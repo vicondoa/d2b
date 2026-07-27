@@ -177,6 +177,82 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-contracts"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-core",
+ "d2b-realm-core",
+ "protobuf",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2",
+ "unicode-normalization",
+]
+
+[[package]]
+name = "d2b-core"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-realm-core",
+ "rustix 0.38.44",
+ "schemars",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "d2b-exec-runner"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "rustix 0.38.44",
+]
+
+[[package]]
+name = "d2b-guestd"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "async-trait",
+ "d2b-contracts",
+ "d2b-exec-runner",
+ "d2b-realm-core",
+ "futures",
+ "hmac",
+ "protobuf",
+ "rustix 0.38.44",
+ "sha2",
+ "tokio",
+ "tokio-vsock",
+ "ttrpc",
+]
+
+[[package]]
+name = "d2b-realm-core"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "schemars",
+ "serde",
+]
+
+[[package]]
+name = "d2b-sk-frontend"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "libc",
+ "tokio",
+ "tokio-vsock",
+]
+
+[[package]]
+name = "d2b-userd"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -490,78 +566,6 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "memoffset 0.9.1",
-]
-
-[[package]]
-name = "d2b-core"
-version = "0.0.0-bootstrap"
-dependencies = [
- "d2b-realm-core",
- "rustix 0.38.44",
- "schemars",
- "semver",
- "serde",
- "serde_json",
- "sha2",
-]
-
-[[package]]
-name = "d2b-realm-core"
-version = "0.0.0-bootstrap"
-dependencies = [
- "schemars",
- "serde",
-]
-
-[[package]]
-name = "d2b-exec-runner"
-version = "0.0.0-bootstrap"
-dependencies = [
- "rustix 0.38.44",
-]
-
-[[package]]
-name = "d2b-sk-frontend"
-version = "0.0.0-bootstrap"
-dependencies = [
- "tokio",
- "tokio-vsock",
-]
-
-[[package]]
-name = "d2b-guestd"
-version = "0.0.0-bootstrap"
-dependencies = [
- "async-trait",
- "futures",
- "hmac",
- "d2b-realm-core",
- "d2b-exec-runner",
- "d2b-contracts",
- "protobuf",
- "rustix 0.38.44",
- "sha2",
- "tokio",
- "tokio-vsock",
- "ttrpc",
-]
-
-[[package]]
-name = "d2b-contracts"
-version = "0.0.0-bootstrap"
-dependencies = [
- "d2b-core",
- "protobuf",
- "schemars",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "d2b-userd"
-version = "0.0.0-bootstrap"
-dependencies = [
- "d2b-contracts",
 ]
 
 [[package]]
@@ -895,6 +899,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "tinyvec"
+version = "1.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bb4ebadaa0af04fab11ae01eb5f9fdb5f9c5b875506e210e71c07873528baa7f"
+dependencies = [
+ "tinyvec_macros",
+]
+
+[[package]]
+name = "tinyvec_macros"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
+
+[[package]]
 name = "tokio"
 version = "1.52.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -967,6 +986,15 @@ name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
+
+[[package]]
+name = "unicode-normalization"
+version = "0.1.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5fd4f6878c9cb28d874b009da9e8d183b5abc80117c40bbd187a1fde336be6e8"
+dependencies = [
+ "tinyvec",
+]
 
 [[package]]
 name = "unicode-xid"

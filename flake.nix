@@ -149,6 +149,7 @@
           sha2 = "0.10"
           tokio = { version = "1", features = ["io-util", "macros", "rt-multi-thread", "time", "fs"] }
           tokio-vsock = "0.7"
+          unicode-normalization = "0.1"
           EOF
         '';
         cargoLock = {
@@ -699,6 +700,7 @@
           sha2 = "0.10"
           tokio = { version = "1", features = ["io-util", "macros", "rt-multi-thread", "time", "fs"] }
           tokio-vsock = "0.7"
+          unicode-normalization = "0.1"
           EOF
         '';
         rustWorkspace = args: pkgs.rustPlatform.buildRustPackage ({
