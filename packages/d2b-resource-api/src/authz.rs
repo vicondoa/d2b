@@ -1112,18 +1112,22 @@ fn authorize_bootstrap(
         if !allowed {
             return Err(AuthorizationDenial::BootstrapDenied);
         }
-        if unprovisioned {
-            let exact_bootstrap_create = request.method == ApiMethod::Create
-                && match target.resource_type.as_str() {
-                    "Zone" => target.resource_name.as_ref() == Some(&zone_name),
-                    "Provider" => target.resource_name.as_ref().is_some_and(|name| {
-                        matches!(name.as_str(), "system-core" | "system-minijail")
-                    }),
-                    _ => false,
-                };
-            if !exact_bootstrap_create {
-                return Err(AuthorizationDenial::BootstrapDenied);
-            }
+        let compiled_name = match target.resource_type.as_str() {
+            "Zone" => target
+                .resource_name
+                .as_ref()
+                .is_none_or(|name| name == &zone_name),
+            "Provider" => target
+                .resource_name
+                .as_ref()
+                .is_none_or(|name| matches!(name.as_str(), "system-core" | "system-minijail")),
+            _ => true,
+        };
+        let unprovisioned_create = !unprovisioned
+            || (request.method == ApiMethod::Create
+                && matches!(target.resource_type.as_str(), "Zone" | "Provider"));
+        if !compiled_name || !unprovisioned_create {
+            return Err(AuthorizationDenial::BootstrapDenied);
         }
     }
     Ok(grant(context, request))
@@ -1209,6 +1213,57 @@ mod tests {
             zone_policy_revision: ZoneRevision::new(revision),
             bootstrap_phase: BootstrapPhase::Disabled,
             now_tick: 1,
+        }
+    }
+
+    fn bootstrap_subject(subject_name: &str, subject_uid: &str) -> AuthenticatedSubjectContext {
+        AuthenticatedSubjectContext::new(
+            ResourceRef::parse(&format!("Provider/{subject_name}")).unwrap(),
+            ResourceUid::parse(subject_uid).unwrap(),
+            ResourceRef::parse("Zone/dev").unwrap(),
+            EvidenceClass::UnixPeer,
+            SessionPurpose::parse(BOOTSTRAP_PURPOSE).unwrap(),
+            ServiceName::parse(RESOURCE_SERVICE).unwrap(),
+            SessionBinding::new(
+                SchemaFingerprint::parse(format!("sha256:{}", "1".repeat(64))).unwrap(),
+                TransportBinding::new(
+                    Locality::Local,
+                    BindingDigest::parse(format!("sha256:{}", "2".repeat(64))).unwrap(),
+                ),
+                ReconnectGeneration::new(1).unwrap(),
+                TranscriptHash::from_bytes([3; 32]),
+            ),
+        )
+        .with_controller_generation(ControllerGeneration::new(11).unwrap())
+        .with_provider_generation(ResourceGeneration::new(12).unwrap())
+    }
+
+    fn bootstrap_state(phase: BootstrapPhase) -> AuthorizationState {
+        AuthorizationState {
+            snapshot: PolicySnapshot {
+                policy_revision: 0,
+                api_catalog_revision: 1,
+                active_configuration_revision: ConfigurationGeneration::new(1).unwrap(),
+                controller_generation: Some(ControllerGeneration::new(11).unwrap()),
+            },
+            zone_policy_revision: ZoneRevision::new(0),
+            bootstrap_phase: phase,
+            now_tick: 1,
+        }
+    }
+
+    fn bootstrap_target(resource_type: &str, verb: ResourceVerb) -> AuthorizationTarget {
+        let resource_name = match resource_type {
+            "Zone" => "dev",
+            "Provider" => "system-core",
+            _ => "app",
+        };
+        AuthorizationTarget {
+            resource_type: ResourceTypeName::parse(resource_type).unwrap(),
+            resource_name: Some(ResourceName::parse(resource_name).unwrap()),
+            verb,
+            subresource: None,
+            execution_ref: None,
         }
     }
 
@@ -1553,8 +1608,91 @@ mod tests {
     }
 
     #[test]
-    fn bootstrap_allow_table_has_the_frozen_static_row_count() {
+    fn every_bootstrap_row_allows_exactly_and_denies_a_near_miss() {
         let _: &'static [BootstrapRow; 42] = BOOTSTRAP_ROWS;
         assert_eq!(BOOTSTRAP_ROWS.len(), 42);
+        let core_uid = "123e4567-e89b-42d3-a456-426614174000";
+        let minijail_uid = "123e4567-e89b-42d3-a456-426614174001";
+        let state = bootstrap_state(BootstrapPhase::Provisioned {
+            zone: ZoneId::parse("dev").unwrap(),
+            system_core_uid: ResourceUid::parse(core_uid).unwrap(),
+            system_minijail_uid: ResourceUid::parse(minijail_uid).unwrap(),
+            controller_generation: ControllerGeneration::new(11).unwrap(),
+            provider_generation: ResourceGeneration::new(12).unwrap(),
+        });
+        let engine = NativeAuthorizer::new(ApiCatalog::standard(), None).unwrap();
+
+        for row in BOOTSTRAP_ROWS {
+            let uid = if row.subject_name == "system-core" {
+                core_uid
+            } else {
+                minijail_uid
+            };
+            let context = bootstrap_subject(row.subject_name, uid);
+            let exact = AuthorizationRequest {
+                method: row.method,
+                zone: ZoneId::parse("dev").unwrap(),
+                targets: vec![bootstrap_target(row.resource_type, row.verb)],
+            };
+            assert_eq!(
+                engine.authorize(&context, &exact, &state).map(|_| ()),
+                Ok(()),
+                "bootstrap row did not authorize: {} {:?} {} {:?}",
+                row.subject_name,
+                row.method,
+                row.resource_type,
+                row.verb,
+            );
+
+            let mut near_miss = exact;
+            near_miss.targets[0].verb = ResourceVerb::Delete;
+            assert_eq!(
+                engine.authorize(&context, &near_miss, &state),
+                Err(AuthorizationDenial::BootstrapDenied),
+                "bootstrap near miss authorized: {} {:?} {}",
+                row.subject_name,
+                row.method,
+                row.resource_type,
+            );
+        }
+    }
+
+    #[test]
+    fn bootstrap_zone_and_provider_names_are_compiled_in_both_phases() {
+        let core_uid = "123e4567-e89b-42d3-a456-426614174000";
+        let context = bootstrap_subject("system-core", core_uid);
+        let engine = NativeAuthorizer::new(ApiCatalog::standard(), None).unwrap();
+        let phases = [
+            BootstrapPhase::Unprovisioned {
+                zone: ZoneId::parse("dev").unwrap(),
+                controller_generation: ControllerGeneration::new(11).unwrap(),
+                provider_generation: ResourceGeneration::new(12).unwrap(),
+            },
+            BootstrapPhase::Provisioned {
+                zone: ZoneId::parse("dev").unwrap(),
+                system_core_uid: ResourceUid::parse(core_uid).unwrap(),
+                system_minijail_uid: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174001")
+                    .unwrap(),
+                controller_generation: ControllerGeneration::new(11).unwrap(),
+                provider_generation: ResourceGeneration::new(12).unwrap(),
+            },
+        ];
+
+        for phase in phases {
+            let state = bootstrap_state(phase);
+            for resource_type in ["Zone", "Provider"] {
+                let mut target = bootstrap_target(resource_type, ResourceVerb::Create);
+                target.resource_name = Some(ResourceName::parse("attacker-selected").unwrap());
+                let request = AuthorizationRequest {
+                    method: ApiMethod::Create,
+                    zone: ZoneId::parse("dev").unwrap(),
+                    targets: vec![target],
+                };
+                assert_eq!(
+                    engine.authorize(&context, &request, &state),
+                    Err(AuthorizationDenial::BootstrapDenied)
+                );
+            }
+        }
     }
 }

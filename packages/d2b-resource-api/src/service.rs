@@ -1284,6 +1284,12 @@ fn parse_mutation<T>(
         ));
     }
     if mutation.wait_for_reconcile {
+        if trusted.authorization_state.snapshot.policy_revision == 0 {
+            return Err(ResourceError::terminal(
+                ResourceErrorKind::ExpeditedNotAuthorized,
+                "expedited reconcile is disabled during bootstrap",
+            ));
+        }
         if !matches!(
             kind,
             ResourceMutationKind::Create
@@ -1985,6 +1991,43 @@ mod tests {
             );
         }
         assert_eq!(store.commits.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn expedited_reconcile_is_rejected_in_both_bootstrap_phases() {
+        let phases = [
+            crate::authz::BootstrapPhase::Unprovisioned {
+                zone: ZoneId::parse("dev").unwrap(),
+                controller_generation: ControllerGeneration::new(11).unwrap(),
+                provider_generation: ResourceGeneration::new(12).unwrap(),
+            },
+            crate::authz::BootstrapPhase::Provisioned {
+                zone: ZoneId::parse("dev").unwrap(),
+                system_core_uid: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174001")
+                    .unwrap(),
+                system_minijail_uid: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174002")
+                    .unwrap(),
+                controller_generation: ControllerGeneration::new(11).unwrap(),
+                provider_generation: ResourceGeneration::new(12).unwrap(),
+            },
+        ];
+
+        for phase in phases {
+            let mut authorization_state = state(None);
+            authorization_state.snapshot.policy_revision = 0;
+            authorization_state.bootstrap_phase = phase;
+            let mut value = mutation(wire::MutationKind::MUTATION_KIND_CREATE);
+            value.resource = body(GOLDEN_HOST.to_vec());
+            value.wait_for_reconcile = true;
+            value.reconcile_deadline_ms = 1;
+            let trusted =
+                TrustedRequest::from_authenticated_bus(subject(None), authorization_state, ());
+            let route =
+                parse_mutation_route(&value, Some(ResourceMutationKind::Create), &trusted).unwrap();
+
+            let error = parse_mutation(&value, &route, &trusted).unwrap_err();
+            assert_eq!(error.kind(), ResourceErrorKind::ExpeditedNotAuthorized);
+        }
     }
 
     #[tokio::test]
