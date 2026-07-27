@@ -848,7 +848,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-resource-api-and-authorization.md",
-      "sha256" : "17dc6201b360ab3aba439bb6814947d4f1842426e02e89a027000ceb653e9889",
+      "sha256" : "5d9cc30f4463ae1009e2ac3831e2af2fe9c43d5c93f113fde990fdd00ff08842",
       "specId" : "ADR-046-resource-api-and-authorization",
       "status" : "Accepted",
       "supersedes" : null,
@@ -894,7 +894,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-resource-store-redb.md",
-      "sha256" : "3bf2b6161dcc21b76d8a0d78734d3960f3c5e752c0de1aab8c1b8d4bfd4af397",
+      "sha256" : "cecf43a49f763d7f2c2add5c4b69af5aba5a162ccbec559dd8f669a5d0a6fdeb",
       "specId" : "ADR-046-resource-store-redb",
       "status" : "Accepted",
       "supersedes" : null,

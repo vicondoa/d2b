@@ -398,10 +398,10 @@ authorization, or audit cannot be weakened to pass.
 
 | Item | Treatment |
 | --- | --- |
-| Current anchor | No generic store. Reuse `d2b-core/src/storage.rs`, `sync.rs`; daemon snapshot/operation records; `d2b-realm-router` idempotency; broker fd/path safety |
-| Evidence class | Current storage/locks/ledgers are mixed reachable/generated; redb store is ADR-only |
+| Current anchor | The engine-neutral generic store contract exists in `d2b-resource-store` and `d2b-resource-store-redb` contract modules but is not wired to the Zone runtime. Reuse `d2b-core/src/storage.rs`, `sync.rs`; daemon snapshot/operation records; `d2b-realm-router` idempotency; broker fd/path safety |
+| Evidence class | Generic store contract is `implemented-but-unwired`; the production redb backend is unimplemented and remains spike-gated. Current storage/locks/ledgers are mixed reachable/generated |
 | Behavior retained | Single repair owner, no-follow/fd-relative safety, atomic rename/fsync, OFD locks, bounded records, pidfd non-persistence, idempotency/quarantine |
-| Required delta | Entire redb schema, store actor, revisions, indexes, watches, conflicts, backup/upgrade |
+| Required delta | Wire the contract into the resource API and Zone runtime; after the feasibility gate, implement the redb database, store actor, revisions, indexes, watches, conflicts, backup, and upgrade |
 | Reuse path | Extract exact storage/atomic/idempotency validators named below; redb only supplies ACID B-trees |
 | Replacement/deletion | No existing state file/ledger is removed until its owning resource/operation migration lands |
 | Feasibility proof | SPIKE-01 and SPIKE-02 are specified but unexecuted; the redb pin and production backend remain provisional |

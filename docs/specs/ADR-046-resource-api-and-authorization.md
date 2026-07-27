@@ -675,10 +675,10 @@ process data, and terminal bytes.
 
 | Item | Treatment |
 | --- | --- |
-| Current anchor | Public daemon/broker seqpacket auth; `d2b-daemon-access` admission types; `d2b-realm-router` principal/capability/idempotency checks; Realm access resolver; strict DTOs |
-| Evidence class | Local daemon auth is reachable; daemon-access/Realm peer abstractions are partly unwired; native RBAC/API are ADR-only |
+| Current anchor | The native ResourceService DTO, method, error, and authorization boundary contract exists in `d2b-contracts` and `d2b-resource-api` but is not dispatched from d2b-bus. Existing anchors remain public daemon/broker seqpacket auth, `d2b-daemon-access` admission types, `d2b-realm-router` principal/capability/idempotency checks, Realm access resolver, and strict DTOs |
+| Evidence class | Resource API contract is `implemented-but-unwired`; d2b-bus dispatch and the native RBAC execution path are unimplemented. Local daemon auth is reachable, while daemon-access/Realm peer abstractions remain partly unwired |
 | Behavior retained | SO_PEERCRED/local identity, typed denials, positive capabilities, no relay-to-local auth, strict bounds/unknown-field rejection |
-| Required delta | Entire resource API, Provider API schemas/bindings, Role/RoleBinding engine, status ownership, parent resource routing |
+| Required delta | Dispatch the contract from d2b-bus and wire it to the store and authorization evaluator; implement Provider API schemas/bindings, the Role/RoleBinding engine, status ownership, and parent resource routing |
 | Reuse path | Extract exact admission/error/id/ref validators and router authorization derivation |
 | Replacement/deletion | Old public wire remains until CLI/controllers consume new services |
 | Feasibility proof | Multi-process local/vsock/Zone resource calls, immediate revocation, conflict/no-leak tests |
