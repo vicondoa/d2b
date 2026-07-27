@@ -155,8 +155,8 @@ fn seal_checked(
     snapshot: &SnapshotView,
     repository_roots: &BTreeMap<String, PathBuf>,
 ) -> Result<WorkflowOutput> {
-    super::work_item_state::require_current_wave_merged(&snapshot.material, &repository_roots)?;
-    seal(&candidate, &snapshot)
+    super::work_item_state::require_current_wave_merged(&snapshot.material, repository_roots)?;
+    seal(candidate, snapshot)
 }
 
 /// Binds unanimous panel records and passing validator lanes to one candidate.
