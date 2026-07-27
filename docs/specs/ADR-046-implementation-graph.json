@@ -2,7 +2,7 @@
   "adr" : "0046",
   "artifactKind" : "d2b-adr-implementation-graph",
   "counts" : {
-    "edges" : 1940,
+    "edges" : 1943,
     "maxTopologicalRank" : 22,
     "nodes" : 598,
     "specNodes" : 55,
@@ -8688,8 +8688,23 @@
       "type" : "work-item-depends-on"
     },
     {
+      "from" : "ADR046-store-001",
+      "to" : "ADR046-feasibility-001",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-store-002",
+      "to" : "ADR046-feasibility-001",
+      "type" : "work-item-depends-on"
+    },
+    {
       "from" : "ADR046-store-002",
       "to" : "ADR046-store-001",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-store-003",
+      "to" : "ADR046-feasibility-001",
       "type" : "work-item-depends-on"
     },
     {
@@ -15446,20 +15461,20 @@
       ],
       "detailedDesign" : "Implements SPIKE-01 and SPIKE-02: the ten-table schema, fair write queue, blocking store-actor, watch registrar, and hint bus described in those two spike entries Primary reuse disposition: `adapt`. Preserved source-plan detail: `adapt` (the atomic-write/idempotency discipline in `storage.rs`/`sync.rs` is adapted into the spike's write-transaction algorithm; redb itself is used unmodified).",
       "entryContracts" : [
-        "ADR-046-feasibility-and-spikes"
+        "ADR-046-resource-store-redb"
       ],
-      "exitGate" : "ADR046-W7 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
+      "exitGate" : "ADR046-W0 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-feasibility-001",
       "kind" : "work-item",
       "owner" : "W0 shared contract root; store/reconciliation integrator",
-      "parallelGroup" : "wi:ADR-046-feasibility-and-spikes",
+      "parallelGroup" : "wi:resource-store-foundation:w0",
       "prerequisites" : [
-        "ADR-046-feasibility-and-spikes"
+        "ADR-046-resource-store-redb"
       ],
       "specId" : "ADR-046-feasibility-and-spikes",
-      "topologicalRank" : 11,
+      "topologicalRank" : 4,
       "validation" : "SPIKE-01 metrics (1)-(5) and SPIKE-02 metrics (1) across all 3 concurrency profiles, per those entries' exact pass/fail thresholds",
-      "wave" : "W7"
+      "wave" : "W0"
     },
     {
       "blockers" : [],
@@ -15480,7 +15495,7 @@
         "ADR046-feasibility-001"
       ],
       "specId" : "ADR-046-feasibility-and-spikes",
-      "topologicalRank" : 12,
+      "topologicalRank" : 11,
       "validation" : "SPIKE-03 metrics (1)-(3) and thresholds",
       "wave" : "W7"
     },
@@ -21553,13 +21568,14 @@
       "exitGate" : "ADR046-W0 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-store-001",
       "kind" : "work-item",
-      "owner" : "Resource-object contracts; store integrator. Contract-only scope may proceed, but production redb backend completion depends on successful SPIKE-01 evidence",
+      "owner" : "ADR046-feasibility-001; resource-object contracts; store integrator",
       "parallelGroup" : "wi:ADR-046-resource-store-redb",
       "prerequisites" : [
-        "ADR-046-resource-store-redb"
+        "ADR-046-resource-store-redb",
+        "ADR046-feasibility-001"
       ],
       "specId" : "ADR-046-resource-store-redb",
-      "topologicalRank" : 4,
+      "topologicalRank" : 5,
       "validation" : "Pre-spike codec/golden-vector and small-scale semantic tests make no scale claim; completion requires SPIKE-01 evidence. Unit/property/fault tests and hard benchmark; exact dependency/feature-policy lint; compile tests for `Send` futures and generic fake injection; `AdmittedMutation` private-field/single-constructor and in-transaction revision-recheck tests; policy test forbidding resource-store dependency on API/RBAC symbols; queue/pool constant assertions; paused-clock read-expiry tests; no reduced-durability call-site lint",
       "wave" : "W0"
     },
@@ -21575,14 +21591,15 @@
       "exitGate" : "ADR046-W0 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-store-002",
       "kind" : "work-item",
-      "owner" : "ADR046-store-001 contract scope plus successful SPIKE-01 and SPIKE-02 evidence; watch/reconciliation integrator",
+      "owner" : "ADR046-store-001; ADR046-feasibility-001; watch/reconciliation integrator",
       "parallelGroup" : "wi:ADR-046-resource-store-redb",
       "prerequisites" : [
         "ADR-046-resource-store-redb",
+        "ADR046-feasibility-001",
         "ADR046-store-001"
       ],
       "specId" : "ADR-046-resource-store-redb",
-      "topologicalRank" : 5,
+      "topologicalRank" : 6,
       "validation" : "SPIKE-01 correctness and SPIKE-02 latency evidence before implementation; deterministic watch/compaction/disconnect/fan-in tests afterward",
       "wave" : "W0"
     },
@@ -21598,14 +21615,15 @@
       "exitGate" : "ADR046-W0 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-store-003",
       "kind" : "work-item",
-      "owner" : "ADR046-store-001 contract scope; storage-row source contract may proceed, but redb backup/migration completion depends on successful SPIKE-01 evidence; storage/broker integrator",
+      "owner" : "ADR046-store-001; ADR046-feasibility-001; storage/broker integrator",
       "parallelGroup" : "wi:ADR-046-resource-store-redb",
       "prerequisites" : [
         "ADR-046-resource-store-redb",
+        "ADR046-feasibility-001",
         "ADR046-store-001"
       ],
       "specId" : "ADR-046-resource-store-redb",
-      "topologicalRank" : 5,
+      "topologicalRank" : 6,
       "validation" : "Storage-row source validation may proceed; marker replacement, crash publication, backup/restore/upgrade tests require SPIKE-01 evidence first",
       "wave" : "W0"
     },
@@ -24585,11 +24603,12 @@
         "wi:ADR-046-resource-api-and-authorization",
         "wi:ADR-046-resource-object-model",
         "wi:ADR-046-resource-store-redb",
-        "wi:ADR-046-terminology-and-identities"
+        "wi:ADR-046-terminology-and-identities",
+        "wi:resource-store-foundation:w0"
       ],
       "specCount" : 6,
       "wave" : "W0",
-      "workItemCount" : 10
+      "workItemCount" : 11
     },
     {
       "parallelGroups" : [
@@ -24701,7 +24720,7 @@
       ],
       "specCount" : 5,
       "wave" : "W7",
-      "workItemCount" : 74
+      "workItemCount" : 73
     }
   ]
 }

@@ -84,7 +84,7 @@
     {
       "dependsOn" : [],
       "path" : "docs/specs/ADR-046-decision-register.md",
-      "sha256" : "f4c4a6b67c325832360863326fd9c46930f9e296d03a00a18f92ce9618b333d8",
+      "sha256" : "305559b76d2e57cdd680402d1796ae8354bf7355cff394e77a036feab783375e",
       "specId" : "ADR-046-decision-register",
       "status" : "Accepted",
       "supersedes" : null,
@@ -894,7 +894,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-resource-store-redb.md",
-      "sha256" : "9981d046ec8ef60881760ae8583fcf69abf95e06a1c74c32e41c5f465247ad2c",
+      "sha256" : "3bf2b6161dcc21b76d8a0d78734d3960f3c5e752c0de1aab8c1b8d4bfd4af397",
       "specId" : "ADR-046-resource-store-redb",
       "status" : "Accepted",
       "supersedes" : null,
@@ -1207,7 +1207,7 @@
         "ADR-046-zone-routing"
       ],
       "path" : "docs/specs/ADR-046-validation-and-delivery.md",
-      "sha256" : "e39cd8ba298203733dd68fb52d337c470b82dc0de22e33a2feef0a16b6b847c9",
+      "sha256" : "d9cec827e3acfb2609fc23587d750c6abecc028b5a97b75599c0b6f8c0175745",
       "specId" : "ADR-046-validation-and-delivery",
       "status" : "Accepted",
       "supersedes" : "This repository's current `AGENTS.md` \"Panel review\" phase-gate as the *sole* review mechanism for ADR 0046 work (extended, not replaced, per §12); ad hoc per-agent validation ordering for ADR 0046 implementation",
