@@ -738,7 +738,7 @@ impl NativeAuthorizer {
         let cache_key = cache_key(context, request, relay_hop);
         let revisions = revision_set(state);
         if !self.cache.contains(&cache_key, revisions, state.now_tick) {
-            evaluate_policy(&policy, context, request, relay_hop)?;
+            evaluate_policy(policy, context, request, relay_hop)?;
             self.cache.insert_allow(
                 cache_key,
                 revisions,

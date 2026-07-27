@@ -5,41 +5,43 @@ use std::{
     process::Command,
 };
 
-fn check_rejected(
-    cargo: &str,
-    manifest: &Path,
-    target: &Path,
-    temp: &Path,
-    rustc_wrapper: &Path,
-    cfg_test_marker: &Path,
-    test: &str,
-    expected: &[&str],
-) {
-    let output = Command::new(cargo)
-        .args([
-            "check",
-            "--quiet",
-            "--locked",
-            "--all-features",
-            "--manifest-path",
-            manifest.to_str().unwrap(),
-            "--test",
-            test,
-        ])
-        .env("CARGO_TARGET_DIR", target)
-        .env("D2B_CFG_TEST_MARKER", cfg_test_marker)
-        .env("RUSTC_WRAPPER", rustc_wrapper)
-        .env("TMPDIR", temp)
-        .output()
-        .expect("run dependent compile-fail crate");
-    let stderr = String::from_utf8(output.stderr).expect("compiler diagnostics are UTF-8");
+struct CompileFailHarness<'a> {
+    cargo: &'a str,
+    manifest: &'a Path,
+    target: &'a Path,
+    temp: &'a Path,
+    rustc_wrapper: &'a Path,
+    cfg_test_marker: &'a Path,
+}
 
-    assert!(!output.status.success(), "{test} unexpectedly compiled");
-    for diagnostic in expected {
-        assert!(
-            stderr.contains(diagnostic),
-            "{test} did not produce the expected privacy error {diagnostic:?}:\n{stderr}"
-        );
+impl CompileFailHarness<'_> {
+    fn check_rejected(&self, test: &str, expected: &[&str]) {
+        let output = Command::new(self.cargo)
+            .args([
+                "check",
+                "--quiet",
+                "--locked",
+                "--all-features",
+                "--manifest-path",
+                self.manifest.to_str().unwrap(),
+                "--test",
+                test,
+            ])
+            .env("CARGO_TARGET_DIR", self.target)
+            .env("D2B_CFG_TEST_MARKER", self.cfg_test_marker)
+            .env("RUSTC_WRAPPER", self.rustc_wrapper)
+            .env("TMPDIR", self.temp)
+            .output()
+            .expect("run dependent compile-fail crate");
+        let stderr = String::from_utf8(output.stderr).expect("compiler diagnostics are UTF-8");
+
+        assert!(!output.status.success(), "{test} unexpectedly compiled");
+        for diagnostic in expected {
+            assert!(
+                stderr.contains(diagnostic),
+                "{test} did not produce the expected privacy error {diagnostic:?}:\n{stderr}"
+            );
+        }
     }
 }
 
@@ -79,63 +81,35 @@ exec "$rustc" "$@"
 
     let manifest = fixture.join("Cargo.toml");
     let cargo = env!("CARGO");
-    check_rejected(
+    let harness = CompileFailHarness {
         cargo,
-        &manifest,
-        &target,
-        &temp,
-        &rustc_wrapper,
-        &cfg_test_marker,
+        manifest: &manifest,
+        target: &target,
+        temp: &temp,
+        rustc_wrapper: &rustc_wrapper,
+        cfg_test_marker: &cfg_test_marker,
+    };
+    harness.check_rejected(
         "forge_issuer",
         &["error[E0432]", "no `AdmissionIssuer` in the root"],
     );
-    check_rejected(
-        cargo,
-        &manifest,
-        &target,
-        &temp,
-        &rustc_wrapper,
-        &cfg_test_marker,
+    harness.check_rejected(
         "forge_permit",
         &["error[E0432]", "no `AdmissionPermit` in the root"],
     );
-    check_rejected(
-        cargo,
-        &manifest,
-        &target,
-        &temp,
-        &rustc_wrapper,
-        &cfg_test_marker,
+    harness.check_rejected(
         "forge_subject",
         &["error[E0599]", "no function or associated item named `new`"],
     );
-    check_rejected(
-        cargo,
-        &manifest,
-        &target,
-        &temp,
-        &rustc_wrapper,
-        &cfg_test_marker,
+    harness.check_rejected(
         "private_admission_path",
         &["error[E0603]", "module `admission` is private"],
     );
-    check_rejected(
-        cargo,
-        &manifest,
-        &target,
-        &temp,
-        &rustc_wrapper,
-        &cfg_test_marker,
+    harness.check_rejected(
         "private_test_issuer",
         &["error[E0603]", "module `identity` is private"],
     );
-    check_rejected(
-        cargo,
-        &manifest,
-        &target,
-        &temp,
-        &rustc_wrapper,
-        &cfg_test_marker,
+    harness.check_rejected(
         "private_fields",
         &[
             "error[E0616]",
