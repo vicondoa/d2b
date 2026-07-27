@@ -842,9 +842,18 @@ where
             .map_err(|denial| {
                 ResourceError::terminal(
                     denial.resource_error_kind(),
-                    match denial.resource_error_kind() {
-                        ResourceErrorKind::RelayDenied => "relay authorization denied",
-                        _ => "resource authorization denied",
+                    // A closed reason per denial class, carrying no Zone,
+                    // subject or resource value. Collapsing every class into
+                    // one message left an operator unable to tell a Zone
+                    // boundary rejection from an ordinary denial.
+                    match denial {
+                        crate::authz::AuthorizationDenial::ZoneMismatch => {
+                            "zone-boundary authorization denied"
+                        }
+                        _ => match denial.resource_error_kind() {
+                            ResourceErrorKind::RelayDenied => "relay authorization denied",
+                            _ => "resource authorization denied",
+                        },
                     },
                 )
             })
