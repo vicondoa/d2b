@@ -34,22 +34,19 @@ use crate::{
 pub struct TrustedRequest<T> {
     subject: Arc<AuthenticatedSubjectContext>,
     authorization_state: AuthorizationState,
-    relay_hop: bool,
     request: T,
 }
 
 impl<T> TrustedRequest<T> {
     /// Bind a decoded request to authenticated session and live policy state.
-    pub fn from_component_session(
+    pub(crate) fn from_authenticated_bus(
         subject: Arc<AuthenticatedSubjectContext>,
         authorization_state: AuthorizationState,
-        relay_hop: bool,
         request: T,
     ) -> Self {
         Self {
             subject,
             authorization_state,
-            relay_hop,
             request,
         }
     }
@@ -149,12 +146,7 @@ where
             Ok(identity) => identity,
             Err(error) => return get_error(error),
         };
-        let auth = authorization_for_identity(
-            ApiMethod::Get,
-            ResourceVerb::Get,
-            &identity,
-            trusted.relay_hop,
-        );
+        let auth = authorization_for_identity(ApiMethod::Get, ResourceVerb::Get, &identity);
         if let Err(error) = self.authorize(&trusted, auth) {
             return get_error(error);
         }
@@ -207,7 +199,6 @@ where
             method: ApiMethod::List,
             zone: subject_zone(&trusted),
             targets,
-            relay_hop: trusted.relay_hop,
         };
         if let Err(error) = self.authorize(&trusted, auth) {
             return list_error(error);
@@ -305,7 +296,6 @@ where
             method: ApiMethod::Watch,
             zone: subject_zone(&trusted),
             targets,
-            relay_hop: trusted.relay_hop,
         };
         if let Err(error) = self.authorize(&trusted, auth) {
             return watch_error(error);
@@ -530,7 +520,6 @@ where
                 .iter()
                 .flat_map(|item| item.authorizations.iter().cloned())
                 .collect(),
-            relay_hop: trusted.relay_hop,
         };
         let grant = match self.authorize(&trusted, auth) {
             Ok(grant) => grant,
@@ -592,12 +581,7 @@ where
         };
         if let Err(error) = self.authorize(
             &trusted,
-            authorization_for_identity(
-                ApiMethod::ResolveRef,
-                ResourceVerb::Get,
-                &identity,
-                trusted.relay_hop,
-            ),
+            authorization_for_identity(ApiMethod::ResolveRef, ResourceVerb::Get, &identity),
         ) {
             return resolve_error(error);
         }
@@ -649,7 +633,6 @@ where
                 subresource: Some("schema".to_owned()),
                 execution_ref: None,
             }],
-            relay_hop: trusted.relay_hop,
         };
         if let Err(error) = self.authorize(&trusted, auth) {
             return inspect_error(error);
@@ -698,12 +681,8 @@ where
             Ok(identity) => identity,
             Err(error) => return upgrade_error(error),
         };
-        let auth = authorization_for_identity(
-            ApiMethod::Upgrade,
-            ResourceVerb::UpdateSpec,
-            &identity,
-            trusted.relay_hop,
-        );
+        let auth =
+            authorization_for_identity(ApiMethod::Upgrade, ResourceVerb::UpdateSpec, &identity);
         if let Err(error) = self.authorize(&trusted, auth) {
             return upgrade_error(error);
         }
@@ -774,7 +753,6 @@ where
                 method,
                 zone: route.identity.zone.clone(),
                 targets: route.authorizations.clone(),
-                relay_hop: trusted.relay_hop,
             },
         )?;
         validate_request(&trusted.request)?;
@@ -838,7 +816,6 @@ where
                             execution_ref: trusted.subject.execution_ref().cloned(),
                         })
                         .collect(),
-                    relay_hop: trusted.relay_hop,
                 },
                 &trusted.authorization_state,
             )
@@ -1056,7 +1033,6 @@ fn authorization_for_identity(
     method: ApiMethod,
     verb: ResourceVerb,
     identity: &ParsedIdentity,
-    relay_hop: bool,
 ) -> AuthorizationRequest {
     AuthorizationRequest {
         method,
@@ -1068,7 +1044,6 @@ fn authorization_for_identity(
             subresource: None,
             execution_ref: None,
         }],
-        relay_hop,
     }
 }
 
@@ -1906,10 +1881,9 @@ mod tests {
     }
 
     fn trusted<T>(request: T, controller_generation: Option<u64>) -> TrustedRequest<T> {
-        TrustedRequest::from_component_session(
+        TrustedRequest::from_authenticated_bus(
             subject(controller_generation),
             state(controller_generation),
-            false,
             request,
         )
     }

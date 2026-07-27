@@ -108,7 +108,6 @@ pub struct AuthorizationRequest {
     pub method: ApiMethod,
     pub zone: ZoneId,
     pub targets: Vec<AuthorizationTarget>,
-    pub relay_hop: bool,
 }
 
 /// Revision and bootstrap state captured from trusted runtime state.
@@ -465,8 +464,9 @@ impl NativeAuthorizer {
         {
             return Err(AuthorizationDenial::ZoneMismatch);
         }
+        let relay_hop = authenticated_relay_hop(context)?;
         if state.snapshot.policy_revision == 0 {
-            return authorize_bootstrap(context, request, state);
+            return authorize_bootstrap(context, request, state, relay_hop);
         }
 
         let policy = self
@@ -477,10 +477,10 @@ impl NativeAuthorizer {
             return Err(AuthorizationDenial::PolicyRevisionChanged);
         }
 
-        let cache_key = cache_key(context, request);
+        let cache_key = cache_key(context, request, relay_hop);
         let revisions = revision_set(state);
         if !self.cache.contains(&cache_key, revisions, state.now_tick) {
-            evaluate_policy(&policy, context, request)?;
+            evaluate_policy(&policy, context, request, relay_hop)?;
             self.cache.insert_allow(
                 cache_key,
                 revisions,
@@ -573,21 +573,31 @@ impl NativeAuthorizer {
     }
 }
 
+pub(crate) fn authenticated_relay_hop(
+    context: &AuthenticatedSubjectContext,
+) -> Result<bool, AuthorizationDenial> {
+    match context.transport_binding().locality() {
+        Locality::Local => Ok(false),
+        Locality::AdjacentZone
+            if context.evidence_class() == EvidenceClass::EnrolledKk
+                && matches!(
+                    context.subject_ref().resource_type().as_str(),
+                    "Zone" | "ZoneLink"
+                ) =>
+        {
+            Ok(true)
+        }
+        Locality::AdjacentZone | Locality::Remote => Err(AuthorizationDenial::RelayOriginInvalid),
+    }
+}
+
 fn evaluate_policy(
     policy: &PolicySet,
     context: &AuthenticatedSubjectContext,
     request: &AuthorizationRequest,
+    relay_hop: bool,
 ) -> Result<(), AuthorizationDenial> {
-    if request.relay_hop {
-        if context.transport_binding().locality() != Locality::AdjacentZone
-            || context.evidence_class() != EvidenceClass::EnrolledKk
-            || !matches!(
-                context.subject_ref().resource_type().as_str(),
-                "Zone" | "ZoneLink"
-            )
-        {
-            return Err(AuthorizationDenial::RelayOriginInvalid);
-        }
+    if relay_hop {
         let relay_allowed = policy
             .bindings
             .iter()
@@ -614,7 +624,7 @@ fn evaluate_policy(
             .flat_map(|role| &role.rules)
             .any(|rule| rule.permits_target(target, &request.zone));
         if !allowed {
-            return Err(if request.relay_hop {
+            return Err(if relay_hop {
                 AuthorizationDenial::RelayTargetGrantMissing
             } else {
                 AuthorizationDenial::NoMatchingGrant
@@ -652,11 +662,12 @@ fn grant(
 fn cache_key(
     context: &AuthenticatedSubjectContext,
     request: &AuthorizationRequest,
+    relay_hop: bool,
 ) -> AuthorizationCacheKey {
     let mut digest = Sha256::new();
     digest.update([request.method as u8]);
     digest.update(request.zone.as_str().as_bytes());
-    digest.update([u8::from(request.relay_hop)]);
+    digest.update([u8::from(relay_hop)]);
     digest.update([evidence_tag(context.evidence_class())]);
     digest.update([locality_tag(context.transport_binding().locality())]);
     digest.update(context.session_purpose().as_str().as_bytes());
@@ -949,6 +960,7 @@ fn authorize_bootstrap(
     context: &AuthenticatedSubjectContext,
     request: &AuthorizationRequest,
     state: &AuthorizationState,
+    relay_hop: bool,
 ) -> Result<AuthorizationGrant, AuthorizationDenial> {
     let (zone, core_uid, minijail_uid, controller_generation, provider_generation, unprovisioned) =
         match &state.bootstrap_phase {
@@ -980,7 +992,7 @@ fn authorize_bootstrap(
             ),
             BootstrapPhase::Disabled => return Err(AuthorizationDenial::BootstrapDenied),
         };
-    if request.relay_hop
+    if relay_hop
         || &request.zone != zone
         || context.evidence_class() != EvidenceClass::UnixPeer
         || context.transport_binding().locality() != Locality::Local
@@ -1161,12 +1173,11 @@ mod tests {
         PolicySet::new(revision, vec![role], vec![binding]).unwrap()
     }
 
-    fn request(relay_hop: bool) -> AuthorizationRequest {
+    fn request() -> AuthorizationRequest {
         AuthorizationRequest {
             method: ApiMethod::Get,
             zone: ZoneId::parse("dev").unwrap(),
             targets: vec![target(ResourceVerb::Get)],
-            relay_hop,
         }
     }
 
@@ -1175,11 +1186,7 @@ mod tests {
         let context = subject(Locality::Local, EvidenceClass::UnixPeer, "User/alice");
         let engine =
             NativeAuthorizer::new(Some(policy(4, &context, Some(ResourceVerb::Get), false)));
-        assert!(
-            engine
-                .authorize(&context, &request(false), &state(4))
-                .is_ok()
-        );
+        assert!(engine.authorize(&context, &request(), &state(4)).is_ok());
         let caps = engine
             .positive_capabilities(&context, &ZoneId::parse("dev").unwrap(), &state(4))
             .unwrap();
@@ -1189,7 +1196,7 @@ mod tests {
                 &context,
                 &AuthorizationRequest {
                     targets: vec![target(ResourceVerb::Delete)],
-                    ..request(false)
+                    ..request()
                 },
                 &state(4)
             ),
@@ -1202,25 +1209,21 @@ mod tests {
         let context = subject(Locality::Local, EvidenceClass::UnixPeer, "User/alice");
         let engine =
             NativeAuthorizer::new(Some(policy(4, &context, Some(ResourceVerb::Get), false)));
-        assert!(
-            engine
-                .authorize(&context, &request(false), &state(4))
-                .is_ok()
-        );
+        assert!(engine.authorize(&context, &request(), &state(4)).is_ok());
         engine.replace_policy(policy(5, &context, None, false), &state(5));
         assert_eq!(
-            engine.authorize(&context, &request(false), &state(5)),
+            engine.authorize(&context, &request(), &state(5)),
             Err(AuthorizationDenial::NoMatchingGrant)
         );
         engine.mark_policy_unavailable();
         assert_eq!(
-            engine.authorize(&context, &request(false), &state(5)),
+            engine.authorize(&context, &request(), &state(5)),
             Err(AuthorizationDenial::PolicyUnavailable)
         );
     }
 
     #[test]
-    fn relay_and_target_grants_are_independent() {
+    fn adjacent_route_cannot_disable_relay_admission() {
         let context = subject(
             Locality::AdjacentZone,
             EvidenceClass::EnrolledKk,
@@ -1229,29 +1232,29 @@ mod tests {
         let no_relay =
             NativeAuthorizer::new(Some(policy(4, &context, Some(ResourceVerb::Get), false)));
         assert_eq!(
-            no_relay.authorize(&context, &request(true), &state(4)),
+            no_relay.authorize(&context, &request(), &state(4)),
             Err(AuthorizationDenial::RelayGrantMissing)
         );
         let no_target = NativeAuthorizer::new(Some(policy(4, &context, None, true)));
         assert_eq!(
-            no_target.authorize(&context, &request(true), &state(4)),
+            no_target.authorize(&context, &request(), &state(4)),
             Err(AuthorizationDenial::RelayTargetGrantMissing)
         );
         let both = NativeAuthorizer::new(Some(policy(4, &context, Some(ResourceVerb::Get), true)));
-        assert!(both.authorize(&context, &request(true), &state(4)).is_ok());
+        assert!(both.authorize(&context, &request(), &state(4)).is_ok());
     }
 
     #[test]
-    fn relay_rejects_local_and_bootstrap_origins() {
+    fn relay_rejects_untrusted_adjacent_and_remote_origins() {
         for (locality, evidence) in [
-            (Locality::Local, EvidenceClass::UnixPeer),
             (Locality::AdjacentZone, EvidenceClass::BootstrapIkpsk2),
+            (Locality::Remote, EvidenceClass::EnrolledKk),
         ] {
             let context = subject(locality, evidence, "ZoneLink/parent");
             let engine =
                 NativeAuthorizer::new(Some(policy(4, &context, Some(ResourceVerb::Get), true)));
             assert_eq!(
-                engine.authorize(&context, &request(true), &state(4)),
+                engine.authorize(&context, &request(), &state(4)),
                 Err(AuthorizationDenial::RelayOriginInvalid)
             );
         }
@@ -1266,11 +1269,7 @@ mod tests {
         );
         let engine =
             NativeAuthorizer::new(Some(policy(4, &enrolled, Some(ResourceVerb::Get), true)));
-        assert!(
-            engine
-                .authorize(&enrolled, &request(true), &state(4))
-                .is_ok()
-        );
+        assert!(engine.authorize(&enrolled, &request(), &state(4)).is_ok());
 
         let bootstrap = subject(
             Locality::AdjacentZone,
@@ -1278,7 +1277,7 @@ mod tests {
             "ZoneLink/parent",
         );
         assert_eq!(
-            engine.authorize(&bootstrap, &request(true), &state(4)),
+            engine.authorize(&bootstrap, &request(), &state(4)),
             Err(AuthorizationDenial::RelayOriginInvalid)
         );
     }
@@ -1292,7 +1291,7 @@ mod tests {
         );
         let engine =
             NativeAuthorizer::new(Some(policy(4, &context, Some(ResourceVerb::Get), true)));
-        let mut wrong_zone = request(true);
+        let mut wrong_zone = request();
         wrong_zone.zone = ZoneId::parse("other").unwrap();
         assert_eq!(
             engine.authorize(&context, &wrong_zone, &state(4)),
