@@ -1,14 +1,14 @@
 //! Revision-bound positive authorization decision cache.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     sync::{Mutex, MutexGuard},
 };
 
 use d2b_contracts::v3::{ConfigurationGeneration, ResourceRef, ResourceUid, ZoneRevision};
 
 /// Policy revisions that make one positive decision valid.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PolicyRevisionSet {
     pub policy_revision: u64,
     pub api_catalog_revision: u64,
@@ -17,7 +17,7 @@ pub struct PolicyRevisionSet {
 }
 
 /// Exact subject and authorization-attribute digest.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct AuthorizationCacheKey {
     subject_ref: ResourceRef,
     subject_uid: ResourceUid,
@@ -38,6 +38,16 @@ impl AuthorizationCacheKey {
     }
 }
 
+impl core::fmt::Debug for AuthorizationCacheKey {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("AuthorizationCacheKey")
+            .field("subject_kind", self.subject_ref.resource_type())
+            .field("has_subject_uid", &true)
+            .field("has_attributes_digest", &true)
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PositiveEntry {
     revisions: PolicyRevisionSet,
@@ -45,10 +55,30 @@ struct PositiveEntry {
 }
 
 /// A bounded positive-only cache. Denial state is never converted into an allow.
-#[derive(Debug)]
 pub struct PositiveDecisionCache {
     max_entries: usize,
     entries: Mutex<BTreeMap<AuthorizationCacheKey, PositiveEntry>>,
+}
+
+impl core::fmt::Debug for PositiveDecisionCache {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let is_poisoned = self.entries.is_poisoned();
+        let entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let revision_sets = entries
+            .values()
+            .map(|entry| entry.revisions)
+            .collect::<BTreeSet<_>>();
+
+        f.debug_struct("PositiveDecisionCache")
+            .field("max_entries", &self.max_entries)
+            .field("entry_count", &entries.len())
+            .field("revision_sets", &revision_sets)
+            .field("is_poisoned", &is_poisoned)
+            .finish()
+    }
 }
 
 impl PositiveDecisionCache {
