@@ -561,10 +561,16 @@ where
                     response
                 }
             }
-            Err(error) => batch_error(map_store_error_with_revision_visibility(
-                error,
-                self.can_read_revision(&trusted, &routes),
-            )),
+            Err(error) => {
+                let conflict_mutation_ordinal =
+                    error.mutation_ordinal().map(|ordinal| ordinal.get());
+                let mut response = batch_error(map_store_error_with_revision_visibility(
+                    error,
+                    self.can_read_revision(&trusted, &routes),
+                ));
+                response.conflict_mutation_ordinal = conflict_mutation_ordinal;
+                response
+            }
         }
     }
 
@@ -1694,9 +1700,9 @@ mod tests {
         SessionPurpose, TranscriptHash, TransportBinding,
     };
     use d2b_resource_store::{
-        AdmissionIssuer, AdmissionVerifier, ResourceStoreBackend, StoreError, StoreErrorKind,
-        StoreListResult, StoreResolvedIdentity, StoreWatchReceipt, StoredSchema, VerifiedMutation,
-        admission_pair,
+        AdmissionIssuer, AdmissionVerifier, MutationOrdinal, ResourceStoreBackend, StoreError,
+        StoreErrorKind, StoreListResult, StoreResolvedIdentity, StoreWatchReceipt, StoredSchema,
+        VerifiedMutation, admission_pair,
     };
     use protobuf::EnumOrUnknown;
 
@@ -1833,10 +1839,9 @@ mod tests {
                         revision: ZoneRevision::new(9),
                     })
                 }
-                CommitMode::Conflict => Err(StoreError::new(
-                    StoreErrorKind::ResourceConflict,
-                    Some(ZoneRevision::new(8)),
-                    None,
+                CommitMode::Conflict => Err(StoreError::batch_conflict(
+                    ZoneRevision::new(8),
+                    MutationOrdinal::new(u32::from(mutation.mutations().len() > 1)).unwrap(),
                     d2b_contracts::v3::RetryClass::Reauthorize,
                     "revision-changed",
                 )),
@@ -2316,6 +2321,31 @@ mod tests {
         );
         assert_eq!(error.current_revision, None);
         assert!(response.resource.is_none());
+    }
+
+    #[tokio::test]
+    async fn batch_conflict_reports_the_stale_mutation_ordinal() {
+        let store = Arc::new(FakeStore::new(CommitMode::Conflict));
+        let service = ResourceService::new(
+            Arc::clone(&store),
+            authorizer(&store, [ResourceVerb::Delete, ResourceVerb::Get]),
+        );
+        let mut request = wire::CommitBatchRequest::new();
+        request.meta = request_meta();
+        request.mutations = vec![
+            mutation(wire::MutationKind::MUTATION_KIND_DELETE),
+            mutation(wire::MutationKind::MUTATION_KIND_DELETE),
+        ];
+
+        let response = service.commit_batch(trusted(request, None)).await;
+
+        assert_eq!(response.conflict_mutation_ordinal, Some(1));
+        let error = response.error.as_ref().unwrap();
+        assert_eq!(
+            error.kind.enum_value().unwrap(),
+            wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_CONFLICT
+        );
+        assert_eq!(error.current_revision, Some(8));
     }
 
     #[tokio::test]
