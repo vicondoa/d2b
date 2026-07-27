@@ -600,12 +600,14 @@ that evidence exists.
 | Backup/restore/internal schema upgrade | staged validate → atomic publish → rollback-window retention |
 | Repeated open/close and long-reader rejection | no reader starves the single writer |
 
-The RSS row is not a W0 pass criterion as a whole. W0 records only the resource
-service/store median at the 10,000-resource/100-watch fixture and fails above
-24 MiB. The owning controller waves separately fail above 22 MiB for
-`Provider/system-core` and 12 MiB for `Provider/system-minijail`. W6 alone may
-record the aggregate row as passing, after measuring all three processes live
-and at or below 64 MiB; the unallocated 6 MiB is variance headroom.
+The RSS row is not a contract-only store pass criterion. After SPIKE-01 runs,
+`ADR046-store-001` production backend work records the resource service/store
+median at the 10,000-resource/100-watch fixture and fails above 24 MiB; that
+evidence blocks backend completion. The work that lands the fixed controllers
+separately fails above 22 MiB for `Provider/system-core` and 12 MiB for
+`Provider/system-minijail`. Provider integration alone may record the
+aggregate row as passing, after measuring all three processes live and at or
+below 64 MiB; the unallocated 6 MiB is variance headroom.
 
 Failure to meet a hard target changes the Proposed design (per the spec);
 it is never resolved by weakening durability, authorization, or audit.

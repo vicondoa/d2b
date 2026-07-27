@@ -367,13 +367,16 @@ On the pinned reference host/release profile:
 | p95 durable commit → matching controller handler start | <=5 ms |
 | p95 ready Process commit → launch-attempt start | <=20 ms |
 
-Evidence for the aggregate RSS row is staged. W0 records only the Zone resource
+Evidence for the aggregate RSS row is staged. After SPIKE-01 passes,
+`ADR046-store-001` production backend work records the Zone resource
 service/store median at the 10,000-resource/100-watch fixture and must meet
-<=24 MiB; it must not report the aggregate row as passing. The wave that lands
-each fixed controller separately records `Provider/system-core <=22 MiB` and
-`Provider/system-minijail <=12 MiB`. W6 records the first valid all-three-live
-aggregate result, which must remain <=64 MiB. The sub-budgets total 58 MiB; the
-remaining 6 MiB is variance headroom, not an independently spendable budget.
+<=24 MiB. That result gates backend completion; contract-only store work has
+no RSS exit criterion and must not report the aggregate row as passing.
+The work items that land each fixed controller separately record
+`Provider/system-core <=22 MiB` and `Provider/system-minijail <=12 MiB`.
+Provider integration records the first valid all-three-live aggregate result,
+which must remain <=64 MiB. The sub-budgets total 58 MiB; the remaining 6 MiB
+is variance headroom, not an independently spendable budget.
 
 Benchmark fixtures include:
 
