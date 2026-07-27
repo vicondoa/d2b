@@ -1147,16 +1147,11 @@ mod tests {
         ));
         assert_eq!(assert_chain_redacted(&serde_error, &payload_marker), 1);
 
-        let duplicate = format!(
-            r#"{{"{payload_marker}":1,"{payload_marker}":2}}"#
-        );
+        let duplicate = format!(r#"{{"{payload_marker}":1,"{payload_marker}":2}}"#);
         let canonical_error = ResourceEnvelope::from_json(duplicate.as_bytes()).unwrap_err();
         assert!(matches!(
             &canonical_error,
-            ResourceError::CanonicalJson(CanonicalJsonError::DuplicateKey {
-                key_ordinal: 2,
-                ..
-            })
+            ResourceError::CanonicalJson(CanonicalJsonError::DuplicateKey { key_ordinal: 2, .. })
         ));
         assert_eq!(assert_chain_redacted(&canonical_error, &payload_marker), 2);
     }
@@ -1174,10 +1169,8 @@ mod tests {
             uid_marker.as_str(),
             payload_marker.as_str(),
         ];
-        let finalizer = FinalizerId::parse(format!(
-            "{name_marker}.d2bus.org/{payload_marker}"
-        ))
-        .unwrap();
+        let finalizer =
+            FinalizerId::parse(format!("{name_marker}.d2bus.org/{payload_marker}")).unwrap();
         let presentation = PresentationMetadata::new(
             BTreeMap::from([("marker".to_owned(), payload_marker.clone())]),
             BTreeMap::from([("marker".to_owned(), payload_marker.clone())]),
@@ -1203,24 +1196,17 @@ mod tests {
         )
         .unwrap();
         let extension = ProviderSpecExtension::new(
-            ExtensionSchemaId::parse(&format!(
-                "{name_marker}.d2bus.org/Host/spec"
-            ))
-            .unwrap(),
+            ExtensionSchemaId::parse(&format!("{name_marker}.d2bus.org/Host/spec")).unwrap(),
             SchemaVersion::parse("1.0").unwrap(),
-            CanonicalJsonObject::parse(
-                format!(r#"{{"marker":"{payload_marker}"}}"#).as_bytes(),
-            )
-            .unwrap(),
+            CanonicalJsonObject::parse(format!(r#"{{"marker":"{payload_marker}"}}"#).as_bytes())
+                .unwrap(),
         )
         .unwrap();
         let spec = ResourceSpec::new(
             Some(ResourceRef::parse(&format!("Provider/{name_marker}")).unwrap()),
             None,
-            CanonicalJsonObject::parse(
-                format!(r#"{{"marker":"{payload_marker}"}}"#).as_bytes(),
-            )
-            .unwrap(),
+            CanonicalJsonObject::parse(format!(r#"{{"marker":"{payload_marker}"}}"#).as_bytes())
+                .unwrap(),
             Some(extension.clone()),
         )
         .unwrap();
@@ -1250,9 +1236,11 @@ mod tests {
             }
         }
 
-        assert!(String::from_utf8(envelope.canonical_bytes().unwrap())
-            .unwrap()
-            .contains(&payload_marker));
+        assert!(
+            String::from_utf8(envelope.canonical_bytes().unwrap())
+                .unwrap()
+                .contains(&payload_marker)
+        );
         assert!(finalizer.to_canonical_string().contains(&payload_marker));
     }
 }

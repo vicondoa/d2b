@@ -32,8 +32,8 @@ pub use resource_schema::{
     CanonicalJsonError, CanonicalJsonObject, CanonicalJsonValue, ExtensionSchemaId,
     ExtensionSchemaLayer, ObjectFieldSchema, ProviderExtensionRegistration,
     RESOURCE_ENVELOPE_DOMAIN_TAG, RESOURCE_SPEC_DOMAIN_TAG, RESOURCE_STATUS_DOMAIN_TAG,
-    ResourceSchemaContract, ResourceSchemaError, SCHEMA_DOMAIN_TAG, SchemaVersion, canonical_digest,
-    canonical_json_bytes,
+    ResourceSchemaContract, ResourceSchemaError, SCHEMA_DOMAIN_TAG, SchemaVersion,
+    canonical_digest, canonical_json_bytes,
 };
 pub use resource_status::{
     ConditionState, ProviderStatusExtension, ResourceCondition, ResourceCurrencySet,

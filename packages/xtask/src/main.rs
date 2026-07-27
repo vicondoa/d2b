@@ -576,9 +576,7 @@ fn sanitize_generated_rust(path: &Path) -> Result<(), Box<dyn std::error::Error>
     Ok(())
 }
 
-fn redact_generated_protobuf_formatting(
-    path: &Path,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn redact_generated_protobuf_formatting(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     const DERIVE: &str = "#[derive(PartialEq,Clone,Default,Debug)]";
     let mut generated = fs::read_to_string(path)?;
     let message_names = generated

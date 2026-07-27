@@ -1408,9 +1408,7 @@ key":1}"#,
     #[test]
     fn canonical_json_errors_keep_only_closed_reasons_and_safe_positions() {
         let payload_marker = format!("payload-marker-{:x}", std::process::id());
-        let duplicate = format!(
-            r#"{{"{payload_marker}":1,"{payload_marker}":2}}"#
-        );
+        let duplicate = format!(r#"{{"{payload_marker}":1,"{payload_marker}":2}}"#);
         let duplicate_error = CanonicalJsonValue::parse(duplicate.as_bytes()).unwrap_err();
         assert!(matches!(
             &duplicate_error,
@@ -1420,17 +1418,12 @@ key":1}"#,
                 column
             } if *column > 0
         ));
-        for rendered in [
-            format!("{duplicate_error:?}"),
-            format!("{duplicate_error}"),
-        ] {
+        for rendered in [format!("{duplicate_error:?}"), format!("{duplicate_error}")] {
             assert!(!rendered.contains(&payload_marker));
         }
         assert!(std::error::Error::source(&duplicate_error).is_none());
 
-        let malformed = format!(
-            r#"{{"safe":"{payload_marker}","broken":}}"#
-        );
+        let malformed = format!(r#"{{"safe":"{payload_marker}","broken":}}"#);
         let syntax_error = CanonicalJsonValue::parse(malformed.as_bytes()).unwrap_err();
         assert!(matches!(
             &syntax_error,
@@ -1572,11 +1565,8 @@ key":1}"#,
             resource_type.clone(),
             ExtensionSchemaLayer::Status,
         );
-        let object = ObjectFieldSchema::new(
-            [payload_marker.clone()],
-            [payload_marker.clone()],
-        )
-        .unwrap();
+        let object =
+            ObjectFieldSchema::new([payload_marker.clone()], [payload_marker.clone()]).unwrap();
         let digest = SchemaFingerprint::parse(format!("sha256:{nonce:064x}")).unwrap();
         let identity = BaseSchemaIdentity {
             version: SchemaVersion::parse("1.0").unwrap(),
@@ -1635,11 +1625,11 @@ key":1}"#,
             }
         }
 
-        assert!(spec_schema_id
-            .to_canonical_string()
-            .contains(&name_marker));
-        assert!(String::from_utf8(dynamic_object.to_canonical_bytes())
-            .unwrap()
-            .contains(&payload_marker));
+        assert!(spec_schema_id.to_canonical_string().contains(&name_marker));
+        assert!(
+            String::from_utf8(dynamic_object.to_canonical_bytes())
+                .unwrap()
+                .contains(&payload_marker)
+        );
     }
 }

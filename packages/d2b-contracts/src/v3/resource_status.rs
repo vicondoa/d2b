@@ -1048,16 +1048,12 @@ mod tests {
             currency.clone(),
         )
         .unwrap();
-        let details = CanonicalJsonObject::parse(
-            format!(r#"{{"marker":"{payload_marker}"}}"#).as_bytes(),
-        )
-        .unwrap();
+        let details =
+            CanonicalJsonObject::parse(format!(r#"{{"marker":"{payload_marker}"}}"#).as_bytes())
+                .unwrap();
         let provider = ProviderStatusExtension::new(
             reference,
-            ExtensionSchemaId::parse(&format!(
-                "{name_marker}.d2bus.org/Host/status"
-            ))
-            .unwrap(),
+            ExtensionSchemaId::parse(&format!("{name_marker}.d2bus.org/Host/status")).unwrap(),
             SchemaVersion::parse("1.0").unwrap(),
             ResourceGeneration::new(1).unwrap(),
             details.clone(),
@@ -1096,8 +1092,10 @@ mod tests {
             }
         }
 
-        assert!(String::from_utf8(canonical_json_bytes(&status).unwrap())
-            .unwrap()
-            .contains(&payload_marker));
+        assert!(
+            String::from_utf8(canonical_json_bytes(&status).unwrap())
+                .unwrap()
+                .contains(&payload_marker)
+        );
     }
 }

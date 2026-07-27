@@ -28,7 +28,11 @@ fn every_resource_protobuf_message_has_closed_diagnostic_formatting() {
     let nonce = format!("{:x}", std::process::id());
     let zone = format!("zone-{nonce}");
     let name = format!("name-{nonce}");
-    let uid = format!("123e4567-e89b-4{:0>3}-a456-{:0>12}", &nonce[..nonce.len().min(3)], nonce);
+    let uid = format!(
+        "123e4567-e89b-4{:0>3}-a456-{:0>12}",
+        &nonce[..nonce.len().min(3)],
+        nonce
+    );
     let payload = format!("payload-marker-{nonce}");
     let markers = [zone.as_str(), name.as_str(), uid.as_str(), payload.as_str()];
 
