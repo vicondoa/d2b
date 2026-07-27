@@ -102,7 +102,7 @@ pub struct SealRecord {
 
 impl SealRecord {
     /// Re-validates a seal read back from delivery state.
-    pub fn validate(&self) -> Result<()> {
+    pub fn validate(&self, candidate: &CandidateDir) -> Result<()> {
         ensure_artifact_kind(&self.artifact_kind, SEAL_ARTIFACT_KIND, "wave seal")?;
         if self.schema_version != DELIVERY_SCHEMA_VERSION {
             return Err(DeliveryError::new(format!(
@@ -126,6 +126,7 @@ impl SealRecord {
                 "wave seal digests do not re-derive from the sealed material",
             ));
         }
+        candidate.validate_artifact_address(&self.wave, &self.candidate_id, "wave seal")?;
         self.panel.validate()?;
         for lane in &self.evidence {
             for validation in &lane.validations {
@@ -164,7 +165,7 @@ pub fn seal(candidate: &CandidateDir, snapshot: &SnapshotView) -> Result<Workflo
         panel_request_sha256,
         evidence,
     };
-    record.validate()?;
+    record.validate(candidate)?;
     candidate.write_json(SEAL_FILE, &record)?;
 
     WorkflowOutput::ok(WaveCommand::Seal)
@@ -322,7 +323,7 @@ pub(crate) mod tests {
         );
 
         let record: SealRecord = candidate.read_json(SEAL_FILE).expect("seal record");
-        record.validate().expect("sealed record is valid");
+        record.validate(&candidate).expect("sealed record is valid");
         assert_eq!(record.candidate_id, snapshot.candidate_id);
         assert_eq!(record.panel.records.len(), PANEL_ROLES.len());
         assert!(record.panel.unanimous);
@@ -484,7 +485,7 @@ pub(crate) mod tests {
         seal(&candidate, &snapshot).expect("seal");
         let mut record: SealRecord = candidate.read_json(SEAL_FILE).expect("seal record");
         record.content_id = ContentId::parse("d".repeat(64)).expect("digest");
-        let error = record.validate().expect_err("forged seal");
+        let error = record.validate(&candidate).expect_err("forged seal");
         assert!(error.message().contains("re-derive"), "{error}");
     }
 

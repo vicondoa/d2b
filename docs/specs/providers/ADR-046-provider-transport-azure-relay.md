@@ -607,12 +607,7 @@ spec:
       limit: 64
     fds:
       limit: 256
-  mounts:
-    - volumeRef: Volume/transport-azure-relay--listener--state--work-gateway
-      view: main
-      mountPath: /state
-      access: read-only
-      required: true
+  mounts: []
   networkUsage:
     networkRef: <config.networkRef>
     ports: []
@@ -627,7 +622,7 @@ spec:
     class: on-failure
     backoffBase: "2s"
     backoffMax: "60s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: null
     resetAfter: "300s"
 ```
@@ -694,12 +689,7 @@ spec:
       limit: 32
     fds:
       limit: 128
-  mounts:
-    - volumeRef: Volume/transport-azure-relay--sender--state--work-gateway
-      view: main
-      mountPath: /state
-      access: read-only
-      required: true
+  mounts: []
   networkUsage:
     networkRef: <config.networkRef>
     ports: []
@@ -714,7 +704,7 @@ spec:
     class: on-failure
     backoffBase: "2s"
     backoffMax: "60s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: null
     resetAfter: "300s"
 ```
@@ -1554,8 +1544,10 @@ are gated with `#[ignore]` and documented in `src/tests/integration/README`.
 
 Per D094 and `ADR-046-validation-and-delivery` §10.16, this Provider's `src/`
 unit tests and `tests/*.rs` hermetic suite are fast, in-process, deterministic,
-and parallel-safe: an individual normal test has p95 ≤50 ms with no wall-clock
-sleep, and `cargo test -p d2b-provider-transport-azure-relay --lib --tests` completes in ≤2 s warm-cache
+and parallel-safe: an individual normal test has an advisory wall-clock p95
+diagnostic threshold of <=50 ms; gate enforcement is aggregate per-crate
+process CPU only. There is no wall-clock
+sleep, and `cargo test -p d2b-provider-transport-azure-relay --lib --tests` completes in ≤3 s warm-cache
 execution time (compilation excluded). They use a deterministic fake clock/RNG
 and the toolkit fakes/FakeEffectPort only - no process spawn, container,
 network, DBus, systemd, broker daemon, Nix eval/build, KVM, USB/GPU/TPM

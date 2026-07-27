@@ -40,9 +40,9 @@ is a `Guest`. The Provider:
 The controller communicates with privileged infrastructure **only through an
 injected async `TpmEffectPort`** over opaque resource IDs. It never calls
 broker operations directly, never receives socket paths, UIDs, GIDs, pidfds,
-or broker wire types. `volume-local` and `system-minijail` Providers translate
-resource API operations into the actual broker effects; the broker remains the
-sole executor and audit owner of all privileged filesystem and process-spawn
+or broker wire types. Core Volume and Process effect adapters translate those
+opaque requests into the actual broker effects; the broker remains the sole
+executor and audit owner of all privileged filesystem and process-spawn
 operations.
 
 ---
@@ -205,7 +205,7 @@ spec:
     class: on-failure
     backoffBase: "2s"
     backoffMax: "120s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: null
     resetAfter: "3600s"
   adoptionPolicy: adopt-on-restart
@@ -571,7 +571,7 @@ spec:
     class: on-failure
     backoffBase: "2s"
     backoffMax: "60s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: 10
     resetAfter: "3600s"
   adoptionPolicy: adopt-on-restart
@@ -1120,8 +1120,7 @@ Declared in the Provider descriptor; granted by the Provider framework:
 | `User` | `get`, `list`, `watch` | read-only; for principal resolution |
 
 The controller holds **no** permissions to call broker operations. Broker
-permissions belong exclusively to `Provider/volume-local` and
-`Provider/system-minijail`.
+permissions belong exclusively to core Volume and Process effect adapters.
 
 ---
 
@@ -1279,9 +1278,9 @@ policy test must pass.
 | Dependency/owner | P0; blocked by ADR046-device-tpm-001; owner: device-tpm effect boundary |
 | Current source | `PrepareSwtpmDir` in `packages/d2b-priv-broker/src/ops/swtpm_dir.rs` and `SpawnRunner { role: Swtpm }` in `packages/d2b-priv-broker/src/ops/spawn_runner.rs` remain privileged executors, but the controller must not import broker crates |
 | Reuse action | wrap |
-| Destination | packages/d2b-provider-device-tpm/src/{effect_port.rs,effect_impl.rs}; packages/d2b-provider-device-tpm/tests/effect_fake.rs |
-| Detailed design | TpmEffectPort and FakeTpmEffectPort: implement the effect trait, typed TPM EndpointRef handoff, and fake test port. Prove non-test files contain no `use d2b_priv_broker::` and the controller sees only opaque resource IDs and EndpointRefs. Primary reuse disposition: `wrap`. Preserved source-plan detail: wrap privileged effects behind an injected async `TpmEffectPort`; keep broker operations only behind `volume-local` and `system-minijail`. |
-| Integration | Device controller calls `TpmEffectPort`; ResourceClient-backed implementation talks to ResourceAPI/ComponentSession; `volume-local` and `system-minijail` translate resource operations into broker effects. |
+| Destination | packages/d2b-provider-device-tpm/src/effect_port.rs; packages/d2b-provider-device-tpm/tests/effect_fake.rs; production implementation in the framework-internal core Device effect adapter |
+| Detailed design | TpmEffectPort and FakeTpmEffectPort: define the effect trait, typed TPM EndpointRef handoff, and fake test port in the Provider crate; implement the production mapping only in the core adapter. Prove non-test Provider files contain no `use d2b_priv_broker::` and the controller sees only opaque resource IDs and EndpointRefs. Primary reuse disposition: `wrap`. Preserved source-plan detail: wrap privileged effects behind an injected async `TpmEffectPort`; keep broker operations only behind core Volume and Process adapters. |
+| Integration | Device controller calls `TpmEffectPort`; the core implementation resolves ResourceAPI/ComponentSession state and maps Volume and Process effects to broker operations. |
 | Data migration | Existing TPM state migration follows §17.3: the old `/var/lib/d2b/vms/<vm>/swtpm/` directory moves to the controller-created Volume path with the provisioning marker preserved and re-keyed; this item must not silently recreate missing state. |
 | Validation | `tests/effect_fake.rs`; static proof that non-test files do not import `d2b_priv_broker` |
 | Removal proof | Direct broker references in controller/daemon TPM paths are superseded by the effect-port/resource-provider boundary; final deletion is ADR046-device-tpm-013 |
@@ -1340,7 +1339,7 @@ Implement `build_tpm_state_volume_spec` in `resources.rs`. Tests prove:
 | Reuse action | adapt |
 | Destination | packages/d2b-provider-device-tpm/src/resources.rs; Process spec tests under packages/d2b-provider-device-tpm/tests/ |
 | Detailed design | Canonical swtpm Process spec: implement `build_swtpm_process_spec` with `readOnlyRoot: true`, `userNamespace.mappingClass: process-principal-root`, namespace classes `[pid, mount, user]`, empty capability classes, `seccompClass: w1-swtpm`, two Device-owned Endpoint resources (`tpm` and `ctrl`), `mounts[0].required: true`, and no socket path, binary path, UID integer, or GID integer in any spec field. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract swtpm argv/sandbox intent into canonical Process resources; remove caller-supplied binary path, UID, GID, and socket path fields. |
-| Integration | Controller emits the Process spec; `system-minijail` consumes it and invokes broker `SpawnRunner`; Endpoint resources publish TPM and control sockets for downstream consumers. |
+| Integration | Controller emits the Process spec; `system-minijail` requests launch through its injected MinijailProcessEffectPort; the core/ProviderSupervisor adapter invokes broker `SpawnRunner`; Endpoint resources publish TPM and control sockets for downstream consumers. |
 | Data migration | Existing TPM state migration follows §17.3: the old `/var/lib/d2b/vms/<vm>/swtpm/` directory moves to the controller-created Volume path with the provisioning marker preserved and re-keyed; this item must not silently recreate missing state. |
 | Validation | Process spec golden tests proving all required and forbidden fields; preserved `minijail_swtpm_video.rs` contract tests |
 | Removal proof | `ProcessRole::Swtpm` and swtpm argv builder call sites can be retired after the canonical Process resource covers runner launch |
@@ -1509,7 +1508,7 @@ Volume NOT deleted (`cleanupPolicy: never`) → Volume persists. Core emits
 | Reuse action | delete-after-cutover |
 | Destination | packages/d2bd/src/*; packages/d2b-core/src/processes.rs; packages/d2b-provider-device-tpm/src/; packages/d2b-host/src/swtpm_argv.rs |
 | Detailed design | Remove direct broker references: remove pre-ADR-0046 daemon swtpm broker call sites, retire `ProcessRole::Swtpm` and `ProcessRole::SwtpmPreStartFlush`, move argv builders from `d2b-host/src/swtpm_argv.rs` to `d2b-provider-device-tpm/src/` with binary path fields removed, while retaining `d2b-priv-broker/src/ops/swtpm_dir.rs` for `volume-local` and `spawn_runner.rs` for `system-minijail`. Primary reuse disposition: `delete-after-cutover`. Preserved source-plan detail: remove direct broker references from daemon and move argv builders into the Provider with binary path fields removed; retain broker ops only behind resource providers. |
-| Integration | After controller/effect-port parity, daemon no longer calls TPM broker ops; Resource providers invoke broker effects from Volume and Process reconciliation; contract tests ensure swtpm sandbox/readiness still hold. |
+| Integration | After controller/effect-port parity, daemon and Provider processes no longer call TPM broker ops; core adapters invoke broker effects requested through Volume and Process EffectPorts; contract tests ensure swtpm sandbox/readiness still hold. |
 | Data migration | Existing TPM state migration follows §17.3: the old `/var/lib/d2b/vms/<vm>/swtpm/` directory moves to the controller-created Volume path with the provisioning marker preserved and re-keyed; this item must not silently recreate missing state. |
 | Validation | Static search/proof for no direct broker swtpm references in daemon/controller plus preserved swtpm contract tests |
 | Removal proof | Direct daemon swtpm call sites removed; `ProcessRole::Swtpm` and `ProcessRole::SwtpmPreStartFlush` retired; `d2b-host/src/swtpm_argv.rs` no longer owns Provider argv builders |
@@ -1526,9 +1525,11 @@ Move argv builders from `d2b-host/src/swtpm_argv.rs` to
 
 Per D094 and `ADR-046-validation-and-delivery` §10.16, this Provider's `src/`
 unit tests and `tests/*.rs` hermetic suite are fast, in-process, deterministic,
-and parallel-safe: an individual normal test has p95 ≤50 ms with no wall-clock
+and parallel-safe: an individual normal test has an advisory wall-clock p95
+diagnostic threshold of <=50 ms; gate enforcement is aggregate per-crate
+process CPU only. There is no wall-clock
 sleep, and `cargo test -p d2b-provider-device-tpm --lib --tests` completes in
-≤2 s warm-cache execution time (compilation excluded). They use a deterministic
+≤3 s warm-cache execution time (compilation excluded). They use a deterministic
 fake clock/RNG and the toolkit fakes/FakeEffectPort only - no process spawn,
 container, network, DBus, systemd, broker daemon, Nix eval/build, KVM,
 USB/GPU/TPM hardware, or live cloud, and no filesystem tree beyond tiny temp

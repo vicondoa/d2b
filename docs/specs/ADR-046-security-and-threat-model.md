@@ -425,11 +425,13 @@ core-controller process boundary at bootstrap, but they use **distinct
 authenticated subjects and closed RBAC grants**; after bootstrap, both are
 ordinary RBAC subjects like any other component (RZC lines 1564-1627).
 Bootstrap authorization is a compiled, non-extensible narrow policy: only
-these two exact subjects receive the closed initial recovery/config
-publication verbs, it cannot be widened by operator config, and
-`bootstrap-supersession-atomic` guarantees no window where both bootstrap
-policy and stored RBAC are simultaneously active once
-`IndexBuilt=True` (D052; RZC lines 1564-1627, line 3030).
+these two exact subjects receive the D105 frozen method/type rows under exact
+local evidence, purpose, service, and generation binding; it cannot be widened
+by operator config. `bootstrap-supersession-atomic` advances
+`store_meta.policy_revision` from 0 to 1 in the same redb transaction that
+installs the initial Role/RoleBinding set, so there is no window where bootstrap
+and stored RBAC are simultaneously active. `IndexBuilt` is ordinary Role
+readiness status and is not the bootstrap phase authority.
 
 Controllers own their watch/coalescing queues and retry decisions
 independently; workers have **no** `ResourceClient`, no d2b-bus/dependency
@@ -797,10 +799,10 @@ Network/Device Providers themselves.
 
 | Domain | EffectPort | Sole privileged executor | Enforcement |
 | --- | --- | --- | --- |
-| Process | `MinijailProcessEffectPort` | `Provider/system-minijail` controller + `d2b-priv-broker` `SpawnRunner` | Compile-time dependency audit: the Provider crate imports no `d2b.broker.v3` service/client/DTO (`ADR-046-provider-system-minijail.md` lines 1621-1628) |
-| Process (systemd) | `SystemdProcessEffectPort` | `Provider/system-systemd` controller via D-Bus transient unit API | Controller never connects to the systemd D-Bus socket directly and never calls `systemctl` as a subprocess |
-| Volume | `VolumeEffectPort` | `Provider/volume-local` controller + broker `ProvisionLayoutEntry`/`RepairLayoutEntry`/`CleanupLayoutEntry`/`RotateSealingKey`/`PrepareSwtpmDir`; key rotation is requested only through `VolumeEffectPort::rotate_sealing_key` | "The controller process holds no claim that grants access to raw host paths" (`ADR-046-provider-volume-local.md` lines 1739-1776) |
-| Network | `NetworkEffectPort` | `Provider/network-local` controller + broker `CreatePersistentTap`/`DeletePersistentTap`/`SetBridgePortFlags`/`ApplyNftablesProjection`/`ApplySysctl` | "The controller holds no broker role and no `network-admin` capability" (`ADR-046-provider-network-local.md` lines 1680-1682) |
+| Process | `MinijailProcessEffectPort` | Core/ProviderSupervisor adapter + `d2b-priv-broker` `SpawnRunner` | Compile-time dependency audit: the Provider crate imports no `d2b.broker.v3` service/client/DTO (`ADR-046-provider-system-minijail.md` lines 1621-1628) |
+| Process (systemd) | `SystemdProcessEffectPort` | Core systemd effect adapter via D-Bus transient unit API | Provider controller never connects to the systemd D-Bus socket directly and never calls `systemctl` as a subprocess |
+| Volume | `VolumeEffectPort` | Core Volume effect adapter + broker `ProvisionLayoutEntry`/`RepairLayoutEntry`/`CleanupLayoutEntry`/`RotateSealingKey`/`PrepareSwtpmDir`; key rotation is requested only through `VolumeEffectPort::rotate_sealing_key` | "The controller process holds no claim that grants access to raw host paths" (`ADR-046-provider-volume-local.md` lines 1739-1776) |
+| Network | `NetworkEffectPort` | Core Network effect adapter + broker `CreatePersistentTap`/`DeletePersistentTap`/`SetBridgePortFlags`/`ApplyNftablesProjection`/`ApplySysctl` | "The controller holds no broker role and no `network-admin` capability" (`ADR-046-provider-network-local.md` lines 1680-1682) |
 | Device (USBIP) | `UsbipEffectPort` | Core adapter + broker `ApplyNftablesProjection { action: Apply \| Remove }` (D-NETWORK-004) for both acquisition and release | Network-local never owns USBIP TCP/3240 exposure; release is net-new privileged surface, not a capability of the shipped whole-table `UsbipBindFirewallRule` op |
 | Device (vsock) | `VsockEffectPort` | Zone runtime `LiveVsockEffectPort` | `tokio-vsock` is not a dependency of `transport-vsock` (INV-VSOCK-004) |
 | Cloud (ARM/ACA) | `AzureEffectPort` | The cloud runtime Provider's own controller, confined to the gateway Guest | All calls non-blocking; `AzureOperationHandle` is opaque, max 256 bytes |
@@ -1782,10 +1784,11 @@ time rejection, not an operational recommendation.
 - Any Provider claiming a wildcard permission
   (`resourceNames: ["*"]`/empty `executionRefs`) without being a
   core-controller-generated Role (RZC lines 868-997, line 2985).
-- Manifest-derived Provider spec fields set by the operator -
-  `spec.exports`, `spec.components`, `spec.dependencies`,
-  `spec.permissionClaims`, `spec.upgradePolicy`, `spec.restartPolicy` are
-  resolved only from the signed manifest (RZC lines 2722-2723).
+- Any Provider ResourceSpec field other than `artifactId` and `config`.
+  Properties such as `exports`, `components`, `dependencies`,
+  `permissionClaims`, `upgradePolicy`, and `restartPolicy` exist only in the
+  signed manifest/catalog entry and are never copied into the Provider resource
+  row (RZC section 4.3).
 - Any Provider process importing a broker service/client/DTO, or receiving a
   broker socket, host path, device node, systemd D-Bus connection, or
   compositor socket by ambient discovery (§13, D077).

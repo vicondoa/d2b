@@ -4,7 +4,9 @@
 
 > Canonical metric inventory exposed by `d2bd`.
 > Implementation: [`packages/d2bd/src/metrics.rs`](../../packages/d2bd/src/metrics.rs).
-> Static gate: [`tests/daemon-metrics-eval.sh`](../../tests/daemon-metrics-eval.sh).
+> Policy coverage:
+> [`packages/d2b-contract-tests/tests/policy_metrics.rs`](../../packages/d2b-contract-tests/tests/policy_metrics.rs).
+> This is advisory until the fixture-contract lane is enabled and promoted.
 
 > **v1.2 status - scrapable endpoint deferred.** The in-process
 > registry described below is wired and exercised by the daemon

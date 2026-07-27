@@ -249,6 +249,14 @@ fn normalize_nix_store_hashes(value: &str) -> String {
     normalized
 }
 
+/// Rewrites a golden's prose into the text the binary actually emits.
+///
+/// The keys below are exact golden strings. When a documentation pass edited
+/// the goldens, every key stopped matching and this function silently became
+/// the identity, so the goldens and the binary drifted apart with nothing
+/// failing - this suite was not executed in any lane at the time. Keep each key
+/// byte-identical to its golden, and prefer changing the binary or the golden
+/// over adding another rewrite here.
 fn normalized_runtime_golden(name: &str) -> String {
     let expected = golden(name);
     expected
@@ -257,21 +265,19 @@ fn normalized_runtime_golden(name: &str) -> String {
             "routes through d2bd → broker.",
         )
         .replace(
-            "W8 keys rotate --dry-run: planned operation. --apply uses the daemon-first bridge and broker audit when the daemon handles the request.",
+            "Keys rotate --dry-run is a planned operation. --apply uses the daemon-first bridge and broker audit when the daemon handles the request.",
             "d2b keys rotate --dry-run: planned operation. --apply routes through d2bd → broker RunKeysRotate with broker audit.",
         )
         .replace(
-            "W8 keys trust --dry-run: planned operation. --apply uses the daemon-first bridge and broker audit when the daemon handles the request.",
+            "Keys trust --dry-run is a planned operation. --apply uses the daemon-first bridge and broker audit when the daemon handles the request.",
             "d2b keys trust --dry-run: planned operation. --apply routes through d2bd → broker RunKeysRotate with broker audit.",
         )
         .replace(
-            "W8 keys rotate-known-host --dry-run: planned operation. --apply uses the daemon-first bridge and broker audit when the daemon handles the request.",
+            "Keys rotate-known-host --dry-run is a planned operation. --apply uses the daemon-first bridge and broker audit when the daemon handles the request.",
             "d2b keys rotate-known-host --dry-run: planned operation. --apply routes through d2bd → broker RunKeysRotate with broker audit.",
         )
-        .replace("W3 host-prepare", "host-prepare")
-        .replace("v1.1-P2", "v1.1")
-        .replace("W15: dry-run preview retained;", "dry-run preview;")
-        .replace("with the W3 socket ACLs", "with socket ACLs")
+        .replace("Host-prepare", "host-prepare")
+        .replace("with the required socket ACLs", "with socket ACLs")
 }
 
 fn build_hermetic_bundle_tree(fixtures: &Path, dir: &Path) {

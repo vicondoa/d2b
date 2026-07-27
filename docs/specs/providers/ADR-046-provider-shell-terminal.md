@@ -230,7 +230,7 @@ status:
 | --- | --- | --- | --- | --- | --- |
 | `apiVersion` | `string` | Yes | `resources.d2bus.org/v3` | Exact | Resource API version. |
 | `type` | `string` | Yes | `shell-terminal.d2bus.org.ShellPool` | Exact | Vendor-qualified ResourceType identifier. |
-| `metadata.name` | `ResourceName` | Yes | None | `^[a-z][a-z0-9-]*$`, max 63 | Pool resource name. |
+| `metadata.name` | `ResourceName` | Yes | None | `^[a-z][a-z0-9-]*$`, 1 to 63 bytes | Pool resource name. |
 | `metadata.zone` | `ResourceName` | Yes | None | Existing Zone | Owning Zone. |
 | `metadata.ownerRef` | `ResourceRef` | No | `Provider/shell-terminal` | Provider or higher-level owner | Default owner is the provider. |
 | `spec.providerRef` | `ResourceRef` | Yes | `Provider/shell-terminal` | Exact | Provider identity. |
@@ -406,7 +406,7 @@ status:
 | --- | --- | --- | --- | --- | --- |
 | `apiVersion` | `string` | Yes | `resources.d2bus.org/v3` | Exact | Resource API version. |
 | `type` | `string` | Yes | `shell-terminal.d2bus.org.ShellSession` | Exact | Vendor-qualified ResourceType identifier. |
-| `metadata.name` | `ResourceName` | Yes | Controller-generated or Nix-specified | `^[a-z][a-z0-9-]*$`, max 63 | Stable session resource name. |
+| `metadata.name` | `ResourceName` | Yes | Controller-generated or Nix-specified | `^[a-z][a-z0-9-]*$`, 1 to 63 bytes | Stable session resource name. |
 | `metadata.zone` | `ResourceName` | Yes | None | Existing Zone | Owning Zone. |
 | `metadata.ownerRef` | `ResourceRef` | Yes | `shell-terminal.d2bus.org.ShellPool/<name>` | pool reference | Owning pool. |
 | `spec.providerRef` | `ResourceRef` | Yes | `Provider/shell-terminal` | Exact | Provider identity. |
@@ -600,7 +600,7 @@ spec:
     class: on-failure
     backoffBase: "1s"
     backoffMax: "60s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: null
     resetAfter: "300s"
   readiness:
@@ -680,7 +680,7 @@ d2b.zones.dev.resources.shell-terminal-controller = {
       class = "on-failure";
       backoffBase = "1s";
       backoffMax = "60s";
-      backoffMultiplier = 2.0;
+      backoffMultiplierMilli = 2000;
       maxRestarts = null;
       resetAfter = "300s";
     };
@@ -1439,9 +1439,11 @@ handles into the controller.
 
 Per D094 and `ADR-046-validation-and-delivery` §10.16, this Provider's `src/`
 unit tests and `tests/*.rs` hermetic suite are fast, in-process, deterministic,
-and parallel-safe: an individual normal test has p95 ≤50 ms with no wall-clock
+and parallel-safe: an individual normal test has an advisory wall-clock p95
+diagnostic threshold of <=50 ms; gate enforcement is aggregate per-crate
+process CPU only. There is no wall-clock
 sleep, and `cargo test -p d2b-provider-shell-terminal --lib --tests` completes
-in ≤2 s warm-cache execution time (compilation excluded). They use a
+in ≤3 s warm-cache execution time (compilation excluded). They use a
 deterministic fake clock/RNG and the toolkit fakes/FakeEffectPort only - no
 process spawn, container, network, DBus, systemd, broker daemon, Nix eval/build,
 KVM, USB/GPU/TPM hardware, or live cloud, and no filesystem tree beyond tiny
@@ -1450,7 +1452,7 @@ keeps a lane timeout/budget, parallel isolation, and fake external services by
 default; such a need is re-placed into `integration/`, never given a sleep,
 larger timeout, or `#[ignore]`. Bounded crypto/property tests are the only
 classified exception, each named with a capped case count and a declared higher
-per-test budget.
+per-test advisory threshold.
 
 ## Implementation work items
 

@@ -152,11 +152,14 @@ the failed step. There is no daemon-side caching of step success.
 ## Execution gate
 
 Today the daemon **logs** the planned host-prep DAG on every VM
-start (so the gate set `tests/host-prep-dag-eval.sh` and operators
-can audit the planned step set) but only dispatches the broker ops
+start so operators can audit the planned step set, but only dispatches the broker ops
 when `D2B_HOST_PREP_DAG_EXECUTE=1` is set in the daemon's
 environment. This gate remains in place while the deferred broker
 handlers listed above still return `Unimplemented`.
+
+The source and documentation policy lives in
+`packages/d2b-contract-tests/tests/policy_source.rs`. It is advisory until the
+fixture-contract lane is enabled and promoted.
 
 ## Cross-references
 

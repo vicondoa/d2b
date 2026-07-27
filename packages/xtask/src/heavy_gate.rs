@@ -1224,20 +1224,6 @@ fn exec_wrapped_command(args: &[String], nesting: NestingMarker) -> Result<u8> {
 }
 
 /// Clear the wrapper's signal mask and become the wrapped command.
-/// Names a wrapped program by its final path component only.
-///
-/// The wrapped program is operator supplied and may be an absolute path, so an
-/// unredacted diagnostic would echo the checkout or a username-bearing
-/// directory into the operator stderr and CI logs that a spawn failure
-/// reaches. Naming only the leaf keeps the failure diagnosable while dropping
-/// the sensitive directory portion.
-fn program_label(program: &OsString) -> String {
-    Path::new(program)
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "<program>".to_owned())
-}
-
 fn exec_shim(request: &Request) -> Result<u8> {
     let mut mask = SigSet::empty();
     for signal in FORWARDED_SIGNALS {
@@ -1254,7 +1240,7 @@ fn exec_shim(request: &Request) -> Result<u8> {
         GateErrorKind::Spawn,
         format!(
             "cannot start `{}`: {error}",
-            program_label(&request.program)
+            crate::diagnostic_redaction::redact_path(Path::new(&request.program))
         ),
     ))
 }
@@ -1352,7 +1338,7 @@ fn supervise(request: &Request, guard: Option<&SlotGuard>) -> Result<u8> {
             GateErrorKind::Spawn,
             format!(
                 "cannot start the heavy lane for `{}`: {error}",
-                program_label(&request.program)
+                crate::diagnostic_redaction::redact_path(Path::new(&request.program))
             ),
         )
     })?;
@@ -2213,34 +2199,27 @@ mod tests {
     }
 
     #[test]
-    fn a_spawn_failure_names_the_program_leaf_not_its_absolute_directory() {
+    fn a_spawn_failure_keeps_unambiguous_repository_context() {
         // A wrapped program that does not exist must fail closed while its
-        // diagnostic names only the leaf, never the absolute directory the
-        // operator supplied. `exec_shim` runs the exec in-process, so a missing
+        // diagnostic keeps repository-relative context without exposing the
+        // absolute checkout. `exec_shim` runs the exec in-process, so a missing
         // program returns the spawn diagnostic directly.
+        let repo = crate::repo_root().unwrap();
+        let program = repo.join(".scratch/redaction-sentinel-lane/does-not-exist");
         let request = Request {
-            program: OsString::from("/home/redaction-sentinel-lane/does-not-exist"),
+            program: program.into_os_string(),
             args: Vec::new(),
         };
         let error = exec_shim(&request).expect_err("a missing program must fail to exec");
         let message = error.message();
         assert!(
-            !message.contains("/home/redaction-sentinel-lane"),
-            "the spawn diagnostic leaked its absolute directory: {message}"
+            !message.contains(repo.to_str().unwrap()),
+            "the spawn diagnostic leaked its absolute checkout: {message}"
         );
         assert!(
-            message.contains("does-not-exist"),
-            "the spawn diagnostic must still name the program leaf: {message}"
+            message.contains("<repo>/.scratch/redaction-sentinel-lane/does-not-exist"),
+            "the spawn diagnostic must preserve repository-relative context: {message}"
         );
-    }
-
-    #[test]
-    fn program_label_reduces_an_absolute_path_to_its_leaf() {
-        assert_eq!(
-            program_label(&OsString::from("/home/alice/checkout/tests/entrypoint.sh")),
-            "entrypoint.sh"
-        );
-        assert_eq!(program_label(&OsString::from("make")), "make");
     }
 
     fn spawn_child_mode(test_name: &str, root: &Path, env_key: &str) -> std::process::Child {
@@ -3332,9 +3311,10 @@ mod tests {
 
         // 1. Filesystem entrypoints. Walk every GATED heavy-lane directory
         //    recursively and require an executable self-guard on each script.
-        //    performance-budgets.sh lives outside those directories, so it is
-        //    named explicitly. Optional directories (benchmark, cloud) are
-        //    walked when present and simply contribute nothing when absent.
+        //    performance-budgets.sh and the fixture-contract mode in
+        //    test-rust.sh live outside those directories, so they are named
+        //    explicitly. Optional directories (benchmark, cloud) are walked
+        //    when present and simply contribute nothing when absent.
         let mut entrypoints: Vec<PathBuf> = Vec::new();
         for dir in walked_heavy_dirs {
             entrypoints.extend(collect_heavy_entrypoints(&root.join(dir)));
@@ -3349,6 +3329,13 @@ mod tests {
             perf.display()
         );
         entrypoints.push(perf.clone());
+        let fixture_contracts = root.join("tests/test-rust.sh");
+        assert!(
+            fixture_contracts.is_file(),
+            "expected the fixture-contract entrypoint at {}",
+            fixture_contracts.display()
+        );
+        entrypoints.push(fixture_contracts.clone());
         entrypoints.sort();
         entrypoints.dedup();
 
@@ -3503,6 +3490,11 @@ mod tests {
             entrypoints.contains(&perf),
             "the performance-budgets entrypoint must be in the guarded set so static.sh's direct \
              invocation cannot bypass the semaphore"
+        );
+        assert!(
+            entrypoints.contains(&fixture_contracts),
+            "the fixture-contract entrypoint must be in the guarded set so its Nix and Cargo work \
+             cannot bypass the semaphore"
         );
     }
 

@@ -47,85 +47,80 @@ DASHES=(
 PROCESS_MARKER_RE='(^|[^[:alnum:]_-])W[0-9]+((fu|a)[0-9]*|-(fu|followup)([0-9]+)?)?([^[:alnum:]_]|$)|[[:alnum:]_]-W[0-9]+((fu|a)[0-9]*|-(fu|followup)([0-9]+)?)?([^[:alnum:]_]|$)|(^|[^[:alnum:]_-])P[0-9]+([.][0-9]+)?([^[:alnum:]_]|$)|[[:alnum:]_]-P[0-9]+([.][0-9]+)?([^[:alnum:]_]|$)|(^|[^[:alnum:]_])(ph|fu)[0-9]+([^[:alnum:]_]|$)|(^|[^[:alnum:]_])H[0-9]{1,2}([^[:alnum:]_]|$)|(^|[^[:alnum:]_])(finding|recommendation|review|panel|round|revision)[[:space:]#:_-]+[CHMLR][0-9]+([^[:alnum:]_]|$)|[(][[:space:]]*(software|test|nixos|networking|security|rust|product|docs|observability|kernel)-[0-9]+[[:space:]]*[)]'
 PROCESS_MARKER_FILENAME_RE='(^|[-_.])(W|w|P)[0-9]+((fu|a)[0-9]*|-(fu|followup)([0-9]+)?)?([-_.]|$)'
 
-# Shrink-only legacy debt ratchet. This path set and its budget may only get
-# smaller. Adding a path is permitted only in the same change that removes a
-# different violation and its entry; never increase the budget. Do not attach
-# free-text reasons: membership is the sole exemption, so every change remains
-# an explicit path diff.
-LEGACY_PROCESS_MARKER_PATH_BUDGET=71
-LEGACY_PROCESS_MARKER_PATHS=(
-  docs/reference/broker-w2-dispositions.md
-  docs/reference/schemas/v1/bundle.json
-  docs/reference/schemas/v1/minijail-profile.json
-  docs/reference/schemas/v1/processes.json
-  docs/reference/schemas/v1/wire-protocol.json
-  docs/reference/schemas/v2/minijail-profile.json
-  docs/reference/schemas/v2/processes.json
-  docs/reference/wave-evidence-schema.md
-  nixos-modules/host-activation.nix
-  nixos-modules/host.nix
-  nixos-modules/net.nix
-  packages/Cargo.toml
-  packages/d2b-contract-tests/tests/minijail_gpu.rs
-  packages/d2b-contract-tests/tests/minijail_profiles.rs
-  packages/d2b-contract-tests/tests/minijail_swtpm_video.rs
-  packages/d2b-contract-tests/tests/policy_guest.rs
-  packages/d2b-contract-tests/tests/policy_restart_adoption.rs
-  packages/d2b-contract-tests/tests/privileges_parity.rs
-  packages/d2b-contract-tests/tests/realm_workload_schema_contract.rs
-  packages/d2b-contract-tests/tests/usb_sk_contract.rs
-  packages/d2b-contracts/proto/guest_control.proto
-  packages/d2b-contracts/tests/version_skew.rs
-  packages/d2b-core/Cargo.toml
-  packages/d2b-core/src/bundle_resolver.rs
-  packages/d2b-core/src/host_w3.rs
-  packages/d2b-core/src/minijail_profile.rs
-  packages/d2b-core/src/privileges_w3.rs
-  packages/d2b-core/tests/bundle_resolver_tamper.rs
-  packages/d2b-exec-runner/tests/tty_pty_integration.rs
-  packages/d2b-gateway-runtime/src/aca_workload.rs
-  packages/d2b-gateway-runtime/src/display_listener.rs
-  packages/d2b-gateway-runtime/src/production.rs
-  packages/d2b-gateway-runtime/src/waypipe_display.rs
-  packages/d2b-gateway/Cargo.toml
-  packages/d2b-gateway/src/audit.rs
-  packages/d2b-gateway/src/handshake.rs
-  packages/d2b-gateway/src/ledger.rs
-  packages/d2b-gateway/src/lib.rs
-  packages/d2b-gateway/src/orchestrator.rs
-  packages/d2b-guestd/src/exec_pty.rs
-  packages/d2b-host/Cargo.toml
-  packages/d2b-host/src/hardlink_farm.rs
-  packages/d2b-host/src/runner_shape.rs
-  packages/d2b-priv-broker/Cargo.toml
-  packages/d2b-priv-broker/src/ops/store_sync_audit.rs
-  packages/d2b-priv-broker/src/ops/tap.rs
-  packages/d2b-priv-broker/src/runtime.rs
-  packages/d2b-provider-aca/Cargo.toml
-  packages/d2b-provider-relay/src/bin/d2b-relay.rs
-  packages/d2b-realm-provider/src/credential.rs
-  packages/d2b-realm-router/src/display_transport.rs
-  packages/d2b-realm-router/src/secure_session.rs
-  packages/d2b-realm-router/src/session_lifecycle.rs
-  packages/d2b/src/lib.rs
-  packages/d2b/tests/auth_status_contract.rs
-  packages/d2b/tests/cli_contract.rs
-  packages/d2b/tests/cli_json_contract.rs
-  packages/d2b/tests/host_doctor_contract.rs
-  packages/d2b/tests/status_contract.rs
-  packages/d2b/tests/usb_contract.rs
-  packages/d2b/tests/vm_verbs_contract.rs
-  packages/d2bd/Cargo.toml
-  packages/d2bd/src/guest_control_health.rs
-  packages/d2bd/src/lib.rs
-  packages/d2bd/src/main.rs
-  packages/d2bd/src/supervisor/pidfd_table.rs
-  packages/d2bd/src/workload_target_index.rs
-  tests/fixtures/gen-w3-cli-goldens.py
-  tests/golden/l3-matrix/w3-arch.txt
-  tests/golden/l3-matrix/w3-fedora.txt
-  tests/golden/l3-matrix/w3-ubuntu.txt
-)
+# Shrink-only legacy debt ratchet. The committed pin partitions one frozen path
+# universe into active and retired entries. A cleanup moves a path from
+# activePaths to retiredPaths; adding a path changes the frozen-universe digest
+# and fails both this gate and the independent xtask checker. There is no mutable
+# count budget to raise alongside an added exemption.
+PROCESS_MARKER_PIN=tests/golden/pinned/process-marker-legacy-paths.json
+PROCESS_MARKER_UNIVERSE_SHA256=0f6899e939fd8e0b49f41b56a0221f33552d79348adc2853927d338e610f8f34
+LEGACY_PROCESS_MARKER_PATHS=()
+
+load_process_marker_pin() {
+  local pin="$ROOT/$PROCESS_MARKER_PIN"
+  local active_output retired_output digest path
+  local -a retired_paths=() universe=()
+  local -A seen=()
+
+  [ -r "$pin" ] || fail "cannot read process-marker pin $PROCESS_MARKER_PIN"
+  [ "$(grep -c '^  "schemaVersion": 1,$' "$pin" || true)" -eq 1 ] \
+    || fail "process-marker pin has an unsupported or ambiguous schemaVersion"
+  [ "$(grep -c '^  "activePaths": \[$' "$pin" || true)" -eq 1 ] \
+    || fail "process-marker pin must declare exactly one activePaths array"
+  [ "$(grep -c '^  "retiredPaths": \[' "$pin" || true)" -eq 1 ] \
+    || fail "process-marker pin must declare exactly one retiredPaths array"
+
+  active_output=$(awk '
+    /^  "activePaths": \[$/ { inside = 1; next }
+    inside && /^  \],?$/ { found_end = 1; exit }
+    inside {
+      if ($0 !~ /^    "[^"\\]+",?$/) exit 2
+      sub(/^    "/, "")
+      sub(/",?$/, "")
+      print
+    }
+    END { if (!inside || !found_end) exit 3 }
+  ' "$pin") || fail "cannot parse process-marker pin activePaths"
+  [ -n "$active_output" ] || fail "process-marker pin activePaths must not be empty"
+  mapfile -t LEGACY_PROCESS_MARKER_PATHS <<< "$active_output"
+
+  retired_output=$(awk '
+    /^  "retiredPaths": \[/ {
+      inside = 1
+      if ($0 ~ /\[\]$/) {
+        found_end = 1
+        exit
+      }
+      next
+    }
+    inside && /^  \],?$/ { found_end = 1; exit }
+    inside {
+      if ($0 !~ /^    "[^"\\]+",?$/) exit 2
+      sub(/^    "/, "")
+      sub(/",?$/, "")
+      print
+    }
+    END { if (!inside || !found_end) exit 3 }
+  ' "$pin") || fail "cannot parse process-marker pin retiredPaths"
+  if [ -n "$retired_output" ]; then
+    mapfile -t retired_paths <<< "$retired_output"
+  fi
+
+  universe=("${LEGACY_PROCESS_MARKER_PATHS[@]}" "${retired_paths[@]}")
+  for path in "${universe[@]}"; do
+    [ -n "$path" ] || fail "process-marker pin contains an empty path"
+    [ -z "${seen[$path]+present}" ] \
+      || fail "process-marker pin contains a duplicate path"
+    seen["$path"]=1
+  done
+  command -v sha256sum >/dev/null 2>&1 \
+    || fail "sha256sum is required to verify the process-marker pin"
+  digest=$(
+    printf '%s\n' "${universe[@]}" | LC_ALL=C sort | sha256sum | awk '{ print $1 }'
+  ) || fail "cannot compute process-marker pin universe digest"
+  [ "$digest" = "$PROCESS_MARKER_UNIVERSE_SHA256" ] \
+    || fail "process-marker pin path universe changed; exemptions may only move from activePaths to retiredPaths"
+}
 
 log() {
   printf '%s %s\n' "$(date +%H:%M:%S)" "$*" >&2
@@ -261,8 +256,7 @@ scan_process_markers() {
   [ "${#files[@]}" -gt 0 ] || fail "process-marker scan found no files in its scan root"
 
   if [ "$is_repo_root" -eq 1 ]; then
-    [ "${#LEGACY_PROCESS_MARKER_PATHS[@]}" -eq "$LEGACY_PROCESS_MARKER_PATH_BUDGET" ] \
-      || fail "process-marker legacy path count (${#LEGACY_PROCESS_MARKER_PATHS[@]}) does not match shrink-only budget $LEGACY_PROCESS_MARKER_PATH_BUDGET"
+    load_process_marker_pin
     for f in "${LEGACY_PROCESS_MARKER_PATHS[@]}"; do
       [ -z "${legacy_paths[$f]+present}" ] \
         || fail "duplicate process-marker legacy path: $f"
@@ -454,13 +448,17 @@ scan_process_markers() {
 
   if [ "${#new_violation_lines[@]}" -gt 0 ]; then
     printf '%s\n' "${new_violation_lines[@]}" >&2
-    fail "new process-marker violation outside the legacy path allow-list"
+    fail \
+      "new process-marker violation outside the legacy path allow-list; remove the marker from the listed files in this change -" \
+      "the frozen pin forbids adding an exemption"
   fi
   if [ "${#stale_legacy_paths[@]}" -gt 0 ]; then
     for f in "${stale_legacy_paths[@]}"; do
       log "  STALE: $f"
     done
-    fail "legacy process-marker paths no longer violate; delete their entries and lower the budget"
+    fail \
+      "legacy process-marker paths no longer violate; move every STALE entry above from activePaths to retiredPaths in" \
+      "$PROCESS_MARKER_PIN; never delete or reactivate a retired entry"
   fi
   if [ "$is_repo_root" -eq 1 ]; then
     ok "process-marker ratchet clean; ${#LEGACY_PROCESS_MARKER_PATHS[@]} legacy paths remain"

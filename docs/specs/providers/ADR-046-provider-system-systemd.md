@@ -123,9 +123,11 @@ closed on missing capabilities rather than silently degrading.
 The controller does not open ambient system or user DBus manager connections
 and does not invoke `systemctl` or any raw DBus call. All transient unit
 operations - `StartTransientUnit`, active-state observation, stop, kill, and
-user-manager availability checks - are dispatched through an injected
-`SystemdProcessEffectPort` trait object. The effect port implementation is
-owned by the core supervisor and process specs, not by this Provider crate.
+user-manager availability checks - are dispatched through a concrete
+`SystemdProcessEffectPort` implementation injected into a controller generic
+over the port type. The native async trait uses no trait object or
+`async-trait` dependency. The effect port implementation is owned by the core
+supervisor and process specs, not by this Provider crate.
 
 The effect port:
 
@@ -133,13 +135,14 @@ The effect port:
 - owns exact same-UID verification before any user-domain operation;
 - resolves the opaque `userRef`, `template`, and process identity tokens from
   the LaunchTicket into OS-level calls;
-- returns the atomic identity tuple (`InvocationID`, `ControlGroup`, `MainPID`,
-  `ExecMainStartTimestamp`) to the controller after a successful start;
+- binds the atomic identity tuple (`InvocationID`, `ControlGroup`, `MainPID`,
+  `ExecMainStartTimestamp`), opens and re-verifies the pidfd, and returns only
+  an opaque `ProcessIdentityHandle`, an identity digest, and a closed outcome;
 - owns unit name computation (fixed hash-derived; opaque to the controller).
 
-The controller receives only typed results and error codes from the port; it
-never sees raw DBus paths, socket addresses, unit names, cgroup strings, or
-PIDs as direct arguments to its own functions.
+The controller receives only opaque handles, digests, typed results, and error
+codes from the port; it never sees raw DBus paths, socket addresses, unit
+names, cgroup strings, PIDs, pidfds, or systemd property fragments.
 
 ---
 
@@ -174,7 +177,7 @@ d2b.zones.dev.resources.system-systemd = {
 | Field | Type | Default | Bound | Description |
 | --- | --- | --- | --- | --- |
 | `launchTimeoutSec` | u32 | `30` | 1..3600 | Wall-clock seconds from `StartTransientUnit` call to `MainPID` appearing in the unit's active state. Expiry triggers `Degraded` with `reason: launch-timeout`. |
-| `terminationGraceSec` | u32 | `30` | 0..3600 | Seconds to wait for SIGTERM drain before issuing SIGKILL via pidfd. Overrides per-Process `drainTimeout` only when the Process value exceeds this bound. |
+| `terminationGraceSec` | u32 | `30` | 0..3600 | Seconds to wait for graceful systemd drain before the core adapter requests a forced systemd stop. Overrides per-Process `drainTimeout` only when the Process value exceeds this bound. |
 | `userManagerCheckTimeout` | u32 | `5` | 1..60 | Seconds before a per-user manager reachability check times out. Same-UID user-manager verification is mandatory; this bound controls the per-check deadline only. |
 | `maxConcurrentLaunches` | u32 | `64` | 1..256 | Maximum number of in-flight `StartTransientUnit` calls at any one time across all Processes on this controller instance. Excess launches wait in the pending queue without blocking the controller-wide watch loop. |
 
@@ -229,7 +232,8 @@ no DBus connections itself.
   port; write process status on exit/restart/degraded.
 - For each `EphemeralProcess`: launch once, wait for terminal state, record
   outcome and exitCode, begin TTL countdown.
-- Maintain the local pidfd table (non-persistent; ephemeral process-local state).
+- Maintain only opaque per-Process identity handles; core/ProviderSupervisor
+  owns the non-persistent pidfd table.
 - On controller restart: relist live `Process` resources, attempt adoption per
   the adoption algorithm; quarantine on identity mismatch.
 - Respond to `desiredLifecycle=stopped`: invoke effect port `StopUnit`, then
@@ -287,18 +291,11 @@ d2b.zones.<zone>.resources."system-systemd-controller-<target>" = {
       class             = "on-failure";
       backoffBase       = "1s";
       backoffMax        = "60s";
-      backoffMultiplier = 2.0;
+      backoffMultiplierMilli = 2000;
       maxRestarts       = null;
       resetAfter        = "300s";
     };
-    mounts = [
-      # Volume created by core ProviderDeployment; view name matches descriptor
-      { volumeRef = "Volume/system-systemd--controller--main-state--<target>";
-        view      = "controller-rw";
-        mountPath = "/state";
-        access    = "read-write";
-        required  = true; }
-    ];
+    mounts = [];
     adoptionPolicy = "adopt-on-restart";
     drainTimeout   = "30s";
   };
@@ -324,15 +321,7 @@ Canonical rendered JSON (schema mirror):
     "template": "system-systemd-controller-main",
     "configRef": null,
     "credentialRefs": [],
-    "mounts": [
-      {
-        "volumeRef": "Volume/system-systemd--controller--main-state--<target>",
-        "view": "controller-rw",
-        "mountPath": "/state",
-        "access": "read-write",
-        "required": true
-      }
-    ],
+    "mounts": [],
     "sandbox": {
       "namespaceClasses": ["mount", "ipc", "network"],
       "capabilityClasses": [],
@@ -363,7 +352,7 @@ Canonical rendered JSON (schema mirror):
       "class": "on-failure",
       "backoffBase": "1s",
       "backoffMax": "60s",
-      "backoffMultiplier": 2.0,
+      "backoffMultiplierMilli": 2000,
       "maxRestarts": null,
       "resetAfter": "300s"
     },
@@ -439,7 +428,8 @@ resolution returns `endpoint-resolve-denied`. Producer restart bumps
 
 ## 5.4 Retained opaque handles (D092 promotion test)
 
-- pidfds remain ephemeral controller-local supervision/identity handles.
+- pidfds remain ephemeral core/ProviderSupervisor supervision/identity handles;
+  the controller retains only opaque `ProcessIdentityHandle` values.
 - LaunchTicket fd indexes, systemd manager handles, and inherited socketpairs are
   per-launch attachment slots, not stable endpoint identities.
 - InvocationID/MainPID/unit identity tuples and cgroup observations are effect-port
@@ -472,74 +462,48 @@ Every step is mandatory; any deviation is a runtime security violation.
 4. Resolve `spec.template` against the signed component descriptor of the owning
    resource's registered controller. Verify the template maps to an exact binary
    entry + content digest in the signed descriptor.
-5. Compile `SandboxSpec` into systemd unit hardening properties:
-   - `namespaceClasses` → `PrivateMounts=`, `PrivateNetwork=`, `PrivatePIDs=`,
-     `PrivateUsers=` etc.
-   - `capabilityClasses` → `AmbientCapabilities=`, `CapabilityBoundingSet=`;
-   - `seccompClass=strict` → `SystemCallFilter=@system-service` or equivalent
-     approved allowlist; `seccompClass=allow-all` requires descriptor carve-out;
-     `<provider-class>` selects a named compiled seccomp profile from the
-     Provider's seccomp catalog;
-   - `noNewPrivileges=true` → `NoNewPrivileges=yes`;
-   - `readOnlyRoot=true` → `ProtectSystem=strict` + `ReadOnlyPaths=/`;
-   - `environmentClass=minimal` → fixed approved environment only.
-6. Compute `sandboxRevisionDigest` over compiled unit properties + template
-   generation + sandbox spec.
-7. Verify all `mounts[].volumeRef` targets are Ready; resolve mount paths from
-   Volume view descriptors.
+5. Validate that every semantic `SandboxSpec` class is supported and allowed by
+   the signed descriptor; compute `sandboxRevisionDigest` over the canonical
+   semantic spec, policy ID, and template generation. The Provider does not
+   compile or receive systemd property fragments.
+6. Verify all `mounts[].volumeRef` targets are Ready. Core resolves the opaque
+   Volume refs to private mount attachments when constructing the LaunchTicket.
 
 ### 6.2 Launch
 
-8. Invoke the effect port `start` operation, passing:
+7. Invoke the effect port `start` operation, passing:
    - the `LaunchTicket` identity token (opaque; encodes domain, executionRef,
      userRef, template generation, and sandbox revision);
-   - compiled hardening properties from step 5;
+   - the opaque sandbox policy ID and `sandboxRevisionDigest`;
    - the `launchTimeoutSec` bound.
    The port selects the correct manager connection (system or per-user),
-   verifies domain-specific preconditions, constructs a transient unit with
+   verifies domain-specific preconditions, privately maps the signed semantic
+   sandbox policy to systemd properties, constructs a transient unit with
    `Type=exec` (mandatory; the port rejects `Type=forking`, `Type=notify`, and
    `Type=oneshot`), and dispatches `StartTransientUnit`.
-9. Receive the port's start receipt: an opaque `UnitHandle` and the initial
-   `InvocationID`.
+8. Receive an opaque start receipt; no unit name, InvocationID, PID, cgroup,
+   property fragment, or manager handle crosses the EffectPort.
 
 ### 6.3 Identity binding
 
-10. Await the effect port `await_active` call on the `UnitHandle`, bounded by
-    `launchTimeoutSec`. The port polls unit active state and returns on
-    `ActiveState=active` or on expiry.
-11. Call the effect port `read_identity` on the `UnitHandle`. The port performs
-    a single atomic DBus property read and returns the typed identity record:
-    - `InvocationID` (verified to match the start receipt from step 9);
-    - `ControlGroup` (cgroup leaf; opaque bytes retained for digest only);
-    - `MainPID` (must be non-zero);
-    - `ExecMainStartTimestamp` (monotonic start time in µs; must be non-zero).
-12. Verify via the port that the cgroup placement matches the expected leaf
-    derived from the Process resource UID and template generation; the port
-    returns a typed `CgroupMatch` / `CgroupMismatch` result.
-13. Verify `ExecMainStartTimestamp` is non-zero and within the launch window.
-14. All four binding values (InvocationID, ControlGroup, MainPID,
-    ExecMainStartTimestamp) must be consistent and non-zero. Any `CgroupMismatch`
-    or zero/missing field → abort, log quarantine event, do not open pidfd.
+9. Core awaits active state within `launchTimeoutSec`, atomically reads and
+   validates InvocationID, ControlGroup, MainPID, and
+   ExecMainStartTimestamp, verifies expected cgroup placement and launch
+   timing, opens and re-verifies the pidfd, and computes the identity digest.
+10. The EffectPort returns only
+    `IdentityBound { handle, processIdentityDigest }` or a closed failure such
+    as `identity-mismatch`, `pid-reuse-detected`, or `pidfd-open-failed`.
+11. The controller stores the opaque handle in memory and writes only
+    `processIdentityDigest` to Process status. Missing or inconsistent identity
+    causes quarantine without exposing the underlying values.
 
 ### 6.4 Pidfd acquisition
 
-15. Call `pidfd_open(MainPID, 0)`.
-16. Immediately re-verify: re-read `/proc/<MainPID>/status` `PPid` and
-    `/proc/<MainPID>/cgroup` to confirm the PID has not been reused since step
-    11. Any discrepancy → close pidfd, quarantine.
-17. Store pidfd in the ephemeral controller-local pidfd table.
-18. Compute `processIdentityDigest` = SHA-256 over
-    (InvocationID ‖ cgroup ‖ ExecMainStartTimestamp ‖ template_generation ‖
-    executable_content_digest). Write to process status.
-19. systemd owns wait/reap and cgroup termination. The controller does NOT call
-    `waitpid` on `MainPID` and does NOT issue SIGKILL via pidfd directly. The
-    pidfd is held as identity evidence only: it confirms the process is still
-    running (non-zero poll result) and uniquely identifies the process across
-    PID reuse. All SIGKILL must go through the effect port `KillUnit` operation
-    (bound to the verified `UnitHandle`); after `KillUnit` the controller
-    re-reads InvocationID + cgroup + MainPID + ExecMainStartTimestamp via effect
-    port and confirms the pidfd has exited. The controller monitors exit through
-    unit active state transitions reported by the effect port watch stream.
+Pidfd acquisition, `/proc` re-verification, pidfd polling, and systemd
+identity reads are core adapter responsibilities. The Provider never receives
+or opens a pidfd and never reads `/proc`. systemd owns wait/reap and cgroup
+termination. Stop and kill requests use only the opaque identity handle; core
+re-verifies identity and reports a typed terminal observation.
 
 ### 6.5 Readiness
 
@@ -598,7 +562,7 @@ After a Process exits while `desiredLifecycle=running`:
    - `on-crash`: restart only if classified `crash`.
 3. Increment `restartCount`; if `restartCount >= maxRestarts`: write `Failed`.
 4. Apply exponential backoff:
-   `delay = min(backoffBase * backoffMultiplier^(restartCount-1), backoffMax)`.
+   `delay = min(backoffBase * (backoffMultiplierMilli / 1000)^(restartCount-1), backoffMax)`.
 5. After `resetAfter` duration of continuous `Ready` state, reset
    `restartCount = 0`.
 6. Dispatch next launch at the end of backoff delay. Backoff does not hold the
@@ -609,18 +573,16 @@ After a Process exits while `desiredLifecycle=running`:
 On controller startup, the relist step finds `Process` resources with non-
 terminal phase. For each:
 
-1. Locate the candidate unit by requesting the effect port `locate_by_identity`
-   with the cgroup leaf derived from the stored `processIdentityDigest`.
-2. The port reads the unit's `InvocationID`, `ControlGroup`, `MainPID`,
-   `ExecMainStartTimestamp` atomically and returns a typed identity record.
-3. Recompute digest from the returned values and compare to stored
-   `processIdentityDigest`. Mismatch on any component → write
-   `adoptionState=quarantined`; do not touch the process.
-4. On match: call `pidfd_open(MainPID)` and re-verify (§6.4 step 16).
-5. Write `adoptionState=adopted`; resume normal monitoring via effect port watch.
-6. Ambiguous state (unit not found, cgroup empty, MainPID zero): write
-   `adoptionState=adoption-failed`; invoke effect port `stop` + `kill`
-   (best-effort); re-launch.
+1. Request EffectPort adoption using only the Process ref and stored
+   `processIdentityDigest`.
+2. Core locates the unit, reads and validates the full identity tuple, compares
+   the digest, opens and re-verifies a fresh pidfd, and returns
+   `Adopted { handle }`, `Quarantined`, or `NotFound`.
+3. On `Adopted`, retain the opaque handle, write
+   `adoptionState=adopted`, and resume typed EffectPort observation.
+4. On `Quarantined`, write `adoptionState=quarantined` and do not issue any
+   stop effect.
+5. On `NotFound`, write `adoptionState=adoption-failed` and re-launch.
 
 Quarantined processes are never killed by adoption logic. The operator resolves
 them via explicit `delete` or `update-spec` with an acknowledged quarantine
@@ -632,22 +594,15 @@ acknowledgment field.
 
 On `desiredLifecycle=stopped` or `deletion-requested` (finalizer):
 
-1. Invoke the effect port `stop` operation on the `UnitHandle` (sends SIGTERM
-   to the unit's main process group).
+1. Invoke the effect port `stop` operation on the opaque identity handle.
 2. Wait `drainTimeout` (per Process spec, capped at `terminationGraceSec` from
    Provider config when the Process value is larger).
-3. If the unit has not reached inactive/dead: invoke the effect port `KillUnit`
-   operation on the `UnitHandle` (bound to the verified unit identity established
-   at §6.3). After `KillUnit` completes, re-read InvocationID + cgroup +
-   MainPID + ExecMainStartTimestamp via the effect port to confirm identity
-   continuity, then await pidfd exit to confirm the process has terminated.
-   The controller does NOT call `pidfd_send_signal` directly; systemd owns
-   cgroup termination and SIGKILL delivery.
-4. Await the effect port `await_inactive` call on the `UnitHandle`; timeout
-   after 5 s.
-5. Close pidfd.
-6. Release cgroup association.
-7. Clear finalizer `process.system-systemd/cleanup`.
+3. If the unit has not reached inactive/dead, invoke the EffectPort forced-stop
+   operation on that handle. Core re-verifies identity, asks systemd to kill the
+   unit, waits for the core-held pidfd and unit state to agree on termination,
+   and returns a typed outcome.
+4. Release the opaque handle.
+5. Clear finalizer `process.system-systemd/cleanup`.
 
 On ambiguous state (unit gone, cgroup empty, exit not confirmed via effect port):
 emit audit condition `process-exit-unconfirmed`; record `finalized`; do not
@@ -655,11 +610,12 @@ block deletion indefinitely.
 
 ---
 
-## 10. Sandbox compilation
+## 10. Sandbox validation and core mapping
 
-The controller compiles `Process.spec.sandbox` (a `SandboxSpec`) into systemd
-unit hardening properties. Compilation is deterministic and produces a
-`sandboxRevisionDigest` written to process status.
+The controller validates `Process.spec.sandbox` against signed semantic policy
+and computes a deterministic `sandboxRevisionDigest`. It passes only the
+opaque policy ID and digest through SystemdProcessEffectPort. The core adapter
+owns the frozen mapping to systemd unit hardening properties:
 
 The mapping from semantic sandbox classes to systemd properties:
 
@@ -690,8 +646,8 @@ virtiofsd-class processes is exclusively `Provider/system-minijail`'s
 responsibility (D051).
 
 No raw systemd unit property fragment, `ExecStart=` override, or `Environment=`
-assignment from caller-controlled data reaches the unit. All properties come
-from the compiled sandbox plan and the signed executable reference.
+assignment enters or leaves the Provider process. Core derives all properties
+from the signed semantic policy and executable reference.
 
 ---
 
@@ -711,7 +667,7 @@ Route key:
 
 | Method | Direction | Description |
 | --- | --- | --- |
-| `LaunchProcess` | request/response | Receive `LaunchTicket`; execute launch algorithm; return `processIdentityDigest` or error. |
+| `LaunchProcess` | request/response | Receive opaque Process/template/policy IDs; request launch through SystemdProcessEffectPort; return `processIdentityDigest` or error. |
 | `StopProcess` | request/response | Receive `ProcessRef + pidfd-less stop request`; drain and stop unit; return outcome. |
 | `AdoptProcess` | request/response | Receive `ProcessRef + adoptionCandidateDigest`; run adoption algorithm; return `adopted`/`quarantined`/`failed`. |
 | `QueryProcessState` | request/response | Receive `ProcessRef`; return current typed process state (common phase + exit class); does not surface raw systemd `ActiveState`/`SubState` strings. |
@@ -776,9 +732,9 @@ generation/digest IDs, `disruption: None|Reload|Restart|Recycle|Replace`,
 `owned`/`dependencies` refs. It honors base `spec.updatePolicy` (manual
 disruptive default; auto non-disruptive), while the Core Operation ledger owns
 upgrade operation, idempotency, and progress. Process Provider upgrades recycle
-the controller realization; running workload Processes are re-adopted from
-cgroup leaves with fresh pidfds and are not disrupted unless the plan requires
-it. Disruptive changes return `UpgradeRequired` rather than applying in place,
+the controller realization; core re-adopts running workload Processes from
+cgroup leaves with fresh pidfds and returns opaque handles, without disruption
+unless the plan requires it. Disruptive changes return `UpgradeRequired` rather than applying in place,
 non-disruptive changes reconcile normally, and the per-resource single-flight
 serializes reconcile versus upgrade.
 
@@ -881,11 +837,13 @@ empty for this Provider.
 `ProviderStateSet` is empty. Its bounded non-secret operational state -
 controller/effect-port readiness, per-Process launch/adoption observations,
 active-process counters, and closed-enum error detail - lives in the owning
-resource's `status` subresource and the core Operation ledger (D087). Pidfds and
-live effect-port handles remain ephemeral process-local state; persisted restart
+resource's `status` subresource and the core Operation ledger (D087). Pidfds
+remain ephemeral core/ProviderSupervisor state and opaque effect-port handles
+remain controller-local; persisted restart
 counts, backoff state, and checkpoints are core resource/operation state
 (`Process`/`EphemeralProcess` status and the core Operation ledger), and running
-units are re-adopted after restart from declared cgroup leaves and fresh pidfds.
+units are re-adopted by core after restart from declared cgroup leaves and fresh
+pidfds.
 
 Because that operational state is fully derivable from spec, `status`, the core
 Operation ledger, and external process observation, it fails the storage-need
@@ -929,16 +887,14 @@ On Provider drain (`desiredLifecycle=stopped` on the Provider's own Process
 resource):
 
 1. Stop accepting new `LaunchProcess` requests.
-2. Invoke effect port `stop` on all active process `UnitHandle`s; wait up to
+2. Invoke effect port `stop` on all active opaque identity handles; wait up to
    `terminationGraceSec`.
-3. Invoke effect port `KillUnit` on each remaining active process `UnitHandle`
-   (bound to its verified unit identity); re-read InvocationID + cgroup +
-   MainPID + start-time via effect port; await pidfd exit for confirmation.
-   The controller does NOT issue `pidfd_send_signal` directly; systemd owns
-   SIGKILL and cgroup termination.
+3. Invoke the EffectPort forced-stop operation on each remaining opaque handle;
+   core re-verifies identity and confirms termination using systemd state and
+   its private pidfd.
 4. Write `Degraded` phase to all owned Process resources with condition
    `reason: provider-drain`.
-5. Clear all pidfds.
+5. Release all opaque identity handles.
 6. Exit cleanly.
 
 Active Processes that exit during drain write their final status before the
@@ -1008,7 +964,7 @@ cgroup path, user name, or unit name appears as a metric label value.
 | `d2b_process_restart_total` | counter | `provider=systemd`, `class={exited,signaled,killed}` | - | Per restart event |
 | `d2b_process_adoption_total` | counter | `provider=systemd`, `outcome={ok,quarantine,error}` | - | Per adoption attempt |
 | `d2b_process_stop_duration_seconds` | histogram | `provider=systemd`, `stop_class={graceful,forced}`, `outcome` | 0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 30.0 | Drain time measurement |
-| `d2b_process_pidfd_active` | gauge | (none) | - | Live entries in ephemeral pidfd table |
+| `d2b_process_pidfd_active` | gauge | (none) | - | Core-owned live entries in the ephemeral pidfd table |
 | `d2b_provider_reconcile_total` | counter | `resource_type={Process,EphemeralProcess}`, `outcome={ok,requeue,conflict,error}` | - | |
 | `d2b_provider_reconcile_duration_seconds` | histogram | `resource_type` | 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 2.0 | |
 | `d2b_provider_component_phase` | gauge | `component_type=controller`, `phase` | - | Controller process phase |
@@ -1020,7 +976,7 @@ cgroup path, user name, or unit name appears as a metric label value.
 | --- | --- | --- |
 | `d2b.process.systemd.launch` | Internal | `domain`, `process_class`, `template_id_digest`, `outcome`, `operation_id` |
 | `d2b.process.systemd.identity_bind` | Internal | `domain`, `outcome` |
-| `d2b.process.systemd.pidfd_open` | Internal | `domain`, `outcome` |
+| `d2b.process.systemd.pidfd_open` | Internal | `domain`, `outcome` (emitted by core effect adapter) |
 | `d2b.process.systemd.stop` | Internal | `stop_class`, `domain`, `outcome` |
 | `d2b.process.systemd.adopt` | Internal | `domain`, `outcome` |
 
@@ -1193,7 +1149,7 @@ Canonical rendered JSON:
       "class": "on-failure",
       "backoffBase": "1s",
       "backoffMax": "60s",
-      "backoffMultiplier": 2.0,
+      "backoffMultiplierMilli": 2000,
       "maxRestarts": null,
       "resetAfter": "300s"
     },
@@ -1289,13 +1245,13 @@ Evidence class per `ADR-046-current-code-migration-map`:
 - `sandboxRevisionDigest` and `processIdentityDigest` computation and write.
 - d2b-bus ComponentSession service (`LaunchProcess`, `StopProcess`,
   `AdoptProcess`, `QueryProcessState`).
-- `SystemdProcessEffectPort` trait and test double (owns DBus manager
-  connections, unit name computation, UID verification, and
-  `await_active`/`read_identity`/`stop`/`kill`/`await_inactive`/`locate_by_identity`
-  operations; implementation owned by core supervisor spec, not this crate).
+- `SystemdProcessEffectPort` trait and Provider-side fake; the production
+  implementation is owned by core and owns DBus manager connections, unit name
+  computation, UID verification, pidfds, identity binding, and
+  start/observe/stop/adopt operations.
 - User-domain execution via effect port; UID verification and manager-connection
   lifecycle owned by port implementation.
-- ProviderStateSet: empty - the controller declares no Provider state Volume; bounded non-secret operational state lives in `status`/the core Operation ledger (D087); running units re-adopted from cgroup leaves + fresh pidfds on restart.
+- ProviderStateSet: empty - the controller declares no Provider state Volume; bounded non-secret operational state lives in `status`/the core Operation ledger (D087); core re-adopts running units from cgroup leaves + fresh pidfds on restart and returns opaque handles.
 - Async reconcile loop watching `Process` / `EphemeralProcess` resources.
 - `system-systemd` conformance tests and shared conformance kit integration.
 
@@ -1336,9 +1292,9 @@ assumptions. Copied behavior is independently re-tested against v3
 | Current source | `packages/d2b-unsafe-local-helper/src/systemd.rs` - `SystemdUserScopeManager`, `VerifiedScope`; `packages/d2bd/src/supervisor/` - pidfd adoption, restart backoff |
 | Reuse source | Main `a1cc0b2d`: `d2b-session/src/engine.rs`, `d2b-session-unix/src/adapter.rs` (effect port test double session/transport) |
 | Reuse action | adapt |
-| Destination | `packages/d2b-provider-system-systemd/src/controller.rs` (async reconcile loop), `src/launch.rs` (launch algorithm via effect port), `src/effect_port.rs` (`SystemdProcessEffectPort` trait + test double), `src/adoption.rs` (adoption algorithm), `src/sandbox.rs` (SandboxSpec → unit property compiler) |
+| Destination | `packages/d2b-provider-system-systemd/src/controller.rs` (async reconcile loop), `src/launch.rs` (opaque launch requests via effect port), `src/effect_port.rs` (`SystemdProcessEffectPort` trait + fake), `src/adoption.rs` (typed adoption outcomes), `src/sandbox.rs` (semantic SandboxSpec validation); production DBus/pidfd/systemd-property implementation in core/ProviderSupervisor |
 | Detailed design | Full §6 launch algorithm (effect port integration); §7 EphemeralProcess; §8 restart/adoption (effect port `locate_by_identity`); §9 drain (effect port `stop`/`kill`); §10 sandbox compilation; §11 bus services; ProviderSupervisor LaunchTicket integration Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
-| Integration | Core ProviderDeployment creates controller Process via Provider/system-minijail and creates/deletes one private Volume per component per execution target before/after component Processes (naming: `system-systemd--controller--main-state--<target>`; ownerRef: Provider/system-systemd; kind=state; persistenceClass=persistent; minimal nonzero quota; identity marker; migrationPolicy=none; layout principal: Nix-preprovisioned `User/<controller-system-user>` or bounded principal pool; no ComponentPrincipal ResourceRef); Provider/volume-local is sole Volume reconciler; system-systemd controller does NOT create, own, or reconcile its Volume; controller consumes only the `controller-rw` view dirfd via its Process mounts; controller watches Process/EphemeralProcess; ProviderSupervisor calls LaunchProcess; effect port implementation injected by core supervisor spec |
+| Integration | Core ProviderDeployment creates the controller Process via Provider/system-minijail with no state Volume or `/state` mount; the controller issues no Volume CRUD operations, watches Process/EphemeralProcess, and persists bounded non-secret observations only in owning-resource status and the core Operation ledger; ProviderSupervisor calls LaunchProcess; effect port implementation is injected by the core supervisor spec |
 | Data migration | No state migration; controller relists and adopts on restart |
 | Validation | `tests/conformance.rs` (shared conformance kit); `tests/identity_binding.rs` (InvocationID/cgroup/MainPID/start-time golden vectors via mock effect port); `tests/adoption.rs` (quarantine/identity-mismatch cases); `tests/restart.rs` (backoff/maxRestarts); latency assertions (p95 ≤5 ms hint→handler, ≤20 ms commit→effect port `start` call) |
 | Removal proof | `VmProcessDag` supervisor roles removed per role disposition table after each succeeds in conformance |
@@ -1387,7 +1343,7 @@ packages/d2b-provider-system-systemd/
 │   ├── launch.rs                   # §6 launch algorithm via effect port
 │   ├── effect_port.rs              # SystemdProcessEffectPort trait + test double
 │   ├── adoption.rs                 # §8.2 adoption algorithm
-│   ├── sandbox.rs                  # §10 SandboxSpec → unit property compiler
+│   ├── sandbox.rs                  # §10 semantic SandboxSpec validation
 │   ├── ephemeral.rs                # §7 EphemeralProcess lifecycle
 │   ├── drain.rs                    # §13.2 drain/stop via effect port
 │   ├── audit.rs                    # §15.3 ProcessEffect audit emission
@@ -1395,11 +1351,11 @@ packages/d2b-provider-system-systemd/
 │   └── error.rs                    # §14 error catalogue
 ├── tests/
 │   ├── conformance.rs              # shared conformance kit (`check_provider_conformance`)
-│   ├── identity_binding.rs         # InvocationID/cgroup/MainPID/start-time golden vectors; mismatch/quarantine cases
+│   ├── identity_binding.rs         # opaque identity receipt and mismatch/quarantine cases
 │   ├── adoption.rs                 # adoption algorithm: adopted/quarantined/failed outcomes; restart scenarios
 │   ├── restart.rs                  # backoff/maxRestarts/resetAfter correctness
 │   ├── ephemeral.rs                # EphemeralProcess: TTL, startDeadline, runtimeDeadline
-│   ├── sandbox_compile.rs          # SandboxSpec → unit property compiler: every class; unsupported `user` namespace rejection
+│   ├── sandbox_compile.rs          # semantic SandboxSpec validation: every class; unsupported `user` namespace rejection
 │   └── fault.rs                    # fault injection: launch timeout, identity mismatch, effect port unavailable
 ├── integration/
 │   ├── host_scenario.rs            # real controller vs real Zone runtime; system-domain Process lifecycle; Volume pre-created by ProviderDeployment; controller consumes dirfd only
@@ -1424,11 +1380,11 @@ and `FakeProvider` fixtures from `d2b-provider-toolkit`:
 | Test file | Required assertions |
 | --- | --- |
 | `conformance.rs` | `check_provider_conformance` returns zero `ConformanceError` for `Process` and `EphemeralProcess` ProviderType axes |
-| `identity_binding.rs` | Golden vectors: correct tuple (InvocationID, cgroup, start-time) → correct digest via mock effect port; any field tampered → identity-mismatch error; PID-reuse race → pid-reuse-detected error |
+| `identity_binding.rs` | Mock EffectPort returns opaque `IdentityBound`, `identity-mismatch`, and `pid-reuse-detected` outcomes; Provider never receives tuple fields or a pidfd. Core adapter tests own the raw tuple golden vectors. |
 | `adoption.rs` | Mock effect port `locate_by_identity` returns match → `adopted`; any mismatch → `quarantined` (unit NOT killed); absent unit → `adoption-failed` + effect port `stop`+`kill` attempt |
 | `restart.rs` | `on-failure`: restart on non-zero, not on zero; `never`: no restart; backoff exponential; `maxRestarts` exceeded → `Failed`; `resetAfter` resets counter |
 | `ephemeral.rs` | Zero exit → `Succeeded`, TTL countdown; non-zero exit → `Failed`; `runtimeDeadline` expiry → SIGTERM then SIGKILL → `Failed`; `startDeadline` expiry → `Failed`; `incidentHold=true` blocks cleanup |
-| `sandbox_compile.rs` | Every `NamespaceClass` value maps to the correct systemd property; `capabilityClasses` produce correct `AmbientCapabilities` and `CapabilityBoundingSet`; `userNamespace.mappingClass` non-null → `unsupported-user-namespace-mapping` error; `seccompClass=allow-all` without descriptor carve-out → error |
+| `sandbox_compile.rs` | Every semantic `NamespaceClass` and `capabilityClasses` value is accepted or rejected per signed policy; no systemd property fragment is produced; `userNamespace.mappingClass` non-null → `unsupported-user-namespace-mapping`; `seccompClass=allow-all` without descriptor carve-out → error. Core adapter tests own semantic-class-to-systemd-property mappings. |
 | `fault.rs` | `launchTimeoutSec` expiry via mock port `await_active` → `Degraded` + `reason: launch-timeout`; effect port returns `EffectPortUnavailable` → `ProviderReady=False`; port returns `UserManagerUnavailable` → `UserEffectReady=False` for user-domain only |
 
 ### integration/ requirements
@@ -1439,7 +1395,7 @@ repository test orchestration (`make test-integration` /
 
 | Integration file | Scenario | Required assertions |
 | --- | --- | --- |
-| `host_scenario.rs` | Real controller against Zone runtime in container | System-domain Process: Pending → Launching → Ready; SIGTERM drain → stopped; restart on crash; Provider drain stops all active Processes; adoption after controller restart re-derived from cgroup leaves + fresh pidfds; controller declares no Provider state Volume and issues no Volume CRUD operations |
+| `host_scenario.rs` | Real controller against Zone runtime in container | System-domain Process: Pending → Launching → Ready; SIGTERM drain → stopped; restart on crash; Provider drain stops all active Processes; core re-derives adoption after controller restart from cgroup leaves + fresh pidfds and returns opaque handles; controller declares no Provider state Volume and issues no Volume CRUD operations |
 | `guest_scenario.rs` | Controller inside a Guest via runtime Provider | Same lifecycle; both system and user domain; Guest-hosted Processes visible in Zone resource watch |
 | `user_domain.rs` | User-domain Process via real effect port on Host | User-domain Process Pending → Ready; effect port reports user manager unreachable → `UserEffectReady=False`; `no_isolation=true` in ProcessEffect audit for user-only Host |
 | `cleanup_scenario.rs` | Nix generation change → async Delete | Process removed from Nix config → `ResourceDeletionRequested` audit event emitted; store `Deleted` revision and row/index removal are applied atomically in the same store transaction; `ResourceDeleted` audit record is appended separately after the atomic deletion (deduplicated on replay) and its append does not participate in the deletion transaction; no false delete for controller-managed children |
@@ -1448,8 +1404,10 @@ repository test orchestration (`make test-integration` /
 
 Per D094 and `ADR-046-validation-and-delivery` §10.16, this Provider's `src/`
 unit tests and `tests/*.rs` hermetic suite are fast, in-process, deterministic,
-and parallel-safe: an individual normal test has p95 ≤50 ms with no wall-clock
-sleep, and `cargo test -p d2b-provider-system-systemd --lib --tests` completes in ≤2 s warm-cache
+and parallel-safe: an individual normal test has an advisory wall-clock p95
+diagnostic threshold of <=50 ms; gate enforcement is aggregate per-crate
+process CPU only. There is no wall-clock
+sleep, and `cargo test -p d2b-provider-system-systemd --lib --tests` completes in ≤3 s warm-cache
 execution time (compilation excluded). They use a deterministic fake clock/RNG
 and the toolkit fakes/FakeEffectPort only - no process spawn, container,
 network, DBus, systemd, broker daemon, Nix eval/build, KVM, USB/GPU/TPM
@@ -1486,7 +1444,7 @@ and `ADR-046-provider-model-and-packaging` Provider dossier requirement):
 | Controllers/services/workers/binaries | Binary `d2b-provider-system-systemd`; `systemd-controller` component (one instance per execution target); core ProviderDeployment creates controller Process via Provider/system-minijail; no user supervisor binary or entry point inside this crate; cgroup placement per §5.1 |
 | Placement | Valid Host and Guest execution targets; `allowedDomains: [system, user]`; required `providerRef` chain (Provider/system-systemd must be Ready before any Process uses it); system and user domain both dispatched through injected `SystemdProcessEffectPort`; effect port implementation is core-owned |
 | Dependencies and RBAC | Required RoleBinding verbs per §12.1 (no User RoleBindings; UID verification is effect port responsibility); no broker operations; ComponentSession on d2b-bus for ProviderSupervisor integration; no internal socketpair service |
-| Security and state | No capabilities claimed; no secrets or credential leases; no direct DBus connections (all systemd interactions through injected effect port); the controller declares no Provider state Volume - bounded non-secret operational state lives in `status`/the core Operation ledger (D087); pidfds and effect-port handles are ephemeral and not persisted; running units re-adopted from cgroup leaves + fresh pidfds; no OFD locks; no raw systemd property fragments from caller data |
+| Security and state | No capabilities claimed; no secrets or credential leases; no direct DBus connections (all systemd interactions through injected effect port); the controller declares no Provider state Volume - bounded non-secret operational state lives in `status`/the core Operation ledger (D087); core-owned pidfds and controller-held opaque effect handles are ephemeral and not persisted; core re-adopts running units from cgroup leaves + fresh pidfds; no OFD locks; no raw systemd property fragments enter the Provider |
 | Telemetry | Metric instruments per §15.1; span catalog per §15.2; audit `ProcessEffect` record per §15.3; `no_isolation=true` on user-only Host child ProcessEffect records only |
 | Build/test/integration commands | `cargo test -p d2b-provider-system-systemd`; `make test-integration -- provider-system-systemd`; `make test-host-integration -- provider-system-systemd` |
 | Standalone-repo future usage | Crate depends only on published crates and the d2b provider SDK subset (`d2b-contracts`, `d2b-provider-toolkit`); may be extracted to its own repository without copying daemon internals |
@@ -1499,9 +1457,9 @@ and `ADR-046-provider-model-and-packaging` Provider dossier requirement):
 | --- | --- |
 | Current anchor | `packages/d2b-unsafe-local-helper/src/systemd.rs` (production-reachable user scope creation/verification); `packages/d2bd/src/supervisor/` (production-reachable pidfd adoption/restart) |
 | Evidence class | production-reachable (both anchors) |
-| Behavior retained | DBus transient unit creation; InvocationID/ControlGroup/MainPID/ExecMainStartTimestamp binding; pidfd open + re-verification; exponential backoff restart; scope identity verification |
+| Behavior retained | Core EffectPort implementation retains DBus transient unit creation, InvocationID/ControlGroup/MainPID/ExecMainStartTimestamp binding, pidfd open and re-verification, and scope identity verification; Provider retains semantic restart/backoff decisions over opaque outcomes |
 | Required delta | Process/EphemeralProcess ResourceType and status schema; LaunchTicket/ProviderSupervisor integration; sandboxRevisionDigest/processIdentityDigest; async reconcile loop; d2b-bus ComponentSession service; `SystemdProcessEffectPort` trait + test double (core implementation); no Provider state Volume (bounded non-secret operational state in status/core ledger, D087); conformance tests |
-| Reuse path | `SystemdUserScopeManager`/`VerifiedScope` inform effect port contract and test double; `d2bd/src/supervisor/` backoff logic → `src/adoption.rs` and `src/controller.rs` |
+| Reuse path | `SystemdUserScopeManager`/`VerifiedScope` inform the core effect adapter contract and Provider fake; `d2bd/src/supervisor/` backoff logic informs Provider `src/adoption.rs` and `src/controller.rs`, while raw discovery and pidfd logic remain core-owned |
 | Replacement/deletion | `d2b-unsafe-local-helper` binary and `unsafe_local_wire.rs` protocol types retained until user-domain Host Process launch parity via effect port confirmed; `VmProcessDag` roles removed per per-role disposition table after each process type achieves conformance |
 | Feasibility proof | `SystemdUserScopeManager` demonstrates transient user scope + InvocationID binding is production-tested; pidfd adoption in `d2bd/src/supervisor/` demonstrates identity-mismatch quarantine path |
 | Future owner | `ADR046-systemd-001` through `ADR046-systemd-003` |

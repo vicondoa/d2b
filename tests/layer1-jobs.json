@@ -6,17 +6,17 @@
       {
         "id": "preflight",
         "mode": "serial",
-        "jobs": ["tier0"]
+        "jobs": ["tier0", "check-inventory"]
       },
       {
         "id": "parallel",
         "mode": "parallel",
-        "jobs": ["test-lint", "test-changelog", "test-rust", "test-proofs", "test-flake", "test-policy"]
+        "jobs": ["test-lint", "test-changelog", "test-rust", "test-proofs", "test-flake", "test-nix-unit", "test-policy"]
       },
       {
         "id": "serial-after-parallel",
         "mode": "serial",
-        "jobs": ["test-drift", "test-runtime-ledger"]
+        "jobs": ["test-drift", "test-runtime-ledger", "test-performance-budgets", "test-fixture-contracts"]
       }
     ]
   },
@@ -24,10 +24,14 @@
     "workflowName": "pr-l1-static-fast",
     "jobs": [
       "tier0",
+      "check-inventory",
+      "test-performance-budgets",
       "test-lint",
       "test-changelog",
       "test-rust",
+      "test-fixture-contracts",
       "test-proofs",
+      "test-nix-unit",
       "flake-eval-discover",
       "flake-eval-x86",
       "flake-eval-x86-outputs",
@@ -40,10 +44,14 @@
     "rollupJob": "check",
     "rollupNeeds": [
       "tier0",
+      "check-inventory",
+      "test-performance-budgets",
       "test-lint",
       "test-changelog",
       "test-rust",
+      "test-fixture-contracts",
       "test-proofs",
+      "test-nix-unit",
       "test-flake-x86",
       "test-flake-aarch64",
       "test-drift",
@@ -56,8 +64,32 @@
     "tier0": {
       "displayName": "Tier 0 first-pass gate",
       "makeTarget": "check-tier0",
+      "extraMakeTargets": [
+        { "makeTarget": "test-adr-index-coverage", "displayName": "ADR index coverage guard" },
+        { "makeTarget": "test-ci-coverage", "displayName": "CI coverage structural guard" }
+      ],
       "ciKind": "tier0",
       "ciJobId": "tier0",
+      "timeoutMinutes": 5,
+      "runsOn": "ubuntu-latest"
+    },
+    "check-inventory": {
+      "displayName": "Migration ledger drift gate",
+      "makeTarget": "check-inventory",
+      "ciKind": "simple",
+      "ciJobId": "check-inventory",
+      "needs": ["tier0"],
+      "timeoutMinutes": 5,
+      "runsOn": "ubuntu-latest"
+    },
+    "test-performance-budgets": {
+      "displayName": "Performance budget gate",
+      "makeTarget": "test-performance-budgets",
+      "enforcement": "advisory",
+      "advisoryReason": "Latency budgets need a pinned self-hosted runner. Without D2B_PERF_STABLE=1 the gate skips, so it must not be counted as an enforcing green job.",
+      "ciKind": "simple",
+      "ciJobId": "test-performance-budgets",
+      "needs": ["tier0"],
       "timeoutMinutes": 5,
       "runsOn": "ubuntu-latest"
     },
@@ -91,6 +123,23 @@
       "timeoutMinutes": 60,
       "runsOn": "ubuntu-latest"
     },
+    "test-fixture-contracts": {
+      "displayName": "Fixture-dependent Rust contract tests",
+      "makeTarget": "test-fixture-contracts",
+      "requiresHeavyGate": true,
+      "localEnv": {
+        "D2B_ENABLE_FIXTURE_BUILD": "1"
+      },
+      "ciEnv": {
+        "D2B_ENABLE_FIXTURE_BUILD": "1"
+      },
+      "enforcesForSkip": "test-rust:D2B_SKIP_FIXTURE_BUILD",
+      "ciKind": "rust",
+      "ciJobId": "test-fixture-contracts",
+      "needs": ["test-rust"],
+      "timeoutMinutes": 60,
+      "runsOn": "ubuntu-latest"
+    },
     "test-proofs": {
       "displayName": "Proof crates gate",
       "makeTarget": "test-proofs",
@@ -106,6 +155,15 @@
       "localEnv": {
         "D2B_FLAKE_LOCAL_SHARDS": "1"
       }
+    },
+    "test-nix-unit": {
+      "displayName": "Nix unit corpus gate",
+      "makeTarget": "test-nix-unit",
+      "ciKind": "simple-nix",
+      "ciJobId": "test-nix-unit",
+      "needs": ["tier0"],
+      "timeoutMinutes": 30,
+      "runsOn": "ubuntu-latest"
     },
     "flake-eval-discover": {
       "displayName": "Enumerate flake checks (x86_64-linux)",

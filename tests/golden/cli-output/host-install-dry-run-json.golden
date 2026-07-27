@@ -2,7 +2,7 @@
 {
   "command": "host install",
   "mode": "dry-run",
-  "notes": "Dry-run preview retained; --apply routes through the daemon → broker RunHostInstall path.",
+  "notes": "dry-run preview; --apply routes through the daemon → broker RunHostInstall path.",
   "planned_steps": [
     {
       "step": 1,

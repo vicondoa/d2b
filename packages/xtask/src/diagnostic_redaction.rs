@@ -1,6 +1,7 @@
 //! Path-safe filtering for diagnostics that must reach operator stderr.
 
 use std::{
+    collections::VecDeque,
     env, fs,
     io::{self, Read, Write},
     path::{Path, PathBuf},
@@ -8,7 +9,7 @@ use std::{
 };
 
 const DEFAULT_TAIL_LINES: usize = 20;
-const MAX_DIAGNOSTIC_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_DIAGNOSTIC_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct RedactionError(&'static str);
@@ -41,12 +42,25 @@ impl DiagnosticRedactor {
     }
 
     fn redact(&self, input: &str) -> String {
-        let mut redacted = input.to_owned();
+        let mut redacted = strip_control_characters(&normalize_ansi_escape_sequences(input));
         for root in &self.roots {
             redacted = replace_sensitive_root(&redacted, &root.path, root.replacement);
         }
-        redact_other_absolute_paths(&strip_control_characters(&redacted))
+        redact_other_absolute_paths(&redacted)
     }
+}
+
+pub(crate) fn redact_path(path: &Path) -> String {
+    let Ok(repo_root) = crate::repo_root() else {
+        return "<path>".to_owned();
+    };
+    let Ok(redactor) = DiagnosticRedactor::new(repo_root, None) else {
+        return "<path>".to_owned();
+    };
+    let Some(path) = path.to_str() else {
+        return "<path>".to_owned();
+    };
+    redactor.redact(path)
 }
 
 fn add_sensitive_root(
@@ -99,7 +113,7 @@ fn is_start_boundary(bytes: &[u8], index: usize) -> bool {
     index == 0
         || matches!(
             bytes[index - 1],
-            b' ' | b'\t' | b'\n' | b'\r' | b'\'' | b'"' | b'(' | b'[' | b'{' | b'=' | b':'
+            b' ' | b'\t' | b'\n' | b'\r' | b'\'' | b'"' | b'`' | b'(' | b'[' | b'{' | b'=' | b':'
         )
 }
 
@@ -113,6 +127,7 @@ fn is_end_boundary(bytes: &[u8], index: usize) -> bool {
                 | b'\r'
                 | b'\''
                 | b'"'
+                | b'`'
                 | b')'
                 | b']'
                 | b'}'
@@ -156,11 +171,56 @@ fn strip_control_characters(input: &str) -> String {
         .collect()
 }
 
+fn normalize_ansi_escape_sequences(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut output = String::with_capacity(input.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != 0x1b {
+            let character = input[index..].chars().next().expect("valid UTF-8");
+            output.push(character);
+            index += character.len_utf8();
+            continue;
+        }
+
+        output.push(' ');
+        index += 1;
+        match bytes.get(index).copied() {
+            Some(b'[') => {
+                index += 1;
+                while let Some(byte) = bytes.get(index).copied() {
+                    index += 1;
+                    if (0x40..=0x7e).contains(&byte) {
+                        break;
+                    }
+                }
+            }
+            Some(b']' | b'P' | b'X' | b'^' | b'_') => {
+                index += 1;
+                while index < bytes.len() {
+                    if bytes[index] == 0x07 {
+                        index += 1;
+                        break;
+                    }
+                    if bytes[index] == 0x1b && bytes.get(index + 1) == Some(&b'\\') {
+                        index += 2;
+                        break;
+                    }
+                    index += input[index..].chars().next().map_or(1, char::len_utf8);
+                }
+            }
+            Some(0x40..=0x5f) => index += 1,
+            _ => {}
+        }
+    }
+    output
+}
+
 fn is_unquoted_path_terminator(byte: u8) -> bool {
     byte.is_ascii_whitespace()
         || matches!(
             byte,
-            b'\'' | b'"' | b')' | b']' | b'}' | b'<' | b'>' | b',' | b';' | b'|'
+            b'\'' | b'"' | b'`' | b')' | b']' | b'}' | b'<' | b'>' | b',' | b';' | b'|'
         )
 }
 
@@ -198,6 +258,49 @@ fn tail_lines(input: &str, count: usize) -> String {
         tail.push('\n');
     }
     tail
+}
+
+fn read_diagnostic_tail(mut input: impl Read) -> Result<(Vec<u8>, u64), RedactionError> {
+    let mut tail = VecDeque::with_capacity(MAX_DIAGNOSTIC_BYTES);
+    let mut buffer = [0u8; 8192];
+    let mut total_bytes = 0u64;
+    let mut last_dropped = None;
+
+    loop {
+        let read = input
+            .read(&mut buffer)
+            .map_err(|_| RedactionError("cannot read the diagnostic input"))?;
+        if read == 0 {
+            break;
+        }
+        total_bytes = total_bytes.saturating_add(read as u64);
+        let overflow = tail
+            .len()
+            .saturating_add(read)
+            .saturating_sub(MAX_DIAGNOSTIC_BYTES);
+        for _ in 0..overflow {
+            last_dropped = tail.pop_front();
+        }
+        tail.extend(&buffer[..read]);
+    }
+
+    let mut tail: Vec<u8> = tail.into();
+    if let Some(last_dropped) = last_dropped
+        && !is_start_boundary(&[last_dropped], 1)
+    {
+        let boundary = tail
+            .iter()
+            .enumerate()
+            .find_map(|(index, _)| is_start_boundary(&tail, index + 1).then_some(index + 1));
+        match boundary {
+            Some(boundary) => {
+                tail.drain(..boundary);
+            }
+            None => tail.clear(),
+        };
+    }
+    let dropped_bytes = total_bytes.saturating_sub(tail.len() as u64);
+    Ok((tail, dropped_bytes))
 }
 
 fn parse_args(args: &[String]) -> Result<(PathBuf, Option<PathBuf>, usize), RedactionError> {
@@ -249,20 +352,17 @@ fn filter(
 ) -> Result<(), RedactionError> {
     let (repo_root, home, tail) = parse_args(args)?;
     let redactor = DiagnosticRedactor::new(&repo_root, home.as_deref())?;
-    let mut bytes = Vec::new();
-    input
-        .by_ref()
-        .take(MAX_DIAGNOSTIC_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|_| RedactionError("cannot read the diagnostic input"))?;
-    if bytes.len() as u64 > MAX_DIAGNOSTIC_BYTES {
-        return Err(RedactionError(
-            "diagnostic input exceeds the safe size limit",
-        ));
+    let (bytes, dropped_bytes) = read_diagnostic_tail(input.by_ref())?;
+    let diagnostic = String::from_utf8_lossy(&bytes);
+    let redacted = tail_lines(&redactor.redact(&diagnostic), tail);
+    if dropped_bytes > 0 {
+        writeln!(
+            output,
+            "diagnostic truncated: dropped {dropped_bytes} byte(s) from the beginning; \
+             showing the redacted tail"
+        )
+        .map_err(|_| RedactionError("cannot write the redacted diagnostic"))?;
     }
-    let diagnostic =
-        std::str::from_utf8(&bytes).map_err(|_| RedactionError("diagnostic input is not UTF-8"))?;
-    let redacted = tail_lines(&redactor.redact(diagnostic), tail);
     output
         .write_all(redacted.as_bytes())
         .map_err(|_| RedactionError("cannot write the redacted diagnostic"))
@@ -352,6 +452,46 @@ mod tests {
     }
 
     #[test]
+    fn central_path_redaction_preserves_repository_context() {
+        let repo = crate::repo_root().unwrap();
+        assert_eq!(
+            redact_path(&repo.join("one/shared.rs")),
+            "<repo>/one/shared.rs"
+        );
+        assert_eq!(
+            redact_path(&repo.join("two/shared.rs")),
+            "<repo>/two/shared.rs"
+        );
+    }
+
+    #[test]
+    fn paths_delimited_by_backticks_are_redacted() {
+        let scratch = Scratch::new("backtick-boundary");
+        let repo = scratch.0.join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        let redactor = DiagnosticRedactor::new(&repo, None).unwrap();
+        let diagnostic = format!("failed to read `{}/src/main.rs`", repo.display());
+
+        let output = redactor.redact(&diagnostic);
+        assert_eq!(output, "failed to read `<repo>/src/main.rs`");
+        assert!(!output.contains(repo.to_str().unwrap()));
+    }
+
+    #[test]
+    fn ansi_color_sequences_are_normalized_before_path_matching() {
+        let scratch = Scratch::new("ansi-boundary");
+        let repo = scratch.0.join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        let redactor = DiagnosticRedactor::new(&repo, None).unwrap();
+        let diagnostic = format!("error:\u{1b}[31m{}/src/main.rs\u{1b}[0m", repo.display());
+
+        let output = redactor.redact(&diagnostic);
+        assert!(output.contains("<repo>/src/main.rs"), "{output}");
+        assert!(!output.contains(repo.to_str().unwrap()));
+        assert!(!output.contains('\u{1b}'));
+    }
+
+    #[test]
     fn filtering_fails_before_emitting_raw_input_when_a_root_cannot_resolve() {
         let scratch = Scratch::new("fail-closed");
         let missing = scratch.0.join("missing");
@@ -364,5 +504,93 @@ mod tests {
         let mut output = Vec::new();
         assert!(filter(&args, &b"/home/alice/private"[..], &mut output).is_err());
         assert!(output.is_empty());
+    }
+
+    #[test]
+    fn oversized_input_emits_a_redacted_tail_and_truncation_notice() {
+        let scratch = Scratch::new("oversized");
+        let repo = scratch.0.join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        let args = vec![
+            "--repo-root".to_owned(),
+            repo.display().to_string(),
+            "--tail-lines".to_owned(),
+            "2".to_owned(),
+        ];
+        let mut input = vec![b'x'; MAX_DIAGNOSTIC_BYTES + 128];
+        input.push(b'\n');
+        input.extend(format!("error: {}/src/tail.rs\n", repo.display()).bytes());
+        let expected_dropped = MAX_DIAGNOSTIC_BYTES + 129;
+        let mut output = Vec::new();
+
+        filter(&args, input.as_slice(), &mut output).unwrap();
+
+        let output = String::from_utf8(output).unwrap();
+        assert!(
+            output.contains(&format!(
+                "diagnostic truncated: dropped {expected_dropped} byte(s)"
+            )),
+            "the truncation notice must quantify the discarded prefix: {output}"
+        );
+        assert!(
+            output.contains("error: <repo>/src/tail.rs"),
+            "the retained tail must remain useful and redacted: {output}"
+        );
+        assert!(!output.contains(repo.to_str().unwrap()));
+    }
+
+    #[test]
+    fn truncation_inside_a_multibyte_character_still_emits_a_redacted_tail() {
+        let scratch = Scratch::new("multibyte-boundary");
+        let repo = scratch.0.join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        let args = vec![
+            "--repo-root".to_owned(),
+            repo.display().to_string(),
+            "--tail-lines".to_owned(),
+            "1".to_owned(),
+        ];
+        let operative = format!("\nerror: {}/src/tail.rs\n", repo.display());
+        let filler_len = MAX_DIAGNOSTIC_BYTES - 1 - operative.len();
+        let mut input = vec![0xc3, 0xa9];
+        input.extend(std::iter::repeat_n(b'x', filler_len));
+        input.extend(operative.bytes());
+        assert_eq!(input.len(), MAX_DIAGNOSTIC_BYTES + 1);
+        let mut output = Vec::new();
+
+        filter(&args, input.as_slice(), &mut output).unwrap();
+
+        let output = String::from_utf8(output).unwrap();
+        assert!(
+            output.contains("diagnostic truncated: dropped"),
+            "the split UTF-8 prefix must produce a truncation notice: {output}"
+        );
+        assert!(
+            output.contains("error: <repo>/src/tail.rs"),
+            "the retained tail must survive the split and remain redacted: {output}"
+        );
+        assert!(!output.contains(repo.to_str().unwrap()));
+    }
+
+    #[test]
+    fn malformed_bytes_in_the_retained_tail_do_not_suppress_redacted_output() {
+        let scratch = Scratch::new("malformed-retained-tail");
+        let repo = scratch.0.join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        let args = vec![
+            "--repo-root".to_owned(),
+            repo.display().to_string(),
+            "--tail-lines".to_owned(),
+            "1".to_owned(),
+        ];
+        let mut input = vec![0xff, b'\n'];
+        input.extend(format!("error: {}/src/tail.rs\n", repo.display()).bytes());
+        let mut output = Vec::new();
+
+        filter(&args, input.as_slice(), &mut output).unwrap();
+
+        let output = String::from_utf8(output).unwrap();
+        assert!(output.contains("error: <repo>/src/tail.rs"), "{output}");
+        assert!(!output.contains(repo.to_str().unwrap()));
     }
 }

@@ -518,18 +518,23 @@ types remain before the Provider resource is removed.
 
 ### 4.3 Spec
 
-Provider.spec carries the complete desired installation. All digests are
-`sha256:` prefixed lowercase hex. An empty or missing digest field is
-rejected at admission.
+Provider.spec is exactly `{ artifactId; config }`. It selects the desired
+installation but never duplicates manifest, package, component, resource,
+status, or generated properties in the Provider resource row.
 
 ```yaml
 spec:
   artifactId: "runtime-cloud-hypervisor"  # bounded ID; references d2b.artifacts catalog
-  # PackageIdentity fields (digest, manifestDigest, configSchemaDigest, signatureId,
-  # trustEpoch, conformanceAttestationDigest, compatibility, support, etc.) are
-  # resolved from the artifact catalog by the resource compiler; they do not appear
-  # in operator-authored spec or in the canonical JSON envelope.
   config: {}                            # root config; validated against catalog's configSchemaDigest schema
+```
+
+The signed manifest/catalog entry selected by `artifactId` carries the
+deployment descriptor below. It is integrity-checked and read directly by
+core ProviderDeployment; it is never copied into Provider.spec or another
+field of the Provider resource row.
+
+```yaml
+manifest:
   exports:
     resourceTypes:
       - name: Host                      # short Zone-unique ResourceType name (or vendor.qualified.Name)
@@ -636,10 +641,11 @@ Rules:
   resources to be drained and replaced;
 - the empty config `{}` is valid for Providers with no config.
 
-#### 4.3.3 Component descriptors
+#### 4.3.3 Signed-manifest component descriptors
 
-A Provider may declare at most one set of each component type (controllers,
-services, workers). Component IDs are unique within the Provider.
+A Provider's signed manifest may declare at most one set of each component
+type (controllers, services, workers). Component IDs are unique within the
+Provider manifest.
 
 The following component bounds are normative and enforced at admission:
 
@@ -703,7 +709,8 @@ The following component bounds are normative and enforced at admission:
 
 #### 4.3.4 Dependencies
 
-`spec.dependencies` is a flat map from alias to Provider ResourceRef:
+The signed manifest's `dependencies` field is a flat map from alias to
+Provider ResourceRef:
 
 ```yaml
 dependencies:
@@ -728,8 +735,8 @@ Rules:
 
 #### 4.3.5 Permission claims
 
-`spec.permissionClaims` is a bounded list of operations the Provider controller
-or service requests. Each claim has:
+The signed manifest's `permissionClaims` field is a bounded list of operations
+the Provider controller or service requests. Each claim has:
 
 ```yaml
 - verb: create               # resource verb or runtime verb
@@ -753,6 +760,9 @@ Rules:
   self-executing grants.
 
 #### 4.3.6 Upgrade and lifecycle policy
+
+These fields belong to the signed manifest's `lifecycle` object, not to
+Provider.spec.
 
 | Field | Values | Default |
 | --- | --- | --- |
@@ -933,14 +943,15 @@ The workspace policy check (`packages/d2b-contract-tests/tests/policy_provider_c
 implemented in work item ADR046-pkg-001) walks every `packages/d2b-provider-*`
 crate directory in the workspace and asserts all four paths exist. A missing
 `src/`, `tests/`, `integration/`, or `README.md` in any Provider crate is a
-**hard policy failure** that blocks `make test-policy` (and therefore
-`make check`) on the same basis as a workspace member sort violation or a
-`Command::new("bash")` site.
+policy failure in the fixture-dependent contract layer.
 
-The check is gated by the same `D2B_FIXTURES` step in
-`tests/tools/rust-workspace-checks.sh` as the existing crate-naming and
-member-sort checks. It does not require building the crate; it inspects
-the filesystem only.
+The check is routed through the `test-fixture-contracts` entry in
+`tests/layer1-jobs.json` and the corresponding `make test-fixture-contracts`
+target. That manifest job is advisory and skips unless
+`D2B_ENABLE_FIXTURE_BUILD=1` with `D2B_FIXTURES` delivered to its sandbox, so
+this check is not enforcing pull-request evidence until that delivery is wired
+and the manifest classification is promoted. It does not require compiling the
+Provider crate; it inspects the filesystem only.
 
 #### 4.8.3 README minimum sections
 
@@ -2596,14 +2607,16 @@ The `provider lifecycle` handler reconciles Provider:
    Set `PackageTrusted` and `trustResult`.
 2. **Config validation**: Validate `spec.config` against the JSON Schema
    identified by the artifact catalog's `configSchemaDigest`. Set `ConfigValid`.
-3. **Dependency resolution**: For each alias in `spec.dependencies`, resolve
-   to a Ready Provider; verify service fingerprint compatibility. Set
+3. **Dependency resolution**: For each alias in the signed manifest's
+   `dependencies`, resolve to a Ready Provider; verify service fingerprint
+   compatibility. Set
    `DependenciesReady`.
 4. **API binding**: Pass component descriptors and exported ResourceTypes to
    the API catalog handler; verify no name collisions; intersect permission
    claims with Zone policy; install schemas.
-5. **Component launch**: For each component in `spec.components`, create or
-   update the owned Process resource with the corresponding template/placement.
+5. **Component launch**: For each component in the signed manifest's
+   `components`, create or update the owned Process resource with the
+   corresponding template/placement.
    Bootstrap exception components (`system-core`, `system-minijail`) skip this
    step.
 6. **Readiness**: Once all required component Processes reach `Ready`, write
@@ -3100,11 +3113,10 @@ d2b.zones.dev.resources.runtime-cloud-hypervisor = {
       # apiToken = d2b.zones.dev.credentialRef "api-token";
     };
 
-    # spec.exports, spec.components, spec.dependencies, spec.permissionClaims,
-    # spec.upgradePolicy, spec.restartPolicy: populated from the signed manifest
-    # embedded in the artifact at build time. These are NOT writable Nix options;
-    # the Nix module generator does not emit settable options for them.
-    # Attempting to set them is an eval assertion error.
+    # Signed-manifest fields such as exports, components, dependencies,
+    # permissionClaims, upgradePolicy, and restartPolicy are not Provider spec
+    # fields. The Nix module generator emits no options for them, and attempting
+    # to add any field besides artifactId or config is an eval assertion error.
   };
 };
 ```
@@ -3295,7 +3307,7 @@ and `status` are filled by the Zone runtime (null in the bundle).
   "apiVersion": "resources.d2bus.org/v3",            // fixed; not per-type versioned
   "resourceType": "<ResourceType>",       // PascalCase registered type name
   "metadata": {
-    "name":                <string>,      // ResourceName; ^[a-z][a-z0-9-]*$; ≤128 chars
+    "name":                <string>,      // ResourceName; ^[a-z][a-z0-9-]*$; 1 to 63 bytes
     "zone":                <string>,      // equals the Zone name this bundle is for
     "uid":                 null,          // null in bundle; set by runtime at first create
     "generation":          <u64>,         // 1 for new resources; compiler-incremented on spec change
@@ -3398,42 +3410,20 @@ it to detect replacement across reconnects.
   },
   "spec": {
     "artifactId": "runtime-cloud-hypervisor",
-    "config": { "defaultCpuCount": 2, "defaultMemoryMib": 1024 },
-    "exports": [
-      { "resourceType": "Guest", "schemaDigest": "sha256:445566..." }
-    ],
-    "components": [
-      {
-        "name": "primary", "role": "controller", "placement": "HostLocal",
-        "processTemplate": {
-          "executableRef": "d2b-provider-runtime-cloud-hypervisor",
-          "args": ["--zone-bus-fd", "3"],
-          "environmentPolicy": "isolated"
-        },
-        "required": true
-      }
-    ],
-    "dependencies": [],
-    "permissionClaims": [
-      { "resourceType": "Guest",
-        "verbs": ["create","update-spec","update-status","delete"],
-        "level": "standard" }
-    ],
-    "upgradePolicy": "drain-then-replace",
-    "restartPolicy": "on-failure"
+    "config": { "defaultCpuCount": 2, "defaultMemoryMib": 1024 }
   },
   "status": null
 }
 ```
 
-`exports`, `components`, `dependencies`, `permissionClaims`, `upgradePolicy`, and
-`restartPolicy` are loaded from the signed manifest embedded in the artifact
-identified by `artifactId`. The operator supplies only `artifactId` (a plain
-bounded ID referencing the `d2b.artifacts.*` catalog) and `config`. The resource
-compiler resolves all manifest-derived fields and PackageIdentity sub-fields from
-the artifact catalog at build time. Store paths and raw closure metadata are
-**private catalog implementation data** and do not appear in the spec, status,
-audit records, or OTEL attributes.
+The operator supplies only `artifactId` (a plain bounded ID referencing the
+`d2b.artifacts.*` catalog) and `config`. Core ProviderDeployment reads
+`exports`, `components`, `dependencies`, `permissionClaims`, `upgradePolicy`,
+and `restartPolicy` directly from the signed manifest/catalog entry. The
+resource compiler verifies those properties and all PackageIdentity fields at
+build time but never copies them into the Provider resource envelope. Store
+paths and raw closure metadata are **private catalog implementation data** and
+do not appear in the spec, status, audit records, or OTEL attributes.
 
 #### Role canonical envelope
 
@@ -3514,7 +3504,8 @@ not fork the shape.
     { "apiVersion": "resources.d2bus.org/v3", "type": "Credential",
       "metadata": { "name": "api-token", "zone": "dev" }, "spec": { } },
     { "apiVersion": "resources.d2bus.org/v3", "type": "Provider",
-      "metadata": { "name": "runtime-cloud-hypervisor", "zone": "dev" }, "spec": { } },
+      "metadata": { "name": "runtime-cloud-hypervisor", "zone": "dev" },
+      "spec": { "artifactId": "provider-runtime-cloud-hypervisor", "config": {} } },
     { "apiVersion": "resources.d2bus.org/v3", "type": "Role",
       "metadata": { "name": "process-controller", "zone": "dev" }, "spec": { } },
     { "apiVersion": "resources.d2bus.org/v3", "type": "RoleBinding",
@@ -3566,7 +3557,7 @@ Three ordered phases validate the Nix configuration before a bundle is activated
 | Check | Mechanism | Failure mode |
 | --- | --- | --- |
 | Resource attrset key (→ `metadata.name`) matches `^[a-z][a-z0-9-]*$` | Nix `assert` | eval error |
-| Name length ≤ 128 chars | Nix `assert` | eval error |
+| Name length is 1 to 63 bytes | Nix `assert` | eval error |
 | `type` is a recognized core ResourceType or a non-empty string (non-core types validated at Phase 2) | Nix `assert` | eval error if empty or non-string |
 | `spec.rules[*].verbs` tokens in closed verb enum (§5.3.2) - Role only | Nix `assert` | eval error |
 | `spec.rules[*].sessionVerbs` tokens in closed session verb enum - Role only | Nix `assert` | eval error |
@@ -3591,7 +3582,7 @@ Three ordered phases validate the Nix configuration before a bundle is activated
 | `spec.artifactId` format `^[a-z][a-z0-9-]*$`, max 128 chars - Provider only | Nix `assert` | eval error |
 | `type = "Provider"` without a `spec.artifactId` field is rejected | Nix `assert` | eval error |
 | `spec.artifactId` value must name an entry in `d2b.artifacts.*` (attrset key lookup at eval time) with `type = "provider"` - Provider only | Nix `assert` | eval error if ID absent from catalog |
-| Manifest-derived Provider spec fields (`spec.exports`, `spec.components`, `spec.dependencies`, `spec.permissionClaims`, `spec.upgradePolicy`, `spec.restartPolicy`) not set by operator | Nix `assert` | eval error with message |
+| Provider spec contains no field other than `artifactId` and `config`; signed-manifest fields such as `exports`, `components`, `dependencies`, `permissionClaims`, `upgradePolicy`, and `restartPolicy` are not resource fields | Strict generated Provider ResourceSpec plus Nix `assert` | eval error with message |
 
 #### Phase 2 - Nix build (impure; runs on `nixos-rebuild build` and `nix build`)
 
@@ -3668,11 +3659,12 @@ controller-managed ResourceType.
 
 1. Resource compiler emits a bundle whose identity is its `contentHash`; the installed bundle's `contentHash` differs from the active generation's.
 2. Zone runtime reads and integrity-verifies the bundle (Phase 3 checks, §14.10).
-3. The active generation advances atomically: the sole durable writer ADR046-routing-013 commits the durable generation record `configuration/generation.json` (§14.9) - recording the new `contentHash` active, the prior `contentHash`, and the retention metadata in one durable write - and the runtime assigns the next monotonic `configurationGeneration` ordinal (the redb `store_meta` active-generation pointer is updated consistently within that same atomic step). This commit is the sole activation point; no other work item writes `generation.json`.
-4. The Zone begins serving all requests under the new generation immediately after the advance returns. No cleanup gate; no operator wait.
-5. `Zone.status.activeConfigurationGeneration` = the new ordinal.
-6. `Zone.status.conditions[ConfigurationCurrent].status = "True"`.
-7. Absent config-owned resources are identified and queued for async Delete
+3. The active generation advances atomically: the sole durable writer ADR046-routing-013 commits the durable generation record `configuration/generation.json` (§14.9), recording the new `contentHash` and monotonic `configurationGeneration` ordinal as active, the prior pointer, and the retention metadata in one durable write. This commit is the sole activation point; no other work item writes `generation.json`.
+4. After that commit returns, core idempotently advances the redb `store_meta.active_configuration_revision` pointer to the committed ordinal in a separate redb transaction. On restart it reconciles this pointer from the committed `generation.json` before admitting requests or applying a diff; no cross-file/redb atomic transaction is claimed.
+5. The Zone begins serving all requests under the new generation after step 4. No cleanup gate; no operator wait.
+6. `Zone.status.activeConfigurationGeneration` = the new ordinal.
+7. `Zone.status.conditions[ConfigurationCurrent].status = "True"`.
+8. Absent config-owned resources are identified and queued for async Delete
    (see below). Activation does not wait for them.
 
 #### Absent resource deletion (normative)
@@ -3860,10 +3852,10 @@ Rollback atomically:
 | `provider-wildcard-permission-restricted` | Non-bootstrap Provider with wildcard permission claim is rejected |
 | `provider-upgrade-drain-then-replace` | `upgradePolicy=drain-then-replace` completes old component drain before new launch |
 | `provider-component-bound-limits` | Provider with 9 controllers fails admission; 8 is the maximum |
-| `provider-crate-layout-src-required` | A `d2b-provider-*` workspace crate without `src/` fails `make test-policy` with message naming the crate and missing path |
-| `provider-crate-layout-tests-required` | A `d2b-provider-*` workspace crate without `tests/` fails `make test-policy` |
-| `provider-crate-layout-integration-required` | A `d2b-provider-*` workspace crate without `integration/` fails `make test-policy` |
-| `provider-crate-layout-readme-required` | A `d2b-provider-*` workspace crate without `README.md` fails `make test-policy` |
+| `provider-crate-layout-src-required` | A `d2b-provider-*` workspace crate without `src/` fails the enabled fixture-contract lane with a message naming the crate and missing path |
+| `provider-crate-layout-tests-required` | A `d2b-provider-*` workspace crate without `tests/` fails the enabled fixture-contract lane |
+| `provider-crate-layout-integration-required` | A `d2b-provider-*` workspace crate without `integration/` fails the enabled fixture-contract lane |
+| `provider-crate-layout-readme-required` | A `d2b-provider-*` workspace crate without `README.md` fails the enabled fixture-contract lane |
 | `provider-readme-sections-all-present` | A Provider `README.md` missing any of the nine required headings (§4.8.3) fails policy with the exact missing heading name |
 | `provider-readme-sections-partial-missing` | A Provider `README.md` with 8 of 9 sections fails policy; message names the one missing section |
 | `provider-integration-target-declared` | An `integration/*.rs` file without an `integration-target:` declaration in the first 20 lines fails policy |
@@ -4149,7 +4141,7 @@ Evidence classes:
 | Symbol | File | Evidence class | ADR-0046 mapping |
 | --- | --- | --- | --- |
 | `HostSubstrateProvider`, `RuntimeProvider`, `WorkloadProvider`, `DurableExecutionProvider`, `InfrastructureProvider`, `NodeProvider`, `TransportProvider`, `RelayProvider`, `CredentialProvider`, `PersistentShellProvider`, `DisplayProvider` traits | `d2b-realm-provider/src/provider.rs:31,41,65,89,268,333,197,324,301,137,169` | `implemented-and-reachable` (`WorkloadProvider` is imported in live `d2bd/src/lib.rs:93` for ACA) | Provider trait surface. Each trait axis maps to a Provider component service definition; `WorkloadProvider` is the only one with a live call path (ACA gateway). Remaining traits are reachable via `d2b-realm-provider` dependency but have no live non-ACA call sites |
-| `RuntimeCapabilitySet`, `WorkloadCapabilitySet`, `NodeCapabilitySet` | `d2b-realm-provider/src/capabilities.rs` | `implemented-and-reachable` | Maps to Provider `spec.components[].supportedCapabilities` |
+| `RuntimeCapabilitySet`, `WorkloadCapabilitySet`, `NodeCapabilitySet` | `d2b-realm-provider/src/capabilities.rs` | `implemented-and-reachable` | Maps to signed Provider manifest `components[].supportedCapabilities` |
 | `workload_lists_and_advertises()`, `display_fails_closed_when_unsupported()` | `d2b-realm-provider/src/conformance.rs` | `implemented-and-reachable` | Provider conformance check behavior; reused in Provider trust check (ADR046-zone-control-003) |
 | `ProviderError`, `ErrorKind`, `RetryHint`, `ProviderDiagnostic` | `d2b-realm-provider/src/error.rs` | `implemented-and-reachable` | Provider lifecycle error/retry schema; maps to Provider `status.conditions[].message` and error bounds |
 
@@ -4218,7 +4210,7 @@ None of the following exist in baseline:
 | Baseline symbol | Reuse action | Destination |
 | --- | --- | --- |
 | `is_label()`, `LABEL_PATTERN`, `MAX_ID_LEN`, `IdError` | extract | `d2b-contracts/src/v3/resource_ref.rs` ResourceName validator |
-| `RealmControllerPlacement` label set | adapt (semantics change: process placement → component placement) | Provider `spec.components[].placement` field enum |
+| `RealmControllerPlacement` label set | adapt (semantics change: process placement → component placement) | Signed Provider manifest `components[].placement` field enum |
 | `EntrypointMode::{HostResident,GatewayBacked}` | adapt | ZoneLink transport binding selector |
 | `RealmTransportBinding::{LocalUnixSocket,RemoteRealmTransport,ProviderRealmTransport}` | adapt | ZoneLink `spec.transportProviderRef` + transport settings variants |
 | `SecurePeerSession<C>` (Noise KK) | copy/adapt via main `a1cc0b2d` | Enrolled-steady-state Noise KK handshake primitive within the ZoneLink enrollment-and-session FSM (`Unenrolled -> IKpsk2 -> EnrollmentCommitted -> KK -> Ready`, ADR046-zone-control-018); the one-time IKpsk2 bootstrap primitive is reused separately from d2b-bus (ADR046-zone-control-011) and this KK primitive never replaces or reorders that bootstrap step |
@@ -4340,11 +4332,11 @@ None of the following exist in baseline:
 | Dependency/owner | ADR046-zone-control-004, ADR046-zone-control-005; Zone runtime |
 | Current source | `packages/d2bd/src/admission.rs` (`authorize_peer()`, `verb_requires_admin()`, `verb_allowed_for_host_shutdown()`, `PeerRole::{Admin, Launcher, HostShutdown}` - `implemented-and-reachable`, baseline `b5ddbed6`); `packages/d2b-daemon-access/src/lib.rs` (`LocalUnixAllowlistRole`, `DaemonAccessDecision::Authorized/Denied`, `DaemonAccessAdmissionSource`, `MappedDaemonAccessPrincipal`, `map_local_unix_daemon_access()` - `implemented-and-reachable`); `packages/d2bd/src/lib.rs` (`LoadedRealmControllersConfig`, `LoadedRealmIdentityConfig` startup state - `implemented-and-reachable`); compiled bootstrap constant policy: `ADR-only` |
 | Reuse action | adapt |
-| Destination | `packages/d2b-resource-api/src/bootstrap_authz.rs`; Zone runtime startup path |
-| Detailed design | Compiled bootstrap authorization as described in §9; exact subjects (system-core, system-minijail); closed verb table; non-configurable enforcement; atomic supersession after stored RBAC publishes; out-of-band reset path Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt (`authorize_peer()`/`verb_requires_admin()` verb table → bootstrap constant policy verb table; `PeerRole` two-variant model → system-core/system-minijail bootstrap subjects; `map_local_unix_daemon_access()` SO_PEERCRED mapping → bootstrap subject derivation; `LoadedRealmControllersConfig` startup path → Zone runtime startup bootstrap init sequence). |
-| Integration | Resource API authorization layer checks bootstrap policy before stored RBAC; supersession is triggered by first `IndexBuilt=True` event from authorization handler |
-| Data migration | Bootstrap is always freshly compiled; no migration |
-| Validation | All §15.6 bootstrap tests |
+| Destination | `packages/d2b-resource-api/src/authz.rs`; Zone runtime startup path |
+| Detailed design | Implement the D105 bootstrap authorization as a `&'static` exact tuple table in `authz.rs`, with no constructor accepting configuration, Nix, environment, or API data. Derive `unprovisioned` and `provisioned-bootstrap` solely from `store_meta.policy_revision = 0` plus bootstrap Provider presence in `type_index`; require the exact subject/evidence/purpose/service/generation/locality tuple; enforce the frozen per-subject method/type rows and name narrowings; deny UpdateSpec, UpdateMetadata, UpdateFinalizers, Delete, CommitBatch, Upgrade, and expedited waitForReconcile in both phases. Atomically advance `policy_revision` from 0 to 1 in the same redb transaction that installs the initial Role/RoleBinding set; never consult bootstrap after revision 1. A reset provisions a new store identity and never clears the marker in place. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt (`authorize_peer()`/`verb_requires_admin()` verb table → bootstrap constant policy verb table; `PeerRole` two-variant model → system-core/system-minijail bootstrap subjects; `map_local_unix_daemon_access()` SO_PEERCRED mapping → bootstrap subject derivation; `LoadedRealmControllersConfig` startup path → Zone runtime startup bootstrap init sequence). |
+| Integration | Resource API authorization derives bootstrap phase from the same redb transaction snapshot used for admission; the one-way `policy_revision` 0-to-1 transaction disables the table before any stored-policy request is admitted |
+| Data migration | No migration; reset provisions a new store identity rather than clearing `policy_revision` |
+| Validation | All §15.6 bootstrap tests plus exact static-row-count/no-external-input policy test, both derived-phase cases, subject-UID recheck in provisioned-bootstrap, atomic 0-to-1 publication, and no-reentry-after-restart/reset vectors |
 | Removal proof | `daemon-access` bootstrap stub removed after Zone runtime bootstrap authz integrates |
 
 ### ADR046-zone-control-007
@@ -4549,7 +4541,7 @@ Evidence class for all: `main-reuse-source`.
 | Reuse source | None |
 | Reuse action | create |
 | Destination | `nixos-modules/options-zones.nix`, `nixos-modules/generated/resource-types.nix`, `nixos-modules/generated/options-zones-<ResourceType>.nix`, `nixos-modules/resource-type-validators.nix` |
-| Detailed design | Consume the generator and registry established by ADR046-routing-011 to declare the unified `d2b.zones.<zone>.resources.<name>` option tree plus the Zone-level compiler-only `parentZone` scalar. The generated standard registry is exactly the canonical 19 types (`Zone`, `ZoneLink`, `Provider`, `Host`, `Guest`, `Process`, `EphemeralProcess`, `Network`, `Volume`, `Credential`, `Device`, `Endpoint`, `User`, `Role`, `RoleBinding`, `Quota`, `EmergencyPolicy`, `ResourceExport`, `ResourceImport`), and every standard type has a strict generated `spec` submodule carrying the schema's Nix types, defaults, bounds, and documentation. Installed Provider artifacts may append only signed qualified ResourceTypes whose strict schema has been verified and generated into the evaluated option set. `type` is selected from that closed combined registry: an unknown standard string, an unqualified extension, or a qualified type without an installed verified schema fails evaluation; there is no unrestricted string or free-form `spec` fallback. Require `parentZone` on every non-root Zone and forbid it on `local-root`; resolve it against declared Zone keys, reject self-parent/conflicting module definitions/cycles, and cap each ancestry path at 16 Zone names. Compile the validated map into sealed allocator bootstrap topology; never emit it into the resource bundle or `Zone.spec`. Declare the global `d2b.artifacts.<id>` catalog with `package` (types.package, required) and `type` (closed enum, required). Provider `spec.artifactId` is a plain catalog ID; the derivation is not a `spec` field. Implement the Phase 1 cross-resource assertions (§14.10 Phase 1 table); retain `credentialRef`, `resourceRef`, and `closedEnum` helpers; reject operator-authored `Zone`; and enforce child-local ZoneLink topology. The runtime creates `Zone/<name>`, `Provider/system-core`, and `Provider/system-minijail` with `managedBy=controller`; none is emitted or inferred from the configuration bundle. `allowUnsafeLocal` maps to the dedicated Host admission gate. Provider manifest-derived fields (`spec.exports`, `spec.components`, `spec.dependencies`, `spec.permissionClaims`, `spec.upgradePolicy`, `spec.restartPolicy`) are read-only and setting one is an eval error. |
+| Detailed design | Consume the generator and registry established by ADR046-routing-011 to declare the unified `d2b.zones.<zone>.resources.<name>` option tree plus the Zone-level compiler-only `parentZone` scalar. The generated standard registry is exactly the canonical 19 types (`Zone`, `ZoneLink`, `Provider`, `Host`, `Guest`, `Process`, `EphemeralProcess`, `Network`, `Volume`, `Credential`, `Device`, `Endpoint`, `User`, `Role`, `RoleBinding`, `Quota`, `EmergencyPolicy`, `ResourceExport`, `ResourceImport`), and every standard type has a strict generated `spec` submodule carrying the schema's Nix types, defaults, bounds, and documentation. Installed Provider artifacts may append only signed qualified ResourceTypes whose strict schema has been verified and generated into the evaluated option set. `type` is selected from that closed combined registry: an unknown standard string, an unqualified extension, or a qualified type without an installed verified schema fails evaluation; there is no unrestricted string or free-form `spec` fallback. Require `parentZone` on every non-root Zone and forbid it on `local-root`; resolve it against declared Zone keys, reject self-parent/conflicting module definitions/cycles, and cap each ancestry path at 16 Zone names. Compile the validated map into sealed allocator bootstrap topology; never emit it into the resource bundle or `Zone.spec`. Declare the global `d2b.artifacts.<id>` catalog with `package` (types.package, required) and `type` (closed enum, required). Provider `spec.artifactId` is a plain catalog ID; the derivation is not a `spec` field. Implement the Phase 1 cross-resource assertions (§14.10 Phase 1 table); retain `credentialRef`, `resourceRef`, and `closedEnum` helpers; reject operator-authored `Zone`; and enforce child-local ZoneLink topology. The runtime creates `Zone/<name>`, `Provider/system-core`, and `Provider/system-minijail` with `managedBy=controller`; none is emitted or inferred from the configuration bundle. `allowUnsafeLocal` maps to the dedicated Host admission gate. Provider ResourceSpec has exactly `artifactId` and `config`; manifest-derived properties such as `exports`, `components`, `dependencies`, `permissionClaims`, `upgradePolicy`, and `restartPolicy` are not resource fields, and attempting to set one is an eval error. |
 | Integration | ADR046-routing-011 supplies the one canonical 19-type registry and generated option family; validated `parentZone` feeds the allocator bootstrap sealer; the closed `d2b.zones.<zone>.resources.*` tree is consumed by ADR046-zone-control-015; the Zone controller (ADR046-zone-control-001) reads the resulting bundle; Provider package conventions come from ADR046-zone-control-003 |
 | Data migration | Replace `nixos-modules/options-realms.nix`-derived option trees once Zone controller is live and has reached parity |
 | Validation | All Phase 1 eval tests in §15.8 (`nix-eval-name-regex-enforced`, `nix-eval-verb-closed-enum`, `nix-eval-session-verb-closed-enum`, `nix-eval-relay-session-verb-known`, `nix-eval-roleref-format`, `nix-eval-subject-type-restricted`, `nix-eval-no-duplicate-subjects`, `nix-eval-bootstrap-provider-rejected`, `nix-eval-provider-missing-artifact-id`, `nix-eval-artifact-id-not-in-catalog`, `nix-eval-artifact-wrong-type`, `nix-eval-artifact-id-format`, `nix-eval-credentialref-declared`, `nix-eval-dollar-key-rejected`, all five `nix-eval-parent-zone-*` vectors, `nix-eval-zonelink-child-name-mismatch-rejected`, `nix-eval-zonelink-second-uplink-rejected`, `nix-eval-zonelink-limits-maxpendingintents-bound`); Phase 2 runs `nix-build-relay-scope-restricted`; drift test asserts the standard registry and generated option modules cover exactly all 19 canonical types; negative evals reject unknown strings, unqualified extensions, unsigned or uninstalled qualified types, and unknown `spec` fields; a positive fixture admits an installed signed qualified type and validates its strict generated schema |
@@ -4565,8 +4557,8 @@ Evidence class for all: `main-reuse-source`.
 | Reuse source | None |
 | Reuse action | create |
 | Destination | `packages/d2b-resource-compiler/src/{main,bundle,schema,validator,digest,sort,secret_lint,generation}.rs`; exposed as `pkgs.d2b-resource-compiler`; called from `nixos-modules/resource-compiler.nix` |
-| Detailed design | Implement all Phase 2 build-time checks (§14.10 Phase 2 table): dispatch on `type` to look up ResourceTypeSchema; validate each resource's `spec` canonical JSON against the committed schema (build validation compares canonical rendered JSON against ResourceTypeSchema for each core type); compile the `d2b.artifacts.*` catalog: for each entry, build/include the derivation, verify `type` is a recognized value, compute `digest` over the derivation output, extract and hash manifest and config schema files, validate signature chain and conformance attestation; detect duplicate artifact IDs; for each Provider resource, look up `spec.artifactId` in the compiled catalog (build failure if absent or wrong type), verify `configSchemaDigest` matches schema SHA-256, validate operator `spec.config` against loaded JSON Schema using a pure-Rust validator bundled in the derivation, verify `manifestDigest` and signature chain, load manifest-derived fields (`exports`, `components`, `dependencies`, `permissionClaims`, `upgradePolicy`, `restartPolicy`) into the bundle envelope; emit private integrity-pinned artifact catalog (ID → type/digest/closure metadata) as a separate private file (never merged into the public resource bundle); check `spec.rules[*].resourceTypes` against installed Provider catalogs in the bundle (Role); verify `spec.roleRef` names an existing Role in the bundle (RoleBinding); verify `spec.subjects[*]` names resolve in bundle (RoleBinding); check ResourceType short-name collision across all Zone Providers; RFC 8785 canonical JSON serialization; `contentHash` computation over the sorted `resources` array; `artifactCatalogDigest` copy from the site artifact catalog; inline-secret heuristic lint (`--strict-secrets` flag); emit `resource-bundle.json` bundle with all fields per §14.9 |
-| Integration | Reads from `d2b.zones.<zone>.resources.*` (ADR046-zone-control-014); emits bundle consumed by ADR046-zone-control-001 configuration publication handler; generation counter stored as Nix module derivation input hash (hermetic) or in a NixOS state file (impure) - exact mechanism is implementation decision |
+| Detailed design | Implement all Phase 2 build-time checks (§14.10 Phase 2 table): dispatch on `type` to look up ResourceTypeSchema; validate each resource's `spec` canonical JSON against the committed schema (build validation compares canonical rendered JSON against ResourceTypeSchema for each core type); compile the `d2b.artifacts.*` catalog: for each entry, build/include the derivation, verify `type` is a recognized value, compute `digest` over the derivation output, extract and hash manifest and config schema files, validate signature chain and conformance attestation; detect duplicate artifact IDs; for each Provider resource, look up `spec.artifactId` in the compiled catalog (build failure if absent or wrong type), verify `configSchemaDigest` matches schema SHA-256, validate operator `spec.config` against loaded JSON Schema using a pure-Rust validator bundled in the derivation, verify `manifestDigest` and signature chain, and retain manifest-derived properties (`exports`, `components`, `dependencies`, `permissionClaims`, `upgradePolicy`, `restartPolicy`) only in the private integrity-pinned artifact catalog entry read by core ProviderDeployment, never in the canonical Provider resource envelope; emit that private catalog (ID → type/digest/closure/manifest metadata) as a separate private file, never merged into the public resource bundle; check `spec.rules[*].resourceTypes` against installed Provider catalogs in the bundle (Role); verify `spec.roleRef` names an existing Role in the bundle (RoleBinding); verify `spec.subjects[*]` names resolve in bundle (RoleBinding); check ResourceType short-name collision across all Zone Providers; RFC 8785 canonical JSON serialization; `contentHash` computation over the sorted `resources` array; `artifactCatalogDigest` copy from the site artifact catalog; inline-secret heuristic lint (`--strict-secrets` flag); emit `resource-bundle.json` bundle with all fields per §14.9 |
+| Integration | Reads from `d2b.zones.<zone>.resources.*` (ADR046-zone-control-014) and emits the immutable bundle consumed by ADR046-zone-control-001. This build-time work assigns or stores no runtime generation ordinal; ADR046-routing-013 assigns the next ordinal during activation and persists it in the sole durable `generation.json` commit. |
 | Data migration | Full reset; no prior bundle state exists to carry forward |
 | Validation | All Phase 2 build tests in §15.8 (`nix-build-artifact-id-missing-from-catalog`, `nix-build-artifact-wrong-type-rejected`, `nix-build-duplicate-artifact-id`, `nix-build-artifact-store-path-absent-from-bundle`, `nix-build-artifact-store-path-absent-from-config`, `nix-build-config-schema-failure`, `nix-build-schema-digest-mismatch`, `nix-build-manifest-digest-mismatch`, `nix-build-resourcetype-collision`, `nix-build-bundle-sorted`, `nix-build-bundle-digest-stable`, `nix-build-per-resource-digest-correct`, `nix-build-credential-ref-survives-build`, `nix-build-inline-secret-lint-warning`, `nix-build-inline-secret-strict-failure`) |
 | Removal proof | No current equivalent; additive only; no prior code removed |
@@ -4581,7 +4573,7 @@ Evidence class for all: `main-reuse-source`.
 | Reuse source | main `a1cc0b2d`: `packages/d2b-session/src/lifecycle.rs` `begin_reconnect` exponential backoff logic (cleanup retry); `packages/d2b-state/` lock/lease types (ADR046-store-001 dependency for bundle file locking) |
 | Reuse action | adapt |
 | Destination | `packages/d2b-core-controller/src/configuration.rs` (Phase 3 activation, diff, delete dispatch); `packages/d2b-core-controller/src/cleanup.rs` (pending tracking, status, stuck detection, rollback verb handler) |
-| Detailed design | Implement all Phase 3 runtime activation checks (§14.10 Phase 3 table); `contentHash` and `artifactCatalogDigest` integrity verify; `zoneUid` consistency check; `contentHash`-identity no-op check; atomic generation advance - the durable `generation.json` commit is owned by the sole durable writer ADR046-routing-013; this work item records the next `configurationGeneration` ordinal and the active `contentHash` in the redb `store_meta` pointer consistently within that same atomic commit and does not write `generation.json` independently; diff computation (resources with `managedBy=configuration` absent from new bundle → async Delete; `managedBy=controller`/`managedBy=api` resources untouched); `managedBy` and `configurationGeneration` field maintenance on resources in redb store; `cleanupPendingCount` and `generationCleanupPending` maintenance; Zone.status.phase → Degraded while cleanup pending, reverts on completion; `GenerationCleanupPending`/`GenerationCleanupFailed` condition management; stuck-cleanup `GenerationCleanupFailed=True` at `cleanupStuckThreshold` (default 5 min) with exponential backoff retry; prior generation bundle retention and pruning up to configured `retainedGenerations` (default 3, range 1..16); audit emission for all four cleanup audit kinds (§14.11); `zone.config-rollback` verb handler Primary reuse disposition: `adapt`. Preserved source-plan detail: extract exponential backoff from `begin_reconnect`. |
+| Detailed design | Implement all Phase 3 runtime activation checks (§14.10 Phase 3 table); `contentHash` and `artifactCatalogDigest` integrity verify; `zoneUid` consistency check; `contentHash`-identity no-op check; atomic generation advance - the durable `generation.json` commit, including the next `configurationGeneration` ordinal, is owned by the sole durable writer ADR046-routing-013. After that commit returns, this work item idempotently records the committed ordinal and active `contentHash` in redb `store_meta` in a separate transaction before request admission or diff application; restart reconciles that pointer from committed `generation.json` before serving. It does not write `generation.json` independently and claims no cross-file/redb transaction; diff computation (resources with `managedBy=configuration` absent from new bundle → async Delete; `managedBy=controller`/`managedBy=api` resources untouched); `managedBy` and `configurationGeneration` field maintenance on resources in redb store; `cleanupPendingCount` and `generationCleanupPending` maintenance; Zone.status.phase → Degraded while cleanup pending, reverts on completion; `GenerationCleanupPending`/`GenerationCleanupFailed` condition management; stuck-cleanup `GenerationCleanupFailed=True` at `cleanupStuckThreshold` (default 5 min) with exponential backoff retry; prior generation bundle retention and pruning up to configured `retainedGenerations` (default 3, range 1..16); audit emission for all four cleanup audit kinds (§14.11); `zone.config-rollback` verb handler Primary reuse disposition: `adapt`. Preserved source-plan detail: extract exponential backoff from `begin_reconnect`. |
 | Integration | Zone store / redb (ADR046-store-001); core-controller watch/trigger bus (ADR046-zone-control-011); Zone status writer (ADR046-zone-control-001); audit emitter (§13.2); Credential revocation hook (triggered when `deletionRequestedAt` is set on a Credential and `core.credential-revoke` finalizer is present; revocation completes before finalizer clearance) |
 | Data migration | Full reset; no prior bundle activation state exists to carry forward |
 | Validation | All Phase 3 runtime and cleanup tests in §15.8 (`nix-runtime-bundledigest-integrity`, `nix-runtime-generation-monotone`, `nix-runtime-zoneuid-mismatch-rejected`, `nix-runtime-zonename-mismatch-rejected`, `nix-runtime-activation-nonblocking`, `nix-runtime-provider-config-invalid-continues`, all `cleanup-*` and `rollback-*` tests) |
@@ -4593,12 +4585,12 @@ Evidence class for all: `main-reuse-source`.
 | --- | --- |
 | Work item ID | `ADR046-pkg-001` |
 | Dependency/owner | ADR046-zone-control-003; workspace policy owner |
-| Current source | `packages/d2b-contract-tests/tests/policy_contracts.rs` lines 5-6 (D2B_FIXTURES gate / workspace-checks integration pattern - `implemented-and-reachable`, baseline `b5ddbed6`); `packages/d2b-contract-tests/tests/static_invariants.rs` (hermetic policy test structure - `implemented-and-reachable`); `tests/tools/rust-workspace-checks.sh` (D2B_FIXTURES step shell harness - `implemented-and-reachable`); AGENTS.md "Naming conventions" section (`<base>-<implementation>` workspace sort rules - `implemented-and-reachable`); `packages/d2b-realm-core/src/ids.rs` `LABEL_PATTERN` / `MAX_ID_LEN` (name regex reused for crate name token validation - `implemented-and-reachable`) |
+| Current source | `packages/d2b-contract-tests/tests/static_invariants.rs` (hermetic policy test structure - `implemented-and-reachable`); `tests/layer1-jobs.json` (`test-fixture-contracts` manifest entry - `implemented-and-reachable`); `tests/test-rust.sh` (`fixture-contracts` lane and D2B_FIXTURES delivery - `implemented-and-reachable`); AGENTS.md "Naming conventions" section (`<base>-<implementation>` workspace sort rules - `implemented-and-reachable`); `packages/d2b-realm-core/src/ids.rs` `LABEL_PATTERN` / `MAX_ID_LEN` (name regex reused for crate name token validation - `implemented-and-reachable`) |
 | Reuse source | None |
 | Reuse action | create |
-| Destination | `packages/d2b-contract-tests/tests/policy_provider_crate_layout.rs` (new file; gated under D2B_FIXTURES in existing `tests/tools/rust-workspace-checks.sh`) |
-| Detailed design | Implement `policy_provider_crate_layout.rs` with the following test functions: (1) `every_provider_crate_has_src` - walk `packages/d2b-provider-*/` directories in the workspace, assert each contains `src/`; failure names crate and missing path; (2) `every_provider_crate_has_tests` - assert `tests/` present; (3) `every_provider_crate_has_integration` - assert `integration/` present; (4) `every_provider_crate_has_readme` - assert `README.md` present; (5) `every_provider_readme_has_required_sections` - read `README.md`, check for all nine section headings from §4.8.3 (case-insensitive, after stripping `#` and whitespace); failure names the missing heading(s); (6) `every_integration_file_has_target_declaration` - for each `integration/*.rs` file, scan first 20 lines for exactly one `//! integration-target: (container|host-integration)` declaration; failure names the file and the violation (missing/multiple/invalid value); (7) `non_provider_crates_exempt` - verify the check does not run on non-`d2b-provider-*` crates. All checks are filesystem-only (no compilation). Workspace member list is discovered by parsing `packages/Cargo.toml` `[workspace].members`. Gate: add the new test file to `tests/tools/rust-workspace-checks.sh` D2B_FIXTURES list alongside existing policy tests |
-| Integration | `make test-policy` and `make check` both fail if any provider crate violates §4.8; consistent with existing `no-bash-ast-walker` and workspace-sort gates; ADR046-zone-control-003 references §4.8 for Provider package conventions |
+| Destination | `packages/d2b-contract-tests/tests/policy_provider_crate_layout.rs` (new file; executed by the fixture-dependent Rust contract lane when enabled) |
+| Detailed design | Implement `policy_provider_crate_layout.rs` with the following test functions: (1) `every_provider_crate_has_src` - walk `packages/d2b-provider-*/` directories in the workspace, assert each contains `src/`; failure names crate and missing path; (2) `every_provider_crate_has_tests` - assert `tests/` present; (3) `every_provider_crate_has_integration` - assert `integration/` present; (4) `every_provider_crate_has_readme` - assert `README.md` present; (5) `every_provider_readme_has_required_sections` - read `README.md`, check for all nine section headings from §4.8.3 (case-insensitive, after stripping `#` and whitespace); failure names the missing heading(s); (6) `every_integration_file_has_target_declaration` - for each `integration/*.rs` file, scan first 20 lines for exactly one `//! integration-target: (container|host-integration)` declaration; failure names the file and the violation (missing/multiple/invalid value); (7) `non_provider_crates_exempt` - verify the check does not run on non-`d2b-provider-*` crates. All checks are filesystem-only (no compilation). Workspace member list is discovered by parsing `packages/Cargo.toml` `[workspace].members`. Gate: add the new test file to the `d2b-contract-tests` crate covered by the manifest's `test-fixture-contracts` entry |
+| Integration | `make test-fixture-contracts` fails on a §4.8 violation when `D2B_ENABLE_FIXTURE_BUILD=1` and `D2B_FIXTURES` is available. The manifest lane remains advisory until sandbox fixture delivery is wired and its classification is promoted; ADR046-zone-control-003 references §4.8 for Provider package conventions |
 | Data migration | Additive; no existing `d2b-provider-*` crates in the pre-ADR45 baseline; first Provider crate created must comply from inception |
 | Validation | §15.3 layout conformance tests: `provider-crate-layout-src-required`, `provider-crate-layout-tests-required`, `provider-crate-layout-integration-required`, `provider-crate-layout-readme-required`, `provider-readme-sections-all-present`, `provider-readme-sections-partial-missing`, `provider-integration-target-declared`, `provider-integration-target-unique`, `provider-integration-target-valid-values`, `provider-crate-naming-convention`, `provider-crate-layout-non-provider-exempt` |
 | Removal proof | No existing code removed; additive policy test only |

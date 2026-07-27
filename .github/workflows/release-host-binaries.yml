@@ -6,6 +6,10 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: sh tests/tools/ci-shell {0}
+
 jobs:
   detect-version:
     runs-on: ubuntu-latest
@@ -16,11 +20,10 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          fetch-depth: 0
           persist-credentials: false
+          fetch-depth: 0
       - id: detect
         name: Detect changelog release cut
-        shell: bash
         run: |
           set -euo pipefail
           version=$(perl -e 'use strict; use warnings;
@@ -44,7 +47,6 @@ jobs:
           printf 'skip=%s\n' "$skip" >> "$GITHUB_OUTPUT"
       - name: Reject unfolded changelog fragments
         if: steps.detect.outputs.skip != 'true'
-        shell: bash
         run: |
           set -euo pipefail
           stray=$(find changelog.d -type f ! -name README.md -printf '%P\n' 2>/dev/null | sort || true)
@@ -135,6 +137,7 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
+          persist-credentials: false
           fetch-depth: 0
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:

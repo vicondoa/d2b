@@ -434,7 +434,7 @@ spec:
     class: on-failure
     backoffBase: "1s"
     backoffMax: "60s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: null
     resetAfter: "300s"
   adoptionPolicy: adopt-on-restart
@@ -488,7 +488,7 @@ spec:
     class: on-failure
     backoffBase: "1s"
     backoffMax: "60s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: null
     resetAfter: "300s"
   adoptionPolicy: adopt-on-restart
@@ -1576,9 +1576,11 @@ All sources in this section are from main commit `a1cc0b2da4a08ca3240a770a972fe4
 
 Per D094 and `ADR-046-validation-and-delivery` §10.16, this Provider's `src/`
 unit tests and `tests/*.rs` hermetic suite are fast, in-process, deterministic,
-and parallel-safe: an individual normal test has p95 ≤50 ms with no wall-clock
+and parallel-safe: an individual normal test has an advisory wall-clock p95
+diagnostic threshold of <=50 ms; gate enforcement is aggregate per-crate
+process CPU only. There is no wall-clock
 sleep, and `cargo test -p d2b-provider-runtime-azure-container-apps --lib --tests`
-completes in ≤2 s warm-cache execution time (compilation excluded). They use a
+completes in ≤3 s warm-cache execution time (compilation excluded). They use a
 deterministic fake clock/RNG and the toolkit fakes/FakeEffectPort only - no
 process spawn, container, network, DBus, systemd, broker daemon, Nix eval/build,
 KVM, USB/GPU/TPM hardware, or live cloud, and no filesystem tree beyond tiny
@@ -1587,7 +1589,7 @@ keeps a lane timeout/budget, parallel isolation, and fake external services by
 default; such a need is re-placed into `integration/`, never given a sleep,
 larger timeout, or `#[ignore]`. Bounded crypto/property tests are the only
 classified exception, each named with a capped case count and a declared higher
-per-test budget.
+per-test advisory threshold.
 
 ### 19.1 Required test layout
 

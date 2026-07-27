@@ -323,7 +323,7 @@ spec:
     class: on-failure
     backoffBase: "1s"
     backoffMax: "60s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: null
     resetAfter: "300s"
   readiness:
@@ -411,7 +411,7 @@ spec:
     class: on-failure
     backoffBase: "2s"
     backoffMax: "120s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: null
     resetAfter: "300s"
   readiness:
@@ -1116,7 +1116,7 @@ than proceeding without an audit record.
 pub struct ClipboardAuditEvent {
     pub operation_id: Uuid,             // unique per operation
     pub event_type: ClipboardEventType,
-    pub source_zone_id: Option<BoundedId>,  // max 63 chars; no path/payload
+    pub source_zone_id: Option<BoundedId>,  // 1 to 63 bytes; no path/payload
     pub dest_zone_id: Option<BoundedId>,
     pub mime_type: Option<AllowedMime>,     // from MIME allowlist only; null if rejected before check
     pub byte_hint: Option<SizeBucket>,      // discretized: <1K, 1-64K, 64K-1M, >1M; never exact size
@@ -1740,9 +1740,11 @@ ADR046-clipboard-012.
 
 Per D094 and `ADR-046-validation-and-delivery` §10.16, this Provider's `src/`
 unit tests and `tests/*.rs` hermetic suite are fast, in-process, deterministic,
-and parallel-safe: an individual normal test has p95 ≤50 ms with no wall-clock
+and parallel-safe: an individual normal test has an advisory wall-clock p95
+diagnostic threshold of <=50 ms; gate enforcement is aggregate per-crate
+process CPU only. There is no wall-clock
 sleep, and `cargo test -p d2b-provider-clipboard-wayland --lib --tests`
-completes in ≤2 s warm-cache execution time (compilation excluded). They use a
+completes in ≤3 s warm-cache execution time (compilation excluded). They use a
 deterministic fake clock/RNG and the toolkit fakes/FakeEffectPort only - no
 process spawn, container, network, DBus, systemd, broker daemon, Nix eval/build,
 KVM, USB/GPU/TPM hardware, or live cloud, and no filesystem tree beyond tiny
@@ -1751,7 +1753,7 @@ keeps a lane timeout/budget, parallel isolation, and fake external services by
 default; such a need is re-placed into `integration/`, never given a sleep,
 larger timeout, or `#[ignore]`. Bounded crypto/property tests are the only
 classified exception, each named with a capped case count and a declared higher
-per-test budget.
+per-test advisory threshold.
 
 Per D094, each replaced current-code test is retired with an explicit
 keep/adapt/move/delete disposition and a removal gate: the minimum reusable

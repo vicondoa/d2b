@@ -11,7 +11,8 @@ SHELL := $(CURDIR)/tests/tools/scrub-shell-environment
 .PHONY: pre-tag smoke-lite i3-check \
         check check-static check-ci check-all check-fast check-tier0 \
         test test-unit \
-        test-lint test-rust test-proofs test-flake test-nix-unit \
+        test-lint test-rust test-fixture-contracts test-proofs test-flake test-nix-unit \
+        test-performance-budgets test-adr-index-coverage test-ci-coverage \
         test-flake-list \
         test-drift test-policy test-integration test-host-integration test-hardware perf \
         heavy-lane-guard heavy-lane-integration heavy-lane-host-integration \
@@ -20,7 +21,8 @@ SHELL := $(CURDIR)/tests/tools/scrub-shell-environment
         heavy-gate-build heavy-gate-provision heavy-check heavy-cargo-test heavy-flake-check \
         heavy-test-integration heavy-test-host-integration heavy-test-hardware \
         layer1-workflow layer1-workflow-check \
-        ledger-regen check-inventory pr-checklist-gate nix-unit-pin flake-matrix-pin
+        ledger-regen check-inventory pr-checklist-gate nix-unit-pin flake-matrix-pin \
+        runtime-ledger-pin
 
 # Current Nix system double, used to address per-system flake.checks attrs.
 # Falls back to x86_64-linux if `nix` is unavailable (e.g. a docs-only host).
@@ -106,6 +108,11 @@ test-lint:
 test-rust:
 	bash tests/test-rust.sh
 
+## test-fixture-contracts - enforcing fixture-backed contract and CLI layer.
+## Layer-1 local and CI orchestration set D2B_ENABLE_FIXTURE_BUILD=1.
+test-fixture-contracts:
+	bash tests/test-rust.sh fixture-contracts
+
 ## test-proofs - standalone proof crates under proofs/ (not members of packages/).
 test-proofs:
 	bash tests/test-proofs.sh
@@ -125,8 +132,8 @@ test-flake:
 test-flake-list:
 	@bash tests/test-flake-list.sh
 
-## test-nix-unit - build all sharded nix-unit corpus checks (focused convenience
-## target; already covered by test-flake, so NOT in test-unit to avoid double work).
+## test-nix-unit - build all sharded nix-unit corpus checks. Kept as explicit
+## Layer-1 evidence even though test-flake also evaluates the checks.
 test-nix-unit:
 	bash tests/test-nix-unit.sh
 
@@ -138,6 +145,18 @@ test-drift:
 ## invariants (ci-coverage, adr-index, deliverable-gate, etc.).
 test-policy:
 	bash tests/test-policy.sh
+
+## test-performance-budgets - execute the self-gating performance canary.
+## Hosted runners take the cheap skip path; pinned stable runners enforce it.
+test-performance-budgets:
+	bash tests/unit/gates/performance-budgets.sh
+
+## Focused policy entrypoints used by the early CI preflight.
+test-adr-index-coverage:
+	bash tests/unit/meta/adr-index-coverage.sh
+
+test-ci-coverage:
+	bash tests/unit/meta/ci-coverage.sh
 
 ## test-integration - L2 podman container integration tests. Public heavy lane:
 ## it acquires a heavy-gate slot, then runs the raw work behind the gate so it
@@ -309,8 +328,11 @@ heavy-gate-build:
 	@cd packages && CARGO_TARGET_DIR='$(HEAVY_GATE_TARGET_DIR)' cargo build --quiet -p xtask
 
 ## heavy-gate-provision - create or repair the protected slot namespace for the
-## current uid. This is the explicit developer setup path on hosts that do not
-## consume the NixOS module; it never creates a fallback under a user-owned root.
+## current numeric uid without resolving a user name through NSS. This is the
+## explicit post-login path for network-backed users and the developer setup
+## path on hosts that do not consume the NixOS module. Because /run is a tmpfs,
+## run it once per boot when the gate reports missing provisioning. It never
+## creates a fallback under a user-owned root.
 heavy-gate-provision:
 	@target_uid="$$(id -u)"; \
 	sudo -- sh -eu -c '\
@@ -326,7 +348,7 @@ heavy-gate-provision:
 	    if [ -L "$$slot" ] || { [ -e "$$slot" ] && [ ! -f "$$slot" ]; }; then echo "heavy-gate provisioning: refusing an unsafe slot file" >&2; exit 1; fi; \
 	    if [ ! -e "$$slot" ]; then install -m 0600 -o "$$target_uid" -g root /dev/null "$$slot"; else chown "$$target_uid":root "$$slot"; chmod 0600 "$$slot"; fi; \
 	  done; \
-	  echo "heavy-gate provisioning: protected slots are ready"' \
+	  echo "heavy-gate provisioning: protected slots are ready for this boot"' \
 	  sh "$$target_uid"
 
 ## heavy-check - the Layer-1 PR-equivalent gate under the heavy-lane semaphore.
@@ -402,7 +424,7 @@ changelog-fold:
 	cd packages && cargo run -q -p xtask -- changelog-fold
 # --- hermetic execution-budget gate ----------------------------------------
 
-.PHONY: test-runtime-ledger
+.PHONY: test-runtime-ledger runtime-ledger-pin
 
 ## test-runtime-ledger - hermetic execution-budget gate. Reads the pinned
 ##   closed census (D2B_RUNTIME_CENSUS) of crates, warm-builds those census
@@ -420,8 +442,12 @@ changelog-fold:
 ##
 ##   This is an absolute aggregate CPU budget gate. It holds no baseline and
 ##   makes no historical regression claim. Per-test wall-clock values never fail
-##   it; they remain visible only to identify likely contributors to a crate CPU
-##   increase.
+##   it; every per-test threshold breach is emitted to stderr as a non-failing
+##   advisory so CI and operators can enumerate likely contributors to a crate
+##   CPU increase. Libtest exposes per-test wall time, not per-test CPU time.
+##   Measuring the latter would require a custom harness or one timed process per
+##   test per repetition, whose startup cost and census-sized process fan-out
+##   would materially change this gate.
 ##
 ##   Deferred follow-up (tracked as runtime-ledger-full-census-and-real-shards):
 ##   grow the census beyond the single pinned crate to a real multi-crate shard
@@ -438,13 +464,15 @@ D2B_RUNTIME_RUNNER      ?= local
 D2B_RUNTIME_REPETITIONS ?= 3
 D2B_RUNTIME_LEDGER      ?= packages/target/test-runtime-ledger.json
 D2B_RUNTIME_CENSUS      ?= tests/runtime-ledger-census.json
+D2B_RUNTIME_CRATES      ?=
+D2B_RUNTIME_UPDATE_CENSUS ?= 0
 D2B_LEDGER_XTASK         = cargo run --quiet -p xtask -- test-runtime-ledger
 
 ## Classified hermetic tests that legitimately exceed the normal 50 ms
 ## per-test wall-clock diagnostic threshold. Per-test wall-clock data is
 ## advisory because machine contention makes it unsuitable for enforcement;
-## these overrides keep the slow-test report useful without changing the
-## enforced aggregate process-CPU crate budget:
+## these overrides keep the complete advisory-breach report useful without
+## changing the enforced aggregate process-CPU crate budget:
 ##   * the *_bounded_byte_inputs_do_not_panic property harnesses each replay a
 ##     committed corpus and drive RUNS=10000 generated inputs through a parser,
 ##     so hundreds of milliseconds of pure execution is the intended workload;
@@ -459,6 +487,12 @@ D2B_RUNTIME_ADVISORY_THRESHOLDS = \
 	--advisory-threshold d2b-core::rejects_tampered_unsafe_local_workloads_artifact=300
 
 
+## runtime-ledger-pin - measure the pinned crates and regenerate the exact
+##   runtime test census after adding or removing a test. To add or remove a
+##   whole crate, pass the complete intended set as D2B_RUNTIME_CRATES.
+runtime-ledger-pin:
+	@$(MAKE) --no-print-directory test-runtime-ledger D2B_RUNTIME_UPDATE_CENSUS=1
+
 ## test-runtime-ledger - emit and check the hermetic execution-budget ledger.
 test-runtime-ledger:
 	@set -eu; \
@@ -468,7 +502,11 @@ test-runtime-ledger:
 	work='$(abspath packages/target/test-runtime-ledger.work)'; \
 	reps='$(D2B_RUNTIME_REPETITIONS)'; \
 	rm -rf "$$work"; mkdir -p "$$work"; \
-	crates="$$(cd packages && $(D2B_LEDGER_XTASK) census --expected-census "$$census" --field crates)"; \
+	if [ -n '$(strip $(D2B_RUNTIME_CRATES))' ]; then \
+	  crates='$(strip $(D2B_RUNTIME_CRATES))'; \
+	else \
+	  crates="$$(cd packages && $(D2B_LEDGER_XTASK) census --expected-census "$$census" --field crates)"; \
+	fi; \
 	if [ -z "$$crates" ]; then \
 	  echo "test-runtime-ledger: the pinned census names no crates" >&2; exit 1; fi; \
 	echo "test-runtime-ledger: linting hermetic placement across the census crates' integration tests"; \
@@ -558,6 +596,9 @@ test-runtime-ledger:
 	( cd packages && $(D2B_LEDGER_XTASK) record \
 	    --runner '$(D2B_RUNTIME_RUNNER)' --repetitions "$$reps" \
 	    --output "$$ledger" $(D2B_RUNTIME_ADVISORY_THRESHOLDS) $$args ); \
+	if [ '$(D2B_RUNTIME_UPDATE_CENSUS)' = 1 ]; then \
+	  ( cd packages && $(D2B_LEDGER_XTASK) pin --ledger "$$ledger" --output "$$census" ); \
+	fi; \
 	( cd packages && $(D2B_LEDGER_XTASK) check \
 	    --ledger "$$ledger" --expected-census "$$census" ); \
 	finished_at="$$(date +%s)"; \

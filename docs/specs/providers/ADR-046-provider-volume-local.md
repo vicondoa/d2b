@@ -995,7 +995,6 @@ pub struct VolumeMountToken {
 }
 impl fmt::Debug for VolumeMountToken { fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { f.write_str("VolumeMountToken([redacted])") } }
 
-#[async_trait]
 pub trait VolumeEffectPort: Send + Sync + 'static {
     /// Provision or verify-create a layout entry relative to the Volume root.
     async fn provision_layout_entry(&self, vol: VolumeId, entry: LayoutEntryId,
@@ -1157,7 +1156,7 @@ spec:
     class: on-failure
     backoffBase: "5s"
     backoffMax: "300s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: null
     resetAfter: "300s"
   readiness:
@@ -1832,8 +1831,9 @@ Volume reconciliation follows `ADR-046-resource-reconciliation`:
    injected `VolumeEffectPort`; concurrently dispatches per-resource effect calls
    while the watch loop remains responsive to new events.
 5. Writes status batch with expected revision; conflict → re-read/retry.
-6. On attachment create, volume-virtiofs receives `owned-resource-changed` from
-   the Volume.
+6. Translate each virtiofs attachment into one
+   `virtiofs.d2bus.org.Export` owned by the Volume; diff the desired Export set
+   and let volume-virtiofs reconcile each Export independently.
 
 Credential watches join the same per-Volume single-flight. An observed sealing
 generation advance first commits the `rotation-pending` status transition, then
@@ -2492,8 +2492,10 @@ pass.
 
 Per D094 and `ADR-046-validation-and-delivery` §10.16, this Provider's `src/`
 unit tests and `tests/*.rs` hermetic suite are fast, in-process, deterministic,
-and parallel-safe: an individual normal test has p95 ≤50 ms with no wall-clock
-sleep, and `cargo test -p d2b-provider-volume-local --lib --tests` completes in ≤2 s warm-cache
+and parallel-safe: an individual normal test has an advisory wall-clock p95
+diagnostic threshold of <=50 ms; gate enforcement is aggregate per-crate
+process CPU only. There is no wall-clock
+sleep, and `cargo test -p d2b-provider-volume-local --lib --tests` completes in ≤3 s warm-cache
 execution time (compilation excluded). They use a deterministic fake clock/RNG
 and the toolkit fakes/FakeEffectPort only - no process spawn, container,
 network, DBus, systemd, broker daemon, Nix eval/build, KVM, USB/GPU/TPM
@@ -2728,7 +2730,7 @@ Documents:
 | Reuse action | adapt |
 | Destination | `packages/d2b-host/src/volume_effect_adapter.rs` (or the equivalent host-runtime crate designated by the Zone broker owner), implementing the `VolumeEffectPort` trait defined in `d2b-contracts`; planned `d2b-priv-broker/src/ops/rotate_sealing_key.rs` closed operation |
 | Detailed design | Adapter holds trusted FD table keyed by `VolumeId`; resolves `SourcePolicyId` to host path prefix from private bundle; calls `openat2(RESOLVE_BENEATH)` anchored at retained FD for all FS ops; calls `setfacl`/`acl_set_fd`, `mount`/`umount`, `fallocate` from within adapter only; authorizes `volume.rotate-sealing-key`, verifies committed proof, recomputes the canonical idempotency key, and maps `rotate_sealing_key` one-to-one to the closed broker `RotateSealingKey` operation. Broker independently resolves opaque `VolumeId`/`SealingPolicyId`, checks policy/generation/preconditions, performs journaled atomic rewrap and roll-forward recovery, and durably emits exactly one success audit before returning. Neither boundary accepts key bytes, credential bytes, key handles, or paths. Other blocking filesystem calls run in the bounded blocking-thread pool Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt into adapter. |
-| Integration | Zone runtime creates adapter with required FD table and bundle reference at provider startup; passes `Arc<dyn VolumeEffectPort>` to controller via ComponentSession bootstrap |
+| Integration | Zone runtime creates the concrete adapter with the required FD table and bundle reference at Provider startup; the controller is generic over `P: VolumeEffectPort` and receives that implementation through ComponentSession bootstrap, with no trait object or `async-trait` dependency |
 | Data migration | None (adapter replaces direct broker-op call sites) |
 | Validation | Adapter hermetic tests: each effect op called with mock FD table and bundle; rotation authorization, policy binding, all generation/revision preconditions, canonical idempotency vectors, byte-identical duplicate/retry, different-payload conflict, typed retry classification, and no key/path/handle in wire/Debug/error/audit; broker crash injection at every journal boundary with old-or-target visibility, roll-forward, and exactly-once success audit; anchored-path rejection for RESOLVE_BENEATH violations; `cargo deny check` verifies adapter exposes neither raw paths nor broker implementation to Provider crate; `integration/{provision,sealing}.rs` exercise full adapter paths |
 | Removal proof | Baseline broker op handlers (`state_dir.rs`, `storage_contract.rs`, `swtpm_dir.rs`, `store_sync.rs`, `store_view_posture.rs`) retired only after Volume controller parity is confirmed and all callers are on the adapter |

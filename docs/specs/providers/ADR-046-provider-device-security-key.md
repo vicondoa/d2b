@@ -505,7 +505,6 @@ pub struct InventoryObservation {
     pub fido_confirmed: bool,  // true iff FIDO usage page 0xF1D0 confirmed
 }
 
-#[async_trait]
 pub trait SecurityKeyEffectPort: Send + Sync {
     /// Observe whether a FIDO hidraw node matching this device identity is
     /// currently present. Core resolves inventory; the Provider only sees the
@@ -521,10 +520,12 @@ pub trait SecurityKeyEffectPort: Send + Sync {
 
 The Core/broker adapter is the sole concrete implementation. It is the only
 location where sysfs matching, `device_id`-to-sysfs resolution, and any related
-audit occur. The Provider controller is injected with a `Box<dyn SecurityKeyEffectPort>`
-plus a `DeviceId` and `ObservationPolicyId` per Device at startup; Core resolves
-the Zone + label context to these opaque values before injecting. The Provider
-passes them back to the port without inspecting their contents.
+audit occur. The Provider controller is generic over `P:
+SecurityKeyEffectPort` and receives that concrete implementation plus a
+`DeviceId` and `ObservationPolicyId` per Device at startup; there is no trait
+object or `async-trait` dependency. Core resolves the Zone + label context to
+these opaque values before injecting. The Provider passes them back to the port
+without inspecting their contents.
 
 The Provider crate's `src/effect_port.rs` re-exports `SecurityKeyEffectPort`,
 `DeviceId`, `ObservationPolicyId`, and `InventoryObservation` from `d2b-contracts`.
@@ -575,7 +576,7 @@ spec:
     class: always
     backoffBase: "1s"
     backoffMax: "30s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
   readiness:
     initialDelay: "0s"
     timeout: "10s"
@@ -630,7 +631,7 @@ spec:
     class: on-failure
     backoffBase: "1s"
     backoffMax: "30s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: 5
   readiness:
     initialDelay: "0s"
@@ -833,7 +834,7 @@ spec:
     class: on-failure
     backoffBase: "2s"
     backoffMax: "60s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: 5
   readiness:
     initialDelay: "2s"
@@ -2445,9 +2446,11 @@ Old and new suites never run in parallel indefinitely.
 
 Per D094 and `ADR-046-validation-and-delivery` §10.16, this Provider's `src/`
 unit tests and `tests/*.rs` hermetic suite are fast, in-process, deterministic,
-and parallel-safe: an individual normal test has p95 ≤50 ms with no wall-clock
+and parallel-safe: an individual normal test has an advisory wall-clock p95
+diagnostic threshold of <=50 ms; gate enforcement is aggregate per-crate
+process CPU only. There is no wall-clock
 sleep, and `cargo test -p d2b-provider-device-security-key --lib --tests`
-completes in ≤2 s warm-cache execution time (compilation excluded). They use a
+completes in ≤3 s warm-cache execution time (compilation excluded). They use a
 deterministic fake clock/RNG and the toolkit fakes/FakeEffectPort only - no
 process spawn, container, network, DBus, systemd, broker daemon, Nix eval/build,
 KVM, USB/GPU/TPM hardware, or live cloud, and no filesystem tree beyond tiny
@@ -2456,7 +2459,7 @@ keeps a lane timeout/budget, parallel isolation, and fake external services by
 default; such a need is re-placed into `integration/`, never given a sleep,
 larger timeout, or `#[ignore]`. Bounded crypto/property tests are the only
 classified exception, each named with a capped case count and a declared higher
-per-test budget.
+per-test advisory threshold.
 
 ### Hermetic (in `tests/`)
 

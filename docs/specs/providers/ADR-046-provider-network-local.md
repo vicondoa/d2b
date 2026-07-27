@@ -196,7 +196,7 @@ spec:
     class: on-failure
     backoffBase: "2s"
     backoffMax: "120s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: null
     resetAfter: "300s"
   readiness:
@@ -233,11 +233,12 @@ required for the network controller; `kvm` belongs to
 
 The reconcile context (RECONCILE §Reconcile context) contains no database handle,
 direct broker socket, reusable credential, or raw route table.  The network-local
-controller drives all host-kernel mutations through an injected async
-`NetworkEffectPort` trait object declared in `d2b-contracts`.  The core adapter
-(in `d2b-core`, not the provider crate) implements this trait, maps opaque resource
-UIDs and semantic intent structs to closed broker wire operations, and emits
-broker-level audit records.
+controller is generic over `P: NetworkEffectPort` and drives all host-kernel
+mutations through the concrete implementation injected at startup.  The native
+async trait is declared in `d2b-contracts` and uses no trait object or
+`async-trait` dependency.  The core adapter (in `d2b-core`, not the provider
+crate) implements this trait, maps opaque resource UIDs and semantic intent
+structs to closed broker wire operations, and emits broker-level audit records.
 
 The provider crate sees the declared `NetworkSpec` in full - including `lanCidr`,
 `uplinkCidr`, and other operator-declared IP policy fields - because those are the
@@ -257,7 +258,6 @@ printable string; they implement custom redacted `Debug` and are not `Clone` or
 /// All methods are async and must not hold a redb transaction across any await.
 /// Blocking kernel effects use explicit bounded adapters inside the core impl.
 /// EffectError is a closed typed enum; no String-payload error variant exists.
-#[async_trait]
 pub trait NetworkEffectPort: Send + Sync {
     // ── Fabric (bridges) ─────────────────────────────────────────────────────
     /// Create or ensure a host kernel bridge fabric for a Network.
@@ -1039,7 +1039,7 @@ spec:
     class: on-failure
     backoffBase: "1s"
     backoffMax: "60s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: null
     resetAfter: "300s"
   readiness:
@@ -1229,7 +1229,7 @@ spec:
     class: on-failure
     backoffBase: "1s"
     backoffMax: "60s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: null
     resetAfter: "300s"
   readiness:
@@ -1303,7 +1303,7 @@ spec:
     class: on-failure
     backoffBase: "2s"
     backoffMax: "60s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: null
     resetAfter: "300s"
   readiness:
@@ -1363,7 +1363,7 @@ spec:
     class: on-failure
     backoffBase: "2s"
     backoffMax: "60s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: null
     resetAfter: "300s"
   readiness:
@@ -1494,10 +1494,13 @@ shared `inet d2b` table and byte-preserves every other marker (see §5.4). The
 Because the op is projection-scoped, independent Network reconciles never
 overwrite one another and never delete the whole table: a mutation to one
 Network's marker leaves every sibling Network and every device-usbip marker
-byte-preserved, and the generation fence serializes concurrent mutation of the
-same projection instead of allowing last-writer-wins. Network-local emits no
-USBIP rule and no TCP/3240 match. The returned `FirewallDigest` covers only this
-Network UID's ownership projection and is stored in
+byte-preserved. The ordered OFD lock on the `inet d2b` table serializes
+concurrent mutations. The generation fence does not serialize and has no
+compare-and-advance behavior; it only rejects and requeues an intent whose
+`expected_generation_id` names a superseded installed configuration generation.
+Same-generation mutations converge idempotently under the lock. Network-local
+emits no USBIP rule and no TCP/3240 match. The returned `FirewallDigest` covers
+only this Network UID's ownership projection and is stored in
 `status.provider.details.firewallDigest` for drift detection.
 Device-usbip-owned rules and markers are excluded. No rule text appears in
 status, audit, or telemetry.
@@ -1563,10 +1566,11 @@ When `spec.externalAttachment` is non-null:
 2. Core resolves the Network→Guest owner relationship and supplies the admitted
    attachment through the private dependency resolver and LaunchTicket. The
    controller does not copy `parentInterface` or an authority key into Guest
-   spec. `Provider/runtime-cloud-hypervisor` calls the broker's `SpawnRunner`
-   path, and the broker creates the macvtap FD internally
-   (`live_create_macvtap_fd` in `d2b-priv-broker/src/runtime.rs`) as part of VMM
-   spawn dispatch.
+   spec. `Provider/runtime-cloud-hypervisor` requests the opaque VMM launch
+   through its injected ProcessEffectPort. The core effect adapter privately
+   dispatches the broker's `SpawnRunner` operation, and the broker creates the
+   macvtap FD internally (`live_create_macvtap_fd` in
+   `d2b-priv-broker/src/runtime.rs`) before core supplies it in the LaunchTicket.
 3. Port-forward DNAT rules are written to `nftables.rules` by the controller and
    applied by the net-agent inside the net VM.
 
@@ -1628,9 +1632,11 @@ release.
 The USBIP backend and proxy processes are **not** owned by the network-local
 controller.  They are owned by `Provider/device-usbip`.
 
-The `UsbipBindFirewallRule` broker operation stays with `Provider/device-usbip`.
-The network-local controller does **not** install USBIP firewall rules and does
-**not** call `UsbipBindFirewallRule`.
+USBIP-owned `ApplyNftablesProjection` requests stay with
+`Provider/device-usbip`. The network-local controller does **not** install USBIP
+firewall rules and does **not** dispatch that shared operation for a
+device-usbip projection. The shipped whole-table `UsbipBindFirewallRule` op is
+not the firewall path.
 
 Network-local emits **no** USBIP or TCP/3240 rule on the host or in the net-VM
 ruleset. `Network.spec` has no `usbipCarveOut` field and must not be mutated by
@@ -1643,10 +1649,11 @@ dependency, watches only identity/readiness/generation, and owns exactly one
 multiplexed relay `Endpoint` authority per Network. Its typed
 `UsbipEffectPort` is the sole semantic path for all TCP/3240 and
 per-Network/per-busid firewall effects. The Core adapter privately resolves the
-Network UID and dispatches the closed `UsbipBindFirewallRule` broker operation;
-raw attachment handles, IfNames, addresses, and rules never enter either
-Provider controller. USBIP drift and status belong exclusively to the owning
-USB Service's strict provider status.
+Network UID and dispatches the shared closed `ApplyNftablesProjection` broker
+operation for the device-usbip-owned projection; raw attachment handles,
+IfNames, addresses, and rules never enter either Provider controller. USBIP
+drift and status belong exclusively to the owning USB Service's strict provider
+status.
 
 ---
 
@@ -2376,7 +2383,7 @@ topology through the resource API surface.
 rule and no TCP/3240 match. Its firewall digest and `FirewallReady` condition
 cover only rules bearing that Network UID's ownership. Device-usbip rules are
 created, observed, reported, and removed only through `UsbipEffectPort` and the
-closed `UsbipBindFirewallRule` broker operation.
+shared closed `ApplyNftablesProjection` broker operation.
 
 **Rationale**: one semantic owner prevents a generic uplink opening from
 outliving a USB claim or bypassing per-Network/per-busid authorization.
@@ -2702,11 +2709,11 @@ On controller binary upgrade:
 ### ADR046-nl-018
 | Field | Value |
 | --- | --- |
-| Dependency/owner | Broker plus device provider boundary; `UsbipBindFirewallRule` remains owned by `Provider/device-usbip`. |
-| Current source | Existing `UsbipBindFirewallRule` owns per-busid `inet d2b` exposure, while legacy `network.nix` and `net.nix` add broader TCP/3240 allows. |
+| Dependency/owner | Broker plus device provider boundary; USBIP ownership projections applied through the shared `ApplyNftablesProjection` operation remain owned by `Provider/device-usbip`. |
+| Current source | The shipped whole-table `UsbipBindFirewallRule` op currently owns per-busid `inet d2b` exposure, while legacy `network.nix` and `net.nix` add broader TCP/3240 allows; that shipped op is not the v3 firewall path. |
 | Reuse action | adapt |
 | Destination | Device-usbip EffectPort/adapter owns USBIP rules, drift, and strict provider status; network-local host/net-VM renderers and status cover only Network-owned policy. |
-| Detailed design | `UsbipBindFirewallRule` remains the sole broker mutation path for exact per-Network/per-busid TCP/3240 exposure. Network-local emits no TCP/3240 match, excludes device-usbip ownership markers from its digest, and never reports USBIP drift. Primary reuse disposition: `adapt`. Preserved source-plan detail: preserve the typed closed broker op; remove both generic network-local USBIP allows. |
+| Detailed design | `ApplyNftablesProjection { action: Apply \| Remove }` is the sole broker mutation path for exact per-Network/per-busid TCP/3240 exposure. Network-local emits no TCP/3240 match, excludes device-usbip ownership markers from its digest, and never reports USBIP drift. Primary reuse disposition: `adapt`. Preserved source-plan detail: reuse the shared projection-scoped broker op; remove both generic network-local USBIP allows and do not extend or dispatch the shipped whole-table `UsbipBindFirewallRule` op. |
 | Integration | `Provider/device-usbip` watches only Network identity/readiness/generation; Core privately resolves the Network attachment for the one relay Endpoint authority and firewall op. Binding proxies receive authorized connected streams through LaunchTickets. |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
 | Validation | Network-local host and net-VM firewall intent tests assert no TCP/3240/USBIP rule; USBIP rule churn leaves Network digest/`FirewallReady` unchanged; device-usbip tests own exact scoping, drift, status, and release. |
@@ -2761,9 +2768,11 @@ The integration test invocation commands are documented in the root `README.md`.
 
 Per D094 and `ADR-046-validation-and-delivery` §10.16, this Provider's `src/`
 unit tests and `tests/*.rs` hermetic suite are fast, in-process, deterministic,
-and parallel-safe: an individual normal test has p95 ≤50 ms with no wall-clock
+and parallel-safe: an individual normal test has an advisory wall-clock p95
+diagnostic threshold of <=50 ms; gate enforcement is aggregate per-crate
+process CPU only. There is no wall-clock
 sleep, and `cargo test -p d2b-provider-network-local --lib --tests` completes in
-≤2 s warm-cache execution time (compilation excluded). They use a deterministic
+≤3 s warm-cache execution time (compilation excluded). They use a deterministic
 fake clock/RNG and the toolkit fakes/FakeEffectPort only - no process spawn,
 container, network, DBus, systemd, broker daemon, Nix eval/build, KVM,
 USB/GPU/TPM hardware, or live cloud, and no filesystem tree beyond tiny temp

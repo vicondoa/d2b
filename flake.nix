@@ -1069,9 +1069,10 @@
           pname = "d2b-rust-tests";
           preBuild = assertRustToolchain;
           cargoBuildFlags = [ "--workspace" ];
-          # Keep fixture-dependent contract crates out of generic
-          # sandbox workspace tests. Full D2B_FIXTURES delivery to the
-          # sandbox/CI is a tracked W1 deliverable.
+          # Keep fixture-dependent contract crates out of generic sandbox
+          # workspace tests. fixture-smoke only renders their input artifacts;
+          # it does not execute these tests. Full D2B_FIXTURES delivery to the
+          # sandbox/CI is tracked separately.
           cargoTestFlags = [
             "--workspace"
             "--exclude"

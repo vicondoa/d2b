@@ -42,9 +42,14 @@ fn gate_path() -> PathBuf {
     repo_root().join(GATE)
 }
 
+fn scrubber_path() -> PathBuf {
+    repo_root().join("tests/tools/scrub-shell-environment")
+}
+
 /// Run the gate's scan mode over `root` and return `(success, combined output)`.
 fn scan(root: &Path) -> (bool, String) {
-    let output = Command::new("bash")
+    let output = Command::new(scrubber_path())
+        .args(["-c", "exec bash \"$@\"", "policy-dash-gate"])
         .arg(gate_path())
         .arg("--scan-dashes")
         .arg(root)

@@ -11,20 +11,47 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: sh tests/tools/ci-shell {0}
+
 jobs:
   tier0:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
       - name: Tier 0 first-pass gate
         run: make check-tier0
       - name: ADR index coverage guard
-        run: bash tests/unit/meta/adr-index-coverage.sh
+        run: make test-adr-index-coverage
       - name: CI coverage structural guard
-        run: bash tests/unit/meta/ci-coverage.sh
-      - name: Test rearchitecture fail-closed gates
-        run: bash tests/tools/gen-migration-ledger.sh --check
+        run: make test-ci-coverage
+
+  check-inventory:
+    needs: [tier0]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - name: Migration ledger drift gate
+        run: make check-inventory
+
+  test-performance-budgets:
+    name: "Advisory - non-enforcing - Performance budget gate"
+    needs: [tier0]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - name: Performance budget gate
+        run: make test-performance-budgets
 
   test-lint:
     needs: [tier0]
@@ -32,6 +59,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
       - uses: cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077
         with:
           nix_path: nixpkgs=channel:nixos-unstable
@@ -48,9 +77,10 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
+          persist-credentials: false
           fetch-depth: 0
       - name: Changelog policy gate
-        run: bash scripts/changelog-check.sh
+        run: make test-changelog
 
   test-rust:
     needs: [tier0]
@@ -73,6 +103,7 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
+          persist-credentials: false
           fetch-depth: 0
       - uses: cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077
         with:
@@ -116,14 +147,80 @@ jobs:
           shared-key: "test-rust-${{ runner.os }}"
           save-if: "true"
       - name: Rust workspace gate
-        # Skip the fixture nix-build (~35 min) - the same fixtures are
-        # already evaluated by the flake-eval-x86 (fixture-smoke) and
-        # (fixture-smoke-full) shards. The contract tests that depend on
-        # D2B_FIXTURES still run in those shards' eval; here we test only
-        # the Rust compilation + unit/integration tests.
         env:
           D2B_SKIP_FIXTURE_BUILD: "1"
         run: make test-rust
+
+  test-fixture-contracts:
+    needs: [test-rust]
+    runs-on: ubuntu-latest
+    # Warm (rust-cache hit): ~8-12 min. Cold (no cache): ~43 min.
+    timeout-minutes: 60
+    env:
+      # Disable sccache in CI - we use Swatinem/rust-cache (target-dir
+      # caching) instead, which caches ALL compiled artifacts including
+      # proc-macros and bin/lib crates that sccache cannot cache (~60% of
+      # compilations are "non-cacheable" by sccache due to crate-type).
+      # CARGO_INCREMENTAL=0 is still set: incremental compilation artifacts
+      # are non-deterministic and bloat the cache without benefit for CI
+      # (each PR run starts from a different commit).
+      CARGO_INCREMENTAL: "0"
+      # Override the repo .cargo/config.toml rustc-wrapper (sccache) so
+      # rust-cache's post-step `cargo metadata` doesn't fail looking for
+      # an sccache binary that isn't installed.
+      CARGO_BUILD_RUSTC_WRAPPER: ""
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Free runner disk for Rust gate
+        run: |
+          df -h
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL || true
+          docker system prune -af || true
+          df -h
+      - name: Install pinned Rust toolchain + ripgrep + acl
+        # MUST run BEFORE Swatinem/rust-cache: the cache action reads
+        # `rustc --version` to compute its key hash, so the pinned
+        # toolchain must be the active default when the cache step runs.
+        # Without this, the runner's pre-installed 1.96.0 is hashed,
+        # and the cache is keyed on the wrong compiler version.
+        run: |
+          PINNED=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' packages/rust-toolchain.toml | head -1)
+          rustup toolchain install "$PINNED" --profile minimal --component rustfmt --component clippy
+          rustup default "$PINNED"
+          echo "Rust toolchain: $(rustc --version)"
+          sudo apt-get update && sudo apt-get install -y ripgrep acl
+      - name: Rust dependency cache (target dirs + cargo registry)
+        # Swatinem/rust-cache caches dependency artifacts in target dirs
+        # and the cargo registry. It performs all I/O in its own action
+        # process (JavaScript pre/post steps) via @actions/cache - no
+        # ACTIONS_RUNTIME_TOKEN or cache credentials are exposed to `run:`
+        # steps where untrusted crate code (build scripts, proc-macros,
+        # `cargo test`) executes.
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          workspaces: |
+            packages -> target
+            packages/d2b-priv-broker -> target
+          cache-directories: |
+            packages/d2b-priv-broker/target-layer1
+            packages/d2b-priv-broker/target-fakebackends
+          prefix-key: "v0-rust"
+          shared-key: "test-rust-${{ runner.os }}"
+          save-if: "true"
+      - name: Provision the heavy-gate runtime root
+        run: make heavy-gate-provision
+      - name: Fixture-dependent Rust contract tests
+        env:
+          D2B_ENABLE_FIXTURE_BUILD: "1"
+        run: make test-fixture-contracts
 
   test-proofs:
     needs: [tier0]
@@ -131,6 +228,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
       - uses: cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077
         with:
           nix_path: nixpkgs=channel:nixos-unstable
@@ -138,6 +237,22 @@ jobs:
             experimental-features = nix-command flakes
       - name: Proof crates gate
         run: make test-proofs
+
+  test-nix-unit:
+    needs: [tier0]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Nix unit corpus gate
+        run: make test-nix-unit
 
   flake-eval-discover:
     needs: [tier0]
@@ -147,6 +262,8 @@ jobs:
       checks: ${{ steps.list.outputs.checks }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
       - uses: cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077
         with:
           nix_path: nixpkgs=channel:nixos-unstable
@@ -171,6 +288,8 @@ jobs:
         check: ${{ fromJSON(needs.flake-eval-discover.outputs.checks) }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
       - name: Add swap (insurance for the heaviest single check)
         run: |
           # A single check instantiates in its own process and fits a 16 GB
@@ -205,6 +324,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
       - uses: cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077
         with:
           nix_path: nixpkgs=channel:nixos-unstable
@@ -221,6 +342,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
       - name: Require all x86 flake jobs to pass
         run: |
           discover='${{ needs.flake-eval-discover.result }}'
@@ -240,6 +364,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
       - uses: cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077
         with:
           nix_path: nixpkgs=channel:nixos-unstable
@@ -257,6 +383,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
       - uses: cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077
         with:
           nix_path: nixpkgs=channel:nixos-unstable
@@ -286,6 +414,7 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
+          persist-credentials: false
           fetch-depth: 0
       - uses: cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077
         with:
@@ -329,13 +458,8 @@ jobs:
           shared-key: "test-rust-${{ runner.os }}"
           save-if: "true"
       - name: Policy meta-gates
-        # Skip the fixture nix-build (~35 min) - the same fixtures are
-        # already evaluated by the flake-eval-x86 (fixture-smoke) and
-        # (fixture-smoke-full) shards. The contract tests that depend on
-        # D2B_FIXTURES still run in those shards' eval; here we test only
-        # the Rust compilation + unit/integration tests.
         env:
-          D2B_SKIP_FIXTURE_BUILD: "1"
+          {}
         run: make test-policy
 
   test-runtime-ledger:
@@ -359,6 +483,7 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
+          persist-credentials: false
           fetch-depth: 0
       - uses: cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077
         with:
@@ -402,21 +527,19 @@ jobs:
           shared-key: "test-rust-${{ runner.os }}"
           save-if: "true"
       - name: Runtime execution-budget ledger gate
-        # Skip the fixture nix-build (~35 min) - the same fixtures are
-        # already evaluated by the flake-eval-x86 (fixture-smoke) and
-        # (fixture-smoke-full) shards. The contract tests that depend on
-        # D2B_FIXTURES still run in those shards' eval; here we test only
-        # the Rust compilation + unit/integration tests.
         env:
-          D2B_SKIP_FIXTURE_BUILD: "1"
+          {}
         run: make test-runtime-ledger
 
   check:
-    needs: [tier0, test-lint, test-changelog, test-rust, test-proofs, test-flake-x86, test-flake-aarch64, test-drift, test-policy, test-runtime-ledger]
+    needs: [tier0, check-inventory, test-performance-budgets, test-lint, test-changelog, test-rust, test-fixture-contracts, test-proofs, test-nix-unit, test-flake-x86, test-flake-aarch64, test-drift, test-policy, test-runtime-ledger]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
       - name: Require generated Layer-1 gate graph to pass
         run: |
           failed=0
@@ -438,11 +561,24 @@ jobs:
               failed=1
             fi
           }
+          require_advisory_success() {
+            name="$1"
+            result="$2"
+            echo "advisory:$name=$result (not an enforcing pass)"
+            if [ "$result" != success ]; then
+              echo "::error::required advisory $name did not complete successfully (result=$result)"
+              failed=1
+            fi
+          }
           require_success tier0 '${{ needs.tier0.result }}'
+          require_success check-inventory '${{ needs.check-inventory.result }}'
+          require_advisory_success test-performance-budgets '${{ needs.test-performance-budgets.result }}'
           require_success test-lint '${{ needs.test-lint.result }}'
           allow_success_or_skipped test-changelog '${{ needs.test-changelog.result }}'
           require_success test-rust '${{ needs.test-rust.result }}'
+          require_success test-fixture-contracts '${{ needs.test-fixture-contracts.result }}'
           require_success test-proofs '${{ needs.test-proofs.result }}'
+          require_success test-nix-unit '${{ needs.test-nix-unit.result }}'
           require_success test-flake-x86 '${{ needs.test-flake-x86.result }}'
           require_success test-flake-aarch64 '${{ needs.test-flake-aarch64.result }}'
           require_success test-drift '${{ needs.test-drift.result }}'
@@ -451,4 +587,5 @@ jobs:
           if [ "$failed" -ne 0 ]; then
             exit 1
           fi
-          echo "All generated Layer-1 jobs passed."
+          echo "All generated enforcing Layer-1 jobs passed."
+          echo "Required advisory jobs completed (not enforcing passes): test-performance-budgets"

@@ -8,6 +8,7 @@ import difflib
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -19,9 +20,21 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 MANIFEST = ROOT / "tests" / "layer1-jobs.json"
 TEMPLATE = ROOT / "tests" / "ci" / "layer1-workflow.template.yml"
 WORKFLOW = ROOT / ".github" / "workflows" / "pr-l1-static-fast.yml"
+SELF_TEST = ROOT / "tests" / "unit" / "meta" / "ci-runner-regression.py"
 CHECKOUT = "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5"
 INSTALL_NIX = "cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077"
 RUST_CACHE = "Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32"
+# The shell program must be resolvable by the Actions runner itself, which
+# looks the first token up on PATH rather than against the workspace, and whose
+# argument splitter does not preserve nested quoting. The runner resolves `sh`
+# on PATH; hosted runners provide dash, which does not process Bash startup
+# hooks before the wrapper can scrub them.
+SCRUBBED_BASH = "sh tests/tools/ci-shell {0}"
+PATH_START = r"(?P<prefix>^|[\s'\"`(\[{: =])"
+ROOT_END = r"(?=$|[/\s'\"`),\]};:])"
+ABSOLUTE_PATH = re.compile(
+    PATH_START + r"/[^ \t\r\n'\"`),\]}>;,|]*"
+)
 
 
 def load_manifest() -> dict[str, Any]:
@@ -69,6 +82,21 @@ def needs_line(job: dict[str, Any]) -> str:
     return f"    needs: {yaml_list(needs)}\n" if needs else ""
 
 
+def ci_env_block(job: dict[str, Any], spaces: int) -> str:
+    env = job.get("ciEnv", {})
+    if not env:
+        return ""
+    prefix = " " * spaces
+    lines = [f"{prefix}env:"]
+    for name, value in env.items():
+        if not re.fullmatch(r"[A-Z_][A-Z0-9_]*", name):
+            raise SystemExit(f"{MANIFEST}: invalid CI environment name {name!r}")
+        if not isinstance(value, str):
+            raise SystemExit(f"{MANIFEST}: CI environment value for {name!r} must be a string")
+        lines.append(f"{prefix}  {name}: {json.dumps(value)}")
+    return "\n".join(lines) + "\n"
+
+
 def nix_setup_step() -> str:
     return f"""      - uses: {INSTALL_NIX}
         with:
@@ -81,27 +109,42 @@ def simple_nix_job(job: dict[str, Any]) -> str:
     return f"""  {job["ciJobId"]}:
 {needs_line(job)}    runs-on: {job["runsOn"]}
     timeout-minutes: {job["timeoutMinutes"]}
+{ci_env_block(job, 4)}\
     steps:
       - uses: {CHECKOUT}
+        with:
+          persist-credentials: false
 {nix_setup_step()}
       - name: {job["displayName"]}
         run: make {job["makeTarget"]}"""
 
 
+def simple_job(job: dict[str, Any]) -> str:
+    return f"""  {job["ciJobId"]}:
+{needs_line(job)}    runs-on: {job["runsOn"]}
+    timeout-minutes: {job["timeoutMinutes"]}
+    steps:
+      - uses: {CHECKOUT}
+        with:
+          persist-credentials: false
+      - name: {job["displayName"]}
+        run: make {job["makeTarget"]}"""
+
+
 def tier0_job(job: dict[str, Any]) -> str:
+    extra = "".join(
+        f"\n      - name: {step['displayName']}\n        run: make {step['makeTarget']}"
+        for step in job.get("extraMakeTargets", [])
+    )
     return f"""  {job["ciJobId"]}:
     runs-on: {job["runsOn"]}
     timeout-minutes: {job["timeoutMinutes"]}
     steps:
       - uses: {CHECKOUT}
+        with:
+          persist-credentials: false
       - name: {job["displayName"]}
-        run: make {job["makeTarget"]}
-      - name: ADR index coverage guard
-        run: bash tests/unit/meta/adr-index-coverage.sh
-      - name: CI coverage structural guard
-        run: bash tests/unit/meta/ci-coverage.sh
-      - name: Test rearchitecture fail-closed gates
-        run: bash tests/tools/gen-migration-ledger.sh --check"""
+        run: make {job["makeTarget"]}{extra}"""
 
 
 def changelog_job(job: dict[str, Any]) -> str:
@@ -112,9 +155,40 @@ def changelog_job(job: dict[str, Any]) -> str:
     steps:
       - uses: {CHECKOUT}
         with:
+          persist-credentials: false
           fetch-depth: 0
       - name: {job["displayName"]}
-        run: bash scripts/changelog-check.sh"""
+        run: make {job["makeTarget"]}"""
+
+
+def render_env(job: dict[str, Any]) -> str:
+    """Renders a job's declared environment as workflow step `env:` entries.
+
+    The environment comes from the manifest so the local runner and the
+    workflow cannot disagree about which lane executes which layer. Hardcoding
+    it here once let `test-rust` skip the fixture build in continuous
+    integration while the manifest said nothing about it.
+    """
+    env = job.get("localEnv", {})
+    if not env:
+        return "          {}"
+    return "\n".join(f'          {key}: "{value}"' for key, value in sorted(env.items()))
+
+
+def heavy_gate_step(job: dict[str, Any]) -> str:
+    """Renders the heavy-gate provisioning step for jobs that need the gate.
+
+    The gate root is a protected runtime directory that a NixOS host gets from
+    tmpfiles. A continuous-integration runner has no such directory, and the
+    gate fails closed rather than falling back to an unprotected namespace, so
+    a job whose target acquires a slot must provision it first.
+    """
+    if not job.get("requiresHeavyGate"):
+        return ""
+    return (
+        "      - name: Provision the heavy-gate runtime root\n"
+        "        run: make heavy-gate-provision\n"
+    )
 
 
 def rust_job(job: dict[str, Any]) -> str:
@@ -138,6 +212,7 @@ def rust_job(job: dict[str, Any]) -> str:
     steps:
       - uses: {CHECKOUT}
         with:
+          persist-credentials: false
           fetch-depth: 0
 {nix_setup_step()}
       - name: Free runner disk for Rust gate
@@ -176,14 +251,9 @@ def rust_job(job: dict[str, Any]) -> str:
           prefix-key: "v0-rust"
           shared-key: "test-rust-${{{{ runner.os }}}}"
           save-if: "true"
-      - name: {job["displayName"]}
-        # Skip the fixture nix-build (~35 min) - the same fixtures are
-        # already evaluated by the flake-eval-x86 (fixture-smoke) and
-        # (fixture-smoke-full) shards. The contract tests that depend on
-        # D2B_FIXTURES still run in those shards' eval; here we test only
-        # the Rust compilation + unit/integration tests.
+{heavy_gate_step(job)}      - name: {job["displayName"]}
         env:
-          D2B_SKIP_FIXTURE_BUILD: "1"
+{render_env(job)}
         run: make {job["makeTarget"]}"""
 
 
@@ -195,6 +265,8 @@ def flake_discover_job(job: dict[str, Any]) -> str:
       checks: ${{{{ steps.list.outputs.checks }}}}
     steps:
       - uses: {CHECKOUT}
+        with:
+          persist-credentials: false
 {nix_setup_step()}
       - id: list
         name: {job["displayName"]}
@@ -216,6 +288,8 @@ def flake_x86_shards_job(job: dict[str, Any]) -> str:
         check: ${{{{ fromJSON(needs.flake-eval-discover.outputs.checks) }}}}
     steps:
       - uses: {CHECKOUT}
+        with:
+          persist-credentials: false
       - name: Add swap (insurance for the heaviest single check)
         run: |
           # A single check instantiates in its own process and fits a 16 GB
@@ -247,6 +321,8 @@ def flake_x86_outputs_job(job: dict[str, Any]) -> str:
     timeout-minutes: {job["timeoutMinutes"]}
     steps:
       - uses: {CHECKOUT}
+        with:
+          persist-credentials: false
 {nix_setup_step()}
       - name: {job["displayName"]}
         env:
@@ -261,6 +337,9 @@ def flake_x86_rollup_job(job: dict[str, Any]) -> str:
     runs-on: {job["runsOn"]}
     timeout-minutes: {job["timeoutMinutes"]}
     steps:
+      - uses: {CHECKOUT}
+        with:
+          persist-credentials: false
       - name: {job["displayName"]}
         run: |
           discover='${{{{ needs.flake-eval-discover.result }}}}'
@@ -281,6 +360,8 @@ def flake_aarch64_smoke_job(job: dict[str, Any]) -> str:
     timeout-minutes: {job["timeoutMinutes"]}
     steps:
       - uses: {CHECKOUT}
+        with:
+          persist-credentials: false
 {nix_setup_step()}
       - name: {job["displayName"]}
         run: |
@@ -294,6 +375,11 @@ def check_rollup_job(manifest: dict[str, Any]) -> str:
     rollup = ci["rollupJob"]
     needs = ci["rollupNeeds"]
     allowed_skipped = set(ci.get("allowedSkippedRollupJobs", []))
+    advisory_needs = {
+        need
+        for need in needs
+        if manifest["jobs"][need].get("enforcement") == "advisory"
+    }
     lines = [
         f"  {rollup}:",
         f"    needs: {yaml_list(needs)}",
@@ -301,6 +387,9 @@ def check_rollup_job(manifest: dict[str, Any]) -> str:
         "    runs-on: ubuntu-latest",
         "    timeout-minutes: 5",
         "    steps:",
+        f"      - uses: {CHECKOUT}",
+        "        with:",
+        "          persist-credentials: false",
         "      - name: Require generated Layer-1 gate graph to pass",
         "        run: |",
         "          failed=0",
@@ -322,10 +411,22 @@ def check_rollup_job(manifest: dict[str, Any]) -> str:
         "              failed=1",
         "            fi",
         "          }",
+        "          require_advisory_success() {",
+        "            name=\"$1\"",
+        "            result=\"$2\"",
+        "            echo \"advisory:$name=$result (not an enforcing pass)\"",
+        "            if [ \"$result\" != success ]; then",
+        "              echo \"::error::required advisory $name did not complete successfully "
+        "(result=$result)\"",
+        "              failed=1",
+        "            fi",
+        "          }",
     ]
     for need in needs:
         expr = "${{ needs." + need + ".result }}"
-        if need in allowed_skipped:
+        if need in advisory_needs:
+            lines.append(f"          require_advisory_success {need} '{expr}'")
+        elif need in allowed_skipped:
             lines.append(f"          allow_success_or_skipped {need} '{expr}'")
         else:
             lines.append(f"          require_success {need} '{expr}'")
@@ -334,14 +435,21 @@ def check_rollup_job(manifest: dict[str, Any]) -> str:
             "          if [ \"$failed\" -ne 0 ]; then",
             "            exit 1",
             "          fi",
-            "          echo \"All generated Layer-1 jobs passed.\"",
+            "          echo \"All generated enforcing Layer-1 jobs passed.\"",
         ]
     )
+    if advisory_needs:
+        advisory_names = ", ".join(need for need in needs if need in advisory_needs)
+        lines.append(
+            "          echo \"Required advisory jobs completed "
+            f"(not enforcing passes): {advisory_names}\""
+        )
     return "\n".join(lines)
 
 
 RENDERERS = {
     "tier0": tier0_job,
+    "simple": simple_job,
     "simple-nix": simple_nix_job,
     "changelog": changelog_job,
     "rust": rust_job,
@@ -362,11 +470,29 @@ def render_workflow(manifest: dict[str, Any]) -> str:
         renderer = RENDERERS.get(kind)
         if renderer is None:
             raise SystemExit(f"{MANIFEST}: no renderer for ciKind {kind!r}")
-        rendered_jobs.append(renderer(job))
+        rendered = renderer(job)
+        if job.get("enforcement") == "advisory":
+            header = f"  {job['ciJobId']}:\n"
+            advisory_name = json.dumps(
+                f"Advisory - non-enforcing - {job['displayName']}"
+            )
+            if not rendered.startswith(header):
+                raise SystemExit(
+                    f"{MANIFEST}: renderer for {job_id!r} emitted an unexpected job header"
+                )
+            rendered = rendered.replace(header, f"{header}    name: {advisory_name}\n", 1)
+        rendered_jobs.append(rendered)
     rendered_jobs.append(check_rollup_job(manifest))
     template = TEMPLATE.read_text(encoding="utf-8")
     workflow = template.replace("{{ workflow_name }}", manifest["ci"]["workflowName"])
     workflow = workflow.replace("{{ jobs }}", "\n\n".join(rendered_jobs))
+    permissions = "permissions:\n  contents: read\n"
+    if workflow.count(permissions) != 1:
+        raise SystemExit(f"{TEMPLATE}: expected one workflow permissions block")
+    workflow = workflow.replace(
+        permissions,
+        permissions + f"\ndefaults:\n  run:\n    shell: {SCRUBBED_BASH}\n",
+    )
     return workflow.rstrip() + "\n"
 
 
@@ -395,19 +521,109 @@ def command_check_workflow(_: argparse.Namespace) -> int:
     return 1
 
 
+def command_self_test(args: argparse.Namespace) -> int:
+    return subprocess.run([sys.executable, str(SELF_TEST), *args.tests], cwd=ROOT).returncode
+
+
+def normalize_ansi_escape_sequences(line: str) -> str:
+    output: list[str] = []
+    index = 0
+    while index < len(line):
+        if line[index] != "\x1b":
+            output.append(line[index])
+            index += 1
+            continue
+
+        output.append(" ")
+        index += 1
+        if index >= len(line):
+            continue
+        introducer = line[index]
+        if introducer == "[":
+            index += 1
+            while index < len(line):
+                final = ord(line[index])
+                index += 1
+                if 0x40 <= final <= 0x7E:
+                    break
+        elif introducer in "]PX^_":
+            index += 1
+            while index < len(line):
+                if line[index] == "\x07":
+                    index += 1
+                    break
+                if (
+                    line[index] == "\x1b"
+                    and index + 1 < len(line)
+                    and line[index + 1] == "\\"
+                ):
+                    index += 2
+                    break
+                index += 1
+        elif 0x40 <= ord(introducer) <= 0x5F:
+            index += 1
+    return "".join(output)
+
+
+def redact_diagnostic_line(line: str) -> str:
+    # The Rust redactor may not be built when this earliest Layer-1 phase fails.
+    # Apply its repo/home placeholders and absolute-path fallback in-process
+    # rather than making failure reporting depend on Cargo.
+    line = normalize_ansi_escape_sequences(line)
+    line = "".join(
+        character if character == "\t" or character.isprintable() else " "
+        for character in line
+    )
+    sensitive_roots = [
+        (str(ROOT.resolve()), "<repo>"),
+        (str(ROOT), "<repo>"),
+    ]
+    home = os.environ.get("HOME")
+    if home:
+        sensitive_roots.append((str(pathlib.Path(home).resolve()), "<home>"))
+        sensitive_roots.append((home.rstrip("/") or "/", "<home>"))
+    for root, replacement in sorted(set(sensitive_roots), key=lambda item: -len(item[0])):
+        pattern = re.compile(PATH_START + re.escape(root) + ROOT_END)
+        line = pattern.sub(
+            lambda match: f"{match.group('prefix')}{replacement}",
+            line,
+        )
+    return ABSOLUTE_PATH.sub(
+        lambda match: f"{match.group('prefix')}<path>",
+        line,
+    )
+
+
 def run_job(job_id: str, job: dict[str, Any]) -> int:
     target = job.get("makeTarget")
     if not target:
         raise RuntimeError(f"local job {job_id!r} has no makeTarget")
+    # Every target the continuous-integration job runs must also run locally,
+    # or `make check` is not the pull-request-equivalent gate it claims to be.
+    targets = [target, *(step["makeTarget"] for step in job.get("extraMakeTargets", []))]
     env = os.environ.copy()
     env.update(job.get("localEnv", {}))
     log_dir = pathlib.Path(tempfile.mkdtemp(prefix=f"d2b-{job_id}."))
     log_path = log_dir / "output.log"
     print(f"==> {target} ({job.get('displayName', job_id)})", flush=True)
+    failed_target = None
+    returncode = 0
     with log_path.open("wb") as log:
-        proc = subprocess.run(["make", target], cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
-    if proc.returncode == 0:
-        print(f"ok: {target}", flush=True)
+        for one in targets:
+            proc = subprocess.run(
+                ["make", one], cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT
+            )
+            returncode = proc.returncode
+            if returncode != 0:
+                failed_target = one
+                break
+    if returncode == 0:
+        # An advisory job may legitimately no-op, so reporting it as `ok`
+        # would let a gate that did nothing count towards a green run.
+        if job.get("enforcement") == "advisory":
+            print(f"advisory: {target} (not an enforcing gate)", flush=True)
+        else:
+            print(f"ok: {target}", flush=True)
         if os.environ.get("D2B_CHECK_KEEP_LOGS") != "1":
             try:
                 log_path.unlink()
@@ -415,14 +631,24 @@ def run_job(job_id: str, job: dict[str, Any]) -> int:
             except OSError:
                 pass
         return 0
-    print(f"FAIL: {target} (exit {proc.returncode}); tail of {log_path}:", file=sys.stderr, flush=True)
+    assert failed_target is not None
+    print(
+        f"FAIL: {failed_target} for Layer-1 job {job_id} "
+        f"(exit {returncode}); redacted retained tail:",
+        file=sys.stderr,
+        flush=True,
+    )
     try:
         lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
         for line in lines[-200:]:
-            print(line, file=sys.stderr)
+            print(redact_diagnostic_line(line), file=sys.stderr)
     except OSError as exc:
-        print(f"could not read {log_path}: {exc}", file=sys.stderr)
-    return proc.returncode
+        detail = exc.strerror or "I/O error"
+        print(
+            f"could not read retained output for Layer-1 job {job_id}: {detail}",
+            file=sys.stderr,
+        )
+    return returncode
 
 
 def selected_phases(manifest: dict[str, Any], include_preflight: bool) -> list[dict[str, Any]]:
@@ -444,7 +670,8 @@ def command_run_local(args: argparse.Namespace) -> int:
         print("D2B_CHECK_JOBS must be >= 1", file=sys.stderr)
         return 2
     include_preflight = not args.skip_preflight
-    for phase in selected_phases(manifest, include_preflight):
+    phases = selected_phases(manifest, include_preflight)
+    for phase in phases:
         mode = phase["mode"]
         phase_jobs = phase["jobs"]
         print(f"==> Layer-1 phase: {phase['id']} ({mode})", flush=True)
@@ -466,7 +693,22 @@ def command_run_local(args: argparse.Namespace) -> int:
         else:
             print(f"unknown phase mode {mode!r}", file=sys.stderr)
             return 2
-    print("Layer-1 manifest runner OK")
+    enforcing = [
+        job_id
+        for phase in phases
+        for job_id in phase["jobs"]
+        if jobs[job_id].get("enforcement") != "advisory"
+    ]
+    advisory = [
+        job_id
+        for phase in phases
+        for job_id in phase["jobs"]
+        if jobs[job_id].get("enforcement") == "advisory"
+    ]
+    summary = f"Layer-1 manifest runner OK: {len(enforcing)} enforcing job(s)"
+    if advisory:
+        summary += f", {len(advisory)} advisory ({', '.join(advisory)})"
+    print(summary)
     return 0
 
 
@@ -480,6 +722,10 @@ def main() -> int:
 
     check = subparsers.add_parser("check-workflow", help="fail if the rendered workflow is stale")
     check.set_defaults(func=command_check_workflow)
+
+    self_test = subparsers.add_parser("self-test", help="run Layer-1 runner regressions")
+    self_test.add_argument("tests", nargs="*", help=argparse.SUPPRESS)
+    self_test.set_defaults(func=command_self_test)
 
     run = subparsers.add_parser("run-local", help="run local Layer-1 phases from the manifest")
     run.add_argument("--skip-preflight", action="store_true", help="skip the preflight phase")

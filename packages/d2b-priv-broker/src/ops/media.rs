@@ -34,6 +34,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+const DEFAULT_UDEVADM_BINARY: &str = "/run/current-system/sw/bin/udevadm";
+
 #[derive(Debug)]
 pub enum MediaOpError {
     InvalidRef(String),
@@ -2116,7 +2118,11 @@ fn escape_udev_value(value: &str) -> String {
 }
 
 fn reload_udev_rules() -> bool {
-    Command::new("udevadm")
+    let binary = std::env::var_os("D2B_BROKER_UDEVADM_BINARY")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_UDEVADM_BINARY));
+    Command::new(binary)
         .arg("control")
         .arg("--reload-rules")
         .env_remove("NOTIFY_SOCKET")

@@ -622,7 +622,7 @@ spec:
     class: always
     backoffBase: "2s"
     backoffMax: "60s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: 10
     resetAfter: "1h"
 
@@ -1427,8 +1427,10 @@ The `xtask gen-zone-resources` step adds for `Provider/transport-unix` links:
 
 Per D094 and `ADR-046-validation-and-delivery` §10.16, this Provider's `src/`
 unit tests and `tests/*.rs` hermetic suite are fast, in-process, deterministic,
-and parallel-safe: an individual normal test has p95 ≤50 ms with no wall-clock
-sleep, and `cargo test -p d2b-provider-transport-unix --lib --tests` completes in ≤2 s warm-cache
+and parallel-safe: an individual normal test has an advisory wall-clock p95
+diagnostic threshold of <=50 ms; gate enforcement is aggregate per-crate
+process CPU only. There is no wall-clock
+sleep, and `cargo test -p d2b-provider-transport-unix --lib --tests` completes in ≤3 s warm-cache
 execution time (compilation excluded). They use a deterministic fake clock/RNG
 and the toolkit fakes/FakeEffectPort only - no process spawn, container,
 network, DBus, systemd, broker daemon, Nix eval/build, KVM, USB/GPU/TPM
@@ -1610,7 +1612,7 @@ Old and new suites never run in parallel indefinitely.
 | Reuse source | Minijail sandbox semantic class patterns from current v3 broker; Process resource schema from ADR-046-resources-host-guest-process-user |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-transport-unix/` crate Cargo.toml binary target `d2b-transport-unix-service`; Provider component descriptor JSON committed at `packages/d2b-provider-transport-unix/descriptor/unix-transport-service.json`; Nix package derivation at `packages/d2b-provider-transport-unix/` |
-| Detailed design | Component descriptor declares: `processClass=service`, `template=unix-transport-service`, `stateNamespaces=[]` (no Provider state Volume; bounded non-secret operational state in status/core ledger, D087), `sandbox.capabilityClasses=[]`, `sandbox.namespaceClasses=[mount]`, `sandbox.seccompClass=strict`, `budget.memory.limit="16Mi"`, `budget.cpu.limit="200m"`, `budget.fds.limit=512`, `endpoints=[{name:portal,transport:unix,purpose:transport-unix-portal}]`, `readiness={class:provider-defined,initialDelay:"0s",timeout:"5s",failureThreshold:1,successThreshold:1}`, `restartPolicy={class:always,backoffBase:"2s",backoffMax:"60s",backoffMultiplier:2.0,maxRestarts:10,resetAfter:"1h"}`; Provider package bundles descriptor digest; core ProviderDeployment creates the Process with empty `mounts` when `Provider/transport-unix` is installed Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt; no direct symbol copy. |
+| Detailed design | Component descriptor declares: `processClass=service`, `template=unix-transport-service`, `stateNamespaces=[]` (no Provider state Volume; bounded non-secret operational state in status/core ledger, D087), `sandbox.capabilityClasses=[]`, `sandbox.namespaceClasses=[mount]`, `sandbox.seccompClass=strict`, `budget.memory.limit="16Mi"`, `budget.cpu.limit="200m"`, `budget.fds.limit=512`, `endpoints=[{name:portal,transport:unix,purpose:transport-unix-portal}]`, `readiness={class:provider-defined,initialDelay:"0s",timeout:"5s",failureThreshold:1,successThreshold:1}`, `restartPolicy={class:always,backoffBase:"2s",backoffMax:"60s",backoffMultiplierMilli:2000,maxRestarts:10,resetAfter:"1h"}`; Provider package bundles descriptor digest; core ProviderDeployment creates the Process with empty `mounts` when `Provider/transport-unix` is installed Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt; no direct symbol copy. |
 | Integration | Provider resource installed → core ProviderDeployment reads component descriptor → creates child `Process/transport-unix-service` (no state-Volume prerequisite) → ProviderSupervisor spawns binary with portal FD in inherited FD table. On delete: Process terminal first → ProviderDeployment finalizer cleared last; the service `status` disappears with the resource row |
 | Data migration | None (fresh Provider resource) |
 | Validation | `tests/conformance.rs::process_resource_matches_component_descriptor`; `tests/conformance.rs::provider_state_set_is_empty`; `tests/conformance.rs::no_state_volume_mount`; sandbox policy tests against minijail conformance kit |

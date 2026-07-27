@@ -24,11 +24,11 @@
 # over a same-named binary on PATH. Clear the inherited function table before
 # defining any trusted helper, and prevent BASH_ENV from rebuilding it in a
 # nested non-interactive shell.
-while read -r _ _ inherited_function; do
-  unset -f -- "$inherited_function"
-done < <(declare -F)
-unset inherited_function
-unset -v BASH_ENV
+while builtin read -r _ _ inherited_function; do
+  builtin unset -f -- "$inherited_function"
+done < <(builtin declare -F)
+builtin unset inherited_function
+builtin unset -v BASH_ENV
 
 set -u
 

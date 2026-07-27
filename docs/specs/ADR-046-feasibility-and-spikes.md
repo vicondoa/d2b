@@ -663,16 +663,18 @@ measurable and are recorded, not asserted by feel:
   shape) is recorded with the ledger so a recorded figure reflects test cost,
   not hardware drift; a genuine cross-machine reference baseline is the
   deferred follow-up `runtime-ledger-full-census-and-real-shards`.
-- **Repetitions and statistic.** Each measured test/crate is executed a
-  fixed, recorded repetition count with a warm cache; the reported figure is
-  the p95 of execution-only time (build excluded).
-- **Fail policy.** A run fails when a budget in §10.16 is exceeded on the
-  freshly recorded ledger; the gate holds no baseline and makes no
-  historical-regression claim, so a slower run that still fits its budget
-  passes. A historical-regression gate built on top of these budgets is the
-  deferred follow-up `runtime-ledger-full-census-and-real-shards`. A classified
-  crypto/property exception is compared only against its own declared per-test
-  budget and capped case count.
+- **Repetitions and statistic.** Each measured test/crate is executed a fixed,
+  recorded repetition count after a warm build. Per-test p95 uses libtest
+  wall-clock time and is advisory; per-crate p95 uses aggregate process CPU
+  and is enforced.
+- **Fail policy.** A run fails when an aggregate crate process-CPU p95 exceeds
+  its budget or when the exact closed census, presently one crate and 190 test
+  IDs, is incomplete, expanded, or under-repeated. A per-test wall-clock
+  diagnostic-threshold breach does not fail the gate. The gate holds no
+  baseline and makes no historical-regression claim. A historical-regression
+  gate built on top of these budgets is the deferred follow-up
+  `runtime-ledger-full-census-and-real-shards`. A classified crypto/property
+  test has its own advisory threshold and capped case count.
 - **Cold compile tracked separately.** Cold compilation time is recorded on a
   separate line and optimized through shared cache and dependency discipline;
   it is never mixed into the execution budgets, and correctness never depends
@@ -873,8 +875,8 @@ decisions/work items" row.
 | Reuse source | existing `libtest --format=json` timing output and `xtask` (no new test framework) |
 | Reuse action | adapt |
 | Destination | `proofs/test-runtime-budget-spike/`; a one-off measurement-reference proof for the §10.16 budgets consumed by `ADR046-delivery-007` (no committed baseline ledger ships) |
-| Detailed design | Establishes the D094 measurement reference: records the reference runner class, repetition count, and per-test/crate p95 for a representative hermetic crate; proves the §10.16 per-test and per-crate budgets (individual normal test p95 <=50 ms, per-crate `--lib --tests` <=2 s) are met on the reference runner and that an injected slow/sleeping test is detected as a budget violation (a real multi-crate Layer-1 shard inventory is the deferred follow-up `runtime-ledger-full-census-and-real-shards`) |
-| Integration | Output ledger shape is consumed by the runtime ledger/timing gate as absolute per-test/crate budgets; a real multi-crate shard inventory and a historical-regression baseline built on top of them are the deferred follow-up `runtime-ledger-full-census-and-real-shards` |
+| Detailed design | Establishes the D094 measurement reference: records the reference runner class, repetition count, advisory per-test wall-clock p95, and enforced aggregate per-crate process-CPU p95 for a representative hermetic crate. It proves the crate's `--lib --tests` aggregate process CPU is <=3 s, reports a normal test's <=50 ms wall-clock threshold only as a diagnostic, and detects an injected sleeping test through the placement policy rather than a timing-budget failure. A real multi-crate Layer-1 shard inventory is the deferred follow-up `runtime-ledger-full-census-and-real-shards`. |
+| Integration | Output ledger shape is consumed by the runtime ledger/timing gate as advisory per-test wall-clock diagnostics and enforced per-crate process-CPU budgets; a real multi-crate shard inventory and a historical-regression baseline built on top of them are the deferred follow-up `runtime-ledger-full-census-and-real-shards` |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
-| Validation | The representative crate meets every budget; a synthetic slow/sleep/process/network test is flagged; cold compile time is recorded on a separate line and excluded from the execution budgets |
+| Validation | The representative crate meets its aggregate process-CPU budget; a per-test wall-clock threshold breach remains advisory; a synthetic sleep/process/network test is flagged by placement policy; cold compile time is excluded from measurements |
 | Removal proof | Deleted once `ADR046-delivery-007`'s in-tree ledger/timing gate reproduces these budget checks against the real crate set |

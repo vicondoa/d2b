@@ -6,11 +6,12 @@
   fresh handle, so a forged nesting marker that supplies an unlocked descriptor
   for a slot another lane happens to hold can no longer run a third concurrent
   lane, and the check-then-use race is removed.
-- Heavy-gate now verifies the runtime root that holds the shared semaphore
-  directory before use, accepting only a current-uid private directory or a
-  mode-verified root-owned sticky directory and rejecting peer-owned roots, so a
-  peer can no longer rename the verified shared directory between invocations to
-  split the semaphore into a second namespace.
+- Heavy-gate now verifies the fixed root-provisioned namespace that holds the
+  shared semaphore before use. It accepts only the root-owned, non-writable
+  root and per-uid directory plus the pre-created target-uid-owned mode-`0600`
+  slot files, and has no user-owned or temporary fallback, so neither a peer nor
+  the target uid can rename a slot name between invocations to split the
+  semaphore into a second namespace.
 - Heavy-gate unconditionally terminates and reaps the supervised process group
   after the leader exits, before restoring the signal mask, closing the window
   where a signal arriving between the post-exit drain and the conditional sweep
@@ -18,16 +19,19 @@
 
 ### Changed
 
-- Every live, hardware, and performance test entrypoint now routes through the
-  heavy-gate semaphore. The release smoke lanes and the aggregating and
-  per-layer runners re-exec through the gate exactly once when invoked directly,
-  and an inventory guard fails closed if a new live entrypoint or bare heavy
-  make target is added without gating.
+- Every live and hardware test entrypoint, plus the enforcing path of every
+  performance entrypoint, now routes through the heavy-gate semaphore. The
+  performance advisory skip exits before acquiring a slot because it does no
+  heavy work. The release smoke lanes and the aggregating and per-layer runners
+  re-exec through the gate exactly once when invoked directly, and an inventory
+  guard fails closed if a new live entrypoint or bare heavy make target is added
+  without gating.
 - The runtime execution-budget ledger now enforces a pinned closed census: it
-  requires a census, measures execution-only time from warmed, crate-qualified
-  libtest streams so compilation is excluded, reproduces the expected test and
-  crate sets exactly, rejects census id loss and repetition mismatch, and runs
-  as a required Layer-1 job. It holds no baseline and makes no
+  requires a census, records advisory per-test wall clock from warmed,
+  crate-qualified libtest streams, records enforced aggregate process CPU for
+  each complete crate invocation, reproduces the expected test and crate sets
+  exactly, rejects census id loss and repetition mismatch, and runs as a
+  required Layer-1 job. It holds no baseline and makes no
   historical-regression claim.
 
 ### Security

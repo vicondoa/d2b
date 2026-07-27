@@ -76,9 +76,9 @@ final argv must contain exactly one:
 --vhost-user-media socket=/run/d2b-video/<vm>/video.sock
 ```
 
-`tests/video-contract-eval.sh` asserts this final evaluated shape, including
-the VM-attribute-name socket identity when the guest `networking.hostName`
-differs.
+`tests/unit/nix/cases/video-contract.nix` asserts this final evaluated shape,
+including the VM-attribute-name socket identity when the guest
+`networking.hostName` differs.
 
 ## Guest-side resources
 

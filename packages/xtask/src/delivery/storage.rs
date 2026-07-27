@@ -333,6 +333,22 @@ impl CandidateDir {
         &self.candidate_id
     }
 
+    /// Requires an artifact's recorded address to match the directory from
+    /// which it was read.
+    pub fn validate_artifact_address(
+        &self,
+        wave: &str,
+        candidate_id: &CandidateId,
+        label: &str,
+    ) -> Result<()> {
+        if self.wave != wave || &self.candidate_id != candidate_id {
+            return Err(DeliveryError::new(format!(
+                "{label} is bound to a different wave or candidate than its delivery-state address"
+            )));
+        }
+        Ok(())
+    }
+
     pub fn snapshot_path(&self) -> PathBuf {
         self.path.join(SNAPSHOT_FILE)
     }

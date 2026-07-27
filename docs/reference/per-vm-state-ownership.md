@@ -189,8 +189,8 @@ Operator recovery:
   `tests::*` - missing state dir is clean, unresolvable principals are
   clean, and drift-message rendering (per-axis, kind mismatch, and the
   non-ENOENT stat-failure variant).
-- Integration (shell):
-  [`tests/per-vm-state-ownership-eval.sh`](../../tests/per-vm-state-ownership-eval.sh) -
+- Eval contract:
+  [`tests/unit/nix/cases/per-vm-state-ownership.nix`](../../tests/unit/nix/cases/per-vm-state-ownership.nix) -
   confirms `d2b.daemon.perVmStateOwnershipMatrix` is non-empty,
   every entry carries every required typed field (including `kind` and
   `required`), the hardlink-pool entries have `recursive = false`, the

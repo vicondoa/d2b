@@ -32,7 +32,10 @@
 # The build also runs with the caller's build-affecting Cargo/Rust environment
 # stripped, so a hostile rustc, rustc-wrapper, cargo config override, or
 # RUSTFLAGS cannot substitute the binary; only the in-checkout, trusted
-# packages/.cargo/config.toml governs the real toolchain wrapper.
+# packages/.cargo/config.toml governs the real toolchain wrapper. The wrapper
+# is pinned empty on the command line rather than through the environment: the
+# scrub above deliberately unsets CARGO_BUILD_RUSTC_WRAPPER, which would
+# otherwise restore the config file's sccache wrapper, absent on CI runners.
 #
 # Usage, from a heavy entrypoint after computing ROOT:
 #
@@ -44,6 +47,12 @@
 # re-exec the caller through the gate to acquire a real slot, bounded so a
 # stale or broken binary can never loop forever.
 d2b_heavy_gate_reexec() {
+  # Bash imports exported functions before this helper runs, and function
+  # resolution precedes PATH lookup. Developers commonly export toolchain
+  # wrapper functions, so explicitly invoke Bash's cleanup builtin rather than
+  # another function that happens to be named `unset`.
+  builtin unset -f cargo rustc 2>/dev/null || true
+
   # $1 is the caller-supplied ROOT; it is deliberately ignored for locating
   # xtask (see the trust model above). $2 is the entrypoint to re-run.
   local self="$2"
@@ -103,11 +112,12 @@ d2b_heavy_gate_reexec() {
   build_err="$build_diag_dir/cargo.stderr"
   (
     cd -- "$packages" 2>/dev/null \
-      && unset CARGO_TARGET_DIR CARGO_BUILD_TARGET_DIR \
+      && builtin unset CARGO_TARGET_DIR CARGO_BUILD_TARGET_DIR \
                RUSTC RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER \
                CARGO_BUILD_RUSTC CARGO_BUILD_RUSTC_WRAPPER \
                RUSTFLAGS RUSTDOCFLAGS CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_RUSTFLAGS \
-      && CARGO_TARGET_DIR="$target" cargo build --quiet -p xtask
+      && CARGO_TARGET_DIR="$target" builtin command cargo build --quiet \
+           --config 'build.rustc-wrapper=""' -p xtask
   ) >/dev/null 2>"$build_err" || rc=$?
   if [ "$rc" -ne 0 ]; then
     echo "heavy-gate self-guard: xtask build failed under the pinned toolchain (exit $rc); failing closed" >&2

@@ -649,7 +649,7 @@ restartPolicy:
   class: on-failure
   backoffBase: "1s"
   backoffMax: "60s"
-  backoffMultiplier: 2.0
+  backoffMultiplierMilli: 2000
   maxRestarts: null
   resetAfter: "300s"
 ```
@@ -991,7 +991,7 @@ spec:
     class: on-failure
     backoffBase: "2s"
     backoffMax: "120s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: null                # unlimited; ProviderDeployment manages Provider phase
     resetAfter: "600s"
   desiredLifecycle: running
@@ -1061,7 +1061,7 @@ spec:
     class: on-failure
     backoffBase: "1s"
     backoffMax: "60s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: null
     resetAfter: "300s"
   desiredLifecycle: running
@@ -1674,9 +1674,11 @@ bundle and are never swept by configuration generation cleanup.
 
 Per D094 and `ADR-046-validation-and-delivery` §10.16, this Provider's `src/`
 unit tests and `tests/*.rs` hermetic suite are fast, in-process, deterministic,
-and parallel-safe: an individual normal test has p95 ≤50 ms with no wall-clock
+and parallel-safe: an individual normal test has an advisory wall-clock p95
+diagnostic threshold of <=50 ms; gate enforcement is aggregate per-crate
+process CPU only. There is no wall-clock
 sleep, and `cargo test -p d2b-provider-runtime-cloud-hypervisor --lib --tests`
-completes in ≤2 s warm-cache execution time (compilation excluded). They use a
+completes in ≤3 s warm-cache execution time (compilation excluded). They use a
 deterministic fake clock/RNG and the toolkit fakes/FakeEffectPort only - no
 process spawn, container, network, DBus, systemd, broker daemon, Nix eval/build,
 KVM, USB/GPU/TPM hardware, or live cloud, and no filesystem tree beyond tiny
@@ -1685,7 +1687,7 @@ keeps a lane timeout/budget, parallel isolation, and fake external services by
 default; such a need is re-placed into `integration/`, never given a sleep,
 larger timeout, or `#[ignore]`. Bounded crypto/property tests are the only
 classified exception, each named with a capped case count and a declared higher
-per-test budget.
+per-test advisory threshold.
 
 ## 23 Implementation work items
 
@@ -1698,7 +1700,7 @@ per-test budget.
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-runtime-cloud-hypervisor/src/controller.rs` |
 | Detailed design | End-to-end: single Guest reconcile → synchronous dependency-readiness check via ResourceClient → VMM Process creation → guest-control health check in observe handler → status write. Uses fake bus/store/supervisor stubs from toolkit. Proves fast-path latency gates (≤5 ms hint, ≤20 ms VMM Process creation when all deps ready). No EphemeralProcess resources at any step. Primary reuse disposition: `adapt`. Preserved source-plan detail: Extract and adapt. |
-| Integration | Zone ResourceClient + system-minijail Process Provider + fake broker effect |
+| Integration | Zone ResourceClient + system-minijail Process Provider + fake MinijailProcessEffectPort |
 | Data migration | None (spike) |
 | Validation | Unit: reconcile state machine, fast-path latency, adoption/ambiguity, finalize ordering. Integration: end-to-end VMM boot with real KVM and guest-control session (requires `make test-host-integration`) |
 | Removal proof | Not applicable (new crate) |

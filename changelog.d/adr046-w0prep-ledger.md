@@ -1,11 +1,12 @@
 ### Changed
 
-- The `test-runtime-ledger` gate now ships as an honest absolute per-test and
-  per-crate execution-budget gate: each recorded p95 is judged only against its
-  own frozen budget, so a slower run that still fits its budget passes. It holds
-  no baseline and makes no historical-regression claim. A genuine cross-machine
-  reference baseline and a real multi-crate shard inventory are the deferred
-  follow-up `runtime-ledger-full-census-and-real-shards`.
+- The `test-runtime-ledger` gate now records per-test wall-clock p95s as
+  advisory diagnostics and enforces aggregate per-crate process-CPU p95
+  budgets. Process CPU excludes time descheduled behind unrelated machine
+  load. It holds no baseline and makes no historical-regression claim. A
+  genuine cross-machine reference baseline and a real multi-crate shard
+  inventory are the deferred follow-up
+  `runtime-ledger-full-census-and-real-shards`.
 - Removed the shard dimension from the gate entirely, in both the `Makefile`
   recipe and `packages/xtask/src/test_runtime_ledger.rs`. Every shard had been
   assigned the identical per-crate aggregate and no shard target was ever
@@ -14,16 +15,18 @@
   Real shards land only with the named deferred follow-up.
 - Reconciled the remaining ledger prose across `AGENTS.md`, `tests/README.md`,
   the ADR-046 validation-and-delivery, streamline, and feasibility-and-spikes
-  specs, and the ADR-046 W0-prep changelog fragments, so no surface advertises
-  the removed baseline, historical-regression, shard, or regeneration-workflow
-  capabilities (there is no `make runtime-ledger-regen` target and no committed
-  baseline file).
+  specs, and the preparatory changelog fragments, so no surface advertises the
+  removed per-test enforcement, baseline, historical-regression, or shard
+  capabilities (there is no committed baseline file).
+  Regenerating the census pin after a legitimate test change is a separate,
+  supported step: `make runtime-ledger-pin`.
 - Documented the envelope policy lint's D116 negative-example marker in
   `AGENTS.md` beside the existing lint guidance: the `policy_adr046_envelopes`
   lint exempts an intentional teaching block that demonstrates the D116
-  eval-time failure only when it carries a comment naming both `d2b-lint` and
-  `d116`, and the guidance frames it as a narrowly scoped intentional-rejection
-  signal rather than a general suppression switch.
+  eval-time failure only in the pinned documenting file and only when it carries
+  the exact `d2b-lint: expect-d116-eval-error` marker. The guidance frames it as
+  a narrowly scoped intentional-rejection signal rather than a general
+  suppression switch.
 
 ### Fixed
 

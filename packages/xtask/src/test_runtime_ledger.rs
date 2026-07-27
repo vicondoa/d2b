@@ -17,11 +17,19 @@
 //! `libtest --format=json` stream) and never spawns a test runner itself, so
 //! the ledger stays reproducible and free of host paths.
 
-use std::{collections::BTreeMap, collections::BTreeSet, fs, path::Path, process::ExitCode};
+use std::{
+    collections::BTreeMap,
+    collections::BTreeSet,
+    fs::{self, OpenOptions},
+    io::Write,
+    path::{Path, PathBuf},
+    process::ExitCode,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 use serde::{Deserialize, Serialize};
 
-use crate::gen_spec_set::render_json;
+use crate::{diagnostic_redaction::redact_path, gen_spec_set::render_json};
 
 pub const ARTIFACT_KIND: &str = "d2b-test-runtime-ledger";
 pub const SCHEMA_VERSION: u32 = 2;
@@ -32,7 +40,15 @@ pub const SCHEMA_VERSION: u32 = 2;
 /// so this threshold ranks diagnostics but never fails the gate.
 pub const TEST_ADVISORY_THRESHOLD_MS: u64 = 50;
 /// Enforced aggregate process-CPU budget for a Provider crate's hermetic suite.
-pub const CRATE_BUDGET_MS: u64 = 2_000;
+///
+/// This is an absolute ceiling, not a regression anchor, so it must hold on the
+/// slowest machine that enforces it rather than on the fastest machine that
+/// records it. GitHub-hosted runners measure roughly a third more process CPU
+/// than the reference development host for the same suite, so a budget tuned
+/// only against local samples is red in continuous integration from the moment
+/// it is pinned. The value below clears the highest observed continuous
+/// integration sample with headroom for a noisy shared runner.
+pub const CRATE_BUDGET_MS: u64 = 3_000;
 /// Minimum execution-only repetitions the ledger must carry before its p95 or
 /// per-crate budgets mean anything. A single CPU sample is too thin to support
 /// a stable nearest-rank p95, so the gate refuses fewer repetitions.
@@ -54,6 +70,63 @@ pub const MAX_SAMPLES_PER_ID: usize = 4_096;
 /// than this is rejected before it is parsed so a giant blob cannot be folded
 /// into the ledger or echoed into a violation message.
 pub const MAX_LIBTEST_BYTES: usize = 8 * 1024 * 1024;
+/// Maximum length of the closed malformed-event diagnostic. The parser never
+/// includes the hostile input line in this message.
+const MAX_LIBTEST_PARSE_ERROR_LEN: usize = 128;
+
+static CENSUS_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+struct CensusTempFile {
+    path: PathBuf,
+    armed: bool,
+}
+
+impl CensusTempFile {
+    fn new(path: PathBuf) -> Self {
+        Self { path, armed: true }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for CensusTempFile {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
+}
+
+fn write_expected_census_atomic(output: &Path, rendered: &[u8]) -> Result<(), String> {
+    let parent = output
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let leaf = output
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "the expected census output has no valid file name".to_string())?;
+    let sequence = CENSUS_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let temp_path = parent.join(format!(".{leaf}.tmp.{}.{sequence}", std::process::id()));
+    let mut temp_guard = CensusTempFile::new(temp_path.clone());
+    let mut temp = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp_path)
+        .map_err(|error| format!("cannot create the expected census temporary file: {error}"))?;
+    temp.write_all(rendered)
+        .and_then(|()| temp.sync_all())
+        .map_err(|error| format!("cannot write the expected census temporary file: {error}"))?;
+    drop(temp);
+    fs::rename(&temp_path, output)
+        .map_err(|error| format!("cannot install the expected census pin: {error}"))?;
+    temp_guard.disarm();
+    fs::File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| format!("cannot sync the expected census output directory: {error}"))
+}
 
 /// Validate the short, closed runner-label grammar.
 ///
@@ -287,14 +360,27 @@ pub fn parse_libtest_json(stream: &str) -> Result<Vec<(String, u64)>, String> {
         ));
     }
     let mut out = Vec::new();
-    for line in stream.lines() {
+    for (line_index, line) in stream.lines().enumerate() {
         let line = line.trim();
         if line.is_empty() || !line.starts_with('{') {
             continue;
         }
         let event: LibtestEvent = match serde_json::from_str(line) {
             Ok(event) => event,
-            Err(error) => return Err(format!("malformed libtest event `{line}`: {error}")),
+            Err(error) => {
+                let reason = match error.classify() {
+                    serde_json::error::Category::Io => "input read error",
+                    serde_json::error::Category::Syntax => "invalid JSON syntax",
+                    serde_json::error::Category::Data => "event fields have invalid types",
+                    serde_json::error::Category::Eof => "truncated JSON object",
+                };
+                let mut diagnostic = format!(
+                    "malformed libtest event at line {}: {reason}",
+                    line_index + 1
+                );
+                diagnostic.truncate(MAX_LIBTEST_PARSE_ERROR_LEN);
+                return Err(diagnostic);
+            }
         };
         if event.kind != "test" {
             continue;
@@ -417,6 +503,24 @@ pub struct ExpectedCensus {
 }
 
 impl ExpectedCensus {
+    fn from_ledger(ledger: &Ledger) -> Self {
+        let mut crates = ledger
+            .crates
+            .iter()
+            .map(|sample| sample.id.clone())
+            .collect::<Vec<_>>();
+        let mut tests = ledger
+            .tests
+            .iter()
+            .map(|sample| sample.id.clone())
+            .collect::<Vec<_>>();
+        crates.sort();
+        crates.dedup();
+        tests.sort();
+        tests.dedup();
+        Self { crates, tests }
+    }
+
     /// Validate the pin's own ids so a malformed pin cannot smuggle a
     /// control-bearing or oversized id into a violation line.
     pub fn validate(&self) -> Result<(), String> {
@@ -443,6 +547,13 @@ impl ExpectedCensus {
     }
 }
 
+fn render_expected_census(census: &ExpectedCensus) -> Result<String, String> {
+    let mut rendered = serde_json::to_string_pretty(census)
+        .map_err(|error| format!("cannot render the expected census pin: {error}"))?;
+    rendered.push('\n');
+    Ok(rendered)
+}
+
 /// Enforce that the ledger's crate and test censuses reproduce the pinned
 /// closed sets *exactly* - no missing pinned id, and no unpinned extra.
 ///
@@ -465,7 +576,9 @@ pub fn audit_closed_census(ledger: &Ledger, expected: &ExpectedCensus) -> Vec<Vi
                 scope: scope.to_string(),
                 id: (*id).to_string(),
                 detail: "pinned in the closed census but missing from this run; the census \
-                         cannot shrink to evade a budget"
+                         cannot shrink to evade a budget; an intentional removal must be \
+                         hand-edited from the committed census and reviewed as an explicit \
+                         identifier deletion before regenerating"
                     .to_string(),
             });
         }
@@ -473,8 +586,9 @@ pub fn audit_closed_census(ledger: &Ledger, expected: &ExpectedCensus) -> Vec<Vi
             violations.push(Violation {
                 scope: scope.to_string(),
                 id: (*id).to_string(),
-                detail: "measured but not pinned in the closed census; add it to the census \
-                         pin (or the regeneration helper) before the gate will accept it"
+                detail: "measured but not pinned in the closed census; run \
+                         `make runtime-ledger-pin` and commit the regenerated pin before the \
+                         gate will accept it"
                     .to_string(),
             });
         }
@@ -483,10 +597,14 @@ pub fn audit_closed_census(ledger: &Ledger, expected: &ExpectedCensus) -> Vec<Vi
     violations
 }
 
-pub fn top_slow_tests(ledger: &Ledger, limit: usize) -> Vec<&Sample> {
-    let mut tests: Vec<&Sample> = ledger.tests.iter().collect();
+pub fn advisory_breaches(ledger: &Ledger) -> Vec<&Sample> {
+    let mut tests: Vec<&Sample> = ledger
+        .tests
+        .iter()
+        .filter(|sample| sample.p95_ms > sample.threshold_ms)
+        .collect();
     tests.sort_by(|a, b| b.p95_ms.cmp(&a.p95_ms).then_with(|| a.id.cmp(&b.id)));
-    tests.into_iter().take(limit).collect()
+    tests
 }
 
 // ---------------------------------------------------------------------------
@@ -575,7 +693,8 @@ const USAGE: &str = "usage: cargo xtask test-runtime-ledger <command>\n\
               [--crate <id>=<ms>]... [--test <id>=<ms>]...\n\
               [--libtest-json <path>]... [--crate-libtest-json <crate>=<path>]...\n\
               [--advisory-threshold <test-id>=<ms>]...\n\
-       check  --ledger <path> --expected-census <path> [--top <n>]\n\
+       check  --ledger <path> --expected-census <path>\n\
+       pin    --ledger <path> --output <path>\n\
        census --expected-census <path> --field crates\n\
        lint   <path>...\n\
        help";
@@ -584,6 +703,7 @@ pub fn run_cli(args: &[String]) -> ExitCode {
     let result = match args.first().map(String::as_str) {
         Some("record") => run_record(&args[1..]),
         Some("check") => run_check(&args[1..]),
+        Some("pin") => run_pin(&args[1..]),
         Some("census") => run_census(&args[1..]),
         Some("lint") => run_lint(&args[1..]),
         Some("help") | None => {
@@ -613,29 +733,48 @@ fn pair(value: &str, flag: &str) -> Result<(String, u64), String> {
     Ok((id.to_string(), millis))
 }
 
-/// Reduces a filesystem path to its final component so a diagnostic can name
-/// the artifact without disclosing the absolute checkout or work directory.
-///
-/// The Make target passes census, ledger, work, and lint paths as absolute
-/// paths, so an unredacted diagnostic would echo the checkout layout and a
-/// username-bearing directory into CI logs. Naming only the leaf keeps the
-/// message diagnosable while dropping the sensitive directory portion.
-fn redact_path(path: &str) -> String {
-    Path::new(path)
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "<path>".to_owned())
-}
-
 /// Load and validate the pinned closed census from a committed JSON pin.
-fn load_expected_census(path: &str) -> Result<ExpectedCensus, String> {
-    let bytes =
-        fs::read(path).map_err(|error| format!("cannot read the expected census pin: {error}"))?;
-    let census: ExpectedCensus = serde_json::from_slice(&bytes).map_err(|error| {
+fn parse_expected_census(bytes: &[u8]) -> Result<ExpectedCensus, String> {
+    let census: ExpectedCensus = serde_json::from_slice(bytes).map_err(|error| {
         format!("the expected census pin is not a valid expected census: {error}")
     })?;
     census.validate()?;
     Ok(census)
+}
+
+fn load_expected_census(path: &str) -> Result<ExpectedCensus, String> {
+    let bytes =
+        fs::read(path).map_err(|error| format!("cannot read the expected census pin: {error}"))?;
+    parse_expected_census(&bytes)
+}
+
+fn load_existing_expected_census(path: &str) -> Result<Option<ExpectedCensus>, String> {
+    match fs::read(path) {
+        Ok(bytes) => parse_expected_census(&bytes).map(Some),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("cannot read the existing census pin: {error}")),
+    }
+}
+
+fn ensure_pin_preserves_existing(
+    existing: &ExpectedCensus,
+    candidate: &ExpectedCensus,
+) -> Result<(), String> {
+    let existing_crates: BTreeSet<&str> = existing.crates.iter().map(String::as_str).collect();
+    let candidate_crates: BTreeSet<&str> = candidate.crates.iter().map(String::as_str).collect();
+    let existing_tests: BTreeSet<&str> = existing.tests.iter().map(String::as_str).collect();
+    let candidate_tests: BTreeSet<&str> = candidate.tests.iter().map(String::as_str).collect();
+    let removed_crates = existing_crates.difference(&candidate_crates).count();
+    let removed_tests = existing_tests.difference(&candidate_tests).count();
+    if removed_crates == 0 && removed_tests == 0 {
+        return Ok(());
+    }
+    Err(format!(
+        "refusing to overwrite the closed census because the new ledger omits \
+         {removed_crates} existing crate identifier(s) and {removed_tests} existing test \
+         identifier(s); deliberate removals must be expressed by hand-editing the committed \
+         census first, reviewing that exact identifier deletion, and then regenerating"
+    ))
 }
 
 fn run_census(args: &[String]) -> Result<(), String> {
@@ -722,7 +861,7 @@ fn run_record(args: &[String]) -> Result<(), String> {
             "--crate-libtest-json" => {
                 let (crate_id, path) = value
                     .split_once('=')
-                    .ok_or_else(|| format!("{flag} expects `<crate>=<path>`, got `{value}`"))?;
+                    .ok_or_else(|| format!("{flag} expects `<crate>=<path>`"))?;
                 validate_id("crate", crate_id)?;
                 let stream = fs::read_to_string(path).map_err(|error| {
                     format!("cannot read the libtest stream for crate `{crate_id}`: {error}")
@@ -793,10 +932,63 @@ fn load_ledger(path: &str) -> Result<Ledger, String> {
     Ok(ledger)
 }
 
+fn run_pin(args: &[String]) -> Result<(), String> {
+    let mut ledger_path = String::new();
+    let mut output = String::new();
+    let mut index = 0usize;
+    while index < args.len() {
+        let flag = args[index].as_str();
+        let value = args
+            .get(index + 1)
+            .ok_or_else(|| format!("{flag} expects a value"))?;
+        match flag {
+            "--ledger" => ledger_path = value.clone(),
+            "--output" => output = value.clone(),
+            other => return Err(format!("unknown pin flag `{other}`\n{USAGE}")),
+        }
+        index += 2;
+    }
+    if ledger_path.is_empty() {
+        return Err("--ledger is required".to_string());
+    }
+    if output.is_empty() {
+        return Err("--output is required".to_string());
+    }
+
+    let ledger = load_ledger(&ledger_path)?;
+    let mut violations = check(&ledger);
+    violations.extend(audit_census(&ledger));
+    if !violations.is_empty() {
+        return Err(format!(
+            "refusing to regenerate the census from a ledger with {} budget or completeness \
+             violation(s)",
+            violations.len()
+        ));
+    }
+    let census = ExpectedCensus::from_ledger(&ledger);
+    census.validate()?;
+    if let Some(existing) = load_existing_expected_census(&output)? {
+        ensure_pin_preserves_existing(&existing, &census)?;
+    }
+    let rendered = render_expected_census(&census)?;
+    if let Some(parent) = Path::new(&output).parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("cannot create the census output directory: {error}"))?;
+    }
+    write_expected_census_atomic(Path::new(&output), rendered.as_bytes())?;
+    println!(
+        "regenerated runtime census with {} crate(s) and {} test(s)",
+        census.crates.len(),
+        census.tests.len()
+    );
+    Ok(())
+}
+
 fn run_check(args: &[String]) -> Result<(), String> {
     let mut ledger_path = String::new();
     let mut census_path: Option<String> = None;
-    let mut top = 10usize;
     let mut index = 0usize;
     while index < args.len() {
         let flag = args[index].as_str();
@@ -806,11 +998,6 @@ fn run_check(args: &[String]) -> Result<(), String> {
         match flag {
             "--ledger" => ledger_path = value.clone(),
             "--expected-census" => census_path = Some(value.clone()),
-            "--top" => {
-                top = value
-                    .parse()
-                    .map_err(|_| format!("--top expects an integer, got `{value}`"))?
-            }
             other => return Err(format!("unknown check flag `{other}`\n{USAGE}")),
         }
         index += 2;
@@ -827,10 +1014,12 @@ fn run_check(args: &[String]) -> Result<(), String> {
     })?;
     let ledger = load_ledger(&ledger_path)?;
     let expected = load_expected_census(&census_path)?;
-    for sample in top_slow_tests(&ledger, top) {
-        println!(
-            "advisory wall-clock: {} p95 {} ms (diagnostic threshold {} ms)",
-            sample.id, sample.p95_ms, sample.threshold_ms
+    let advisory_breaches = advisory_breaches(&ledger);
+    for sample in &advisory_breaches {
+        eprintln!(
+            "test-runtime-ledger advisory: test `{}` wall-clock p95 {} ms exceeds the {} ms \
+             diagnostic threshold (non-failing; aggregate process CPU remains enforced)",
+            sample.id, sample.p95_ms, sample.threshold_ms,
         );
     }
     for sample in &ledger.crates {
@@ -847,10 +1036,12 @@ fn run_check(args: &[String]) -> Result<(), String> {
     if violations.is_empty() {
         println!(
             "runtime CPU budgets hold for {} crate measurement(s) on `{}`; \
-             captured {} advisory per-test wall-clock measurement(s)",
+             captured {} per-test wall-clock measurement(s), with {} non-failing advisory \
+             breach(es) reported",
             ledger.crates.len(),
             ledger.runner,
             ledger.tests.len(),
+            advisory_breaches.len(),
         );
         return Ok(());
     }
@@ -869,8 +1060,12 @@ fn run_lint(args: &[String]) -> Result<(), String> {
     }
     let mut findings = Vec::new();
     for path in args {
-        let text = fs::read_to_string(path)
-            .map_err(|error| format!("cannot read lint target `{}`: {error}", redact_path(path)))?;
+        let text = fs::read_to_string(path).map_err(|error| {
+            format!(
+                "cannot read lint target `{}`: {error}",
+                redact_path(Path::new(path))
+            )
+        })?;
         findings.extend(lint_source(path, &text));
     }
     if findings.is_empty() {
@@ -883,7 +1078,7 @@ fn run_lint(args: &[String]) -> Result<(), String> {
     for finding in &findings {
         eprintln!(
             "{}:{}: {} - {}",
-            redact_path(&finding.path),
+            redact_path(Path::new(&finding.path)),
             finding.line,
             finding.rule,
             finding.detail
@@ -955,18 +1150,46 @@ mod tests {
     }
 
     #[test]
+    fn crate_budget_matches_the_decision_register() {
+        assert_eq!(
+            CRATE_BUDGET_MS, 3_000,
+            "the crate budget and decision register must change together"
+        );
+    }
+
+    #[test]
+    fn crate_cpu_measurements_at_and_under_budget_pass_the_gate() {
+        let mut within_budget = ledger(Vec::new());
+        within_budget.crates.extend([
+            crate_sample(
+                "exactly-at-budget",
+                CRATE_BUDGET_MS,
+                &[CRATE_BUDGET_MS; MIN_REPETITIONS],
+            ),
+            crate_sample(
+                "one-ms-under-budget",
+                CRATE_BUDGET_MS,
+                &[CRATE_BUDGET_MS - 1; MIN_REPETITIONS],
+            ),
+        ]);
+
+        assert!(check(&within_budget).is_empty());
+    }
+
+    #[test]
     fn an_over_budget_crate_cpu_measurement_fails_the_gate() {
         let mut over = ledger(Vec::new());
-        over.crates
-            .push(crate_sample("d2b-core", CRATE_BUDGET_MS, &[1_000, 2_001]));
+        over.crates.push(crate_sample(
+            "d2b-core",
+            CRATE_BUDGET_MS,
+            &[1_000, CRATE_BUDGET_MS + 1],
+        ));
         let violations = check(&over);
         assert_eq!(violations.len(), 1);
         assert_eq!(violations[0].scope, "crate");
-        assert!(
-            violations[0]
-                .detail
-                .contains("exceeds the 2000 ms process-CPU budget")
-        );
+        assert!(violations[0].detail.contains(&format!(
+            "exceeds the {CRATE_BUDGET_MS} ms process-CPU budget"
+        )));
     }
 
     #[test]
@@ -996,6 +1219,25 @@ mod tests {
             vec![("a::b".to_string(), 12)]
         );
         assert!(parse_libtest_json("{ \"type\": \"test\" ").is_err());
+    }
+
+    #[test]
+    fn malformed_libtest_events_report_only_a_bounded_sanitized_reason() {
+        let sentinel = "/home/redaction-sentinel-libtest/private";
+        let hostile = format!(
+            "ignored\n{{\"type\":\"test\",\"name\":\"{sentinel}{}\"",
+            "x".repeat(4_096)
+        );
+
+        let error = parse_libtest_json(&hostile).expect_err("malformed event must fail");
+        assert!(error.contains("at line 2"), "{error}");
+        assert!(error.contains("truncated JSON object"), "{error}");
+        assert!(!error.contains(sentinel), "host path leaked: {error}");
+        assert!(
+            error.len() <= MAX_LIBTEST_PARSE_ERROR_LEN,
+            "parse diagnostic is not bounded: {} bytes",
+            error.len()
+        );
     }
 
     #[test]
@@ -1049,14 +1291,19 @@ mod tests {
     }
 
     #[test]
-    fn top_slow_tests_report_the_worst_offenders_first() {
-        let recorded = ledger(vec![
-            test_sample("a::fast", TEST_ADVISORY_THRESHOLD_MS, &[1]),
-            test_sample("b::slow", TEST_ADVISORY_THRESHOLD_MS, &[40]),
-        ]);
-        let top = top_slow_tests(&recorded, 1);
-        assert_eq!(top.len(), 1);
-        assert_eq!(top[0].id, "b::slow");
+    fn advisory_breaches_include_one_outside_the_previous_slowest_ten() {
+        let mut tests = (0..10)
+            .map(|index| test_sample(&format!("slow::{index:02}"), 200, &[100]))
+            .collect::<Vec<_>>();
+        tests.push(test_sample(
+            "breach::outside_previous_window",
+            TEST_ADVISORY_THRESHOLD_MS,
+            &[60],
+        ));
+        let recorded = ledger(tests);
+        let breaches = advisory_breaches(&recorded);
+        assert_eq!(breaches.len(), 1);
+        assert_eq!(breaches[0].id, "breach::outside_previous_window");
     }
 
     /// A complete, three-repetition census across every granularity.
@@ -1156,6 +1403,71 @@ mod tests {
     }
 
     #[test]
+    fn regenerated_census_is_sorted_stable_and_exact() {
+        let mut measured = full_ledger(MIN_REPETITIONS);
+        measured
+            .crates
+            .insert(0, crate_sample("a-crate", CRATE_BUDGET_MS, &[1, 1, 1]));
+        measured.tests.insert(
+            0,
+            test_sample("z-crate::z_test", TEST_ADVISORY_THRESHOLD_MS, &[1, 1, 1]),
+        );
+        let census = ExpectedCensus::from_ledger(&measured);
+        assert_eq!(
+            census,
+            ExpectedCensus {
+                crates: vec!["a-crate".to_string(), "d2b-core".to_string()],
+                tests: vec!["a::b".to_string(), "z-crate::z_test".to_string()],
+            }
+        );
+        let rendered = render_expected_census(&census).expect("census renders");
+        assert_eq!(
+            render_expected_census(&ExpectedCensus::from_ledger(&measured))
+                .expect("census renders again"),
+            rendered,
+            "the same successful ledger must produce byte-stable pin content"
+        );
+        assert!(
+            rendered.contains("\"crates\": ["),
+            "regeneration preserves the committed pin's JSON formatting"
+        );
+    }
+
+    #[test]
+    fn census_pin_write_replaces_the_target_without_leaving_a_temp_file() {
+        let target = std::env::var_os("CARGO_TARGET_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .parent()
+                    .expect("xtask has a workspace parent")
+                    .join("target")
+            });
+        let sequence = CENSUS_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let scratch = target
+            .join("test-runtime-ledger-tests")
+            .join(format!("atomic-pin-{}-{sequence}", std::process::id()));
+        let _ = fs::remove_dir_all(&scratch);
+        fs::create_dir_all(&scratch).expect("create census test directory");
+        let output = scratch.join("runtime-ledger-census.json");
+        fs::write(&output, b"old census").expect("seed existing census");
+
+        write_expected_census_atomic(&output, b"new census").expect("atomically replace census");
+
+        assert_eq!(fs::read(&output).unwrap(), b"new census");
+        let names = fs::read_dir(&scratch)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            vec![output.file_name().unwrap()],
+            "the successful rename must not leave a temporary file"
+        );
+        fs::remove_dir_all(scratch).expect("remove census test directory");
+    }
+
+    #[test]
     fn closed_census_rejects_a_shrunk_scope() {
         let mut shrunk = full_ledger(MIN_REPETITIONS);
         shrunk.crates.clear();
@@ -1165,6 +1477,10 @@ mod tests {
                 .iter()
                 .any(|v| v.scope == "crate" && v.id == "d2b-core" && v.detail.contains("missing")),
             "dropping a pinned crate is rejected: {violations:?}"
+        );
+        assert!(
+            violations.iter().all(|v| v.detail.contains("hand-edited")),
+            "every intentional removal names the explicit reviewable route: {violations:?}"
         );
     }
 
@@ -1178,6 +1494,79 @@ mod tests {
                 .iter()
                 .any(|v| v.scope == "test" && v.id == "a::b" && v.detail.contains("missing")),
             "dropping a pinned test is rejected: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn pin_refuses_a_vanished_identifier_until_the_census_is_explicitly_edited() {
+        use std::{
+            path::PathBuf,
+            sync::atomic::{AtomicU64, Ordering},
+        };
+
+        static SCRATCH_ID: AtomicU64 = AtomicU64::new(0);
+
+        struct Scratch(PathBuf);
+        impl Drop for Scratch {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+
+        let id = SCRATCH_ID.fetch_add(1, Ordering::Relaxed);
+        let scratch = Scratch(
+            crate::repo_root()
+                .expect("repository root")
+                .join(".scratch")
+                .join(format!("runtime-ledger-pin-{}-{id}", std::process::id())),
+        );
+        let _ = fs::remove_dir_all(&scratch.0);
+        fs::create_dir_all(&scratch.0).expect("create pin fixture");
+        let ledger_path = scratch.0.join("ledger.json");
+        let census_path = scratch.0.join("census.json");
+        let measured = full_ledger(MIN_REPETITIONS);
+        fs::write(
+            &ledger_path,
+            render_json(&measured).expect("render measured ledger"),
+        )
+        .expect("write measured ledger");
+        let existing = ExpectedCensus {
+            crates: vec!["d2b-core".to_string(), "retired-crate".to_string()],
+            tests: vec!["a::b".to_string(), "retired-crate::old_test".to_string()],
+        };
+        let existing_bytes = render_expected_census(&existing).expect("render existing census");
+        fs::write(&census_path, &existing_bytes).expect("write existing census");
+        let args = vec![
+            "--ledger".to_string(),
+            ledger_path.display().to_string(),
+            "--output".to_string(),
+            census_path.display().to_string(),
+        ];
+
+        let error = run_pin(&args).expect_err("an observed disappearance must not rewrite the pin");
+        assert!(
+            error
+                .contains("omits 1 existing crate identifier(s) and 1 existing test identifier(s)")
+                && error.contains("hand-editing the committed census first"),
+            "the refusal must describe the explicit removal path: {error}"
+        );
+        assert_eq!(
+            fs::read(&census_path).expect("read preserved census"),
+            existing_bytes.as_bytes(),
+            "a refused pin must leave the existing closed census byte-identical"
+        );
+
+        let reviewed = ExpectedCensus::from_ledger(&measured);
+        fs::write(
+            &census_path,
+            render_expected_census(&reviewed).expect("render reviewed census"),
+        )
+        .expect("express deliberate removals in the committed census");
+        run_pin(&args).expect("pin succeeds after the explicit census edit");
+        assert_eq!(
+            load_expected_census(census_path.to_str().expect("utf-8 census path"))
+                .expect("load regenerated census"),
+            reviewed
         );
     }
 
@@ -1198,6 +1587,12 @@ mod tests {
                 && v.id == "not-pinned"
                 && v.detail.contains("not pinned")),
             "padding a scope with an unpinned id is rejected: {violations:?}"
+        );
+        assert!(
+            violations
+                .iter()
+                .all(|v| v.detail.contains("make runtime-ledger-pin")),
+            "an unpinned measurement names the real regeneration route: {violations:?}"
         );
     }
 
@@ -1387,17 +1782,18 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_lint_target_names_the_leaf_not_the_absolute_directory() {
-        let dir = "/home/redaction-sentinel-lint";
-        let args = vec![format!("{dir}/entrypoint.sh")];
+    fn a_missing_lint_target_keeps_unambiguous_repository_context() {
+        let repo = crate::repo_root().unwrap();
+        let target = repo.join(".scratch/redaction-sentinel-lint/one/entrypoint.sh");
+        let args = vec![target.display().to_string()];
         let error = run_lint(&args).expect_err("a missing lint target must fail");
         assert!(
-            !error.contains(dir),
-            "the lint diagnostic leaked its absolute directory: {error}"
+            !error.contains(repo.to_str().unwrap()),
+            "the lint diagnostic leaked its absolute checkout: {error}"
         );
         assert!(
-            error.contains("entrypoint.sh"),
-            "the lint diagnostic must still name the offending file: {error}"
+            error.contains("<repo>/.scratch/redaction-sentinel-lint/one/entrypoint.sh"),
+            "the lint diagnostic must preserve repository-relative context: {error}"
         );
     }
 }

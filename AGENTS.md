@@ -82,25 +82,28 @@ are implementation details unless a target or `tests/AGENTS.md` tells
 you to run one directly.
 
 ```bash
-# Sub-60s syntax + shellcheck loop for docs/shell-only edits.
+# Focused Layer-1 jobs, in tests/layer1-jobs.json local phase order.
+# Read each job's current enforcement classification from that manifest.
 make check-tier0
-
-# Layer-1 local development umbrella: lint, Rust, proofs, flake,
-# drift, policy, and the hermetic runtime-ledger gate. CI runs these
-# sub-targets in parallel.
-make test-unit
-
-# Focused Layer-1 shards when iterating on one surface.
+make check-inventory
 make test-lint
+make test-changelog
 make test-rust
 make test-proofs
 make test-flake
-make test-drift
+make test-nix-unit
 make test-policy
+make test-drift
 make test-runtime-ledger
+make test-performance-budgets
+make test-fixture-contracts
+
+# Post-preflight Layer-1 development umbrella. This runs the manifest jobs
+# outside its preflight phase; `make check` also runs the preflight jobs.
+make test-unit
 
 # PR-equivalent Layer-1 gate. Uses tests/layer1-jobs.json to run
-# independent make test-* shards locally with bounded parallelism.
+# the current enforcing and advisory jobs with bounded parallelism.
 make check
 
 # Legacy/full-static monolithic gate retained for explicit use.
@@ -110,6 +113,38 @@ make check-static
 # host/manual pre-PR targets below before opening an agent-owned PR.
 make test
 ```
+
+`tests/layer1-jobs.json` is authoritative for both the job list and its
+classification. A job is enforcing unless it carries `"enforcement":
+"advisory"`; an advisory entry pairs that field with `advisoryReason` explaining
+why its successful result is not enforcing evidence. Advisory means the
+command is still launched and a nonzero result still fails the run, but a
+guarded skip is permitted. Therefore an advisory result must not be cited as
+validation evidence for a change.
+
+The manifest currently classifies `check-tier0`, `check-inventory`,
+`test-lint`, `test-changelog`, `test-rust`, `test-proofs`, `test-flake`,
+`test-nix-unit`, `test-policy`, `test-drift`, `test-runtime-ledger`, and
+`test-fixture-contracts` as enforcing. It classifies
+`test-performance-budgets` as advisory. Always re-read the manifest rather than
+assuming this split is fixed.
+
+The performance canary prints `SKIP` and enforces no latency budget unless
+`D2B_PERF_STABLE=1`. Promoting it requires a pinned self-hosted runner, setting
+that variable on the runner, and then removing the advisory classification and
+reason from the manifest. The project does not currently have such a runner.
+
+The fixture-contract lane runs the fixture-dependent `d2b-contract-tests`
+crate and the CLI-contract cases against a built `D2B_FIXTURES` bundle. Both
+the local and continuous-integration lanes set `D2B_ENABLE_FIXTURE_BUILD=1`, so
+it executes and enforces; invoking it without that variable is a hard failure
+rather than a silent skip. It acquires the heavy-gate semaphore before doing
+Nix or Cargo work, and `packages/xtask/src/heavy_gate.rs` fails closed if that
+guard is ever removed. `test-rust` explicitly excludes the fixture-dependent
+`d2b-contract-tests` crate, so a green `test-rust` does not validate that
+fixture-dependent contract and policy layer. Selected hermetic policy files
+may still have separate enforcing entrypoints such as `test-policy`; inspect
+the target driver before claiming coverage.
 
 Before opening an agent-owned PR, run the host/manual integration
 targets on the development host; do not rely on the PR pipeline for
@@ -128,17 +163,23 @@ deployed d2b state.
 `make test-runtime-ledger` is the hermetic execution-budget Layer-1 job
 (also run by `make test-unit` / `make check` through
 `tests/layer1-jobs.json`). After a warm build (so compilation is excluded
-from the timings), it records execution-only p95s for the pinned closed
-crate census (`tests/runtime-ledger-census.json`, presently a single crate)
-and enforces absolute per-test and per-crate budgets: it fails any p95 over
-its frozen budget, an incomplete or under-repeated run, or a census that does
-not reproduce the pin exactly. It is a pure absolute-budget gate - it holds
-no baseline and makes no historical-regression claim, so a slower run that
-still fits its budget passes, and there is no regeneration workflow to run
-when you change a census test (edit the census pin directly). Growing the
-census to a real multi-crate shard inventory (with a per-shard budget) and
-adding a cross-machine reference baseline for a true historical-regression
-gate is the named deferred follow-up
+from measurement), it records per-test wall-clock p95s as advisory
+diagnostics and enforces an aggregate process-CPU p95 budget for each pinned
+crate. Process CPU excludes time descheduled behind unrelated machine load,
+which is why it is the enforced timing basis. The closed census in
+`tests/runtime-ledger-census.json` presently pins one crate and exactly 190
+tests; a vanished or extra test, an incomplete or under-repeated run, or an
+aggregate crate CPU p95 over budget fails the gate. A per-test diagnostic
+threshold breach does not.
+
+The gate holds no baseline and makes no historical-regression claim. When you
+legitimately add, remove or rename a census test, regenerate the pin with
+`make runtime-ledger-pin` and commit the result; the pin is a closed set, so
+the gate fails until it matches. The `test-runtime-ledger check` output is
+authoritative for the exact advisory-report formatting and selection.
+Growing the census to a real multi-crate shard inventory (with a per-shard
+budget) and adding a cross-machine reference baseline for a true
+historical-regression gate is the named deferred follow-up
 `runtime-ledger-full-census-and-real-shards`. If its shape here diverges from
 the current `Makefile` target or `tests/layer1-jobs.json`, treat those as
 authoritative and flag the drift for the integrator.
@@ -152,6 +193,21 @@ two slots per uid via open file description locks so concurrent heavy lanes
 cannot oversubscribe the shared Nix store, cargo target directory, or KVM
 device. Do not add a second lock file, sleep-and-retry loop, or per-crate
 guard.
+
+The slot namespace is fixed at `/run/d2b-heavy-gates/uid-<uid>/`. The root
+and per-uid directory are root-owned and non-writable by unprivileged users;
+the two `slot-*` files are pre-created for the target uid at mode `0600`.
+There is no runtime-directory or temporary-directory fallback. The NixOS
+module provisions the root with systemd-tmpfiles, then activation provisions
+directories and slots for configured lifecycle users that NSS can resolve.
+An unavailable network-backed user is deferred rather than failing
+activation; after that user logs in, run `make heavy-gate-provision`. Use
+the same target on a host that does not consume the module. Because `/run`
+is a tmpfs, run it once per boot when the gate requests it. An absent or
+malformed namespace is an environment error with that provisioning
+remediation, never permission to create a weaker pool. In particular,
+`/run/user/<uid>` is rejected because its owner can rename slot names or
+their parent and create an independent pool.
 
 The structure is public-lane-plus-guarded-internal:
 
@@ -188,8 +244,9 @@ pick one per command and pass file arguments relative to the directory you
 run from.
 
 Invoking a live script directly is safe but not the documented path: each
-one re-executes itself through the semaphore exactly once when
-`D2B_HEAVY_GATE` is unset, so it cannot bypass the sole-use invariant.
+one verifies the inherited slot and re-executes itself through the semaphore
+exactly once when no genuine slot is held. A bare `D2B_HEAVY_GATE` value is
+not trusted, so it cannot bypass the sole-use invariant.
 **A new live, hardware, or performance entrypoint must carry that same
 self-guard block**, or the fail-closed inventory guard
 (`every_live_and_heavy_entrypoint_routes_through_the_gate`) rejects it.
@@ -631,8 +688,9 @@ effects routed through a typed `d2b-priv-broker` op declared
 in `packages/d2b-contracts/` and audited in
 `/var/lib/d2b/audit/broker-<utc-date>.jsonl`. Do not introduce
 a new `systemd.services.*` declaration in `nixos-modules/` for
-per-VM work - the `tests/legacy-unit-denylist-eval.sh` gate will
-reject it. See
+per-VM work. The denylist coverage lives in
+`packages/d2b-contract-tests/tests/policy_units.rs`; run the enabled
+fixture-contract lane when changing this surface. See
 [`docs/explanation/daemon-lifecycle.md`](./docs/explanation/daemon-lifecycle.md)
 for the DAG node taxonomy and
 [`docs/reference/privileges.md`](./docs/reference/privileges.md) for
@@ -798,7 +856,7 @@ At a glance:
 | `tests/unit/nix/cases/` | Auto-discovered nix-unit eval cases. After adding/removing one, run `make nix-unit-pin`. |
 | `tests/unit/nix/eval-cases/`, `tests/unit/smoke/` | Flake-check and smoke-eval definitions. After adding/removing a flake check, run `make flake-matrix-pin`. |
 | `packages/<crate>/src/**`, `packages/<crate>/tests/*.rs` | Rust unit and binary integration tests. Prefer these over shell gates when behaviour is hermetic. |
-| `packages/d2b-contract-tests/tests/` | Rendered-artifact contract tests and policy lints. |
+| `packages/d2b-contract-tests/tests/` | Rendered-artifact contract tests and policy lints. The fixture-dependent crate is excluded from `test-rust`; its fixture-backed tests run in the enforcing `test-fixture-contracts` lane, while selected hermetic policy files have separate enforcing entrypoints. |
 | `tests/unit/gates/`, `tests/unit/meta/` | Drift and meta gates; closed set. Regenerate affected artifacts with the matching `xtask gen-*` command instead of adding another gate. |
 | `tests/integration/containers/` | Container integration tests run by `make test-integration`; host/manual pre-PR tier. |
 | `tests/host-integration/*.nix` | runNixOSTest VM checks run by `make test-host-integration`; local NixOS/KVM pre-PR tier, not the PR pipeline. |
@@ -892,34 +950,42 @@ they are load-bearing:
 The ban is mechanically enforced by `scan_process_markers` in
 `tests/tools/tier0-first-pass.sh`, which runs as part of
 `make check-tier0`. That script is authoritative for the governed
-paths, marker patterns, narrow functional exceptions, and exact
-diagnostic wording.
+paths, marker patterns, narrow functional exceptions, exact diagnostics,
+and use of the active exemption set. The pin's typed schema and frozen
+universe are independently checked by
+`packages/xtask/src/process_marker_pin.rs`; consult both implementations
+when changing the ratchet.
 
-Existing violations are a shrink-only debt ratchet. Both the
-`LEGACY_PROCESS_MARKER_PATHS` allow-list and its exact-count
-`LEGACY_PROCESS_MARKER_PATH_BUDGET` constant live in
-`tests/tools/tier0-first-pass.sh`. Never increase the budget or add a
-path as a general exemption. The only permitted transfer adds a path
-while removing a different violation and its entry in the same change,
-without increasing the budget.
+Existing violations are recorded in
+`tests/golden/pinned/process-marker-legacy-paths.json`. Its
+`activePaths` array is the current exemption set and `retiredPaths`
+records cleaned paths. Both arrays must be sorted and disjoint, every
+entry must be a normalized relative path, and their combined path
+universe must match the fixed SHA-256 digest embedded in both checkers.
+The digest freezes the combined universe; there is no editable count
+budget and no permitted swap that adds a different path.
 
-A listed path is exempt only while the scanner still finds a violation
-there. Cleaning that path makes the gate fail with a `STALE:` line;
-delete the path's allow-list entry and lower the budget in the same
-change. Handle the three contributor-facing failure modes as follows:
+An active path is exempt only while the scanner still finds a violation
+there. Cleaning that path makes the gate fail with a `STALE:` line; move
+the path from `activePaths` to `retiredPaths` in the same change, preserving
+the frozen universe. A retired path is not exempt, so a marker there is
+reported as a new violation. Handle the contributor-facing failure modes
+as follows:
 
 - For a new violation outside the allow-list, remove or reword the
   marker. If it is a genuine functional identifier, add a narrowly
   scoped scanner exception with policy review rather than growing
   legacy debt.
-- For a stale allow-list entry, delete the entry and lower the budget by
-  one for each cleaned path.
-- For a budget mismatch, complete the intended shrink by removing
-  cleaned entries and/or lowering the budget until the count is exact;
-  never resolve it by raising the budget.
+- For a stale active entry, move it to `retiredPaths`; do not delete it
+  from the frozen universe.
+- For a pin validation failure, restore sorted, unique, normalized arrays
+  whose disjoint union matches the embedded digest. Do not add, delete, or
+  replace a frozen path.
 
-The exact failure text may evolve; `tests/tools/tier0-first-pass.sh`
-remains the authority for it.
+The exact scanner failure text may evolve;
+`tests/tools/tier0-first-pass.sh` remains the authority for it, while
+`packages/xtask/src/process_marker_pin.rs` is authoritative for typed pin
+validation.
 
 There are two deliberate functional exceptions. The consumer-facing
 `d2b.defaultSwitchReadiness.<wave>` option namespace (keys
@@ -1046,6 +1112,10 @@ fields that request panel, agent, or model metadata.
 
 ## Disk hygiene contract
 
+- Put every throwaway probe, one-off crate, parser experiment, and debugging
+  artifact under the gitignored repository-root `.scratch/` directory.
+  Never place an exploratory file beside production code or tests, where a
+  catch-all `git add` can sweep it into a commit.
 - Test eval expressions MUST resolve the flake via `git+file://$ROOT`
   (use the `d2b_flake_ref` helper in `tests/lib.sh`), **never**
   `builtins.getFlake (toString $ROOT)`. A bare path makes Nix use the
@@ -1151,30 +1221,30 @@ Touch these only with a clear plan and a corresponding test run.
 
 | System                              | Where                                                                                  | Risk if broken                                                            |
 | ----------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| Net VM networking / firewall        | `nixos-modules/net.nix` (the `lib.mkForce` neutralization of `base.nix`'s `10-eth-dhcp`, plus the per-env MTU/MSS and east-west wiring) | Net VM dual-stacks DHCP on its uplink, breaks NAT, or weakens same-env isolation unexpectedly. Validate with `tests/net-vm-network-eval.sh`. |
+| Net VM networking / firewall        | `nixos-modules/net.nix` (the `lib.mkForce` neutralization of `base.nix`'s `10-eth-dhcp`, plus the per-env MTU/MSS and east-west wiring) | Net VM dual-stacks DHCP on its uplink, breaks NAT, or weakens same-env isolation unexpectedly. Validate with `tests/unit/nix/cases/net-vm-network.nix`. |
 | Per-VM `/nix/store` hardlink farm   | `nixos-modules/store.nix`, `/var/lib/d2b/vms/<vm>/store{,-meta}/`, `nixos-modules/processes-json.nix` (`virtiofsdRunner` ro-store `--shared-dir`), daemon `StoreSync` op + broker `store_view_farm` | The guest's `/nix/store` MUST be the per-VM closure-only farm `/var/lib/d2b/vms/<vm>/store`, never the host's full `/nix/store`: virtiofsd-ro-store's `--shared-dir` points at that farm (the `share.source == "/nix/store"` string stays as the eval-time sentinel - do not "simplify" it back to serving `/nix/store`, that re-leaks the whole host store to every guest). Requires `/var/lib/d2b` and `/nix/store` on the **same filesystem** - hardlinks can't cross FS boundaries; if split, `d2b vm switch` refuses with a fatal error. The broker builds the farm inside a private mount namespace where `/nix/store` is lazily detached (NixOS bind-mounts `/nix/store` on itself, so a same-`st_dev` cross-vfsmount `link(2)` returns `EXDEV` - recoverable, distinct from a fatal different-filesystem `EXDEV`); a `link(2)` `EMLINK` on a `--optimise`d store's saturated empty-file inode falls back to a byte copy. The daemon owns the sync; there is no per-VM `store-sync` unit. |
 | TPM persistence (per-VM swtpm)      | `/var/lib/d2b/vms/<vm>/swtpm/`; spawned via broker `SpawnRunner` from `packages/d2b-host/src/swtpm_argv.rs` and supervised by `d2bd` as a child of the VM's DAG. The broker **provisions + hardens** this dir on first start (`packages/d2b-priv-broker/src/ops/swtpm_dir.rs`, gated on `seccomp_policy_ref == "w1-swtpm"`): fd-safe create (owner `d2b-<vm>-swtpm`, mode 0700, inherited ACLs cleared), reconcile-in-place on a correct-owner existing dir, fail-closed on owner/type/symlink mismatch, ancestor `--x` traverse ACL, stale `tpm.sock` unlink - emitting the path-free `PrepareSwtpmDir` audit op. | Holds the per-VM TPM 2.0 NVRAM + EK seed. **Wiping it looks like device tampering to any IdP** (Entra ID, Intune, Bitlocker-style policies) and forces re-enrollment. Never zero it casually. The per-VM state root is `3770` (setgid **+ sticky**) so a non-owner role UID cannot rename/replace the `swtpm/` entry; an identity-bound, root-owned marker at `/var/lib/d2b/swtpm-markers/<vm>` makes a *previously-provisioned-then-missing/replaced* dir **fail the VM start closed** (`previously-provisioned-swtpm-state-missing`) rather than silently re-creating an empty TPM. The state directory's ACLs are asserted by `tests/unit/smoke/smoke-eval-tpm.nix`; the broker hardening by `packages/d2b-priv-broker/src/ops/swtpm_dir.rs` tests. |
-| USBIP passthrough                   | `nixos-modules/components/usbip.nix` (eval-time gating) + broker `UsbipBindFirewallRule` + `SpawnRunner` (per-busid attach process supervised by `d2bd`) | Eval-time gating still scopes attach to opted-in envs (validated by `tests/usbip-gating-eval.sh`). At runtime, attach/detach runs through the broker - there is no per-env `d2b-sys-<env>-usbipd-*` socket. Misrouted attaches expose a YubiKey to the wrong env. |
-| GPU sidecar (graphics VMs)          | `nixos-modules/components/graphics.nix` + broker `SpawnRunner` for cloud-hypervisor on graphics VMs; pidfd handed back via `OpenPidfd` and supervised by `d2bd` | Graphics VMs run cloud-hypervisor with the GPU device attached. Restarting `d2bd` no longer terminates CH - pidfd handoff means the child outlives a daemon reconnect - but the broker spawn path is the only audited place CH is launched. Bypassing it breaks the audit trail. Validate with `tests/video-sidecar-hardening-eval.sh`. |
-| Video sidecar (graphics VMs)        | `nixos-modules/components/video/guest.nix`, `nixos-modules/processes-json.nix`, `pkgs/vhost-user-video/`, `packages/d2b-host/src/video_argv.rs`, broker `SpawnRunner{role: Video}` | `graphics.videoSidecar = true` is an explicit opt-in H264 decode path: guest `virtio_media` + patched Cloud Hypervisor `--vhost-user-media` + patched crosvm `device video-decoder --backend vaapi`. There is no per-VM video systemd unit, no stock crosvm/CH fallback, and no free-form video extra args. The video runner MUST use the dedicated `d2b-<vm>-video` principal, not `d2b-<vm>-gpu`, so broker/activation ACLs can deny host Wayland/PipeWire/Pulse sockets to video without breaking GPU cross-domain. The broker masks `/dev` for the video runner and exposes only the declared device allowlist: default `/dev/dri/renderD128`, plus `/dev/nvidiactl`, `/dev/nvidia0`, and `/dev/nvidia-uvm` only when `graphics.videoNvidiaDecode = true`. `virtio_media` is a guest module, not a host `/proc/modules` preflight requirement. Firefox/VA-API uses the separate experimental `graphics.virglVideo` GPU path; it is default-off and must not be treated as stable video-sidecar coverage. Validate with `tests/video-contract-eval.sh`, `tests/video-argv-shape.sh`, and `tests/minijail-validator-video.sh`. |
+| USBIP passthrough                   | `nixos-modules/components/usbip.nix` (eval-time gating) + broker `UsbipBindFirewallRule` + `SpawnRunner` (per-busid attach process supervised by `d2bd`) | Eval-time gating still scopes attach to opted-in envs (validated by `tests/unit/nix/cases/usbip-gating.nix`). At runtime, attach/detach runs through the broker - there is no per-env `d2b-sys-<env>-usbipd-*` socket. Misrouted attaches expose a YubiKey to the wrong env. |
+| GPU sidecar (graphics VMs)          | `nixos-modules/components/graphics.nix` + broker `SpawnRunner` for cloud-hypervisor on graphics VMs; pidfd handed back via `OpenPidfd` and supervised by `d2bd` | Graphics VMs run cloud-hypervisor with the GPU device attached. Restarting `d2bd` no longer terminates CH - pidfd handoff means the child outlives a daemon reconnect - but the broker spawn path is the only audited place CH is launched. Bypassing it breaks the audit trail. Validate the evaluated graphics shape with `tests/unit/nix/cases/video-contract.nix`. |
+| Video sidecar (graphics VMs)        | `nixos-modules/components/video/guest.nix`, `nixos-modules/processes-json.nix`, `pkgs/vhost-user-video/`, `packages/d2b-host/src/video_argv.rs`, broker `SpawnRunner{role: Video}` | `graphics.videoSidecar = true` is an explicit opt-in H264 decode path: guest `virtio_media` + patched Cloud Hypervisor `--vhost-user-media` + patched crosvm `device video-decoder --backend vaapi`. There is no per-VM video systemd unit, no stock crosvm/CH fallback, and no free-form video extra args. The video runner MUST use the dedicated `d2b-<vm>-video` principal, not `d2b-<vm>-gpu`, so broker/activation ACLs can deny host Wayland/PipeWire/Pulse sockets to video without breaking GPU cross-domain. The broker masks `/dev` for the video runner and exposes only the declared device allowlist: default `/dev/dri/renderD128`, plus `/dev/nvidiactl`, `/dev/nvidia0`, and `/dev/nvidia-uvm` only when `graphics.videoNvidiaDecode = true`. `virtio_media` is a guest module, not a host `/proc/modules` preflight requirement. Firefox/VA-API uses the separate experimental `graphics.virglVideo` GPU path; it is default-off and must not be treated as stable video-sidecar coverage. Validate evaluated shape with `tests/unit/nix/cases/video-contract.nix`; rendered argv and sandbox coverage lives in `packages/d2b-contract-tests/tests/minijail_swtpm_video.rs` and is advisory until the fixture lane is enabled. |
 | UI color contract / niri backend    | `nixos-modules/ui-colors.nix`, `nixos-modules/niri-vm-borders.nix`, `docs/reference/ui-colors.{md,json}`, `tests/unit/nix/cases/niri-vm-borders.nix`, and sibling consumers such as `vicondoa/d2b-wlcontrol` | The compositor-agnostic `d2b.site.ui` / `d2b.envs.<env>.ui` / `d2b.vms.<vm>.ui` color model is the source of truth for host/env/VM/state colors. Generated `/etc/d2b/ui-colors.json` and `/etc/d2b/ui-colors.css` are public presentation metadata, not authz or policy inputs. Niri-specific settings belong only under `d2b.site.ui.compositors.niri`; do not add compositor-specific color source options. Keep the JSON schema, reference docs, GTK CSS `@define-color` names, and nix-unit artifact-shape tests in sync. Downstream tools must fail visibly but remain usable when the artifact is missing or malformed, without reading root-owned d2b state directly. |
 | Unsafe-local provider, launcher, and persistent-shell helper | `nixos-modules/options-realms-workloads.nix`, `nixos-modules/unsafe-local-workloads-json.nix`, `packages/d2b-core/src/unsafe_local_workloads.rs`, `packages/d2b-contracts/src/unsafe_local_wire.rs`, `packages/d2b-unsafe-local-helper/src/{shell_runtime,shell_supervisor,shell_socket,output_ring,tty_exec}.rs`, and `docs/reference/unsafe-local-provider.md` | `unsafe-local` is explicit and default-denied. It runs only as the exact authenticated requesting uid and provides no isolation boundary. Public metadata never carries configured argv or shell policy; those come only from the integrity-pinned private bundle. A persistent-shell supervisor in a verified transient USER scope - not the reconnectable helper or d2bd - owns the login-shell PTY, bounded merged-output ring, attachment, and private same-UID listener. Ledger adoption preserves ambiguous sessions as degraded; teardown closes the PTY and signals only the exact re-verified scope. The helper-wide ring reservation is bounded, terminal responses transfer exactly one CLOEXEC stream fd, and shell names, supervisor ids, paths, environment, process/unit identity, and bytes stay out of Debug/errors/audit. Do not add cross-uid execution, a direct compositor fallback, VM state/network/device semantics, a root service, per-VM unit, broker op, free-form shell command, or broad same-UID cleanup. |
 | Manifest contract                   | `docs/reference/manifest-schema.{md,json}` + `nixos-modules/manifest.nix`               | Version-pinned via `manifestVersion`. Adding, removing, or renaming a per-VM field requires bumping the version, updating the schema, and noting it in the CHANGELOG. The `static.sh` md↔json drift gate catches partial updates. |
 | Manifest bundle - private artifacts | `docs/reference/manifest-bundle.md` + `docs/reference/schemas/v2/*.json` + `packages/d2b-core/src/{bundle,host,processes,privileges,closures,minijail_profile}.rs` + `nixos-modules/{bundle,bundle-artifacts,host-json,processes-json,privileges-json,closures-json,minijail-profiles}.nix` + `packages/xtask/src/main.rs` (`gen-schemas`) | Sensitive bundle artifacts install at `root:d2bd` 0640 and ground every broker/sandbox/runner behaviour. `d2b-core` DTOs are canonical; `d2b._bundle` is the typed internal artifact table that owns JSON data, install names, classifications, and `/etc/d2b` materialization for every bundle artifact. Add new bundle artifacts through `nixos-modules/bundle-artifacts.nix` instead of hand-writing parallel install logic in each emitter. Committed schemas under `docs/reference/schemas/v2/` ARE the contract and the `tests/unit/gates/drift-check.sh` gate enforces `xtask gen-schemas` + `git diff --exit-code` through `make test-drift`. Breaking the schema without an intentional `bundleVersion`/`schemaVersion` bump silently breaks every downstream consumer. |
-| Control plane - `d2bd` + `d2b-priv-broker` | `packages/d2b-contracts/**` + `packages/d2b-core/**` + `packages/d2bd/**` + `packages/d2b-priv-broker/**` (sibling workspace; `unsafe_code = "deny"` with quarantined `src/sys.rs` for fd-passing FFI) + `packages/d2b/**` + `docs/reference/{cli-contract,daemon-api,error-codes,privileges}.md` + the daemon Layer-1 gate set in `tests/static.sh` | The **only** persistent root surfaces the framework declares. `d2b-priv-broker.socket` is socket-activated: systemd creates/binds/listens/sets-ACL before the broker starts; the broker adopts fd 3 via `SD_LISTEN_FDS` and MUST NOT self-bind, self-fchmod, or self-fchown when `SD_LISTEN_FDS=1`. `d2bd.service` carries `Wants=d2b-priv-broker.socket` (not `Requires=`) so the daemon keeps serving while the broker is idle. The broker reloads the current bundle resolver per accepted request so it does not dispatch stale runner intents after a switch. The broker drops to the `d2bd` group and uses `SO_PEERCRED` at accept time for authz (launcher / admin / deny). Every host mutation flows through a typed broker op (cgroup v2 delegation, TAP/bridge lifecycle, `ApplyNftables`, `ApplyNmUnmanaged`, `ApplySysctl`, `UpdateHostsFile`, `ModprobeIfAllowed`, `UsbipBindFirewallRule`, `SpawnRunner`, `OpenPidfd`) and is recorded as an `OpAuditRecord` in `/var/lib/d2b/audit/broker-<utc-date>.jsonl` (root-owned `0640 root:d2bd`, append-only `O_APPEND`, daily rotation, 14-day default retention overridable via `d2b.site.audit.retentionDays`). Relevant tests: `tests/broker-socket-activation-eval.sh`, `tests/broker-caps-eval.sh`, `tests/d2bd-startup-smoke.sh`, `tests/legacy-unit-denylist-eval.sh`. See [ADR 0015](./docs/adr/0015-daemon-only-clean-break.md). |
+| Control plane - `d2bd` + `d2b-priv-broker` | `packages/d2b-contracts/**` + `packages/d2b-core/**` + `packages/d2bd/**` + `packages/d2b-priv-broker/**` (sibling workspace; `unsafe_code = "deny"` with quarantined `src/sys.rs` for fd-passing FFI) + `packages/d2b/**` + `docs/reference/{cli-contract,daemon-api,error-codes,privileges}.md` + the daemon Layer-1 gate set in `tests/static.sh` | The **only** persistent root surfaces the framework declares. `d2b-priv-broker.socket` is socket-activated: systemd creates/binds/listens/sets-ACL before the broker starts; the broker adopts fd 3 via `SD_LISTEN_FDS` and MUST NOT self-bind, self-fchmod, or self-fchown when `SD_LISTEN_FDS=1`. `d2bd.service` carries `Wants=d2b-priv-broker.socket` (not `Requires=`) so the daemon keeps serving while the broker is idle. The broker reloads the current bundle resolver per accepted request so it does not dispatch stale runner intents after a switch. The broker drops to the `d2bd` group and uses `SO_PEERCRED` at accept time for authz (launcher / admin / deny). Every host mutation flows through a typed broker op (cgroup v2 delegation, TAP/bridge lifecycle, `ApplyNftables`, `ApplyNmUnmanaged`, `ApplySysctl`, `UpdateHostsFile`, `ModprobeIfAllowed`, `UsbipBindFirewallRule`, `SpawnRunner`, `OpenPidfd`) and is recorded as an `OpAuditRecord` in `/var/lib/d2b/audit/broker-<utc-date>.jsonl` (root-owned `0640 root:d2bd`, append-only `O_APPEND`, daily rotation, 14-day default retention overridable via `d2b.site.audit.retentionDays`). Relevant enforcing coverage includes `tests/unit/nix/cases/broker-socket-activation.nix`, `tests/unit/nix/cases/broker-caps.nix`, and daemon startup integration tests under `packages/d2bd/tests/`. The legacy-unit policy lives in `packages/d2b-contract-tests/tests/policy_units.rs` and remains advisory until the fixture lane is enabled. See [ADR 0015](./docs/adr/0015-daemon-only-clean-break.md). |
 | Storage lifecycle / restart / synchronization | Planned generated contracts in `d2b-core::{storage,process_restart,sync}` + Nix emitters, broker storage/sync ops, daemon lifecycle DAG integration, and docs [ADR 0034](./docs/adr/0034-storage-lifecycle-restart-and-synchronization.md) / [`docs/explanation/storage-lifecycle.md`](./docs/explanation/storage-lifecycle.md) | Managed paths, restart adoption, locks, leases, cleanup, and degraded-state reporting are control-plane contracts. Normal daemon restarts are continuation events: do not broad-sweep `/run/d2b`; first re-discover adoptable runners from declared cgroup leaves, open fresh pidfds, verify identity, and quarantine/degrade ambiguity. Pidfds are not persisted. New advisory locks use OFD locks with `O_CLOEXEC`, explicit fd transfer only, and total acquisition order. The broker resolves storage/lock mutations from opaque bundle ids through anchored `openat2`/fd-relative path walking; daemon-owned ledgers are diagnostics, never repair authority. |
-| Eval-time assertions                | `nixos-modules/assertions.nix`                                                          | These are the framework's contract with consumers. Loosening one silently turns a previously-rejected misconfig into runtime breakage. New assertions need a matching case in `tests/assertions-eval.sh`. |
+| Eval-time assertions                | `nixos-modules/assertions.nix`                                                          | These are the framework's contract with consumers. Loosening one silently turns a previously-rejected misconfig into runtime breakage. New assertions need a matching case in `tests/unit/nix/cases/assertions.nix`. |
 | Guest-control exec session table    | `packages/d2bd/src/{exec_session,exec_session_real}.rs`, `run_exec_owner` in `packages/d2bd/src/lib.rs`, `packages/d2b/src/exec_client.rs`, `packages/d2b-contracts/src/public_wire.rs` (`ExecOp`/`ExecOpResponse`) | Arbitrary `d2b vm exec` is **admin-only**; configured `d2b launch` local-VM items may use the same detached guest-control backend with launcher authority because argv is resolved exclusively from the hash-verified private bundle. Both run through `d2bd` plus authenticated guest-control vsock to `guestd`. Attached exec uses the daemon's in-process **session table**: per-session workers own one authenticated guest-control client and proxy typed exec ops. **guestd runs every exec as the VM's workload user (`ssh.user`) inside a real PAM login session (`systemd-run --property=PAMName=login --uid=<user>`) - never as root; the wire `user` field is ignored and the target user is host-fixed, bare `argv[0]` is resolved by the workload user's login `PATH`, and each attached exec runs in a process-unique named transient unit (`d2b-exec-<…>.service`) that teardown stops via `systemctl kill` so a quiet command cannot outlive owner-disconnect, cancel, or the runtime ceiling. Operators elevate with `sudo` inside the session.** Detached non-TTY exec is enabled with `d2b vm exec -d <vm> -- <cmd>` and managed through VM-first verbs (`d2b vm exec <vm> list`, `logs <id>`, `status <id>`, `kill <id>`); command forms always require `--`, so those verb words remain valid VM names. Detached jobs and configured local-VM launches also run as the workload user, never root: the root detached runner only owns trusted slot/log files, re-validates the non-root uid before spawning the workload unit, and fails terminally rather than falling back to direct root execution. Guestd reconciles detached runner/workload units on startup, cleans orphaned workloads, and runs a periodic reaper for terminal records and retained logs; `kill` maps to idempotent two-phase `ExecCancel` (SIGTERM/grace/SIGKILL). There is **no per-VM systemd unit, no new broker op, and no SSH** - the guest owns the PTY; the host only flips termios for attached TTY via an RAII raw-mode guard restored on every exit/error/panic. The admin `SO_PEERCRED` check runs before arbitrary exec session setup; configured launch instead requires local launcher/admin authority and a trusted configured item. Old/non-guest-control generations fail closed (exit `70`) with no proxy and no SSH fallback. Session-table caps (global/per-UID/per-VM), detached slot/log quotas, and rate limits are enforced before connect/auth or create. Attached audit emits one redacted kind=critical session-establishment event (vm/peer_uid/tty); detached create/kill daemon audit carries only vm/peer_uid/action/result/exec_id, while configured-launch audit adds target/item/operation correlation without execution details. Opaque session handles, argv, stdio, env, cwd, and paths never reach any Debug/trace/audit/metric surface. Validate with the `exec_session`/`exec_client` hermetic test matrices. |
 | Unsafe-local persistent shells | `packages/d2bd/src/{workload_dispatch,unsafe_local_helper,unsafe_local_terminal,shell_backend}.rs`, shell owner dispatch in `packages/d2bd/src/lib.rs`, `packages/d2b-unsafe-local-helper/src/{shell_runtime,shell_supervisor}.rs`, and `tests/host-integration/unsafe-local-helper.nix` | `d2b shell` remains **admin-only** for every provider. Unsafe-local target identity and `defaultName`/`maxSessions` come only from the hash-verified private bundle; public `ShellOp` keeps protocol v3 and carries no policy, uid, argv, env, cwd, or path. The daemon dispatches helper protocol v2 to the exact `SO_PEERCRED` uid, validates exactly one connected CLOEXEC stream fd, and multiplexes terminal protocol v1 behind a fresh opaque public handle. Disconnect/`CloseAttach` detach but never kill; `Kill` targets only the helper-verified transient user scope. Shells survive CLI, daemon, and helper reconnects while that scope and the non-lingering user manager live. User logout ends them by design. User scopes provide lifecycle ownership, **not containment from other processes with the same host uid**. There is no root unit, broker op, per-VM service, SSH path, host-shell fallback, direct-compositor fallback, or automatic replay after an ambiguous daemon timeout. Never log/audit/label shell names, supervisor ids, public handles, terminal bytes, helper diagnostics, PIDs, unit names, argv, env, cwd, or paths; audit may use configured target/peer uid and fixed digests, while metrics use closed provider/component/operation/outcome/error labels. |
 | Lifecycle permission group          | `nixos-modules/host-users.nix`                                                          | Membership in `d2b` + `SO_PEERCRED` at `public.sock` accept time is the **only** lifecycle authorisation surface. There is no polkit allowlist; wiring anything else into the group inverts the threat model. **Exception:** the guarded `ExecStop` shutdown hook runs as uid 0 and receives the narrow `HostShutdown` role, which is permitted only for `vmStop` during host-shutdown teardown (see `packages/d2bd/src/admission.rs`). This exception is scoped strictly: all other admin-only operations (exec, USB attach, key rotation, host prepare, audit export) are denied for this role. The daemon-restart continuation guard is preserved: `Restart=on-failure` restarts never receive `HostShutdown` treatment because the restarting daemon re-adopts runners and the shutdown hook only runs under systemd stop with a live `stopping` system state check. |
 | SSH key generation / rotation       | `nixos-modules/host-keys.nix`, `host-activation.nix`                                    | The framework owns `${cfg.site.keysDir}/<vm>_ed25519`. `d2b keys rotate` MUST NOT touch consumer-supplied keys. |
-| virtiofsd sandbox model             | `nixos-modules/minijail-profiles.nix` (virtiofsdProfiles), `packages/d2b-priv-broker/src/sys.rs` (`clone3_spawn_runner` user-NS path), `nixos-modules/processes-json.nix` (argv emit) | virtiofsd profiles MUST declare zero host capabilities (`capabilities = []`), `requiresStartRoot = false`, and a `userNamespace` block mapping in-NS UID/GID 0 to the per-share principal. Normal VM shares map to `d2b-<vm>-runner`; the guest-control token share (`d2b-gctl`) maps to the narrower `d2b-<vm>-gctlfs` principal. The broker pre-establishes the user namespace via `clone3(CLONE_NEWUSER)` + `pipe2` sync + `/proc/<pid>/uid_map` writes BEFORE virtiofsd's first instruction runs. virtiofsd argv MUST include `--sandbox=chroot --inode-file-handles=never` and `--readonly` for every `readOnly` share (`ro-store`, `d2b-gctl`). Reintroducing host caps, `requiresStartRoot=true`, or `--sandbox=namespace` violates [ADR 0021](./docs/adr/0021-broker-user-namespace-for-virtiofsd.md). Validate with `tests/minijail-validator-virtiofsd.sh` + `tests/virtiofsd-argv-shape.sh`. |
+| virtiofsd sandbox model             | `nixos-modules/minijail-profiles.nix` (virtiofsdProfiles), `packages/d2b-priv-broker/src/sys.rs` (`clone3_spawn_runner` user-NS path), `nixos-modules/processes-json.nix` (argv emit) | virtiofsd profiles MUST declare zero host capabilities (`capabilities = []`), `requiresStartRoot = false`, and a `userNamespace` block mapping in-NS UID/GID 0 to the per-share principal. Normal VM shares map to `d2b-<vm>-runner`; the guest-control token share (`d2b-gctl`) maps to the narrower `d2b-<vm>-gctlfs` principal. The broker pre-establishes the user namespace via `clone3(CLONE_NEWUSER)` + `pipe2` sync + `/proc/<pid>/uid_map` writes BEFORE virtiofsd's first instruction runs. virtiofsd argv MUST include `--sandbox=chroot --inode-file-handles=never` and `--readonly` for every `readOnly` share (`ro-store`, `d2b-gctl`). Reintroducing host caps, `requiresStartRoot=true`, or `--sandbox=namespace` violates [ADR 0021](./docs/adr/0021-broker-user-namespace-for-virtiofsd.md). Rendered profile and argv coverage lives in `packages/d2b-contract-tests/tests/minijail_roles.rs` and is advisory until the fixture lane is enabled. |
 
 ## Don'ts (security-relevant)
 
 - **Don't remove `lib.mkForce` from the net VM's `10-eth-dhcp`
   neutralizer.** Verify any reshape of `net.nix` against
-  `tests/net-vm-network-eval.sh` first.
+  `tests/unit/nix/cases/net-vm-network.nix` first.
 - **Don't relax the VM-name regex or reserved prefixes.**
   `sys-*` and `launcher` are reserved so the framework can
   declare its own VMs without name collisions and so the CLI
@@ -1188,10 +1258,10 @@ Touch these only with a clear plan and a corresponding test run.
 - **Don't reintroduce a per-VM systemd unit or a host-singleton
   framework service.** Every per-VM lifecycle step lives inside
   `d2bd`'s DAG executor with privileged side effects routed
-  through a typed `d2b-priv-broker` op (ADR 0015). The
-  `tests/legacy-unit-denylist-eval.sh` and
-  `tests/agents-md-rewrite-eval.sh` gates fail closed on
-  regressions.
+  through a typed `d2b-priv-broker` op (ADR 0015). Policy coverage
+  lives in `packages/d2b-contract-tests/tests/policy_units.rs` and
+  `policy_docs.rs`; run the enabled fixture-contract lane because
+  those checks are not part of `test-rust`.
 - **Don't reintroduce a bash CLI fallback or env-knob escape
   hatch.** The Rust CLI is the only operator surface;
   `D2B_LEGACY_BASH_OPT_IN`, `D2B_LEGACY_CLI`, and
@@ -1342,19 +1412,20 @@ contract:
   `d2b` group membership + `SO_PEERCRED` at
   `public.sock` accept time is the **only** lifecycle authorisation
   surface.
-- The Rust CLI does not invoke bash. `tests/no-bash-exec-eval.sh`
-  is the fail-closed gate ([ADR 0017](./docs/adr/0017-no-bash-fallbacks-invariant.md)).
+- The Rust CLI does not invoke bash. `tests/tools/no-bash-ast-walker`
+  is the enforcing AST-level check in `test-rust`; the companion
+  source policy in `packages/d2b-contract-tests/tests/policy_source.rs`
+  is advisory until the fixture lane is enabled
+  ([ADR 0017](./docs/adr/0017-no-bash-fallbacks-invariant.md)).
 
 ### Verification gates
 
-- `tests/legacy-unit-denylist-eval.sh` asserts that no example's
-  `nixos-rebuild dry-build` output emits a retired unit name.
-- `tests/adr-0015-presence-eval.sh` asserts the ADR exists,
-  carries the canonical header, and is cross-referenced from this
-  file.
-- `tests/agents-md-rewrite-eval.sh` asserts AGENTS.md itself does
-  not mention the bash CLI or per-VM systemd templates as live
-  surfaces (only as historical / retired context).
+- `packages/d2b-contract-tests/tests/policy_units.rs` denies retired
+  unit names, while `policy_lints.rs` checks the ADR header and
+  cross-references and `policy_docs.rs` checks this file's daemon-only
+  wording. These fixture-dependent policies are not enforcing
+  pull-request evidence until `test-fixture-contracts` is enabled and
+  promoted.
 - Host exit criterion: on a deployed host,
   `systemctl list-units --no-pager --all | grep -E '^(d2b|microvm)' | wc -l`
   returns `3`.

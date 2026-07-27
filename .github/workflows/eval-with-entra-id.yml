@@ -8,17 +8,32 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: sh tests/tools/ci-shell {0}
+
 jobs:
   eval:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-      - uses: cachix/install-nix-action@ba0dd844c9180cbf77aa72a116d6fbc515d0e87b
+        with:
+          persist-credentials: false
+      - name: Install Nix for trusted pushes
+        if: github.event_name != 'pull_request'
+        uses: cachix/install-nix-action@ba0dd844c9180cbf77aa72a116d6fbc515d0e87b
         with:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
             access-tokens = github.com=${{ github.token }}
+      - name: Install Nix without credentials for pull requests
+        if: github.event_name == 'pull_request'
+        uses: cachix/install-nix-action@ba0dd844c9180cbf77aa72a116d6fbc515d0e87b
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
       - name: Eval with-entra-id example
         run: |
           cd examples/with-entra-id

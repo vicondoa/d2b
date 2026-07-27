@@ -100,12 +100,13 @@ skip the broker dispatch on a clean restart.
 - Unit tests (`packages/d2bd/src/supervisor/stop_dag.rs::tests`)
   exercise every drift variant against a fixture-derived
   `BundleResolver`.
-- The stop-dag-reconcile static gate
+- The stop-dag-reconcile policy
   `packages/d2b-contract-tests/tests/policy_daemon.rs`
   (`stop_dag_reconcile_surface`) asserts
   the module surface, the supervisor module wires it in, the planner
   composes only existing broker ops (no new `*Request` types), and
-  this doc is up to date.
+  this doc is up to date. This fixture-dependent policy is advisory until the
+  fixture-contract lane is enabled and promoted.
 
 ## See also
 

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# tests/unit/meta/ci-coverage.sh - structural gate asserting every tests/*.sh is
-# wired into at least one CI workflow or test aggregator.
+# tests/unit/meta/ci-coverage.sh - structural gate asserting every closed-set
+# shell gate is reachable from a Make target in the local Layer-1 manifest.
 #
 # Root-cause gap: static CI set drift.
 #
-# Exits 0 if all tests are covered, 1 if any are orphaned.
+# Exits 0 if all gates are covered, 1 if any are orphaned.
 #
 # Usage:
 #   bash tests/unit/meta/ci-coverage.sh
@@ -14,170 +14,291 @@ set -euo pipefail
 HERE=$(dirname "$(readlink -f "$0")")
 ROOT=${ROOT:-$(cd "$HERE/../../.." && pwd)}
 
-# ---------------------------------------------------------------------------
-# EXCLUDE_FROM_CI - intentional exclusions with rationale.
-# Each entry is the basename without leading "tests/" e.g. "lib.sh".
-# Keep sorted; add rationale comment above each entry.
-# ---------------------------------------------------------------------------
-EXCLUDE_FROM_CI=(
-  # lib.sh: shared helper library sourced by other tests; not a standalone test.
-  "lib.sh"
+MANIFEST="$ROOT/tests/layer1-jobs.json"
+MAKEFILE="$ROOT/Makefile"
+WORKFLOW_DIR="$ROOT/.github/workflows"
 
-  # runner.sh: high-level aggregator that invokes static.sh + d2b-store.sh +
-  # audio.sh + security tests; it IS a test runner, not an individual test.
-  # Not wired into PR CI by design (full suite; takes 10-30 min).
-  "runner.sh"
+for required in "$MANIFEST" "$MAKEFILE"; do
+  if [ ! -f "$required" ]; then
+    echo "ERROR: missing coverage source $required" >&2
+    exit 1
+  fi
+done
 
-  # cli-rust-native-common.sh: sourced helper (common fixtures for cli-rust-native-*
-  # tests); not a standalone runnable test.
-  "cli-rust-native-common.sh"
-
-  # static-timing.sh: wall-clock timing analysis tool for maintainer profiling;
-  # not a correctness gate.
-  "static-timing.sh"
-
-  # hardware-smoke-gpu-yubikey.sh: requires physical GPU + YubiKey hardware;
-  # intentionally maintainer-only, never runnable in ephemeral CI.
-  "hardware-smoke-gpu-yubikey.sh"
-
-  # static.sh: full panel gate aggregator; invoked manually before panel
-  # dispatch / wave-exit gates, and by runner.sh. Not wired into PR CI
-  # because it takes 30-60 min and requires a self-hosted NixOS runner.
-  "static.sh"
-
-  # audit-forwarding.sh: Layer-2 optional live test for auditd → journald →
-  # Alloy → Loki forwarding. Requires d2b installed + live auditd stack.
-  # Skips cleanly when manifest absent; deliberately not a PR gate.
-  "audit-forwarding.sh"
-
-  # network-isolation.sh: Layer-2 optional live test for host datapath
-  # isolation. Requires d2b installed + live networking stack.
-  # Skips cleanly when manifest absent; deliberately not a PR gate.
-  "network-isolation.sh"
-
-  # d2b-store.sh: Layer-2 integration tests for the per-VM /nix/store
-  # hardlink farm + lifecycle CLI. Requires a live host with d2bd +
-  # d2b-priv-broker active. Documented in tests/README.md and AGENTS.md.
-  "d2b-store.sh"
-
-  # swtpm-persistence-smoke.sh: Layer-2 persistence regression. Requires
-  # D2B_LIVE=1, a running d2bd, and a restartable swtpm. Not runnable in
-  # ephemeral CI.
-  "swtpm-persistence-smoke.sh"
-
-  # live-vm-smoke.sh: maintainer-side pre-tag live-VM smoke gate.
-  # Requires: KVM (/dev/kvm present), systemd-activated d2b-priv-broker,
-  # d2b on PATH, and declared VMs (personal-dev + work-aad for --full).
-  # Exits 77 (SKIP) cleanly when any prerequisite is absent; never runnable in
-  # ephemeral CI. Invoked via `make pre-tag` (--full) or `make smoke-lite` (--lite).
-  "live-vm-smoke.sh"
+checkout_credential_errors=()
+while IFS= read -r workflow; do
+  checkout_count=$(grep -Ec 'uses:[[:space:]]*actions/checkout@' "$workflow" || true)
+  secured_count=$(
+    awk '
+      /^[[:space:]]*- uses:[[:space:]]*actions\/checkout@/ {
+        if (getline with_line <= 0) {
+          next
+        }
+        sub(/^[[:space:]]*/, "", with_line)
+        if (with_line != "with:") {
+          next
+        }
+        if (getline credential_line <= 0) {
+          next
+        }
+        sub(/^[[:space:]]*/, "", credential_line)
+        if (credential_line == "persist-credentials: false") {
+          secured += 1
+        }
+      }
+      END { print secured + 0 }
+    ' "$workflow"
+  )
+  if [ "$checkout_count" -ne "$secured_count" ]; then
+    checkout_credential_errors+=(
+      "${workflow#"$ROOT"/}: $secured_count of $checkout_count checkout steps immediately disable credential persistence"
+    )
+  fi
+done < <(
+  find "$WORKFLOW_DIR" -maxdepth 1 -type f \
+    \( -name '*.yml' -o -name '*.yaml' \) -print \
+    | LC_ALL=C sort
 )
 
-# ---------------------------------------------------------------------------
-# Reference files to search.
-# ---------------------------------------------------------------------------
-WORKFLOW_DIR="$ROOT/.github/workflows"
-STATIC_SH="$ROOT/tests/static.sh"
-STATIC_FAST_SH="$ROOT/tests/static-fast.sh"
-LIVE_VM_SMOKE="$ROOT/tests/integration/live/live-vm-smoke.sh"
-
-# ---------------------------------------------------------------------------
-# Build a combined blob of all reference content for fast grep.
-# ---------------------------------------------------------------------------
-ref_files=()
-for wf in "$WORKFLOW_DIR"/*.yml; do
-  [ -f "$wf" ] && ref_files+=("$wf")
-done
-[ -f "$STATIC_SH" ]      && ref_files+=("$STATIC_SH")
-[ -f "$STATIC_FAST_SH" ] && ref_files+=("$STATIC_FAST_SH")
-[ -f "$LIVE_VM_SMOKE" ]  && ref_files+=("$LIVE_VM_SMOKE")
-
-if [ ${#ref_files[@]} -eq 0 ]; then
-  echo "ERROR: no reference files found (no .github/workflows/*.yml and no tests/static*.sh)" >&2
+if [ "${#checkout_credential_errors[@]}" -gt 0 ]; then
+  echo "FAIL: GitHub Actions checkout credential coverage is incomplete:" >&2
+  printf '  %s\n' "${checkout_credential_errors[@]}" >&2
   exit 1
 fi
 
-# ---------------------------------------------------------------------------
-# Helper: is_excluded <basename>
-# ---------------------------------------------------------------------------
-is_excluded() {
-  local name="$1"
-  for ex in "${EXCLUDE_FROM_CI[@]}"; do
-    [ "$ex" = "$name" ] && return 0
+expected_workflow_shell='shell: sh tests/tools/ci-shell {0}'
+workflow_shell_errors=()
+while IFS= read -r workflow; do
+  found=0
+  while IFS= read -r line; do
+    found=1
+    trimmed=${line#"${line%%[![:space:]]*}"}
+    if [ "$trimmed" != "$expected_workflow_shell" ]; then
+      workflow_shell_errors+=("${workflow#"$ROOT"/}: unsupported shell declaration: $trimmed")
+    fi
+  done < <(grep -E '^[[:space:]]*shell:' "$workflow" || true)
+  if [ "$found" -eq 0 ]; then
+    workflow_shell_errors+=("${workflow#"$ROOT"/}: missing scrubbed default run shell")
+  fi
+done < <(find "$WORKFLOW_DIR" -maxdepth 1 -type f -name '*.yml' -print | LC_ALL=C sort)
+
+if [ "${#workflow_shell_errors[@]}" -gt 0 ]; then
+  echo "FAIL: GitHub Actions workflow shell coverage is incomplete:" >&2
+  printf '  %s\n' "${workflow_shell_errors[@]}" >&2
+  exit 1
+fi
+
+bash "$ROOT/tests/tools/layer1-jobs" self-test
+
+mapfile -t local_job_ids < <(
+  awk '
+    /^[[:space:]]*"local":[[:space:]]*\{/ { in_local = 1; next }
+    /^[[:space:]]*"ci":[[:space:]]*\{/ { in_local = 0 }
+    in_local && /"jobs":[[:space:]]*\[/ {
+      line = $0
+      sub(/^.*\[/, "", line)
+      sub(/\].*$/, "", line)
+      while (match(line, /"[^"]+"/)) {
+        print substr(line, RSTART + 1, RLENGTH - 2)
+        line = substr(line, RSTART + RLENGTH)
+      }
+    }
+  ' "$MANIFEST"
+)
+
+if [ "${#local_job_ids[@]}" -eq 0 ]; then
+  echo "ERROR: Layer-1 manifest has no local jobs" >&2
+  exit 1
+fi
+
+manifest_targets=()
+for job_id in "${local_job_ids[@]}"; do
+  target=$(
+    awk -v job_id="$job_id" '
+      $0 ~ "^[[:space:]]*\"" job_id "\":[[:space:]]*\\{" { in_job = 1; next }
+      in_job && /"makeTarget":[[:space:]]*"/ {
+        line = $0
+        sub(/^.*"makeTarget":[[:space:]]*"/, "", line)
+        sub(/".*$/, "", line)
+        print line
+        exit
+      }
+      in_job && /^[[:space:]]*"[^"]+":[[:space:]]*\{/ { exit }
+    ' "$MANIFEST"
+  )
+  if [ -z "$target" ]; then
+    echo "ERROR: local manifest job $job_id has no makeTarget" >&2
+    exit 1
+  fi
+  manifest_targets+=("$target")
+done
+
+entrypoint_scripts=()
+for target in "${manifest_targets[@]}"; do
+  recipe=$(
+    awk -v target="$target" '
+      $0 ~ "^" target "([[:space:]]*:[^=]*)?$" { in_target = 1; found = 1; next }
+      in_target && /^\t/ { print; next }
+      in_target && /^[^[:space:]#]/ { exit }
+      END { if (!found) exit 2 }
+    ' "$MAKEFILE"
+  ) || {
+    echo "ERROR: manifest target $target is not defined in Makefile" >&2
+    exit 1
+  }
+  while IFS= read -r script; do
+    entrypoint_scripts+=("$script")
+  done < <(
+    printf '%s\n' "$recipe" \
+      | grep -oE '(tests|scripts)/[A-Za-z0-9_./-]+\.sh' \
+      | LC_ALL=C sort -u \
+      || true
+  )
+done
+
+is_direct_entrypoint() {
+  local rel="$1"
+  local entrypoint
+  for entrypoint in "${entrypoint_scripts[@]}"; do
+    [ "$entrypoint" = "$rel" ] && return 0
   done
   return 1
 }
 
-# ---------------------------------------------------------------------------
-# Helper: is_referenced <basename>
-# Returns 0 if the test is mentioned in any reference file.
-# Searches for:
-#   (a) the exact string "tests/<name>"  (direct path reference)
-#   (b) the bare stem  (e.g. "bundle-drift") to catch loop-based references
-#       in static-fast.sh where tests are listed as bare names in arrays.
-# ---------------------------------------------------------------------------
-is_referenced() {
-  local name="$1"                       # e.g. "bundle-drift.sh"
-  local rel="${2:-tests/$name}"         # e.g. "tests/unit/gates/bundle-drift.sh"
-  local stem="${name%.sh}"              # e.g. "bundle-drift"
-  # Use grep -qF (fixed-string) for speed; search all reference files at once.
-  if grep -qF "$rel" "${ref_files[@]}" 2>/dev/null; then
-    return 0
-  fi
-  # Bare stem match - covers loop entries like "  bundle-drift \" in static-fast.sh
-  # and "  vm-submodule-eval; do" (last item in a for loop) in static.sh.
-  # Require the stem be preceded by whitespace/quote and followed by
-  # whitespace, backslash, quote, semicolon, or end-of-field.
-  if grep -qE "(^|[ \t'\"])(${stem})([ \t'\"\\\\;]|$)" "${ref_files[@]}" 2>/dev/null; then
-    return 0
-  fi
+is_referenced_by_entrypoint() {
+  local rel="$1"
+  local entrypoint
+  for entrypoint in "${entrypoint_scripts[@]}"; do
+    [ -f "$ROOT/$entrypoint" ] || continue
+    if awk -v rel="$rel" '
+      /^[[:space:]]*#/ { next }
+      index($0, rel) { found = 1 }
+      END { exit found ? 0 : 1 }
+    ' "$ROOT/$entrypoint"; then
+      return 0
+    fi
+  done
   return 1
 }
 
-# ---------------------------------------------------------------------------
-# Main scan
-# ---------------------------------------------------------------------------
 orphans=()
 covered=0
-excluded_count=${#EXCLUDE_FROM_CI[@]}
 
-for script in "$HERE"/*.sh; do
-  name=$(basename "$script")
+while IFS= read -r script; do
   rel=${script#"$ROOT"/}
-
-  # Skip self.
-  [ "$name" = "ci-coverage.sh" ] && continue
-
-  # Skip _helper scripts.
-  [[ "$name" == _* ]] && continue
-
-  # Skip excluded.
-  if is_excluded "$name"; then
-    continue
-  fi
-
-  if is_referenced "$name" "$rel"; then
+  if is_direct_entrypoint "$rel" || is_referenced_by_entrypoint "$rel"; then
     covered=$((covered + 1))
   else
     orphans+=("$rel")
   fi
+done < <(
+  find "$ROOT/tests/unit/meta" "$ROOT/tests/unit/gates" \
+    -maxdepth 1 -type f -name '*.sh' -print \
+    | LC_ALL=C sort
+)
+
+# ---------------------------------------------------------------------------
+# A gate that can exit 0 without doing its work must say so in the manifest.
+#
+# Reachability alone is not coverage: a gate wired to a manifest target still
+# contributes a green result while skipping. A wholly skippable gate is
+# advisory. When one subset of a larger enforcing job is skipped, a separate
+# job must name that exact gap: `advisoryForSkip` when the gap remains advisory,
+# or `enforcesForSkip` when a companion job executes and enforces the omitted
+# work. Demoting the larger job would understate the checks that really execute.
+# ---------------------------------------------------------------------------
+undeclared_skippable=()
+while IFS= read -r gate; do
+  rel=${gate#"$ROOT"/}
+  # A skip guard is an early, unconditional `exit 0` reached when an opt-in
+  # variable is unset. Match the guard shape rather than any particular name.
+  if ! grep -qE '^\s*if \[ "\$\{D2B_[A-Z_]+:-0\}" != 1 \]' "$gate"; then
+    continue
+  fi
+  target=$(basename "$gate" .sh)
+  if ! grep -q "\"makeTarget\": \"test-${target}\"" "$MANIFEST"; then
+    continue
+  fi
+  if ! awk -v t="test-${target}" '
+    $0 ~ "\"makeTarget\": \"" t "\"" { found = 1 }
+    found && /"enforcement": "advisory"/ { ok = 1 }
+    found && /^    },/ { exit }
+    END { exit ok ? 0 : 1 }
+  ' "$MANIFEST"; then
+    undeclared_skippable+=("$rel")
+  fi
+done < <(
+  find "$ROOT/tests/unit/gates" -maxdepth 1 -type f -name '*.sh' -print \
+    | LC_ALL=C sort
+)
+
+undeclared_manifest_skips=()
+for job_id in "${local_job_ids[@]}"; do
+  mapfile -t skip_guards < <(awk -v job_id="$job_id" '
+    $0 ~ "^[[:space:]]*\"" job_id "\":[[:space:]]*\\{" { in_job = 1; next }
+    in_job && /"D2B_SKIP_[A-Z0-9_]+":[[:space:]]*"1"/ {
+      line = $0
+      sub(/^[^"]*"/, "", line)
+      sub(/".*$/, "", line)
+      print line
+    }
+    in_job && /^    },/ { exit }
+  ' "$MANIFEST")
+  for guard in "${skip_guards[@]}"; do
+    declaration="$job_id:$guard"
+    if ! awk -v declaration="$declaration" '
+      /^[[:space:]]*"[^"]+":[[:space:]]*\{/ {
+        if ($0 ~ /^    "/) {
+          in_job = 1
+          advisory_link = 0
+          enforcing_link = 0
+          advisory = 0
+        }
+      }
+      in_job && index($0, "\"advisoryForSkip\": \"" declaration "\"") { advisory_link = 1 }
+      in_job && index($0, "\"enforcesForSkip\": \"" declaration "\"") { enforcing_link = 1 }
+      in_job && /"enforcement":[[:space:]]*"advisory"/ { advisory = 1 }
+      in_job && /^    },/ {
+        if ((advisory_link && advisory) || (enforcing_link && !advisory)) {
+          found = 1
+          exit
+        }
+        in_job = 0
+      }
+      END { exit found ? 0 : 1 }
+    ' "$MANIFEST"; then
+      undeclared_manifest_skips+=("$declaration")
+    fi
+  done
 done
+
+if [ ${#undeclared_skippable[@]} -ne 0 ] || [ ${#undeclared_manifest_skips[@]} -ne 0 ]; then
+  echo "FAIL: gates that can skip are not declared advisory in the manifest:" >&2
+  for g in "${undeclared_skippable[@]}"; do
+    echo "  $g" >&2
+  done
+  for declaration in "${undeclared_manifest_skips[@]}"; do
+    echo "  manifest skip $declaration has no exact advisory item" >&2
+  done
+  echo "" >&2
+  echo "Remediation: declare a companion job naming the exact job:guard gap with" >&2
+  echo "advisoryForSkip or enforcesForSkip, or remove the skip guard." >&2
+  exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # Report
 # ---------------------------------------------------------------------------
 if [ ${#orphans[@]} -eq 0 ]; then
-  echo "PASS: $covered tests referenced; $excluded_count intentionally excluded"
+  echo "PASS: $covered closed-set shell gates reachable from local Layer-1 manifest targets"
   exit 0
 else
-  echo "FAIL: the following tests/*.sh are not referenced in any CI workflow or test aggregator:" >&2
+  echo "FAIL: closed-set shell gates not reachable from a local Layer-1 manifest target:" >&2
   for o in "${orphans[@]}"; do
     echo "  $o" >&2
   done
   echo "" >&2
-  echo "Remediation: wire each orphan into tests/static.sh (or another aggregator/workflow)" >&2
-  echo "OR add it to the EXCLUDE_FROM_CI list in tests/unit/meta/ci-coverage.sh with a rationale comment." >&2
-  echo "" >&2
-  echo "FAIL: $covered tests referenced; ${#orphans[@]} orphaned; $excluded_count intentionally excluded" >&2
+  echo "Remediation: wire each orphan through a manifest-listed Make target or its direct driver." >&2
+  echo "FAIL: $covered gates reachable; ${#orphans[@]} orphaned" >&2
   exit 1
 fi

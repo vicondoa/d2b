@@ -122,7 +122,9 @@ impl FixtureRepo {
     /// Run the real gate against this fixture. Returns (passed, combined output).
     fn run_gate(&self) -> (bool, String) {
         let script = repo_root().join("scripts/changelog-check.sh");
-        let output = Command::new("bash")
+        let scrubber = repo_root().join("tests/tools/scrub-shell-environment");
+        let output = Command::new(scrubber)
+            .args(["-c", "exec bash \"$@\"", "policy-changelog-gate"])
             .arg(&script)
             .current_dir(&self.root)
             .env("ROOT", &self.root)
@@ -392,5 +394,22 @@ fn parity_a_structurally_invalid_fragment_is_rejected() {
     assert!(
         out.contains("unknown section"),
         "expected a structural diagnostic:\n{out}"
+    );
+}
+
+#[test]
+fn parity_a_star_bullet_fragment_is_rejected() {
+    let repo = FixtureRepo::new("parity-star-bullet");
+    repo.seed();
+    repo.write(
+        "changelog.d/branch.md",
+        "### Added\n\n* non-canonical bullet\n",
+    );
+    repo.commit("add star-bullet fragment");
+    let (passed, out) = repo.run_gate();
+    assert_gate(passed, &out, false, "star-bullet fragment");
+    assert!(
+        out.contains("must start with a '- ' bullet"),
+        "expected a canonical-bullet diagnostic:\n{out}"
     );
 }

@@ -417,7 +417,6 @@ Every method:
 ### 6.4 `Oo7SecretServicePort` trait (injected interface)
 
 ```rust
-#[async_trait]
 pub trait Oo7SecretServicePort: Send + Sync {
     async fn state(&self) -> Result<SecretServiceState, SecretServicePortError>;
 
@@ -674,7 +673,9 @@ an authorized EffectPort/LaunchTicket; unauthorized resolution returns
 
 ### 7.4 Injected port: pre-opened D-Bus FD
 
-The controller is constructed with an injected `Arc<dyn Oo7SecretServicePort>`.
+The controller is generic over `P: Oo7SecretServicePort` and is constructed
+with that concrete injected implementation; there is no trait object or
+`async-trait` dependency.
 The production implementation wraps the pre-opened Secret Service connection
 port delivered by the fixed user supervisor as the user portal FD in the
 LaunchTicket's inherited FD table. The component descriptor for
@@ -1508,9 +1509,11 @@ by the workspace policy gate. The policy gate enforces only the four root items:
 
 Per D094 and `ADR-046-validation-and-delivery` §10.16, this Provider's `src/`
 unit tests and `tests/*.rs` hermetic suite are fast, in-process, deterministic,
-and parallel-safe: an individual normal test has p95 ≤50 ms with no wall-clock
+and parallel-safe: an individual normal test has an advisory wall-clock p95
+diagnostic threshold of <=50 ms; gate enforcement is aggregate per-crate
+process CPU only. There is no wall-clock
 sleep, and `cargo test -p d2b-provider-credential-secret-service --lib --tests`
-completes in ≤2 s warm-cache execution time (compilation excluded). They use a
+completes in ≤3 s warm-cache execution time (compilation excluded). They use a
 deterministic fake clock/RNG and the toolkit fakes/FakeEffectPort only - no
 process spawn, container, network, DBus, systemd, broker daemon, Nix eval/build,
 KVM, USB/GPU/TPM hardware, or live cloud, and no filesystem tree beyond tiny
@@ -1519,7 +1522,7 @@ keeps a lane timeout/budget, parallel isolation, and fake external services by
 default; such a need is re-placed into `integration/`, never given a sleep,
 larger timeout, or `#[ignore]`. Bounded crypto/property tests are the only
 classified exception, each named with a capped case count and a declared higher
-per-test budget.
+per-test advisory threshold.
 
 ---
 

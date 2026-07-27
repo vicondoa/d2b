@@ -35,6 +35,17 @@ The remaining Layer-1 surface is a **closed set** you should not grow with new
 files: **drift gates** (`tests/unit/gates/` - `xtask gen-* + git diff`) and
 **meta gates** (`tests/unit/meta/` - guard the test infra itself).
 
+Fixture-backed type 4 tests and fixture-dependent type 5 tests in
+`d2b-contract-tests` are routed through the manifest's
+`test-fixture-contracts` job. That job is enforcing: both the local and
+pull-request lanes set `D2B_ENABLE_FIXTURE_BUILD=1`, it builds `D2B_FIXTURES`
+and runs the crate together with the CLI-contract cases, and invoking it
+without that variable fails rather than skipping. `test-rust` excludes this
+fixture-dependent crate, so cite the fixture lane rather than `test-rust` when
+claiming this coverage ran. Selected hermetic policy files may
+also have explicit enforcing entrypoints under `test-policy`; check its driver
+before citing one.
+
 ### Layer 2 - integration tiers (only when Layer 1 genuinely can't cover it)
 
 | # | Type | What it is | Lives in | Runs **where** |
