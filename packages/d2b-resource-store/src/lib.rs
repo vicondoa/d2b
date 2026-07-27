@@ -11,7 +11,7 @@ use d2b_contracts::v3::{
     ResourceRef, ResourceTypeName, ResourceUid, ZoneId, ZoneRevision,
 };
 
-pub use error::{StoreError, StoreErrorKind};
+pub use error::{MutationOrdinal, MutationOrdinalError, StoreError, StoreErrorKind};
 
 /// Exact optimistic precondition for a mutation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

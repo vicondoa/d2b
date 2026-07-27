@@ -5136,6 +5136,8 @@ pub struct CommitBatchResponse {
     pub revision: u64,
     // @@protoc_insertion_point(field:d2b.resource.v3.CommitBatchResponse.error)
     pub error: ::protobuf::MessageField<ResourceError>,
+    // @@protoc_insertion_point(field:d2b.resource.v3.CommitBatchResponse.conflict_mutation_ordinal)
+    pub conflict_mutation_ordinal: ::std::option::Option<u32>,
     // special fields
     // @@protoc_insertion_point(special_field:d2b.resource.v3.CommitBatchResponse.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -5153,7 +5155,7 @@ impl CommitBatchResponse {
     }
 
     fn generated_message_descriptor_data() -> ::protobuf::reflect::GeneratedMessageDescriptorData {
-        let mut fields = ::std::vec::Vec::with_capacity(3);
+        let mut fields = ::std::vec::Vec::with_capacity(4);
         let mut oneofs = ::std::vec::Vec::with_capacity(0);
         fields.push(::protobuf::reflect::rt::v2::make_vec_simpler_accessor::<_, _>(
             "resources",
@@ -5169,6 +5171,11 @@ impl CommitBatchResponse {
             "error",
             |m: &CommitBatchResponse| { &m.error },
             |m: &mut CommitBatchResponse| { &mut m.error },
+        ));
+        fields.push(::protobuf::reflect::rt::v2::make_option_accessor::<_, _>(
+            "conflict_mutation_ordinal",
+            |m: &CommitBatchResponse| { &m.conflict_mutation_ordinal },
+            |m: &mut CommitBatchResponse| { &mut m.conflict_mutation_ordinal },
         ));
         ::protobuf::reflect::GeneratedMessageDescriptorData::new_2::<CommitBatchResponse>(
             "CommitBatchResponse",
@@ -5197,6 +5204,9 @@ impl ::protobuf::Message for CommitBatchResponse {
                 26 => {
                     ::protobuf::rt::read_singular_message_into_field(is, &mut self.error)?;
                 },
+                32 => {
+                    self.conflict_mutation_ordinal = ::std::option::Option::Some(is.read_uint32()?);
+                },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
                 },
@@ -5220,6 +5230,9 @@ impl ::protobuf::Message for CommitBatchResponse {
             let len = v.compute_size();
             my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
         }
+        if let Some(v) = self.conflict_mutation_ordinal {
+            my_size += ::protobuf::rt::uint32_size(4, v);
+        }
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
         my_size
@@ -5234,6 +5247,9 @@ impl ::protobuf::Message for CommitBatchResponse {
         }
         if let Some(v) = self.error.as_ref() {
             ::protobuf::rt::write_message_field_with_cached_size(3, v, os)?;
+        }
+        if let Some(v) = self.conflict_mutation_ordinal {
+            os.write_uint32(4, v)?;
         }
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
@@ -5255,6 +5271,7 @@ impl ::protobuf::Message for CommitBatchResponse {
         self.resources.clear();
         self.revision = 0;
         self.error.clear();
+        self.conflict_mutation_ordinal = ::std::option::Option::None;
         self.special_fields.clear();
     }
 
@@ -5263,6 +5280,7 @@ impl ::protobuf::Message for CommitBatchResponse {
             resources: ::std::vec::Vec::new(),
             revision: 0,
             error: ::protobuf::MessageField::none(),
+            conflict_mutation_ordinal: ::std::option::Option::None,
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance
@@ -7169,20 +7187,22 @@ static file_descriptor_proto_data: &'static [u8] = b"\
     econcileDispositionR\x0bdisposition\"\x7f\n\x12CommitBatchRequest\x120\n\
     \x04meta\x18\x01\x20\x01(\x0b2\x1c.d2b.resource.v3.RequestMetaR\x04meta\
     \x127\n\tmutations\x18\x02\x20\x03(\x0b2\x19.d2b.resource.v3.MutationR\t\
-    mutations\"\xad\x01\n\x13CommitBatchResponse\x12D\n\tresources\x18\x01\
+    mutations\"\x8c\x02\n\x13CommitBatchResponse\x12D\n\tresources\x18\x01\
     \x20\x03(\x0b2&.d2b.resource.v3.ResourceEnvelopeBytesR\tresources\x12\
     \x1a\n\x08revision\x18\x02\x20\x01(\x04R\x08revision\x124\n\x05error\x18\
-    \x03\x20\x01(\x0b2\x1e.d2b.resource.v3.ResourceErrorR\x05error\"\x80\x01\
-    \n\x11ResolveRefRequest\x120\n\x04meta\x18\x01\x20\x01(\x0b2\x1c.d2b.res\
-    ource.v3.RequestMetaR\x04meta\x129\n\x06target\x18\x02\x20\x01(\x0b2!.d2\
-    b.resource.v3.ResourceIdentityR\x06target\"\x89\x01\n\x12ResolveRefRespo\
-    nse\x12=\n\x08resource\x18\x01\x20\x01(\x0b2!.d2b.resource.v3.ResourceId\
-    entityR\x08resource\x124\n\x05error\x18\x02\x20\x01(\x0b2\x1e.d2b.resour\
-    ce.v3.ResourceErrorR\x05error\"m\n\x14InspectSchemaRequest\x120\n\x04met\
-    a\x18\x01\x20\x01(\x0b2\x1c.d2b.resource.v3.RequestMetaR\x04meta\x12#\n\
-    \rresource_type\x18\x02\x20\x01(\tR\x0cresourceType\"\x8d\x01\n\x15Inspe\
-    ctSchemaResponse\x12>\n\x06schema\x18\x01\x20\x01(\x0b2&.d2b.resource.v3\
-    .ResourceEnvelopeBytesR\x06schema\x124\n\x05error\x18\x02\x20\x01(\x0b2\
+    \x03\x20\x01(\x0b2\x1e.d2b.resource.v3.ResourceErrorR\x05error\x12?\n\
+    \x19conflict_mutation_ordinal\x18\x04\x20\x01(\rH\0R\x17conflictMutation\
+    Ordinal\x88\x01\x01B\x1c\n\x1a_conflict_mutation_ordinal\"\x80\x01\n\x11\
+    ResolveRefRequest\x120\n\x04meta\x18\x01\x20\x01(\x0b2\x1c.d2b.resource.\
+    v3.RequestMetaR\x04meta\x129\n\x06target\x18\x02\x20\x01(\x0b2!.d2b.reso\
+    urce.v3.ResourceIdentityR\x06target\"\x89\x01\n\x12ResolveRefResponse\
+    \x12=\n\x08resource\x18\x01\x20\x01(\x0b2!.d2b.resource.v3.ResourceIdent\
+    ityR\x08resource\x124\n\x05error\x18\x02\x20\x01(\x0b2\x1e.d2b.resource.\
+    v3.ResourceErrorR\x05error\"m\n\x14InspectSchemaRequest\x120\n\x04meta\
+    \x18\x01\x20\x01(\x0b2\x1c.d2b.resource.v3.RequestMetaR\x04meta\x12#\n\r\
+    resource_type\x18\x02\x20\x01(\tR\x0cresourceType\"\x8d\x01\n\x15Inspect\
+    SchemaResponse\x12>\n\x06schema\x18\x01\x20\x01(\x0b2&.d2b.resource.v3.R\
+    esourceEnvelopeBytesR\x06schema\x124\n\x05error\x18\x02\x20\x01(\x0b2\
     \x1e.d2b.resource.v3.ResourceErrorR\x05error\"\x96\x02\n\x0eUpgradeReque\
     st\x120\n\x04meta\x18\x01\x20\x01(\x0b2\x1c.d2b.resource.v3.RequestMetaR\
     \x04meta\x129\n\x06target\x18\x02\x20\x01(\x0b2!.d2b.resource.v3.Resourc\
