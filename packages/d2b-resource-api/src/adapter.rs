@@ -1,15 +1,19 @@
-//! Authenticated d2b-bus binding for resource clients and transports.
+//! Unregistered resource dispatch prepared for a future authenticated bus router.
+//!
+//! This workspace has no ComponentSession or d2b-bus implementation, so these
+//! generated services have no production registration path.
 
 use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
-use d2b_contracts::{resource_proto as wire, v3::AuthenticatedSubjectContext};
-use d2b_resource_store::ResourceStore;
+use d2b_contracts::resource_proto as wire;
 
 use crate::{
-    authz::{AuthorizationState, authenticated_relay_hop},
-    client::ResourceClient,
+    ResourceStore,
+    authz::authenticated_relay_hop,
+    client::UnregisteredResourceClient,
     generated::d2b_resource_v3_ttrpc,
+    identity::AuthenticatedSubjectContext,
     service::{ResourceService, TrustedRequest, UpgradeDispatcher},
 };
 
@@ -25,39 +29,47 @@ impl core::fmt::Display for AdapterBindingError {
 
 impl std::error::Error for AdapterBindingError {}
 
-/// Session-scoped adapter created only after d2b-bus authentication succeeds.
-#[derive(Debug)]
-pub struct AuthenticatedBusAdapter<S, U> {
-    service: Arc<ResourceService<S, U>>,
-    subject: Arc<AuthenticatedSubjectContext>,
-    state: AuthorizationState,
+/// Current production reachability of the resource service.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResourceApiReachability {
+    AwaitingAuthenticatedComponentSessionRouter,
 }
 
-impl<S, U> AuthenticatedBusAdapter<S, U>
+pub const RESOURCE_API_REACHABILITY: ResourceApiReachability =
+    ResourceApiReachability::AwaitingAuthenticatedComponentSessionRouter;
+
+/// Session-scoped dispatcher that is intentionally not registered on a server.
+pub struct UnregisteredBusAdapter<S, U> {
+    service: Arc<ResourceService<S, U>>,
+    session: AuthenticatedSubjectContext,
+}
+
+impl<S, U> core::fmt::Debug for UnregisteredBusAdapter<S, U> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("UnregisteredBusAdapter(<redacted>)")
+    }
+}
+
+impl<S, U> UnregisteredBusAdapter<S, U>
 where
     S: ResourceStore,
     U: UpgradeDispatcher,
 {
     /// Seal authenticated identity and policy state to one ComponentSession.
-    pub fn bind_authenticated_session(
+    pub fn bind_unregistered_session(
         service: Arc<ResourceService<S, U>>,
-        subject: Arc<AuthenticatedSubjectContext>,
-        state: AuthorizationState,
+        session: AuthenticatedSubjectContext,
     ) -> Result<Self, AdapterBindingError> {
-        authenticated_relay_hop(&subject).map_err(|_| AdapterBindingError)?;
-        Ok(Self {
-            service,
-            subject,
-            state,
-        })
+        authenticated_relay_hop(session.claims()).map_err(|_| AdapterBindingError)?;
+        Ok(Self { service, session })
     }
 
-    /// Return an in-process client bound to the same authenticated session.
-    pub fn client(&self) -> ResourceClient<S, U> {
-        ResourceClient::from_authenticated_bus(
+    /// Return an explicitly unregistered in-process contract client.
+    pub fn unregistered_client(&self) -> UnregisteredResourceClient<S, U> {
+        UnregisteredResourceClient::from_session_capability(
             Arc::clone(&self.service),
-            Arc::clone(&self.subject),
-            self.state.clone(),
+            Arc::clone(self.session.claims()),
+            self.session.authorization_state().clone(),
         )
     }
 
@@ -66,27 +78,29 @@ where
     }
 
     pub(crate) fn trusted<T>(&self, request: T) -> TrustedRequest<T> {
-        TrustedRequest::from_authenticated_bus(
-            Arc::clone(&self.subject),
-            self.state.clone(),
+        TrustedRequest::from_session_capability(
+            Arc::clone(self.session.claims()),
+            self.session.authorization_state().clone(),
             request,
         )
     }
 }
 
-impl<S, U> AuthenticatedBusAdapter<S, U>
+impl<S, U> UnregisteredBusAdapter<S, U>
 where
     S: ResourceStore + 'static,
     U: UpgradeDispatcher + 'static,
 {
-    /// Register all resource methods on one authenticated ttrpc service.
-    pub fn register_ttrpc(self: Arc<Self>) -> HashMap<String, ttrpc::r#async::Service> {
+    /// Build the generated service map without registering it on a bus server.
+    pub fn unregistered_ttrpc_services(
+        self: Arc<Self>,
+    ) -> HashMap<String, ttrpc::r#async::Service> {
         d2b_resource_v3_ttrpc::create_resource_service(self)
     }
 }
 
 #[async_trait]
-impl<S, U> d2b_resource_v3_ttrpc::ResourceService for AuthenticatedBusAdapter<S, U>
+impl<S, U> d2b_resource_v3_ttrpc::ResourceService for UnregisteredBusAdapter<S, U>
 where
     S: ResourceStore + 'static,
     U: UpgradeDispatcher + 'static,
@@ -205,27 +219,29 @@ mod tests {
     use std::{collections::BTreeSet, sync::Mutex};
 
     use d2b_contracts::v3::{
-        BindingDigest, CanonicalJsonValue, ConfigurationGeneration, ControllerGeneration,
-        EvidenceClass, Locality, RESOURCE_ENVELOPE_DOMAIN_TAG, ReconnectGeneration,
-        ResourceEnvelope, ResourceGeneration, ResourceName, ResourceRef, ResourceTypeName,
-        ResourceUid, SchemaFingerprint, ServiceName, SessionBinding, SessionPurpose,
-        TranscriptHash, TransportBinding, ZoneId, ZoneRevision, canonical_digest,
+        AuthenticatedSubjectContext as SessionClaims, BindingDigest, CanonicalJsonValue,
+        ConfigurationGeneration, ControllerGeneration, EvidenceClass, Locality,
+        RESOURCE_ENVELOPE_DOMAIN_TAG, ReconnectGeneration, ResourceEnvelope, ResourceGeneration,
+        ResourceName, ResourceRef, ResourceTypeName, ResourceUid, SchemaFingerprint, ServiceName,
+        SessionBinding, SessionPurpose, TranscriptHash, TransportBinding, ZoneId, ZoneRevision,
+        canonical_digest,
     };
     use d2b_resource_store::{
-        AdmissionIssuer, AdmissionVerifier, AdmittedVerb, PolicySnapshot, ResourceMutationKind,
-        ResourceStoreBackend, StoreCommitResult, StoreError, StoreGetRequest,
-        StoreInspectSchemaRequest, StoreListRequest, StoreListResult, StoreResolveRequest,
-        StoreResolvedIdentity, StoreWatchReceipt, StoreWatchRequest, StoredResource, StoredSchema,
-        VerifiedMutation, admission_pair,
+        AdmittedVerb, PolicySnapshot, ResourceMutationKind, StoreCommitResult, StoreError,
+        StoreGetRequest, StoreInspectSchemaRequest, StoreListRequest, StoreListResult,
+        StoreResolveRequest, StoreResolvedIdentity, StoreWatchReceipt, StoreWatchRequest,
+        StoredResource, StoredSchema,
     };
     use protobuf::{EnumOrUnknown, MessageField};
 
     use crate::authz::{
-        ApiCatalog, ApiMethod, BindingScope, BootstrapPhase, BoundSubject, CompiledRole,
-        CompiledRoleBinding, NativeAuthorizer, PolicyRule, PolicySet, RelayGrantAuthority,
-        ResourceVerb,
+        ApiCatalog, ApiMethod, AuthorizationState, BindingScope, BootstrapPhase, BoundSubject,
+        CompiledRole, CompiledRoleBinding, NativeAuthorizer, PolicyRule, PolicySet,
+        RelayGrantAuthority, ResourceVerb,
     };
+    use crate::identity::issue_test_subject;
     use crate::service::{AuthorizedUpgrade, UpgradeResult};
+    use crate::{AdmissionVerifier, ResourceStoreBackend, VerifiedMutation};
 
     const GOLDEN_HOST: &[u8] = br#"{"apiVersion":"resources.d2bus.org/v3","metadata":{"configurationGeneration":7,"createdAt":"2026-07-22T00:00:00.000Z","deletionRequestedAt":null,"finalizers":[],"generation":1,"managedBy":"configuration","name":"host-system","ownerRef":null,"revision":1,"uid":"123e4567-e89b-42d3-a456-426614174000","updatedAt":"2026-07-22T00:00:00.000Z","zone":"dev"},"spec":{"providerRef":"Provider/system-core","updatePolicy":{"disruptive":"manual","nonDisruptive":"automatic"}},"status":{"completedAt":null,"conditions":[],"lastReconciledAt":null,"observedGeneration":0,"outcome":null,"phase":"Pending","resource":{},"startedAt":null,"update":{"dependencies":{"count":0,"refs":[]},"disruption":"None","lastAssessedAt":null,"observedGeneration":0,"operationId":null,"owned":{"count":0,"refs":[]},"preserveState":true,"reasons":[],"state":"Unknown","targetGeneration":1}},"type":"Host"}"#;
 
@@ -235,9 +251,12 @@ mod tests {
     }
 
     impl UnreachableStore {
-        fn paired() -> (Arc<Self>, AdmissionIssuer) {
-            let (issuer, admission_verifier) = admission_pair();
-            (Arc::new(Self { admission_verifier }), issuer)
+        fn paired(
+            catalog: ApiCatalog,
+            policy: Option<PolicySet>,
+        ) -> (Arc<Self>, Arc<NativeAuthorizer>) {
+            let (authorizer, admission_verifier) = NativeAuthorizer::new(catalog, policy).unwrap();
+            (Arc::new(Self { admission_verifier }), Arc::new(authorizer))
         }
     }
 
@@ -327,15 +346,14 @@ mod tests {
     }
 
     impl RecordingStore {
-        fn paired(calls: Arc<Mutex<Vec<DispatchObservation>>>) -> (Arc<Self>, AdmissionIssuer) {
-            let (issuer, admission_verifier) = admission_pair();
-            (
-                Arc::new(Self {
-                    admission_verifier,
-                    calls,
-                }),
-                issuer,
-            )
+        fn new(
+            calls: Arc<Mutex<Vec<DispatchObservation>>>,
+            admission_verifier: AdmissionVerifier,
+        ) -> Arc<Self> {
+            Arc::new(Self {
+                admission_verifier,
+                calls,
+            })
         }
 
         fn record(&self, observation: DispatchObservation) {
@@ -536,10 +554,18 @@ mod tests {
         }
     }
 
-    fn subject(locality: Locality, evidence: EvidenceClass) -> Arc<AuthenticatedSubjectContext> {
+    fn subject(locality: Locality, evidence: EvidenceClass) -> Arc<SessionClaims> {
+        subject_named(locality, evidence, "alice")
+    }
+
+    fn subject_named(
+        locality: Locality,
+        evidence: EvidenceClass,
+        name: &str,
+    ) -> Arc<SessionClaims> {
         Arc::new(
-            AuthenticatedSubjectContext::new(
-                ResourceRef::parse("User/alice").unwrap(),
+            SessionClaims::new(
+                ResourceRef::parse(&format!("User/{name}")).unwrap(),
                 ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
                 ResourceRef::parse("Zone/dev").unwrap(),
                 evidence,
@@ -574,29 +600,24 @@ mod tests {
     }
 
     fn denied_adapter()
-    -> Arc<AuthenticatedBusAdapter<UnreachableStore, crate::service::UnavailableUpgradeDispatcher>>
+    -> Arc<UnregisteredBusAdapter<UnreachableStore, crate::service::UnavailableUpgradeDispatcher>>
     {
-        let (store, issuer) = UnreachableStore::paired();
-        let service = Arc::new(ResourceService::new(
-            store,
-            Arc::new(NativeAuthorizer::new(ApiCatalog::standard(), None, issuer).unwrap()),
-        ));
+        let (store, authorizer) = UnreachableStore::paired(ApiCatalog::standard(), None);
+        let service = Arc::new(ResourceService::new(store, authorizer));
         Arc::new(
-            AuthenticatedBusAdapter::bind_authenticated_session(
+            UnregisteredBusAdapter::bind_unregistered_session(
                 service,
-                subject(Locality::Local, EvidenceClass::UnixPeer),
-                state(),
+                issue_test_subject(subject(Locality::Local, EvidenceClass::UnixPeer), state()),
             )
             .unwrap(),
         )
     }
 
     fn recording_adapter() -> (
-        Arc<AuthenticatedBusAdapter<RecordingStore, RecordingUpgrade>>,
+        Arc<UnregisteredBusAdapter<RecordingStore, RecordingUpgrade>>,
         Arc<Mutex<Vec<DispatchObservation>>>,
     ) {
         let calls = Arc::new(Mutex::new(Vec::new()));
-        let (store, issuer) = RecordingStore::paired(Arc::clone(&calls));
         let context = subject(Locality::Local, EvidenceClass::UnixPeer);
         let catalog = ApiCatalog::standard();
         let role = CompiledRole::new(
@@ -667,25 +688,25 @@ mod tests {
             RelayGrantAuthority::None,
         )
         .unwrap();
+        let policy = PolicySet::new(&catalog, 4, vec![role], vec![binding]).unwrap();
+        let (authorizer, admission_verifier) =
+            NativeAuthorizer::new(catalog, Some(policy)).unwrap();
+        let store = RecordingStore::new(Arc::clone(&calls), admission_verifier);
         let upgrade = Arc::new(RecordingUpgrade {
             calls: Arc::clone(&calls),
         });
         let service = Arc::new(ResourceService::with_upgrade(
             store,
-            Arc::new(
-                NativeAuthorizer::new(
-                    catalog.clone(),
-                    Some(PolicySet::new(&catalog, 4, vec![role], vec![binding]).unwrap()),
-                    issuer,
-                )
-                .unwrap(),
-            ),
+            Arc::new(authorizer),
             upgrade,
         ));
         (
             Arc::new(
-                AuthenticatedBusAdapter::bind_authenticated_session(service, context, state())
-                    .unwrap(),
+                UnregisteredBusAdapter::bind_unregistered_session(
+                    service,
+                    issue_test_subject(context, state()),
+                )
+                .unwrap(),
             ),
             calls,
         )
@@ -794,8 +815,12 @@ mod tests {
     }
 
     #[test]
-    fn registration_contains_the_exact_thirteen_method_surface() {
-        let services = denied_adapter().register_ttrpc();
+    fn unregistered_service_map_contains_the_exact_thirteen_method_surface() {
+        assert_eq!(
+            RESOURCE_API_REACHABILITY,
+            ResourceApiReachability::AwaitingAuthenticatedComponentSessionRouter
+        );
+        let services = denied_adapter().unregistered_ttrpc_services();
         assert_eq!(services.len(), 1);
         let methods = &services["d2b.resource.v3.ResourceService"].methods;
         let actual = methods.keys().cloned().collect::<BTreeSet<_>>();
@@ -820,8 +845,29 @@ mod tests {
         assert_eq!(actual, expected);
     }
 
+    #[test]
+    fn adapter_and_client_debug_redact_session_identity() {
+        const MARKER: &str = "sentinel-observability-marker";
+
+        let (store, authorizer) = UnreachableStore::paired(ApiCatalog::standard(), None);
+        let service = Arc::new(ResourceService::new(store, authorizer));
+        let adapter = UnregisteredBusAdapter::bind_unregistered_session(
+            service,
+            issue_test_subject(
+                subject_named(Locality::Local, EvidenceClass::UnixPeer, MARKER),
+                state(),
+            ),
+        )
+        .unwrap();
+        let adapter_debug = format!("{adapter:?}");
+        let client_debug = format!("{:?}", adapter.unregistered_client());
+
+        assert!(!adapter_debug.contains(MARKER), "{adapter_debug}");
+        assert!(!client_debug.contains(MARKER), "{client_debug}");
+    }
+
     #[tokio::test]
-    async fn thirteen_method_adapter_pins_dispatch_targets_counts_and_sentinels() {
+    async fn unregistered_thirteen_method_adapter_pins_dispatch_targets_counts_and_sentinels() {
         let ctx = context();
         let (adapter, calls) = recording_adapter();
 
@@ -1107,20 +1153,16 @@ mod tests {
 
     #[test]
     fn adapter_rejects_locality_evidence_mismatches() {
-        let (store, issuer) = UnreachableStore::paired();
-        let service = Arc::new(ResourceService::new(
-            store,
-            Arc::new(NativeAuthorizer::new(ApiCatalog::standard(), None, issuer).unwrap()),
-        ));
+        let (store, authorizer) = UnreachableStore::paired(ApiCatalog::standard(), None);
+        let service = Arc::new(ResourceService::new(store, authorizer));
         for (locality, evidence) in [
             (Locality::AdjacentZone, EvidenceClass::BootstrapIkpsk2),
             (Locality::Remote, EvidenceClass::EnrolledKk),
         ] {
             assert!(
-                AuthenticatedBusAdapter::bind_authenticated_session(
+                UnregisteredBusAdapter::bind_unregistered_session(
                     Arc::clone(&service),
-                    subject(locality, evidence),
-                    state(),
+                    issue_test_subject(subject(locality, evidence), state()),
                 )
                 .is_err()
             );

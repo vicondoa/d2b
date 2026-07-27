@@ -16,13 +16,14 @@ use d2b_contracts::{
     },
 };
 use d2b_resource_store::{
-    ExpectedRevision, ResourceMutationKind, ResourceStore, StoreCommitResult, StoreFilter,
-    StoreGetRequest, StoreInspectSchemaRequest, StoreListRequest, StoreMutation,
-    StoreOperationContext, StoreProjection, StoreResolveRequest, StoreWatchRequest, StoredResource,
+    ExpectedRevision, ResourceMutationKind, StoreCommitResult, StoreFilter, StoreGetRequest,
+    StoreInspectSchemaRequest, StoreListRequest, StoreMutation, StoreOperationContext,
+    StoreProjection, StoreResolveRequest, StoreWatchRequest, StoredResource,
 };
 use protobuf::{Message, MessageField};
 
 use crate::{
+    ResourceStore,
     authz::{
         ApiMethod, AuthorizationRequest, AuthorizationState, AuthorizationTarget, NativeAuthorizer,
         ResourceVerb,
@@ -40,7 +41,7 @@ pub struct TrustedRequest<T> {
 
 impl<T> TrustedRequest<T> {
     /// Bind a decoded request to authenticated session and live policy state.
-    pub(crate) fn from_authenticated_bus(
+    pub(crate) fn from_session_capability(
         subject: Arc<AuthenticatedSubjectContext>,
         authorization_state: AuthorizationState,
         request: T,
@@ -72,7 +73,7 @@ pub trait UpgradeDispatcher: Send + Sync {
 }
 
 /// Authorized upgrade request passed to the owning controller.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct AuthorizedUpgrade {
     pub operation: StoreOperationContext,
     pub zone: ZoneId,
@@ -82,6 +83,19 @@ pub struct AuthorizedUpgrade {
     pub expected_revision: ZoneRevision,
 }
 
+impl core::fmt::Debug for AuthorizedUpgrade {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("AuthorizedUpgrade")
+            .field("action", &self.action)
+            .field("recursive", &self.recursive)
+            .field("operation", &"<redacted>")
+            .field("zone", &"<redacted>")
+            .field("target", &"<redacted>")
+            .field("expected_revision", &"<redacted>")
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpgradeAction {
     Assess,
@@ -89,11 +103,21 @@ pub enum UpgradeAction {
     Execute,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct UpgradeResult {
     pub resource: StoredResource,
     pub plan: Vec<d2b_resource_store::StoreResolvedIdentity>,
     pub revision: ZoneRevision,
+}
+
+impl core::fmt::Debug for UpgradeResult {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("UpgradeResult")
+            .field("resource", &"<redacted>")
+            .field("plan_length", &self.plan.len())
+            .field("revision", &"<redacted>")
+            .finish()
+    }
 }
 
 /// Default until the controller dispatch slice lands.
@@ -110,11 +134,16 @@ impl UpgradeDispatcher for UnavailableUpgradeDispatcher {
 }
 
 /// Resource API over one concrete store and one native authorization engine.
-#[derive(Debug)]
 pub struct ResourceService<S, U = UnavailableUpgradeDispatcher> {
     store: Arc<S>,
     authorizer: Arc<NativeAuthorizer>,
     upgrade: Arc<U>,
+}
+
+impl<S, U> core::fmt::Debug for ResourceService<S, U> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("ResourceService(<redacted>)")
+    }
 }
 
 impl<S> ResourceService<S, UnavailableUpgradeDispatcher> {
@@ -999,24 +1028,50 @@ impl<T> TrustedRequest<T> {
     }
 }
 
-#[derive(Debug)]
 struct ParsedIdentity {
     zone: ZoneId,
     resource_ref: ResourceRef,
     uid: Option<ResourceUid>,
 }
 
-#[derive(Debug)]
 struct ParsedMutation {
     store: StoreMutation,
 }
 
-#[derive(Debug)]
 struct ParsedMutationRoute {
     identity: ParsedIdentity,
     owner: Option<ParsedIdentity>,
     kind: ResourceMutationKind,
     authorizations: Vec<AuthorizationTarget>,
+}
+
+impl core::fmt::Debug for ParsedIdentity {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ParsedIdentity")
+            .field("zone", &"<redacted>")
+            .field("resource_ref", &"<redacted>")
+            .field("has_uid", &self.uid.is_some())
+            .finish()
+    }
+}
+
+impl core::fmt::Debug for ParsedMutation {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ParsedMutation")
+            .field("kind", &self.store.kind)
+            .finish()
+    }
+}
+
+impl core::fmt::Debug for ParsedMutationRoute {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ParsedMutationRoute")
+            .field("identity", &self.identity)
+            .field("has_owner", &self.owner.is_some())
+            .field("kind", &self.kind)
+            .field("authorization_count", &self.authorizations.len())
+            .finish()
+    }
 }
 
 fn parse_identity(value: Option<&wire::ResourceIdentity>) -> Result<ParsedIdentity, ResourceError> {
@@ -1689,7 +1744,7 @@ mod tests {
     use std::{
         collections::BTreeMap,
         sync::{
-            Mutex,
+            Mutex, OnceLock,
             atomic::{AtomicU64, AtomicUsize, Ordering},
         },
     };
@@ -1700,9 +1755,8 @@ mod tests {
         SessionPurpose, TranscriptHash, TransportBinding,
     };
     use d2b_resource_store::{
-        AdmissionIssuer, AdmissionVerifier, MutationOrdinal, ResourceStoreBackend, StoreError,
-        StoreErrorKind, StoreListResult, StoreResolvedIdentity, StoreWatchReceipt, StoredSchema,
-        VerifiedMutation, admission_pair,
+        MutationOrdinal, StoreError, StoreErrorKind, StoreListResult, StoreResolvedIdentity,
+        StoreWatchReceipt, StoredSchema,
     };
     use protobuf::EnumOrUnknown;
 
@@ -1710,6 +1764,7 @@ mod tests {
         ApiCatalog, BindingScope, BoundSubject, CompiledRole, CompiledRoleBinding, PolicyRule,
         PolicySet, RelayGrantAuthority,
     };
+    use crate::{AdmissionVerifier, ResourceStoreBackend, VerifiedMutation};
 
     const GOLDEN_HOST: &[u8] = br#"{"apiVersion":"resources.d2bus.org/v3","metadata":{"configurationGeneration":7,"createdAt":"2026-07-22T00:00:00.000Z","deletionRequestedAt":null,"finalizers":[],"generation":1,"managedBy":"configuration","name":"host-system","ownerRef":null,"revision":1,"uid":"123e4567-e89b-42d3-a456-426614174000","updatedAt":"2026-07-22T00:00:00.000Z","zone":"dev"},"spec":{"providerRef":"Provider/system-core","updatePolicy":{"disruptive":"manual","nonDisruptive":"automatic"}},"status":{"completedAt":null,"conditions":[],"lastReconciledAt":null,"observedGeneration":0,"outcome":null,"phase":"Pending","resource":{},"startedAt":null,"update":{"dependencies":{"count":0,"refs":[]},"disruption":"None","lastAssessedAt":null,"observedGeneration":0,"operationId":null,"owned":{"count":0,"refs":[]},"preserveState":true,"reasons":[],"state":"Unknown","targetGeneration":1}},"type":"Host"}"#;
 
@@ -1721,6 +1776,7 @@ mod tests {
 
     #[derive(Debug)]
     struct FakeStore {
+        debug_marker: &'static str,
         mode: Mutex<CommitMode>,
         commits: AtomicUsize,
         mutation_count: AtomicUsize,
@@ -1731,14 +1787,13 @@ mod tests {
         last_resource_uid: Mutex<Option<ResourceUid>>,
         last_payload_digest: Mutex<Option<String>>,
         uid_index: Mutex<BTreeMap<ResourceUid, ResourceRef>>,
-        admission_issuer: AdmissionIssuer,
-        admission_verifier: AdmissionVerifier,
+        admission_verifier: OnceLock<AdmissionVerifier>,
     }
 
     impl FakeStore {
         fn new(mode: CommitMode) -> Self {
-            let (admission_issuer, admission_verifier) = admission_pair();
             Self {
+                debug_marker: "",
                 mode: Mutex::new(mode),
                 commits: AtomicUsize::new(0),
                 mutation_count: AtomicUsize::new(0),
@@ -1749,8 +1804,14 @@ mod tests {
                 last_resource_uid: Mutex::new(None),
                 last_payload_digest: Mutex::new(None),
                 uid_index: Mutex::new(BTreeMap::new()),
-                admission_issuer,
-                admission_verifier,
+                admission_verifier: OnceLock::new(),
+            }
+        }
+
+        fn with_debug_marker(mode: CommitMode, debug_marker: &'static str) -> Self {
+            Self {
+                debug_marker,
+                ..Self::new(mode)
             }
         }
 
@@ -1767,7 +1828,9 @@ mod tests {
 
     impl ResourceStoreBackend for FakeStore {
         fn admission_verifier(&self) -> &AdmissionVerifier {
-            &self.admission_verifier
+            self.admission_verifier
+                .get()
+                .expect("test authorizer installs the paired verifier")
         }
 
         async fn get(&self, _request: StoreGetRequest) -> Result<StoredResource, StoreError> {
@@ -1807,12 +1870,16 @@ mod tests {
             &self,
             mutation: VerifiedMutation,
         ) -> Result<StoreCommitResult, StoreError> {
-            let mutations = mutation.mutations(&self.admission_verifier)?;
+            let verifier = self
+                .admission_verifier
+                .get()
+                .expect("test authorizer installs the paired verifier");
+            let mutations = mutation.mutations(verifier)?;
             self.commits.fetch_add(1, Ordering::SeqCst);
             self.mutation_count.store(mutations.len(), Ordering::SeqCst);
             self.configuration_revision.store(
                 mutation
-                    .policy_snapshot(&self.admission_verifier)?
+                    .policy_snapshot(verifier)?
                     .active_configuration_revision
                     .get(),
                 Ordering::SeqCst,
@@ -1931,14 +1998,16 @@ mod tests {
             RelayGrantAuthority::None,
         )
         .unwrap();
-        Arc::new(
-            NativeAuthorizer::new(
-                catalog.clone(),
-                Some(PolicySet::new(&catalog, 4, vec![role], vec![binding]).unwrap()),
-                store.admission_issuer.clone(),
-            )
-            .unwrap(),
+        let (authorizer, verifier) = NativeAuthorizer::new(
+            catalog.clone(),
+            Some(PolicySet::new(&catalog, 4, vec![role], vec![binding]).unwrap()),
         )
+        .unwrap();
+        store
+            .admission_verifier
+            .set(verifier)
+            .expect("one authorizer is paired with each test store");
+        Arc::new(authorizer)
     }
 
     fn authorizer_for_subresource(
@@ -1975,14 +2044,16 @@ mod tests {
             RelayGrantAuthority::None,
         )
         .unwrap();
-        Arc::new(
-            NativeAuthorizer::new(
-                catalog.clone(),
-                Some(PolicySet::new(&catalog, 4, vec![role], vec![binding]).unwrap()),
-                store.admission_issuer.clone(),
-            )
-            .unwrap(),
+        let (authorizer, verifier) = NativeAuthorizer::new(
+            catalog.clone(),
+            Some(PolicySet::new(&catalog, 4, vec![role], vec![binding]).unwrap()),
         )
+        .unwrap();
+        store
+            .admission_verifier
+            .set(verifier)
+            .expect("one authorizer is paired with each test store");
+        Arc::new(authorizer)
     }
 
     fn request_meta() -> MessageField<wire::RequestMeta> {
@@ -2063,7 +2134,7 @@ mod tests {
     }
 
     fn trusted<T>(request: T, controller_generation: Option<u64>) -> TrustedRequest<T> {
-        TrustedRequest::from_authenticated_bus(
+        TrustedRequest::from_session_capability(
             subject(controller_generation),
             state(controller_generation),
             request,
@@ -2247,7 +2318,7 @@ mod tests {
             value.wait_for_reconcile = true;
             value.reconcile_deadline_ms = 1;
             let trusted =
-                TrustedRequest::from_authenticated_bus(subject(None), authorization_state, ());
+                TrustedRequest::from_session_capability(subject(None), authorization_state, ());
             let route =
                 parse_mutation_route(&value, Some(ResourceMutationKind::Create), &trusted).unwrap();
 
@@ -2372,10 +2443,8 @@ mod tests {
     #[tokio::test]
     async fn finalizers_are_separate_and_batch_is_one_admitted_commit() {
         let store = Arc::new(FakeStore::new(CommitMode::Success));
-        let metadata_service = ResourceService::new(
-            Arc::clone(&store),
-            authorizer(&store, [ResourceVerb::UpdateMetadata]),
-        );
+        let authorizer = authorizer(&store, [ResourceVerb::UpdateMetadata, ResourceVerb::Delete]);
+        let metadata_service = ResourceService::new(Arc::clone(&store), Arc::clone(&authorizer));
         let mut request = wire::UpdateMetadataRequest::new();
         request.meta = request_meta();
         let mut value = mutation(wire::MutationKind::MUTATION_KIND_UPDATE_METADATA);
@@ -2390,10 +2459,7 @@ mod tests {
             wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_SCHEMA_INVALID
         );
 
-        let batch_service = ResourceService::new(
-            Arc::clone(&store),
-            authorizer(&store, [ResourceVerb::Delete]),
-        );
+        let batch_service = ResourceService::new(Arc::clone(&store), authorizer);
         let mut batch = wire::CommitBatchRequest::new();
         batch.meta = request_meta();
         batch.mutations = vec![
@@ -2482,14 +2548,15 @@ mod tests {
         );
         assert!(response.resources.is_empty());
 
-        *store.schema_response.lock().unwrap() = Some(StoredSchema {
+        let schema_store = Arc::new(FakeStore::new(CommitMode::Success));
+        *schema_store.schema_response.lock().unwrap() = Some(StoredSchema {
             resource_type: ResourceTypeName::parse("Host").unwrap(),
             canonical_json: vec![b'x'; MAX_RESPONSE_CANONICAL_BYTES],
             payload_digest: format!("sha256:{}", "1".repeat(64)),
         });
         let schema_service = ResourceService::new(
-            Arc::clone(&store),
-            authorizer_for_subresource(&store, ResourceVerb::Get, "schema"),
+            Arc::clone(&schema_store),
+            authorizer_for_subresource(&schema_store, ResourceVerb::Get, "schema"),
         );
         let mut request = wire::InspectSchemaRequest::new();
         request.meta = request_meta();
@@ -2551,5 +2618,86 @@ mod tests {
             Some(ControllerGeneration::new(11).unwrap())
         );
         let _: ResourceGeneration = ResourceGeneration::new(11).unwrap();
+    }
+
+    #[test]
+    fn service_debug_surfaces_redact_backend_and_resource_fields() {
+        const MARKER: &str = "sentinel-observability-marker";
+
+        let store = Arc::new(FakeStore::with_debug_marker(CommitMode::Success, MARKER));
+        assert_eq!(store.debug_marker, MARKER);
+        let service = ResourceService::new(Arc::clone(&store), authorizer(&store, []));
+        let upgrade = AuthorizedUpgrade {
+            operation: StoreOperationContext {
+                operation_id: MARKER.to_owned(),
+                idempotency_key: Some(MARKER.to_owned()),
+                correlation_id: MARKER.to_owned(),
+                trace_id: Some(MARKER.to_owned()),
+                deadline_ms: 1,
+            },
+            zone: ZoneId::parse(MARKER).unwrap(),
+            target: ResourceRef::parse(&format!("Host/{MARKER}")).unwrap(),
+            action: UpgradeAction::Plan,
+            recursive: true,
+            expected_revision: ZoneRevision::new(1),
+        };
+        let mut resource = stored_resource(MARKER.len());
+        resource.resource_ref = ResourceRef::parse(&format!("Host/{MARKER}")).unwrap();
+        resource.zone = ZoneId::parse(MARKER).unwrap();
+        resource.canonical_json = MARKER.as_bytes().to_vec();
+        resource.payload_digest = MARKER.to_owned();
+        let result = UpgradeResult {
+            resource,
+            plan: Vec::new(),
+            revision: ZoneRevision::new(1),
+        };
+        let parsed_identity = ParsedIdentity {
+            zone: ZoneId::parse(MARKER).unwrap(),
+            resource_ref: ResourceRef::parse(&format!("Host/{MARKER}")).unwrap(),
+            uid: None,
+        };
+        let protected_mutation = StoreMutation {
+            kind: ResourceMutationKind::UpdateSpec,
+            zone: ZoneId::parse(MARKER).unwrap(),
+            target: ResourceRef::parse(&format!("Host/{MARKER}")).unwrap(),
+            expected: ExpectedRevision::Exact(ZoneRevision::new(1)),
+            expected_uid: None,
+            owner: Some(ResourceRef::parse(&format!("Process/{MARKER}")).unwrap()),
+            canonical_resource: Some(MARKER.as_bytes().to_vec()),
+            add_finalizers: Vec::new(),
+            remove_finalizers: Vec::new(),
+            wait_for_reconcile: false,
+            reconcile_deadline_ms: None,
+        };
+        let parsed_mutation = ParsedMutation {
+            store: protected_mutation,
+        };
+        let parsed_route = ParsedMutationRoute {
+            identity: ParsedIdentity {
+                zone: ZoneId::parse(MARKER).unwrap(),
+                resource_ref: ResourceRef::parse(&format!("Host/{MARKER}")).unwrap(),
+                uid: None,
+            },
+            owner: None,
+            kind: ResourceMutationKind::UpdateSpec,
+            authorizations: vec![AuthorizationTarget {
+                resource_type: ResourceTypeName::parse("Host").unwrap(),
+                resource_name: Some(ResourceName::parse(MARKER).unwrap()),
+                verb: ResourceVerb::UpdateSpec,
+                subresource: Some(MARKER.to_owned()),
+                execution_ref: Some(ResourceRef::parse(&format!("Process/{MARKER}")).unwrap()),
+            }],
+        };
+
+        for rendered in [
+            format!("{service:?}"),
+            format!("{upgrade:?}"),
+            format!("{result:?}"),
+            format!("{parsed_identity:?}"),
+            format!("{parsed_mutation:?}"),
+            format!("{parsed_route:?}"),
+        ] {
+            assert!(!rendered.contains(MARKER), "{rendered}");
+        }
     }
 }

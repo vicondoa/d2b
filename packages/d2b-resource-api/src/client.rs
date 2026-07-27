@@ -1,29 +1,34 @@
-//! In-process async client used behind an authenticated d2b-bus binding.
+//! In-process contract client awaiting authenticated d2b-bus routing.
 
 use std::sync::Arc;
 
 use d2b_contracts::{resource_proto as wire, v3::AuthenticatedSubjectContext};
-use d2b_resource_store::ResourceStore;
 
 use crate::{
+    ResourceStore,
     authz::AuthorizationState,
     service::{ResourceService, TrustedRequest, UpgradeDispatcher},
 };
 
-/// Resource client whose identity is fixed by its ComponentSession.
-#[derive(Debug)]
-pub struct ResourceClient<S, U> {
+/// Unregistered resource client whose identity is fixed by a session capability.
+pub struct UnregisteredResourceClient<S, U> {
     service: Arc<ResourceService<S, U>>,
     subject: Arc<AuthenticatedSubjectContext>,
     state: AuthorizationState,
 }
 
-impl<S, U> ResourceClient<S, U>
+impl<S, U> core::fmt::Debug for UnregisteredResourceClient<S, U> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("UnregisteredResourceClient(<redacted>)")
+    }
+}
+
+impl<S, U> UnregisteredResourceClient<S, U>
 where
     S: ResourceStore,
     U: UpgradeDispatcher,
 {
-    pub(crate) fn from_authenticated_bus(
+    pub(crate) fn from_session_capability(
         service: Arc<ResourceService<S, U>>,
         subject: Arc<AuthenticatedSubjectContext>,
         state: AuthorizationState,
@@ -103,7 +108,7 @@ where
     }
 
     fn trusted<T>(&self, request: T) -> TrustedRequest<T> {
-        TrustedRequest::from_authenticated_bus(
+        TrustedRequest::from_session_capability(
             Arc::clone(&self.subject),
             self.state.clone(),
             request,
