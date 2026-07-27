@@ -113,11 +113,17 @@ exec "$rustc" "$@"
         "private_fields",
         &[
             "error[E0616]",
-            "field `authority` of struct `AdmissionVerifier` is private",
-            "field `authority` of struct `StoreIdentity` is private",
             "field `mutations` of struct `AdmittedMutation` is private",
             "field `claims` of struct `AuthenticatedSubjectContext` is private",
             "field `subject` of struct `TrustedRequest` is private",
+        ],
+    );
+    harness.check_rejected(
+        "shared_store_tokens",
+        &[
+            "error[E0432]",
+            "no `AdmissionVerifier` in the root",
+            "no `StoreIdentity` in the root",
         ],
     );
     assert!(

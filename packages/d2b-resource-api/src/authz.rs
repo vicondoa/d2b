@@ -2,7 +2,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
+    sync::{Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
 
 use d2b_contracts::v3::identity::STANDARD_RESOURCE_TYPES;
@@ -20,9 +20,10 @@ use d2b_resource_store::{
 use sha2::{Digest, Sha256};
 
 use crate::admission::{
-    AdmissionError, AdmissionIssuer, AdmissionPermit, AdmissionVerifier, AdmittedMutation,
-    StoreIdentity, admission_pair,
+    AdmissionError, AdmissionIssuer, AdmissionPermit, AdmittedMutation, StoreAdmissionBinding,
+    admission_pair,
 };
+use crate::store::StoreBindingError;
 
 const POSITIVE_CACHE_ENTRIES: usize = 4096;
 const POSITIVE_CACHE_TICKS: u64 = 30;
@@ -631,6 +632,7 @@ pub struct NativeAuthorizer {
     policy: RwLock<Option<Arc<PolicySet>>>,
     cache: PositiveDecisionCache,
     admission: AdmissionIssuer,
+    store_binding: Mutex<Option<StoreAdmissionBinding>>,
 }
 
 impl core::fmt::Debug for NativeAuthorizer {
@@ -640,20 +642,29 @@ impl core::fmt::Debug for NativeAuthorizer {
 }
 
 impl NativeAuthorizer {
-    /// Build the evaluator and the verifier transferred to its store backend.
+    /// Build an evaluator carrying one single-owner store binding.
     pub fn new(
         catalog: ApiCatalog,
         policy: Option<PolicySet>,
-    ) -> Result<(Self, AdmissionVerifier, StoreIdentity), AuthorizationPolicyError> {
-        let (admission, verifier, store_identity) = admission_pair();
-        let authorizer = Self::from_issuer(catalog, policy, admission)?;
-        Ok((authorizer, verifier, store_identity))
+    ) -> Result<Self, AuthorizationPolicyError> {
+        let (admission, store_binding) = admission_pair();
+        Self::from_issuer_with_binding(catalog, policy, admission, Some(store_binding))
     }
 
+    #[cfg(test)]
     fn from_issuer(
         catalog: ApiCatalog,
         policy: Option<PolicySet>,
         admission: AdmissionIssuer,
+    ) -> Result<Self, AuthorizationPolicyError> {
+        Self::from_issuer_with_binding(catalog, policy, admission, None)
+    }
+
+    fn from_issuer_with_binding(
+        catalog: ApiCatalog,
+        policy: Option<PolicySet>,
+        admission: AdmissionIssuer,
+        store_binding: Option<StoreAdmissionBinding>,
     ) -> Result<Self, AuthorizationPolicyError> {
         if policy
             .as_ref()
@@ -666,7 +677,16 @@ impl NativeAuthorizer {
             policy: RwLock::new(policy.map(Arc::new)),
             cache: PositiveDecisionCache::new(POSITIVE_CACHE_ENTRIES),
             admission,
+            store_binding: Mutex::new(store_binding),
         })
+    }
+
+    pub(super) fn take_store_binding(&self) -> Result<StoreAdmissionBinding, StoreBindingError> {
+        self.store_binding
+            .lock()
+            .map_err(|_| StoreBindingError)?
+            .take()
+            .ok_or(StoreBindingError)
     }
 
     pub fn replace_policy(
@@ -2254,6 +2274,7 @@ mod tests {
 
     #[test]
     fn authorization_debug_surfaces_redact_policy_and_identity_fields() {
+        const POLICY_REVISION_SENTINEL: u64 = 4_294_967_291;
         const ZONE_SENTINEL: &str = "authz-zone-sentinel";
         const NAME_SENTINEL: &str = "authz-name-sentinel";
         const REF_SENTINEL: &str = "authz-ref-sentinel";
@@ -2316,8 +2337,14 @@ mod tests {
             RelayGrantAuthority::None,
         )
         .unwrap();
-        let policy =
-            PolicySet::new(&catalog, 9, vec![role.clone()], vec![binding.clone()]).unwrap();
+        let policy = PolicySet::new(
+            &catalog,
+            POLICY_REVISION_SENTINEL,
+            vec![role.clone()],
+            vec![binding.clone()],
+        )
+        .unwrap();
+        assert_eq!(policy.policy_revision, POLICY_REVISION_SENTINEL);
         let capabilities = PositiveCapabilities {
             resources: vec![target.clone()],
             session_verbs: BTreeSet::from([SessionVerb::Connect]),
@@ -2332,32 +2359,64 @@ mod tests {
             NativeAuthorizer::from_issuer(catalog.clone(), Some(policy.clone()), test_issuer())
                 .unwrap();
 
-        for rendered in [
-            format!("{catalog:?}"),
+        let catalog_debug = format!(
+            "ApiCatalog {{ resource_type_count: {} }}",
+            catalog.resource_types.len()
+        );
+        assert_eq!(format!("{catalog:?}"), catalog_debug);
+        assert_eq!(
             format!("{target:?}"),
+            "AuthorizationTarget { verb: Get, resource_type: \"<redacted>\", \
+             has_resource_name: true, has_subresource: true, has_execution_ref: true }"
+        );
+        assert_eq!(
             format!("{request:?}"),
+            "AuthorizationRequest { method: Get, zone: \"<redacted>\", target_count: 1 }"
+        );
+        assert_eq!(
             format!("{protected_state:?}"),
+            "AuthorizationState { snapshot: \"<redacted>\", \
+             zone_policy_revision: \"<redacted>\", \
+             bootstrap_phase: BootstrapPhase::Unprovisioned(<redacted>), \
+             now_tick: \"<redacted>\" }"
+        );
+        assert_eq!(
             format!("{:?}", protected_state.bootstrap_phase),
-            format!("{bound_subject:?}"),
-            format!("{scope:?}"),
+            "BootstrapPhase::Unprovisioned(<redacted>)"
+        );
+        assert_eq!(format!("{bound_subject:?}"), "BoundSubject(<redacted>)");
+        let scope_debug =
+            "BindingScope { zone_count: 1, resource_name_count: 1, execution_ref_count: 1 }";
+        assert_eq!(format!("{scope:?}"), scope_debug);
+        assert_eq!(
             format!("{rule:?}"),
+            "PolicyRule { resource_type_count: 1, resource_verb_count: 1, \
+             session_verb_count: 1, subresource_count: 1, resource_name_count: 1, \
+             zone_count: 1, execution_ref_count: 1 }"
+        );
+        assert_eq!(
             format!("{role:?}"),
+            "CompiledRole { role_ref: \"<redacted>\", rule_count: 1 }"
+        );
+        assert_eq!(
             format!("{binding:?}"),
+            format!(
+                "CompiledRoleBinding {{ role_ref: \"<redacted>\", subject_count: 1, \
+                 scope: {scope_debug}, relay_authority: None }}"
+            )
+        );
+        assert_eq!(
             format!("{policy:?}"),
+            format!(
+                "PolicySet {{ policy_revision: \"<redacted>\", catalog: {catalog_debug}, \
+                 role_count: 1, binding_count: 1 }}"
+            )
+        );
+        assert_eq!(
             format!("{capabilities:?}"),
-            format!("{grant:?}"),
-            format!("{authorizer:?}"),
-        ] {
-            for sentinel in [
-                ZONE_SENTINEL,
-                NAME_SENTINEL,
-                REF_SENTINEL,
-                UID_SENTINEL,
-                PAYLOAD_SENTINEL,
-                TYPE_SENTINEL,
-            ] {
-                assert!(!rendered.contains(sentinel), "{rendered}");
-            }
-        }
+            "PositiveCapabilities { resource_count: 1, session_verb_count: 1 }"
+        );
+        assert_eq!(format!("{grant:?}"), "AuthorizationGrant(<redacted>)");
+        assert_eq!(format!("{authorizer:?}"), "NativeAuthorizer(<redacted>)");
     }
 }

@@ -1,15 +1,5 @@
 use d2b_resource_api::service::TrustedRequest;
-use d2b_resource_api::{
-    AdmissionVerifier, AdmittedMutation, AuthenticatedSubjectContext, StoreIdentity,
-};
-
-fn verifier(value: &AdmissionVerifier) {
-    let _ = &value.authority;
-}
-
-fn store_identity(value: &StoreIdentity) {
-    let _ = &value.authority;
-}
+use d2b_resource_api::{AdmittedMutation, AuthenticatedSubjectContext};
 
 fn admission(value: &AdmittedMutation) {
     let _ = &value.mutations;

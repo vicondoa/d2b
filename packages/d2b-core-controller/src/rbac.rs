@@ -1,7 +1,7 @@
 //! Revision-bound positive authorization decision cache.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     sync::{Mutex, MutexGuard},
 };
 
@@ -67,15 +67,10 @@ impl core::fmt::Debug for PositiveDecisionCache {
             .entries
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let revision_sets = entries
-            .values()
-            .map(|entry| entry.revisions)
-            .collect::<BTreeSet<_>>();
 
         f.debug_struct("PositiveDecisionCache")
             .field("max_entries", &self.max_entries)
             .field("entry_count", &entries.len())
-            .field("revision_sets", &revision_sets)
             .field("is_poisoned", &is_poisoned)
             .finish()
     }
@@ -193,16 +188,10 @@ mod tests {
         let cache = PositiveDecisionCache::new(2);
         cache.insert_allow(key, revisions(11), 23, 1);
         let cache_debug = format!("{cache:?}");
-        for marker in [
-            SUBJECT_NAME_SENTINEL,
-            SUBJECT_UID_SENTINEL,
-            DIGEST_DEBUG_SENTINEL,
-        ] {
-            assert!(!cache_debug.contains(marker), "{cache_debug}");
-        }
-        assert!(cache_debug.contains("entry_count: 1"));
-        assert!(cache_debug.contains("policy_revision: 11"));
-        assert!(cache_debug.contains("is_poisoned: false"));
+        assert_eq!(
+            cache_debug,
+            "PositiveDecisionCache { max_entries: 2, entry_count: 1, is_poisoned: false }"
+        );
     }
 
     #[test]

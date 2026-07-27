@@ -5,7 +5,7 @@ use std::sync::Arc;
 use d2b_contracts::{resource_proto as wire, v3::AuthenticatedSubjectContext};
 
 use crate::{
-    ResourceStore,
+    ResourceStoreBackend,
     authz::AuthorizationState,
     service::{ResourceService, TrustedRequest, UpgradeDispatcher},
 };
@@ -25,7 +25,7 @@ impl<S, U> core::fmt::Debug for UnregisteredResourceClient<S, U> {
 
 impl<S, U> UnregisteredResourceClient<S, U>
 where
-    S: ResourceStore,
+    S: ResourceStoreBackend,
     U: UpgradeDispatcher,
 {
     pub(crate) fn from_session_capability(

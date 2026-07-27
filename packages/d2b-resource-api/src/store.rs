@@ -1,6 +1,6 @@
 //! Checked resource-store backend boundary.
 
-use std::future::Future;
+use std::{future::Future, sync::Arc};
 
 use d2b_resource_store::{
     StoreCommitResult, StoreError, StoreGetRequest, StoreInspectSchemaRequest, StoreListRequest,
@@ -8,13 +8,10 @@ use d2b_resource_store::{
     StoreWatchRequest, StoredResource, StoredSchema,
 };
 
-use crate::admission::{AdmissionVerifier, AdmittedMutation, StoreIdentity, VerifiedMutation};
+use crate::admission::{AdmittedMutation, StoreAdmissionBinding, VerifiedMutation};
 
 /// Backend seam reached only after instance-bound admission verification.
 pub trait ResourceStoreBackend: Send + Sync {
-    fn admission_verifier(&self) -> &AdmissionVerifier;
-    fn store_identity(&self) -> &StoreIdentity;
-
     fn get(
         &self,
         request: StoreGetRequest,
@@ -46,88 +43,73 @@ pub trait ResourceStoreBackend: Send + Sync {
     ) -> impl Future<Output = Result<StoreCommitResult, StoreError>> + Send;
 }
 
-mod sealed {
-    pub trait Sealed {}
+/// A native authorizer has already been bound to a store backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StoreBindingError;
 
-    impl<T: super::ResourceStoreBackend> Sealed for T {}
+impl core::fmt::Display for StoreBindingError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("native authorizer is already bound to a store backend")
+    }
 }
 
-/// Runtime-neutral store interface with a non-bypassable admission check.
-pub trait ResourceStore: sealed::Sealed + Send + Sync {
-    fn get(
-        &self,
-        request: StoreGetRequest,
-    ) -> impl Future<Output = Result<StoredResource, StoreError>> + Send;
+impl std::error::Error for StoreBindingError {}
 
-    fn list(
-        &self,
-        request: StoreListRequest,
-    ) -> impl Future<Output = Result<StoreListResult, StoreError>> + Send;
-
-    fn watch(
-        &self,
-        request: StoreWatchRequest,
-    ) -> impl Future<Output = Result<StoreWatchReceipt, StoreError>> + Send;
-
-    fn resolve_ref(
-        &self,
-        request: StoreResolveRequest,
-    ) -> impl Future<Output = Result<StoreResolvedIdentity, StoreError>> + Send;
-
-    fn inspect_schema(
-        &self,
-        request: StoreInspectSchemaRequest,
-    ) -> impl Future<Output = Result<StoredSchema, StoreError>> + Send;
-
-    fn commit(
-        &self,
-        mutation: AdmittedMutation,
-    ) -> impl Future<Output = Result<StoreCommitResult, StoreError>> + Send;
+pub(super) struct CheckedResourceStore<S> {
+    backend: Arc<S>,
+    admission: StoreAdmissionBinding,
 }
 
-impl<T: ResourceStoreBackend> ResourceStore for T {
-    fn get(
+impl<S> CheckedResourceStore<S> {
+    pub(super) const fn new(backend: Arc<S>, admission: StoreAdmissionBinding) -> Self {
+        Self { backend, admission }
+    }
+}
+
+impl<S> CheckedResourceStore<S>
+where
+    S: ResourceStoreBackend,
+{
+    pub(super) fn get(
         &self,
         request: StoreGetRequest,
     ) -> impl Future<Output = Result<StoredResource, StoreError>> + Send {
-        ResourceStoreBackend::get(self, request)
+        self.backend.get(request)
     }
 
-    fn list(
+    pub(super) fn list(
         &self,
         request: StoreListRequest,
     ) -> impl Future<Output = Result<StoreListResult, StoreError>> + Send {
-        ResourceStoreBackend::list(self, request)
+        self.backend.list(request)
     }
 
-    fn watch(
+    pub(super) fn watch(
         &self,
         request: StoreWatchRequest,
     ) -> impl Future<Output = Result<StoreWatchReceipt, StoreError>> + Send {
-        ResourceStoreBackend::watch(self, request)
+        self.backend.watch(request)
     }
 
-    fn resolve_ref(
+    pub(super) fn resolve_ref(
         &self,
         request: StoreResolveRequest,
     ) -> impl Future<Output = Result<StoreResolvedIdentity, StoreError>> + Send {
-        ResourceStoreBackend::resolve_ref(self, request)
+        self.backend.resolve_ref(request)
     }
 
-    fn inspect_schema(
+    pub(super) fn inspect_schema(
         &self,
         request: StoreInspectSchemaRequest,
     ) -> impl Future<Output = Result<StoredSchema, StoreError>> + Send {
-        ResourceStoreBackend::inspect_schema(self, request)
+        self.backend.inspect_schema(request)
     }
 
-    fn commit(
+    pub(super) fn commit(
         &self,
         mutation: AdmittedMutation,
     ) -> impl Future<Output = Result<StoreCommitResult, StoreError>> + Send {
-        let verified = self
-            .admission_verifier()
-            .verify(mutation, self.store_identity());
-        async move { ResourceStoreBackend::commit_verified(self, verified?).await }
+        let verified = self.admission.verify(mutation);
+        async move { self.backend.commit_verified(verified?).await }
     }
 }
