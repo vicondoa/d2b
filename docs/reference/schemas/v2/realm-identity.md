@@ -9,23 +9,23 @@ loading secrets or changing runtime trust behavior.
 
 ## Top-level fields
 
-- `schemaVersion` — schema version for this artifact.
-- `runtimeState` — closed runtime state enum. The value in this scope remains
+- `schemaVersion` - schema version for this artifact.
+- `runtimeState` - closed runtime state enum. The value in this scope remains
   `metadata-only`.
-- `realms` — enabled realm rows that declare at least one identity/key ref or
+- `realms` - enabled realm rows that declare at least one identity/key ref or
   fingerprint.
-- `invariants` — booleans asserting the artifact is metadata-only, contains no
+- `invariants` - booleans asserting the artifact is metadata-only, contains no
   secret material, and preserves current runtime behavior.
 
 ## Realm fields
 
-- `realm` — most-specific-first realm path labels.
-- `realmIdentityRef` and `realmIdentityFingerprint` — optional opaque locator
+- `realm` - most-specific-first realm path labels.
+- `realmIdentityRef` and `realmIdentityFingerprint` - optional opaque locator
   and SHA-256 fingerprint for the realm identity key.
-- `controllerCredentialRef` and `controllerCredentialFingerprint` — optional
+- `controllerCredentialRef` and `controllerCredentialFingerprint` - optional
   opaque locator and SHA-256 fingerprint for the controller-generation
   credential.
-- `trustBundleRef`, `enrollmentRef`, and `rotationPolicyRef` — optional
+- `trustBundleRef`, `enrollmentRef`, and `rotationPolicyRef` - optional
   bounded non-secret metadata refs.
 
 ## Contract notes

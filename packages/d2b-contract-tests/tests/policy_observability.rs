@@ -88,7 +88,7 @@ fn startup_tracing_avoids_host_path_fields() {
 // ===========================================================================
 #[test]
 fn loki_native_otel_resource_attributes() {
-    // Bounded allowlist + required identity keys — verbatim ports of the bash
+    // Bounded allowlist + required identity keys - verbatim ports of the bash
     // ALLOWED_RESOURCE_KEYS / REQUIRED_RESOURCE_KEYS arrays.
     let allowed_resource_keys: BTreeSet<&str> = [
         "deployment.environment",
@@ -574,7 +574,7 @@ fn wave_evidence_schema_cross_check() {
     let doc = read_repo_file(doc_rel);
     let schema = read_repo_file(schema_rel);
 
-    // Extract wave keys from the readinessWaveSpecs block — a faithful port of
+    // Extract wave keys from the readinessWaveSpecs block - a faithful port of
     // the bash awk parser: enter at `readinessWaveSpecs = {`, exit at a line of
     // exactly two leading spaces + `};`, and capture 4-space-indented
     // `<name> = {` rows in between.

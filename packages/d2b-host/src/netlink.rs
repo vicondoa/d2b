@@ -158,7 +158,7 @@ pub struct TapOwner {
     pub gid: u32,
 }
 
-/// Error type for netlink ops — wire-stable variant tags drive the
+/// Error type for netlink ops - wire-stable variant tags drive the
 /// audit `error_kind` field.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NetlinkError {
@@ -235,7 +235,7 @@ pub trait NetlinkBackend {
 /// Drives the IPv6-off 5-step ordered sequence over an arbitrary
 /// [`NetlinkBackend`]. Step 1 (NM unmanaged) is the broker's
 /// responsibility and is therefore represented here only as a
-/// precondition flag — the caller must have invoked the broker NM op
+/// precondition flag - the caller must have invoked the broker NM op
 /// before calling this function.
 pub fn ipv6_off_sequence<B: NetlinkBackend>(
     backend: &mut B,

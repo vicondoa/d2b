@@ -1,5 +1,5 @@
 {
-  "$comment": "W3fu1 H4 malicious fixture — two environments hash-derive to the SAME ifname suffix, which the emitter MUST reject at emit time with `ifname-collision`. host-json-drift-gate.sh asserts the schema rejects this input with the documented error code.",
+  "$comment": "W3fu1 H4 malicious fixture - two environments hash-derive to the SAME ifname suffix, which the emitter MUST reject at emit time with `ifname-collision`. host-json-drift-gate.sh asserts the schema rejects this input with the documented error code.",
   "schemaVersion": "v2",
   "bundleVersion": "0.4.0",
   "site": {
@@ -38,6 +38,6 @@
   "cloudHypervisorCapabilities": [],
   "_expectedRejection": {
     "code": "ifname-collision",
-    "reason": "environments[0].bridge == environments[1].bridge — emitter MUST refuse"
+    "reason": "environments[0].bridge == environments[1].bridge - emitter MUST refuse"
   }
 }

@@ -4,7 +4,7 @@
 | --- | --- |
 | Spec ID | `ADR-046-provider-audio-pipewire` |
 | Parent | ADR 0046 |
-| Status | Proposed |
+| Status | Accepted |
 | Version | 10 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
@@ -36,7 +36,7 @@ covers:
 - the guest frontend provisioning model (virtio-snd + in-guest PipeWire stack);
 - per-guestUser `GuestAudioAgent` Processes (libpipewire `AudioSet` service);
 - process principal model: dedicated worker principals are core Process
-  principals from the bounded pool — not runtime-created User resources;
+  principals from the bounded pool - not runtime-created User resources;
 - static components (controller, AudioMediator) created by core
   ProviderDeployment; the Provider controller reconciles AudioService and
   AudioBinding, while the AudioBinding handler creates only its owned Process and
@@ -119,7 +119,7 @@ explicitly stated at each design boundary.
 | `PipeWireHostController` (`d2bd/src/audio_host_controller.rs:85`) | `AudioMediator` user-session service; exposes `SetGrant`/`SetLevel` ComponentSession service; applies changes via libpipewire API | `implemented-and-reachable` |
 | `QemuAudioController` (`audio_host_controller.rs:227`) | removed; audio discovers enforcement capability via the `runtime-audio` dependency alias; no implementation-ID branch in `audio.d2bus.org.AudioBinding.spec` | `implemented-and-reachable` |
 | `WPCTL_PATH` / `PW_DUMP_PATH` env keys (`audio_host_controller.rs:103`) | superseded; AudioMediator uses libpipewire registry introspection and direct API calls; no wpctl binary or pw-dump subprocess | `implemented-and-reachable` |
-| `PIPEWIRE_RUNTIME_DIR` env key (`audio_host_controller.rs:105`) | not a Process spec field; AudioMediator receives a declared pre-opened PipeWire portal FD from the user supervisor/display portal — it does not open the socket from the ambient runtime environment | `implemented-and-reachable` |
+| `PIPEWIRE_RUNTIME_DIR` env key (`audio_host_controller.rs:105`) | not a Process spec field; AudioMediator receives a declared pre-opened PipeWire portal FD from the user supervisor/display portal - it does not open the socket from the ambient runtime environment | `implemented-and-reachable` |
 | `access(2)` credential posture check (`audio_host_controller.rs:134`) | replaced by AudioMediator readiness check; AudioMediator reports `ProviderSessionUnavailable` when the portal FD cannot be acquired from the user supervisor | `implemented-and-reachable` |
 | `ofd_lock` / `acquire_audio_state_lock` (`audio_dispatch.rs:73,125`) | superseded; `AudioBinding.spec` is durable per-Guest intent and AudioService owns backing authority; no state file is maintained; OFD lock is removed | `implemented-and-reachable` |
 | `write_audio_state_unlocked` atomic rename (`audio_dispatch.rs:221`) | superseded; no state file; grants are authoritative in `AudioBinding.spec` | `implemented-and-reachable` |
@@ -134,7 +134,7 @@ explicitly stated at each design boundary.
 | WirePlumber `client.conf.d/90-d2b` stream rules (`nixos-modules/components/audio/host.nix:252`) | retained as host Nix config; not a resource spec field | `implemented-and-reachable` |
 | WirePlumber `monitor.alsa.rules` (`nixos-modules/components/audio/guest.nix:197`) | retained as guest Nix config; not a resource spec field | `implemented-and-reachable` |
 | `services.pipewire.extraConfig.client."90-d2b"` (`host.nix:252`) | compiled host configuration owned by the `Provider/audio-pipewire` Nix module; not an AudioService/AudioBinding base field | `implemented-and-reachable` |
-| `d2b.site.audio.inputTargetNode` (`host.nix:253`) | `Provider/audio-pipewire.spec.config.captureAlias` — bounded named alias (`^[a-z][a-z0-9-]*$`) resolved privately by AudioMediator via libpipewire registry; not a PipeWire node ID or socket path | `generated-or-eval-contract` |
+| `d2b.site.audio.inputTargetNode` (`host.nix:253`) | `Provider/audio-pipewire.spec.config.captureAlias` - bounded named alias (`^[a-z][a-z0-9-]*$`) resolved privately by AudioMediator via libpipewire registry; not a PipeWire node ID or socket path | `generated-or-eval-contract` |
 | `vhost-device-sound v0.3.0` (`pkgs/vhost-device-sound/default.nix`) | `spec.artifactId` in `Provider/audio-pipewire` pointing to Nix artifact catalog entry | `implemented-and-reachable` |
 | `microvm.extraArgsScript` CH audio injection (`guest.nix:112`) | `Guest.spec.audioExtension` arguments derived from the runtime-audio capability reported by the Guest's Runtime Provider; values such as `virtio_id` and `queue_sizes` are not spec fields | `implemented-and-reachable` |
 | `/var/lib/d2b/vms/<vm>/state/audio-state.json` (`host.nix:341`) | superseded legacy file; per-Guest grants live in `audio.d2bus.org.AudioBinding.spec`, while physical authority lives in `AudioService`; no per-Guest state file in v3 | `implemented-and-reachable` |
@@ -157,7 +157,7 @@ All design decisions are resolved in this revision.
 | DRAUDIO-003 | Where does the vhost-user-sound socket path live? | Controller-generated private implementation detail. Never appears in `AudioBinding.spec`, `AudioBinding.status`, API responses, audit records, OTEL attributes, or any broker configuration. |
 | DRAUDIO-004 | How does the controller enforce PipeWire stream routing after a grant change? | The AudioBinding controller calls the same-Zone AudioService selected by `serviceRef`. An owner Service dispatches to its local AudioMediator; a projection Service routes over its ResourceImport encrypted stream to the remote owner. Only the owner AudioMediator applies libpipewire changes. `AudioBinding.spec` is durable per-Guest intent; no state file is required. |
 | DRAUDIO-005 | How is the `application.name = "d2b-<guest>"` PipeWire stream identity established? | The component template for `vhost-user-sound-worker` is a signed LaunchTicket projection that sets the per-Guest binary copy path as argv[0]. `libpipewire`'s `init_prgname()` reads `/proc/self/exe`. This is a template projection; it does not appear in the live Process resource spec. |
-| DRAUDIO-006 | WirePlumber stream rules: resource spec or host Nix config? | Host Nix config. The operator capture target is stored only as `Provider/audio-pipewire.spec.config.captureAlias` — a bounded named alias (`^[a-z][a-z0-9-]*$`, ≤64 chars). The AudioMediator resolves it to the actual PipeWire node object via libpipewire registry introspection at runtime, privately. The alias never appears in AudioService/AudioBinding base spec/status, stream rules, audit, or telemetry. |
+| DRAUDIO-006 | WirePlumber stream rules: resource spec or host Nix config? | Host Nix config. The operator capture target is stored only as `Provider/audio-pipewire.spec.config.captureAlias` - a bounded named alias (`^[a-z][a-z0-9-]*$`, ≤64 chars). The AudioMediator resolves it to the actual PipeWire node object via libpipewire registry introspection at runtime, privately. The alias never appears in AudioService/AudioBinding base spec/status, stream rules, audit, or telemetry. |
 | DRAUDIO-007 | Guest PipeWire stack: resource spec or Nix guest config? | Guest Nix config. The in-guest virtio-snd module, PipeWire stack, WirePlumber virtio-snd profile, and diagnostic packages are Nix guest module concerns. |
 | DRAUDIO-009 | Mic direction: null-target sentinel vs explicit routing? | WirePlumber stream rules in `client.conf.d/90-d2b` set initial stream-creation properties. Live changes reach the owner AudioMediator through the referenced AudioService (local or projection route) and use libpipewire. No worker restart or state file is required. |
 | DRAUDIO-011 | How does the vhost-user-sound worker access PipeWire without ambient socket exposure? | A same-UID user-session `AudioMediator` receives a declared pre-opened PipeWire portal FD from the user supervisor/display portal (not from the ambient runtime environment). The controller requests an operation-scoped typed attachment transfer; d2b-bus/ProviderSupervisor routes the FD directly mediator→worker LaunchTicket without the Process Provider knowing audio and without the controller handling FDs. No socket path, SetSocketAcl, or `PIPEWIRE_RUNTIME_DIR` env entry appears in any resource spec, status, broker config, or public surface. |
@@ -253,7 +253,7 @@ advertises no audio capability, the sidecar is not deployed.
 
 No audio capability field is stored in `AudioBinding.spec`. No
 implementation-ID branch (cloud-hypervisor vs. qemu) appears in the spec or
-the controller's reconcile logic — capability presence/absence and the typed
+the controller's reconcile logic - capability presence/absence and the typed
 capability fields are the only dispatch surface.
 
 ### Worker process template
@@ -344,6 +344,17 @@ status:
     code: ok
     message: null
     retryable: false
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 `authority.authorityKey` is a bounded opaque key, not a PipeWire node name,
@@ -393,6 +404,17 @@ status:
     code: ok
     message: null
     retryable: false
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 The projection carries no `authority` field. Its routing authority is the
@@ -409,11 +431,11 @@ base schema is:
 
 | Field | Type | Required | Default | Bounds | Notes |
 | --- | --- | --- | --- | --- | --- |
-| `providerRef` | ResourceRef | yes | — | same-Zone Provider advertising the AudioService base fingerprint | Immutable; this dossier's initial implementation is `Provider/audio-pipewire` |
-| `serviceRole` | enum | yes | — | `owner\|projection` | Immutable; must agree with ownerRef rules |
-| `implementationEndpointRefs` | list[ResourceRef] | yes | — | 1..=4 local `Endpoint/<name>` refs | Owner: only local backing implementation Endpoints; projection: only local encrypted-stream route Endpoints |
-| `operations` | list[enum] | yes | — | unique subset of `playback\|capture` | Closed service capability set |
-| `authority` | AuthorityDescriptor | role-dependent | — | D097 schema | Required only for `owner`; forbidden for `projection` |
+| `providerRef` | ResourceRef | yes | - | same-Zone Provider advertising the AudioService base fingerprint | Immutable; this dossier's initial implementation is `Provider/audio-pipewire` |
+| `serviceRole` | enum | yes | - | `owner\|projection` | Immutable; must agree with ownerRef rules |
+| `implementationEndpointRefs` | list[ResourceRef] | yes | - | 1..=4 local `Endpoint/<name>` refs | Owner: only local backing implementation Endpoints; projection: only local encrypted-stream route Endpoints |
+| `operations` | list[enum] | yes | - | unique subset of `playback\|capture` | Closed service capability set |
+| `authority` | AuthorityDescriptor | role-dependent | - | D097 schema | Required only for `owner`; forbidden for `projection` |
 
 The initial PipeWire implementation accepts an absent `spec.provider` or the
 exact signed envelope
@@ -535,8 +557,8 @@ metadata:
   finalizers:
     - audio-pipewire.d2bus.org/sidecar-stopped
   deletionRequestedAt: null
-  createdAt: 2026-07-22T00:00:00Z
-  updatedAt: 2026-07-22T00:01:00Z
+  createdAt: 2026-07-22T00:00:00.000Z
+  updatedAt: 2026-07-22T00:01:00.000Z
 spec:
   providerRef: Provider/audio-pipewire
   serviceRef: audio.d2bus.org.AudioService/host-audio
@@ -564,7 +586,7 @@ status:
     - type: ServiceReady
       status: "True"
       reason: referenced-audio-service-ready
-  lastReconciledAt: 2026-07-22T00:01:01Z
+  lastReconciledAt: 2026-07-22T00:01:01.000Z
   resource:
     channels:
       speaker:
@@ -594,6 +616,17 @@ status:
     exitCode: null
     message: null
     retryable: false
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 ### `AudioBinding.spec` fields
@@ -613,14 +646,14 @@ with `status.provider`.
 
 | Field | Type | Required | Default | Bounds | Notes |
 | --- | --- | --- | --- | --- | --- |
-| `providerRef` | ResourceRef | yes | — | same-Zone Provider advertising the AudioBinding base fingerprint | Immutable after creation; this dossier's initial implementation is `Provider/audio-pipewire` |
-| `serviceRef` | ResourceRef | yes | — | same-Zone `audio.d2bus.org.AudioService/<name>` | Immutable; owner or projection Service; must be Ready before realization |
-| `grants.mic` | enum | yes | — | `"on"` \| `"off"` | Microphone grant |
-| `grants.speaker` | enum | yes | — | `"on"` \| `"off"` | Speaker grant |
+| `providerRef` | ResourceRef | yes | - | same-Zone Provider advertising the AudioBinding base fingerprint | Immutable after creation; this dossier's initial implementation is `Provider/audio-pipewire` |
+| `serviceRef` | ResourceRef | yes | - | same-Zone `audio.d2bus.org.AudioService/<name>` | Immutable; owner or projection Service; must be Ready before realization |
+| `grants.mic` | enum | yes | - | `"on"` \| `"off"` | Microphone grant |
+| `grants.speaker` | enum | yes | - | `"on"` \| `"off"` | Speaker grant |
 | `grants.speakerLevel` | uint \| null | no | `null` | `0..=100` | Speaker volume percent; null = system default |
 | `grants.micGain` | uint \| null | no | `null` | `0..=100` | Microphone input gain percent; null = system default |
 | `guestUsers` | list[ResourceRef] | no | `[]` | ≤16 entries; each `User/<name>` where name matches `[a-z][a-z0-9_-]*` ≤32 chars | Guest User ResourceRefs; corresponding User resources must exist; group membership verified by controller before sidecar start |
-| `suspendOnGuestAbsent` | bool | no | `true` | — | When `true` the sidecar Process is not started/is stopped when the owning Guest is not Running |
+| `suspendOnGuestAbsent` | bool | no | `true` | - | When `true` the sidecar Process is not started/is stopped when the owning Guest is not Running |
 
 The initial PipeWire implementation accepts an absent `spec.provider` or the
 exact signed envelope
@@ -775,7 +808,7 @@ and owns the Process and its private Endpoint resources after resolving
 `spec.serviceRef`. The system Process Provider (`Provider/system-minijail`)
 launches, supervises, and reaps the worker and owns all ProcessEffect audit
 records. The worker's execution principal is a core Process principal from the
-bounded pool — not a controller-created `User` resource.
+bounded pool - not a controller-created `User` resource.
 
 ### Process resource
 
@@ -816,7 +849,7 @@ spec:
     class: on-failure
     backoffBase: "1s"
     backoffMax: "30s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: 5
     resetAfter: "300s"
   readiness:
@@ -829,39 +862,40 @@ spec:
 
 ### Execution schema notes
 
-- **No `executableRef`, `argv`, `env`** — these are signed component-template
+- **No `executableRef`, `argv`, `env`** - these are signed component-template
   projections in the LaunchTicket. The Process Provider resolves them from the
   compiled `vhost-user-sound-worker` template. The live Process resource spec
   stored in the Zone store contains no executable path, argument list, or
   environment.
-- **No `inherited-fd` endpoint in the Process spec** — for an owner Service,
+- **No `inherited-fd` endpoint in the Process spec** - for an owner Service,
   the PipeWire FD attachment from the AudioMediator is declared in the
   component descriptor (the private signed template), not the live resource
   spec. For a projection Service, the template instead resolves the local
   projection route Endpoint and no PipeWire FD exists. d2b-bus/
   ProviderSupervisor performs either authorized local attachment without the
   Process Provider knowing audio and without the controller handling FDs.
-- **No `mounts` block in the live Process spec** — the worker receives its
+- **No `mounts` block in the live Process spec** - the worker receives its
   configuration via the sealed component descriptor and the operation-scoped FD
   transfer. `AudioBinding.spec` is the durable desired intent for grants/levels,
   and its AudioService is the backing authority/route; no application state
   file is written. The worker declares no Provider state
-  Volume; bounded non-secret observations are stored in `AudioBinding.status`, the
-  Provider status subresource where applicable, and the core Operation ledger.
-- `domain: system` — the worker runs in the system domain. The execution
+  Volume; bounded non-secret controller observations are stored in
+  `AudioBinding.status` and the core Operation ledger. Core separately derives
+  aggregate Provider status from component, dependency, and Process health.
+- `domain: system` - the worker runs in the system domain. The execution
   principal is a core Process principal from the bounded pool allocated by the
   Process Provider; it is not a controller-created `User` resource and does not
   appear in the live Process spec. No `userRef` field is set.
-- `sandbox.namespaceClasses: [mount, pid, ipc, uts]` — network namespace is
+- `sandbox.namespaceClasses: [mount, pid, ipc, uts]` - network namespace is
   **not** in this list. An owner worker receives the PipeWire FD as an inherited
   descriptor; a projection worker receives only an authorized same-Zone route
   attachment and the Provider's stream component owns encrypted carriage.
-- `sandbox.capabilityClasses: []` — zero host capabilities; load-bearing
+- `sandbox.capabilityClasses: []` - zero host capabilities; load-bearing
   invariant; see security section.
-- `sandbox.seccompClass: audio-pipewire-worker` — the Process Provider
+- `sandbox.seccompClass: audio-pipewire-worker` - the Process Provider
   resolves the exact seccomp profile from the compiled Process template.
   Maps to the `w1-audio` seccomp policy in the baseline minijail profile table.
-- `sandbox.startRoot: false` — the Process Provider must not elevate to root
+- `sandbox.startRoot: false` - the Process Provider must not elevate to root
   before exec.
 - `Endpoint/corp-vm-audio-vhost-user` is the AudioBinding-owned private service
   identity for the vhost-user server. The AudioBinding controller creates the
@@ -870,11 +904,12 @@ spec:
   appears in resource spec or status.
 - `budget` uses the canonical nested `cpu`/`memory`/`pids`/`fds` shape.
   `pids` and `fds` use the `{limit: N}` object form (not a bare scalar).
-- `restartPolicy.class: on-failure` — canonical class name.
-  `backoffBase`/`backoffMax` are duration strings; `backoffMultiplier` is the
-  exponential factor; `maxRestarts` is the per-launch-cycle ceiling; `resetAfter`
-  resets the counter if the process stays Running for this duration.
-- `readiness.class: provider-defined` — the `vhost-user-sound-worker` template
+- `restartPolicy.class: on-failure` - canonical class name.
+  `backoffBase`/`backoffMax` are duration strings; `backoffMultiplierMilli` is
+  the exponential factor multiplied by 1000; `maxRestarts` is the
+  per-launch-cycle ceiling; `resetAfter` resets the counter if the process stays
+  Running for this duration.
+- `readiness.class: provider-defined` - the `vhost-user-sound-worker` template
   declares a provider-defined readiness mechanism (vhost-user socket ready).
   Fields: `initialDelay`, `timeout`, `failureThreshold`, `successThreshold`.
 
@@ -967,7 +1002,7 @@ spec:
     class: on-failure
     backoffBase: "2s"
     backoffMax: "30s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: null
     resetAfter: "300s"
   readiness:
@@ -978,11 +1013,11 @@ spec:
     class: provider-defined
 ```
 
-**No `executableRef`, `argv`, `env`** — these are component-template
+**No `executableRef`, `argv`, `env`** - these are component-template
 projections. The live Process resource spec stored in the Zone store contains
 only the fields shown above. `budget`, `restartPolicy`, and `readiness` use the
 same canonical field names as the worker Process spec. `readiness.class:
-provider-defined` — the `audio-mediator-service` template declares its own
+provider-defined` - the `audio-mediator-service` template declares its own
 readiness mechanism (ComponentSession endpoint accepting connections).
 
 ### FD routing via ProviderSupervisor
@@ -1114,8 +1149,8 @@ When `Provider/audio-pipewire.spec.config.captureAlias` is non-null, the
 AudioMediator resolves it at grant-change time via libpipewire registry
 introspection. It iterates the PipeWire global object list and finds the node
 whose `node.nick` or `node.name` matches the alias. The resolution is private
-to the AudioMediator process. The resolved node object never leaves the mediator
-— it is used in place directly for `pw_node_set_param` routing calls. No node
+to the AudioMediator process. The resolved node object never leaves the mediator -
+it is used in place directly for `pw_node_set_param` routing calls. No node
 ID appears in any bus message, resource spec, status, audit record, or OTEL
 attribute.
 
@@ -1129,15 +1164,15 @@ compiled into the Guest's NixOS configuration at Provider activation time.
 
 Activated for any Guest that owns an `AudioBinding` resource, it installs:
 
-- `boot.kernelModules: ["snd_virtio"]` — in-tree since 5.16;
+- `boot.kernelModules: ["snd_virtio"]` - in-tree since 5.16;
 - `services.pipewire.enable = true` with `alsa.enable`, `alsa.support32Bit`,
   and `pulse.enable` (PulseAudio compat layer);
-- `security.rtkit.enable = true` — realtime priority for audio threads;
+- `security.rtkit.enable = true` - realtime priority for audio threads;
 - WirePlumber `monitor.alsa.rules` override: `device.profile = "pro-audio"`
   and `api.alsa.use-acp = false` for the virtio-snd card; this is required
   because the virtio-snd ALSA driver has no ACP entry and WirePlumber defaults
   to `"Off"`, leaving no Sink or Source;
-- `services.pulseaudio.enable = lib.mkForce false` — prevents PulseAudio
+- `services.pulseaudio.enable = lib.mkForce false` - prevents PulseAudio
   collision;
 - diagnostic packages: `pipewire`, `wireplumber`, `alsa-utils`.
 
@@ -1160,13 +1195,13 @@ controller does **not** mutate `User.spec.groups` at runtime.
 
 ### GuestAudioAgent and AudioSet service
 
-Guest-side enforcement is performed by the **`GuestAudioAgent`** — a Process
+Guest-side enforcement is performed by the **`GuestAudioAgent`** - a Process
 resource running inside the Guest under the guest workload user's UID. It is
 part of the audio-pipewire Provider's guest component set.
 
 The `GuestAudioAgent`:
 1. Opens a PipeWire connection in the Guest's compositor session (same-UID
-   user domain, natural session access — no socket path or ambient ACL needed).
+   user domain, natural session access - no socket path or ambient ACL needed).
 2. Exposes a typed `AudioSet` ComponentSession service over vsock (Guest→Zone
    d2b-bus transport).
 3. When the `audio-binding-controller` calls `AudioSet(mic, speaker, speakerLevel,
@@ -1184,7 +1219,7 @@ by this typed ComponentSession service.
 The controller creates one `GuestAudioAgent` Process per entry in
 `AudioBinding.spec.guestUsers`. Each Process:
 - Is named using an opaque UID digest derived from `AudioBinding.metadata.uid`
-  and `User/<name>.metadata.uid`, e.g. `ag-4a7f2c1b` — never by username.
+  and `User/<name>.metadata.uid`, e.g. `ag-4a7f2c1b` - never by username.
 - Has `ownerRef: audio.d2bus.org.AudioBinding/corp-vm-audio` and is located in the controller's
   component identity index for that `AudioBinding`; never selected by mutable
   label selector.
@@ -1237,7 +1272,7 @@ spec:
     class: on-failure
     backoffBase: "2s"
     backoffMax: "30s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: null
     resetAfter: "300s"
   readiness:
@@ -1249,7 +1284,7 @@ spec:
 ```
 
 Like all Process resources, this spec contains no `executableRef`, `argv`, or
-`env` — these are signed component-template projections in the LaunchTicket.
+`env` - these are signed component-template projections in the LaunchTicket.
 
 ## Endpoint resources (D092)
 
@@ -1290,12 +1325,24 @@ spec:
     allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 status:
-  readiness: Ready
-  observedProducerGeneration: 1
-  observedResourceGeneration: 1
-  endpointGeneration: 1
-  connectionAvailability: available
-  leaseAvailability: lease-required
+  resource:
+    readiness: Ready
+    observedProducerGeneration: 1
+    observedResourceGeneration: 1
+    endpointGeneration: 1
+    connectionAvailability: available
+    leaseAvailability: lease-required
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 ```yaml
@@ -1320,12 +1367,24 @@ spec:
     allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 status:
-  readiness: Ready
-  observedProducerGeneration: 1
-  observedResourceGeneration: 1
-  endpointGeneration: 1
-  connectionAvailability: available
-  leaseAvailability: lease-required
+  resource:
+    readiness: Ready
+    observedProducerGeneration: 1
+    observedResourceGeneration: 1
+    endpointGeneration: 1
+    connectionAvailability: available
+    leaseAvailability: lease-required
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 ```yaml
@@ -1349,12 +1408,24 @@ spec:
     allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 status:
-  readiness: Ready
-  observedProducerGeneration: 1
-  observedResourceGeneration: 1
-  endpointGeneration: 1
-  connectionAvailability: available
-  leaseAvailability: lease-required
+  resource:
+    readiness: Ready
+    observedProducerGeneration: 1
+    observedResourceGeneration: 1
+    endpointGeneration: 1
+    connectionAvailability: available
+    leaseAvailability: lease-required
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 This projection-Service-owned local Endpoint is only the front door to the
@@ -1383,12 +1454,24 @@ spec:
     allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 status:
-  readiness: Ready
-  observedProducerGeneration: 1
-  observedResourceGeneration: 1
-  endpointGeneration: 1
-  connectionAvailability: available
-  leaseAvailability: lease-required
+  resource:
+    readiness: Ready
+    observedProducerGeneration: 1
+    observedResourceGeneration: 1
+    endpointGeneration: 1
+    connectionAvailability: available
+    leaseAvailability: lease-required
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 ## Retained opaque handles
@@ -1961,7 +2044,7 @@ positions, opaque consumer handles, or consumer Zone identities.
 | `audio-binding.enforcement-applied` | Referenced AudioService call returned `Applied` | result: `Applied\|Degraded` per channel; no route, node ID, or level value |
 | `audio-binding.realization-ready` | All required owned realization resources become Ready | no socket path or provider-only status detail |
 | `audio-binding.realization-stopped` | Owned realization resources reach terminal phases | includes a bounded aggregate outcome only; no socket path or implementation identity |
-| `audio-binding.deleted` | post-commit after `phase=Deleted` revision event is durable | — |
+| `audio-binding.deleted` | post-commit after `phase=Deleted` revision event is durable | - |
 
 **Suppressed from all audit records:**
 - vhost-user socket path;
@@ -2774,7 +2857,7 @@ remote lease are released.
 | Reuse source | Same baseline paths |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-audio-pipewire/src/argv.rs` (component template renderer) |
-| Detailed design | `generate_audio_argv` remains the canonical argv builder for the `vhost-user-sound-worker` component template. The resulting argv/env/executableRef are sealed into the LaunchTicket. The per-Guest binary copy path enforcement remains via the LaunchTicket verifier. The live Process resource spec contains no argv or executableRef. The `--socket` argument is removed; the vhost-user service identity is `Endpoint/corp-vm-audio-vhost-user`, while the backing locator is resolved into the LaunchTicket under authorization. Primary reuse disposition: `adapt`. Preserved source-plan detail: `adapt` — argv builder retained; becomes a signed component-template projection, not a live Process spec field. |
+| Detailed design | `generate_audio_argv` remains the canonical argv builder for the `vhost-user-sound-worker` component template. The resulting argv/env/executableRef are sealed into the LaunchTicket. The per-Guest binary copy path enforcement remains via the LaunchTicket verifier. The live Process resource spec contains no argv or executableRef. The `--socket` argument is removed; the vhost-user service identity is `Endpoint/corp-vm-audio-vhost-user`, while the backing locator is resolved into the LaunchTicket under authorization. Primary reuse disposition: `adapt`. Preserved source-plan detail: `adapt` - argv builder retained; becomes a signed component-template projection, not a live Process spec field. |
 | Integration | The component template for `vhost-user-sound-worker` embeds the output of `generate_audio_argv`; the Process Provider resolves arg0 from the artifact catalog. |
 | Data migration | No runtime state migration; argv template output is regenerated from the v3 component template, and live Process specs never store argv. |
 | Validation | `tests/argv.rs`: rejection matrix (Nix store path, symlink, cross-guest copy, empty name); no-socket-in-argv assertion; no-argv-in-process-spec assertion |
@@ -2790,7 +2873,7 @@ remote lease are released.
 | Reuse source | Same baseline paths |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-audio-pipewire/src/mediator/enforcement.rs` |
-| Detailed design | Owner AudioService only: speaker `SetGrant` maps `"off"` to `pw_node_set_param(SPA_PARAM_Props, mute=true, target.object=-1)` on the worker's node and `"on"` to `mute=false`; `SetLevel` maps to a bounded volume. Microphone `"on"` is applied only after the owner authority grants its single capture slot; queued/blocked consumers remain muted, and release mutes/disconnects before handoff. `captureAlias` resolves privately through the registry. A projection AudioService routes the operation to the remote owner over its import stream and is denied any local mediator/PipeWire open. `FakeAudioMediator` is the hermetic test double. No state file, wpctl, EphemeralProcess, or node ID in any external surface. Primary reuse disposition: `adapt`. Preserved source-plan detail: `adapt` — enforcement logic becomes a libpipewire API implementation behind the `SetGrant`/`SetLevel` ComponentSession service. |
+| Detailed design | Owner AudioService only: speaker `SetGrant` maps `"off"` to `pw_node_set_param(SPA_PARAM_Props, mute=true, target.object=-1)` on the worker's node and `"on"` to `mute=false`; `SetLevel` maps to a bounded volume. Microphone `"on"` is applied only after the owner authority grants its single capture slot; queued/blocked consumers remain muted, and release mutes/disconnects before handoff. `captureAlias` resolves privately through the registry. A projection AudioService routes the operation to the remote owner over its import stream and is denied any local mediator/PipeWire open. `FakeAudioMediator` is the hermetic test double. No state file, wpctl, EphemeralProcess, or node ID in any external surface. Primary reuse disposition: `adapt`. Preserved source-plan detail: `adapt` - enforcement logic becomes a libpipewire API implementation behind the `SetGrant`/`SetLevel` ComponentSession service. |
 | Integration | AudioBinding controller calls its resolved AudioService. Owner Service dispatches locally to AudioMediator; projection Service dispatches over the encrypted import route to the remote owner. |
 | Data migration | No state migration; mediator applies current AudioBinding grants and levels from resource state during reconcile, replacing host-controller direct writes. |
 | Validation | `tests/mediator.rs` and `tests/enforcement.rs`: owner-Service SetGrant/SetLevel round-trip; speaker mixing; microphone queued consumers remain muted; release/lease-expiry mute-before-handoff and no-overlap proof; projection routing with fake streams; projection-PipeWire-open denial; no-node-id-in-bus-message; ProviderSessionUnavailable; captureAlias registry resolution |
@@ -2810,7 +2893,7 @@ remote lease are released.
 | Integration | `Provider/audio-pipewire` signs and publishes implementation support for both neutral qualified ResourceTypeSchemas and strict provider-envelope schemas. Core import controller may create/delete only projection AudioService; ordinary resource API admission handles owner Services and AudioBindings. |
 | Data migration | Full d2b 3.0 reset; owner Services and per-Guest AudioBindings are authored as new v3 resources; projection Services are core-generated from ResourceImport. |
 | Validation | `tests/resource_type.rs`: consume the ADR046-provider-004 common fixtures/fingerprints; canonical minimal base without `spec.provider`; neutral qualified-name registration; both schema/status round-trips including bounded aggregate owner queue status and per-Binding arbitration state; clean-break rejection of provider-qualified names, every AudioState spelling, and all aliases; fake alternate-provider base conformance; strict base/provider unknown-field matrices; projection `spec.provider` rejection; D088 `status.resource`/`status.provider` placement; PipeWire fields only in strict provider envelopes/config; Service role/AuthorityDescriptor/ownerRef/Endpoint-locality rules; initial-v3 exclusive-mic/mixed-speaker schema and consent/approval/priority/concurrent-capture rejection; Core-only projection admission; AudioBinding required same-Zone serviceRef and Guest owner; immutable refs; out-of-range levels/users; explicit tests that AudioBinding cannot be exported or projected |
-| Removal proof | None — both ResourceTypes are net-new |
+| Removal proof | None - both ResourceTypes are net-new |
 
 ### ADR046-audio-006: Implement deterministic AudioService and AudioBinding handlers
 
@@ -2818,11 +2901,11 @@ remote lease are released.
 | --- | --- |
 | Work item ID | `ADR046-audio-006` |
 | Dependency/owner | Depends on `ADR046-audio-001` through `ADR046-audio-005`; core ResourceImport controller; system Process Provider; AudioMediator (`ADR046-audio-007`); GuestAudioAgent (`ADR046-audio-011`); no Provider state Volume under D087 |
-| Current source | `packages/d2bd/src/audio_dispatch.rs` lines 250–end (dispatch ordering reference) |
+| Current source | `packages/d2bd/src/audio_dispatch.rs` lines 250-end (dispatch ordering reference) |
 | Reuse source | None directly; reconcile flow is new async controller |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-audio-pipewire/src/controller/audio_service.rs`; `src/controller/audio_binding.rs` |
-| Detailed design | One controller binary registers deterministic handlers for the two neutral ResourceTypes, constrained to immutable `spec.providerRef: Provider/audio-pipewire`. Service handler watches AudioService, its ResourceImport owner and local Endpoints; owner semantics claim/revalidate D097, local mediator, and aggregate exclusive-mic queue state, while projection semantics bind only encrypted import streams and deny PipeWire. It cannot create/delete projection Service. Binding handler watches AudioBinding, same-Zone serviceRef, Guest/User, owned Process, and private Endpoints; creates the vhost-user worker, GuestAudioAgents, and private Endpoints, then calls the resolved Service and guest agents. It maps `Applied|Queued|MicQueueFull` into the closed conditions/status/phase, and release/delete/revocation cancels queue state before child teardown. A Service event enqueues serviceRef-indexed Bindings. A resource selecting another conforming Provider is ignored and cannot be status/finalizer-mutated. Neither handler uses broker/pidfd/EphemeralProcess/Volume/User operations or direct filesystem access. Primary reuse disposition: `adapt`. Preserved source-plan detail: `adapt` — dispatch logic is the reference for step ordering only. |
+| Detailed design | One controller binary registers deterministic handlers for the two neutral ResourceTypes, constrained to immutable `spec.providerRef: Provider/audio-pipewire`. Service handler watches AudioService, its ResourceImport owner and local Endpoints; owner semantics claim/revalidate D097, local mediator, and aggregate exclusive-mic queue state, while projection semantics bind only encrypted import streams and deny PipeWire. It cannot create/delete projection Service. Binding handler watches AudioBinding, same-Zone serviceRef, Guest/User, owned Process, and private Endpoints; creates the vhost-user worker, GuestAudioAgents, and private Endpoints, then calls the resolved Service and guest agents. It maps `Applied|Queued|MicQueueFull` into the closed conditions/status/phase, and release/delete/revocation cancels queue state before child teardown. A Service event enqueues serviceRef-indexed Bindings. A resource selecting another conforming Provider is ignored and cannot be status/finalizer-mutated. Neither handler uses broker/pidfd/EphemeralProcess/Volume/User operations or direct filesystem access. Primary reuse disposition: `adapt`. Preserved source-plan detail: `adapt` - dispatch logic is the reference for step ordering only. |
 | Integration | Registered with Zone core as a controller under `Provider/audio-pipewire`. |
 | Data migration | v1/v2 audio policy file migration is handled by ADR046-audio-001 before reconcile; the controller keeps no Provider state Volume and imports no additional runtime state. |
 | Validation | Fast hermetic `tests/audio_service_controller.rs`: neutral type/provider selection, foreign-provider ignore/deny, owner authority, bounded aggregate microphone status, projection ownerRef/import chain, core-only create/delete, projection no-PipeWire-open, revocation queue cancellation, and D091 propagation. `tests/audio_binding_controller.rs`: neutral type/provider selection, required same-Zone serviceRef, owner/projection dispatch, child Process/private Endpoint state machine, `Applied|Queued|MicQueueFull` status mapping, off/delete/revocation cancellation, grant changes, absence/failures/deletion. Conformance asserts no AudioBinding export/projection, no broker/pidfd/EphemeralProcess/Volume/User ops. ProviderDeployment integration remains fake-only and validates empty ProviderStateSet. |
@@ -2872,7 +2955,7 @@ remote lease are released.
 | Destination | `packages/d2b-provider-audio-pipewire/tests/minijail_contract.rs` (provider-local); retain cross-bundle source greps in `d2b-contract-tests` |
 | Detailed design | Retain worker sandbox assertions and add role-sensitive attachment checks: an owner-Service worker may receive only the local AudioMediator attachment; a projection-Service worker receives only its same-Zone route Endpoint and can never receive a PipeWire FD. Binding-owned private Endpoint ownership/producerRef is explicit. All Service/Binding/Process/Endpoint serialized forms remain locator-free. |
 | Integration | Provider-local contract tests run in `d2b-provider-audio-pipewire`; retained cross-bundle greps in `d2b-contract-tests` ensure bundle-wide invariants still hold. |
-| Data migration | None — test migration only; no runtime state. |
+| Data migration | None - test migration only; no runtime state. |
 | Validation | `cargo test -p d2b-provider-audio-pipewire -- minijail` must pass; existing cross-bundle tests must continue to pass |
 | Removal proof | The superseded duplicate shell validator `tests/minijail-validator-audio.sh` is deleted only after the successor Rust gate (`minijail_audio_usbip.rs` cross-bundle + provider-local `minijail_contract.rs`) is green and its removal-proof check passes; the `seccomp_policy_ref == "w1-audio"` assertion migrates to `spec.sandbox.seccompClass == "audio-pipewire-worker"` before removal. Cross-bundle Rust tests are retained. |
 
@@ -2898,7 +2981,7 @@ remote lease are released.
 | --- | --- |
 | Work item ID | `ADR046-audio-011` |
 | Dependency/owner | Depends on `ADR046-audio-004`; ComponentSession service contract; libpipewire 1.x; system-systemd Process Provider for guest domain |
-| Current source | `packages/d2b-guestd/src/audio_set.rs` (guestd wpctl dispatch — reference only) |
+| Current source | `packages/d2b-guestd/src/audio_set.rs` (guestd wpctl dispatch - reference only) |
 | Reuse source | `packages/d2bd/src/audio_host_controller.rs` libpipewire enforcement patterns (reference only) |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-audio-pipewire/src/guest_agent/mod.rs`; `src/guest_agent/enforcement.rs`; `src/bin/audio_pipewire_guest_agent.rs` |
@@ -2914,17 +2997,17 @@ remote lease are released.
 | --- | --- |
 | Work item ID | `ADR046-audio-012` |
 | Dependency/owner | ADR046-zone-control-019, ADR046-zone-control-020; audio Provider owner |
-| Current source | None — net-new ADR 0046 cross-Zone sharing (D096) |
+| Current source | None - net-new ADR 0046 cross-Zone sharing (D096) |
 | Reuse source | audio authority/mediator service (this dossier); `packages/d2b-provider/src/share_adapter.rs` `ExportAdapter`/`ImportAdapter` traits |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-audio-pipewire/src/share_adapter.rs` |
 | Detailed design | Implement signed `Provider/audio-pipewire` adapters only for canonical `serviceType: audio.d2bus.org.AudioService` when `spec.providerRef` selects this Provider. ResourceExport carries that `serviceType` plus the signed `projectionSchemaFingerprint` and semantic `factoryFingerprint`; ResourceImport carries the matching `expectedServiceType`, `expectedProjectionSchemaFingerprint`, and `expectedFactoryFingerprint`. Export adapter admits only the owner Service. Its local authority Endpoint remains Service-owned and is never an Export field. Core creates/deletes the projection AudioService with `ownerRef: ResourceImport/<name>`, `providerRef`, and semantic base/import fields but no `spec.provider`; routing derives from the signed local descriptor and ResourceImport record. The semantic factory fingerprint binds factory metadata plus projection-protocol version, never Provider/adapter identity, which the signed descriptor authenticates separately. The import adapter reconciles its semantic route and never creates AudioBinding or opens PipeWire. Per-Guest AudioBindings are ordinary consumer resources with same-Zone serviceRef. No provider-qualified type alias, FD/path/socket/remote Ref crosses a Zone. Primary reuse disposition: `adapt`. Preserved source-plan detail: net-new (implement the signed audio export/import adapter). |
 | Integration | Core export/import controller (ADR046-zone-control-019); local projection lifecycle (ADR046-zone-control-020); ComponentSession bounded encrypted named streams |
-| Data migration | None — full d2b 3.0 reset |
+| Data migration | None - full d2b 3.0 reset |
 | Validation | Fast hermetic `tests/share_adapter.rs`: exact neutral AudioService `serviceType`; exact projection-schema/factory fingerprint match; explicit rejection of obsolete `endpointRef`, `exportedType`, `baseSchemaFingerprint`, `expectedType`, `expectedBaseSchemaFingerprint`, and `projectionType`; reject every Export Endpoint field, provider-qualified alias, and AudioBinding export/projection; accept owner AudioService export; Core-only projection creation/deletion; exact ResourceImport -> projection AudioService ownerRef chain with no `spec.provider`; semantic factory fingerprint unchanged by Provider/adapter identity mutation while signed identity authentication remains exact; projection never opens PipeWire; reconnect/revocation/D091 propagation with fake streams. Only `integration/real_stream.rs` exercises a real encrypted named stream. |
 | Removal proof | Not applicable (new surface) |
 
-### ADR046-audio-013: Audio authority service — speaker mixer and mic arbiter (D096/D097)
+### ADR046-audio-013: Audio authority service - speaker mixer and mic arbiter (D096/D097)
 
 | Field | Value |
 | --- | --- |
@@ -2934,9 +3017,9 @@ remote lease are released.
 | Reuse source | Same baseline controller/policy symbols |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-audio-pipewire/src/authority.rs` (speaker mixer + mic arbiter); `AuthorityDescriptor` on owner `AudioService` |
-| Detailed design | Exactly one owner AudioService holds the real PipeWire connection and D097 AuthorityDescriptor. Projection Services and AudioBindings cannot carry it. Speaker streams remain multiplexed/mixed. Microphone capture has exactly one slot across owner and importing Zones. The arbiter keys requests by authenticated Zone plus route-scoped opaque consumer handle, permits one pending entry per handle, bounds pending entries to 16 per Zone and 64 total, uses owner-sequenced FIFO per Zone and round-robin across non-empty Zones, and ignores client timestamps/priority. Its 30-second active lease renews only while no other Zone waits; contended expiry mutes/disconnects, dequeues the next Zone, and atomically requeues a still-requesting old holder at its Zone FIFO tail. Off/delete/revoke/disconnect cancel idempotently. Queue entries are memory-only and restart rebuild fails closed with capture muted. Multiplexed capture and consent/approval/priority/concurrent-capture surfaces are rejected; a future spec must define a concrete consent authorization ResourceType and resource-API verb before concurrent capture exists. Core rejects duplicate owner Services before open and adopts by ownerProof. No new ProcessRole, broker path, or state file. Primary reuse disposition: `adapt`. Preserved source-plan detail: `adapt` — the host controller becomes the single authority service; no daemon `Mutex`/state-file wrapping. |
+| Detailed design | Exactly one owner AudioService holds the real PipeWire connection and D097 AuthorityDescriptor. Projection Services and AudioBindings cannot carry it. Speaker streams remain multiplexed/mixed. Microphone capture has exactly one slot across owner and importing Zones. The arbiter keys requests by authenticated Zone plus route-scoped opaque consumer handle, permits one pending entry per handle, bounds pending entries to 16 per Zone and 64 total, uses owner-sequenced FIFO per Zone and round-robin across non-empty Zones, and ignores client timestamps/priority. Its 30-second active lease renews only while no other Zone waits; contended expiry mutes/disconnects, dequeues the next Zone, and atomically requeues a still-requesting old holder at its Zone FIFO tail. Off/delete/revoke/disconnect cancel idempotently. Queue entries are memory-only and restart rebuild fails closed with capture muted. Multiplexed capture and consent/approval/priority/concurrent-capture surfaces are rejected; a future spec must define a concrete consent authorization ResourceType and resource-API verb before concurrent capture exists. Core rejects duplicate owner Services before open and adopts by ownerProof. No new ProcessRole, broker path, or state file. Primary reuse disposition: `adapt`. Preserved source-plan detail: `adapt` - the host controller becomes the single authority service; no daemon `Mutex`/state-file wrapping. |
 | Integration | Owner AudioService references `Endpoint/audio-pipewire-authority`; same-Zone AudioBindings and remote projection Services call it. Core authority index admits exactly one owner Service. |
-| Data migration | None — full d2b 3.0 reset; grants are authoritative in `AudioBinding.spec` (no state file). |
+| Data migration | None - full d2b 3.0 reset; grants are authoritative in `AudioBinding.spec` (no state file). |
 | Validation | Fast hermetic `tests/authority.rs`: AuthorityDescriptor accepted only on owner AudioService; Binding/projection rejection; duplicate conflict; multiplexed speaker mix/quota; one active mic across local/imported Zones; per-Zone FIFO and cross-Zone round-robin; one-entry-per-handle, per-Zone/total bounds and `MicQueueFull`; idempotent cancellation; contended 30-second lease; mute-before-handoff/no overlap; restart-muted rebuild; multiplexed-capture and consent/approval/priority/concurrent-verb rejection; ownerProof adoption; D091 drain/recycle with fake clock/FakeHostController |
 | Removal proof | `audio_host_controller.rs` daemon-side controller deleted after the authority service reaches parity; confirmed by `cargo check`. |
 
@@ -2950,9 +3033,9 @@ remote lease are released.
 | Reuse source | Same baseline stream/mux/bridge symbols |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-audio-pipewire/src/streams.rs` |
-| Detailed design | Per-import audio frames flow only over bounded encrypted named streams: one stream with two `StreamChannel`s for playback/capture split direction and a single `StreamAuthz` (a consumer never opens two authz contexts to split direction), credit-based backpressure (a sender spends only receiver-granted credit), per-import session generation, cancel, and deadline. `StreamKind::AudioPlayback`/`AudioCapture` require `Capability::AudioPlayback`/`AudioCapture`. Playback streams may run concurrently; the owner activates capture frames for only its single granted opaque consumer handle, and revocation/disconnect cancels that Zone's active/pending requests before route teardown. No PipeWire FD/socket crosses a Zone; intermediaries see ciphertext. Guest audio calls (`audio_set`/`audio_status`) are issued to all active guests concurrently and results aggregated. Volume/gain (`LevelPercent`), queue identity/position, and node identity are redacted from audit/OTEL/logs. Primary reuse disposition: `adapt`. Preserved source-plan detail: `adapt` — audio frames ride the existing ComponentSession named-stream credit machinery. |
+| Detailed design | Per-import audio frames flow only over bounded encrypted named streams: one stream with two `StreamChannel`s for playback/capture split direction and a single `StreamAuthz` (a consumer never opens two authz contexts to split direction), credit-based backpressure (a sender spends only receiver-granted credit), per-import session generation, cancel, and deadline. `StreamKind::AudioPlayback`/`AudioCapture` require `Capability::AudioPlayback`/`AudioCapture`. Playback streams may run concurrently; the owner activates capture frames for only its single granted opaque consumer handle, and revocation/disconnect cancels that Zone's active/pending requests before route teardown. No PipeWire FD/socket crosses a Zone; intermediaries see ciphertext. Guest audio calls (`audio_set`/`audio_status`) are issued to all active guests concurrently and results aggregated. Volume/gain (`LevelPercent`), queue identity/position, and node identity are redacted from audit/OTEL/logs. Primary reuse disposition: `adapt`. Preserved source-plan detail: `adapt` - audio frames ride the existing ComponentSession named-stream credit machinery. |
 | Integration | Owner and projection AudioService adapters allocate per-import streams over ComponentSession; AudioBinding only consumes the same-Zone Service Ref; core routes encrypted records only. |
-| Data migration | None — full d2b 3.0 reset |
+| Data migration | None - full d2b 3.0 reset |
 | Validation | Fast hermetic `tests/streams.rs`: projection-Service ownerRef/import binding, split-direction single-authz stream, credits, generation isolation, cancel/deadline, concurrent playback, one active capture across imports, route loss cancels that Zone's active/pending capture, ciphertext-only intermediary, redaction. Only `integration/real_stream.rs` runs the slower real encrypted stream. |
 | Removal proof | Not applicable (new surface) |
 
@@ -3019,10 +3102,12 @@ policy rejects a provider crate missing any of these paths.
 
 Per D094 and `ADR-046-validation-and-delivery` §10.16, this Provider's `src/`
 unit tests and `tests/*.rs` hermetic suite are fast, in-process, deterministic,
-and parallel-safe: an individual normal test has p95 ≤50 ms with no wall-clock
+and parallel-safe: an individual normal test has an advisory wall-clock p95
+diagnostic threshold of <=50 ms; gate enforcement is aggregate per-crate
+process CPU only. There is no wall-clock
 sleep, and `cargo test -p d2b-provider-audio-pipewire --lib --tests` completes
-in ≤2 s warm-cache execution time (compilation excluded). They use a
-deterministic fake clock/RNG and the toolkit fakes/FakeEffectPort only — no
+in ≤3 s warm-cache execution time (compilation excluded). They use a
+deterministic fake clock/RNG and the toolkit fakes/FakeEffectPort only - no
 process spawn, container, network, DBus, systemd, broker daemon, Nix eval/build,
 KVM, USB/GPU/TPM hardware, or live cloud, and no filesystem tree beyond tiny
 temp fixtures. Any scenario needing those lives only in `integration/`, which
@@ -3030,7 +3115,7 @@ keeps a lane timeout/budget, parallel isolation, and fake external services by
 default; such a need is re-placed into `integration/`, never given a sleep,
 larger timeout, or `#[ignore]`. Bounded crypto/property tests are the only
 classified exception, each named with a capped case count and a declared higher
-per-test budget.
+per-test advisory threshold.
 
 The Service/Binding split is a mandatory fast hermetic matrix:
 
@@ -3154,7 +3239,7 @@ Per D094, each replaced current-code test is retired with an explicit
 keep/adapt/move/delete disposition and a removal gate: the minimum reusable
 semantic assertions migrate into this crate's hermetic `tests/`, and the old
 duplicate tests, shell gates, fixtures, static artifacts, CI jobs, and manifest
-entries are deleted once successor coverage and the removal proof pass —
+entries are deleted once successor coverage and the removal proof pass -
 updating `tests/layer1-jobs.json`, the closed gate manifests, the
 flake/matrix/Nix-unit pins, the generated ledgers, and the CI workflow shards.
 Old and new suites never run in parallel indefinitely.

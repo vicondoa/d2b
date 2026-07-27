@@ -6,9 +6,9 @@
 //! the bytes survive a guestd restart for re-adoption.
 //!
 //! Layout per stream:
-//! - `<stream>`      — a circular data file whose physical size never exceeds
+//! - `<stream>`      - a circular data file whose physical size never exceeds
 //!   `cap`. The byte at logical offset `o` lives at physical `o % cap`.
-//! - `<stream>.meta` — a small [`StreamMeta`] sidecar written atomically
+//! - `<stream>.meta` - a small [`StreamMeta`] sidecar written atomically
 //!   (temp -> fsync -> rename -> dir fsync).
 //!
 //! Durability ordering (the crux of the cross-process protocol):

@@ -144,7 +144,7 @@ impl StdinLogic {
     }
 
     /// Validate a WriteStdin at `offset`. Rejects writes after close and any
-    /// non-contiguous offset. Does NOT advance — call [`advance`](Self::advance)
+    /// non-contiguous offset. Does NOT advance - call [`advance`](Self::advance)
     /// only after the bytes are durably written to the master.
     pub fn admit(&self, offset: u64) -> Result<(), TerminalIoError> {
         if self.closed {

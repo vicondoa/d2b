@@ -42,7 +42,7 @@ use d2b_contracts::cli_output::{StatusBridgeCheckOutputV2, StatusOutputV2, Statu
 // corp-vm: all units inactive + an empty daemon-state dir (pidfd-table.json
 // absent -> ch-runner / virtiofsd "stopped"). d2bd.service is pinned
 // inactive (the bash helper omitted it, so the CLI fell back to the real
-// host's `systemctl is-active d2bd.service` — non-hermetic). The bridges
+// host's `systemctl is-active d2bd.service` - non-hermetic). The bridges
 // drive the `--human` "Bridge health" section.
 const SYSTEM_STATE_JSON: &str = r#"{
   "units": {

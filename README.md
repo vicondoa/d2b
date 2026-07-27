@@ -105,9 +105,9 @@ For browser WebAuthn with a host-attached YubiKey/security key, see
 
 D2b targets the **single-user NixOS desktop** where the host is
 trusted, but some workloads are not. It is for people who want to run
-things on their computer that they do not completely trust — AI agents,
+things on their computer that they do not completely trust - AI agents,
 large dependency trees, risky browsing/dev environments, or work-required
-software such as Intune — while keeping those workloads away from the
+software such as Intune - while keeping those workloads away from the
 host OS and from each other.
 
 Concretely:
@@ -176,7 +176,7 @@ d2b into an existing host config.
 
 | Path | Audience | Notes |
 | --- | --- | --- |
-| [`templates/default`](./templates/default) | New host, fastest setup | `nix flake init -t github:vicondoa/d2b` — sentinel TODOs + assertion gates |
+| [`templates/default`](./templates/default) | New host, fastest setup | `nix flake init -t github:vicondoa/d2b` - sentinel TODOs + assertion gates |
 | [`examples/personal-dev`](./examples/personal-dev) | Read-and-copy headless starter | Alias of the checked [`examples/minimal`](./examples/minimal) flake; VM name `personal-dev`. |
 | [`examples/graphics-workstation`](./examples/graphics-workstation) | Desktop VM with Wayland + audio + USBIP | Requires a compositor on the host; `waylandUser` must be non-null. |
 | [`examples/multi-env`](./examples/multi-env) | Two isolated runtime envs (work + personal) | Demonstrates the transition substrate that realms can point at with `network.mode = "inherit-env"`. |
@@ -205,10 +205,10 @@ The fastest way to a working d2b host:
 ```bash
 mkdir my-d2b-host && cd my-d2b-host
 nix flake init -t github:vicondoa/d2b
-# Edit configuration.nix — fill in the 7 numbered TODOs.
+# Edit configuration.nix - fill in the 7 numbered TODOs.
 # TODOs 2-3 are eval-enforced via assertions (hostname, user,
 # SSH key). TODOs 1, 5-7 (hardware, network CIDRs) ship with
-# plausible defaults you must still review before activation —
+# plausible defaults you must still review before activation -
 # see templates/default/README.md for the full table.
 sudo nixos-rebuild build  --flake .#desktop
 sudo nixos-rebuild switch --flake .#desktop
@@ -255,7 +255,7 @@ rather than starting fresh, this is the minimum surface area.
 ```
 
 **2. Drop in a `configuration.nix` block.** This is the minimum
-d2b needs from you — pick a Wayland user (alice here) plus
+d2b needs from you - pick a Wayland user (alice here) plus
 one env + one VM. Everything else (sidecar users, SSH-key
 generation, dnsmasq, NAT, firewall, the auto-declared
 net VM) is materialised by the framework.
@@ -378,7 +378,7 @@ A handful of things consistently bite first-time users.
   `10.0.0.0/16` ⊃ `10.0.1.0/24`) is a hard eval error. Same
   for env-vs-host overlap. Pick non-overlapping ranges.
 - **No autostart for graphics VMs.** `autostart = true` on a
-  graphics VM is rejected — there is no Wayland session
+  graphics VM is rejected - there is no Wayland session
   available at multi-user.target. Use `autostart = false` (the
   default) and `d2b vm start <vm> --apply` from a Plasma
   terminal.
@@ -408,7 +408,7 @@ The Rust `d2b` CLI is the only operator surface. Run
   return a typed exit-78 envelope until the daemon-native surface
   ships. Argument parsing and shell completions still work.
 - **Guest control** (admin-only): `vm exec` runs a command inside a
-  VM over the authenticated guest-control vsock — no SSH —
+  VM over the authenticated guest-control vsock - no SSH -
   (`d2b vm exec <vm> -- <cmd…>`, or `d2b vm exec -it <vm> --
   bash -l` for an interactive PTY). It is restricted
   to callers in `d2b.site.adminUsers`, the role gate enforced via
@@ -421,7 +421,7 @@ rebuild and let the notify-ready daemon restart into the new generation
 (or run `sudo systemctl restart d2bd` explicitly);
 then start the VM on the guest-control generation and run the verbs.
 Every exec runs the requested command as the VM's workload user
-(`ssh.user`) — **never root** — inside a real PAM login session, so
+(`ssh.user`) - **never root** - inside a real PAM login session, so
 graphical and login-shell workflows see the same environment an SSH
 login would (`XDG_RUNTIME_DIR`, `WAYLAND_DISPLAY`, the login-shell
 profile). Operators elevate with `sudo` inside the session.
@@ -437,18 +437,18 @@ For typed exit codes and JSON envelopes, see
 
 Organised as a [Diataxis] tree under [`docs/`](docs/):
 
-- **Tutorials / Examples** — [`examples/`](examples/) and
+- **Tutorials / Examples** - [`examples/`](examples/) and
   [`templates/default/`](templates/default/).
-- **How-to** — [`docs/how-to/`](docs/how-to/):
+- **How-to** - [`docs/how-to/`](docs/how-to/):
   [`install-nixos-tier1.md`](docs/how-to/install-nixos-tier1.md),
   [`host-prepare.md`](docs/how-to/host-prepare.md),
   [`migrating-from-microvm.md`](docs/how-to/migrating-from-microvm.md),
   [`enable-observability.md`](docs/how-to/enable-observability.md).
-- **Reference** — [`docs/reference/`](docs/reference/): manifest
+- **Reference** - [`docs/reference/`](docs/reference/): manifest
   schema, CLI contract, security runbook, error-envelope guidance,
   and per-component docs (graphics, tpm, usbip, audio,
   home-manager, observability).
-- **Explanation** — [`docs/explanation/design.md`](docs/explanation/design.md):
+- **Explanation** - [`docs/explanation/design.md`](docs/explanation/design.md):
   threat model + design rationale + *Why not X* FAQ.
 
 For security disclosure, see [`SECURITY.md`](SECURITY.md).
@@ -479,8 +479,8 @@ D2b's desktop-compartmentalization framing owes a debt to
 
 ## Further reading
 
-- [CHANGELOG.md](./CHANGELOG.md) — release notes and known gaps.
-- [SECURITY.md](./SECURITY.md) — threat model summary and reporting
+- [CHANGELOG.md](./CHANGELOG.md) - release notes and known gaps.
+- [SECURITY.md](./SECURITY.md) - threat model summary and reporting
   channel.
 
 If you are an AI agent or human contributor working on this repo,

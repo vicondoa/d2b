@@ -1,4 +1,4 @@
-# usbip-firewall-skeleton — d2b-host nftables + broker usbip_firewall
+# usbip-firewall-skeleton - d2b-host nftables + broker usbip_firewall
 # #[test]s. Successor of tests/usbip-firewall-skeleton.sh, which ran:
 # - cargo test --manifest-path packages/Cargo.toml -p d2b-host
 #   --all-features -- nftables::tests::{usbip_carveout_inserted_before_generic,

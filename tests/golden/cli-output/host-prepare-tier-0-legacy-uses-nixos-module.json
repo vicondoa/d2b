@@ -4,6 +4,6 @@
   "exit_code": 78,
   "kind": "host-prepare-apply-error",
   "observed_state": "host.tier == 0 / legacy but d2bd.service was asked to mutate the host.",
-  "remediation": "Use the NixOS module on Tier-0 all-legacy hosts; the W3 daemon path is for Tier 1+.",
-  "what_was_checked": "Whether a Tier-0 all-legacy host is invoking the W3 apply path."
+  "remediation": "Use the NixOS module on Tier-0 all-legacy hosts; the d2b daemon path is for Tier 1+.",
+  "what_was_checked": "Whether a Tier-0 all-legacy host is invoking the d2b apply path."
 }

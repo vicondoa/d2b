@@ -25,7 +25,7 @@
       `N/A: no device/passthrough or full-microVM-boot surface touched`
       with a one-line justification. *(This tier requires physical devices.)*
 - [ ] **New/changed tests are wired into a `make` target** and have rows in
-      `tests/migration-ledger.toml` (`make check-inventory` green — it fails
+      `tests/migration-ledger.toml` (`make check-inventory` green - it fails
       closed on any unclassified test; use `make ledger-regen` to update).
 - [ ] **Docs + CI updated in lockstep**: `docs/**`, `AGENTS.md`,
       `tests/README.md`, and `.github/workflows/*` (doc+ci-reference gate

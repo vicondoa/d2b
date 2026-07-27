@@ -7,14 +7,14 @@ one VM plus the runner-parity metadata used by the daemon/oracle tests.
 
 ## Top-level fields
 
-- `schemaVersion` — schema directory/version for this artifact.
-- `vm` — VM name the closure belongs to.
-- `toplevel` — declared NixOS system closure path.
-- `closurePaths` — complete transitive closure required for that VM.
-- `declaredRunner` — runner path emitted by the public manifest.
-- `runnerParityPath` — observed/snapshotted runner path used for parity.
-- `runnerParityOk` — whether `declaredRunner` and `runnerParityPath` agree.
-- `generation` — provenance metadata for the closure snapshot.
+- `schemaVersion` - schema directory/version for this artifact.
+- `vm` - VM name the closure belongs to.
+- `toplevel` - declared NixOS system closure path.
+- `closurePaths` - complete transitive closure required for that VM.
+- `declaredRunner` - runner path emitted by the public manifest.
+- `runnerParityPath` - observed/snapshotted runner path used for parity.
+- `runnerParityOk` - whether `declaredRunner` and `runnerParityPath` agree.
+- `generation` - provenance metadata for the closure snapshot.
 
 ## Contract notes
 

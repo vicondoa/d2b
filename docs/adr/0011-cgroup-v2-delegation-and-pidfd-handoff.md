@@ -11,7 +11,7 @@
 
 `d2bd` must run per-VM payloads inside their own cgroup leaves so
 the daemon can enforce CPU/memory/io/pids quotas, attach pidfds for
-authoritative control, and kill stuck payloads at teardown — but
+authoritative control, and kill stuck payloads at teardown - but
 [ADR 0002](0002-non-root-daemon-and-privileged-broker.md) commits to
 running the daemon as a non-root system user. Linux's cgroup v2
 "delegation" model is exactly the right primitive for this: a root
@@ -34,7 +34,7 @@ W3 must pick:
 1. **Single slice, fixed name; per-VM intermediate + per-role leaf
    hierarchy (v1.1 reconciles SUPERSEDES the v1.0 flat
    `<vm-id>.scope` model).** The delegated subtree is
-   `/sys/fs/cgroup/d2b.slice` — literally that name, not
+   `/sys/fs/cgroup/d2b.slice` - literally that name, not
    configurable.
 
    - **v1.0 model (historical):** per-VM leaves at
@@ -43,11 +43,11 @@ W3 must pick:
    - **v1.1 model (CANONICAL after this ADR's v1.1 update):**
      per-VM **intermediate** cgroup directory at
      `d2b.slice/<vm-id>/` (process-free per ADR 0011 § Decision
-     item 5 — "no internal processes" in non-leaf nodes), with
+     item 5 - "no internal processes" in non-leaf nodes), with
      **per-role leaves** at `d2b.slice/<vm-id>/<role>/` for
      each broker `SpawnRunner{role}` child per
      [ADR 0018](0018-microvm-nix-removal.md) § "Sidecar/template
-     retirement — full role matrix". The role-leaf model is
+     retirement - full role matrix". The role-leaf model is
      required because v1.1 retires the per-VM systemd-template
      scope model and replaces it with one broker-spawned child
      per role; each role needs its own pidfd / cgroup.kill scope.
@@ -55,14 +55,14 @@ W3 must pick:
    Operator-facing path-class values (referenced by audit records
    per [ADR 0010](0010-wire-protocol-and-typed-errors.md) and
    [`docs/reference/cgroup-delegation.md`](../reference/cgroup-delegation.md)):
-   - `slice` — `/sys/fs/cgroup/d2b.slice` (the delegated root).
-   - `vm-interior` (v1.1 only) — `d2b.slice/<vm-id>/` (process-
+   - `slice` - `/sys/fs/cgroup/d2b.slice` (the delegated root).
+   - `vm-interior` (v1.1 only) - `d2b.slice/<vm-id>/` (process-
      free intermediate). `cgroup.kill` on this path is REFUSED
      with `cgroup-kill-on-ancestor-refused`.
-   - `vm-role-leaf` (v1.1 canonical) — `d2b.slice/<vm-id>/<role>/`
+   - `vm-role-leaf` (v1.1 canonical) - `d2b.slice/<vm-id>/<role>/`
      (leaf, per-SpawnRunner role). Carries processes; `cgroup.kill`
      allowed during declared teardown per item 6 below.
-   - `host-scoped-leaf` — leaves for SpawnRunner roles that have no
+   - `host-scoped-leaf` - leaves for SpawnRunner roles that have no
      associated workload VM. Two host-scope path patterns are
      recognized, both carrying `path_class: host-scoped-leaf`:
      - **Per-env host roles** at `d2b.slice/sys-<env>/<role>/`
@@ -104,7 +104,7 @@ W3 must pick:
    contract (`docs/reference/error-codes.md`) and the broker audit
    record `error_kind` field.
 
-   **Phase A (privileged, uid 0) — steps 1-6** (probe, controllers,
+   **Phase A (privileged, uid 0) - steps 1-6** (probe, controllers,
    cpuset inheritance, `+controller` enables, slice/leaf mkdir, fd-
    based `fchown` of the delegated subtree to `d2bd`'s uid/gid)
    run as uid 0 because they require write access above the
@@ -113,11 +113,11 @@ W3 must pick:
    [ADR 0015](0015-daemon-only-clean-break.md)'s "broker chowns
    before drop-priv" lifecycle.
 
-   **Phase B (post-delegation, uid != 0) — steps 7-8** (leaf-only
+   **Phase B (post-delegation, uid != 0) - steps 7-8** (leaf-only
    kill enforcement, uid-0 refusal guard) run after the broker has
    dropped privileges to `d2bd`'s uid. Step 8's
    `require_non_root_delegation()` (`getuid() != 0`) gates
-   **runtime mutation of the already-delegated subtree** — i.e., it
+   **runtime mutation of the already-delegated subtree** - i.e., it
    is enforced on subsequent calls into the cgroup module **AFTER
    the initial delegation completes**, not on the Phase A setup
    path. The R9 kernel reviewer flagged the earlier flat 8-step
@@ -175,7 +175,7 @@ W3 must pick:
    where pid + `/proc/<pid>/stat` field 22 are both validated.
 
    **Process-into-cgroup placement primitive** (resolves R21 kernel
-   blocker). A pidfd is NOT writable to `cgroup.procs` — the kernel
+   blocker). A pidfd is NOT writable to `cgroup.procs` - the kernel
    only accepts a PID/tgid in `cgroup.procs`. v1.1+ implementations
    MUST use one of the following Linux primitives to place the
    broker-spawned child into its role-leaf cgroup:
@@ -193,7 +193,7 @@ W3 must pick:
      child PID into the role-leaf's `cgroup.procs` file BEFORE
      calling `execve` in the child. This has a tiny race window
      where the child runs briefly in the broker's cgroup before
-     the parent's write completes — acceptable for some payloads
+     the parent's write completes - acceptable for some payloads
      but NOT for the v1.1 audit/lifecycle model where the child
      must be in its declared leaf from the first instruction.
 
@@ -209,7 +209,7 @@ W3 must pick:
    tracer); fallback parent-side-write is denied at compile
    time. No `cgroup.procs` writes from outside the broker.
 
-   **Subreaper note — v1.0 said `d2bd` sets
+   **Subreaper note - v1.0 said `d2bd` sets
    `PR_SET_CHILD_SUBREAPER`; v1.1 SUPERSEDES this for SpawnRunner
    children.** Per
    [ADR 0018](0018-microvm-nix-removal.md) § "set-booted race-free
@@ -251,7 +251,7 @@ libcgroup encapsulates the v2 delegation steps in a higher-level API.
 Rejected because:
 
 - it cannot enforce that the broker re-derives paths from the
-  trusted bundle — it accepts caller-supplied paths;
+  trusted bundle - it accepts caller-supplied paths;
 - its kill scope is process-list-based, not cgroup-leaf-bounded;
 - the C ABI surface adds a panel-relevant supply-chain dependency
   outside our existing Rust-only crate inventory;
@@ -264,7 +264,7 @@ Letting `d2b.slice` be a real `d2b.slice` systemd slice with
 Rejected because:
 
 - it makes systemd the authority over which controllers are enabled,
-  in what order, and on which ancestors — losing the
+  in what order, and on which ancestors - losing the
   bundle-derived-paths invariant;
 - the cpuset-inheritance step is implicit and varies across systemd
   versions, which breaks our `cpuset-inheritance-failed` failure-mode
@@ -338,10 +338,10 @@ the broker captured at spawn.
 
 ## Test coverage
 
-- `tests/cgroup-delegation-oracle.sh` (L1c) — exercises every refusal
+- `tests/cgroup-delegation-oracle.sh` (L1c) - exercises every refusal
   path through the fake `d2b_host::cgroup::fake::FakeCgroupBackend`
   plus the broker audit recorder.
-- `tests/pidfd-handoff.sh` (L1c) — exercises the SCM_RIGHTS transport,
+- `tests/pidfd-handoff.sh` (L1c) - exercises the SCM_RIGHTS transport,
   CLOEXEC preservation, supervisor poll registration, and
   reconciliation start-time validation.
 - KVM-backed L2 confirmation lands in a later wave.

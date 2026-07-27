@@ -31,7 +31,7 @@ let
 
   # The GPU sidecar is `crosvm device gpu`, spawned by microvm.nix's
   # cloud-hypervisor runner over vhost-user-gpu. Use the crosvm
-  # nixpkgs ships (Feb 2026, rev 4c80bf3) directly — that rev speaks
+  # nixpkgs ships (Feb 2026, rev 4c80bf3) directly - that rev speaks
   # the standardised vhost-user shmem message numbers
   # (`GET_SHMEM_CONFIG = 44`, `SHMEM_MAP = 9`, `SHMEM_UNMAP = 10`)
   # which match rust-vmm/vhost @ vhost-user-backend-v0.22.0 (the
@@ -41,7 +41,7 @@ let
   # Historical note: this used to be pinned to crosvm 18bc84d
   # (Oct 2024), which used the OLD non-standard numbers
   # (`GET_SHARED_MEMORY_REGIONS = 1004`, `SHMEM_MAP = 1000`,
-  # `SHMEM_UNMAP = 1001`) — those are what spectrum's CH 50 patch
+  # `SHMEM_UNMAP = 1001`) - those are what spectrum's CH 50 patch
   # series sent. The CH v50 -> v52 bump took us to the
   # standardised number set, and we now need the matching crosvm
   # (any rev >= the Dec 2025 commit 729f98c "Update GET_SHMEM_CONFIG
@@ -67,7 +67,7 @@ let
   # is silently bypassed (so duplicate-syscall failures recur the
   # first time the C parser sees a policy with @includes).
   #
-  # KNOWN LIMITATION — seccomp policies not
+  # KNOWN LIMITATION - seccomp policies not
   # loaded at runtime by `crosvm device gpu`.
   #
   # The symlinkJoin above adds the compiled .bpf files to the package
@@ -77,7 +77,7 @@ let
   # NO --seccomp-policy-dir flag in this crosvm rev (Feb 2026,
   # 4c80bf3). Verified: `crosvm device gpu --help` exposes only
   # --socket-path, --fd, --wayland-sock, --resource-bridge,
-  # --x-display, and --params — no seccomp knob.
+  # --x-display, and --params - no seccomp knob.
   #
   # Loading seccomp policies at runtime for the gpu device subcommand
   # requires a crosvm-side change. We retain the .bpf files in the

@@ -159,7 +159,7 @@ pub enum BrokerRequest {
     /// other active claim holds this busid. The broker validates the busid shape,
     /// acquires the per-busid OFD lock, and runs the `usbip bind` helper.
     ///
-    /// Currently a typed stub (`Unimplemented`) — the live handler wires the
+    /// Currently a typed stub (`Unimplemented`) - the live handler wires the
     /// per-device backend path without restarting shared per-env backends.
     UsbipExplicitBind(UsbipExplicitBindRequest),
     /// Explicit-attach: install a per-busid nftables carve-out scoped
@@ -203,7 +203,7 @@ pub enum BrokerRequest {
     /// whose bundle ProcessNode has `DiskInit` plan-ops (currently CH
     /// when `writableStoreOverlay` is enabled). The broker resolves
     /// the target path, size, mode, and ownership from the trusted
-    /// bundle — the daemon names only the opaque `vm_id`.
+    /// bundle - the daemon names only the opaque `vm_id`.
     DiskInit(DiskInitRequest),
     /// Open the FIDO/CTAP hidraw node for the named device selector.
     ///
@@ -213,7 +213,7 @@ pub enum BrokerRequest {
     /// the fd via `SCM_RIGHTS`. The daemon holds the fd for the CTAP
     /// relay session lifetime.
     ///
-    /// Typed stub — live handler target: `live_security_key_open_device`.
+    /// Typed stub - live handler target: `live_security_key_open_device`.
     SecurityKeyOpenDevice(crate::security_key::SecurityKeyOpenDeviceRequest),
     /// Apply udev group grants for configured FIDO hidraw nodes.
     ///
@@ -222,7 +222,7 @@ pub enum BrokerRequest {
     /// vendor/product/serial-matched hidraw nodes. Called once during
     /// host activation or when the device selector list changes.
     ///
-    /// Typed stub — live handler target: `live_security_key_apply_udev_rules`.
+    /// Typed stub - live handler target: `live_security_key_apply_udev_rules`.
     SecurityKeyApplyUdevRules(crate::security_key::SecurityKeyApplyUdevRulesRequest),
 }
 
@@ -683,7 +683,7 @@ pub struct CreateTapFdRequest {
 
 /// The slice path is pinned by the bundle
 /// (`/sys/fs/cgroup/d2b.slice`). It is **not** taken from caller
-/// input — the broker reads it from its own bundle copy via `scope_id`.
+/// input - the broker reads it from its own bundle copy via `scope_id`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DelegateCgroupV2Request {
@@ -837,7 +837,7 @@ pub struct LaunchMinijailChildRequest {
 }
 
 /// `module_name` stays as the (already-validated)
-/// [`ModuleName`] newtype because it is genuinely a public input —
+/// [`ModuleName`] newtype because it is genuinely a public input -
 /// the broker still looks it up in the trusted kernel-module
 /// matrix and refuses anything not in the allow list. The matrix
 /// itself never crosses the wire.
@@ -1175,7 +1175,7 @@ pub struct PrepareStoreViewRequest {
 /// the daemon and broker both read it from the same trusted bundle, so
 /// a mismatch means a stale daemon is racing the activator and the op
 /// is refused fail-closed. It is a display/wire token only and is never
-/// used as the on-disk generation key — the broker derives the
+/// used as the on-disk generation key - the broker derives the
 /// collision-free `generation_id` (full closure identity, ADR 0027)
 /// from its trusted closure copy.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1569,10 +1569,10 @@ pub struct SpawnRunnerRequest {
     /// VM scope the runner belongs to.
     pub vm_id: VmId,
     /// Per-VM role this runner fills. Must be unique across the VM's
-    /// active runners — the daemon's pidfd table is keyed on
+    /// active runners - the daemon's pidfd table is keyed on
     /// `(vm_id, role_id)` and a duplicate registration fails closed.
     pub role_id: RoleId,
-    /// Role selector — picks the argv generator the broker applies to
+    /// Role selector - picks the argv generator the broker applies to
     /// the bundle row anchored by `bundle_runner_intent_ref`.
     pub role: RunnerRole,
     /// Opaque reference into the trusted bundle's runner-intent table.
@@ -1594,7 +1594,7 @@ pub struct SpawnRunnerRequest {
     /// Additive: present for VMs that are declared as realm workloads;
     /// absent (`None`) for VMs that predate realm workload declarations.
     /// The broker treats `None` as "no realm identity available" and does
-    /// not reject the request — this field is for audit, observability, and
+    /// not reject the request - this field is for audit, observability, and
     /// routing purposes only. The backend-specific runtime config
     /// (`vm_id`, `role`, `role_id`, `bundle_runner_intent_ref`) is always
     /// carried in the existing typed fields, never inside this identity.
@@ -1622,7 +1622,7 @@ pub enum RunnerAllocationKind {
     /// per-VM bundle row).
     VsockCid,
     /// CH `--net fd=N` value when running under
-    /// [`crate::broker_wire::CreateTapFdRequest`] — the daemon
+    /// [`crate::broker_wire::CreateTapFdRequest`] - the daemon
     /// references the SCM_RIGHTS slot the broker handed back in the
     /// matching CreateTapFd response.
     TapFdSlot,
@@ -1651,7 +1651,7 @@ pub struct SpawnRunnerResponse {
     /// reconciliation rejects a stale (pid, start_time) tuple.
     pub start_time_ticks: u64,
     /// Index into the SCM_RIGHTS fd vector the daemon should treat as
-    /// the spawned process's pidfd. Always `0` today — kept explicit
+    /// the spawned process's pidfd. Always `0` today - kept explicit
     /// so future multi-fd spawn responses (e.g. CH API socket + pidfd)
     /// have an existing wire slot.
     pub pidfd_index: u32,
@@ -1720,7 +1720,7 @@ impl BrokerCallerRole {
 // Typed broker request scaffolds for the host-prep DAG steps. The
 // dispatchers currently return `BrokerError::Unimplemented` until real
 // handlers are wired. The structs follow the opaque-id discipline: the
-// daemon never names raw paths/uids/argv on the wire — only
+// daemon never names raw paths/uids/argv on the wire - only
 // bundle-resolved intent references.
 // ---------------------------------------------------------------
 
@@ -2257,7 +2257,7 @@ mod tests {
 
     /// Earlier rejection guards lumped multiple legacy authority fields
     /// into a single test payload, so any one field being accidentally
-    /// reintroduced would still be caught — but the guard could not
+    /// reintroduced would still be caught - but the guard could not
     /// point at which field. The helper + per-field tests below assert
     /// each removed raw field rejects on its own, so a future regression
     /// that reintroduces exactly one of them fails closed with a
@@ -2268,7 +2268,7 @@ mod tests {
     /// use values matching each field's legacy wire type. Without this,
     /// a future regression that reintroduces a numeric field like
     /// `ownerUid`/`ownerGid`/`mtu` would still pass via serde
-    /// type-mismatch on a string value — the gate would see an error and
+    /// type-mismatch on a string value - the gate would see an error and
     /// accept it without proving the wire contract actually refused the
     /// field name.
     fn require_wire_unknown_field_rejection(kind: &str, base: serde_json::Value, unknown: &str) {
@@ -2441,7 +2441,7 @@ mod tests {
     #[test]
     fn launch_minijail_child_rejects_inline_authority_fields() {
         // Legacy argv, env, uid, gid, caps, and seccomp_profile fields
-        // are forbidden — deny_unknown_fields traps them.
+        // are forbidden - deny_unknown_fields traps them.
         let frame = encode_frame(&serde_json::json!({
             "kind": "LaunchMinijailChild",
             "payload": {

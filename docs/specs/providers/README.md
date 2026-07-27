@@ -5,8 +5,8 @@ control plane. Each dossier is a member of the atomic ADR 0046 specification set
 indexed by [`../README.md`](../README.md); the parent decision is
 [`docs/adr/0046-d2b-3-provider-control-plane.md`](../../adr/0046-d2b-3-provider-control-plane.md).
 
-This is a proposed, documentation-only set under user review. All dossiers are
-`Proposed`; nothing here creates crates, packages, controllers, services, or
+This is an accepted, documentation-only set. All dossiers are
+`Accepted`; nothing here creates crates, packages, controllers, services, or
 Provider resources.
 
 ## What a Provider is
@@ -26,11 +26,11 @@ separately sandboxed controller, service, and worker binaries, but it declares
 exactly one Provider identity. Each Provider crate root MUST provide the four
 workspace-policy paths:
 
-- `src/` — controller, service, and worker binaries and shared library code;
-- `tests/` — fast hermetic unit and binary integration tests with runtime
+- `src/` - controller, service, and worker binaries and shared library code;
+- `tests/` - fast hermetic unit and binary integration tests with runtime
   budgets (D094);
-- `integration/` — slower cross-process/container integration fixtures (D094);
-- `README.md` — crate overview covering its required topics.
+- `integration/` - slower cross-process/container integration fixtures (D094);
+- `README.md` - crate overview covering its required topics.
 
 Each dossier's **Implementation work items** assign exact work items and files
 to each of those paths.
@@ -48,8 +48,8 @@ filesystem, network, or device effects directly.
 
 Component state is **status-first** (D086/D087): bounded, non-secret state lives
 in the owning resource's `status` by default. A component declares a
-per-component `Volume` — created and deleted by **core ProviderDeployment**, not
-by the semantic controller — only when its state is secret/sensitive, large or
+per-component `Volume` - created and deleted by **core ProviderDeployment**, not
+by the semantic controller - only when its state is secret/sensitive, large or
 binary/file content, or unsuitable for revisioned API/status churn. Stateless
 and status-sufficient components declare none. When declared, those state
 Volumes are `Provider/volume-local`-backed, `persistent`, with a nonzero quota

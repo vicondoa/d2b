@@ -106,7 +106,7 @@ paths outside the marker-scoped nftables model.
 - plan.md, "Networking model"
 - plan.md, "Privileged broker contract"
 - plan.md, "Required test families"
-- AGENTS.md, "Critical subsystems — handle with care"
+- AGENTS.md, "Critical subsystems - handle with care"
 - AGENTS.md, "Don'ts (security-relevant)"
 
 ## inet d2b table hook priorities and chain layout
@@ -122,14 +122,14 @@ The concrete chain layout is:
 > R11 networking-r11-1): [ADR 0013](0013-w3-firewall-coexistence-policy.md)
 > § "Chain layout (exactly four chains)" SUPERSEDES the six-chain
 > `d2b_*`-named `-300/+300` layout below for v1.1+ implementations.
-> ADR 0013 declares exactly four chains — **`prerouting`,
+> ADR 0013 declares exactly four chains - **`prerouting`,
 > `forward`, `output`, `input`** (no `d2b_*` prefix; the chain
 > NAMES inside the `inet d2b` table use the hook names
-> directly per ADR 0013's table) — at priorities `-150` /
+> directly per ADR 0013's table) - at priorities `-150` /
 > `-5` documented in
 > [`docs/reference/inet-d2b-chains.md`](../reference/inet-d2b-chains.md);
 > the six-chain split-by-policy layout in the table below uses
-> the legacy `d2b_*` naming and `-300/+300` priorities — these
+> the legacy `d2b_*` naming and `-300/+300` priorities - these
 > are the v1.0 historical decision retained for narrative
 > continuity. v1.1 implementation work (broker nftables emit +
 > drift detector) MUST follow ADR 0013 + the reference doc, NOT

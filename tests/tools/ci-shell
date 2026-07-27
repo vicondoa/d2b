@@ -1,0 +1,19 @@
+#!/bin/sh
+# Continuous-integration step shell.
+#
+# Workflows name this as `sh tests/tools/ci-shell {0}`. On the hosted runner,
+# sh is dash: it neither sources BASH_ENV nor imports exported Bash functions.
+# Until the scrubber has exec'd, keep this wrapper to shell builtins so a
+# poisoned Bash function cannot shadow a helper command.
+#
+# The step script is run through scrub-shell-environment, so exported shell
+# functions and BASH_ENV cannot reach it.
+
+set -eu
+
+case "$0" in
+  */*) here=${0%/*} ;;
+  *) here=. ;;
+esac
+
+exec "$here/scrub-shell-environment" -c 'exec bash "$@"' d2b-ci "$@"

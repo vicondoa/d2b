@@ -1,4 +1,4 @@
-# Provider capability matrix — console and audio
+# Provider capability matrix - console and audio
 
 **Diataxis category:** reference.
 
@@ -26,11 +26,11 @@ For display and virtual I/O capabilities beyond console and audio, see
 
 | Provider | Console surface | Console transport | Persistent drainer | Notes |
 | --- | --- | --- | --- | --- |
-| Cloud Hypervisor NixOS | ✓ | Broker-owned `--serial` backend; attach-safe and non-blocking. | Daemon-side ring-buffer drainer; broker or broker-spawned component owns the fd. | See [Console transport — Cloud Hypervisor](#console-transport--cloud-hypervisor). |
-| qemu-media | ✓ | Broker-owned fd-backed chardev (PTY/fd-store design, not a qemu-created path socket). | Same daemon ring-buffer contract; broker-owned fd. | Qemu path sockets weaken permission posture; the fd-backed design is the posture baseline. See [Console transport — qemu-media](#console-transport--qemu-media). |
-| ACA sandbox | ✓ via guestd | Provider guestd terminal/console over ADR 0032 relay/peer transport. | Not applicable (provider-managed draining). | Missing guestd is provider misconfiguration; see [ACA console — provider misconfiguration](#aca-console--provider-misconfiguration). |
+| Cloud Hypervisor NixOS | ✓ | Broker-owned `--serial` backend; attach-safe and non-blocking. | Daemon-side ring-buffer drainer; broker or broker-spawned component owns the fd. | See [Console transport - Cloud Hypervisor](#console-transport--cloud-hypervisor). |
+| qemu-media | ✓ | Broker-owned fd-backed chardev (PTY/fd-store design, not a qemu-created path socket). | Same daemon ring-buffer contract; broker-owned fd. | Qemu path sockets weaken permission posture; the fd-backed design is the posture baseline. See [Console transport - qemu-media](#console-transport--qemu-media). |
+| ACA sandbox | ✓ via guestd | Provider guestd terminal/console over ADR 0032 relay/peer transport. | Not applicable (provider-managed draining). | Missing guestd is provider misconfiguration; see [ACA console - provider misconfiguration](#aca-console--provider-misconfiguration). |
 
-### Console transport — Cloud Hypervisor
+### Console transport - Cloud Hypervisor
 
 Cloud Hypervisor VMs may use a `--serial socket=...` backend only
 when the implementation demonstrates the socket is non-blocking and
@@ -48,7 +48,7 @@ If the fd is held by a persistent broker component, that component
 owns the drainer. The broker must remain the sole reader of the
 console fd during a `d2bd` restart so draining is not interrupted.
 
-### Console transport — qemu-media
+### Console transport - qemu-media
 
 qemu-media VMs do not run `guestd`. The daemon accesses the console
 through a broker-owned fd-backed chardev. The broker opens a socketpair
@@ -58,7 +58,7 @@ qemu-created UNIX path socket.
 
 **Why not a qemu-created path socket**: A `chardev socket,path=...`
 entry causes QEMU to bind and listen on the path, inverting the
-ownership relationship — the daemon connects rather than holds. The
+ownership relationship - the daemon connects rather than holds. The
 filesystem path is addressable by any process that can traverse the
 parent directory. A stale socket file from a previous crash requires an
 unlink-then-rebind sequence that races with reconnect attempts. A
@@ -70,7 +70,7 @@ daemon restart, the broker fd owner survives the restart (it is not the
 daemon main process) so console draining is not paused. The drainer
 contract is identical to the Cloud Hypervisor case.
 
-### ACA console — provider misconfiguration
+### ACA console - provider misconfiguration
 
 ACA sandboxes are expected to run a guestd-compatible in-sandbox
 agent. If the agent is absent, the daemon returns a typed
@@ -112,11 +112,11 @@ not a holder of the console fd.
 
 | Provider | Host audio enforcement | Guest audio enforcement | Offline audio policy | Notes |
 | --- | --- | --- | --- | --- |
-| Cloud Hypervisor NixOS | ✓ PipeWire/vhost-user-sound controller | ✓ via `guestd` over authenticated guest-control | N/A (live state) | Reports `enforcement: host-and-guest` when both sides apply; host-side `off` is fail-closed; see [Audio enforcement — Cloud Hypervisor](#audio-enforcement--cloud-hypervisor). |
-| qemu-media | ✓ host/qemu audio subset when declared | `unsupported` — `enforcement: unsupported` reported for guest-side capability | ✓ Persisted offline policy | See [Audio enforcement — qemu-media](#audio-enforcement--qemu-media). |
+| Cloud Hypervisor NixOS | ✓ PipeWire/vhost-user-sound controller | ✓ via `guestd` over authenticated guest-control | N/A (live state) | Reports `enforcement: host-and-guest` when both sides apply; host-side `off` is fail-closed; see [Audio enforcement - Cloud Hypervisor](#audio-enforcement--cloud-hypervisor). |
+| qemu-media | ✓ host/qemu audio subset when declared | `unsupported` - `enforcement: unsupported` reported for guest-side capability | ✓ Persisted offline policy | See [Audio enforcement - qemu-media](#audio-enforcement--qemu-media). |
 | ACA sandbox | None (no local host PipeWire nodes or broker mutations) | ✓ remote guestd policy only | None | Reports `enforcement: guest-only` when guestd applies; no local audio state files or broker host mutations for ACA sandboxes; see [ACA audio](#aca-audio). |
 
-### Audio enforcement — Cloud Hypervisor
+### Audio enforcement - Cloud Hypervisor
 
 Cloud Hypervisor NixOS VMs support both host-side PipeWire enforcement
 and guest-side enforcement via `guestd`:
@@ -153,7 +153,7 @@ and guest-side enforcement via `guestd`:
 - Multi-target `audio status` returns per-target errors and remediations
   so one misconfigured provider does not fail the entire status command.
 
-### Audio enforcement — qemu-media
+### Audio enforcement - qemu-media
 
 qemu-media VMs do not run `guestd`. The daemon:
 
@@ -229,21 +229,21 @@ span ID; per-chunk or per-byte labelling is forbidden.
 
 ## Related references
 
-- [ADR 0041](../adr/0041-console-and-audio-controls.md) — binding decision
+- [ADR 0041](../adr/0041-console-and-audio-controls.md) - binding decision
   for the provider-capability-aware console and audio design, including
   the QEMU chardev preference rationale, stream isolation constraints,
   and audio lock semantics.
-- [Display and virtual I/O capabilities](./display-io-capabilities.md) —
+- [Display and virtual I/O capabilities](./display-io-capabilities.md) -
   display, clipboard, USB, HID, GPU, and video sidecar capability boundaries.
-- [Provider-managed sandboxes](./provider-managed-sandboxes.md) — Azure
+- [Provider-managed sandboxes](./provider-managed-sandboxes.md) - Azure
   Container Apps adapter capability matrix.
-- [Runtime provider selection](./runtime-provider-selection.md) — local
+- [Runtime provider selection](./runtime-provider-selection.md) - local
   runtime provider boundaries and capability gating.
-- [Audio component reference](./components-audio.md) — Cloud Hypervisor
+- [Audio component reference](./components-audio.md) - Cloud Hypervisor
   audio component options, lifecycle, and hardening details.
-- [qemu-media reference](./qemu-media.md) — qemu-media runtime details.
-- [CLI contract — `console`](./cli-contract.md#console) — `d2b console`
+- [qemu-media reference](./qemu-media.md) - qemu-media runtime details.
+- [CLI contract - `console`](./cli-contract.md#console) - `d2b console`
   argument and exit-code contract.
-- [CLI contract — `audio`](./cli-contract.md#audio-status) — `d2b audio`
+- [CLI contract - `audio`](./cli-contract.md#audio-status) - `d2b audio`
   subcommands and exit-code contract.
-- [Daemon API](./daemon-api.md) — `ConsoleOp`/`AudioOp` public wire types; see the [console and audio wire types note](./daemon-api.md#console-and-audio-wire-types).
+- [Daemon API](./daemon-api.md) - `ConsoleOp`/`AudioOp` public wire types; see the [console and audio wire types note](./daemon-api.md#console-and-audio-wire-types).

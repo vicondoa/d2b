@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/integration/distro-matrix/ubuntu-2404-tier1.sh— (rollup):
+# tests/integration/distro-matrix/ubuntu-2404-tier1.sh - (rollup):
 # Ubuntu 24.04 LTS x86_64 Tier-1 smoke harness scaffold.
 #
 # This is the **scaffold** half of the deliverable. The Tier-1
@@ -44,6 +44,19 @@ set -euo pipefail
 HERE=$(dirname "$(readlink -f "$0")")
 ROOT=${ROOT:-${D2B_REPO:-$(cd "$HERE/../../.." && pwd)}}
 FIXTURES="$HERE/fixtures/ubuntu-2404"
+export ROOT
+
+# --- heavy-gate sole-use semaphore (ADR 0046) ------------------------------
+# This Tier-1 harness is a genuinely heavy lane: it requires root (sudo),
+# requires /dev/kvm, and runs `cargo build --release --workspace` plus a second
+# release build of the broker, then boots a VM. It MUST route through the
+# sole-use heavy-gate semaphore rather than trusting the forgeable
+# D2B_HEAVY_GATE marker, so it verifies a genuinely-held slot (re-using an
+# inherited one when an aggregating runner already holds it, acquiring one via
+# re-exec otherwise) before doing any of that work.
+# shellcheck source=tests/tools/heavy-gate-reexec.sh
+. "$ROOT/tests/tools/heavy-gate-reexec.sh"
+d2b_heavy_gate_reexec "$ROOT" "$0" "$@"
 
 DISTRO="ubuntu-24.04"
 ARCH="x86_64-linux"
@@ -81,13 +94,13 @@ preflight_or_skip() {
         skip "Tier-1 smoke needs root for KVM + nft + ip route"
     fi
     if ! [ -e /dev/kvm ]; then
-        skip "no /dev/kvm — Tier-1 smoke requires KVM"
+        skip "no /dev/kvm - Tier-1 smoke requires KVM"
     fi
     if ! command -v nix >/dev/null 2>&1; then
-        skip "nix not on PATH — install nix or run from a NixOS host"
+        skip "nix not on PATH - install nix or run from a NixOS host"
     fi
     if ! [ -f /etc/os-release ]; then
-        skip "no /etc/os-release — cannot identify host distro"
+        skip "no /etc/os-release - cannot identify host distro"
     fi
     if ! grep -q '^ID=ubuntu' /etc/os-release; then
         log "host is not Ubuntu; running scaffold validation only"

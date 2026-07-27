@@ -4,7 +4,7 @@
 | --- | --- |
 | Spec ID | `ADR-046-provider-credential-entra` |
 | Parent | ADR 0046 |
-| Status | Proposed |
+| Status | Accepted |
 | Version | 2 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
@@ -227,10 +227,22 @@ spec:
     allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 status:
-  readiness: Ready
-  endpointGeneration: 7
-  observedProducerGeneration: 3
-  connectionAvailability: available
+  resource:
+    readiness: Ready
+    endpointGeneration: 7
+    observedProducerGeneration: 3
+    connectionAvailability: available
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 Endpoint spec/status never contains raw Unix paths, fd numbers, browser URLs,
@@ -455,6 +467,7 @@ Endpoint exported by that Guest. d2b core does not import the sibling flake.
       providerRef = "Provider/runtime-cloud-hypervisor";
       defaultDomain = "system";
       allowedDomains = [ "system" "user" ];
+      defaultUserRef = "User/alice";  # required when "user" is in allowedDomains (D116)
       systemArtifactId = "work-identity-system";
       config.imports = [ inputs.entrablau.nixosModules.default ];
     };
@@ -697,10 +710,12 @@ or any digest derived from Credential identity.
 
 Per D094 and `ADR-046-validation-and-delivery` §10.16, this Provider's `src/`
 unit tests and `tests/*.rs` hermetic suite are fast, in-process, deterministic,
-and parallel-safe: an individual normal test has p95 ≤50 ms with no wall-clock
+and parallel-safe: an individual normal test has an advisory wall-clock p95
+diagnostic threshold of <=50 ms; gate enforcement is aggregate per-crate
+process CPU only. There is no wall-clock
 sleep, and `cargo test -p d2b-provider-credential-entra --lib --tests`
-completes in ≤2 s warm-cache execution time (compilation excluded). They use a
-deterministic fake clock/RNG and the toolkit fakes/FakeEffectPort only — no
+completes in ≤3 s warm-cache execution time (compilation excluded). They use a
+deterministic fake clock/RNG and the toolkit fakes/FakeEffectPort only - no
 process spawn, container, network, DBus, systemd, broker daemon, Nix eval/build,
 KVM, USB/GPU/TPM hardware, or live cloud, and no filesystem tree beyond tiny
 temp fixtures. Any scenario needing those lives only in `integration/`, which
@@ -708,13 +723,13 @@ keeps a lane timeout/budget, parallel isolation, and fake external services by
 default; such a need is re-placed into `integration/`, never given a sleep,
 larger timeout, or `#[ignore]`. Bounded crypto/property tests are the only
 classified exception, each named with a capped case count and a declared higher
-per-test budget.
+per-test advisory threshold.
 
 Per D094, each replaced current-code test is retired with an explicit
 keep/adapt/move/delete disposition and a removal gate: the minimum reusable
 semantic assertions migrate into this crate's hermetic `tests/`, and the old
 duplicate tests, shell gates, fixtures, static artifacts, CI jobs, and manifest
-entries are deleted once successor coverage and the removal proof pass —
+entries are deleted once successor coverage and the removal proof pass -
 updating `tests/layer1-jobs.json`, the closed gate manifests, the
 flake/matrix/Nix-unit pins, the generated ledgers, and the CI workflow shards.
 Old and new suites never run in parallel indefinitely.

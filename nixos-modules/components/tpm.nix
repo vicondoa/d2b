@@ -4,7 +4,7 @@
 # Wires cloud-hypervisor's `--tpm socket=...` to the per-VM
 # d2b-<name>-swtpm.service running on the host (see host.nix for
 # the per-VM systemd unit). State persists in
-# /var/lib/d2b/swtpm/<name>/ on the host across launches — wiping
+# /var/lib/d2b/swtpm/<name>/ on the host across launches - wiping
 # it looks like device tampering to remote IdPs and forces
 # re-enrolment.
 { lib, pkgs, config, ... }:
@@ -20,7 +20,7 @@
   # is owned d2bd:d2b 0750 with default ACL granting every
   # per-VM ephemeral UID rwx (see host-activation.nix
   # d2bRoleUidAcls). Putting the TPM socket there lets cloud-hypervisor
-  # connect via the inherited named-user ACL — no separate /run/swtpm/ dir
+  # connect via the inherited named-user ACL - no separate /run/swtpm/ dir
   # or per-VM ACL needed.
   microvm.cloud-hypervisor.extraArgs = [
       "--tpm" "socket=/run/d2b/vms/${config.networking.hostName}/tpm.sock"
@@ -121,7 +121,7 @@
       # ECC P-256 first (systemd preference), RSA-2048 fallback.
       # Attributes match TCG TPM v2.0 Provisioning Guidance §7.5.1.
       # tpm2-tools 5.7's tpm2_attr_util.c only accepts LOWERCASE tokens
-      # for the -a list — uppercase produces 'Unknown token: "DECRYPT"'.
+      # for the -a list - uppercase produces 'Unknown token: "DECRYPT"'.
       ATTRS="decrypt|fixedparent|fixedtpm|noda|restricted|sensitivedataorigin|userwithauth"
       if tpm2_createprimary -C o -G ecc256:aes128cfb \
           -a "$ATTRS" -c "$CTX"; then

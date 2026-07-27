@@ -4,7 +4,7 @@
 | --- | --- |
 | Spec ID | `ADR-046-components-processes-and-sandbox` |
 | Parent | ADR 0046 |
-| Status | Proposed |
+| Status | Accepted |
 | Version | 1 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
@@ -37,9 +37,9 @@ later Process controller, including Provider/system-systemd.
 
 Provider state Volumes are optional and declared only under the storage-need
 test (see "Static Provider deployment and optional component state Volumes"
-below and `ADR-046-provider-state`). The fixed bootstrap components — the first
+below and `ADR-046-provider-state`). The fixed bootstrap components - the first
 `Provider/volume-local` controller instance on each execution target, and
-(where present) `Provider/system-core` and `Provider/system-minijail` — keep
+(where present) `Provider/system-core` and `Provider/system-minijail` - keep
 their bounded non-secret operational state in the owning resource's `status`
 subresource and the core Operation ledger, and declare **no** state Volume.
 Because no component requires a state Volume before a `volume-local` instance
@@ -73,7 +73,7 @@ bootstraps its own Process (the two fixed exceptions are system-core, which
 has no Process, and system-minijail, which launches every later Process
 controller including system-systemd's). The static graph is created once, at
 Provider install/reconcile time, from the manifest's declared component
-descriptors — never invented, widened, or self-launched by the Provider's own
+descriptors - never invented, widened, or self-launched by the Provider's own
 code at runtime.
 
 Controllers may create authorized *dynamic* children beyond that static
@@ -104,7 +104,7 @@ Each declared state Volume uses the canonical full Volume schema (see
 `stateSchema`/`persistenceClass`/`sensitivityClass` fields defined in
 `ADR-046-provider-state`, and its layout is owned by a dedicated `User/<name>`
 principal drawn from a bounded, Nix-preprovisioned pool sized to the
-Provider descriptor's fixed controller/service/worker/namespace counts —
+Provider descriptor's fixed controller/service/worker/namespace counts -
 never an ad hoc principal created at runtime. Core ProviderDeployment creates
 every *declared* state Volume from the manifest's signed state declarations
 before creating and launching the corresponding component Process, so the
@@ -114,7 +114,7 @@ component mounts only its own declared view of its own state Volume (a
 cross-Provider sharing of another component's state Volume. Resource rows,
 resource `status`, and the core Operation ledger remain the sole authority for
 resource references, generation counters, backoff/idempotency state, and
-session state — a component's state Volume payload never duplicates any of
+session state - a component's state Volume payload never duplicates any of
 that; it holds only the component's private secret/large/revision-unsuitable
 working payload. Creating a declared state Volume normally requires a
 `Provider/volume-local` controller instance to already be running on that same
@@ -130,19 +130,19 @@ worker needs is inherited through its LaunchTicket at launch time. The one
 narrow exception: a worker may be declared to own its exact workload child
 process when that child is the worker's manifest-fixed data-plane purpose
 (for example, a persistent-shell supervisor worker owning its shell PTY
-child) — and only then, under an explicit descriptor policy naming that exact
+child) - and only then, under an explicit descriptor policy naming that exact
 child relationship. This exception never grants a worker broker, bus, or
 arbitrary child-spawn authority beyond that one fixed relationship.
 
 ## ProviderSupervisor and EffectPort
 
-No Provider process — including a primitive Process, Volume, Network, or
-Device Provider — imports the broker crate, receives a broker socket or DTO,
+No Provider process - including a primitive Process, Volume, Network, or
+Device Provider - imports the broker crate, receives a broker socket or DTO,
 directly opens a host path/device/systemd socket, or performs privileged
 mutation itself. A Provider controller/service validates and decides semantics
 only, then calls an injected async typed **EffectPort** trait using opaque
 resource/intent/template/policy IDs. Core owns a small, fixed set of effect
-adapters — one per effect domain — that privately map each EffectPort call to
+adapters - one per effect domain - that privately map each EffectPort call to
 the actual broker/allocator/systemd/user/guest/kernel operation. The broker
 remains the sole privileged executor and independent audit owner of every
 mutation; no effect adapter and no Provider bypasses it.
@@ -184,7 +184,7 @@ state, or registers services/commands.
 The same pattern generalizes to the other primitive domains: volume-local and
 volume-virtiofs call a `VolumeLayoutEffectPort`/`VolumeSourceEffectPort` with
 the Volume resource UID, layout-entry index, and resolved semantic
-owner/mode/ACL settings — never a raw host path or broker DTO — and the
+owner/mode/ACL settings - never a raw host path or broker DTO - and the
 volume-domain effect adapter performs the actual broker layout operation
 (`ADR-046-resources-volume`). Network and Device Providers call the equivalent
 `NetworkEffectPort`/`DeviceEffectPort` with opaque resource/intent IDs. Every
@@ -462,6 +462,6 @@ pre-start effects, fine-grained ACL/device policy, or restart semantics.
 | Destination | `packages/d2b-provider-system-systemd/`, `packages/d2b-provider-system-minijail/` |
 | Detailed design | Two Process/EphemeralProcess implementations, pidfd/wait ownership, system/user domains Primary reuse disposition: `adapt`. Preserved source-plan detail: extract/adapt. |
 | Integration | Zone-installed Providers/controller instances per Host/Guest |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Identical schema/status conformance plus provider-specific adoption |
 | Removal proof | Old helpers retained until host/user/guest parity |

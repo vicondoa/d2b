@@ -57,7 +57,7 @@ fn main() {
         std::process::exit(0);
     } else {
         eprintln!(
-            "no-bash-ast-walker: FAIL — {} violation(s):",
+            "no-bash-ast-walker: FAIL - {} violation(s):",
             violations.len()
         );
         for v in &violations {

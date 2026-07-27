@@ -7,7 +7,7 @@
 #
 # Defaults discover the registry from the deployed resource group. ACR has
 # admin disabled, so we push with a short-lived AAD token (az acr login
-# --expose-token) — no stored registry credentials.
+# --expose-token) - no stored registry credentials.
 set -euo pipefail
 
 REGION="${D2B_REGION:-centralus}"

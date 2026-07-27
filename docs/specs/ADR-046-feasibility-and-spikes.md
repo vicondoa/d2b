@@ -4,7 +4,7 @@
 | --- | --- |
 | Spec ID | `ADR-046-feasibility-and-spikes` |
 | Parent | ADR 0046 |
-| Status | Proposed |
+| Status | Accepted |
 | Version | 1 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
@@ -121,7 +121,7 @@ nothing further needs to run before the affected decisions can be treated as
 settled for planning purposes. Re-running them is not a prerequisite for any
 work item below.
 
-### E1 — kcp runtime-substrate rejection (decision D003)
+### E1 - kcp runtime-substrate rejection (decision D003)
 
 | Field | Value |
 | --- | --- |
@@ -129,26 +129,26 @@ work item below.
 | Measured result | Approximately 490 MiB RSS and a 176 MiB executable for a minimal kcp-based control plane instance. |
 | Source of the number | Parent ADR (`docs/adr/0046-d2b-3-provider-control-plane.md`, "A kcp feasibility spike proved ... measured approximately 490 MiB RSS and a 176 MiB executable") and `ADR-046-decision-register` entry D003 ("The spike proved desired object semantics but measured about 490 MiB RSS and a 176 MiB executable."). |
 | Original artifact location | Not present in this repository at any inspected commit (`b5ddbed6`, `a1cc0b2d`, or main `HEAD`); the measurement is retained only as narrative evidence in the two citations above. |
-| Semantics proven useful and retained | Typed spec/status, revisions, watches, optimistic conflicts, owner/finalizer behavior, resource hierarchy, and controller-client ergonomics — all carried into the native `ADR-046-resource-object-model` / `ADR-046-resource-store-redb` / `ADR-046-resource-reconciliation` design without the Kubernetes-API/etcd/workqueue machinery. |
+| Semantics proven useful and retained | Typed spec/status, revisions, watches, optimistic conflicts, owner/finalizer behavior, resource hierarchy, and controller-client ergonomics - all carried into the native `ADR-046-resource-object-model` / `ADR-046-resource-store-redb` / `ADR-046-resource-reconciliation` design without the Kubernetes-API/etcd/workqueue machinery. |
 | Consequence | D003: kcp is rejected as the v3 runtime substrate. D004-D006: one embedded redb database per Zone, one writer with concurrent MVCC readers, embedded in the Zone runtime process, replaces it. |
 | Reproducibility disposition | Not reproduced by this spec (anti-claim rule 4). Any future dispute about the number must re-derive it against a stated kcp version/build profile as a new, separately reviewed spike; this spec does not schedule that work because no ADR 0046 work item depends on it. |
 
-### E2 — redb selection rationale (decisions D004, D005, D006)
+### E2 - redb selection rationale (decisions D004, D005, D006)
 
 redb is selected as the per-Zone embedded store on **design-level**, not
 **workload-level**, grounds:
 
-- **Embedded, pure Rust, no separate server process** — avoids the
+- **Embedded, pure Rust, no separate server process** - avoids the
   kcp-class footprint measured in E1 (no separate apiserver/etcd binary, no
   gRPC/HTTP control-plane surface to run per Zone).
-- **ACID transactions with one writer and concurrent MVCC readers** — matches
+- **ACID transactions with one writer and concurrent MVCC readers** - matches
   D005 (single-writer optimistic-conflict model) without an external lock
   manager.
-- **Crash-safe B-tree storage with an `FileBackend::new(File)`-shaped API** —
+- **Crash-safe B-tree storage with an `FileBackend::new(File)`-shaped API** -
   matches `ADR-046-resource-store-redb`'s "Ownership and process boundary"
   requirement that the store never resolves a caller-controlled path; the
   storage owner passes one already-open `File`.
-- **No wire protocol of its own** — every client access is mediated by
+- **No wire protocol of its own** - every client access is mediated by
   `d2b-bus`/ComponentSession per D011; redb is never reachable except through
   the one embedding Zone runtime process (D006).
 
@@ -171,7 +171,7 @@ redb = { version = "=4.1.0", default-features = false }
 # the pinned packages/rust-toolchain.toml channel 1.94.1); edition 2024.
 ```
 
-### E3 — main a1cc0b2d ComponentSession/Noise/Unix/vsock transport re-verification
+### E3 - main a1cc0b2d ComponentSession/Noise/Unix/vsock transport re-verification
 
 `ADR-046-componentsession-and-bus` cites main commit `a1cc0b2d` (`ADR-0045
 W9: coordinate toolkit and sibling cutover (#314)`) as the exact reuse source
@@ -201,7 +201,7 @@ git worktree remove /path/scratch --force   # cleanup; no artifact retained
 | **Total** | | | **70 passed, 0 failed** |
 
 Toolchain used: `cargo 1.95.0` / `rustc 1.95.0` (nix-profile), against the
-repository's pinned channel `1.94.1` (`packages/rust-toolchain.toml`) — a
+repository's pinned channel `1.94.1` (`packages/rust-toolchain.toml`) - a
 newer patch/minor toolchain than pinned, disclosed here for transparency.
 Anyone re-running this reproduction with the exact pinned `1.94.1` toolchain
 is expected to reproduce the same pass count; a mismatch is itself a finding
@@ -212,17 +212,17 @@ reconciled.
 (Noise NN/KK/IKpsk2 handshake, directional record protection, replay/sequence
 rejection, fair scheduling, named-stream credit, Unix seqpacket/stream
 transport, pidfd/SO_PEERCRED identity evidence, in-memory vsock framing) a
-demonstrated, currently-green implementation shape — this is what the
+demonstrated, currently-green implementation shape - this is what the
 `Reuse action: copy and adapt` in `ADR046-session-001`/`ADR046-session-002`
 inherits. Per anti-claim rule 2, it remains `implemented-but-unwired` for v3:
 no ComponentSession exists in the `b5ddbed6` v3 baseline, and copying these
-70 tests into `packages/d2b-session*` at their new v3 destination — then
+70 tests into `packages/d2b-session*` at their new v3 destination - then
 adding the subject/RBAC/revocation/resource-watch/latency integration tests
-those work items require — is exactly the validation column of
+those work items require - is exactly the validation column of
 `ADR046-session-001` and `ADR046-session-002` in `ADR-046-componentsession-and-bus`,
 not a step this spec performs.
 
-### E4 — current v3 reachable-evidence inventory
+### E4 - current v3 reachable-evidence inventory
 
 These v3 (`b5ddbed6`) files exist at the exact paths cited by their owning
 specs and were confirmed present during authoring of this spec. They are
@@ -252,30 +252,30 @@ in any of them and remain `ADR-only`.
 
 | Subsystem / claim | Evidence class today | Spike required before its work item starts |
 | --- | --- | --- |
-| kcp unsuitable at recursive Host/Guest/Zone scale | completed evidence (E1) | No — see anti-claim rule 4 |
-| redb is the right embedding shape (single-writer/MVCC/pure-Rust/fd-backed) | design rationale, `ADR-only` for workload fit (E2) | Yes — SPIKE-01 |
-| redb meets the 10k-resource functional/index/revision/watch/group-commit/crash-recovery/RSS targets | `unknown-requires-spike` | Yes — SPIKE-01 |
-| p95 durable commit → controller handler start ≤5 ms | `unknown-requires-spike` | Yes — SPIKE-02 |
-| p95 ready-Process commit → launch-attempt start ≤20 ms under concurrent dispatch | `unknown-requires-spike` | Yes — SPIKE-03 |
-| Async EffectPort adapters never block the executor | `unknown-requires-spike` | Yes — SPIKE-04 |
-| Noise NN/KK/IKpsk2 handshake, records, fair scheduling, Unix/vsock transport (main shape) | `implemented-but-unwired` for v3, proven at main `a1cc0b2d` (E3) | Only the v3 integration delta — SPIKE-06/07/08 |
-| Independent Provider crate → multiple binaries → manifest/config-schema/component registration | `ADR-only` | Yes — SPIKE-05 |
-| d2b-bus exact-addressed routing with per-recipient distinct Noise sessions | `ADR-only` | Yes — SPIKE-06 |
-| Unix/vsock/Azure-Relay transports carry only opaque Noise record bytes | `ADR-only` for v3 wiring; per-transport performance gates already specified in each dossier | Yes — SPIKE-07 |
-| Credential Provider → consumer Provider raw token/signature delivery over dedicated Noise_KK session | `ADR-only` | Yes — SPIKE-08 |
-| Optional declared state-Volume creation order, guest-local vs. host-backed-guest, virtiofs `Export` child | `ADR-only` | Yes — SPIKE-09 |
-| Volume ACL/`sourcePolicyId`/quota/marker/adoption policies | `ADR-only` | Yes — SPIKE-10 |
-| systemd/minijail Process Providers: pidfd acquire/verify/reap/adopt/quarantine conformance | `ADR-only` | Yes — SPIKE-11 |
-| Nix direct ResourceSpec authoring → codegen → build validation → removed-resource cleanup | `generated-or-eval-contract` pattern proven by existing `nixos-modules/assertions.nix` + `xtask gen-schemas` + drift gate machinery; ADR 0046 schema set is `ADR-only` | Yes — SPIKE-12 |
-| CLI dynamic Provider-projection discovery with bounded deadline/size | `ADR-only` | Yes — SPIKE-13 |
-| Clean v3 reset/cutover (no v2 alias dispatch, fresh Zone bootstrap) | `ADR-only` | Yes — SPIKE-14 |
-| Representative local/cloud/interaction Provider end-to-end composition | `ADR-only` | Yes — SPIKE-15 |
-| Three-layer spec + status shape: base-schema parity across implementations, minimal-base acceptance, capability-declared rejection, base-only projection, extension versioning/unknown-field/shadow | `ADR-only` | Yes — SPIKE-16 |
-| Expedited reconcile commit-proof gating/idempotency/priority-lane and currency/disruptive-upgrade dependency planning | `ADR-only` | Yes — SPIKE-17 |
-| Endpoint resource promotion, no-locator resolution, producer generation, consumer dependency trigger, promotion-test lint | `ADR-only` | Yes — SPIKE-18 |
-| Entra identity-Guest login/token grounding via fake Entrablau Guest service (no live Entra) | `ADR-only` | Yes — SPIKE-19 |
-| D096 signed Service/Binding projection factory, Service-only export, deterministic same-type projection, authored Binding graph/finalizers, and real cross-Zone streams | `ADR-only` | Yes — SPIKE-20 |
-| Current v3 storage/DAG/pidfd/spawn_runner/router files exist and pass their own tests | `implemented-and-reachable`/`production-reachable` for current role (E4) | No — already evidenced |
+| kcp unsuitable at recursive Host/Guest/Zone scale | completed evidence (E1) | No - see anti-claim rule 4 |
+| redb is the right embedding shape (single-writer/MVCC/pure-Rust/fd-backed) | design rationale, `ADR-only` for workload fit (E2) | Yes - SPIKE-01 |
+| redb meets the 10k-resource functional/index/revision/watch/group-commit/crash-recovery/RSS targets | `unknown-requires-spike` | Yes - SPIKE-01 |
+| p95 durable commit → controller handler start ≤5 ms | `unknown-requires-spike` | Yes - SPIKE-02 |
+| p95 ready-Process commit → launch-attempt start ≤20 ms under concurrent dispatch | `unknown-requires-spike` | Yes - SPIKE-03 |
+| Async EffectPort adapters never block the executor | `unknown-requires-spike` | Yes - SPIKE-04 |
+| Noise NN/KK/IKpsk2 handshake, records, fair scheduling, Unix/vsock transport (main shape) | `implemented-but-unwired` for v3, proven at main `a1cc0b2d` (E3) | Only the v3 integration delta - SPIKE-06/07/08 |
+| Independent Provider crate → multiple binaries → manifest/config-schema/component registration | `ADR-only` | Yes - SPIKE-05 |
+| d2b-bus exact-addressed routing with per-recipient distinct Noise sessions | `ADR-only` | Yes - SPIKE-06 |
+| Unix/vsock/Azure-Relay transports carry only opaque Noise record bytes | `ADR-only` for v3 wiring; per-transport performance gates already specified in each dossier | Yes - SPIKE-07 |
+| Credential Provider → consumer Provider raw token/signature delivery over dedicated Noise_KK session | `ADR-only` | Yes - SPIKE-08 |
+| Optional declared state-Volume creation order, guest-local vs. host-backed-guest, virtiofs `Export` child | `ADR-only` | Yes - SPIKE-09 |
+| Volume ACL/`sourcePolicyId`/quota/marker/adoption policies | `ADR-only` | Yes - SPIKE-10 |
+| systemd/minijail Process Providers: pidfd acquire/verify/reap/adopt/quarantine conformance | `ADR-only` | Yes - SPIKE-11 |
+| Nix direct ResourceSpec authoring → codegen → build validation → removed-resource cleanup | `generated-or-eval-contract` pattern proven by existing `nixos-modules/assertions.nix` + `xtask gen-schemas` + drift gate machinery; ADR 0046 schema set is `ADR-only` | Yes - SPIKE-12 |
+| CLI dynamic Provider-projection discovery with bounded deadline/size | `ADR-only` | Yes - SPIKE-13 |
+| Clean v3 reset/cutover (no v2 alias dispatch, fresh Zone bootstrap) | `ADR-only` | Yes - SPIKE-14 |
+| Representative local/cloud/interaction Provider end-to-end composition | `ADR-only` | Yes - SPIKE-15 |
+| Three-layer spec + status shape: base-schema parity across implementations, minimal-base acceptance, capability-declared rejection, base-only projection, extension versioning/unknown-field/shadow | `ADR-only` | Yes - SPIKE-16 |
+| Expedited reconcile commit-proof gating/idempotency/priority-lane and currency/disruptive-upgrade dependency planning | `ADR-only` | Yes - SPIKE-17 |
+| Endpoint resource promotion, no-locator resolution, producer generation, consumer dependency trigger, promotion-test lint | `ADR-only` | Yes - SPIKE-18 |
+| Entra identity-Guest login/token grounding via fake Entrablau Guest service (no live Entra) | `ADR-only` | Yes - SPIKE-19 |
+| D096 signed Service/Binding projection factory, Service-only export, deterministic same-type projection, authored Binding graph/finalizers, and real cross-Zone streams | `ADR-only` | Yes - SPIKE-20 |
+| Current v3 storage/DAG/pidfd/spawn_runner/router files exist and pass their own tests | `implemented-and-reachable`/`production-reachable` for current role (E4) | No - already evidenced |
 
 ## Mandatory disposable spike catalog
 
@@ -290,76 +290,76 @@ channel. None of these crates exist yet; authoring one is the first step of
 its listed work item in "Implementation work items" below, not a step
 performed by this documentation-only spec.
 
-### SPIKE-01 — redb functional scale, indexes, revisions, watch, group commit, crash recovery, RSS
+### SPIKE-01 - redb functional scale, indexes, revisions, watch, group commit, crash recovery, RSS
 
 | Field | Value |
 | --- | --- |
 | Hypothesis | An embedded redb 4.1.0 database, built against the `ADR-046-resource-store-redb` physical schema (`store_meta`, `api_schemas`, `resources`, `type_index`, `owner_index`, `controller_index`, `revision_log`, `operations`, `zone_link_cursors`), sustains 10,000 resources with 100 live watches, correct revision/index maintenance, bounded group commit, and forced-crash recovery, inside the aggregate ≤64 MiB idle-RSS budget shared with the fixed system-core/system-minijail controllers. |
-| Minimal disposable artifact | `proofs/redb-resource-store-spike/` — a standalone crate implementing exactly the eight tables above over `redb::Database` with a `FileBackend::new(File)`-backed open, an async bounded fair write queue feeding one blocking store-actor thread (via `tokio::task::spawn_blocking`), and a minimal watch registrar replaying `revision_log`. No d2b-bus, no ComponentSession, no broker — a fake in-process caller drives the API directly. |
+| Minimal disposable artifact | `proofs/redb-resource-store-spike/` - a standalone crate implementing exactly the eight tables above over `redb::Database` with a `FileBackend::new(File)`-backed open, an async bounded fair write queue feeding one blocking store-actor thread (via `tokio::task::spawn_blocking`), and a minimal watch registrar replaying `revision_log`. No d2b-bus, no ComponentSession, no broker - a fake in-process caller drives the API directly. |
 | Inputs | (a) empty store; (b) 10,000 pre-seeded resources across 6 synthetic ResourceTypes with realistic key/value sizes (JSON spec/status ≤4 KiB each, matching `ADR-046-resource-object-model` bounded-message expectations); (c) 100 concurrently registered watches with mixed ResourceType filters; (d) an expected-revision conflict storm of 500 concurrent writers targeting 50 shared resources; (e) an owner-trigger fan-in tree 4 levels deep, 8 children per level; (f) `SIGKILL` injected at each of the 13 commit-transaction boundaries listed in the write-transaction algorithm. |
 | Command/harness | `cargo test --manifest-path proofs/redb-resource-store-spike/Cargo.toml -- --test-threads=1` for functional/index/revision/watch/conflict/owner-trigger/compaction cases; `cargo run --manifest-path proofs/redb-resource-store-spike/Cargo.toml --bin crash-fixture -- --kill-at-txn <n>` (13 invocations, one per boundary, each in a fresh subprocess) for crash recovery; `/usr/bin/time -v cargo run --manifest-path proofs/redb-resource-store-spike/Cargo.toml --bin rss-fixture -- --resources 10000 --watches 100` for RSS, read three times and take the median "Maximum resident set size (kbytes)". |
-| Metrics | (1) resource/index/revision correctness — exact match of 10k resources against a parallel `BTreeMap` oracle after every mutation; (2) watch replay/live no-gap — every one of 100 watchers receives every committed ChangeBatch entry after its `afterRevision`, verified by a monotonic per-watcher received-revision set with no gap; (3) group-commit batch size distribution under the conflict storm; (4) crash-recovery: process re-open succeeds or fails closed (never silently creates an empty replacement) at all 13 boundaries; (5) median RSS in KiB. |
+| Metrics | (1) resource/index/revision correctness - exact match of 10k resources against a parallel `BTreeMap` oracle after every mutation; (2) watch replay/live no-gap - every one of 100 watchers receives every committed ChangeBatch entry after its `afterRevision`, verified by a monotonic per-watcher received-revision set with no gap; (3) group-commit batch size distribution under the conflict storm; (4) crash-recovery: process re-open succeeds or fails closed (never silently creates an empty replacement) at all 13 boundaries; (5) median RSS in KiB. |
 | Pass/fail threshold | (1) zero divergence from oracle across 10k resources / 5 repeated runs; (2) zero missed/duplicated ChangeBatch deliveries across 100 watchers; (3) non-conflicting writes in the storm achieve group commit (batch size > 1) at least 50% of the time; (4) 13/13 boundaries either recover to the last fully-committed state or refuse to open (never a silent empty store); (5) median RSS for the store+actor alone ≤ 24 MiB (leaving ≥40 MiB of the 64 MiB aggregate budget in `ADR-046-resource-store-redb` for the fixed system-core/system-minijail controllers measured separately in SPIKE-11/SPIKE-15). |
 | Expected resource budget | Single-threaded build+run ≤5 minutes on a 4-vCPU/8 GiB CI runner; peak build RSS ≤1 GiB; on-disk database file ≤200 MiB for the 10k-resource fixture. |
 | Failure interpretation | RSS miss → the schema/serialization plan in `ADR-046-resource-store-redb` §"Physical tables" changes (e.g., narrower key encoding, smaller in-memory index shape) before `ADR046-store-001` starts; a correctness miss on watch/crash-recovery → the async storage adapter or write-transaction algorithm in that same spec is revised, never the tolerance; group-commit batch-size miss → the "bounded group commit" admission window is retuned, but per anti-claim rule 3 not by weakening per-mutation validation. |
 | Affected decisions/work items | D003, D004, D005, D006, D008, D053; `ADR046-store-001`, `ADR046-store-002`, `ADR046-store-003`. |
 | Cleanup | `proofs/redb-resource-store-spike/` is deleted, and its entry removed from `tests/test-proofs.sh`, once `packages/d2b-resource-store-redb` (the real `ADR046-store-001` destination) has an in-tree benchmark reproducing metrics (1)-(5) at equal or stricter thresholds. |
-| Status | Specified — not yet executed (D024: documentation-only task; execution is separate future implementation work). |
+| Status | Specified - not yet executed (D024: documentation-only task; execution is separate future implementation work). |
 
-### SPIKE-02 — durable commit → controller handler start, p95 ≤5 ms
+### SPIKE-02 - durable commit → controller handler start, p95 ≤5 ms
 
 | Field | Value |
 | --- | --- |
 | Hypothesis | The post-commit dispatcher inside the Zone runtime (redb write-transaction commit → in-memory index swap → matching watch/reconcile-hint push) delivers a hint to a waiting async consumer with p95 latency ≤5 ms, independent of concurrent unrelated commit traffic. |
-| Minimal disposable artifact | `proofs/redb-commit-handler-latency-spike/` — extends SPIKE-01's store-actor with a minimal in-process "hint bus" (a bounded `tokio::sync::mpsc` per registered consumer, no real d2b-bus/ComponentSession) and a synthetic "controller" task that records `Instant::now()` on hint receipt. |
+| Minimal disposable artifact | `proofs/redb-commit-handler-latency-spike/` - extends SPIKE-01's store-actor with a minimal in-process "hint bus" (a bounded `tokio::sync::mpsc` per registered consumer, no real d2b-bus/ComponentSession) and a synthetic "controller" task that records `Instant::now()` on hint receipt. |
 | Inputs | 1,000 sequential single-resource writes each immediately followed (same async task) by measuring elapsed time to the matching consumer's hint receipt; repeated under three concurrency profiles: (a) no background writers; (b) 10 background writer tasks issuing unrelated resource writes at a combined 500 writes/s; (c) 100 background writer tasks at a combined 2,000 writes/s. |
 | Command/harness | `cargo bench --manifest-path proofs/redb-commit-handler-latency-spike/Cargo.toml -- commit_to_handler` using `criterion` with `--sample-size 1000`; percentile computed by criterion's built-in estimator over the full 1,000-sample run per profile. |
 | Metrics | p50/p95/p99 elapsed time in microseconds from `write_transaction.commit()` return to consumer task waking and reading the hint, for each of the 3 concurrency profiles. |
 | Pass/fail threshold | p95 ≤5,000 µs (5 ms) in all 3 profiles; p99 ≤10,000 µs recorded and reported (not gating, but any p99 >20 ms is a documented finding attached to the result). |
 | Expected resource budget | ≤3 minutes wall time per profile; single CI runner core pinned via `taskset`/`cset` where available, otherwise best-effort with reported CPU count and load. |
-| Failure interpretation | A miss under profile (a) is a dispatcher-design failure — the post-commit swap/push path in `ADR-046-resource-store-redb` §"Async storage adapter" changes. A miss only under profiles (b)/(c) is an admission-fairness failure — the "per-principal/controller fair admission" rule in the same section is retuned (e.g., smaller max group-commit batch, dedicated hint-delivery task priority) before `ADR046-store-002` starts. |
+| Failure interpretation | A miss under profile (a) is a dispatcher-design failure - the post-commit swap/push path in `ADR-046-resource-store-redb` §"Async storage adapter" changes. A miss only under profiles (b)/(c) is an admission-fairness failure - the "per-principal/controller fair admission" rule in the same section is retuned (e.g., smaller max group-commit batch, dedicated hint-delivery task priority) before `ADR046-store-002` starts. |
 | Affected decisions/work items | D030; `ADR046-store-001`, `ADR046-store-002`, `ADR046-reconcile-002`. |
 | Cleanup | Deleted once `packages/d2b-controller-toolkit/benches/reaction.rs` (the real `ADR046-reconcile-003` destination named in `ADR-046-resource-reconciliation`) reproduces the same 3-profile p95/p99 gate against the real store. |
-| Status | Specified — not yet executed. |
+| Status | Specified - not yet executed. |
 
-### SPIKE-03 — ready Process commit → launch-attempt start, p95 ≤20 ms, concurrent reading and dispatch
+### SPIKE-03 - ready Process commit → launch-attempt start, p95 ≤20 ms, concurrent reading and dispatch
 
 | Field | Value |
 | --- | --- |
-| Hypothesis | When a Process resource is durably committed with all dependencies Ready, an independent async controller task reaches "launch-attempt start" with p95 ≤20 ms, and — critically — the watch receiver dispatches the *next* independent ready Process without waiting for any in-flight launch, readiness wait, or long-running effect to complete. |
-| Minimal disposable artifact | `proofs/process-fastlaunch-spike/` — builds on SPIKE-02's hint bus, replaces the synthetic consumer with a minimal async "Process controller" loop matching `ADR-046-resource-reconciliation` §"Async loop" (steps 1-14: register, list, watch, per-resource single-flight dispatch, parallel independent resources under a semaphore) and a fake `ProcessLaunchEffectPort` whose `spawn()` sleeps a configurable 0-500 ms to model a slow real launch without touching any real process/broker/systemd/minijail code. |
+| Hypothesis | When a Process resource is durably committed with all dependencies Ready, an independent async controller task reaches "launch-attempt start" with p95 ≤20 ms, and - critically - the watch receiver dispatches the *next* independent ready Process without waiting for any in-flight launch, readiness wait, or long-running effect to complete. |
+| Minimal disposable artifact | `proofs/process-fastlaunch-spike/` - builds on SPIKE-02's hint bus, replaces the synthetic consumer with a minimal async "Process controller" loop matching `ADR-046-resource-reconciliation` §"Async loop" (steps 1-14: register, list, watch, per-resource single-flight dispatch, parallel independent resources under a semaphore) and a fake `ProcessLaunchEffectPort` whose `spawn()` sleeps a configurable 0-500 ms to model a slow real launch without touching any real process/broker/systemd/minijail code. |
 | Inputs | 1, 10, and 100 concurrently-ready Process resources committed in the same synthetic Zone within a 50 ms window; fake effect-port launch latency fixed at 200 ms per resource (chosen to exceed the 20 ms gate by 10x, so a passing "commit-to-launch-attempt-start" measurement cannot be an artifact of the launch itself finishing fast). |
 | Command/harness | `cargo bench --manifest-path proofs/process-fastlaunch-spike/Cargo.toml -- launch_attempt_start` with `criterion`, one benchmark group per concurrency level (1/10/100), `--sample-size 200` per group. |
 | Metrics | (1) p50/p95/p99 elapsed time from commit to launch-attempt-start (fake effect-port `spawn()` call entry) per concurrency level; (2) "next-dispatch" latency: elapsed time from resource *N*'s commit to resource *N+1*'s handler-start when both are ready simultaneously, for *N* in 1..100; (3) total wall time for all 100 resources to reach launch-attempt-start. |
-| Pass/fail threshold | (1) p95 ≤20,000 µs (20 ms) at all three concurrency levels; (2) no resource's next-dispatch latency exceeds 20 ms regardless of how many earlier resources are still inside their (200 ms) fake launch sleep — this is the concurrency-independence assertion; (3) total wall time for 100 resources ≤ (20 ms dispatch budget + configured semaphore width × 200 ms), proving effects run in parallel under budget rather than serially. |
+| Pass/fail threshold | (1) p95 ≤20,000 µs (20 ms) at all three concurrency levels; (2) no resource's next-dispatch latency exceeds 20 ms regardless of how many earlier resources are still inside their (200 ms) fake launch sleep - this is the concurrency-independence assertion; (3) total wall time for 100 resources ≤ (20 ms dispatch budget + configured semaphore width × 200 ms), proving effects run in parallel under budget rather than serially. |
 | Expected resource budget | ≤5 minutes wall time for the 100-resource benchmark group; process peak RSS ≤128 MiB (in-memory synthetic Zone only, no real redb file). |
-| Failure interpretation | A miss in metric (1) revises the controller dispatch loop or hint-bus design in `ADR-046-resource-reconciliation` §"Process fast path". A miss in metric (2) — one resource's launch blocking another's dispatch — is treated as a severity-blocking finding against the "independent resources run in parallel under semaphore/budget" invariant in the same section; the fix is structural (remove the blocking await), never a threshold relaxation. |
+| Failure interpretation | A miss in metric (1) revises the controller dispatch loop or hint-bus design in `ADR-046-resource-reconciliation` §"Process fast path". A miss in metric (2) - one resource's launch blocking another's dispatch - is treated as a severity-blocking finding against the "independent resources run in parallel under semaphore/budget" invariant in the same section; the fix is structural (remove the blocking await), never a threshold relaxation. |
 | Affected decisions/work items | D030; `ADR-046-resource-reconciliation` (Process fast path, async loop); `ADR-046-resources-host-guest-process-user` (Fast path contract); `ADR046-reconcile-001`, `ADR046-reconcile-003`, `ADR046-process-001`. |
 | Cleanup | Deleted once `packages/d2b-controller-toolkit/benches/reaction.rs` and the Process-Provider integration tests named by `ADR046-reconcile-003` reproduce the same 1/10/100-concurrency p95/independence gates against real Process Provider controllers. |
-| Status | Specified — not yet executed. |
+| Status | Specified - not yet executed. |
 
-### SPIKE-04 — async EffectPort adapters never block the executor
+### SPIKE-04 - async EffectPort adapters never block the executor
 
 | Field | Value |
 | --- | --- |
 | Hypothesis | `ProcessLaunchEffectPort`, `VolumeLayoutEffectPort`/`VolumeSourceEffectPort`, `NetworkEffectPort`, and `DeviceEffectPort` calls are fully async from the calling controller's perspective; every blocking kernel/filesystem/broker-socket call inside their implementation runs on a bounded blocking-adapter (`tokio::task::spawn_blocking` or an equivalent dedicated thread pool), and no controller task holds a redb transaction or a blocking call across an `.await`. |
-| Minimal disposable artifact | `proofs/effectport-async-spike/` — implements the four EffectPort trait signatures from `ADR-046-components-processes-and-sandbox` and `ADR-046-resources-volume` against fake backends that perform a real blocking syscall analogue (a `std::fs::File::sync_all()` on a temp file standing in for a broker filesystem op, and a `std::thread::sleep` standing in for a blocking `clone3`/`pidfd_open` call), instrumented with a tokio `LocalSet`-free single-threaded current-thread runtime so any accidental blocking call inside an `.await` stalls the whole runtime and is trivially detected. |
+| Minimal disposable artifact | `proofs/effectport-async-spike/` - implements the four EffectPort trait signatures from `ADR-046-components-processes-and-sandbox` and `ADR-046-resources-volume` against fake backends that perform a real blocking syscall analogue (a `std::fs::File::sync_all()` on a temp file standing in for a broker filesystem op, and a `std::thread::sleep` standing in for a blocking `clone3`/`pidfd_open` call), instrumented with a tokio `LocalSet`-free single-threaded current-thread runtime so any accidental blocking call inside an `.await` stalls the whole runtime and is trivially detected. |
 | Inputs | 200 concurrent EffectPort calls (50 per port) issued against a single-threaded `tokio` runtime (`#[tokio::main(flavor = "current_thread")]`) alongside a fixed 10 ms-interval heartbeat task; each fake backend's blocking primitive is deliberately slow (50 ms) to make any accidental synchronous execution on the async worker visibly stall the heartbeat. |
 | Command/harness | `cargo test --manifest-path proofs/effectport-async-spike/Cargo.toml -- --test-threads=1 effectport_never_blocks`; the test asserts on the heartbeat task's own recorded tick-to-tick jitter, not on the EffectPort latency itself. |
 | Metrics | Heartbeat tick-to-tick jitter (max observed gap between consecutive 10 ms heartbeat ticks) while 200 EffectPort calls with 50 ms blocking backends are in flight on the same current-thread runtime. |
 | Pass/fail threshold | Max heartbeat gap ≤15 ms (50% tolerance over the 10 ms nominal interval) throughout the entire 200-call run. A gap ≥50 ms (matching the fake backend's blocking duration) is conclusive proof a blocking call executed directly on the async worker and is an automatic fail. |
 | Expected resource budget | ≤1 minute wall time; single OS thread for the async runtime plus the bounded blocking-adapter pool (sized to 16 threads, matching a conservative real broker/effect-adapter pool budget). |
-| Failure interpretation | Any observed stall traces directly to the offending EffectPort implementation call site; the fix is moving that call behind `spawn_blocking` (or the broker-side blocking adapter it dispatches to) — this is a structural fix, not a threshold change, per anti-claim rule 3 (no relaxing "no handler holds ... a blocking kernel/filesystem call across an await" from `ADR-046-resource-reconciliation`). |
+| Failure interpretation | Any observed stall traces directly to the offending EffectPort implementation call site; the fix is moving that call behind `spawn_blocking` (or the broker-side blocking adapter it dispatches to) - this is a structural fix, not a threshold change, per anti-claim rule 3 (no relaxing "no handler holds ... a blocking kernel/filesystem call across an await" from `ADR-046-resource-reconciliation`). |
 | Affected decisions/work items | D077; `ADR-046-components-processes-and-sandbox` (ProviderSupervisor and EffectPort); `ADR-046-resource-reconciliation` (Async interface); `ADR046-process-001`, `ADR046-volume-001` (see `ADR-046-resources-volume` implementation work items). |
 | Cleanup | Deleted once `packages/d2b-provider-supervisor` (the real `ADR046-process-001` destination) and the volume-domain effect adapter each carry an in-tree blocking-adapter regression test with an equal or stricter jitter gate. |
-| Status | Specified — not yet executed. |
+| Status | Specified - not yet executed. |
 
-### SPIKE-05 — independent Provider crate → multiple binaries → manifest/config-schema/component registration
+### SPIKE-05 - independent Provider crate → multiple binaries → manifest/config-schema/component registration
 
 | Field | Value |
 | --- | --- |
-| Hypothesis | A single Provider crate can declare one Provider identity, build two independently sandboxed binaries (a controller and a service, per `ADR-046-provider-model-and-packaging` §"Provider components"), publish a signed manifest carrying component descriptors + a root JSON Schema, and have core `ProviderDeployment` parse that manifest and create the exact declared static Process graph — without the crate importing `d2bd`, broker, or Zone-store internals. |
-| Minimal disposable artifact | `proofs/provider-packaging-spike/` — a two-binary Cargo crate (`src/bin/controller.rs`, `src/bin/service.rs`) plus a hand-authored `manifest.json` matching the field list in `ADR-046-provider-model-and-packaging` §"Provider resource" and §"Package catalog" (package/executable/manifest/component digests, exported ResourceTypes, controller/service component descriptors, root config JSON Schema); a fake `ProviderDeployment` reads this manifest and asserts it can enumerate exactly the declared components/binaries/digests with no additional discovery. |
+| Hypothesis | A single Provider crate can declare one Provider identity, build two independently sandboxed binaries (a controller and a service, per `ADR-046-provider-model-and-packaging` §"Provider components"), publish a signed manifest carrying component descriptors + a root JSON Schema, and have core `ProviderDeployment` parse that manifest and create the exact declared static Process graph - without the crate importing `d2bd`, broker, or Zone-store internals. |
+| Minimal disposable artifact | `proofs/provider-packaging-spike/` - a two-binary Cargo crate (`src/bin/controller.rs`, `src/bin/service.rs`) plus a hand-authored `manifest.json` matching the field list in `ADR-046-provider-model-and-packaging` §"Provider resource" and §"Package catalog" (package/executable/manifest/component digests, exported ResourceTypes, controller/service component descriptors, root config JSON Schema); a fake `ProviderDeployment` reads this manifest and asserts it can enumerate exactly the declared components/binaries/digests with no additional discovery. |
 | Inputs | One manifest declaring 1 controller + 1 service + 1 worker template, a root config schema with 3 required fields (2 typed, 1 with a `sourcePolicyId`-shaped opaque string), and a deliberately mismatched second manifest (wrong digest) to test the negative path. |
 | Command/harness | `cargo test --manifest-path proofs/provider-packaging-spike/Cargo.toml -- --test-threads=1`; a workspace-policy check script (`proofs/provider-packaging-spike/check_layout.sh`) asserting the crate has its own `src/`, `tests/`, `integration/`, and `README.md` per D059, mirrored against `cargo metadata --manifest-path proofs/provider-packaging-spike/Cargo.toml --no-deps` to confirm zero dependency edges on any `d2bd`/broker/Zone-store crate name. |
 | Metrics | (1) exact component/binary/digest enumeration match against the manifest; (2) config validation rejects unknown top-level fields (`additionalProperties: false`) and out-of-bounds values; (3) digest-mismatch manifest is rejected before any component is considered; (4) `cargo metadata` dependency graph contains zero edges to any forbidden crate name. |
@@ -368,14 +368,14 @@ performed by this documentation-only spec.
 | Failure interpretation | A component/digest enumeration mismatch or forbidden dependency edge blocks `ADR046-provider-001`/`ADR046-provider-002` (see `ADR-046-provider-model-and-packaging` implementation work items) from starting until the manifest schema or crate-layout policy check is corrected. |
 | Affected decisions/work items | D012, D057, D059, D075, D078; `ADR046-provider-001`, `ADR046-provider-002`, `ADR046-provider-003`. |
 | Cleanup | Deleted once the real Provider-toolkit crate (destination of `ADR046-provider-001`) ships its own manifest-parsing/component-enumeration/workspace-policy conformance tests with equal or stricter coverage. |
-| Status | Specified — not yet executed. |
+| Status | Specified - not yet executed. |
 
-### SPIKE-06 — d2b-bus exact-addressed routing with per-recipient distinct Noise protection
+### SPIKE-06 - d2b-bus exact-addressed routing with per-recipient distinct Noise protection
 
 | Field | Value |
 | --- | --- |
-| Hypothesis | `d2b-bus` resolves the exact `(Zone, service package, method/stream, target ResourceRef or Provider, schema fingerprint, generation)` route key to exactly one destination process, and two distinct recipient components enrolled with distinct static Noise keys each get their own independent `Noise_KK` session — no session key, record sequence, or transcript is shared or reusable across recipients. |
-| Minimal disposable artifact | `proofs/bus-routing-noise-spike/` — reuses main a1cc0b2d's `d2b-session`/`d2b-session-unix` crates (copied verbatim into the spike's own `Cargo.toml` path dependency from a pinned local checkout of `a1cc0b2d`, per the reuse policy in `ADR-046-componentsession-and-bus`) plus a minimal in-process router implementing only the route-key resolution and RBAC-attribute check (a fake static-allow-list RBAC, not the real Role/RoleBinding engine). |
+| Hypothesis | `d2b-bus` resolves the exact `(Zone, service package, method/stream, target ResourceRef or Provider, schema fingerprint, generation)` route key to exactly one destination process, and two distinct recipient components enrolled with distinct static Noise keys each get their own independent `Noise_KK` session - no session key, record sequence, or transcript is shared or reusable across recipients. |
+| Minimal disposable artifact | `proofs/bus-routing-noise-spike/` - reuses main a1cc0b2d's `d2b-session`/`d2b-session-unix` crates (copied verbatim into the spike's own `Cargo.toml` path dependency from a pinned local checkout of `a1cc0b2d`, per the reuse policy in `ADR-046-componentsession-and-bus`) plus a minimal in-process router implementing only the route-key resolution and RBAC-attribute check (a fake static-allow-list RBAC, not the real Role/RoleBinding engine). |
 | Inputs | 3 synthetic recipient components (`recipient-a`, `recipient-b`, `recipient-c`), each with its own enrolled `Noise_KK` static keypair; 500 routed calls fanned out round-robin across the 3 recipients; one deliberate cross-wiring attempt where the router is fed `recipient-a`'s route key but `recipient-b`'s transport handle, which must fail closed. |
 | Command/harness | `cargo test --manifest-path proofs/bus-routing-noise-spike/Cargo.toml -- --test-threads=1 bus_routing_and_per_recipient_noise`. |
 | Metrics | (1) every one of the 500 calls is delivered to exactly the recipient named by its route key, verified by a per-recipient received-call counter; (2) each recipient's session transcript hash and record sequence counter are independent (no shared state, verified by asserting the three sessions' internal sequence counters never reference each other's session object); (3) the deliberate cross-wiring case is rejected before any record is exchanged. |
@@ -384,30 +384,30 @@ performed by this documentation-only spec.
 | Failure interpretation | A misrouted call or shared-session-state finding blocks `ADR046-bus-001` from starting until the route-key resolution or per-session isolation in `ADR-046-componentsession-and-bus` §"d2b-bus" is corrected; per anti-claim rule 3, the fix is never "widen the route key to fail open." |
 | Affected decisions/work items | D011, D039, D040, D054; `ADR046-session-001`, `ADR046-session-002`, `ADR046-bus-001`. |
 | Cleanup | Deleted once `packages/d2b-bus/src/router.rs` (the real `ADR046-bus-001` destination) carries an in-tree message-isolation/route-authorization/no-direct-store-path conformance test with equal or stricter coverage, per that work item's own Validation column. |
-| Status | Specified — not yet executed. |
+| Status | Specified - not yet executed. |
 
-### SPIKE-07 — Unix/vsock/Azure-Relay transports carry only opaque Noise record bytes
+### SPIKE-07 - Unix/vsock/Azure-Relay transports carry only opaque Noise record bytes
 
 | Field | Value |
 | --- | --- |
 | Hypothesis | All three initial Transport Providers (`transport-unix` seqpacket/stream, `transport-vsock` framed vsock, `transport-azure-relay` WebSocket-carried) expose the same `OpenTransport`/`CloseTransport`/`ObserveTransport` shape and carry only 2-byte length-prefixed opaque Noise record bytes end-to-end; none of the three can decrypt, interpret, or leak a credential/path/PID through its carriage layer. |
-| Minimal disposable artifact | `proofs/transport-opaque-streams-spike/` — three minimal transport backends: (a) a real Unix seqpacket socketpair (reusing main a1cc0b2d's `d2b-session-unix::adapter`); (b) main a1cc0b2d's in-memory vsock adapter (`d2b-session-unix::vsock` test-only `InMemoryVsockAdapter`, already exercised in E3); (c) a fake WebSocket-shaped byte pipe (an in-process `tokio::io::duplex` standing in for the real Azure Relay WebSocket, since no live Azure Relay resource is provisioned by a disposable spike) — each wrapped by the same generic `TransportHandle` trait object and driven by one shared conformance test suite. |
+| Minimal disposable artifact | `proofs/transport-opaque-streams-spike/` - three minimal transport backends: (a) a real Unix seqpacket socketpair (reusing main a1cc0b2d's `d2b-session-unix::adapter`); (b) main a1cc0b2d's in-memory vsock adapter (`d2b-session-unix::vsock` test-only `InMemoryVsockAdapter`, already exercised in E3); (c) a fake WebSocket-shaped byte pipe (an in-process `tokio::io::duplex` standing in for the real Azure Relay WebSocket, since no live Azure Relay resource is provisioned by a disposable spike) - each wrapped by the same generic `TransportHandle` trait object and driven by one shared conformance test suite. |
 | Inputs | A 64 KiB pseudorandom Noise-record-shaped payload (2-byte length prefix + ciphertext) sent across each of the three transports; a byte-level payload inspector sitting "in the middle" of each transport that must observe only opaque length-prefixed bytes (never a decrypted plaintext, never an `SCM_RIGHTS` control message on the vsock/relay legs). |
-| Command/harness | `cargo test --manifest-path proofs/transport-opaque-streams-spike/Cargo.toml -- --test-threads=1 opaque_byte_stream_conformance` — one parametrized test instantiated three times, once per transport backend. |
-| Metrics | (1) byte-exact delivery of the 64 KiB payload on each transport; (2) the middle-observer never decodes a valid Noise record (proving it never sees plaintext — it can only see the same ciphertext bytes the endpoints exchange); (3) `SCM_RIGHTS`/attachment attempts are accepted only on the Unix seqpacket backend and rejected (`attachment-not-permitted-over-zone-link`) on the vsock and relay-shaped backends; (4) each transport's own dossier-defined performance gate: Unix `OpenTransport` p95 ≤2 ms (seqpacket) / ≤1 ms (stream); vsock `OpenTransport` overhead ≤2 ms p99 (excluding connect) and bridge throughput ≥512 MiB/s on loopback; relay-shaped backend backpressure propagates (send blocks) when the fake WebSocket leg's buffer is deliberately capped at 4 KiB. |
+| Command/harness | `cargo test --manifest-path proofs/transport-opaque-streams-spike/Cargo.toml -- --test-threads=1 opaque_byte_stream_conformance` - one parametrized test instantiated three times, once per transport backend. |
+| Metrics | (1) byte-exact delivery of the 64 KiB payload on each transport; (2) the middle-observer never decodes a valid Noise record (proving it never sees plaintext - it can only see the same ciphertext bytes the endpoints exchange); (3) `SCM_RIGHTS`/attachment attempts are accepted only on the Unix seqpacket backend and rejected (`attachment-not-permitted-over-zone-link`) on the vsock and relay-shaped backends; (4) each transport's own dossier-defined performance gate: Unix `OpenTransport` p95 ≤2 ms (seqpacket) / ≤1 ms (stream); vsock `OpenTransport` overhead ≤2 ms p99 (excluding connect) and bridge throughput ≥512 MiB/s on loopback; relay-shaped backend backpressure propagates (send blocks) when the fake WebSocket leg's buffer is deliberately capped at 4 KiB. |
 | Pass/fail threshold | (1)-(3) must hold exactly (binary); (4) must meet the exact numeric gates already committed in `docs/specs/providers/ADR-046-provider-transport-unix.md` §"Performance targets" and `ADR-046-provider-transport-vsock.md` §"Performance gates" (reproduced here, not redefined): Unix seqpacket open p95 ≤2 ms, Unix stream open p95 ≤1 ms, vsock open overhead p99 ≤2 ms, vsock bridge throughput ≥512 MiB/s. |
 | Expected resource budget | ≤3 minutes wall time; ≤256 KiB working set per active transport (matching the vsock dossier's own bridge-task memory gate), measured via the same `/usr/bin/time -v` methodology as SPIKE-01. |
 | Failure interpretation | A plaintext leak or accepted attachment on the vsock/relay-shaped backend is a severity-blocking security finding against `ADR-046-zone-routing` §"No FD, credential, or host path forwarding" and blocks every `ADR046-transport-*-00x` work item until fixed; a latency/throughput miss revises the transport's own implementation (buffer sizing, syscall batching), never the already-committed dossier target. |
 | Affected decisions/work items | D081; `ADR046-transport-unix-001..011`, `ADR046-transport-vsock` work items, `ADR046-transport-relay-001..007`. |
 | Cleanup | Deleted once each real transport Provider crate (`d2b-provider-transport-unix`, `-vsock`, `-azure-relay`) reproduces its own share of these metrics in its `tests/`/`integration/` per its dossier's "Required tests" section, including a real (non-fake) Azure Relay integration test gated behind the existing live-credential opt-in convention used elsewhere in this repository for cloud-backed tests. |
-| Status | Specified — not yet executed. |
+| Status | Specified - not yet executed. |
 
-### SPIKE-08 — Credential Provider → consumer Provider raw delivery over dedicated Noise_KK
+### SPIKE-08 - Credential Provider → consumer Provider raw delivery over dedicated Noise_KK
 
 | Field | Value |
 | --- | --- |
 | Hypothesis | A Credential Provider can deliver a bounded raw token (or `SignChallenge` signature) to one authorized consumer Provider/component over a dedicated end-to-end `Noise_KK` ComponentSession, with the delivery binding contract fields from `ADR-046-resources-credential` §"Binding contract" enforced, `d2b-bus` forwarding only opaque records without decrypting them, and the plaintext zeroized immediately after extraction with no logging/audit/metric surface ever seeing the byte value. |
-| Minimal disposable artifact | `proofs/credential-kk-e2e-spike/` — reuses main a1cc0b2d's `d2b-session` Noise_KK handshake/record machinery (proven green in E3) plus a fake Credential Provider (`acquire-token`) and fake consumer Provider, with a fake `d2b-bus` relay in the middle that can only forward opaque records (it is deliberately given no decryption capability at all, not merely "policy forbidding" it, so any successful decryption at the relay is a code-level bug, not a policy violation). |
+| Minimal disposable artifact | `proofs/credential-kk-e2e-spike/` - reuses main a1cc0b2d's `d2b-session` Noise_KK handshake/record machinery (proven green in E3) plus a fake Credential Provider (`acquire-token`) and fake consumer Provider, with a fake `d2b-bus` relay in the middle that can only forward opaque records (it is deliberately given no decryption capability at all, not merely "policy forbidding" it, so any successful decryption at the relay is a code-level bug, not a policy violation). |
 | Inputs | A 256-byte synthetic "token" value; the 11 binding-contract fields from `ADR-046-resources-credential` §"Binding contract" (`credentialRef`, `credentialUID`, `credentialGeneration`, `consumerProviderRef`, `consumerComponentGeneration`, `audience`, `operationClass`, `expiryUnixMs`, `deadlineUnixMs`, `routeDigest`, `schemaVersion`, `maxTokenBytes`, `transcriptDigest`); one deliberate NN-profile bootstrap attempt (must be rejected per §"Security requirements", item 1); one deliberate oversize (larger than `maxTokenBytes`) delivery attempt (must be rejected per item 3); one deliberate replay of a prior sequence number (must be rejected per item 2). |
 | Command/harness | `cargo test --manifest-path proofs/credential-kk-e2e-spike/Cargo.toml -- --test-threads=1 credential_kk_delivery`. |
 | Metrics | (1) successful delivery: consumer receives the exact 256-byte token, binding fields verified by both endpoints before accepting records; (2) relay-observability: the fake relay's log of forwarded bytes never contains the plaintext token (checked by a substring search over everything the relay ever touches); (3) NN-bootstrap-for-delivery rejection; (4) oversize-payload rejection with channel close+zeroize; (5) sequence-replay rejection; (6) post-ACK channel closes and a canary zeroizing wrapper confirms the buffer is zeroed (test-only introspection into the zeroizing type, not available in production code paths). |
@@ -416,14 +416,14 @@ performed by this documentation-only spec.
 | Failure interpretation | Any plaintext-at-relay occurrence is an automatic, severity-blocking security finding against `ADR-046-resources-credential` §"Credential-delivery endpoint contract" and blocks every `ADR046-credential-00x` work item; a binding-field check bypass blocks the same work items pending a fix to the offer/prologue construction, never a relaxed binding contract. |
 | Affected decisions/work items | D055, D056, D068; `ADR046-credential-001` through `ADR046-credential-008`. |
 | Cleanup | Deleted once the real `d2b-provider-credential-secret-service` (or any of the three frozen Credential Provider crates) carries its own end-to-end KK delivery conformance test with equal or stricter coverage, per `ADR-046-resources-credential` §"Runtime tests". |
-| Status | Specified — not yet executed. |
+| Status | Specified - not yet executed. |
 
-### SPIKE-09 — Optional state-Volume creation order, guest-local vs. host-backed-guest, virtiofs Export child
+### SPIKE-09 - Optional state-Volume creation order, guest-local vs. host-backed-guest, virtiofs Export child
 
 | Field | Value |
 | --- | --- |
-| Hypothesis | Core `ProviderDeployment` creates a component's *declared* optional state Volume (a stateless component declares none and gets none — its bounded non-secret state lives in resource `status`/the core Operation ledger per D087) before launching that component's Process, requires no bootstrap state-Volume mechanism (the first `volume-local` instance per execution target declares no state Volume and reaches Ready from its own status without crossing a Host/Guest boundary), and correctly creates exactly one `virtiofs.d2bus.org.Export` child (owned by the source Volume, not by the Provider) per attachment for `placementMode: host-backed-guest`, while `placementMode: guest-local` creates zero Export children and the Host volume-local controller never touches its bytes/dirfd/path. |
-| Minimal disposable artifact | `proofs/provider-state-export-spike/` — an in-process fake resource store (a plain `HashMap`-backed oracle, not real redb) modeling just enough of `ADR-046-provider-state` §"State placement under Host/Guest/user execution" to construct the ordering/ownership graph and assert it; two fake execution targets ("Host/h1", "Guest/g1") each with their own fake `volume-local` instance that reaches Ready from status alone. |
+| Hypothesis | Core `ProviderDeployment` creates a component's *declared* optional state Volume (a stateless component declares none and gets none - its bounded non-secret state lives in resource `status`/the core Operation ledger per D087) before launching that component's Process, requires no bootstrap state-Volume mechanism (the first `volume-local` instance per execution target declares no state Volume and reaches Ready from its own status without crossing a Host/Guest boundary), and correctly creates exactly one `virtiofs.d2bus.org.Export` child (owned by the source Volume, not by the Provider) per attachment for `placementMode: host-backed-guest`, while `placementMode: guest-local` creates zero Export children and the Host volume-local controller never touches its bytes/dirfd/path. |
+| Minimal disposable artifact | `proofs/provider-state-export-spike/` - an in-process fake resource store (a plain `HashMap`-backed oracle, not real redb) modeling just enough of `ADR-046-provider-state` §"State placement under Host/Guest/user execution" to construct the ordering/ownership graph and assert it; two fake execution targets ("Host/h1", "Guest/g1") each with their own fake `volume-local` instance that reaches Ready from status alone. |
 | Inputs | (a) a stateless worker component descriptor (no declared `stateNamespaces`); (b) a stateful controller component descriptor with `placementMode: guest-local` targeting `Guest/g1`; (c) a stateful controller component descriptor with `placementMode: host-backed-guest` and 2 declared `attachments[]` targeting `Guest/g1`; (d) an attempted `placementMode: host-backed-guest` for a component descriptor schema-flagged as carrying "gateway credentials" (must be rejected `guest-local-required`). |
 | Command/harness | `cargo test --manifest-path proofs/provider-state-export-spike/Cargo.toml -- --test-threads=1 provider_state_set_and_export`. |
 | Metrics | (1) creation order: the stateless worker (a) has zero state Volumes; each *declared* state Volume exists and is Ready before its component's Process resource is created, in cases (b)/(c); (2) no bootstrap state Volume: the first `volume-local` instance on each target reaches Ready without any state Volume, and no cross-target bootstrap reference exists (asserted by tagging every provisioning call with its execution-target ID and checking zero cross-target references and zero bootstrap-storage calls); (3) Export-child count: exactly 0 for case (b), exactly 2 for case (c), each owned (`ownerRef`) by the source Volume, not by `Provider/<name>`; (4) case (d) is rejected with `guest-local-required` before any Volume is created. |
@@ -432,15 +432,15 @@ performed by this documentation-only spec.
 | Failure interpretation | A creation-order violation (Process created before its declared state Volume is Ready) blocks every `ADR-046-provider-state` work item and the `ADR046-provider-00x` work items that depend on it; any bootstrap state-Volume mechanism or cross-target reference is a severity-blocking finding against the "No bootstrap state Volume" invariant in `ADR-046-components-processes-and-sandbox` and must be fixed structurally, never suppressed. |
 | Affected decisions/work items | D076, D078, D086, D087; provider-state and volume-virtiofs implementation work items named in `ADR-046-provider-state` and `ADR-046-resources-volume`. |
 | Cleanup | Deleted once core `ProviderDeployment`'s real implementation (destination named by the `ADR-046-provider-state` work items) carries an equivalent in-tree ordering/ownership/Export-count conformance test. |
-| Status | Specified — not yet executed. |
+| Status | Specified - not yet executed. |
 
-### SPIKE-10 — Volume ACL, `sourcePolicyId`, quota, and lifecycle-marker policies
+### SPIKE-10 - Volume ACL, `sourcePolicyId`, quota, and lifecycle-marker policies
 
 | Field | Value |
 | --- | --- |
 | Hypothesis | A Volume-local implementation can enforce `AclGrant` principals typed strictly as `User/<name>` (no numeric UID/GID form accepted), resolve `source.settings.sourcePolicyId` to a real path only inside the private effect-adapter boundary (never surfacing the path in spec/status/audit), enforce `hard` quota by failing Volume creation immediately when the backing filesystem cannot guarantee the limit, and drive `CreatePolicy`/`RepairPolicy`/`CleanupPolicy`/`AdoptionPolicy`/`RestartPolicy` through their full state tables without silently reinterpreting any value. |
-| Minimal disposable artifact | `proofs/volume-policy-spike/` — a fake `volume-local` controller operating against a real temporary directory (via `tempfile::TempDir`, cleaned up automatically) standing in for one allowlisted root, with a fake `VolumeSourceEffectPort`/`VolumeLayoutEffectPort` implementing exactly the layout-entry/ACL/quota logic described in `ADR-046-resources-volume`, never a broker call. |
-| Inputs | (a) 6 layout entries covering every `CreatePolicy` value; (b) an ACL grant with a numeric-UID-shaped string (must be rejected at schema validation, not at runtime); (c) a `tmpfs`-kind Volume with `quota.maxBytes = 8 MiB`/`maxInodes = 1024` and an attempt to write 16 MiB (must fail at or before the 8 MiB boundary via the kernel `size=`/`nr_inodes=` mount options); (d) a `block-image`-kind Volume with `enforcement: hard` on a backing filesystem/loop device deliberately unable to guarantee the quota (a sparse file smaller than the requested quota) — must fail closed to `Failed` status with zero layout operations attempted; (e) one `sourcePolicyId` resolution, asserting the resolved absolute path never appears in the returned "public" Volume status/spec echo. |
+| Minimal disposable artifact | `proofs/volume-policy-spike/` - a fake `volume-local` controller operating against a real temporary directory (via `tempfile::TempDir`, cleaned up automatically) standing in for one allowlisted root, with a fake `VolumeSourceEffectPort`/`VolumeLayoutEffectPort` implementing exactly the layout-entry/ACL/quota logic described in `ADR-046-resources-volume`, never a broker call. |
+| Inputs | (a) 6 layout entries covering every `CreatePolicy` value; (b) an ACL grant with a numeric-UID-shaped string (must be rejected at schema validation, not at runtime); (c) a `tmpfs`-kind Volume with `quota.maxBytes = 8 MiB`/`maxInodes = 1024` and an attempt to write 16 MiB (must fail at or before the 8 MiB boundary via the kernel `size=`/`nr_inodes=` mount options); (d) a `block-image`-kind Volume with `enforcement: hard` on a backing filesystem/loop device deliberately unable to guarantee the quota (a sparse file smaller than the requested quota) - must fail closed to `Failed` status with zero layout operations attempted; (e) one `sourcePolicyId` resolution, asserting the resolved absolute path never appears in the returned "public" Volume status/spec echo. |
 | Command/harness | `cargo test --manifest-path proofs/volume-policy-spike/Cargo.toml -- --test-threads=1 volume_acl_quota_policy`. |
 | Metrics | (1) every `CreatePolicy` value produces exactly its documented `StorageLifecycle`-analog behavior (matching the table in `ADR-046-resources-volume` §"CreatePolicy"); (2) numeric-UID ACL is rejected before any filesystem mutation; (3) tmpfs write beyond quota fails at the kernel boundary (`ENOSPC`/`EDQUOT`-class error), not silently truncated; (4) hard-enforcement Volume on an unenforceable backend reaches `Failed` with zero layout side effects (verified by asserting the target directory remains exactly as it was before the attempt); (5) resolved host path is absent from every field of the returned status/spec/audit-record structs (checked via a recursive string-search helper over the serialized DTOs). |
 | Pass/fail threshold | All five metrics binary pass across all listed inputs; metric (5) is zero-tolerance (a single path leak anywhere in a public DTO is an automatic fail). |
@@ -448,30 +448,30 @@ performed by this documentation-only spec.
 | Failure interpretation | A path leak is a severity-blocking security finding against D082 and blocks `ADR046-volume-001` through `ADR046-volume-006`; a quota-enforcement miss blocks the same work items pending a fix to the pre-creation filesystem-capability probe, never a relaxed `hard` semantics. |
 | Affected decisions/work items | D032, D044, D062, D082, D083, D084; `ADR046-volume-001` through `ADR046-volume-006`. |
 | Cleanup | Deleted once `d2b-provider-volume-local`'s own `tests/`/`integration/` suite (per its dossier) reproduces these five metrics with equal or stricter coverage against the real broker-mediated layout effect adapter. |
-| Status | Specified — not yet executed. |
+| Status | Specified - not yet executed. |
 
-### SPIKE-11 — systemd/minijail Process Provider pidfd acquire/verify/reap/adopt/quarantine conformance
+### SPIKE-11 - systemd/minijail Process Provider pidfd acquire/verify/reap/adopt/quarantine conformance
 
 | Field | Value |
 | --- | --- |
 | Hypothesis | Both Process Provider implementations satisfy the identical pidfd contract in `ADR-046-resources-host-guest-process-user` §"Pidfd rules": a verified pidfd is acquired only after stable-identity verification, is never persisted/serialized/bus-exposed, is closed and reopened with full re-verification after every ProviderSupervisor restart, and ambiguous post-restart identity always quarantines rather than silently adopts or kills. |
-| Minimal disposable artifact | `proofs/process-provider-conformance-spike/` — one shared conformance test suite (a single Rust `trait ProcessProviderHarness` with `launch`/`restart_supervisor`/`simulate_identity_drift` methods) instantiated twice: once against a real `clone3(CLONE_PIDFD)`-based minijail-shaped launcher (reusing the existing `packages/d2b-priv-broker/src/ops/spawn_runner.rs` real-spawn shape as a reference, invoked directly and unprivileged via a plain `fork`+`exec` substitute — no real broker/minijail sandbox compilation, since this spike proves the pidfd/identity state machine, not sandbox compilation), and once against a real transient systemd user-scope launcher (InvocationID+cgroup+MainPID+start-time) using `systemd-run --user --scope`. |
-| Inputs | (a) 20 successful launches per implementation, each followed by a supervisor "restart" (drop and reacquire the pidfd) and re-verification; (b) 5 deliberate identity-drift cases per implementation (kill the original process and immediately start an unrelated process reusing the same PID before re-verification runs) which must quarantine, never silently adopt; (c) 1 case per implementation where the process exits cleanly before restart — must not attempt an invalid reap. |
+| Minimal disposable artifact | `proofs/process-provider-conformance-spike/` - one shared conformance test suite (a single Rust `trait ProcessProviderHarness` with `launch`/`restart_supervisor`/`simulate_identity_drift` methods) instantiated twice: once against a real `clone3(CLONE_PIDFD)`-based minijail-shaped launcher (reusing the existing `packages/d2b-priv-broker/src/ops/spawn_runner.rs` real-spawn shape as a reference, invoked directly and unprivileged via a plain `fork`+`exec` substitute - no real broker/minijail sandbox compilation, since this spike proves the pidfd/identity state machine, not sandbox compilation), and once against a real transient systemd user-scope launcher (InvocationID+cgroup+MainPID+start-time) using `systemd-run --user --scope`. |
+| Inputs | (a) 20 successful launches per implementation, each followed by a supervisor "restart" (drop and reacquire the pidfd) and re-verification; (b) 5 deliberate identity-drift cases per implementation (kill the original process and immediately start an unrelated process reusing the same PID before re-verification runs) which must quarantine, never silently adopt; (c) 1 case per implementation where the process exits cleanly before restart - must not attempt an invalid reap. |
 | Command/harness | `cargo test --manifest-path proofs/process-provider-conformance-spike/Cargo.toml --features systemd-user -- --test-threads=1 process_provider_conformance` (the `systemd-user` feature gates the systemd half behind `systemd-run --user` availability, matching this repository's existing host-integration-only gating pattern for systemd-dependent tests; the minijail-shaped half has no such gate). |
 | Metrics | (1) 20/20 successful launches per implementation acquire a pidfd only after all identity checks pass; (2) 20/20 restarts close and reopen the pidfd with full re-verification (never reusing the pre-restart pidfd); (3) 5/5 identity-drift cases per implementation quarantine (`adoptionState: quarantined`), never silently adopt the unrelated process nor blindly `SIGKILL` an unrelated PID; (4) 1/1 clean-exit case per implementation reports terminal status without an invalid reap attempt (no `ESRCH`/error swallowed silently). |
-| Pass/fail threshold | All four metrics at 100% across both implementations (40 launches, 40 restarts, 10 drift cases, 2 clean-exit cases total); metric (3) is zero-tolerance — any single false adoption of an unrelated process is an automatic fail. |
-| Expected resource budget | ≤5 minutes wall time (includes real process spawn/kill cycles); requires a Linux host with `clone3`/`pidfd_open` support and, for the systemd half, a running user `systemd --user` instance (skip with a clear diagnostic, not a silent pass, when unavailable — matching this repository's existing host-integration skip convention). |
+| Pass/fail threshold | All four metrics at 100% across both implementations (40 launches, 40 restarts, 10 drift cases, 2 clean-exit cases total); metric (3) is zero-tolerance - any single false adoption of an unrelated process is an automatic fail. |
+| Expected resource budget | ≤5 minutes wall time (includes real process spawn/kill cycles); requires a Linux host with `clone3`/`pidfd_open` support and, for the systemd half, a running user `systemd --user` instance (skip with a clear diagnostic, not a silent pass, when unavailable - matching this repository's existing host-integration skip convention). |
 | Failure interpretation | Any false adoption blocks `ADR046-process-002` (the systemd/minijail Provider work item in `ADR-046-components-processes-and-sandbox`) until the identity-verification tuple (executable hash + template generation + cgroup/scope placement + provider-specific attributes) is corrected; per anti-claim rule 3, the fix is never "trust the PID alone," which the spec already forbids. |
 | Affected decisions/work items | D022, D051; `ADR046-process-001`, `ADR046-process-002`. |
 | Cleanup | Deleted once `packages/d2b-provider-system-systemd` and `packages/d2b-provider-system-minijail` each carry this exact shared conformance suite in their own `tests/` per D059's required crate layout. |
-| Status | Specified — not yet executed. |
+| Status | Specified - not yet executed. |
 
-### SPIKE-12 — Nix direct ResourceSpec authoring → codegen → build validation → removed-resource cleanup
+### SPIKE-12 - Nix direct ResourceSpec authoring → codegen → build validation → removed-resource cleanup
 
 | Field | Value |
 | --- | --- |
 | Hypothesis | A Nix expression authoring `d2b.zones.<zone>.resources.<name> = { type = "..."; spec = { ... }; }` directly mirrors the canonical ResourceTypeSchema (no second Nix vocabulary), a `cargo xtask gen-schemas`-shaped generator produces the same committed JSON Schema the Nix build validates against, an eval-time assertion rejects bound/ref/domain/cycle violations before any build, a build-time derivation rejects schema-violating or store-path-carrying `spec`/`config` values, and removing a configuration-managed resource from the next Nix generation triggers asynchronous finalizer-safe deletion (visible Degraded/pending-cleanup status) rather than an immediate destructive sweep. |
-| Minimal disposable artifact | `proofs/nix-authoring-spike/` — a minimal flake (`flake.nix` + `resources.nix`) declaring 2 synthetic ResourceTypes (one with a `Ref` field, one with a nested object and a bound numeric field) with hand-written committed JSON Schemas under `proofs/nix-authoring-spike/schemas/`, a small standalone Rust `xtask`-shaped binary (`proofs/nix-authoring-spike/src/bin/gen-schemas.rs`) that emits the same schema from a hand-written DTO to prove the codegen/drift-gate shape (`git diff --exit-code`-style comparison) works end to end, and a Nix derivation that validates a rendered `resources.json` against the committed schema using the same offline/hermetic/no-network approach as `ADR-046-nix-configuration` §"Bundle integrity". |
+| Minimal disposable artifact | `proofs/nix-authoring-spike/` - a minimal flake (`flake.nix` + `resources.nix`) declaring 2 synthetic ResourceTypes (one with a `Ref` field, one with a nested object and a bound numeric field) with hand-written committed JSON Schemas under `proofs/nix-authoring-spike/schemas/`, a small standalone Rust `xtask`-shaped binary (`proofs/nix-authoring-spike/src/bin/gen-schemas.rs`) that emits the same schema from a hand-written DTO to prove the codegen/drift-gate shape (`git diff --exit-code`-style comparison) works end to end, and a Nix derivation that validates a rendered `resources.json` against the committed schema using the same offline/hermetic/no-network approach as `ADR-046-nix-configuration` §"Bundle integrity". |
 | Inputs | (a) a valid two-resource configuration; (b) a configuration with a dangling `Ref` (must fail eval); (c) a configuration whose rendered `spec` violates the committed schema bound (must fail build); (d) a configuration whose `spec` contains a Nix-store-path-shaped string (must fail build per D070); (e) a second Nix generation that omits one of the two resources present in generation (a), with that resource's `managedBy: configuration`. |
 | Command/harness | `nix build --no-link ./proofs/nix-authoring-spike#checks.$(nix eval --impure --raw --expr builtins.currentSystem).resources-valid` for case (a); `nix eval --impure ./proofs/nix-authoring-spike#checks... 2>&1` (expect eval failure) for case (b); `nix build ./proofs/nix-authoring-spike#checks....resources-schema-violation 2>&1` (expect build failure) for cases (c)/(d); `cargo run --manifest-path proofs/nix-authoring-spike/Cargo.toml --bin gen-schemas -- --check` (expect nonzero exit on intentional drift, matching `make test-drift`'s `xtask gen-schemas` + `git diff --exit-code` pattern) for the codegen check; a small harness script simulating generation (e) and asserting the omitted resource's status becomes `Degraded`/pending-cleanup rather than disappearing synchronously. |
 | Metrics | (1) case (a) builds successfully and the rendered JSON is byte-identical on a second hermetic build (D-070-style reproducibility); (2) case (b) fails at eval, not build; (3) cases (c)/(d) fail at build with a structured error naming the exact offending Nix option path; (4) the codegen check exits nonzero exactly when the hand-written schema and generator-emitted schema diverge, and zero when they match; (5) the omitted resource in generation (e) is not present in the new generation's active resource set, is still observable (Degraded/pending-cleanup) until its simulated finalizer completes, and the resource present in both generations is untouched. |
@@ -480,14 +480,14 @@ performed by this documentation-only spec.
 | Failure interpretation | A non-reproducible build or a schema-violating value that still builds blocks every `ADR-046-nix-configuration` work item and every ResourceType/Provider spec's own "Nix authoring and configuration cleanup" section; a synchronous (non-finalizer-safe) deletion on generation change is a severity-blocking finding against D057 and must be fixed structurally. |
 | Affected decisions/work items | D057, D058, D069, D070; the Nix-authoring implementation work items in `ADR-046-nix-configuration` and in every ResourceType/Provider spec's own Nix section. |
 | Cleanup | Deleted once the real `nixos-modules/resources.nix` + `packages/xtask` `gen-schemas` implementation (per `ADR-046-nix-configuration`'s own work items) reproduces these five metrics as part of `make test-drift`/`make test-flake`. |
-| Status | Specified — not yet executed. |
+| Status | Specified - not yet executed. |
 
-### SPIKE-13 — CLI dynamic Provider-projection discovery with bounded deadline and size
+### SPIKE-13 - CLI dynamic Provider-projection discovery with bounded deadline and size
 
 | Field | Value |
 | --- | --- |
-| Hypothesis | The CLI discovers a Provider's `cliProjection` lazily via `InspectSchema` only when that Provider's subcommand is invoked or `--help` for `d2b provider` is requested, respects the exact bounds in `ADR-046-cli-and-operations` §"Dynamic descriptors — safety bounds" (64 KiB total, 32-byte name limits, 32 sub-verbs, 2 s per-Provider / 10 s total deadline), rejects a Provider-projected name colliding with a built-in verb at install/bind time (not at CLI runtime), and imposes zero added startup latency on any non-Provider command. |
-| Minimal disposable artifact | `proofs/cli-discovery-spike/` — a fake `InspectSchema` server (a plain async TCP/Unix-socket stub, not real ComponentSession) returning configurable projection payloads, plus a minimal CLI-shaped harness implementing exactly the discovery/caching/rendering logic described in that section (lazy fetch, per-invocation-only cache, deadline enforcement, byte-escaping of completion strings). |
+| Hypothesis | The CLI discovers a Provider's `cliProjection` lazily via `InspectSchema` only when that Provider's subcommand is invoked or `--help` for `d2b provider` is requested, respects the exact bounds in `ADR-046-cli-and-operations` §"Dynamic descriptors - safety bounds" (64 KiB total, 32-byte name limits, 32 sub-verbs, 2 s per-Provider / 10 s total deadline), rejects a Provider-projected name colliding with a built-in verb at install/bind time (not at CLI runtime), and imposes zero added startup latency on any non-Provider command. |
+| Minimal disposable artifact | `proofs/cli-discovery-spike/` - a fake `InspectSchema` server (a plain async TCP/Unix-socket stub, not real ComponentSession) returning configurable projection payloads, plus a minimal CLI-shaped harness implementing exactly the discovery/caching/rendering logic described in that section (lazy fetch, per-invocation-only cache, deadline enforcement, byte-escaping of completion strings). |
 | Inputs | (a) a well-formed 8 KiB projection; (b) a 128 KiB projection (must be skipped for exceeding the 64 KiB bound, with the documented single stderr line, not a crash); (c) a projection whose top-level subcommand name is `list` (must be rejected at bind time with the built-in-collision rule); (d) a Provider whose `InspectSchema` never responds (must time out at exactly the 2 s per-Provider deadline and continue without blocking the CLI); (e) 6 Providers simultaneously slow, each taking 3 s, to verify the 10 s total-fetch deadline caps overall wait; (f) a projection containing a newline and an HTML-special character in a completion string, to verify escaping. |
 | Command/harness | `cargo test --manifest-path proofs/cli-discovery-spike/Cargo.toml -- --test-threads=1 cli_dynamic_discovery`. |
 | Metrics | (1) case (a) renders correctly; (2) case (b) is skipped with the exact documented single-line warning format; (3) case (c) is rejected before any command dispatch, with a stable error, not a runtime shadowing; (4) case (d)'s per-Provider wait is capped at 2 s (measured); (5) case (e)'s total wait is capped at 10 s, not 6×3=18 s; (6) case (f)'s rendered completion string contains no raw newline and no unescaped HTML/shell-special character; (7) a non-Provider command's measured startup time is statistically indistinguishable (within measurement noise, ≤5 ms difference) between a CLI build with zero installed Providers and one with 20 installed (slow) Providers, proving zero added startup cost. |
@@ -496,46 +496,46 @@ performed by this documentation-only spec.
 | Failure interpretation | A collision that reaches runtime shadowing, or a startup-latency regression on non-Provider commands, blocks `ADR046-cli-001` through `ADR046-cli-011` (the exact set depends on which sub-item owns discovery/projection rendering) until the discovery/caching/bind-time-rejection logic is corrected; per anti-claim rule 3, the fix is never "widen the deadline" to make a slow-Provider case pass. |
 | Affected decisions/work items | D064; the CLI implementation work items `ADR046-cli-001` through `ADR046-cli-011` in `ADR-046-cli-and-operations`. |
 | Cleanup | Deleted once the real `d2b` CLI binary (destination of the owning `ADR046-cli-*` work item) carries an equivalent in-tree discovery/bound/collision/latency conformance test. |
-| Status | Specified — not yet executed. |
+| Status | Specified - not yet executed. |
 
-### SPIKE-14 — clean v3 reset and cutover (no v2 alias dispatch, fresh Zone bootstrap)
+### SPIKE-14 - clean v3 reset and cutover (no v2 alias dispatch, fresh Zone bootstrap)
 
 | Field | Value |
 | --- | --- |
 | Hypothesis | A v3 CLI binary built from this spec's authoring baseline contains zero executable dispatch paths for any of the removed v2 commands listed in `ADR-046-cli-and-operations` §"v2 command surface removed at 3.0 clean break", exposes no migration-diagnostic command, and can bootstrap a fresh Zone from an empty state directory through Nix generation activation to a Ready `Zone/<name>` self-resource with no v2/Realm state import of any kind. |
-| Minimal disposable artifact | `proofs/clean-cutover-spike/` — a static-analysis check (`cargo metadata` + a symbol-table scan of the built CLI binary, e.g., via `nm`/`strings`-shaped inspection or, more robustly, a source-level `grep`-based assertion against the CLI crate's command-table source) confirming none of the 27 removed-command strings from that table dispatch to a handler function, plus a minimal "fresh Zone bootstrap" harness driving the fixed bootstrap sequence in `ADR-046-components-processes-and-sandbox` §"Bootstrap boundary" against fakes for the Zone runtime, broker, and fixed controllers (no real redb/broker — this spike proves *sequencing and state-freshness*, not the redb/process spikes already covered by SPIKE-01/SPIKE-03/SPIKE-11). |
+| Minimal disposable artifact | `proofs/clean-cutover-spike/` - a static-analysis check (`cargo metadata` + a symbol-table scan of the built CLI binary, e.g., via `nm`/`strings`-shaped inspection or, more robustly, a source-level `grep`-based assertion against the CLI crate's command-table source) confirming none of the 27 removed-command strings from that table dispatch to a handler function, plus a minimal "fresh Zone bootstrap" harness driving the fixed bootstrap sequence in `ADR-046-components-processes-and-sandbox` §"Bootstrap boundary" against fakes for the Zone runtime, broker, and fixed controllers (no real redb/broker - this spike proves *sequencing and state-freshness*, not the redb/process spikes already covered by SPIKE-01/SPIKE-03/SPIKE-11). |
 | Inputs | (a) the 27-row removed-command table from `ADR-046-cli-and-operations`; (b) an empty state directory (no `/var/lib/d2b` content of any kind, no Realm artifacts); (c) one deliberately injected legacy Realm-shaped file dropped into the fresh state directory before bootstrap, which must be ignored (never imported, never migrated) by the v3 bootstrap sequence. |
 | Command/harness | A source-scan test: `cargo test --manifest-path proofs/clean-cutover-spike/Cargo.toml -- --test-threads=1 no_v2_alias_dispatch` asserting, for every one of the 27 removed-command strings, that the CLI crate's command-table source (a copy of the relevant `packages/d2b/src/lib.rs`-shaped command enum used by this spike's fixture, not the real crate) contains no executable arm; a second test, `fresh_zone_bootstrap_ignores_legacy_state`, drives the fake bootstrap sequence against inputs (b) and (c). |
 | Metrics | (1) 27/27 removed commands have zero executable dispatch arms and no migration-diagnostic branch exists; (2) fresh bootstrap from an empty directory reaches a Ready `Zone/<name>` self-resource through the fixed sequence (Zone runtime → broker → core-controller → minimum Host/Guest supervisor → user supervisor → system-minijail) with no step skipped or reordered; (3) the injected legacy Realm-shaped file is never read, referenced, or copied by any step of the bootstrap sequence (verified by a file-access-tracing fake filesystem that fails the test on any open() of that path). |
-| Pass/fail threshold | All three metrics binary pass; metric (3) is zero-tolerance — a single stat()/open() of the legacy file is an automatic fail, since ADR 0046 defines the cutover as destructive with the pre-ADR45 v3 tree as ancestry, not main, and with no v2 data-import path of any kind. |
+| Pass/fail threshold | All three metrics binary pass; metric (3) is zero-tolerance - a single stat()/open() of the legacy file is an automatic fail, since ADR 0046 defines the cutover as destructive with the pre-ADR45 v3 tree as ancestry, not main, and with no v2 data-import path of any kind. |
 | Expected resource budget | ≤2 minutes wall time; ≤32 MiB RSS. |
 | Failure interpretation | Any surviving v2 dispatch arm or any legacy-file access blocks the entire CLI/cutover implementation wave; per D001/D041, the fix is deletion of the offending path, never a compatibility shim. |
 | Affected decisions/work items | D001, D002, D041, D064; the v2-removal work items implied by `ADR-046-cli-and-operations` §"v2 command surface removed at 3.0 clean break" and the bootstrap work items in `ADR-046-components-processes-and-sandbox`. |
 | Cleanup | Deleted once the real `packages/d2b` CLI crate and the real Zone-runtime bootstrap sequence are built; their own workspace-policy/lint gates (extending the existing `deny.toml`/policy-test convention already used for other closed-set invariants in this repository) enforce the same zero-v2-dispatch and no-legacy-import guarantees permanently, superseding this spike. |
-| Status | Specified — not yet executed. |
+| Status | Specified - not yet executed. |
 
-### SPIKE-15 — representative local / cloud / interaction Provider end-to-end composition
+### SPIKE-15 - representative local / cloud / interaction Provider end-to-end composition
 
 | Field | Value |
 | --- | --- |
-| Hypothesis | Three representative Provider compositions each reconcile end-to-end through Zone bootstrap → Provider install → Process launch → Ready status inside the shared aggregate resource-plane budget, without any composition requiring a code path outside the ones already defined by the other 14 spikes: (a) **local** — `Guest/dev-vm` on `Provider/runtime-cloud-hypervisor` with a `Provider/volume-local`-backed state Volume and Process Providers `Provider/system-minijail` launching the VMM process; (b) **cloud** — a `Guest` on `Provider/runtime-azure-container-apps` (or `runtime-azure-virtual-machine`) acquiring its identity through `Provider/credential-managed-identity` over the SPIKE-08 KK delivery path; (c) **interaction** — a `Provider/shell-terminal` (or `display-wayland`) Process under a user-domain `Host`, mounting an operator-declared `Volume` via the SPIKE-10 ACL/quota path (shell-terminal/display-wayland declare no Provider state Volume of their own; their bounded non-secret operational state lives in resource `status`/the core Operation ledger per D087). |
-| Minimal disposable artifact | `proofs/e2e-composition-spike/` — a single fake-but-integrated harness wiring together the fakes already built for SPIKE-01 (store), SPIKE-02/03 (reconcile/fast-path), SPIKE-04 (EffectPort), SPIKE-05 (Provider packaging), SPIKE-06/07 (bus/transport), SPIKE-08 (credential KK), SPIKE-09/10 (state/volume), and SPIKE-11 (process conformance) into one process, driving all three compositions through the same fixed bootstrap sequence as SPIKE-14, so this spike is explicitly an **integration** of the other 14 fakes rather than a sixteenth independent fake stack. |
-| Inputs | Three Nix-authored (per SPIKE-12's harness) ResourceSpec sets, one per composition, each declaring exactly the resources named in the Hypothesis row; a shared Zone budget ceiling matching `ADR-046-resource-store-redb`'s aggregate ≤64 MiB idle-RSS target, measured with all three compositions' fixed/mandatory processes running simultaneously (system-core, system-minijail, and each composition's own controller/service processes — excluding the large Guest runtime processes themselves, which are out of the resource-plane budget by definition in that spec). |
+| Hypothesis | Three representative Provider compositions each reconcile end-to-end through Zone bootstrap → Provider install → Process launch → Ready status inside the shared aggregate resource-plane budget, without any composition requiring a code path outside the ones already defined by the other 14 spikes: (a) **local** - `Guest/dev-vm` on `Provider/runtime-cloud-hypervisor` with a `Provider/volume-local`-backed state Volume and Process Providers `Provider/system-minijail` launching the VMM process; (b) **cloud** - a `Guest` on `Provider/runtime-azure-container-apps` (or `runtime-azure-virtual-machine`) acquiring its identity through `Provider/credential-managed-identity` over the SPIKE-08 KK delivery path; (c) **interaction** - a `Provider/shell-terminal` (or `display-wayland`) Process under a user-domain `Host`, mounting an operator-declared `Volume` via the SPIKE-10 ACL/quota path (shell-terminal/display-wayland declare no Provider state Volume of their own; their bounded non-secret operational state lives in resource `status`/the core Operation ledger per D087). |
+| Minimal disposable artifact | `proofs/e2e-composition-spike/` - a single fake-but-integrated harness wiring together the fakes already built for SPIKE-01 (store), SPIKE-02/03 (reconcile/fast-path), SPIKE-04 (EffectPort), SPIKE-05 (Provider packaging), SPIKE-06/07 (bus/transport), SPIKE-08 (credential KK), SPIKE-09/10 (state/volume), and SPIKE-11 (process conformance) into one process, driving all three compositions through the same fixed bootstrap sequence as SPIKE-14, so this spike is explicitly an **integration** of the other 14 fakes rather than a sixteenth independent fake stack. |
+| Inputs | Three Nix-authored (per SPIKE-12's harness) ResourceSpec sets, one per composition, each declaring exactly the resources named in the Hypothesis row; a shared Zone budget ceiling matching `ADR-046-resource-store-redb`'s aggregate ≤64 MiB idle-RSS target, measured with all three compositions' fixed/mandatory processes running simultaneously (system-core, system-minijail, and each composition's own controller/service processes - excluding the large Guest runtime processes themselves, which are out of the resource-plane budget by definition in that spec). |
 | Command/harness | `cargo test --manifest-path proofs/e2e-composition-spike/Cargo.toml -- --test-threads=1 end_to_end_composition_{local,cloud,interaction}` (three named tests, one per composition) plus `/usr/bin/time -v` RSS measurement (methodology identical to SPIKE-01) taken once with all three compositions' fixed/mandatory control-plane processes running concurrently. |
 | Metrics | (1) each composition reaches `phase: Ready` on its top-level resource (the `Guest` for (a)/(b), the `Process` for (c)) within a bounded wall-clock budget of 5 s from Nix-generation-activation-equivalent trigger to Ready, using only the fakes already validated by the other 14 spikes (no new unvalidated code path); (2) the cloud composition's credential acquisition reuses exactly the SPIKE-08 KK delivery path with no plaintext leak, re-asserted in this integrated context; (3) the interaction composition's mounted `Volume` passes the exact SPIKE-10 ACL/`sourcePolicyId`/quota checks, re-asserted in this integrated context; (4) combined idle RSS of the fixed/mandatory control-plane processes across all three compositions running simultaneously stays within the aggregate budget scaled for 3 Zones sharing one host (≤3× the single-Zone ≤64 MiB target, i.e., ≤192 MiB, since each Zone embeds its own store/core-controller/system-minijail per D006/D007). |
 | Pass/fail threshold | Metrics (1)-(3) binary pass for all three compositions; metric (4) ≤192 MiB combined median RSS over 3 repeated runs. |
 | Expected resource budget | ≤10 minutes wall time (dominated by the 3×5 s Ready-latency budget plus fixture setup); ≤256 MiB total build RSS. |
 | Failure interpretation | A composition that only reaches Ready by adding a code path not already covered by SPIKE-01 through SPIKE-14 is itself a finding: it means the feasibility catalog is incomplete for that composition, and the missing capability must be added to this catalog (via a spec revision) before the corresponding production work item is scheduled, per anti-claim rule 7 ("no unresolved entries") applied prospectively. A metric-4 RSS miss revises the per-Zone footprint budget or the number of Zones assumed to co-reside on one host, never the individual Zone target already fixed by `ADR-046-resource-store-redb`. |
 | Affected decisions/work items | D006, D007, D008, D043, D044, D047, D048, D076; every Guest/Volume/Credential/interaction Provider dossier's own implementation work items, and the core bootstrap work items in `ADR-046-components-processes-and-sandbox`. |
-| Cleanup | Deleted once the real integration test suites named by the individual Provider dossiers (`integration/` per D059) collectively reproduce compositions (a), (b), and (c) against real (non-fake) Zone/store/bus/broker code, at which point this spike's role — proving the fakes compose without a missing capability — is fully subsumed. |
-| Status | Specified — not yet executed. |
+| Cleanup | Deleted once the real integration test suites named by the individual Provider dossiers (`integration/` per D059) collectively reproduce compositions (a), (b), and (c) against real (non-fake) Zone/store/bus/broker code, at which point this spike's role - proving the fakes compose without a missing capability - is fully subsumed. |
+| Status | Specified - not yet executed. |
 
-### SPIKE-16 — three-layer spec + status shape: schema parity, base-only projection, extension versioning
+### SPIKE-16 - three-layer spec + status shape: schema parity, base-only projection, extension versioning
 
 | Field | Value |
 | --- | --- |
 | Hypothesis | The frozen three-layer shape supports both status (D088) and desired spec (D089): universal base + ResourceType base (`status.resource` / `spec.*` incl. `spec.providerRef`) + optional canonical Provider extension (`status.provider.details` / `spec.provider.settings`). It supports (a) identical base shape across multiple implementations of one ResourceType (status.resource and base spec both); (b) a generic base-only consumer that reads/watches/authors on the base only while ignoring an absent, unknown, or version-mismatched extension; (c) strict per-layer bounds and signed/registered extension validation with unknown-field denial and shadow rejection; (d) atomic single-mutation status writes; (e) each `ResourceApiBinding` implements the exact base spec/status fingerprint, accepts the canonical minimal valid base Spec, and rejects an unsupported optional base capability only via its signed capability matrix and a provider-neutral `unsupported-capability`; and (f) `spec.provider` validation against `spec.providerRef` at build and admission. |
-| Minimal disposable artifact | `proofs/layered-shape-spike/` — an in-process fake resource store (a `HashMap` oracle, not real redb) with registered spec/status extension-schema tables and a capability matrix; two fake `Guest` implementations (`runtime-cloud-hypervisor`, `runtime-azure-container-apps`) each accepting the same base spec and writing the same `status.resource`, with distinct `spec.provider.settings`/`status.provider.details`; a fake base-only consumer authoring base spec and reading universal + `status.resource`. |
+| Minimal disposable artifact | `proofs/layered-shape-spike/` - an in-process fake resource store (a `HashMap` oracle, not real redb) with registered spec/status extension-schema tables and a capability matrix; two fake `Guest` implementations (`runtime-cloud-hypervisor`, `runtime-azure-container-apps`) each accepting the same base spec and writing the same `status.resource`, with distinct `spec.provider.settings`/`status.provider.details`; a fake base-only consumer authoring base spec and reading universal + `status.resource`. |
 | Inputs | (a) two implementations accepting an identical minimal base Spec and producing identical `status.resource`; (b) `spec.provider`/`status.provider` with an unregistered `schemaId`; (c) an unknown field in `settings`/`details`; (d) a `settings`/`details` restating a base field; (e) an oversize extension (>32 KiB); (f) an optional base capability one implementation's signed matrix marks unsupported; (g) a base-only consumer against each case. |
 | Command/harness | `cargo test --manifest-path proofs/layered-shape-spike/Cargo.toml -- --test-threads=1 layered_three_layer_shape`. |
 | Metrics | (1) both implementations accept the identical minimal base Spec and produce a byte-identical `status.resource` and base-spec shape; (2) base-only consumer authors/reads/watches all cases successfully and never parses `settings`/`details`; (3) unregistered schema → `spec-provider-schema-invalid`/`status-provider-schema-invalid`; unknown field → rejected; shadow of base → `spec-provider-shadow`/`status-provider-overlap`; oversize → bounds error; (4) all present status layers commit in exactly one mutation; a forced partial-layer write is rejected; (5) the capability-unsupported case returns provider-neutral `unsupported-capability` and never a silently-ignored base field; (6) `spec.provider` fails validation when `spec.providerRef` names a Provider that did not register that schema. |
@@ -544,14 +544,14 @@ performed by this documentation-only spec.
 | Failure interpretation | A base-only consumer that fails on an unknown/newer extension, two implementations that diverge on the base spec or `status.resource`, or a base capability honored/degraded outside the capability matrix, is a severity-blocking finding against D088/D089: the shared field is either mis-placed in an extension (must be promoted to base) or the base contract is not truly provider-neutral. Fixed structurally, never suppressed. |
 | Affected decisions/work items | D027, D028, D037, D075, D088, D089; resource object/API/store/reconcile work items and every Provider dossier's spec/status-schema work item. |
 | Cleanup | Deleted once the real resource-contract crate (`packages/d2b-contracts`) and the provider conformance kit reach equal base-schema-parity, minimal-base-acceptance, capability-matrix, base-only-projection, and extension-version test coverage. |
-| Status | Specified — not yet executed. |
+| Status | Specified - not yet executed. |
 
-### SPIKE-17 — expedited reconcile commit-proof gating and currency/disruptive-upgrade planning
+### SPIKE-17 - expedited reconcile commit-proof gating and currency/disruptive-upgrade planning
 
 | Field | Value |
 | --- | --- |
 | Hypothesis | (D090) An expedited (`waitForReconcile`) mutation can run controller preflight/plan in parallel with a reserved-revision commit while gating every external effect/finalizer/status write on a typed `CommittedRevisionProof`, enter a bounded priority lane in the same per-resource single-flight, and return committed-object + one-pass disposition + `statusPersistence` without waiting for the async status write; an `Abort` yields no effect; a durable commit is never rolled back on later reconcile timeout; and a normal re-entry no-ops via the `(UID,generation,revision,operationId)` idempotency key. (D091) A controller can assess currency into `status.update`, report `UpgradeRequired` for a disruptive change instead of applying it, and a dependency-aware planner can topologically drain→recycle→restart dependents (GPU example) while preserving UID/state/TPM. |
-| Minimal disposable artifact | `proofs/expedited-upgrade-spike/` — an in-process fake resource store (reserved-revision + commit-proof/`Abort` emitter, not real redb) and a fake single-flight reconciler with a bounded priority lane; a fake GPU Device with dependent Processes for the drain/recycle/restart planner; a deterministic clock. |
+| Minimal disposable artifact | `proofs/expedited-upgrade-spike/` - an in-process fake resource store (reserved-revision + commit-proof/`Abort` emitter, not real redb) and a fake single-flight reconciler with a bounded priority lane; a fake GPU Device with dependent Processes for the drain/recycle/restart planner; a deterministic clock. |
 | Inputs | (a) expedited create where commit succeeds then one pass reaches a disposition; (b) expedited create where commit `Abort`s (assert zero effects); (c) controller finishes preflight before proof (assert no effect until proof); (d) delayed status write (assert `statusPersistence: pending`); (e) a normally-queued reconcile after an expedited pass (assert no-op/rejoin, no duplicate); (f) expedited timeout after commit (assert committed-but-pending, queue continues); (g) restart mid-expedited (assert no duplicate effect); (h) each currency trigger → correct `state`/`reasons`; (i) disruptive change → `UpgradeRequired` not applied in place; (j) GPU with dependents → `Blocked`, planner drains/recycles/restarts, UID/state/TPM preserved. |
 | Command/harness | `cargo test --manifest-path proofs/expedited-upgrade-spike/Cargo.toml -- --test-threads=1 expedited_and_upgrade`. |
 | Metrics | (1) no effect/finalizer/status mutation occurs before `CommittedRevisionProof`; `Abort` → zero effects; (2) durable commit persists regardless of a later pass timeout; (3) idempotency key dedups the normal re-entry (exactly-once effect); (4) response returns committed object + one-pass disposition + `statusPersistence` without blocking on the status write; (5) priority lane is bounded/fair (ordinary reconciles not starved); (6) currency states/reasons/disruption computed correctly per trigger; (7) disruptive change never applied in place (always `UpgradeRequired`); (8) planner order is drain→recycle→restart and preserves UID/state/TPM. |
@@ -560,14 +560,14 @@ performed by this documentation-only spec.
 | Failure interpretation | An effect before proof, a rolled-back commit, a duplicated effect, an in-place disruptive change, or a planner that disrupts dependents before draining is a severity-blocking finding against D090/D091 and must be fixed structurally, never suppressed. |
 | Affected decisions/work items | D005, D030, D084, D090, D091; resource API/store/reconcile/core-controller work items and every Provider dossier's currency/upgrade work item. |
 | Cleanup | Deleted once the real resource-store/reconcile/core-controller crates and the provider conformance kit reach equal commit-proof-gating, idempotency, priority-lane, currency, and dependency-planner coverage. |
-| Status | Specified — not yet executed. |
+| Status | Specified - not yet executed. |
 
-### SPIKE-18 — Endpoint resource promotion, no-locator resolution, producer generation, consumer trigger
+### SPIKE-18 - Endpoint resource promotion, no-locator resolution, producer generation, consumer trigger
 
 | Field | Value |
 | --- | --- |
 | Hypothesis | (D092) A stable endpoint can be modeled as an `Endpoint` resource with `ownerRef` (lifecycle) and `producerRef` (Process/Device/Guest/Host) carrying only closed class/transport/locality/purpose + bounded fingerprints and NO raw locator; `spec.visibility` is exactly `owner\|provider\|zone`, while the strict `consumerPolicy` object is the only finer gate; a consumer references `Endpoint/<name>` and resolves to a private transport/FD only through an EffectPort/LaunchTicket path under authorization; a producer restart bumps `endpointGeneration`/`status.update` and fires the consumer's dependency trigger; and the promotion test correctly keeps high-churn handles (pidfd, fd index, named stream, `OwnedTransport`, `operationId`) as non-resource opaque IDs. |
-| Minimal disposable artifact | `proofs/endpoint-resource-spike/` — an in-process fake resource store with a `producer_index`, a fake TPM Device producing an `Endpoint`, a fake consumer Process referencing it, and a fake EffectPort that resolves an Endpoint to an opaque private handle only for an authorized consumer; a deterministic clock. |
+| Minimal disposable artifact | `proofs/endpoint-resource-spike/` - an in-process fake resource store with a `producer_index`, a fake TPM Device producing an `Endpoint`, a fake consumer Process referencing it, and a fake EffectPort that resolves an Endpoint to an opaque private handle only for an authorized consumer; a deterministic clock. |
 | Inputs | (a) Device creates an owned `Endpoint` (producerRef=Device, no locator in spec/status); (b) authorized owner-, provider-, and Zone-scope consumers resolve via the EffectPort; (c) invalid visibility aliases and mismatches for each canonical `consumerPolicy` allowlist; (d) producer restart → `endpointGeneration` bump; (e) child-first deletion when the producer/owner is deleted; (f) a set of high-churn handles fed to the promotion-test lint; (g) all Markdown Endpoint examples fed to an Endpoint-only drift parser. |
 | Command/harness | `cargo test --manifest-path proofs/endpoint-resource-spike/Cargo.toml -- --test-threads=1 endpoint_resource`. |
 | Metrics | (1) Endpoint spec/status contain no path/address/CID/port/fd/credential and visibility accepts exactly `owner\|provider\|zone`; (2) authorized resolve returns a handle only through the EffectPort; (3) an out-of-scope subject or any present `allowedSubjects`/`allowedProviderComponents`/`allowedOperations` mismatch returns `endpoint-resolve-denied`, with no locator; (4) producer restart bumps `endpointGeneration` and fires exactly one consumer `dependency-changed` trigger; (5) deleting the producer/owner deletes the Endpoint child-first; (6) the promotion-test lint classifies pidfd/fd-index/named-stream/`OwnedTransport`/`operationId` as permitted opaque (non-resource) and any stable cross-boundary endpoint as requiring promotion; (7) every Endpoint example uses the exact visibility enum and the object-form `consumerPolicy` as its only finer gate, without inspecting ResourceExport visibility. |
@@ -576,14 +576,14 @@ performed by this documentation-only spec.
 | Failure interpretation | A raw locator in an Endpoint's spec/status, an unauthorized resolution, or a high-churn handle wrongly promoted (or a stable cross-boundary endpoint left as an opaque ID) is a severity-blocking finding against D092 and must be fixed structurally, never suppressed. |
 | Affected decisions/work items | D010, D022, D081, D084, D088, D089, D092; resource object/API/store/reconcile/core-controller work items and every Provider dossier's endpoint-migration work item. |
 | Cleanup | Deleted once the real resource-contract/store/reconcile crates and the provider conformance kit reach equal Endpoint no-locator, resolution-authorization, producer-generation, consumer-trigger, and promotion-test-lint coverage. |
-| Status | Specified — not yet executed. |
+| Status | Specified - not yet executed. |
 
-### SPIKE-19 — Entra identity-Guest login/token grounding (fake Entrablau service)
+### SPIKE-19 - Entra identity-Guest login/token grounding (fake Entrablau service)
 
 | Field | Value |
 | --- | --- |
-| Hypothesis | (D093) `credential-entra` can be secret-free by grounding login/token acquisition in an Entrablau-enabled identity `Guest`: the controller binds `identityGuestRef` + a login `Endpoint`, `BeginLogin` opens an authenticated end-to-end session to a Guest login service that conducts the interactive login inside the Guest, status carries only bounded non-secret interaction observations, and an on-demand access token is delivered end-to-end (Noise_KK) only to the exact `consumerRef` consumer while Host/bus see ciphertext — with no Host login/`DefaultAzureCredential`/env/DBus/path/browser fallback and no direct Entra egress from the controller. Entrablau is external/sibling, so target integration is ADR-only and proven here with a fake service; a manual real-Guest login is a separate non-CI check. |
-| Minimal disposable artifact | `proofs/entra-guest-login-spike/` — an in-process fake resource store; a fake "Entrablau Guest login service" behind a fake login `Endpoint` that scripts success/required/cancel/timeout and issues opaque token leases over a fake KK channel; a fake consumer process; a fake Host observer asserting it only sees ciphertext. NO live Entra, NO network. |
+| Hypothesis | (D093) `credential-entra` can be secret-free by grounding login/token acquisition in an Entrablau-enabled identity `Guest`: the controller binds `identityGuestRef` + a login `Endpoint`, `BeginLogin` opens an authenticated end-to-end session to a Guest login service that conducts the interactive login inside the Guest, status carries only bounded non-secret interaction observations, and an on-demand access token is delivered end-to-end (Noise_KK) only to the exact `consumerRef` consumer while Host/bus see ciphertext - with no Host login/`DefaultAzureCredential`/env/DBus/path/browser fallback and no direct Entra egress from the controller. Entrablau is external/sibling, so target integration is ADR-only and proven here with a fake service; a manual real-Guest login is a separate non-CI check. |
+| Minimal disposable artifact | `proofs/entra-guest-login-spike/` - an in-process fake resource store; a fake "Entrablau Guest login service" behind a fake login `Endpoint` that scripts success/required/cancel/timeout and issues opaque token leases over a fake KK channel; a fake consumer process; a fake Host observer asserting it only sees ciphertext. NO live Entra, NO network. |
 | Inputs | (a) BeginLogin → scripted success → on-demand token lease to the authorized consumer; (b) login-required/AwaitingUser; (c) CancelLogin; (d) deadline timeout; (e) controller restart mid-login; (f) login Endpoint unavailable / generation mismatch; (g) Host placement of the login service; (h) a cross-Zone `identityGuestRef`. |
 | Command/harness | `cargo test --manifest-path proofs/entra-guest-login-spike/Cargo.toml -- --test-threads=1 entra_guest_login`. |
 | Metrics | (1) no token/URL/cookie/authority-conferring device code/user PII appears in Credential status/audit/OTEL (only closed `interactionState` + bounded metadata); (2) the raw token reaches only the exact `consumerRef` consumer over KK; the Host observer sees ciphertext only; (3) cancel and deadline-timeout leave the durable Credential unchanged and never block past the deadline; (4) restart mid-login resumes/re-derives without leaking secrets; (5) Endpoint-unavailable/generation-mismatch → typed error and no token; (6) Host placement → `host-placement-rejected`; cross-Zone `identityGuestRef` → rejected; (7) the controller performs no direct Entra network call (all Entra flow is inside the fake Guest service). |
@@ -592,14 +592,14 @@ performed by this documentation-only spec.
 | Failure interpretation | A token/URL/cookie/PII in an observable surface, a token reaching anyone but the exact consumer, a Host-grounded login path, or a direct Entra egress from the controller is a severity-blocking finding against D093 and must be fixed structurally, never suppressed. A manual real-Guest login with the sibling `vicondoa/entrablau.nix` composed validates the contract end-to-end outside CI. |
 | Affected decisions/work items | D048, D055, D056, D088, D089, D090, D092, D093; credential-entra dossier work items and the ACA/Azure-VM consumer work items. |
 | Cleanup | Deleted once `packages/d2b-provider-credential-entra` and the identity-Guest integration tests reach equal fake-service coverage and a documented manual real-Guest login procedure exists. |
-| Status | Specified — not yet executed. |
+| Status | Specified - not yet executed. |
 
-### SPIKE-20 — Cross-Zone singleton sharing via ResourceExport/ResourceImport (D096)
+### SPIKE-20 - Cross-Zone singleton sharing via ResourceExport/ResourceImport (D096)
 
 | Field | Value |
 | --- | --- |
 | Hypothesis | (D096) Deterministic cross-Zone sharing requires a signed Provider projection factory binding a qualified semantic/provider-neutral `*Service` type, matching qualified semantic `*Binding` type, allowed Service backing refs, allowed Binding target refs, and projection schema/fingerprints. Export targets only the one owner Service; import preserves that semantic type in exactly one non-authoritative projection Service while local `providerRef` independently selects the implementation; operator-authored local Bindings express desired consumer intent, reference it, and own Process/Endpoint children. The canonical minimal base works without `spec.provider`; observed realization exists only in status. No Device/Endpoint/Binding projection, auto-Binding, or FD/secret/path/locator transfer is needed. |
-| Minimal disposable artifact | `proofs/cross-zone-singleton-share-spike/` — an in-memory two-Zone resource store/catalog, signed/tampered factory fixtures, fake owner/import/Binding controllers, deterministic owner/dependency graph, fake ZoneLink/clock/stream, and a real encrypted named-stream feature. The fake tier exercises all metadata/admission/lifecycle rules without processes, sockets, sleeps, or network; the integration feature swaps in the production stream from SPIKE-06/SPIKE-07. |
+| Minimal disposable artifact | `proofs/cross-zone-singleton-share-spike/` - an in-memory two-Zone resource store/catalog, signed/tampered factory fixtures, fake owner/import/Binding controllers, deterministic owner/dependency graph, fake ZoneLink/clock/stream, and a real encrypted named-stream feature. The fake tier exercises all metadata/admission/lifecycle rules without processes, sockets, sleeps, or network; the integration feature swaps in the production stream from SPIKE-06/SPIKE-07. |
 | Inputs | (a) `audio.d2bus.org.AudioService` + `audio.d2bus.org.AudioBinding`, initially implemented by `audio-pipewire`: owner backed by local Device+Endpoint, export to work Zone, same-type projection Service, and two authored Bindings targeting a Guest/User; (b) `security-key.d2bus.org.SecurityKeyService` + `security-key.d2bus.org.SecurityKeyBinding` with `device-security-key` and exclusive fair queue; (c) `telemetry.d2bus.org.TelemetryService` + `telemetry.d2bus.org.TelemetryBinding` with `observability-otel` and producer backpressure; (d) `usb.d2bus.org.UsbService` + `usb.d2bus.org.UsbBinding` with `device-usbip` under allow/deny policy combinations; (e) every other Provider forbidden; (f) canonical minimal base without `spec.provider`, independently selected conformant owner/consumer implementations, Core projection attempts with `spec.provider`, Provider/adapter-identity-only descriptor mutations, and negatives for implementation-qualified type, implementation detail in base, absent/unsigned/wrong Service/Binding factory, disallowed backing/target, schema mismatch, and fingerprint tamper; (g) direct Device/Endpoint/Binding/Credential export, attempted Device/Endpoint/Binding projection, observed state smuggled into Binding spec, forged Binding authority status, stale generation, and FD/secret/path/socket/device-handle transfer; (h) security-key and USB Providers resolve one fake physical token through different labels to the same trusted USB identity and attempt to substitute Provider-private authority classes/digests. |
 | Command/harness | Fast hermetic: `cargo test --manifest-path proofs/cross-zone-singleton-share-spike/Cargo.toml -- --test-threads=1 fake_stream_export_import`. Slower integration: `cargo test --manifest-path proofs/cross-zone-singleton-share-spike/Cargo.toml --features real-stream -- --test-threads=1 real_stream_export_import` after the real bounded encrypted stream crate is available. |
 | Metrics | (1) factory signature/type/ref/schema/fingerprint validation is exact and fail-closed; Provider/adapter identity is authenticated by the signed descriptor but does not change the semantic fingerprint; (2) only owner Service accepted as export target; (3) exactly one same-semantic-type projection Service with import ownerRef, `providerRef`, semantic base/import fields, no `spec.provider`, and zero Device/Endpoint/Binding projections, including when local Provider implementations differ; (4) Binding exists only when authored, validates service/target refs, keeps desired intent in spec and observations only in status, cannot write remote authority, and common/provider observations remain under `status.resource`/`status.provider` respectively; (5) graph exactly import→Service→Binding→owned Process/Endpoint; (6) revoke/update propagates through that graph; import finalizer waits on Binding refs and never deletes them; (7) the four exact semantic pairs are admitted under their initial Provider mapping, USB policy is gated, and every other family is forbidden; security-key and USB implementations resolve one token to the same Core-derived `(Host, physical-usb-backing, opaqueKeyDigest)` tuple and the second receives `physical-usb-backing-conflict` before effects, regardless of Provider-private claims; (8) Nix lowering/resource names are stable across three evaluations and canonical minimal base works without `spec.provider`; (9) quota/fairness/deadline/cancel/reconnect behavior exact; (10) no FD/secret/Credential/backing/remote Ref/path/locator/bytes or PipeWire/CTAPHID/OTEL/USBIP base detail leaks, and intermediaries see ciphertext; high-churn sessions/streams never enter the store. |
@@ -608,9 +608,9 @@ performed by this documentation-only spec.
 | Failure interpretation | A non-Service export, wrong projection type/cardinality, auto-Binding, observed state in Binding spec, Binding authority spoof, factory bypass, forbidden-Provider admission, plaintext/FD/secret/path leak, or stale reconnect is severity-blocking and requires structural contract/controller repair. Quota/fairness misses revise arbitration, never these invariants. |
 | Affected decisions/work items | D096; `ADR046-zone-control-019`, `ADR046-zone-control-020`; Provider toolkit factory conformance; audio-pipewire, device-security-key, observability-otel, and policy-gated device-usbip adapter work. |
 | Cleanup | Deleted only after the real controller/toolkit has equal hermetic factory/admission/graph/finalizer/Nix-stability coverage and production encrypted-stream integration covers all four classified families. |
-| Status | Specified — not yet executed. |
+| Status | Specified - not yet executed. |
 
-## Implementation validation — how a spike is retired
+## Implementation validation - how a spike is retired
 
 Every spike above ends with a "Cleanup" row naming the exact future crate
 whose own in-tree tests must reach equal or stricter coverage before the
@@ -623,11 +623,11 @@ three-stage lifecycle:
 1. **Spike stage.** The disposable crate under `proofs/` exists solely to
    falsify or corroborate one hypothesis with a fixed harness. It is added to
    `tests/test-proofs.sh`'s crate list (mirroring the two existing entries)
-   only when it is authored — this spec does not add it, since this spec
+   only when it is authored - this spec does not add it, since this spec
    adds no code.
 2. **Work-item stage.** The named `ADR046-*` work item (in the resource,
    controller, or Provider spec that owns the destination) copies the
-   *proven shape* — not the disposable crate itself — into its real
+   *proven shape* - not the disposable crate itself - into its real
    destination crate, and extends its own `tests/`/`integration/` suite to
    reach or exceed the spike's metrics. This is the "Validation" column of
    that work item, already required by `docs/specs/README.md`; this spec
@@ -642,29 +642,33 @@ three-stage lifecycle:
 No spike in this catalog is retired by this spec; retirement is always
 performed by the owning production work item, per anti-claim rule 5.
 
-## Hermetic test-runtime budget baseline (D094)
+## Hermetic test-runtime budget reference (D094)
 
 The D094 execution budgets in `ADR-046-validation-and-delivery` §10.16 are
 measurable and are recorded, not asserted by feel:
 
 - **Reference runner.** The pinned CI/reference runner class (fixed vCPU/RAM
-  shape) is recorded with the ledger; the same class is used for the
-  historical regression comparison so a budget change reflects test cost, not
-  hardware drift.
-- **Repetitions and statistic.** Each measured test/crate/shard is executed a
-  fixed, recorded repetition count with a warm cache; the reported figure is
-  the p95 of execution-only time (build excluded).
-- **Fail/regression policy.** A run fails when any budget in §10.16 is
-  exceeded or when a test/crate/shard regresses beyond the recorded historical
-  threshold versus the previous committed ledger. A classified crypto/property
-  exception is compared only against its own declared per-test budget and
-  capped case count.
+  shape) is recorded with the ledger so a recorded figure reflects test cost,
+  not hardware drift; a genuine cross-machine reference baseline is the
+  deferred follow-up `runtime-ledger-full-census-and-real-shards`.
+- **Repetitions and statistic.** Each measured test/crate is executed a fixed,
+  recorded repetition count after a warm build. Per-test p95 uses libtest
+  wall-clock time and is advisory; per-crate p95 uses aggregate process CPU
+  and is enforced.
+- **Fail policy.** A run fails when an aggregate crate process-CPU p95 exceeds
+  its budget or when the exact closed census, presently one crate and 190 test
+  IDs, is incomplete, expanded, or under-repeated. A per-test wall-clock
+  diagnostic-threshold breach does not fail the gate. The gate holds no
+  baseline and makes no historical-regression claim. A historical-regression
+  gate built on top of these budgets is the deferred follow-up
+  `runtime-ledger-full-census-and-real-shards`. A classified crypto/property
+  test has its own advisory threshold and capped case count.
 - **Cold compile tracked separately.** Cold compilation time is recorded on a
   separate line and optimized through shared cache and dependency discipline;
   it is never mixed into the execution budgets, and correctness never depends
   on any cache.
 
-This baseline is established by `ADR046-feasibility-011` and consumed by the
+This budget reference is established by `ADR046-feasibility-011` and consumed by the
 test-runtime ledger/timing gate (`ADR046-delivery-007`/`ADR046-streamline-022`).
 
 ## Current-code fit
@@ -672,7 +676,7 @@ test-runtime ledger/timing gate (`ADR046-delivery-007`/`ADR046-streamline-022`).
 | Item | Treatment |
 | --- | --- |
 | Current anchor | `docs/adr/0046-d2b-3-provider-control-plane.md` (kcp measurement, decision D003); `ADR-046-decision-register` D003-D086; `packages/d2b-core/src/{storage,sync}.rs`; `packages/d2bd/src/supervisor/{dag,pidfd}.rs`; `packages/d2b-priv-broker/src/ops/spawn_runner.rs` and `tests/pidfd_real_spawner.rs`; `packages/d2b-realm-router/src/*`; main `a1cc0b2d` `packages/d2b-session*` (re-executed in E3: 70/70 tests passing) |
-| Evidence class | Mixed by claim; see §"Evidence classification matrix" above for the exact class of every subsystem this spec touches — no single class applies to the whole document |
+| Evidence class | Mixed by claim; see §"Evidence classification matrix" above for the exact class of every subsystem this spec touches - no single class applies to the whole document |
 | Behavior retained | The kcp measurement and its rejection rationale (E1); the redb design rationale (E2); the exact main reuse inventory and its currently-green test count (E3); the current v3 reachable-file inventory for storage/DAG/pidfd/router (E4) |
 | Required delta | Every item in the "Evidence classification matrix" marked `unknown-requires-spike` needs its named spike executed (with a passing or revised-and-repassing result) before its owning `ADR046-*` work item may start, per anti-claim rules 1, 3, and 5 |
 | Reuse path | SPIKE-06/07/08 explicitly reuse main `a1cc0b2d`'s `d2b-session`/`d2b-session-unix` crates as path dependencies from a pinned local checkout, per the same reuse policy as `ADR-046-componentsession-and-bus` |
@@ -717,7 +721,7 @@ decisions/work items" row.
 | Destination | `proofs/process-fastlaunch-spike/` |
 | Detailed design | Implements SPIKE-03: the fake Process controller loop, fake `ProcessLaunchEffectPort`, and the 1/10/100-concurrency commit-to-launch-attempt and next-dispatch-independence benchmarks Primary reuse disposition: `adapt`. Preserved source-plan detail: `adapt` (current DAG ordering/readiness concepts are adapted into the spike's per-resource single-flight/parallel-semaphore loop). |
 | Integration | Consumes `ADR046-feasibility-001`'s hint-bus shape as its watch-receiver input |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | SPIKE-03 metrics (1)-(3) and thresholds |
 | Removal proof | Deleted once `packages/d2b-controller-toolkit/benches/reaction.rs` and the Process Provider integration tests named by `ADR046-reconcile-003` reproduce equal-or-stricter coverage |
 
@@ -733,7 +737,7 @@ decisions/work items" row.
 | Destination | `proofs/effectport-async-spike/` |
 | Detailed design | Implements SPIKE-04: the four fake EffectPort traits, the deliberately slow blocking-primitive backends, and the current-thread-runtime heartbeat-jitter detector |
 | Integration | None (standalone) |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | SPIKE-04 heartbeat-jitter metric and threshold |
 | Removal proof | Deleted once `packages/d2b-provider-supervisor` and the volume-domain effect adapter each carry an equal-or-stricter in-tree blocking-adapter regression test |
 
@@ -749,7 +753,7 @@ decisions/work items" row.
 | Destination | `proofs/provider-packaging-spike/` |
 | Detailed design | Implements SPIKE-05: the two-binary crate, hand-authored manifest, fake `ProviderDeployment`, and the `cargo metadata` dependency-edge check Primary reuse disposition: `adapt`. Preserved source-plan detail: `adapt` (the crate-layout policy check reuses the same `src/`/`tests/`/`integration/`/`README.md` structure already enforced elsewhere in this repository's workspace policy tests). |
 | Integration | None (standalone) |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | SPIKE-05 metrics (1)-(4) across 20 repeated randomized-order manifest loads |
 | Removal proof | Deleted once the real Provider-toolkit crate (`ADR046-provider-001` destination) ships equal-or-stricter manifest-parsing/enumeration/workspace-policy coverage |
 
@@ -765,7 +769,7 @@ decisions/work items" row.
 | Destination | `proofs/bus-routing-noise-spike/`, `proofs/transport-opaque-streams-spike/`, `proofs/credential-kk-e2e-spike/` |
 | Detailed design | Implements SPIKE-06 (exact-addressed routing + per-recipient Noise isolation), SPIKE-07 (Unix/vsock/relay-shaped opaque byte-stream conformance across 3 backends), and SPIKE-08 (Credential Provider → consumer Provider KK delivery with the 13-field binding contract) Primary reuse disposition: `adapt`. Preserved source-plan detail: `copy-unchanged` for the Noise/record/transport machinery (path-dependency on a pinned local checkout of `a1cc0b2d`); `adapt` for the fake router/relay/credential-delivery wrapper code that SPIKE-06/07/08 add on top. |
 | Integration | SPIKE-07's Unix backend and SPIKE-08's session machinery both depend on the same pinned `a1cc0b2d` path-dependency established for SPIKE-06 |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | SPIKE-06 metrics (1)-(3), SPIKE-07 metrics (1)-(4) against the exact numeric gates already committed in the transport-unix/vsock dossiers, SPIKE-08 metrics (1)-(6) |
 | Removal proof | Deleted per each spike's own Cleanup row: `packages/d2b-bus/src/router.rs` for SPIKE-06; the three real transport Provider crates for SPIKE-07; the real Credential Provider crates for SPIKE-08 |
 
@@ -781,7 +785,7 @@ decisions/work items" row.
 | Destination | `proofs/provider-state-export-spike/`, `proofs/volume-policy-spike/` |
 | Detailed design | Implements SPIKE-09 (optional declared state-Volume creation order, guest-local/host-backed-guest placement, virtiofs Export child ownership) and SPIKE-10 (Volume ACL/`sourcePolicyId`/quota/lifecycle-marker policy conformance) |
 | Integration | None between the two spikes beyond sharing the same fake resource-store oracle shape |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | SPIKE-09 metrics (1)-(4); SPIKE-10 metrics (1)-(5), zero-tolerance on path leakage |
 | Removal proof | Deleted per each spike's Cleanup row: the real `ADR-046-provider-state` work-item destination for SPIKE-09; `d2b-provider-volume-local`'s own `tests/`/`integration/` suite for SPIKE-10 |
 
@@ -797,7 +801,7 @@ decisions/work items" row.
 | Destination | `proofs/process-provider-conformance-spike/` |
 | Detailed design | Implements SPIKE-11: the shared `ProcessProviderHarness` trait, the minijail-shaped `clone3(CLONE_PIDFD)` launcher, and the systemd transient-user-scope launcher, plus the identity-drift/quarantine and clean-exit cases |
 | Integration | None (standalone; requires a Linux host with `clone3`/`pidfd_open`, and optionally a running `systemd --user` instance behind the `systemd-user` feature) |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | SPIKE-11 metrics (1)-(4), zero-tolerance on false adoption |
 | Removal proof | Deleted once `packages/d2b-provider-system-systemd` and `packages/d2b-provider-system-minijail` each carry this exact shared conformance suite in their own `tests/` |
 
@@ -813,7 +817,7 @@ decisions/work items" row.
 | Destination | `proofs/nix-authoring-spike/` |
 | Detailed design | Implements SPIKE-12: the minimal flake, the two synthetic ResourceTypes, the hand-written committed schemas, the standalone `gen-schemas`-shaped drift check, and the two-generation removed-resource cleanup simulation |
 | Integration | None (standalone flake; no dependency on the main `flake.nix`) |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | SPIKE-12 metrics (1)-(5), byte-for-byte reproducibility across 3 hermetic builds |
 | Removal proof | Deleted once the real `nixos-modules/resources.nix` and `packages/xtask` `gen-schemas` implementation reproduce these metrics as part of `make test-drift`/`make test-flake` |
 
@@ -829,7 +833,7 @@ decisions/work items" row.
 | Destination | `proofs/cli-discovery-spike/`, `proofs/clean-cutover-spike/` |
 | Detailed design | Implements SPIKE-13 (dynamic Provider-projection discovery, bounds, latency isolation) and SPIKE-14 (zero v2 dispatch, fresh Zone bootstrap ignoring legacy state) |
 | Integration | None between the two spikes beyond sharing the same fixture command-table shape |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | SPIKE-13 metrics (1)-(7); SPIKE-14 metrics (1)-(3), zero-tolerance on legacy-file access |
 | Removal proof | Deleted per each spike's Cleanup row: the real `d2b` CLI crate's own discovery conformance test for SPIKE-13; the real CLI crate's workspace-policy/lint gate plus the real bootstrap sequence for SPIKE-14 |
 
@@ -845,7 +849,7 @@ decisions/work items" row.
 | Destination | `proofs/e2e-composition-spike/` |
 | Detailed design | Implements SPIKE-15: the three representative compositions (local/cloud-hypervisor, cloud/azure, interaction/shell-terminal-or-wayland), wired from the fakes built by `-001` through `-009`, plus the combined 3-Zone aggregate RSS measurement |
 | Integration | Depends on and imports the fake shapes from `proofs/redb-resource-store-spike/`, `proofs/process-fastlaunch-spike/`, `proofs/effectport-async-spike/`, `proofs/provider-packaging-spike/`, `proofs/bus-routing-noise-spike/`, `proofs/transport-opaque-streams-spike/`, `proofs/credential-kk-e2e-spike/`, `proofs/provider-state-export-spike/`, `proofs/volume-policy-spike/`, and `proofs/process-provider-conformance-spike/` |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | SPIKE-15 metrics (1)-(4) across all three compositions |
 | Removal proof | Deleted once the real integration test suites named by the individual Provider dossiers (`integration/` per D059) collectively reproduce all three compositions against real, non-fake Zone/store/bus/broker code |
 
@@ -858,9 +862,9 @@ decisions/work items" row.
 | Current source | this codebase's ad hoc `tests/tools/` timing logs (`d2b-static-timing.$$/`), which are not a candidate-bound, reference-runner-recorded ledger |
 | Reuse source | existing `libtest --format=json` timing output and `xtask` (no new test framework) |
 | Reuse action | adapt |
-| Destination | `proofs/test-runtime-budget-spike/`; the committed baseline ledger consumed by `ADR046-delivery-007` |
-| Detailed design | Establishes the D094 measurement baseline: records the reference runner class, repetition count, and per-test/crate/shard p95 for a representative hermetic crate; proves the §10.16 budgets (individual normal test p95 ≤50 ms, per-crate `--lib --tests` ≤2 s, Layer-1 hermetic shard ≤60 s) are met on the reference runner and that an injected slow/sleeping test is detected as a regression |
-| Integration | Output ledger shape is consumed by the runtime ledger/timing gate; establishes the historical threshold seed |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
-| Validation | The representative crate meets every budget; a synthetic slow/sleep/process/network test is flagged; cold compile time is recorded on a separate line and excluded from the execution budgets |
-| Removal proof | Deleted once `ADR046-delivery-007`'s in-tree ledger/timing gate reproduces the baseline against the real crate set |
+| Destination | `proofs/test-runtime-budget-spike/`; a one-off measurement-reference proof for the §10.16 budgets consumed by `ADR046-delivery-007` (no committed baseline ledger ships) |
+| Detailed design | Establishes the D094 measurement reference: records the reference runner class, repetition count, advisory per-test wall-clock p95, and enforced aggregate per-crate process-CPU p95 for a representative hermetic crate. It proves the crate's `--lib --tests` aggregate process CPU is <=3 s, reports a normal test's <=50 ms wall-clock threshold only as a diagnostic, and detects an injected sleeping test through the placement policy rather than a timing-budget failure. A real multi-crate Layer-1 shard inventory is the deferred follow-up `runtime-ledger-full-census-and-real-shards`. |
+| Integration | Output ledger shape is consumed by the runtime ledger/timing gate as advisory per-test wall-clock diagnostics and enforced per-crate process-CPU budgets; a real multi-crate shard inventory and a historical-regression baseline built on top of them are the deferred follow-up `runtime-ledger-full-census-and-real-shards` |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
+| Validation | The representative crate meets its aggregate process-CPU budget; a per-test wall-clock threshold breach remains advisory; a synthetic sleep/process/network test is flagged by placement policy; cold compile time is excluded from measurements |
+| Removal proof | Deleted once `ADR046-delivery-007`'s in-tree ledger/timing gate reproduces these budget checks against the real crate set |

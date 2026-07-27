@@ -64,12 +64,12 @@ fields "wave" = "<wave>", "timestamp", and "operatorSignature".
 
 ### Field semantics
 
-- **`wave`** — wave identifier. Must equal the file basename so a
+- **`wave`** - wave identifier. Must equal the file basename so a
   copied-by-mistake `p0.json` cannot satisfy `p1`.
-- **`timestamp`** — when the validating smoke run completed.
+- **`timestamp`** - when the validating smoke run completed.
   RFC 3339 / ISO-8601 UTC is the recommended shape; the
   validator enforces only non-empty `string`.
-- **`operatorSignature`** — who attests to the run. Free-form
+- **`operatorSignature`** - who attests to the run. Free-form
   string; typical shapes are `alice@example`,
   `ci-bot@build-host-3`, or a host fingerprint. The validator
   enforces only non-empty `string`.
@@ -85,7 +85,7 @@ evidence file under `/var/lib/d2b/validated/<wave>.json` before
 `d2b.defaultSwitchReadiness.<wave>.validated = true` will pass
 eval.
 
-| Wave key | Implemented (shipped code)                                                                                                                                            | Validated (what the evidence file attests) — i.e. what the operator must have exercised before writing the file |
+| Wave key | Implemented (shipped code)                                                                                                                                            | Validated (what the evidence file attests) - i.e. what the operator must have exercised before writing the file |
 | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
 | `w4Fu`   | W12/W14 headless daemon + supervisor path.                                                                                                                            | Ubuntu Tier-1 smoke + matching `broker-<utc-date>.jsonl` audit log entries.                                    |
 | `w5Fu`   | W17 minijail profiles + GPU/audio/video argv generators.                                                                                                              | W20 hardware smoke (NVIDIA Quadro T1000 / virtio-snd / virtio-media) + audit log evidence. Depends on `w4Fu` validated. |
@@ -103,10 +103,16 @@ eval.
 | `p6`     | Legacy systemd template emission + bash CLI removed (clean break). The `d2b.vms.<vm>.supervisor` option's hard removal + eval-time rejection assertion was deferred to v1.1 backlog (see ADR 0015 § Decision); v1.0 retains the option with default `"systemd"` for backward-compat. | `tests/legacy-unit-denylist-eval.sh` + `tests/static.sh` green. |
 | `p7`     | Docs blast-radius + v1.0 cut shipped.                                                                                                                                 | `tests/static.sh` + per-example flake-check green.                                                             |
 
-> **Drift gate.** `tests/wave-evidence-schema-eval.sh` asserts every
-> wave declared in `readinessWaveSpecs` has a matching `| \`<wave>\` |`
-> row in the table above. Add a new wave to `readinessWaveSpecs` →
-> add a row here in the same commit, or the gate fails.
+The script names in this table record the historical evidence vocabulary for
+the original readiness rollout. Several have since been retired and are not
+runnable paths in the current tree. The current `d2b host validate` catalog
+still names many of them and consequently reports those validators as missing.
+
+> **Drift policy.**
+> `packages/d2b-contract-tests/tests/policy_observability.rs` asserts every wave
+> declared in `readinessWaveSpecs` has a matching table row. Add a new wave to
+> `readinessWaveSpecs` and add a row here in the same commit. This policy is
+> advisory until the fixture-contract lane is enabled and promoted.
 
 Cross-dependencies enforced by additional assertions in
 `options-daemon.nix`:
@@ -144,7 +150,7 @@ The intended path from a fresh host to a wave's
    wave inventory and writes one
    `/var/lib/d2b/validated/<wave>.json` file per wave with
    the canonical `{wave, timestamp, operatorSignature}` payload.
-   It does NOT itself run the validators — operators are expected
+   It does NOT itself run the validators - operators are expected
    to have run each wave's validator (`tests/minijail-validator-*.sh`,
    etc.) by hand or in a CI job, OR to rely on the daemon's
    opportunistic evidence-write path described below. `--dry-run`
@@ -202,17 +208,17 @@ that the three fields are present and well-typed.
 
 ## See also
 
-- [`host-validate.md`](./host-validate.md) — the
+- [`host-validate.md`](./host-validate.md) - the
   `d2b host validate` verb (P5 sibling deliverable) that
   writes these files.
-- [`default-switch-and-deprecation.md`](./default-switch-and-deprecation.md)
-  — the per-wave evidence gate this evidence feeds.
-- [`../explanation/default-switch-and-deprecation.md`](../explanation/default-switch-and-deprecation.md)
-  — the per-wave readiness matrix and the design rationale.
-- [`../how-to/hardware-smoke-walkthrough.md`](../how-to/hardware-smoke-walkthrough.md)
-  — the W20 hardware smoke that writes `w5Fu.json` / `w6Fu.json`.
-- [`wave-evidence-schema.json`](./wave-evidence-schema.json) —
+- [`default-switch-and-deprecation.md`](./default-switch-and-deprecation.md) -
+  the per-wave evidence gate this evidence feeds.
+- [`../explanation/default-switch-and-deprecation.md`](../explanation/default-switch-and-deprecation.md) -
+  the per-wave readiness matrix and the design rationale.
+- [`../how-to/hardware-smoke-walkthrough.md`](../how-to/hardware-smoke-walkthrough.md) -
+  the W20 hardware smoke that writes `w5Fu.json` / `w6Fu.json`.
+- [`wave-evidence-schema.json`](./wave-evidence-schema.json) -
   machine-readable JSON Schema companion to this document.
-- [`../../nixos-modules/options-daemon.nix`](../../nixos-modules/options-daemon.nix)
-  — `validationEvidencePresent`, the cargo-checked predicate this
+- [`../../nixos-modules/options-daemon.nix`](../../nixos-modules/options-daemon.nix) -
+  `validationEvidencePresent`, the cargo-checked predicate this
   doc mirrors.

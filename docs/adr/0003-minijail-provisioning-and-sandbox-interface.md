@@ -55,7 +55,7 @@ that introduces the actual crates.
    > pending device-bind compatibility analysis.
    >
    > **Updated v1.2 (D5)**: closes the 'future roles (gpu/audio/swtpm)
-   > may follow' deferral — swtpm fully closed via ADR 0021
+   > may follow' deferral - swtpm fully closed via ADR 0021
    > broker-pre-NS pattern (zero host caps, single-entry user NS,
    > swtpm principal mapping); gpu partially closed (render-node-only,
    > v1.2fu25): broker pre-opens /dev/dri/renderD128 before
@@ -66,7 +66,7 @@ that introduces the actual crates.
    > NVIDIA/non-render-node out of scope. audio fully closed (v1.2fu27,
    > Tier 2): user-NS + owned-net-NS (namespaces.net=true); the child
    > calls unshare(CLONE_NEWNET) inside the user NS so CAP_NET_RAW is
-   > effective in the user-NS-owned net NS — resolves the AF_NETLINK
+   > effective in the user-NS-owned net NS - resolves the AF_NETLINK
    > dependency without any host caps.
 5. The Cargo workspace keeps `unsafe_code = "forbid"` at workspace scope, and future `d2b-sandbox` or `libminijail-sys` exceptions require per-crate overrides approved by a follow-up ADR.
 6. Seccomp and ioctl policies are per-role and derived from typed device and resource requirements, and no profile may use an `ioctl: 1` catch-all.
@@ -88,7 +88,7 @@ that introduces the actual crates.
 
 ## Updated v1.2
 
-**D4/P2.1 — seccomp BPF compilation wired** (closes the v1.1.2-final deferral):
+**D4/P2.1 - seccomp BPF compilation wired** (closes the v1.1.2-final deferral):
 
 `load_runner_seccomp` in `packages/d2b-priv-broker/src/live_handlers.rs`
 previously returned `Ok(None)` for non-absolute policy refs (e.g.
@@ -104,7 +104,7 @@ As of v1.2fu15, the function:
    the ioctl allowlist from the `ioctl_policy.rs` matrix (Decision §6).
 3. Returns `Ok(Some(program))` for known refs; returns
    `Err(SpawnFailed { detail: "InvalidSeccompPolicy: unknown …" })` for
-   unknown refs — the `Ok(None)` silent-skip path is retired.
+   unknown refs - the `Ok(None)` silent-skip path is retired.
 
 The broker child closure is reordered: capset → umask → seccomp → execve
 (previously capset → seccomp → umask), ensuring umask is not intercepted by

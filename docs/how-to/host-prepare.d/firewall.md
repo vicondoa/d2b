@@ -5,7 +5,7 @@ This fragment is included in `docs/how-to/host-prepare.md`.
 This document is the operator how-to for the `inet d2b` named
 table that the privileged broker's host-prepare path reconciles (and
 re-checks before every VM start). The mutating `d2b host prepare
---apply` is **not yet wired** — it returns the typed `daemon-down`
+--apply` is **not yet wired** - it returns the typed `daemon-down`
 envelope (exit 1) today; `host check` and `host prepare --dry-run`
 exercise the read-only path. The authoritative chain layout reference
 lives at
@@ -49,7 +49,7 @@ To use d2b on a firewalld host, either:
 
 1. Stop firewalld (`systemctl disable --now firewalld`) and, once
    `d2b host prepare --apply` is wired, re-run it to reconcile (it
-   returns `daemon-down` (exit 1) today — use `--dry-run` to re-check); or
+   returns `daemon-down` (exit 1) today - use `--dry-run` to re-check); or
 2. Replace firewalld with a firewall setup where d2b owns
    `inet d2b`; otherwise d2b fails closed.
 
@@ -62,7 +62,7 @@ shadows `inet d2b`'s `forward` chain.
 To use d2b on a ufw host:
 
 1. `ufw disable` and, once `d2b host prepare --apply` is wired,
-   re-run it to reconcile (it returns `daemon-down` (exit 1) today —
+   re-run it to reconcile (it returns `daemon-down` (exit 1) today -
    use `--dry-run` to re-check); or
 2. Replace ufw with a firewall setup where d2b owns `inet
    d2b`; otherwise the host check refuses.
@@ -100,7 +100,7 @@ volatile `handle`/`index` fields stripped) and compares against the
 digest stored in the bundle's `host.json`. Mismatches fail closed with
 `inet-d2b-drift`; remediation is to re-run
 `d2b host prepare --apply` once it is wired (it returns
-`daemon-down` (exit 1) today — use `--dry-run` to re-check the diff).
+`daemon-down` (exit 1) today - use `--dry-run` to re-check the diff).
 
 ## USBIP firewall carve-out
 
@@ -116,13 +116,13 @@ separately from this firewall carve-out.
   match the bundle's declared policy. Either change the bundle (allowed
   override per the matrix above) or stop/disable the offending manager
   and, once `d2b host prepare --apply` is wired, re-run it (it
-  returns `daemon-down` (exit 1) today — use `--dry-run` to re-check).
+  returns `daemon-down` (exit 1) today - use `--dry-run` to re-check).
 - **`nft-foreign-rule-shadows-d2b`**: a foreign hook at a priority
   ≤ `-5` is active. Inspect with `nft list ruleset` and identify the
   source.
 - **`inet-d2b-drift`**: the live table no longer matches the
   bundle digest. Re-apply with `d2b host prepare --apply` once it
-  is wired (it returns `daemon-down` (exit 1) today — use `--dry-run`
+  is wired (it returns `daemon-down` (exit 1) today - use `--dry-run`
   to re-check); if it
   recurs immediately, a periodic process is rewriting the ruleset
   (`firewalld --reload`, `ufw reload`, custom cron, …).

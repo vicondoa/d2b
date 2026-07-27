@@ -105,7 +105,7 @@ impl BrokerReapLog {
 
     /// PEEK (non-consuming) the event for a `(vm, role)` runner id, if any.
     ///
-    /// Unlike [`Self::take_for`] this does NOT remove the entry — the
+    /// Unlike [`Self::take_for`] this does NOT remove the entry - the
     /// readiness liveness probe must only observe so the buffered exit
     /// status remains available to the mutating teardown path
     /// (`wait_terminated` / rollback) that owns deregistration.
@@ -529,7 +529,7 @@ impl PidfdTable {
     /// `(pid, start_time_ticks)`, or `None` when no entry is registered
     /// (e.g. rollback already removed it) or the dup fails.
     ///
-    /// This OBSERVES only — it never removes the entry. All
+    /// This OBSERVES only - it never removes the entry. All
     /// deregistration stays in the teardown / rollback path.
     pub fn dup_pidfd_for(&self, vm: &str, role: &str) -> Option<(OwnedFd, i32, u64)> {
         let entries = self.entries.read();
@@ -890,7 +890,7 @@ mod tests {
 
     #[test]
     fn observe_only_helpers_do_not_deregister() {
-        // The readiness liveness probe ONLY observes — `dup_pidfd_for`
+        // The readiness liveness probe ONLY observes - `dup_pidfd_for`
         // and the reap-log `peek_for` must never remove an entry, so
         // the mutating rollback path retains ownership of deregistration.
         let table = PidfdTable::new(fresh_state_path("observe-only"));

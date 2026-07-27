@@ -10,35 +10,35 @@ services, and sockets.
 
 ## Top-level fields
 
-- `schemaVersion` — schema version for this artifact.
-- `runtimeState` — closed runtime state enum. The value in this scope remains
+- `schemaVersion` - schema version for this artifact.
+- `runtimeState` - closed runtime state enum. The value in this scope remains
   `metadata-only`.
-- `controllers` — enabled realm controller rows, sorted deterministically by
+- `controllers` - enabled realm controller rows, sorted deterministically by
   normalized realm path.
-- `invariants` — booleans asserting the artifact preserves the existing global
+- `invariants` - booleans asserting the artifact preserves the existing global
   daemon/broker behavior and keeps direct Unix socket semantics.
 
 ## Controller fields
 
-- `realmName`, `realmId`, and `realmPath` — identifiers copied from the
+- `realmName`, `realmId`, and `realmPath` - identifiers copied from the
   normalized realm index.
-- `placement` and `providerPlacement` — closed controller placement metadata
+- `placement` and `providerPlacement` - closed controller placement metadata
   plus the optional provider binding for provider-backed placements.
-- `daemon` — deterministic daemon user/group, public socket group,
+- `daemon` - deterministic daemon user/group, public socket group,
   service/config/lock names, and materialization flags.
-- `broker` — deterministic broker socket/service names, broker socket
+- `broker` - deterministic broker socket/service names, broker socket
   path, audit directory, host-mutation intent, and materialization flags.
-- `paths` and `sockets` — state/run/audit directories plus public and broker
+- `paths` and `sockets` - state/run/audit directories plus public and broker
   socket paths.
-- `allocator` — metadata-only binding to `/etc/d2b/allocator.json`, the
+- `allocator` - metadata-only binding to `/etc/d2b/allocator.json`, the
   local-root allocator socket path, and the realm's allocator resource request
   references.
-- `access` — declared direct-access users/groups plus inherited host admin
+- `access` - declared direct-access users/groups plus inherited host admin
   users for socket ACL planning.
-- `localRuntime` — metadata-only local runtime providers, VM workload rows,
+- `localRuntime` - metadata-only local runtime providers, VM workload rows,
   preserved VM paths, and runtime operation capability summaries for host-local
   realms.
-- `providers` — provider declarations copied from the realm index.
+- `providers` - provider declarations copied from the realm index.
 
 ## Contract notes
 

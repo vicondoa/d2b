@@ -85,7 +85,7 @@ struct NonceMeta {
 /// production, the daemon holds it on a single Tokio task that processes
 /// notification-action callbacks. Tests inject it directly.
 ///
-/// Nonces are _consumed_ on successful validation — a second call with the
+/// Nonces are _consumed_ on successful validation - a second call with the
 /// same token returns [`NonceError::NotFound`].
 ///
 /// Expired entries are garbage-collected lazily on any
@@ -140,7 +140,7 @@ impl ActionNonceStore {
     /// 4. `action_key` matches the registered value.
     ///
     /// On success the entry is removed (single-use). On failure the entry is
-    /// **not** removed — the caller may log the error and the token remains
+    /// **not** removed - the caller may log the error and the token remains
     /// in the store until it expires or is GC'd.
     pub fn validate_and_consume(
         &mut self,

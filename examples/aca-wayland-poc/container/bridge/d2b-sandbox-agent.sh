@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# d2b sandbox agent (ADR 0032, P0 — historical MI relay probe).
+# d2b sandbox agent (ADR 0032, P0 - historical MI relay probe).
 #
 # Runs inside an Azure Container Apps sandbox. Exposes a Wayland-native app
 # over `waypipe server` (SHM-only) and tunnels the byte stream out over an
 # Azure Relay hybrid connection using the productionized `d2b-relay`
 # sender. Authentication is the sandbox's **managed identity** (plane 2): the
 # agent fetches a Microsoft Entra token for https://relay.azure.net from the
-# injected IDENTITY_ENDPOINT and hands it to d2b-relay as a bearer — NO
+# injected IDENTITY_ENDPOINT and hands it to d2b-relay as a bearer - NO
 # SAS key ever enters the workload.
 #
 # Env:

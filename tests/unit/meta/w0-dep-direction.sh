@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# tests/unit/meta/w0-dep-direction.sh — ADR 0032 crate-granular dependency
+# tests/unit/meta/w0-dep-direction.sh - ADR 0032 crate-granular dependency
 # direction + lint-inheritance gate.
 #
 # The constellation contract crates must stay codec-/transport-/host-neutral:
 #
-#   * d2b-realm-core   — depends on NO other workspace crate and
+#   * d2b-realm-core   - depends on NO other workspace crate and
 #                                    NOT on prost (pure, codec-neutral model).
-#   * d2b-realm-provider, -router, -transport (when present) —
+#   * d2b-realm-provider, -router, -transport (when present) -
 #                                    may depend only on the contract crate(s)
 #                                    listed below, and NOT on prost, a codec
 #                                    crate, a transport impl crate, or any
@@ -15,7 +15,7 @@
 # Every constellation crate must inherit workspace lints
 # ([lints] workspace = true) so unsafe_code = "forbid" + clippy apply.
 #
-# Dependencies are resolved with `cargo metadata --no-deps` — the
+# Dependencies are resolved with `cargo metadata --no-deps` - the
 # authoritative resolver: it returns each workspace member's dependencies by
 # their REAL, resolved crate name (post-`package=` rename, post-`workspace =
 # true` inheritance, including target-specific and any TOML-spelling form)
@@ -87,7 +87,7 @@ is_member() {
 
 # External (non-member) crates a pure contract crate must never depend on.
 # d2b-priv-broker lives in a SEPARATE workspace (excluded from
-# packages/Cargo.toml), so it never appears in the member set — name it
+# packages/Cargo.toml), so it never appears in the member set - name it
 # explicitly, along with any other d2b-* host/daemon crate caught by the
 # glob in check_dep below.
 is_external_forbidden() {

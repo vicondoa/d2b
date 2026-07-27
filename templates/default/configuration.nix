@@ -5,12 +5,12 @@
 # the README next to this file enumerates them with rationale.
 #
 # TODOs 2 and 3 are gated by the `assertions = [ … ]` block at the
-# bottom of this file — `nix flake check` will fail with an
+# bottom of this file - `nix flake check` will fail with an
 # actionable message until you replace those sentinels. TODO 1
 # (hardware) is gated by NixOS's own `fileSystems."/"` check.
 # TODOs 4-7 ship with plausible defaults (waylandUser=user, an
 # RFC 1918 host LAN, RFC 5737 doc-range uplink, etc.) that pass
-# `nix flake check` — they need your judgement-level review
+# `nix flake check` - they need your judgement-level review
 # before activation, NOT an eval gate. (The framework's CIDR
 # validators in `nixos-modules/network.nix` parse the strings as
 # IPv4 arithmetic and would crash eval before any TODO assertion
@@ -30,7 +30,7 @@ in
   # ────────────────────────────────────────────────────────────────
   # TODO 1: boot, filesystems, hardware
   # ────────────────────────────────────────────────────────────────
-  # d2b is host-shape-agnostic — bring your own bootloader,
+  # d2b is host-shape-agnostic - bring your own bootloader,
   # disk layout, kernel modules, hardware-configuration.nix, etc.
   # For a fresh install the easiest starting point is:
   #
@@ -56,7 +56,7 @@ in
   # This is the human who runs Plasma/Sway/Hyprland. Change the
   # `user` binding at the top of this file; every reference below
   # picks up the new name automatically. d2b does NOT create
-  # this user — declare it normally here.
+  # this user - declare it normally here.
   users.users.${user} = {
     isNormalUser = true;
     uid = 1000;
@@ -70,7 +70,7 @@ in
   };
 
   # ────────────────────────────────────────────────────────────────
-  # d2b — site-level configuration
+  # d2b - site-level configuration
   # ────────────────────────────────────────────────────────────────
   d2b.site = {
     # TODO 4: keep at `user` (TODO 3) for a graphical host, or set
@@ -96,7 +96,7 @@ in
   };
 
   # TODO 5: your host's primary LAN CIDR(s).
-  # Look it up with `ip route` — a typical home LAN is
+  # Look it up with `ip route` - a typical home LAN is
   # `192.168.1.0/24`. d2b uses this list to:
   #   - assert no env CIDR overlaps your real LAN at eval time
   #   - inject DROP rules into every env's net VM so workload VMs
@@ -104,7 +104,7 @@ in
   d2b.hostLanCidrs = [ "192.168.1.0/24" ];
 
   # ────────────────────────────────────────────────────────────────
-  # d2b — one isolated env
+  # d2b - one isolated env
   # ────────────────────────────────────────────────────────────────
   # An env materialises two bridges (host↔net-VM uplink + workload
   # LAN), an auto-declared headless net VM that NATs + firewalls,
@@ -124,10 +124,10 @@ in
   };
 
   # ────────────────────────────────────────────────────────────────
-  # d2b — one workload VM in the env
+  # d2b - one workload VM in the env
   # ────────────────────────────────────────────────────────────────
   # Repeat this block per workload. The VM's IP is derived from
-  # `(env, index)` — here `10.20.0.10`. The framework auto-generates
+  # `(env, index)` - here `10.20.0.10`. The framework auto-generates
   # an Ed25519 SSH host key under `/var/lib/d2b/keys/` and
   # injects the matching pubkey into the guest's `authorized_keys`.
   d2b.vms.corp-vm = {
@@ -158,7 +158,7 @@ in
   system.stateVersion = "25.11";
 
   # ────────────────────────────────────────────────────────────────
-  # Sentinel assertions — fail eval until TODOs 2-3 are filled in.
+  # Sentinel assertions - fail eval until TODOs 2-3 are filled in.
   # ────────────────────────────────────────────────────────────────
   # TODOs 1 (hardware) and 4-7 (network CIDRs, waylandUser) ship
   # with plausible defaults that pass `nix flake check`; they need
@@ -169,15 +169,15 @@ in
   assertions = [
     {
       assertion = config.networking.hostName != "TODO-set-hostname";
-      message = "Edit configuration.nix — set networking.hostName (TODO 2).";
+      message = "Edit configuration.nix - set networking.hostName (TODO 2).";
     }
     {
       assertion = !(lib.elem "TODO-set-user" config.d2b.site.launcherUsers);
-      message = "Edit configuration.nix — rename the `user` let-binding at the top of the file (TODO 3); it propagates to users.users.<user>, d2b.site.{waylandUser,launcherUsers}, and d2b.vms.corp-vm.ssh.user.";
+      message = "Edit configuration.nix - rename the `user` let-binding at the top of the file (TODO 3); it propagates to users.users.<user>, d2b.site.{waylandUser,launcherUsers}, and d2b.vms.corp-vm.ssh.user.";
     }
     {
       assertion = config.d2b.site.userAuthorizedKeys != [ ];
-      message = "Edit configuration.nix — add at least one SSH public key to d2b.site.userAuthorizedKeys (TODO 3 tail) so you can log in to the workload VM after first boot. (This assertion only inspects `d2b.site.userAuthorizedKeys`; if you intend to rely solely on a host-level password for the Wayland user, the assertion will still fire — flip it locally or supply a stub key.)";
+      message = "Edit configuration.nix - add at least one SSH public key to d2b.site.userAuthorizedKeys (TODO 3 tail) so you can log in to the workload VM after first boot. (This assertion only inspects `d2b.site.userAuthorizedKeys`; if you intend to rely solely on a host-level password for the Wayland user, the assertion will still fire - flip it locally or supply a stub key.)";
     }
   ];
 }

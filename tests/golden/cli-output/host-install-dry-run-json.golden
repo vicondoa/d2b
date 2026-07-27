@@ -2,7 +2,7 @@
 {
   "command": "host install",
   "mode": "dry-run",
-  "notes": "W15: dry-run preview retained; --apply routes through the daemon → broker RunHostInstall path.",
+  "notes": "dry-run preview; --apply routes through the daemon → broker RunHostInstall path.",
   "planned_steps": [
     {
       "step": 1,
@@ -14,7 +14,7 @@
     },
     {
       "step": 3,
-      "what": "bind /run/d2b/public.sock + /run/d2b/priv.sock with the W3 socket ACLs (launcher / admin groups)"
+      "what": "bind /run/d2b/public.sock + /run/d2b/priv.sock with the required socket ACLs (launcher / admin groups)"
     },
     {
       "step": 4,

@@ -62,7 +62,7 @@ schemars = { version = "0.8", features = ["derive"] }
 # review for the W3 prep commit ruled they ship with the scope commit
 # that first consumes them (s2 for rtnetlink, s3 for nftables) so the
 # license / advisory whitelist update lands in the same commit that
-# adds the consumer. See plan.md §"W3 broker variant additions" — the
+# adds the consumer. See plan.md §"W3 broker variant additions" - the
 # wire contract for routes/nft is fully encoded in d2b-contracts here,
 # so scope agents have everything they need to pull these crates in.
 rustix = { version = "0.38", features = ["fs", "process", "net", "pipe", "system", "mount", "thread", "pty", "termios", "stdio"] }
@@ -76,7 +76,7 @@ rustix = { version = "0.38", features = ["fs", "process", "net", "pipe", "system
 rtnetlink = "0.14"
 # W3 s3: sha2 lands here so d2b-host's nft drift-detection digest
 # is byte-stable across builds and consumers. The nftnl native binding
-# is intentionally NOT pulled in — see
+# is intentionally NOT pulled in - see
 # `docs/adr/0013-w3-firewall-coexistence-policy.md` for the panel-
 # rationalized fallback (typed NftBatch + `nft -f -` text rendering,
 # verified by the broker's hash readback).

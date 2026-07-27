@@ -12,7 +12,7 @@
       "id": "kernel-version",
       "severity": "pass",
       "message": "kernel 6.8.12-d2b satisfies the >= 6.6 requirement",
-      "remediation": "Keep a 6.6+ kernel available for W2 daemon experiments."
+      "remediation": "Keep a kernel version 6.6 or newer available for daemon testing."
     },
     {
       "id": "cgroup-v2",
@@ -226,20 +226,20 @@
       "id": "kernel-module:vfio",
       "severity": "pass",
       "message": "kernel module `vfio` remains deferred to a later wave",
-      "remediation": "No W2 action required.",
+      "remediation": "No action required.",
       "detail": "future-passthrough",
       "details": {
-        "gate": "Reserved for a later passthrough role; not required in W1."
+        "gate": "Reserved for a later passthrough role; not currently required."
       }
     },
     {
       "id": "kernel-module:vhost_vsock",
       "severity": "pass",
       "message": "kernel module `vhost_vsock` remains deferred to a later wave",
-      "remediation": "No W2 action required.",
+      "remediation": "No action required.",
       "detail": "future-kernel-vsock",
       "details": {
-        "gate": "Reserved for a later kernel-backed vsock path; W1 uses Unix-socket-backed Cloud Hypervisor vsock only."
+        "gate": "Reserved for a later kernel-backed vsock path; only Unix-socket-backed Cloud Hypervisor vsock is currently used."
       }
     },
     {

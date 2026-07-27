@@ -77,7 +77,7 @@ d2b.vms.personal-dev = {
 
 # After
 d2b.vms.personal-dev = {
-  # usbip.yubikey removed — physical key is now owned by the host broker
+  # usbip.yubikey removed - physical key is now owned by the host broker
 };
 ```
 

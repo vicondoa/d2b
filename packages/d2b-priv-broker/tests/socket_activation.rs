@@ -125,7 +125,9 @@ fn broker_adopts_socket_activated_fd_and_serves_hello() {
          --bundle-path /nonexistent/bundle.json"
     );
 
-    let mut broker_proc = Command::new("sh")
+    let scrubber =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/tools/scrub-shell-environment");
+    let mut broker_proc = Command::new(scrubber)
         .args(["-c", &shell_cmd])
         .env("BROKER", &broker_bin_str)
         .env("UID", current_uid.to_string())

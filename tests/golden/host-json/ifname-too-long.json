@@ -1,5 +1,5 @@
 {
-  "$comment": "W3fu1 H4 malicious fixture — derived bridge ifname is 17 bytes (>= IFNAMSIZ-1 = 15), which the emitter MUST reject with `ifname-too-long`.",
+  "$comment": "W3fu1 H4 malicious fixture - derived bridge ifname is 17 bytes (>= IFNAMSIZ-1 = 15), which the emitter MUST reject with `ifname-too-long`.",
   "schemaVersion": "v2",
   "bundleVersion": "0.4.0",
   "site": {

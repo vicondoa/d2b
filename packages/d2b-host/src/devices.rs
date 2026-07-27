@@ -271,7 +271,7 @@ pub fn validate_entry(entry: &DeviceNodeEntry, readback: &DeviceNodeReadback) ->
 }
 
 /// Variant of [`validate_entry`] that accepts a bundle-supplied
-/// "trusted gid database" — a list of `(gid, name)` rows pinned in
+/// "trusted gid database" - a list of `(gid, name)` rows pinned in
 /// the bundle. When the host-side gid → name resolver returns `None`
 /// (NSS unavailable, sandboxed activation context), the trusted DB
 /// is consulted before falling back to a `GroupUnverifiable` warning.

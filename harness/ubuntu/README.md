@@ -8,10 +8,10 @@ W3 lifts this into a real `d2b host check` / host-prepare runner, W4 uses it for
 
 ## Inventory
 
-- `host-check-stub.sh` — portable Bash, read-only stub that prints the future host-check JSON shape and always exits 0.
-- `expected-host-check.json` — canonical green Ubuntu 24.04 snapshot for human comparison.
-- `run-host-check-on-current-host.sh` — developer helper that runs the stub and diffs current output against the snapshot while normalizing expected host-specific details.
-- `default.nix` — derivation that copies this harness into `$out/harness/ubuntu` and verifies the stub emits parseable JSON.
+- `host-check-stub.sh` - portable Bash, read-only stub that prints the future host-check JSON shape and always exits 0.
+- `expected-host-check.json` - canonical green Ubuntu 24.04 snapshot for human comparison.
+- `run-host-check-on-current-host.sh` - developer helper that runs the stub and diffs current output against the snapshot while normalizing expected host-specific details.
+- `default.nix` - derivation that copies this harness into `$out/harness/ubuntu` and verifies the stub emits parseable JSON.
 
 ## Run locally on Ubuntu 24.04
 

@@ -1,4 +1,4 @@
-# W3 L3 distro matrix — Arch Linux cloud image
+# W3 L3 distro matrix - Arch Linux cloud image
 os = arch
 release = rolling-20241001
 image_url = https://geo.mirror.pkgbuild.com/images/v20241001.262684/Arch-Linux-x86_64-cloudimg.qcow2

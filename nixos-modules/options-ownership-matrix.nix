@@ -7,7 +7,7 @@
 # minijail profiles describe WHAT a runner role may write, this
 # matrix describes WHO OWNS each subdirectory and WITH WHICH MODE.
 #
-# CRITICAL — hardlink farm carve-out.
+# CRITICAL - hardlink farm carve-out.
 # /var/lib/d2b/vms/<vm>/store-view/live/ (and the legacy
 # /var/lib/d2b/vms/<vm>/store/) is a hardlink pool whose inodes are
 # SHARED with /nix/store. `setfacl -R` (or `chmod -R`, `chown -R`)
@@ -203,7 +203,7 @@ let
       recursive = false;
       description = ''
         HOST-ONLY broker StoreSync state (ADR 0027). `d2b:d2b
-        0750` so the runner/virtiofsd identity has no access — this is
+        0750` so the runner/virtiofsd identity has no access - this is
         broker-authoritative metadata (`current`, per-generation
         marker.json/meta.json/integrity.json, integrity-unknown.json)
         that must never reach the guest. Must NOT reuse the
@@ -293,7 +293,7 @@ in
       preflight: the daemon refuses to start a VM whose per-VM state
       has drifted from this declaration.
 
-      Override only with extreme caution — every entry interacts with
+      Override only with extreme caution - every entry interacts with
       the broker-side dispatch and the minijail `writablePaths`
       declarations in nixos-modules/minijail-profiles.nix.
 
@@ -366,7 +366,7 @@ in
             If true, the enforcer recurses into the subdirectory when
             checking ownership/mode. MUST default to false. MUST stay
             false for `store` and `store-view/live` (per-VM /nix/store
-            hardlink pools whose inodes are shared with /nix/store — see
+            hardlink pools whose inodes are shared with /nix/store - see
             the module-level critical-carve-out comment). Ignored for
             `file`-kind entries (a single inode is never walked).
           '';

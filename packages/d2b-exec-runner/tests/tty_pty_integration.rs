@@ -25,13 +25,13 @@ use rustix::termios::{Winsize, tcgetpgrp, tcgetsid, tcsetwinsize};
 
 /// Generous wall-clock budget for the signal-/PTY-delivery polls below. The
 /// polls break as soon as their condition is met (~1s on an idle machine), so a
-/// large ceiling does not slow the happy path — it only keeps the suite green
+/// large ceiling does not slow the happy path - it only keeps the suite green
 /// under heavy CI load (e.g. when the rust workspace gate runs concurrently
 /// with the Nix eval region). A tight 5s ceiling was racy under that load.
 const WAIT: Duration = Duration::from_secs(30);
 
 /// Hard ceiling for the SIGHUP-on-hangup watchdog. The session leader is
-/// reaped with a blocking `wait()`, so this is NOT a normal-path budget — it
+/// reaped with a blocking `wait()`, so this is NOT a normal-path budget - it
 /// only bounds the pathological case where the leader genuinely ignores SIGHUP
 /// (a real bug), escalating to SIGKILL so the test fails loudly instead of
 /// hanging. Generous so heavy co-scheduled load never trips it spuriously.
@@ -108,8 +108,8 @@ fn tty_helper_establishes_session_ctty_winsize_winch_and_hangup() {
     // The target prints its initial winsize, then re-prints it on every
     // SIGWINCH, and backgrounds an in-session child that IGNORES SIGHUP (so it
     // survives the terminal hangup the foreground shell dies from). It stays in
-    // the helper-created session, so only the sid-scoped reap — not the SIGHUP
-    // and not a foreground-PG kill — can clean it up. A `sleep` loop (rather
+    // the helper-created session, so only the sid-scoped reap - not the SIGHUP
+    // and not a foreground-PG kill - can clean it up. A `sleep` loop (rather
     // than a blocking `read`) keeps the shell responsive so a trapped SIGWINCH
     // runs promptly between commands, and a SIGHUP on hangup still terminates it.
     //
@@ -232,8 +232,8 @@ fn tty_helper_establishes_session_ctty_winsize_winch_and_hangup() {
     //    with NO fixed budget for the success path: under heavy co-scheduled
     //    load (the rust gate running concurrently with the Nix eval region) the
     //    leader can be scheduler-starved for tens of seconds, and a wall-clock
-    //    deadline would flake. Only after a generous WATCHDOG ceiling — which a
-    //    healthy leader never reaches — do we treat a still-alive leader as a
+    //    deadline would flake. Only after a generous WATCHDOG ceiling - which a
+    //    healthy leader never reaches - do we treat a still-alive leader as a
     //    genuine SIGHUP-ignored bug, SIGKILL it to avoid hanging the suite, and
     //    fail the assertion. SIGHUP goes to the leader's PID only (not the
     //    process group), so the HUP-trapping in-session background child checked
@@ -269,7 +269,7 @@ fn tty_helper_establishes_session_ctty_winsize_winch_and_hangup() {
 
     // 6. In-session no-orphan: the background child shares the helper-created
     //    session (sid == child_pid) and is NOT a direct child of the helper's
-    //    foreground process, so SIGHUP to the session leader does not reach it —
+    //    foreground process, so SIGHUP to the session leader does not reach it -
     //    it must still be ALIVE here, BEFORE guestd's reaper runs. This is the
     //    exact condition ProcSessionReaper exists to handle.
     assert!(
@@ -279,7 +279,7 @@ fn tty_helper_establishes_session_ctty_winsize_winch_and_hangup() {
         "in-session background child {bg_pid} should still be alive after SIGHUP, before the sid-scoped reap"
     );
     // Reap by the SAME sid-scoped logic guestd uses (ProcSessionReaper): scan
-    // /proc for every pid whose session id == child_pid and SIGKILL it — not by
+    // /proc for every pid whose session id == child_pid and SIGKILL it - not by
     // killing child_pid's process group. This proves the foundation of guestd's
     // no-orphan teardown. A setsid/double-fork escapee would be out of scope
     // (documented trusted-root limitation).
@@ -352,8 +352,8 @@ fn tty_signal_follows_the_foreground_process_group_at_delivery_time() {
     //   2. The shell runs a FOREGROUND child in its OWN process group (job
     //      control's `tcsetpgrp`), moving the terminal's foreground PG OFF the
     //      session leader and ONTO the child's group.
-    //   3. Delivering the allowlisted signal exactly as guestd does —
-    //      `tcgetpgrp(master)` then `kill_process_group` — reaches the CHILD (a
+    //   3. Delivering the allowlisted signal exactly as guestd does -
+    //      `tcgetpgrp(master)` then `kill_process_group` - reaches the CHILD (a
     //      different PG than the session leader). Had delivery used the session
     //      leader's PG, the child (different PG) would never receive it.
     let bin = env!("CARGO_BIN_EXE_d2b-exec-runner");
@@ -447,7 +447,7 @@ fn tty_signal_follows_the_foreground_process_group_at_delivery_time() {
     kill_process_group(pgid, sig).expect("deliver SIGUSR1 to the foreground PG");
 
     // The child (in the foreground PG, distinct from the session leader)
-    // received SIGUSR1, ran its trap, and exited — and only then does the shell
+    // received SIGUSR1, ran its trap, and exited - and only then does the shell
     // resume. Observing both markers proves the signal reached the child's group
     // and NOT merely the session leader.
     assert!(

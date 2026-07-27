@@ -20,13 +20,13 @@
 //! [`LoadedModuleSet`] snapshot of `/proc/modules` and returns a
 //! [`ModuleCheckReport`] enumerating:
 //!
-//! * `required` — modules every VM in the bundle conditionally
+//! * `required` - modules every VM in the bundle conditionally
 //!   demands (kvm_*, vhost_net, tun, virtio_*, plus virtiofs /
 //!   udmabuf when the bundle uses them).
-//! * `present` — required modules detected loaded.
-//! * `missing_required` — required modules NOT loaded. Non-empty →
+//! * `present` - required modules detected loaded.
+//! * `missing_required` - required modules NOT loaded. Non-empty →
 //!   daemon refuses to start.
-//! * `optional_missing` — optional modules NOT loaded, with the
+//! * `optional_missing` - optional modules NOT loaded, with the
 //!   VMs that would have benefited from each. Non-empty → log a
 //!   warning + mark each affected VM as degraded so the autostart
 //!   pass skips it instead of looping.
@@ -38,7 +38,7 @@
 //!
 //! # Scope
 //!
-//! The check is read-only and hermetic — the pure function takes
+//! The check is read-only and hermetic - the pure function takes
 //! `&LoadedModuleSet` and never touches the filesystem. The
 //! side-effecting wrapper [`run_kernel_module_check`] reads
 //! `/proc/modules` and `/proc/sys/kernel/modules_disabled` once,
@@ -86,7 +86,7 @@ pub const REQUIRED_IF_VIRTIOFS: &str = "virtiofs";
 pub const REQUIRED_IF_GRAPHICS: &[&str] = &["udmabuf"];
 
 /// Optional accelerator modules for nvidia-equipped graphics
-/// hosts. Absence is warn-only — VMs continue to autostart with
+/// hosts. Absence is warn-only - VMs continue to autostart with
 /// software rendering / no accelerator handoff.
 pub const OPTIONAL_GRAPHICS_NVIDIA: &[&str] = &["nvidia", "nvidia_uvm"];
 
@@ -181,7 +181,7 @@ impl ModuleCheckReport {
 
 /// Detect per-bundle feature usage so the conditional REQUIRED /
 /// OPTIONAL rows can be folded in. Pure inspection of the
-/// resolver state — no I/O.
+/// resolver state - no I/O.
 fn classify_vms(resolver: &BundleResolver) -> BundleFeatureSet {
     let mut features = BundleFeatureSet::default();
 
@@ -391,16 +391,16 @@ pub const SYS_MODULE_DIR: &str = "/sys/module";
 /// `modules.builtin` text file, then dispatch to [`check_kernel_modules`].
 ///
 /// Module detection order (union of all three sources):
-///   1. `/proc/modules` — loadable modules currently inserted.
-///   2. `/sys/module/<name>/` directory entries — also covers built-in
+///   1. `/proc/modules` - loadable modules currently inserted.
+///   2. `/sys/module/<name>/` directory entries - also covers built-in
 ///      modules that the kernel exposes in sysfs even though they do
 ///      not appear in `/proc/modules`. This is the primary fix for
 ///      false-positive "missing" reports on hosts where virtio modules
 ///      are compiled in (`=y`) rather than loadable (`=m`).
-///   3. `/lib/modules/$(uname -r)/modules.builtin` — text list of
+///   3. `/lib/modules/$(uname -r)/modules.builtin` - text list of
 ///      built-in modules for offline/early-boot coverage, merged into
 ///      the `builtin` set.
-///   4. `/boot/config-$(uname -r)` / `/proc/config.gz` — kernel config
+///   4. `/boot/config-$(uname -r)` / `/proc/config.gz` - kernel config
 ///      for `CONFIG_*=y` built-in detection (existing path).
 ///
 /// On any read failure we conservatively treat the failed source as

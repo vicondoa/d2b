@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-05-31
 - Wave: P6
-- Plan slice: §"Phase 6: clean break — daemon-only end-state", docs-4
+- Plan slice: §"Phase 6: clean break - daemon-only end-state", docs-4
 - Companion ADRs: [ADR 0001](0001-systemd-free-vm-orchestration.md), [ADR 0002](0002-non-root-daemon-and-privileged-broker.md), [ADR 0007](0007-bash-coexistence-and-migration.md), [ADR 0010](0010-wire-protocol-and-typed-errors.md)
 
 ## Context
@@ -11,7 +11,7 @@
 The v0.4.0 baseline shipped three persistent root surfaces in addition
 to `d2bd`:
 
-1. **Per-VM systemd templates** — `d2b@<vm>.service`,
+1. **Per-VM systemd templates** - `d2b@<vm>.service`,
    `microvm@<vm>.service`, `microvm-virtiofsd@<vm>.service`,
    `d2b-<vm>-{gpu,snd,video,swtpm,store-sync}.service`,
    `microvm-{tap-interfaces,macvtap-interfaces,pci-devices,set-booted}@.service`,
@@ -21,17 +21,17 @@ to `d2bd`:
    units. Each template carried its own `restartIfChanged = false`,
    its own user/group, its own ACL surface, and its own startup
    ordering.
-2. **Host singleton framework services** —
+2. **Host singleton framework services** -
    `d2b-{ch-exporter,otel-host-bridge,net-route-preflight,audit-check}.service`,
    `d2b-audit-check.timer`, and the `microvms.target` aggregator.
-3. **The W14c bash CLI fallback bridge** — the Rust `d2b` binary
+3. **The W14c bash CLI fallback bridge** - the Rust `d2b` binary
    shelled out to `/run/current-system/sw/bin/d2b-legacy` for any
    verb the daemon could not yet serve, gated by
    `D2B_LEGACY_BASH_OPT_IN` and `D2B_LEGACY_CLI`. The
    `cli.nix` Nix module packaged the bash entrypoints and every
    `d2b-<vm>-*` desktop wrapper read from it.
 
-P0–P5 closed the readiness gap. By the time P5 lands, the daemon
+P0-P5 closed the readiness gap. By the time P5 lands, the daemon
 covers every verb on the v0.4.0 user-facing surface, the broker has
 live handlers for the full host-prepare dispatch
 (see [ADR 0011](0011-cgroup-v2-delegation-and-pidfd-handoff.md),
@@ -71,7 +71,7 @@ real cost: every legacy unit remains in the audit scope of v0.5, the
 manifest must keep accepting both `supervisor` values, the
 `tests/cli-json.sh` gate must keep both code paths green, the
 documentation tree must explain both modes, and the v0.5 → v0.6
-upgrade still has the same blast radius — just deferred.
+upgrade still has the same blast radius - just deferred.
 
 A clean break collapses every legacy surface to "removed in v1.0" in
 a single coherent cut at the v0.4.x → v1.0.0 boundary. The cost is
@@ -108,7 +108,7 @@ it from one place:
 - Teardown uses **broker-mediated `CgroupKill`** (v1.1-P10 op
   per [ADR 0011](0011-cgroup-v2-delegation-and-pidfd-handoff.md)
   Decision item 6 + [`docs/reference/cgroup-delegation.md`](../reference/cgroup-delegation.md)
-  "Broker ops on the cgroup tree" — **the broker is the sole
+  "Broker ops on the cgroup tree" - **the broker is the sole
   writer of `cgroup.kill`; the daemon NEVER writes
   `cgroup.kill` directly**) against the leaf only; daemon
   uses `pidfd_send_signal(SIGTERM)` first and ONLY escalates to
@@ -119,17 +119,17 @@ it from one place:
 
 ### What stays
 
-- **`d2bd.service`** — non-root daemon, supervisor of every
+- **`d2bd.service`** - non-root daemon, supervisor of every
   per-VM DAG, owner of state under `/var/lib/d2b/`,
   socket-activated `public.sock` (mode 0660, group
   `d2b`), `restartIfChanged = false`.
-- **`d2b-priv-broker.socket` + `d2b-priv-broker.service`** —
+- **`d2b-priv-broker.socket` + `d2b-priv-broker.service`** -
   socket-activated privileged broker (see
   [ADR 0002](0002-non-root-daemon-and-privileged-broker.md)),
   dispatcher for every audited host mutation
   (see [`docs/reference/privileges.md`](../reference/privileges.md)),
   append-only audit log at `/var/lib/d2b/audit/broker-<utc-date>.jsonl`.
-- **The `d2b` group** — the lifecycle permission
+- **The `d2b` group** - the lifecycle permission
   boundary. Membership in this group plus `SO_PEERCRED` at
   `public.sock` accept time is the only authorisation surface for
   `d2b vm {start,stop,restart,switch}`.
@@ -157,8 +157,8 @@ fallback):
   `nixos-modules/` for a subset of these patterns; the full list
   below is the v1.1 design surface and the residual patterns
   are **scheduled to be added to the denylist gate in their
-  owning v1.1-P<N> phase** (see the v1.1 plan TDD-table P10 rows
-  — `microvm@`, `microvm-virtiofsd@`, `microvm-pci-devices@`,
+  owning v1.1-P<N> phase** (see the v1.1 plan TDD-table P10 rows -
+  `microvm@`, `microvm-virtiofsd@`, `microvm-pci-devices@`,
   `microvm-set-booted@`, `d2b-vfsd-watchdog@`, and
   `microvms.target` land their denylist registrations in
   v1.1-P10). Until each row lands, this enumeration MUST be
@@ -208,15 +208,15 @@ fallback):
   `nixos-modules/assertions.nix` fires as a backup only when the
   shim is bypassed (e.g. consumer flake subverts the module set).
   Tier 0 detection in `packages/d2b/src/lib.rs`
-  `detect_deployment_shape` continues to function — every enabled VM
+  `detect_deployment_shape` continues to function - every enabled VM
   is now daemon-supervised, and the systemd-template path is
   retired alongside the supervisor option (the `microvm@<vm>`
   template definitions themselves go in v1.1-P10 per ADR 0018).
 
   **Companion v1.1 ADRs:**
-  [ADR 0017 — No bash fallbacks invariant](0017-no-bash-fallbacks-invariant.md)
+  [ADR 0017 - No bash fallbacks invariant](0017-no-bash-fallbacks-invariant.md)
   retires `exec_legacy_passthrough` and the residual bash-fallback
-  call sites in v1.1-P1. [ADR 0018 — Removal of the microvm.nix
+  call sites in v1.1-P1. [ADR 0018 - Removal of the microvm.nix
   flake dependency](0018-microvm-nix-removal.md) retires the per-VM
   systemd templates listed below alongside the `microvm.nix`
   substrate in v1.1-P8 → P11.
@@ -229,7 +229,7 @@ fallback):
 - The `daemon-experimental` / `legacy-systemd` mode plumbing from
   [ADR 0007](0007-bash-coexistence-and-migration.md). ADR 0007
   remains in the repository as historical context; this ADR
-  supersedes its decisions 1–6 in their entirety.
+  supersedes its decisions 1-6 in their entirety.
 
 ### Why no v0 → v1 manifest compatibility window
 
@@ -238,7 +238,7 @@ in P2 (`ph2-p2-manifestversion-bump`); fields that previously
 encoded systemd-coupled semantics (notably `audioService` and
 `apiSocket`) are redocumented as broker-spawn descriptors in P6
 under the already-bumped v3 schema. A v0.4 consumer manifest is
-**not** machine-translatable to v3 — the per-VM `supervisor` field
+**not** machine-translatable to v3 - the per-VM `supervisor` field
 is gone, the per-env `d2b-sys-<env>-usbipd-*` socket emitter is
 gone, and the host-singleton observability units are gone. Operators
 must follow [`docs/how-to/migrate-d2b-v0-to-v1.md`](../how-to/migrate-d2b-v0-to-v1.md)
@@ -309,7 +309,7 @@ v2 → v3 auto-rewriter.
   reconnect-on-`ENOENT` contract for `public.sock`, plus the broker
   `RestartSec` + `StartLimitIntervalSec` settings keeping a crash
   loop from spiralling. Operators wanting hot-spare semantics are
-  out of scope — d2b is a single-host framework.
+  out of scope - d2b is a single-host framework.
 
 ### Neutral
 
@@ -329,7 +329,7 @@ v2 → v3 auto-rewriter.
   `d2bd.service`, `d2b-priv-broker.service`, and
   `d2b-priv-broker.socket` remain.
 - **ADR 0007 status unchanged.** ADR 0007 stays `Accepted` as the
-  historical record of the W2–W14c coexistence path; this ADR
+  historical record of the W2-W14c coexistence path; this ADR
   documents the end-state and is the binding reference from v1.0
   onwards. The ADR 0007 → ADR 0015 supersession is recorded in the
   ADR index ([`docs/adr/README.md`](README.md)).

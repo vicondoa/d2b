@@ -2,7 +2,7 @@
 
 {
   # ---------------------------------------------------------------
-  # Host NixOS baseline — PLACEHOLDER
+  # Host NixOS baseline - PLACEHOLDER
   # ---------------------------------------------------------------
   # The values below are stubs that let `nix flake check` evaluate
   # without touching real hardware. When you copy this example to a
@@ -24,7 +24,7 @@
 
   # ---------------------------------------------------------------
   # Host Wayland session. Pick whatever compositor you actually
-  # run — sway, Hyprland, GNOME, KDE Plasma — they all forward
+  # run - sway, Hyprland, GNOME, KDE Plasma - they all forward
   # Wayland surfaces the same way to the GPU sidecar. The
   # framework needs a running compositor for the Wayland user
   # named below; it does not care which compositor.
@@ -47,7 +47,7 @@
   # must be running on the host for audio.enable to do anything.
   #
   # Commented out for the same eval-cost reason as the Wayland
-  # session above — uncomment on the real host.
+  # session above - uncomment on the real host.
   # ---------------------------------------------------------------
   # services.pipewire = {
   #   enable = true;
@@ -63,7 +63,7 @@
   # user's PipeWire socket.
   #   /run/user/<uid>/<waylandDisplay>   (filter proxy; not the GPU sidecar)
   #   /run/user/<uid>/pipewire-0
-  # The framework does NOT create the user — you do, here.
+  # The framework does NOT create the user - you do, here.
   # ---------------------------------------------------------------
   users.users.alice = {
     isNormalUser = true;
@@ -74,7 +74,7 @@
   };
 
   # ---------------------------------------------------------------
-  # d2b.site — host-wide knobs
+  # d2b.site - host-wide knobs
   # ---------------------------------------------------------------
   d2b.site = {
     # Required for any VM with graphics.enable or audio.enable.
@@ -97,7 +97,7 @@
   d2b.hostLanCidrs = [ "192.168.1.0/24" ];
 
   # ---------------------------------------------------------------
-  # d2b.envs.desktop — one isolated env
+  # d2b.envs.desktop - one isolated env
   # ---------------------------------------------------------------
   #   - lanSubnet must be /24; workload VM gets 10.42.0.10 (.index)
   #     and the auto-declared net VM takes .1.
@@ -112,14 +112,14 @@
   };
 
   # ---------------------------------------------------------------
-  # d2b.vms.corp-desktop — the workstation VM, full stack
+  # d2b.vms.corp-desktop - the workstation VM, full stack
   # ---------------------------------------------------------------
   # graphics + audio + YubiKey USBIP. This is the example's reason
-  # for existing — the headless baseline is in
+  # for existing - the headless baseline is in
   # `examples/minimal/`; this layers all three component toggles
   # on top.
   #
-  # `autostart` is intentionally left at the default `false` —
+  # `autostart` is intentionally left at the default `false` -
   # graphics VMs cannot autostart because there is no Wayland
   # session at multi-user.target. Use `d2b vm start corp-desktop --apply`
   # from a Plasma terminal once you're logged in.

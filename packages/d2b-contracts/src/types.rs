@@ -4,7 +4,7 @@
 //! payloads to the broker. Every mutating broker request carries opaque
 //! IDs that the broker resolves against its **own trusted copy of the
 //! bundle**. The daemon never names raw paths, raw uids/gids, raw argv,
-//! raw nft rule text, raw routes or raw sysctl values — those derive
+//! raw nft rule text, raw routes or raw sysctl values - those derive
 //! exclusively from the broker-side `Bundle::find_*_intent` lookups
 //! anchored by these IDs.
 
@@ -49,7 +49,7 @@ macro_rules! opaque_id {
 
 opaque_id! {
     /// Opaque identifier for a launching/admin caller subject. The
-    /// broker resolves this against the bundle's `subjects` table —
+    /// broker resolves this against the bundle's `subjects` table -
     /// it is never a raw uid/gid on the wire.
     SubjectId
 }
@@ -97,7 +97,7 @@ opaque_id! {
     /// (resolved against `BundleResolver::find_store_view_intent`
     /// keyed by VM).
     /// The daemon never names raw `/nix/store` closure paths on
-    /// the wire — only this reference. Canonical form is the
+    /// the wire - only this reference. Canonical form is the
     /// `intent_id_store_view(vm)` string (`"store-view:vm:<vm>"`).
     BundleClosureRef
 }

@@ -24,7 +24,7 @@ pub struct VmProcessDag {
     ///
     /// Additive: present for VMs that are declared as realm workloads;
     /// absent (`None`) for VMs that predate realm workload declarations.
-    /// Consumers must not treat absence as an error — it simply means the
+    /// Consumers must not treat absence as an error - it simply means the
     /// VM is a classical `d2b.vms.<vm>` entry without a realm workload row.
     ///
     /// The provider/backend-specific config (vm_id, role, runner argv) is
@@ -175,7 +175,7 @@ pub enum SpawnRunnerPlanOp {
         size_bytes: u64,
         /// Unix permission bits in octal (e.g. `0o600` = 384 decimal).
         mode: u32,
-        /// Owner UID — typically the per-VM runner UID.
+        /// Owner UID - typically the per-VM runner UID.
         owner_uid: u32,
         /// Owner GID.
         owner_gid: u32,
@@ -206,7 +206,7 @@ pub enum ProcessRole {
     Video,
     /// Optional GPU/graphics sidecar.
     Gpu,
-    /// Optional GPU/graphics sidecar — render-node-only mode (fd-passing, no device bind-mounts).
+    /// Optional GPU/graphics sidecar - render-node-only mode (fd-passing, no device bind-mounts).
     /// Selected when `graphics.renderNodeOnly = true`; uses broker-pre-NS pattern (ADR 0021).
     GpuRenderNode,
     /// Optional audio sidecar.
@@ -288,7 +288,7 @@ pub struct RoleProfile {
     pub umask: Option<u32>,
 }
 
-/// v1.1.1fu14 — single-entry uid_map/gid_map declaration for the
+/// v1.1.1fu14 - single-entry uid_map/gid_map declaration for the
 /// per-role user namespace. See ADR 0021.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -329,7 +329,7 @@ pub enum ReadinessPredicate {
     ComponentSpecific(String),
     /// Authenticated guest-control Health probe. Readiness requires a
     /// full Hello + token challenge-response + Health over the guest-control
-    /// vsock — the host-side probe. Unlike [`Self::ComponentSpecific`]
+    /// vsock - the host-side probe. Unlike [`Self::ComponentSpecific`]
     /// (which reports ready unconditionally and would fail OPEN), this predicate
     /// fails CLOSED: it is ready only when the daemon completes the
     /// authenticated probe and the guest reports a healthy/degraded state, and

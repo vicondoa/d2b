@@ -13,13 +13,13 @@
 > `host destroy --apply` verbs are **not yet wired**: the daemon-side
 > typed-intent dispatch and bundle resolver that back them are still
 > pending, so both return the typed `daemon-down` envelope (exit 1)
-> today — use `--dry-run` for now. When the daemon-side dispatch
+> today - use `--dry-run` for now. When the daemon-side dispatch
 > ships, the `--apply` verbs will dispatch through the broker reconcile
 > ops (`ApplyNftables`, `ApplyRoute`, `ApplySysctl`,
 > `UpdateHostsFile`, `ApplyNmUnmanaged`), with broker failures
 > surfacing a typed `broker-error` envelope (exit 78). On a Tier 0
-> NixOS-legacy host — one with no loadable daemon-owned d2b
-> bundle — `host prepare --apply` is refused with
+> NixOS-legacy host - one with no loadable daemon-owned d2b
+> bundle - `host prepare --apply` is refused with
 > `tier-0-legacy-uses-nixos-module` (exit 78). The per-VM
 > `d2b.vms.<vm>.supervisor` option was removed in v1.1 (ADR 0015);
 > every enabled VM is daemon-supervised. See
@@ -53,7 +53,7 @@ to `d2b-priv-broker` over a `0600` private Unix socket
 - fails closed and audits `decision=denied-unknown` for any operation
   whose subject/scope is absent from the trusted bundle
   (`defaultForUnknown: deny`);
-- never holds long-running state — every broker invocation is a
+- never holds long-running state - every broker invocation is a
   short-lived per-operation process.
 
 This is the trust boundary. Compromise of `d2bd` cannot escalate
@@ -88,7 +88,7 @@ or `fork + pidfd_open` (fallback) and ships the resulting CLOEXEC
 pidfd to `d2bd` over the private socket via `SCM_RIGHTS`. The
 daemon's supervisor takes ownership in an explicit per-VM/per-role fd
 table and uses `pidfd_send_signal` for control (and for VM-scoped
-sidecars whose parent is the daemon, `waitid(P_PIDFD)` for reap) —
+sidecars whose parent is the daemon, `waitid(P_PIDFD)` for reap) -
 never raw PID kill/wait.
 
 **SpawnRunner-child supervision.** The broker is the parent of every
@@ -99,7 +99,7 @@ verification and lifecycle signalling but does not reap). Per
 [ADR 0018](../adr/0018-microvm-nix-removal.md) § "set-booted
 race-free serialization" / "broker-as-parent reaping model",
 neither the broker nor `d2bd` claims `PR_SET_CHILD_SUBREAPER`
-for the SpawnRunner-child population — making either side a
+for the SpawnRunner-child population - making either side a
 subreaper would silently re-parent unrelated host processes into
 the daemon/broker, breaking the audit/lifecycle model.
 
@@ -109,26 +109,26 @@ The host CLI splits read-only and mutating behaviour across distinct
 verbs (canonical contract in
 [`docs/how-to/host-prepare.md`](../how-to/host-prepare.md)):
 
-- `d2b host check` — no mutation. Opens read-only file descriptors,
+- `d2b host check` - no mutation. Opens read-only file descriptors,
   reads `cgroup.controllers`, walks `/proc/modules`, reads
   `/proc/sys/kernel/modules_disabled`, reads `/sys/class/net/*/`, reads
   `/etc/hosts`, reads existing NetworkManager unmanaged config, hashes
   the current nftables ruleset, and produces a diff. It never opens an
   `O_WRONLY` fd outside its own scratch directory.
-- `d2b host prepare --dry-run` — no mutation. Emits the reconcile
+- `d2b host prepare --dry-run` - no mutation. Emits the reconcile
   diff the `--apply` form would execute. Mandatory `--dry-run` flag.
-- `d2b host prepare --apply` — not yet wired; returns the typed
+- `d2b host prepare --apply` - not yet wired; returns the typed
   `daemon-down` envelope (exit 1) today because the daemon-side
   typed-intent dispatch and bundle resolver are still pending. Once
   wired it mutates exactly the **d2b-owned**
-  state. The owned set is identified by ownership markers — see
-  ADRs 0011/0012/0013 — typically:
+  state. The owned set is identified by ownership markers - see
+  ADRs 0011/0012/0013 - typically:
 
   - a `# d2b-managed begin` / `# d2b-managed end` block in
     `/etc/hosts`;
   - a `# d2b-managed begin` / `# d2b-managed end` block in
     `/etc/NetworkManager/conf.d/00-d2b-unmanaged.conf`;
-  - the `inet d2b` nftables table (and only that table — peer
+  - the `inet d2b` nftables table (and only that table - peer
     tables, even foreign ones in the `inet` family, are never flushed);
   - the `d2b.slice` cgroup subtree;
   - bridges / TAPs whose name starts with the broker-derived
@@ -138,20 +138,20 @@ verbs (canonical contract in
   domains is left alone; discovering a foreign ownership marker where
   d2b expects its own is fail-closed (`path-safety-violation`,
   `nm-managed-foreign-conflict`, `foreign-nft-rule-preserved`).
-- `d2b host destroy --dry-run` — no mutation. Reports the
+- `d2b host destroy --dry-run` - no mutation. Reports the
   d2b-owned set that `--apply` would withdraw.
-- `d2b host destroy --apply` — not yet wired; returns
+- `d2b host destroy --apply` - not yet wired; returns
   `daemon-down` (exit 1) today. Once wired it withdraws the
   d2b-owned state
   in reverse dependency order. Mandatory `--apply` flag. Refuses if
   any matching VM is still running (`vm-still-running-refused`). Never
   touches foreign ownership markers.
-- `d2b host doctor --read-only` — no mutation. Surfaces
+- `d2b host doctor --read-only` - no mutation. Surfaces
   load-bearing findings without acting. Mandatory `--read-only`
   flag.
-- `d2b host install --dry-run` — no mutation. Prints the
+- `d2b host install --dry-run` - no mutation. Prints the
   synthesized 5-step installer preview.
-- `d2b host install --apply` — live daemon → broker
+- `d2b host install --apply` - live daemon → broker
   `RunHostInstall` path. Broker failures surface exit 78
   (`broker-error`) instead of falling back to bash.
 
@@ -168,7 +168,7 @@ treats NM/networkd coexistence as a fail-closed predicate.
 ordering (ADR 0012), the broker writes
 the unmanaged drop-in
 (`/etc/NetworkManager/conf.d/00-d2b-unmanaged.conf`, marker block
-`# d2b-managed begin` / `# d2b-managed end`) **pre-create** —
+`# d2b-managed begin` / `# d2b-managed end`) **pre-create** -
 before any `RTM_NEWLINK` for the d2b bridge or TAP. The broker
 then triggers `nmcli general reload conf` (NM ≥ 1.20) or
 `systemctl reload NetworkManager.service` (older NM). `nmcli
@@ -179,7 +179,7 @@ and the broker confirms via `nmcli -t -f DEVICE,STATE device status`
 that the d2b ifname is `unmanaged` does it proceed to link create.
 
 **How systemd-networkd hosts are handled.** systemd-networkd is
-**detection-only** — the broker never writes a `*.network` or
+**detection-only** - the broker never writes a `*.network` or
 `*.link` file. The host-prepare path probes for an active
 systemd-networkd that is managing the d2b ifname prefix
 (`d2b-`/`d2bv-`) by reading `/run/systemd/network/*.link` and the
@@ -209,7 +209,7 @@ D2b cannot detect every drift mid-startup, so it requires
 exclusive ownership up front and fails closed on any sign of
 contention.
 
-**What happens if NM is absent.** Clean host — neither
+**What happens if NM is absent.** Clean host - neither
 `/run/NetworkManager/` nor `/var/lib/NetworkManager/` exists, and
 `systemctl is-active NetworkManager.service` returns failure. The
 broker records the detection result as `manager_detected: none` in
@@ -220,9 +220,9 @@ run NetworkManager.
 
 Cross-references:
 
-- [ADR 0012](../adr/0012-w3-ipv6-off-sysctl-set-and-hash-ifname.md)
-  — IPv6-off sysctl set, hash-derived IfName, bridge-port defaults;
-- [`docs/how-to/host-prepare.d/network.md`](../how-to/host-prepare.d/network.md) — operator walkthrough of the 5-step ordering.
+- [ADR 0012](../adr/0012-w3-ipv6-off-sysctl-set-and-hash-ifname.md) -
+  IPv6-off sysctl set, hash-derived IfName, bridge-port defaults;
+- [`docs/how-to/host-prepare.d/network.md`](../how-to/host-prepare.d/network.md) - operator walkthrough of the 5-step ordering.
 
 ## Tier behavior
 
@@ -257,7 +257,7 @@ fail-closed.
 ## Recovery runbook
 
 The mutating `host prepare --apply` / `host destroy --apply` verbs
-are **not yet wired** — they return the typed `daemon-down` envelope
+are **not yet wired** - they return the typed `daemon-down` envelope
 (exit 1) today, so this runbook describes the recovery flow that
 applies once the daemon-side dispatch ships. If `host prepare --apply`
 fails partway through, the operator runbook is:
@@ -284,8 +284,8 @@ fails partway through, the operator runbook is:
    [`docs/reference/privileges.md`](../reference/privileges.md)).
 6. **Resume the broker** with `d2b admin broker --resume`.
 
-For the security-policy framing — how this runbook integrates with
-GitHub Security Advisory disclosure — read [`SECURITY.md`](../../SECURITY.md).
+For the security-policy framing - how this runbook integrates with
+GitHub Security Advisory disclosure - read [`SECURITY.md`](../../SECURITY.md).
 
 ## Net-route preflight & network reconcile
 
@@ -317,7 +317,7 @@ re-runs the broker-side network slice of `host prepare`
 (`ApplyNftables(host)` + per-env `ApplyRoute` + per-env
 `ApplySysctl`) without starting any VM, and on success resets
 the persistent consecutive-failure counter. It does NOT touch
-`/etc/hosts` or the NetworkManager unmanaged file — those
+`/etc/hosts` or the NetworkManager unmanaged file - those
 remain scoped to a full `host prepare`.
 
 ```console
@@ -336,12 +336,12 @@ when a caller surfaces explicit network-preflight degradation.
 
 ## Cross-references
 
-- [`docs/how-to/host-prepare.md`](../how-to/host-prepare.md) — operator how-to.
-- [`docs/reference/privileges.md`](../reference/privileges.md) — broker enum operation matrix.
-- [`docs/reference/cgroup-delegation.md`](../reference/cgroup-delegation.md) — cgroup algorithm.
-- [`docs/reference/inet-d2b-chains.md`](../reference/inet-d2b-chains.md) — nftables chain layout.
-- [`docs/reference/support-matrix.md`](../reference/support-matrix.md) — tier matrix.
-- [`SECURITY.md`](../../SECURITY.md) — trust-boundary threat-model delta.
+- [`docs/how-to/host-prepare.md`](../how-to/host-prepare.md) - operator how-to.
+- [`docs/reference/privileges.md`](../reference/privileges.md) - broker enum operation matrix.
+- [`docs/reference/cgroup-delegation.md`](../reference/cgroup-delegation.md) - cgroup algorithm.
+- [`docs/reference/inet-d2b-chains.md`](../reference/inet-d2b-chains.md) - nftables chain layout.
+- [`docs/reference/support-matrix.md`](../reference/support-matrix.md) - tier matrix.
+- [`SECURITY.md`](../../SECURITY.md) - trust-boundary threat-model delta.
 - ADRs [0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md),
   [0012](../adr/0012-w3-ipv6-off-sysctl-set-and-hash-ifname.md),
   [0013](../adr/0013-w3-firewall-coexistence-policy.md),

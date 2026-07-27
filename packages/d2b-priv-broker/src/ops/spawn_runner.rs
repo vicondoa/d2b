@@ -493,7 +493,7 @@ mod tests {
 
     #[test]
     fn user_namespace_with_zero_uid_is_allowed_in_plan_layer() {
-        // The preflight does NOT validate the host UID — the
+        // The preflight does NOT validate the host UID - the
         // broker dispatch is responsible for refusing UID 0
         // mappings when adr_carve_out is absent (separately
         // enforced in runtime.rs). This test pins the plan

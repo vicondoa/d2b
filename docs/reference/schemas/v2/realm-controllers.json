@@ -897,7 +897,7 @@
           ]
         },
         "realmPath": {
-          "description": "Realm path (most-specific first) — the label sequence after the workload in the canonical target address.",
+          "description": "Realm path (most-specific first) - the label sequence after the workload in the canonical target address.",
           "type": "array",
           "items": {
             "$ref": "#/definitions/RealmId"

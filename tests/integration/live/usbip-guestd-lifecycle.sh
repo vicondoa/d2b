@@ -13,6 +13,16 @@ set -euo pipefail
 
 HERE=$(dirname "$(readlink -f "$0")")
 ROOT=${ROOT:-$(cd "$HERE/../../.." && pwd)}
+
+# --- heavy-gate sole-use semaphore (ADR 0046) ------------------------------
+# This live lane mutates real host, KVM, and daemon state, so it must never
+# bypass the sole-use heavy-gate semaphore. The mere presence of
+# D2B_HEAVY_GATE is not trusted: the shared helper asks the wrapper to verify
+# this process genuinely holds a slot and re-execs through the gate exactly
+# once when it does not.
+# shellcheck source=tests/tools/heavy-gate-reexec.sh
+. "$ROOT/tests/tools/heavy-gate-reexec.sh"
+d2b_heavy_gate_reexec "$ROOT" "$0" "$@"
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
 

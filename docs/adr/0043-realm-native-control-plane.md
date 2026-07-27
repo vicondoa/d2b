@@ -217,11 +217,11 @@ retired `d2b.vms` or `d2b.envs` Nix AST. This metadata is presentation and
 launch intent only: it must not contain secrets, provider tokens, session
 handles, unredacted command payloads, or authorization decisions.
 
-Additions to the realm-to-workload association schema — new optional workload
-fields, new capability status keys, new desktop launch metadata keys — are
+Additions to the realm-to-workload association schema - new optional workload
+fields, new capability status keys, new desktop launch metadata keys - are
 **additive** and do not require a `schemaVersion` or `manifestVersion` bump.
-Structural breaking changes — removing a required field, renaming a field,
-or changing a field's type — require a coordinated `schemaVersion` and
+Structural breaking changes - removing a required field, renaming a field,
+or changing a field's type - require a coordinated `schemaVersion` and
 `manifestVersion` bump per the existing manifest contract rules, a CHANGELOG
 breaking-change entry, and migration notes for downstream sibling flake
 consumers.
@@ -897,7 +897,7 @@ Provider/session traits must preserve the existing invariants in type shapes:
   the standard d2b operation envelope.
 
 Wire DTOs that carry both a workload identity and a provider-specific execution
-request — the primary example being `SpawnRunner` — must **structurally
+request - the primary example being `SpawnRunner` - must **structurally
 separate universal workload identity from provider-specific backend config**
 using a typed/polymorphic envelope:
 

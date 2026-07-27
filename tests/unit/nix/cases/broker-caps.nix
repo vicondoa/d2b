@@ -17,7 +17,7 @@
 #
 # Reading serviceConfig.{CapabilityBoundingSet,AmbientCapabilities} is lazy
 # and does NOT force serviceConfig.ExecStart (which would recurse on the
-# broker derivation) — the same projection the bash gate relied on.
+# broker derivation) - the same projection the bash gate relied on.
 { mkEval, lib, ... }:
 
 let

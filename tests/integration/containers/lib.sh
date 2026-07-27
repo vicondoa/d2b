@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/integration/containers/lib.sh — shared helpers for the podman-based integration
+# tests/integration/containers/lib.sh - shared helpers for the podman-based integration
 # test layer (the type-G container tests).
 #
 # Design: each test is a standalone bash script in tests/integration/containers/ that
@@ -8,14 +8,14 @@
 # tests/integration/containers/images/*.nix), loads it into podman, runs it, and asserts.
 #
 # Scope: this layer is ONLY for things that need a foreign (non-Nix) userland
-# — e.g. proving a static d2b binary runs on stock Ubuntu, matching CI.
+# - e.g. proving a static d2b binary runs on stock Ubuntu, matching CI.
 # It is deliberately NOT used to boot systemd and exercise daemon/socket
 # activation: that is covered far more cheaply by the native
 # `packages/d2b-priv-broker/tests/socket_activation.rs` test (real
 # LISTEN_FDS fd-3 handoff + Hello round-trip, ~0.4 s, unprivileged) plus the
 # nix-unit unit-shape cases. A faithful systemd-boot container was measured at
 # ~1.4 G to ship (the d2b bundle drags the full per-VM runtime substrate,
-# so `systemdMinimal` does not help) for zero marginal coverage — do not add
+# so `systemdMinimal` does not help) for zero marginal coverage - do not add
 # one. See tests/integration/containers/README.md.
 #
 # Portability: podman is the container runtime, rootless throughout. It runs
@@ -49,7 +49,7 @@ nlc_require_podman() {
       || nlc_fail "could not bootstrap podman via nix"
     NLC_PODMAN=("$podman_path")
   else
-    nlc_log "SKIP: neither podman nor nix available — container tests need one"
+    nlc_log "SKIP: neither podman nor nix available - container tests need one"
     exit 0
   fi
   export NLC_PODMAN

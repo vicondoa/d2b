@@ -1,4 +1,4 @@
-//! d2b-relay-bridge — tunnel a raw byte stream over an Azure Relay
+//! d2b-relay-bridge - tunnel a raw byte stream over an Azure Relay
 //! Hybrid Connection (ADR 0032).
 //!
 //! Two modes:

@@ -5,7 +5,7 @@
 //! Its KEY-SET shape checks (the exact `keys | sort` jq assertions for `list`,
 //! `status`, `services`, `runnerParity`, `livePoolIntegrity`) are now covered by
 //! the strict `deny_unknown_fields` DTO deserializes in `cli_contract.rs` and
-//! `status_contract.rs` — a successful typed deserialize into
+//! `status_contract.rs` - a successful typed deserialize into
 //! `d2b_contracts::cli_output::{ListOutputV2, StatusVmOutputV2}` IS the exact-key-set check.
 //!
 //! This module covers only the behaviours unique to the cli-json gate:
@@ -25,8 +25,8 @@
 //! `D2B_FIXTURES` (the same artifact dir cli_contract.rs / status_contract.rs
 //! consume); they skip cleanly when it is unset (the plain
 //! `cargo test --workspace` pass with no Nix sandbox). The daemon-down keys /
-//! audit cases need no fixture — they only point the public socket at a missing
-//! path — so they always run.
+//! audit cases need no fixture - they only point the public socket at a missing
+//! path - so they always run.
 
 use std::io::Read;
 use std::os::fd::OwnedFd;

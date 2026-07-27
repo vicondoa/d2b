@@ -536,7 +536,7 @@ pub fn run(command: BrokerMode) -> Result<(), RunError> {
 ///
 /// Returns:
 /// - `None` if `LISTEN_PID` is absent or does not match this process's PID,
-///   or if `LISTEN_FDS` is absent or not `"1"` — not socket-activated.
+///   or if `LISTEN_FDS` is absent or not `"1"` - not socket-activated.
 /// - `Some(Ok(fd))` when socket activation is valid and fd 3 has been
 ///   verified as an `AF_UNIX SOCK_SEQPACKET` listen socket.
 /// - `Some(Err(_))` if `LISTEN_FDNAMES` is present but is not `"priv.sock"`,
@@ -572,7 +572,7 @@ fn adopt_listen_fd() -> Option<Result<OwnedFd, RunError>> {
         ))));
     }
 
-    // Steps 4–5: verify fd 3 + set CLOEXEC + wrap in OwnedFd (sys.rs). The
+    // Steps 4-5: verify fd 3 + set CLOEXEC + wrap in OwnedFd (sys.rs). The
     // `LISTEN_*` vars are intentionally left in place; see the fn docs for
     // why that is inert (LISTEN_PID self-scoping + explicit runner env).
     Some(crate::sys::adopt_listen_fd_from_fd3().map_err(RunError::Io))
@@ -581,7 +581,7 @@ fn adopt_listen_fd() -> Option<Result<OwnedFd, RunError>> {
 /// Send `READY=1` (and `MAINPID=<pid>`) to `$NOTIFY_SOCKET` via the
 /// `sd_notify(3)` protocol.
 ///
-/// Failures are logged at WARN level but are not fatal — the broker
+/// Failures are logged at WARN level but are not fatal - the broker
 /// continues serving even if the notification cannot be delivered.
 /// This preserves behaviour in environments that do not use systemd
 /// supervision (tests, containers).
@@ -590,7 +590,7 @@ fn sd_notify_ready() {
 
     let notify_socket = match env::var("NOTIFY_SOCKET") {
         Ok(s) if !s.is_empty() => s,
-        _ => return, // not under systemd supervision — skip silently
+        _ => return, // not under systemd supervision - skip silently
     };
 
     let addr: UnixAddr = if let Some(abstract_name) = notify_socket.strip_prefix('@') {
@@ -732,7 +732,7 @@ fn run_server(config: ServerConfig) -> Result<(), RunError> {
         }
         Some(Err(err)) => return Err(err),
         None => {
-            // Not socket-activated: legacy / test mode — bind ourselves.
+            // Not socket-activated: legacy / test mode - bind ourselves.
             validate_socket_parent(&config.socket_path, config.test_mode)?;
             prepare_socket_path(&config.socket_path)?;
             // fchmod() on an AF_UNIX socket fd does not change the bound
@@ -3152,7 +3152,7 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
         // the retired per-VM `d2b-<vm>-store-sync.service` bash
         // oneshot. See the CRITICAL invariant in `ops/store_sync.rs`:
         // NEVER recursively chown/chmod/setfacl the per-VM `store/` path
-        // — mutations propagate INTO `/nix/store` through the shared
+        // - mutations propagate INTO `/nix/store` through the shared
         // hardlink inodes.
         RealBrokerRequest::StoreSync(req) => {
             let resolver = require_resolver(resolver)?;
@@ -4014,7 +4014,7 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
         // validates the VM exists in the trusted manifest, records the
         // typed audit row, and acks. The actual filesystem mutation
         // (writing the leases file / performing the bind mount) stays
-        // out of scope here — both targets live in subtrees the daemon
+        // out of scope here - both targets live in subtrees the daemon
         // already owns (`/var/lib/d2b/dnsmasq/`, per-VM store farm),
         // and this removes the typed-Unimplemented wall so the host-prep
         // DAG executor exercises a real broker round trip in eval-only
@@ -4171,7 +4171,7 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             }
 
             // Build synthetic intent for backend calls: usbip_bind/usbip_unbind
-            // only use bus_id, lock_path, and vm_name — the empty allowlist is never
+            // only use bus_id, lock_path, and vm_name - the empty allowlist is never
             // checked on the explicit path (no enforce_usbip_physical_policy call).
             let synthetic_intent = d2b_core::bundle_resolver::ResolvedUsbipBindIntent {
                 intent_id: format!("explicit:{}:{}", req.env, req.bus_id),
@@ -4828,9 +4828,9 @@ fn register_runner_pidfd(runner_id: &str, pidfd: &OwnedFd) -> Result<(), BrokerE
 /// orphan child (a non-blocking targeted reap is a no-op for a live
 /// process), and reaping that orphan would also pollute the existing
 /// same-`runner_id` registry entry + push a spurious `ChildReaped` for the
-/// live runner. A `runner_id` has at most one live registration — the
+/// live runner. A `runner_id` has at most one live registration - the
 /// daemon serializes per-VM lifecycle (per-VM start flock + DAG) and a live
-/// entry is cleared on exit (SIGCHLD reaper) or on down/stop — so a
+/// entry is cleared on exit (SIGCHLD reaper) or on down/stop - so a
 /// legitimate re-spawn never collides here; a collision is a
 /// concurrent/duplicate spawn and must fail closed. See issue #64
 /// work-review (W1fu1/fu2).
@@ -5843,7 +5843,7 @@ fn usbip_binary_path() -> PathBuf {
 /// bundle's `processes.vms[*].vm` list. The wire `VmId` is a transparent
 /// opaque string; the bundle index is the `processes.vms[*].vm` field.
 /// We use the wire value as both the opaque key and the human-readable
-/// name today — the daemon emits them identically.
+/// name today - the daemon emits them identically.
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn lookup_vm_name(_resolver: &Arc<BundleResolver>, vm_id: &d2b_contracts::types::VmId) -> String {
     vm_id.as_str().to_owned()
@@ -7026,7 +7026,7 @@ fn collect_active_explicit_usbip_carveouts(
             if find_wildcard_usbip_bind_intent_for(resolver, &vm, &bus_id).is_some() {
                 return None;
             }
-            // Pure explicit busid — reconstruct rule body from manifest + host config.
+            // Pure explicit busid - reconstruct rule body from manifest + host config.
             let vm_entry = resolver.find_manifest_vm(&vm)?;
             let env = vm_entry.env.as_deref()?;
             let env_config = resolver.find_host_env(env)?;
@@ -8897,7 +8897,7 @@ impl BrokerError {
                 // PATH-FREE: only the closed-set reason slug reaches the
                 // wire envelope.
                 &format!("swtpm-dir hardening refused: {reason}"),
-                "Inspect the signed PrepareSwtpmDir audit record (operation_fields.fail_reason) for the refusal cause; do NOT delete or recreate the per-VM swtpm state dir — that destroys the TPM2 NVRAM and forces IdP re-enrollment.",
+                "Inspect the signed PrepareSwtpmDir audit record (operation_fields.fail_reason) for the refusal cause; do NOT delete or recreate the per-VM swtpm state dir - that destroys the TPM2 NVRAM and forces IdP re-enrollment.",
             ),
             Self::RequestValidation { operation, reason } => error_response(
                 "Broker.RequestValidation",
@@ -9051,7 +9051,7 @@ fn error_response(
 /// accept loop is not blocked. The pidfd registry Mutex is safe to lock
 /// from a tokio task (no signal-context access; no async Mutex needed).
 ///
-/// Returns the `tokio::runtime::Runtime` handle — must stay alive for
+/// Returns the `tokio::runtime::Runtime` handle - must stay alive for
 /// the duration of the broker process (bind it to a local in `run_server`).
 #[cfg(not(feature = "layer1-bootstrap"))]
 fn start_sigchld_reaper(audit_log: Arc<AuditLog>) -> tokio::runtime::Runtime {
@@ -9213,7 +9213,7 @@ fn broker_audit_log_handle() -> &'static OnceLock<Arc<AuditLog>> {
 ///    insertion (its SIGCHLD may have already been coalesced/consumed
 ///    by a reap pass that ran before the entry existed); and
 /// 2. registration itself fails and the broker is about to drop the
-///    pidfd — without an explicit reap the child would zombie.
+///    pidfd - without an explicit reap the child would zombie.
 ///
 /// `waitid(P_PIDFD, WEXITED|WNOHANG)` is inherently generation-exact:
 /// a pidfd can never refer to a reused PID, so this is the
@@ -12565,7 +12565,7 @@ mod tests {
             vm_id: VmId::new("corp-vm"),
             role_id: RoleId::new("ch-runner"),
             // Use the existing corp-vm runner intent but assert
-            // it as an OtelHostBridge spawn — closed-set
+            // it as an OtelHostBridge spawn - closed-set
             // validation must refuse because corp-vm != "obs".
             role: RunnerRole::OtelHostBridge,
             bundle_runner_intent_ref: BundleOpId::new(intent_id_runner("corp-vm", "ch-runner")),
@@ -13825,7 +13825,7 @@ mod tests {
         let node_b = PathBuf::from("/dev/bus/usb/001/022");
         let call_count = RefCell::new(0usize);
         let log = RefCell::new(AclCallLog::default());
-        // Revoke always fails with "not found" — benign during re-enum.
+        // Revoke always fails with "not found" - benign during re-enum.
         let result = retry_usbip_backend_acl_grant(
             1002,
             || {

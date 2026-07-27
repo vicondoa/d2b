@@ -8,7 +8,7 @@
 # hard assertion driven by `lib.nix`'s `guestConfigForbiddenNamespaces`
 # check, which evaluates the guest file over the real NixOS module set
 # (with `microvm` / `d2b` redeclared as detector options) and reports
-# any forbidden namespace the guest defines — by DEFINITION-EXISTENCE, so
+# any forbidden namespace the guest defines - by DEFINITION-EXISTENCE, so
 # imports / `builtins.toFile`-generated modules / `_file` spoofing are all
 # caught.
 #
@@ -18,7 +18,7 @@
 # containment violation surfaces as a FAILING ASSERTION (a value), not an
 # eval throw, the substring naming the offending options is preserved
 # (faithful to the bash gate's `grep` checks) using `lib.hasInfix` over the
-# joined messages — stronger than the harness's throw-only `expectedError`
+# joined messages - stronger than the harness's throw-only `expectedError`
 # bucket would allow. The two contained fixtures assert the full failing
 # list is empty, exactly as the bash gate's `[ "$out" = "[]" ]` check did.
 #

@@ -72,9 +72,9 @@ bash CLI).
 
 ## See also
 
-- [`host-prepare.md`](./host-prepare.md) — generic Linux Tier-1
+- [`host-prepare.md`](./host-prepare.md) - generic Linux Tier-1
   onboarding and prerequisite reconciliation.
-- [`migrate-nixos-to-daemon.md`](./migrate-nixos-to-daemon.md) —
+- [`migrate-nixos-to-daemon.md`](./migrate-nixos-to-daemon.md) -
   move an existing NixOS host from legacy systemd-owned VMs to
   `d2bd`.
 - [`install-ubuntu-2404.md`](./install-ubuntu-2404.md)

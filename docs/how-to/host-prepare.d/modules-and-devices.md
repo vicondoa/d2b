@@ -8,17 +8,17 @@ into [`docs/how-to/host-prepare.md`](../host-prepare.md).
 
 Host prepare runs a four-step probe before any `ModprobeIfAllowed` broker call:
 
-1. `/proc/sys/kernel/modules_disabled` — if the file reads `1`, every
+1. `/proc/sys/kernel/modules_disabled` - if the file reads `1`, every
    `required` module that is neither built-in nor loaded surfaces as
    `host-modules-locked`. There is no remediation other than rebooting
    with `modules_disabled=0` or shipping the module built-in.
-2. `/proc/modules` plus `/sys/module/<name>/` — loaded-module
+2. `/proc/modules` plus `/sys/module/<name>/` - loaded-module
    detection. Modules listed here are accepted without any further
    action.
 3. `/lib/modules/$(uname -r)/modules.builtin` (preferred) or
-   `modules.builtin.bin` — built-in detection. Built-in modules
+   `modules.builtin.bin` - built-in detection. Built-in modules
    satisfy the requirement without needing `modprobe`.
-4. `/boot/config-$(uname -r)` or `/proc/config.gz` — `CONFIG_*` checks
+4. `/boot/config-$(uname -r)` or `/proc/config.gz` - `CONFIG_*` checks
    used only as **secondary evidence**. The probe never refuses solely
    on the basis of a missing `CONFIG_*` line.
 

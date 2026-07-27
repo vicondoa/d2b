@@ -1382,7 +1382,7 @@
       ],
       "properties": {
         "level": {
-          "description": "Current level 0–100; 0 when not configured or unavailable.",
+          "description": "Current level 0-100; 0 when not configured or unavailable.",
           "type": "integer",
           "format": "uint32",
           "minimum": 0.0
@@ -1578,7 +1578,7 @@
           ]
         },
         {
-          "description": "Audio level value is out of the 0–100 range.",
+          "description": "Audio level value is out of the 0-100 range.",
           "type": "string",
           "enum": [
             "audio-level-out-of-range"
@@ -2208,7 +2208,7 @@
       "additionalProperties": false
     },
     "ReadGuestFileResponse": {
-      "description": "Single-shot bounded response. `content` is capped at `READ_GUEST_FILE_MAX_BYTES`; oversize files fail with `FileTooLarge` BEFORE any read/allocation. `size_bytes`/`sha256` are guest-reported diagnostics only — the host recomputes both from the received bytes.",
+      "description": "Single-shot bounded response. `content` is capped at `READ_GUEST_FILE_MAX_BYTES`; oversize files fail with `FileTooLarge` BEFORE any read/allocation. `size_bytes`/`sha256` are guest-reported diagnostics only - the host recomputes both from the received bytes.",
       "type": "object",
       "required": [
         "content",

@@ -6,7 +6,7 @@
 //! Per the security contract in
 //! `packages/d2b-contracts/src/types.rs::BundleOpId`, mutating broker
 //! requests carry opaque IDs that the broker resolves against its own
-//! trusted copy of the bundle — the daemon never names raw paths, raw
+//! trusted copy of the bundle - the daemon never names raw paths, raw
 //! uids/gids, raw argv, raw nft rule text, raw routes, or raw sysctl
 //! values.
 //!
@@ -44,7 +44,7 @@
 //! preparing test fixtures, and the broker itself) build a
 //! `BundleOpId` by formatting these well-known strings, and the
 //! resolver looks them up. There is no out-of-band ID allocation /
-//! UUIDs — every intent_id is reconstructable from the bundle data
+//! UUIDs - every intent_id is reconstructable from the bundle data
 //! alone, so the security property "the broker never trusts a
 //! caller-supplied authority-bearing payload" is preserved: the
 //! daemon's `bundle_*_intent_ref` value is a *lookup key*, not the
@@ -160,7 +160,7 @@ pub struct ResolvedNftIntent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedRouteIntent {
     pub intent_id: String,
-    /// `ip route` command body — the part after `ip route add` (or
+    /// `ip route` command body - the part after `ip route add` (or
     /// del / replace). The broker live_handler chooses the verb.
     pub route_spec: String,
     pub destination: String,
@@ -211,7 +211,7 @@ pub struct ResolvedUsbipFirewallIntent {
     pub desired_hash: String,
 }
 
-/// Resolved USBIP bind plan — per-busid lock + owner VM.
+/// Resolved USBIP bind plan - per-busid lock + owner VM.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedUsbipBindIntent {
     pub intent_id: String,
@@ -258,7 +258,7 @@ pub struct ResolvedDiskInitOp {
     pub size_bytes: u64,
     /// Unix permission bits (e.g. `0o600`).
     pub mode: u32,
-    /// Owner UID — typically the per-VM runner UID.
+    /// Owner UID - typically the per-VM runner UID.
     pub owner_uid: u32,
     /// Owner GID.
     pub owner_gid: u32,
@@ -266,7 +266,7 @@ pub struct ResolvedDiskInitOp {
     pub if_absent: bool,
 }
 
-/// Resolved runner spawn plan — input to `live_spawn_runner`'s
+/// Resolved runner spawn plan - input to `live_spawn_runner`'s
 /// `SpawnRunnerPlanInput`.
 ///
 /// Resolved runner execve plan. `processes.json` now carries the
@@ -411,7 +411,7 @@ impl From<UserNamespaceSpec> for crate::processes::RoleUserNamespace {
     }
 }
 
-/// Resolved per-role Unix socket plan — input to broker
+/// Resolved per-role Unix socket plan - input to broker
 /// `BindUnixSocket` / `SetSocketAcl`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedSocketIntent {
@@ -732,11 +732,11 @@ fn lookup_group_gid(name: &str) -> Option<u32> {
 ///
 /// Returns [`Error::Bundle(BundleError::Tampered)`] with a short
 /// `reason` slug on any security check failure:
-/// - `"symlink"` — `open` returned `ELOOP` (path is a symlink).
-/// - `"not-regular-file"` — `fstat` shows it is not a regular file.
-/// - `"owner"` — `st_uid` ≠ `policy.required_uid` or
+/// - `"symlink"` - `open` returned `ELOOP` (path is a symlink).
+/// - `"not-regular-file"` - `fstat` shows it is not a regular file.
+/// - `"owner"` - `st_uid` ≠ `policy.required_uid` or
 ///   `st_gid` ≠ `policy.required_gid` (when Some).
-/// - `"mode"` — low 9 bits of `st_mode` ≠ `policy.required_mode`.
+/// - `"mode"` - low 9 bits of `st_mode` ≠ `policy.required_mode`.
 fn secure_open_and_read(path: &Path, policy: &BundleVerifyPolicy) -> Result<Vec<u8>, Error> {
     use rustix::fs::{FileType, OFlags, fstat, open};
 
@@ -820,7 +820,7 @@ fn verify_artifact_hash(
 /// Verify the `bundleHash` self-field in an already-parsed `Bundle`.
 ///
 /// The hash is computed over the canonical JSON of the bundle with
-/// `bundleHash` removed and `artifactHashes` set to null — matching what
+/// `bundleHash` removed and `artifactHashes` set to null - matching what
 /// `nixos-modules/bundle.nix` emits via `builtins.toJSON dataWithoutHash`
 /// where `dataWithoutHash` has `artifactHashes = null`.
 ///
@@ -858,7 +858,7 @@ fn verify_bundle_hash(path: &Path, raw_bytes: &[u8]) -> Result<(), Error> {
                 true
             }
         }
-        // No schemaVersion at all is a v1 / legacy bundle — warning only.
+        // No schemaVersion at all is a v1 / legacy bundle - warning only.
         None => false,
     };
 
@@ -898,7 +898,7 @@ fn verify_bundle_hash(path: &Path, raw_bytes: &[u8]) -> Result<(), Error> {
     }
 
     // serde_json without `preserve_order` feature serialises objects with
-    // BTreeMap (sorted keys) — the same lexicographic ordering that
+    // BTreeMap (sorted keys) - the same lexicographic ordering that
     // builtins.toJSON uses on the Nix side.
     let canonical =
         serde_json::to_vec(&value).map_err(|_| Error::internal_io("bundle-hash-canonical"))?;
@@ -1706,7 +1706,7 @@ impl BundleResolver {
     /// `requiresStartRoot = true`. `requires_start_root` lives on the
     /// minijail-profile metadata, not on the `processes::RoleProfile` this
     /// validator walks, and per ADR 0021 virtiofsd now runs fake-root inside
-    /// a broker-established user namespace with `requiresStartRoot = false` —
+    /// a broker-established user namespace with `requiresStartRoot = false` -
     /// so the carve-out reference, not `requiresStartRoot`, is the live
     /// security gate. The schema-shape part of the bash gate (root-capable
     /// shapes must declare an ADR carve-out field) is structurally
@@ -1725,7 +1725,7 @@ impl BundleResolver {
                     });
                 }
                 // An ADR carve-out justifies a uid/gid 0 or writable-store
-                // profile, but only if it is a real reference — an empty or
+                // profile, but only if it is a real reference - an empty or
                 // whitespace-only `adr_carve_out` is treated as NO carve-out
                 // (the bash static-invariant-uid0 gate required an ADR-like
                 // reference; matching that here closes a fail-open where
@@ -1882,7 +1882,7 @@ fn role_device_classes(
         //   /dev/kvm, /dev/dri/renderD128, /dev/nvidiactl,
         //   /dev/nvidia0 (was nvidia-render → /dev/nvidia0),
         //   /dev/nvidia-uvm, /dev/udmabuf.
-        // The previous claim included vfio (NOT in the GPU contract —
+        // The previous claim included vfio (NOT in the GPU contract -
         // vfio is for SR-IOV passthrough scenarios that this role does
         // not cover) and omitted kvm + udmabuf.
         ProcessRole::Gpu | ProcessRole::GpuRenderNode => &[
@@ -2292,7 +2292,7 @@ fn render_hosts_managed_block(host: &HostJson) -> String {
     let mut buf = String::new();
     buf.push_str(&host.hosts_file.start_marker);
     buf.push('\n');
-    buf.push_str("# managed by d2b broker — do not edit by hand\n");
+    buf.push_str("# managed by d2b broker - do not edit by hand\n");
     for env in &host.environments {
         buf.push_str(&format!(
             "# env {} bridge {} mtu {}\n",
@@ -2308,7 +2308,7 @@ fn render_hosts_managed_block(host: &HostJson) -> String {
 
 fn build_nm_unmanaged_intents(host: &HostJson) -> BTreeMap<String, ResolvedNmUnmanagedIntent> {
     let mut out = BTreeMap::new();
-    let mut contents = String::from("# managed by d2b broker — do not edit by hand\n");
+    let mut contents = String::from("# managed by d2b broker - do not edit by hand\n");
     contents.push_str("[keyfile]\n");
     contents.push_str("unmanaged-devices=");
     contents.push_str(&host.network_manager.match_criteria.join(";"));
@@ -3051,7 +3051,7 @@ fn manifest_parse_reason(err: &str) -> &'static str {
     }
 }
 
-// Silence the "TapRole imported but unused" warning — we only need
+// Silence the "TapRole imported but unused" warning - we only need
 // it transitively to refer to BridgePortFlags in the render
 // helpers, which already use the type via `flag.role`.
 #[allow(dead_code)]
@@ -4394,7 +4394,7 @@ mod tests {
             "swtpm ResolvedRunnerIntent.user_namespace must carry the profile's \
              userNamespace spec (ADR 0021 broker-pre-NS, D5/P2.3)"
         );
-        // Confirm host caps are empty — invariant required alongside user_namespace.
+        // Confirm host caps are empty - invariant required alongside user_namespace.
         assert!(
             intent.capabilities.is_empty(),
             "swtpm host capabilities must be empty when user_namespace is Some(_) \
@@ -4501,7 +4501,7 @@ mod tests {
             "gpu-render-node ResolvedRunnerIntent.user_namespace must carry the profile's \
              userNamespace spec (ADR 0021 broker-pre-NS, D5/P2.3)"
         );
-        // Confirm host caps are empty — invariant required alongside user_namespace.
+        // Confirm host caps are empty - invariant required alongside user_namespace.
         assert!(
             intent.capabilities.is_empty(),
             "gpu-render-node host capabilities must be empty when user_namespace is Some(_) \
@@ -4551,7 +4551,7 @@ mod tests {
             uid: AUDIO_UID,
             gid: AUDIO_GID,
             adr_carve_out: None,
-            // Host caps must be empty — CAP_NET_RAW is effective inside
+            // Host caps must be empty - CAP_NET_RAW is effective inside
             // the user-NS-owned net NS, not on the host.
             caps: Vec::new(),
             namespaces: NamespaceSet {
@@ -4621,7 +4621,7 @@ mod tests {
             "audio ResolvedRunnerIntent.user_namespace must carry the profile's \
              userNamespace spec (ADR 0021 broker-pre-NS, D5/P2.3 Tier 2)"
         );
-        // Zero host caps — CAP_NET_RAW is effective only inside the
+        // Zero host caps - CAP_NET_RAW is effective only inside the
         // user-NS-owned net NS, not on the host side.
         assert!(
             intent.capabilities.is_empty(),
@@ -4634,7 +4634,7 @@ mod tests {
             Some(7),
             "audio umask must remain 0o007 (fu36 socket-ACL requirement)"
         );
-        // Confirm net = true propagates — required for the user-NS-owned net NS
+        // Confirm net = true propagates - required for the user-NS-owned net NS
         // that makes CAP_NET_RAW effective for AF_NETLINK.
         assert!(
             intent.namespaces.net,

@@ -4,7 +4,7 @@ Reference fragment listing kernel-module + device-node requirements
 per support tier. The integrator assembles this into
 [`docs/reference/support-matrix.md`](../support-matrix.md).
 
-## Tier 0 — NixOS legacy
+## Tier 0 - NixOS legacy
 
 | Module     | Min kernel | Disposition |
 | ---------- | ---------- | ----------- |
@@ -17,7 +17,7 @@ per support tier. The integrator assembles this into
 `tier-0-legacy-uses-nixos-module` (exit 78). The NixOS module owns the
 module + device-node activation contract.
 
-## Tier 1 alpha — Ubuntu 24.04 LTS
+## Tier 1 alpha - Ubuntu 24.04 LTS
 
 | Module     | Min kernel | Disposition |
 | ---------- | ---------- | ----------- |
@@ -28,7 +28,9 @@ module + device-node activation contract.
 
 Glibc 2.39, cgroup v2 unified, NetworkManager 1.46, nftables 1.0.9,
 Cloud Hypervisor v40+, Nix-built minijail v17 (see
-`tests/minijail-version-check.sh`).
+`packages/d2b-contract-tests/tests/policy_misc.rs`). That version policy is
+fixture-lane coverage and is advisory until `test-fixture-contracts` is
+enabled.
 
 | Device class    | Required path        | Required mode | Required group |
 | --------------- | -------------------- | ------------- | -------------- |
@@ -37,7 +39,7 @@ Cloud Hypervisor v40+, Nix-built minijail v17 (see
 | `vhost-net`     | `/dev/vhost-net`     | `0660`        | `kvm`          |
 | `fuse`          | `/dev/fuse`          | `0660`        | `fuse`         |
 
-## Tier 1 later — Fedora Server 40+
+## Tier 1 later - Fedora Server 40+
 
 | Module     | Min kernel | Disposition |
 | ---------- | ---------- | ----------- |
@@ -51,7 +53,7 @@ nftables 1.0.9, NetworkManager 1.46.
 Device classes match Tier 1 alpha; group names follow Fedora defaults
 (`kvm`, `fuse`).
 
-## Tier 2 — Arch Linux
+## Tier 2 - Arch Linux
 
 | Module     | Min kernel | Disposition |
 | ---------- | ---------- | ----------- |

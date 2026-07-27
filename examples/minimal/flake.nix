@@ -1,5 +1,5 @@
 {
-  description = "Minimal d2b example — one headless workload VM in one env";
+  description = "Minimal d2b example - one headless workload VM in one env";
 
   inputs = {
     # Pin d2b to a published release tag for real-world use:

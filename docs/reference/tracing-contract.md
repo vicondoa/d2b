@@ -1,8 +1,9 @@
 # Tracing contract (bounded-cardinality span attributes)
 
-> **Status**: codified and enforced by the static gate
-> `tests/tracing-contract-lint.sh`. Tracked on the
-> observability roadmap.
+> **Status**: codified in
+> `packages/d2b-contract-tests/tests/policy_contracts.rs`. The policy test is
+> advisory pull-request coverage until the fixture-contract lane is enabled
+> and promoted.
 
 The d2b daemon (`d2bd`) and the privileged broker
 (`d2b-priv-broker`) both emit OpenTelemetry spans and structured
@@ -18,7 +19,7 @@ allowlist.
 * **Bounded scalar attrs only** on `tracing::{info,warn,error,debug,trace}!`
   and `tracing::span!` calls.
 * **Per-bundle / per-store-path identifiers are FORBIDDEN** as span
-  attributes — the bundle path is high cardinality (one per
+  attributes - the bundle path is high cardinality (one per
   `/nix/store/<hash>-<name>` realisation) and leaks host layout.
 * **Filesystem paths in general** are surfaced via the typed
   [error envelope](./error-codes.md) and the
@@ -54,18 +55,18 @@ allowlist.
 Per-VM bounded paths (e.g. `path = %spec.path` for the canonical
 ownership matrix, `/var/lib/d2b/state/<vm>/<leaf>`) are tolerated
 **only** when the path is statically bounded by the
-`(vm, canonical-leaf)` cross product — never an arbitrary `/nix/store`
+`(vm, canonical-leaf)` cross product - never an arbitrary `/nix/store`
 path or operator-supplied path. New tracing sites SHOULD prefer
 adding a bounded enum attr (`target_kind = "sshd-host-keys"`) rather
 than emitting the path itself.
 
-## Forbidden patterns (gated by `tests/tracing-contract-lint.sh`)
+## Forbidden patterns
 
 | Pattern                                                | Why forbidden                                                | Gated since |
 | ------------------------------------------------------ | ------------------------------------------------------------ | ----------- |
 | `bundle = %X.display()` / `bundle = ?X.display()`      | High cardinality (`/nix/store/<hash>-bundle`); leaks host store layout. | `b6f4ac9` |
 | `bundle_path = %X` / `bundle_path = ?X`                | Same as `bundle =`; alias must also be refused.              | `b6f4ac9` |
-| `keys_dir = %X.display()`                              | Per-VM sshd state dir — encode via `vm` + bounded `outcome`. | `58aaac8` |
+| `keys_dir = %X.display()`                              | Per-VM sshd state dir - encode via `vm` + bounded `outcome`. | `58aaac8` |
 | `path = %X.display()` inside `ssh_host_key_preflight`  | Same path-leak class at `debug!` level.                      | `cbd2169` |
 | `/nix/store/...` **string literal** inside a `tracing!` arg | Pins the host store hash into the trace backend.        | `b6f4ac9`  |
 | `argv = …`, `cmdline = …`, `command_line = …`          | Argv may contain operator-supplied content / secrets.        | this gate |
@@ -76,16 +77,17 @@ than emitting the path itself.
 
 ## How the contract is enforced
 
-1. **`tests/tracing-contract-lint.sh`** — the static gate. It greps
-   workspace Rust source for the forbidden patterns above and fails
-   closed if any match. Runs in `tests/static-fast.sh` order alongside
-   other drift gates.
-2. **Audit-record fallback** — every operator-recoverable detail
+1. **`packages/d2b-contract-tests/tests/policy_contracts.rs`** - the
+   `tracing_contract_lint` policy scans workspace Rust source for the forbidden
+   patterns above and fails if any match. It runs only when the advisory
+   fixture-contract lane is enabled, so it is not enforcing pull-request
+   evidence yet.
+2. **Audit-record fallback** - every operator-recoverable detail
    (paths, drift reasons, child stderr) lives in
    `OpAuditRecord.{typed_envelope,tracing_span_id}` (see
    [`daemon-api.md`](./daemon-api.md)), so the operator can pivot from
    a bounded span to the full envelope via `tracing_span_id`.
-3. **Code review** — new `tracing!` call sites in PR review are scored
+3. **Code review** - new `tracing!` call sites in PR review are scored
    against this allowlist. Reviewers should reject any per-bundle or
    per-store-path attr and point the author at the bounded-attr +
    audit-record pattern established by the historical closures.
@@ -137,11 +139,11 @@ The same shape closed the observability findings:
 plus bounded `uid` / `gid` / `mode` numerics. The path remains in the
 typed `SshdHostKeyDrift` envelope.
 
-### P2fu1 — bounded `drift_kind`
+### P2fu1 - bounded `drift_kind`
 
 `observability-r1-1` (P2fu1, `48f4838`) introduced `drift_kind = ?reason`
 for the per-VM key drift event. The `drift_kind` is a typed
-`SshHostKeyDriftReason` enum — bounded — not an open-ended string.
+`SshHostKeyDriftReason` enum - bounded - not an open-ended string.
 
 ## Adding new tracing sites
 
@@ -152,6 +154,7 @@ for the per-VM key drift event. The `drift_kind` is a typed
    route it through the typed error envelope
    (`packages/d2b-core/src/error.rs`) and the broker audit log,
    not the span.
-3. Run `bash tests/tracing-contract-lint.sh` locally before pushing.
+3. Run `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts` locally before
+   pushing a tracing-contract change.
 4. If you genuinely need a new bounded attr name, add a row to the
    table above and a corresponding allow in the lint script.

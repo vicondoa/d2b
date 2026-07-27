@@ -280,7 +280,7 @@ mod tests {
             kind: DirKind::StateDir,
             base_dir: base.clone(),
             vm_id_or_scope: "vm-a".into(),
-            // The prepare asks for 0o750 — the mask-clipping value the
+            // The prepare asks for 0o750 - the mask-clipping value the
             // regression came from. It MUST be ignored for the existing
             // dir.
             mode: 0o750,

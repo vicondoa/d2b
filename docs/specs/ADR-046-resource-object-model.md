@@ -4,7 +4,7 @@
 | --- | --- |
 | Spec ID | `ADR-046-resource-object-model` |
 | Parent | ADR 0046 |
-| Status | Proposed |
+| Status | Accepted |
 | Version | 1 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
@@ -28,8 +28,8 @@ metadata:
   ownerRef: null
   finalizers: []
   deletionRequestedAt: null
-  createdAt: 2026-07-22T00:00:00Z
-  updatedAt: 2026-07-22T00:00:00Z
+  createdAt: 2026-07-22T00:00:00.000Z
+  updatedAt: 2026-07-22T00:00:00.000Z
 spec: {}
 status:
   observedGeneration: 0
@@ -39,6 +39,18 @@ status:
   startedAt: null
   completedAt: null
   outcome: null
+  resource: {}                     # Layer 2 ResourceType-common; {} when none declared (D107)
+  update:                          # universal currency object; present on every resource (D091)
+    state: Unknown
+    reasons: []
+    observedGeneration: 0
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 `metadata`, `spec`, and `status` are always present. A type with no desired
@@ -98,8 +110,8 @@ Spec is the desired state. Rules:
 
 `spec` mirrors the D088 three-layer status shape with symmetric frozen names.
 Generic API/CLI/controllers author and reconcile only Layers 1 and 2; the
-Layer-3 Provider extension builds on — never shadows, overrides, renames, or
-duplicates — the fields below it.
+Layer-3 Provider extension builds on - never shadows, overrides, renames, or
+duplicates - the fields below it.
 
 | Layer | Location | Owner | Consumers |
 | --- | --- | --- | --- |
@@ -109,10 +121,10 @@ duplicates — the fields below it.
 
 ```yaml
 spec:
-  # Layer 2 — ResourceType base spec (provider-neutral; includes providerRef)
+  # Layer 2 - ResourceType base spec (provider-neutral; includes providerRef)
   providerRef: Provider/<name>
   # ...exact typed base fields frozen by the ResourceType schema...
-  # Layer 3 — optional canonical selected-Provider extension envelope
+  # Layer 3 - optional canonical selected-Provider extension envelope
   provider:
     schemaId: <provider-name>.d2bus.org/<ResourceType>/spec
     schemaVersion: "1.0"
@@ -156,7 +168,7 @@ spec, and an optional implementation extension under the same `spec.provider`
 envelope.
 
 **Provider self-description exception.** The `Provider` resource's spec remains
-`{ artifactId, config }` (D075) — the one documented exception to the
+`{ artifactId, config }` (D075) - the one documented exception to the
 `providerRef`-plus-`spec.provider` shape, because a `Provider` cannot carry a
 non-circular `spec.providerRef` to itself.
 
@@ -190,7 +202,7 @@ revisioned status API.
 
 Every resource's `status` has a frozen three-layer shape. Generic API, CLI, and
 controllers depend only on Layers 1 and 2; the Layer-3 Provider extension builds
-on — never replaces, overrides, or duplicates — the fields below it.
+on - never replaces, overrides, or duplicates - the fields below it.
 
 | Layer | Location | Owner | Consumers |
 | --- | --- | --- | --- |
@@ -200,12 +212,12 @@ on — never replaces, overrides, or duplicates — the fields below it.
 
 ```yaml
 status:
-  # Layer 1 — universal ResourceStatus base (present on every resource)
+  # Layer 1 - universal ResourceStatus base (present on every resource)
   observedGeneration: 4
   phase: Ready
   conditions: [ ... ]
-  lastReconciledAt: 2026-07-23T00:00:01Z
-  startedAt: 2026-07-23T00:00:00Z
+  lastReconciledAt: 2026-07-23T00:00:01.000Z
+  startedAt: 2026-07-23T00:00:00.000Z
   completedAt: null
   outcome: null
   update:                              # universal currency object (D091)
@@ -216,14 +228,14 @@ status:
     disruption: None
     preserveState: true
     operationId: null
-    lastAssessedAt: 2026-07-23T00:00:01Z
+    lastAssessedAt: 2026-07-23T00:00:01.000Z
     owned: { count: 0, refs: [] }
     dependencies: { count: 0, refs: [] }
-  # Layer 2 — ResourceType-common, provider-neutral (required across all implementations)
+  # Layer 2 - ResourceType-common, provider-neutral (required across all implementations)
   resource:
     # exact typed fields frozen by the ResourceType schema
     ...
-  # Layer 3 — optional Provider-specific extension
+  # Layer 3 - optional Provider-specific extension
   provider:
     providerRef: Provider/<name>
     schemaId: <provider-name>.d2bus.org/<ResourceType>/status
@@ -284,7 +296,7 @@ status: "True" # True | False | Unknown
 reason: process-ready
 message: bounded redacted operator detail
 observedGeneration: 3
-lastTransitionAt: 2026-07-22T00:00:01Z
+lastTransitionAt: 2026-07-22T00:00:01.000Z
 ```
 
 Outcome:
@@ -294,8 +306,8 @@ code: process-exited
 exitCode: 1
 message: bounded redacted error detail
 retryable: true
-retryAfter: 5s
-occurredAt: 2026-07-22T00:00:01Z
+retryAfterMs: 5000
+occurredAt: 2026-07-22T00:00:01.000Z
 ```
 
 `code` and `reason` are stable lower-kebab-case machine values. `message` may
@@ -308,7 +320,7 @@ bytes, argv/environment, state contents, or host/provider paths.
 `status.resource` is the provider-neutral, typed object frozen by the
 ResourceType schema. It holds the observation fields that every implementation
 of that ResourceType and every cross-resource/provider consumer must be able to
-read — for example Guest runtime readiness/capabilities, the Device claim base,
+read - for example Guest runtime readiness/capabilities, the Device claim base,
 Credential lease metadata, or the Volume attachment base. It extends the
 universal base (Layer 1) and never restates it. Generic API/CLI/controllers
 depend only on the universal base plus `status.resource`. Any field shared
@@ -573,9 +585,9 @@ the `Endpoint` ResourceType.
 
 ## Authority and cardinality (D097)
 
-Every scarce or singleton backing — a physical device, a singleton external
+Every scarce or singleton backing - a physical device, a singleton external
 service, a per-Zone runtime service, a per-Host/user/seat service, a fixed
-listener/store, or a globally-unique policy — is governed by a signed
+listener/store, or a globally-unique policy - is governed by a signed
 **`AuthorityDescriptor`**. It is a provider-neutral declaration attached to the
 owning typed Resource and its owning Provider (not a new opaque public ID, and
 **not** a new ResourceType unless an audit proves no existing type can own the
@@ -601,10 +613,10 @@ effects are rejected before they happen.
 conflicting authority Resource or Process **before any external effect**. The
 index key is scoped to the level at which a collision can actually occur:
 `zone`-scoped authorities are keyed by `(Zone, authorityClass, opaqueKeyDigest)`,
-but `host`, `physical-device`, `seat`, and `external-service` authorities — where
+but `host`, `physical-device`, `seat`, and `external-service` authorities - where
 **two Zones on the same host can collide over one physical/kernel backing** (a
 GPU, physical TPM, USB device, `/dev/kvm`, a passthrough NIC, a globally-unique
-vsock CID, or a fixed listener port) — are keyed **Host-global** by
+vsock CID, or a fixed listener port) - are keyed **Host-global** by
 `(Host, authorityClass, opaqueKeyDigest)`, not merely Zone-local. A Host-global
 authority admits exactly one owner across **all** Zones on that host; a second
 Zone claiming the same physical backing is a `duplicateConflict`. `authorityKey`
@@ -627,8 +639,8 @@ replace it. The shared deterministic conflict is
 status.
 
 **Status/spec base.** The universal status base exposes bounded provider-neutral
-authority state — `available`, current holder count, queue depth, arbitration,
-and update currency — with **no raw identity**; provider extension carries
+authority state - `available`, current holder count, queue depth, arbitration,
+and update currency - with **no raw identity**; provider extension carries
 implementation detail only. The spec base (or provider capability) declares the
 requested share mode and **cannot bypass** the descriptor.
 
@@ -719,11 +731,11 @@ The following are not standalone ResourceTypes:
 | Dependency/owner | W0 shared contract root; `d2b-contracts` |
 | Current source | `packages/d2b-realm-core/src/ids.rs`, `workload.rs`, `error.rs`; `packages/d2b-core/src/storage.rs`, `processes.rs` |
 | Reuse action | adapt |
-| Destination | `packages/d2b-contracts/src/v3/resource.rs`, `resource_status.rs`, `resource_schema.rs` |
-| Detailed design | Implement strict ResourceEnvelope, metadata, the three-layer spec shape (universal envelope + ResourceType base `spec.*` incl. `spec.providerRef` + optional canonical `spec.provider` `{ schemaId, schemaVersion, settings }`), the three-layer status shape (universal base + `status.resource` + optional `status.provider` with `providerRef`/`schemaId`/`schemaVersion`/`observedProviderGeneration`/`details`), phase/condition/outcome, canonical JSON, per-layer bounds/redaction, ownerRef/UID fields Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
+| Destination | `packages/d2b-contracts/src/v3/resource.rs`, `resource_status.rs`, `resource_schema.rs`, `error.rs` |
+| Detailed design | Implement strict ResourceEnvelope, metadata, the three-layer spec shape (universal envelope + ResourceType base `spec.*` incl. `spec.providerRef` + optional canonical `spec.provider` `{ schemaId, schemaVersion, settings }`), and the three-layer status shape: universal base plus always-present `status.resource` (serializing as `{}` when the type has no common fields) plus optional `status.provider`, which is absent when unset. Implement phase/condition/outcome with D108's exact scalars, the integer-only `d2b-cjson/v1` profile and domain-separated digests, per-layer bounds/redaction, and ownerRef/UID fields. Define the codec-neutral `ResourceErrorKind`/`ResourceError` pair in `v3/error.rs`; do not extend `d2b-core::error::Kind` or encode domain errors as transport status. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Store/API/SDK/Nix/codegen consume one contract |
 | Data migration | Full d2b 3.0 reset; no v2 resource import |
-| Validation | Golden JSON/protobuf vectors; serde unknown-field; three-layer spec shape round-trip; canonical minimal base-spec acceptance; base-schema version/fingerprint conformance; `spec.provider` deny-unknown/version-mismatch/shadow rejection and providerRef-binding; three-layer status shape round-trip; base-only projection (universal + `status.resource`) ignores/omits `status.provider`; `status.provider` unknown-field/version-mismatch rejection; status redaction/size/time/phase tests; `status.update` currency object round-trip (state/reasons/disruption/preserveState/owned+dependency refs bounded); `spec.updatePolicy` base round-trip |
+| Validation | Golden JSON/protobuf and cross-language canonical-JSON vectors; duplicate-key/float/non-NFC/control/key-bound rejection; serde unknown-field; three-layer spec shape round-trip; canonical minimal base-spec acceptance; base-schema version/fingerprint conformance; `spec.provider` deny-unknown/version-mismatch/shadow rejection and providerRef-binding; three-layer status shape round-trip, including required empty `status.resource`; base-only projection ignores/omits `status.provider`; `status.provider` unknown-field/version-mismatch rejection; status redaction/size/time/phase tests; exact D108 outcome scalar vectors; ResourceError codec and no-overlap-with-v2-kind policy tests; `status.update` currency object round-trip (state/reasons/disruption/preserveState/owned+dependency refs bounded); `spec.updatePolicy` base round-trip |
 | Removal proof | Old DTOs removed per owning ResourceType wave only after rendered/runtime consumers move |
 
 ### ADR046-object-002
@@ -734,8 +746,8 @@ The following are not standalone ResourceTypes:
 | Current source | `packages/d2b-realm-core/src/allocator_engine.rs`, `d2b-realm-router/src/lib.rs` shared ownership/idempotency precedents |
 | Reuse action | adapt |
 | Destination | `packages/d2b-resource-store-redb/src/ownership.rs`, `packages/d2b-controller-toolkit/src/owner_hints.rs` |
-| Detailed design | Singular ownerRef resolution/UID binding, cycle/depth property checks, reverse index, owner hints, child-first deletion |
-| Integration | Every store mutation updates owner index and hint dispatcher atomically |
+| Detailed design | `ownership.rs` implements singular ownerRef resolution/UID binding, cycle/depth property checks, and the reverse index. The W0 `owner_hints.rs` surface contains only the bounded `owned-resource-changed` hint DTO, its coalescing contract, and the trait seam emitted by the store dispatcher; it contains no queue, reconcile loop, or controller runtime. |
+| Integration | Every store mutation updates the owner index and emits through the owner-hint trait seam atomically; later toolkit/controller work owns queueing, reconciliation, and child-first runtime deletion |
 | Data migration | None after reset |
-| Validation | Property tests for cycles/reparent/name reuse; integration tests for child drift repair and owner cascades |
+| Validation | Property tests for cycles/reparent/name reuse; store-dispatch tests for bounded hint coalescing and atomic index-plus-hint emission through a fake trait implementation |
 | Removal proof | Not applicable |

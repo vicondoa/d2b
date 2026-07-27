@@ -1,4 +1,4 @@
-# cli-vm-verbs — CLI-contract integration tests for the daemon-native mutating
+# cli-vm-verbs - CLI-contract integration tests for the daemon-native mutating
 # verbs (up/down/restart + vm start/stop/restart), list/vm list, and the
 # guest-control surface (vm exec). Successor for the retired
 # tests/cli-vm-verbs-eval.sh bash gate: spawns the real `d2b` binary against

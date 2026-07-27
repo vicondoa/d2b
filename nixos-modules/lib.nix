@@ -16,7 +16,7 @@ let
   # ------------------------------------------------------------
   # Fail-closed reader for /var/lib/d2b/<vm>/audio-state.json.
   # Output (one line on stdout): "mic=<on|off> speaker=<on|off>".
-  # NEVER exits non-zero — callers (extraArgsScript, d2b CLI)
+  # NEVER exits non-zero - callers (extraArgsScript, d2b CLI)
   # cannot handle a non-zero exit mid-flow.
   #
   # Returns "mic=off speaker=off" for EVERY error case
@@ -26,7 +26,7 @@ let
   #   • field absent
   #   • field present but value is not the exact string "on"
   #     (e.g. boolean true, number 1, string "true", string "ON")
-  #   • jq not on PATH (path is Nix-store–hardcoded below)
+  #   • jq not on PATH (path is Nix-store-hardcoded below)
   #
   # The jq path is baked in at Nix eval time so the function works
   # in both audio.nix's extraArgsScript (minimal $PATH) and the
@@ -67,7 +67,7 @@ let
             # (e.g. an interactive operator or d2b-gpu-<vm> before ACLs are
             # applied). Fail closed so the sidecar never gets audio access on
             # a permission error.
-            printf 'd2b: audio-state unreadable for %s (permission denied) — failing closed\n' "$_nas_vm" >&2
+            printf 'd2b: audio-state unreadable for %s (permission denied) - failing closed\n' "$_nas_vm" >&2
           fi
           printf 'mic=%s speaker=%s\n' "$_nas_mic" "$_nas_spk"
         }
@@ -408,7 +408,7 @@ rec {
   subnetMask = subnet: lib.last (lib.splitString "/" subnet);
 
   # Parse "10.0.0.0/24" → { netInt = 167772160; prefix = 24; }
-  # Used by cidrOverlaps below. Pure Nix — no shell, no `ip`
+  # Used by cidrOverlaps below. Pure Nix - no shell, no `ip`
   # spawning at eval time. Assumes a well-formed IPv4 CIDR; the
   # callers in network.nix already gate per-env shape (/24 lan, /30
   # uplink,.0 network address). cfg.hostLanCidrs is consumer-set;
@@ -483,10 +483,10 @@ rec {
     in
     lib.toUpper "02:${pair 0}:${pair 2}:${pair 4}:${pair 6}:${hex2 index}";
 
-  # vmRunner — single access point for per-VM runner config that
+  # vmRunner - single access point for per-VM runner config that
   # processes-json.nix / closures-json.nix /
   # minijail-profiles.nix / store.nix consume. Reads from
-  # `config.d2b._computed.vms.<name>.config.microvm.*` — the
+  # `config.d2b._computed.vms.<name>.config.microvm.*` - the
   # d2b-owned per-VM evaluator output (see
   # `nixos-modules/vm-evaluator.nix`). The
   # `d2b._computed.vms.<name>` storage location is a SIBLING
@@ -508,12 +508,12 @@ rec {
   # touch the path.
   vmDeclaredRunner = _config: _name: null;
 
-  # guestConfigForbiddenNamespaces — namespace-containment policy check
+  # guestConfigForbiddenNamespaces - namespace-containment policy check
   # for the per-VM guest-editable `guestConfigFile`.
   #
   # Returns the host-owned option path(s) (under `microvm.*` /
-  # `d2b.*`) that the guest file — OR ANY MODULE IT IMPORTS /
-  # GENERATES — defined. An empty list means the guest file touched only
+  # `d2b.*`) that the guest file - OR ANY MODULE IT IMPORTS /
+  # GENERATES - defined. An empty list means the guest file touched only
   # guest-OS options.
   #
   # Mechanism: evaluate the guest file (and its full import closure) with
@@ -522,7 +522,7 @@ rec {
   # `config.networking.hostName` in a `mkIf` guard) resolves instead of
   # crashing the host eval. `microvm` and `d2b` are redeclared as
   # detector options that nothing else defines, and a namespace is
-  # reported iff `options.<ns>.isDefined` — i.e. the guest contributed a
+  # reported iff `options.<ns>.isDefined` - i.e. the guest contributed a
   # real definition. Detection is by definition-EXISTENCE, so a guest's
   # `imports`, a `builtins.toFile`-generated module, and `_file`
   # spoofing are all caught (none can hide a definition from the option
@@ -531,11 +531,11 @@ rec {
   # SCOPE / NON-GOAL: this is a best-effort namespace-containment policy
   # lint, NOT a sound eval-time security sandbox. Two known limits, both
   # inherent to evaluating guest-authored Nix as a module and both with
-  # the SAME backstop (the operator-review-and-approve trust gate — the
+  # the SAME backstop (the operator-review-and-approve trust gate - the
   # host only ever evaluates a guest file the operator reviewed via
   # `config diff` and approved) and the SAME deferred sound fix (a
   # restricted/pure evaluator whose normalized output is the only thing
-  # the host consumes — see docs/adr/0024 "Future work"):
+  # the host consumes - see docs/adr/0024 "Future work"):
   #   1. `lib.evalModules` cannot stop an approved guest file from
   #      reading host paths at eval time (e.g. `builtins.readFile`).
   #   2. This lint evaluates the guest file over the base NixOS module
@@ -551,13 +551,13 @@ rec {
   #          here only an undefined `anything` detector root) fails the
   #          sandbox eval and is reported fail-closed (false POSITIVE).
   #      Sound attribution of a guest's contribution in the FULL context
-  #      is not reliably expressible — definition counts conflate
+  #      is not reliably expressible - definition counts conflate
   #      defaults, value comparison forces (and is perturbed by) the whole
   #      runner closure, and source-file attribution is `_file`-spoofable
-  #      — hence the deferred restricted-evaluator.
+  #      - hence the deferred restricted-evaluator.
   # The lint reliably catches the common case: UNCONDITIONAL host-owned
   # sets, and conditional ones whose guard resolves the same here as in
-  # the real eval — from any source (`imports`, `builtins.toFile`,
+  # the real eval - from any source (`imports`, `builtins.toFile`,
   # `_file` spoofing), since detection is by definition-existence. Guest
   # files that read framework-declared `d2b.*`/`microvm.*` options
   # are not supported (they read host-owned state the guest layer should

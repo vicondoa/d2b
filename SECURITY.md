@@ -4,7 +4,7 @@
 
 | Version | Status |
 |---|---|
-| v0.1.0 (alpha) | Supported — best-effort during alpha. |
+| v0.1.0 (alpha) | Supported - best-effort during alpha. |
 | < v0.1.0 / pre-release | Not maintained. |
 
 ## Reporting a vulnerability
@@ -18,7 +18,7 @@ File a private security advisory:
 
 **For v0.1.0 (alpha), GitHub Security Advisories are the only
 supported disclosure channel.** Email is not monitored and there is
-no PGP key published. Future versions may add additional channels —
+no PGP key published. Future versions may add additional channels -
 see the CHANGELOG for any expansion of the supported set.
 
 GitHub's advisory tooling gates the disclosure timeline with
@@ -29,7 +29,7 @@ path to a coordinated fix.
 ## What to include
 
 - A clear description of the vulnerability.
-- Affected version(s) — commit hash or tag.
+- Affected version(s) - commit hash or tag.
 - Minimal reproduction (PoC if available, otherwise prose).
 - Suggested severity (Critical / High / Medium / Low, optional).
 - Disclosure preferences (timeline, attribution).
@@ -49,13 +49,13 @@ In scope:
 - The per-VM sidecars (`nixos-modules/host-sidecars.nix`, `nixos-modules/components/`).
 - The framework's SSH key management (`d2b-keys` activation, virtiofs injection).
 - Network isolation / NAT / firewalling (`nixos-modules/net.nix`, `nixos-modules/network.nix`).
-- The Rust workspace (`packages/`) — bootstrap surface, supply-chain gates, and long-lived control-plane behavior.
+- The Rust workspace (`packages/`) - bootstrap surface, supply-chain gates, and long-lived control-plane behavior.
 
 Out of scope:
-- Vulnerabilities in upstream `nixpkgs`, `microvm.nix`, `cloud-hypervisor`, `crosvm`, `swtpm` — report those to their respective maintainers; we'll coordinate.
+- Vulnerabilities in upstream `nixpkgs`, `microvm.nix`, `cloud-hypervisor`, `crosvm`, `swtpm` - report those to their respective maintainers; we'll coordinate.
 - Vulnerabilities in consumer-side code that *uses* d2b (your own `/etc/nixos` is your concern; d2b provides primitives).
 - Physical attacks (encrypted disk + TPM-bound unlock is a Lanzaboote concern, not d2b's).
-- Side-channel attacks on shared CPU cache / SMT — out of scope (hardware-level concern).
+- Side-channel attacks on shared CPU cache / SMT - out of scope (hardware-level concern).
 - Supply-chain attacks on the Nix store (defer to upstream Nix + nixpkgs).
 
 ## Threat model
@@ -82,13 +82,13 @@ will introduce are:
 
 - A single public CLI socket at `/run/d2b/public.sock`, mode
   `0660` group `d2b`. Membership in the `d2b` group (populated
-  from `d2b.site.launcherUsers`) is the only *connection* gate —
+  from `d2b.site.launcherUsers`) is the only *connection* gate -
   there is no second `d2b-admin` socket or group. Destructive /
   admin verbs (`vm exec`, `audit`, and `config sync`'s
   guest read) are gated a second time *inside the daemon*: the
   `SO_PEERCRED` peer identity must also appear in
   `d2b.site.adminUsers`. Authorization is `SO_PEERCRED` plus the
-  system account database — never polkit at runtime.
+  system account database - never polkit at runtime.
 - A private broker socket at `/run/d2b/priv.sock` reachable only
   by the `d2bd` service uid. The broker re-derives every
   privileged parameter from its own copy of the root-owned bundle
@@ -113,7 +113,7 @@ will introduce are:
   > compromised virtiofsd cannot access host resources outside its
   > bind-mounted share, even with kernel exploits that bypass the
   > sandbox, because the host kernel sees its credentials as the
-  > unprivileged share principal — there are no in-host caps to
+  > unprivileged share principal - there are no in-host caps to
   > escalate from.
 
 The first non-NixOS target is Ubuntu 24.04 LTS x86_64 with kernel
@@ -137,7 +137,7 @@ broker still open no realm relay/provider connections. Realm egress
 session, or provider credentials. A realm relay is treated as an
 untrusted, ciphertext-only rendezvous: it sees connection metadata and
 traffic shape but never plaintext operations, and relay credentials
-authenticate relay access only — never a constellation principal or
+authenticate relay access only - never a constellation principal or
 local `Admin`. Later realm-policy work (a separate ADR/reference) is
 expected to add endpoint-allowlisted, region-pinned realm egress as
 gateway-held realm configuration; that enforcement is not a current host
@@ -183,7 +183,7 @@ The new trust-boundary statements are:
   (`AuditLog::write_entry` and `AuditLog::write_op_record`) and
   the reader (`AuditLog::export_lines`, which now enumerates the
   full daily-file directory in chronological order) operate
-  solely against `broker-<utc-date>.jsonl` files — see
+  solely against `broker-<utc-date>.jsonl` files - see
   [`docs/reference/daemon-api.md`](docs/reference/daemon-api.md#audit)
   "Retention" and "Legacy retirement".
 - An admin can pause the broker (`d2b admin broker --pause`);
@@ -198,7 +198,7 @@ The new trust-boundary statements are:
 ### Guest-control exec trust boundary
 
 `d2b vm exec` runs a command inside a VM over
-the authenticated guest-control vsock channel — there is no SSH. The
+the authenticated guest-control vsock channel - there is no SSH. The
 trust-boundary statements are:
 
 - **Admin-only, destructive.** Guest exec is a destructive verb: the
@@ -206,8 +206,8 @@ trust-boundary statements are:
   daemon-side role gate above), on top of the `d2b`-group
   connection gate. Per-VM exec must also be enabled in the bundle
   (`guest.control.enable` + `guest.exec.enable`). Every exec runs the
-  requested command as the VM's workload user (`ssh.user`) — **never
-  root** — inside a real PAM login session (`systemd-run
+  requested command as the VM's workload user (`ssh.user`) - **never
+  root** - inside a real PAM login session (`systemd-run
   --property=PAMName=login --uid=<user>`); the wire `user` field is
   host-fixed by guestd and ignored, and operators elevate with `sudo`
   inside the session.
@@ -226,9 +226,9 @@ trust-boundary statements are:
   per-VM concurrent session caps; detached-exec slot and retained-log
   quotas; bounded per-op deadlines (each long-poll op gets a fresh
   deadline rather than an aging shared one); a hard in-flight op cap
-  whose over-cap response is **close-only** — the owner session is torn
+  whose over-cap response is **close-only** - the owner session is torn
   down through the single existing teardown path with no reader-side
-  socket write, preserving the single-writer invariant — so a stalled
+  socket write, preserving the single-writer invariant - so a stalled
   or abusive owner cannot pin unbounded work, and owner EOF/POLLHUP is
   always observed promptly; and bounded teardown on disconnect.
   Detached exec adds startup reconciliation, valid runner/workload
@@ -238,6 +238,6 @@ trust-boundary statements are:
 ## See also
 
 - [Design / threat model](docs/explanation/design.md)
-- [`docs/explanation/design.md`](docs/explanation/design.md) — defense-in-depth list
-- [CHANGELOG](CHANGELOG.md) — version history including security-relevant fixes
-- [docs/reference/security-runbook.md](docs/reference/security-runbook.md) — operator incident-response, USBIP containment, and recovery procedures
+- [`docs/explanation/design.md`](docs/explanation/design.md) - defense-in-depth list
+- [CHANGELOG](CHANGELOG.md) - version history including security-relevant fixes
+- [docs/reference/security-runbook.md](docs/reference/security-runbook.md) - operator incident-response, USBIP containment, and recovery procedures

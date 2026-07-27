@@ -1,34 +1,34 @@
 //! `d2b host doctor --read-only` checks.
 //!
 //! Each check is a passive, read-only probe:
-//! - `broker_ready` — connect to `/run/d2b/priv.sock`, or verify the
+//! - `broker_ready` - connect to `/run/d2b/priv.sock`, or verify the
 //!   private socket exists and correctly rejects this unprivileged caller.
-//! - `daemon_ready` — connect to `/run/d2b/public.sock`.
-//! - `metrics_endpoint` — `GET /metrics` over the canonical
+//! - `daemon_ready` - connect to `/run/d2b/public.sock`.
+//! - `metrics_endpoint` - `GET /metrics` over the canonical
 //!   Prometheus URL (`http://127.0.0.1:9101/metrics`, see
 //!   `docs/reference/daemon-metrics.md`). The scrape endpoint is optional;
 //!   connect / HTTP failures are reported as a passing "not serving"
 //!   posture so local host health stays clean until the metrics listener
 //!   is enabled.
-//! - `signoz-ui-endpoint` — when observability is enabled, read
+//! - `signoz-ui-endpoint` - when observability is enabled, read
 //!   `_observability.signozUrl` from `vms.json` and probe the SigNoz
 //!   health endpoint.
-//! - `otel_host_bridge_runner` — inspect daemon-persisted
+//! - `otel_host_bridge_runner` - inspect daemon-persisted
 //!   `pidfd-table.json` for a registration with role
 //!   `otel-host-bridge`.
-//! - `usbipd_runners` — same table, counts every entry whose role
+//! - `usbipd_runners` - same table, counts every entry whose role
 //!   contains `usbip` (per-env `Usbip` runner role, see
 //!   `docs/reference/privileges.md`).
-//! - `kernel_module_matrix` — read daemon-persisted
+//! - `kernel_module_matrix` - read daemon-persisted
 //!   `kernel-module-report.json`. Missing required modules = fail;
 //!   missing optionals = warn; clean = pass.
-//! - `autostart_status` — read daemon-persisted
+//! - `autostart_status` - read daemon-persisted
 //!   `autostart-report.json`. Report the degraded + failed count.
-//! - `graceful_shutdown_status` — read daemon-persisted
+//! - `graceful_shutdown_status` - read daemon-persisted
 //!   `shutdown-degraded.json` and `pidfd-table.json`. Report uncleared
 //!   graceful-shutdown degraded markers, bounded remediation, and live
 //!   primary-VMM inventory for lifecycle follow-up.
-//! - `storage_lifecycle_report` — read daemon-persisted
+//! - `storage_lifecycle_report` - read daemon-persisted
 //!   `storage-lifecycle-report.json`. Report storage/restart/sync
 //!   contract drift and the safe remediation command.
 //!
@@ -353,7 +353,7 @@ fn signoz_health_url(signoz_url: &str) -> Result<String, String> {
 }
 
 /// Minimal HTTP/1.1 GET against the documented Prometheus scrape URL.
-/// Restricted to `http://<host>:<port>/<path>` — the daemon-metrics
+/// Restricted to `http://<host>:<port>/<path>` - the daemon-metrics
 /// reference doc pins HTTP-on-loopback, so we don't pull TLS in here.
 fn probe_http_metrics(url: &str) -> Result<u16, String> {
     let parsed = parse_http_url(url)?;
@@ -1206,7 +1206,7 @@ fn check_seccomp_bpf_loaded(entries: &PidfdEntries, report: &mut DoctorReport) {
             report.push(
                 "seccomp-bpf-loaded",
                 DoctorStatus::Warn,
-                "pidfd-table.json missing; no runners running — seccomp BPF posture not verifiable",
+                "pidfd-table.json missing; no runners running - seccomp BPF posture not verifiable",
             );
             return;
         }
@@ -1411,7 +1411,7 @@ fn check_pre_ns_posture_with_reader<F>(
 // --- check_broker_reap_health (D7 visibility) ---
 
 /// For each registered runner PID, read `/proc/<pid>/stat` and check
-/// for zombie (`Z`) or dead (`X`) state — both indicate the process
+/// for zombie (`Z`) or dead (`X`) state - both indicate the process
 /// exited but was never reaped.
 ///
 /// - **Fail** if any registered runner is in state `Z` or `X`.
@@ -1452,7 +1452,7 @@ fn check_broker_reap_health(entries: &PidfdEntries, report: &mut DoctorReport) {
         report.push_with_data(
             "broker-reap-health",
             DoctorStatus::Pass,
-            "no runners registered; no zombie check needed (buffer depth not yet observable — D7 IPC placeholder)",
+            "no runners registered; no zombie check needed (buffer depth not yet observable - D7 IPC placeholder)",
             json!({ "zombies": 0, "checked": 0, "bufferDepth": null }),
         );
         return;
@@ -1463,7 +1463,7 @@ fn check_broker_reap_health(entries: &PidfdEntries, report: &mut DoctorReport) {
 
     for entry in &entries.entries {
         let Some(state_char) = read_proc_stat_state(entry.pid) else {
-            // Process exited and /proc entry is gone — already reaped.
+            // Process exited and /proc entry is gone - already reaped.
             continue;
         };
         checked += 1;
@@ -1489,7 +1489,7 @@ fn check_broker_reap_health(entries: &PidfdEntries, report: &mut DoctorReport) {
             "broker-reap-health",
             DoctorStatus::Pass,
             format!(
-                "no zombie/dead runners among {checked} checked (buffer depth not yet observable — D7 IPC placeholder)"
+                "no zombie/dead runners among {checked} checked (buffer depth not yet observable - D7 IPC placeholder)"
             ),
             data,
         );
@@ -1509,7 +1509,7 @@ fn check_broker_reap_health(entries: &PidfdEntries, report: &mut DoctorReport) {
 
 // --- check_bridge_ipv6_sysctl (D8 visibility) ---
 
-/// Deserialised shape of `envs.json` — loose, forward-compatible.
+/// Deserialised shape of `envs.json` - loose, forward-compatible.
 #[derive(Debug, Clone, Deserialize, Default)]
 struct PersistedEnvsJson {
     #[serde(default)]
@@ -1528,14 +1528,14 @@ struct PersistedEnvEntry {
 /// Collect declared bridge names from `<daemon-state-dir>/envs.json`.
 /// Falls back to scanning `/sys/class/net/` for d2b-named bridges
 /// (`br-*-lan` / `br-*-up`) only when the file is absent or
-/// unparseable — a successfully-parsed empty file means "no envs
+/// unparseable - a successfully-parsed empty file means "no envs
 /// declared" and suppresses the fallback.
 fn collect_bridge_names(daemon_state_dir: &Path) -> Vec<String> {
     let envs_path = daemon_state_dir.join("envs.json");
     if let Ok(bytes) = std::fs::read(&envs_path)
         && let Ok(parsed) = serde_json::from_slice::<PersistedEnvsJson>(&bytes)
     {
-        // Successfully parsed — use declared bridges only; do NOT
+        // Successfully parsed - use declared bridges only; do NOT
         // fall back to sysfs so that an empty envs.json correctly
         // signals "no envs" rather than triggering a sysfs scan.
         let mut bridges: Vec<String> = Vec::new();
@@ -1555,7 +1555,7 @@ fn collect_bridge_names(daemon_state_dir: &Path) -> Vec<String> {
         bridges.dedup();
         return bridges;
     }
-    // envs.json absent or unparseable — fall back to sysfs scan.
+    // envs.json absent or unparseable - fall back to sysfs scan.
     sysfs_d2b_bridges()
 }
 
@@ -1661,7 +1661,7 @@ fn check_bridge_ipv6_sysctl(daemon_state_dir: &Path, report: &mut DoctorReport) 
 
 /// Run `sysctl -n <key>` and return trimmed stdout, or an error string.
 fn run_sysctl_n(key: &str) -> Result<String, String> {
-    let out = std::process::Command::new("sysctl")
+    let out = crate::system_tool_command("sysctl")
         .args(["-n", key])
         .output()
         .map_err(|e| format!("exec sysctl: {e}"))?;
@@ -1748,7 +1748,7 @@ pub fn render_human(report: &DoctorReport) -> String {
             DoctorStatus::Warn => "WARN",
             DoctorStatus::Fail => "FAIL",
         };
-        let _ = writeln!(out, "  [{}] {} — {}", marker, c.name, c.detail);
+        let _ = writeln!(out, "  [{}] {} - {}", marker, c.name, c.detail);
     }
     out
 }
@@ -2394,9 +2394,10 @@ mod tests {
     #[test]
     fn broker_reap_health_fail_on_zombie() {
         // Spawn a child that exits immediately, then check its state
-        // before waitpid — it should be in Z state.
-        use std::process::Command;
-        let mut child = Command::new("true").spawn().expect("spawn true");
+        // before waitpid - it should be in Z state.
+        let mut child = crate::system_tool_command("true")
+            .spawn()
+            .expect("spawn true");
         let pid = child.id() as i32;
         // Give the child time to exit without being reaped.
         std::thread::sleep(std::time::Duration::from_millis(50));

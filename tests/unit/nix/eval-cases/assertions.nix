@@ -4,7 +4,7 @@
 # `evalSucceeded` map; the shell wrapper then asserts each case's
 # expected substring against either the failing-assertion message list
 # (Bucket A, the common path) or the captured throw signal
-# (Bucket B, eval-throws — fallback to a focused per-case re-eval).
+# (Bucket B, eval-throws - fallback to a focused per-case re-eval).
 #
 # Replaces 31 separate per-case `nix-instantiate --eval --strict`
 # invocations in the legacy bash gate. See `shared.nix` for the
@@ -16,7 +16,7 @@ let
 in
 shared.mkBatch {
   cases = {
-    # H10/1 — private-key marker in userAuthorizedKeys must be rejected.
+    # H10/1 - private-key marker in userAuthorizedKeys must be rejected.
     "private-key-in-authorized-keys" = {
       expectedSubstring = "does not look like a valid SSH public key";
       override = (
@@ -29,7 +29,7 @@ shared.mkBatch {
       );
     };
 
-    # H10/2 — graphics VM declared but waylandUser = null.
+    # H10/2 - graphics VM declared but waylandUser = null.
     "graphics-without-wayland-user" = {
       expectedSubstring = "d2b.site.waylandUser";
       override = (
@@ -41,7 +41,7 @@ shared.mkBatch {
       );
     };
 
-    # H10/3 — waylandUser names a user that does not exist.
+    # H10/3 - waylandUser names a user that does not exist.
     "wayland-user-missing" = {
       expectedSubstring = "config.users.users.ghost is not declared";
       override = (
@@ -52,7 +52,7 @@ shared.mkBatch {
       );
     };
 
-    # Naming surface — VM names must start with a letter and only
+    # Naming surface - VM names must start with a letter and only
     # use lowercase alnum + '-'.
     "vm-name-invalid" = {
       expectedSubstring = "VM name must match the regex ^[a-z][a-z0-9-]*$";
@@ -78,7 +78,7 @@ shared.mkBatch {
       );
     };
 
-    # Naming surface — 'launcher' is reserved.
+    # Naming surface - 'launcher' is reserved.
     "vm-name-reserved-launcher" = {
       expectedSubstring = "'launcher' is reserved";
       override = (
@@ -103,7 +103,7 @@ shared.mkBatch {
       );
     };
 
-    # Naming surface — user-declared VMs may not consume sys-* prefix.
+    # Naming surface - user-declared VMs may not consume sys-* prefix.
     "vm-name-reserved-sys-prefix" = {
       expectedSubstring = "names starting with 'sys-' are reserved";
       override = (
@@ -128,7 +128,7 @@ shared.mkBatch {
       );
     };
 
-    # Naming surface — env names share the same leading-letter rule.
+    # Naming surface - env names share the same leading-letter rule.
     "env-name-invalid" = {
       expectedSubstring = "env name must match the regex ^[a-z][a-z0-9-]*$";
       override = (
@@ -145,7 +145,7 @@ shared.mkBatch {
       );
     };
 
-    # Network option-schema — env names must fit the IFNAMSIZ budget.
+    # Network option-schema - env names must fit the IFNAMSIZ budget.
     "env-name-too-long" = {
       expectedSubstring = "env name must be at most 8 characters";
       override = (
@@ -162,7 +162,7 @@ shared.mkBatch {
       );
     };
 
-    # Network option-schema — workload env references must point at
+    # Network option-schema - workload env references must point at
     # a declared env.
     "vm-env-missing" = {
       expectedSubstring = "but d2b.envs has no such ENABLED env";
@@ -174,7 +174,7 @@ shared.mkBatch {
       );
     };
 
-    # Network option-schema — workload env references may not target
+    # Network option-schema - workload env references may not target
     # a disabled env.
     "vm-env-disabled" = {
       expectedSubstring = "but d2b.envs has no such ENABLED env";
@@ -187,7 +187,7 @@ shared.mkBatch {
       );
     };
 
-    # Network option-schema — workload indices must be unique within
+    # Network option-schema - workload indices must be unique within
     # an env.
     "vm-index-duplicate" = {
       expectedSubstring = "Each workload VM in an env needs a unique `index`";
@@ -211,7 +211,7 @@ shared.mkBatch {
       );
     };
 
-    # Network option-schema — staticIp and env/index wiring are
+    # Network option-schema - staticIp and env/index wiring are
     # mutually exclusive.
     "static-ip-and-env-mutually-exclusive" = {
       expectedSubstring = "set EITHER `env`/`index` OR the deprecated `staticIp`, not both";
@@ -223,7 +223,7 @@ shared.mkBatch {
       );
     };
 
-    # H10/4 — lanSubnet must be /24.
+    # H10/4 - lanSubnet must be /24.
     "lansubnet-wrong-mask" = {
       expectedSubstring = "must be a /24";
       override = (
@@ -234,7 +234,7 @@ shared.mkBatch {
       );
     };
 
-    # H10/5 — uplinkSubnet must be /30.
+    # H10/5 - uplinkSubnet must be /30.
     "uplinksubnet-wrong-mask" = {
       expectedSubstring = "must be a /30";
       override = (
@@ -245,7 +245,7 @@ shared.mkBatch {
       );
     };
 
-    # H10/6 — lanSubnet network address must end in .0.
+    # H10/6 - lanSubnet network address must end in .0.
     "lansubnet-nonzero-host" = {
       expectedSubstring = "ending in '.0'";
       override = (
@@ -256,7 +256,7 @@ shared.mkBatch {
       );
     };
 
-    # H10/7 — two envs whose CIDRs OVERLAP.
+    # H10/7 - two envs whose CIDRs OVERLAP.
     "overlap-containment" = {
       expectedSubstring = "CIDR overlap";
       override = (
@@ -270,7 +270,7 @@ shared.mkBatch {
       );
     };
 
-    # H10/8 — env subnet overlaps with a hostLanCidrs entry.
+    # H10/8 - env subnet overlaps with a hostLanCidrs entry.
     "env-vs-host-overlap" = {
       expectedSubstring = "overlaps with `d2b.hostLanCidrs`";
       override = (
@@ -281,7 +281,7 @@ shared.mkBatch {
       );
     };
 
-    # Wave 3 — stateDir is reserved but not fully threaded.
+    # Wave 3 - stateDir is reserved but not fully threaded.
     "state-dir-override-rejected" = {
       expectedSubstring = "d2b.site.stateDir is reserved but not fully threaded yet";
       override = (
@@ -485,7 +485,7 @@ shared.mkBatch {
       );
     };
 
-    # v0.1.6 SWArch-M9 — graphics VMs cannot be autostart.
+    # v0.1.6 SWArch-M9 - graphics VMs cannot be autostart.
     "graphics-with-autostart" = {
       expectedSubstring = "graphics.enable = true is incompatible";
       override = (
@@ -509,7 +509,7 @@ shared.mkBatch {
       );
     };
 
-    # Issue #22 — guest audit forwarding requires per-VM observability.
+    # Issue #22 - guest audit forwarding requires per-VM observability.
     "audit-without-observability" = {
       expectedSubstring = "d2b.vms.corp-vm.audit.enable requires observability.enable on the same VM";
       override = (
@@ -520,7 +520,7 @@ shared.mkBatch {
       );
     };
 
-    # W19 — `guest.exec.allowRoot` was removed (exec always runs as the
+    # W19 - `guest.exec.allowRoot` was removed (exec always runs as the
     # workload user). A legacy assignment must land on the friendly
     # migration assertion, not a cryptic "option does not exist".
     "guest-exec-allowroot-removed" = {
@@ -533,7 +533,7 @@ shared.mkBatch {
       );
     };
 
-    # W19 — `guest.exec.users` was removed (no per-VM exec user
+    # W19 - `guest.exec.users` was removed (no per-VM exec user
     # allowlist; exec targets the single workload user `ssh.user`).
     "guest-exec-users-removed" = {
       expectedSubstring = "guest.exec.users was removed";

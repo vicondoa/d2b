@@ -28,7 +28,7 @@ to `journalctl -u d2bd.service` but never blocks the public
 socket from serving `status` / `doctor` / `audit`.
 
 If the trusted bundle fails to load, autostart is **skipped** with
-a warning — the daemon must still come up so operators can run
+a warning - the daemon must still come up so operators can run
 `d2b doctor` against a broken bundle.
 
 ## Plan order
@@ -47,14 +47,14 @@ workloads):
 The daemon currently derives the `autostart` flag heuristically:
 every VM the manifest knows about is autostart-eligible **unless**
 it is a graphics VM (graphics VMs are barred from autostart by
-`nixos-modules/assertions.nix` SWArch-M9 — they have no Wayland
+`nixos-modules/assertions.nix` SWArch-M9 - they have no Wayland
 session at boot).
 
 VMs with `autostart = false` remain in the plan (so a future
 `d2b status --plan` can surface the full picture) but
 `execute_autostart` skips them with `Outcome::NotAutostart`. A
 non-autostart net VM does **not** propagate as a degraded gate for
-its env's workloads — opting out is an explicit operator choice,
+its env's workloads - opting out is an explicit operator choice,
 not a failure.
 
 ## Concurrency cap
@@ -141,22 +141,18 @@ workloads grouped by env.
   (`cargo test --lib autostart`). They cover ordering,
   concurrency-cap enforcement, degraded-mode propagation,
   idempotent re-entry, and the `parallelism = 0` clamp.
-- `tests/daemon-autostart-eval.sh` is a static + small nixpkgs
-  eval gate that asserts the public Rust surface, the NixOS
-  option default + override, the daemon-side wiring, and the
-  documentation cross-references.
-- The full Layer-2 smoke (`tests/daemon-autostart-smoke.sh`) is
-  out of scope for this page — it brings up a real 2-env × 2-workload
-  fixture and asserts the net-VM-first envelope on hardware-like
-  state.
+- `tests/unit/nix/cases/daemon-autostart.nix` asserts the public Rust surface,
+  the NixOS option default and override, daemon-side wiring, and documentation
+  cross-references through `test-nix-unit`.
+- No current full Layer-2 autostart smoke is registered.
 
 ## Cross-references
 
-- [`docs/reference/daemon-api.md`](daemon-api.md) — daemon
+- [`docs/reference/daemon-api.md`](daemon-api.md) - daemon
   lifecycle and where the autostart pass slots in.
-- [`docs/reference/host-prep-dag.md`](host-prep-dag.md) — per-VM
+- [`docs/reference/host-prep-dag.md`](host-prep-dag.md) - per-VM
   host-prep step set that `dispatch_broker_vm_start` drives once
   the autostart layer picks the VM.
-- [`docs/reference/per-vm-state-ownership.md`](per-vm-state-ownership.md)
-  — ownership-matrix preflight that gates every per-VM start
+- [`docs/reference/per-vm-state-ownership.md`](per-vm-state-ownership.md) -
+  ownership-matrix preflight that gates every per-VM start
   (autostart or otherwise).

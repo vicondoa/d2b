@@ -19,7 +19,7 @@
 //! Redaction is structural, not advisory: the exported surface is a
 //! dedicated [`StoreSyncObservabilityRecord`] struct that simply does
 //! not carry the host-only fields, so no serializer ever receives the
-//! full audit struct — [`StoreSyncObservabilityRecord::from_audit_fields`]
+//! full audit struct - [`StoreSyncObservabilityRecord::from_audit_fields`]
 //! reads only the allow-listed fields and the rest cannot leak. The
 //! `#[serde(deny_unknown_fields)]` round-trip test plus the
 //! [`EXPORTED_KEYS`] key-set test pin the contract.
@@ -104,7 +104,7 @@ pub struct StoreSyncObservabilityRecord {
     pub target_vm: String,
     pub vm_id: String,
     /// Target env of the synced VM. Stays in JSON content (never a Loki
-    /// label) and is always serialized — `null` only for env-less VMs — so
+    /// label) and is always serialized - `null` only for env-less VMs - so
     /// the exported key-set is stable.
     pub target_env: Option<String>,
     pub generation_id: String,
@@ -187,7 +187,7 @@ impl StoreSyncObservabilityRecord {
 /// module's `systemd.tmpfiles` rule (mode `0750` + a focused `alloy`
 /// read/traverse ACL and a default ACL so broker-created `0640` files
 /// inherit `user:alloy:r`). The broker must NOT chmod/chown/setfacl an
-/// existing directory — doing so would clobber that grant. We only
+/// existing directory - doing so would clobber that grant. We only
 /// create the tree when it is missing (standalone broker tests, or a
 /// first run before tmpfiles ran). Refuses a symlinked leaf.
 fn ensure_export_dir(export_dir: &Path) -> io::Result<()> {

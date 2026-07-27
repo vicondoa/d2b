@@ -2,7 +2,7 @@
 {
   "command": "keys trust",
   "mode": "dry-run",
-  "notes": "W8 keys trust --dry-run: planned operation. --apply uses the daemon-first bridge and broker audit when the daemon handles the request.",
+  "notes": "Keys trust --dry-run is a planned operation. --apply uses the daemon-first bridge and broker audit when the daemon handles the request.",
   "planned": [],
   "vm": "corp-vm"
 }

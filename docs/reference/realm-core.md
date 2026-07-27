@@ -334,8 +334,8 @@ the structured capability.
 
 ## Related references
 
-- [ADR 0043 — Realm-native control plane](../adr/0043-realm-native-control-plane.md)
-- [ADR 0039 — Persistent shell routing](../adr/0039-constellation-persistent-shell-routing.md)
+- [ADR 0043 - Realm-native control plane](../adr/0043-realm-native-control-plane.md)
+- [ADR 0039 - Persistent shell routing](../adr/0039-constellation-persistent-shell-routing.md)
 - [Realm peer protocol reference](./constellation-protocol.md)
 - [Daemon API reference](./daemon-api.md)
 - [Naming conventions](./naming-conventions.md)

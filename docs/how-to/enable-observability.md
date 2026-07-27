@@ -54,8 +54,8 @@ metrics and a broker-spawned host bridge into `sys-obs`.
 ## Optional: host journal and host OTLP ingest
 
 The host edge collector always ships hostmetrics and the StoreSync audit
-log. To bring it to parity with the guest collectors — host journal logs
-and a host-local OTLP ingest endpoint — opt in (both default off):
+log. To bring it to parity with the guest collectors - host journal logs
+and a host-local OTLP ingest endpoint - opt in (both default off):
 
 ```nix
 {

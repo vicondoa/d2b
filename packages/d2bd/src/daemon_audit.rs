@@ -90,7 +90,7 @@ pub enum VmStartRunnerExitReason {
     /// The spawned runner terminated before its readiness signal fired.
     RunnerExited,
     /// The runner's PID was reused by a different process (start-time
-    /// drift) — our runner is gone.
+    /// drift) - our runner is gone.
     RunnerReused,
 }
 
@@ -229,7 +229,7 @@ pub enum DaemonEvent {
     },
     /// Emitted when a `vm start` long-lived runner node fast-fails because
     /// the spawned runner terminated (or its PID was reused) BEFORE its
-    /// readiness signal fired — the `tpm.enable` first-run wedge fix.
+    /// readiness signal fired - the `tpm.enable` first-run wedge fix.
     ///
     /// Bounded by construction: carries ONLY the VM name, the closed
     /// `role_id` of the failed node, a closed reason kind, the optional
@@ -1170,7 +1170,7 @@ fn write_jsod2b_line_for_date(state_dir: &Path, today: &str, line: &str) -> io::
 
 /// Best-effort retention: delete `daemon-events-YYYY-MM-DD.jsonl` files
 /// whose date is older than `retention_days` before today (UTC). All
-/// errors are swallowed — retention must never abort an audit write.
+/// errors are swallowed - retention must never abort an audit write.
 fn prune_old_audit_logs(state_dir: &Path, retention_days: i64) {
     let now_secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1876,7 +1876,7 @@ mod tests {
     #[test]
     fn no_op_does_not_write_file() {
         let dir = tempfile::tempdir().expect("create temp dir");
-        // Create a no-op log — but give it the temp dir to make sure the
+        // Create a no-op log - but give it the temp dir to make sure the
         // file is NOT created.
         let log = DaemonAuditLog::no_op();
         // Manually set state_dir to the temp dir via a helper.

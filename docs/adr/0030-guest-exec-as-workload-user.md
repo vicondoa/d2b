@@ -32,7 +32,7 @@ app then fails with "Missing XDG_RUNTIME_DIR". Only a **real PAM login
 session** (the `login` PAM stack includes `pam_systemd.so`) creates
 `/run/user/<uid>` and sets `XDG_RUNTIME_DIR`, and `WAYLAND_DISPLAY` is only
 exported by the **login shell** sourcing `/etc/set-environment`. So both are
-required — exactly the two things SSH used to provide.
+required - exactly the two things SSH used to provide.
 
 Running guest commands as root also broke the privilege model the operator
 expects: a guest-control client should never be able to choose the target
@@ -45,7 +45,7 @@ argv as root.
    `exec_user: Option<String>` (resolved to uid/gid in the guest), threaded
    from `guest-control.nix` via guestd's `--exec-user <name>` flag, which is
    derived from the per-VM `ssh.user`. Guestd **ignores the wire `user`
-   field entirely** — a client cannot escalate to root or target any other
+   field entirely** - a client cannot escalate to root or target any other
    user. A missing configured workload user fails closed. Eval-time
    assertions reject `guest.exec.enable` without a valid non-root `ssh.user`.
 
@@ -96,7 +96,7 @@ argv as root.
   session.
 - The capability set is re-gated from `enabled && allow_root` to `enabled &&
   exec_user resolved && required helpers present`, and the host always
-  negotiates the output (`EXEC_LOGS`) capability alongside attached exec — a
+  negotiates the output (`EXEC_LOGS`) capability alongside attached exec - a
   session that cannot stream output is never reachable.
 - No manifest/bundle schema change: this changes host-owned guestd flags, not
   the per-VM manifest contract.

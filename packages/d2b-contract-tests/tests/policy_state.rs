@@ -1,12 +1,12 @@
 //! Group-rename / state-dir / store-sync policy-lint gates (the "H-group"),
 //! migrated from the `tests/*-eval.sh` bash gates. Each test reads the real
 //! repo files (via the `d2b_contract_tests::read_repo_file` helper) and
-//! asserts a structural/source invariant — all are grep-only gates over
+//! asserts a structural/source invariant - all are grep-only gates over
 //! `nixos-modules/**` (no Nix eval/build). This crate runs only from
 //! `tests/tools/rust-workspace-checks.sh` against the real checkout (it is excluded
-//! from the hermetic Nix sandbox workspace build), so repo-file access — and
+//! from the hermetic Nix sandbox workspace build), so repo-file access - and
 //! shelling out to `git` for the gitignore-respecting file enumeration the
-//! bash gates got from `grep -R` — is sound here.
+//! bash gates got from `grep -R` - is sound here.
 //!
 //! Migrated gates:
 //!   * tests/group-rename-semantic-eval.sh         -> group_rename_semantic
@@ -158,7 +158,7 @@ fn group_rename_semantic() {
 fn require_match(haystack: &str, pattern: &str, msg: &str) {
     assert!(
         line_matches(haystack, pattern),
-        "group-rename-semantic: FAIL — {msg} (no line matched /{pattern}/)"
+        "group-rename-semantic: FAIL - {msg} (no line matched /{pattern}/)"
     );
 }
 
@@ -177,7 +177,7 @@ fn group_migration_fresh_install() {
     let helper_rel = "nixos-modules/host-activation-helper/src/main.rs";
     assert!(
         repo_path_exists(activation_rel) && repo_path_exists(helper_rel),
-        "group-migration-fresh-install: FAIL — migration module/helper missing"
+        "group-migration-fresh-install: FAIL - migration module/helper missing"
     );
     let activation = read_repo_file(activation_rel);
     let helper = read_repo_file(helper_rel);
@@ -192,7 +192,7 @@ fn group_migration_fresh_install() {
     ] {
         assert!(
             activation.contains(needle),
-            "group-migration-fresh-install: FAIL — missing {needle} in {activation_rel}"
+            "group-migration-fresh-install: FAIL - missing {needle} in {activation_rel}"
         );
     }
     for needle in [
@@ -202,7 +202,7 @@ fn group_migration_fresh_install() {
     ] {
         assert!(
             helper.contains(needle),
-            "group-migration-fresh-install: FAIL — missing {needle} in {helper_rel}"
+            "group-migration-fresh-install: FAIL - missing {needle} in {helper_rel}"
         );
     }
 
@@ -229,7 +229,7 @@ fn group_migration_fresh_install() {
     }
     assert!(
         raw_chgrp_line.is_none(),
-        "group-migration-fresh-install: FAIL — raw chgrp found in migration module: {:?}",
+        "group-migration-fresh-install: FAIL - raw chgrp found in migration module: {:?}",
         raw_chgrp_line
     );
 }
@@ -296,7 +296,7 @@ fn state_dir_acl() {
 
     assert!(
         failures.is_empty(),
-        "state-dir-acl: FAIL —\n{}",
+        "state-dir-acl: FAIL -\n{}",
         failures.join("\n")
     );
 }
@@ -317,7 +317,7 @@ fn store_sync_export() {
     let host_rel = "nixos-modules/components/observability/host.nix";
     assert!(
         repo_path_exists(host_rel),
-        "store-sync-export: FAIL — missing required file: {host_rel}"
+        "store-sync-export: FAIL - missing required file: {host_rel}"
     );
     let host = read_repo_file(host_rel);
     // Comment-free view so a `#`-comment can neither satisfy a positive check
@@ -449,7 +449,7 @@ fn store_sync_export() {
 
     assert!(
         failures.is_empty(),
-        "store-sync-export: FAIL —\n{}",
+        "store-sync-export: FAIL -\n{}",
         failures.join("\n")
     );
 }
@@ -465,7 +465,7 @@ fn host_otlp_ingest_socket_isolation() {
     let host_rel = "nixos-modules/components/observability/host.nix";
     assert!(
         repo_path_exists(host_rel),
-        "host-otlp-ingest: FAIL — missing required file: {host_rel}"
+        "host-otlp-ingest: FAIL - missing required file: {host_rel}"
     );
     let code = code_only(&read_repo_file(host_rel));
 
@@ -520,7 +520,7 @@ fn host_otlp_ingest_socket_isolation() {
     }
     assert!(
         failures.is_empty(),
-        "host-otlp-ingest: FAIL —\n{}",
+        "host-otlp-ingest: FAIL -\n{}",
         failures.join("\n")
     );
 }
@@ -536,7 +536,7 @@ fn host_journald_cursor_provisioned() {
     let host_rel = "nixos-modules/components/observability/host.nix";
     assert!(
         repo_path_exists(host_rel),
-        "host-journald-cursor: FAIL — missing required file: {host_rel}"
+        "host-journald-cursor: FAIL - missing required file: {host_rel}"
     );
     let code = code_only(&read_repo_file(host_rel));
 
@@ -568,7 +568,7 @@ fn host_journald_cursor_provisioned() {
     }
     assert!(
         failures.is_empty(),
-        "host-journald-cursor: FAIL —\n{}",
+        "host-journald-cursor: FAIL -\n{}",
         failures.join("\n")
     );
 }

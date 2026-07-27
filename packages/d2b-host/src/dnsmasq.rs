@@ -114,7 +114,7 @@ pub fn render_dnsmasq_env_conf(input: &DnsmasqEnvConfInput) -> Result<String, Dn
     out.push_str("# Bind to the LAN bridge interface only.\n");
     out.push_str(&format!("interface={}\n", input.lan_bridge));
     out.push_str("bind-interfaces\n\n");
-    out.push_str("# DHCP pool — clients on the LAN bridge get an address from this range.\n");
+    out.push_str("# DHCP pool - clients on the LAN bridge get an address from this range.\n");
     out.push_str(&format!(
         "dhcp-range={},{},12h\n\n",
         input.dhcp_range_start, input.dhcp_range_end

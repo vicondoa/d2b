@@ -23,8 +23,8 @@
 //!     `ops/{store_view_farm,route,tap,store_sync_*}.rs`, so the blanket ban
 //!     is red against current code (also documented as pre-existing breakage
 //!     in `tests/README.md`). The migrated test keeps the gate's actual stated
-//!     purpose — "the broker delegates bundle validation to d2b-core only"
-//!     — via the positive `d2b_core::manifest` + `validate_bundle`
+//!     purpose ("the broker delegates bundle validation to d2b-core
+//!     only") via the positive `d2b_core::manifest` + `validate_bundle`
 //!     delegation checks, and drops the over-broad negative blanket ban.
 //!   * privileges-matrix-completeness.sh renders the live `privileges.json`
 //!     via `nix eval` and derives `rendered_ops` from
@@ -33,7 +33,7 @@
 //!     `docs/reference/schemas/v2/privileges.json` (`OperationAuthz.operation`
 //!     enum), which `d2b-core`'s `privileges::operation_schema` defines as
 //!     exactly `sorted(union(PUBLIC_OPERATION_AUTHZ, BROKER_OPERATION_AUTHZ)
-//!     .operation)` — identical to the rendered op set, with no Nix eval (per
+//!     .operation)` - identical to the rendered op set, with no Nix eval (per
 //!     the disk-hygiene contract). The bash gate's JSON-Schema validation of
 //!     the rendered artifact is dropped: it needs the Nix-rendered file and is
 //!     covered by the bundle/manifest drift gate; the completeness invariant
@@ -115,7 +115,7 @@ fn read_lossy(path: &Path) -> String {
 //       "no duplicate broker-side bundle parsing" proxy).
 //
 // Check (4) is red against current code and dropped per the module-level Spec
-// correction; checks (1)-(3) — the gate's actual stated delegation purpose —
+// correction; checks (1)-(3) - the gate's actual stated delegation purpose -
 // are ported faithfully.
 // ---------------------------------------------------------------------------
 #[test]
@@ -229,9 +229,9 @@ fn record_cli(parts: &[String], version_re: &Regex, found: &mut BTreeSet<String>
                 ("audit", "--human") | ("audit", "--json") | ("status", "--check-bridges")
             )
         {
-            // Two faithful elif arms of the bash gate's python helper —
+            // Two faithful elif arms of the bash gate's python helper -
             // (a) `audio|auth|debug|keys|store|usb <sub>` and (b) the
-            // `audit --human|--json` / `status --check-bridges` flag verbs —
+            // `audit --human|--json` / `status --check-bridges` flag verbs -
             // merged because both append `parts[1]` and are mutually
             // exclusive (avoids clippy::if_same_then_else).
             op.push(p1.clone());

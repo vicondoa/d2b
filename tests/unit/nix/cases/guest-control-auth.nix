@@ -20,7 +20,7 @@
 # while staying hermetic (no `builtins.getFlake`). The default
 # parameterization asserts the exact evidence JSON; each rejection case
 # asserts the eval THROWS (the bash gate additionally matched the assertion
-# message — "must be an absolute" / "guest.control.auth.tokenFile is set" —
+# message - "must be an absolute" / "guest.control.auth.tokenFile is set" -
 # which is not capturable by the harness's `expectedError` bucket, so it
 # relaxes to a throw assertion, the same faithful reduction the other
 # throw-case migrations took).

@@ -1,4 +1,4 @@
-# Default switch and deprecation — historical record
+# Default switch and deprecation - historical record
 
 > **Status: historical record.** The daemon-experimental rollout this
 > page describes is closed. `d2b.daemonExperimental.enable` now
@@ -7,7 +7,7 @@
 > reverts the host to the unsupported pre-daemon legacy state). The
 > bash CLI is gone, and
 > there are no framework-declared per-VM lifecycle templates. See
-> [ADR 0015 — daemon-only clean break](../adr/0015-daemon-only-clean-break.md)
+> [ADR 0015 - daemon-only clean break](../adr/0015-daemon-only-clean-break.md)
 > for the rationale, alternatives considered, consequences, and
 > rollback limits.
 >
@@ -29,7 +29,7 @@
 
 | Concept (historical) | Replaced by (current behavior) |
 | --- | --- |
-| `d2b.daemonExperimental.enable = false` as the shipped default | Now `default = true`. It is no longer computed from wave readiness (no longer evidence-auto-flipped), but it still functionally gates the daemon control plane — setting it `false` reverts the host to the unsupported pre-daemon legacy state. The per-wave evidence files instead gate the `d2b.defaultSwitchReadiness.<wave>.validated` assertion (see below). |
+| `d2b.daemonExperimental.enable = false` as the shipped default | Now `default = true`. It is no longer computed from wave readiness (no longer evidence-auto-flipped), but it still functionally gates the daemon control plane - setting it `false` reverts the host to the unsupported pre-daemon legacy state. The per-wave evidence files instead gate the `d2b.defaultSwitchReadiness.<wave>.validated` assertion (see below). |
 | The three-mode bridge (`default` daemon-first-with-bash-fallback / `D2B_NATIVE_ONLY=1` / `D2B_LEGACY_BASH_OPT_IN=1`) | Single daemon-native path. Both environment variables are unrecognised after the clean break. |
 | The bash CLI (`scripts/d2b`, `nixos-modules/cli.nix`) shipped alongside the Rust CLI as a fallback runtime | Bash CLI deleted in the daemon-only clean break. Rust CLI is the only CLI. |
 | Per-VM `d2b@<vm>.service` and `microvm@<vm>.service` templates as the lifecycle substrate | Daemon-supervised lifecycle (`d2bd::supervisor` + per-VM DAG executor). The per-VM systemd templates are deleted in the clean break. |
@@ -69,7 +69,7 @@ The trade-off explicitly accepted by ADR 0015:
 - **Lost:** the `+30 / +90 / +180 day` cadence that gave external
   documentation, internal training, and consumer flake pins a
   forward-dated warning. The clean break ships with a CHANGELOG
-  entry, an AGENTS.md rewrite, and ADR 0015 — no in-CLI
+  entry, an AGENTS.md rewrite, and ADR 0015 - no in-CLI
   deprecation warning, because there is no in-CLI legacy code path
   to warn from.
 - **Kept:** every operator config knob that selects daemon vs not
@@ -93,7 +93,7 @@ daemon control plane (setting it `false` reverts the host to the
 unsupported pre-daemon legacy state). The flip-gate subset is still
 computed in
 `nixos-modules/options-daemon.nix`, and the per-wave evidence files
-are still live — but what they gate today is the per-wave
+are still live - but what they gate today is the per-wave
 `d2b.defaultSwitchReadiness.<wave>.validated = true` eval
 assertion (fail-closed without the evidence file), not the
 `daemonExperimental.enable` default. The subset and evidence schema
@@ -102,7 +102,7 @@ below remain accurate for that assertion.
 ### Flip-gate subset
 
 The gate iterates over a fixed subset of `defaultSwitchReadiness`
-waves — the subset that has shipped by the time the flip is
+waves - the subset that has shipped by the time the flip is
 considered. The full schema also carries `p5`, `p6`, `p7` records;
 those are intentionally excluded from the gate because they
 describe work that happens AFTER the flip itself, and requiring
@@ -155,10 +155,10 @@ eval failure.
 
 Operator overrides still win in both directions:
 
-- `d2b.daemonExperimental.enable = lib.mkForce true` — opt
+- `d2b.daemonExperimental.enable = lib.mkForce true` - opt
   into daemon mode before the flip gate is fully green. Same
   semantics as before.
-- `d2b.daemonExperimental.enable = lib.mkForce false` — opt
+- `d2b.daemonExperimental.enable = lib.mkForce false` - opt
   out. **Semantics changed at the clean break.** Before it, this selected the
   legacy bash/systemd runtime. After it, the legacy runtime no
   longer exists; setting this to `false` simply disables the
@@ -167,7 +167,7 @@ Operator overrides still win in both directions:
   third runtime to fall back to.
 
 The `mkDefault` / `mkForce` priority semantics of the underlying
-`lib.mkOption` are preserved — this module declares only the
+`lib.mkOption` are preserved - this module declares only the
 default expression, so any operator-side assignment behaves
 exactly as the NixOS option-merging rules describe.
 
@@ -191,11 +191,11 @@ references resolve. Every row's "Bash" column reads as
 | `host prepare` | ✅ | ✅ | ✅ (daemon-side host-prep) |
 | `host destroy` | ✅ | ✅ | ✅ (daemon-side host-prep) |
 | `host doctor` | ✅ | ✅ | ✅ (read-only) |
-| `host install` | — | ✅ | ✅ (daemon → broker `RunHostInstall`) |
+| `host install` | - | ✅ | ✅ (daemon → broker `RunHostInstall`) |
 | `vm start` | ✅ (`up`) | ✅ | ✅ (daemon-native; retired bash bridge) |
 | `vm stop` | ✅ (`down`) | ✅ | ✅ (daemon-native; retired bash bridge) |
 | `vm restart` | ✅ | ✅ | ✅ (daemon-native; retired bash bridge) |
-| `vm list` | — | ✅ | ✅ (daemon-native; promoted from placeholder) |
+| `vm list` | - | ✅ | ✅ (daemon-native; promoted from placeholder) |
 | `build` | ✅ | ✅ | n/a (non-destructive) |
 | `generations` | ✅ | ✅ | n/a (non-destructive) |
 | `switch` | ✅ | ✅ | ✅ (broker `RunActivation`) |
@@ -217,21 +217,21 @@ references resolve. Every row's "Bash" column reads as
 | `migrate` | ✅ | ✅ | ✅ (daemon → broker `RunMigrate`) |
 
 Legend (historical): `✅` = implemented and live in that revision;
-`—` = the verb is read-only, daemon-only from
+`-` = the verb is read-only, daemon-only from
 the start, or didn't apply. The "Bash" column reads as deleted
 across every row.
 
 ## References
 
-- [ADR 0015 — daemon-only clean break](../adr/0015-daemon-only-clean-break.md)
-- [ADR 0007 — bash coexistence and migration (superseded)](../adr/0007-bash-coexistence-and-migration.md)
-- [`../reference/default-switch-and-deprecation.md`](../reference/default-switch-and-deprecation.md)
-  — post-clean-break landing page (active surface).
-- [`../reference/cli-contract.md`](../reference/cli-contract.md)
-  — authoritative per-verb CLI surface.
-- [`../reference/wave-evidence-schema.md`](../reference/wave-evidence-schema.md)
-  — JSON schema for the per-wave evidence files.
-- [`../reference/host-validate.md`](../reference/host-validate.md)
-  — the `d2b host validate` verb that writes those files.
+- [ADR 0015 - daemon-only clean break](../adr/0015-daemon-only-clean-break.md)
+- [ADR 0007 - bash coexistence and migration (superseded)](../adr/0007-bash-coexistence-and-migration.md)
+- [`../reference/default-switch-and-deprecation.md`](../reference/default-switch-and-deprecation.md) -
+  post-clean-break landing page (active surface).
+- [`../reference/cli-contract.md`](../reference/cli-contract.md) -
+  authoritative per-verb CLI surface.
+- [`../reference/wave-evidence-schema.md`](../reference/wave-evidence-schema.md) -
+  JSON schema for the per-wave evidence files.
+- [`../reference/host-validate.md`](../reference/host-validate.md) -
+  the `d2b host validate` verb that writes those files.
 - [Daemon experimental mode](daemon-experimental.md)
 - [Daemon lifecycle](daemon-lifecycle.md)

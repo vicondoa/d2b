@@ -2,11 +2,11 @@
 //!
 //! Resolves the per-VM provider capability row before touching local state:
 //!
-//! * **Cloud Hypervisor NixOS** – OFD-locked local state I/O, host PipeWire
+//! * **Cloud Hypervisor NixOS** - OFD-locked local state I/O, host PipeWire
 //!   enforcement via a `pw-cli`/`wpctl` subprocess (credential-aware; see
 //!   [`audio_host_controller::PipeWireHostController`]), guest enforcement via
 //!   guestd audio RPCs over the authenticated guest-control transport.
-//! * **qemu-media** – OFD-locked local state I/O, offline state-file policy.
+//! * **qemu-media** - OFD-locked local state I/O, offline state-file policy.
 //!   Guest enforcement always reported `Unsupported`. No guestd calls.
 //!
 //! All provider-internal resource IDs and credentials are redacted from
@@ -309,7 +309,7 @@ pub enum HostEnforcementResult {
 ///   the audio ProcessNode from `processes.json` to extract `WPCTL_PATH` and
 ///   `PIPEWIRE_RUNTIME_DIR` and returns a [`PipeWireHostController`]. Falls
 ///   back to returning `Unsupported` if the node or required env vars are
-///   absent — this is a configuration error, not a runtime failure.
+///   absent - this is a configuration error, not a runtime failure.
 ///
 /// * For `QemuAudioBackend` providers, returns a [`QemuAudioController`]
 ///   which commits offline policy and returns `Applied` immediately.
@@ -1177,7 +1177,7 @@ mod tests {
         assert_eq!(
             applied,
             AudioSetApplied::Unsupported,
-            "failed enforcement on Off must be Unsupported — host boundary NOT sealed"
+            "failed enforcement on Off must be Unsupported - host boundary NOT sealed"
         );
         assert_ne!(applied, AudioSetApplied::HostOnly);
     }

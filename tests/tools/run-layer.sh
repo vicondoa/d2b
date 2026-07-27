@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/tools/run-layer.sh <make_target> — run all not-yet-ported legacy
+# tests/tools/run-layer.sh <make_target> - run all not-yet-ported legacy
 # scripts assigned to a `make` target in tests/migration-ledger.toml.
 #
 # W0: targets delegate to the legacy bash scripts (grouped by the ledger).
@@ -35,6 +35,21 @@ if ! is_known_target "$target"; then
   exit 2
 fi
 
+# --- heavy-gate sole-use semaphore (ADR 0046) ------------------------------
+# test-integration, test-hardware, and perf dispatch the destructive live and
+# hardware lanes, so they must never bypass the sole-use heavy-gate semaphore.
+# The mere presence of D2B_HEAVY_GATE is not trusted: for those targets the
+# shared helper verifies this process genuinely holds a slot and re-execs
+# through the gate exactly once when it does not. Non-heavy targets (test-rust,
+# test-drift, ...) run bare.
+case "$target" in
+  test-integration | test-hardware | perf)
+    # shellcheck source=tests/tools/heavy-gate-reexec.sh
+    . "$ROOT/tests/tools/heavy-gate-reexec.sh"
+    d2b_heavy_gate_reexec "$ROOT" "$0" "$@"
+    ;;
+esac
+
 [ -f "$LEDGER" ] || { echo "run-layer: missing ledger $LEDGER (run gen-migration-ledger.sh)" >&2; exit 1; }
 
 # Extract `name`s whose make_target matches and status is still runnable legacy.
@@ -55,7 +70,7 @@ fi
 echo "run-layer[$target]: ${#scripts[@]} legacy script(s)"
 rc=0
 for s in "${scripts[@]}"; do
-  [ -f "$ROOT/$s" ] || { echo "  MISSING $s (ledger drift — re-run check-inventory)" >&2; rc=1; continue; }
+  [ -f "$ROOT/$s" ] || { echo "  MISSING $s (ledger drift - re-run check-inventory)" >&2; rc=1; continue; }
   printf '  -> %s\n' "$s"
   if ! bash "$ROOT/$s"; then
     echo "  FAIL $s" >&2

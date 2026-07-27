@@ -5,7 +5,7 @@
 //!
 //! # Why this state machine exists
 //!
-//! The host-side USBIP path is a chain of cooperating subsystems —
+//! The host-side USBIP path is a chain of cooperating subsystems -
 //! the `usbip-host` kernel module, the existing broker-mediated USB
 //! device claim for the busid, the per-env nftables
 //! carve-out, the per-env usbipd backend + proxy runners, and the
@@ -15,7 +15,7 @@
 //! * Binding before `modprobe usbip-host` succeeds returns a
 //!   confusing `ENODEV` deep inside the broker call site.
 //! * Skipping broker-mediated claim acquisition lets two envs race for the same
-//!   physical device — both win briefly, then one loses on the
+//!   physical device - both win briefly, then one loses on the
 //!   first I/O.
 //! * Opening the firewall before withholding non-owner-env
 //!   `SpawnRunner`s for the same busid leaves a brief window where
@@ -41,17 +41,17 @@
 //!
 //! # Shape
 //!
-//! * [`UsbipBusidStep`] — typed enum, one variant per canonical
+//! * [`UsbipBusidStep`] - typed enum, one variant per canonical
 //!   step.
-//! * [`UsbipBusidPlan`] — `{ busid, env, steps }` with the
+//! * [`UsbipBusidPlan`] - `{ busid, env, steps }` with the
 //!   canonical order pinned by construction.
-//! * [`build_usbip_plan`] — pure constructor; takes a
+//! * [`build_usbip_plan`] - pure constructor; takes a
 //!   `BundleResolver` so callers can resolve the per-env intents
 //!   (firewall + bind) before invoking the executor.
-//! * [`UsbipStepExecutor`] — trait one method per step. Production
+//! * [`UsbipStepExecutor`] - trait one method per step. Production
 //!   wires this through the broker dispatch surface; tests inject
 //!   a fixture executor.
-//! * [`execute_usbip_plan`] — drives the plan in order, fail-fast
+//! * [`execute_usbip_plan`] - drives the plan in order, fail-fast
 //!   on the first step that returns an error. Returns a typed
 //!   [`UsbipExecutionReport`] with the per-step outcome trace.
 //!
@@ -97,7 +97,7 @@ impl UsbipClaimSource {
 
 /// One node in the canonical per-busid USBIP state machine.
 ///
-/// The order of variants in this enum is documentation-only — the
+/// The order of variants in this enum is documentation-only - the
 /// actual canonical order is encoded by [`CANONICAL_STEPS`] and
 /// pinned at plan construction in [`build_usbip_plan`]. Tests
 /// assert that the two stay aligned.
@@ -105,7 +105,7 @@ impl UsbipClaimSource {
 #[serde(rename_all = "kebab-case")]
 pub enum UsbipBusidStep {
     /// `ModprobeIfAllowed(usbip-host)` against the trusted-bundle
-    /// kernel-module matrix. MUST be first — every later step
+    /// kernel-module matrix. MUST be first - every later step
     /// silently no-ops without the kernel symbol surface.
     Modprobe,
     /// Acquire the existing broker-mediated USB device claim for the
@@ -131,7 +131,7 @@ pub enum UsbipBusidStep {
 
 impl UsbipBusidStep {
     /// Stable kebab-case identifier used in typed errors,
-    /// audit-log fields, and tests. Keeping this stable matters —
+    /// audit-log fields, and tests. Keeping this stable matters -
     /// operators grep for `usbip-step-failed: step=firewall …`
     /// across hosts.
     pub fn as_str(self) -> &'static str {
@@ -179,7 +179,7 @@ pub const CANONICAL_STEPS: [UsbipBusidStep; 7] = [
 /// Typed plan for bringing up a single busid into a single env.
 ///
 /// `busid` and `env` are taken verbatim from the resolved bundle
-/// intents — callers MUST NOT compose synthetic busids here. The
+/// intents - callers MUST NOT compose synthetic busids here. The
 /// `steps` field is the canonical bring-up order; the stop path
 /// is the same list reversed (use [`UsbipBusidPlan::stop_order`]).
 ///
@@ -207,8 +207,8 @@ impl UsbipBusidPlan {
     /// host unbind plus targeted conntrack/socket cleanup, or fail closed
     /// if the selected stream cannot be isolated.
     ///
-    /// `Modprobe` at the tail is intentionally a no-op — the kernel
-    /// module stays loaded — but keeping it in the list leaves room for a
+    /// `Modprobe` at the tail is intentionally a no-op - the kernel
+    /// module stays loaded - but keeping it in the list leaves room for a
     /// stop-side dispatch table to record the no-op explicitly.
     pub fn stop_order(&self) -> Vec<UsbipBusidStep> {
         self.steps
@@ -351,7 +351,7 @@ pub fn build_usbip_explicit_plan(
 /// the broker; tests inject a fixture that records call order
 /// and can fail a chosen step.
 ///
-/// Each method MUST be idempotent — replays of the same plan
+/// Each method MUST be idempotent - replays of the same plan
 /// after a partial failure are expected.
 pub trait UsbipStepExecutor {
     fn modprobe(&mut self, plan: &UsbipBusidPlan) -> Result<(), String>;

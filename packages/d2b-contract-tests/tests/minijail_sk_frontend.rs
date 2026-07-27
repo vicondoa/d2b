@@ -13,7 +13,7 @@
 //!   * The profile carries `role = "security-key-frontend"`.
 //!   * The profile carries a `seccompPolicyRef` (must be present; the
 //!     framework's profile schema requires it).
-//!   * The profile does NOT declare `capabilities =` — mkProfile defaults to
+//!   * The profile does NOT declare `capabilities =` - mkProfile defaults to
 //!     `[]`, which is correct: the host daemon only watches a path for
 //!     readiness and never touches a device.
 //!   * `ProcessRole::SecurityKeyFrontend` exists as a Rust enum variant in
@@ -127,7 +127,7 @@ fn sk_frontend_profile_no_host_capabilities() {
     assert!(
         !any_line_matches(&block, r"capabilities\s*="),
         "sk-frontend profile unexpectedly declares host capabilities; \
-         the node is a no-runner tracker — capabilities must remain at mkProfile \
+         the node is a no-runner tracker - capabilities must remain at mkProfile \
          default []. block content:\n{block}"
     );
 }

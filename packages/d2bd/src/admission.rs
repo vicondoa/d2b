@@ -21,7 +21,7 @@ pub(crate) enum PeerRole {
     /// systemd `ExecStop = "+..."`. Permits only `vmStop` during host
     /// shutdown; all other admin-only operations (exec, USB attach, key
     /// rotation, host prepare, audit export …) are explicitly denied.
-    /// The kernel's `SO_PEERCRED` provides the uid=0 identity — no other
+    /// The kernel's `SO_PEERCRED` provides the uid=0 identity - no other
     /// per-connection credential is evaluated for this role.
     HostShutdown,
 }

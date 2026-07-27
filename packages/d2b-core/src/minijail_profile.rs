@@ -46,15 +46,15 @@ pub struct MinijailProfile {
     /// group r-w (mode 0660/0770) and the existing default ACL on the
     /// per-VM runtime dir yields effective r-w for named-user entries
     /// (cloud-hypervisor uid). Without this,
-    /// the default 0o022 umask yields socket mode 0644 — but
-    /// vhost-user/swtpm bind() typically restricts to 0600 — which
+    /// the default 0o022 umask yields socket mode 0644 - but
+    /// vhost-user/swtpm bind() typically restricts to 0600 - which
     /// derives ACL mask=0 and named-user entries become ineffective.
     /// None means "inherit the broker's umask" (current behaviour).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub umask: Option<u32>,
 }
 
-/// v1.1.1fu14 — single-entry uid_map/gid_map declaration for the
+/// v1.1.1fu14 - single-entry uid_map/gid_map declaration for the
 /// per-role user namespace. The values are the host UIDs/GIDs that
 /// in-NS UID 0 (and GID 0) map to. See ADR 0021.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -67,8 +67,8 @@ pub struct UserNamespaceProfile {
 // v1.1.2fu19 panel-software R2 should-fix: provide `From` impls
 // across the duplicate `UserNamespaceSpec` types so layer
 // boundaries don't drift if one struct adds a field and the
-// others don't. The conversions are infallible — both source
-// and target are the same two `u32`s — so we use `From`, not
+// others don't. The conversions are infallible - both source
+// and target are the same two `u32`s - so we use `From`, not
 // `TryFrom`.
 impl From<crate::processes::RoleUserNamespace> for UserNamespaceProfile {
     fn from(rn: crate::processes::RoleUserNamespace) -> Self {

@@ -1,4 +1,4 @@
-# nft-coexistence — d2b-host nftables detector→policy matrix + broker
+# nft-coexistence - d2b-host nftables detector→policy matrix + broker
 # ApplyNftables refusal cases. Successor of tests/nft-coexistence.sh, which
 # only ran these #[test]s (d2b-host with --all-features; broker
 # ops::nft::tests with --all-features). They already run in the gated

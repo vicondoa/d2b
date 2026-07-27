@@ -33,7 +33,7 @@ let
 
   # Allowed SSH public-key types. We match by prefix on the key line
   # ("ssh-ed25519 AAAA..."). Adding/removing types here is a deliberate
-  # choice — be conservative: legacy RSA<2048, DSA, etc. are NOT in
+  # choice - be conservative: legacy RSA<2048, DSA, etc. are NOT in
   # this list.
   sshKeyPrefixes = [
     "ssh-ed25519 "
@@ -73,7 +73,7 @@ let
     in
     noPrivateMarker && hasAllowedSshPrefix firstReal;
 
-  # Pretty origin for the error message — for a path, name it; for a
+  # Pretty origin for the error message - for a path, name it; for a
   # string, truncate.
   authorizedKeyEntryName = entry:
     if builtins.isPath entry || lib.isStorePath entry
@@ -1020,8 +1020,8 @@ let
 
   # Systemd-escape identity regex (lower-case alnum and `-`, must
   # start with a LETTER). `^[a-z][a-z0-9-]*$` deliberately excludes
-  #   * `.` (dots — systemd-escape would turn them into `\x2e`)
-  #   * `_` (underscores — same)
+  #   * `.` (dots - systemd-escape would turn them into `\x2e`)
+  #   * `_` (underscores - same)
   #   * `@` (would collide with template-instance separator)
   #   * `/` (path separator)
   #   * uppercase (NixOS option names are case-sensitive but
@@ -1031,7 +1031,7 @@ let
   #   * leading digit (a numeric-prefixed VM/env name like `42web`
   #     produces unit names such as `d2b@42web.service` and tap
   #     names like `42web-l10` which are technically legal but trip up
-  #     tooling that treats the leading digit as a numeric argument —
+  #     tooling that treats the leading digit as a numeric argument -
   #     e.g. `ip link show 42web-l10` resolves to the interface at
   #     index 42 first. Requiring a leading letter matches
   #     systemd-escape best practices and avoids the ambiguity.)
@@ -1051,7 +1051,7 @@ let
     lib.hasPrefix "sys-" name && !(lib.elem name autoSysVmNames);
 
   # Env name regex (same shape as VM names, no `sys-` prefix
-  # restriction — env names like `sys` would still be permitted by
+  # restriction - env names like `sys` would still be permitted by
   # this rule, but combined with the IFNAMSIZ-1 ≤ 8 char rule in
   # network.nix the practical surface is small). The check is here
   # rather than in network.nix because it's a pure naming-format
@@ -1073,7 +1073,7 @@ let
   # with auto-declared one" mistakes. In practice that blocked
   # perfectly safe extensions like `ssh.user = "root"` on the obs
   # VM, because the framework's `observability-vm.nix` block already
-  # uses `lib.mkDefault` for every value it sets — a consumer extension
+  # uses `lib.mkDefault` for every value it sets - a consumer extension
   # MERGES on top of it via the module system. The assertion was
   # over-conservative and the check was removed in v0.2.0. We retain
   # `userObsVmDefinitions` purely for diagnostics in other error
@@ -1174,8 +1174,8 @@ let
           + "are reserved for d2b's auto-declared system VMs "
           + "(e.g. sys-<env>-net for each declared env, plus "
           + "d2b.observability.vmName when observability is "
-          + "enabled). Rename this VM or — if it's intentionally a "
-          + "system VM — register it via d2b.envs.<env>.netName "
+          + "enabled). Rename this VM or - if it's intentionally a "
+          + "system VM - register it via d2b.envs.<env>.netName "
           + "instead.";
       }
       {
@@ -1289,7 +1289,7 @@ let
         message = ''
           d2b.vms.${name}.guest.exec.allowRoot was removed.
           Guest-control exec now always runs as the VM's workload
-          user (`ssh.user`) inside a PAM login session — never as
+          user (`ssh.user`) inside a PAM login session - never as
           root. There is no root-exec mode. Remove
           `guest.exec.allowRoot = ...;`; to run a command as root,
           elevate with `sudo` inside the exec session.
@@ -1333,7 +1333,7 @@ let
       {
         # Graphics VMs CANNOT be autostart. The
         # `d2b@<vm>` wrapper template starts `microvm@<vm>`,
-        # which is the upstream microvm.nix runner — but graphics
+        # which is the upstream microvm.nix runner - but graphics
         # VMs run cloud-hypervisor via the `d2b-<vm>-gpu`
         # sidecar (which replaces the upstream runner). The sidecar
         # binds to /run/user/<wayland-uid>/wayland-0, which only
@@ -1346,7 +1346,7 @@ let
           d2b.vms.${name}: graphics.enable = true is incompatible
           with autostart = true. Graphics VMs are launched by the
           d2b CLI through d2b-${name}-gpu.service, which
-          binds to /run/user/<uid>/wayland-0 — that socket only
+          binds to /run/user/<uid>/wayland-0 - that socket only
           exists in a live user session. The systemd boot path
           would start microvm@${name}.service (the upstream runner)
           bypassing the GPU sidecar entirely, and the VM would have
@@ -1672,7 +1672,7 @@ let
         }
         {
           assertion = cidrContains cidr host && cidrContains cidr net;
-          message = "env ${name}: uplinkSubnet ${cidr} cannot be materialized — derived host IP ${host} and net IP ${net} are outside the CIDR.";
+          message = "env ${name}: uplinkSubnet ${cidr} cannot be materialized - derived host IP ${host} and net IP ${net} are outside the CIDR.";
         }
       ])
     cfg.envs;
@@ -1860,7 +1860,7 @@ let
     ]
     ++
     # If any VM uses graphics, audio, or qemu-media, the host MUST point
-    # at a Wayland user — that's the user whose XDG_RUNTIME_DIR holds the
+    # at a Wayland user - that's the user whose XDG_RUNTIME_DIR holds the
     # compositor / PipeWire sockets those host-side processes need.
     lib.optional needsWaylandUser {
       assertion = cfg.site.waylandUser != null;
@@ -1905,7 +1905,7 @@ let
       '';
     }
     # launcherUsers entries must reference real users (same rationale
-    # as waylandUser — extraGroups merging on a non-existent user is
+    # as waylandUser - extraGroups merging on a non-existent user is
     # a silent no-op).
     ++ map
       (u: {
@@ -1999,7 +1999,7 @@ let
   # read here as `_computed.<name>.guestForbidden`. It is a policy lint,
   # not an eval-time security sandbox (see lib.nix + docs/adr/0024).
   # Only VMs that set a guestConfigFile force that per-VM evaluation, so
-  # VMs without one — i.e. every existing consumer — pay nothing here.
+  # VMs without one - i.e. every existing consumer - pay nothing here.
   guestConfigContainmentAssertions = lib.mapAttrsToList
     (name: vm:
       let
@@ -2046,7 +2046,7 @@ let
     1267 9436
   ];
 
-  # A — per-VM security-key requires host enable.
+  # A - per-VM security-key requires host enable.
   securityKeyHostRequiredAssertions = lib.mapAttrsToList
     (name: vm:
       {
@@ -2060,7 +2060,7 @@ let
       })
     cfg.vms;
 
-  # B — per-VM mutual exclusion: security-key proxy and USBIP YubiKey.
+  # B - per-VM mutual exclusion: security-key proxy and USBIP YubiKey.
   securityKeyUsbipMutualExclusionAssertions = lib.mapAttrsToList
     (name: vm:
       {
@@ -2077,7 +2077,7 @@ let
       })
     cfg.vms;
 
-  # C — host device selector validity assertions.
+  # C - host device selector validity assertions.
   securityKeyDeviceAssertions =
     let
       devices = cfg.host.usb.securityKey.devices;

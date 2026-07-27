@@ -4,14 +4,14 @@
 //! split-readiness `probe_api_ready` path) used to loop on a readiness
 //! socket until a deadline. When the spawned runner died before its
 //! readiness socket ever appeared, that loop blocked all the way to the
-//! readiness budget (default `max(api_timeout, 300) = 300s`) — the
+//! readiness budget (default `max(api_timeout, 300) = 300s`) - the
 //! observed `tpm.enable` first-run wedge.
 //!
 //! This module adds an **observe-only** liveness probe that the
 //! readiness loop consults each iteration. It:
 //!
 //! - dups the daemon-held pidfd for the node's `(vm, role)` and polls it
-//!   for `POLLIN` (the authoritative, reap-independent exit signal — the
+//!   for `POLLIN` (the authoritative, reap-independent exit signal - the
 //!   kernel marks a pidfd readable once the referenced process exits),
 //! - PEEKs (does NOT consume) the `BrokerReapLog` matched by
 //!   `runner_id`/`pid` for a buffered broker-reaped exit status,
@@ -36,7 +36,7 @@ pub enum RunnerLiveness {
     /// exit status when one was buffered, else `None`.
     Exited(Option<ChildExitStatus>),
     /// The registered PID now belongs to a different process
-    /// (start-time drift) — our runner is gone and the PID was reused.
+    /// (start-time drift) - our runner is gone and the PID was reused.
     Reused,
     /// Liveness could not be determined this iteration (entry already
     /// gone via rollback, unreadable `/proc`, dup failure). The caller
@@ -47,12 +47,12 @@ pub enum RunnerLiveness {
 /// Read-only `/proc/<pid>/stat` start-time observation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StartTimeObs {
-    /// `/proc/<pid>/stat` start-time matches the registered value — this
+    /// `/proc/<pid>/stat` start-time matches the registered value - this
     /// is still our process (possibly a zombie awaiting reap).
     Match,
-    /// `/proc/<pid>/stat` start-time differs — the PID was reused.
+    /// `/proc/<pid>/stat` start-time differs - the PID was reused.
     Drift,
-    /// `/proc/<pid>/stat` is absent — the process is gone (reaped).
+    /// `/proc/<pid>/stat` is absent - the process is gone (reaped).
     Gone,
     /// `/proc/<pid>/stat` could not be read/parsed this iteration.
     Unreadable,

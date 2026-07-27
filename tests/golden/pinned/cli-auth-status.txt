@@ -1,4 +1,4 @@
-# cli-auth-status — CLI-contract integration test (d2b crate, tests/*.rs).
+# cli-auth-status - CLI-contract integration test (d2b crate, tests/*.rs).
 # Successor for the retired cli-rust-native-auth-status.sh bash gate: spawns the
 # real `d2b` binary and drives `auth status` across the launcher/none/admin
 # roles via the env-file fixture contract, validating the JSON envelope strictly

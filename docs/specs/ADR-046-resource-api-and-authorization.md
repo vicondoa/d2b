@@ -4,8 +4,8 @@
 | --- | --- |
 | Spec ID | `ADR-046-resource-api-and-authorization` |
 | Parent | ADR 0046 |
-| Status | Proposed |
-| Version | 1 |
+| Status | Accepted |
+| Version | 2 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
 | Owners | `d2b-resource-api`, Zone authorization engine |
@@ -137,7 +137,7 @@ conformance suite. Binding:
 2. records the Provider's signed `spec.provider` extension schema
    (`schemaId`/`schemaVersion`/`settings` JSON Schema) and the aligned
    `status.provider` extension schema, both deny-unknown, bounded, and digested;
-3. records the Provider's signed **standard capability matrix** — the exact set
+3. records the Provider's signed **standard capability matrix** - the exact set
    of optional base capabilities it does and does not support.
 
 A bound Provider MUST accept the canonical minimal valid base Spec for the
@@ -241,7 +241,7 @@ opaqueKeyDigest)` derived from each authority Resource/Process's signed
 `AuthorityDescriptor`. On `Create`/`UpdateSpec` of an authority-bearing Resource
 (or launch of an authority owner Process), admission consults the index **before
 any external effect** and rejects a second claimant for an `exactly-one`/
-`zero-or-one` authority — or one exceeding a `bounded-many` bound — with the
+`zero-or-one` authority - or one exceeding a `bounded-many` bound - with the
 typed `duplicateConflict` error naming the exact incumbent owner digest. The
 `authorityKey` is internal and non-authorizing: it is never an authorization
 principal and never appears as a locator in spec/status/audit. Authorization for
@@ -256,16 +256,35 @@ requires ordinary `get`/`list` verbs on the owning ResourceType.
 Before a reset/empty store has Role/RoleBinding resources, the Zone runtime has
 one compiled, non-configurable bootstrap policy:
 
-- exact subjects: Provider/system-core and Provider/system-minijail;
-- exact local ComponentSession purposes/services;
-- only store recovery, schema/config publication, initial Host/User/Provider/
-  Role/RoleBinding creation, and first Process-controller launch verbs;
-- no wildcard Provider/resource/runtime authority;
-- no config field can widen it;
-- normal stored RBAC governs all non-bootstrap work after publication.
+- the table is a `&'static` array in `packages/d2b-resource-api/src/authz.rs`
+  and accepts no configuration, Nix, environment, or API input;
+- its two phases are derived only from `store_meta.policy_revision` and the
+  presence of the bootstrap Provider rows in `type_index`;
+- exact subjects, local evidence, purpose, service, generations, and transport
+  binding must match the compiled tuple;
+- the exact method/type rows are those frozen by D105, with Provider creation
+  narrowed to `system-core`/`system-minijail` and Zone creation to the compiled
+  Zone name;
+- UpdateSpec, UpdateMetadata, UpdateFinalizers, Delete, CommitBatch, Upgrade,
+  and expedited waitForReconcile are always denied during bootstrap.
 
-Every bootstrap action remains structurally validated/audited. A different
-subject, remote route, Provider generation, or method fails closed.
+The first policy publication advances `policy_revision` from 0 to 1 in the same
+redb transaction that installs the initial Role/RoleBinding set. The transition
+is one-way; the table is never consulted at revision 1 or later, and reset
+creates a new store identity rather than clearing the marker. Every bootstrap
+action remains structurally validated/audited. A different subject, remote
+route, Provider generation, or method fails closed.
+
+### Admitted mutation boundary
+
+The native evaluator is the only constructor of `AllowDecision`. It captures
+the admitted mutation, exact authorization attributes, revisions, controller
+generation, request identity, and deadline into `AdmittedMutation`, whose
+fields are private. `ResourceStore::commit` accepts only that type. Inside the
+write transaction the store compares the captured policy, API-catalog, active
+configuration, and controller revisions against live `store_meta`; any mismatch
+aborts without mutation as `authorization-denied`. The store never evaluates
+RBAC and never auto-retries. The client must reissue through the evaluator.
 
 ### Role
 
@@ -473,24 +492,111 @@ reauthorizes and applies/rejects against current revision.
 
 ## Limits
 
-The API spec freezes bounds for:
+Every bound below is normative and is enforced before any redb mutation or
+Provider invocation. A rejection is total: no partial write, no Provider call,
+and no revision allocation occurs. The Rust constants live in
+`d2b-contracts::v3` and a policy lint asserts each declared value equals the
+number in this table. Raising a bound is a compatible change and requires a new
+decision register entry; lowering one breaks live Providers and is a breaking
+change.
 
-- request/response/batch bytes;
-- batch mutation/resource count;
-- ResourceType/name/ref depth/length;
-- list page/filter count;
-- watch count/filter complexity/rate/credit;
-- Role rules/bindings/subjects;
-- conditions/status/error strings;
-- finalizers/owner depth;
-- concurrent reads/writes per principal/controller;
-- deadlines and retry-after.
+Each value is derived from an already frozen v3 bound rather than carried over
+from a v2-era default. The derivation anchors are the frozen ComponentSession
+transport ceilings in `ADR-046-security-and-threat-model` (1 MiB logical
+message, 128 active named streams per session, 256 KiB queued plaintext per
+named stream and 4 MiB aggregate in each direction, 64 request attachments,
+`MAX_REQUEST_LIFETIME_MS` of 900,000 ms, 64 in-flight Provider agent
+dispatches), the frozen status caps in `ADR-046-resource-object-model` (64 KiB
+total status, 32 KiB per typed layer), and the frozen bounds in the decision
+register (D073 Role and RoleBinding shape, D112 and D113 admission bounds, D117
+store pool and queue capacities).
 
-Over-limit input is rejected before redb mutation or Provider invocation.
+### Request, response, and batch
+
+| Bound | Limit | Derived from | Over-limit class |
+| --- | --- | --- | --- |
+| Request canonical bytes | 512 KiB | Half the frozen 1 MiB transport logical-message ceiling, reserving the remainder for record and fragment headers, AEAD tags, up to 64 attachment descriptors, ttrpc control metadata, and the typed protobuf fields wrapping the canonical-JSON carrier | `resource-schema-invalid` |
+| Response canonical bytes | 512 KiB | Same ceiling. A response that would exceed it is truncated at an envelope boundary and returns a page cursor rather than failing, so the byte cap and not the page count is the binding pagination constraint | `resource-schema-invalid` |
+| One resource envelope | 256 KiB | Status is capped at 64 KiB, leaving 192 KiB for `metadata` and `spec`; two full envelopes still fit inside one response | `resource-schema-invalid` |
+| Mutations in one `CommitBatch` | 32 | Twice the maximum group-commit batch of 16, so one batch never needs more than two commit groups | `resource-schema-invalid` |
+| Distinct resources touched by one batch | 32 | One mutation targets exactly one resource | `resource-schema-invalid` |
+
+### Identifier and reference lengths
+
+| Bound | Limit | Derived from | Over-limit class |
+| --- | --- | --- | --- |
+| ResourceType local `<Type>` segment | 63 bytes | DNS-label shape; grammar `^[A-Z][A-Za-z0-9]{0,62}$` | `resource-schema-invalid` |
+| ResourceType `<provider-name>` segment | 63 bytes | Resource-name grammar `^[a-z][a-z0-9-]*$` | `resource-schema-invalid` |
+| Canonical `ResourceTypeName` | 63 bytes standard, 137 bytes qualified | Asserted from the two segment caps and the 11-byte `.d2bus.org.` separator, not separately configured | `resource-schema-invalid` |
+| `ResourceName`, `ZoneId` | 63 bytes | DNS-label shape | `resource-schema-invalid` |
+| Canonical `ResourceRef` string | 201 bytes | Asserted from 137 plus separator plus 63 | `resource-ref-invalid` |
+| Reference nesting depth | 1 | A ref is exactly one type and one name and cannot nest, so owner-chain depth is the only depth bound in the resource plane | `resource-ref-invalid` |
+
+### List and pagination
+
+| Bound | Limit | Derived from | Over-limit class |
+| --- | --- | --- | --- |
+| ResourceTypes per request | 16 | The 16 ResourceTypes per Role rule (D073), so a List can never span more types than one rule can authorize | `resource-schema-invalid` |
+| Page size | 500 maximum, 100 default | Secondary to the 512 KiB response cap, which truncates first whenever envelopes are large | `resource-schema-invalid` |
+| Exact-match filters per request | 8 | Each filter is an indexed lookup inside one read transaction bounded to 250 ms (D117) | `resource-schema-invalid` |
+| Values per filter | 64 | The 64 `resourceNames` per Role rule (D073) | `resource-schema-invalid` |
+| Page cursor | 256 bytes, opaque | Bound to the snapshot revision and the request filter digest; a cursor presented with different filters is rejected, and an unreadable snapshot returns `revision-expired` | `resource-schema-invalid` |
+
+### Watch
+
+Watch memory is bounded by the aggregate queue ceiling, not by the watch count.
+At the per-watch ceiling, 256 watches would queue 64 MiB, which is the entire
+Zone idle-RSS budget, so the 4 MiB aggregate is the binding limit and the
+per-watch value is only a fairness ceiling.
+
+| Bound | Limit | Derived from | Over-limit class |
+| --- | --- | --- | --- |
+| Watches per session | 32 | One quarter of the frozen 128 active named streams per session, leaving stream headroom for non-watch work | `resource-schema-invalid` |
+| Watches per Zone | 256 | 2.5 times the 100 live watches in the pinned performance fixture | `backpressure` |
+| ResourceTypes per watch | 16 | Same rule as List | `resource-schema-invalid` |
+| Filters per watch | 8 | Same rule as List | `resource-schema-invalid` |
+| Outstanding credits | 1024 maximum, 128 default | Exhausted credits stall delivery and apply backpressure; an event is never dropped | `resource-schema-invalid` |
+| Queued bytes per watch | 256 KiB | The frozen per-named-stream queue ceiling; a watch is carried on a named stream, so this is the transport's own cap and not a second budget | `backpressure` |
+| Aggregate queued watch bytes per Zone | 4 MiB | The frozen aggregate named-stream queue ceiling, shared with named streams so watch and stream backpressure use one accounting | `backpressure` |
+
+### Metadata, owners, and finalizers
+
+| Bound | Limit | Derived from | Over-limit class |
+| --- | --- | --- | --- |
+| Owner-chain depth | 8 | The deepest chain any spec describes is about five resources; the walk runs inside the write transaction | `resource-owner-depth` |
+| Resources visited per owner-hint propagation pass | 64 | Keeps hint fan-out bounded per commit | `backpressure` |
+| Finalizers per resource | 8 | Unique and canonically sorted for the digest | `resource-schema-invalid` |
+| Finalizer ID | 128 bytes | Admitted forms are `core.<name>` and `<namespace>.d2bus.org/<name>`, each segment 1 to 63 bytes | `resource-schema-invalid` |
+| Labels, annotations | 32 each | Neither participates in authorization | `resource-schema-invalid` |
+| Label or annotation key | 128 bytes | Optional `<namespace>/` prefix, same grammar both sides | `resource-schema-invalid` |
+| Label value | 256 bytes | UTF-8, control-character free | `resource-schema-invalid` |
+| Annotation value, aggregate annotations | 4 KiB, 16 KiB | Kept well inside the 256 KiB envelope cap | `resource-schema-invalid` |
+
+Status bounds (64 KiB total, 32 KiB per typed layer, 32 conditions, 64 entries
+per list or map, 4 KiB per bounded string) are frozen by
+`ADR-046-resource-object-model` and rejected as `status-oversize`. Role and
+RoleBinding bounds (32 rules; per rule 16 ResourceTypes, 16 verbs, 64 resource
+names, 32 `executionRefs`; 128 subjects per binding) are frozen by D073 and
+rejected as `resource-schema-invalid`.
+
+### Concurrency, deadlines, and retry
+
+| Bound | Limit | Derived from | Over-limit class |
+| --- | --- | --- | --- |
+| Concurrent reads per principal | 8 | The store runs a 4-thread read pool with at most 16 concurrent read transactions (D117), so two principals can saturate the pool and a third queues rather than starves | `backpressure` |
+| Concurrent writes per principal | 4 | The store has a single writer with a group-commit batch of 16, so four principals fill one batch | `backpressure` |
+| Concurrent in-flight Provider dispatches | 64 | The frozen semaphore-guarded Provider agent ceiling | `backpressure` |
+| Request deadline | 900,000 ms maximum, 30,000 ms default | The frozen `MAX_REQUEST_LIFETIME_MS` | `resource-schema-invalid` |
+| Expedited `waitForReconcile` deadline | 10,000 ms | Short enough that the priority lane cannot starve the ordinary queue | `expedited-quota-exceeded` |
+| Expedited requests in flight per Zone | 8 | Same reason | `expedited-quota-exceeded` |
+| `retryAfterMs` | 1 to 86,400,000 ms | The 24 h EphemeralProcess failed-TTL ceiling; `0` is rejected so absence has one spelling | `resource-schema-invalid` |
+| Revision-log compaction trigger | 32 MiB, 100,000 entries, or 24 h, whichever is first | Compaction advances the durable floor in bounded write transactions deleting at most 1,000 batches each, so it never blocks the writer | not applicable |
 
 ## Errors
 
-Stable classes include:
+The stable class set is **closed** at exactly these 31 classes. Adding,
+removing, or renaming one is a breaking wire change and requires a decision
+register entry; a Provider MUST NOT invent a class.
 
 - resource-not-found;
 - resource-already-exists;
@@ -524,8 +630,22 @@ Stable classes include:
 - resource-plane-unavailable;
 - internal-integrity-failure.
 
-Error messages are bounded/redacted. Conflict returns current revision but does
-not return an unauthorized resource body.
+Over-limit input maps onto this closed set and never introduces a new class:
+byte, count, and length violations are `resource-schema-invalid`; reference
+shape violations are `resource-ref-invalid`; owner-chain depth is
+`resource-owner-depth`; status size is `status-oversize`; concurrency, queue,
+and per-Zone capacity exhaustion is `backpressure`; expedited-lane exhaustion
+is `expedited-quota-exceeded`.
+
+An error is carried as a typed value with a closed `kind`, an optional
+`currentRevision`, an optional `retryAfterMs`, a closed retry class, and a
+`reason` string bounded at 512 bytes. The `reason` is UTF-8, control-character
+free, and redacted: it never echoes caller input, a filesystem or store path,
+argv, credential material, or an unauthorized resource body. Conflict returns
+the current revision but does not return an unauthorized resource body, and
+`currentRevision` is populated only for `resource-conflict` and
+`revision-expired` and only when the caller is authorized to read that
+revision.
 
 ## Audit
 
@@ -564,11 +684,11 @@ process data, and terminal bytes.
 | Dependency/owner | W0; resource API integrator |
 | Current source | `packages/d2b-contracts/src/public_wire.rs`, `broker_wire.rs`; `d2b-daemon-access/src/lib.rs`; `d2b-realm-router/src/lib.rs` |
 | Reuse action | adapt |
-| Destination | `packages/d2b-contracts/proto/d2b-resource-v3.proto`, `packages/d2b-resource-api/src/service.rs`, `client.rs` |
-| Detailed design | Async methods, contexts, preconditions, limits, errors, status/finalizer separation, batch API Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
+| Destination | `packages/d2b-contracts/proto/d2b-resource-v3.proto`; `packages/d2b-contracts/src/generated/d2b_resource_v3.rs`; `packages/d2b-resource-api/src/generated/`, `service.rs`, `client.rs`; `packages/xtask/src/main.rs` codegen commands |
+| Detailed design | Freeze the service as `d2b.resource.v3.ResourceService` and the D100 typed message set with one canonical-JSON bytes carrier. `xtask gen-resource-proto` emits message-only pure-Rust bindings into `d2b-contracts` from a service-stripped proto; `xtask gen-resource-ttrpc` emits async service/client bindings into `d2b-resource-api`. No `build.rs`, `google.protobuf.Any`, dynamically typed `oneof`, or domain error in transport status. Implement async methods, contexts, admitted-mutation preconditions, D112 contract constants, typed resource errors, status/finalizer separation, and batch API. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | d2b-bus exact service → Zone auth → redb actor |
 | Data migration | None; v3 clean break |
-| Validation | Protocol vectors; malformed/oversize/conflict/status-owner tests |
+| Validation | Golden encoding/field-number vectors; generated-file drift tests for both outputs and byte-identical existing guest-proto output; no-build-script/Any/dynamic-oneof/transport-domain-error policy tests; D112 constant assertions; malformed/oversize/conflict/status-owner tests |
 | Removal proof | Old command/resource-equivalent paths removed only per integration wave |
 
 ### ADR046-api-002
@@ -579,8 +699,8 @@ process data, and terminal bytes.
 | Current source | `d2bd` public admission; `d2b-daemon-access` policy evidence; `d2b-realm-core/src/access.rs`, `audit.rs` |
 | Reuse action | adapt |
 | Destination | `packages/d2b-resource-api/src/authz.rs`, `packages/d2b-core-controller/src/rbac.rs` |
-| Detailed design | Role/RoleBinding schemas/evaluator/cache/revision invalidation, canonical resource/session verb enums including ZoneLink-scoped `relay`, ComponentSession subject mapping, parent Zone access, and independent per-hop relay plus target-verb admission |
+| Detailed design | `packages/d2b-resource-api/src/authz.rs` defines ComponentSession subject mapping, parent-Zone access, canonical resource/session verb admission including ZoneLink-scoped `relay`, and independent per-hop relay plus target-verb checks. The W0 `packages/d2b-core-controller/src/rbac.rs` surface is limited to the stored-policy evaluator skeleton, cache keying, and revision invalidation; it defines no concrete Role or RoleBinding schema, which lands with the Zone-control work items in W5. |
 | Integration | Every resource/runtime method invokes one native evaluator before structural checks |
 | Data migration | Generate initial Roles/Bindings from Nix v3 config |
-| Validation | Decision matrix/property tests; closed-enum and relay-origin/scope rejection; relay-missing and target-verb-missing fail-closed vectors; revocation/cache/outage/parent-child tests |
+| Validation | W0 evaluator-skeleton, cache-key, revision-invalidation, subject-mapping, relay-origin/scope, relay-missing, and target-verb-missing fail-closed tests; concrete Role/RoleBinding schema and revocation vectors land with the W5 Zone-control work items |
 | Removal proof | Legacy auth remains until every v3 route is covered |

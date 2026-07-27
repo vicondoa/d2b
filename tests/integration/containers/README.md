@@ -12,11 +12,11 @@ bootstraps it via `nix shell nixpkgs#podman`.
 
 ## What this tier is for
 
-**Only** scenarios that genuinely need a *foreign, non-Nix userland* — things
+**Only** scenarios that genuinely need a *foreign, non-Nix userland* - things
 that cannot be proven by a native Rust test or a nix eval. Today that is one
 case:
 
-- `ubuntu-host-check` — proves a statically-linked d2b binary
+- `ubuntu-host-check` - proves a statically-linked d2b binary
   (`d2b-guestd-static`) runs on a stock `ubuntu:24.04` userland, i.e. the
   guest-side binary is portable to the distros d2b targets.
 
@@ -33,11 +33,11 @@ already exists, far more cheaply and without containers:
 
 A faithful systemd-boot container was built and **measured**: even forcing
 `pkgs.systemdMinimal`, the image stays **~1.4 G** to ship. The bulk is not
-systemd — it is the d2b bundle under test, whose process descriptors
+systemd - it is the d2b bundle under test, whose process descriptors
 transitively reference the full per-VM runtime substrate (swtpm → tpm2-tss,
 the hypervisor, virtiofsd, store-overlay → cryptsetup, full systemd). On an
 Ubuntu CI runner with no `/nix/store`, that 1.4 G must be built-or-fetched
-every run, and the boot needs privileged podman + `sudo` — all for **zero**
+every run, and the boot needs privileged podman + `sudo` - all for **zero**
 marginal coverage over the native tests above.
 
 So: do not add a systemd-boot / privileged-podman container here. If you think

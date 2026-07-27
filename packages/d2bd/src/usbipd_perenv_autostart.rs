@@ -2,7 +2,7 @@
 //!
 //! Retires the 9 per-env usbipd systemd units declared by
 //! `nixos-modules/network.nix`
-//! (`d2b-sys-<env>-usbipd-{backend,proxy}.{service,socket}` —
+//! (`d2b-sys-<env>-usbipd-{backend,proxy}.{service,socket}` -
 //! 3 envs × 3 units = 9 units) by folding them into broker
 //! `SpawnRunner` with [`RunnerRole::Usbip`]. The per-env scope is
 //! the broker's role anchor: `vm_id = sys-<env>-usbipd`, with two
@@ -169,7 +169,7 @@ pub enum PerEnvUsbipdOutcome {
     /// Successfully spawned this pass.
     Spawned,
     /// Daemon's pidfd table already has a live entry for this
-    /// `(vm_id, role_id)` — idempotent short-circuit on
+    /// `(vm_id, role_id)` - idempotent short-circuit on
     /// SIGHUP / bundle-reload.
     AlreadyRunning,
     /// Broker `SpawnRunner` returned `BundleIntentMissing`. The
@@ -253,8 +253,8 @@ pub trait PerEnvUsbipdSpawner: Send + Sync + 'static {
 }
 
 /// Drive the derived plan. Per spec: check idempotency, then
-/// dispatch the broker `SpawnRunner`. Failures do not abort siblings
-/// — each spec is reported independently so the operator can see the
+/// dispatch the broker `SpawnRunner`. Failures do not abort siblings:
+/// each spec is reported independently so the operator can see the
 /// full picture in one pass. The plan is ordered backend-then-proxy
 /// per env so a backend failure short-circuits to skipping that
 /// env's proxy (the proxy would race the absent backend).

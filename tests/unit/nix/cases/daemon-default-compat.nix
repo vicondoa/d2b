@@ -12,7 +12,7 @@
 # historical evidence-gated default-flip. Because the default no longer
 # depends on those files (reading `daemonExperimental.enable` never forces
 # `validationEvidencePresent`), the five scenarios reproduce byte-identical
-# boolean results WITHOUT any on-disk evidence — confirmed by probe before
+# boolean results WITHOUT any on-disk evidence - confirmed by probe before
 # migration. The scenarios still set `defaultSwitchReadiness` /
 # `defaultFlipEvidenceDir` exactly as the bash gate did so the cases mirror
 # the original inputs; only the (now-inert) disk writes are dropped.

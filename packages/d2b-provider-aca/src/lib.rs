@@ -6,7 +6,7 @@
 //! it through this Rust provider against the Azure Container Apps data-plane REST surface.
 //!
 //! ## Three-plane auth
-//! Plane 1 — Azure control-plane access — is acquired through an explicitly
+//! Plane 1 - Azure control-plane access - is acquired through an explicitly
 //! configured workload identity first, then managed identity. The production
 //! provider deliberately does not fall back to ambient developer credentials
 //! such as Azure CLI or environment credential chains. d2b stores **no**

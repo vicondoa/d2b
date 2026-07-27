@@ -1,7 +1,7 @@
 //! BundleResolver tamper-resistance integration tests.
 //!
 //! Each test creates a self-contained fake bundle root inside a
-//! `tempfile::TempDir` — the real `/etc/d2b` is never touched.
+//! `tempfile::TempDir` - the real `/etc/d2b` is never touched.
 //!
 //! The tests use [`BundleVerifyPolicy`] with the **current process's**
 //! uid/gid so that files created without `chown` still pass the owner
@@ -43,7 +43,7 @@ fn write_private(path: &Path, content: &[u8]) {
         .expect("write file");
 }
 
-/// Compute `"sha256:<hex>"` over `data` — same algorithm as the Rust verifier.
+/// Compute `"sha256:<hex>"` over `data` - same algorithm as the Rust verifier.
 fn sha256_hex(data: &[u8]) -> String {
     let digest: [u8; 32] = sha2::Sha256::digest(data).into();
     let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
@@ -272,7 +272,7 @@ fn tamper_symlink() {
 #[test]
 fn tamper_owner_wrong_uid() {
     if rustix::process::getuid().as_raw() != 0 {
-        eprintln!("tamper_owner_wrong_uid: skipping — not root (cannot chown)");
+        eprintln!("tamper_owner_wrong_uid: skipping - not root (cannot chown)");
         return;
     }
 
@@ -280,13 +280,11 @@ fn tamper_owner_wrong_uid() {
     let bundle_path = dir.path().join("bundle.json");
     write_private(&bundle_path, &minimal_bundle_json_no_hash());
 
-    // Change owner to uid=65534 (nobody) using the system chown binary.
-    let status = std::process::Command::new("chown")
-        .arg("65534")
-        .arg(bundle_path.as_os_str())
-        .status()
-        .expect("chown command ran");
-    assert!(status.success(), "chown 65534 failed: {status}");
+    // Change owner to uid=65534 (nobody) with a direct syscall. Spawning the
+    // system `chown` binary would make this hermetic-tier test depend on an
+    // external process and on PATH.
+    nix::unistd::chown(&bundle_path, Some(nix::unistd::Uid::from_raw(65534)), None)
+        .expect("chown to uid 65534");
 
     // Use a policy that expects uid=0 so the file fails.
     let policy = BundleVerifyPolicy {
@@ -337,7 +335,7 @@ fn tamper_hash_mismatch() {
     let with_hash = bundle_json_with_hash(&pre_hash);
 
     // Rewrite so the bundleHash field value is intact but the other content
-    // differs — replace the first occurrence of the bundleVersion value with
+    // differs - replace the first occurrence of the bundleVersion value with
     // a different number to ensure the parsed Value changes.
     let mut value: serde_json::Value = serde_json::from_slice(&with_hash).expect("parse with_hash");
     value["bundleVersion"] = serde_json::json!(99);
@@ -369,7 +367,7 @@ fn tamper_truncated() {
     let pre_hash = minimal_bundle_json_no_hash();
     let with_hash = bundle_json_with_hash(&pre_hash);
 
-    // Truncate to first 10 bytes — definitely unparseable JSON.
+    // Truncate to first 10 bytes - definitely unparseable JSON.
     write_private(&bundle_path, &with_hash[..10]);
 
     let policy = current_user_policy();
@@ -630,7 +628,7 @@ fn tamper_artifact_hash_mismatch() {
     let processes_path = dir.path().join("processes.json");
     let vms_path = dir.path().join("vms.json");
     write_private(&host_path, &host_bytes);
-    // Write tampered processes.json — different bytes → hash mismatch.
+    // Write tampered processes.json - different bytes → hash mismatch.
     let tampered = b"{\"schemaVersion\":\"v2\",\"vms\":[],\"tampered\":true}";
     write_private(&processes_path, tampered);
     fs::write(&vms_path, minimal_vms_json()).expect("write vms.json");
@@ -643,8 +641,8 @@ fn tamper_artifact_hash_mismatch() {
 }
 
 // ---------------------------------------------------------------
-// P0fu3 H1 (security-r2-medium): schemaVersion >= 2 — including
-// future v3+ shapes — MUST carry bundleHash. The original code
+// P0fu3 H1 (security-r2-medium): schemaVersion >= 2 - including
+// future v3+ shapes - MUST carry bundleHash. The original code
 // path matched `schemaVersion == "v2"` exactly, so a future
 // "v3" bundle missing bundleHash would silently downgrade to
 // warning-only. These tests fail-closed on that path.
@@ -695,7 +693,7 @@ fn tamper_missing_bundle_hash_unknown_schema_fails_closed() {
     let bundle_path = dir.path().join("bundle.json");
 
     // An unparseable schemaVersion ("v2-experimental") that is not
-    // recognized as the legacy v1 shape must fail closed — we don't
+    // recognized as the legacy v1 shape must fail closed - we don't
     // know whether the unknown future schema needs bundleHash so we
     // require it.
     write_private(

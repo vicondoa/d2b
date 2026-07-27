@@ -1,4 +1,4 @@
-# `d2b host doctor` — probe reference
+# `d2b host doctor` - probe reference
 
 **Diataxis category:** reference.
 
@@ -127,21 +127,21 @@ reported as guest OS failures.
 These four probes were added in v1.2 to close visibility gaps in the
 runtime health surface.
 
-### `seccomp-bpf-loaded` — D4 visibility
+### `seccomp-bpf-loaded` - D4 visibility
 
 | Field | Value |
 |-------|-------|
 | Invariant | Every registered runner is running under a seccomp BPF filter (mode 2) |
-| Closes | D4 — seccomp BPF compilation from `ioctl_policy.rs` |
+| Closes | D4 - seccomp BPF compilation from `ioctl_policy.rs` |
 | Source data | `/proc/<pid>/status` field `Seccomp:` for each PID in `<daemon-state-dir>/pidfd-table.json` |
 | Pass | All live registered runners report `Seccomp: 2` |
 | Warn | `pidfd-table.json` is missing, or empty, or all PIDs have exited (nothing to check) |
 | Fail | Any live runner reports `Seccomp: 0` (disabled) or `Seccomp: 1` (strict mode, not BPF filter) |
 
 **Seccomp mode values** (`/proc/<pid>/status Seccomp:`):
-- `0` — seccomp disabled
-- `1` — strict mode (`SECCOMP_MODE_STRICT`)
-- `2` — BPF filter mode (`SECCOMP_MODE_FILTER`) — required
+- `0` - seccomp disabled
+- `1` - strict mode (`SECCOMP_MODE_STRICT`)
+- `2` - BPF filter mode (`SECCOMP_MODE_FILTER`) - required
 
 **Probe-substitution note**: no substitution required; `/proc/<pid>/status`
 is universally available on Linux ≥ 3.8 (the minimum kernel for the
@@ -150,7 +150,7 @@ gone (process already exited) are silently skipped.
 
 ---
 
-### `pre-ns-posture` — pre-established user namespace visibility
+### `pre-ns-posture` - pre-established user namespace visibility
 
 | Field | Value |
 |-------|-------|
@@ -175,12 +175,12 @@ been present in `/proc/<pid>/status` since Linux 4.1.
 
 ---
 
-### `broker-reap-health` — D7 visibility
+### `broker-reap-health` - D7 visibility
 
 | Field | Value |
 |-------|-------|
 | Invariant | No registered runner is in zombie (`Z`) or dead (`X`) process state |
-| Closes | D7 — broker pidfd-reap (`waitid(P_PIDFD)` + `ChildReaped` IPC) visibility |
+| Closes | D7 - broker pidfd-reap (`waitid(P_PIDFD)` + `ChildReaped` IPC) visibility |
 | Source data | `/proc/<pid>/stat` field 3 (state character) for each PID in `pidfd-table.json` |
 | Pass | No registered runner in state `Z` or `X` |
 | Warn | `pidfd-table.json` missing or unreadable |
@@ -209,12 +209,12 @@ are gone (already reaped) are silently skipped.
 
 ---
 
-### `bridge-ipv6-sysctl` — D8 visibility
+### `bridge-ipv6-sysctl` - D8 visibility
 
 | Field | Value |
 |-------|-------|
 | Invariant | Every declared d2b bridge has `net.ipv6.conf.<bridge>.disable_ipv6 = 1` |
-| Closes | D8 — bridge IPv6 sysctl boot-time application and persistence guard |
+| Closes | D8 - bridge IPv6 sysctl boot-time application and persistence guard |
 | Source data | `sysctl -n net.ipv6.conf.<bridge>.disable_ipv6` for each bridge discovered from `<daemon-state-dir>/envs.json` (or `/sys/class/net/` fallback) |
 | Pass | All discovered bridges return `1` |
 | Warn | No bridges discovered (no envs running), or sysctl query errors for some bridges |
@@ -234,7 +234,7 @@ L2 frames between the host tap and the per-env `net VM`'s uplink. IPv6
 link-local autoconfiguration (`fe80::/10`) on the bridge would allow the
 host kernel to respond to NDP solicitations destined for VM traffic,
 breaking the network isolation model. The sysctl `disable_ipv6 = 1` must
-survive `systemctl restart systemd-networkd` — the live-smoke gate (D1
+survive `systemctl restart systemd-networkd` - the live-smoke gate (D1
 `--full` mode) asserts this.
 
 **Probe-substitution note**: `sysctl(8)` is required on the PATH (present

@@ -6,7 +6,7 @@
 //! `d2b-otel-host-bridge.service` host singleton into a
 //! broker-`SpawnRunner` lifecycle. The broker can now start the
 //! runner per the trusted bundle's intent, and `pidfd_table`
-//! tracks liveness — but there was no formal *readiness* signal
+//! tracks liveness - but there was no formal *readiness* signal
 //! that the daemon could block on before declaring an
 //! observability VM "ready". Without that gate the per-VM start
 //! response could report `overall_ok=true` while the host-side
@@ -19,16 +19,16 @@
 //! [`evaluate_readiness`] takes a [`ReadinessProbe`] snapshot and
 //! returns one of:
 //!
-//! * [`OtelHostBridgeReadiness::Ready`] — the runner has been
+//! * [`OtelHostBridgeReadiness::Ready`] - the runner has been
 //!   registered in `pidfd_table` AND the obs vsock host socket
 //!   exists (the side-effect-free proxy for "socket accept
 //!   succeeded + first OTLP forward acknowledged"; the formal
 //!   `sd_notify READY=1` channel from broker-spawned runners is a
 //!   later phase, see `docs/reference/otel-host-bridge-readiness.md`).
-//! * [`OtelHostBridgeReadiness::Pending { elapsed_ms }`] — one or
+//! * [`OtelHostBridgeReadiness::Pending { elapsed_ms }`] - one or
 //!   both signals are missing but the configured deadline has not
 //!   yet elapsed; the caller should sleep and retry.
-//! * [`OtelHostBridgeReadiness::Failed { reason }`] — the runner
+//! * [`OtelHostBridgeReadiness::Failed { reason }`] - the runner
 //!   pidfd registration is absent AND the per-VM observability
 //!   marker indicates the runner exited; no further polling can
 //!   help.
@@ -42,7 +42,7 @@
 //! * `manifest._observability.enabled == true` (the operator has
 //!   opted into observability), AND
 //! * `request.vm == manifest._observability.vmName` (the VM being
-//!   started is the observability VM itself — the OtelHostBridge
+//!   started is the observability VM itself - the OtelHostBridge
 //!   relays into it).
 //!
 //! Workload VMs short-circuit with no I/O. The gate is also
@@ -297,7 +297,7 @@ impl ReadinessWaitOutcome {
 
 /// Side-effecting wrapper. Polls `source` every
 /// `config.poll_interval` until [`evaluate_readiness`] returns
-/// `Ready` or `Failed` (the latter — including timeout — yields
+/// `Ready` or `Failed` (the latter - including timeout - yields
 /// `DegradedTimeout` for the caller).
 ///
 /// `now` is injected so tests can fake the clock.

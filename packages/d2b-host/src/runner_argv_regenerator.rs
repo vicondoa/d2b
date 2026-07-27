@@ -33,7 +33,7 @@
 //! The wire-cleanup (removing the Nix-side argv generation from
 //! processes-json.nix entirely and having the bundle carry typed
 //! `ChArgvInput` records instead of materialized `argv` lists) is
-//! scheduled for v1.1.1 — at v1.1 we ship the canonical Rust
+//! scheduled for v1.1.1 - at v1.1 we ship the canonical Rust
 //! generators + the regenerator wrapper as the documented
 //! migration surface.
 
@@ -125,7 +125,7 @@ pub struct RunnerArgvExtra {
 /// Regenerate the spawn argv for a resolved runner intent using the
 /// canonical Rust argv generators in this crate.
 ///
-/// At v1.1 this function is the documented migration surface — the
+/// At v1.1 this function is the documented migration surface - the
 /// broker may opt into Rust-regenerated argv per-role to validate
 /// against the bundle's prebuilt argv before the v1.1.1 wire
 /// cleanup makes the Rust path mandatory.

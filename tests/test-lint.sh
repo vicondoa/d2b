@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/test-lint.sh — `make test-lint`: fast static lint, no Nix eval, no cargo.
+# tests/test-lint.sh - `make test-lint`: fast static lint, no Nix eval, no cargo.
 #
 #   * preflight disk-space guard (fail closed before the Nix-heavy siblings)
 #   * nix-instantiate --parse on every .nix file
@@ -9,6 +9,7 @@
 # Driver script name matches the make target (tests/test-<target>.sh).
 
 set -euo pipefail
+suite_started=$SECONDS
 
 HERE=$(dirname "$(readlink -f "$0")")
 ROOT=${ROOT:-$(cd "$HERE/.." && pwd)}
@@ -21,9 +22,12 @@ export ROOT D2B_LOG
 cd "$ROOT"
 
 # --- preflight ------------------------------------------------------------
-if [ -x "$ROOT/tests/tools/preflight-disk-space.sh" ]; then
+if [ -f "$ROOT/tests/tools/preflight-disk-space.sh" ]; then
   log "--> preflight-disk-space"
   bash "$ROOT/tests/tools/preflight-disk-space.sh"
+else
+  fail "required preflight gate is missing: tests/tools/preflight-disk-space.sh"
+  exit 1
 fi
 
 # --- nix-instantiate --parse ---------------------------------------------
@@ -63,4 +67,4 @@ fi
 shellcheck --severity=warning -x "${sh_files[@]}"
 ok "shellcheck (${#sh_files[@]} scripts)"
 
-log "test-lint OK"
+log "test-lint OK (duration: $((SECONDS - suite_started))s)"

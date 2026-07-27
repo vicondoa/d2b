@@ -1,18 +1,18 @@
-//! `d2b-gateway-runtime` — the composition root that ties the
+//! `d2b-gateway-runtime` - the composition root that ties the
 //! `d2b-gateway` per-session handshake to the `d2b-provider-relay`
 //! prologue gate (ADR 0032). It provides the **matched pair** that makes
 //! the session credential gate the display byte stream over Azure Relay:
 //!
-//! - [`agent_prologue`] — built by the in-sandbox agent from the secret + the
+//! - [`agent_prologue`] - built by the in-sandbox agent from the secret + the
 //!   binding it received over the MI-authenticated ACA control plane; written
 //!   as the relay sender's prologue (the first bytes on the display channel).
-//! - [`make_prologue_verifier`] — the gateway-side
+//! - [`make_prologue_verifier`] - the gateway-side
 //!   [`PrologueVerifier`](d2b_provider_relay::PrologueVerifier) the relay
 //!   listener runs **before bridging any byte**; it deserializes + verifies the
 //!   handshake (MAC, generation, expiry, field-equality, one-shot anti-replay).
 //!
 //! Because the relay treats the prologue as opaque bytes + a closure, this is
-//! the only place the relay and the gateway credential meet — keeping the
+//! the only place the relay and the gateway credential meet - keeping the
 //! transport crate free of any gateway dependency.
 
 use std::sync::{Arc, Mutex};

@@ -1,4 +1,4 @@
-# runner-shape-preflight — d2b-host runner_shape #[test]s.
+# runner-shape-preflight - d2b-host runner_shape #[test]s.
 # Successor of tests/runner-shape-preflight.sh: that gate only looped
 # `cargo test -p d2b-host --all-features --lib runner_shape::tests::<t>`
 # over these names (d2b-host's fake-backends is #[cfg(any(test, feature))]

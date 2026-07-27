@@ -4,7 +4,7 @@
 | --- | --- |
 | Spec ID | `ADR-046-provider-transport-azure-relay` |
 | Parent | ADR 0046 |
-| Status | Proposed |
+| Status | Accepted |
 | Version | 1 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
@@ -165,10 +165,10 @@ spec:
 
     # Maximum number of concurrent relay sessions this Provider instance
     # may multiplex across all ZoneLinks it serves.
-    maxConcurrentSessions: 32           # 1–256; default 32
+    maxConcurrentSessions: 32           # 1-256; default 32
 
     # WebSocket connection timeout before failing.
-    connectTimeoutSeconds: 30           # 5–300; default 30
+    connectTimeoutSeconds: 30           # 5-300; default 30
 ```
 
 Config field rules:
@@ -177,8 +177,8 @@ Config field rules:
 | --- | --- | --- | --- |
 | `executionRef` | ResourceRef | Yes | Must be `Guest/<name>`; no host value accepted; all service components execute in this Guest |
 | `networkRef` | ResourceRef | Yes | Must be `Network/<name>`; used for service Process egress routing; TLS trust governed by Network policy |
-| `maxConcurrentSessions` | u32 | No | 1–256; default 32 |
-| `connectTimeoutSeconds` | u32 | No | 5–300; default 30 |
+| `maxConcurrentSessions` | u32 | No | 1-256; default 32 |
+| `connectTimeoutSeconds` | u32 | No | 5-300; default 30 |
 
 No SAS key, SAS token, bearer token, private key, connection string, or TLS
 certificate byte may appear in `config` at any path. All credential material
@@ -392,8 +392,17 @@ never authenticates a d2b Zone subject.
 ### KK enrollment contract
 
 Before the child-local ZoneLink becomes Ready, the child controller and the
-selected parent allocator's sealed route endpoint complete an out-of-band
-enrollment exchange that establishes:
+selected parent allocator's sealed route endpoint complete a one-time IKpsk2
+bootstrap enrollment. The child consumes the allocator-issued single-use PSK
+exactly once in a `Noise_IKpsk2_25519_ChaChaPoly_SHA256` handshake, atomically
+persists the enrolled static-key identity, and terminates that bootstrap
+session; the IKpsk2 bootstrap session is never rekeyed or continued into steady
+state. Enrollment is committed only when the child atomically persists durable
+`EnrollmentCommitted` state recording the enrolled static-key identities. A
+distinct enrolled KK handshake (a fresh `Noise_KK` handshake from
+`EnrollmentCommitted`, never a rekey of the IKpsk2 bootstrap session) MUST then
+complete before the ZoneLink becomes Ready, and no continuation or resource
+traffic ever rides IKpsk2-derived transport keys. Enrollment establishes:
 
 - **Selected parent route endpoint**: the parent allocator binds its route
   principal's static 25519 public-key fingerprint into the sealed allocation
@@ -409,9 +418,11 @@ The enrollment record carries the static public keys in an opaque, bounded
 format. No private key material enters any resource spec, status, bundle
 artifact, OTEL span, or audit record.
 
-On every session establishment:
+On every enrolled (post-bootstrap) session establishment:
 
-1. The sender initiates a Noise KK handshake (`-> e, es, ss` / `<- e, ee, se`).
+1. The sender initiates a Noise KK handshake (`-> e, es, ss` / `<- e, ee, se`)
+   using the persisted enrolled static keys; the one-time IKpsk2 bootstrap
+   above runs only for initial enrollment and to re-enroll after revocation.
 2. The Noise prologue binds the canonical ZoneLink identity and exact spec
    digest: `childZoneName`, `transportProviderRef`, `transportSettings`,
    `transportCredentials`, `disabled`, and `limits`, plus the sealed enrollment
@@ -596,12 +607,7 @@ spec:
       limit: 64
     fds:
       limit: 256
-  mounts:
-    - volumeRef: Volume/transport-azure-relay--listener--state--work-gateway
-      view: main
-      mountPath: /state
-      access: read-only
-      required: true
+  mounts: []
   networkUsage:
     networkRef: <config.networkRef>
     ports: []
@@ -616,7 +622,7 @@ spec:
     class: on-failure
     backoffBase: "2s"
     backoffMax: "60s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: null
     resetAfter: "300s"
 ```
@@ -683,12 +689,7 @@ spec:
       limit: 32
     fds:
       limit: 128
-  mounts:
-    - volumeRef: Volume/transport-azure-relay--sender--state--work-gateway
-      view: main
-      mountPath: /state
-      access: read-only
-      required: true
+  mounts: []
   networkUsage:
     networkRef: <config.networkRef>
     ports: []
@@ -703,7 +704,7 @@ spec:
     class: on-failure
     backoffBase: "2s"
     backoffMax: "60s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: null
     resetAfter: "300s"
 ```
@@ -738,13 +739,25 @@ spec:
   lifecyclePolicy: producer-owned
 status:
   phase: Ready
-  readiness: Ready
-  observedProducerGeneration: 1
-  observedResourceGeneration: 1
-  endpointGeneration: 1
-  connectionAvailability: Available
-  leaseAvailability: Available
+  resource:
+    readiness: Ready
+    observedProducerGeneration: 1
+    observedResourceGeneration: 1
+    endpointGeneration: 1
+    connectionAvailability: Available
+    leaseAvailability: Available
   conditions: []
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ---
 apiVersion: resources.d2bus.org/v3
 type: Endpoint
@@ -768,13 +781,25 @@ spec:
   lifecyclePolicy: producer-owned
 status:
   phase: Ready
-  readiness: Ready
-  observedProducerGeneration: 1
-  observedResourceGeneration: 1
-  endpointGeneration: 1
-  connectionAvailability: Available
-  leaseAvailability: Available
+  resource:
+    readiness: Ready
+    observedProducerGeneration: 1
+    observedResourceGeneration: 1
+    endpointGeneration: 1
+    connectionAvailability: Available
+    leaseAvailability: Available
   conditions: []
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 Consumers refer to `Endpoint/<name>` and resolve it only through the authorized
@@ -815,9 +840,9 @@ ProviderStateSet(zone, "transport-azure-relay") =
 `Provider/transport-azure-relay` declares **no** Provider state Volume; its
 `ProviderStateSet` is empty. All relay session state is transient in-process
 memory (`OwnedTransport`/WebSocket handles, per D081) and is never persisted.
-Its bounded non-secret operational state — listener/sender readiness,
+Its bounded non-secret operational state - listener/sender readiness,
 transport-open/close reconcile stage, bounded reconnect/connection counters,
-and closed-enum error detail — lives in the owning resource's `status`
+and closed-enum error detail - lives in the owning resource's `status`
 subresource and the child Zone's core Operation ledger (D087). All ZoneLink session state is
 owned by the child Zone's core ZoneLink controller under its local `ZoneLink`
 resource.
@@ -892,7 +917,10 @@ them, and the parent has no ZoneLink handler:
 
 | Concern | Core responsibility |
 | --- | --- |
-| Noise KK handshake and key derivation | Core initiates and verifies; relay sees opaque bytes only |
+| Enrollment-and-session state machine | Core owns `Unenrolled -> IKpsk2 -> EnrollmentCommitted -> KK -> Ready`; only `Unenrolled -> IKpsk2` consumes the allocator-issued single-use PSK, and resource traffic is prohibited before `Ready` |
+| One-time IKpsk2 bootstrap and PSK consumption | Core consumes the single-use PSK exactly once during bootstrap; relay sees opaque bytes only and never the PSK |
+| Sealed enrollment record (child static key-pin) | Core seals it in one durable transaction, reuses it on reconnect, and invalidates it on revocation; relay has no view |
+| Noise KK handshake and key derivation | Core initiates and verifies against the sealed enrollment record; relay sees opaque bytes only |
 | Session generation counter | Core increments on each reconnect |
 | Reconnect policy and backoff | Core's reconnect policy drives reconnect; core calls `CloseTransport` then `OpenTransport` after applying its own backoff |
 | Idempotency key tracking | Core assigns and deduplicates `ZoneLinkIdempotencyKey` |
@@ -943,7 +971,9 @@ Noise record bytes over that stream. Key properties:
   is transferred to d2b-bus or core.
 - **Opaque Noise records only.** The named stream carries only the
   2-byte length-prefixed Noise record bytes produced and consumed by core's
-  KK machinery. The relay service cannot decrypt or interpret them.
+  handshake machinery - the one-time IKpsk2 bootstrap records during
+  enrollment and the enrolled KK records for every established and
+  reconnected session. The relay service cannot decrypt or interpret them.
 - **Attachment support: false.** FD transfer via `SCM_RIGHTS` is a local-Unix
   operation; it is rejected at the source d2b-bus before any relay frame is
   sent (`attachment-not-permitted-over-zone-link`).
@@ -1039,17 +1069,17 @@ Both the listener and sender service processes run under the sandbox declared
 in their canonical Process resources above. Sandbox fields are compiled by
 `Provider/system-minijail`:
 
-- `namespaceClasses: [mount, pid, ipc]` — mount, PID, and IPC namespaces
+- `namespaceClasses: [mount, pid, ipc]` - mount, PID, and IPC namespaces
   are unshared; no network namespace (egress is handled via `networkUsage`);
-- `capabilityClasses: []` — no capability grants beyond the process class base;
-- `seccompClass: transport-azure-relay-egress` — named Provider seccomp profile
+- `capabilityClasses: []` - no capability grants beyond the process class base;
+- `seccompClass: transport-azure-relay-egress` - named Provider seccomp profile
   from the transport Provider's compiled catalog; permits only the syscalls
   required for TLS/WebSocket egress and IPC;
-- `startRoot: false` — process never starts as in-namespace root;
-- `noNewPrivileges: true` — `PR_SET_NO_NEW_PRIVS` set before exec;
-- `environmentClass: minimal` — only the fixed approved environment set;
+- `startRoot: false` - process never starts as in-namespace root;
+- `noNewPrivileges: true` - `PR_SET_NO_NEW_PRIVS` set before exec;
+- `environmentClass: minimal` - only the fixed approved environment set;
   no inherited host variables;
-- `readOnlyRoot: true` — rootfs mounted read-only.
+- `readOnlyRoot: true` - rootfs mounted read-only.
 
 Network egress is governed by the `Network` resource referenced in
 `config.networkRef` via `networkUsage.networkRef`. TLS trust for the Azure
@@ -1090,7 +1120,7 @@ status:
   resource:
     childZoneUid: <store-generated-uid>
     connected: true
-    lastConnectedAt: 2026-07-22T00:00:00Z
+    lastConnectedAt: 2026-07-22T00:00:00.000Z
     lastDisconnectedAt: null
     lastSentRevision: 14
     lastAckedRevision: 14
@@ -1116,11 +1146,11 @@ status:
         - type: RelayConnected
           status: "True"
           reason: websocket-open
-          lastTransitionAt: 2026-07-22T00:00:00Z
+          lastTransitionAt: 2026-07-22T00:00:00.000Z
         - type: CredentialValid
           status: "True"
           reason: lease-active
-          lastTransitionAt: 2026-07-22T00:00:01Z
+          lastTransitionAt: 2026-07-22T00:00:01.000Z
 ```
 
 Rules:
@@ -1135,15 +1165,16 @@ Rules:
   token or key.
 - The provider-extension `RelayConnected` and `CredentialValid` conditions
   reflect carriage health, not Zone routing health. Core derives
-  `ZoneLink.status.conditions.SessionEstablished` from the Noise KK handshake
-  outcome, which succeeds only after relay transport is `Connected`.
+  `ZoneLink.status.conditions.SessionEstablished` from the enrolled Noise KK
+  handshake outcome (established after the one-time IKpsk2 bootstrap
+  enrollment), which succeeds only after relay transport is `Connected`.
 
 ### Status phases
 
 | Phase | Meaning |
 | --- | --- |
 | `Pending` | Listener service process started inside gateway Guest; relay control channel not yet open |
-| `Connected` | Relay channel open; `OpenTransport` returned a handle; awaiting core Noise KK |
+| `Connected` | Relay channel open; `OpenTransport` returned a handle; awaiting the core handshake (one-time IKpsk2 bootstrap when the link is `Unenrolled`, otherwise the enrolled KK handshake) |
 | `Reconnecting` | Core called `CloseTransport` after disconnect; re-issuing `OpenTransport` |
 | `Failed` | Core reconnect policy exhausted or credential unrecoverable |
 | `Unknown` | Core cannot determine carriage state from `ObserveTransport` stream |
@@ -1208,8 +1239,10 @@ Rules:
 - `reason` fields use stable bounded codes, not provider-internal diagnostics.
 - `relayNamespaceId` and `relayEntityId` are non-secret identifiers.
 - `correlationId` links audit records to OTEL spans without carrying span payload.
-- Noise KK outcomes, session generation, and resource state transitions are
-  recorded in the core resource audit trail, not here.
+- Noise IKpsk2 bootstrap and enrolled KK outcomes, enrollment commit and
+  invalidation, session generation, and resource state transitions
+  (`Unenrolled -> IKpsk2 -> EnrollmentCommitted -> KK -> Ready`) are recorded
+  in the core resource audit trail, not here.
 
 ---
 
@@ -1248,8 +1281,10 @@ OTEL spans are emitted for:
 
 - Relay WebSocket connect and accept operations (span: `relay.connect`,
   `relay.accept`).
-- Noise KK handshake initiation and completion (span: `kk.handshake`; no
-  key material in attributes).
+- Noise handshake initiation and completion (span: `kk.handshake` for the
+  enrolled KK handshake and `ikpsk2.bootstrap` for the one-time IKpsk2
+  bootstrap enrollment; no key material, PSK, or enrollment secret in
+  attributes).
 - Credential acquisition requests (span: `credential.acquire`; carries only
   `credentialRef` as an opaque ResourceRef string, never token bytes).
 - Reconnect cycles (span: `relay.reconnect`).
@@ -1365,10 +1400,10 @@ download, or PATH scan.
 | Current source | `packages/d2b-provider-relay/src/lib.rs` (`RelayEndpoint`, `RelayCredential`, `RelayRole`, `RelayStream`, `connect()`, `listen()`, `mint_sas()`) |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-transport-azure-relay/src/relay_transport.rs` |
-| Detailed design | Adapt `RelayStream` as relay transport service process; expose named opaque byte stream on the `transport-service` Unix endpoint; add 2-byte length-prefixed framing; preserve credential redaction; TLS/WebSocket state stays in-process — only Noise record bytes traverse the named stream; register named stream with d2b-bus as `TransportHandle`; transport descriptor: `attachment_support: false`, `locality: Remote`, `atomic: false`; expose `OpenTransport`/`CloseTransport`/`ObserveTransport` interface to core; long-lived service process multiplexes sessions internally Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
+| Detailed design | Adapt `RelayStream` as relay transport service process; expose named opaque byte stream on the `transport-service` Unix endpoint; add 2-byte length-prefixed framing; preserve credential redaction; TLS/WebSocket state stays in-process - only Noise record bytes traverse the named stream; register named stream with d2b-bus as `TransportHandle`; transport descriptor: `attachment_support: false`, `locality: Remote`, `atomic: false`; expose `OpenTransport`/`CloseTransport`/`ObserveTransport` interface to core; long-lived service process multiplexes sessions internally Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | The child Zone's core ZoneLink controller calls its same-Zone selected Provider's `OpenTransport(spec.transportSettings, roleCredentialRef)` using the role ref selected from `spec.transportCredentials` → receives named byte stream handle; relay service cannot interpret plaintext bytes; one carriage per call; WebSocket loss closes the named stream; the parent has only sealed allocator/route state |
 | Data migration | No compatibility with current relay sessions; v3 sessions are independent |
-| Validation | `tests/fake_relay_transport.rs`: connect/accept, framing, credential redaction, named stream roundtrip; `tests/listener_sender_conformance.rs`: named stream contract; Noise KK binding; relay identity exclusion |
+| Validation | `tests/fake_relay_transport.rs`: connect/accept, framing, credential redaction, named stream roundtrip; `tests/listener_sender_conformance.rs`: named stream contract; enrolled Noise KK binding (established after the one-time IKpsk2 bootstrap enrollment); relay identity exclusion; enrollment-transition rejection: a rekey or continuation of the IKpsk2 bootstrap session is rejected, and any continuation or resource-API traffic offered on IKpsk2-derived transport keys (before durable `EnrollmentCommitted` and a distinct enrolled KK handshake reach `Ready`) fails closed |
 | Removal proof | `d2b-provider-relay/src/lib.rs` relay plumbing retained until ACA display migration completes |
 
 ### ADR046-transport-relay-002
@@ -1379,9 +1414,9 @@ download, or PATH scan.
 | Current source | None (new) |
 | Reuse action | create |
 | Destination | `packages/d2b-provider-transport-azure-relay/src/credential_client.rs` |
-| Detailed design | Async Credential KK session client for service components (service processes have d2b-bus access, enabling Credential KK; workers do not); child core validates the same-Zone refs in `spec.transportCredentials`, selects the unique listener or sender ref by Credential audience, and supplies it to the child-local Provider service inside its gateway Guest; raw credential bytes are held in zeroizing memory inside the gateway Guest, presented to Azure Relay, then immediately zeroized; no Credential ref or byte crosses a Zone or Guest boundary, and byte delivery between the Credential Provider and consuming service remains inside the protected KK session; the parent allocator receives neither refs nor credentials and keeps only sealed route state; redacted Debug; no credential bytes in logs/audit/OTEL; the child Zone's core ProviderDeployment creates a private persistent Volume (per ADR-046-provider-state) for each component before its Process starts — the transport Provider does not own or create these Volumes; `Provider/volume-local` reconciles them; `migrationPolicy: none` means no migration worker is ever spawned; no relay auth token, WebSocket handle, session key, or credential byte is written to that Volume; all relay session state remains transient in-process memory |
+| Detailed design | Async Credential KK session client for service components (service processes have d2b-bus access, enabling Credential KK; workers do not); child core validates the same-Zone refs in `spec.transportCredentials`, selects the unique listener or sender ref by Credential audience, and supplies it to the child-local Provider service inside its gateway Guest; raw credential bytes are held in zeroizing memory inside the gateway Guest, presented to Azure Relay, then immediately zeroized; no Credential ref or byte crosses a Zone or Guest boundary, and byte delivery between the Credential Provider and consuming service remains inside the protected KK session; the parent allocator receives neither refs nor credentials and keeps only sealed route state; redacted Debug; no credential bytes in logs/audit/OTEL; the child Zone's core ProviderDeployment creates a private persistent Volume (per ADR-046-provider-state) for each component before its Process starts - the transport Provider does not own or create these Volumes; `Provider/volume-local` reconciles them; `migrationPolicy: none` means no migration worker is ever spawned; no relay auth token, WebSocket handle, session key, or credential byte is written to that Volume; all relay session state remains transient in-process memory |
 | Integration | The selected Provider's role service invokes acquisition inside the child gateway Guest; the parent allocator has only sealed route state and no Provider/Credential/ZoneLink resource |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/credential_redaction.rs`: credential bytes never reach any Debug/log/audit/OTEL path; `src/tests/integration/credential_delivery.rs`: end-to-end credential delivery using injected fake Credential effect port |
 | Removal proof | N/A; new module |
 
@@ -1393,9 +1428,9 @@ download, or PATH scan.
 | Current source | None (new; core drives reconnect, not the transport Provider) |
 | Reuse action | create |
 | Destination | `packages/d2b-provider-transport-azure-relay/src/reconnect.rs` |
-| Detailed design | Relay service responds to `CloseTransport`+`OpenTransport` cycle from core; core owns reconnect policy and backoff scheduling; relay service tears down the current WebSocket when core calls `CloseTransport` and establishes a new WebSocket connection when core calls `OpenTransport`; relay service does not maintain a backoff state machine or independently retry — it starts a new WebSocket on demand and emits the connect result via `ObserveTransport`; listener and sender are long-lived service processes that do not re-spawn on reconnect |
+| Detailed design | Relay service responds to `CloseTransport`+`OpenTransport` cycle from core; core owns reconnect policy and backoff scheduling; relay service tears down the current WebSocket when core calls `CloseTransport` and establishes a new WebSocket connection when core calls `OpenTransport`; relay service does not maintain a backoff state machine or independently retry - it starts a new WebSocket on demand and emits the connect result via `ObserveTransport`; listener and sender are long-lived service processes that do not re-spawn on reconnect |
 | Integration | `ObserveTransport` delivers `TransportObservation::Disconnected` to core; core drives reconnect via `CloseTransport` then `OpenTransport` after applying its own backoff |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/reconnect_backoff.rs`: relay responds to CloseTransport/OpenTransport cycle; WebSocket starts on demand; ObserveTransport reports connect result; `src/tests/integration/reconnect_scenario.rs`: full reconnect cycle including Credential re-acquisition |
 | Removal proof | N/A; new module |
 
@@ -1409,7 +1444,7 @@ download, or PATH scan.
 | Destination | `packages/d2b-provider-transport-azure-relay/src/transport_settings.rs`; `docs/reference/schemas/v3/providers/transport-azure-relay.transport-settings.json` |
 | Detailed design | `AzureRelayTransportSettings` Rust struct with serde for only `relayNamespaceId` and `relayEntityId`; validation against committed JSON Schema; reject secret-shaped fields/values; generate and admit the exact six-field ZoneLink base; reject legacy provider envelopes and allocator-private fingerprint/capability fields; resolve `spec.transportProviderRef` before schema validation; validate exactly two same-Zone `spec.transportCredentials` refs with one `azure-relay-listen` and one `azure-relay-send` audience; enforce `disabled`/`limits` in child core; xtask `gen-provider-transport-schemas` integration |
 | Integration | `make test-drift` gate: `xtask gen-provider-transport-schemas && git diff --exit-code` |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/transport_settings_schema.rs`: valid/invalid schema vectors; `tests/transport_credentials.rs`: exact canonical ZoneLink field set, same-Zone ref/count/audience/scope checks, and rejection of credential refs inside `transportSettings`; eval-time Nix assertion coverage from `nix-unit: transport-settings-secret-key` test (see zone-routing spec) |
 | Removal proof | N/A; new contract |
 
@@ -1423,7 +1458,7 @@ download, or PATH scan.
 | Destination | `packages/d2b-provider-transport-azure-relay/src/backpressure.rs` |
 | Detailed design | Outbound WebSocket send buffer bounded at `MAX_AGGREGATE_NAMED_STREAM_QUEUE_BYTES`; relay WebSocket write backpressure propagates to `FairScheduler` credit; `d2b_relay_transport_backpressure_events_total` counter emitted; no unbounded memory growth under slow relay |
 | Integration | Named stream send on `transport-service` Unix endpoint blocks on relay WebSocket write; d2b-bus `FairScheduler` observes backpressure via credit stall |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/backpressure_credit.rs`: slow relay writer saturates outbound queue; named-stream credit stalls before unbounded growth; source Zone never buffers beyond aggregate limit |
 | Removal proof | N/A; new module |
 
@@ -1435,9 +1470,9 @@ download, or PATH scan.
 | Current source | `packages/d2bd/src/metrics.rs` (hand-rolled Prometheus; baseline) |
 | Reuse action | create |
 | Destination | `packages/d2b-provider-transport-azure-relay/src/{metrics.rs, audit.rs}` |
-| Detailed design | Emit all OTEL metrics and audit records listed in §OTEL and §Audit; closed semantic label sets with no Zone/resource-name-derived keys; retain Zone identity only in the `d2b.zone` OTEL resource attribute; never label secret bytes; provider audit covers **carriage authentication and health observations only** — Azure auth events, WebSocket lifecycle, credential acquisition outcomes — and is **separate from resource audit** (resource lifecycle events are owned by core); audit records appended through the Zone runtime audit log interface (no atomicity guarantee with Zone resource state in redb; best-effort delivery per the Zone's audit provider configuration); OTEL via lightweight emitter ring (no direct OTEL SDK dependency in Provider) |
+| Detailed design | Emit all OTEL metrics and audit records listed in §OTEL and §Audit; closed semantic label sets with no Zone/resource-name-derived keys; retain Zone identity only in the `d2b.zone` OTEL resource attribute; never label secret bytes; provider audit covers **carriage authentication and health observations only** - Azure auth events, WebSocket lifecycle, credential acquisition outcomes - and is **separate from resource audit** (resource lifecycle events are owned by core); audit records appended through the Zone runtime audit log interface (no atomicity guarantee with Zone resource state in redb; best-effort delivery per the Zone's audit provider configuration); OTEL via lightweight emitter ring (no direct OTEL SDK dependency in Provider) |
 | Integration | `Provider/observability-otel` receives emitter ring frames; audit log via Zone runtime `d2b.audit.transport` category |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/credential_redaction.rs` extended to cover audit/OTEL paths; `tests/metric_labels.rs` structurally asserts exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys and that a Zone-name canary never enters label values; `tests/fake_relay_transport.rs` asserts audit record fields against schema |
 | Removal proof | N/A; new module |
 
@@ -1446,12 +1481,12 @@ download, or PATH scan.
 | Field | Value |
 | --- | --- |
 | Dependency/owner | Provider crate owner; integration test owner |
-| Current source | None — net-new v3 work; no pre-ADR45 baseline equivalent |
+| Current source | None - net-new v3 work; no pre-ADR45 baseline equivalent |
 | Reuse action | create |
 | Destination | `packages/d2b-provider-transport-azure-relay/src/tests/integration/README` |
 | Detailed design | Required content: fake relay server setup and teardown using the injected fake Relay effect port; how to run hermetic integration tests without a live Azure service; how to configure the injected fake Credential effect port for credential delivery tests; the fixture declares compiler-only `k2.parentZone = "local-root"` and puts the exact-shape ZoneLink, selected Provider, Network, Credentials, Process, and Endpoint resources only in K2; local-root's store is asserted to contain no reciprocal ZoneLink or Provider; how to run with a real Azure namespace (requires same-child-Zone `Credential` resources listed in `spec.transportCredentials`, not environment-variable credential paths); integration test scenarios and expected outcomes; CI/local execution instructions |
 | Integration | `make test-integration` invokes `tests/integration/containers/` scenarios which inject the fake relay and credential port implementations from `src/tests/integration/fake_relay_server.rs` |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | File must be present; workspace policy gate enforces `src/tests/integration/README` |
 | Removal proof | N/A; mandatory layout |
 
@@ -1481,10 +1516,10 @@ wave:
 
 | Test | Fixture | What it proves |
 | --- | --- | --- |
-| `zone_link_connect.rs` | `fake_relay_server.rs` (in-process async fake relay via injected effect port) | Full child-local ZoneLink bootstrap over fake relay: K2-local Provider/link, compiler-only `k2.parentZone = "local-root"`, no local-root reciprocal row, connect, Noise KK, resource API ping, Watch |
+| `zone_link_connect.rs` | `fake_relay_server.rs` (in-process async fake relay via injected effect port) | Full child-local ZoneLink bootstrap over fake relay: K2-local Provider/link, compiler-only `k2.parentZone = "local-root"`, no local-root reciprocal row, connect, initial IKpsk2 bootstrap consuming the allocator-issued single-use PSK, enrolled follow-on Noise KK, resource API ping, Watch, and a fresh IKpsk2 bootstrap re-enrollment after revocation |
 | `credential_delivery.rs` | Injected fake Credential effect port | Listener credential acquired via KK session; token bytes zeroized; sender credential acquired independently by child Zone instance; no cross-Zone token minting |
 | `reconnect_scenario.rs` | Fake relay server with injected disconnect | Disconnect triggers new relay connect; new Noise KK; Watch resumes from last revision; queued intents replayed |
-| `fake_relay_server.rs` | — | Fake Azure Relay server that accepts listener and sender WebSocket roles; no real Azure service required; controllable inject-disconnect API; passed as constructor argument or injected effect port to test subjects |
+| `fake_relay_server.rs` | - | Fake Azure Relay server that accepts listener and sender WebSocket roles; no real Azure service required; controllable inject-disconnect API; passed as constructor argument or injected effect port to test subjects |
 
 The `src/tests/integration/fake_relay_server.rs` must implement the Azure Relay Hybrid
 Connection WebSocket protocol sufficiently to:
@@ -1500,7 +1535,7 @@ fake relay server and fake Credential port are injected as constructor
 arguments or via the toolkit's fake-port infrastructure; no environment
 variable activates them. Live/manual integration tests that target a real
 Azure namespace must declare Credential resources in `spec.transportCredentials`
-and supply those Credential resources in the test configuration — never via
+and supply those Credential resources in the test configuration - never via
 `D2B_RELAY_NAMESPACE`, `D2B_RELAY_ENTITY`, `D2B_RELAY_SAS_ENV`, or any
 environment-variable credential path. Tests that require a live Azure endpoint
 are gated with `#[ignore]` and documented in `src/tests/integration/README`.
@@ -1509,10 +1544,12 @@ are gated with `#[ignore]` and documented in `src/tests/integration/README`.
 
 Per D094 and `ADR-046-validation-and-delivery` §10.16, this Provider's `src/`
 unit tests and `tests/*.rs` hermetic suite are fast, in-process, deterministic,
-and parallel-safe: an individual normal test has p95 ≤50 ms with no wall-clock
-sleep, and `cargo test -p d2b-provider-transport-azure-relay --lib --tests` completes in ≤2 s warm-cache
+and parallel-safe: an individual normal test has an advisory wall-clock p95
+diagnostic threshold of <=50 ms; gate enforcement is aggregate per-crate
+process CPU only. There is no wall-clock
+sleep, and `cargo test -p d2b-provider-transport-azure-relay --lib --tests` completes in ≤3 s warm-cache
 execution time (compilation excluded). They use a deterministic fake clock/RNG
-and the toolkit fakes/FakeEffectPort only — no process spawn, container,
+and the toolkit fakes/FakeEffectPort only - no process spawn, container,
 network, DBus, systemd, broker daemon, Nix eval/build, KVM, USB/GPU/TPM
 hardware, or live cloud, and no filesystem tree beyond tiny temp fixtures. Any
 scenario needing those lives only in `integration/`, which keeps a lane
@@ -1543,7 +1580,7 @@ Per D094, each replaced current-code test is retired with an explicit
 keep/adapt/move/delete disposition and a removal gate: the minimum reusable
 semantic assertions migrate into this crate's hermetic `tests/`, and the old
 duplicate tests, shell gates, fixtures, static artifacts, CI jobs, and manifest
-entries are deleted once successor coverage and the removal proof pass —
+entries are deleted once successor coverage and the removal proof pass -
 updating `tests/layer1-jobs.json`, the closed gate manifests, the
 flake/matrix/Nix-unit pins, the generated ledgers, and the CI workflow shards.
 Old and new suites never run in parallel indefinitely.

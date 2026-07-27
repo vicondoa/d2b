@@ -64,7 +64,7 @@ d2b.vms.work.graphics.waylandProxy.border.label.enable = false;
 
 `graphics.xwayland.enable = true` is not supported during the
 Wayland-only migration phase.  Setting it now fails eval with a clear
-message.  Set `graphics.xwayland.enable = false` (or remove the option —
+message.  Set `graphics.xwayland.enable = false` (or remove the option -
 false is the default) before switching.
 
 Future work will add a validated Xwayland path.

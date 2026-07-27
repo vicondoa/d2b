@@ -3,7 +3,7 @@
 # sets `d2b.vms.<name>.graphics.enable = true`.
 #
 # Hypervisor: cloud-hypervisor (chosen over crosvm because crosvm has
-# no swtpm backend — its only `--vtpm-proxy` flag wires to ChromeOS's
+# no swtpm backend - its only `--vtpm-proxy` flag wires to ChromeOS's
 # D-Bus vtpmd, useless outside ChromeOS). Cloud-hypervisor has native
 # `--tpm socket=` and under microvm.nix uses the same
 # `crosvm device gpu` sidecar over vhost-user-gpu that crosvm itself
@@ -39,7 +39,7 @@ let
 
   # The GPU sidecar is `crosvm device gpu`, spawned by microvm.nix's
   # cloud-hypervisor runner over vhost-user-gpu. Use the crosvm
-  # nixpkgs ships (Feb 2026, rev 4c80bf3) directly — that rev speaks
+  # nixpkgs ships (Feb 2026, rev 4c80bf3) directly - that rev speaks
   # the standardised vhost-user shmem message numbers
   # (`GET_SHMEM_CONFIG = 44`, `SHMEM_MAP = 9`, `SHMEM_UNMAP = 10`)
   # which match rust-vmm/vhost @ vhost-user-backend-v0.22.0 (the
@@ -49,7 +49,7 @@ let
   # Historical note: this used to be pinned to crosvm 18bc84d
   # (Oct 2024), which used the OLD non-standard numbers
   # (`GET_SHARED_MEMORY_REGIONS = 1004`, `SHMEM_MAP = 1000`,
-  # `SHMEM_UNMAP = 1001`) — those are what spectrum's CH 50 patch
+  # `SHMEM_UNMAP = 1001`) - those are what spectrum's CH 50 patch
   # series sent. The CH v50 -> v52 bump took us to the
   # standardised number set, and we now need the matching crosvm
   # (any rev >= the Dec 2025 commit 729f98c "Update GET_SHMEM_CONFIG
@@ -75,7 +75,7 @@ let
   # is silently bypassed (so duplicate-syscall failures recur the
   # first time the C parser sees a policy with @includes).
   #
-  # KNOWN LIMITATION — seccomp policies not
+  # KNOWN LIMITATION - seccomp policies not
   # loaded at runtime by `crosvm device gpu`.
   #
   # The symlinkJoin above adds the compiled .bpf files to the package
@@ -85,7 +85,7 @@ let
   # NO --seccomp-policy-dir flag in this crosvm rev (Feb 2026,
   # 4c80bf3). Verified: `crosvm device gpu --help` exposes only
   # --socket-path, --fd, --wayland-sock, --resource-bridge,
-  # --x-display, and --params — no seccomp knob.
+  # --x-display, and --params - no seccomp knob.
   #
   # Loading seccomp policies at runtime for the gpu device subcommand
   # requires a crosvm-side change. We retain the .bpf files in the
@@ -232,7 +232,7 @@ let
   # at a known-good newer crosvm rev (the commit that added
   # MADV_GUARD_*) and use those policies. Policy files are pure
   # text and forward-compatible with the slightly older crosvm
-  # binary — newer versions only add allowed syscalls/args.
+  # binary - newer versions only add allowed syscalls/args.
   #
   # Pinned rev: google/crosvm@299c1e7 ("seccomp: Add
   # MADV_GUARD_{INSTALL,REMOVE}", 2026-03-27).
@@ -265,7 +265,7 @@ let
     # init and SIGSYS out, because their policies (net.policy /
     # rng_device.policy) include common_device.policy but neither
     # they nor common allow statx. statx is a metadata-read
-    # syscall, no capability grant — safe to allow for any device
+    # syscall, no capability grant - safe to allow for any device
     # proxy that includes common_device.policy.
     #
     # Several other policies (9p_device, block, fs_device, etc.)
@@ -279,7 +279,7 @@ let
       -exec sed -i '/^statx:/d' {} +
     cat >> $out/share/policy/crosvm/common_device.policy <<'EOF'
 
-# nixpkgs glibc 2.41+ compat — see modules/d2b/graphics.nix
+# nixpkgs glibc 2.41+ compat - see modules/d2b/graphics.nix
 statx: 1
 EOF
 
@@ -321,7 +321,7 @@ in
     assertions = [
       {
         assertion = spectrumCH.passthru.testedWithCrosvmRev == pkgs.crosvm.src.rev;
-        message = "CH and crosvm rev pair drifted — review compatibility first. spectrum-ch.testedWithCrosvmRev=${spectrumCH.passthru.testedWithCrosvmRev}, crosvm.src.rev=${pkgs.crosvm.src.rev}";
+        message = "CH and crosvm rev pair drifted - review compatibility first. spectrum-ch.testedWithCrosvmRev=${spectrumCH.passthru.testedWithCrosvmRev}, crosvm.src.rev=${pkgs.crosvm.src.rev}";
       }
     ];
 
@@ -338,7 +338,7 @@ in
       # window only becomes visible once the guest issues a virtio-gpu
       # SET_SCANOUT command. fbcon does that when it binds to the
       # framebuffer; aim it at fb99 (which doesn't exist) and the kernel
-      # console stays on ttyS0/serial only — no SET_SCANOUT, no host
+      # console stays on ttyS0/serial only - no SET_SCANOUT, no host
       # scanout window. Cross-domain Wayland forwarding (foot, Firefox)
       # uses a separate virtio-gpu opcode path and is unaffected.
       kernelParams = [ "nofb" "video=off" ];
@@ -351,7 +351,7 @@ in
       #
       # gate the cross-domain Wayland context type on
       # `d2b.graphics.crossDomainTrusted`. When the option is false
-      # (the default — set true only for VMs that legitimately need
+      # (the default - set true only for VMs that legitimately need
       # cross-domain Wayland forwarding, e.g. a Wayland-forwarding
       # launchpad VM running FreeRDP), wrap crosvm in a shell shim
       # that strips `cross-domain` from the `--params` JSON before
@@ -370,7 +370,7 @@ in
       # (start_hidden in gpu_display_win/surface.rs), not Linux/
       # Wayland. KDE renders the window without decoration (crosvm
       # never requests xdg-decoration SSD) and shows the default 'W'
-      # placeholder icon — observed on every VM start.
+      # placeholder icon - observed on every VM start.
       #
       # An earlier attempt to patch display_wl.c to skip the
       # xdg_surface/xdg_toplevel creation when hidden=true broke the
@@ -464,7 +464,7 @@ in
       # to the single ICD that matches our hardware.
       #
       # virtio_icd → venus (Vulkan-over-virtio, terminated on the host).
-      # lvp_icd    → lavapipe (CPU software fallback) — kept so apps that
+      # lvp_icd    → lavapipe (CPU software fallback) - kept so apps that
       #              insist on Vulkan never fail outright if venus gates
       #              on a missing host feature.
       VK_DRIVER_FILES = "/run/opengl-driver/share/vulkan/icd.d/virtio_icd.x86_64.json:/run/opengl-driver/share/vulkan/icd.d/lvp_icd.x86_64.json";
@@ -539,7 +539,7 @@ in
     # side foot terminal that SSHes into the VM, which gets proper
     # chrome from the host KDE compositor via standard
     # xdg-decoration. Operators can still SSH from any other host
-    # terminal at any time — the launcher is just one convenience
+    # terminal at any time - the launcher is just one convenience
     # path.
   };
 }

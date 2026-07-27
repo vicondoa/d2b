@@ -1,4 +1,4 @@
-# cli-host-doctor — host-doctor CLI-contract integration tests (d2b
+# cli-host-doctor - host-doctor CLI-contract integration tests (d2b
 # crate, tests/host_doctor_contract.rs). Successors for the retired
 # tests/cli-rust-native-host-doctor.sh gate: spawn the real `d2b` binary
 # and exercise `host doctor --read-only --json` against sandboxed daemon-state

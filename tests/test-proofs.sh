@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/test-proofs.sh — `make test-proofs`: clippy + test the standalone proof
+# tests/test-proofs.sh - `make test-proofs`: clippy + test the standalone proof
 # crates under proofs/ (separate Cargo workspaces, not members of packages/).
 #
 #   * proofs/chunked-stdio-conformance
@@ -9,6 +9,7 @@
 # job; they now live behind a make target so CI and local runs share one path.
 
 set -euo pipefail
+suite_started=$SECONDS
 
 HERE=$(dirname "$(readlink -f "$0")")
 ROOT=${ROOT:-$(cd "$HERE/.." && pwd)}
@@ -52,7 +53,7 @@ export CARGO_BUILD_RUSTC_WRAPPER="" RUSTC_WRAPPER=""
 # bootstrap above is skipped; but the pinned toolchain then auto-installs as
 # `minimal` (no clippy) on the first `cargo clippy`, which fails. Add clippy
 # explicitly and idempotently whenever rustup drives the toolchain. (Locally,
-# rustup is typically not on PATH — only the activated toolchain bin — and the
+# rustup is typically not on PATH - only the activated toolchain bin - and the
 # toolchain already carries clippy, so this is a no-op.)
 if command -v rustup >/dev/null 2>&1; then
   rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal >/dev/null 2>&1 || true
@@ -77,4 +78,4 @@ for proof in chunked-stdio-conformance w0-ch-connect-proof; do
 done
 
 [ "$rc" -eq 0 ] || exit 1
-log "test-proofs OK"
+log "test-proofs OK (duration: $((SECONDS - suite_started))s)"

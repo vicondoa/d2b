@@ -1,17 +1,18 @@
 # ADR 0046 implementation graph (generated)
 
-> **Generated index — not a normative member.** This file and its companion
+> **Generated index - not a normative member.** This file and its companion
 > [`ADR-046-implementation-graph.json`](ADR-046-implementation-graph.json) are
 > deterministically generated from
 > [`ADR-046-spec-set.json`](ADR-046-spec-set.json),
 > [`ADR-046-work-items.json`](ADR-046-work-items.json), and the 8-wave topology
 > in [`ADR-046-validation-and-delivery.md` §3](ADR-046-validation-and-delivery.md).
-> They are **not** among the 55 `ADR-046-spec-set.json` members. This Proposed
-> documentation set does not yet contain the future `xtask` generator; its
-> disposable regeneration script was removed after producing these bytes.
+> They are **not** among the 55 `ADR-046-spec-set.json` members. Regenerate them
+> with `cargo run -p xtask -- spec-registry` followed by
+> `cargo run -p xtask -- implementation-graph`; the committed bytes are enforced
+> by the ADR 0046 work-item policy gate.
 
 The graph maps every member spec and every work item exactly once to a
-dependency-ordered launch wave (`W0`–`W7`) and a file-disjoint parallel group.
+dependency-ordered launch wave (`W0`-`W7`) and a file-disjoint parallel group.
 It includes every resolved security-key work-item dependency; no lexical
 tie-break or omitted dependency is used.
 Each JSON work-item node also embeds the manifest's exact `detailedDesign` and
@@ -28,7 +29,7 @@ Each JSON work-item node also embeds the manifest's exact `detailedDesign` and
 | Edges | 1940 |
 | Max topological rank | 22 |
 
-## Waves (W0–W7)
+## Waves (W0-W7)
 
 | Wave | Specs | #Specs | #Work items | Parallel groups |
 | --- | --- | --- | --- | --- |
@@ -280,7 +281,7 @@ file; all other destinations retain their existing parallelism.
 22. `ADR046-qemu-media-018`
 23. `ADR046-qemu-media-019`
 
-## Regeneration findings (D095–D098)
+## Regeneration findings (D095-D098)
 
 - Regenerated from 55 member specs and 543 current work items; every declared heading is represented exactly once.
 - `ADR046-provider-004` owns the common D098 Service/Binding base DTOs and schemas; the four implementation Providers own only strict extensions and controllers.
@@ -292,7 +293,7 @@ file; all other destinations retain their existing parallelism.
   `file-overlap-order` edge and in the dependent node's `prerequisites`, so the
   ready-wave query enforces it. Soft cross-Provider integration order remains
   file-disjoint and concurrent.
-- No repository generator exists at this Proposed stage. `ADR046-streamline-001`/`024` and `ADR046-delivery-004`/`009` own the future canonical implementation and policy gate.
+- `cargo run -p xtask -- spec-registry` and `cargo run -p xtask -- implementation-graph` are the canonical generators; `packages/d2b-contract-tests/tests/policy_adr046_work_items.rs` is the fail-closed drift gate that keeps the committed bytes honest.
 
 ## Ready-wave algorithm
 

@@ -2,17 +2,19 @@
 
 How the test suite is organized, where each kind of test lives, and how to run
 and add them. For the **decision rule on where a new test goes** (and the rule
-that you must *not* add new ad-hoc `tests/*.sh`), read [`AGENTS.md`](./AGENTS.md)
-— that is the binding contract; this file is the human quick-start.
+that you must *not* add new ad-hoc `tests/*.sh`), read [`AGENTS.md`](./AGENTS.md) -
+that is the binding contract; this file is the human quick-start.
 
 ## Two layers
 
-- **Layer 1 — static gate.** Hermetic, fast, deterministic; no live host, VM, or
+- **Layer 1 - static gate.** Hermetic, fast, deterministic; no live host, VM, or
   container. Runs on every PR and locally via `make check`. This is where the
   overwhelming majority of tests live (Nix eval cases, Rust unit/integration/
   contract/policy-lint tests, flake checks, and a small closed set of drift +
-  meta gates).
-- **Layer 2 — integration tiers.** Real systemd / kernel / userland: podman
+  meta gates). The manifest records which jobs are enforcing and which are
+  advisory; an advisory success may be a guarded skip and is not validation
+  evidence.
+- **Layer 2 - integration tiers.** Real systemd / kernel / userland: podman
   containers, runNixOSTest VMs, live-host scripts, and hardware tests. Used only
   when Layer 1 *provably* cannot cover the behaviour.
 
@@ -41,34 +43,85 @@ tests/
     └── hardware/                                                type 12: real-device tests (manual)
 ```
 
-Rust tests (types 2–5: unit, integration, contract, policy-lint) live under
+Rust tests (types 2-5: unit, integration, contract, policy-lint) live under
 `packages/<crate>/`, **not** here.
 
 ## Running tests
 
 | Command | Runs | Where |
 |---------|------|-------|
-| `make test-unit` | **L1 umbrella** from `tests/layer1-jobs.json`: lint + rust + proofs + flake + drift + policy | local + CI (parallel jobs) |
+| `make test-unit` | **post-preflight L1 umbrella** from `tests/layer1-jobs.json`; `make check` also runs the manifest's preflight jobs | local + CI (parallel jobs) |
 | `make test` | `test-unit` + `test-integration` | local host; still run `make test-host-integration` before opening an agent-owned PR |
+| `make check-tier0` | sub-60s syntax + shellcheck gate | local + CI |
+| `make check-inventory` | fail-closed migration-ledger drift check | local + CI |
 | `make test-lint` | preflight + nix-parse + shellcheck | local + CI |
-| `make test-rust` | comprehensive Rust gate (fmt, clippy, cargo test, contract, broker ×3, deny/audit) | local + CI |
+| `make test-changelog` | require release notes for code changes and validate every changelog fragment | local + CI |
+| `make test-rust` | Rust gate (fmt, clippy, workspace tests, broker x3, deny/audit); explicitly excludes the fixture-dependent `d2b-contract-tests` crate | local + CI |
+| `make test-fixture-contracts` | enforcing fixture-backed lane: builds `D2B_FIXTURES`, runs `d2b-contract-tests` and the CLI-contract cases, and acquires the heavy-gate semaphore first; both lanes set `D2B_ENABLE_FIXTURE_BUILD=1`, and invoking it without that variable fails rather than skipping | local + CI |
 | `make test-proofs` | standalone proofs/ crates | local + CI |
 | `make test-flake` | `nix flake check --no-build` (native system); `D2B_FLAKE_CHECK=<name>` instantiates one check, `D2B_FLAKE_OUTPUTS=1` sweeps non-`checks` outputs, `D2B_FLAKE_LOCAL_SHARDS=1` runs the local bounded shard fan-out | local + CI (x86 sharded per-check matrix; aarch64 PR job runs a lightweight smoke eval) |
 | `make test-flake-list` | emit native-system flake check names as JSON (CI matrix plumbing) | CI (dynamic matrix) |
-| `make test-nix-unit` | sharded nix-unit corpus checks (already covered by test-flake; focused convenience target) | local |
+| `make test-nix-unit` | sharded nix-unit corpus checks, retained as explicit evidence in the manifest-driven local and CI graph | local + CI |
 | `make test-drift` | drift-check + vms-json-parity + flake-check-matrix-sync | local + CI |
 | `make test-policy` | meta gates (ci-coverage, adr-index, deliverable inventory, etc.) | local + CI |
+| `make test-runtime-ledger` | hermetic execution-budget gate: after a warm build, enforces aggregate per-crate process-CPU p95 budgets over the exact pinned census and reports per-test wall-clock p95s against advisory diagnostic thresholds (holds no baseline; makes no historical-regression claim) | local + CI |
+| `make test-performance-budgets` | advisory performance canary; without `D2B_PERF_STABLE=1` it reports `SKIP` and enforces nothing | local + CI |
 | `make test-integration` | type-9 podman container tests | **local host/manual pre-PR** (podman; not the PR pipeline) |
 | `make test-host-integration` | type-10 runNixOSTest VM checks | **local NixOS host w/ KVM**, manual pre-PR (not the PR pipeline; TCG fallback) |
-| `make check-tier0` | sub-60s syntax + shellcheck gate | local + CI |
 | `make check-fast` | alias for `test-unit` (backward compat) | local + CI |
-| `make check` | PR-equivalent Layer-1 gate from `tests/layer1-jobs.json` with bounded local parallelism | local |
+| `make check` | PR-equivalent manifest target set with bounded local parallelism; enforcement classifications come from `tests/layer1-jobs.json` | local |
 | `make check-static` | legacy/full-static monolithic gate (`tests/static.sh`) | local |
 | `make layer1-workflow` | regenerate `.github/workflows/pr-l1-static-fast.yml` from `tests/layer1-jobs.json` + template | local |
 | `make layer1-workflow-check` | verify the generated workflow is up to date | local + CI via `make test-drift` |
 | `make flake-matrix-pin` | regenerate the CI flake-check-matrix drift pin after adding/removing a flake check | local |
 | `make nix-unit-pin` | regenerate the nix-unit case-presence pins | local |
-| `D2B_LIVE=1 bash tests/integration/live/<x>.sh` | type-11 live-host tests | **manual, against a deployed d2b host** |
+| `make runtime-ledger-pin` | regenerate the runtime-ledger census pin after adding, removing or renaming a timed test | local |
+| `cargo run --manifest-path packages/Cargo.toml -p xtask -- heavy-gate -- env D2B_LIVE=1 bash tests/integration/live/<x>.sh` | type-11 live-host tests, through the heavy-gate semaphore | **manual, against a deployed d2b host** |
+
+All Layer-2 lanes (types 9-12) run behind one sole-use semaphore, invoked
+from the repository root as `cargo run --manifest-path packages/Cargo.toml
+-p xtask -- heavy-gate` (two slots per uid via open file description locks), so
+concurrent heavy lanes cannot oversubscribe the shared Nix store, cargo
+target directory, or KVM device. The public lane targets above
+(`make test-integration`, `make test-host-integration`, `make test-hardware`,
+`make perf`) acquire a slot and then delegate to a guarded internal
+`heavy-lane-*` target that fails closed if run outside the gate; run the
+public targets, not the internal ones. `make heavy-check`,
+`make heavy-cargo-test`, `make heavy-flake-check`, and the `heavy-test-*`
+aliases run a Layer-1 gate, the Rust suite, the building flake check, or a
+public lane under the same semaphore. Live-host and hardware scripts obey the
+same rule: use the gated `make pre-tag` / `make smoke-lite` live-VM smoke
+entrypoints, or wrap a raw live script as `cargo run --manifest-path
+packages/Cargo.toml -p xtask -- heavy-gate -- env
+D2B_LIVE=1 bash tests/integration/live/<x>.sh`. Invoking `D2B_LIVE=1 bash
+tests/integration/live/<x>.sh` directly no longer bypasses the semaphore:
+each live and hardware entrypoint, plus the enforcing path of each performance
+entrypoint, verifies its inherited slot and re-executes itself through the gate
+exactly once when no genuine slot is held. The advisory performance skip exits
+before acquiring a slot because it does no heavy work. A bare `D2B_HEAVY_GATE`
+value is not trusted, so the shared Nix store, cargo target directory, and KVM
+device cannot be oversubscribed. The gated targets remain the documented path.
+The `cargo run --manifest-path
+packages/Cargo.toml` spelling is required because there is no root cargo
+workspace, so the bare `cargo xtask` alias resolves only when run from
+`packages/`; see AGENTS.md for the `sccache` tradeoff and the `cd packages
+&& cargo xtask <command>` alternative.
+
+The semaphore uses a protected, system-provisioned namespace under
+`/run/d2b-heavy-gates`; it never falls back to a user-writable runtime or
+temporary directory. The NixOS module provisions the fixed root at boot and
+creates two private slots for each configured `d2b.site.launcherUsers` member
+that NSS can resolve during activation. An unavailable network-backed user is
+deferred rather than failing activation. After that user logs in, or on a
+development machine that does not use the module, run
+`make heavy-gate-provision` once per boot when the gate requests it. The target
+uses the caller's numeric UID without an NSS user-name lookup and uses `sudo`
+only to create the root-owned namespace and the current user's two mode-`0600`
+slot files. This per-boot step is necessary because `/run` is a tmpfs. Until it
+is complete, a missing or malformed namespace fails closed with stable code
+`heavy-gate-provisioning-required` and names that Make target as the
+remediation; do not work around it by moving the gate into `/tmp` or another
+user-owned location.
 
 Current live-host scripts include `d2b-store.sh` for per-VM store
 adoption and `usbip-guestd-lifecycle.sh` for USBIP guestd attach/detach across
@@ -76,12 +129,65 @@ a `d2bd` restart. The USBIP script requires
 `D2B_USBIP_VM=<vm>` and `D2B_USBIP_BUSID=<busid>` and uses only `d2b usb`
 verbs for USB state changes.
 
-`tests/layer1-jobs.json` is the central Layer-1 job graph. `make check` and
-`make test-unit` consume it directly; `.github/workflows/pr-l1-static-fast.yml`
-is generated from it by `make layer1-workflow` and checked by
-`make layer1-workflow-check` during `make test-drift`. CI runs the individual
-Layer-1 sub-targets (`test-lint`, `test-rust`, etc.) in parallel and exposes a
-stable final `check` rollup job intended for branch protection.
+`tests/layer1-jobs.json` is the central Layer-1 job graph. In its local phase
+order, the enforcing jobs are `check-tier0`, `check-inventory`, `test-lint`,
+`test-changelog`, `test-rust`, `test-proofs`, `test-flake`, `test-nix-unit`,
+`test-policy`, `test-drift`, `test-runtime-ledger`, and
+`test-fixture-contracts`. The only advisory job is
+`test-performance-budgets`. `make test-unit`
+consumes the same manifest but skips its preflight phase. Re-read the manifest
+rather than assuming this split is fixed.
+
+Jobs are enforcing by default. The manifest's optional `"enforcement":
+"advisory"` field classifies a job whose successful exit might not represent
+executed checks, and the accompanying `advisoryReason` records why. An advisory
+command still runs, and a nonzero exit still fails the graph, but a guarded
+skip is not a failure. The runner labels such a result `advisory:` rather than
+`ok:` and reports enforcing and advisory counts separately. Do not cite an
+advisory job result as validation evidence for a change.
+
+The performance advisory exists because latency budgets require a pinned
+self-hosted runner. `test-performance-budgets` exits successfully with `SKIP`
+unless `D2B_PERF_STABLE=1`; no current project runner provides that stable
+environment. Promotion to enforcing requires provisioning a pinned self-hosted
+runner, setting `D2B_PERF_STABLE=1` there, and removing the `enforcement` and
+`advisoryReason` fields from the job after that wiring lands.
+
+The fixture advisory exists because `test-fixture-contracts` exits successfully
+with `SKIP` unless `D2B_ENABLE_FIXTURE_BUILD=1`, and the sandbox does not yet
+receive `D2B_FIXTURES`. Promotion requires enabling that variable for the lane,
+delivering the fixture output to its sandbox, and then removing the
+`enforcement` and `advisoryReason` fields from the manifest. That delivery is
+tracked follow-up work. `test-rust` excludes `d2b-contract-tests`, so a green
+Rust job does not validate its fixture-dependent contract and policy layer.
+Selected hermetic policy files may have separate enforcing entrypoints under
+`test-policy`; inspect that target before citing one.
+
+`.github/workflows/pr-l1-static-fast.yml` is generated from the manifest by
+`make layer1-workflow` and checked by `make layer1-workflow-check` during
+`make test-drift`. CI runs the individual Layer-1 jobs in parallel and exposes
+a stable final `check` rollup job intended for branch protection. Locally,
+`make check` runs each manifest job's `makeTarget` and every
+`extraMakeTargets` entry, so the manifest-declared target set matches the
+pull-request graph. The performance job remains advisory in both places.
+
+The `test-runtime-ledger` job is part of that graph. It warm-builds the pinned
+census, records per-test wall-clock p95s as advisory diagnostics, and enforces
+each crate's aggregate process-CPU p95 budget. Process CPU excludes time the
+test process is descheduled behind unrelated machine load. The closed census
+presently pins one crate and exactly 190 tests, so a vanished or extra test,
+an incomplete or under-repeated run, or an aggregate crate CPU p95 over budget
+fails; a per-test diagnostic-threshold breach does not.
+
+The gate holds no baseline and makes no historical-regression claim. The
+`test-runtime-ledger check` output is authoritative for exact advisory-report
+formatting and selection. Growing the census to a real multi-crate shard
+inventory (with a per-shard budget) and adding a cross-machine reference
+baseline for a true historical-regression gate is the deferred follow-up
+`runtime-ledger-full-census-and-real-shards`. If this description diverges from
+the current `Makefile` target or `tests/layer1-jobs.json`, treat those as
+authoritative and flag the drift for the integrator rather than hand-editing
+the census pin.
 
 The x86 `test-flake` leg is sharded one job per flake check (the matrix is
 enumerated at CI time by `make test-flake-list`; the `test-flake-x86` job is a
@@ -90,20 +196,21 @@ leg runs only the lightweight `smoke-eval-aarch64.nix` expression. A fail-closed
 drift gate keeps the matrix and smoke wiring in sync with the flake (`make
 flake-matrix-pin` to update its pin). Locally, manifest-driven `make check`
 sets `D2B_FLAKE_LOCAL_SHARDS=1` for `make test-flake` and
-`D2B_SKIP_FIXTURE_BUILD=1` for `make test-rust`, matching the PR Rust job because
-the fixture checks run in the flake shard set; tune `D2B_CHECK_JOBS` and
-`D2B_FLAKE_JOBS` for host capacity. Agent-owned PRs also run
+`D2B_SKIP_FIXTURE_BUILD=1` for `make test-rust`, matching the PR Rust job. The
+flake shards do not execute `d2b-contract-tests`; only the separate advisory
+fixture lane can do so, and it currently skips unless explicitly enabled. Tune
+`D2B_CHECK_JOBS` and `D2B_FLAKE_JOBS` for host capacity. Agent-owned PRs also run
 `make test-integration` and `make test-host-integration` on the host before the
 PR is opened; those manual integration tiers are not replaced by PR pipeline
 jobs.
 
 Useful knobs:
-- `D2B_NO_SCCACHE=1` — disable sccache in the rust gate.
-- `D2B_CI_SCCACHE=1` — opt the rust gate back into sccache under CI (off by
+- `D2B_NO_SCCACHE=1` - disable sccache in the rust gate.
+- `D2B_CI_SCCACHE=1` - opt the rust gate back into sccache under CI (off by
   default there; `pr-l1-static-fast` sets it and backs `SCCACHE_DIR` with
-  `actions/cache`, using sccache's local-disk backend — never the native GHA
+  `actions/cache`, using sccache's local-disk backend - never the native GHA
   backend, which would export `ACTIONS_RUNTIME_TOKEN` into the build env).
-- `D2B_NO_PARALLEL_BROKER=1` — run the broker feature passes serially.
+- `D2B_NO_PARALLEL_BROKER=1` - run the broker feature passes serially.
 - The rust gate uses **sccache** (a shared per-crate compilation cache) and
   runs the broker's three feature passes (default / layer1-bootstrap /
   fake-backends) concurrently with the main workspace, on deterministic target
@@ -129,12 +236,12 @@ Layer 1:
 
 Only reach for Layer 2 (containers / VMs / live-host / hardware) when a foreign
 userland, a real systemd boot, a live host, or a physical device is genuinely
-required — and pick the lowest tier that works.
+required - and pick the lowest tier that works.
 
 ## Conventions
 
 - **Commit before building.** `nix flake check` and the eval gates resolve the
-  flake via `git+file://`, which only sees git-tracked files — an untracked new
+  flake via `git+file://`, which only sees git-tracked files - an untracked new
   module/test is invisible until committed.
 - **Retiring a test is ledger-tracked** (`tests/migration-state.d/<name>.toml` +
   `tests/tools/gen-migration-ledger.sh --check`); fail-closed native successors

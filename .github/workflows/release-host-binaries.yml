@@ -1,10 +1,14 @@
 name: release-host-binaries
 on:
   push:
-    branches: [main]
+    branches: [v3]
 
 permissions:
   contents: read
+
+defaults:
+  run:
+    shell: sh tests/tools/ci-shell {0}
 
 jobs:
   detect-version:
@@ -16,11 +20,10 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          fetch-depth: 0
           persist-credentials: false
+          fetch-depth: 0
       - id: detect
         name: Detect changelog release cut
-        shell: bash
         run: |
           set -euo pipefail
           version=$(perl -e 'use strict; use warnings;
@@ -42,6 +45,17 @@ jobs:
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
           printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
           printf 'skip=%s\n' "$skip" >> "$GITHUB_OUTPUT"
+      - name: Reject unfolded changelog fragments
+        if: steps.detect.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          stray=$(find changelog.d -type f ! -name README.md -printf '%P\n' 2>/dev/null | sort || true)
+          if [ -n "$stray" ]; then
+            echo "Release blocked: unfolded changelog fragments remain under changelog.d/:" >&2
+            echo "$stray" >&2
+            echo "Run 'make changelog-fold' and commit the folded CHANGELOG.md before cutting a release." >&2
+            exit 1
+          fi
 
   build:
     needs: detect-version
@@ -123,6 +137,7 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
+          persist-credentials: false
           fetch-depth: 0
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
@@ -180,8 +195,8 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch origin main
-          git checkout -B main origin/main
+          git fetch origin v3
+          git checkout -B v3 origin/v3
 
           rm -rf release-assets
           mkdir -p nix release-assets
@@ -238,7 +253,7 @@ jobs:
             'Consumers: `nix flake update d2b` to pick up pre-built binaries.'
           git push origin "$BRANCH"
           gh pr create \
-            --base main \
+            --base v3 \
             --head "$BRANCH" \
             --title "release: prebuilt manifest for v${VERSION}" \
             --body "Auto-generated after [v${VERSION}](https://github.com/${REPO}/releases/tag/${TAG}) release. Updates \`nix/prebuilt.json\` with SRI hashes for the published binaries." \

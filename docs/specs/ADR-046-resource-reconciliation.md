@@ -4,7 +4,7 @@
 | --- | --- |
 | Spec ID | `ADR-046-resource-reconciliation` |
 | Parent | ADR 0046 |
-| Status | Proposed |
+| Status | Accepted |
 | Version | 1 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
@@ -158,7 +158,7 @@ executor and never bypasses per-resource serialization:
    runs after the expedited pass completes.
 3. All effect IDs/idempotency keys derive from `(UID, generation, revision,
    operationId)`. The later ordinary re-entry observes the converged/progressing
-   state and no-ops or rejoins the in-flight operation — it never duplicates an
+   state and no-ops or rejoins the in-flight operation - it never duplicates an
    effect.
 4. The pass returns a bounded `ReconcileProjection` and one **disposition**:
    `Converged`, `Progressing`, `Blocked`, `UpgradeRequired`, or `Failed`
@@ -201,7 +201,7 @@ for one resource:
   affected owned/dependent resources. Example: a GPU Device marks itself
   `UpgradeRequired`/`Blocked` while applications depend on it; the planner
   drains dependent Processes/Guests, recycles the GPU realization, then restarts
-  the dependents — no surprise disruption. Core invokes dependency/owner
+  the dependents - no surprise disruption. Core invokes dependency/owner
   triggers and aggregates self/owned/dependency currency for list/get.
 
 ## Trigger reasons
@@ -413,10 +413,10 @@ field.
 
 On a Zone or controller restart a controller re-reads its owned resources'
 status and treats every field as **observation, not authority**. Before
-relying on any recovered observation it reverifies against external reality —
+relying on any recovered observation it reverifies against external reality -
 re-discovering running processes from declared cgroup leaves, opening fresh
 pidfds, and revalidating opaque external handles and markers against the live
-external system — and quarantines or degrades any ambiguity. Status never
+external system - and quarantines or degrades any ambiguity. Status never
 substitutes for that reverification and never carries or stands in for a
 privileged effect. This makes a durable payload Volume unnecessary for a
 component whose operational state is fully derivable from spec, status, the
@@ -458,7 +458,7 @@ core Operation ledger, and independent external observation.
 | Destination | `packages/d2b-controller-toolkit/src/lib.rs`, `runner.rs`, `queue.rs`, `context.rs`, `result.rs` |
 | Detailed design | Async ResourceReconciler, watch receiver, coalescing, per-resource serialization, parallel tasks, retry/checkpoint/finalize; expedited priority lane and `CommittedRevisionProof`-gated effects (D090); `assess_update`/`plan_upgrade`/`execute_upgrade` methods serialized in the same single-flight (D091) Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Provider controller binaries wrap handlers with toolkit |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Golden state-machine vectors, deterministic clocks, conflict/restart/queue tests; D090: commit-fails/Abort → no effect, controller finishes-before-commit gated on proof, effects-gate, status-write-delayed (`statusPersistence: pending`), normal-queued no-op/rejoin, concurrent mutation, delete event-only projection, expedited timeout committed-but-pending, restart re-entry no duplicate; D091: current/non-disruptive/each-trigger assess, UpgradeRequired-not-in-place, dependency propagation/topological drain-recycle-restart, GPU blocking, state/TPM preservation, crash/re-entry resume, single-flight reconcile-vs-upgrade serialization |
 | Removal proof | Current per-role orchestration removed only after ResourceType successors |
 
@@ -472,7 +472,7 @@ core Operation ledger, and independent external observation.
 | Destination | `packages/d2b-core-controller/src/hints.rs`, `dependencies.rs`, `owner_reconcile.rs` |
 | Detailed design | Watch-plan validation, indexes, suppression, owner/dependency hints, leases, startup relist, fair admission |
 | Integration | Store post-commit dispatcher → d2b-bus controller streams |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Owner/dependency chains, suppression/no-loss, restart/relist, lease withdrawal |
 | Removal proof | Not applicable |
 
@@ -486,6 +486,6 @@ core Operation ledger, and independent external observation.
 | Destination | `packages/d2b-controller-toolkit/benches/reaction.rs`, Process Provider integration tests |
 | Detailed design | Commit-to-handler/launch fast path, nonblocking watch, parallel ready resources |
 | Integration | Resource store → bus/session → controller → Process effect/status |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Hard <=5 ms/<=20 ms p95 gates and 1/10/100 Process concurrency |
 | Removal proof | Not applicable |

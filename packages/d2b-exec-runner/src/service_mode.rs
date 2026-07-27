@@ -304,7 +304,7 @@ pub fn supervise(
     // Best-effort: give the drains a bounded grace to flush their follows and mark
     // EOF. In the normal case the child's exit closed the only write-ends and
     // they finish immediately. If a leaked descendant inherited a write-end the
-    // drains may block forever — we stop waiting and publish the terminal status
+    // drains may block forever - we stop waiting and publish the terminal status
     // anyway. Any still-blocked drain thread is detached (dropping its
     // `JoinHandle`) and reclaimed at process exit; the streams simply lack a
     // clean EOF, which readers already tolerate.
@@ -966,7 +966,7 @@ mod tests {
 
     fn scratch_slot() -> (PathBuf, RunnerPaths) {
         // Always place test scratch under the system temp dir (respects TMPDIR,
-        // falls back to /tmp) — never the repo-relative "." which leaks
+        // falls back to /tmp) - never the repo-relative "." which leaks
         // runner-svc-* dirs into the worktree.
         let base = std::env::temp_dir();
         let dir = base.join(format!(
@@ -1152,7 +1152,7 @@ ControlGroup=/d2b.slice/d2b-exec.slice/d2b-exec-03-w.service
             "d2b-exec-03-w.service"
         ));
 
-        // A flat (top-level) slice placement must also verify — the check
+        // A flat (top-level) slice placement must also verify - the check
         // anchors on the immediate parent slice segment, not on a fixed
         // ancestor prefix.
         let flat = "\

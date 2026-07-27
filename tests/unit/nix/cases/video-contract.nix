@@ -17,7 +17,7 @@
 # The two source-content checks the bash gate ran with `grep -Fq` against
 # `nixos-modules/components/graphics.nix` (that `graphics.virglVideo` is the
 # source of crosvm/rutabaga `use_video`) migrate to `lib.hasInfix` over
-# `builtins.readFile` of the same file — a value assertion.
+# `builtins.readFile` of the same file - a value assertion.
 #
 # Faithful note on the assertion-message checks: the bash gate used
 # `builtins.match ".*<msg>.*"`, which is fragile across the multi-line

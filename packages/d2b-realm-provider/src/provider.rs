@@ -1,5 +1,5 @@
 //! The v2 provider trait surface (ADR 0032). All provider/transport
-//! traits are `async` via `async_trait` — Azure Relay, QUIC, SSH,
+//! traits are `async` via `async_trait` - Azure Relay, QUIC, SSH,
 //! provider APIs, remote daemon sessions, and stream muxing must never
 //! block the daemon reactor. Sync wrappers over blocking host code must
 //! use `spawn_blocking`/dedicated threads (the no-blocking gate).
@@ -214,7 +214,7 @@ pub trait TransportProvider: Send + Sync {
 ///
 /// The **router** owns issuing the `StreamOpen.operation_id` binding (it
 /// ties the open to the single authorizing operation and its principal);
-/// the mux does not re-authorize the principal — it enforces capability
+/// the mux does not re-authorize the principal - it enforces capability
 /// consistency + advertisement and rejects everything else fail-closed.
 #[async_trait]
 pub trait StreamMux: Send + Sync {

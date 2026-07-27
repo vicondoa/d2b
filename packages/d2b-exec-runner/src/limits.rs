@@ -4,7 +4,7 @@
 //! (`quota == slots * 2 * stream_cap`) is asserted by a unit test below.
 
 /// Maximum concurrent *running* detached execs (a concurrency cap, NOT a
-/// runtime cap — each may run indefinitely).
+/// runtime cap - each may run indefinitely).
 pub const DETACHED_ACTIVE_PER_VM: usize = 8;
 
 /// Total retained detached records (running + terminal) per VM. Equals the

@@ -17,3 +17,5 @@ serde_json.workspace = true
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 d2b-host = { path = "../d2b-host", version = "0.0.0-bootstrap" }
 regex = "1"
+rnix = "0.14"
+serde_yaml_ng = "0.10"

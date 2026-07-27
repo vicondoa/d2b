@@ -1,7 +1,7 @@
 //! Live broker request handlers.
 //!
 //! These functions execute the side-effectful work for the broker's
-//! production dispatch path — `pidfd_open(2)` + start-time
+//! production dispatch path - `pidfd_open(2)` + start-time
 //! re-verification, `nft -f -` shellouts via `ReconcileExecutor`,
 //! and `clone3(CLONE_PIDFD)` spawns via `sys::pidfd_sys`. They are
 //! pure-shaped (take their inputs directly rather than reading the
@@ -155,7 +155,7 @@ pub struct OpenPidfdResult {
 /// 5. On mismatch: drop the pidfd (closing it) and return
 ///    [`LiveHandlerError::PidfdRace`].
 ///
-/// This closes the critical pid-reuse race — the daemon's pre-call
+/// This closes the critical pid-reuse race - the daemon's pre-call
 /// /proc read is augmented by the broker's post-open re-check so the
 /// returned pidfd is provably bound to the original process.
 pub fn live_open_pidfd(
@@ -1848,7 +1848,7 @@ pub(crate) fn policy_ref_device_classes(
     use d2b_host::devices::DeviceClass;
     match policy_ref {
         // cloud-hypervisor-runner binds /dev/kvm + /dev/vhost-net + /dev/net/tun.
-        // Returns empty (permissive BPF) — KVM uses 100+ ioctls and
+        // Returns empty (permissive BPF) - KVM uses 100+ ioctls and
         // /dev/kvm access is gated by ACL on the device node + per-VM UID.
         // BPF enforcement of KVM ioctl matrix is tracked for a future
         // release (requires complete matrix from CH 52 source). The
@@ -1876,7 +1876,7 @@ pub(crate) fn policy_ref_device_classes(
         // but it uses terminal/file ioctls during init → permissive BPF.
         "w1-swtpm" => Some(&[]),
         // gpu sidecar binds the full GPU device set.
-        // Returns empty (permissive BPF) — same reasoning as KVM: DRM
+        // Returns empty (permissive BPF) - same reasoning as KVM: DRM
         // ioctl surface is huge; ACL on /dev/dri/* + per-VM UID is
         // the primary control.
         "w1-gpu" => Some(&[]),
@@ -2210,7 +2210,7 @@ impl SetfaclFailure {
     /// Path-free detail for the guest-control fs-share (`d2b-gctl`) consumer
     /// ACL path. The consumer is the per-VM cloud-hypervisor runner (not the
     /// daemon), so this reports the CH-runner principal class rather than
-    /// `d2bd`. Carries only closed-set op/target/stage/errno labels —
+    /// `d2bd`. Carries only closed-set op/target/stage/errno labels -
     /// never the raw socket/state-dir path, the acl-spec, or a uid-by-value.
     fn guest_control_fs_detail(&self, op_label: &str, target_class: &str) -> String {
         let errno = self
@@ -2878,7 +2878,7 @@ const GUEST_CONTROL_DAEMON_PRINCIPAL: &str = "d2bd";
 
 /// The runner principal-class the framework grants guest-control fs-share
 /// (`d2b-gctl`) connect access to: the per-VM cloud-hypervisor runner. The
-/// `d2b-gctl` token virtiofs share is the only CROSS-PRINCIPAL fs share —
+/// `d2b-gctl` token virtiofs share is the only CROSS-PRINCIPAL fs share -
 /// it is served by the narrower `gctlfs` principal (ADR 0021), so its 0700
 /// socket is owned by `gctlfs`, not the CH runner. CH connects to that
 /// vhost-user fs backend socket during device-init (the `--fs
@@ -2890,7 +2890,7 @@ const GUEST_CONTROL_FS_CONSUMER_PRINCIPAL: &str = "cloud-hypervisor-runner";
 
 /// The setfacl `-m` spec that lifts the `d2b-gctl` socket's masked-out
 /// CH-runner named entry: grant the runner uid `rw` AND pin the ACL mask
-/// to `rw`. The explicit `m::rw` is load-bearing — without it the 0700
+/// to `rw`. The explicit `m::rw` is load-bearing - without it the 0700
 /// socket's `mask::---` keeps the named entry's effective perms at `---`
 /// and CH's connect still EACCESes. The mask grants no execute and does
 /// not touch owner/owning-group/other, so it raises effective perms for
@@ -2920,7 +2920,7 @@ fn cloud_hypervisor_vsock_socket_arg(plan: &SpawnRunnerPlan) -> Option<PathBuf> 
 /// Path-free digest of a guest-control vsock ACL mutation, for audit.
 ///
 /// Returns `sha256:<hex>` over the operation, the target class, and the
-/// target's resolved `(dev, ino)` — never the raw socket / state-dir
+/// target's resolved `(dev, ino)` - never the raw socket / state-dir
 /// path. The guest-control observability contract forbids raw vsock /
 /// socket / state-dir paths in spans, logs, metrics, and audit.
 fn guest_control_acl_diff_hash(op: &str, target_class: &str, dev: u64, ino: u64) -> String {
@@ -2959,7 +2959,7 @@ fn audit_guest_control_vsock_acl(op: &str, target_class: &str, dev: u64, ino: u6
 
 /// Path-free wrapper over [`setfacl_fd_safe_op_classed`] for the
 /// guest-control ACL path: on failure, builds a detail string carrying
-/// only the closed-set op/target-class/stage/errno classification —
+/// only the closed-set op/target-class/stage/errno classification -
 /// never the raw socket/state-dir path or the acl-spec string.
 fn setfacl_guest_control(
     path: &Path,
@@ -2992,7 +2992,7 @@ fn setfacl_guest_control_fs(
 /// Emit a hash-only audit event for a guest-control fs-share consumer ACL
 /// mutation (the cloud-hypervisor runner's connect grant on the `d2b-gctl`
 /// virtiofs socket / its parent dir). Closed-enum labels only; no raw
-/// paths, uids-by-value, or content — same contract as
+/// paths, uids-by-value, or content - same contract as
 /// [`audit_guest_control_vsock_acl`].
 fn audit_guest_control_fs_acl(op: &str, target_class: &str, dev: u64, ino: u64) {
     tracing::info!(
@@ -3033,7 +3033,7 @@ fn current_path_dev_ino(path: &Path) -> Result<Option<(u64, u64)>, SetfaclFailur
 /// Grant the daemon `u:d2bd:--x` on every non-world-traversable
 /// directory from the filesystem root down to `leaf` (inclusive), so the
 /// daemon can `connect()` to the per-VM guest-control socket through the
-/// full ancestor chain — not just the immediate parent. World-
+/// full ancestor chain - not just the immediate parent. World-
 /// traversable directories already grant search to everyone and are
 /// skipped. The immediate per-VM leaf is audited as `state-dir`; higher
 /// non-world-x ancestors as `ancestor`. These grants are additive and
@@ -3103,7 +3103,7 @@ fn grant_guest_control_socket_acl_once(socket: &Path) -> Result<bool, String> {
 
 /// Revoke the daemon-principal guest-control vsock ACL from the socket
 /// inode. Best-effort, idempotent, and path-free: a missing socket is a
-/// no-op. Scoped to the per-VM socket inode only — the shared/ancestor
+/// no-op. Scoped to the per-VM socket inode only - the shared/ancestor
 /// traversal grants are intentionally retained (the daemon also needs
 /// them for the per-VM api-socket and sibling VMs depend on them). This
 /// is the production revoke wiring: there is no CH-stop teardown hook
@@ -3202,7 +3202,7 @@ fn refresh_guest_control_vsock_acl(plan: &SpawnRunnerPlan) -> Result<(), LiveHan
 /// without the guest-control token share.
 ///
 /// Cloud Hypervisor's `--fs` takes a variadic list of value elements
-/// (`socket=...,tag=...`) — one per share — so this scans EVERY argv
+/// (`socket=...,tag=...`) - one per share - so this scans EVERY argv
 /// element (never just the first after `--fs`) for the element whose
 /// comma-separated fields include exactly `tag=d2b-gctl`, and returns its
 /// absolute `socket=` value. Gated on the CH runner's seccomp policy ref
@@ -3249,7 +3249,7 @@ fn grant_guest_control_fs_traversal_acl(parent: &Path, uid: u32) -> Result<(), S
 /// lifted to cover the CH-runner named entry (without enabling execute in the
 /// mask). Then re-stat to confirm the same `(dev, ino)` (inode pinning): if
 /// the socket was replaced/vanished between the setfacl and the re-stat, the
-/// grant landed on a stale inode — do not audit success and report not-ready
+/// grant landed on a stale inode - do not audit success and report not-ready
 /// (`Ok(false)`) so the caller retries the live inode. `Ok(false)` while the
 /// socket has not yet been created by the gctlfs virtiofsd.
 fn grant_guest_control_fs_socket_acl_once(socket: &Path, uid: u32) -> Result<bool, String> {
@@ -3314,7 +3314,7 @@ fn spawn_guest_control_fs_acl_retry(socket: PathBuf, uid: u32) {
 /// the runner-owned shares). The gctlfs virtiofsd runs in the broker's
 /// user namespace (ADR 0021) where `--socket-group` does not take effect
 /// on the host-visible socket, leaving it `0700 gctlfs:gctlfs` with
-/// `mask::---` — which masks out the `default:u:$ch_uid` grant the
+/// `mask::---` - which masks out the `default:u:$ch_uid` grant the
 /// host-activation default ACL inherits onto the socket. Grant the CH
 /// runner uid search on the parent and `rw` on the socket (lifting the
 /// mask) so CH's vhost-user backend connect succeeds. The socket is a DAG
@@ -3395,8 +3395,8 @@ pub fn live_spawn_runner(
     // swtpm-dir first-run hardening (issue #64). Gated on the
     // `w1-swtpm` role and run BEFORE clone3 so the persistent TPM2
     // NVRAM dir is provisioned + identity-bound (or fails closed)
-    // before swtpm — which opens the NVRAM by pathname under its user
-    // namespace — is ever spawned. ONLY the persistent state dir is
+    // before swtpm - which opens the NVRAM by pathname under its user
+    // namespace - is ever spawned. ONLY the persistent state dir is
     // touched; the `/run` runtime-socket-dir posture is left intact.
     let swtpm_dir_audit = maybe_harden_swtpm_dir(&plan)?;
     let api_socket_acl_path = cloud_hypervisor_api_socket(&plan);
@@ -3410,7 +3410,7 @@ pub fn live_spawn_runner(
     // and avoids introducing a new SpawnRunnerPlan field).
     //
     // The fd is opened here (parent side, before clone3(CLONE_NEWUSER))
-    // so the DAC permission check runs as the broker UID — the child's
+    // so the DAC permission check runs as the broker UID - the child's
     // user-NS UID mapping provides no host-side access. The OwnedFd is
     // moved into RunnerIsolationSpec.pre_opened_device_fds; the broker
     // sys layer dup2's it to RENDER_NODE_INHERITED_FD (10) in the child
@@ -5201,7 +5201,7 @@ mod tests {
     fn guest_control_fs_socket_grant_not_ready_for_absent_socket() {
         // Hermetic: before the gctlfs virtiofsd creates the d2b-gctl
         // socket, the consumer socket grant must report not-ready
-        // (Ok(false)) so the caller retries — never erroring (which would
+        // (Ok(false)) so the caller retries - never erroring (which would
         // fail the cloud-hypervisor spawn outright) and never touching a
         // foreign inode. This is the exact race the bounded retry thread
         // exists to tolerate.
@@ -5238,7 +5238,7 @@ mod tests {
         // The fs-share consumer error formatter must never leak a
         // path-bearing legacy detail: it carries only closed-set class
         // tokens (op/target-class/stage), the CH-runner consumer
-        // principal, the io::ErrorKind, and the numeric errno — same
+        // principal, the io::ErrorKind, and the numeric errno - same
         // path-free contract as the daemon `guest_control_detail` twin.
         let failure = SetfaclFailure {
             stage: SetfaclStage::Apply,
@@ -5291,7 +5291,7 @@ mod tests {
     fn guest_control_acl_grant_not_ready_for_absent_socket() {
         // Hermetic: before cloud-hypervisor creates the vsock socket,
         // the socket grant must report not-ready (Ok(false)) so the
-        // caller retries — never erroring and never touching a foreign
+        // caller retries - never erroring and never touching a foreign
         // inode.
         let dir = TestDir::new("gc-vsock-acl");
         let socket = dir.join("vsock.sock");
@@ -5305,7 +5305,7 @@ mod tests {
         // the absent inode before any setfacl). The traversal-skip
         // behaviour (no setfacl on world-traversable ancestors) is
         // covered hermetically by `dir_traverse_classification_world_x_vs_private`
-        // without invoking the host setfacl binary on real ancestors —
+        // without invoking the host setfacl binary on real ancestors -
         // which a TestDir rooted under a non-world-x CI path (e.g.
         // `/home/runner`, mode 0750) would otherwise trigger.
         revoke_guest_control_vsock_acl(&socket).expect("revoke of absent socket is a no-op");

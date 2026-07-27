@@ -12,13 +12,13 @@
 # `mkEval`.
 #
 # Faithful note on the per-VM/observability host units: in the daemon-only
-# end-state those units are RETIRED — their replacements are broker
+# end-state those units are RETIRED - their replacements are broker
 # `SpawnRunner` runners whose restart contract is owned by the broker's
 # pidfd supervisor, not a `restartIfChanged` knob. The bash gate handled
 # them with `check_optional` (SKIP when absent, PASS when present with
 # `restartIfChanged = false`). Each is migrated to the `ricOkOrAbsent`
 # invariant below: it passes while the unit is absent and would fail only
-# if such a unit were RE-INTRODUCED with a missing/true restart policy —
+# if such a unit were RE-INTRODUCED with a missing/true restart policy -
 # exactly the regression the bash retained these checks to guard against.
 # d2bd is a strict value case too, but with the opposite policy: it may
 # restart on update and must use KillMode=process so VM runners survive.

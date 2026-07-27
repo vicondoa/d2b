@@ -59,7 +59,7 @@ allowed to request its contents through the daemon.
    behavior on security-sensitive paths.
 4. Positive: typed errors give automation stable handles (`kind`, exit
    code, docs anchor) instead of shell-text scraping.
-5. Positive: the audit path stays least-privilege — the broker keeps the
+5. Positive: the audit path stays least-privilege - the broker keeps the
    write fd, the daemon mediates reads, and non-root callers never get a
    raw file descriptor.
 6. Negative: additive protocol work now has to go through explicit

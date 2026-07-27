@@ -17,7 +17,7 @@ The parent decision is
 The parent and every manifest-listed spec form one atomic normative set:
 
 - all files move from `Proposed` to `Accepted` together, and every member is
-  `Proposed` today; this is a documentation-only set under user review;
+  `Accepted`; this is a documentation-only set;
 - a content change to any member invalidates validation and panel evidence for
   the set;
 - no spec may silently override another spec;
@@ -36,8 +36,8 @@ manifests, and the generated implementation-graph artifacts
 
 **Foundation and platform (15):**
 
-- [`ADR-046-decision-register`](ADR-046-decision-register.md) — resolved
-  decisions (through D098)
+- [`ADR-046-decision-register`](ADR-046-decision-register.md) - resolved
+  decisions (through D118)
 - [`ADR-046-terminology-and-identities`](ADR-046-terminology-and-identities.md)
 - [`ADR-046-resource-object-model`](ADR-046-resource-object-model.md)
 - [`ADR-046-resource-store-redb`](ADR-046-resource-store-redb.md)
@@ -53,22 +53,22 @@ manifests, and the generated implementation-graph artifacts
 - [`ADR-046-nix-configuration`](ADR-046-nix-configuration.md)
 - [`ADR-046-current-code-migration-map`](ADR-046-current-code-migration-map.md)
 
-**Resource catalog (6)** — the 19 standard ResourceTypes (`Zone`, `ZoneLink`,
+**Resource catalog (6)** - the 19 standard ResourceTypes (`Zone`, `ZoneLink`,
 `Provider`, `Role`, `RoleBinding`, `Quota`, `EmergencyPolicy`, `Host`, `Guest`,
 `Process`, `EphemeralProcess`, `Volume`, `Network`, `Device`, `User`,
 `Credential`, `Endpoint`, `ResourceExport`, `ResourceImport`) have the
 following exclusive ResourceType owners. Foundation specs define shared
 contracts but do not co-own these types:
 
-- [`ADR-046-resources-zone-control`](ADR-046-resources-zone-control.md) —
+- [`ADR-046-resources-zone-control`](ADR-046-resources-zone-control.md) -
   `Zone`, `ZoneLink`, `Provider`, `Role`, `RoleBinding`, `Quota`,
   `EmergencyPolicy`, `ResourceExport`, `ResourceImport`
-- [`ADR-046-resources-host-guest-process-user`](ADR-046-resources-host-guest-process-user.md) —
+- [`ADR-046-resources-host-guest-process-user`](ADR-046-resources-host-guest-process-user.md) -
   `Host`, `Guest`, `Process`, `EphemeralProcess`, `User`, `Endpoint`
-- [`ADR-046-resources-volume`](ADR-046-resources-volume.md) — `Volume`
-- [`ADR-046-resources-network`](ADR-046-resources-network.md) — `Network`
-- [`ADR-046-resources-device`](ADR-046-resources-device.md) — `Device`
-- [`ADR-046-resources-credential`](ADR-046-resources-credential.md) — `Credential`
+- [`ADR-046-resources-volume`](ADR-046-resources-volume.md) - `Volume`
+- [`ADR-046-resources-network`](ADR-046-resources-network.md) - `Network`
+- [`ADR-046-resources-device`](ADR-046-resources-device.md) - `Device`
+- [`ADR-046-resources-credential`](ADR-046-resources-credential.md) - `Credential`
 
 **Cross-cutting (3):**
 
@@ -83,7 +83,7 @@ contracts but do not co-own these types:
 - [`ADR-046-validation-and-delivery`](ADR-046-validation-and-delivery.md)
 - [`ADR-046-streamline`](ADR-046-streamline.md)
 
-**Provider dossiers (27)** — one dossier per installed `Provider/<name>`
+**Provider dossiers (27)** - one dossier per installed `Provider/<name>`
 resource, indexed with owned/exported ResourceTypes and component placement in
 [`providers/README.md`](providers/README.md).
 
@@ -91,10 +91,13 @@ resource, indexed with owned/exported ResourceTypes and component placement in
 
 `ADR-046-spec-set.json` and `ADR-046-work-items.json` are deterministic indexes,
 regenerated from the member Markdown and not themselves members of the set.
-This Proposed documentation set does not yet contain the future checked-in
-generator. The current candidate was produced with a disposable script that was
-removed after regeneration; `ADR046-delivery-004` and
-`ADR046-delivery-009` own the future generator and fail-closed policy tests.
+The checked-in generator exists: `packages/xtask/src/gen_spec_set.rs` emits both
+manifests via `cargo run -p xtask -- spec-registry`, and
+`packages/xtask/src/implementation_graph.rs` emits the implementation graph via
+`cargo run -p xtask -- implementation-graph`. Both run under the fail-closed
+`make test-drift` gate, which regenerates every ADR 0046 artifact and requires a
+clean `git diff`. `ADR046-delivery-004` and `ADR046-delivery-009` own the
+follow-on hardening of that generator and its fail-closed policy tests.
 
 - `ADR-046-spec-set.json` (`artifactKind: d2b-adr-spec-set`, `schemaVersion` 3)
   binds the exact 55 member files: for each member, its `specId`, `path`,
@@ -115,7 +118,7 @@ removed after regeneration; `ADR046-delivery-004` and
   d2b-adr-implementation-graph`, `schemaVersion` 1) and its rendered human view
   `ADR-046-implementation-graph.md` are the D095 machine-readable
   implementation DAG. They map every one of the 55 member specs and every work
-  item exactly once to a `W0`–`W7` launch wave and a file-disjoint parallel
+  item exactly once to a `W0`-`W7` launch wave and a file-disjoint parallel
   group, with typed edges, owner/destinations, entry contracts, prerequisites,
   blockers, exit gate, and topological rank. They are generated from the two
   manifests above plus the 8-wave topology in
@@ -242,7 +245,7 @@ Rules:
   reference;
 - a plain enum or inline value never uses a `Ref` suffix;
 - standard ResourceTypes use Zone-unique short names;
-- vendor ResourceTypes use a qualified name such as `acme.io.Widget`;
+- vendor ResourceTypes use a qualified name such as `acme.d2bus.org.Widget`;
 - API binding rejects ResourceType collisions;
 - cross-Zone resource references do not exist unless a later reviewed special
   case explicitly adds one.
@@ -296,7 +299,7 @@ Each spec contains an **Implementation work items** section. Every item has:
 
 | Field | Requirement |
 | --- | --- |
-| Work item ID | Declared by an exact level-three heading `### ADR046-<registered-prefix>-<ordinal>`; an optional table row must match it exactly |
+| Work item ID | Declared by a level-three heading `### ADR046-<registered-prefix>-<ordinal>`, optionally followed by a title (see "Authoring shapes the registry tolerates"); an optional table row must match the ID exactly |
 | Dependency/owner | Prerequisites, future wave, crate/component, shared owner |
 | Current source | Exact v3 paths, symbols, call sites, artifacts, and tests |
 | Reuse source | Optional exact main commit/paths/symbols/tests used for copy/adaptation; explicit `None` serializes as `null` |
@@ -316,6 +319,46 @@ suffix. `<ordinal>` is a three-digit value from `001` through `999`. A member
 that owns work items registers a nonempty bytewise-sorted prefix list. Every
 prefix is globally unique to exactly one member and is never inferred by
 splitting an ID, Spec ID, or filename.
+
+### Authoring shapes the registry tolerates
+
+The generator parses the shapes the set actually uses, not an idealized
+subset. An author does not have to normalize an existing spec to these rules,
+but a tool that reads the set must handle all of them.
+
+**The work-item heading may carry a title after the ID.** 356 headings are the
+bare ID; the rest add a title introduced by a spaced hyphen (112), a colon
+(51), or parentheses (24). All four forms declare the same ID.
+
+```text
+### ADR046-core-001
+### ADR046-core-001 - Some title
+### ADR046-core-001: Some title
+### ADR046-core-001 (Some title)
+```
+
+Because a registered prefix may itself contain hyphens, ID extraction is
+**anchored on the ID grammar and takes the shortest match**, never split on a
+separator character. `ADR046-security-key-012 - Some title` yields
+`ADR046-security-key-012`, and `ADR046-core-001-002` yields `ADR046-core-001`.
+A parser that splits on the first hyphen, or that recognizes only one title
+introducer, silently truncates or drops items.
+
+**The enclosing section title varies.** `## Implementation work items` is the
+majority spelling, but the set also uses `## Work items`, numbered forms such
+as `## 17. Implementation work items`, and descriptive forms such as
+`## Bus and ComponentSession reuse work items`. Anchor a scan on the work-item
+heading pattern, not on the section title, and assert the expected total so a
+miss fails closed rather than silently under-reporting.
+
+**Table cells escape pipes as `\|`.** Unescape on read and re-escape on write,
+or any field value containing a pipe is corrupted.
+
+**Dependency cells reserve the word `through`.** It is a range-expansion
+keyword: `ADR046-network-001 through ADR046-network-004` expands to four
+dependency edges. Use `to`, or list the IDs, when a literal range is not
+intended, and remember that a bare ordinal such as `004` carries no
+`ADR046-` prefix and therefore does not parse as an ID at all.
 
 | Normative member | Registered `workItemPrefixes` |
 | --- | --- |

@@ -4,7 +4,7 @@
 | --- | --- |
 | Spec ID | `ADR-046-reset-and-cutover` |
 | Parent | ADR 0046 |
-| Status | Proposed |
+| Status | Accepted |
 | Version | 1 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
@@ -15,9 +15,9 @@
 ## Purpose
 
 This spec is the exhaustive normative contract for taking one running d2b host
-from its current pre-ADR-0046 state — the daemon-only/realm-native control
+from its current pre-ADR-0046 state - the daemon-only/realm-native control
 plane described by the repository `AGENTS.md` and evidenced at baseline
-`b5ddbed6` — to a live ADR 0046 Zone/Provider control plane. d2b 3.0 has **no
+`b5ddbed6` - to a live ADR 0046 Zone/Provider control plane. d2b 3.0 has **no
 v2 compatibility layer and no in-place protocol migration**: `Realm`,
 `Workload`, `d2b-realm-router` PeerSession, the legacy public wire
 (`WorkloadOp`, `RealmMethod`), and every v2 CLI verb stop working the moment
@@ -31,8 +31,8 @@ verification contract that every future cutover work item, CLI command, and
 Provider dossier migration procedure must satisfy. Every other ADR 0046 spec's
 "Data migration" column that reads "Full reset" or "Destructive v3 bootstrap"
 is scoped to the **resource-store control-plane rows only**. This spec governs
-what happens to the **durable host-owned bytes** — TPM identity, SSH keys,
-disk images, durable Volumes, audit history, and credentials — that must
+what happens to the **durable host-owned bytes** - TPM identity, SSH keys,
+disk images, durable Volumes, audit history, and credentials - that must
 survive the cutover of the control plane sitting on top of them.
 
 ## Cross-reference and evidence corrections
@@ -62,7 +62,7 @@ without an open decision:
   provisioning marker to be **migrated, not destroyed**, via a one-time
   migration `EphemeralProcess` that re-keys the marker. Both statements are
   correct and non-contradictory once scoped: `ADR046-vl-005`'s "full v3
-  reset" describes the **volume-local Volume ResourceType implementation** —
+  reset" describes the **volume-local Volume ResourceType implementation** -
   there is no row-level import of a prior `Volume` resource because no
   `Volume` resource existed before v3. "TPM NVRAM must be backed up by
   operator" is an **independent defense-in-depth recommendation**, not a
@@ -77,18 +77,18 @@ without an open decision:
 
 | Term | Meaning |
 | --- | --- |
-| **Cutover** | The one-time, host-scoped, destructive procedure that replaces the pre-ADR-0046 control plane (daemon-only `d2bd`/`d2b-priv-broker`, Realm/Workload types, legacy Nix option namespace) with a live ADR 0046 Zone runtime. There is exactly one cutover per physical host (or per execution target that will host its own Zone runtime — see [Full Zone reset vs Provider reset vs Guest reset](#full-zone-reset-vs-provider-reset-vs-guest-reset)). |
+| **Cutover** | The one-time, host-scoped, destructive procedure that replaces the pre-ADR-0046 control plane (daemon-only `d2bd`/`d2b-priv-broker`, Realm/Workload types, legacy Nix option namespace) with a live ADR 0046 Zone runtime. There is exactly one cutover per physical host (or per execution target that will host its own Zone runtime - see [Full Zone reset vs Provider reset vs Guest reset](#full-zone-reset-vs-provider-reset-vs-guest-reset)). |
 | **Cutover snapshot** | The immutable, integrity-pinned, point-in-time capture of every current-baseline artifact this spec's [inventories](#authoritative-inventories) enumerate, taken at the start of [Preflight](#preflight-and-immutable-snapshot) before any mutation. Identified by a `checkpoint_id`. |
 | **Disposition** | The single closed-set classification (`Adopt`, `Preserve`, or `Destroy`) this spec assigns to every current-baseline path, unit, process, and artifact. See [Disposition framework](#disposition-framework). |
 | **Adopt** | The current artifact's durable bytes are moved, hardlinked, or re-keyed into a new v3-owned location (a Volume, a Zone bundle path, a re-rooted audit segment directory) while preserving identity, content, and any fail-closed provisioning marker. The old path is retired only after the new owner verifies adoption succeeded. |
 | **Preserve** | The current artifact is left exactly where it is, unmodified, and continues to be read (never written) by legacy or transitional code until its owning ADR 0046 work item supplies a live successor. Nothing under Preserve is touched by cutover `apply`. |
-| **Destroy** | The current artifact is deleted. Destroy is permitted **only** for regenerable, ephemeral, or cache-class data (§ [Old artifact/unit/schema removal gates](#old-artifactunitschema-removal-gates) enumerates the exact gate each Destroy candidate must clear). Destroy is never the default disposition; every row in the [migration/disposition matrix](#migrationdisposition-matrix) states its disposition explicitly — there is no implicit fallback to Destroy for an unlisted path. |
+| **Destroy** | The current artifact is deleted. Destroy is permitted **only** for regenerable, ephemeral, or cache-class data (§ [Old artifact/unit/schema removal gates](#old-artifactunitschema-removal-gates) enumerates the exact gate each Destroy candidate must clear). Destroy is never the default disposition; every row in the [migration/disposition matrix](#migrationdisposition-matrix) states its disposition explicitly - there is no implicit fallback to Destroy for an unlisted path. |
 | **Full Zone reset** | The destructive re-initialization of one Zone's redb resource store: every non-`Zone` resource is deleted in reverse-dependency order, the store is closed, and Zone runtime re-enters compiled bootstrap authorization for a fresh initialization. Defined by `ADR-046-resources-zone-control` §2.6/§9.4; this spec is its authoritative out-of-band operational procedure (see [Full Zone reset vs Provider reset vs Guest reset](#full-zone-reset-vs-provider-reset-vs-guest-reset)). |
 | **Provider reset** | Deletion and re-creation of exactly one `Provider/<name>` resource, its entire `ProviderStateSet` (every Volume it owns), and its component Process/EphemeralProcess children. Does not touch the Zone, other Providers, Hosts, Guests, or unrelated resources. |
 | **Guest reset** | Deletion and re-creation of exactly one `Guest/<name>` resource and its owned children (its runtime Processes, its store-view/TPM Volumes unless explicitly retained). Does not touch the Zone, Providers, or other Guests. |
 | **Cutover checkpoint** | One phase-boundary durable record in the [cutover journal](#crashpower-lossretryidempotency-journals), written with the ADR 0034 atomic-persistence sequence (temp file, `fsync`, rename, parent `fsync`). |
 | **Incident hold (cutover-wide)** | An operator-set hold that blocks every destructive disposition step and the entire [old artifact/unit/schema removal gate](#old-artifactunitschema-removal-gates) sequence, built on the same `IncidentHold` condition semantics `ADR-046-provider-state` defines for a Volume, extended here to apply Zone-wide during a cutover window. |
-| **Gateway Guest** | A Guest whose runtime Provider hosts a nested child Zone (a "gateway guest" in ADR 0032 terms). The child Zone authors and stores its one local uplink `ZoneLink`, whose `spec.childZoneName` matches that child Zone's self-name; the compiler-only `parentZone` setting selects the provisioning allocator. The parent keeps only sealed allocator/route state, with no reciprocal parent-store `ZoneLink` or parent-side `ZoneLink` handler, and never holds the gateway Guest's Credential or audit — see [Gateway Guest credential/audit custody](#gateway-guest-credentialaudit-custody). |
+| **Gateway Guest** | A Guest whose runtime Provider hosts a nested child Zone (a "gateway guest" in ADR 0032 terms). The child Zone authors and stores its one local uplink `ZoneLink`, whose `spec.childZoneName` matches that child Zone's self-name; the compiler-only `parentZone` setting selects the provisioning allocator. The parent keeps only sealed allocator/route state, with no reciprocal parent-store `ZoneLink` or parent-side `ZoneLink` handler, and never holds the gateway Guest's Credential or audit - see [Gateway Guest credential/audit custody](#gateway-guest-credentialaudit-custody). |
 
 Every term above composes with, and does not redefine, the shared vocabulary
 in `ADR-046-terminology-and-identities` (Zone, ResourceRef, Provider, Host,
@@ -150,9 +150,11 @@ to individually clear.
    `phase >= 5` checkpoint recorded (this host has already cut over; direct
    the operator to `d2b host reset` or `d2b host cutover doctor` instead).
 2. Confirms baseline shape: `Realm`/`Workload` Nix option namespace present
-   (`d2b.realms.*`), `d2bd.socket`/`d2bd.service`/`d2b-priv-broker.socket`/
-   `d2b-priv-broker.service` units installed, no `d2b.zones.*` Zone runtime
-   unit present yet.
+   (`d2b.realms.*`), the three root-visible units
+   `d2bd.service`/`d2b-priv-broker.socket`/`d2b-priv-broker.service` installed
+   and still launching their pre-cutover binaries, and no `d2b.zones.*` option
+   namespace present yet. Cutover adapts those same three units in place; it
+   never expects or installs a separate Zone runtime unit.
 3. Runs the [disk-space guard](#disk-spacegc-safety) before touching anything
    else, fail-closed on insufficient space, mirroring
    `tests/tools/preflight-disk-space.sh`'s ordering before toolchain
@@ -208,7 +210,7 @@ configuration and the resource plane it activates:
    already-activated system's `bundle-<hash>.json` presence, whichever is
    available) must currently validate without error. Cutting over a host
    whose current configuration does not evaluate is refused with
-   `cutover-precondition-failed` — this spec never repairs a pre-existing
+   `cutover-precondition-failed` - this spec never repairs a pre-existing
    broken configuration.
 2. **The candidate v3 Zone bundle validates independently.** The new
    `d2b.zones.<zone>.*` Nix configuration that will replace
@@ -224,7 +226,7 @@ configuration and the resource plane it activates:
    (two evaluations of the same tree produce the same generation id, per
    `ADR-046-nix-configuration` build-time invariant). A bundle that fails any
    of these checks refuses preflight with `bundle-schema-mismatch` or
-   `bundle-integrity-failure` and prints the exact offending field —
+   `bundle-integrity-failure` and prints the exact offending field -
    preflight never proceeds on a bundle it cannot fully validate.
 3. **Provider trust preflight.** Every Provider named by the candidate
    bundle's `Provider.spec.artifactId` values is checked against the trust
@@ -319,7 +321,7 @@ Every inventory entry that this spec's [migration/disposition
 matrix](#migrationdisposition-matrix) does not explicitly list is treated as
 **Preserve by default** for Phase 4 (never mutated by this cutover) and is
 flagged in the plan output under a `unclassified` array so the operator sees
-it before consenting — there is no silent Destroy for anything outside the
+it before consenting - there is no silent Destroy for anything outside the
 matrix.
 
 ## Old daemon/unit/process drain
@@ -333,7 +335,7 @@ does not reach the expected quiesced state within its bounded deadline
 1. **Stop every Guest and net VM.** Uses the existing graceful-shutdown path
    ([ADR 0040](../adr/0040-graceful-vm-shutdown.md)); a Guest that does not
    reach a stopped state within its shutdown deadline aborts the drain with
-   `cutover-precondition-failed` naming the stuck Guest — cutover never force
+   `cutover-precondition-failed` naming the stuck Guest - cutover never force
    kills a Guest that might hold unflushed durable Volume state.
 2. **Stop `d2bd.service`.** The daemon relinquishes `public.sock`.
 3. **Stop `d2b-priv-broker.service`.** The broker relinquishes `broker.sock`
@@ -345,7 +347,7 @@ does not reach the expected quiesced state within its bounded deadline
 5. **Verify quiescence.** Re-read `/proc` for any process matching a
    `d2b-<vm>-*` cgroup leaf under `d2b.slice`; any live process here after
    steps 1-4 aborts the drain with `cutover-precondition-failed` rather than
-   being killed — a live, unaccounted-for process is exactly the "any open
+   being killed - a live, unaccounted-for process is exactly the "any open
    d2b daemon, broker, runner, net VM, or Guest file descriptor" fail-closed
    hazard from the dry-run plan.
 6. **Boot-scoped runtime cleanup, cutover-only.** Only after step 5 confirms
@@ -353,7 +355,7 @@ does not reach the expected quiesced state within its bounded deadline
    `/run/d2b-video`, `/run/d2b-wlproxy`, and `/var/lib/d2b/guest-control-<vm>`
    (these are the same `cutoverOnlyCleanup` candidates
    `build_storage_migration_plan` already names). Lock files under `/run/d2b`
-   are **never** unlinked here — they are left for the normal reboot/tmpfs
+   are **never** unlinked here - they are left for the normal reboot/tmpfs
    cleanup path, exactly as ADR 0034's `fail_closed_hazards` already
    requires.
 
@@ -362,8 +364,8 @@ After step 6, this host has no live d2b process. Phase 4 begins.
 ## Disposition framework
 
 Every path, unit, process, and artifact this spec's inventories enumerate
-receives exactly one of three dispositions. The framework — not any single
-matrix row — is the normative contract; the [migration/disposition
+receives exactly one of three dispositions. The framework - not any single
+matrix row - is the normative contract; the [migration/disposition
 matrix](#migrationdisposition-matrix) is its application to the concrete
 baseline evidence.
 
@@ -376,7 +378,7 @@ disposition:
 1. is executed by a dedicated, idempotent migration `EphemeralProcess` using
    the exact prepare/stage/commit/precommit-rollback/roll-forward-after-crash
    algorithm `ADR-046-provider-state` "Cross-component migration coordination"
-   already defines — this spec introduces no second migration state machine;
+   already defines - this spec introduces no second migration state machine;
 2. never deletes the source path until the destination Volume/artifact
    reports `phase: Ready` (or the equivalent terminal success state for a
    non-Volume artifact, such as an audit segment directory) **and** the
@@ -384,7 +386,7 @@ disposition:
 3. re-validates the source's provisioning marker (where one exists, such as
    the swtpm marker) before adoption and refuses the specific adopt step with
    a fail-closed condition rather than silently re-provisioning if the marker
-   is absent, replaced, or fails identity verification — the marker check is
+   is absent, replaced, or fails identity verification - the marker check is
    identical to the existing `previously-provisioned-swtpm-state-missing`
    detection in `d2b-priv-broker/src/ops/swtpm_dir.rs`, generalized to every
    marker-bearing Adopt candidate;
@@ -395,7 +397,7 @@ disposition:
    "neither path has a valid marker" (data loss);
 5. leaves the source path in place, unmodified, until the corresponding
    [old artifact/unit/schema removal gate](#old-artifactunitschema-removal-gates)
-   clears — Adopt is never combined with an immediate Destroy of its own
+   clears - Adopt is never combined with an immediate Destroy of its own
    source in the same phase.
 
 ### Preserve
@@ -429,9 +431,9 @@ gated as follows:
   artifact/unit/schema that a new resource/Provider/systemd-unit has already
   replaced);
 - Destroy for any current-baseline artifact other than the Phase 3
-  boot-scoped runtime sockets is deferred to Phase 10 — see [Old
-  artifact/unit/schema removal gates](#old-artifactunitschema-removal-gates)
-  — and never runs inside Phase 4's initial disposition execution;
+  boot-scoped runtime sockets is deferred to Phase 10 - see [Old
+  artifact/unit/schema removal gates](#old-artifactunitschema-removal-gates) -
+  and never runs inside Phase 4's initial disposition execution;
 - every Destroy is logged to the cutover journal with the exact path/unit
   name, the gate that cleared it, and the checkpoint id, before the delete
   syscall executes.
@@ -451,7 +453,7 @@ had been safely handled when it was not.
    is preserved and re-keyed by `Provider/volume-local` from its old basename
    to the new `device_uid`-based name. A missing or already-dropped marker at
    preflight time fails cutover `plan` closed with
-   `cutover-precondition-failed` naming the affected Guest — cutover refuses
+   `cutover-precondition-failed` naming the affected Guest - cutover refuses
    to proceed rather than silently re-provisioning a fresh, identity-less TPM
    for that Guest. This is the binding resolution of the apparent
    `ADR046-vl-005` vs. device-tpm §17.3 tension recorded in [Cross-reference
@@ -459,9 +461,9 @@ had been safely handled when it was not.
    operator-backup recommendation in `ADR046-vl-005` is additional, not a
    substitute for this automated Adopt.
 2. **Durable Volumes.** Every current-baseline path this spec's inventories
-   classify as user-declared persistent data — Guest disk images (including
+   classify as user-declared persistent data - Guest disk images (including
    writable store-overlay images), any path a future `Volume` resource will
-   declare with `kind: durable` per `ADR-046-resources-volume` §"Kind" — is
+   declare with `kind: durable` per `ADR-046-resources-volume` §"Kind" - is
    **Adopted**, never Destroyed. There is no disposition path in this spec
    that deletes a `kind: durable`-equivalent artifact; the [Disposition
    framework](#disposition-framework)'s Destroy gate explicitly excludes this
@@ -487,7 +489,7 @@ had been safely handled when it was not.
    state is treated exactly like TPM identity: it is **Preserved/Adopted**, never
    silently wiped. A Guest, Provider, or Zone reset either preserves the identity
    Guest's TPM/login state or **explicitly destroys** it under the operator's
-   authorized destructive disposition — never as an implicit side effect. A
+   authorized destructive disposition - never as an implicit side effect. A
    subsequent login re-enrolls only if the operator explicitly destroyed that
    state.
 
@@ -499,7 +501,7 @@ its dedicated gateway guest VM; the host never holds them
 (`CredentialCustody::None` for host-local vs.
 `CredentialCustody::GatewayGuest` for relay-backed, per
 `d2b-realm-router/src/service_v2.rs`, and `ADR-046-zone-routing`
-"d2b-realm-router/src/service_v2.rs — RealmServiceServer" evidence). This
+"d2b-realm-router/src/service_v2.rs - RealmServiceServer" evidence). This
 cutover preserves that boundary exactly, translated into ZoneLink terms:
 
 1. A pre-cutover gateway-backed realm becomes, post-cutover, a Guest whose
@@ -515,7 +517,7 @@ cutover preserves that boundary exactly, translated into ZoneLink terms:
    disposition matrix](#migrationdisposition-matrix) **never** enumerate the
    gateway guest's internal relay credentials, remote node registry, or
    realm audit log as host-side artifacts to Adopt, Preserve, or Destroy from
-   the parent host's perspective — those live inside the gateway Guest's own
+   the parent host's perspective - those live inside the gateway Guest's own
    filesystem and are the gateway Guest's own (nested) cutover's
    responsibility when that Guest itself boots a v3 Zone runtime internally.
    The parent host's cutover Adopts no `ZoneLink` row. It regenerates only the
@@ -534,7 +536,7 @@ cutover preserves that boundary exactly, translated into ZoneLink terms:
    `d2b-gateway-runtime` process to a nested v3 Zone runtime, that nested
    cutover is a **separate, independent invocation** of this same procedure,
    run *inside* the Guest (its own Host in ADR 0046 terms), with its own
-   snapshot, checkpoint id, and consent — it is never folded into the parent
+   snapshot, checkpoint id, and consent - it is never folded into the parent
    host's single `checkpoint_id` and never shares a cutover journal with the
    parent.
 5. Audit authority remains Zone-local: the child Zone's audit stream records
@@ -550,7 +552,7 @@ cutover preserves that boundary exactly, translated into ZoneLink terms:
 Every Provider component's durable payload state is governed entirely by
 `ADR-046-provider-state`; this spec does not define a second state model.
 Provider state Volumes are optional and declared only under the storage-need
-test — bounded non-secret operational state lives in resource `status` and the
+test - bounded non-secret operational state lives in resource `status` and the
 core Operation ledger by default (D087). Two distinctions matter specifically
 for cutover:
 
@@ -570,7 +572,7 @@ for cutover:
    layout content (from the adopted source) and the identity marker before the
    Volume is marked `Ready`. Once created, they participate in the exact same
    ownership, quota, sealing, snapshot, retention, incident-hold, and
-   unclaimed-GC machinery as any other declared Provider state Volume — cutover
+   unclaimed-GC machinery as any other declared Provider state Volume - cutover
    does not create a special-cased Volume subtype.
 
 The optional `ProviderStateSet` query itself
@@ -579,7 +581,7 @@ zone && v.metadata.ownerRef == "Provider/<provider-name>" }`) requires no
 cutover-specific extension: once Phase 6 installs a Provider, its
 `ProviderStateSet` is exactly the set of *declared* Volumes Core
 ProviderDeployment (or, for the Adopt cases above, the Adopt migration
-`EphemeralProcess`) created for it — possibly empty — queryable the same way at
+`EphemeralProcess`) created for it - possibly empty - queryable the same way at
 any later time.
 
 ## Resource-store initialization
@@ -589,7 +591,7 @@ Phase 5 creates the Zone's redb resource store from nothing, per
 and work item `ADR046-store-003` ("Data migration: Destructive v3 bootstrap;
 v3-to-v3 logical restore"). There is no logical import of any pre-cutover
 daemon state, Realm/Workload representation, or legacy JSON artifact into the
-redb store — the store's `store_meta` table is populated fresh:
+redb store - the store's `store_meta` table is populated fresh:
 
 ```text
 store_uuid                 = freshly generated
@@ -608,7 +610,7 @@ backup_generation            = none
 
 Phase 5's only input from the pre-cutover host is the **already-adopted**
 bytes from Phase 4 (TPM/store-view/disk-image Volumes) and the **validated
-candidate bundle** from preflight — never a raw read of `d2bd`'s in-memory
+candidate bundle** from preflight - never a raw read of `d2bd`'s in-memory
 state, `realm-controllers.json`, or `realm-identity.json` (those remain
 Preserved on disk per the [migration/disposition matrix](#migrationdisposition-matrix)
 until their owning work item retires them, but their content is not imported
@@ -634,7 +636,7 @@ startup sequence `ADR-046-core-controllers` "Startup" already defines:
 ## volume-local reaches Ready without a state Volume
 
 Step 8 above depends on `Provider/volume-local` being able to create the
-*declared* state Volumes for other Providers — but `volume-local`'s own
+*declared* state Volumes for other Providers - but `volume-local`'s own
 controller instance declares no state Volume: its bounded non-secret
 operational state lives in resource `status` and the core Operation ledger
 (D087). Because the fixed bootstrap components (`volume-local`, `system-core`,
@@ -653,13 +655,13 @@ Volume" in `ADR-046-components-processes-and-sandbox`):
 - the TPM/store-view Adopt Volumes described above are created later, in
   Phase 4/8, by their owning migration `EphemeralProcess` and Provider
   (`device-tpm`, `runtime-cloud-hypervisor`), strictly after `volume-local`
-  has already reached readiness — they are ordinary
+  has already reached readiness - they are ordinary
   Core-ProviderDeployment-adjacent declared Volumes.
 
 Cutover's only responsibility here is sequencing: Phase 5 step 8 (Provider
 install) must not attempt to create any Provider's declared component state
 Volume before `volume-local`'s own controller Process has reached `Ready` on
-the target it will serve — this is naturally satisfied because
+the target it will serve - this is naturally satisfied because
 `Provider/volume-local` is itself the very first non-bootstrap Provider
 installed in [Provider install/topological start](#provider-installtopological-start).
 
@@ -677,7 +679,7 @@ before any Process is created:
    bundle, one edge `A -> B` for every alias in `A`'s manifest that Zone
    configuration binds to Provider `B`.
 2. Reject the candidate bundle at Phase 5/6 boundary (before any Process
-   exists) if this graph contains a cycle — `ADR-046-provider-model-and-packaging`
+   exists) if this graph contains a cycle - `ADR-046-provider-model-and-packaging`
    "Provider dependencies" already requires synchronous dependency cycles to
    fail configuration; cutover enforces this before Phase 6 begins, not
    after a partial install.
@@ -727,7 +729,7 @@ before any Process is created:
    Optional declared dependencies within a stage that are absent from the
    candidate bundle produce declared degraded behavior for the dependent
    Provider (per `ADR-046-provider-model-and-packaging` "Provider
-   dependencies"), never an install failure — the fixed staging above is a
+   dependencies"), never an install failure - the fixed staging above is a
    deterministic default ordering for Providers with no explicit
    cross-dependency edge, not a hard requirement that every stage's Providers
    be present.
@@ -758,7 +760,7 @@ complete, reproducible install sequence before `apply` runs.
    represented after cutover by one local uplink `ZoneLink/<name>` authored and
    stored in the nested child Zone during Phase 6/7 of that child's independent
    invocation (per [Gateway Guest credential/audit
-   custody](#gateway-guest-credentialaudit-custody)) — never as migrated
+   custody](#gateway-guest-credentialaudit-custody)) - never as migrated
    session or credential state. Its `spec.childZoneName` must equal the child
    Zone's self-name, and its `transportProviderRef` must name an
    already-`Ready` Stage C transport Provider in that same child Zone (per
@@ -776,11 +778,11 @@ complete, reproducible install sequence before `apply` runs.
    remote-link readiness.
 3. Any pre-cutover realm that used `EntrypointMode::HostResident` becomes an
    ordinary `Guest` (VM/sandbox) or a user-only `Host` (unsafe-local, per
-   D042) in the parent Zone — never a `ZoneLink`, because a host-resident
+   D042) in the parent Zone - never a `ZoneLink`, because a host-resident
    realm never had a separate resource store to link to.
 4. ZoneLink activation completes when the **child Zone's** core
    `zone link/delegation` handler (`ADR-046-resources-zone-control` §11.2)
-   reports its local uplink `Ready` — verified in
+   reports its local uplink `Ready` - verified in
    [Post-cutover verification](#post-cutover-verification).
 
 ## Guest/runtime/network/store view activation
@@ -796,7 +798,7 @@ Provider install:
    store-view or TPM Volume was created in Phase 4's disposition execution,
    `Provider/volume-local` must report that Volume `Ready` (marker verified,
    quota enforced) before the owning runtime Provider is permitted to start
-   that Guest's Process — a Guest never starts against a Volume still in
+   that Guest's Process - a Guest never starts against a Volume still in
    `Pending`/`Degraded`.
 3. **Device attachment.** `Provider/device-tpm`, `device-usbip`,
    `device-security-key`, `device-gpu` reconcile their declared attachments
@@ -810,13 +812,13 @@ Provider install:
 5. **Store view.** The per-Guest `/nix/store` hardlink farm (adopted from
    `/var/lib/d2b/vms/<vm>/store/` in Phase 4) is mounted read-only into the
    Guest by the owning virtiofsd Process, which `Provider/volume-local`
-   supervises per `ADR-046-provider-volume-local` ADR046-vl-004 — unchanged
+   supervises per `ADR-046-provider-volume-local` ADR046-vl-004 - unchanged
    from the current same-filesystem hardlink-farm contract in
    `nixos-modules/store.nix`/ADR 0027, only its activation path moves from
    Nix activation to the Volume controller.
 
 Any Guest that fails to reach `Ready` within its per-Guest deadline during
-Phase 8 does not block other Guests — per `ADR-046-resource-reconciliation`
+Phase 8 does not block other Guests - per `ADR-046-resource-reconciliation`
 "Process fast path", independent resources reconcile/start concurrently. That
 Guest's `Degraded`/`Failed` status is surfaced individually in [Post-cutover
 verification](#post-cutover-verification) and does not abort the cutover for
@@ -840,7 +842,7 @@ checks, in order, refusing to report success unless every check passes:
 | 9 | The new audit chain's first record verifies against the closure record of the old chain (per [Audit chain closure and opening](#audit-chain-closure-and-opening)) | Hash-chain break or missing closure record |
 | 10 | `d2b host cutover doctor` reports zero entries in the [degraded-state ledger](#failurequarantinemanual-recovery) tagged `cutover-quarantined` | Any such entry present |
 
-`verify` failing any check does **not** automatically roll back — the
+`verify` failing any check does **not** automatically roll back - the
 [rollback boundary](#rollback-boundary) has already closed by this point
 (verification only runs after Phase 8). A failed `verify` transitions the
 host into [Failure/quarantine/manual recovery](#failurequarantinemanual-recovery)
@@ -854,25 +856,26 @@ other section needs to restate it:
 | Point | What "rollback" means | Mechanism |
 | --- | --- | --- |
 | Before Phase 1 (`plan`) | No state changed; nothing to roll back | N/A |
-| End of Phase 3 (drain complete) | Configuration/binary rollback: undo the NixOS activation that installed the new units, restart the old `d2bd`/`d2b-priv-broker` units, restart Guests | `nixos-rebuild switch --rollback` to the pre-cutover system generation, then `systemctl start d2bd.service d2b-priv-broker.service`, then normal Guest start |
-| End of Phase 4 (disposition execution complete) | **Last safe rollback point.** Adopted bytes exist at both old and new locations (old path not yet removed by any gate); configuration/binary rollback is still possible because the old daemon/unit set has not been destroyed, only stopped | Same as above; the cutover journal (below) records that Phase 4 completed so a resumed/re-run cutover does not re-adopt already-adopted paths |
-| Phase 5 onward | **No rollback.** The redb resource store now holds committed state with no v2 representation to revert to; Provider installs and Guest starts have created new process/cgroup/Volume state that a binary rollback cannot cleanly unwind | Recovery is **restore from the cutover snapshot**, not rollback: stop the new Zone runtime, `d2b host cutover rollback --checkpoint <id>` re-runs Phase 3's drain against the *new* control plane, restores the pre-cutover NixOS generation, and restarts the old daemon/broker against the still-Preserved and still-Adopted (never Destroyed, because Phase 10 has not run) durable paths |
-| After Phase 10 clears any gate | **Fully irreversible** for whatever that gate destroyed. `d2b host cutover rollback` after Phase 10 refuses with `cutover-rollback-window-closed` and directs the operator to the cutover snapshot for forensic recovery only (the snapshot's content digests, not a live restore, since the artifact itself is gone) | N/A — this is why Phase 10 requires its own separate consent and never runs automatically |
+| End of Phase 3 (drain complete) | Configuration/binary rollback: undo the NixOS activation that swapped the three units' binary/config in place, restart the three units against their pre-cutover binaries, restart Guests | `nixos-rebuild switch --rollback` to the pre-cutover system generation, then `systemctl start d2bd.service d2b-priv-broker.service`, then normal Guest start |
+| End of Phase 4 (disposition execution complete) | **Last safe rollback point.** Adopted bytes exist at both old and new locations (old path not yet removed by any gate); configuration/binary rollback is still possible because the three units still have a pre-cutover generation to roll back to and none of the durable paths they need has been destroyed, only stopped | Same as above; the cutover journal (below) records that Phase 4 completed so a resumed/re-run cutover does not re-adopt already-adopted paths |
+| Phase 5 onward | **No rollback.** The redb resource store now holds committed state with no v2 representation to revert to; Provider installs and Guest starts have created new process/cgroup/Volume state that a binary rollback cannot cleanly unwind | Recovery is **restore from the cutover snapshot**, not rollback: stop the Zone runtime, `d2b host cutover rollback --checkpoint <id>` re-runs Phase 3's drain against the live control plane, restores the pre-cutover NixOS generation, and restarts the three units against the pre-cutover binaries and the still-Preserved and still-Adopted (never Destroyed, because Phase 10 has not run) durable paths |
+| After Phase 10 clears any gate | **Fully irreversible** for whatever that gate destroyed. `d2b host cutover rollback` after Phase 10 refuses with `cutover-rollback-window-closed` and directs the operator to the cutover snapshot for forensic recovery only (the snapshot's content digests, not a live restore, since the artifact itself is gone) | N/A - this is why Phase 10 requires its own separate consent and never runs automatically |
 
 `d2b host cutover rollback --checkpoint <checkpoint_id> [--json | --human]`
 is only valid while the journal (below) shows the named checkpoint's last
 completed phase is `<= 4`. It:
 
-1. Re-drains the new Zone runtime using the same algorithm as [Old
+1. Re-drains the Zone runtime using the same algorithm as [Old
    daemon/unit/process drain](#old-daemonunitprocess-drain), applied to the
-   new units instead of the old;
+   three units now running the cut-over binaries;
 2. Restores the pre-cutover NixOS system generation
    (`nixos-rebuild switch --rollback`, or the equivalent `activation-nixos`
    rollback once that Provider itself is live for a later, non-initial
    cutover);
-3. Restarts `d2bd.service`/`d2b-priv-broker.service`;
+3. Restarts `d2bd.service`/`d2b-priv-broker.service` against the restored
+   pre-cutover binaries;
 4. Restarts every Guest from its Preserved/Adopted-but-not-yet-Destroyed
-   state — since Phase 10 has not run, every old path this rollback needs is
+   state - since Phase 10 has not run, every old path this rollback needs is
    still present.
 
 Rollback past Phase 4 (i.e., against a checkpoint whose last completed phase
@@ -883,13 +886,13 @@ for manual forensic recovery.
 ## Removed configuration async finalizer cleanup
 
 The candidate v3 Zone bundle activated in Phase 5 step 6 is generation 1 for
-this Zone — there is no "prior generation" to clean up on the very first
+this Zone - there is no "prior generation" to clean up on the very first
 activation. This section exists to state precisely that the [generation-based
 cleanup contract](../specs/ADR-046-nix-configuration.md#resource-cleanup-contract)
 (`managedBy=configuration` diff-and-async-Delete, `PendingCleanup`/`Degraded`
 status, finalizer-safe, non-blocking activation, count-based
 `retainedGenerations` retention) applies to this cutover's Zone bundle
-**exactly the same way it applies to every later configuration change** —
+**exactly the same way it applies to every later configuration change** -
 cutover does not special-case generation 1:
 
 - generation 1's `managedBy=configuration` resource set is exactly the
@@ -915,7 +918,7 @@ the ADR 0034 atomic-persistence sequence, at
 object per line, `O_APPEND | O_CREAT`, `fsync` after every append):
 
 ```json
-{"phase": 4, "step": "adopt-tpm-corp-vm", "outcome": "succeeded", "at": "2026-07-22T00:03:11Z"}
+{"phase": 4, "step": "adopt-tpm-corp-vm", "outcome": "succeeded", "at": "2026-07-22T00:03:11.000Z"}
 ```
 
 Idempotency rules, applied uniformly to every phase:
@@ -924,7 +927,7 @@ Idempotency rules, applied uniformly to every phase:
    `apply` reads the journal for the named `checkpoint_id`, determines the
    highest phase/step with a recorded `succeeded` outcome, and resumes
    immediately after it. A step recorded `started` but never `succeeded`/
-   `failed` (crash mid-step) is re-executed from its own beginning — every
+   `failed` (crash mid-step) is re-executed from its own beginning - every
    Adopt step's migration `EphemeralProcess` is required (per [Disposition
    framework](#disposition-framework)) to be idempotent and safe to re-run
    for exactly this reason, mirroring `ADR-046-provider-state` "Migration
@@ -938,7 +941,7 @@ Idempotency rules, applied uniformly to every phase:
    invalid, the step re-executes from its own beginning against the
    still-present source.
 3. **Phase 5 (resource-store initialization) is the one phase that is not
-   naturally idempotent** — creating a redb store twice would create two
+   naturally idempotent** - creating a redb store twice would create two
    `store_uuid` values. Cutover's journal therefore records the
    `store_uuid`/`zone_uid` immediately after store creation; a resumed
    `apply` that finds Phase 5 already `succeeded` in the journal opens the
@@ -950,7 +953,7 @@ Idempotency rules, applied uniformly to every phase:
    "Store identity" already defines for the store in general).
 4. **Retry budget.** Any individual step retries up to 3 times with bounded
    backoff before the whole `apply` invocation aborts with a typed failure
-   naming the exact step, phase, and journal path — cutover never retries
+   naming the exact step, phase, and journal path - cutover never retries
    indefinitely or silently degrades a failed step into a skipped one.
 5. **The journal is retained forever for a given checkpoint_id** (it is small
    and append-only); it is pruned only when its `checkpoint_id`'s snapshot is
@@ -962,12 +965,11 @@ Phase 10 (`d2b host cutover finalize --consent "<phrase>"
 [--json | --human]`) is the **only** phase permitted to Destroy anything
 beyond the Phase 3 boot-scoped runtime sockets. It requires its own separate
 consent phrase (bound to the same `checkpoint_id`, distinct wording from
-`apply`'s), and each candidate must independently clear its own gate — there
+`apply`'s), and each candidate must independently clear its own gate - there
 is no bulk Destroy:
 
 | Candidate | Gate that must clear before Destroy | Removal proof |
 | --- | --- | --- |
-| `d2bd.service`, `d2bd.socket`, `d2b-priv-broker.service`, `d2b-priv-broker.socket` unit files | New fixed Zone runtime units installed and `verify` check 1 passed at least once since the units were stopped | `tests/host-integration/cutover-unit-retirement.nix` boots with only new units present and passes `d2b host cutover verify` |
 | `/etc/d2b/realm-controllers.json`, `/etc/d2b/realm-identity.json` | Every Zone self-resource exists, the compiler-only `parentZone` topology is present only in sealed allocator bootstrap state, and every declared child-local `ZoneLink` reports `Ready`/accepted-`Degraded` with no reciprocal parent-store row per `verify` check 6 | `ADR046-nix-008`/`ADR046-nix-009` parity tests pass against the live Zone |
 | `nixos-modules/options-realms*.nix`, `nixos-modules/options-vms.nix` | Every VM/realm declaration has an equivalent `d2b.zones.<zone>.resources.*` declaration that produced a `Ready` Guest/Host in `verify` | `tests/unit/nix/cases/realm-to-zone-parity.nix` |
 | `/var/lib/d2b/vms/<vm>/swtpm/`, `/var/lib/d2b/swtpm-markers/<vm>` (source side of an Adopt) | `verify` check 4 (TPM digest match) passed **and** the destination TPM Volume has survived at least one full Guest restart cycle post-cutover, proving the adopted marker is load-bearing in practice, not merely digest-equal | `integration/swtpm_marker.rs` adapted; `tests/host-integration/tpm-adopt-retirement.nix` |
@@ -977,24 +979,48 @@ is no bulk Destroy:
 | `d2b-unsafe-local-helper` binary, `DaemonToUnsafeLocalHelper` wire protocol | Process Provider supervisor ticket migration for the user-only Host is live and passes conformance | Per `ADR-046-current-code-migration-map` row for `d2b-unsafe-local-helper` |
 
 Every row above stays at **Preserve** until its gate clears, independent of
-every other row — clearing the TPM gate does not imply the store-view gate is
+every other row - clearing the TPM gate does not imply the store-view gate is
 also clear. `d2b host cutover finalize` reports, per candidate, which gate is
 outstanding and refuses to Destroy that candidate until it clears; it never
 partially destroys a candidate (e.g., it never removes only the marker file
 while leaving the swtpm directory, or vice versa).
+
+### The three root-visible units are adapted in place, never destroyed
+
+`d2bd.service`, `d2b-priv-broker.socket`, and `d2b-priv-broker.service` are the
+only three root-visible units the framework ever declares, and cutover keeps it
+that way. They are **not** Destroy candidates and never appear in the removal
+gate above: cutover retains all three unit names and adapts what they launch in
+place. The bootstrap `nixos-rebuild switch` swaps the binary and configuration
+behind the same three units - `d2bd.service` becomes the fixed Zone core
+controller launcher (`ADR046-core-001`), and the two broker units keep their
+socket-activated shape - so at no point does a second, parallel Zone runtime
+unit set exist alongside the first. Restarting `d2bd.service` during cutover is
+a continuation event under this repository's binding ADR 0034 storage contract:
+the restarted daemon re-adopts the store and any live runners before any
+cleanup, and never broad-sweeps `/run/d2b`. Because there is no parallel unit
+set, there is no Destroy step for the three units and no window in which the
+host carries more than three d2b units.
+
+The exact-three-units invariant is asserted end to end:
+`tests/host-integration/cutover-unit-topology.nix` boots the cut-over host and
+requires `systemctl list-units --no-pager --all | grep -E '^(d2b|microvm)' |
+wc -l` to return exactly `3` (`d2bd.service`, `d2b-priv-broker.socket`,
+`d2b-priv-broker.service`), matching the AGENTS.md host exit criterion, before
+`d2b host cutover verify` may report success.
 
 ## Data export/import where selected
 
 Cutover itself imports no row-level data into the resource store (see
 [Resource-store initialization](#resource-store-initialization)). Two
 operator-selected export/import affordances exist, both optional and
-explicitly requested — never automatic:
+explicitly requested - never automatic:
 
 1. **Pre-cutover audit export.** `d2b audit export` (the current, retained
    verb) or, once the Zone is live, `d2b zone audit export` may be run by the
    operator *before* Phase 3 drain to produce an NDJSON export of the legacy
    hash chain for archival outside `/var/lib/d2b`. This is purely advisory
-   and has no effect on cutover's own behavior — the legacy audit segments
+   and has no effect on cutover's own behavior - the legacy audit segments
    are Preserved regardless (see next section).
 2. **Guest configuration export/import.** For a Guest whose declarative
    configuration cannot be mechanically derived from its pre-cutover Nix
@@ -1010,7 +1036,7 @@ explicitly requested — never automatic:
 
 No other export/import path exists. In particular, there is no bulk
 "export the daemon's in-memory state" or "import realm-controllers.json rows
-into the resource store" affordance — those artifacts are Preserved read-only
+into the resource store" affordance - those artifacts are Preserved read-only
 evidence, not import sources, consistent with [Resource-store
 initialization](#resource-store-initialization).
 
@@ -1027,7 +1053,7 @@ Cutover treats each chain identically:
    computed with that chain's own existing `record_hash`/`prev_hash`
    algorithm so the closure record is itself a verifiable final link.
 2. **Preserve, never delete.** Every closed segment file is **Preserved**
-   forever under its current path — it is authoritative historical evidence
+   forever under its current path - it is authoritative historical evidence
    and is never a Destroy candidate at any Phase 10 gate. (This is
    consistent with `ADR-046-current-code-migration-map` and
    `ADR-046-telemetry-audit-and-support`'s `audit_segments_preserved_on_provider_delete`
@@ -1037,13 +1063,13 @@ Cutover treats each chain identically:
    `ADR-046-telemetry-audit-and-support` `ADR046-audit-*` work items) is a
    **genesis record**: `{"event": "chain-opened", "reason": "adr0046-cutover", "checkpoint_id": "<id>", "closed_chain_refs": [<path list of every closed chain's final closure-record hash>], "at": "<RFC3339>"}`.
    This is the only place a v3 audit record references pre-cutover evidence,
-   and it references it only by path and closure hash — never by copying
+   and it references it only by path and closure hash - never by copying
    pre-cutover record content into the new chain.
 4. **Verification.** [Post-cutover verification](#post-cutover-verification)
    check 9 confirms the new chain's genesis record's `closed_chain_refs`
    match the actual closure records written in step 1, byte for byte.
 5. **No merge.** The old and new chains are never merged, re-hashed together,
-   or presented as one continuous chain to `d2b zone audit export` — an
+   or presented as one continuous chain to `d2b zone audit export` - an
    operator who needs pre-cutover history reads the old segment files
    directly (still present, per step 2); `d2b zone audit export` only ever
    serves the new chain.
@@ -1061,15 +1087,15 @@ valid `stateSchema`. This is worth naming explicitly here only to make clear
 that cutover:
 
 - creates a state Volume for a freshly installed Provider **only** for a
-  declared namespace that passed the storage-need test — never an empty,
+  declared namespace that passed the storage-need test - never an empty,
   identity-only Volume, and never a Volume for a stateless component (per the
   revised D076);
-- never invents synthetic prior state for a freshly installed Provider —
+- never invents synthetic prior state for a freshly installed Provider -
   `stateSchemaPhase: current` and `installedSchemaVersion` equal to
   `spec.stateSchema.schemaVersion` are set at creation, not derived from any
   cutover-specific migration path;
 - treats this identically for a component on a Host and a component on a
-  Guest — the placement rules in `ADR-046-provider-state` "State placement
+  Guest - the placement rules in `ADR-046-provider-state` "State placement
   under Host/Guest/user execution" apply unmodified during cutover.
 
 ## Incident hold (cutover-wide)
@@ -1080,13 +1106,13 @@ with `d2b host cutover hold --reason "<bounded operator text>"
 [--json | --human]`. While active:
 
 1. Phase 4 (disposition execution), Phase 8 (Guest/runtime activation past
-   what has already started), and Phase 10 (removal gates) refuse to proceed
-   — a hold blocks every destructive or state-creating step the same way a
+   what has already started), and Phase 10 (removal gates) refuse to proceed -
+   a hold blocks every destructive or state-creating step the same way a
    per-Volume `IncidentHold` condition blocks `deletionRequestedAt`
    processing and migration commit in `ADR-046-provider-state` "Incident
    hold";
 2. read-only phases (Preflight, `plan`, `verify`, `doctor`) continue to work
-   normally — a hold never blocks observation;
+   normally - a hold never blocks observation;
 3. any Adopt migration `EphemeralProcess` already in flight when the hold is
    declared completes its current atomic step (it does not abort mid-write,
    which would violate the idempotency contract in [Crash/power-loss/retry/
@@ -1100,12 +1126,12 @@ with `d2b host cutover hold --reason "<bounded operator text>"
    (Volumes it adopted state into) is individually cleared by their owning
    Provider controller's normal reconcile per `ADR-046-provider-state`, the
    cutover-wide hold is a separate, independent hold and must be cleared on
-   its own — clearing one does not implicitly clear the other.
+   its own - clearing one does not implicitly clear the other.
 
 ## Full Zone reset vs Provider reset vs Guest reset
 
 These three destructive operations are related but strictly nested in scope.
-None of them is the cutover this spec otherwise describes — they are the
+None of them is the cutover this spec otherwise describes - they are the
 post-cutover recovery levers this spec defines as the "full Zone reset,"
 "Provider reset," and "Guest reset" scopes the rest of the ADR 0046 set
 (system-minijail, volume-local, and other dossiers) already reference by name
@@ -1149,12 +1175,12 @@ evidence corrections](#cross-reference-and-evidence-corrections)):
    final transaction emits the Zone's own `phase=Deleted` event and closes
    the store.
 5. Zone runtime re-enters compiled bootstrap authorization (§9 of
-   `ADR-046-resources-zone-control`) for a fresh initialization — equivalent
+   `ADR-046-resources-zone-control`) for a fresh initialization - equivalent
    to re-running this spec's Phase 5 onward against a new, empty store at the
    same store path.
 6. Authentication for this operation is OS-level (uid=0 or the local `d2b`
    group's `SO_PEERCRED` admission, matching the existing local lifecycle
-   authorization surface) — it is never reachable remotely or through
+   authorization surface) - it is never reachable remotely or through
    d2b-bus, exactly as `ADR-046-resources-zone-control` §9.4 requires.
 7. **Full Zone reset destroys every Volume in the Zone, including
    `kind: durable` Volumes, unless `--preserve-durable-volumes` is passed**,
@@ -1162,7 +1188,7 @@ evidence corrections](#cross-reference-and-evidence-corrections)):
    "Relocation") to a holding area outside the Zone before store deletion and
    are eligible for re-attachment to a freshly reconciled Guest/Provider
    after the reset completes. This flag defaults to **on** (durable Volumes
-   are preserved by default) — a Full Zone reset that would destroy durable
+   are preserved by default) - a Full Zone reset that would destroy durable
    Volumes requires the operator to explicitly pass
    `--destroy-durable-volumes` and the same exact-consent-phrase pattern as
    cutover `apply`.
@@ -1174,21 +1200,21 @@ evidence corrections](#cross-reference-and-evidence-corrections)):
 
 1. Deletes `Provider/<name>` through the normal resource API delete path
    (`deletionRequestedAt`, finalizer-ordered child deletion, `Deleted` event);
-   the Provider's and its children's `status` — the default surface for bounded
-   non-secret operational state (D087) — disappears with the resource row and
+   the Provider's and its children's `status` - the default surface for bounded
+   non-secret operational state (D087) - disappears with the resource row and
    its revision, requiring no separate state disposition;
 2. Any declared Volume in that Provider's (possibly empty) `ProviderStateSet`
    is deleted **only** if `--destroy-volumes` is explicitly passed; by default,
    Volumes with `persistenceClass: persistent` are detached (ownerRef cleared
    to `null` pending operator disposition) rather than deleted, surfaced as
-   `Unclaimed` per `ADR-046-provider-state` "Unclaimed Volume GC" — an
+   `Unclaimed` per `ADR-046-provider-state` "Unclaimed Volume GC" - an
    operator must explicitly delete an unclaimed Volume; it is never
    automatically swept by a Provider reset;
 3. Re-creating `Provider/<name>` afterward (a fresh `apply` of the same
    `artifactId`) goes through the normal Provider install algorithm and, if
    any Volume from the prior instance is still present and unclaimed with a
    matching component-state schema, the new instance's Core ProviderDeployment
-   does **not** automatically re-adopt it — the operator must explicitly
+   does **not** automatically re-adopt it - the operator must explicitly
    re-attach it, because an automatic re-adopt across a Provider identity
    change is exactly the kind of implicit ownership inference
    `ADR-046-resource-object-model` "Deletion" already forbids ("a
@@ -1208,8 +1234,8 @@ evidence corrections](#cross-reference-and-evidence-corrections)):
 2. The Guest's owned Process/EphemeralProcess children are deleted
    child-first under normal finalizer protocol;
 3. The Guest's store-view and TPM Volumes follow the exact same
-   `--destroy-volumes`-gated preserve-by-default rule as Provider reset above
-   — **never** destroyed by default, consistent with [Never wipe TPM
+   `--destroy-volumes`-gated preserve-by-default rule as Provider reset above -
+   **never** destroyed by default, consistent with [Never wipe TPM
    identity or durable Volumes silently](#never-wipe-tpm-identity-or-durable-volumes-silently);
 4. Re-creating `Guest/<name>` afterward re-attaches a preserved Volume only
    when the operator explicitly names it in the new Guest's declaration
@@ -1346,7 +1372,7 @@ dry-run plan](#explicit-operator-consent-and-dry-run-plan) above. `apply`,
 text convention: one summary line, then a bulleted list per section
 (preflight requirements, preserve, disposition, hazards), with no manual
 `chmod`/`chown`/`setfacl` remediation text anywhere in the human or JSON
-output — consistent with the existing `host migrate-storage` documentation
+output - consistent with the existing `host migrate-storage` documentation
 note that such instructions are never an acceptable recovery path.
 
 ## NixOS activation sequencing
@@ -1354,49 +1380,55 @@ note that such instructions are never an acceptable recovery path.
 Cutover spans two distinct NixOS activation contexts, and this spec is
 explicit about which one applies where:
 
-1. **The one-time bootstrap `nixos-rebuild switch`.** Before any Zone runtime
-   exists, the operator runs a normal `nixos-rebuild switch` against a NixOS
+1. **The one-time bootstrap `nixos-rebuild switch`.** Before the Zone runtime
+   is live, the operator runs a normal `nixos-rebuild switch` against a NixOS
    configuration that has replaced `nixos-modules/options-realms*.nix`/
    `options-vms.nix` with `d2b.zones.<zone>.*`. This activation:
-   - installs the new fixed Zone runtime systemd unit set (the
-     `Provider/system-core`/`system-minijail` bootstrap processes' owning
-     unit, per `ADR-046-core-controllers` "Process model") **without
-     starting it** — `system.activationScripts` orders the new unit's
-     installation `Before=` the point where old units are stopped, but the
-     unit itself is declared `wantedBy = []`/not auto-started at this
-     activation, so the physical host boots with both the old units present
-     (already stopped by a prior `d2b host cutover` Phase 3 drain, if this
-     is a re-activation) and the new unit installed-but-dormant;
-   - does **not** delete `d2bd.service`/`d2b-priv-broker.service` unit files
-     yet — those remain Preserved until [Old artifact/unit/schema removal
-     gates](#old-artifactunitschema-removal-gates) clears them in Phase 10;
+   - swaps the binary and configuration behind the **existing** three units
+     in place: `d2bd.service` is retained and becomes the fixed Zone core
+     controller launcher (the `Provider/system-core`/`system-minijail`
+     bootstrap processes are supervised in-process by `d2bd`, per
+     `ADR-046-core-controllers` "Process model"), and `d2b-priv-broker.socket`/
+     `d2b-priv-broker.service` keep their socket-activated shape. No second,
+     parallel Zone runtime unit set is installed; the host carries exactly the
+     same three unit names before and after this activation;
+   - installs the adapted units **without auto-starting a fresh Zone runtime** -
+     `d2bd.service` is left stopped (already drained by a prior `d2b host
+     cutover` Phase 3, if this is a re-activation) so that starting the Zone
+     runtime remains the explicit, consent-gated act of `d2b host cutover
+     apply`, not a side effect of activation;
+   - does **not** delete or rename any of the three unit files - they are
+     adapted in place and are never Destroy candidates (§ [The three
+     root-visible units are adapted in place, never
+     destroyed](#the-three-root-visible-units-are-adapted-in-place-never-destroyed));
    - is itself rollback-safe via the normal NixOS generation mechanism for as
      long as this spec's [rollback boundary](#rollback-boundary) remains
      open (through end of Phase 4).
 2. **`d2b host cutover apply`** is then run interactively by the operator
-   (never from an activation script — it requires the exact consent phrase
-   from a human-read `plan` output) and is what actually starts the new Zone
-   runtime unit and executes Phases 3-8.
+   (never from an activation script - it requires the exact consent phrase
+   from a human-read `plan` output) and is what actually starts the adapted
+   `d2bd.service` as the live Zone runtime and executes Phases 3-8. Starting
+   it is a continuation event: the daemon re-adopts store/runner state before
+   any cleanup, per ADR 0034.
 3. **After cutover completes**, ordinary NixOS rebuilds resume their normal
    role: they change the Zone's `d2b.zones.<zone>.*` Nix configuration and
    activate new configuration generations through the ordinary
-   `ADR-046-nix-configuration` "Bundle and generation emission" contract —
+   `ADR-046-nix-configuration` "Bundle and generation emission" contract -
    the `activation-nixos` Provider (once installed, per [Provider
    install/topological start](#provider-installtopological-start) Stage D)
    takes over ordinary Host/Guest NixOS generation plan/apply/adopt/rollback
    from that point forward; it is never used for the initial bootstrap
    switch itself, because a Provider cannot exist before the Zone runtime
-   that hosts it exists — this is the same chicken-and-egg boundary the
+   that hosts it exists - this is the same chicken-and-egg boundary the
    [volume-local reaches Ready without a state Volume](#volume-local-reaches-ready-without-a-state-volume)
    section already establishes for Volume creation, applied here to NixOS
    activation instead.
-4. **Ordering invariant.** The new fixed Zone runtime unit is declared
-   `After=` and `Requires=` nothing that depends on Zone runtime already
-   being up (it is the process that brings Zone runtime up); it is declared
-   `Before=` nothing that the old `d2bd.service`/`d2b-priv-broker.service`
-   units are declared `After=`, so the two unit sets never race for the same
-   socket path during the window where both are installed but only one is
-   running.
+4. **Ordering invariant.** Because the three units are adapted in place rather
+   than paired with a parallel set, there is no cross-unit-set race for a
+   socket path: activation swaps the binary/config behind each unit name while
+   that unit is stopped, and `d2b host cutover apply` starts `d2bd.service`
+   only after activation has completed, so the single `public.sock` owner is
+   unambiguous at every instant.
 
 ## Backup/retention count 1-16, no TTL
 
@@ -1411,7 +1443,7 @@ d2b.site.cutoverSnapshotRetention = 3;   # default 3; range 1..16
 
 - an eval assertion enforces `1 <= cutoverSnapshotRetention <= 16`, mirroring
   the existing `retainedGenerations` assertion exactly;
-- retention is **count-based only** — there is no TTL/age-based expiry of a
+- retention is **count-based only** - there is no TTL/age-based expiry of a
   cutover snapshot, matching the existing "Generations within retention count
   retained (no TTL)" test invariant already proven for configuration
   generations;
@@ -1421,7 +1453,7 @@ d2b.site.cutoverSnapshotRetention = 3;   # default 3; range 1..16
   auto-pruned, regardless of age, until the operator explicitly discards it
   with `d2b host cutover doctor --discard-checkpoint <id>`);
 - pruning a snapshot never touches the live adopted Volumes/Providers/Guests
-  it describes — only the snapshot's own JSON/journal files under
+  it describes - only the snapshot's own JSON/journal files under
   `/var/lib/d2b/cutover/<checkpoint_id>/` are removed.
 
 ## Disk-space/GC safety
@@ -1440,19 +1472,19 @@ cannot be bypassed by disk-consuming setup":
 2. If free space under `/var/lib/d2b` (or wherever the target Volume root
    will live, if separately configured) is below this computed requirement,
    `preflight` fails closed with `cutover-precondition-failed` and prints the
-   exact shortfall in bytes — it never proceeds with a partial Adopt that
+   exact shortfall in bytes - it never proceeds with a partial Adopt that
    could run out of space mid-copy.
 3. Adopt operations that use same-filesystem `rename`/hardlink (store-view
    farm, matching the existing ADR 0027 hardlink-farm contract) require zero
    additional headroom beyond directory-entry overhead and are excluded from
-   the "copied" sum above — cutover's disk-space estimate distinguishes
+   the "copied" sum above - cutover's disk-space estimate distinguishes
    same-filesystem-cheap Adopt from cross-filesystem-expensive Adopt exactly
    as `ADR 0034` already requires for the hardlink-sensitive store-view path
    ("same-filesystem/cross-mount invariants... recursive chmod/chown/setfacl
    over a hardlink farm remains forbidden").
 4. GC safety: cutover snapshot pruning (previous section) and the ordinary
    Zone generation GC (`d2b activation gc`, once `activation-nixos` is
-   installed) are independent budgets — pruning a cutover snapshot never
+   installed) are independent budgets - pruning a cutover snapshot never
    counts against or interferes with `retainedGenerations` pruning, and vice
    versa.
 
@@ -1463,14 +1495,14 @@ new closed reason class:
 
 | Class | When it is set | Recovery |
 | --- | --- | --- |
-| `cutover-quarantined` | Any Phase 4-8 step whose ambiguity cannot be resolved automatically (e.g., a marker exists at the destination but does not match the source's recorded digest; a redb store exists at the target path but its `zone_uid` does not match the journal's recorded identity) | `d2b host cutover doctor` surfaces the exact quarantined step, affected path/resource, and a static remediation id; the privileged broker never repairs a quarantined path from trusted paths/owners/modes in the ledger — only from the trusted bundle/journal, matching the existing ADR 0034 invariant that "repairs never trust paths, owners, modes, ACLs, or commands from the ledger" |
+| `cutover-quarantined` | Any Phase 4-8 step whose ambiguity cannot be resolved automatically (e.g., a marker exists at the destination but does not match the source's recorded digest; a redb store exists at the target path but its `zone_uid` does not match the journal's recorded identity) | `d2b host cutover doctor` surfaces the exact quarantined step, affected path/resource, and a static remediation id; the privileged broker never repairs a quarantined path from trusted paths/owners/modes in the ledger - only from the trusted bundle/journal, matching the existing ADR 0034 invariant that "repairs never trust paths, owners, modes, ACLs, or commands from the ledger" |
 | `adoption-quarantined` (reused from ADR 0034) | An Adopt migration `EphemeralProcess` finds multiple, ambiguous, or mismatched candidates for a marker-bearing source (e.g. two swtpm directories claim the same Guest identity) | Operator resolves the ambiguity manually (removing the stale candidate) and re-runs the specific Adopt step; cutover never guesses which candidate is authoritative |
 | `restart-required` (reused) | A Provider/Guest process needs a restart to pick up newly adopted state (e.g., `volume-local` restarted mid-Adopt) | `d2b host cutover doctor` names the exact process; operator restarts it directly |
 | `storage-drift` (reused) | A path's on-disk owner/mode/ACL does not match its declared storage contract entry after Adopt | Broker repair resolves only the trusted storage id from the bundle, never a raw path from the ledger |
 
 `d2b host cutover doctor [--zone <zone>] [--read-only] [--json | --human]`
 is read-only (its `--read-only` flag is accepted for symmetry with `d2b host
-doctor` but is always effectively on for this verb — `doctor` never mutates).
+doctor` but is always effectively on for this verb - `doctor` never mutates).
 It reports:
 
 1. every open journal checkpoint and its last completed phase/step;
@@ -1502,14 +1534,14 @@ owns the destination.
 
 | Current artifact | Evidence (migration-map) | Disposition | Target | Owning work item / dossier |
 | --- | --- | --- | --- | --- |
-| `d2bd.service`, `d2bd.socket` | §7, `production-reachable` | Preserve until Phase 10 gate clears (§ [Old artifact/unit/schema removal gates](#old-artifactunitschema-removal-gates)), then Destroy | Fixed Zone runtime unit | `ADR046-core-001` |
-| `d2b-priv-broker.service`, `d2b-priv-broker.socket` | §7, `production-reachable` | Preserve until Phase 10 gate clears, then Destroy | Zone-local privileged broker (`ADR046-provider-003`) | `ADR046-provider-003` |
+| `d2bd.service` | §7, `production-reachable` | Adapt in place (retain the unit name; swap the binary/config it launches). Never Destroyed | Same `d2bd.service`, now the fixed Zone core controller launcher | `ADR046-core-001` |
+| `d2b-priv-broker.service`, `d2b-priv-broker.socket` | §7, `production-reachable` | Adapt in place (retain both unit names; swap the broker binary/config). Never Destroyed | Same `d2b-priv-broker.socket`/`d2b-priv-broker.service`, Zone-local privileged broker (`ADR046-provider-003`) | `ADR046-provider-003` |
 | `/run/d2b/d2bd.sock`, `/run/d2b/broker.sock` | §7 | Destroy (Phase 3, boot-scoped) | `/run/d2b/z-<zone-id>/...` fresh sockets | `ADR046-core-controllers` "Process model" |
-| `/run/d2b/allocator.sock` | §7, config-ref/schema-only, engine not live | Destroy (Phase 3; never adopted — no live allocator process to quiesce) | No successor socket; provisioning integrates into fixed core controllers | `ADR046-core-001` |
+| `/run/d2b/allocator.sock` | §7, config-ref/schema-only, engine not live | Destroy (Phase 3; never adopted - no live allocator process to quiesce) | No successor socket; provisioning integrates into fixed core controllers | `ADR046-core-001` |
 | `d2b-realm-router` PeerSession/MuxSession/`WorkloadOp`/`RealmMethod` wire | multiple rows, `dead-reachable`/`production-reachable` | Preserve (compiled into binary; Destroy only when the binary itself is retired at Phase 10) | ComponentSession/d2b-bus/`ResourceOp` | `ADR046-session-001`, `ADR046-bus-001`, `ADR046-api-001` |
 | `d2b-unsafe-local-helper` binary, `DaemonToUnsafeLocalHelper` protocol | §7, `production-reachable` | Preserve until Process Provider supervisor ticket migration lands, then Destroy | User-only `Host` Process supervisor | `ADR046-primitives-003` |
 | `d2b-guest-shell-runner` | `production-reachable` | Preserve until user-only Host shell Process parity, then Destroy | `Process` child of user-only Host | `ADR046-primitives-003` |
-| `~/.local/state/d2b/unsafe-local-scopes.json` | §7 evidence, per-user scope ledger | Adopt into a declared user-only Host state Volume — this ledger is real private per-user content that passes the storage-need test, not derivable from status/core ledger — via a per-user migration `EphemeralProcess` | User-only Host declared component state Volume | `ADR046-primitives-003` |
+| `~/.local/state/d2b/unsafe-local-scopes.json` | §7 evidence, per-user scope ledger | Adopt into a declared user-only Host state Volume - this ledger is real private per-user content that passes the storage-need test, not derivable from status/core ledger - via a per-user migration `EphemeralProcess` | User-only Host declared component state Volume | `ADR046-primitives-003` |
 
 ### Storage/restart/synchronization contract (ADR 0034)
 
@@ -1518,7 +1550,7 @@ owns the destination.
 | `storage.json` | ADR 0034 generated artifact | Preserve (read by legacy code until every storage id has a live Volume/resource successor), then Destroy per-id as each successor lands | Per-artifact `Volume`/resource storage declaration | `ADR046-store-003` |
 | `sync.json`/`locks.json` | ADR 0034 generated artifact | Preserve, then Destroy per-id as each lock's successor (OFD-lock-owning resource/controller) lands | Internal controller/transaction lock mechanics (not a ResourceType, per `ADR-046-resource-object-model` "Folded implementation detail") | `ADR046-store-001` |
 | Daemon degraded-state ledger | ADR 0034 | Preserve as historical evidence; new degraded conditions post-cutover use the Zone resource `status.conditions` model instead | `Resource.status.conditions` | `ADR046-core-001` |
-| OFD lock files under `/run/d2b` | ADR 0034 | Destroy only via normal reboot/tmpfs cleanup — never unlinked directly by cutover (explicit fail-closed hazard) | N/A (mechanism, not a resource) | N/A |
+| OFD lock files under `/run/d2b` | ADR 0034 | Destroy only via normal reboot/tmpfs cleanup - never unlinked directly by cutover (explicit fail-closed hazard) | N/A (mechanism, not a resource) | N/A |
 
 ### TPM (device-tpm Provider dossier)
 
@@ -1551,10 +1583,10 @@ owns the destination.
 
 | Current artifact | Evidence | Disposition | Target | Owning work item / dossier |
 | --- | --- | --- | --- | --- |
-| `<keysDir>/<vm>_ed25519{,.pub}` | `nixos-modules/host-keys.nix` | Preserve (framework SSH keys are never regenerated by cutover) | Unchanged; continues to be consumed the same way by Guest boot | N/A — out of ADR 0046 Provider scope per activation-nixos dossier §1.2 ("SSH key lifecycle... belongs to a separate identity Provider") |
+| `<keysDir>/<vm>_ed25519{,.pub}` | `nixos-modules/host-keys.nix` | Preserve (framework SSH keys are never regenerated by cutover) | Unchanged; continues to be consumed the same way by Guest boot | N/A - out of ADR 0046 Provider scope per activation-nixos dossier §1.2 ("SSH key lifecycle... belongs to a separate identity Provider") |
 | `<stateDir>/vms/<vm>/host-keys/{host.pub,user-authorized-keys}` | `nixos-modules/host-keys.nix` | Preserve | Unchanged | Same as above |
 | `realm-controllers.json`, `realm-identity.json` | migration-map §"Current-code fit" rows, `implemented-and-reachable`/live | Preserve until the compiler-only `parentZone` topology is sealed, every child-local `ZoneLink`/Credential successor is `Ready`, and the no-reciprocal-parent-row check passes (Phase 10 gate), then Destroy | Runtime-created `Zone` self resource + sealed allocator topology + child-local `ZoneLink` transport/route state; Credential `scope`/`audience`/`allowedOperations` fields | `ADR046-nix-008`, `ADR046-nix-009` |
-| Gateway guest realm relay credentials/audit (ADR 0032 `CredentialCustody::GatewayGuest`) | ADR 0032 evidence | **Never enumerated by the parent host's inventory** — see [Gateway Guest credential/audit custody](#gateway-guest-credentialaudit-custody) | Nested child Zone's own Credential resources | N/A — parent host cutover has no authority here |
+| Gateway guest realm relay credentials/audit (ADR 0032 `CredentialCustody::GatewayGuest`) | ADR 0032 evidence | **Never enumerated by the parent host's inventory** - see [Gateway Guest credential/audit custody](#gateway-guest-credentialaudit-custody) | Nested child Zone's own Credential resources | N/A - parent host cutover has no authority here |
 
 ### Audit and telemetry
 
@@ -1570,11 +1602,11 @@ owns the destination.
 | Current artifact | Evidence | Disposition | Target | Owning work item / dossier |
 | --- | --- | --- | --- | --- |
 | `d2b vm *`, `d2b realm *`, `d2b up/down/restart/list/status`, `d2b usb *`, `d2b keys *`, `d2b build/switch/boot/test/rollback/gc/migrate/config *` | `ADR-046-cli-and-operations` "v2 command surface removed at 3.0 clean break" | Preserve (compiled dispatch) until v3 successor is wired, then Destroy at Phase 10 (compile-time removal, verified by policy lint) | `d2b guest/zone/device/exec/shell/activation *` | `ADR-046-cli-and-operations` per-verb work items |
-| `d2b host migrate-storage` | `ADR-046-cli-and-operations` "Removal notes" | Destroy at Phase 10 with **no v3 successor** — the layout cutover it served (v1→v2) is unrelated to this cutover and is not re-implemented | None (retired) | N/A |
+| `d2b host migrate-storage` | `ADR-046-cli-and-operations` "Removal notes" | Destroy at Phase 10 with **no v3 successor** - the layout cutover it served (v1→v2) is unrelated to this cutover and is not re-implemented | None (retired) | N/A |
 Any current-baseline path, unit, or artifact not named in any table above is,
 per [Authoritative inventories](#authoritative-inventories), classified
 **Preserve by default** and surfaced in the `plan` output's `unclassified`
-array for explicit operator review before `apply` — this matrix is exhaustive
+array for explicit operator review before `apply` - this matrix is exhaustive
 over every category this spec's inventories walk, but a future Provider
 dossier revision that introduces a new current-code row must add a
 corresponding row here before its disposition may be anything other than the
@@ -1587,9 +1619,9 @@ Preserve default.
 | Current anchor | ADR 0034 "Migration decision" (planned-downtime storage cutover, preserve list, checkpoint/rollback UX); `packages/d2b/src/lib.rs` `cmd_host_migrate_storage`/`build_storage_migration_plan`/`storage_migration_checkpoint_id` (retired verb, reused shape); `cmd_host_destroy`/`require_explicit_mutation_flag` (dry-run/apply precondition pattern); `packages/d2bd/src/storage_lifecycle.rs`/`ownership_preflight.rs` (bundle-versioned contract checks, legacy-recovery-artifact optionality); `ADR-046-resources-zone-control` §2.6/§9.4 (destructive reset primitive); `ADR-046-provider-state` (migration/incident-hold/unclaimed-GC machinery) |
 | Evidence class | The CLI dry-run planning precedent (`host migrate-storage`, `host destroy`) is `implemented-and-reachable`; the ADR 0034 preserve-list/checkpoint contract is `implemented-and-reachable` as design but its `--apply`/`--rollback` are themselves `test-only-or-preview` (fail closed in the current build); the Zone/Provider/Volume destinations this spec adopts into are `ADR-only` |
 | Behavior retained | Dry-run-before-apply with a printed checkpoint id and exact rollback command; preserve-list-first design (swtpm NVRAM/markers, SSH keys, store-view state/gcroots, disk images, audit/degraded history never silently destroyed); fail-closed hazards enumerated explicitly rather than left implicit; broker-mediated path-safe mutation (no manual chmod/chown/setfacl); atomic persistence sequence (temp file, fsync, rename, parent fsync) for every durable record this spec's own journal/snapshot writes |
-| Required delta | The entire Zone/Provider/redb resource-store bootstrap this spec's Phase 5-8 execute has no current-baseline equivalent at all — ADR 0034's cutover only ever moved a storage *layout*, never replaced the daemon/wire protocol/resource model sitting on top of it; the Full/Provider/Guest reset scopes, the cutover-wide incident hold, and the gateway-custody-aware child-local ZoneLink translation are new |
+| Required delta | The entire Zone/Provider/redb resource-store bootstrap this spec's Phase 5-8 execute has no current-baseline equivalent at all - ADR 0034's cutover only ever moved a storage *layout*, never replaced the daemon/wire protocol/resource model sitting on top of it; the Full/Provider/Guest reset scopes, the cutover-wide incident hold, and the gateway-custody-aware child-local ZoneLink translation are new |
 | Reuse path | Copy the exact `StorageMigrationPlan` JSON shape (renamed fields) for the new `plan`/`apply` JSON envelopes; copy `require_explicit_mutation_flag`'s precondition gate for every new mutating verb; copy `storage_migration_checkpoint_id`'s digest-of-sorted-names pattern extended over every inventory class; copy the ADR 0034 preserve list verbatim as the seed of the [migration/disposition matrix](#migrationdisposition-matrix)'s TPM/keys/disk-image/audit rows; copy `ADR-046-provider-state`'s prepare/stage/commit/rollback/roll-forward algorithm unmodified as every Adopt step's mechanism |
-| Replacement/deletion | `d2b host migrate-storage` is retired with no successor (it served an unrelated v1→v2 cutover); every other current-baseline artifact this spec's matrix names is Preserved until its own [Old artifact/unit/schema removal gate](#old-artifactunitschema-removal-gates) clears — nothing is removed by this spec's own authoring, only by its future implementation work items after their gates clear |
+| Replacement/deletion | `d2b host migrate-storage` is retired with no successor (it served an unrelated v1→v2 cutover); every other current-baseline artifact this spec's matrix names is Preserved until its own [Old artifact/unit/schema removal gate](#old-artifactunitschema-removal-gates) clears - nothing is removed by this spec's own authoring, only by its future implementation work items after their gates clear |
 | Feasibility proof | A disposable end-to-end cutover rehearsal fixture (single-Guest, single-TPM, single-store-view host) proving: preflight snapshot digest reproducibility; drain quiescence detection; Adopt idempotency across an injected crash at every step boundary; Phase 5 redb bootstrap against the rehearsal fixture's adopted Volumes; Provider install topological order determinism; `verify` catching an injected digest mismatch; rollback within the boundary and refusal past it; Full/Provider/Guest reset scope isolation (resetting one does not affect siblings) |
 | Future owner | Work items below |
 
@@ -1599,7 +1631,7 @@ Every test type below follows the taxonomy `tests/AGENTS.md` defines; this
 spec introduces no new top-level `tests/*.sh` gate (the closed-set rule
 applies here exactly as everywhere else in the repository).
 
-### Type 1 — eval cases (`tests/unit/nix/cases/`)
+### Type 1 - eval cases (`tests/unit/nix/cases/`)
 
 | Case | Asserts |
 | --- | --- |
@@ -1607,7 +1639,7 @@ applies here exactly as everywhere else in the repository).
 | `cutover-candidate-bundle-validation.nix` | A candidate `d2b.zones.<zone>.*` configuration with a dangling `*Ref` fails eval with a structured error naming the offending field |
 | `zone-reset-scope-target-parsing.nix` | `--scope`/`--target` combinations for `zone`/`provider`/`guest` parse to the correct `ResourceRef` type; a `Zone/<name>` target under `--scope provider` is rejected |
 
-### Type 2 — unit tests (`packages/<crate>/src/**`)
+### Type 2 - unit tests (`packages/<crate>/src/**`)
 
 | Test | Asserts |
 | --- | --- |
@@ -1616,7 +1648,7 @@ applies here exactly as everywhere else in the repository).
 | Disposition framework invariant | Every disposition table entry compiles to exactly one of `Adopt`/`Preserve`/`Destroy`; a path absent from every table defaults to `Preserve` |
 | TPM/durable-Volume Destroy exclusion | Property test: no code path can assign `Destroy` to a path tagged `kind: durable`-equivalent or TPM-marker-bearing in the inventory |
 
-### Type 3 — integration tests (`packages/<crate>/tests/*.rs`)
+### Type 3 - integration tests (`packages/<crate>/tests/*.rs`)
 
 | Test | Asserts |
 | --- | --- |
@@ -1626,14 +1658,14 @@ applies here exactly as everywhere else in the repository).
 | `cutover_rollback_window_closes_after_phase_5` | `rollback` succeeds for a checkpoint at phase `<=4` and refuses with `cutover-rollback-window-closed` at phase `>=5` |
 | `host_reset_scope_isolation` | A `Provider reset` does not mutate the Zone resource, other Providers, or unrelated Guests; a `Guest reset` does not mutate the Zone, Providers, or other Guests |
 
-### Type 4 — contract tests (`packages/d2b-contract-tests/tests/*.rs`)
+### Type 4 - contract tests (`packages/d2b-contract-tests/tests/*.rs`)
 
 | Test | Asserts |
 | --- | --- |
 | `cutover_snapshot_schema_matches_doc` | The rendered `snapshot.json`/`journal.jsonl` shapes match this spec's documented fields exactly (drift gate) |
 | `cutover_plan_json_schema_v1` | `plan`'s JSON envelope matches the documented schema, frozen at version 1 |
 
-### Type 5 — policy lints (`packages/d2b-contract-tests/tests/policy_*.rs`)
+### Type 5 - policy lints (`packages/d2b-contract-tests/tests/policy_*.rs`)
 
 | Test | Asserts |
 | --- | --- |
@@ -1641,35 +1673,36 @@ applies here exactly as everywhere else in the repository).
 | `policy_legacy_cli_verbs_absent_after_gate` | Compilation fails if any retired `cmd_vm_*`/`cmd_realm_*` dispatch entry is reintroduced after its Phase 10 gate is recorded clear |
 | `policy_no_manual_chmod_chown_setfacl_text` | No cutover CLI human-output string contains `chmod`/`chown`/`setfacl` remediation text |
 
-### Type 6 — flake checks (`tests/unit/smoke/`)
+### Type 6 - flake checks (`tests/unit/smoke/`)
 
 | Check | Asserts |
 | --- | --- |
 | `smoke-eval-cutover-candidate-bundle` | The candidate v3 Zone bundle for the repository's own example configurations (`examples/minimal`, `examples/multi-env`) evaluates and builds under the new `d2b.zones.*` namespace |
 
-### Type 9 — container (`tests/integration/containers/`, `make test-integration`)
+### Type 9 - container (`tests/integration/containers/`, `make test-integration`)
 
 | Test | Asserts |
 | --- | --- |
 | `cutover-rehearsal-container.sh` | A rootless-podman fixture proves the Adopt migration `EphemeralProcess` pattern (prepare/stage/commit/rollback) against a synthetic swtpm-directory/store-view fixture without requiring a real Guest boot |
 
-### Type 10 — VM/host-KVM (`tests/host-integration/*.nix`, `make test-host-integration`)
+### Type 10 - VM/host-KVM (`tests/host-integration/*.nix`, `make test-host-integration`)
 
 | Test | Asserts |
 | --- | --- |
-| `cutover-full-rehearsal.nix` | A real NixOS VM with one TPM-enabled Guest, one store-view Guest, and framework SSH keys: full Preflight→Verify cutover rehearsal, `verify` digest checks pass, old units retired only after their Phase 10 gates clear |
+| `cutover-full-rehearsal.nix` | A real NixOS VM with one TPM-enabled Guest, one store-view Guest, and framework SSH keys: full Preflight->Verify cutover rehearsal, `verify` digest checks pass, the three root-visible units are adapted in place, and legacy option-namespace/wire/helper artifacts are retired only after their Phase 10 gates clear |
+| `cutover-unit-topology.nix` | The cut-over host carries exactly three root-visible d2b units (`systemctl list-units --all \| grep -E '^(d2b\|microvm)' \| wc -l` returns `3`: `d2bd.service`, `d2b-priv-broker.socket`, `d2b-priv-broker.service`), before and after cutover, matching the AGENTS.md host exit criterion |
 | `cutover-crash-resume.nix` | Kills the `apply` process mid-Phase-4 (mid-Adopt) and confirms a re-run resumes idempotently with no data loss and no duplicate Volume creation |
 | `zone-provider-guest-reset-isolation.nix` | Full/Provider/Guest reset scope isolation proven against a live multi-Guest, multi-Provider Zone |
 | `tpm-adopt-retirement.nix` | Phase 10 TPM gate: adopted TPM Volume survives a full Guest restart cycle before its source directory may be Destroyed |
 
-### Type 11 — live-host (`tests/integration/live/`, `D2B_LIVE=1`, manual, never CI)
+### Type 11 - live-host (`tests/integration/live/`, `D2B_LIVE=1`, manual, never CI)
 
 | Test | Asserts |
 | --- | --- |
 | `live/cutover-real-host.sh` | Full cutover against a real deployed pre-ADR-0046 host (never CI); requires explicit operator sign-off and a pre-existing full disk/VM backup outside this spec's own snapshot mechanism |
 | `live/cutover-real-host-cloud-guest.sh` (manual cloud) | Cutover of a host with a live `runtime-azure-container-apps`/`runtime-azure-virtual-machine` Guest against real Azure resources; proves the gateway-custody boundary holds with a real relay-backed realm |
 
-### Type 12 — hardware (`tests/host-integration/hardware/`, manual, real devices)
+### Type 12 - hardware (`tests/host-integration/hardware/`, manual, real devices)
 
 | Test | Asserts |
 | --- | --- |
@@ -1678,7 +1711,7 @@ applies here exactly as everywhere else in the repository).
 
 ## Implementation work items
 
-### ADR046-reset-001 — Inventory and snapshot engine
+### ADR046-reset-001 - Inventory and snapshot engine
 
 | Field | Value |
 | --- | --- |
@@ -1694,7 +1727,7 @@ applies here exactly as everywhere else in the repository).
 | Validation | `checkpoint_id` determinism property test; snapshot atomic-write crash-injection test; `cutover_preflight_refuses_dirty_flake_check` |
 | Removal proof | Not applicable (net-new capability) |
 
-### ADR046-reset-002 — Config/artifact/schema validation
+### ADR046-reset-002 - Config/artifact/schema validation
 
 | Field | Value |
 | --- | --- |
@@ -1706,11 +1739,11 @@ applies here exactly as everywhere else in the repository).
 | Destination | `packages/d2b-cutover/src/{bundle_validate,trust_preflight}.rs` |
 | Detailed design | Independent legacy-flake-check gate; candidate v3 bundle schema/cross-ref/determinism validation per [Config/artifact/schema validation](#configartifactschema-validation); Provider trust preflight per `ADR-046-provider-model-and-packaging` "Trust" |
 | Integration | Invoked by `preflight` before the snapshot is written; failures block `plan` from being offered |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `cutover-candidate-bundle-validation.nix`; trust-preflight rejection tests for each of digest/publisher/signature/deny/provenance/conformance failure modes |
 | Removal proof | Not applicable |
 
-### ADR046-reset-003 — Consent, drain, and disposition executor
+### ADR046-reset-003 - Consent, drain, and disposition executor
 
 | Field | Value |
 | --- | --- |
@@ -1726,7 +1759,7 @@ applies here exactly as everywhere else in the repository).
 | Validation | `cutover_apply_requires_exact_consent_phrase`; `cutover_drain_refuses_on_live_process` |
 | Removal proof | Not applicable |
 
-### ADR046-reset-004 — Adopt migration EphemeralProcess integration
+### ADR046-reset-004 - Adopt migration EphemeralProcess integration
 
 | Field | Value |
 | --- | --- |
@@ -1742,7 +1775,7 @@ applies here exactly as everywhere else in the repository).
 | Validation | Crash-injection at every step boundary (Type 10 `cutover-crash-resume.nix`); TPM/durable-Volume Destroy-exclusion property test |
 | Removal proof | Not applicable (the mechanism is retained permanently for later Full/Provider/Guest reset relocation use, not retired after first use) |
 
-### ADR046-reset-005 — Resource-store bootstrap and Provider install sequencer
+### ADR046-reset-005 - Resource-store bootstrap and Provider install sequencer
 
 | Field | Value |
 | --- | --- |
@@ -1758,7 +1791,7 @@ applies here exactly as everywhere else in the repository).
 | Validation | Provider install topological-order determinism test; cycle-rejection test; store-identity mismatch fail-closed test |
 | Removal proof | Not applicable |
 
-### ADR046-reset-006 — Child-local ZoneLink/Guest activation and gateway custody boundary
+### ADR046-reset-006 - Child-local ZoneLink/Guest activation and gateway custody boundary
 
 | Field | Value |
 | --- | --- |
@@ -1774,7 +1807,7 @@ applies here exactly as everywhere else in the repository).
 | Validation | Gateway-custody-boundary test asserting the parent inventory never contains a gateway-guest-internal path; child-local ZoneLink test asserting one uplink, self-matching `childZoneName`, and child-store ownership; compiler test asserting `parentZone` selects the allocator but appears only in sealed bootstrap state; no-reciprocal-parent-row/no-parent-handler test; child-local ZoneLink `Degraded/waiting-on-remote` non-blocking test |
 | Removal proof | Not applicable |
 
-### ADR046-reset-007 — Verification, doctor, and degraded-ledger integration
+### ADR046-reset-007 - Verification, doctor, and degraded-ledger integration
 
 | Field | Value |
 | --- | --- |
@@ -1786,11 +1819,11 @@ applies here exactly as everywhere else in the repository).
 | Destination | `packages/d2b-cutover/src/{verify,doctor,degraded}.rs` |
 | Detailed design | The ten `verify` checks in [Post-cutover verification](#post-cutover-verification); the `cutover-quarantined` degraded class and `doctor` reporting in [Failure/quarantine/manual recovery](#failurequarantinemanual-recovery); audit chain closure/genesis-record cross-check (check 9) Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | `d2b host cutover verify`/`doctor` CLI commands; consumed by the Phase 10 finalize gate table |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Injected-digest-mismatch test for TPM/durable-Volume verify checks; audit-genesis-cross-check test; `cutover-full-rehearsal.nix` |
 | Removal proof | Not applicable |
 
-### ADR046-reset-008 — Old artifact/unit/schema removal gate engine (Phase 10)
+### ADR046-reset-008 - Old artifact/unit/schema removal gate engine (Phase 10)
 
 | Field | Value |
 | --- | --- |
@@ -1806,7 +1839,7 @@ applies here exactly as everywhere else in the repository).
 | Validation | `policy_no_destroy_without_gate`; `policy_legacy_cli_verbs_absent_after_gate`; `tpm-adopt-retirement.nix` |
 | Removal proof | Each candidate's own row in [Old artifact/unit/schema removal gates](#old-artifactunitschema-removal-gates) states its exact removal proof |
 
-### ADR046-reset-009 — Rollback, journal resume, and incident hold
+### ADR046-reset-009 - Rollback, journal resume, and incident hold
 
 | Field | Value |
 | --- | --- |
@@ -1818,11 +1851,11 @@ applies here exactly as everywhere else in the repository).
 | Destination | `packages/d2b-cutover/src/{journal,rollback,hold}.rs` |
 | Detailed design | Append-only journal per [Crash/power-loss/retry/idempotency journals](#crashpower-lossretryidempotency-journals); [Rollback boundary](#rollback-boundary) enforcement (`cutover-rollback-window-closed` past phase 4); cutover-wide incident hold per [Incident hold (cutover-wide)](#incident-hold-cutover-wide) |
 | Integration | `d2b host cutover rollback`/`hold` CLI commands; consulted by ADR046-reset-003's disposition executor and ADR046-reset-008's finalize gate before every mutating step |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `cutover_rollback_window_closes_after_phase_5`; incident-hold-blocks-destructive-step test |
 | Removal proof | Not applicable |
 
-### ADR046-reset-010 — Full/Provider/Guest reset CLI and scope isolation
+### ADR046-reset-010 - Full/Provider/Guest reset CLI and scope isolation
 
 | Field | Value |
 | --- | --- |
@@ -1838,7 +1871,7 @@ applies here exactly as everywhere else in the repository).
 | Validation | `host_reset_scope_isolation`; `zone-provider-guest-reset-isolation.nix`; durable-Volume-preserved-by-default property test for both Provider and Guest scopes |
 | Removal proof | Not applicable |
 
-### ADR046-reset-011 — Live-host and hardware validation
+### ADR046-reset-011 - Live-host and hardware validation
 
 | Field | Value |
 | --- | --- |

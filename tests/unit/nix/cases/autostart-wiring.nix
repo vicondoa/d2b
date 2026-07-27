@@ -13,7 +13,7 @@
 #     `d2b@*.service` (dangling wants would log a load failure at boot);
 #   - `d2bd.service` MUST be wired into `multi-user.target.wants` so it
 #     comes up on boot and drives `autostart = true` VMs;
-#   - `systemd.targets.microvms.wants` MUST still be `[]` — the upstream
+#   - `systemd.targets.microvms.wants` MUST still be `[]` - the upstream
 #     `microvm@<vm>` autostart cascade stays suppressed even though the
 #     host.nix `microvm.vms` translation is preserved.
 #

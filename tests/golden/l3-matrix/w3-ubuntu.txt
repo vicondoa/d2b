@@ -1,4 +1,4 @@
-# W3 L3 distro matrix — Ubuntu 24.04 LTS
+# W3 L3 distro matrix - Ubuntu 24.04 LTS
 os = ubuntu
 release = 24.04
 image_url = https://cloud-images.ubuntu.com/releases/24.04/release-20240926/ubuntu-24.04-server-cloudimg-amd64.img

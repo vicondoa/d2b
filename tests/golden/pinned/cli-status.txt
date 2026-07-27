@@ -1,4 +1,4 @@
-# cli-status — CLI-contract integration tests for `d2b status`
+# cli-status - CLI-contract integration tests for `d2b status`
 # (packages/d2b/tests/status_contract.rs). Successor for the retired
 # cli-rust-native-status.sh bash gate: spawns the real `d2b` binary against
 # the D2B_FIXTURES rendered bundle (copied into a hermetic temp bundle so the

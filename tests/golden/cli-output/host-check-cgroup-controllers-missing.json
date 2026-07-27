@@ -4,6 +4,6 @@
   "exit_code": 1,
   "kind": "host-check-error",
   "observed_state": "Required controllers missing from /sys/fs/cgroup/d2b.slice/cgroup.controllers.",
-  "remediation": "Enable the missing controllers via systemd `Delegate=` on d2b-host.slice and reload.",
+  "remediation": "Enable the missing controllers via systemd `Delegate=` on d2b.slice and reload.",
   "what_was_checked": "Whether the host slice exposes the cpu/memory/io/pids controllers."
 }

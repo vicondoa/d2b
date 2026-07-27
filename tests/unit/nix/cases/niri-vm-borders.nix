@@ -13,7 +13,7 @@
 
 # niri window-rule generation requires a graphics VM, which the framework's
 # checkVmPlatform gate refuses on aarch64. The bash gate hardcoded
-# system = "x86_64-linux"; mirror that — contribute these cases only to the
+# system = "x86_64-linux"; mirror that - contribute these cases only to the
 # x86_64-linux nix-unit check (the aarch64 check has no graphics coverage,
 # which is correct: graphics cannot run there).
 lib.optionalAttrs (system == "x86_64-linux") (

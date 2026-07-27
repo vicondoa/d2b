@@ -42,7 +42,7 @@ pub struct ListItemOutputV2 {
     /// Canonical realm-native workload target address (`<workload>.<realm>.d2b`).
     /// Present when the daemon has associated this entry with a realm workload
     /// identity. Absent for classical `d2b.vms` entries not yet adopted into
-    /// a realm. Additive — old CLI consumers must tolerate its absence.
+    /// a realm. Additive - old CLI consumers must tolerate its absence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub canonical_target: Option<String>,
 }
@@ -438,7 +438,7 @@ pub struct StatusVmOutputV2 {
     /// Canonical realm-native workload target address (`<workload>.<realm>.d2b`).
     /// Present when the daemon has associated this VM with a realm workload
     /// identity. Absent for classical VMs not yet adopted into a realm.
-    /// Additive — old CLI consumers must tolerate its absence.
+    /// Additive - old CLI consumers must tolerate its absence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub canonical_target: Option<String>,
 }
@@ -726,12 +726,12 @@ pub struct VmAudioStatusOutputV1 {
 pub struct VmAudioStatusEntryOutputV1 {
     /// VM name.
     pub vm: String,
-    /// Speaker level (0–100), if known.
+    /// Speaker level (0-100), if known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub speaker_level: Option<LevelPercent>,
     /// Whether the speaker is muted.
     pub speaker_muted: bool,
-    /// Microphone gain (0–100), if known.
+    /// Microphone gain (0-100), if known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mic_level: Option<LevelPercent>,
     /// Whether the microphone is muted.
@@ -767,7 +767,7 @@ pub struct VmAudioSetOutputV1 {
     pub channel: AudioChannel,
     /// Whether and how the change was applied.
     pub applied: AudioSetApplied,
-    /// Channel level after the operation (0–100), if known.
+    /// Channel level after the operation (0-100), if known.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub level: Option<LevelPercent>,
     /// Whether the channel is muted after the operation.

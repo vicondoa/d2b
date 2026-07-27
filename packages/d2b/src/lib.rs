@@ -78,6 +78,14 @@ const DEFAULT_HOST_RUNTIME_PATH: &str = "/var/lib/d2b/runtime/host-runtime.json"
 const DEFAULT_CLIENT_VERSION_RANGE: &str = ">=0.4.0, <0.5.0";
 const RUNTIME_UNKNOWN: &str = "unknown";
 const MAX_FRAME_BYTES: usize = 1024 * 1024;
+const SYSTEM_TOOL_PATH: &str = "/run/current-system/sw/bin:/usr/bin:/usr/sbin:/bin:/sbin";
+
+fn system_tool_command(program: &str) -> Command {
+    let mut command = Command::new(program);
+    command.env("PATH", SYSTEM_TOOL_PATH);
+    command
+}
+
 /// Location of daemon-persisted state files (`pidfd-table.json`,
 /// `kernel-module-report.json`, `autostart-report.json`,
 /// `storage-lifecycle-report.json`) that
@@ -99,8 +107,8 @@ const EXIT_GUEST_CONTROL_CONFIG: i32 = 70;
 #[derive(Debug, Parser)]
 #[command(
     version,
-    about = "d2b — opinionated NixOS desktop microVM CLI.",
-    long_about = "d2b — daemon-native CLI for d2b microVMs.\n\nMutating verbs dispatch through d2bd; privileged host mutations additionally use d2b-priv-broker. \
+    about = "d2b - opinionated NixOS desktop microVM CLI.",
+    long_about = "d2b - daemon-native CLI for d2b microVMs.\n\nMutating verbs dispatch through d2bd; privileged host mutations additionally use d2b-priv-broker. \
         Read-only verbs (list, status, audit, host check) prefer d2bd's \
         public socket and fall back to static/local sources where documented. \
         See `d2b <COMMAND> --help` for per-verb usage."
@@ -2605,7 +2613,7 @@ fn dispatch(
 }
 
 // ============================================================
-// `d2b clipboard` — clipboard authority fallback arming
+// `d2b clipboard` - clipboard authority fallback arming
 // ============================================================
 
 fn cmd_clipboard_arm(_context: &Context, args: &ClipboardArmArgs) -> Result<i32, CliFailure> {
@@ -2730,7 +2738,7 @@ mod clipboard_arm_tests {
 }
 
 // ============================================================
-// `d2b config` — guest-editable config sync / review / approve
+// `d2b config` - guest-editable config sync / review / approve
 // ============================================================
 //
 //   sync    pull the in-VM edited file into a host-side staging copy
@@ -2928,7 +2936,7 @@ fn config_validate_remote_path(p: &str) -> Result<(), CliFailure> {
 }
 
 /// Validate the bytes of a staging file before approval. Kept
-/// deliberately light — the authoritative eval + containment gate is
+/// deliberately light - the authoritative eval + containment gate is
 /// the per-VM `guestConfigFile` assertion on `d2b switch`. Here we
 /// only refuse an empty / non-UTF-8 file so approve cannot silently
 /// land a truncated sync.
@@ -3130,7 +3138,7 @@ fn vm_uses_guest_control(context: &Context, vm: &str) -> Result<bool, CliFailure
 
 /// Build a consistent, leak-free CLI failure envelope for a guest-control
 /// config-sync error. `observed_state`/`remediation` carry only daemon-supplied
-/// closed-enum text — never guest content, paths, nonces, or transport detail.
+/// closed-enum text - never guest content, paths, nonces, or transport detail.
 fn guest_control_config_failure(
     kind: &str,
     what_was_checked: &str,
@@ -3472,7 +3480,7 @@ fn cmd_config_diff(args: &ConfigDiffArgs) -> Result<i32, CliFailure> {
         ));
     }
     // `diff -u <live> <staged>`: exit 0 = identical, 1 = differ, >1 = error.
-    let output = Command::new("diff")
+    let output = system_tool_command("diff")
         .arg("-u")
         .arg(&args.against)
         .arg(&staging)
@@ -4949,7 +4957,7 @@ fn daemon_down_envelope(verb: &str) -> HostErrorEnvelope {
 
 /// Typed `not-yet-implemented` envelope (exit 78) for verbs whose
 /// daemon-native handler has not landed yet. No bash fallback ever
-/// satisfies these — operators receive the typed envelope and the
+/// satisfies these - operators receive the typed envelope and the
 /// migration-guide cross-link.
 fn not_yet_implemented_envelope(verb: &str) -> HostErrorEnvelope {
     host_error_envelope(
@@ -4993,7 +5001,7 @@ fn detect_deployment_shape(context: &Context) -> Result<DeploymentShape, CliFail
             }
         });
     }
-    // Default to Tier-0 all-legacy when we can't load a bundle —
+    // Default to Tier-0 all-legacy when we can't load a bundle -
     // safest fail-closed shape for the `--apply` refusal contract.
     let bundle = context.load_bundle_context().ok().flatten();
     let Some(_bundle) = bundle else {
@@ -5502,7 +5510,7 @@ fn cmd_host_validate(_context: &Context, args: &HostValidateArgs) -> Result<i32,
     }
 
     // Validate `--wave` value against the catalog before doing any
-    // filesystem work — surface a typed envelope instead of a silent
+    // filesystem work - surface a typed envelope instead of a silent
     // empty report.
     if let Some(only) = &req.only_wave {
         let known: bool = host_validate::WAVE_CATALOG.iter().any(|w| w.wave == only);
@@ -6697,7 +6705,7 @@ fn cmd_realm_run(context: &Context, args: &RealmRunArgs) -> Result<i32, CliFailu
 
 /// Route a `vm <verb> <target>` argument (ADR 0032, P0). A local VM name routes
 /// to the existing host-daemon fast path (returns `Ok`); a realm/gateway target
-/// surfaces a typed, json-aware diagnostic and a non-zero exit — the host daemon
+/// surfaces a typed, json-aware diagnostic and a non-zero exit - the host daemon
 /// holds no realm configuration and cannot dispatch into a realm. The realm's
 /// gateway-mode `d2bd` owns gateway-backed targets.
 #[cfg(test)]
@@ -6989,7 +6997,7 @@ fn vm_dag_dry_run_summary(
     force: bool,
 ) -> serde_json::Value {
     // The DAG the supervisor would drive. Mirrors the structure emitted
-    // by the processes::VmProcessDag exporter — for the headless alpha
+    // by the processes::VmProcessDag exporter - for the headless alpha
     // shape (host-reconcile → store-preflight → virtiofsd-ro-store → ch
     // → guest-control-health) we summarize the node ids and the
     // topological edges. The full per-role argv preview is a follow-up
@@ -7761,7 +7769,7 @@ fn cmd_vm_exec(context: &Context, args: &VmExecArgs) -> Result<i32, CliFailure> 
 
     let mut env_vars = Vec::with_capacity(args.env.len());
     for (idx, entry) in args.env.iter().enumerate() {
-        // Redaction: never echo the raw --env entry — it may carry a
+        // Redaction: never echo the raw --env entry - it may carry a
         // secret value (e.g. `TOKEN=...` or `=secret`). Report the 1-based
         // position only.
         let position = idx + 1;
@@ -8482,7 +8490,7 @@ fn w7_dry_run_summary(verb: &str, vm: Option<&str>) -> serde_json::Value {
 }
 
 fn cmd_build(context: &Context, args: &BuildArgs) -> Result<i32, CliFailure> {
-    // build is non-destructive — always allowed; never returns
+    // build is non-destructive - always allowed; never returns
     // daemon-down. The non-destructive scope (build / generations
     // / richer status) ships dry-run-shaped output today even
     // without --dry-run.
@@ -10423,7 +10431,7 @@ fn bridge_health_row(
     }
 
     let probe_bridge = resolve_bridge_probe_name(bundle, bridge);
-    let output = Command::new("ip")
+    let output = system_tool_command("ip")
         .args(["-j", "link", "show", "dev", probe_bridge.as_str()])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -10476,7 +10484,7 @@ fn systemctl_state(context: &Context, unit: &str) -> String {
     {
         return state.clone();
     }
-    let output = Command::new("systemctl")
+    let output = system_tool_command("systemctl")
         .args(["--no-pager", "is-active", unit])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -10626,7 +10634,7 @@ where
 /// Look up the canonical workload target address for a VM by its VM name.
 /// Reads the bundle.json and, if it references a realm-controllers artifact,
 /// parses it to find the workload's `identity.canonicalTarget`. Returns `None`
-/// on any IO or parse error (advisory hint path — never blocks the caller).
+/// on any IO or parse error (advisory hint path - never blocks the caller).
 fn try_canonical_target_for_vm(bundle_path: &Path, vm: &str) -> Option<String> {
     let bundle: Bundle = read_json_file(bundle_path).ok()?;
     let realm_controllers_ref = bundle.realm_controllers_path.as_deref()?;
@@ -11261,7 +11269,7 @@ fn emit_daemon_mutating_outcome(outcome: DaemonVerbOutcome, json: bool) -> Resul
 /// path; failure modes surface as typed envelopes (daemon-down
 /// exit-1, broker-error exit-78, not-yet-implemented exit-78). The
 /// Rust CLI dispatching through d2bd → broker is the only
-/// operator path — no bash fallback.
+/// operator path - no bash fallback.
 fn dispatch_mutating_verb(
     context: &Context,
     request_type: &str,
@@ -13113,7 +13121,7 @@ mod host_install_dispatch_tests {
 
     #[test]
     fn route_vm_target_passes_canonical_realm_target() {
-        // `corp-vm.work.d2b` already has the `.d2b` suffix — env-style detection
+        // `corp-vm.work.d2b` already has the `.d2b` suffix - env-style detection
         // must not reject it. This test verifies there is no false positive.
         let manifest_path = test_socket_path("env-style-no-false-positive", ".manifest.json");
         if let Some(parent) = manifest_path.parent() {
@@ -13131,7 +13139,7 @@ mod host_install_dispatch_tests {
         let (result, _stdout) = super::with_test_stdout_capture(|| {
             super::route_vm_target_with_table(&context, "corp-vm.work.d2b", false, Some(table))
         });
-        // Must not produce an env-style error — the result may be Ok (Local) or a
+        // Must not produce an env-style error - the result may be Ok (Local) or a
         // different error (gateway not found), but never old-env-style-target.
         if let Err(err) = &result {
             assert!(
@@ -13538,7 +13546,7 @@ mod host_install_dispatch_tests {
     }
 
     /// Per-thread guard that overrides the config-staging base for a test and
-    /// clears it on drop — replaces the old `D2B_CONFIG_STAGING_DIR` env
+    /// clears it on drop - replaces the old `D2B_CONFIG_STAGING_DIR` env
     /// mutation so no test touches process-global env.
     struct StagingBaseGuard;
 
@@ -14326,7 +14334,7 @@ mod host_install_dispatch_tests {
 
         // A `--json` run emits exactly ONE terminal JSON document on
         // STDOUT for ALL outcomes (incl this old-generation establishment
-        // reject) and returns the CLI exit code — nothing goes to stderr.
+        // reject) and returns the CLI exit code - nothing goes to stderr.
         let exit_code = result.expect("json exec returns the exit code, not a stderr failure");
         assert_eq!(exit_code, 70, "old generation maps to exit 70");
         let envelope: Value =
@@ -14375,7 +14383,7 @@ mod host_install_dispatch_tests {
     fn vm_exec_env_validation_redacts_supplied_value() {
         // A malformed `--env` entry may carry a secret (e.g. `=secret`
         // or `TOKEN=hunter2`). The operator error must report the offending
-        // position only — never the raw entry, key, or value.
+        // position only - never the raw entry, key, or value.
         const SECRET: &str = "sentinel-env-secret-7f3a";
         let context = Context {
             manifest_path: PathBuf::from("/dev/null"),
@@ -14453,7 +14461,7 @@ mod host_install_dispatch_tests {
         // A missing command is validated inside `cmd_vm_exec` (the
         // clap arg is NOT `required`), so a `--json` run emits a single stdout
         // usage envelope (source: cli, reason: usage, exit 2) and the human run
-        // is a plain stderr usage failure — both matching error-codes.md and
+        // is a plain stderr usage failure - both matching error-codes.md and
         // cli-contract.md.
         let context = Context {
             manifest_path: PathBuf::from("/dev/null"),
@@ -15693,7 +15701,7 @@ mod host_install_dispatch_tests {
             vec!["d2b", "help", "restart"],
         ] {
             // clap's `--help` short-circuits with a `DisplayHelp`
-            // error kind; either Ok or DisplayHelp is acceptable —
+            // error kind; either Ok or DisplayHelp is acceptable -
             // anything else means we lost native help routing.
             match NativeCli::try_parse_from(argv.clone()) {
                 Ok(_) => {}
@@ -18758,7 +18766,7 @@ mod ssh_spawn_gate {
         // partial generation) must reject with exit 70 +
         // `guest-control-unavailable-old-generation`, WITHOUT contacting
         // public.sock, WITHOUT staging/publishing, and WITHOUT taking the
-        // SSH argv path. This is not live behaviour — it is the
+        // SSH argv path. This is not live behaviour - it is the
         // hermetic guarantee that an unsupported generation can never
         // silently fall back to an SSH transport or a partial write.
         let dir = scratch("config-old-generation");
@@ -18918,7 +18926,7 @@ mod console_fsm_tests {
 
     #[test]
     fn detach_in_middle_returns_correct_prefix_len() {
-        // "abc\x1ddef" — detach at index 3, prefix "abc"
+        // "abc\x1ddef" - detach at index 3, prefix "abc"
         let mut chunk = b"abc".to_vec();
         chunk.push(DETACH);
         chunk.extend_from_slice(b"def");
@@ -18930,7 +18938,7 @@ mod console_fsm_tests {
 
     #[test]
     fn detach_at_end_returns_full_minus_one_prefix() {
-        // "hello\x1d" — detach at index 5, prefix "hello"
+        // "hello\x1d" - detach at index 5, prefix "hello"
         let mut chunk = b"hello".to_vec();
         chunk.push(DETACH);
         assert_eq!(
@@ -18941,7 +18949,7 @@ mod console_fsm_tests {
 
     #[test]
     fn first_detach_char_wins_over_later_occurrences() {
-        // "\x1dabc\x1d" — first detach at index 0
+        // "\x1dabc\x1d" - first detach at index 0
         let mut chunk = vec![DETACH];
         chunk.extend_from_slice(b"abc");
         chunk.push(DETACH);

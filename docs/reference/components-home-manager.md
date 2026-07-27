@@ -14,7 +14,7 @@ wires it with the framework's sensible defaults (`useGlobalPkgs`,
 attrset whose per-user values are forwarded into upstream
 `home-manager.users`. One `nixos-rebuild switch` (or, for
 VM-only changes, one `d2b switch <vm> --apply`) rebuilds the guest's
-system + home environment atomically — there is no separate
+system + home environment atomically - there is no separate
 `home-manager switch` invocation inside the VM.
 
 [Home Manager]: https://github.com/nix-community/home-manager
@@ -74,19 +74,19 @@ the host beyond what other components already create.
 
 ## Guest-side resources created
 
-- `imports = [ inputs.home-manager.nixosModules.home-manager ]` —
+- `imports = [ inputs.home-manager.nixosModules.home-manager ]` -
   upstream HM as a NixOS module.
-- `home-manager.useGlobalPkgs = true` — share nixpkgs with the
+- `home-manager.useGlobalPkgs = true` - share nixpkgs with the
   guest system; no separate HM nixpkgs evaluation.
-- `home-manager.useUserPackages = true` — user packages flow via
+- `home-manager.useUserPackages = true` - user packages flow via
   `users.users.<name>.packages`.
-- `home-manager.backupFileExtension = "hm-backup"` — on first
+- `home-manager.backupFileExtension = "hm-backup"` - on first
   application, any conflicting pre-existing dotfile is renamed to
   `<file>.hm-backup` rather than failing the activation.
-- `home-manager.extraSpecialArgs = { inherit inputs; }` — the
+- `home-manager.extraSpecialArgs = { inherit inputs; }` - the
   consumer's flake `inputs` is available inside every HM module's
   argument set.
-- `home-manager.users = config.d2b.homeManager.users` — the
+- `home-manager.users = config.d2b.homeManager.users` - the
   propagated attrset.
 
 ## Runtime invariants
@@ -97,7 +97,7 @@ the host beyond what other components already create.
 - `home-manager.useGlobalPkgs = true` guarantees the guest's HM and
   system see the same nixpkgs; overlays declared in the consumer's
   flake apply to both.
-- `backupFileExtension` is `"hm-backup"` — never `.bak` (which would
+- `backupFileExtension` is `"hm-backup"` - never `.bak` (which would
   collide with other tooling). After the first activation on a
   fresh VM, expect a handful of `.hm-backup` files in the relevant
   users' homes; inspect, then delete.
@@ -108,7 +108,7 @@ The Home Manager component runs entirely inside the guest as part
 of the system's own activation flow. It does not spawn any new
 privileged host-side process, does not bind any new socket, and
 does not add any new host UID/GID. All sandboxing relevant to the
-guest itself is inherited from the surrounding microVM boundary —
+guest itself is inherited from the surrounding microVM boundary -
 HM's `useUserPackages = true` puts user packages in
 `/etc/profiles/per-user/<name>/` which the guest activation already
 manages with the usual NixOS guarantees.
@@ -121,7 +121,7 @@ manages with the usual NixOS guarantees.
   `system.stateVersion` unless you have a reason to diverge.
 - **Untracked files invisible to flakes.** New files under
   `home/<user>/` must be `git add`ed before they participate in
-  the build. The #1 "why didn't my change apply?" pitfall —
+  the build. The #1 "why didn't my change apply?" pitfall -
   exactly the same as for top-level NixOS modules.
 - **`.hm-backup` files after first activation.** Expected; HM moves
   conflicting pre-existing dotfiles aside instead of failing. Diff
@@ -131,20 +131,20 @@ manages with the usual NixOS guarantees.
   to their own config will either fail or create their own
   `.bak` files. For live-editable dotfiles, use
   `config.lib.file.mkOutOfStoreSymlink` to point straight at the
-  source-tree path instead — same pattern as the framework's own
+  source-tree path instead - same pattern as the framework's own
   AGENTS.md describes for the host.
 - **Secrets in HM.** Not in scope for the v0.1.0 component. Use
   `sops-nix` (multi-secret) or `agenix` per-VM via
-  `d2b.vms.<vm>.config.imports = [ … ];` — the component does
+  `d2b.vms.<vm>.config.imports = [ … ];` - the component does
   not auto-import either.
 
 ## See also
 
 - [Design / threat model](../explanation/design.md)
 - [Manifest schema](./manifest-schema.md)
-- [Home Manager — NixOS module flavour][hm-nixos]
+- [Home Manager - NixOS module flavour][hm-nixos]
 - [`examples/minimal`](../../examples/minimal/) and
-  [`examples/graphics-workstation`](../../examples/graphics-workstation/)
-  — both demonstrate consuming the component.
+  [`examples/graphics-workstation`](../../examples/graphics-workstation/) -
+  both demonstrate consuming the component.
 
 [hm-nixos]: https://nix-community.github.io/home-manager/index.xhtml#sec-install-nixos-module

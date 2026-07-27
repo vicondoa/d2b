@@ -40,7 +40,7 @@ pub fn system_now_fn() -> NowFn {
 }
 
 /// Fill `buf` with cryptographically-strong bytes from `/dev/urandom`. Panics
-/// (fail-closed) if the kernel CSPRNG cannot be read in full — the gateway must
+/// (fail-closed) if the kernel CSPRNG cannot be read in full - the gateway must
 /// never mint a session secret from weak/partial entropy.
 fn fill_random(buf: &mut [u8]) {
     let mut f = std::fs::File::open("/dev/urandom")

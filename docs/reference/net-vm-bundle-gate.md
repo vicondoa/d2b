@@ -4,8 +4,8 @@ The daemon refuses to start a `sys-<env>-net` VM (one of
 `sys-corp-net`, `sys-personal-net`, `sys-obs-net`, …) when the
 on-disk dnsmasq.conf hash for that env diverges from the hash the
 trusted bundle implies. This catches the case where the bundle was
-updated but the dnsmasq render step — a host singleton or systemd
-unit — never reran, so the running net VM would silently serve a
+updated but the dnsmasq render step - a host singleton or systemd
+unit - never reran, so the running net VM would silently serve a
 stale lease table to its workloads.
 
 > **Current ordering note.** The preflight still runs from
@@ -23,7 +23,7 @@ stale lease table to its workloads.
 | Runs in | `d2bd` (unprivileged) |
 | Invoked from | `dispatch_broker_vm_start`, before the host-prep DAG executes. `ConfigMissing` is soft-deferred with a warning; the other drift classes are fail-closed. |
 | Subject | `${dnsmasq_dir}/<env>.conf` (default `/var/lib/d2b/dnsmasq/<env>.conf`) |
-| Capabilities used | — (pure `read()` against a file the daemon already has read access to) |
+| Capabilities used | - (pure `read()` against a file the daemon already has read access to) |
 | Failure mode | `HashMismatch`, `ConfigReadFailed`, and `EnvMissing` refuse VM start with typed `daemon.bundle-dnsmasq-drift` (exit code `63`); `ConfigMissing` soft-defers with a warning |
 | Scope | net VMs (`is_net_vm = true` in `vms.json`); workload VMs short-circuit |
 
@@ -38,12 +38,12 @@ that first start into a hard failure.
 The expected hash is derived from three bundle-owned intent sources
 exposed by `d2b_core::bundle_resolver::BundleResolver`:
 
-1. `nft_intent[env:<env>]` — per-env nftables subset whose
+1. `nft_intent[env:<env>]` - per-env nftables subset whose
    `desired_hash` already digests every bridge port-flag /
    forward-blocklist line that informs DHCP visibility.
-2. `hosts_intent[host]` — the managed `/etc/hosts` block listing one
+2. `hosts_intent[host]` - the managed `/etc/hosts` block listing one
    line per env / bridge / MTU.
-3. `route_intent[env:<env>:*]` — per-env route specs the net VM
+3. `route_intent[env:<env>:*]` - per-env route specs the net VM
    relies on for its uplink view.
 
 The three sources are concatenated in a fixed, versioned canonical
@@ -68,7 +68,7 @@ The full implementation lives in
 
 The actual hash is `sha256(bytes_of_disk(${dnsmasq_dir}/<env>.conf))`,
 also hex-encoded lowercase. The daemon does NOT parse or interpret
-the file — only its bytes matter — so the rendering step is free to
+the file - only its bytes matter - so the rendering step is free to
 choose any serialization that keeps producing the same bytes for the
 same intent set.
 
@@ -82,7 +82,7 @@ should leave the default.
 | Drift variant | Refusal envelope `message` (after redaction) | Operator action |
 | --- | --- | --- |
 | `EnvMissing` | "net VM '<vm>' has no env in manifest" | Fix `vms.json`; rebuild and reactivate the bundle. |
-| `ConfigMissing` | "dnsmasq.conf for env '<env>' is missing; bundle/dnsmasq render did not run" | Warning-only soft-defer on the current start path so a fresh host can continue. If the file should already exist, regenerate it with `nixos-rebuild switch` and retry (the standalone `d2b host prepare --apply` recovery path is not yet wired — it returns `daemon-down` (exit 1) today). |
+| `ConfigMissing` | "dnsmasq.conf for env '<env>' is missing; bundle/dnsmasq render did not run" | Warning-only soft-defer on the current start path so a fresh host can continue. If the file should already exist, regenerate it with `nixos-rebuild switch` and retry (the standalone `d2b host prepare --apply` recovery path is not yet wired - it returns `daemon-down` (exit 1) today). |
 | `ConfigReadFailed` | "dnsmasq.conf for env '<env>' could not be read: <errno detail>" | Restore the file's ownership/mode (it should be daemon-readable). |
 | `HashMismatch` | "dnsmasq.conf hash for env '<env>' diverges from bundle expectation (expected <sha256>, actual <sha256>); rebuild required" | The bundle was updated but the dnsmasq render step did not rerun. Re-render dnsmasq.conf and retry. |
 
@@ -114,8 +114,8 @@ continues the start path instead of turning a missing
 
 The canonical recovery is to re-render the dnsmasq config and retry.
 A full `nixos-rebuild switch` is sufficient. The focused `d2b host
-prepare --apply` recovery path — refreshing only the daemon-owned
-host-prep state — is **not yet wired**: it returns the typed
+prepare --apply` recovery path - refreshing only the daemon-owned
+host-prep state - is **not yet wired**: it returns the typed
 `daemon-down` envelope (exit 1) today (use `--dry-run` to inspect the
 plan), and will land once the daemon-side dispatch ships. After the
 refresh:
@@ -140,14 +140,11 @@ the typed envelope remains `daemon.bundle-dnsmasq-drift` (exit code
   typed_error::tests::bundle_dnsmasq_drift_envelope_shape` pins
   exit code `63`, kind `bundle-dnsmasq-drift`, and remediation
   string.
-* Integration:
-  [`tests/net-vm-bundle-gate-eval.sh`](../../tests/net-vm-bundle-gate-eval.sh)
-  wraps the cargo tests in the canonical static-gate shape used by
-  the other preflight gates.
+* The `test-rust` workspace run executes both the gate and typed-error tests.
 
 ## Cross-references
 
-* [`docs/reference/privileges.md`](./privileges.md) — daemon-side
+* [`docs/reference/privileges.md`](./privileges.md) - daemon-side
   VM-start preflight catalog.
-* [`packages/d2bd/src/ssh_host_key_preflight.rs`](../../packages/d2bd/src/ssh_host_key_preflight.rs) —
+* [`packages/d2bd/src/ssh_host_key_preflight.rs`](../../packages/d2bd/src/ssh_host_key_preflight.rs) -
   sibling preflight (same trust boundary, different subject).

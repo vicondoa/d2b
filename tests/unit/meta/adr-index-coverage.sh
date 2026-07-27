@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tests/unit/meta/adr-index-coverage.sh— ADR index coverage guard.
+# tests/unit/meta/adr-index-coverage.sh - ADR index coverage guard.
 #
 # Asserts SET EQUALITY between:
 #   - docs/adr/0NNN-*.md files present on disk

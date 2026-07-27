@@ -89,7 +89,7 @@ fn minimal_host_json() -> Vec<u8> {
 }
 
 /// `processes.json` with a single workload VM whose DAG has one
-/// CloudHypervisorRunner node and one Virtiofsd node — the minimum
+/// CloudHypervisorRunner node and one Virtiofsd node - the minimum
 /// shape that exercises `build_runner_intents` for both per-role
 /// SpawnRunner intents.
 fn processes_json_with_runner_intents() -> Vec<u8> {

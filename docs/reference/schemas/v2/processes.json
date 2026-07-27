@@ -390,7 +390,7 @@
           ]
         },
         {
-          "description": "Optional GPU/graphics sidecar — render-node-only mode (fd-passing, no device bind-mounts). Selected when `graphics.renderNodeOnly = true`; uses broker-pre-NS pattern (ADR 0021).",
+          "description": "Optional GPU/graphics sidecar - render-node-only mode (fd-passing, no device bind-mounts). Selected when `graphics.renderNodeOnly = true`; uses broker-pre-NS pattern (ADR 0021).",
           "type": "string",
           "enum": [
             "gpu-render-node"
@@ -622,7 +622,7 @@
           }
         },
         {
-          "description": "Authenticated guest-control Health probe. Readiness requires a full Hello + token challenge-response + Health over the guest-control vsock — the host-side probe. Unlike [`Self::ComponentSpecific`] (which reports ready unconditionally and would fail OPEN), this predicate fails CLOSED: it is ready only when the daemon completes the authenticated probe and the guest reports a healthy/degraded state, and never ready for an old-generation / unreachable / auth-failed / timed-out guest. The daemon resolves the per-VM vsock socket, peer credentials, and broker-backed signer from its own trusted state.",
+          "description": "Authenticated guest-control Health probe. Readiness requires a full Hello + token challenge-response + Health over the guest-control vsock - the host-side probe. Unlike [`Self::ComponentSpecific`] (which reports ready unconditionally and would fail OPEN), this predicate fails CLOSED: it is ready only when the daemon completes the authenticated probe and the guest reports a healthy/degraded state, and never ready for an old-generation / unreachable / auth-failed / timed-out guest. The daemon resolves the per-VM vsock socket, peer credentials, and broker-backed signer from its own trusted state.",
           "type": "object",
           "required": [
             "kind",
@@ -760,7 +760,7 @@
       "additionalProperties": false
     },
     "RoleUserNamespace": {
-      "description": "v1.1.1fu14 — single-entry uid_map/gid_map declaration for the per-role user namespace. See ADR 0021.",
+      "description": "v1.1.1fu14 - single-entry uid_map/gid_map declaration for the per-role user namespace. See ADR 0021.",
       "type": "object",
       "required": [
         "hostGidForZero",
@@ -819,7 +819,7 @@
               "minimum": 0.0
             },
             "ownerUid": {
-              "description": "Owner UID — typically the per-VM runner UID.",
+              "description": "Owner UID - typically the per-VM runner UID.",
               "type": "integer",
               "format": "uint32",
               "minimum": 0.0
@@ -875,7 +875,7 @@
           "type": "string"
         },
         "workloadIdentity": {
-          "description": "Universal workload identity from the realm-native model.\n\nAdditive: present for VMs that are declared as realm workloads; absent (`None`) for VMs that predate realm workload declarations. Consumers must not treat absence as an error — it simply means the VM is a classical `d2b.vms.<vm>` entry without a realm workload row.\n\nThe provider/backend-specific config (vm_id, role, runner argv) is carried separately in the per-node `profile` and `argv` fields so the universal identity never duplicates backend-specific data.",
+          "description": "Universal workload identity from the realm-native model.\n\nAdditive: present for VMs that are declared as realm workloads; absent (`None`) for VMs that predate realm workload declarations. Consumers must not treat absence as an error - it simply means the VM is a classical `d2b.vms.<vm>` entry without a realm workload row.\n\nThe provider/backend-specific config (vm_id, role, runner argv) is carried separately in the per-node `profile` and `argv` fields so the universal identity never duplicates backend-specific data.",
           "anyOf": [
             {
               "$ref": "#/definitions/WorkloadIdentity"
@@ -972,7 +972,7 @@
           ]
         },
         "realmPath": {
-          "description": "Realm path (most-specific first) — the label sequence after the workload in the canonical target address.",
+          "description": "Realm path (most-specific first) - the label sequence after the workload in the canonical target address.",
           "type": "array",
           "items": {
             "$ref": "#/definitions/RealmId"

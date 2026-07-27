@@ -5,7 +5,7 @@
 # three root-visible units start, the broker socket is socket-activated with the
 # declared ACL, and the unprivileged public daemon comes up and binds
 # `/run/d2b/public.sock`. This is the live successor of the eval-only +
-# `D2B_LIVE` portions of `tests/d2bd-startup-smoke.sh` — it exercises real
+# `D2B_LIVE` portions of `tests/d2bd-startup-smoke.sh` - it exercises real
 # systemd activation ordering and socket binding that the pure-eval unit-surface
 # gate cannot.
 { pkgs, self }:
@@ -92,8 +92,8 @@ pkgs.testers.runNixOSTest {
     #    root-visible SERVICE/SOCKET surface is exactly the public daemon, the
     #    broker socket, and the broker service. No per-VM systemd template, no
     #    host-singleton framework service, no microvms.target. d2b.slice is
-    #    the broker's systemd-delegated cgroup slice (systemd.slices.d2b) —
-    #    cgroup organization, not a framework service — so it is permitted to
+    #    the broker's systemd-delegated cgroup slice (systemd.slices.d2b) -
+    #    cgroup organization, not a framework service - so it is permitted to
     #    appear; everything else under the d2b/microvm prefix is forbidden.
     units = machine.succeed(
         "systemctl list-units --no-pager --all --plain "

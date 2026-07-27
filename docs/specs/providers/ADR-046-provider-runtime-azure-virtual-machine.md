@@ -4,7 +4,7 @@
 | --- | --- |
 | Spec ID | `ADR-046-provider-runtime-azure-virtual-machine` |
 | Parent | ADR 0046 |
-| Status | Proposed |
+| Status | Accepted |
 | Version | 3 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
@@ -254,23 +254,23 @@ provider:
 
 | Field | Type | Required | Default | Bounds | Notes |
 | --- | --- | --- | --- | --- | --- |
-| `subscriptionId` | OpaqueAzureRef | Yes | — | Max 128 | Azure subscription GUID. Not a secret. |
-| `resourceGroup` | OpaqueAzureRef | Yes | — | Max 90 | Target resource group name. |
-| `region` | OpaqueAzureRef | Yes | — | Max 64 | Azure region. |
-| `vmSize` | OpaqueAzureRef | Yes | — | Max 64 | VM size SKU. Resize requires deallocation. |
-| `imageRef` | OpaqueAzureRef | Yes | — | Max 512 | Image URN or gallery path. Change requires re-provision. |
+| `subscriptionId` | OpaqueAzureRef | Yes | - | Max 128 | Azure subscription GUID. Not a secret. |
+| `resourceGroup` | OpaqueAzureRef | Yes | - | Max 90 | Target resource group name. |
+| `region` | OpaqueAzureRef | Yes | - | Max 64 | Azure region. |
+| `vmSize` | OpaqueAzureRef | Yes | - | Max 64 | VM size SKU. Resize requires deallocation. |
+| `imageRef` | OpaqueAzureRef | Yes | - | Max 512 | Image URN or gallery path. Change requires re-provision. |
 | `diskSku` | enum | No | `Premium_LRS` | Closed set | OS disk SKU. |
 | `osDiskSizeGb` | u32 \| null | No | null | 30..4095 | OS disk GiB. Null = image default. |
-| `adminUser` | string | Yes | — | Max 64; `^[a-z_][a-z0-9_-]*$` | Linux admin username for ARM osProfile. Not used for SSH access. |
+| `adminUser` | string | Yes | - | Max 64; `^[a-z_][a-z0-9_-]*$` | Linux admin username for ARM osProfile. Not used for SSH access. |
 | `vnetSubscriptionId` | OpaqueAzureRef \| null | No | null | Max 128 | VNet subscription. Null = subscriptionId. |
 | `vnetResourceGroup` | OpaqueAzureRef \| null | No | null | Max 90 | VNet resource group. Null = resourceGroup. |
-| `vnetName` | OpaqueAzureRef | Yes | — | Max 64 | VNet name. |
-| `subnetName` | OpaqueAzureRef | Yes | — | Max 80 | Subnet name. |
-| `assignPublicIp` | bool | No | `false` | — | Discouraged for production. |
+| `vnetName` | OpaqueAzureRef | Yes | - | Max 64 | VNet name. |
+| `subnetName` | OpaqueAzureRef | Yes | - | Max 80 | Subnet name. |
+| `assignPublicIp` | bool | No | `false` | - | Discouraged for production. |
 | `dataDisks` | list | No | `[]` | 0..16; LUN 0..63 unique | Provider-owned ARM child disk intents. No Volume ResourceRef. No cloud resource URI. See DataDiskSpec. |
 | `bootstrapPskDelivery` | enum | No | `vm-extension` | `vm-extension`\|`user-data` | One-time PSK delivery mechanism over ARM control plane. |
 | `bootstrapDeadlineMs` | u64 | No | `600000` | 60000..3600000 | Bootstrap enrollment deadline. |
-| `childZoneHosting` | bool | No | `false` | — | When true, VM hosts a child Zone; creates ZoneLink after enrollment. |
+| `childZoneHosting` | bool | No | `false` | - | When true, VM hosts a child Zone; creates ZoneLink after enrollment. |
 | `azureTags` | map | No | `{}` | Max 50; key ≤512; val ≤256 | Azure resource tags. `d2b:*` keys rejected at eval time. |
 
 ### DataDiskSpec
@@ -330,7 +330,7 @@ payload that passes the storage-need test.
 
 For this Provider, **ARM operation handles, checkpoint/idempotency records, and
 all non-secret observed cloud state move to `Guest.status` and the core
-Operation ledger** — the core Operation ledger owns in-flight ARM
+Operation ledger** - the core Operation ledger owns in-flight ARM
 idempotency/retry/transaction progress, and `Guest.status` owns the latest
 bounded observed cloud phase (opaque, non-authorizing `AzureOperationHandle`
 digests only; never a poll URL, resource URI, or endpoint). This Provider
@@ -338,7 +338,7 @@ retains **exactly one** guest-local, sealed Provider state Volume, and only for
 the **secret bootstrap PSK / admission / enrolled private recovery material**
 that cannot enter status. That Volume passes the storage-need test as secret,
 sensitive private recovery data. The Volume is an ordinary `Volume` resource
-created by **core ProviderDeployment** — before component Processes start — from
+created by **core ProviderDeployment** - before component Processes start - from
 the single `stateNamespaces` declaration in the controller component descriptor.
 It is not authored in the Zone bundle by the operator and does not appear in Nix
 configuration. `Provider/volume-local` is the sole Volume reconciler; the
@@ -514,7 +514,7 @@ counters, closed-enum error detail) lives in `status`/the core Operation ledger
 | Service | `d2b.azure-vm.bootstrap.v1` (IKpsk2 handshake → enrolled KK) |
 | Cardinality | 1 per Zone |
 | Session limit | 1 active bootstrap session per Guest; max 16 concurrent |
-| State Volume | none — the bootstrap service declares no Provider state Volume; its session state is transient in process memory and it obtains sealed PSK/admission from the controller via `GrantBootstrapAdmission`; bounded non-secret operational state lives in `status`/the core Operation ledger (D087) |
+| State Volume | none - the bootstrap service declares no Provider state Volume; its session state is transient in process memory and it obtains sealed PSK/admission from the controller via `GrantBootstrapAdmission`; bounded non-secret operational state lives in `status`/the core Operation ledger (D087) |
 | Injected ports | `ControllerServicePort` (d2b.azure-vm.controller.v1), `TransportEffectPort` |
 
 ---
@@ -585,7 +585,7 @@ spec:
     class: on-failure
     backoffBase: "2s"
     backoffMax: "60s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: null
     resetAfter: "300s"
   readiness:
@@ -694,7 +694,7 @@ spec:
     class: on-failure
     backoffBase: "1s"
     backoffMax: "30s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: null
     resetAfter: "300s"
   readiness:
@@ -1218,11 +1218,11 @@ URL in any payload field. `pskDigest` is sha256 of PSK bytes, not the PSK itself
 | Metric | Kind | Labels | Notes |
 | --- | --- | --- | --- |
 | `d2b_azure_vm_provision_total` | Counter | `result`, `error_code` | Closed label values only |
-| `d2b_azure_vm_bootstrap_total` | Counter | `result` | — |
+| `d2b_azure_vm_bootstrap_total` | Counter | `result` | - |
 | `d2b_azure_vm_lro_poll_total` | Counter | `op_class`, `result` | `op_class` from closed operation table |
 | `d2b_azure_vm_reconcile_duration_ms` | Histogram | `phase` | `phase` from closed providerPhase table |
 | `d2b_azure_vm_credential_acquire_total` | Counter | `result` | ARM credential only |
-| `d2b_azure_vm_active_guests` | Gauge | — | Count of Ready Azure VM Guests |
+| `d2b_azure_vm_active_guests` | Gauge | - | Count of Ready Azure VM Guests |
 | `d2b_telemetry_drop_total` | Counter | `subsystem: azure-vm` | Dropped frames |
 
 No VM name, resource group, subscription ID, tenant ID, ARM resource ID, ARM
@@ -1288,7 +1288,7 @@ d2b.zones.dev.resources.runtime-azure-virtual-machine = {
 ### Credential declarations
 
 ```nix
-# ARM credential — credential-managed-identity, guest-agent placement
+# ARM credential - credential-managed-identity, guest-agent placement
 d2b.zones.dev.resources.arm-azure-vm = {
   type = "Credential";
   spec = {
@@ -1481,7 +1481,7 @@ d2b.zones.dev.resources.corp-vm = {
 | Current source | `nixos-modules/options-realms-workloads.nix`: `WorkloadProviderKind::ProviderManaged` |
 | Reuse action | adapt |
 | Destination | `nixos-modules/` (Provider/Guest resource emitters); crate Nix build |
-| Detailed design | Nix `spec.config` shape; `controllerExecutionRef`/`networkRef` eval-time assertions; no Volume refs for data disks; `systemArtifactId=null` enforcement; the single controller sealed recovery Volume is an ordinary Volume resource created by core ProviderDeployment (not in Zone bundle; not operator-authored); the bootstrap-svc declares no state Volume; guest-local placement — reconciled by the Guest-local volume-local instance and expressed by `source.executionRef` = config gateway Guest; host MUST NOT hold ARM binding, admission, PSK, or operation state; ARM operation/idempotency records live in the core Operation ledger and non-secret observed cloud phase in `Guest.status` (D087); no virtiofs or host-to-guest attachment; manifest freezes guest-local with no fallback; controller does not create, own, or list Volume in exported ResourceTypes; `Provider/volume-local` is the sole Volume reconciler; controller consumes required view dirfd only; **the recovery Volume is `kind: state`, `persistenceClass: persistent`, `storageNeed: secret`, sealed via `sealingCredentialRef`, with nonzero `quotaBytes`, `quota.maxBytes`, `quota.maxInodes`, and `source.settings.sourcePolicyId`; `persistenceClass: ephemeral` and zero quotas are rejected**; it survives component/Provider restart and participates in upgrade/destroy/reset; full canonical Volume spec including `stateSchema`, `source`, `layout` with a Nix-preprovisioned `User/<name>` principal (not ComponentPrincipal), `views`, `identityMarker`, `snapshotPolicy: null`, `retentionPolicy: null`; `sensitivityClass: private` and `volume-domain-mismatch` isolation enforced; canonical `SandboxSpec` fields with `namespaceClasses`/`capabilityClasses`/`seccompClass`/`noNewPrivileges`/`startRoot`/`environmentClass`/`readOnlyRoot`; `BudgetSpec` with SI suffix; `restartPolicy` class/backoffBase/backoffMax; Endpoint ResourceType templates with name/transport/purpose |
+| Detailed design | Nix `spec.config` shape; `controllerExecutionRef`/`networkRef` eval-time assertions; no Volume refs for data disks; `systemArtifactId=null` enforcement; the single controller sealed recovery Volume is an ordinary Volume resource created by core ProviderDeployment (not in Zone bundle; not operator-authored); the bootstrap-svc declares no state Volume; guest-local placement - reconciled by the Guest-local volume-local instance and expressed by `source.executionRef` = config gateway Guest; host MUST NOT hold ARM binding, admission, PSK, or operation state; ARM operation/idempotency records live in the core Operation ledger and non-secret observed cloud phase in `Guest.status` (D087); no virtiofs or host-to-guest attachment; manifest freezes guest-local with no fallback; controller does not create, own, or list Volume in exported ResourceTypes; `Provider/volume-local` is the sole Volume reconciler; controller consumes required view dirfd only; **the recovery Volume is `kind: state`, `persistenceClass: persistent`, `storageNeed: secret`, sealed via `sealingCredentialRef`, with nonzero `quotaBytes`, `quota.maxBytes`, `quota.maxInodes`, and `source.settings.sourcePolicyId`; `persistenceClass: ephemeral` and zero quotas are rejected**; it survives component/Provider restart and participates in upgrade/destroy/reset; full canonical Volume spec including `stateSchema`, `source`, `layout` with a Nix-preprovisioned `User/<name>` principal (not ComponentPrincipal), `views`, `identityMarker`, `snapshotPolicy: null`, `retentionPolicy: null`; `sensitivityClass: private` and `volume-domain-mismatch` isolation enforced; canonical `SandboxSpec` fields with `namespaceClasses`/`capabilityClasses`/`seccompClass`/`noNewPrivileges`/`startRoot`/`environmentClass`/`readOnlyRoot`; `BudgetSpec` with SI suffix; `restartPolicy` class/backoffBase/backoffMax; Endpoint ResourceType templates with name/transport/purpose |
 | Integration | Nix emitters produce Provider, Guest, Volume, and Endpoint resource specs consumed by ProviderDeployment, `Provider/volume-local`, the Process Provider, and the Azure VM controller. |
 | Data migration | Full d2b 3.0 reset; old `d2b.realms.<r>.workloads.<w>` config is replaced by v3 resource authoring with no automatic v2 config import. |
 | Validation | Nix eval tests; `make test-flake`; `make test-drift` |
@@ -1511,7 +1511,7 @@ d2b.zones.dev.resources.corp-vm = {
 | Destination | `tests/`; `integration/` |
 | Detailed design | See §Test requirements Primary reuse disposition: `adapt`. Preserved source-plan detail: Copy/adapt fake toolkit; write new tests. |
 | Integration | Provider crate tests, fake toolkit, and integration harness run under cargo/Layer-1 and validate all ADR046-azure-vm-* outputs together. |
-| Data migration | None — test-only work; no runtime state. Old mock tests are removed only after parity. |
+| Data migration | None - test-only work; no runtime state. Old mock tests are removed only after parity. |
 | Validation | All tests pass |
 | Removal proof | Old `InfrastructureProvider` mock tests deleted after parity |
 
@@ -1523,10 +1523,12 @@ d2b.zones.dev.resources.corp-vm = {
 
 Per D094 and `ADR-046-validation-and-delivery` §10.16, this Provider's `src/`
 unit tests and `tests/*.rs` hermetic suite are fast, in-process, deterministic,
-and parallel-safe: an individual normal test has p95 ≤50 ms with no wall-clock
+and parallel-safe: an individual normal test has an advisory wall-clock p95
+diagnostic threshold of <=50 ms; gate enforcement is aggregate per-crate
+process CPU only. There is no wall-clock
 sleep, and `cargo test -p d2b-provider-runtime-azure-virtual-machine --lib --tests`
-completes in ≤2 s warm-cache execution time (compilation excluded). They use a
-deterministic fake clock/RNG and the toolkit fakes/FakeEffectPort only — no
+completes in ≤3 s warm-cache execution time (compilation excluded). They use a
+deterministic fake clock/RNG and the toolkit fakes/FakeEffectPort only - no
 process spawn, container, network, DBus, systemd, broker daemon, Nix eval/build,
 KVM, USB/GPU/TPM hardware, or live cloud, and no filesystem tree beyond tiny
 temp fixtures. Any scenario needing those lives only in `integration/`, which
@@ -1534,7 +1536,7 @@ keeps a lane timeout/budget, parallel isolation, and fake external services by
 default; such a need is re-placed into `integration/`, never given a sleep,
 larger timeout, or `#[ignore]`. Bounded crypto/property tests are the only
 classified exception, each named with a capped case count and a declared higher
-per-test budget.
+per-test advisory threshold.
 
 ### tests/ (hermetic; no external processes)
 
@@ -1641,7 +1643,7 @@ Per D094, each replaced current-code test is retired with an explicit
 keep/adapt/move/delete disposition and a removal gate: the minimum reusable
 semantic assertions migrate into this crate's hermetic `tests/`, and the old
 duplicate tests, shell gates, fixtures, static artifacts, CI jobs, and manifest
-entries are deleted once successor coverage and the removal proof pass —
+entries are deleted once successor coverage and the removal proof pass -
 updating `tests/layer1-jobs.json`, the closed gate manifests, the
 flake/matrix/Nix-unit pins, the generated ledgers, and the CI workflow shards.
 Old and new suites never run in parallel indefinitely.

@@ -26,50 +26,50 @@ pub mod constants {
     //! `<linux/usbip.h>`, `<linux/tpm.h>`, `<drm/drm.h>`.
     pub type Number = u64;
 
-    /// `<linux/if_tun.h>` — set up the TAP/TUN interface.
+    /// `<linux/if_tun.h>` - set up the TAP/TUN interface.
     pub const TUNSETIFF: Number = 0x400454ca;
-    /// `<linux/if_tun.h>` — set persistent flag.
+    /// `<linux/if_tun.h>` - set persistent flag.
     pub const TUNSETPERSIST: Number = 0x400454cb;
-    /// `<linux/if_tun.h>` — set TAP owner uid.
+    /// `<linux/if_tun.h>` - set TAP owner uid.
     pub const TUNSETOWNER: Number = 0x400454cc;
-    /// `<linux/if_tun.h>` — set TAP owner gid.
+    /// `<linux/if_tun.h>` - set TAP owner gid.
     pub const TUNSETGROUP: Number = 0x400454ce;
-    /// `<linux/if_tun.h>` — attach a BPF filter (denied because it leads
+    /// `<linux/if_tun.h>` - attach a BPF filter (denied because it leads
     /// to undeclared packet inspection paths).
     pub const TUNATTACHFILTER: Number = 0x401054d5;
 
-    /// `<linux/kvm.h>` — create a VM.
+    /// `<linux/kvm.h>` - create a VM.
     pub const KVM_CREATE_VM: Number = 0xae01;
-    /// `<linux/kvm.h>` — get the KVM API version.
+    /// `<linux/kvm.h>` - get the KVM API version.
     pub const KVM_GET_API_VERSION: Number = 0xae00;
-    /// `<linux/kvm.h>` — create a VCPU.
+    /// `<linux/kvm.h>` - create a VCPU.
     pub const KVM_CREATE_VCPU: Number = 0xae41;
-    /// `<linux/kvm.h>` — run a VCPU.
+    /// `<linux/kvm.h>` - run a VCPU.
     pub const KVM_RUN: Number = 0xae80;
 
-    /// `<linux/vhost.h>` — vhost owner registration.
+    /// `<linux/vhost.h>` - vhost owner registration.
     pub const VHOST_SET_OWNER: Number = 0xaf01;
-    /// `<linux/vhost.h>` — vhost get features.
+    /// `<linux/vhost.h>` - vhost get features.
     pub const VHOST_GET_FEATURES: Number = 0x8008af00;
-    /// `<linux/vhost.h>` — vhost-net set backend.
+    /// `<linux/vhost.h>` - vhost-net set backend.
     pub const VHOST_NET_SET_BACKEND: Number = 0x4008af30;
 
-    /// `<linux/fuse.h>` — current FUSE versions don't define request
+    /// `<linux/fuse.h>` - current FUSE versions don't define request
     /// numbers; the device handle is read/written. The constant here
     /// is the sentinel "no ioctl ops" so the role table can still
     /// enumerate FUSE.
     pub const FUSE_NO_IOCTL: Number = 0;
 
-    /// `<drm/drm.h>` — DRM_IOCTL_VERSION.
+    /// `<drm/drm.h>` - DRM_IOCTL_VERSION.
     pub const DRM_IOCTL_VERSION: Number = 0xc0406400;
-    /// `<drm/drm.h>` — DRM_IOCTL_GET_UNIQUE.
+    /// `<drm/drm.h>` - DRM_IOCTL_GET_UNIQUE.
     pub const DRM_IOCTL_GET_UNIQUE: Number = 0xc0106401;
 
     // ---------------------------------------------------------------
     // DRM_IOCTL_VIRTGPU_* family.
     //
     // virtgpu (drm/virtgpu_drm.h, base 0x40 + DRM_COMMAND_BASE 0x40)
-    // — required for virgl/venus/cross-domain Wayland on the Gpu role.
+    // - required for virgl/venus/cross-domain Wayland on the Gpu role.
     // The ioctl numbers below are the kernel UAPI for the request
     // codes we currently exercise on this host's NVIDIA Quadro T1000
     // via crosvm-gpu cross-domain (verified on personal-dev/work-aad
@@ -84,37 +84,37 @@ pub mod constants {
     // size, regenerate via the oracle in
     // tests/golden/runner-shape/virtgpu-ioctl-values.txt.
     // ---------------------------------------------------------------
-    /// virtgpu — map resource into guest address space (nr=0x01).
+    /// virtgpu - map resource into guest address space (nr=0x01).
     pub const DRM_IOCTL_VIRTGPU_MAP: Number = 0xc0106441;
-    /// virtgpu — execbuffer (nr=0x02; the only submit-path ioctl in
+    /// virtgpu - execbuffer (nr=0x02; the only submit-path ioctl in
     /// the upstream UAPI; older Mesa branches called this SUBMIT_CMD
     /// but that token is not a kernel UAPI symbol).
     pub const DRM_IOCTL_VIRTGPU_EXECBUFFER: Number = 0xc0406442;
-    /// virtgpu — get capability params (nr=0x03).
+    /// virtgpu - get capability params (nr=0x03).
     pub const DRM_IOCTL_VIRTGPU_GETPARAM: Number = 0xc0106443;
-    /// virtgpu — create resource (texture/buffer) (nr=0x04).
+    /// virtgpu - create resource (texture/buffer) (nr=0x04).
     pub const DRM_IOCTL_VIRTGPU_RESOURCE_CREATE: Number = 0xc0386444;
-    /// virtgpu — wait for fence (nr=0x08).
+    /// virtgpu - wait for fence (nr=0x08).
     pub const DRM_IOCTL_VIRTGPU_WAIT: Number = 0xc0086448;
-    /// virtgpu — get host capability set version + descriptor (nr=0x09).
+    /// virtgpu - get host capability set version + descriptor (nr=0x09).
     pub const DRM_IOCTL_VIRTGPU_GET_CAPS: Number = 0xc0186449;
-    /// virtgpu — create resource via blob (zero-copy import; nr=0x0a).
+    /// virtgpu - create resource via blob (zero-copy import; nr=0x0a).
     pub const DRM_IOCTL_VIRTGPU_RESOURCE_CREATE_BLOB: Number = 0xc030644a;
-    /// virtgpu — create per-process 3D context (nr=0x0b).
+    /// virtgpu - create per-process 3D context (nr=0x0b).
     pub const DRM_IOCTL_VIRTGPU_CONTEXT_INIT: Number = 0xc010644b;
 
-    /// `<linux/udmabuf.h>` — UDMABUF_CREATE: wrap a memfd as a dma-buf.
+    /// `<linux/udmabuf.h>` - UDMABUF_CREATE: wrap a memfd as a dma-buf.
     /// Used by the Gpu role's cross-domain Wayland surface so the
     /// host compositor can import the guest's framebuffers without
     /// a copy. The newer LIST variant is the path crosvm uses.
     pub const UDMABUF_CREATE: Number = 0x40187542;
-    /// `<linux/udmabuf.h>` — UDMABUF_CREATE_LIST: batched variant.
+    /// `<linux/udmabuf.h>` - UDMABUF_CREATE_LIST: batched variant.
     pub const UDMABUF_CREATE_LIST: Number = 0x40087543;
 
-    /// `<linux/usbip.h>` — USBIP_VHCI_IMPORT_DEV.
+    /// `<linux/usbip.h>` - USBIP_VHCI_IMPORT_DEV.
     pub const USBIP_VHCI_IMPORT_DEV: Number = 0x40087500;
 
-    /// `<linux/tpm.h>` — TPM_TRANSMIT_CMD passthrough.
+    /// `<linux/tpm.h>` - TPM_TRANSMIT_CMD passthrough.
     pub const TPM_TRANSMIT_CMD: Number = 0x40187401;
 }
 

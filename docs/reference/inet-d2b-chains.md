@@ -60,9 +60,8 @@ comment "d2b managed: <ownership-id>"
 `<ownership-id>` is a stable kebab-case identifier such as
 `usbip-carveout-1-1.4` or `default-deny-forward`. The drift gate uses
 the `d2b managed: ` prefix to distinguish d2b-owned state from
-foreign rules; the foreign-rule preservation gate
-(`tests/nft-foreign-rule-preservation.sh`) asserts foreign rules are
-byte-stable across repeat-apply.
+foreign rules. The `d2b-host` nftables tests included in `test-rust` assert
+foreign rules are byte-stable across repeat-apply.
 
 ## Specific-before-generic ordering
 
@@ -127,6 +126,5 @@ kebab-case discriminant and the typed inner detail.
   (`apply_nftables`)
 - USBIP carve-out: `packages/d2b-priv-broker/src/ops/usbip_firewall.rs`
   (`bind_firewall_rule`)
-- Gates: `tests/nft-coexistence.sh`,
-  `tests/nft-foreign-rule-preservation.sh`,
-  `tests/usbip-firewall-skeleton.sh`
+- Enforcing coverage: `d2b-host::nftables::tests` and
+  `d2b-priv-broker::ops::{nft,usbip_firewall}::tests` in `test-rust`

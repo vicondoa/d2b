@@ -107,7 +107,7 @@ fn polkit_allowlist_daemon_only_singletons() {
         "polkit-allowlist-eval: {rel} lost the start/stop/restart verb allowlist"
     );
 
-    // Exactly one polkit.addRule callback should remain — `grep -cF` counts
+    // Exactly one polkit.addRule callback should remain - `grep -cF` counts
     // matching lines, so this mirrors the bash gate's line-count semantics (the
     // per-VM gpu->snd fallback rule must be gone).
     let addrule_count = polkit
@@ -123,7 +123,7 @@ fn polkit_allowlist_daemon_only_singletons() {
 }
 
 /// The executable region of a Nix module: from the first line that is exactly
-/// `in` through EOF, inclusive — a faithful port of the bash gate's
+/// `in` through EOF, inclusive - a faithful port of the bash gate's
 /// `awk '/^in$/,0'` range extraction (which scopes the forbidden-pattern scan
 /// to the `let`-binding-closing `in` through the end of the file, excluding the
 /// leading comment block that legitimately names the retired unit shapes).
@@ -186,7 +186,7 @@ fn minijail_cmp_version(observed: u32, required: u32) -> &'static str {
 
 #[test]
 fn minijail_version_comparison_canary() {
-    // (label, observed, required, expected) — verbatim from the bash gate's
+    // (label, observed, required, expected) - verbatim from the bash gate's
     // assert_cmp cases.
     let cases = [
         (

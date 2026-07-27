@@ -2,7 +2,7 @@
 
 A full desktop-grade d2b consumer flake. One workload VM
 (`corp-desktop`) with **graphics**, **audio**, and **YubiKey
-USBIP** all enabled — i.e. every d2b component that touches a
+USBIP** all enabled - i.e. every d2b component that touches a
 host-side sidecar.
 
 This is the answer to "I want a Wayland desktop inside a microVM
@@ -47,27 +47,27 @@ Graphics VMs do **not** ship pixels back to the host as a video
 stream. Instead, the guest's Wayland clients connect through a
 chain that spans the VM boundary:
 
-1. **Guest** — the guest runs `wl-cross-domain-proxy` (a lightweight
+1. **Guest** - the guest runs `wl-cross-domain-proxy` (a lightweight
    virtio-gpu cross-domain bridge). Guest apps see a normal Wayland
    socket (`WAYLAND_DISPLAY=wayland-1`).
-2. **virtio-gpu cross-domain channel** — the cross-domain transport
+2. **virtio-gpu cross-domain channel** - the cross-domain transport
    carries Wayland protocol messages and surface allocations from the
    guest through the KVM boundary to the crosvm GPU sidecar on the
    host.
 3. **crosvm GPU sidecar** (`crosvm device gpu`, running as
-   `d2b-<vm>-gpu`) — receives the guest Wayland traffic and
+   `d2b-<vm>-gpu`) - receives the guest Wayland traffic and
    forwards it to the host-side filter socket at
    `/run/d2b-wlproxy/<vm>/wayland-0`. The GPU sidecar does NOT
    connect directly to the host compositor socket.
 4. **`d2b-wayland-proxy`** (running as `d2b-<vm>-wlproxy`,
-   listening on `/run/d2b-wlproxy/<vm>/wayland-0`) — mediates
+   listening on `/run/d2b-wlproxy/<vm>/wayland-0`) - mediates
    between the GPU sidecar and the real host compositor. It hides
    high-risk Wayland globals (screen capture, virtual input, etc.),
    rewrites guest app IDs to `d2b.<vm>.<original-app-id>` so the
    host compositor can identify VM windows, and prefixes window titles
    with `[<vm>] ` for non-niri compositors. The `wlproxy` role is the
    **only** VM-specific process that holds the real host compositor socket.
-5. **Host compositor** — receives forwarded surfaces and owns focus,
+5. **Host compositor** - receives forwarded surfaces and owns focus,
    decorations, multi-monitor placement, and HiDPI.
 
 This design means the GPU sidecar is never directly trusted with the
@@ -78,7 +78,7 @@ trust boundary.
 Practical implications:
 
 - A graphics VM with `d2b.site.waylandUser = null` is a hard
-  eval error — there's no host compositor to forward into.
+  eval error - there's no host compositor to forward into.
 - `autostart = true` on a graphics VM is rejected; the daemon cannot
   reach the user's Wayland session at boot. Always bring graphics VMs
   up interactively from a compositor terminal:
@@ -86,8 +86,8 @@ Practical implications:
 - Guest app IDs are prefixed with `d2b.corp-desktop.` by the
   filter proxy. If you use niri, you can opt into a generated
   window-rule include file via
-  `d2b.site.ui.compositors.niri.enable = true`
-  — see [`docs/how-to/niri-vm-borders.md`](../../docs/how-to/niri-vm-borders.md).
+  `d2b.site.ui.compositors.niri.enable = true` -
+  see [`docs/how-to/niri-vm-borders.md`](../../docs/how-to/niri-vm-borders.md).
 - This example explicitly sets `graphics.crossDomainTrusted = true` so it
   exercises the filtered cross-domain path. Do not use that setting for
   VMs that run privileged Docker/container workloads.
@@ -185,9 +185,9 @@ The flake hard-pins `system = "x86_64-linux"` in
 `audio.enable = true` transitively depend on three x86_64-only
 packages:
 
-- `pkgs/spectrum-ch` — patched cloud-hypervisor build.
-- `pkgs/crosvm-patched` — the GPU sidecar binary.
-- `pkgs/vhost-device-sound` — the audio sidecar binary.
+- `pkgs/spectrum-ch` - patched cloud-hypervisor build.
+- `pkgs/crosvm-patched` - the GPU sidecar binary.
+- `pkgs/vhost-device-sound` - the audio sidecar binary.
 
 `nixos-modules/host.nix`'s `checkVmPlatform` gate throws an
 eval-time error with a clear message if any VM with
@@ -199,7 +199,7 @@ let-bindings.
 
 Headless VMs (no graphics, no audio, no usbip-related host
 sidecars beyond what aarch64 supports) are arch-agnostic and
-evaluate cleanly on `aarch64-linux` — see
+evaluate cleanly on `aarch64-linux` - see
 [`examples/minimal/`](../minimal) for that path.
 
 ## What materialises after `nixos-rebuild switch`
@@ -208,25 +208,25 @@ A single `nixos-rebuild switch --flake .#demo` (followed
 implicitly by the host activation script) produces:
 
 - **State directories:**
-  - `/var/lib/d2b/keys/corp-desktop_ed25519{,.pub}` — the
+  - `/var/lib/d2b/keys/corp-desktop_ed25519{,.pub}` - the
     framework-managed Ed25519 SSH key (mode 0600 root:d2b).
-  - `/var/lib/d2b/vms/corp-desktop/` — the per-VM workdir
+  - `/var/lib/d2b/vms/corp-desktop/` - the per-VM workdir
     (microvm.nix-owned `var.img`, virtiofsd state, etc.).
-  - `/var/lib/d2b/vms/corp-desktop/state/audio-state.json` —
+  - `/var/lib/d2b/vms/corp-desktop/state/audio-state.json` -
     the live audio-grant state file (created on first
     materialisation; defaults to `{mic:false, speaker:false}`).
-  - `/var/lib/d2b/vms/corp-desktop/store/` — the per-VM
+  - `/var/lib/d2b/vms/corp-desktop/store/` - the per-VM
     `/nix/store` hardlink farm so the guest sees only its own
     closure.
-  - `/var/lib/d2b/vms/sys-desktop-net/` — the auto-declared
+  - `/var/lib/d2b/vms/sys-desktop-net/` - the auto-declared
     headless net VM that NATs the env's LAN.
 
 - **Bridges:**
-  - `br-desktop-up`  — point-to-point /30 between host (`.1`)
+  - `br-desktop-up`  - point-to-point /30 between host (`.1`)
     and the net VM (`.2`).
-  - `br-desktop-lan` — /24 the net VM (`.1`) and workload VMs
+  - `br-desktop-lan` - /24 the net VM (`.1`) and workload VMs
     (`.10` and up) share. The host has **no** interface on this
-    bridge — workload VMs cannot reach the host's neighbours.
+    bridge - workload VMs cannot reach the host's neighbours.
 
 - **Root-visible services:** `d2bd.service`,
   `d2b-priv-broker.socket`, and `d2b-priv-broker.service`.
@@ -285,7 +285,7 @@ nix eval .#nixosConfigurations.demo.config.system.build.toplevel.drvPath
 ```
 
 Both should return a derivation path without errors. They do not
-build anything — building `system.build.toplevel` pulls in the full
+build anything - building `system.build.toplevel` pulls in the full
 Plasma + PipeWire + d2b closure and takes minutes.
 
 ## Customising
@@ -297,7 +297,7 @@ Plasma + PipeWire + d2b closure and takes minutes.
   net VM, the USBIP proxy, and lifecycle group access in lockstep.
 - Want this VM to **not** forward Wayland (e.g. a headless
   background-service VM)? Drop `graphics.enable` and
-  `audio.enable` — at that point you don't need
+  `audio.enable` - at that point you don't need
   `d2b.site.waylandUser` either. See `examples/minimal/`.
 - Want a different Wayland compositor on the host? Swap
   `services.desktopManager.plasma6.enable = true` for your
@@ -307,7 +307,7 @@ Plasma + PipeWire + d2b closure and takes minutes.
 ## Common gotchas
 
 - **`d2b vm start corp-desktop --apply` must run from a Plasma/Wayland
-  terminal on the host** — not over SSH.
+  terminal on the host** - not over SSH.
   The launcher reads the operator's Wayland environment to wire
   the crosvm GPU sidecar; over SSH there is no `wayland-0` socket
   to reach. (Headless VMs are unaffected.)
@@ -331,20 +331,20 @@ running VM runners are re-adopted rather than cycled. After rebuilding,
 `d2b list` flags any VM whose declared closure has drifted from the
 running one as `[pending restart]`; apply with `d2b vm restart
 <vm> --apply`. See
-[`templates/default/README.md` — After every subsequent rebuild](../../templates/default/README.md#after-every-subsequent-rebuild)
+[`templates/default/README.md` - After every subsequent rebuild](../../templates/default/README.md#after-every-subsequent-rebuild)
 for the recommended workflow and
 [`docs/reference/cli-contract.md`](../../docs/reference/cli-contract.md#pending-restart-signal-v015)
 for the exact predicate.
 
 ## See also
 
-- [`examples/minimal`](../minimal/) — read-and-copy headless starter
-- [`examples/multi-env`](../multi-env/) — two isolated envs (work + personal)
-- [`examples/with-entra-id`](../with-entra-id/) — Entra-ID composition via the sibling flake
-- [`templates/default`](../../templates/default/) — scaffold via `nix flake init`
-- [`docs/how-to/troubleshoot-usbip.md`](../../docs/how-to/troubleshoot-usbip.md) — USBIP/YubiKey recovery runbook
+- [`examples/minimal`](../minimal/) - read-and-copy headless starter
+- [`examples/multi-env`](../multi-env/) - two isolated envs (work + personal)
+- [`examples/with-entra-id`](../with-entra-id/) - Entra-ID composition via the sibling flake
+- [`templates/default`](../../templates/default/) - scaffold via `nix flake init`
+- [`docs/how-to/troubleshoot-usbip.md`](../../docs/how-to/troubleshoot-usbip.md) - USBIP/YubiKey recovery runbook
 
-> **Note on the in-tree path** — the version of `flake.nix` checked
+> **Note on the in-tree path** - the version of `flake.nix` checked
 > into this directory uses `d2b.url = "path:../..";` so the
 > example can be evaluated against the in-tree framework without a
 > network. When you copy this layout into your own repo, swap it

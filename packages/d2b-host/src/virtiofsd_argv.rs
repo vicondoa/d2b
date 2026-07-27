@@ -18,8 +18,8 @@
 //!
 //! …plus an opportunistic `--rlimit-nofile 1048576` only when the
 //! process is running as uid 0. The daemon path does not run virtiofsd
-//! as root — the broker spawns each instance under a
-//! per-VM virtiofsd uid/gid — so the rlimit clause is omitted by
+//! as root - the broker spawns each instance under a
+//! per-VM virtiofsd uid/gid - so the rlimit clause is omitted by
 //! default; callers that genuinely need it (raised broker carve-out)
 //! can pass it through [`VirtiofsdArgvInput::extra_args`].
 //!
@@ -85,7 +85,7 @@ pub struct VirtiofsdArgvInput {
     /// `--socket-path` value. The audit uses a runner-cwd-relative
     /// filename (`<vm>-virtiofs-<tag>.sock`); the daemon uses an absolute
     /// path under `/run/d2b/vms/<vm>/`. Either shape is
-    /// honoured — the generator emits the string verbatim.
+    /// honoured - the generator emits the string verbatim.
     pub socket_path: String,
     /// `--socket-group` owner. Audit fixture pins `kvm`; the
     /// daemon-owned broker may move this to a dedicated

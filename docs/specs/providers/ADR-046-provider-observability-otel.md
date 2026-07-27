@@ -4,7 +4,7 @@
 | --- | --- |
 | Spec ID | `ADR-046-provider-observability-otel` |
 | Parent | ADR 0046 |
-| Status | Proposed |
+| Status | Accepted |
 | Version | 3 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
@@ -646,9 +646,9 @@ ProviderStateSet(zone, "observability-otel") =
 ResourceType, not a `ProviderState` or Volume alias. Edge collectors carry no
 durable data across restarts: telemetry is exported through the same-Zone
 Service, and the authority backend owns metrics/traces by construction. Its
-bounded non-secret operational state —
+bounded non-secret operational state -
 collector readiness, export/backpressure reconcile stage, bounded drop/queue
-counters, and closed-enum error detail — lives in the owning resource's
+counters, and closed-enum error detail - lives in the owning resource's
 `status` subresource and the core Operation ledger (D087).
 
 Because the collector's operational state is fully derivable from spec,
@@ -735,7 +735,7 @@ spec:
     class: on-failure
     backoffBase: "1s"
     backoffMax: "60s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: 5
     resetAfter: "600s"
 ```
@@ -792,7 +792,7 @@ spec:
     class: on-failure
     backoffBase: "1s"
     backoffMax: "30s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: 10
     resetAfter: "300s"
 ```
@@ -847,12 +847,24 @@ spec:
     allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 status:
-  readiness: Ready
-  observedProducerGeneration: 1
-  observedResourceGeneration: 1
-  endpointGeneration: 1
-  connectionAvailability: available
-  leaseAvailability: lease-required
+  resource:
+    readiness: Ready
+    observedProducerGeneration: 1
+    observedResourceGeneration: 1
+    endpointGeneration: 1
+    connectionAvailability: available
+    leaseAvailability: lease-required
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 ```yaml
@@ -876,12 +888,24 @@ spec:
     allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 status:
-  readiness: Ready
-  observedProducerGeneration: 1
-  observedResourceGeneration: 1
-  endpointGeneration: 1
-  connectionAvailability: available
-  leaseAvailability: lease-required
+  resource:
+    readiness: Ready
+    observedProducerGeneration: 1
+    observedResourceGeneration: 1
+    endpointGeneration: 1
+    connectionAvailability: available
+    leaseAvailability: lease-required
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 ```yaml
@@ -905,12 +929,24 @@ spec:
     allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 status:
-  readiness: Ready
-  observedProducerGeneration: 1
-  observedResourceGeneration: 1
-  endpointGeneration: 1
-  connectionAvailability: available
-  leaseAvailability: lease-required
+  resource:
+    readiness: Ready
+    observedProducerGeneration: 1
+    observedResourceGeneration: 1
+    endpointGeneration: 1
+    connectionAvailability: available
+    leaseAvailability: lease-required
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 ## Retained opaque handles
@@ -1127,7 +1163,7 @@ An invalid Unix datagram is silently dropped. An invalid stream frame receives
 only the bounded protocol error `invalid-telemetry-frame`; three violations on
 one connection quarantine that connection for at most 30 seconds. Quarantine
 state is in-memory, capped at 64 connections per Binding, and retains only an
-opaque connection handle, expiry, ingress class, and closed error class—not the
+opaque connection handle, expiry, ingress class, and closed error class - not the
 frame, forbidden key/value, or producer/resource identity. Import credits are
 zero while that stream is quarantined.
 
@@ -1474,7 +1510,7 @@ what bounded state is observed in status?”. A Binding is never exported. An En
 named stream answers only “how is this realization transported?” and can never
 be used as the imported semantic projection.
 
-**No audit-authority transfer.** Authoritative **audit** stays Zone-local — the
+**No audit-authority transfer.** Authoritative **audit** stays Zone-local - the
 local Zone remains the system of record. Exporting audit *copies* requires a
 separate, explicit `ResourceExport` and transfers **no** authority; the positive
 allow-list projection is the only path and no import can promote a copy to
@@ -1789,10 +1825,12 @@ All test files must be present. Workspace policy rejects a missing `tests/` or
 
 Per D094 and `ADR-046-validation-and-delivery` §10.16, this Provider's `src/`
 unit tests and `tests/*.rs` hermetic suite are fast, in-process, deterministic,
-and parallel-safe: an individual normal test has p95 ≤50 ms with no wall-clock
+and parallel-safe: an individual normal test has an advisory wall-clock p95
+diagnostic threshold of <=50 ms; gate enforcement is aggregate per-crate
+process CPU only. There is no wall-clock
 sleep, and `cargo test -p d2b-provider-observability-otel --lib --tests`
-completes in ≤2 s warm-cache execution time (compilation excluded). They use a
-deterministic fake clock/RNG and the toolkit fakes/FakeEffectPort only — no
+completes in ≤3 s warm-cache execution time (compilation excluded). They use a
+deterministic fake clock/RNG and the toolkit fakes/FakeEffectPort only - no
 process spawn, container, network, DBus, systemd, broker daemon, Nix eval/build,
 KVM, USB/GPU/TPM hardware, or live cloud, and no filesystem tree beyond tiny
 temp fixtures. Any scenario needing those lives only in `integration/`, which
@@ -1800,7 +1838,7 @@ keeps a lane timeout/budget, parallel isolation, and fake external services by
 default; such a need is re-placed into `integration/`, never given a sleep,
 larger timeout, or `#[ignore]`. Bounded crypto/property tests are the only
 classified exception, each named with a capped case count and a declared higher
-per-test budget.
+per-test advisory threshold.
 
 Service/Binding schema, ownership, and projection-chain tests use only in-memory
 resource fixtures and fake adapters, so they remain fast hermetic tests. Any
@@ -1950,7 +1988,7 @@ integration-only.
 
 **Source:** new; required by this dossier.
 
-- Configure the mock OTLP server to stall (never respond) — simulating a slow
+- Configure the mock OTLP server to stall (never respond) - simulating a slow
   backend.
 - Set `maxQueueSize = 8` (test override).
 - Write frames faster than the stalled exporter can drain them.
@@ -2172,7 +2210,7 @@ Per D094, each replaced current-code test is retired with an explicit
 keep/adapt/move/delete disposition and a removal gate: the minimum reusable
 semantic assertions migrate into this crate's hermetic `tests/`, and the old
 duplicate tests, shell gates, fixtures, static artifacts, CI jobs, and manifest
-entries are deleted once successor coverage and the removal proof pass —
+entries are deleted once successor coverage and the removal proof pass -
 updating `tests/layer1-jobs.json`, the closed gate manifests, the
 flake/matrix/Nix-unit pins, the generated ledgers, and the CI workflow shards.
 Old and new suites never run in parallel indefinitely.
@@ -2237,7 +2275,7 @@ Old and new suites never run in parallel indefinitely.
 | Destination | `packages/d2b-provider-observability-otel/src/nix/journald.nix`; `packages/d2b-provider-observability-otel/src/journald.rs` |
 | Detailed design | Per `ADR-046-telemetry-audit-and-support` §journald stdout/stderr ingestion: cgroup filter derived from trusted `producerRef`; redaction drops credential/secret/path fields, `_CMDLINE`, `_EXE`, and `INVOCATION_ID`; the strict `TelemetryBinding.spec.provider.settings.journald.enable` defaults false. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt journald receiver config for per-Zone cgroup filter. |
 | Integration | Collector binary journald receiver config path → cgroup filter expression → OTel Collector journald receiver → redaction filter → OTLP export |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Nix eval test: filter expression set when enabled; assert `_CMDLINE` and `INVOCATION_ID` in drop list; `tests/redaction.rs` for journald field redaction |
 | Removal proof | Not applicable |
 
@@ -2252,7 +2290,7 @@ Old and new suites never run in parallel indefinitely.
 | Destination | `packages/d2b-contract-tests/tests/policy_observability.rs` (updated); `packages/d2b-contract-tests/tests/policy_telemetry_redaction.rs` (new, per ADR046-telem-008); `packages/d2b-provider-observability-otel/tests/{no_vm_label_in_metrics,ingress_metric_policy}.rs` |
 | Detailed design | (1) Extend `loki_native_otel_resource_attributes` allowlist with `d2b.zone`, `d2b.provider`, `d2b.component`, `service.version`. (2) Add gate: `no_isolation` must not appear in any Provider `MetricDescriptor` label or span attribute catalog. (3) Adapt `minijail_relay_otel.rs` shape test for Provider-managed runner (no broker `RunnerRole::OtelHostBridge`). (4) Add metric inventory gates for `d2b_otel_*` instruments from this spec. (5) Structurally prove that all four metrics ingress adapters call the shared pre-batch policy gate; run exact forbidden-key, suffix, `metadata.name`, ResourceRef, UID, and resource-identity canaries through each adapter; assert bounded non-echoing outcomes/quarantine/backpressure and valid OTEL Resource identity preservation. (6) Retain: `startup_tracing_avoids_host_path_fields`; SigNoz-only backend assertion; `tempo_guest_collector_shape`; `config_source = "realm-controllers"` absence gate. Primary reuse disposition: `adapt`. Preserved source-plan detail: adapt and extend existing tests; keep existing test assertions. |
 | Integration | Contract-tests run in workspace `make test-drift` and `make test-lint` |
-| Data migration | None — full d2b 3.0 reset; no prior state to migrate |
+| Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | All contract-tests pass after update; existing allowlist test does not regress |
 | Removal proof | Not applicable |
 
@@ -2262,13 +2300,13 @@ Old and new suites never run in parallel indefinitely.
 | --- | --- |
 | Work item ID | `ADR046-otel-005` |
 | Dependency/owner | ADR046-zone-control-019, ADR046-zone-control-020; observability Provider owner |
-| Current source | None — net-new ADR 0046 cross-Zone sharing (D096) |
+| Current source | None - net-new ADR 0046 cross-Zone sharing (D096) |
 | Reuse source | SigNoz ingest authority (this dossier); `packages/d2b-provider/src/share_adapter.rs` `ExportAdapter`/`ImportAdapter` traits |
 | Reuse action | adapt |
 | Destination | `packages/d2b-provider-observability-otel/src/share_adapter.rs` |
 | Detailed design | Implement the signed adapter: `sys-obs` exports only the authority `TelemetryService`; its local ingest Endpoint remains Service-owned implementation transport and is never an Export field. ResourceExport uses only canonical `serviceType`, `projectionSchemaFingerprint`, and `factoryFingerprint`; ResourceImport uses the corresponding `expectedServiceType`, `expectedProjectionSchemaFingerprint`, and `expectedFactoryFingerprint`. Every producer import causes Core to create one local `TelemetryService` projection with ResourceImport ownership, `providerRef`, semantic base/import fields, and no `spec.provider`. Routing derives from the signed local descriptor and ResourceImport record. The semantic factory fingerprint binds factory metadata plus projection-protocol version, never Provider/adapter identity, which the signed descriptor authenticates separately. Binding `serviceRef` targets that projection. Enforce many-to-one quota/credit/backpressure/schema/source-stamp/redaction/cardinality over bounded encrypted streams; no FD/socket crosses a Zone and audit authority stays local. Primary reuse disposition: `adapt`. Preserved source-plan detail: net-new (implement the signed observability export/import adapter). |
 | Integration | Core export/import controller (ADR046-zone-control-019); local projection lifecycle (ADR046-zone-control-020); ComponentSession bounded encrypted named streams |
-| Data migration | None — full d2b 3.0 reset |
+| Data migration | None - full d2b 3.0 reset |
 | Validation | Fast `projection_chain.rs` proves Service projection semantics with a fake stream, exact canonical Export/Import type and fingerprint fields, rejection of obsolete `endpointRef`/`exportedType`/`baseSchemaFingerprint`/`expectedType`/`expectedBaseSchemaFingerprint`/`projectionType`, rejection of projection `spec.provider`, and semantic-fingerprint stability under Provider/adapter identity mutation while signed descriptor authentication remains exact; integration alone runs real encrypted streams and SigNoz; revocation/reconnect, quotas, source stamp, redaction/cardinality, no FD crossing, and audit locality |
 | Removal proof | Not applicable |
 
@@ -2284,7 +2322,7 @@ Old and new suites never run in parallel indefinitely.
 | Destination | `packages/d2b-provider-observability-otel/src/{authority,service,binding,projection}.rs`; `AuthorityDescriptor` on the `sys-obs` `TelemetryService` |
 | Detailed design | Implement one provider-neutral D097 authority Service with generic telemetry-ingest Endpoint refs and common service/signals/quota/policy fields. Its strict observability-otel `spec.provider` alone selects the loopback SigNoz stack, backend Endpoints, and OTLP. Core rejects duplicates and adopts by owner proof. Implement core-owned imported Service projections with no `spec.provider` or backend ownership. Implement per-producer Bindings with common service/producer/signals/quota/policy fields and strict implementation extension; Bindings own/cause edge collector/forwarder/private Endpoints/runtime Volume. Keep generic observations in `status.resource` and SigNoz/OTLP/OTEL observations in `status.provider`. Preserve trusted source upsert, retry/queue, bounded cardinality/redaction, audit non-transfer, status-first state, and no OTEL SDK in core. Endpoint is transport only. Primary reuse disposition: `adapt`. Preserved source-plan detail: net-new universal provider-neutral `telemetry.d2bus.org.TelemetryService`/`telemetry.d2bus.org.TelemetryBinding` pair; adapt existing authority/edge behavior as the initial observability-otel implementation. |
 | Integration | Ingest authority + export (ADR046-otel-005); core export/import controller and projection lifecycle (ADR046-zone-control-019/020); ComponentSession per-import encrypted streams; d2b-telemetry closed-label metrics |
-| Data migration | None — full d2b 3.0 reset |
+| Data migration | None - full d2b 3.0 reset |
 | Validation | Fast `resource_service_binding.rs` and `projection_chain.rs` plus reused nix-unit/policy tests prove provider-neutral names, base/Provider field separation, projection `spec.provider` rejection, exact D088 placement of semantic observations under `status.resource` and implementation observations under `status.provider`, ownership, schemas, stamping, quotas, redaction, and projection chain. Real SigNoz and real stream scenarios are integration-only. |
 | Removal proof | Legacy fixed per-source vsock ingress and old gates are removed only after the Service/Binding/ComponentSession successor passes; neither old provider-qualified ResourceType name nor any Endpoint-projection or ResourceType alias remains, and no duplicate suite remains. |
 

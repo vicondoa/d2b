@@ -1471,7 +1471,7 @@ in
     };
   };
 
-  # Realm with workloads declared — inherit-env nudge must NOT fire.
+  # Realm with workloads declared - inherit-env nudge must NOT fire.
   "realms/tombstone-no-nudge-when-workloads-declared" = {
     expr = lib.any
       (w: lib.hasInfix "migrate-d2b-v1-2-to-v2" w)

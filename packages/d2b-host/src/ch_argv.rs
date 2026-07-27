@@ -13,7 +13,7 @@
 //! - API socket placement/permissions (`--api-socket` is daemon-owned
 //!   under `/run/d2b/vms/<vm>/ch-api.sock`);
 //! - vsock CID allocation (daemon may override the manifest value if
-//!   it conflicts with live state — but this generator emits whatever
+//!   it conflicts with live state - but this generator emits whatever
 //!   CID it is given, allocation lives in the caller);
 //! - TAP fd-passing (`--net 'fd=<N>,mac=...'` when the host probed
 //!   `tap-fd` mode, else `--net 'mac=...,tap=<name>'`).
@@ -58,7 +58,7 @@ pub struct ChFsShare {
 #[serde(rename_all = "camelCase")]
 pub struct ChNetIface {
     /// IEEE OUI-formatted MAC address (`AA:BB:CC:DD:EE:FF`). The
-    /// generator emits it verbatim — case is preserved.
+    /// generator emits it verbatim - case is preserved.
     pub mac: String,
     /// TAP ifname when [`ChNetHandoff::PersistentTap`] is selected.
     /// Ignored under [`ChNetHandoff::TapFd`].
@@ -138,7 +138,7 @@ pub struct ChArgvInput {
     pub fs_shares: Vec<ChFsShare>,
     /// Daemon-owned CH API socket path. The ADR 0014 contract requires
     /// `mode=0660` and a non-empty owner; both are enforced
-    /// elsewhere (`runner_shape::runner_shape_preflight`) — this
+    /// elsewhere (`runner_shape::runner_shape_preflight`) - this
     /// generator only emits the path.
     pub api_socket_path: String,
     /// Network interfaces; each emits `--net 'mac=...,(tap|fd)=...'`.
@@ -249,7 +249,7 @@ pub fn generate_ch_argv(input: &ChArgvInput) -> Result<Vec<String>, ChArgvError>
         // CH expects oem_strings=[A,B,C] (comma-separated, no spaces).
         // The audit fixture has a single OEM string with no embedded
         // commas; if multi-string callers pass entries containing
-        // commas they must escape upstream — CH itself does not
+        // commas they must escape upstream - CH itself does not
         // support nested escapes in this flag.
         let joined = input.platform_oem_strings.join(",");
         argv.push(format!("oem_strings=[{joined}]"));

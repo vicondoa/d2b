@@ -47,9 +47,9 @@ table is the at-a-glance summary.
 | Tier | Platform | `d2b host check` | `d2b host prepare --dry-run` | `d2b host prepare --apply` | `d2b host destroy --apply` | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
 | **Tier 0** | NixOS x86_64 (NixOS-legacy host with no daemon-owned d2b bundle to reconcile) | supported | supported (reports `nothing-to-do`) | refused (`tier-0-legacy-uses-nixos-module`, exit 78) | refused | The per-VM `supervisor` option was removed in v1.1 (per ADR 0015); every enabled VM is daemon-supervised and uses the separate `d2b-*`/`d2bv-*` ifname space. |
-| **Tier 1** | Ubuntu 24.04 LTS x86_64, kernel ≥ 6.6 | supported | supported | not yet wired — returns `daemon-down` (exit 1); broker reconcile ops per ADR 0015 forthcoming | not yet wired — returns `daemon-down` (exit 1); broker reconcile ops per ADR 0015 forthcoming | L3 pin: `tests/golden/l3-matrix/w3-ubuntu.txt`. NetworkManager 1.46, nftables 1.0.9, Cloud Hypervisor v40+, Nix-built minijail v17. |
-| **Tier 1-later** | Fedora Server 40+ | supported (best-effort) | supported (best-effort) | not yet wired — returns `daemon-down` (exit 1); broker reconcile ops per ADR 0015 forthcoming | not yet wired — returns `daemon-down` (exit 1); broker reconcile ops per ADR 0015 forthcoming | L3 pin: `w3-fedora.txt`. v1.0 SLA only applies to Tier 0/1. |
-| **Tier 2** | Arch Linux current, or other Linux x86_64 with cgroup v2 unified | supported (advisory) | supported (advisory) | not yet wired — returns `daemon-down` (exit 1); broker reconcile ops per ADR 0015 forthcoming | not yet wired — returns `daemon-down` (exit 1); broker reconcile ops per ADR 0015 forthcoming | Arch carries `w3-arch.txt`. Any unconfirmed prerequisite surfaces as `host-check-warning`. Operator reads the audit log + the per-distro troubleshooting anchor in `docs/how-to/host-prepare.md`. |
+| **Tier 1** | Ubuntu 24.04 LTS x86_64, kernel ≥ 6.6 | supported | supported | not yet wired - returns `daemon-down` (exit 1); broker reconcile ops per ADR 0015 forthcoming | not yet wired - returns `daemon-down` (exit 1); broker reconcile ops per ADR 0015 forthcoming | L3 pin: `tests/golden/l3-matrix/w3-ubuntu.txt`. NetworkManager 1.46, nftables 1.0.9, Cloud Hypervisor v40+, Nix-built minijail v17. |
+| **Tier 1-later** | Fedora Server 40+ | supported (best-effort) | supported (best-effort) | not yet wired - returns `daemon-down` (exit 1); broker reconcile ops per ADR 0015 forthcoming | not yet wired - returns `daemon-down` (exit 1); broker reconcile ops per ADR 0015 forthcoming | L3 pin: `w3-fedora.txt`. v1.0 SLA only applies to Tier 0/1. |
+| **Tier 2** | Arch Linux current, or other Linux x86_64 with cgroup v2 unified | supported (advisory) | supported (advisory) | not yet wired - returns `daemon-down` (exit 1); broker reconcile ops per ADR 0015 forthcoming | not yet wired - returns `daemon-down` (exit 1); broker reconcile ops per ADR 0015 forthcoming | Arch carries `w3-arch.txt`. Any unconfirmed prerequisite surfaces as `host-check-warning`. Operator reads the audit log + the per-distro troubleshooting anchor in `docs/how-to/host-prepare.md`. |
 
 > **v1.0 status note (per [ADR 0015](../adr/0015-daemon-only-clean-break.md)).**
 > v1.0 ships the `host prepare` / `host destroy` verbs with
@@ -57,7 +57,7 @@ table is the at-a-glance summary.
 > mutating `--apply` path is **not yet wired**: the daemon-side
 > typed-intent dispatch and bundle resolver that back it are pending,
 > so `host prepare --apply` / `host destroy --apply` return the typed
-> `daemon-down` envelope (exit 1) today — use `--dry-run` for now.
+> `daemon-down` envelope (exit 1) today - use `--dry-run` for now.
 > When the daemon-side dispatch ships, `--apply` will dispatch through
 > the broker reconcile ops (`ApplyNftables`, `ApplyRoute`,
 > `ApplySysctl`, `UpdateHostsFile`, `ApplyNmUnmanaged`), with broker
@@ -68,4 +68,4 @@ table is the at-a-glance summary.
 > (exit 78). See ADR 0015 and CHANGELOG.
 
 The full ADR rationale for what is and is not supported lives in
-[ADR 0008 — Supported platforms and rejected targets](../adr/0008-supported-platforms-and-rejected-targets.md).
+[ADR 0008 - Supported platforms and rejected targets](../adr/0008-supported-platforms-and-rejected-targets.md).

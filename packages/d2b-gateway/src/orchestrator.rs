@@ -1,6 +1,6 @@
 //! The async display-session orchestrator (ADR 0032 P0, design §3). It
-//! composes the proven pieces — a detached in-sandbox agent (ACA exec), the
-//! host relay listener, and the operator display endpoint — driving the
+//! composes the proven pieces - a detached in-sandbox agent (ACA exec), the
+//! host relay listener, and the operator display endpoint - driving the
 //! [`SessionLedger`] state machine and minting + binding the one-shot
 //! [`SessionBinding`] so display bytes are admitted only by the verified
 //! handshake.

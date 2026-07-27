@@ -132,6 +132,67 @@ Note: the `tier-0-legacy-uses-nixos-module` and
 originate as broker-side audit decisions; the CLI re-uses the same
 docs anchors when intercepting them before reaching the broker.
 
+## Host-check diagnostic codes
+
+`d2b host check` runs a battery of host-posture probes. The current runtime
+emits finding-based output with `mode`, `strict`, `summary`, `exitCode`, and
+`findings`; each finding has an id and remediation but no documentation-anchor
+field. Its implemented cgroup check reports the `cgroup-v2` finding and does
+not emit the code-specific cgroup refusal envelopes listed below.
+
+The rows and golden pairs under
+`tests/golden/cli-output/host-check-<code>.{json,txt}` are static fixtures for
+an intended host-verb refusal contract, not output derived from the current
+implementation. They pin the target `docs_anchor`, remediation, and other
+fields while runtime convergence remains outstanding. Fixture codes that
+originate as broker audit decisions (for example the `cgroup-*`, `ifname-*`,
+and `nm-managed-foreign-conflict` codes) reuse their anchor in the
+[Audit decision code catalog](#audit-decision-code-catalog) below, and the
+shared `daemon-down` connectivity refusal is anchored with the other host-verb
+refusal codes above. The rows here anchor the remaining fixture codes.
+
+| docs anchor | code | exit code | intended probe |
+| --- | --- | --- | --- |
+| <a id="no-kvm"></a>`#no-kvm` | `no-kvm` | `1` | Whether `/dev/kvm` is present and accessible. |
+| <a id="no-cgroup-v2"></a>`#no-cgroup-v2` | `no-cgroup-v2` | `1` | Whether the host runs the unified cgroup v2 hierarchy. |
+| <a id="unsupported-kernel"></a>`#unsupported-kernel` | `unsupported-kernel` | `1` | Whether the running kernel meets d2b's minimum supported version. |
+| <a id="missing-group"></a>`#missing-group` | `missing-group` | `1` | Whether the `d2b` group exists on the host. |
+| <a id="socket-perms-wrong"></a>`#socket-perms-wrong` | `socket-perms-wrong` | `1` | Whether `/run/d2b/public.sock` has the mode/owner/group `d2bd.service` asserts on bind. There is no `d2bd.socket` unit: the daemon binds the socket itself and re-asserts its mode/owner/group each time it binds, so `systemctl restart d2bd.service` recreates the socket and repairs the drift. |
+| <a id="stale-lock"></a>`#stale-lock` | `stale-lock` | `1` | Whether a `/run/d2b/locks/<vm>` lockfile is owned by a live process. |
+| <a id="manifest-skew"></a>`#manifest-skew` | `manifest-skew` | `1` | Whether the installed manifest matches the activated NixOS generation. |
+| <a id="hardlink-fs-mismatch"></a>`#hardlink-fs-mismatch` | `hardlink-fs-mismatch` | `1` | Whether the per-VM `/nix/store` hardlink farm filesystem supports hardlinks into `/nix/store`. |
+| <a id="nftables-conflict"></a>`#nftables-conflict` | `nftables-conflict` | `1` | Whether a conflicting nft framework is active alongside d2b's policy. |
+| <a id="firewall-coexistence-mismatch"></a>`#firewall-coexistence-mismatch` | `firewall-coexistence-mismatch` | `1` | Whether the declared `firewallCoexistence` manager matches the running stack. |
+| <a id="foreign-nft-rule-shadows-d2b"></a>`#foreign-nft-rule-shadows-d2b` | `foreign-nft-rule-shadows-d2b` | `1` | Whether a higher-priority foreign nft rule shadows the `inet d2b` table. |
+| <a id="nm-reload-failed"></a>`#nm-reload-failed` | `nm-reload-failed` | `1` | Whether `nmcli general reload conf` succeeded after writing the unmanaged drop-in. |
+| <a id="tap-creation-denied"></a>`#tap-creation-denied` | `tap-creation-denied` | `1` | Whether the broker can create a TAP fd via `TUNSETIFF` (requires `CAP_NET_ADMIN`). |
+| <a id="profile-rejects-root"></a>`#profile-rejects-root` | `profile-rejects-root` | `1` | Whether the minijail profile refuses uid 0 inside the sandbox. |
+| <a id="seccomp-denial"></a>`#seccomp-denial` | `seccomp-denial` | `1` | Whether the seccomp policy denies undeclared syscalls. |
+
+Each displayed fixture specifies advisory exit `1`. Independently, the current
+finding-based runtime returns exit `2` (`#host-check-failure`) whenever its
+summary carries a required failure.
+
+## Host-prepare and host-destroy apply codes
+
+`d2b host prepare --apply` and `d2b host destroy --apply` refuse before or
+during their mutation when a precondition fails, emitting the same host-verb
+refusal envelope with a kebab-case `code` anchored here. Broker-side audit
+decisions these verbs surface (for example the `nft-coexistence-*`,
+`route-preflight-*`, and `cgroup-*` codes) are cataloged under
+[Audit decision code catalog](#audit-decision-code-catalog); the rows below
+are the apply-path codes that do not originate as a broker audit decision.
+The authoritative field-by-field spec for each code is its golden pair under
+`tests/golden/cli-output/host-prepare-<code>.{json,txt}` or
+`tests/golden/cli-output/host-destroy-<code>.{json,txt}`.
+
+| docs anchor | code | exit code | what_was_checked | observed_state |
+| --- | --- | --- | --- | --- |
+| <a id="legacy-no-prepare-apply"></a>`#legacy-no-prepare-apply` | `legacy-no-prepare-apply` | `78` | Whether a legacy bash dispatch attempted a mutating `host prepare --apply`. | The legacy bash path is retired; the CLI refuses by design and directs the operator to re-run the Rust `d2b host prepare --apply`. |
+| <a id="nft-foreign-rule-flush-attempted"></a>`#nft-foreign-rule-flush-attempted` | `nft-foreign-rule-flush-attempted` | `1` | Whether an nft apply refused to flush a foreign table. | The broker observed an nft ruleset replace targeting a non-d2b table and refused; d2b never flushes foreign rules, so this is fail-closed. Restrict nft batches to `table inet d2b`. |
+| <a id="legacy-no-destroy-apply"></a>`#legacy-no-destroy-apply` | `legacy-no-destroy-apply` | `78` | Whether a legacy bash dispatch attempted a mutating `host destroy --apply`. | The legacy bash path is retired; the CLI refuses by design and directs the operator to re-run the Rust `d2b host destroy --apply`. |
+| <a id="vm-still-running-refused"></a>`#vm-still-running-refused` | `vm-still-running-refused` | `1` | Whether all VMs in the bundle are stopped before `host destroy --apply`. | At least one VM is still running (a cloud-hypervisor process was detected); stop the listed VMs with `d2b down <vm>` and retry the destroy. |
+
 ## `vm exec` exit codes
 
 `d2b vm exec` applies its own reserved exit-code contract on top
@@ -196,7 +257,7 @@ recorded.
 | <a id="cgroup-controllers-missing"></a>`cgroup-controllers-missing` | [0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md) | `DelegateCgroupV2` | `broker-validation-failed` |
 | <a id="cgroup-v2-unified-not-present"></a>`cgroup-v2-unified-not-present` | [0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md) | `DelegateCgroupV2` | `broker-validation-failed` |
 | <a id="cgroup-delegation-refused"></a>`cgroup-delegation-refused` | [0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md) | `DelegateCgroupV2` | `broker-validation-failed` |
-| <a id="cgroup-kill-on-ancestor-refused"></a>`cgroup-kill-on-ancestor-refused` | [0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md) | `CgroupKill` (broker-mediated only — no daemon-direct `cgroup.kill` writes; see [cgroup-delegation.md "Broker ops on the cgroup tree"](./cgroup-delegation.md)) | `broker-validation-failed` |
+| <a id="cgroup-kill-on-ancestor-refused"></a>`cgroup-kill-on-ancestor-refused` | [0011](../adr/0011-cgroup-v2-delegation-and-pidfd-handoff.md) | `CgroupKill` (broker-mediated only - no daemon-direct `cgroup.kill` writes; see [cgroup-delegation.md "Broker ops on the cgroup tree"](./cgroup-delegation.md)) | `broker-validation-failed` |
 | <a id="ifname-too-long"></a>`ifname-too-long` | [0012](../adr/0012-w3-ipv6-off-sysctl-set-and-hash-ifname.md) | `CreateTapFd`, `CreatePersistentTap` | `wire-ifname-invalid` |
 | <a id="ifname-collision"></a>`ifname-collision` | [0012](../adr/0012-w3-ipv6-off-sysctl-set-and-hash-ifname.md) | bundle render + `CreateTapFd` | `broker-validation-failed` |
 | <a id="bridge-port-flag-drift"></a>`bridge-port-flag-drift` | [0012](../adr/0012-w3-ipv6-off-sysctl-set-and-hash-ifname.md) | `SetBridgePortFlags` | `broker-validation-failed` |
@@ -255,7 +316,7 @@ migration guide:
 The multi-line block format renders differently for the two verb
 categories described above:
 
-**Category 1 — Truly deferred verbs** (`audit --strict`) emit
+**Category 1 - Truly deferred verbs** (`audit --strict`) emit
 `#not-yet-implemented` (exit 78) unconditionally. The remediation
 block renders as:
 
@@ -267,7 +328,7 @@ Remediation:
   Specifically the "<verb-specific anchor>" section.
 ```
 
-**Category 2 — Daemon-down rendering pointers** (`audit` without
+**Category 2 - Daemon-down rendering pointers** (`audit` without
 `--strict`, `keys list`, `keys show`) emit `#daemon-down` (exit 1)
 only when the broker is stopped; otherwise the successful
 invocation path runs normally. When `#daemon-down` does fire, the
@@ -296,8 +357,8 @@ unchanged because their inline rendering is preserved.
 
 The two affected verbs and their migration-guide anchors are:
 
-- `d2b audit`: [`docs/how-to/migrate-d2b-v0-to-v1.md#v11-deferred-verbs-audit`](../how-to/migrate-d2b-v0-to-v1.md#v11-deferred-verbs-audit) (**mixed disposition** — non-`--strict` is Category 2 daemon-down only; `--strict` is Category 1 truly deferred)
-- `d2b keys list` / `d2b keys show`: [`docs/how-to/migrate-d2b-v0-to-v1.md#v11-deferred-verbs-keys`](../how-to/migrate-d2b-v0-to-v1.md#v11-deferred-verbs-keys) (Category 2 — daemon-down only)
+- `d2b audit`: [`docs/how-to/migrate-d2b-v0-to-v1.md#v11-deferred-verbs-audit`](../how-to/migrate-d2b-v0-to-v1.md#v11-deferred-verbs-audit) (**mixed disposition** - non-`--strict` is Category 2 daemon-down only; `--strict` is Category 1 truly deferred)
+- `d2b keys list` / `d2b keys show`: [`docs/how-to/migrate-d2b-v0-to-v1.md#v11-deferred-verbs-keys`](../how-to/migrate-d2b-v0-to-v1.md#v11-deferred-verbs-keys) (Category 2 - daemon-down only)
 
 `d2b console` and `d2b audio` (subcommands `status|mic|speaker|off`)
 are implemented and no longer emit `#not-yet-implemented` envelopes.

@@ -79,7 +79,7 @@ assignment at the trusted ingress boundary.
   port (`14317`), and the firewall posture are unchanged.
 - The host edge collector's own `resource` / `resource/store_sync_audit`
   labels are also updated to `identityName` for consistency, but remain
-  advisory — the ingress boundary re-stamps identity. No identity is
+  advisory - the ingress boundary re-stamps identity. No identity is
   trusted from the edge.
 
 ### Collection parity
@@ -150,9 +150,9 @@ The existing `hostmetrics`, self-`prometheus`, and StoreSync-audit
 - Both new receivers default **off**. The host journal is at least as
   sensitive as a guest journal (it can contain auth failures, sudo
   command lines, and service-logged secrets). The same trust boundary as
-  the guest path applies — telemetry leaves only over
+  the guest path applies - telemetry leaves only over
   `/run/d2b/otel/host-egress.sock` -> broker `OtelHostBridge` ->
-  `sys-obs` vsock, never the workload/host LAN — but the conservative
+  `sys-obs` vsock, never the workload/host LAN - but the conservative
   framework default is opt-in, matching `ch.exporter.includeTopologyLabels`
   and the SigNoz anonymous-viewer posture.
 - **`identityName` defaults to the hostname and is *not* gated by the
@@ -207,13 +207,13 @@ The existing `hostmetrics`, self-`prometheus`, and StoreSync-audit
   updated to follow `identityName` while `vm.env` / `vm.role` stay
   `"host"`. The resource-attribute **key**-allowlist gate
   `packages/d2b-contract-tests/tests/policy_observability.rs::loki_native_otel_resource_attributes`
-  (legacy name — the framework uses native SigNoz/ClickHouse, not Loki;
+  (legacy name - the framework uses native SigNoz/ClickHouse, not Loki;
   the retired `tests/loki-label-cardinality-eval.sh` shell gate is gone)
   checks the *set of keys*, not values, and forbids retired
   Loki/Tempo/Grafana surfaces. This change adds no new resource-attribute
   keys (all of `vm.name`/`vm.env`/`vm.role`/`host.name`/`service.name`/
   `source` are already allow-listed) and no retired surfaces, so that gate
-  needs no edit — only re-verification that it stays green.
+  needs no edit - only re-verification that it stays green.
 - **Docs:** `docs/reference/components-observability.md` gains the three
   host option rows, a "Socket and port contract" entry for
   `host-otlp.sock`, and a Secrets/sensitivity note for host journal/OTLP;
@@ -261,7 +261,7 @@ opt-in; consumers that want full parity set the flags explicitly.
 
 Setting `vm.name` to the hostname in `host.nix` alone would be
 overridden by the trusted ingress boundary's upsert and would invite
-trusting edge-supplied identity — the exact pattern ADR 0026 rejects.
+trusting edge-supplied identity - the exact pattern ADR 0026 rejects.
 Identity is therefore changed at the ingress source.
 
 ### A second, consumer-side host collector in `/etc/nixos`
@@ -277,8 +277,8 @@ duplicating it.
 
 An earlier draft exposed the host OTLP ingest receiver as a loopback
 gRPC TCP listener (in addition to, or instead of, a Unix socket). It is
-rejected in favor of **UDS-only** ingest. A TCP listener — even on
-`127.0.0.1` — needs an explicit non-colliding port (the obs surface
+rejected in favor of **UDS-only** ingest. A TCP listener - even on
+`127.0.0.1` - needs an explicit non-colliding port (the obs surface
 already uses `4317`/`4318`/`8888` inside `sys-obs`, `9101` for the host
 CH-exporter, and `12345` for the collector's self-metrics) and is
 reachable by any local process without filesystem-permission scoping. A

@@ -275,7 +275,7 @@ const GATEWAY_DISPLAY_SESSION_TTL: Duration = Duration::from_secs(3600);
 /// Overridable at startup via `D2BD_MAX_INFLIGHT_CONNECTIONS`.
 const DEFAULT_MAX_INFLIGHT_CONNECTIONS: usize = 64;
 /// Write deadline for the typed refusal frame (authz reject / busy) the
-/// accept loop sends before closing — never block the accept loop on a
+/// accept loop sends before closing - never block the accept loop on a
 /// slow/abusive peer.
 const ACCEPT_REFUSAL_WRITE_DEADLINE: Duration = Duration::from_secs(2);
 /// Read deadline for the initial hello frame, so a connected-but-silent
@@ -1381,7 +1381,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
     // Write /run/d2b/version on daemon startup so the CLI's
     // [pending restart] machinery has
     // an authoritative version + binary-path snapshot. Failures are
-    // logged but non-fatal — operators can still drive the daemon
+    // logged but non-fatal - operators can still drive the daemon
     // without the pending-restart signal.
     write_daemon_version_file(&config);
     maybe_write_state_restore_report(&options)?;
@@ -1547,7 +1547,7 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
     // refuse daemon start; optional misses are logged and the
     // affected VMs are skipped (Degraded) by the autostart pass.
     // If the bundle resolver itself is unavailable we skip the
-    // gate — the autostart pass already logs and short-circuits
+    // gate - the autostart pass already logs and short-circuits
     // in that case, and the daemon must remain reachable for
     // diagnostic verbs (status / doctor / audit).
     let module_degraded_vms: BTreeSet<String> = match load_bundle_resolver(&state) {
@@ -1719,8 +1719,8 @@ pub async fn serve(options: ServeOptions) -> Result<(), TypedError> {
         };
 
         // Hand the connection to its own handler thread, moving the RAII
-        // permit in so the in-flight slot is released when the handler —
-        // not the accept loop — finishes. accept() returns immediately.
+        // permit in so the in-flight slot is released when the handler -
+        // not the accept loop - finishes. accept() returns immediately.
         let conn_state = state.clone();
         if let Err(err) = std::thread::Builder::new()
             .name("d2b-conn".to_owned())
@@ -2224,7 +2224,7 @@ async fn run_usbipd_perenv_autostart(
             usbipd_perenv_autostart::PerEnvUsbipdOutcome::SkippedPendingBundle => {
                 tracing::info!(
                     env = %entry.env, role = ?entry.role,
-                    "usbipd-perenv: skipped — bundle has no sys-<env>-usbipd runner intent yet (transitional NixOS unit serves this env)"
+                    "usbipd-perenv: skipped - bundle has no sys-<env>-usbipd runner intent yet (transitional NixOS unit serves this env)"
                 );
             }
             usbipd_perenv_autostart::PerEnvUsbipdOutcome::Failed { reason } => {
@@ -2757,7 +2757,7 @@ fn drop_privileges_if_root(identity: &RuntimeIdentity) -> Result<(), TypedError>
 /// listeners write beside their redirected public socket.
 /// This lets the CLI's `daemon_version::compute_restart_status` compute the
 /// `[pending restart]` signal post-restart. Failures are logged
-/// to stderr and non-fatal — the absence of the version file
+/// to stderr and non-fatal - the absence of the version file
 /// surfaces in the CLI as `DaemonRestartStatus::DaemonNotRunning`,
 /// which is a reasonable degraded shape.
 fn write_daemon_version_file(config: &DaemonConfig) {
@@ -9814,7 +9814,7 @@ const EXEC_SUBSYSTEM: &str = "guest-control-exec";
 
 /// Closed allowlist of `outcome` label values for the exec metric. Any value
 /// emitted outside this set is a hard bug (caught by `debug_assert` below and
-/// the metric-label allowlist test) — `outcome` MUST stay a bounded enum so the
+/// the metric-label allowlist test) - `outcome` MUST stay a bounded enum so the
 /// `d2b_daemon_guest_control_exec_total` series cannot explode in
 /// cardinality or leak a free-form string.
 const EXEC_OUTCOME_LABELS: &[&str] = &["established", "closed", "error", "op-error"];
@@ -9980,7 +9980,7 @@ fn exec_error_kind_label(error: &TypedError) -> &'static str {
 /// Emit the single kind=critical exec session-establishment event. Kept as a
 /// free function so the redaction-safe field set can be asserted by a tracing
 /// capture test: it accepts ONLY the leak-safe identifiers (vm name, peer uid,
-/// negotiated tty). The opaque session handle is deliberately NOT included —
+/// negotiated tty). The opaque session handle is deliberately NOT included -
 /// per AGENTS, session handles must never reach a span, log, audit, or
 /// metric. argv/env/cwd/output bytes are never passed here either.
 fn emit_exec_established_event(vm: &str, peer_uid: u32, tty: bool) {
@@ -10062,7 +10062,7 @@ fn emit_detached_kill_audit(
 /// connect/auth/ExecCreate), spawn the per-session worker, relay the establish
 /// reply, then proxy one op per frame. The connection's EOF/POLLHUP closes the
 /// command channel, which returns the worker, drops the runtime, and drops the
-/// authenticated client — prompting the guest `close_connection` and PTY
+/// authenticated client - prompting the guest `close_connection` and PTY
 /// teardown. The slot is released when its RAII guard drops on return.
 fn run_exec_owner(
     stream: Socket,
@@ -10075,11 +10075,11 @@ fn run_exec_owner(
     _conn_permit: Option<concurrency::ConnPermit>,
 ) {
     // Test seam: when an accept-loop test installs the owner-body hook, run it
-    // (holding `stream` — and thus the owner session — open for as long as the
+    // (holding `stream` - and thus the owner session - open for as long as the
     // hook blocks) and return without touching real bundle/guest state. Placing
     // the hook HERE, in the owner body itself, is what lets a test distinguish
     // an off-loop spawn from an inline call: a hypothetical inline
-    // `handle_connection` would run this body — and block in the hook — on the
+    // `handle_connection` would run this body - and block in the hook - on the
     // accept-loop thread, so its caller would never observe a prompt return.
     #[cfg(test)]
     {
@@ -10401,17 +10401,17 @@ enum ExecWriterItem {
 }
 
 /// Bound on owner-connection ops concurrently in flight. This is a HARD
-/// per-connection limit on the number of ops dispatched-but-not-yet-replied —
+/// per-connection limit on the number of ops dispatched-but-not-yet-replied -
 /// including long-polls (`ReadOutput`/`Wait`) that each pin a guest RPC. A
-/// backpressure-aware owner (the real CLI is strictly sequential — one op,
-/// await its reply, then the next) stays at 1–2 in flight and never approaches
+/// backpressure-aware owner (the real CLI is strictly sequential - one op,
+/// await its reply, then the next) stays at 1-2 in flight and never approaches
 /// this cap; a flooding/pipelining owner that exceeds it has its session closed
 /// promptly (the reader never blocks acquiring a permit).
 const EXEC_OWNER_INFLIGHT_CAP: usize = 64;
 
 /// Bounded grace for the owner writer to flush its last resolved replies (e.g. a
 /// final exit-status `Wait`) during teardown before the owner socket is
-/// force–shut-down. A healthy writer exits in microseconds; this only bounds the
+/// force-shut-down. A healthy writer exits in microseconds; this only bounds the
 /// wait for a writer wedged on a blocking `send` to an owner that stopped
 /// reading, after which the socket is shut down so the send fails and the writer
 /// can exit (otherwise `join()` would hang and strand the owner thread + slot).
@@ -10422,7 +10422,7 @@ const EXEC_OWNER_WRITER_DRAIN_POLL: Duration = Duration::from_millis(5);
 /// concurrent in-flight ops. The earlier design only bounded the
 /// reader→writer channel, but the worker immediately spawns each long-poll and
 /// the writer immediately spawns each awaiter, so both channels drained as fast
-/// as the reader filled them — the reader was never bounded and a pipelining
+/// as the reader filled them - the reader was never bounded and a pipelining
 /// owner could open unbounded concurrent long-polls/guest RPCs. Here a permit
 /// is taken just before an op is dispatched and HELD until its reply frame is
 /// written (or the op is torn down), so the cap hard-bounds the number of ops
@@ -10449,7 +10449,7 @@ impl InflightSemaphore {
     /// permit on drop (reply written, immediate error, or teardown). Never
     /// blocks: the reader must always be free to return to `read_frame` and
     /// observe owner EOF/POLLHUP. Mutex poison is recovered rather than
-    /// propagated as a panic — the critical section only increments/decrements
+    /// propagated as a panic - the critical section only increments/decrements
     /// a counter and cannot leave broken invariants.
     fn try_acquire(self: &Arc<Self>) -> Option<InflightPermit> {
         let mut available = self
@@ -10512,7 +10512,7 @@ fn spawn_exec_owner_writer(
 
 /// Emit the closed-allowlist observability signal for an owner connection that
 /// exceeded the in-flight op cap and is being closed. A leak-safe metric
-/// (closed `outcome`/`error_kind` labels — no vm/handle/uid/argv) plus a
+/// (closed `outcome`/`error_kind` labels - no vm/handle/uid/argv) plus a
 /// rate-bounded structured log carrying only the constant cap. No wire frame is
 /// written from the reader thread (the writer thread is the sole socket
 /// writer).
@@ -10537,7 +10537,7 @@ fn signal_owner_inflight_cap_exceeded(metrics: &metrics::Registry) {
 /// below the cap, and an owner that exceeds `EXEC_OWNER_INFLIGHT_CAP` ops in
 /// flight has its session closed through the single teardown path below
 /// (after emitting an observability signal). Because the reader never blocks
-/// acquiring a permit, owner EOF/POLLHUP is always observed promptly — even
+/// acquiring a permit, owner EOF/POLLHUP is always observed promptly - even
 /// when the cap is fully saturated by parked long-polls.
 /// On reader EOF/POLLHUP (owner disconnect) or over-cap close the loop returns,
 /// `control_tx` is dropped (tearing the worker down and cancelling any
@@ -10782,7 +10782,7 @@ impl exec_session::OwnerReaper for SocketShutdownReaper {
 mod exec_metric_tests {
     //! The exec metric `d2b_daemon_guest_control_exec_total` is
     //! a HARD closed-label series. Its only labels are the constant
-    //! `subsystem` plus a bounded `outcome` / `error_kind` enum — never a vm
+    //! `subsystem` plus a bounded `outcome` / `error_kind` enum - never a vm
     //! name, session handle, op id, peer uid, or argv hash. These tests assert
     //! the descriptor shape, the closed value sets, and that a rendered series
     //! carries nothing else.
@@ -10815,7 +10815,7 @@ mod exec_metric_tests {
     #[test]
     fn exec_metric_descriptor_has_only_three_closed_labels() {
         // The inventory descriptor for the exec metric must declare EXACTLY
-        // the three closed keys — adding `vm`, `session`, `op_id`, or any
+        // the three closed keys - adding `vm`, `session`, `op_id`, or any
         // per-session identifier here is the regression this guards.
         let descriptor = metrics::descriptor(EXEC_METRIC).expect("exec metric is in the inventory");
         assert_eq!(
@@ -10850,7 +10850,7 @@ mod exec_metric_tests {
     fn exec_metric_labels_are_closed_enum() {
         // Emit one sample for EVERY (outcome, error_kind) pair in the closed
         // sets, render, and assert the rendered exec series carries only the
-        // three approved keys, the constant subsystem, and closed values —
+        // three approved keys, the constant subsystem, and closed values -
         // and never a forbidden per-session identifier.
         let registry = metrics::Registry::new();
         for &outcome in EXEC_OUTCOME_LABELS {
@@ -11065,7 +11065,7 @@ mod exec_owner_io_tests {
         assert_eq!(close_reply["op"], "close");
 
         // Park a long-poll, then send an urgent control op. The control reply
-        // must come back (out of order, by op-id) BEFORE the parked poll — proof
+        // must come back (out of order, by op-id) BEFORE the parked poll - proof
         // the owner socket read is not serialized behind the long-poll reply.
         send_op(&client, 10, &wait_op());
         seen_rx
@@ -11138,7 +11138,7 @@ mod exec_owner_io_tests {
     /// of a channel the worker/writer drain as fast as the reader fills it. A
     /// pipelining owner that floods `cap + N` long-polls must see at most `cap`
     /// reach the worker concurrently; the `(cap + 1)`-th op finds NO free permit
-    /// and — crucially — the reader does NOT block on it. Instead the session is
+    /// and - crucially - the reader does NOT block on it. Instead the session is
     /// closed PROMPTLY (the over-cap observability signal is emitted and the
     /// reader returns through the single teardown path). This proves both that
     /// the cap hard-bounds concurrent in-flight work AND that the reader never
@@ -11203,7 +11203,7 @@ mod exec_owner_io_tests {
 
         // Exactly `cap` long-polls reach the worker. The `(cap + 1)`-th op finds
         // no permit and the reader closes the session rather than dispatching it
-        // — so no more than `cap` are ever seen.
+        // - so no more than `cap` are ever seen.
         for _ in 0..cap {
             seen_rx
                 .recv_timeout(Duration::from_secs(5))
@@ -11237,7 +11237,7 @@ mod exec_owner_io_tests {
         // The reader did NOT block on the over-cap permit: the session is
         // already closing on its own. Release the parked replies so the held
         // permits free and the writer awaiters resolve, then the io thread joins
-        // PROMPTLY — without the test ever dropping the client.
+        // PROMPTLY - without the test ever dropping the client.
         stash.lock().expect("stash lock").clear();
         let start = Instant::now();
         io.join().expect("owner io thread joins");
@@ -11333,7 +11333,7 @@ mod exec_owner_io_tests {
         // replies fills the daemon's owner-socket send buffer, wedging the
         // writer's blocking `send`. Teardown must still complete: the bounded
         // drain grace elapses, the owner socket is shut down to unblock the
-        // wedged send, and the io thread joins — instead of hanging forever and
+        // wedged send, and the io thread joins - instead of hanging forever and
         // stranding the owner thread + session slot.
         let cap = EXEC_OWNER_INFLIGHT_CAP;
         let (daemon, client) = seqpacket_pair();
@@ -11399,7 +11399,7 @@ mod exec_owner_io_tests {
             client
         });
 
-        // The io thread must JOIN — proving teardown did not hang on the wedged
+        // The io thread must JOIN - proving teardown did not hang on the wedged
         // send. Poll up to 10s (the bounded grace is sub-second).
         let mut joined = false;
         for _ in 0..400 {
@@ -11417,7 +11417,7 @@ mod exec_owner_io_tests {
 
         // The teardown waited the full bounded grace, proving the writer was
         // genuinely wedged (a healthy writer exits in microseconds, far under the
-        // grace) and the shutdown path — not a free EOF — released it.
+        // grace) and the shutdown path - not a free EOF - released it.
         assert!(
             started.elapsed() >= EXEC_OWNER_WRITER_DRAIN_GRACE,
             "expected the bounded drain grace to elapse on a wedged writer; got {:?}",
@@ -12176,7 +12176,7 @@ impl VmStartRunner<'_> {
             .find_runner_intent(&intent_id)
             .ok_or_else(|| "bundle-intent-missing".to_owned())?;
         let role_id = tracked_role_id(node);
-        // v1.2fu46/fu53: D9 close-the-loop — if the ProcessNode
+        // v1.2fu46/fu53: D9 close-the-loop - if the ProcessNode
         // declares any DiskInit plan-ops (e.g. for
         // writableStoreOverlay), dispatch BrokerRequest::DiskInit
         // BEFORE SpawnRunner.  The broker resolves all plan-ops
@@ -12187,7 +12187,7 @@ impl VmStartRunner<'_> {
         //
         // Decision logic is extracted into
         // `node_requires_disk_init_dispatch` for hermetic unit
-        // testing — the regression covered by panel-test R1 #2.
+        // testing - the regression covered by panel-test R1 #2.
         if node_requires_disk_init_dispatch(node) {
             match dispatch_broker_request(
                 self.state,
@@ -12317,7 +12317,7 @@ impl VmStartRunner<'_> {
         // Serialize register + snapshot as one unit so a concurrent
         // different-VM op cannot persist a stale snapshot that drops this
         // entry (register A, snapshot A reads {A}, register B, snapshot B
-        // writes {A,B}, delayed snapshot A overwrites with {A} — losing B).
+        // writes {A,B}, delayed snapshot A overwrites with {A} - losing B).
         let _mguard = self.state.pidfd_table.mutation_guard();
         self.state
             .pidfd_table
@@ -12585,7 +12585,7 @@ impl supervisor::dag::NodeRunner for VmStartRunner<'_> {
                     self.sync_store_view(vm)?;
                 }
                 // ReadinessOnly nodes spawn no long-lived runner, so there
-                // is no daemon-held pidfd to observe — no liveness probe.
+                // is no daemon-held pidfd to observe - no liveness probe.
                 wait_for_readiness(node, readiness, budget.readiness, None)
             }
             VmStartNodeMode::OneShot(runner_role) => {
@@ -12834,7 +12834,7 @@ fn command_ready(command: &[String]) -> Result<bool, String> {
 
 /// v1.1.2-final-R1 (panel-software + panel-test HIGH): explicit
 /// process-state outcomes from `/proc/<pid>/stat`. The previous
-/// `Ok(None)` return conflated three different scenarios — file
+/// `Ok(None)` return conflated three different scenarios - file
 /// missing (process gone), file unreadable (transient race),
 /// and file present-but-unparseable (kernel format regression).
 /// Callers can now distinguish these and decide whether to retry,
@@ -12845,7 +12845,7 @@ enum ProcState {
     /// 'S' sleeping, 'R' running, 'D' uninterruptible sleep,
     /// 'Z' zombie awaiting reap, 'X' dead).
     Alive(char),
-    /// `/proc/<pid>/stat` does not exist — process has been
+    /// `/proc/<pid>/stat` does not exist - process has been
     /// reaped (no parent holding pidfd) or never existed.
     Gone,
     /// `/proc/<pid>/stat` is present but unparseable. This is
@@ -12968,7 +12968,7 @@ mod proc_state_tests {
 
     #[test]
     fn comm_with_paren() {
-        // Process comm contains ')' — rfind correctly picks the
+        // Process comm contains ')' - rfind correctly picks the
         // OUTER closing paren that ends the comm field.
         assert_eq!(parse("42 (foo) bar) Z 1 42 ..."), ProcState::Alive('Z'));
     }
@@ -12980,13 +12980,13 @@ mod proc_state_tests {
 
     #[test]
     fn truncated_stat() {
-        // Comm present but no state field after — ParseFailed.
+        // Comm present but no state field after - ParseFailed.
         assert_eq!(parse("1234 (sh)"), ProcState::ParseFailed);
     }
 
     #[test]
     fn no_paren_at_all() {
-        // Garbage input without comm parens — ParseFailed.
+        // Garbage input without comm parens - ParseFailed.
         assert_eq!(parse("not a stat line at all"), ProcState::ParseFailed);
     }
 
@@ -13137,7 +13137,7 @@ mod wait_for_one_shot_exit_tests {
 
     /// Read the `starttime` field (column 22) for `pid` from
     /// `/proc/<pid>/stat`.  Panics if the file is missing or
-    /// unparseable — this is a test-only helper.
+    /// unparseable - this is a test-only helper.
     fn read_start_time_ticks(pid: u32) -> u64 {
         let path = format!("/proc/{pid}/stat");
         let content = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
@@ -13145,7 +13145,7 @@ mod wait_for_one_shot_exit_tests {
             .unwrap_or_else(|e| panic!("parse {path}: {e}"))
     }
 
-    /// Spawn `sleep 0` — the child exits in < 1 ms, leaving a zombie
+    /// Spawn `sleep 0` - the child exits in < 1 ms, leaving a zombie
     /// behind because Rust's `Child::drop` does not call `waitpid`.
     fn spawn_zombie_child() -> Child {
         Command::new("sleep")
@@ -13154,7 +13154,7 @@ mod wait_for_one_shot_exit_tests {
             .expect("spawn 'sleep 0'")
     }
 
-    /// Spawn `sleep 30` — alive for the duration of the test.
+    /// Spawn `sleep 30` - alive for the duration of the test.
     fn spawn_sleeping_child() -> Child {
         Command::new("sleep")
             .arg("30")
@@ -13192,7 +13192,7 @@ mod wait_for_one_shot_exit_tests {
         );
     }
 
-    // v1.2 asserts the timeout path — `wait_for_one_shot_exit` must
+    // v1.2 asserts the timeout path - `wait_for_one_shot_exit` must
     // return `Err("oneshot-timeout:<pid>")` when the target stays alive
     // through the full polling window.
     #[test]
@@ -15765,7 +15765,7 @@ fn dispatch_broker_vm_start(
     // unconditionally so operators and gates can observe the planned step
     // set; actual broker dispatch is gated on
     // `D2B_HOST_PREP_DAG_EXECUTE=1`. All step kinds dispatch a real
-    // broker op (or a daemon-native check) — `OwnershipMatrixCheck` and
+    // broker op (or a daemon-native check) - `OwnershipMatrixCheck` and
     // `SshHostKeyPreflight` still cover the two stubs that intentionally
     // remain typed-Unimplemented at the broker layer pending sibling
     // handlers.
@@ -16164,7 +16164,7 @@ fn dispatch_broker_vm_start(
             // overall_ok the guest is up, so it is safe to pin the host
             // pubkey into `/var/lib/d2b/known_hosts.d2b` via the
             // broker for the retained SSH-compat path. Failures here are
-            // warn-only — matching the legacy
+            // warn-only - matching the legacy
             // `d2b-known-hosts-refresh@<vm>.service` behaviour, which
             // left the old pin in place rather than failing the VM start.
             let outcome = known_hosts_refresh::refresh_known_hosts(
@@ -16901,7 +16901,7 @@ fn dispatch_broker_host_destroy(
 
 /// Focused mutating recovery verb for network host-prep drift. Re-applies
 /// the network slice of `host prepare` (host-scope nftables +
-/// per-env routes + per-env ipv6 sysctls) — explicitly NOT the
+/// per-env routes + per-env ipv6 sysctls) - explicitly NOT the
 /// `/etc/hosts` mutation or NetworkManager unmanaged file: those
 /// are scoped to full `host prepare`. On success the persistent
 /// preflight history is reset so the next daemon startup begins with
@@ -23158,7 +23158,7 @@ mod detached_exec_routing_tests {
 /// The public.sock accept loop is serial: it accepts one connection, runs
 /// `handle_connection`, then accepts the next. An exec session's owner
 /// connection is long-lived, so `handle_connection` MUST hand the exec session
-/// off to a spawned owner thread and return immediately — otherwise the single
+/// off to a spawned owner thread and return immediately - otherwise the single
 /// accept loop would be pinned for the entire lifetime of one exec session and
 /// no other client could be served. These hermetic tests drive
 /// `handle_connection` over a real `SOCK_SEQPACKET` pair (no live VM) and prove
@@ -23362,7 +23362,7 @@ mod accept_loop_concurrency_tests {
         // open: it flags `running`, signals `entered`, then blocks until the
         // test releases it. Because the hook runs at the top of
         // `run_exec_owner`, a hypothetical inline `handle_connection` would block
-        // HERE on the accept-loop thread and never return — the watchdog below
+        // HERE on the accept-loop thread and never return - the watchdog below
         // would fire. An off-loop spawn (the real behaviour) returns Ok promptly
         // while this body is still blocked.
         #[derive(Default)]
@@ -23417,7 +23417,7 @@ mod accept_loop_concurrency_tests {
         });
 
         // The owner body must actually be entered (the exec branch dispatched a
-        // real, blocking owner session — not a fast-failed stub).
+        // real, blocking owner session - not a fast-failed stub).
         {
             let (lock, cv) = &*shared;
             let mut s = lock.lock().expect("hook state lock");
@@ -23446,7 +23446,7 @@ mod accept_loop_concurrency_tests {
         handle_a.join().expect("accept-loop thread joins");
 
         // Prove the owner session is STILL HELD OPEN (the body has not torn
-        // down) at the moment handle_connection has already returned — i.e. the
+        // down) at the moment handle_connection has already returned - i.e. the
         // dispatch was genuinely off-loop, concurrent with the accept loop.
         {
             let (lock, _cv) = &*shared;
@@ -28428,7 +28428,7 @@ mod broker_dispatch_tests {
         };
         assert!(
             node_requires_disk_init_dispatch(&node),
-            "plan_ops contains DiskInit → MUST dispatch BrokerRequest::DiskInit before SpawnRunner; otherwise CH boots without overlay file and fatals with NotFound (the original D9 hole — closed by fu46, regression-pinned by this test)"
+            "plan_ops contains DiskInit → MUST dispatch BrokerRequest::DiskInit before SpawnRunner; otherwise CH boots without overlay file and fatals with NotFound (the original D9 hole - closed by fu46, regression-pinned by this test)"
         );
     }
 
@@ -28576,7 +28576,7 @@ mod broker_dispatch_tests {
 
         let node = readiness_test_node();
         // The predicate reports ready (stale listening socket), but the
-        // runner has exited — the liveness re-check must veto false-ready.
+        // runner has exited - the liveness re-check must veto false-ready.
         let ready = vec![ReadinessPredicate::ComponentSpecific("x".to_owned())];
         let probe = ScriptedLivenessProbe::always(RunnerLiveness::Exited(None));
         let result =
@@ -28730,7 +28730,7 @@ mod broker_dispatch_tests {
         };
 
         // HAZARD: the stateless readiness helper treats an EMPTY predicate
-        // slice as TRIVIALLY ready — it returns Ok without running any
+        // slice as TRIVIALLY ready - it returns Ok without running any
         // probe. `spawn_and_check_process_alive` (the process-alive fast
         // path, e.g. `--no-wait-api`) delegates the node to
         // `spawn_and_wait_ready(vm, node, &[], budget)` with exactly this
@@ -28955,7 +28955,7 @@ mod broker_dispatch_tests {
     fn read_guest_config_dispatch_denies_launcher_before_any_side_effect() {
         // The broker socket is unreachable. If the admin gate did NOT
         // short-circuit, dispatch_read_guest_config would load the bundle
-        // resolver, resolve probe params, BrokerSign, and read guest bytes —
+        // resolver, resolve probe params, BrokerSign, and read guest bytes -
         // producing a transport / broker error, never AuthzNotAdmin.
         // Receiving AuthzNotAdmin proves the launcher was denied at the gate
         // BEFORE any bundle load / probe / sign / guest-byte read.
@@ -28983,7 +28983,7 @@ mod broker_dispatch_tests {
         // The admin peer clears the authz gate, so dispatch reaches the
         // handler and fails LATER (the bundle vm has no guest-control node /
         // the broker is unreachable) with a guest-control read or transport
-        // error — never an authz error. This proves the gate is the only
+        // error - never an authz error. This proves the gate is the only
         // thing denying the launcher above, not some unrelated failure.
         let state = test_state_with_broker_socket(unreachable_broker_socket_path(
             "read-guest-config-admin",
@@ -29459,8 +29459,8 @@ mod guest_control_readiness_tracing_tests {
     fn readiness_tracing_events_carry_only_leak_safe_fields() {
         // APPROVED field-name allowlist for the readiness observation
         // events. Hardcoded (not derived from the call site) so that
-        // adding a new field to the `tracing::info!`/`warn!` macro — e.g.
-        // a raw path, nonce, or guest-supplied string — fails this test.
+        // adding a new field to the `tracing::info!`/`warn!` macro - e.g.
+        // a raw path, nonce, or guest-supplied string - fails this test.
         const APPROVED_FIELDS: &[&str] = &[
             "message",
             "kind",
@@ -29600,7 +29600,7 @@ mod exec_established_tracing_tests {
     #[test]
     fn exec_established_event_carries_only_leak_safe_fields() {
         // APPROVED field-name allowlist for the establishment event. The opaque
-        // session handle is deliberately NOT approved — per AGENTS, session
+        // session handle is deliberately NOT approved - per AGENTS, session
         // handles must never reach a span, log, audit, or metric.
         const APPROVED_FIELDS: &[&str] = &["message", "kind", "subsystem", "vm", "peer_uid", "tty"];
         // Field names that MUST NEVER appear (would leak the command line, the

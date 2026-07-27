@@ -40,9 +40,9 @@ The guest `d2b-meta` share is pointed at `store-view/meta/` only;
 
 > **Transitional note:** the shipping `nixos-modules/store.nix`
 > activation path and the legacy `build_farm`/rollback flows still use
-> the older single-root layout — `store-view/current -> generations/<N>`
+> the older single-root layout - `store-view/current -> generations/<N>`
 > with `generations/<N>/{system,store-paths,db.dump,marker.json}` and
-> `gcroots/generation-<N>` — keyed by the u32 token. Consolidating those
+> `gcroots/generation-<N>` - keyed by the u32 token. Consolidating those
 > non-`StoreSync` callers onto the split layout is a follow-up wave.
 
 The Rust primitive layer models crash-safety with a per-generation
@@ -87,7 +87,7 @@ d2b uses two marker styles:
 - **Farm marker**: `store-view/live/.d2b-marker-<vm>` is planted by the
   broker `StoreSync` writer as the cold-start readiness signal. Per
   [ADR 0027](../adr/0027-store-view-hardlink-live-pool.md) it is a
-  **zero-length** file — existence alone is the signal (the readiness probe is
+  **zero-length** file - existence alone is the signal (the readiness probe is
   a `test -e`), and it carries no host paths, generation metadata, or counts
   because it lives under the guest-served `live/` pool. The virtiofsd preflight
   checks both the real tree and the bind-mounted view visible to the service.
@@ -150,7 +150,7 @@ Everything else is pruned:
 > **Transitional note:** the split-layout `StoreSync` path keys
 > generations by `generation_id` (under `state/`/`meta/generations/<id>/`
 > and `gcroots/generation-<id>`) and currently reports
-> `cleanup_deferred: true` with `swept_count: 0` — retention/sweep for
+> `cleanup_deferred: true` with `swept_count: 0` - retention/sweep for
 > the split layout is a follow-up wave. The rule above still governs the
 > legacy `generations/<N>` callers.
 

@@ -17,7 +17,7 @@
 //! teardown phase). The low-level PTY allocation/control syscalls
 //! (`openpt`/`grantpt`/`unlockpt`/`ptsname`/`TIOCSWINSZ`/`tcgetpgrp`) live here
 //! and in the runner helper, never in the attached spawner
-//! (`exec.rs`/`exec_linux.rs`) — see `tests/guest-exec-runtime-static.sh`.
+//! (`exec.rs`/`exec_linux.rs`) - see `tests/guest-exec-runtime-static.sh`.
 
 use std::sync::{Arc, Mutex};
 
@@ -112,7 +112,7 @@ enum WriteOp {
 /// Mutable protocol state lives behind short, non-await std mutexes. The PTY
 /// master write half is owned by a dedicated, abortable **writer task** (not a
 /// handler-held lock): `WriteStdin`/`CloseStdin` submit a [`WriteOp`] over a
-/// bounded channel and await the result. This is the deadlock fix — a child that
+/// bounded channel and await the result. This is the deadlock fix - a child that
 /// stops reading stdin can block the writer task on a full PTY, but teardown
 /// drops the master write clone by **aborting the writer task**, never by
 /// contending for a lock the blocked write holds.
@@ -371,8 +371,8 @@ impl TtyState {
 /// offset machine; processes one [`WriteOp`] at a time so admit → write →
 /// advance is serialized without a handler-held lock. Refuses any op once the
 /// session has left `Running` (so a write queued just before `Closing` cannot
-/// apply afterwards), and is dropped — abandoning any in-flight write and its
-/// master clone — when teardown aborts it.
+/// apply afterwards), and is dropped - abandoning any in-flight write and its
+/// master clone - when teardown aborts it.
 async fn writer_loop(
     mut sink: Box<dyn AsyncWrite + Send + Unpin>,
     mut rx: mpsc::Receiver<WriteOp>,
@@ -458,7 +458,7 @@ async fn process_write(
     // Commit: advance the offset machine + report success ONLY while still
     // `Running`, holding the phase lock across the check + advance so it is
     // atomic w.r.t. `begin_closing`. If `Closing` raced in during the (awaited)
-    // write, the offset is left untouched and the op surfaces `StdinClosed` —
+    // write, the offset is left untouched and the op surfaces `StdinClosed` -
     // no offset advance / success ack after `Closing`.
     let next_offset = {
         let phase_guard = phase
@@ -484,7 +484,7 @@ async fn process_write(
 /// Inject VEOF and mark closed (idempotent). `offset` must match the current
 /// next-offset. The cursor is NOT advanced (VEOF is a control byte, not part of
 /// the stdin byte stream). Admission and the close commit are gated on the
-/// session still being `Running` (atomic w.r.t. `begin_closing` — H1).
+/// session still being `Running` (atomic w.r.t. `begin_closing` - H1).
 async fn process_close(
     sink: &mut Box<dyn AsyncWrite + Send + Unpin>,
     stdin: &Arc<Mutex<StdinLogic>>,
@@ -653,7 +653,7 @@ pub mod linux {
     /// so the interactive session is a real PAM login for the workload user
     /// (never root): `pam_systemd` provisions `XDG_RUNTIME_DIR`, the login
     /// shell sources the profile (`WAYLAND_DISPLAY`, …), and the requested
-    /// command runs inside that session — reproducing an interactive login
+    /// command runs inside that session - reproducing an interactive login
     /// (the surface `vm exec -it` drives).
     pub struct LinuxPtyProcessSpawner {
         helper_path: PathBuf,
@@ -800,8 +800,8 @@ pub mod linux {
             // BEFORE awaiting the status handshake. `Command::spawn(&mut self)`
             // leaves `cmd` owning the parent's copies of the slave (the child's
             // fd 0) and the status-pipe write end (the child's fd 1) until the
-            // Command is dropped. The status pipe only reaches EOF — the
-            // success signal `read_status_byte` awaits — once EVERY write end is
+            // Command is dropped. The status pipe only reaches EOF - the
+            // success signal `read_status_byte` awaits - once EVERY write end is
             // closed, so the parent MUST release its `status_w` copy here or
             // `ExecCreate` would hang forever on a successful exec (the child
             // closes its CLOEXEC status copy on `execve`, but the parent's copy
@@ -1294,7 +1294,7 @@ mod tests {
         let out2 = tty.write_stdin(2, b"cde", false).await.unwrap();
         assert_eq!(out2.accepted_len, 3);
         assert_eq!(out2.next_offset, 5);
-        // Exactly "abcde" — no byte re-delivered.
+        // Exactly "abcde" - no byte re-delivered.
         assert_eq!(lock_sink(&sink).written, b"abcde");
     }
 
@@ -1334,7 +1334,7 @@ mod tests {
         // THE deadlock case: a child that stops reading stdin fills the PTY,
         // so the writer task blocks indefinitely on poll_write. Teardown's
         // release_writer() MUST drop the master write clone by aborting the task
-        // — never by contending for a lock the blocked write holds — so it
+        // - never by contending for a lock the blocked write holds - so it
         // returns promptly and the blocked WriteStdin surfaces StdinClosed.
         let (tty, sink) = tty_state_with_sink(0, None);
         let tty = Arc::new(tty);

@@ -75,7 +75,7 @@ Broker failures on `priv.sock` use `BrokerErrorResponse`:
 Use this shape for bundle-resolution failures, live-handler failures, and other
 privileged-runtime errors that the daemon may need to re-render for operators.
 Because it stays on the private wire, it can be more specific than public
-operator prose — but it still must not leak secrets.
+operator prose - but it still must not leak secrets.
 
 ## Mutating dispatch surfaces
 

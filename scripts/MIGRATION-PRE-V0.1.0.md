@@ -1,12 +1,12 @@
-# migrate-d2b-v0.1.0.sh — historical pre-v0.1.0 migration record
+# migrate-d2b-v0.1.0.sh - historical pre-v0.1.0 migration record
 
 > **This document is a historical record** of the original
 > consumer-side migration from a vendored `/etc/nixos/modules/d2b/`
 > in-tree layout to consuming `github:vicondoa/d2b` `v0.1.0` as a
 > flake input. It was written against one specific deployment
 > (specific VM names, specific consumer flake checkout path) and is
-> preserved here for reference — and as a worked example of a
-> TPM-state-preserving migration — but it is **NOT** the general
+> preserved here for reference - and as a worked example of a
+> TPM-state-preserving migration - but it is **NOT** the general
 > migration guide.
 >
 > If you are migrating to d2b from raw `microvm.nix`, see
@@ -68,20 +68,20 @@ the raw URL if that's faster.
    - `/etc/nixos` is a git repo with a clean working tree.
    - Workload VMs (`work-aad`, `personal-dev`, `d2b-test`) are
      `inactive`.
-   - Net VMs (`work-router`, `personal-router`) are `inactive` — or the
+   - Net VMs (`work-router`, `personal-router`) are `inactive` - or the
      `--stop-net-vms` flag was passed, in which case they're stopped.
    - At least 2× the size of `/var/lib/d2b/` (or 2 GiB, whichever is
      larger) is free on the same filesystem.
-3. **Pre-rename stop phase** — stops every sidecar that could mutate
+3. **Pre-rename stop phase** - stops every sidecar that could mutate
    state during the snapshot window (this **must** happen before the
-   snapshot — see "Why stop before snapshot" below):
+   snapshot - see "Why stop before snapshot" below):
    - **Critical sidecars** (`swtpm@<vm>`, `microvm-virtiofsd@<vm>`,
-     `d2b-gpu@<vm>`) — stop failure is **fatal**. The script aborts
+     `d2b-gpu@<vm>`) - stop failure is **fatal**. The script aborts
      with prescriptive recovery instructions; no state has been modified
      yet so `--rollback` is not needed (just fix the sidecar and re-run).
    - **Other sidecars** (`d2b-snd@<vm>`, `d2b-store-sync@<vm>`,
-     `d2b-known-hosts-refresh@<vm>`) — stop failure is a warning.
-   - **USBIPD units** — both old naming (`usbipd-d2b-*`) and the new
+     `d2b-known-hosts-refresh@<vm>`) - stop failure is a warning.
+   - **USBIPD units** - both old naming (`usbipd-d2b-*`) and the new
      W2 naming (`d2b-sys-<env>-usbipd-{backend,proxy}.{service,socket}`),
      discovered dynamically via `systemctl list-units`.
    - Runs `sync` to flush all dirty pages before the snapshot.
@@ -97,7 +97,7 @@ the raw URL if that's faster.
    - When resuming a partial run that already recorded renames, the
      existing snapshot hashes are preserved as the verification anchor
      instead of being overwritten with current (post-rename) state.
-5. **Rename phase** — `mv` for same-filesystem (the typical case),
+5. **Rename phase** - `mv` for same-filesystem (the typical case),
    `cp -a --reflink=auto` + verify-checksums + `rm -rf` if the source
    and destination land on different filesystems. **Any temp/hash/diff
    failure in the cross-filesystem path is fatal BEFORE the source is
@@ -112,11 +112,11 @@ the raw URL if that's faster.
      `/var/lib/private/d2b/vms/<vm>/swtpm/` (TPM `DynamicUser` private
      state for `swtpm@.service`).
    - Runs `sync` to flush dirty pages.
-6. **Verification phase** — re-hashes every TPM state file (both public
+6. **Verification phase** - re-hashes every TPM state file (both public
    AND private) at its new location and compares with the snapshot.
    **Any mismatch → ABORT immediately with instructions to `--rollback`.**
    This is the non-negotiable gate that protects the TPM enrollment.
-7. **Unit-disable phase** — `systemctl disable --now` on the old-named
+7. **Unit-disable phase** - `systemctl disable --now` on the old-named
    units that the new flake will not recreate:
    - `swtpm@<vm>.service` (becomes `d2b-<vm>-swtpm.service`)
    - `d2b-snd@<vm>.service` (becomes `d2b-<vm>-snd.service`)
@@ -135,13 +135,13 @@ the raw URL if that's faster.
    - "Unit not found" is treated as an acceptable no-op (the script's
      worst-case list includes names that don't exist on every host).
    - Note: `microvm@work-aad`, `microvm@personal-dev`,
-     `microvm@d2b-test` are **not** disabled — the attribute key
+     `microvm@d2b-test` are **not** disabled - the attribute key
      stays unchanged in the new design, those units still exist.
-8. **Back-compat symlink cleanup** — removes
+8. **Back-compat symlink cleanup** - removes
    `/var/lib/microvms → /var/lib/d2b` and
    `/var/lib/swtpm → /var/lib/d2b/swtpm` (legacy shims from an
    earlier migration). Records them for rollback.
-9. **Marker write (atomic)** — writes `/var/lib/d2b/.migration-state.json`
+9. **Marker write (atomic)** - writes `/var/lib/d2b/.migration-state.json`
    via `mktemp` + `mv -T` so a crash mid-write can't leave a corrupt
    marker. Contains `migrationVersion: 1`, `appliedAt`, `fromVersion:
    "pre-v0.1.0"`, `toVersion: "v0.1.0"`, and a pointer to the snapshot
@@ -154,7 +154,7 @@ the raw URL if that's faster.
 
 The script's own forward-anomaly log (look for "anomaly #1") records
 that on the maintainer's host, `swtpm@work-aad.service` was observed
-**active** while `microvm@work-aad.service` was **inactive** — i.e.
+**active** while `microvm@work-aad.service` was **inactive** - i.e.
 `BindsTo` is not reliably propagating stops in the pre-v0.1.0 tree.
 If swtpm is still running when we hash, an in-flight TPM write between
 snapshot and rename would make the snapshot stale and silently break
@@ -166,7 +166,7 @@ first eliminates the race.
 Run through this before invoking the script:
 
 - [ ] **/etc/nixos is clean**: `git -C /etc/nixos status --porcelain` is
-      empty. Commit or stash any pending work first — the `nixos-usb-backup`
+      empty. Commit or stash any pending work first - the `nixos-usb-backup`
       service auto-commits dirty trees under a generic message, which
       would swallow your migration intent.
 - [ ] **The new flake builds**: in a checkout of the post-Phase-9
@@ -210,7 +210,7 @@ want the script to stop them for you:
 sudo -A bash /etc/nixos/scripts/migrate-d2b-v0.1.0.sh --stop-net-vms
 ```
 
-The script is idempotent — re-running after success exits cleanly, and
+The script is idempotent - re-running after success exits cleanly, and
 re-running after a partial failure resumes from the existing snapshot.
 
 ## If something goes wrong → rollback
@@ -229,7 +229,7 @@ Rollback:
 - Re-enables every recorded `systemctl disable`d unit.
 - Recreates the back-compat symlinks.
 - **Re-hashes BOTH public AND private swtpm state at the original paths**
-  and verifies they match the snapshot — this is symmetric with the
+  and verifies they match the snapshot - this is symmetric with the
   forward verification, so a corrupt private (`DynamicUser`) TPM dir
   cannot let rollback report false success.
 - Removes the migration marker so the forward run can be retried.
@@ -273,7 +273,7 @@ state you're in and which command(s) to run.
 The script **does not** run `nixos-rebuild`. That's the user's next step:
 
 1. Commit the `/etc/nixos` changes that consume the new flake (Phase 9
-   steps 1, 4–8 of the plan):
+   steps 1, 4-8 of the plan):
    - `flake.nix`: add `inputs.d2b.url = "github:vicondoa/d2b/v0.1.0";`
    - `flake.nix`: replace `./modules/d2b` import with
      `inputs.d2b.nixosModules.default`
@@ -297,7 +297,7 @@ The script **does not** run `nixos-rebuild`. That's the user's next step:
 
    d2b status work-aad
    # Expect a healthy status report. 'unknown unit' or 'unit not found'
-   # means the rebuild didn't pick up the new flake's unit definitions —
+   # means the rebuild didn't pick up the new flake's unit definitions -
    # check that flake inputs/imports are correct before bringing VMs up.
    ```
 4. Bring VMs back up:
@@ -329,25 +329,25 @@ sudo rm -rf /var/lib/d2b-migration-backup/<ts>
 
 ## Files
 
-- `migrate-d2b-v0.1.0.sh` — the migration script.
-- `README.md` — this file.
+- `migrate-d2b-v0.1.0.sh` - the migration script.
+- `README.md` - this file.
 
 ## Files written by the script (at runtime)
 
-- `/var/lib/d2b/.migration.lock` — flock guard (empty file).
-- `/var/lib/d2b/.migration-in-progress` — points at the snapshot
+- `/var/lib/d2b/.migration.lock` - flock guard (empty file).
+- `/var/lib/d2b/.migration-in-progress` - points at the snapshot
   while the script is running. Removed on clean finish or rollback.
-- `/var/lib/d2b/.migration-state.json` — written on success.
+- `/var/lib/d2b/.migration-state.json` - written on success.
   Subsequent runs treat `migrationVersion >= 1` as "already done".
-- `/var/lib/d2b-migration-backup/<ts>/` — snapshot dir:
-  - `hashes/<vm>__public.sha256` — SHA256s of `/var/lib/d2b/swtpm/<vm>/`.
-  - `hashes/<vm>__private.sha256` — SHA256s of `/var/lib/private/d2b/swtpm/<vm>/`.
-  - `tpm2_getcap/<vm>.txt` — captured TPM properties (or
+- `/var/lib/d2b-migration-backup/<ts>/` - snapshot dir:
+  - `hashes/<vm>__public.sha256` - SHA256s of `/var/lib/d2b/swtpm/<vm>/`.
+  - `hashes/<vm>__private.sha256` - SHA256s of `/var/lib/private/d2b/swtpm/<vm>/`.
+  - `tpm2_getcap/<vm>.txt` - captured TPM properties (or
     `swtpm_setup --print-capabilities` if the VM was stopped).
-  - `renames.tsv` — `<src>\t<dst>` per rename, in execution order.
-  - `disabled-units.txt` — one unit name per line.
-  - `removed-symlinks.tsv` — `<link>\t<target>` per removed symlink.
-- `/var/log/d2b-migration.log` — append-only run log.
+  - `renames.tsv` - `<src>\t<dst>` per rename, in execution order.
+  - `disabled-units.txt` - one unit name per line.
+  - `removed-symlinks.tsv` - `<link>\t<target>` per removed symlink.
+- `/var/log/d2b-migration.log` - append-only run log.
 
 ## Why not just rely on the existing `host.nix` activation migrations?
 
@@ -359,7 +359,7 @@ left behind (`/var/lib/microvms`, `/var/lib/swtpm`) are still present.
 
 This script is the next migration in that chain: `/var/lib/d2b/<vm>/`
 → `/var/lib/d2b/vms/<vm>/`. It is deliberately **not** an activation
-block in the new `vicondoa/d2b` flake — that flake is a clean
+block in the new `vicondoa/d2b` flake - that flake is a clean
 external module aimed at multiple consumers, and bundling a one-time
 host-specific data-migration into a reusable module is a bad fit. The
 migration is a one-shot, ships out-of-band, and the new flake assumes

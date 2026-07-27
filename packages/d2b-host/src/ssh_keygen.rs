@@ -129,7 +129,7 @@ pub fn probe_fingerprint(
 }
 
 /// Parse the `ssh-keygen -lf` output line into a structured
-/// [`SshKeyFingerprint`]. Pure — testable without invoking
+/// [`SshKeyFingerprint`]. Pure - testable without invoking
 /// `ssh-keygen`.
 ///
 /// Output shape (one line, fields whitespace-separated):

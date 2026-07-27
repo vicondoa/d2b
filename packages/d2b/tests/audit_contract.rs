@@ -6,7 +6,7 @@
 //!     set (a poison-pill that would `exit 99` if ever exec'd);
 //!   * `audit --strict` returns the frozen not-yet-implemented envelope (78);
 //!   * a daemon `auditResponse` frame is relayed verbatim to stdout (driven by
-//!     an in-process SOCK_SEQPACKET mock daemon — replaces the bash gate's
+//!     an in-process SOCK_SEQPACKET mock daemon - replaces the bash gate's
 //!     python mock);
 //!   * a real, KVM-free `d2bd serve --once` rejects a launcher-role peer
 //!     with `authz-audit-requires-admin` (32) and NO bash fallback.

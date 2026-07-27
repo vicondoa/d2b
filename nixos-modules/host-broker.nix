@@ -186,12 +186,12 @@ in
   # itself is NOT a no-op: it defaults `true` and still functionally
   # gates the daemon control plane (`d2bd`, daemon-config, and the
   # bundle-artifact group ownership) in `nixos-modules/host-daemon.nix`
-  # and the `*-json.nix` emitters — setting it `false` reverts the host
+  # and the `*-json.nix` emitters - setting it `false` reverts the host
   # to the unsupported pre-daemon legacy state. It is no longer
   # evidence-auto-flipped; `nixos-modules/assertions.nix` deliberately
   # does not warn on it (the option default makes `isDefined` true even
   # when consumers do not set it).
-  # The module body always materializes the broker — there is no
+  # The module body always materializes the broker - there is no
   # `mkIf` wrapper. The legacy gating semantics are documented in
   # `docs/how-to/migrate-nixos-to-daemon.md` § Recovery.
   config = {
@@ -360,7 +360,7 @@ in
         PrivateTmp = true;
         # ProtectHome=true also tmpfs-masks /run/user/<uid> which the
         # audio role needs to reach the
-        # Wayland user's PipeWire socket. Drop it — the broker
+        # Wayland user's PipeWire socket. Drop it - the broker
         # has no business reading /home regardless, and CAP_DAC_*
         # in the bounding set is gated by minijail profile per
         # spawned role anyway.
@@ -439,7 +439,7 @@ in
       # definition contributing to `systemd.services`. This broker module
       # is unconditional (no `mkIf` wrapper); only host-daemon.nix is
       # gated on `daemonExperimental.enable`. The guard is unnecessary: we
-      # unconditionally merge the wants/after entries here — they are
+      # unconditionally merge the wants/after entries here - they are
       # harmless if the `d2bd` unit is absent (e.g. when
       # `daemonExperimental.enable = false` drops the daemon config),
       # since systemd merges these at the unit-file level.

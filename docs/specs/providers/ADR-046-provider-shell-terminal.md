@@ -4,7 +4,7 @@
 | --- | --- |
 | Spec ID | `ADR-046-provider-shell-terminal` |
 | Parent | ADR 0046 |
-| Status | Proposed |
+| Status | Accepted |
 | Version | 2 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
@@ -195,13 +195,33 @@ spec:
   maxAttached: 1
   outputRingCapacity: 262144
 status:
+  observedGeneration: 1
   phase: Ready
-  detail:
-    kind: CapacityReady
-  activeSessions: 2
-  attachedSessions: 1
-  capacityRemaining: 6
-  attachedCapacityRemaining: 0
+  conditions:
+    - type: Ready
+      status: "True"
+  lastReconciledAt: 2026-07-22T00:00:00.000Z
+  startedAt: 2026-07-22T00:00:00.000Z
+  completedAt: null
+  outcome: null
+  resource:
+    detail:
+      kind: CapacityReady
+    activeSessions: 2
+    attachedSessions: 1
+    capacityRemaining: 6
+    attachedCapacityRemaining: 0
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 ### Spec schema
@@ -210,7 +230,7 @@ status:
 | --- | --- | --- | --- | --- | --- |
 | `apiVersion` | `string` | Yes | `resources.d2bus.org/v3` | Exact | Resource API version. |
 | `type` | `string` | Yes | `shell-terminal.d2bus.org.ShellPool` | Exact | Vendor-qualified ResourceType identifier. |
-| `metadata.name` | `ResourceName` | Yes | None | `^[a-z][a-z0-9-]*$`, max 63 | Pool resource name. |
+| `metadata.name` | `ResourceName` | Yes | None | `^[a-z][a-z0-9-]*$`, 1 to 63 bytes | Pool resource name. |
 | `metadata.zone` | `ResourceName` | Yes | None | Existing Zone | Owning Zone. |
 | `metadata.ownerRef` | `ResourceRef` | No | `Provider/shell-terminal` | Provider or higher-level owner | Default owner is the provider. |
 | `spec.providerRef` | `ResourceRef` | Yes | `Provider/shell-terminal` | Exact | Provider identity. |
@@ -350,14 +370,34 @@ spec:
   outputRingCapacity: 262144
   desiredLifecycle: running
 status:
+  observedGeneration: 1
   phase: Ready
-  detail:
-    kind: ReadyDetached
-  supervisorRef: Process/shell-terminal--supervisor--0d3b0e42
-  supervisorGeneration: 1
-  attachCount: 0
-  outputRingBytes: 8192
-  outputRingEvictedBytes: 0
+  conditions:
+    - type: Ready
+      status: "True"
+  lastReconciledAt: 2026-07-22T00:00:00.000Z
+  startedAt: 2026-07-22T00:00:00.000Z
+  completedAt: null
+  outcome: null
+  resource:
+    detail:
+      kind: ReadyDetached
+    supervisorRef: Process/shell-terminal--supervisor--0d3b0e42
+    supervisorGeneration: 1
+    attachCount: 0
+    outputRingBytes: 8192
+    outputRingEvictedBytes: 0
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 ### Spec schema
@@ -366,7 +406,7 @@ status:
 | --- | --- | --- | --- | --- | --- |
 | `apiVersion` | `string` | Yes | `resources.d2bus.org/v3` | Exact | Resource API version. |
 | `type` | `string` | Yes | `shell-terminal.d2bus.org.ShellSession` | Exact | Vendor-qualified ResourceType identifier. |
-| `metadata.name` | `ResourceName` | Yes | Controller-generated or Nix-specified | `^[a-z][a-z0-9-]*$`, max 63 | Stable session resource name. |
+| `metadata.name` | `ResourceName` | Yes | Controller-generated or Nix-specified | `^[a-z][a-z0-9-]*$`, 1 to 63 bytes | Stable session resource name. |
 | `metadata.zone` | `ResourceName` | Yes | None | Existing Zone | Owning Zone. |
 | `metadata.ownerRef` | `ResourceRef` | Yes | `shell-terminal.d2bus.org.ShellPool/<name>` | pool reference | Owning pool. |
 | `spec.providerRef` | `ResourceRef` | Yes | `Provider/shell-terminal` | Exact | Provider identity. |
@@ -560,7 +600,7 @@ spec:
     class: on-failure
     backoffBase: "1s"
     backoffMax: "60s"
-    backoffMultiplier: 2.0
+    backoffMultiplierMilli: 2000
     maxRestarts: null
     resetAfter: "300s"
   readiness:
@@ -640,7 +680,7 @@ d2b.zones.dev.resources.shell-terminal-controller = {
       class = "on-failure";
       backoffBase = "1s";
       backoffMax = "60s";
-      backoffMultiplier = 2.0;
+      backoffMultiplierMilli = 2000;
       maxRestarts = null;
       resetAfter = "300s";
     };
@@ -1399,10 +1439,12 @@ handles into the controller.
 
 Per D094 and `ADR-046-validation-and-delivery` §10.16, this Provider's `src/`
 unit tests and `tests/*.rs` hermetic suite are fast, in-process, deterministic,
-and parallel-safe: an individual normal test has p95 ≤50 ms with no wall-clock
+and parallel-safe: an individual normal test has an advisory wall-clock p95
+diagnostic threshold of <=50 ms; gate enforcement is aggregate per-crate
+process CPU only. There is no wall-clock
 sleep, and `cargo test -p d2b-provider-shell-terminal --lib --tests` completes
-in ≤2 s warm-cache execution time (compilation excluded). They use a
-deterministic fake clock/RNG and the toolkit fakes/FakeEffectPort only — no
+in ≤3 s warm-cache execution time (compilation excluded). They use a
+deterministic fake clock/RNG and the toolkit fakes/FakeEffectPort only - no
 process spawn, container, network, DBus, systemd, broker daemon, Nix eval/build,
 KVM, USB/GPU/TPM hardware, or live cloud, and no filesystem tree beyond tiny
 temp fixtures. Any scenario needing those lives only in `integration/`, which
@@ -1410,7 +1452,7 @@ keeps a lane timeout/budget, parallel isolation, and fake external services by
 default; such a need is re-placed into `integration/`, never given a sleep,
 larger timeout, or `#[ignore]`. Bounded crypto/property tests are the only
 classified exception, each named with a capped case count and a declared higher
-per-test budget.
+per-test advisory threshold.
 
 ## Implementation work items
 
@@ -1418,27 +1460,27 @@ per-test budget.
 | Field | Value |
 | --- | --- |
 | Dependency/owner | Resource schemas area; owned by `d2b-provider-shell-terminal` resource modules. |
-| Current source | None — net-new v3 qualified `ShellPool` and `ShellSession` resource schemas; superseded draft and legacy shell code do not define these canonical resources. |
+| Current source | None - net-new v3 qualified `ShellPool` and `ShellSession` resource schemas; superseded draft and legacy shell code do not define these canonical resources. |
 | Reuse action | create |
 | Destination | `packages/d2b-provider-shell-terminal/src/resources/{pool,session}.rs` |
 | Detailed design | Implement `shell-terminal.d2bus.org.ShellPool` and `shell-terminal.d2bus.org.ShellSession` schemas with qualified names, common phases, and typed detail fields. |
 | Integration | Nix resource compiler, resource API admission, controller reconcile, status writers, and d2b-bus routing all consume the qualified pool/session schemas. Integration path: `packages/d2b-provider-shell-terminal/integration/resource-shape/`. |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
 | Validation | `packages/d2b-provider-shell-terminal/tests/resource_schema.rs` |
-| Removal proof | None — net-new; no prior owner to remove. |
+| Removal proof | None - net-new; no prior owner to remove. |
 
 ### ADR046-sterm-002
 | Field | Value |
 | --- | --- |
 | Dependency/owner | Controller binary area; owned by `d2b-provider-shell-terminal` controller and core Operation ledger integration. |
-| Current source | None — net-new v3 controller; legacy guestd and unsafe-local helper shell paths are not the controller/state authority. |
+| Current source | None - net-new v3 controller; legacy guestd and unsafe-local helper shell paths are not the controller/state authority. |
 | Reuse action | create |
 | Destination | `packages/d2b-provider-shell-terminal/src/bin/d2b-shell-terminal-controller.rs` |
 | Detailed design | Implement `d2b-shell-terminal-controller` with pool/session reconcile loops; assert ProviderStateSet is empty; publish bounded non-secret operational state to resource status and the core Operation ledger; no controller Provider state Volume or `/state` mount exists. Primary reuse disposition: `create`. Preserved source-plan detail: net-new controller; preserve status-first ProviderStateSet-empty rule. |
 | Integration | Core ProviderDeployment starts the controller Process; controller reconciles ShellPool/ShellSession resources, writes status, registers routes, and records operations without a Provider state Volume. Integration path: `packages/d2b-provider-shell-terminal/integration/controller-restart/`. |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
 | Validation | `packages/d2b-provider-shell-terminal/tests/controller_reconcile.rs` |
-| Removal proof | None — net-new controller; legacy controller-equivalent state owner does not exist. |
+| Removal proof | None - net-new controller; legacy controller-equivalent state owner does not exist. |
 
 ### ADR046-sterm-003
 | Field | Value |
@@ -1471,14 +1513,14 @@ per-test budget.
 | Field | Value |
 | --- | --- |
 | Dependency/owner | OpenSession lifecycle area; owned by controller service implementation. |
-| Current source | None — net-new v3 `OpenSession` lifecycle; legacy shell protocols do not create ShellSession resources with inherited-field freeze. |
+| Current source | None - net-new v3 `OpenSession` lifecycle; legacy shell protocols do not create ShellSession resources with inherited-field freeze. |
 | Reuse action | create |
 | Destination | `packages/d2b-provider-shell-terminal/src/service/open_session.rs` |
 | Detailed design | Create sessions from pools, freeze inherited fields, and return `supervisorGeneration` to callers. |
 | Integration | `shell-terminal.v3.OpenSession` validates pool capacity and policy, creates ShellSession and supervisor Process, registers route data, and returns session/supervisor references to clients. Integration path: `packages/d2b-provider-shell-terminal/integration/open-session/`. |
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
 | Validation | `packages/d2b-provider-shell-terminal/tests/open_session.rs` |
-| Removal proof | None — net-new resource lifecycle; no prior owner to remove. |
+| Removal proof | None - net-new resource lifecycle; no prior owner to remove. |
 
 ### ADR046-sterm-006
 | Field | Value |
@@ -1551,14 +1593,14 @@ per-test budget.
 | Field | Value |
 | --- | --- |
 | Dependency/owner | Audit and telemetry area; owned by shell-terminal audit/telemetry modules. |
-| Current source | None — net-new v3 closed-label/redacted observability for shell-terminal; legacy shell paths must not leak names, paths, PIDs, or terminal bytes. |
+| Current source | None - net-new v3 closed-label/redacted observability for shell-terminal; legacy shell paths must not leak names, paths, PIDs, or terminal bytes. |
 | Reuse action | create |
 | Destination | `packages/d2b-provider-shell-terminal/src/{audit,telemetry}.rs` |
 | Detailed design | Implement closed-label metrics, redacted spans, and audit events with no usernames, session names, paths, or terminal bytes. Primary reuse disposition: `create`. Preserved source-plan detail: net-new redacted observability. |
 | Integration | Reconcile, OpenSession, Attach, Detach, Kill, terminal exit, degradation, and Host posture warnings emit only digest/enum surfaces consumed by audit and OTEL collectors. Integration path: `packages/d2b-provider-shell-terminal/integration/support-redaction/`. |
 | Data migration | Full d2b 3.0 reset; no v2 audit/telemetry state import. |
 | Validation | `packages/d2b-provider-shell-terminal/tests/redaction.rs` |
-| Removal proof | None — net-new observability surface; legacy paths must be removed or adapted to pass redaction tests. |
+| Removal proof | None - net-new observability surface; legacy paths must be removed or adapted to pass redaction tests. |
 
 ### ADR046-sterm-012
 | Field | Value |
@@ -1623,7 +1665,7 @@ Per D094, each replaced current-code test is retired with an explicit
 keep/adapt/move/delete disposition and a removal gate: the minimum reusable
 semantic assertions migrate into this crate's hermetic `tests/`, and the old
 duplicate tests, shell gates, fixtures, static artifacts, CI jobs, and manifest
-entries are deleted once successor coverage and the removal proof pass —
+entries are deleted once successor coverage and the removal proof pass -
 updating `tests/layer1-jobs.json`, the closed gate manifests, the
 flake/matrix/Nix-unit pins, the generated ledgers, and the CI workflow shards.
 Old and new suites never run in parallel indefinitely.
@@ -1648,21 +1690,37 @@ spec:
 status:
   observedGeneration: 1
   phase: Ready
-  detail:
-    kind: IsolationPostureWarning
-    message: host execution target reports non-isolated posture
   conditions:
     - type: Ready
       status: "True"
     - type: IsolationPostureWarning
       status: "True"
-  executionRef: Host/workstation
-  userRef: User/alice
-  activeSessions: 1
-  attachedSessions: 1
-  capacityRemaining: 3
-  attachedCapacityRemaining: 0
-  isolationPosture: none
+  lastReconciledAt: 2026-07-22T00:00:00.000Z
+  startedAt: 2026-07-22T00:00:00.000Z
+  completedAt: null
+  outcome: null
+  resource:
+    detail:
+      kind: IsolationPostureWarning
+      message: host execution target reports non-isolated posture
+    executionRef: Host/workstation
+    userRef: User/alice
+    activeSessions: 1
+    attachedSessions: 1
+    capacityRemaining: 3
+    attachedCapacityRemaining: 0
+    isolationPosture: none
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 ```yaml
@@ -1684,8 +1742,6 @@ spec:
 status:
   observedGeneration: 3
   phase: Ready
-  detail:
-    kind: ReadyAttached
   conditions:
     - type: Ready
       status: "True"
@@ -1695,11 +1751,29 @@ status:
       status: "True"
     - type: Attached
       status: "True"
-  supervisorRef: Process/shell-terminal--supervisor--0d3b0e42
-  supervisorGeneration: 7
-  attachCount: 1
-  outputRingBytes: 65536
-  outputRingEvictedBytes: 8192
+  lastReconciledAt: 2026-07-22T00:00:00.000Z
+  startedAt: 2026-07-22T00:00:00.000Z
+  completedAt: null
+  outcome: null
+  resource:
+    detail:
+      kind: ReadyAttached
+    supervisorRef: Process/shell-terminal--supervisor--0d3b0e42
+    supervisorGeneration: 7
+    attachCount: 1
+    outputRingBytes: 65536
+    outputRingEvictedBytes: 8192
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 3
+    targetGeneration: 3
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 ## Appendix B: controller and supervisor interaction sequence

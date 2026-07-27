@@ -1,4 +1,4 @@
-# nix-unit case-presence pins (common — present on every system).
+# nix-unit case-presence pins (common - present on every system).
 # Regenerate with: make nix-unit-pin
 activation-runtime-tmpfiles/activation-preserves-run-parent-daemon-mask
 activation-runtime-tmpfiles/audio-acls-in-tmpfiles-not-activation
@@ -7,6 +7,7 @@ activation-runtime-tmpfiles/audio-locks-dir-d2b-traversal
 activation-runtime-tmpfiles/audio-state-dirs-no-root-posture
 activation-runtime-tmpfiles/gpu-dir
 activation-runtime-tmpfiles/gpu-parent
+activation-runtime-tmpfiles/heavy-gate-provisioning
 activation-runtime-tmpfiles/manifest-audio-service-null
 activation-runtime-tmpfiles/net-var-img-broker-owned
 activation-runtime-tmpfiles/qemu-media-role-acl-script-repairs-run-write-mask

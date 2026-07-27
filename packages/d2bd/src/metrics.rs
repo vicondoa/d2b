@@ -193,7 +193,7 @@ pub const METRIC_INVENTORY: &[MetricDescriptor] = &[
     },
 ];
 
-/// Lookup a descriptor by name. `None` for any unknown name —
+/// Lookup a descriptor by name. `None` for any unknown name -
 /// callers MUST only emit metrics declared in [`METRIC_INVENTORY`].
 pub fn descriptor(name: &str) -> Option<&'static MetricDescriptor> {
     METRIC_INVENTORY.iter().find(|m| m.name == name)
@@ -518,7 +518,7 @@ fn render_float(v: f64) -> String {
 
 /// HTTP response for a `GET /metrics` request. Other paths return
 /// `404 Not Found`; non-GET methods return `405 Method Not Allowed`.
-/// The parser is intentionally minimal — the daemon's accept loop
+/// The parser is intentionally minimal - the daemon's accept loop
 /// gates everything else (peer creds, frame size). Returns the full
 /// HTTP/1.1 response as bytes ready to write back to the client.
 pub fn metrics_handler(request: &[u8], registry: &Registry) -> Vec<u8> {
@@ -543,7 +543,7 @@ pub fn metrics_handler(request: &[u8], registry: &Registry) -> Vec<u8> {
 /// daemon-internal `d2b_daemon_*` registry, appends the per-VM
 /// Cloud Hypervisor stats produced by [`crate::ch_stats`]. This is the
 /// seam that lets the daemon replace the legacy `d2b-ch-exporter.service`
-/// singleton — same metric names (`d2b_vm_ch_api_up`,
+/// singleton - same metric names (`d2b_vm_ch_api_up`,
 /// `d2b_vm_state`, `d2b_vm_running`), bounded
 /// `{vm, env, role}` cardinality, no separate listener.
 pub fn metrics_handler_with_ch_stats(
@@ -704,9 +704,9 @@ mod tests {
         // Every label key the daemon's core registry renders must be in
         // an APPROVED, low-cardinality allowlist. This is an allowlist
         // (not a forbidden-list on an empty registry), so a NEW metric
-        // that introduces an unapproved label key — or a guest-control
+        // that introduces an unapproved label key - or a guest-control
         // closed-enum field (health_state, ...) promoted to a
-        // metric label — fails this test. The allowlist is hardcoded and
+        // metric label - fails this test. The allowlist is hardcoded and
         // independent of METRIC_INVENTORY so widening the inventory cannot
         // silently widen the allowlist.
         //

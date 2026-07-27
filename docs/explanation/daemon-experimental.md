@@ -1,4 +1,4 @@
-# `d2b.daemonExperimental.enable` — v1.0 status
+# `d2b.daemonExperimental.enable` - v1.0 status
 
 ## v1.0 (ADR 0015): on by default
 
@@ -33,7 +33,7 @@ The daemon dispatches every mutating verb through the broker socket:
   cloud-hypervisor, swtpm-flush + long-lived swtpm, vsock-relay, audio,
   GPU, video, USBIP sidecars).
 - Host reconcile: `host install` via broker `RunHostInstall` (wired
-  live). `host prepare / destroy --apply` are **not yet wired** — they
+  live). `host prepare / destroy --apply` are **not yet wired** - they
   return `daemon-down` (exit 1) today; use `--dry-run` for now. Their
   broker reconcile-op dispatch (`ApplyNftables` / `ApplyRoute` /
   `ApplySysctl` / `UpdateHostsFile` / `ApplyNmUnmanaged`) is
@@ -57,6 +57,6 @@ env-var escape hatch in v1.0; the `D2B_LEGACY_BASH_OPT_IN=1` /
 
 ## See also
 
-- [ADR 0015 — daemon-only clean-break](../adr/0015-daemon-only-clean-break.md)
+- [ADR 0015 - daemon-only clean-break](../adr/0015-daemon-only-clean-break.md)
 - [v0 → v1 migration guide](../how-to/migrate-d2b-v0-to-v1.md)
 - [CHANGELOG 1.0.0](../../CHANGELOG.md)

@@ -2,7 +2,7 @@
 //! carries a redacted post-auth audit envelope with mandatory realm,
 //! authorization scope, and principal context. Pre-auth admission failures use
 //! a separate redacted admission record; only that shape may omit a principal.
-//! These records carry **only bounded metadata** — never argv, stdio, log
+//! These records carry **only bounded metadata** - never argv, stdio, log
 //! bytes, Wayland buffers, secrets, or store paths.
 
 use crate::capability::Capability;

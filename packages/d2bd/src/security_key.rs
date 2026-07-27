@@ -8,9 +8,9 @@
 //! manages the long-lived session state on top of that fd: it accepts
 //! per-VM connections over per-VM Unix sockets (Cloud Hypervisor
 //! bridges guest VSOCK to a host Unix socket), authenticates the
-//! connection by verifying the peer process credentials (`SO_PEERCRED`
-//! — never an in-band guest claim), and relays 64-byte CTAPHID reports
-//! between the guest and the physical token.
+//! connection by verifying the peer process credentials
+//! (`SO_PEERCRED`, never an in-band guest claim), and relays 64-byte
+//! CTAPHID reports between the guest and the physical token.
 //!
 //! ## Security properties
 //!
@@ -406,7 +406,7 @@ impl SecurityKeyState {
 /// `SCM_RIGHTS`.
 ///
 /// Built from an [`OwnedFd`] via the safe `std::fs::File: From<OwnedFd>`
-/// conversion — this crate's workspace lints `forbid(unsafe_code)`, so
+/// conversion - this crate's workspace lints `forbid(unsafe_code)`, so
 /// no raw fd reconstruction is used anywhere in this module.
 #[derive(Debug)]
 pub struct HidrawDevice {
@@ -603,7 +603,7 @@ impl std::error::Error for PeerAuthError {}
 /// Verify that the connecting peer's `SO_PEERCRED` identity matches
 /// the expected per-VM socket owner.
 ///
-/// The per-VM socket *path* is never trusted as identity on its own —
+/// The per-VM socket *path* is never trusted as identity on its own -
 /// the CH VSOCK↔Unix bridge process's real kernel-verified uid/gid must
 /// match what the trusted bundle recorded for that VM's socket.
 pub fn authenticate_peer<F: std::os::fd::AsFd>(
@@ -1108,7 +1108,7 @@ mod tests {
     fn lease_release_wrong_vm_does_not_release() {
         let mut state = SecurityKeyState::new("test-selector");
         let id = state.try_acquire_lease("vm-a").unwrap();
-        // vm-b tries to release vm-a's lease — must be a no-op.
+        // vm-b tries to release vm-a's lease - must be a no-op.
         state.release_lease("vm-b", id);
         assert!(matches!(state.lease, LeaseState::Leased { .. }));
     }

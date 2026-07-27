@@ -1,4 +1,4 @@
-# d2b.vms.<vm>.* — per-VM submodule schema. Includes the
+# d2b.vms.<vm>.* - per-VM submodule schema. Includes the
 # component toggles (graphics.enable / tpm.enable / usbip.* /
 # audio.* / audit.*) whose matching files under
 # `nixos-modules/components/`
@@ -451,7 +451,7 @@ in
           example = lib.literalExpression "./vms/work.guest.nix";
           description = ''
             Path to a dedicated **guest-editable** NixOS module holding
-            this VM's in-guest OS layer — the software installed and run
+            this VM's in-guest OS layer - the software installed and run
             inside the VM (`environment.systemPackages`, `services.*`,
             in-guest `users.users.*`, `programs.*`, files, desktop).
 
@@ -466,7 +466,7 @@ in
             This is the surface that the in-VM config-sync workflow
             (`d2b config sync` / `diff` / `approve`) edits: an
             operator can change it from inside the VM, sync the change
-            back to the host, review it, and approve it — without ever
+            back to the host, review it, and approve it - without ever
             being able to escape the VM's own OS boundary.
           '';
         };
@@ -771,7 +771,7 @@ in
             Use `d2b.vms.<vm>.ui.border.activeColor` instead.
 
             Set to `null` (the default) to use the deterministic
-            palette color derived from the VM name — each VM name
+            palette color derived from the VM name - each VM name
             maps to a stable distinct color so the generated KDL
             works without any per-VM configuration.
 
@@ -834,7 +834,7 @@ in
 
           Requires `d2b.host.usb.securityKey.enable = true` at the site
           level (enforced by an eval-time assertion). Mutually exclusive
-          with `usbip.yubikey` for the same VM — both cannot be declared
+          with `usbip.yubikey` for the same VM - both cannot be declared
           simultaneously (enforced by an eval-time assertion). Only
           supported for `runtime.kind = "nixos"` VMs.
         '';
@@ -964,22 +964,22 @@ in
           default = 10;
           description = ''
             Workload-VM IP index within its env's LAN subnet. The
-            VM's IP = <lan-subnet-prefix>.<index>. Range 10–250 to
+            VM's IP = <lan-subnet-prefix>.<index>. Range 10-250 to
             leave room for the net VM (.1), gateway-ish reservations
-            (.2–.9), and DHCP pool overflow (.251–.254). Must be
+            (.2-.9), and DHCP pool overflow (.251-.254). Must be
             unique within an env.
           '';
         };
 
         # DEPRECATED. Pre-env hint used by the CLI to know the VM's
         # IP. With `env` set, the framework derives the IP and the
-        # CLI reads it from the same source — don't set this.
+        # CLI reads it from the same source - don't set this.
         staticIp = lib.mkOption {
           type = lib.types.nullOr lib.types.str;
           default = null;
           example = "10.10.0.10";
           description = ''
-            DEPRECATED. Use `env` + `index` instead — those derive
+            DEPRECATED. Use `env` + `index` instead - those derive
             the IP and propagate it everywhere (CLI manifest,
             dnsmasq reservation, guest networkd). Setting both
             `staticIp` and `env` is an error.
@@ -1020,7 +1020,7 @@ in
 
               Setting this to `null` AND `d2b.site.keysDir` to
               an unreadable location is the only way to opt out of
-              the framework-managed key entirely — `d2b` CLI
+              the framework-managed key entirely - `d2b` CLI
               subcommands that need SSH (`keys rotate`, `switch`,
               …) will refuse to run when the resolved path doesn't
               exist.
@@ -1049,8 +1049,8 @@ in
             Per-VM authorized SSH keys, merged with the global
             `d2b.site.userAuthorizedKeys` set. Both lists are
             handed to the VM's `d2b-load-host-keys.service`,
-            which writes them — together with the framework's own
-            d2b-managed pubkey for this VM — into the SSH user's
+            which writes them - together with the framework's own
+            d2b-managed pubkey for this VM - into the SSH user's
             `authorized_keys` file.
 
             Entries follow the same shape as
@@ -1088,8 +1088,8 @@ in
               guest-control binaries are installed for every VM; this option
               opts the VM into the live guest-control plane (credential share
               plus guestd), which serves the readiness Health probe, `config
-              sync` reads (`ReadGuestFile`), and — when `guest.exec` is also
-              enabled — admin guest exec. All of it runs over the
+              sync` reads (`ReadGuestFile`), and - when `guest.exec` is also
+              enabled - admin guest exec. All of it runs over the
               authenticated guest-control vsock, not SSH.
             '';
           };
@@ -1124,12 +1124,12 @@ in
 
               This wires the guestd exec service so admin operators (callers in
               `d2b.site.adminUsers`) can run `d2b vm exec` against this
-              VM over the authenticated guest-control vsock — no SSH. Exec is
+              VM over the authenticated guest-control vsock - no SSH. Exec is
               off by default; enabling it requires `guest.control.enable = true`
               and a workload user (`ssh.user`).
 
               Every exec runs the requested command as the VM's workload user
-              (`ssh.user`) — never as root — inside a real PAM login session
+              (`ssh.user`) - never as root - inside a real PAM login session
               (`systemd-run --property=PAMName=login --uid=<user>`), so the
               command sees the same environment an SSH login would
               (`XDG_RUNTIME_DIR`, the login-shell profile, …). Users elevate
@@ -1139,7 +1139,7 @@ in
 
           # Tombstones (removed options): guest-control exec now always
           # runs as the VM's workload user (`ssh.user`) in a PAM login
-          # session — never root — and there is no per-VM exec user
+          # session - never root - and there is no per-VM exec user
           # allowlist. These hidden stubs keep legacy assignments landing
           # on the friendly migration assertions in assertions.nix instead
           # of a cryptic "option does not exist" module-system error.
@@ -1223,7 +1223,7 @@ in
             example = "default";
             description = ''
               Default persistent shell session name used when an attach/detach
-              request omits `--name`. The identifier is 1–64 ASCII bytes, starts
+              request omits `--name`. The identifier is 1-64 ASCII bytes, starts
               with `[A-Za-z0-9_]`, and then allows `[A-Za-z0-9._-]`.
             '';
           };

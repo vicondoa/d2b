@@ -27,11 +27,11 @@ For the option schema and CLI contract, see
 
 ## 1. The problem: one YubiKey, two Firefox VMs
 
-A d2b workstation typically has several Firefox VMs — a `personal-dev` realm
-and a `work-aad` realm — and a single physical YubiKey used for WebAuthn
+A d2b workstation typically has several Firefox VMs - a `personal-dev` realm
+and a `work-aad` realm - and a single physical YubiKey used for WebAuthn
 authentication on sites like GitHub, GitLab, and corporate identity providers.
 
-The naive solution — USBIP passthrough — transfers the physical USB device into
+The naive solution - USBIP passthrough - transfers the physical USB device into
 one VM at a time. Switching VMs requires an explicit `d2b usb detach` / `d2b usb attach`
 cycle, during which Firefox in both VMs sees the key disappear and reappear.
 This is disruptive when switching contexts rapidly.
@@ -57,11 +57,11 @@ All USB transfer methods model one driver/client per device at a time:
   model.
 
 - **SPICE USB redirection** and commercial USB-over-IP stacks (VirtualHere,
-  USB/IP derivatives): same model — one client, one owner.
+  USB/IP derivatives): same model - one client, one owner.
 
 There is no Linux kernel API for USB device *sharing* at the URB level. CTAP
 tokens are HID devices, and the HID subsystem does allow multiple `hidraw`
-readers, but only at the host kernel level — not across KVM guest isolation
+readers, but only at the host kernel level - not across KVM guest isolation
 boundaries.
 
 ### The wrong abstraction for FIDO/WebAuthn
@@ -98,7 +98,7 @@ d2b-fido-front (guest frontend, daemon-supervised DAG node)
   ▼
 AF_VSOCK (CID = VM index, port 14319)
   ▼
-d2bd (host daemon) — lease serializer
+d2bd (host daemon) - lease serializer
   │  one active ceremony per physical key
   │  queues, timeouts, cancellation, audit log
   ▼

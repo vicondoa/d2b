@@ -36,8 +36,8 @@
 #              else /run/d2b-runner                (when EUID == 0)
 #              else $HOME/.local/state/d2b-runner  (otherwise, per XDG)
 #   RUN_DIR  = $RUN_ROOT/<RUN_ID>
-#     aggregate.log    — the shared lib.sh log (D2B_LOG) for this run
-#     <scriptname>.log — per-script stdout+stderr
+#     aggregate.log    - the shared lib.sh log (D2B_LOG) for this run
+#     <scriptname>.log - per-script stdout+stderr
 # RUN_ROOT is created mode 0700 owned by $EUID and validated on every
 # run; the prior /tmp/d2b-runner path is no longer used (it was
 # world-writable and let an unprivileged user influence root's log
@@ -50,7 +50,7 @@
 # RUN_DIR and older successful runs are pruned (newest 10 kept).
 # Failed runs are always retained for diagnostics.
 #
-# Honors D2B_VMS and D2B_RUN_ROOT — D2B_VMS is passed through to children
+# Honors D2B_VMS and D2B_RUN_ROOT - D2B_VMS is passed through to children
 # via the environment so the live integration scripts target the same VM set;
 # D2B_RUN_ROOT pins the log root (useful for CI).
 
@@ -58,6 +58,17 @@ set -uo pipefail
 
 HERE=$(dirname "$(readlink -f "$0")")
 
+# --- heavy-gate sole-use semaphore (ADR 0046) ------------------------------
+# This aggregating runner drives the live store/audio/security lanes, which
+# mutate real host and daemon state. It must never bypass the sole-use
+# heavy-gate semaphore. The mere presence of D2B_HEAVY_GATE is not trusted:
+# the shared helper verifies this process genuinely holds a slot before
+# proceeding, and re-execs through the gate exactly once when it does not so
+# the child lanes inherit the already-held slot instead of re-gating.
+_hg_root=$(cd "$HERE/.." && pwd)
+# shellcheck source=tests/tools/heavy-gate-reexec.sh
+. "$_hg_root/tests/tools/heavy-gate-reexec.sh"
+d2b_heavy_gate_reexec "$_hg_root" "$0" "$@"
 # Fixed-order layers. static.sh has no --quick flag and is cheap, so it
 # always runs as-is. The live store and audio gates both speak the
 # --quick / --only / --list dispatcher contract.
@@ -206,7 +217,7 @@ ensure_run_root() {
   local d="$1"
   local is_override="$2"
 
-  # Refuse a raw RUN_ROOT that is itself a symlink (round-3 behaviour):
+  # Refuse a raw RUN_ROOT that is itself a symlink (earlier behaviour):
   # we want the user to fix the symlink manually, not silently chase it
   # to wherever it points.
   if [ -L "$d" ]; then
@@ -410,7 +421,7 @@ run_one() {
 # ---------- main ----------
 
 if [ "$mode" = "list" ]; then
-  printf 'd2b test runner — available tests\n\n'
+  printf 'd2b test runner - available tests\n\n'
 fi
 
 pass=0

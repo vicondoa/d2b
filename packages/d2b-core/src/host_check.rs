@@ -11,6 +11,14 @@ use std::{
     process::{Command, Output, Stdio},
 };
 
+const SYSTEM_TOOL_PATH: &str = "/run/current-system/sw/bin:/usr/bin:/usr/sbin:/bin:/sbin";
+
+fn system_tool_command(program: &str) -> Command {
+    let mut command = Command::new(program);
+    command.env("PATH", SYSTEM_TOOL_PATH);
+    command
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostCheckReport {
     pub strict: bool,
@@ -325,7 +333,7 @@ impl ProbeSource {
         {
             return Ok(value);
         }
-        let output = Command::new("nft")
+        let output = system_tool_command("nft")
             .args(["list", "ruleset", "--json"])
             .env_remove("NOTIFY_SOCKET")
             .stdout(Stdio::piped())
@@ -392,7 +400,7 @@ impl ProbeSource {
                 ServiceProbeState::Inactive
             });
         }
-        let output = Command::new("systemctl")
+        let output = system_tool_command("systemctl")
             .args(["is-active", kind.unit()])
             .env_remove("NOTIFY_SOCKET")
             .stdout(Stdio::piped())
@@ -1162,7 +1170,7 @@ mod module_sysctl_tests {
     fn br_netfilter_sysctl_missing_fails_closed() {
         // br_netfilter loaded but /proc/sys returned None (missing
         // sysctl). The previous behavior silently skipped enforcement;
-        // this makes it fail closed — operators must explicitly set the
+        // this makes it fail closed - operators must explicitly set the
         // documented value.
         let fixture = baseline_fixture(true);
         let host = br_netfilter_host(true);

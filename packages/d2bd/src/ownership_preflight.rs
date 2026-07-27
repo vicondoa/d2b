@@ -45,7 +45,7 @@ use std::path::Path;
 /// `nixos-modules/options-ownership-matrix.nix`.
 ///
 /// Kept as plain data so the daemon can construct the canonical matrix
-/// without depending on a bundle-format change — the per-bundle override
+/// without depending on a bundle-format change - the per-bundle override
 /// path lands in a follow-up commit that wires
 /// `d2b.daemon.perVmStateOwnershipMatrix` into the bundle.
 struct EntrySpec {
@@ -66,7 +66,7 @@ const CANONICAL_MATRIX: &[EntrySpec] = &[
         // 3770: setgid (group inheritance) + sticky (+t). Sticky prevents a
         // non-owner per-VM role UID (which holds rwx via POSIX ACL on this
         // shared-writable root) from rename(2)/unlink(2)-ing entries it does
-        // not own — notably the principal-owned `swtpm` NVRAM dir. See
+        // not own - notably the principal-owned `swtpm` NVRAM dir. See
         // issue #64 (tpm.enable first-run hardening).
         mode: 0o3770,
         kind: EntryKind::Dir,
@@ -115,10 +115,10 @@ const CANONICAL_MATRIX: &[EntrySpec] = &[
         group_template: "users",
         mode: 0o0755,
         kind: EntryKind::Dir,
-        // LEGACY RECOVERY ARTIFACT — optional (absent on native,
+        // LEGACY RECOVERY ARTIFACT - optional (absent on native,
         // post-cutover VMs).
         required: false,
-        // HARDLINK FARM CARVE-OUT — must stay false. The
+        // HARDLINK FARM CARVE-OUT - must stay false. The
         // `d2b_host::ownership_matrix::should_recurse` invariant
         // additionally rejects recursion into `store` regardless of
         // this flag.
@@ -130,7 +130,7 @@ const CANONICAL_MATRIX: &[EntrySpec] = &[
         group_template: "users",
         mode: 0o0755,
         kind: EntryKind::Dir,
-        // LEGACY RECOVERY ARTIFACT — optional.
+        // LEGACY RECOVERY ARTIFACT - optional.
         required: false,
         recursive: false,
     },
@@ -150,7 +150,7 @@ const CANONICAL_MATRIX: &[EntrySpec] = &[
         mode: 0o0755,
         kind: EntryKind::Dir,
         required: true,
-        // HARDLINK FARM CARVE-OUT — must stay false.
+        // HARDLINK FARM CARVE-OUT - must stay false.
         recursive: false,
     },
     EntrySpec {
@@ -175,7 +175,7 @@ const CANONICAL_MATRIX: &[EntrySpec] = &[
         path: "store-view/state",
         owner_template: "d2bd",
         group_template: "d2b",
-        // HOST-ONLY — must NOT reuse the runner-readable `users 0755`
+        // HOST-ONLY - must NOT reuse the runner-readable `users 0755`
         // store-view posture.
         mode: 0o0750,
         kind: EntryKind::Dir,
@@ -327,8 +327,8 @@ pub fn preflight(vm: &str, state_dir: &Path) -> OwnershipPreflightOutcome {
             // (`ENOENT`) is treated as "state not yet provisioned" and
             // skipped: the broker StoreSync / first runner exec creates
             // the required tree before it is used. Every other failure
-            // axis — non-`ENOENT` stat errors, kind mismatches, and
-            // owner/group/mode drift on existing paths — is
+            // axis - non-`ENOENT` stat errors, kind mismatches, and
+            // owner/group/mode drift on existing paths - is
             // fail-closed.
             match m {
                 OwnershipMismatch::StatFailed {
@@ -506,13 +506,13 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let base = tmp.path();
         fs::set_permissions(base, fs::Permissions::from_mode(0o3770)).unwrap();
-        // Don't materialize subdirs — those will surface as
+        // Don't materialize subdirs - those will surface as
         // StatFailed and be skipped.
         match preflight("vm1", base) {
             OwnershipPreflightOutcome::Clean => {}
             OwnershipPreflightOutcome::Drift(drift) => {
                 // If the test host happens to have e.g. a `d2bd`
-                // user, the top-level may drift on owner — that's a
+                // user, the top-level may drift on owner - that's a
                 // legitimate fail-closed signal, not a test failure
                 // (the unit test for actual drift lives in
                 // d2b_host::ownership_matrix::tests).

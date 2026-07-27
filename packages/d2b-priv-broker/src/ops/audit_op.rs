@@ -51,7 +51,7 @@ pub enum SwtpmMarkerResult {
 
 /// Hashed/path-free audit fields for the swtpm-dir first-run hardening
 /// step (issue #64). NO raw `base_dir` / `tpm.sock` / state paths ever
-/// appear here — only a `base_dir_hash`, the closed-set result enums,
+/// appear here - only a `base_dir_hash`, the closed-set result enums,
 /// and the resulting owner/mode.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SwtpmDirAudit {

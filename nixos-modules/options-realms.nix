@@ -1,13 +1,13 @@
-# d2b.realms.<realm>.* — realm-native control-plane option foundation.
+# d2b.realms.<realm>.* - realm-native control-plane option foundation.
 #
 # This file declares the public realm-native Nix schema.  Extended
 # sub-option groups live in focused companion files:
 #
-#   options-realms-network.nix    — d2b.realms.<realm>.network.*
+#   options-realms-network.nix    - d2b.realms.<realm>.network.*
 #                                   Full env-replacement shape:
 #                                   bridge/subnet/uplink/externalNetwork/
 #                                   mDNS/port-forward.
-#   options-realms-workloads.nix  — d2b.realms.<realm>.workloads.*
+#   options-realms-workloads.nix  - d2b.realms.<realm>.workloads.*
 #                                   Per-workload declarations with kind
 #                                   support for local-vm and qemu-media,
 #                                   plus desktop-launcher metadata.
@@ -96,9 +96,9 @@ in
       namespace ownership in the v2 model.
 
       Each realm may declare:
-        - `network.*`   — env-replacement network shape (bridges, subnets,
+        - `network.*`   - env-replacement network shape (bridges, subnets,
                           external network, mDNS, port-forwards).
-        - `workloads.*` — per-workload declarations (kind = local-vm or
+        - `workloads.*` - per-workload declarations (kind = local-vm or
                           qemu-media) with desktop-launcher metadata.
 
       Host-local realms materialise deterministic control-plane units and
@@ -263,19 +263,19 @@ in
               description = ''
                 Realm network model.
 
-                `none`         — no bridges, net VM, or host network
+                `none`         - no bridges, net VM, or host network
                                  resources are claimed.  Safe default for
                                  metadata-only realm declarations.
-                `inherit-env`  — delegates network to an existing
+                `inherit-env`  - delegates network to an existing
                                  `d2b.envs.<env>` entry in `network.envs`.
                                  Bridge lifecycle remains controlled by the
                                  env.
-                `declared`     — the realm owns the network declaration.
+                `declared`     - the realm owns the network declaration.
                                  `network.lanSubnet` and
                                  `network.uplinkSubnet` must be set.
                                  d2b materialises bridges + net VM under a
                                  realm-derived name.
-                `external`     — externally managed network; no d2b
+                `external`     - externally managed network; no d2b
                                  bridges are created.
               '';
             };

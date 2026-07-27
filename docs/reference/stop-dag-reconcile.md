@@ -76,7 +76,7 @@ unit tests populate it directly to simulate drift.
 ### `ReconcileReport`
 
 Deterministic, sorted by intent id / busid. `is_noop()` returns true
-when both action vectors are empty — the supervisor uses that to
+when both action vectors are empty - the supervisor uses that to
 skip the broker dispatch on a clean restart.
 
 ## When the supervisor calls it
@@ -100,18 +100,19 @@ skip the broker dispatch on a clean restart.
 - Unit tests (`packages/d2bd/src/supervisor/stop_dag.rs::tests`)
   exercise every drift variant against a fixture-derived
   `BundleResolver`.
-- The stop-dag-reconcile static gate
+- The stop-dag-reconcile policy
   `packages/d2b-contract-tests/tests/policy_daemon.rs`
   (`stop_dag_reconcile_surface`) asserts
   the module surface, the supervisor module wires it in, the planner
   composes only existing broker ops (no new `*Request` types), and
-  this doc is up to date.
+  this doc is up to date. This fixture-dependent policy is advisory until the
+  fixture-contract lane is enabled and promoted.
 
 ## See also
 
-- [`docs/reference/host-prep-dag.md`](./host-prep-dag.md) —
+- [`docs/reference/host-prep-dag.md`](./host-prep-dag.md) -
   startup-side DAG (mirror image of the stop-DAG).
-- [`docs/reference/privileges.md`](./privileges.md) — broker op
+- [`docs/reference/privileges.md`](./privileges.md) - broker op
   catalogue (`ApplyNftables`, `UsbipBind`, `UsbipUnbind`).
-- [`docs/explanation/daemon-lifecycle.md`](../explanation/daemon-lifecycle.md)
-  — daemon restart contract this planner feeds into.
+- [`docs/explanation/daemon-lifecycle.md`](../explanation/daemon-lifecycle.md) -
+  daemon restart contract this planner feeds into.

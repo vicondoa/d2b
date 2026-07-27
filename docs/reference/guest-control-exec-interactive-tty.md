@@ -112,14 +112,14 @@ allowed.
   `SignalTarget` is rejected with a `ProtocolError` **before** the sequence is
   consumed. The foreground process group is resolved via `tcgetpgrp(master)`
   **at delivery time** (so it tracks job-control changes inside the session).
-  Non-TTY `PROCESS_TREE` signalling is **deferred** — it is not implemented in
+  Non-TTY `PROCESS_TREE` signalling is **deferred** - it is not implemented in
   this surface, so a `PROCESS_TREE` (or unspecified/unknown) target is rejected
   with the same typed error.
 - **Signal allowlist.** The delivered signal must be one of
   `INT`, `TERM`, `HUP`, `QUIT`, `WINCH`, `USR1`, `USR2`, `KILL`, `TSTP`,
   `CONT`. An out-of-allowlist signal number is rejected **before** the
-  sequence is consumed — the `control_seq` is not advanced, so it stays
-  available for a subsequent valid control message — and maps to a typed
+  sequence is consumed - the `control_seq` is not advanced, so it stays
+  available for a subsequent valid control message - and maps to a typed
   `ProtocolError`. There is no dedicated invalid-signal wire kind.
 
 ## Runtime ceiling: indefinite, scoped to TTY
@@ -127,7 +127,7 @@ allowed.
 A TTY exec runs **indefinitely by default** (`interactiveMaxRuntimeSec = 0` ⇒
 unlimited). Setting `d2b.vms.<vm>.guest.exec.interactiveMaxRuntimeSec > 0`
 installs an optional ceiling for interactive sessions only. The 6-hour
-non-interactive attached ceiling (`MAX_EXEC_RUNTIME_MS`) is unchanged — only
+non-interactive attached ceiling (`MAX_EXEC_RUNTIME_MS`) is unchanged - only
 the interactive path opts into unlimited runtime.
 
 ## Teardown: Running → Closing → Terminal
@@ -158,7 +158,7 @@ guest user's privileges, so escaping the session is not a privilege boundary.
 ## Capabilities
 
 `ExecTty`, `TtyResize`, and `Signals` are advertised in the capabilities
-response **only when the interactive path is usable** — i.e. the PTY spawner
+response **only when the interactive path is usable** - i.e. the PTY spawner
 is wired, which requires the `d2b-exec-runner` helper to be present
 (the same gate as the detached exec surface).
 

@@ -1,4 +1,4 @@
-# path-safety-violation-fs — broker filesystem-mutating op path-safety
+# path-safety-violation-fs - broker filesystem-mutating op path-safety
 # #[test]s. Successor of tests/path-safety-violation-fs.sh, whose hard
 # assertions ran these broker #[test]s via substring filters
 # (`cargo test --all-features -- <name>` in packages/d2b-priv-broker);
@@ -8,7 +8,7 @@
 #
 # (The gate's trailing `--features fake-backends -- path_safety_violation`
 # step was best-effort `2>/dev/null` non-failing scaffolding with no matching
-# test in the gated default/layer1-bootstrap broker passes — not pinned.)
+# test in the gated default/layer1-bootstrap broker passes - not pinned.)
 ops::hosts::tests::refuses_symlink_target
 ops::hosts::tests::writes_managed_block_into_fresh_file
 ops::hosts::tests::idempotent_when_block_matches

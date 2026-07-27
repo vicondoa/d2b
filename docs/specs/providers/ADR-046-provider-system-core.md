@@ -4,7 +4,7 @@
 | --- | --- |
 | Spec ID | `ADR-046-provider-system-core` |
 | Parent | ADR 0046 |
-| Status | Proposed |
+| Status | Accepted |
 | Version | 1 |
 | Baseline | `b5ddbed67867d9244bf33390868101bd9b053e49` |
 | Normative | Yes |
@@ -18,8 +18,8 @@
 
 `Provider/system-core` owns exactly two ResourceTypes:
 
-- `Host` — physical/local host execution, policy, and budget parent;
-- `User` — named host identity, UID/session observation, ACL/process subject.
+- `Host` - physical/local host execution, policy, and budget parent;
+- `User` - named host identity, UID/session observation, ACL/process subject.
 
 It is one of the two bootstrap exceptions defined in
 [`ADR-046-provider-model-and-packaging`](../ADR-046-provider-model-and-packaging.md):
@@ -95,7 +95,7 @@ runtime because they are available before the first Host resource exists.
 ### 2.3 Provider resource spec
 
 > **Bootstrap note**: `Provider/system-core` and the `Zone` self-resource are
-> `managedBy=controller` — they are created by the Zone runtime at bootstrap and
+> `managedBy=controller` - they are created by the Zone runtime at bootstrap and
 > are **never** Nix-authored in the resource bundle. Operators do not declare a
 > `Provider/system-core` resource in `d2b.zones.<z>.resources`. See §8 for the
 > Nix authoring surface (artifact catalog entry and Host/User resource authoring
@@ -114,8 +114,8 @@ metadata:
   finalizers:
     - core.provider-api-binding
   deletionRequestedAt: null
-  createdAt: 2026-07-22T00:00:00Z
-  updatedAt: 2026-07-22T00:00:00Z
+  createdAt: 2026-07-22T00:00:00.000Z
+  updatedAt: 2026-07-22T00:00:00.000Z
 spec:
   artifactId: system-core
   config: {}
@@ -123,28 +123,40 @@ spec:
 status:
   phase: Ready
   observedGeneration: 1
-  packageDigest: "sha256:<hex>"
-  manifestDigest: "sha256:<hex>"
-  configSchemaDigest: "sha256:<hex>"
-  signatureId: "d2b-official:<fingerprint>"
-  trustEpoch: 1
-  conformanceAttestationDigest: "sha256:<hex>"
-  exports:
-    resourceTypes:
-      - name: Host
-        version: 1
-        schemaDigest: "sha256:<hex>"
-      - name: User
-        version: 1
-        schemaDigest: "sha256:<hex>"
-  components:
-    controllers:
-      - id: host-controller
-        phase: Ready
-      - id: user-controller
-        phase: Ready
-  dependencyHealth: []
-  disabledCondition: null
+  resource:
+    packageDigest: "sha256:<hex>"
+    manifestDigest: "sha256:<hex>"
+    configSchemaDigest: "sha256:<hex>"
+    signatureId: "d2b-official:<fingerprint>"
+    trustEpoch: 1
+    conformanceAttestationDigest: "sha256:<hex>"
+    exports:
+      resourceTypes:
+        - name: Host
+          version: 1
+          schemaDigest: "sha256:<hex>"
+        - name: User
+          version: 1
+          schemaDigest: "sha256:<hex>"
+    components:
+      controllers:
+        - id: host-controller
+          phase: Ready
+        - id: user-controller
+          phase: Ready
+    dependencyHealth: []
+    disabledCondition: null
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 > **Provider status ownership**: `Provider/system-core` is the fixed core
@@ -188,7 +200,7 @@ No secrets are accepted in Provider config. Credential material is a
 ### 4.1 Host
 
 Complete normative contract: [`ADR-046-resources-host-guest-process-user`](../ADR-046-resources-host-guest-process-user.md).
-This section records the system-core–specific controller behavior.
+This section records the system-core-specific controller behavior.
 
 #### 4.1.1 Spec schema (normative summary)
 
@@ -202,7 +214,7 @@ spec:
   providerRef: Provider/system-core   # fixed; any other value rejected at admission
   defaultDomain: system               # system|user; default system
   allowedDomains: [system, user]      # [system|user]; 1..2 unique items
-  defaultUserRef: null                # User/<name>; required when user ∈ allowedDomains
+  defaultUserRef: User/alice          # User/<name>; required when user ∈ allowedDomains
   budget: {}                          # BudgetSpec aggregate across all Processes
   networkAttachments: []              # 0..64 NetworkAttachmentList entries
   deviceAttachments:  []              # 0..64 DeviceAttachmentList entries
@@ -242,8 +254,8 @@ status:
   observedGeneration: 1
   phase: Ready            # Pending|Ready|Succeeded|Degraded|Failed|Unknown|Deleted
   conditions: []
-  lastReconciledAt: "2026-07-22T00:00:01Z"
-  startedAt: "2026-07-22T00:00:00Z"
+  lastReconciledAt: "2026-07-22T00:00:01.000Z"
+  startedAt: "2026-07-22T00:00:00.000Z"
   completedAt: null
   outcome: null
   resource:
@@ -279,7 +291,7 @@ or host filesystem path appears in public status or audit.
 | `UserManagerReady` | user domain allowed and user manager reachable | `user-manager-unavailable`, `user-manager-unknown` |
 | `PolicyValid` | spec invariants pass admission | `spec-invalid-domains`, `spec-missing-default-user-ref`, `spec-isolation-posture-conflict` |
 | `BudgetAdmitted` | aggregate budget within Zone capacity | `budget-overcommit` |
-| `NoIsolation` | always False for user-only Hosts (status=True means no isolation) | — |
+| `NoIsolation` | always False for user-only Hosts (status=True means no isolation) | - |
 
 `NoIsolation` condition is set to `True` on every user-only Host
 (`defaultDomain=user`, `allowedDomains=[user]`). It is never absent or
@@ -324,8 +336,8 @@ Trigger classes: `spec-generation-changed`, `dependency-changed`,
    emit reconcile hints for over-limit Processes.
 9. Return converged or pending(requeueAt).
 
-Reconcile must complete within 5 s. Synchronous kernel/libc calls — uname(2),
-cgroup stat, capability probes — run in explicit bounded blocking adapters
+Reconcile must complete within 5 s. Synchronous kernel/libc calls - uname(2),
+cgroup stat, capability probes - run in explicit bounded blocking adapters
 (e.g., `tokio::task::spawn_blocking`) with per-call deadlines and cancellation.
 No synchronous probe is called directly in an async task without a blocking
 adapter wrapper.
@@ -388,7 +400,7 @@ status:
   observedGeneration: 1
   phase: Ready          # Pending|Ready|Succeeded|Degraded|Failed|Unknown|Deleted
   conditions: []
-  lastReconciledAt: "2026-07-22T00:00:01Z"
+  lastReconciledAt: "2026-07-22T00:00:01.000Z"
   resource:
     uid: null             # u32; discovered OS UID; diagnostic; not an authz input
     gid: null             # u32; discovered primary OS GID
@@ -452,8 +464,8 @@ Trigger classes: `spec-generation-changed`, `dependency-changed`,
 10. Return converged or pending(requeueAt).
 ```
 
-Reconcile must complete within 5 s. All filesystem and IPC calls — NSS
-`getpwnam`, `stat(2)`, user-manager socket IPC — are synchronous kernel/libc
+Reconcile must complete within 5 s. All filesystem and IPC calls - NSS
+`getpwnam`, `stat(2)`, user-manager socket IPC - are synchronous kernel/libc
 APIs called in explicit bounded blocking adapters with per-call deadlines and
 cancellation. No synchronous call is made directly in an async task without a
 blocking adapter wrapper.
@@ -605,12 +617,24 @@ spec:
     allowedOperations: [resolve]
   lifecyclePolicy: recycle-with-producer
 status:
-  readiness: Ready
-  observedProducerGeneration: 1
-  observedResourceGeneration: 1
-  endpointGeneration: 1
-  connectionAvailability: available
-  leaseAvailability: lease-required
+  resource:
+    readiness: Ready
+    observedProducerGeneration: 1
+    observedResourceGeneration: 1
+    endpointGeneration: 1
+    connectionAvailability: available
+    leaseAvailability: lease-required
+  update:
+    state: Current
+    reasons: []
+    observedGeneration: 1
+    targetGeneration: 1
+    disruption: None
+    preserveState: true
+    operationId: null
+    lastAssessedAt: null
+    owned: { count: 0, refs: [] }
+    dependencies: { count: 0, refs: [] }
 ```
 
 ## 5.5 Retained opaque handles (D092 promotion test)
@@ -647,7 +671,7 @@ trusted endpoint policy). They use:
 
 | Service | Purpose | Direction |
 | --- | --- | --- |
-| `d2b.resource.v3` | ResourceClient — list, watch, update-status | outbound from handlers |
+| `d2b.resource.v3` | ResourceClient - list, watch, update-status | outbound from handlers |
 | `d2b.resource.v3` | Receive reconcile hints from store post-commit dispatcher | inbound to handlers |
 
 No public external service endpoint is registered on d2b-bus. The fixed
@@ -660,12 +684,12 @@ provider-specific methods to operators or other controllers.
 Both handlers use the standard `d2b-provider-toolkit` async `ResourceClient`:
 
 ```
-ResourceClient.watch(Host)   — host-controller watch loop
-ResourceClient.watch(User)   — user-controller watch loop
-ResourceClient.watch(User)   — host-controller cross-watch for UserManagerReady
-ResourceClient.watch(Process) — host-controller cross-watch for budget aggregation
-ResourceClient.watch(Process) — user-controller cross-watch for structural check
-ResourceClient.watch(Volume)  — user-controller cross-watch for structural check
+ResourceClient.watch(Host)   - host-controller watch loop
+ResourceClient.watch(User)   - user-controller watch loop
+ResourceClient.watch(User)   - host-controller cross-watch for UserManagerReady
+ResourceClient.watch(Process) - host-controller cross-watch for budget aggregation
+ResourceClient.watch(Process) - user-controller cross-watch for structural check
+ResourceClient.watch(Volume)  - user-controller cross-watch for structural check
 ResourceClient.update_status(Host, expectedRevision)
 ResourceClient.update_status(User, expectedRevision)
 ```
@@ -735,7 +759,7 @@ bounded blocking adapters, not broker-mediated privileged operations.
 > runtime at bootstrap and are **never** Nix-authored in the resource bundle.
 > Operators do not declare a `Provider/system-core` entry in
 > `d2b.zones.<z>.resources`. The Nix surface for system-core is the artifact
-> catalog entry (§8.1) and the Host/User resource authoring described in §8.2–§8.4.
+> catalog entry (§8.1) and the Host/User resource authoring described in §8.2-§8.4.
 
 ### 8.1 Artifact catalog entry
 
@@ -885,7 +909,7 @@ produces a structured eval error identifying the resource name and field.
 
 ### 8.5 Nix schema drift gate
 
-The spec fields and default values described in §8.2–§8.4 are the authoritative
+The spec fields and default values described in §8.2-§8.4 are the authoritative
 source. Generated Nix option types and documentation are derived from the same
 ResourceTypeSchema and Provider schema used for build-time validation. The
 `make test-drift` gate (`xtask gen-nix-options` + `git diff --exit-code`)
@@ -969,7 +993,7 @@ namespace, no state Volume, no state-view mount, and no dedicated state-layout
 `Provider/system-core` is a fixed bootstrap component. Because it declares no
 state Volume and reaches Ready from resource `status`, the core Operation
 ledger, and a resource-store relist, it needs no state Volume before
-`Provider/volume-local` is ready — so there is no bootstrap state-Volume cycle,
+`Provider/volume-local` is ready - so there is no bootstrap state-Volume cycle,
 no closed bootstrap storage mechanism, and no bootstrap-storage exception (D086,
 superseded by D087; see "No bootstrap state Volume" in
 `ADR-046-components-processes-and-sandbox`). No separate bootstrap Provider
@@ -1090,7 +1114,7 @@ Each system-core handler reports to the core-controller aggregate:
 ```yaml
 handler: system_core_host    # stable closed name
 phase: Ready
-lastReconciledAt: "2026-07-22T00:00:01Z"
+lastReconciledAt: "2026-07-22T00:00:01.000Z"
 queueDepth: 0
 runningCount: 0
 lastWatchRevision: 42
@@ -1099,7 +1123,7 @@ lastWatchRevision: 42
 ```yaml
 handler: system_core_user
 phase: Ready
-lastReconciledAt: "2026-07-22T00:00:01Z"
+lastReconciledAt: "2026-07-22T00:00:01.000Z"
 queueDepth: 0
 runningCount: 0
 lastWatchRevision: 38
@@ -1148,7 +1172,7 @@ description capped at 256 chars; it uses generic descriptions only.
 
 `Provider/system-core` does **not** emit `ProcessEffect` audit records.
 `ProcessEffect` (launch, stop, adoption, quarantine) records are owned by the
-Process Providers — `Provider/system-systemd` and `Provider/system-minijail`.
+Process Providers - `Provider/system-systemd` and `Provider/system-minijail`.
 Those providers are required to query `Host.status.isolationPosture` before
 emitting each `ProcessEffect` record and to embed `no_isolation: true` in the
 record when the parent Host has `isolationPosture="none"`. Audit consumers must
@@ -1270,20 +1294,20 @@ implementation patterns only. No current v3 behavior is assumed from main.
 
 | Current source | Evidence class | Disposition | Target |
 | --- | --- | --- | --- |
-| `packages/d2bd/src/lib.rs` — daemon startup, Host grouping | production-reachable | ADAPT | `d2b-provider-system-core/src/host.rs` |
-| `packages/d2b-realm-core/src/node.rs` — `NodeKind::FullHost` | production-reachable | EXTRACT/ADAPT | `Host` ResourceType schema and reconcile |
-| `packages/d2b-realm-core/src/workload.rs` — `WorkloadProviderKind::UnsafeLocal`, `IsolationPosture::UnsafeLocal` | production-reachable | ADAPT | `Host.spec.isolationPosture="none"` + `Host.status.isolationPosture="none"` |
-| `packages/d2b-realm-core/src/workload.rs` — `WorkloadExecutionPosture` | production-reachable | ADAPT | `Host.spec` (ExecutionPolicy fields) |
-| `packages/d2b-core/src/host.rs` — `HostJson`, `VmRuntimeRow` | production-reachable | ADAPT | `Host` ResourceSpec fields; Network/Guest attachments |
-| `packages/d2bd/src/unsafe_local_helper.rs` — `HelperRegistry` | production-reachable | ADAPT → RETIRE | `Host` user-domain supervisor; `HelperRegistry::allowed_uids` → `defaultUserRef` |
-| `packages/d2b-contracts/src/unsafe_local_wire.rs` — `DaemonToUnsafeLocalHelper`/`UnsafeLocalHelperToDaemon` | production-reachable | DELETE after migration | No v3 equivalent; retired when Process Provider supervisor ticket replaces direct launch |
+| `packages/d2bd/src/lib.rs` - daemon startup, Host grouping | production-reachable | ADAPT | `d2b-provider-system-core/src/host.rs` |
+| `packages/d2b-realm-core/src/node.rs` - `NodeKind::FullHost` | production-reachable | EXTRACT/ADAPT | `Host` ResourceType schema and reconcile |
+| `packages/d2b-realm-core/src/workload.rs` - `WorkloadProviderKind::UnsafeLocal`, `IsolationPosture::UnsafeLocal` | production-reachable | ADAPT | `Host.spec.isolationPosture="none"` + `Host.status.isolationPosture="none"` |
+| `packages/d2b-realm-core/src/workload.rs` - `WorkloadExecutionPosture` | production-reachable | ADAPT | `Host.spec` (ExecutionPolicy fields) |
+| `packages/d2b-core/src/host.rs` - `HostJson`, `VmRuntimeRow` | production-reachable | ADAPT | `Host` ResourceSpec fields; Network/Guest attachments |
+| `packages/d2bd/src/unsafe_local_helper.rs` - `HelperRegistry` | production-reachable | ADAPT → RETIRE | `Host` user-domain supervisor; `HelperRegistry::allowed_uids` → `defaultUserRef` |
+| `packages/d2b-contracts/src/unsafe_local_wire.rs` - `DaemonToUnsafeLocalHelper`/`UnsafeLocalHelperToDaemon` | production-reachable | DELETE after migration | No v3 equivalent; retired when Process Provider supervisor ticket replaces direct launch |
 | `packages/d2b-unsafe-local-helper/src/{main,protocol,runtime,systemd}.rs` | production-reachable | REPLACE → DELETE | User-domain Process; v3 uses normal Process Provider supervisor ticket |
 | `nixos-modules/unsafe-local-workloads-json.nix` | nix-emitted | ADAPT | Emitter for `Host` resource spec (user-only variant) |
-| `nixos-modules/unsafe-local-helper.nix` — service unit | nix-emitted | DELETE after migration | Fixed user-supervisor unit; retired after Process Provider supervisor ticket migration |
-| `packages/d2b-realm-core/src/ids.rs` — `NodeId`, `ProviderId` | production-reachable | EXTRACT/ADAPT | Resource identity types in `d2b-contracts/src/v3/identity.rs` |
-| `packages/d2b-realm-core/src/realm.rs` — `RealmControllerPlacement::HostLocal` | production-reachable | ADAPT | Zone runtime bootstrap; `HostLocal` → Zone runtime on `Host` |
-| `packages/d2b-contract-tests/tests/policy_observability.rs` — `loki_native_otel_resource_attributes` | test-only | ADAPT | Extend OTEL attribute allowlist with `d2b.zone`, `d2b.provider`, `d2b.component`; add `system_core_host`, `system_core_user` to `handler` closed set |
-| `packages/d2bd/src/metrics.rs` — `d2b_daemon_vm_*` with `vm=<name>` label | production-reachable | DELETE from v3 metrics | VM-name labels not carried forward; v3 uses closed `handler` label set |
+| `nixos-modules/unsafe-local-helper.nix` - service unit | nix-emitted | DELETE after migration | Fixed user-supervisor unit; retired after Process Provider supervisor ticket migration |
+| `packages/d2b-realm-core/src/ids.rs` - `NodeId`, `ProviderId` | production-reachable | EXTRACT/ADAPT | Resource identity types in `d2b-contracts/src/v3/identity.rs` |
+| `packages/d2b-realm-core/src/realm.rs` - `RealmControllerPlacement::HostLocal` | production-reachable | ADAPT | Zone runtime bootstrap; `HostLocal` → Zone runtime on `Host` |
+| `packages/d2b-contract-tests/tests/policy_observability.rs` - `loki_native_otel_resource_attributes` | test-only | ADAPT | Extend OTEL attribute allowlist with `d2b.zone`, `d2b.provider`, `d2b.component`; add `system_core_host`, `system_core_user` to `handler` closed set |
+| `packages/d2bd/src/metrics.rs` - `d2b_daemon_vm_*` with `vm=<name>` label | production-reachable | DELETE from v3 metrics | VM-name labels not carried forward; v3 uses closed `handler` label set |
 
 ### 14.2 Main reuse (copy/adapt; NOT current-state evidence)
 
@@ -1296,7 +1320,7 @@ Selected from main `a1cc0b2d`:
 | `packages/d2b-provider-toolkit/src/conformance.rs` | Provider conformance kit invoked from `tests/` | copy and adapt |
 | `packages/d2b-session/src/{handshake,bootstrap,record,engine,scheduler,streams,lifecycle,transport}.rs` | ComponentSession (NN/KK/IKpsk2); basis for local bus connection | copy and adapt (per ADR-046-session-001) |
 | `packages/d2b-session-unix/src/{adapter,socket,pidfd}.rs` | Unix peer identity, SO_PEERCRED validation | copy and adapt (per ADR-046-session-002) |
-| `packages/d2b-provider/src/lib.rs` — provider trait skeleton | Provider resource/manifest/components model | extract and adapt |
+| `packages/d2b-provider/src/lib.rs` - provider trait skeleton | Provider resource/manifest/components model | extract and adapt |
 
 Excluded main assumptions: v2 EndpointRole/Realm/service inventory, Provider
 registry/process model v2, delivery tooling, and generated v2 DTO names are
@@ -1320,7 +1344,7 @@ Per D094, each replaced current-code test is retired with an explicit
 keep/adapt/move/delete disposition and a removal gate: the minimum reusable
 semantic assertions migrate into this crate's hermetic `tests/`, and the old
 duplicate tests, shell gates, fixtures, static artifacts, CI jobs, and manifest
-entries are deleted once successor coverage and the removal proof pass —
+entries are deleted once successor coverage and the removal proof pass -
 updating `tests/layer1-jobs.json`, the closed gate manifests, the
 flake/matrix/Nix-unit pins, the generated ledgers, and the CI workflow shards.
 Old and new suites never run in parallel indefinitely.
@@ -1347,7 +1371,7 @@ items do not acquire co-ownership.
 Test ownership is enumerated per test in §16. The §14.3 table and the final
 column above are the complete removal-proof assignment for this dossier.
 
-### ADR046-system-core-001 — Provider boundary, manifest, and reconcile audit adapter
+### ADR046-system-core-001 - Provider boundary, manifest, and reconcile audit adapter
 
 | Field | Value |
 | --- | --- |
@@ -1370,10 +1394,12 @@ column above are the complete removal-proof assignment for this dossier.
 
 Per D094 and `ADR-046-validation-and-delivery` §10.16, this Provider's `src/`
 unit tests and `tests/*.rs` hermetic suite are fast, in-process, deterministic,
-and parallel-safe: an individual normal test has p95 ≤50 ms with no wall-clock
+and parallel-safe: an individual normal test has an advisory wall-clock p95
+diagnostic threshold of <=50 ms; gate enforcement is aggregate per-crate
+process CPU only. There is no wall-clock
 sleep, and `cargo test -p d2b-provider-system-core --lib --tests` completes in
-≤2 s warm-cache execution time (compilation excluded). They use a deterministic
-fake clock/RNG and the toolkit fakes/FakeEffectPort only — no process spawn,
+≤3 s warm-cache execution time (compilation excluded). They use a deterministic
+fake clock/RNG and the toolkit fakes/FakeEffectPort only - no process spawn,
 container, network, DBus, systemd, broker daemon, Nix eval/build, KVM,
 USB/GPU/TPM hardware, or live cloud, and no filesystem tree beyond tiny temp
 fixtures. Any scenario needing those lives only in `integration/`, which keeps
@@ -1381,7 +1407,7 @@ a lane timeout/budget, parallel isolation, and fake external services by
 default; such a need is re-placed into `integration/`, never given a sleep,
 larger timeout, or `#[ignore]`. Bounded crypto/property tests are the only
 classified exception, each named with a capped case count and a declared higher
-per-test budget.
+per-test advisory threshold.
 
 ### 16.1 `tests/` (hermetic Cargo integration, invoked by `cargo test`)
 

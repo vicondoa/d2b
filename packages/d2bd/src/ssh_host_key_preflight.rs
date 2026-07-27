@@ -176,7 +176,7 @@ const EXPECTED_KEY_MODE: u32 = 0o0400;
 /// `/var/lib/d2b/vms/<vm>/sshd-host-keys`. The `vm` argument is
 /// carried only for tracing/diagnostic context.
 pub fn check_sshd_host_keys(vm: &str, keys_dir: &Path) -> Result<(), SshdHostKeyDrift> {
-    // Step 1: lstat the directory itself — refuse symlinks.
+    // Step 1: lstat the directory itself - refuse symlinks.
     let dir_meta = match fs::symlink_metadata(keys_dir) {
         Ok(m) => m,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -346,7 +346,7 @@ mod tests {
         (dir, key)
     }
 
-    /// Decide whether the test process is uid 0 — only when it is
+    /// Decide whether the test process is uid 0 - only when it is
     /// can we exercise the "happy path returns Ok" assertion. Under
     /// any other uid the key file will own uid != 0 and the check
     /// (correctly) refuses.
@@ -458,7 +458,7 @@ mod tests {
     #[test]
     fn wrong_mode_is_drift() {
         // We can always exercise mode drift by chmod'ing the key.
-        // This depends on the owner check NOT firing first — so it
+        // This depends on the owner check NOT firing first - so it
         // only runs as root. (Under non-root the owner mismatch
         // would be surfaced first.)
         if !running_as_root() {

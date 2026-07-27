@@ -75,7 +75,7 @@ Both layers carry a dedicated unit test:
 
 | Path (relative to `/var/lib/d2b/vms/<vm>/`) | Owner | Group | Mode | Kind | Required | Recursive | Rationale |
 |---|---|---|---|---|---|---|---|
-| `.` | `d2bd` | `users` | `3770` | dir | yes | false | Per-VM state root. `setgid` so role users (runner / gpu / swtpm) inherit the group on files they create; `sticky` (`+t`) so a role UID (which holds rwx via POSIX ACL) cannot rename/unlink entries it does not own — notably the principal-owned `swtpm` NVRAM dir (issue #64). |
+| `.` | `d2bd` | `users` | `3770` | dir | yes | false | Per-VM state root. `setgid` so role users (runner / gpu / swtpm) inherit the group on files they create; `sticky` (`+t`) so a role UID (which holds rwx via POSIX ACL) cannot rename/unlink entries it does not own - notably the principal-owned `swtpm` NVRAM dir (issue #64). |
 | `state` | `d2bd` | `d2b` | `0750` | dir | yes | false | Daemon-owned per-VM state (`audio-state.json`, etc.). |
 | `swtpm` | `d2b-<vm>-swtpm` | `d2b-<vm>-swtpm` | `0700` | dir | yes | false | **CRITICAL SUBSYSTEM** (AGENTS.md): per-VM TPM 2.0 NVRAM. Wiping or rechowning this directory looks like device tampering to any IdP (Entra ID / Intune / BitLocker-class policies) and forces re-enrollment. Owned by the per-VM swtpm runner principal. |
 | `sshd-host-keys` | `d2bd` | `d2b` | `0750` | dir | yes | false | Container for per-VM sshd host keys. The daemon refuses to start the VM if any leaf has drifted (see [ssh-host-key-preflight.md](./ssh-host-key-preflight.md)). |
@@ -86,7 +86,7 @@ Both layers carry a dedicated unit test:
 | `store-view/live` | `d2bd` | `users` | `0755` | dir | yes | **false (carve-out)** | Canonical per-VM `/nix/store` hardlink pool. Served read-only to the guest as `/nix/.ro-store`. The enforcer NEVER recurses into this path. |
 | `store-view/meta` | `d2bd` | `users` | `0755` | dir | yes | false | Guest read-only metadata share root. Served read-only as `/run/d2b-store-meta`. Runner/virtiofsd-readable. |
 | `store-view/meta/generations` | `d2bd` | `users` | `0755` | dir | yes | false | Guest-readable per-generation metadata directory under `store-view/meta`. |
-| `store-view/state` | `d2bd` | `d2b` | `0750` | dir | yes | false | **HOST-ONLY** broker StoreSync state. `d2b:d2b 0750` — the runner/virtiofsd identity has no access. Must NOT reuse the runner-readable `users 0755` posture. |
+| `store-view/state` | `d2bd` | `d2b` | `0750` | dir | yes | false | **HOST-ONLY** broker StoreSync state. `d2b:d2b 0750` - the runner/virtiofsd identity has no access. Must NOT reuse the runner-readable `users 0755` posture. |
 | `store-view/state/generations` | `d2bd` | `d2b` | `0750` | dir | yes | false | **HOST-ONLY** per-generation broker state directory. Per-generation leaves (`marker.json`, `meta.json`, `integrity.json`) are `d2b:d2b 0640`, repaired out of band. |
 | `store-view/gcroots` | `d2bd` | `d2b` | `0750` | dir | yes | false | **HOST-ONLY** StoreSync GC roots: host-absolute symlinks into `/nix/store` protecting retained closures from host GC. Never guest/runner-readable. |
 | `store-view/sync.lock` | `d2bd` | `d2b` | `0600` | **file** | yes | n/a | **BROKER-PRIVATE** StoreSync serialization lock. File-kind: enforcer reasserts mode/uid/gid on the file inode with no-follow semantics. |
@@ -95,7 +95,7 @@ Both layers carry a dedicated unit test:
 
 The `<vm>` token in `owner` / `group` (and in the marker `path`) is
 substituted with the VM name at enforcement time. This keeps the matrix
-VM-agnostic — every VM shares the same shape.
+VM-agnostic - every VM shares the same shape.
 
 `kind` is `dir` (default) or `file`. `file`-kind entries assert the
 inode is a regular file (no-follow) and reassert mode/uid/gid on it;
@@ -141,11 +141,11 @@ The preflight is invoked unconditionally from
 - **Unresolvable principal** (e.g. `d2b-<vm>-swtpm` user not yet
   provisioned because `tpm.enable = false`) → warn-only; the entry
   is skipped.
-- **Optional entry absent (ENOENT)** — a `required = false` entry
+- **Optional entry absent (ENOENT)** - a `required = false` entry
   whose path does not exist (legacy `store` / `store-meta`,
   `integrity-unknown.json`, the live marker before first sync) → no
   drift emitted (silently skipped).
-- **Required entry absent (ENOENT)** — a `required = true` entry whose
+- **Required entry absent (ENOENT)** - a `required = true` entry whose
   path does not exist → `StatFailed { not_found: true }`, downgraded to
   a preflight **warning** and skipped. This is the migration-window
   posture: broker StoreSync prep (which creates `store-view/state`,
@@ -153,7 +153,7 @@ The preflight is invoked unconditionally from
   must not fail-closed on their absence.
 - **Any other stat error** (EACCES, ELOOP, etc.) → `StatFailed
   { not_found: false }` → fail closed.
-- **Kind mismatch** — a file where a directory is expected (or vice
+- **Kind mismatch** - a file where a directory is expected (or vice
   versa), checked no-follow so a symlink at a leaf never satisfies the
   entry → fail closed.
 - **Present and owner/group/mode matches** → silent OK.
@@ -164,7 +164,7 @@ The preflight is invoked unconditionally from
 
 Operator recovery:
 
-1. `nixos-rebuild switch` — re-runs the host-activation posture chain
+1. `nixos-rebuild switch` - re-runs the host-activation posture chain
    for the allowed top-level roots (`store-view`, `store-view/live`,
    `store-view/meta`, plus legacy `store` / `store-meta` if present).
    Host activation does NOT posture the host-only leaves
@@ -179,19 +179,19 @@ Operator recovery:
 
 - Unit (Rust):
   [`packages/d2b-host/src/ownership_matrix.rs`](../../packages/d2b-host/src/ownership_matrix.rs)
-  `tests::*` — happy path, per-axis drift, missing path (optional vs
+  `tests::*` - happy path, per-axis drift, missing path (optional vs
   required ENOENT), `kind` mismatch (file↔dir, no-follow symlink),
   file-kind mode reassertion, and the
   `hardlink_farm_carve_out_holds_for_{store_view_live,legacy_store}`
   regressions.
 - Preflight (Rust):
   [`packages/d2bd/src/ownership_preflight.rs`](../../packages/d2bd/src/ownership_preflight.rs)
-  `tests::*` — missing state dir is clean, unresolvable principals are
+  `tests::*` - missing state dir is clean, unresolvable principals are
   clean, and drift-message rendering (per-axis, kind mismatch, and the
   non-ENOENT stat-failure variant).
-- Integration (shell):
-  [`tests/per-vm-state-ownership-eval.sh`](../../tests/per-vm-state-ownership-eval.sh)
-  — confirms `d2b.daemon.perVmStateOwnershipMatrix` is non-empty,
+- Eval contract:
+  [`tests/unit/nix/cases/per-vm-state-ownership.nix`](../../tests/unit/nix/cases/per-vm-state-ownership.nix) -
+  confirms `d2b.daemon.perVmStateOwnershipMatrix` is non-empty,
   every entry carries every required typed field (including `kind` and
   `required`), the hardlink-pool entries have `recursive = false`, the
   `swtpm` entry uses `<vm>` in its principal templates, the signed

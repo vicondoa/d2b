@@ -25,7 +25,8 @@ tests/tools/preflight-disk-space: free disk on $ROOT below ${min_gib} GiB (${act
 Remediation:
   1. nix-collect-garbage
   2. rm -rf $ROOT/.d2b-* $ROOT/.static-* (or \`d2b_reap_scratch_orphans\`)
-  3. For multi-worktree dev: confirm packages/.cargo/config.toml points
-     target-dir at the shared /home/paydro/.cache/d2b-cargo-target/
+  3. For multi-worktree dev: each worktree keeps its own packages/target/;
+     remove stale worktrees' target dirs (sccache in \$SCCACHE_DIR keeps
+     the rebuild cheap).
 EOF
 exit 1

@@ -25,9 +25,9 @@
 # in assertions-eval, 23 in observability-eval) with one batched eval.
 {
   # Two ways to supply nixpkgs + the d2b module set:
-  #   * flakeRoot — re-`getFlake`s the repo (the bash gates' path; flakeRoot
+  #   * flakeRoot - re-`getFlake`s the repo (the bash gates' path; flakeRoot
   #     is a real working-tree path).
-  #   * nixpkgs + d2bModule — direct injection, used by the in-flake
+  #   * nixpkgs + d2bModule - direct injection, used by the in-flake
   #     nix-unit check where `flakeRoot = ./.` would resolve to a non-git
   #     store path. Provide exactly one of the two.
   flakeRoot ? null,
@@ -56,7 +56,7 @@ let
   #
   # The assertions gate only ever forces `config.assertions`, which reads
   # just `config.users.users` (membership) plus `config.d2b.*`. It
-  # does NOT need nixpkgs' ~1,370-module `nixosSystem` baseModules — those
+  # does NOT need nixpkgs' ~1,370-module `nixosSystem` baseModules - those
   # only matter for building a real system. Booting them per case cost
   # ~28s each (26 cases ≈ 13 min).
   #
@@ -116,7 +116,7 @@ let
   # `systemd` needs a faithful-enough shape because the gate reads back
   # two sub-options: `systemd.services` (membership checks) and
   # `systemd.tmpfiles.rules` (a `listOf str` that MUST concatenate across
-  # modules — a bare `types.anything` reports conflicting list defs
+  # modules - a bare `types.anything` reports conflicting list defs
   # instead of merging). Everything else under `systemd` stays freeform.
   systemdSink =
     { lib, ... }:
@@ -248,7 +248,7 @@ let
   # captured throw payload extracted on a best-effort basis.
   #
   # NixOS treats `assertions = [{ assertion = bool, message = string }]`
-  # as data, so reading the list itself does NOT throw — that lets us
+  # as data, so reading the list itself does NOT throw - that lets us
   # accumulate failing messages without each failed-assertion record
   # also bubbling up.
   evalCase = caseSpec:
@@ -262,7 +262,7 @@ let
       # fires before assertions are computable, tryEval catches it.
       #
       # IMPORTANT (W4a R1 rust-1 + R2 rust-1): we must NOT deep-force
-      # the full `xs` list — that would force `.message` on every
+      # the full `xs` list - that would force `.message` on every
       # record, including passing assertions whose message thunks
       # reference values only safe to read when the assertion is
       # false (see `nixos/modules/tasks/filesystems.nix` line 452
@@ -273,7 +273,7 @@ let
       # Strategy: deepSeq a projection that keeps just the
       # `.assertion` booleans, leaving `.message` thunks untouched.
       # Use `deepSeq forces result` (the two-arg form) rather than
-      # binding to a `let _ = ...; in ...` pattern — Nix is lazy,
+      # binding to a `let _ = ...; in ...` pattern - Nix is lazy,
       # so an unused `let` binding never forces evaluation. The
       # two-arg form forces `forces` before returning `result`.
       assertionsAttempt = builtins.tryEval (

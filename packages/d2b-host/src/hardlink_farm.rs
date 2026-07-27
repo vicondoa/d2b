@@ -48,7 +48,7 @@
 //! - [`activate_generation_marker`]: writes a per-generation
 //!   `marker.json` recording closure hash + d2b version. The
 //!   activate path refuses to mutate any generation dir that lacks
-//!   the marker — protects against an operator hand-rolling a
+//!   the marker - protects against an operator hand-rolling a
 //!   directory and then having `d2b switch` activate it.
 //! - [`swap_current_symlink`]: atomic tmp+rename of the
 //!   `current -> generations/<N>` symlink. Crash-safe: the
@@ -89,7 +89,7 @@ const EMLINK: i32 = 31;
 pub enum HardlinkFarmError {
     /// Two paths live on genuinely different filesystems (distinct
     /// `st_dev`). Hardlinks across filesystems are impossible; the
-    /// store-view farm cannot be built and this is FATAL — no mount
+    /// store-view farm cannot be built and this is FATAL - no mount
     /// namespace can help. Detected up-front by [`assert_same_filesystem`]
     /// before any `link(2)`.
     DifferentFilesystem {
@@ -99,7 +99,7 @@ pub enum HardlinkFarmError {
         b_dev: u64,
     },
     /// `link(2)` returned `EXDEV` even though source and destination
-    /// share the same `st_dev` — i.e. they are on the same underlying
+    /// share the same `st_dev` - i.e. they are on the same underlying
     /// filesystem but in different *vfsmounts* (the canonical case is
     /// NixOS bind-mounting `/nix/store` read-only on top of itself).
     /// Unlike [`DifferentFilesystem`] this is RECOVERABLE: building the
@@ -226,9 +226,9 @@ pub struct GuestGenerationMeta {
 ///
 /// The privileged broker serialises this to a subprocess that runs
 /// the hardlink farm build inside a private mount namespace where
-/// `/nix/store` is lazily detached (so cross-vfsmount `link(2)` EXDEV
-/// — the NixOS `/nix/store` self-bind-mount — does not block the
-/// hardlinks). The subprocess deserialises it and calls [`build_farm`].
+/// `/nix/store` is lazily detached, so a cross-vfsmount `link(2)` EXDEV
+/// (the NixOS `/nix/store` self-bind-mount) does not block the
+/// hardlinks. The subprocess deserialises it and calls [`build_farm`].
 /// Kept here, next to [`build_farm`] + [`GenerationMarker`], so the
 /// broker (serialiser) and the `d2b-activation-helper` binary
 /// (deserialiser) share one definition.
@@ -425,7 +425,7 @@ pub fn system_store_path(closure_paths: &[PathBuf]) -> Option<&Path> {
 
 /// Returns `Ok(())` iff `a` and `b` live on the same filesystem
 /// (same `st_dev`). Surfaces [`HardlinkFarmError::DifferentFilesystem`]
-/// otherwise — the broker uses this BEFORE issuing any `link(2)`
+/// otherwise - the broker uses this BEFORE issuing any `link(2)`
 /// call so it can fail-fast with a typed error instead of EXDEV.
 pub fn assert_same_filesystem(a: &Path, b: &Path) -> Result<(), HardlinkFarmError> {
     let a_dev = std::fs::metadata(a)
@@ -494,7 +494,7 @@ pub fn write_generation_marker(
     // rename so the directory entry is durable. tmpfs is a no-op
     // here (it has no on-disk backing) but ext4 / xfs / btrfs need
     // this for full crash safety. Best-effort: errors are
-    // non-fatal — the marker file itself is already on disk via
+    // non-fatal - the marker file itself is already on disk via
     // the f.sync_all() above.
     if let Ok(dir) = std::fs::File::open(generation_dir) {
         let _ = dir.sync_all();
@@ -549,7 +549,7 @@ pub fn build_farm(
             // that crashed before write_generation_marker. It is never
             // activatable (swap_current_symlink + read_generation_marker
             // both require the marker) and its contents can't be trusted
-            // to belong to this closure — so a colliding closure must not
+            // to belong to this closure - so a colliding closure must not
             // be hardlinked on top of it. Rebuild the generation from
             // scratch instead of unioning the partial leftovers.
             std::fs::remove_dir_all(&generation_dir).map_err(|e| HardlinkFarmError::Io {
@@ -1108,7 +1108,7 @@ fn write_system_symlink(
 /// ADR 0027: the marker is a **zero-length** file. It is the
 /// cold-start readiness signal and lives under the guest-served
 /// `live/` pool, so it must carry no host paths, generation metadata,
-/// counts, caller principal, or any other payload — its existence
+/// counts, caller principal, or any other payload - its existence
 /// alone is the signal and the readiness probe is a `test -e`.
 ///
 /// Written via tmp+rename+fsync so a crash mid-plant leaves either the
@@ -1208,7 +1208,7 @@ fn hardlink_tree(source: &Path, destination: &Path) -> Result<(), HardlinkFarmEr
             match classify_link_failure(e.raw_os_error(), src_dev, dst_dev) {
                 // EXDEV on the SAME `st_dev`: source + destination are on
                 // one underlying filesystem but different vfsmounts (the
-                // NixOS `/nix/store` self-bind-mount). RECOVERABLE — the
+                // NixOS `/nix/store` self-bind-mount). RECOVERABLE - the
                 // broker retries inside a mount namespace where
                 // `/nix/store` is lazily detached.
                 LinkFailure::CrossMount => {
@@ -1220,7 +1220,7 @@ fn hardlink_tree(source: &Path, destination: &Path) -> Result<(), HardlinkFarmEr
                 }
                 // EXDEV on DIFFERENT `st_dev`: genuinely different
                 // filesystems (should already have been caught by
-                // `assert_same_filesystem`). FATAL — no namespace helps.
+                // `assert_same_filesystem`). FATAL - no namespace helps.
                 LinkFailure::DifferentFilesystem => {
                     return Err(HardlinkFarmError::DifferentFilesystem {
                         a: source.display().to_string(),
@@ -1232,7 +1232,7 @@ fn hardlink_tree(source: &Path, destination: &Path) -> Result<(), HardlinkFarmEr
                 // EMLINK: the SOURCE inode is at the filesystem hardlink
                 // ceiling (ext4 `EXT4_LINK_MAX` = 65000). `nix-store
                 // --optimise` dedups every empty/tiny file onto a single
-                // inode, so a long-lived host saturates those inodes —
+                // inode, so a long-lived host saturates those inodes -
                 // after which no NEW hardlink to them can be created, in
                 // ANY mount namespace (the limit is per-inode). Fall back
                 // to a byte copy: the store file is read-only so the farm
@@ -1418,7 +1418,7 @@ pub fn swap_current_symlink(
     // the rename so the directory entry update is durable under
     // power loss (ext4 with `data=writeback`, XFS, etc.). Best
     // effort: errors are non-fatal because the rename itself is
-    // POSIX-atomic for symlinks — fsync only matters when the
+    // POSIX-atomic for symlinks - fsync only matters when the
     // filesystem batches metadata updates.
     if let Ok(dir) = std::fs::File::open(store_root) {
         let _ = dir.sync_all();
@@ -1627,8 +1627,8 @@ pub fn reconcile_split_current_tmp(store_root: &Path) -> Result<(), HardlinkFarm
 
 /// Plant the zero-length per-VM live readiness marker under `live/`.
 ///
-/// ADR 0027: this is the LAST step of a publish — after `state/current`
-/// and `meta/current` are swapped — so the marker's existence implies a
+/// ADR 0027: this is the LAST step of a publish - after `state/current`
+/// and `meta/current` are swapped - so the marker's existence implies a
 /// fully-published generation. Public wrapper over the private
 /// [`write_live_marker`] so the split-layout StoreSync caller can plant
 /// it explicitly (the legacy [`build_farm`] still plants it inline).
@@ -2112,7 +2112,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let gen_dir = dir.path().join("generations/4");
         std::fs::create_dir_all(&gen_dir).unwrap();
-        // Inject a marker with an extra field — deny_unknown_fields
+        // Inject a marker with an extra field - deny_unknown_fields
         // makes this an unparseable error.
         let json = serde_json::json!({
             "closureHash": "sha256:abc",

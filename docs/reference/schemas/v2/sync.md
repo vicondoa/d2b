@@ -10,8 +10,8 @@ degraded-state handling.
 
 ## Top-level fields
 
-- `schemaVersion` — schema version for this artifact.
-- `locks` — lock specs keyed by stable lock id.
+- `schemaVersion` - schema version for this artifact.
+- `locks` - lock specs keyed by stable lock id.
 
 ## Contract notes
 

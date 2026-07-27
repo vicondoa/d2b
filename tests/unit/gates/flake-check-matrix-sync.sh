@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# tests/unit/gates/flake-check-matrix-sync.sh — fail-closed gate: the CI
+# tests/unit/gates/flake-check-matrix-sync.sh - fail-closed gate: the CI
 # flake-check inventory and hosted-runner shard wiring must stay in sync with
 # the flake. Run by `make test-drift`.
 #
 # Two invariants guard against the "CI matrix silently drifts" failure mode:
 #
-#   1. NAME PIN — the live `flake.checks.x86_64-linux.*` set must equal the
+#   1. NAME PIN - the live `flake.checks.x86_64-linux.*` set must equal the
 #      committed pin (tests/golden/flake-check-matrix/x86_64-linux.txt). A
 #      new/removed check fails closed until `make flake-matrix-pin` is run, so a
 #      reviewer confirms the check is covered deliberately. The pin is the full
 #      static check set; the hosted-runner matrix may intentionally filter
 #      checks that require a local/manual or alternate validation path.
 #
-#   2. WIRING — the workflow must still GENERATE the hosted matrix from
+#   2. WIRING - the workflow must still GENERATE the hosted matrix from
 #      `make test-flake-list` and aggregate every hosted shard into the required
 #      `test-flake-x86` context. This catches anyone hardcoding/forking the
 #      matrix source or dropping the aggregator.
@@ -44,7 +44,7 @@ assert_wf() {
   if grep -Eq "$pattern" "$wf"; then
     ok "wiring: $label"
   else
-    fail "wiring: $label — pattern not found in $(basename "$wf"): $pattern"
+    fail "wiring: $label - pattern not found in $(basename "$wf"): $pattern"
     rc=1
   fi
 }

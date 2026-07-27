@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
-# tests/test-drift.sh — `make test-drift`: generated-artifact + rendered-vs-doc
+# tests/test-drift.sh - `make test-drift`: generated-artifact + rendered-vs-doc
 # drift gates. Fail closed when a committed generated file is stale.
 #
-#   * tests/unit/gates/drift-check.sh  — consolidated xtask gen-* drift
+#   * tests/unit/gates/drift-check.sh  - consolidated xtask gen-* drift
 #                                        (error-codes, daemon-api, schemas, …)
-#   * tests/unit/gates/vms-json-parity.sh — rendered vms.json vs manifest parity
-#   * tests/tools/layer1-jobs.py check-workflow — generated CI workflow drift
+#   * tests/unit/gates/vms-json-parity.sh - rendered vms.json vs manifest parity
+#   * tests/tools/layer1-jobs.py check-workflow - generated CI workflow drift
 #
 # CI runs this as its own job; locally it is one prerequisite of `make test-unit`.
 
 set -euo pipefail
+suite_started=$SECONDS
 
 HERE=$(dirname "$(readlink -f "$0")")
 ROOT=${ROOT:-$(cd "$HERE/.." && pwd)}
@@ -27,7 +28,7 @@ for gate in \
   tests/unit/gates/vms-json-parity.sh \
   tests/unit/gates/flake-check-matrix-sync.sh \
   tests/unit/gates/ci-rust-cache-sync.sh; do
-  if [ -x "$ROOT/$gate" ]; then
+  if [ -f "$ROOT/$gate" ]; then
     log "--> $gate"
     if bash "$ROOT/$gate"; then
       ok "$gate"
@@ -36,7 +37,7 @@ for gate in \
       rc=1
     fi
   else
-    log "  SKIP: $gate (not present)"
+    log "  SKIP: $gate (regular file not found)"
   fi
 done
 
@@ -49,4 +50,4 @@ else
 fi
 
 [ "$rc" -eq 0 ] || exit 1
-log "test-drift OK"
+log "test-drift OK (duration: $((SECONDS - suite_started))s)"

@@ -94,11 +94,20 @@ packages/*/t/
 .sccache/
 
 # Broker feature-pass target dirs (deterministic siblings of the broker target
-# dir, kept stable so sccache cache keys don't churn — see tests/test-rust.sh).
+# dir, kept stable so sccache cache keys don't churn - see tests/test-rust.sh).
 packages/d2b-priv-broker/target-layer1/
 packages/d2b-priv-broker/target-fakebackends/
 
-# Panel-review output must never be committed — it belongs in the
+# Panel-review output must never be committed - it belongs in the
 # session workspace, not the repo. (Removed a stray panel-w-fu-fu-rollup/
 # that a prior run wrote into the repo when /tmp was unavailable.)
 panel-*/
+
+# Scratch space for throwaway probes: one-off crates, parser experiments,
+# and any file written to reason about behaviour rather than to ship it.
+# Put debugging artifacts here rather than beside the code they probe, so a
+# catch-all `git add` cannot sweep them into a commit. Two have already
+# reached the tree this way: a stray src/bin probe that broke the build, and
+# a 21 MB crate complete with its target directory.
+.scratch/
+__pycache__/

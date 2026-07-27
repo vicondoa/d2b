@@ -38,14 +38,14 @@
   # ---------------------------------------------------------------
   d2b.site = {
     launcherUsers = [ "alice" ];
-    # Headless example — no Wayland forwarding, no host-side Yubikey
+    # Headless example - no Wayland forwarding, no host-side Yubikey
     # udev rules. Flip these on for a graphics + USBIP setup.
     yubikey.enable = false;
   };
 
   # CIDRs of the host's primary LAN(s). Auto-merged into EVERY env's
   # net-VM DROP rule, so VMs cannot reach the host's neighbours
-  # (printer, NAS, other workstations) — not just the host's own IP.
+  # (printer, NAS, other workstations) - not just the host's own IP.
   # Replace with whatever `ip route` says is your physical LAN.
   d2b.hostLanCidrs = [
     "192.168.1.0/24"
@@ -64,7 +64,7 @@
     lanSubnet    = "10.20.0.0/24";
     uplinkSubnet = "192.0.2.0/30";
 
-    # `extraNetConfig` is the per-env escape hatch — see the README's
+    # `extraNetConfig` is the per-env escape hatch - see the README's
     # "extraNetConfig: when and when not" section. Empty here so the
     # example documents the option without changing behaviour.
     extraNetConfig = { };
@@ -73,7 +73,7 @@
   # ---------------------------------------------------------------
   # Env 2: personal.
   #
-  # Disjoint CIDRs from work — both LAN and uplink. The whole point
+  # Disjoint CIDRs from work - both LAN and uplink. The whole point
   # of this example is that these two envs share NOTHING at the
   # network layer.
   # ---------------------------------------------------------------
@@ -83,7 +83,7 @@
   };
 
   # ---------------------------------------------------------------
-  # Workload VM #1 — joins `work`. Index 10 → IP 10.20.0.10.
+  # Workload VM #1 - joins `work`. Index 10 → IP 10.20.0.10.
   # ---------------------------------------------------------------
   d2b.vms.work-app = {
     enable = true;
@@ -100,7 +100,7 @@
   };
 
   # ---------------------------------------------------------------
-  # Workload VM #2 — joins `personal`. Index 10 → IP 10.30.0.10.
+  # Workload VM #2 - joins `personal`. Index 10 → IP 10.30.0.10.
   # Same `index` as work-app is fine: index uniqueness is scoped
   # per-env.
   # ---------------------------------------------------------------

@@ -10,7 +10,7 @@
 # packages/d2bd/src/ownership_preflight.rs) are SOURCE-LINTS, not
 # eval-time value assertions, so they live in the Rust policy layer:
 # packages/d2b-contract-tests/tests/policy_ownership_preflight.rs
-# (per the eval/Rust routing discipline — nix-unit holds pure-eval
+# (per the eval/Rust routing discipline - nix-unit holds pure-eval
 # assertions; source-greps belong with the other policy_*.rs lints).
 #
 # Spec correction (existing code is canon): the retired gate's prose used the

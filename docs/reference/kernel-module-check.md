@@ -22,9 +22,9 @@ state lock is acquired and after the pidfd table is restored, but
 
 ## What it reads
 
-* `/proc/modules` — currently-loaded modules. Parsed via
+* `/proc/modules` - currently-loaded modules. Parsed via
   `d2b_host::modules::LoadedModuleSet::parse_proc_modules`.
-* The trusted bundle (already loaded by the resolver) — used to
+* The trusted bundle (already loaded by the resolver) - used to
   decide which conditional modules are in scope (virtiofs / graphics
   / usbip / tpm).
 
@@ -33,13 +33,13 @@ side-effecting helper. Mutating module load remains the broker's
 responsibility (`d2b-priv-broker::ops::modprobe`).
 
 If `/proc/modules` cannot be read, the check treats *every* module as
-absent — required modules then read as missing and the daemon
+absent - required modules then read as missing and the daemon
 refuses to start. This is intentional fail-closed posture: a host
 without a readable `/proc` cannot safely host VMs.
 
 ## Required vs optional matrix
 
-### REQUIRED — fatal when missing
+### REQUIRED - fatal when missing
 
 Daemon refuses to start with typed error
 `host-kernel-modules-missing` (exit code 64) and the missing-module
@@ -64,7 +64,7 @@ daemon can prove the corresponding `CONFIG_*` option is built into the
 running kernel. This matters for `udmabuf`, which many kernels expose
 as `CONFIG_UDMABUF=y` with no loadable `.ko`.
 
-### OPTIONAL — warn-only, may degrade VMs
+### OPTIONAL - warn-only, may degrade VMs
 
 Daemon continues startup. A `tracing::warn!` line is emitted for
 each missing optional module. VMs that need that module are skipped
@@ -73,8 +73,8 @@ by the autostart pass with `Outcome::Degraded` and a stable
 
 | Module | Gate | On miss |
 | --- | --- | --- |
-| `nvidia` | Any graphics VM declared. | Warn only — no VM degraded (software-render fallback works). |
-| `nvidia_uvm` | Any graphics VM declared. | Warn only — no VM degraded. |
+| `nvidia` | Any graphics VM declared. | Warn only - no VM degraded (software-render fallback works). |
+| `nvidia_uvm` | Any graphics VM declared. | Warn only - no VM degraded. |
 | `usbip_host` | Any VM has `usbip_yubikey = true` or a `Usbip` process node. | The affected VM(s) are marked degraded. |
 | `tpm_vtpm_proxy` | Any VM has `tpm = true` or a `Swtpm`/`SwtpmPreStartFlush` process node. | The affected VM(s) are marked degraded. |
 
@@ -111,7 +111,7 @@ For a degraded VM caused by a missing OPTIONAL module:
 
 * USBIP-degraded VM → `sudo modprobe usbip_host`.
 * TPM-degraded VM → `sudo modprobe tpm_vtpm_proxy`.
-* Graphics warn (nvidia) — load `nvidia` + `nvidia_uvm` only if the
+* Graphics warn (nvidia) - load `nvidia` + `nvidia_uvm` only if the
   host has nvidia hardware and you intend to use accelerated
   passthrough.
 
@@ -120,18 +120,19 @@ on the next SIGHUP / reconnect) to pick up the change.
 
 ## Matrix gate
 
-`tests/kernel-module-matrix-eval.sh` asserts that the
+`packages/d2b-contract-tests/tests/policy_docs.rs` asserts that the
 `REQUIRED_*` / `OPTIONAL_*` constants in
-`packages/d2bd/src/kernel_module_check.rs` stay in sync with
-the table above. Run it after editing either side.
+`packages/d2bd/src/kernel_module_check.rs` stay in sync with the table above.
+Run the enabled fixture-contract lane after editing either side. This policy is
+advisory pull-request coverage until that lane is promoted.
 
 ## Related
 
-* `docs/reference/support-matrix.d/s4-tier-modules.md` — tier-by-
+* `docs/reference/support-matrix.d/s4-tier-modules.md` - tier-by-
   tier module disposition (Tier 0 NixOS auto-load vs Tier 1+
   loadable).
-* `docs/reference/host-prep-dag.md` — the broker-side module
+* `docs/reference/host-prep-dag.md` - the broker-side module
   matrix (mutating side: `modprobe` allow/deny).
-* `packages/d2b-host/src/modules.rs` — the four-step host probe
+* `packages/d2b-host/src/modules.rs` - the four-step host probe
   (`/proc/modules` + builtin + `/boot/config-*`) the broker uses;
   the daemon check is a *consumer* of `LoadedModuleSet`.

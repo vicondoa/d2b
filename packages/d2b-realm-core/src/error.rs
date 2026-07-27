@@ -132,7 +132,7 @@ impl ConstellationError {
     /// [`ConstellationError::capability_denied`] for `CapabilityDenied`.
     ///
     /// To keep the `CapabilityDenied => Some(capability)` invariant airtight
-    /// in every build, passing `CapabilityDenied` here (a misuse — there is
+    /// in every build, passing `CapabilityDenied` here (a misuse - there is
     /// no capability to attach) is downgraded to `Unauthorized` rather than
     /// producing a denial with no structured capability.
     pub fn new(kind: ErrorKind, message: impl Into<String>) -> Self {

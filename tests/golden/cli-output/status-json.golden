@@ -12,7 +12,7 @@
   "current": null,
   "booted": null,
   "pendingRestart": false,
-  "runtime": "unknown (daemon-experimental, W4 not landed)",
+  "runtime": "unknown (daemon-experimental; runtime integration unavailable)",
   "declaredRoles": [
     "host-reconcile",
     "store-virtiofs-preflight",

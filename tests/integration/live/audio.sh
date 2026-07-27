@@ -48,6 +48,16 @@ set -uo pipefail
 HERE=$(dirname "$(readlink -f "$0")")
 ROOT=${ROOT:-$(cd "$HERE/../../.." && pwd)}
 
+# --- heavy-gate sole-use semaphore (ADR 0046) ------------------------------
+# This live lane mutates real host, KVM, and daemon state, so it must never
+# bypass the sole-use heavy-gate semaphore. The mere presence of
+# D2B_HEAVY_GATE is not trusted: the shared helper asks the wrapper to verify
+# this process genuinely holds a slot and re-execs through the gate exactly
+# once when it does not.
+# shellcheck source=tests/tools/heavy-gate-reexec.sh
+. "$ROOT/tests/tools/heavy-gate-reexec.sh"
+d2b_heavy_gate_reexec "$ROOT" "$0" "$@"
+
 # shellcheck source=tests/lib.sh
 . "$ROOT/tests/lib.sh"
 
@@ -91,7 +101,7 @@ audio_vms() {
 }
 TEST_VMS=$(audio_vms || true)
 if [ -z "$TEST_VMS" ]; then
-  log "no audio-enabled VMs declared — most tests will be limited to host-side surface."
+  log "no audio-enabled VMs declared - most tests will be limited to host-side surface."
 fi
 
 skip() { log "  SKIP: $*"; }
@@ -102,7 +112,7 @@ skip() { log "  SKIP: $*"; }
 # DOWN to the resolved Wayland user (`$D2B_WAYLAND_USER`) automatically
 # so this script stays green in the aggregate suite. If no Wayland
 # user can be resolved, or it has no active login session, we SKIP
-# cleanly (exit 0) rather than FATAL — that way the suite still
+# cleanly (exit 0) rather than FATAL - that way the suite still
 # reports clean on hosts where audio isn't expected to work (e.g. CI
 # without a desktop session) instead of breaking the whole runner.
 if [ "$(id -u)" = "0" ]; then
@@ -149,13 +159,13 @@ if [ "$(id -u)" = "0" ]; then
     D2B_HOST_CONFIG="$D2B_HOST_CONFIG" \
     ROOT="$ROOT" \
     bash "$0" "$@"
-  # exec failed — keep the old FATAL so the regression is visible
+  # exec failed - keep the old FATAL so the regression is visible
   printf '%s FATAL: runuser -u %s failed; audio tests cannot run as root\n' \
     "$(date +%H:%M:%S)" "$D2B_WAYLAND_USER" >&2
   exit 2
 fi
 if [ -z "${XDG_RUNTIME_DIR:-}" ]; then
-  log "FATAL: XDG_RUNTIME_DIR is unset — run from a Plasma terminal, not a bare SSH."
+  log "FATAL: XDG_RUNTIME_DIR is unset - run from a Plasma terminal, not a bare SSH."
   exit 2
 fi
 
@@ -207,7 +217,7 @@ add_cleanup cleanup_audio
 # audio. This has happened twice: the CLI used to SIGHUP WirePlumber
 # (which exits on Hangup), and a misplaced WirePlumber stream-rule
 # disconnected all ALSA cards. Both showed up as "real_sinks=4 before,
-# real_sinks=0/1 after" — and neither was caught because the tests
+# real_sinks=0/1 after" - and neither was caught because the tests
 # only sampled host audio ONCE, near the start, when everything still
 # looked fine. The snapshot below forces an end-of-suite re-check.
 # ---------------------------------------------------------------------
@@ -260,7 +270,7 @@ test_host_pipewire_alive() {
   local status
   status=$(wpctl status 2>&1)
   if [ -z "$status" ] || ! printf '%s' "$status" | grep -q '^PipeWire '; then
-    fail "wpctl status produced no header — pipewire connection broken"
+    fail "wpctl status produced no header - pipewire connection broken"
     return
   fi
   ok "wpctl status reachable"
@@ -283,7 +293,7 @@ test_host_has_audio_sinks_and_sources() {
   log "test_host_has_audio_sinks_and_sources"
   # Count any line under Audio › Sinks: (the "Dummy Output" pseudo-sink
   # IS a real PipeWire sink, but if it's the ONLY one then ALSA cards
-  # were dropped — this is exactly the failure mode we want to catch).
+  # were dropped - this is exactly the failure mode we want to catch).
   local sinks sources real_sinks
   sinks=$(wpctl status 2>/dev/null | awk '/^ ├─ Sinks:/{f=1;next} /^ ├─ Sources:/{f=0} f' \
     | grep -E '\.[0-9]+:' | wc -l 2>/dev/null || true)
@@ -379,7 +389,7 @@ test_cli_rejects_audio_disabled_vm() {
   non=$(jq -r '. as $m | to_entries[] | select(.value.audio != true) | .key' \
     /run/current-system/sw/share/d2b/vms.json 2>/dev/null | head -1)
   if [ -z "$non" ]; then
-    skip "every VM has audio enabled — no negative case to test"
+    skip "every VM has audio enabled - no negative case to test"
     return
   fi
   local out rc=0
@@ -406,7 +416,7 @@ test_cloud_hypervisor_capabilities() {
     "$ROOT#nixosConfigurations.$D2B_HOST_CONFIG.config.microvm.vms" 2>/dev/null \
     | jq -r 'keys[0] // empty')
   if [ -z "$probe_vm" ]; then
-    skip "no microvm.vms entries declared — cannot probe CH binary"
+    skip "no microvm.vms entries declared - cannot probe CH binary"
     return 0
   fi
   ch=$(nix eval --raw \
@@ -420,7 +430,7 @@ test_cloud_hypervisor_capabilities() {
   v=$("$ch" --version 2>&1)
   log "  $v"
   if ! printf '%s\n' "$v" | grep -qE 'cloud-hypervisor v(5[2-9]|[6-9][0-9]|[1-9][0-9]{2,})\.'; then
-    fail "CH version is older than v52 — vulnerable to CVE-2026-45782 and audio is not unblocked"
+    fail "CH version is older than v52 - vulnerable to CVE-2026-45782 and audio is not unblocked"
     return
   fi
   ok "CH version >= v52 (CVE-2026-45782 fixed)"
@@ -433,7 +443,7 @@ test_cloud_hypervisor_capabilities() {
     ok "CH has --generic-vhost-user (audio attach supported)"
   fi
   if ! printf '%s' "$help" | grep -q -- '--gpu'; then
-    fail "CH lacks --gpu (spectrum graphics patches missing — graphics VMs WILL break)"
+    fail "CH lacks --gpu (spectrum graphics patches missing - graphics VMs WILL break)"
   else
     ok "CH has --gpu (spectrum graphics patches present)"
   fi
@@ -475,7 +485,7 @@ test_guest_sees_virtio_snd() {
   # Probe the guest. ssh_vm uses d2b status to find creds.
   local out
   out=$(ssh_vm "$running" 'cat /proc/asound/cards 2>/dev/null' 2>&1) || {
-    skip "$running: SSH probe failed — VM may not yet be sshable"
+    skip "$running: SSH probe failed - VM may not yet be sshable"
     return
   }
   if printf '%s' "$out" | grep -qE 'VIRT|virtio'; then
@@ -794,7 +804,7 @@ test_e2e_node_name_per_vm() {
   # CLIENT-level check (what pavucontrol / KDE audio applet display)
   # ---------------------------------------------------------------------
   # The PipeWire client for the sidecar must show application.name =
-  # "d2b-<vm>" — NOT the generic "vhost-device-sound" inherited from
+  # "d2b-<vm>" - NOT the generic "vhost-device-sound" inherited from
   # argv[0]. In pavucontrol the
   # Applications tab labels each stream by its CLIENT application.name,
   # so two VMs both showing "vhost-device-sound" are indistinguishable.
@@ -1067,7 +1077,7 @@ test_audio_off_no_virtio_snd() {
   fi
   local out rc=0
   if ! out=$(ssh_vm "$running" 'cat /proc/asound/cards 2>/dev/null' 2>&1); then
-    skip "$running: SSH probe failed — VM not yet sshable"
+    skip "$running: SSH probe failed - VM not yet sshable"
     return 0
   fi
   if printf '%s' "$out" | grep -qiE 'virtio|VIRT'; then
@@ -1137,7 +1147,7 @@ main() {
     full|*)         local -n SET=ALL_TESTS ;;
   esac
 
-  log "d2b audio test suite — log: $D2B_LOG"
+  log "d2b audio test suite - log: $D2B_LOG"
   local pass=0 fail_count=0
   for t in "${SET[@]}"; do
     if [ -n "$only" ] && [ "$t" != "$only" ]; then continue; fi

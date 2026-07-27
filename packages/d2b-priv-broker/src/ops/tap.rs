@@ -40,7 +40,7 @@ use std::time::Duration;
 
 /// Outcome of the prior `ApplyNmUnmanaged` op for the same ifname
 /// set, threaded into [`create_tap`] via [`TapCreateGate`]. The wire
-/// request never carries this directly — the runtime fetches it from
+/// request never carries this directly - the runtime fetches it from
 /// the bundle session state (per H1 wire-refactor) and supplies it
 /// alongside [`CreateTapRequest`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

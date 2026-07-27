@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2016
-# tests/unit/meta/pr-checklist-gate.sh — W0 policy gate for the mandatory PR checklist.
+# tests/unit/meta/pr-checklist-gate.sh - W0 policy gate for the mandatory PR checklist.
 #
 # W0 validates the template (default) or a provided PR body (file arg or `-` for
 # stdin). A later wave wires this against live PR bodies in CI.
