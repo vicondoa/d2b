@@ -257,38 +257,61 @@ mod tests {
 
     #[test]
     fn independent_literal_golden_vectors_pin_every_key_space() {
-        let vectors: &[(KeySpace, &[KeyComponent<'_>], &[u8])] = &[
+        let vectors: Vec<(
+            KeySpace,
+            &[KeyComponent<'_>],
+            &[u8],
+            Vec<DecodedKeyComponent>,
+        )> = vec![
             (
                 KeySpace::StoreMeta,
                 &[KeyComponent::Text("zone_name")],
                 b"\x01\x01\x00\x09zone_name",
+                vec![DecodedKeyComponent::Text("zone_name".to_owned())],
             ),
             (
                 KeySpace::ApiSchemas,
                 &[KeyComponent::Text("sha256:00")],
                 b"\x01\x02\x00\x09sha256:00",
+                vec![DecodedKeyComponent::Text("sha256:00".to_owned())],
             ),
             (
                 KeySpace::Resources,
                 &[KeyComponent::Text("Host"), KeyComponent::Text("local")],
                 b"\x01\x03\x00\x04Host\x00\x05local",
+                vec![
+                    DecodedKeyComponent::Text("Host".to_owned()),
+                    DecodedKeyComponent::Text("local".to_owned()),
+                ],
             ),
             (
                 KeySpace::TypeIndex,
                 &[KeyComponent::Text("Guest"), KeyComponent::Text("work")],
                 b"\x01\x04\x00\x05Guest\x00\x04work",
+                vec![
+                    DecodedKeyComponent::Text("Guest".to_owned()),
+                    DecodedKeyComponent::Text("work".to_owned()),
+                ],
             ),
             (
                 KeySpace::OwnerIndex,
                 &[KeyComponent::Text(UID_A), KeyComponent::Text(UID_B)],
                 b"\x01\x05\x00\x24123e4567-e89b-42d3-a456-426614174000\
                   \x00\x24123e4567-e89b-42d3-a456-426614174001",
+                vec![
+                    DecodedKeyComponent::Text("123e4567-e89b-42d3-a456-426614174000".to_owned()),
+                    DecodedKeyComponent::Text("123e4567-e89b-42d3-a456-426614174001".to_owned()),
+                ],
             ),
             (
                 KeySpace::ProducerIndex,
                 &[KeyComponent::Text(UID_A), KeyComponent::Text(UID_B)],
                 b"\x01\x06\x00\x24123e4567-e89b-42d3-a456-426614174000\
                   \x00\x24123e4567-e89b-42d3-a456-426614174001",
+                vec![
+                    DecodedKeyComponent::Text("123e4567-e89b-42d3-a456-426614174000".to_owned()),
+                    DecodedKeyComponent::Text("123e4567-e89b-42d3-a456-426614174001".to_owned()),
+                ],
             ),
             (
                 KeySpace::ControllerIndex,
@@ -298,32 +321,42 @@ mod tests {
                     KeyComponent::Text("local"),
                 ],
                 b"\x01\x07\x00\x04core\x00\x04Host\x00\x05local",
+                vec![
+                    DecodedKeyComponent::Text("core".to_owned()),
+                    DecodedKeyComponent::Text("Host".to_owned()),
+                    DecodedKeyComponent::Text("local".to_owned()),
+                ],
             ),
             (
                 KeySpace::RevisionLog,
                 &[KeyComponent::U64(42)],
                 b"\x01\x08\x00\x00\x00\x00\x00\x00\x00\x2a",
+                vec![DecodedKeyComponent::U64(42)],
             ),
             (
                 KeySpace::Operations,
                 &[KeyComponent::Text("op-1")],
                 b"\x01\x09\x00\x04op-1",
+                vec![DecodedKeyComponent::Text("op-1".to_owned())],
             ),
             (
                 KeySpace::ZoneLinkCursors,
                 &[KeyComponent::Text(UID_A)],
                 b"\x01\x0a\x00\x24123e4567-e89b-42d3-a456-426614174000",
+                vec![DecodedKeyComponent::Text(
+                    "123e4567-e89b-42d3-a456-426614174000".to_owned(),
+                )],
             ),
         ];
 
-        for (key_space, components, literal) in vectors {
+        for (key_space, components, literal, expected_decoded) in vectors {
             assert_eq!(
-                encode_key(*key_space, components).unwrap().as_bytes(),
-                *literal
+                encode_key(key_space, components).unwrap().as_bytes(),
+                literal
             );
             let decoded = DecodedKey::decode(literal).unwrap();
-            assert_eq!(decoded.key_space(), *key_space);
-            assert_eq!(decoded.components().len(), components.len());
+            assert_eq!(decoded.key_space(), key_space);
+            assert_eq!(decoded.components(), expected_decoded);
         }
     }
 
