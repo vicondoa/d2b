@@ -56,8 +56,9 @@ pub(crate) struct AdmissionPermit {
 impl core::fmt::Debug for AdmissionPermit {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("AdmissionPermit")
-            .field("authorization", &self.authorization)
-            .field("policy_snapshot", &self.policy_snapshot)
+            .field("target_count", &self.authorization.targets.len())
+            .field("authorization", &"<redacted>")
+            .field("policy_snapshot", &"<redacted>")
             .field("authority", &"<redacted>")
             .finish()
     }
@@ -159,10 +160,10 @@ impl AdmittedMutation {
 impl core::fmt::Debug for AdmittedMutation {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("AdmittedMutation")
-            .field("mutations", &self.mutations)
-            .field("authorization", &self.authorization)
-            .field("policy_snapshot", &self.policy_snapshot)
-            .field("operation", &self.operation)
+            .field("mutation_count", &self.mutations.len())
+            .field("authorization", &"<redacted>")
+            .field("policy_snapshot", &"<redacted>")
+            .field("operation", &"<redacted>")
             .field("authority", &"<redacted>")
             .finish()
     }
@@ -200,9 +201,9 @@ impl PreparedStoreMutation {
 impl core::fmt::Debug for PreparedStoreMutation {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("PreparedStoreMutation")
-            .field("mutation", &self.mutation)
-            .field("resource_uid", &self.resource_uid)
-            .field("payload_digest", &self.payload_digest)
+            .field("kind", &self.mutation.kind)
+            .field("has_resource_uid", &self.resource_uid.is_some())
+            .field("has_payload_digest", &self.payload_digest.is_some())
             .finish()
     }
 }
@@ -405,6 +406,7 @@ mod tests {
     use super::*;
     use d2b_contracts::v3::{
         ConfigurationGeneration, ResourceName, ResourceRef, ResourceTypeName, ResourceUid, ZoneId,
+        ZoneRevision,
     };
 
     fn authorization(zone: &str) -> AdmittedAuthorization {
@@ -555,5 +557,39 @@ mod tests {
         let verified = verifier.verify(admitted).unwrap();
 
         assert_eq!(verified.policy_snapshot(&verifier).unwrap(), snapshot());
+    }
+
+    #[test]
+    fn admission_debug_surfaces_redact_protected_fields() {
+        const MARKER: &str = "sentinel-observability-marker";
+
+        let (issuer, verifier) = admission_pair();
+        let permit = issuer.record_allow(authorization(MARKER), snapshot());
+        let permit_debug = format!("{permit:?}");
+        let mut protected_mutation = mutation(MARKER);
+        protected_mutation.kind = d2b_resource_store::ResourceMutationKind::Delete;
+        protected_mutation.target = ResourceRef::parse(&format!("Host/{MARKER}")).unwrap();
+        protected_mutation.expected =
+            d2b_resource_store::ExpectedRevision::Exact(ZoneRevision::new(1));
+        let admitted = permit
+            .admit(
+                vec![protected_mutation],
+                StoreOperationContext {
+                    operation_id: MARKER.to_owned(),
+                    idempotency_key: Some(MARKER.to_owned()),
+                    correlation_id: MARKER.to_owned(),
+                    trace_id: Some(MARKER.to_owned()),
+                    deadline_ms: 1,
+                },
+            )
+            .unwrap();
+        let admitted_debug = format!("{admitted:?}");
+        let verified = verifier.verify(admitted).unwrap();
+        let prepared_debug = format!("{:?}", verified.mutations(&verifier).unwrap()[0]);
+        let verified_debug = format!("{verified:?}");
+
+        for rendered in [permit_debug, admitted_debug, prepared_debug, verified_debug] {
+            assert!(!rendered.contains(MARKER), "{rendered}");
+        }
     }
 }

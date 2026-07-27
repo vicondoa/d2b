@@ -39,10 +39,15 @@ pub const RESOURCE_API_REACHABILITY: ResourceApiReachability =
     ResourceApiReachability::AwaitingAuthenticatedComponentSessionRouter;
 
 /// Session-scoped dispatcher that is intentionally not registered on a server.
-#[derive(Debug)]
 pub struct UnregisteredBusAdapter<S, U> {
     service: Arc<ResourceService<S, U>>,
     session: AuthenticatedSubjectContext,
+}
+
+impl<S, U> core::fmt::Debug for UnregisteredBusAdapter<S, U> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("UnregisteredBusAdapter(<redacted>)")
+    }
 }
 
 impl<S, U> UnregisteredBusAdapter<S, U>
@@ -289,8 +294,16 @@ mod tests {
     }
 
     fn subject(locality: Locality, evidence: EvidenceClass) -> Arc<SessionClaims> {
+        subject_named(locality, evidence, "alice")
+    }
+
+    fn subject_named(
+        locality: Locality,
+        evidence: EvidenceClass,
+        name: &str,
+    ) -> Arc<SessionClaims> {
         Arc::new(SessionClaims::new(
-            ResourceRef::parse("User/alice").unwrap(),
+            ResourceRef::parse(&format!("User/{name}")).unwrap(),
             ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
             ResourceRef::parse("Zone/dev").unwrap(),
             evidence,
@@ -439,6 +452,27 @@ mod tests {
         .map(str::to_owned)
         .collect();
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn adapter_and_client_debug_redact_session_identity() {
+        const MARKER: &str = "sentinel-observability-marker";
+
+        let (store, authorizer) = UnreachableStore::paired(ApiCatalog::standard(), None);
+        let service = Arc::new(ResourceService::new(store, authorizer));
+        let adapter = UnregisteredBusAdapter::bind_unregistered_session(
+            service,
+            issue_test_subject(
+                subject_named(Locality::Local, EvidenceClass::UnixPeer, MARKER),
+                state(),
+            ),
+        )
+        .unwrap();
+        let adapter_debug = format!("{adapter:?}");
+        let client_debug = format!("{:?}", adapter.unregistered_client());
+
+        assert!(!adapter_debug.contains(MARKER), "{adapter_debug}");
+        assert!(!client_debug.contains(MARKER), "{client_debug}");
     }
 
     #[tokio::test]

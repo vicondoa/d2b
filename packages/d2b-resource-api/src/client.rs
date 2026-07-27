@@ -11,11 +11,16 @@ use crate::{
 };
 
 /// Unregistered resource client whose identity is fixed by a session capability.
-#[derive(Debug)]
 pub struct UnregisteredResourceClient<S, U> {
     service: Arc<ResourceService<S, U>>,
     subject: Arc<AuthenticatedSubjectContext>,
     state: AuthorizationState,
+}
+
+impl<S, U> core::fmt::Debug for UnregisteredResourceClient<S, U> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("UnregisteredResourceClient(<redacted>)")
+    }
 }
 
 impl<S, U> UnregisteredResourceClient<S, U>

@@ -30,7 +30,7 @@ const RESOURCE_SERVICE: &str = "d2b.resource.v3";
 const BOOTSTRAP_PURPOSE: &str = "resource-bootstrap";
 
 /// Immutable set of ResourceTypes installed for one API binding.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ApiCatalog {
     resource_types: BTreeSet<ResourceTypeName>,
 }
@@ -72,6 +72,14 @@ impl ApiCatalog {
 impl Default for ApiCatalog {
     fn default() -> Self {
         Self::standard()
+    }
+}
+
+impl core::fmt::Debug for ApiCatalog {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ApiCatalog")
+            .field("resource_type_count", &self.resource_types.len())
+            .finish()
     }
 }
 
@@ -146,7 +154,7 @@ pub enum SessionVerb {
 }
 
 /// One exact target evaluated for a method or atomic batch.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct AuthorizationTarget {
     pub resource_type: ResourceTypeName,
     pub resource_name: Option<ResourceName>,
@@ -156,7 +164,7 @@ pub struct AuthorizationTarget {
 }
 
 /// Immutable method authorization input.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct AuthorizationRequest {
     pub method: ApiMethod,
     pub zone: ZoneId,
@@ -164,7 +172,7 @@ pub struct AuthorizationRequest {
 }
 
 /// Revision and bootstrap state captured from trusted runtime state.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct AuthorizationState {
     pub snapshot: PolicySnapshot,
     pub zone_policy_revision: ZoneRevision,
@@ -173,7 +181,7 @@ pub struct AuthorizationState {
 }
 
 /// Durable bootstrap-policy phase.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum BootstrapPhase {
     Unprovisioned {
         zone: ZoneId,
@@ -191,14 +199,14 @@ pub enum BootstrapPhase {
 }
 
 /// Exact subject binding compiled from one RoleBinding.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct BoundSubject {
     pub subject_ref: ResourceRef,
     pub subject_uid: ResourceUid,
 }
 
 /// Optional narrowing applied by a RoleBinding.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct BindingScope {
     pub zones: BTreeSet<ZoneId>,
     pub resource_names: BTreeSet<ResourceName>,
@@ -214,7 +222,7 @@ pub enum RelayGrantAuthority {
 }
 
 /// Validated evaluator projection of one Role rule.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct PolicyRule {
     resource_types: BTreeSet<ResourceTypeName>,
     resource_verbs: BTreeSet<ResourceVerb>,
@@ -223,6 +231,79 @@ pub struct PolicyRule {
     resource_names: BTreeSet<ResourceName>,
     zones: BTreeSet<ZoneId>,
     execution_refs: BTreeSet<ResourceRef>,
+}
+
+impl core::fmt::Debug for AuthorizationTarget {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("AuthorizationTarget")
+            .field("verb", &self.verb)
+            .field("resource_type", &"<redacted>")
+            .field("has_resource_name", &self.resource_name.is_some())
+            .field("has_subresource", &self.subresource.is_some())
+            .field("has_execution_ref", &self.execution_ref.is_some())
+            .finish()
+    }
+}
+
+impl core::fmt::Debug for AuthorizationRequest {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("AuthorizationRequest")
+            .field("method", &self.method)
+            .field("zone", &"<redacted>")
+            .field("target_count", &self.targets.len())
+            .finish()
+    }
+}
+
+impl core::fmt::Debug for AuthorizationState {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("AuthorizationState")
+            .field("snapshot", &"<redacted>")
+            .field("zone_policy_revision", &"<redacted>")
+            .field("bootstrap_phase", &self.bootstrap_phase)
+            .field("now_tick", &"<redacted>")
+            .finish()
+    }
+}
+
+impl core::fmt::Debug for BootstrapPhase {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::Unprovisioned { .. } => "BootstrapPhase::Unprovisioned(<redacted>)",
+            Self::Provisioned { .. } => "BootstrapPhase::Provisioned(<redacted>)",
+            Self::Disabled => "BootstrapPhase::Disabled",
+        })
+    }
+}
+
+impl core::fmt::Debug for BoundSubject {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("BoundSubject(<redacted>)")
+    }
+}
+
+impl core::fmt::Debug for BindingScope {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("BindingScope")
+            .field("zone_count", &self.zones.len())
+            .field("resource_name_count", &self.resource_names.len())
+            .field("execution_ref_count", &self.execution_refs.len())
+            .finish()
+    }
+}
+
+impl core::fmt::Debug for PolicyRule {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("PolicyRule")
+            .field("resource_type_count", &self.resource_types.len())
+            .field("resource_verb_count", &self.resource_verbs.len())
+            .field("session_verb_count", &self.session_verbs.len())
+            .field("subresource_count", &self.subresources.len())
+            .field("resource_name_count", &self.resource_names.len())
+            .field("zone_count", &self.zones.len())
+            .field("execution_ref_count", &self.execution_refs.len())
+            .finish()
+    }
 }
 
 impl PolicyRule {
@@ -322,10 +403,19 @@ impl PolicyRule {
 }
 
 /// Validated evaluator projection of one Role.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct CompiledRole {
     pub role_ref: ResourceRef,
     pub rules: Vec<PolicyRule>,
+}
+
+impl core::fmt::Debug for CompiledRole {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("CompiledRole")
+            .field("role_ref", &"<redacted>")
+            .field("rule_count", &self.rules.len())
+            .finish()
+    }
 }
 
 impl CompiledRole {
@@ -341,12 +431,23 @@ impl CompiledRole {
 }
 
 /// Validated evaluator projection of one RoleBinding.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct CompiledRoleBinding {
     pub role_ref: ResourceRef,
     pub subjects: BTreeSet<BoundSubject>,
     pub scope: BindingScope,
     pub relay_authority: RelayGrantAuthority,
+}
+
+impl core::fmt::Debug for CompiledRoleBinding {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("CompiledRoleBinding")
+            .field("role_ref", &"<redacted>")
+            .field("subject_count", &self.subjects.len())
+            .field("scope", &self.scope)
+            .field("relay_authority", &self.relay_authority)
+            .finish()
+    }
 }
 
 impl CompiledRoleBinding {
@@ -405,12 +506,23 @@ impl CompiledRoleBinding {
 }
 
 /// One immutable installed policy revision.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct PolicySet {
     pub policy_revision: u64,
     catalog: ApiCatalog,
     roles: BTreeMap<ResourceRef, CompiledRole>,
     bindings: Vec<CompiledRoleBinding>,
+}
+
+impl core::fmt::Debug for PolicySet {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("PolicySet")
+            .field("policy_revision", &"<redacted>")
+            .field("catalog", &self.catalog)
+            .field("role_count", &self.roles.len())
+            .field("binding_count", &self.bindings.len())
+            .finish()
+    }
 }
 
 impl PolicySet {
@@ -453,10 +565,19 @@ impl PolicySet {
 }
 
 /// Positive exact capabilities, never inferred from a denial.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct PositiveCapabilities {
     pub resources: Vec<AuthorizationTarget>,
     pub session_verbs: BTreeSet<SessionVerb>,
+}
+
+impl core::fmt::Debug for PositiveCapabilities {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("PositiveCapabilities")
+            .field("resource_count", &self.resources.len())
+            .field("session_verb_count", &self.session_verbs.len())
+            .finish()
+    }
 }
 
 /// Typed fail-closed authorization outcome.
@@ -484,9 +605,14 @@ impl AuthorizationDenial {
 }
 
 /// Successful authorization evidence returned to the service.
-#[derive(Debug)]
 pub struct AuthorizationGrant {
     permit: AdmissionPermit,
+}
+
+impl core::fmt::Debug for AuthorizationGrant {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("AuthorizationGrant(<redacted>)")
+    }
 }
 
 impl AuthorizationGrant {
@@ -500,12 +626,17 @@ impl AuthorizationGrant {
 }
 
 /// Single native evaluator and positive-decision cache.
-#[derive(Debug)]
 pub struct NativeAuthorizer {
     catalog: ApiCatalog,
     policy: RwLock<Option<Arc<PolicySet>>>,
     cache: PositiveDecisionCache,
     admission: AdmissionIssuer,
+}
+
+impl core::fmt::Debug for NativeAuthorizer {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("NativeAuthorizer(<redacted>)")
+    }
 }
 
 impl NativeAuthorizer {
@@ -1758,6 +1889,100 @@ mod tests {
                     AuthorizationDenial::BootstrapDenied
                 );
             }
+        }
+    }
+
+    #[test]
+    fn authorization_debug_surfaces_redact_policy_and_identity_fields() {
+        const MARKER: &str = "sentinel-observability-marker";
+
+        let extension = ResourceTypeName::parse(format!("{MARKER}.d2bus.org.Widget")).unwrap();
+        let catalog = ApiCatalog::with_extensions([extension.clone()]).unwrap();
+        let target = AuthorizationTarget {
+            resource_type: extension.clone(),
+            resource_name: Some(ResourceName::parse(MARKER).unwrap()),
+            verb: ResourceVerb::Get,
+            subresource: Some(MARKER.to_owned()),
+            execution_ref: Some(ResourceRef::parse(&format!("Process/{MARKER}")).unwrap()),
+        };
+        let request = AuthorizationRequest {
+            method: ApiMethod::Get,
+            zone: ZoneId::parse(MARKER).unwrap(),
+            targets: vec![target.clone()],
+        };
+        let mut protected_state = state(9);
+        protected_state.bootstrap_phase = BootstrapPhase::Unprovisioned {
+            zone: ZoneId::parse(MARKER).unwrap(),
+            controller_generation: ControllerGeneration::new(11).unwrap(),
+            provider_generation: ResourceGeneration::new(12).unwrap(),
+        };
+        let bound_subject = BoundSubject {
+            subject_ref: ResourceRef::parse(&format!("User/{MARKER}")).unwrap(),
+            subject_uid: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+        };
+        let scope = BindingScope {
+            zones: BTreeSet::from([ZoneId::parse(MARKER).unwrap()]),
+            resource_names: BTreeSet::from([ResourceName::parse(MARKER).unwrap()]),
+            execution_refs: BTreeSet::from([
+                ResourceRef::parse(&format!("Process/{MARKER}")).unwrap()
+            ]),
+        };
+        let rule = PolicyRule::new(
+            &catalog,
+            [extension],
+            [ResourceVerb::Get],
+            [SessionVerb::Connect],
+            [MARKER.to_owned()],
+            [ResourceName::parse(MARKER).unwrap()],
+            [ZoneId::parse(MARKER).unwrap()],
+            [ResourceRef::parse(&format!("Process/{MARKER}")).unwrap()],
+        )
+        .unwrap();
+        let role = CompiledRole::new(
+            ResourceRef::parse(&format!("Role/{MARKER}")).unwrap(),
+            vec![rule.clone()],
+        )
+        .unwrap();
+        let binding = CompiledRoleBinding::new(
+            role.role_ref.clone(),
+            [bound_subject.clone()],
+            scope.clone(),
+            RelayGrantAuthority::None,
+        )
+        .unwrap();
+        let policy =
+            PolicySet::new(&catalog, 9, vec![role.clone()], vec![binding.clone()]).unwrap();
+        let capabilities = PositiveCapabilities {
+            resources: vec![target.clone()],
+            session_verbs: BTreeSet::from([SessionVerb::Connect]),
+        };
+        let context = subject(
+            Locality::Local,
+            EvidenceClass::UnixPeer,
+            &format!("User/{MARKER}"),
+        );
+        let grant = grant(&test_issuer(), &context, &request, protected_state.snapshot);
+        let authorizer =
+            NativeAuthorizer::from_issuer(catalog.clone(), Some(policy.clone()), test_issuer())
+                .unwrap();
+
+        for rendered in [
+            format!("{catalog:?}"),
+            format!("{target:?}"),
+            format!("{request:?}"),
+            format!("{protected_state:?}"),
+            format!("{:?}", protected_state.bootstrap_phase),
+            format!("{bound_subject:?}"),
+            format!("{scope:?}"),
+            format!("{rule:?}"),
+            format!("{role:?}"),
+            format!("{binding:?}"),
+            format!("{policy:?}"),
+            format!("{capabilities:?}"),
+            format!("{grant:?}"),
+            format!("{authorizer:?}"),
+        ] {
+            assert!(!rendered.contains(MARKER), "{rendered}");
         }
     }
 }

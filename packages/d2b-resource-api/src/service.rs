@@ -73,7 +73,7 @@ pub trait UpgradeDispatcher: Send + Sync {
 }
 
 /// Authorized upgrade request passed to the owning controller.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct AuthorizedUpgrade {
     pub operation: StoreOperationContext,
     pub zone: ZoneId,
@@ -83,6 +83,19 @@ pub struct AuthorizedUpgrade {
     pub expected_revision: ZoneRevision,
 }
 
+impl core::fmt::Debug for AuthorizedUpgrade {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("AuthorizedUpgrade")
+            .field("action", &self.action)
+            .field("recursive", &self.recursive)
+            .field("operation", &"<redacted>")
+            .field("zone", &"<redacted>")
+            .field("target", &"<redacted>")
+            .field("expected_revision", &"<redacted>")
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UpgradeAction {
     Assess,
@@ -90,11 +103,21 @@ pub enum UpgradeAction {
     Execute,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct UpgradeResult {
     pub resource: StoredResource,
     pub plan: Vec<d2b_resource_store::StoreResolvedIdentity>,
     pub revision: ZoneRevision,
+}
+
+impl core::fmt::Debug for UpgradeResult {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("UpgradeResult")
+            .field("resource", &"<redacted>")
+            .field("plan_length", &self.plan.len())
+            .field("revision", &"<redacted>")
+            .finish()
+    }
 }
 
 /// Default until the controller dispatch slice lands.
@@ -111,11 +134,16 @@ impl UpgradeDispatcher for UnavailableUpgradeDispatcher {
 }
 
 /// Resource API over one concrete store and one native authorization engine.
-#[derive(Debug)]
 pub struct ResourceService<S, U = UnavailableUpgradeDispatcher> {
     store: Arc<S>,
     authorizer: Arc<NativeAuthorizer>,
     upgrade: Arc<U>,
+}
+
+impl<S, U> core::fmt::Debug for ResourceService<S, U> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("ResourceService(<redacted>)")
+    }
 }
 
 impl<S> ResourceService<S, UnavailableUpgradeDispatcher> {
@@ -1000,24 +1028,50 @@ impl<T> TrustedRequest<T> {
     }
 }
 
-#[derive(Debug)]
 struct ParsedIdentity {
     zone: ZoneId,
     resource_ref: ResourceRef,
     uid: Option<ResourceUid>,
 }
 
-#[derive(Debug)]
 struct ParsedMutation {
     store: StoreMutation,
 }
 
-#[derive(Debug)]
 struct ParsedMutationRoute {
     identity: ParsedIdentity,
     owner: Option<ParsedIdentity>,
     kind: ResourceMutationKind,
     authorizations: Vec<AuthorizationTarget>,
+}
+
+impl core::fmt::Debug for ParsedIdentity {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ParsedIdentity")
+            .field("zone", &"<redacted>")
+            .field("resource_ref", &"<redacted>")
+            .field("has_uid", &self.uid.is_some())
+            .finish()
+    }
+}
+
+impl core::fmt::Debug for ParsedMutation {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ParsedMutation")
+            .field("kind", &self.store.kind)
+            .finish()
+    }
+}
+
+impl core::fmt::Debug for ParsedMutationRoute {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ParsedMutationRoute")
+            .field("identity", &self.identity)
+            .field("has_owner", &self.owner.is_some())
+            .field("kind", &self.kind)
+            .field("authorization_count", &self.authorizations.len())
+            .finish()
+    }
 }
 
 fn parse_identity(value: Option<&wire::ResourceIdentity>) -> Result<ParsedIdentity, ResourceError> {
@@ -1722,6 +1776,7 @@ mod tests {
 
     #[derive(Debug)]
     struct FakeStore {
+        debug_marker: &'static str,
         mode: Mutex<CommitMode>,
         commits: AtomicUsize,
         mutation_count: AtomicUsize,
@@ -1738,6 +1793,7 @@ mod tests {
     impl FakeStore {
         fn new(mode: CommitMode) -> Self {
             Self {
+                debug_marker: "",
                 mode: Mutex::new(mode),
                 commits: AtomicUsize::new(0),
                 mutation_count: AtomicUsize::new(0),
@@ -1749,6 +1805,13 @@ mod tests {
                 last_payload_digest: Mutex::new(None),
                 uid_index: Mutex::new(BTreeMap::new()),
                 admission_verifier: OnceLock::new(),
+            }
+        }
+
+        fn with_debug_marker(mode: CommitMode, debug_marker: &'static str) -> Self {
+            Self {
+                debug_marker,
+                ..Self::new(mode)
             }
         }
 
@@ -2555,5 +2618,86 @@ mod tests {
             Some(ControllerGeneration::new(11).unwrap())
         );
         let _: ResourceGeneration = ResourceGeneration::new(11).unwrap();
+    }
+
+    #[test]
+    fn service_debug_surfaces_redact_backend_and_resource_fields() {
+        const MARKER: &str = "sentinel-observability-marker";
+
+        let store = Arc::new(FakeStore::with_debug_marker(CommitMode::Success, MARKER));
+        assert_eq!(store.debug_marker, MARKER);
+        let service = ResourceService::new(Arc::clone(&store), authorizer(&store, []));
+        let upgrade = AuthorizedUpgrade {
+            operation: StoreOperationContext {
+                operation_id: MARKER.to_owned(),
+                idempotency_key: Some(MARKER.to_owned()),
+                correlation_id: MARKER.to_owned(),
+                trace_id: Some(MARKER.to_owned()),
+                deadline_ms: 1,
+            },
+            zone: ZoneId::parse(MARKER).unwrap(),
+            target: ResourceRef::parse(&format!("Host/{MARKER}")).unwrap(),
+            action: UpgradeAction::Plan,
+            recursive: true,
+            expected_revision: ZoneRevision::new(1),
+        };
+        let mut resource = stored_resource(MARKER.len());
+        resource.resource_ref = ResourceRef::parse(&format!("Host/{MARKER}")).unwrap();
+        resource.zone = ZoneId::parse(MARKER).unwrap();
+        resource.canonical_json = MARKER.as_bytes().to_vec();
+        resource.payload_digest = MARKER.to_owned();
+        let result = UpgradeResult {
+            resource,
+            plan: Vec::new(),
+            revision: ZoneRevision::new(1),
+        };
+        let parsed_identity = ParsedIdentity {
+            zone: ZoneId::parse(MARKER).unwrap(),
+            resource_ref: ResourceRef::parse(&format!("Host/{MARKER}")).unwrap(),
+            uid: None,
+        };
+        let protected_mutation = StoreMutation {
+            kind: ResourceMutationKind::UpdateSpec,
+            zone: ZoneId::parse(MARKER).unwrap(),
+            target: ResourceRef::parse(&format!("Host/{MARKER}")).unwrap(),
+            expected: ExpectedRevision::Exact(ZoneRevision::new(1)),
+            expected_uid: None,
+            owner: Some(ResourceRef::parse(&format!("Process/{MARKER}")).unwrap()),
+            canonical_resource: Some(MARKER.as_bytes().to_vec()),
+            add_finalizers: Vec::new(),
+            remove_finalizers: Vec::new(),
+            wait_for_reconcile: false,
+            reconcile_deadline_ms: None,
+        };
+        let parsed_mutation = ParsedMutation {
+            store: protected_mutation,
+        };
+        let parsed_route = ParsedMutationRoute {
+            identity: ParsedIdentity {
+                zone: ZoneId::parse(MARKER).unwrap(),
+                resource_ref: ResourceRef::parse(&format!("Host/{MARKER}")).unwrap(),
+                uid: None,
+            },
+            owner: None,
+            kind: ResourceMutationKind::UpdateSpec,
+            authorizations: vec![AuthorizationTarget {
+                resource_type: ResourceTypeName::parse("Host").unwrap(),
+                resource_name: Some(ResourceName::parse(MARKER).unwrap()),
+                verb: ResourceVerb::UpdateSpec,
+                subresource: Some(MARKER.to_owned()),
+                execution_ref: Some(ResourceRef::parse(&format!("Process/{MARKER}")).unwrap()),
+            }],
+        };
+
+        for rendered in [
+            format!("{service:?}"),
+            format!("{upgrade:?}"),
+            format!("{result:?}"),
+            format!("{parsed_identity:?}"),
+            format!("{parsed_mutation:?}"),
+            format!("{parsed_route:?}"),
+        ] {
+            assert!(!rendered.contains(MARKER), "{rendered}");
+        }
     }
 }
