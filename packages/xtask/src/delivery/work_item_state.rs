@@ -1,0 +1,282 @@
+//! Work-item state gates for wave entry and sealing.
+
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::{Path, PathBuf},
+    process::Command,
+};
+
+use serde::Deserialize;
+
+use super::{
+    DeliveryError, Result,
+    model::{CandidateMaterial, RepositoryRecord},
+    storage::MAX_JSON_BYTES,
+};
+
+const GRAPH_PATH: &str = "docs/specs/ADR-046-implementation-graph.json";
+const WORK_ITEMS_PATH: &str = "docs/specs/ADR-046-work-items.json";
+
+#[derive(Deserialize)]
+struct GraphView {
+    nodes: Vec<NodeView>,
+}
+
+#[derive(Deserialize)]
+struct NodeView {
+    id: String,
+    kind: String,
+    wave: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkItemsView {
+    items: Vec<WorkItemView>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkItemView {
+    implementation_state: String,
+    work_item_id: String,
+}
+
+/// Rejects entry into a later wave while any prior-wave item remains Planned.
+pub fn require_prior_waves_merged(
+    material: &CandidateMaterial,
+    repository_roots: &BTreeMap<String, PathBuf>,
+) -> Result<()> {
+    let wave = wave_number(&material.wave)?;
+    if wave == 0 {
+        return Ok(());
+    }
+    let (graph, work_items) = load_bound_state(material, repository_roots)?;
+    validate_state(&material.wave, Gate::Entry, &graph, &work_items)
+}
+
+/// Rejects sealing a wave while any item in that wave remains Planned.
+pub fn require_current_wave_merged(
+    material: &CandidateMaterial,
+    repository_roots: &BTreeMap<String, PathBuf>,
+) -> Result<()> {
+    let (graph, work_items) = load_bound_state(material, repository_roots)?;
+    validate_state(&material.wave, Gate::Seal, &graph, &work_items)
+}
+
+#[derive(Clone, Copy)]
+enum Gate {
+    Entry,
+    Seal,
+}
+
+fn validate_state(wave: &str, gate: Gate, graph: &[u8], work_items: &[u8]) -> Result<()> {
+    let current_wave = wave_number(wave)?;
+    let graph: GraphView = serde_json::from_slice(graph)?;
+    let work_items: WorkItemsView = serde_json::from_slice(work_items)?;
+
+    let mut states = BTreeMap::new();
+    for item in work_items.items {
+        if states
+            .insert(item.work_item_id.clone(), item.implementation_state)
+            .is_some()
+        {
+            return Err(DeliveryError::new(format!(
+                "work-item state manifest repeats `{}`",
+                item.work_item_id
+            )));
+        }
+    }
+
+    let mut checked = BTreeSet::new();
+    for node in graph.nodes {
+        if node.kind != "work-item" {
+            continue;
+        }
+        let node_wave = wave_number(&node.wave)?;
+        let in_scope = match gate {
+            Gate::Entry => node_wave < current_wave,
+            Gate::Seal => node_wave == current_wave,
+        };
+        if !in_scope {
+            continue;
+        }
+        if !checked.insert(node.id.clone()) {
+            return Err(DeliveryError::new(format!(
+                "implementation graph repeats work item `{}`",
+                node.id
+            )));
+        }
+        let state = states.get(&node.id).ok_or_else(|| {
+            DeliveryError::new(format!(
+                "implementation graph work item `{}` is absent from the work-item state manifest",
+                node.id
+            ))
+        })?;
+        if state != "Merged" {
+            let action = match gate {
+                Gate::Entry => format!(
+                    "cannot enter {wave}: prior-wave work item `{}` in {} is `{state}`",
+                    node.id, node.wave
+                ),
+                Gate::Seal => format!("cannot seal {wave}: work item `{}` is `{state}`", node.id),
+            };
+            return Err(DeliveryError::new(format!(
+                "{action}; set its Implementation state to Merged with exact evidence, \
+                 regenerate the work-item manifest and implementation graph, and take a new snapshot"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn load_bound_state(
+    material: &CandidateMaterial,
+    repository_roots: &BTreeMap<String, PathBuf>,
+) -> Result<(Vec<u8>, Vec<u8>)> {
+    let mut found = Vec::new();
+    for repository in &material.repository_set {
+        let root = repository_roots.get(&repository.id).ok_or_else(|| {
+            DeliveryError::new(format!(
+                "sealed repository {} has no matching --repo checkout",
+                repository.id
+            ))
+        })?;
+        let graph = read_tree_file(root, repository, GRAPH_PATH)?;
+        let work_items = read_tree_file(root, repository, WORK_ITEMS_PATH)?;
+        match (graph, work_items) {
+            (Some(graph), Some(work_items)) => found.push((graph, work_items)),
+            (None, None) => {}
+            (Some(_), None) => {
+                return Err(DeliveryError::new(format!(
+                    "repository {} contains {GRAPH_PATH} but not {WORK_ITEMS_PATH} in the sealed tree",
+                    repository.id
+                )));
+            }
+            (None, Some(_)) => {
+                return Err(DeliveryError::new(format!(
+                    "repository {} contains {WORK_ITEMS_PATH} but not {GRAPH_PATH} in the sealed tree",
+                    repository.id
+                )));
+            }
+        }
+    }
+    match found.len() {
+        1 => Ok(found.pop().expect("one state source")),
+        0 => Err(DeliveryError::new(format!(
+            "no sealed repository contains both {GRAPH_PATH} and {WORK_ITEMS_PATH}; \
+             the delivery work-item state gate cannot run"
+        ))),
+        count => Err(DeliveryError::new(format!(
+            "{count} sealed repositories contain the delivery work-item state manifests; \
+             expected exactly one authoritative source"
+        ))),
+    }
+}
+
+fn read_tree_file(
+    root: &Path,
+    repository: &RepositoryRecord,
+    path: &str,
+) -> Result<Option<Vec<u8>>> {
+    let object = format!("{}:{path}", repository.integration_tree_oid);
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["show", &object])
+        .output()
+        .map_err(|error| {
+            DeliveryError::environment(format!(
+                "cannot read delivery work-item state from repository {}: {error}",
+                repository.id
+            ))
+        })?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    if output.stdout.len() > MAX_JSON_BYTES {
+        return Err(DeliveryError::new(format!(
+            "{path} in repository {} exceeds the delivery JSON size limit",
+            repository.id
+        )));
+    }
+    Ok(Some(output.stdout))
+}
+
+fn wave_number(wave: &str) -> Result<u8> {
+    wave.strip_prefix('W')
+        .and_then(|number| number.parse::<u8>().ok())
+        .filter(|number| *number <= 8)
+        .ok_or_else(|| DeliveryError::new(format!("invalid delivery wave `{wave}`")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn graph() -> Vec<u8> {
+        br#"{
+          "nodes": [
+            {"id":"ADR046-foundation-001","kind":"work-item","wave":"W0"},
+            {"id":"ADR046-backend-001","kind":"work-item","wave":"W1"}
+          ]
+        }"#
+        .to_vec()
+    }
+
+    fn work_items(foundation: &str, backend: &str) -> Vec<u8> {
+        format!(
+            r#"{{
+              "items": [
+                {{"workItemId":"ADR046-foundation-001","implementationState":"{foundation}"}},
+                {{"workItemId":"ADR046-backend-001","implementationState":"{backend}"}}
+              ]
+            }}"#
+        )
+        .into_bytes()
+    }
+
+    #[test]
+    fn seal_attempt_rejects_a_planned_item_in_the_current_wave() {
+        let error = validate_state(
+            "W0",
+            Gate::Seal,
+            &graph(),
+            &work_items("Planned", "Planned"),
+        )
+        .expect_err("a Planned current-wave item must block sealing");
+        let message = error.message();
+        assert!(message.contains("cannot seal W0"), "{message}");
+        assert!(message.contains("ADR046-foundation-001"), "{message}");
+        assert!(
+            message.contains("Implementation state to Merged"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn later_wave_entry_rejects_a_planned_prior_wave_item() {
+        let error = validate_state(
+            "W1",
+            Gate::Entry,
+            &graph(),
+            &work_items("Planned", "Planned"),
+        )
+        .expect_err("a Planned prior-wave item must block entry");
+        let message = error.message();
+        assert!(message.contains("cannot enter W1"), "{message}");
+        assert!(message.contains("ADR046-foundation-001"), "{message}");
+        assert!(message.contains("in W0 is `Planned`"), "{message}");
+    }
+
+    #[test]
+    fn planned_items_in_the_entered_wave_are_allowed_until_seal() {
+        validate_state(
+            "W1",
+            Gate::Entry,
+            &graph(),
+            &work_items("Merged", "Planned"),
+        )
+        .expect("entry checks prior waves, not planned work in the entered wave");
+    }
+}

@@ -253,7 +253,12 @@ re-derives launch order or parallelism from this prose. Per D095:
   barrier whose `topologicalRank` precedes its consumers); every work item is
   mapped to a wave; a `parallelGroup` never implies ordering absent a
   dependency or file-overlap edge; the JSON is deterministic; and every Mermaid
-  node ID is a valid identifier.
+  node ID is a valid identifier. Graph generation also rejects any `W0` work
+  item unless its state is `Merged` and every backtick-delimited destination is
+  present. This generation-time check is deliberately specific to `W0`, the
+  already-closed baseline. Later waves legitimately carry `Planned` items until
+  implementation lands; their state is enforced at entry and seal time instead
+  of making the plan itself impossible to generate.
 - **Anti-serialization.** The graph embodies §6: all ready, file-disjoint
   parallel groups launch concurrently. A same-wave dependency is a
   `shared-contract`/`file-overlap-order` prep barrier before its specific
@@ -299,9 +304,11 @@ seal, and merge eligibility - applies to it unchanged.
 
 **Entry criteria (all required):**
 
-1. Gate 0 (§2) has passed, or - for `ADR046-W1` onward - every spec assigned
-   to this wave and every wave before it has a `Merged` implementation state
-   recorded in `docs/specs/ADR-046-work-items.json` (§8).
+1. Gate 0 (§2) has passed. For `ADR046-W1` onward, `wave snapshot` reads the
+   implementation graph and work-item state manifest from the candidate's exact
+   integrated Git tree and rejects entry unless every work item in every prior
+   wave is `Merged`. Items in the wave being entered may remain `Planned`; the
+   seal gate below is what requires their promotion after implementation.
 2. Every destination path this wave's work items name (§3.2, §7) is free of
    an open, unresolved contention flag from an earlier wave.
 3. The wave's Git Town stack (§5) has been proposed against the exact parent
@@ -325,8 +332,9 @@ seal, and merge eligibility - applies to it unchanged.
 3. The ten-role panel (§12.3) has returned unanimous `signoff: true` against
    that exact snapshot, with zero outstanding `recommendations`.
 4. `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave seal`
-   (§12.4) has produced a sealed record
-   binding this wave's `candidate_id`/`content_id`/`snapshot_sha256`.
+   (§12.4) has verified that every work item assigned to this wave is `Merged`,
+   then produced a sealed record binding this wave's
+   `candidate_id`/`content_id`/`snapshot_sha256`.
 5. `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave merge-eligibility`
    reports eligible for every
    PR in the wave's stack, and each has merged root-to-leaf through GitHub
@@ -1148,6 +1156,12 @@ both validator and panel evidence; the wave re-snapshots and both lanes
 rerun. A history-only rebase or retarget may reuse panel evidence only when
 the canonical proof tool (§12.6) verifies byte-identical integrated content.
 
+Before creating a snapshot for any wave after `W0`, the command reads
+`ADR-046-implementation-graph.json` and `ADR-046-work-items.json` from the
+candidate's exact integrated Git tree. It rejects entry when any item assigned
+to an earlier wave is not `Merged`; it does not reject `Planned` items in the
+wave being entered.
+
 Each repository requires at least one
 `--pull-request LOGICAL_ID=NUMBER:HEAD_REF` mapping, and the repeated mappings
 must name the complete expected pull-request set. The repository's `--head`
@@ -1253,7 +1267,11 @@ tooling (if not already present) is work item `ADR046-delivery-004`/`-005`
 `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave seal` requires all ten panel records
 present, unanimous, and bound to the same `candidate_id`/`content_id`/
 `snapshot_sha256`, plus every §12.2 validator lane reporting success on that
-exact snapshot.
+exact snapshot. It also reads the implementation graph and work-item state
+manifest from the snapshot's integrated Git tree and rejects the seal unless
+every item assigned to the current wave is `Merged`. The error names the item
+and the required state transition. `merge-eligibility` repeats this current-wave
+check so an eligibility result cannot bypass stale delivery state.
 
 `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave merge-target` then captures the wave's current
 pull-request stack into a canonical `merge-target.json` under the candidate.
