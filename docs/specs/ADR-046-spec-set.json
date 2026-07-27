@@ -84,7 +84,7 @@
     {
       "dependsOn" : [],
       "path" : "docs/specs/ADR-046-decision-register.md",
-      "sha256" : "e5ff455cbc38e17469f0613b16f391ce765f75ef6e5f062dbe0724cf18599000",
+      "sha256" : "1eff61450d49c5065c9b28b640da80df97e1933845b414322ba6d50effe7546f",
       "specId" : "ADR-046-decision-register",
       "status" : "Accepted",
       "supersedes" : null,
@@ -848,7 +848,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-resource-api-and-authorization.md",
-      "sha256" : "247ea5f1b50d3357e35fd41cf694c18c078f0b5b1cc0942e41276b4e7a293126",
+      "sha256" : "b9bf4875fb6f3f2a771eceadd0938f0b606661d5f4da3b618aecc025e509b211",
       "specId" : "ADR-046-resource-api-and-authorization",
       "status" : "Accepted",
       "supersedes" : null,
@@ -894,7 +894,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-resource-store-redb.md",
-      "sha256" : "7f0eedea43bf38647addd8fcdab389cab2eb6101989353d346a548c7f1934808",
+      "sha256" : "af64447cc0da9289e604534368d3513bd85e6ced606c18f743fbf28667f05546",
       "specId" : "ADR-046-resource-store-redb",
       "status" : "Accepted",
       "supersedes" : null,
@@ -1080,7 +1080,7 @@
         "ADR-046-zone-routing"
       ],
       "path" : "docs/specs/ADR-046-security-and-threat-model.md",
-      "sha256" : "e1db48f0d98a4029015466fc75dbdc62defb3473459058f396be1c307de9903a",
+      "sha256" : "c2db2db6a7ef00499a4737da32a2601eb535471a449eb696a12824074d8f7802",
       "specId" : "ADR-046-security-and-threat-model",
       "status" : "Accepted",
       "supersedes" : null,
