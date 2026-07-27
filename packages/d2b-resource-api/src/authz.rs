@@ -2274,6 +2274,7 @@ mod tests {
 
     #[test]
     fn authorization_debug_surfaces_redact_policy_and_identity_fields() {
+        const POLICY_REVISION_SENTINEL: u64 = 4_294_967_291;
         const ZONE_SENTINEL: &str = "authz-zone-sentinel";
         const NAME_SENTINEL: &str = "authz-name-sentinel";
         const REF_SENTINEL: &str = "authz-ref-sentinel";
@@ -2336,8 +2337,14 @@ mod tests {
             RelayGrantAuthority::None,
         )
         .unwrap();
-        let policy =
-            PolicySet::new(&catalog, 9, vec![role.clone()], vec![binding.clone()]).unwrap();
+        let policy = PolicySet::new(
+            &catalog,
+            POLICY_REVISION_SENTINEL,
+            vec![role.clone()],
+            vec![binding.clone()],
+        )
+        .unwrap();
+        assert_eq!(policy.policy_revision, POLICY_REVISION_SENTINEL);
         let capabilities = PositiveCapabilities {
             resources: vec![target.clone()],
             session_verbs: BTreeSet::from([SessionVerb::Connect]),
@@ -2352,32 +2359,64 @@ mod tests {
             NativeAuthorizer::from_issuer(catalog.clone(), Some(policy.clone()), test_issuer())
                 .unwrap();
 
-        for rendered in [
-            format!("{catalog:?}"),
+        let catalog_debug = format!(
+            "ApiCatalog {{ resource_type_count: {} }}",
+            catalog.resource_types.len()
+        );
+        assert_eq!(format!("{catalog:?}"), catalog_debug);
+        assert_eq!(
             format!("{target:?}"),
+            "AuthorizationTarget { verb: Get, resource_type: \"<redacted>\", \
+             has_resource_name: true, has_subresource: true, has_execution_ref: true }"
+        );
+        assert_eq!(
             format!("{request:?}"),
+            "AuthorizationRequest { method: Get, zone: \"<redacted>\", target_count: 1 }"
+        );
+        assert_eq!(
             format!("{protected_state:?}"),
+            "AuthorizationState { snapshot: \"<redacted>\", \
+             zone_policy_revision: \"<redacted>\", \
+             bootstrap_phase: BootstrapPhase::Unprovisioned(<redacted>), \
+             now_tick: \"<redacted>\" }"
+        );
+        assert_eq!(
             format!("{:?}", protected_state.bootstrap_phase),
-            format!("{bound_subject:?}"),
-            format!("{scope:?}"),
+            "BootstrapPhase::Unprovisioned(<redacted>)"
+        );
+        assert_eq!(format!("{bound_subject:?}"), "BoundSubject(<redacted>)");
+        let scope_debug =
+            "BindingScope { zone_count: 1, resource_name_count: 1, execution_ref_count: 1 }";
+        assert_eq!(format!("{scope:?}"), scope_debug);
+        assert_eq!(
             format!("{rule:?}"),
+            "PolicyRule { resource_type_count: 1, resource_verb_count: 1, \
+             session_verb_count: 1, subresource_count: 1, resource_name_count: 1, \
+             zone_count: 1, execution_ref_count: 1 }"
+        );
+        assert_eq!(
             format!("{role:?}"),
+            "CompiledRole { role_ref: \"<redacted>\", rule_count: 1 }"
+        );
+        assert_eq!(
             format!("{binding:?}"),
+            format!(
+                "CompiledRoleBinding {{ role_ref: \"<redacted>\", subject_count: 1, \
+                 scope: {scope_debug}, relay_authority: None }}"
+            )
+        );
+        assert_eq!(
             format!("{policy:?}"),
+            format!(
+                "PolicySet {{ policy_revision: \"<redacted>\", catalog: {catalog_debug}, \
+                 role_count: 1, binding_count: 1 }}"
+            )
+        );
+        assert_eq!(
             format!("{capabilities:?}"),
-            format!("{grant:?}"),
-            format!("{authorizer:?}"),
-        ] {
-            for sentinel in [
-                ZONE_SENTINEL,
-                NAME_SENTINEL,
-                REF_SENTINEL,
-                UID_SENTINEL,
-                PAYLOAD_SENTINEL,
-                TYPE_SENTINEL,
-            ] {
-                assert!(!rendered.contains(sentinel), "{rendered}");
-            }
-        }
+            "PositiveCapabilities { resource_count: 1, session_verb_count: 1 }"
+        );
+        assert_eq!(format!("{grant:?}"), "AuthorizationGrant(<redacted>)");
+        assert_eq!(format!("{authorizer:?}"), "NativeAuthorizer(<redacted>)");
     }
 }

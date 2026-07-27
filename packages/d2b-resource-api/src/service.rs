@@ -2611,6 +2611,8 @@ mod tests {
 
     #[test]
     fn service_debug_surfaces_redact_backend_and_resource_fields() {
+        const EXPECTED_REVISION_SENTINEL: u64 = 4_294_967_290;
+        const RESULT_REVISION_SENTINEL: u64 = 4_294_967_289;
         const ZONE_SENTINEL: &str = "service-zone-sentinel";
         const NAME_SENTINEL: &str = "service-name-sentinel";
         const REF_SENTINEL: &str = "service-ref-sentinel";
@@ -2635,8 +2637,9 @@ mod tests {
             target: ResourceRef::parse(&format!("Host/{REF_SENTINEL}")).unwrap(),
             action: UpgradeAction::Plan,
             recursive: true,
-            expected_revision: ZoneRevision::new(1),
+            expected_revision: ZoneRevision::new(EXPECTED_REVISION_SENTINEL),
         };
+        assert_eq!(upgrade.expected_revision.get(), EXPECTED_REVISION_SENTINEL);
         let mut resource = stored_resource(PAYLOAD_SENTINEL.len());
         resource.resource_ref = ResourceRef::parse(&format!("Host/{REF_SENTINEL}")).unwrap();
         resource.zone = ZoneId::parse(ZONE_SENTINEL).unwrap();
@@ -2646,7 +2649,7 @@ mod tests {
         let result = UpgradeResult {
             resource,
             plan: Vec::new(),
-            revision: ZoneRevision::new(1),
+            revision: ZoneRevision::new(RESULT_REVISION_SENTINEL),
         };
         let parsed_identity = ParsedIdentity {
             zone: ZoneId::parse(ZONE_SENTINEL).unwrap(),
@@ -2714,24 +2717,32 @@ mod tests {
             PAYLOAD_SENTINEL.to_owned(),
         );
 
-        for rendered in [
-            format!("{service:?}"),
-            format!("{trusted_request:?}"),
+        assert_eq!(format!("{service:?}"), "ResourceService(<redacted>)");
+        assert_eq!(format!("{trusted_request:?}"), "TrustedRequest(<redacted>)");
+        assert_eq!(
             format!("{upgrade:?}"),
+            "AuthorizedUpgrade { action: Plan, recursive: true, \
+             operation: \"<redacted>\", zone: \"<redacted>\", target: \"<redacted>\", \
+             expected_revision: \"<redacted>\" }"
+        );
+        assert_eq!(
             format!("{result:?}"),
-            format!("{parsed_identity:?}"),
+            "UpgradeResult { resource: \"<redacted>\", plan_length: 0, \
+             revision: \"<redacted>\" }"
+        );
+        let identity_debug = "ParsedIdentity { zone: \"<redacted>\", \
+                              resource_ref: \"<redacted>\", has_uid: true }";
+        assert_eq!(format!("{parsed_identity:?}"), identity_debug);
+        assert_eq!(
             format!("{parsed_mutation:?}"),
+            "ParsedMutation { kind: UpdateSpec }"
+        );
+        assert_eq!(
             format!("{parsed_route:?}"),
-        ] {
-            for sentinel in [
-                ZONE_SENTINEL,
-                NAME_SENTINEL,
-                REF_SENTINEL,
-                UID_SENTINEL,
-                PAYLOAD_SENTINEL,
-            ] {
-                assert!(!rendered.contains(sentinel), "{rendered}");
-            }
-        }
+            format!(
+                "ParsedMutationRoute {{ identity: {identity_debug}, has_owner: true, \
+                 kind: UpdateSpec, authorization_count: 1 }}"
+            )
+        );
     }
 }
