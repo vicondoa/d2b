@@ -29,7 +29,7 @@ pub enum OwnerChangeEvent {
 }
 
 /// One pending `owned-resource-changed` notification.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OwnedResourceChangedHint {
     owner_ref: ResourceRef,
@@ -38,6 +38,19 @@ pub struct OwnedResourceChangedHint {
     child_uid: ResourceUid,
     revision: ZoneRevision,
     event: OwnerChangeEvent,
+}
+
+impl core::fmt::Debug for OwnedResourceChangedHint {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("OwnedResourceChangedHint")
+            .field("owner_kind", self.owner_ref.resource_type())
+            .field("has_owner_uid", &true)
+            .field("child_kind", self.child_ref.resource_type())
+            .field("has_child_uid", &true)
+            .field("revision", &self.revision)
+            .field("event", &self.event)
+            .finish()
+    }
 }
 
 impl OwnedResourceChangedHint {
