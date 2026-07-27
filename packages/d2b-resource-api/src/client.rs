@@ -1,4 +1,4 @@
-//! In-process async client used behind an authenticated d2b-bus binding.
+//! In-process contract client awaiting authenticated d2b-bus routing.
 
 use std::sync::Arc;
 
@@ -10,20 +10,20 @@ use crate::{
     service::{ResourceService, TrustedRequest, UpgradeDispatcher},
 };
 
-/// Resource client whose identity is fixed by its ComponentSession.
+/// Unregistered resource client whose identity is fixed by a session capability.
 #[derive(Debug)]
-pub struct ResourceClient<S, U> {
+pub struct UnregisteredResourceClient<S, U> {
     service: Arc<ResourceService<S, U>>,
     subject: Arc<AuthenticatedSubjectContext>,
     state: AuthorizationState,
 }
 
-impl<S, U> ResourceClient<S, U>
+impl<S, U> UnregisteredResourceClient<S, U>
 where
     S: ResourceStore,
     U: UpgradeDispatcher,
 {
-    pub(crate) fn from_authenticated_bus(
+    pub(crate) fn from_session_capability(
         service: Arc<ResourceService<S, U>>,
         subject: Arc<AuthenticatedSubjectContext>,
         state: AuthorizationState,
@@ -103,7 +103,7 @@ where
     }
 
     fn trusted<T>(&self, request: T) -> TrustedRequest<T> {
-        TrustedRequest::from_authenticated_bus(
+        TrustedRequest::from_session_capability(
             Arc::clone(&self.subject),
             self.state.clone(),
             request,

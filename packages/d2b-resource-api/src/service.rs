@@ -41,7 +41,7 @@ pub struct TrustedRequest<T> {
 
 impl<T> TrustedRequest<T> {
     /// Bind a decoded request to authenticated session and live policy state.
-    pub(crate) fn from_authenticated_bus(
+    pub(crate) fn from_session_capability(
         subject: Arc<AuthenticatedSubjectContext>,
         authorization_state: AuthorizationState,
         request: T,
@@ -2071,7 +2071,7 @@ mod tests {
     }
 
     fn trusted<T>(request: T, controller_generation: Option<u64>) -> TrustedRequest<T> {
-        TrustedRequest::from_authenticated_bus(
+        TrustedRequest::from_session_capability(
             subject(controller_generation),
             state(controller_generation),
             request,
@@ -2255,7 +2255,7 @@ mod tests {
             value.wait_for_reconcile = true;
             value.reconcile_deadline_ms = 1;
             let trusted =
-                TrustedRequest::from_authenticated_bus(subject(None), authorization_state, ());
+                TrustedRequest::from_session_capability(subject(None), authorization_state, ());
             let route =
                 parse_mutation_route(&value, Some(ResourceMutationKind::Create), &trusted).unwrap();
 
