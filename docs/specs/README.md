@@ -335,13 +335,16 @@ The generator parses the shapes the set actually uses, not an idealized
 subset. An author does not have to normalize an existing spec to these rules,
 but a tool that reads the set must handle all of them.
 
-**The work-item heading may carry a title after the ID.** 356 headings are the
-bare ID; the rest add a title introduced by a spaced hyphen (112), a colon
-(51), or parentheses (24). All four forms declare the same ID.
+**The work-item heading may carry a title after the ID.** Of all 545 headings,
+358 are the bare ID. Another 112 use the dash-title parser class: 93 have a
+spaced hyphen and 19 place the title directly after one space with no
+punctuation separator. The remaining titled forms use a colon (51) or
+parentheses (24). All five authored shapes declare the same ID.
 
 ```text
 ### ADR046-core-001
 ### ADR046-core-001 - Some title
+### ADR046-core-001 Some title
 ### ADR046-core-001: Some title
 ### ADR046-core-001 (Some title)
 ```
