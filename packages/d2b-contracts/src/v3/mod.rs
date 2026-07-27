@@ -28,11 +28,12 @@ pub use resource::{
 };
 pub use resource_ref::{ResourceRef, ResourceRefError};
 pub use resource_schema::{
-    BaseSchemaBinding, BaseSchemaIdentity, CANONICAL_JSON_PROFILE, CanonicalJsonError,
-    CanonicalJsonObject, CanonicalJsonValue, ExtensionSchemaId, ExtensionSchemaLayer,
-    ObjectFieldSchema, ProviderExtensionRegistration, RESOURCE_ENVELOPE_DOMAIN_TAG,
-    RESOURCE_SPEC_DOMAIN_TAG, RESOURCE_STATUS_DOMAIN_TAG, ResourceSchemaContract,
-    ResourceSchemaError, SCHEMA_DOMAIN_TAG, SchemaVersion, canonical_digest, canonical_json_bytes,
+    BaseSchemaBinding, BaseSchemaIdentity, CANONICAL_JSON_PROFILE, CanonicalJsonCodecReason,
+    CanonicalJsonError, CanonicalJsonObject, CanonicalJsonValue, ExtensionSchemaId,
+    ExtensionSchemaLayer, ObjectFieldSchema, ProviderExtensionRegistration,
+    RESOURCE_ENVELOPE_DOMAIN_TAG, RESOURCE_SPEC_DOMAIN_TAG, RESOURCE_STATUS_DOMAIN_TAG,
+    ResourceSchemaContract, ResourceSchemaError, SCHEMA_DOMAIN_TAG, SchemaVersion, canonical_digest,
+    canonical_json_bytes,
 };
 pub use resource_status::{
     ConditionState, ProviderStatusExtension, ResourceCondition, ResourceCurrencySet,

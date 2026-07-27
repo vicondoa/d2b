@@ -9,9 +9,10 @@ use super::{
     ConfigurationGeneration, ControllerGeneration, ResourceGeneration, ResourceName, ResourceRef,
     ResourceStatus, ResourceTypeName, ResourceUid, Timestamp, ZoneId, ZoneRevision,
     resource_schema::{
-        CanonicalJsonError, CanonicalJsonObject, CanonicalJsonValue, ExtensionSchemaId,
-        ExtensionSchemaLayer, RESOURCE_ENVELOPE_DOMAIN_TAG, RESOURCE_SPEC_DOMAIN_TAG,
-        SchemaVersion, canonical_digest, canonical_json_bytes, validate_canonical_string,
+        CanonicalJsonCodecReason, CanonicalJsonError, CanonicalJsonObject, CanonicalJsonValue,
+        ExtensionSchemaId, ExtensionSchemaLayer, RESOURCE_ENVELOPE_DOMAIN_TAG,
+        RESOURCE_SPEC_DOMAIN_TAG, SchemaVersion, canonical_digest, canonical_json_bytes,
+        serde_json_error_metadata, validate_canonical_string,
     },
 };
 
@@ -706,7 +707,14 @@ impl ResourceEnvelope {
     /// Parse a complete envelope through the duplicate-rejecting canonical profile.
     pub fn from_json(bytes: &[u8]) -> Result<Self, ResourceError> {
         CanonicalJsonValue::parse(bytes).map_err(ResourceError::CanonicalJson)?;
-        serde_json::from_slice(bytes).map_err(|error| ResourceError::Serde(error.to_string()))
+        serde_json::from_slice(bytes).map_err(|error| {
+            let (reason, line, column) = serde_json_error_metadata(&error);
+            ResourceError::Serde {
+                reason,
+                line,
+                column,
+            }
+        })
     }
 
     /// Borrow the ResourceType.
@@ -831,7 +839,11 @@ fn is_lower_name(value: &str) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResourceError {
     CanonicalJson(CanonicalJsonError),
-    Serde(String),
+    Serde {
+        reason: CanonicalJsonCodecReason,
+        line: u32,
+        column: u32,
+    },
     InvalidFinalizer,
     TooManyFinalizers,
     DuplicateFinalizer,
@@ -854,7 +866,15 @@ impl core::fmt::Display for ResourceError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::CanonicalJson(error) => error.fmt(f),
-            Self::Serde(reason) => write!(f, "invalid resource envelope: {reason}"),
+            Self::Serde {
+                reason,
+                line,
+                column,
+            } => write!(
+                f,
+                "invalid resource envelope: {} at line {line}, column {column}",
+                reason.as_str()
+            ),
             Self::InvalidFinalizer => f.write_str("invalid finalizer ID"),
             Self::TooManyFinalizers => f.write_str("resource has more than 8 finalizers"),
             Self::DuplicateFinalizer => f.write_str("resource finalizers must be unique"),
@@ -889,7 +909,14 @@ impl core::fmt::Display for ResourceError {
     }
 }
 
-impl std::error::Error for ResourceError {}
+impl std::error::Error for ResourceError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::CanonicalJson(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -1084,6 +1111,54 @@ mod tests {
             ResourceEnvelope::from_json(duplicate),
             Err(ResourceError::CanonicalJson(_))
         ));
+    }
+
+    #[test]
+    fn resource_codec_error_chains_never_retain_serde_text_or_payload_keys() {
+        fn assert_chain_redacted(
+            mut error: &(dyn std::error::Error + 'static),
+            marker: &str,
+        ) -> usize {
+            let mut depth = 0;
+            loop {
+                let rendered = format!("{error:?}\n{error}");
+                assert!(
+                    !rendered.contains(marker),
+                    "codec error chain exposed an attacker-controlled marker"
+                );
+                depth += 1;
+                let Some(source) = error.source() else {
+                    return depth;
+                };
+                error = source;
+            }
+        }
+
+        let payload_marker = format!("payload-marker-{:x}", std::process::id());
+        let unknown_field = format!(r#"{{"{payload_marker}":null}}"#);
+        let serde_error = ResourceEnvelope::from_json(unknown_field.as_bytes()).unwrap_err();
+        assert!(matches!(
+            &serde_error,
+            ResourceError::Serde {
+                reason: CanonicalJsonCodecReason::Data,
+                line: 1,
+                column
+            } if *column > 0
+        ));
+        assert_eq!(assert_chain_redacted(&serde_error, &payload_marker), 1);
+
+        let duplicate = format!(
+            r#"{{"{payload_marker}":1,"{payload_marker}":2}}"#
+        );
+        let canonical_error = ResourceEnvelope::from_json(duplicate.as_bytes()).unwrap_err();
+        assert!(matches!(
+            &canonical_error,
+            ResourceError::CanonicalJson(CanonicalJsonError::DuplicateKey {
+                key_ordinal: 2,
+                ..
+            })
+        ));
+        assert_eq!(assert_chain_redacted(&canonical_error, &payload_marker), 2);
     }
 
     #[test]

@@ -33,11 +33,40 @@ pub const SCHEMA_DOMAIN_TAG: &str = "d2b:v3:schema";
 /// Maximum bytes in a printable ASCII canonical JSON object key.
 pub const MAX_CANONICAL_KEY_BYTES: usize = 64;
 
+/// Closed serde JSON failure class retained without attacker-controlled text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CanonicalJsonCodecReason {
+    Io,
+    Syntax,
+    Data,
+    UnexpectedEof,
+}
+
+impl CanonicalJsonCodecReason {
+    /// Return the closed diagnostic label.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Io => "I/O",
+            Self::Syntax => "syntax",
+            Self::Data => "data",
+            Self::UnexpectedEof => "unexpected EOF",
+        }
+    }
+}
+
 /// Failure to parse or render the canonical JSON profile.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CanonicalJsonError {
-    Syntax(String),
-    DuplicateKey(String),
+    Syntax {
+        reason: CanonicalJsonCodecReason,
+        line: u32,
+        column: u32,
+    },
+    DuplicateKey {
+        key_ordinal: u32,
+        line: u32,
+        column: u32,
+    },
     InvalidKey,
     InvalidString,
     IntegerOutOfRange,
@@ -47,8 +76,23 @@ pub enum CanonicalJsonError {
 impl core::fmt::Display for CanonicalJsonError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::Syntax(reason) => write!(f, "invalid canonical JSON: {reason}"),
-            Self::DuplicateKey(key) => write!(f, "duplicate canonical JSON key: {key}"),
+            Self::Syntax {
+                reason,
+                line,
+                column,
+            } => write!(
+                f,
+                "invalid canonical JSON: {} at line {line}, column {column}",
+                reason.as_str()
+            ),
+            Self::DuplicateKey {
+                key_ordinal,
+                line,
+                column,
+            } => write!(
+                f,
+                "duplicate canonical JSON key at ordinal {key_ordinal}, line {line}, column {column}"
+            ),
             Self::InvalidKey => {
                 f.write_str("canonical JSON key is not printable ASCII or is too long")
             }
@@ -64,6 +108,58 @@ impl core::fmt::Display for CanonicalJsonError {
 }
 
 impl std::error::Error for CanonicalJsonError {}
+
+const DUPLICATE_KEY_MARKER: &str = "d2b-cjson duplicate-key ordinal=";
+
+struct DuplicateKeyMarker(u32);
+
+impl core::fmt::Display for DuplicateKeyMarker {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{DUPLICATE_KEY_MARKER}{}", self.0)
+    }
+}
+
+fn bounded_position(value: usize) -> u32 {
+    u32::try_from(value).unwrap_or(u32::MAX)
+}
+
+pub(crate) fn serde_json_error_metadata(
+    error: &serde_json::Error,
+) -> (CanonicalJsonCodecReason, u32, u32) {
+    let reason = match error.classify() {
+        serde_json::error::Category::Io => CanonicalJsonCodecReason::Io,
+        serde_json::error::Category::Syntax => CanonicalJsonCodecReason::Syntax,
+        serde_json::error::Category::Data => CanonicalJsonCodecReason::Data,
+        serde_json::error::Category::Eof => CanonicalJsonCodecReason::UnexpectedEof,
+    };
+    (
+        reason,
+        bounded_position(error.line()),
+        bounded_position(error.column()),
+    )
+}
+
+fn canonical_json_error(error: serde_json::Error) -> CanonicalJsonError {
+    let (reason, line, column) = serde_json_error_metadata(&error);
+    let rendered = error.to_string();
+    if let Some(key_ordinal) = rendered
+        .strip_prefix(DUPLICATE_KEY_MARKER)
+        .and_then(|suffix| suffix.split_whitespace().next())
+        .and_then(|value| value.parse::<u32>().ok())
+    {
+        CanonicalJsonError::DuplicateKey {
+            key_ordinal,
+            line,
+            column,
+        }
+    } else {
+        CanonicalJsonError::Syntax {
+            reason,
+            line,
+            column,
+        }
+    }
+}
 
 /// A JSON value that cannot contain data outside `d2b-cjson/v1`.
 #[derive(Clone, PartialEq, Eq)]
@@ -81,11 +177,8 @@ impl CanonicalJsonValue {
     pub fn parse(bytes: &[u8]) -> Result<Self, CanonicalJsonError> {
         validate_number_tokens(bytes)?;
         let mut deserializer = serde_json::Deserializer::from_slice(bytes);
-        let value = Self::deserialize(&mut deserializer)
-            .map_err(|error| CanonicalJsonError::Syntax(error.to_string()))?;
-        deserializer
-            .end()
-            .map_err(|error| CanonicalJsonError::Syntax(error.to_string()))?;
+        let value = Self::deserialize(&mut deserializer).map_err(canonical_json_error)?;
+        deserializer.end().map_err(canonical_json_error)?;
         Ok(value)
     }
 
@@ -212,12 +305,12 @@ impl<'de> Visitor<'de> for CanonicalJsonVisitor {
         A: MapAccess<'de>,
     {
         let mut values = BTreeMap::new();
+        let mut key_ordinal = 0_u32;
         while let Some(key) = map.next_key::<String>()? {
+            key_ordinal = key_ordinal.saturating_add(1);
             validate_canonical_key(&key).map_err(serde::de::Error::custom)?;
             if values.contains_key(&key) {
-                return Err(serde::de::Error::custom(CanonicalJsonError::DuplicateKey(
-                    key,
-                )));
+                return Err(serde::de::Error::custom(DuplicateKeyMarker(key_ordinal)));
             }
             let value = map.next_value()?;
             values.insert(key, value);
@@ -417,8 +510,7 @@ pub(crate) fn validate_canonical_string(value: &str) -> Result<(), CanonicalJson
 
 /// Canonicalize a serializable contract value.
 pub fn canonical_json_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>, CanonicalJsonError> {
-    let json =
-        serde_json::to_vec(value).map_err(|error| CanonicalJsonError::Syntax(error.to_string()))?;
+    let json = serde_json::to_vec(value).map_err(canonical_json_error)?;
     Ok(CanonicalJsonValue::parse(&json)?.to_canonical_bytes())
 }
 
@@ -1311,6 +1403,48 @@ key":1}"#,
         ] {
             assert!(CanonicalJsonValue::parse(input).is_err());
         }
+    }
+
+    #[test]
+    fn canonical_json_errors_keep_only_closed_reasons_and_safe_positions() {
+        let payload_marker = format!("payload-marker-{:x}", std::process::id());
+        let duplicate = format!(
+            r#"{{"{payload_marker}":1,"{payload_marker}":2}}"#
+        );
+        let duplicate_error = CanonicalJsonValue::parse(duplicate.as_bytes()).unwrap_err();
+        assert!(matches!(
+            &duplicate_error,
+            CanonicalJsonError::DuplicateKey {
+                key_ordinal: 2,
+                line: 1,
+                column
+            } if *column > 0
+        ));
+        for rendered in [
+            format!("{duplicate_error:?}"),
+            format!("{duplicate_error}"),
+        ] {
+            assert!(!rendered.contains(&payload_marker));
+        }
+        assert!(std::error::Error::source(&duplicate_error).is_none());
+
+        let malformed = format!(
+            r#"{{"safe":"{payload_marker}","broken":}}"#
+        );
+        let syntax_error = CanonicalJsonValue::parse(malformed.as_bytes()).unwrap_err();
+        assert!(matches!(
+            &syntax_error,
+            CanonicalJsonError::Syntax {
+                reason: CanonicalJsonCodecReason::Syntax
+                    | CanonicalJsonCodecReason::UnexpectedEof,
+                line: 1,
+                column
+            } if *column > 0
+        ));
+        for rendered in [format!("{syntax_error:?}"), format!("{syntax_error}")] {
+            assert!(!rendered.contains(&payload_marker));
+        }
+        assert!(std::error::Error::source(&syntax_error).is_none());
     }
 
     #[test]
