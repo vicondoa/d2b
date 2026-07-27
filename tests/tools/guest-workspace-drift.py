@@ -128,6 +128,45 @@ def validate_inherited_dependencies(
                     )
 
 
+def required_dependencies(manifest: dict):
+    for table_name, table in dependency_tables(manifest):
+        if table_name.rsplit(".", 1)[-1] == "dev-dependencies":
+            continue
+        for alias, specification in table.items():
+            if (
+                isinstance(specification, dict)
+                and specification.get("optional") is True
+            ):
+                continue
+            yield table_name, alias, dependency_name(alias, specification)
+
+
+def validate_override_dependencies(
+    root: Path,
+    overrides: dict[str, str],
+) -> None:
+    fixture_root = root / "tests" / "fixtures" / "guest-rust-workspace"
+    for crate, fixture_name in overrides.items():
+        source_path = root / "packages" / crate / "Cargo.toml"
+        override_path = fixture_root / fixture_name
+        source = load_toml(source_path)
+        override = load_toml(override_path)
+        override_dependencies = {
+            (alias, package)
+            for _, alias, package in required_dependencies(override)
+        }
+        for table_name, alias, package in required_dependencies(source):
+            if (alias, package) not in override_dependencies:
+                raise DriftError(
+                    "guest manifest override dependency drift: "
+                    f"packages/{crate}/Cargo.toml [{table_name}] requires "
+                    f"dependency '{alias}' (package '{package}'), but "
+                    f"tests/fixtures/guest-rust-workspace/{fixture_name} "
+                    "does not declare it; add the dependency to the override "
+                    "and to guest workspace dependencies when it is inherited"
+                )
+
+
 def validate_lock(
     root: Path,
     crates: list[str],
@@ -326,6 +365,7 @@ def main() -> int:
                 "guest workspace Cargo.toml has no [workspace.dependencies] table"
             )
         validate_inherited_dependencies(root, crates, guest_dependencies)
+        validate_override_dependencies(root, overrides)
         validate_lock(root, crates, overrides, guest_manifest)
         validate_with_cargo(root, args.cargo, crates, overrides)
     except (DriftError, OSError) as error:
