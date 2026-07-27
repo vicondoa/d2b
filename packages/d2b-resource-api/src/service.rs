@@ -5,13 +5,14 @@ use std::{future::Future, sync::Arc};
 use d2b_contracts::{
     resource_proto as wire,
     v3::{
-        AuthenticatedSubjectContext, DEFAULT_LIST_PAGE_SIZE, DEFAULT_REQUEST_DEADLINE_MS,
-        DEFAULT_WATCH_CREDITS, FinalizerId, MAX_BATCH_MUTATIONS, MAX_EXPEDITED_DEADLINE_MS,
-        MAX_FILTER_VALUES, MAX_LIST_FILTERS, MAX_LIST_PAGE_SIZE, MAX_LIST_RESOURCE_TYPES,
-        MAX_PAGE_CURSOR_BYTES, MAX_REQUEST_CANONICAL_BYTES, MAX_REQUEST_DEADLINE_MS,
-        MAX_RESPONSE_CANONICAL_BYTES, MAX_WATCH_CREDITS, MAX_WATCH_FILTERS,
-        MAX_WATCH_RESOURCE_TYPES, ResourceEnvelope, ResourceError, ResourceErrorKind, ResourceName,
-        ResourceRef, ResourceTypeName, ResourceUid, ZoneId, ZoneRevision,
+        AuthenticatedSubjectContext, CanonicalJsonValue, DEFAULT_LIST_PAGE_SIZE,
+        DEFAULT_REQUEST_DEADLINE_MS, DEFAULT_WATCH_CREDITS, FinalizerId, MAX_BATCH_MUTATIONS,
+        MAX_EXPEDITED_DEADLINE_MS, MAX_FILTER_VALUES, MAX_LIST_FILTERS, MAX_LIST_PAGE_SIZE,
+        MAX_LIST_RESOURCE_TYPES, MAX_PAGE_CURSOR_BYTES, MAX_REQUEST_CANONICAL_BYTES,
+        MAX_REQUEST_DEADLINE_MS, MAX_RESPONSE_CANONICAL_BYTES, MAX_WATCH_CREDITS,
+        MAX_WATCH_FILTERS, MAX_WATCH_RESOURCE_TYPES, RESOURCE_ENVELOPE_DOMAIN_TAG,
+        ResourceEnvelope, ResourceError, ResourceErrorKind, ResourceName, ResourceRef,
+        ResourceTypeName, ResourceUid, ZoneId, ZoneRevision, canonical_digest,
     },
 };
 use d2b_resource_store::{
@@ -1223,8 +1224,20 @@ fn parse_mutation<T>(
                 "resource body identity does not match its target",
             ));
         }
-        let envelope = ResourceEnvelope::from_json(&body.canonical_json)
-            .map_err(|_| schema_error("resource envelope is malformed"))?;
+        let (envelope, canonical_resource, payload_digest) = if kind == ResourceMutationKind::Create
+        {
+            parse_create_payload(&body.canonical_json)?
+        } else {
+            let envelope = ResourceEnvelope::from_json(&body.canonical_json)
+                .map_err(|_| schema_error("resource envelope is malformed"))?;
+            let canonical = envelope
+                .canonical_bytes()
+                .map_err(|_| schema_error("resource envelope is malformed"))?;
+            let digest = envelope
+                .digest()
+                .map_err(|_| schema_error("resource envelope is malformed"))?;
+            (envelope, canonical, digest)
+        };
         if envelope.resource_type() != identity.resource_ref.resource_type()
             || envelope.metadata().name() != identity.resource_ref.name()
             || envelope.metadata().zone() != &identity.zone
@@ -1232,7 +1245,7 @@ fn parse_mutation<T>(
                 .uid
                 .as_ref()
                 .is_some_and(|uid| uid != envelope.metadata().uid())
-            || body.payload_digest != envelope.digest().unwrap_or_default()
+            || body.payload_digest != payload_digest
         {
             return Err(schema_error(
                 "resource envelope identity or digest does not match",
@@ -1246,11 +1259,7 @@ fn parse_mutation<T>(
         {
             return Err(schema_error("typed owner does not match resource metadata"));
         }
-        Some(
-            envelope
-                .canonical_bytes()
-                .map_err(|_| schema_error("resource envelope is malformed"))?,
-        )
+        Some(canonical_resource)
     } else {
         None
     };
@@ -1365,6 +1374,36 @@ fn parse_precondition(
             "precondition kind is unspecified or inconsistent",
         )),
     }
+}
+
+fn parse_create_payload(
+    bytes: &[u8],
+) -> Result<(ResourceEnvelope, Vec<u8>, String), ResourceError> {
+    // Create admission validates with a non-authoritative placeholder; the store
+    // must mint and inject the durable UID in the same transaction as insertion.
+    let value = CanonicalJsonValue::parse(bytes)
+        .map_err(|_| schema_error("create resource payload is malformed"))?;
+    let canonical_resource = value.to_canonical_bytes();
+    let mut validation_value = value;
+    let CanonicalJsonValue::Object(root) = &mut validation_value else {
+        return Err(schema_error("create resource payload is malformed"));
+    };
+    let Some(CanonicalJsonValue::Object(metadata)) = root.get_mut("metadata") else {
+        return Err(schema_error("create resource metadata is required"));
+    };
+    if metadata.contains_key("uid") {
+        return Err(schema_error(
+            "create resource payload must not contain an authoritative UID",
+        ));
+    }
+    metadata.insert(
+        "uid".to_owned(),
+        CanonicalJsonValue::String("00000000-0000-4000-8000-000000000000".to_owned()),
+    );
+    let envelope = ResourceEnvelope::from_json(&validation_value.to_canonical_bytes())
+        .map_err(|_| schema_error("create resource payload is malformed"))?;
+    let payload_digest = canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical_resource);
+    Ok((envelope, canonical_resource, payload_digest))
 }
 
 struct ParsedCollection {
@@ -1941,6 +1980,29 @@ mod tests {
         MessageField::some(body)
     }
 
+    fn create_payload() -> Vec<u8> {
+        let mut value = CanonicalJsonValue::parse(GOLDEN_HOST).unwrap();
+        let CanonicalJsonValue::Object(root) = &mut value else {
+            unreachable!()
+        };
+        let Some(CanonicalJsonValue::Object(metadata)) = root.get_mut("metadata") else {
+            unreachable!()
+        };
+        metadata.remove("uid");
+        value.to_canonical_bytes()
+    }
+
+    fn create_body(bytes: Vec<u8>) -> MessageField<wire::ResourceEnvelopeBytes> {
+        let canonical = CanonicalJsonValue::parse(&bytes)
+            .unwrap()
+            .to_canonical_bytes();
+        let mut body = wire::ResourceEnvelopeBytes::new();
+        body.identity = identity();
+        body.payload_digest = canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical);
+        body.canonical_json = bytes;
+        MessageField::some(body)
+    }
+
     fn stored_resource(bytes: usize) -> StoredResource {
         StoredResource {
             resource_ref: ResourceRef::parse("Host/host-system").unwrap(),
@@ -1990,7 +2052,7 @@ mod tests {
         let mut request = wire::CreateRequest::new();
         request.meta = request_meta();
         let mut value = mutation(wire::MutationKind::MUTATION_KIND_CREATE);
-        value.resource = body(GOLDEN_HOST.to_vec());
+        value.resource = create_body(create_payload());
         let mut owner = wire::ResourceIdentity::new();
         owner.zone = "dev".to_owned();
         owner.resource_type = "Provider".to_owned();
@@ -2035,10 +2097,11 @@ mod tests {
         let mut request = wire::CreateRequest::new();
         request.meta = request_meta();
         let mut value = mutation(wire::MutationKind::MUTATION_KIND_CREATE);
+        let canonical_create = create_payload();
         let mut noncanonical = b"\n  ".to_vec();
-        noncanonical.extend_from_slice(GOLDEN_HOST);
+        noncanonical.extend_from_slice(&canonical_create);
         noncanonical.push(b'\n');
-        value.resource = body(noncanonical);
+        value.resource = create_body(noncanonical);
         request.mutation = MessageField::some(value);
 
         let response = service.create(trusted(request, None)).await;
@@ -2046,7 +2109,7 @@ mod tests {
         assert!(response.error.is_none());
         assert_eq!(
             store.last_canonical_resource.lock().unwrap().as_deref(),
-            Some(GOLDEN_HOST)
+            Some(canonical_create.as_slice())
         );
     }
 
@@ -2054,17 +2117,19 @@ mod tests {
     async fn create_rejects_every_caller_supplied_uid_field() {
         let store = Arc::new(FakeStore::new(CommitMode::Success));
         let service = ResourceService::new(Arc::clone(&store), authorizer([ResourceVerb::Create]));
-        for uid_location in 0..2 {
+        for uid_location in 0..3 {
             let mut request = wire::CreateRequest::new();
             request.meta = request_meta();
             let mut value = mutation(wire::MutationKind::MUTATION_KIND_CREATE);
-            value.resource = body(GOLDEN_HOST.to_vec());
+            value.resource = create_body(create_payload());
             if uid_location == 0 {
                 value.target.mut_or_insert_default().uid =
                     Some("123e4567-e89b-42d3-a456-426614174000".to_owned());
-            } else {
+            } else if uid_location == 1 {
                 value.precondition.mut_or_insert_default().expected_uid =
                     Some("123e4567-e89b-42d3-a456-426614174000".to_owned());
+            } else {
+                value.resource = body(GOLDEN_HOST.to_vec());
             }
             request.mutation = MessageField::some(value);
             let response = service.create(trusted(request, None)).await;
@@ -2100,7 +2165,7 @@ mod tests {
             authorization_state.snapshot.policy_revision = 0;
             authorization_state.bootstrap_phase = phase;
             let mut value = mutation(wire::MutationKind::MUTATION_KIND_CREATE);
-            value.resource = body(GOLDEN_HOST.to_vec());
+            value.resource = create_body(create_payload());
             value.wait_for_reconcile = true;
             value.reconcile_deadline_ms = 1;
             let trusted =
@@ -2120,7 +2185,7 @@ mod tests {
         let mut request = wire::CreateRequest::parse_from_bytes(&[0x98, 0x06, 0x01]).unwrap();
         request.meta = request_meta();
         let mut value = mutation(wire::MutationKind::MUTATION_KIND_CREATE);
-        value.resource = body(GOLDEN_HOST.to_vec());
+        value.resource = create_body(create_payload());
         request.mutation = MessageField::some(value);
 
         let response = service.create(trusted(request, None)).await;
@@ -2141,7 +2206,7 @@ mod tests {
         let mut request = wire::CreateRequest::new();
         request.meta = request_meta();
         let mut value = mutation(wire::MutationKind::MUTATION_KIND_CREATE);
-        value.resource = body(GOLDEN_HOST.to_vec());
+        value.resource = create_body(create_payload());
         request.mutation = MessageField::some(value);
 
         let response = service.create(trusted(request, None)).await;
@@ -2161,7 +2226,7 @@ mod tests {
         let mut request = wire::CreateRequest::new();
         request.meta = request_meta();
         let mut value = mutation(wire::MutationKind::MUTATION_KIND_CREATE);
-        value.resource = body(GOLDEN_HOST.to_vec());
+        value.resource = create_body(create_payload());
         request.mutation = MessageField::some(value);
 
         let response = service.create(trusted(request, None)).await;
