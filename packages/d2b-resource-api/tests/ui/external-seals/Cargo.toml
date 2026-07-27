@@ -6,5 +6,5 @@ publish = false
 
 [workspace]
 
-[dependencies]
+[dev-dependencies]
 d2b-resource-api = { path = "../../.." }

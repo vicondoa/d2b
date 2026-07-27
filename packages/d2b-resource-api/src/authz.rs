@@ -21,7 +21,7 @@ use sha2::{Digest, Sha256};
 
 use crate::admission::{
     AdmissionError, AdmissionIssuer, AdmissionPermit, AdmissionVerifier, AdmittedMutation,
-    admission_pair,
+    StoreIdentity, admission_pair,
 };
 
 const POSITIVE_CACHE_ENTRIES: usize = 4096;
@@ -644,10 +644,10 @@ impl NativeAuthorizer {
     pub fn new(
         catalog: ApiCatalog,
         policy: Option<PolicySet>,
-    ) -> Result<(Self, AdmissionVerifier), AuthorizationPolicyError> {
-        let (admission, verifier) = admission_pair();
+    ) -> Result<(Self, AdmissionVerifier, StoreIdentity), AuthorizationPolicyError> {
+        let (admission, verifier, store_identity) = admission_pair();
         let authorizer = Self::from_issuer(catalog, policy, admission)?;
-        Ok((authorizer, verifier))
+        Ok((authorizer, verifier, store_identity))
     }
 
     fn from_issuer(
@@ -677,8 +677,12 @@ impl NativeAuthorizer {
         if policy.catalog != self.catalog {
             return Err(AuthorizationPolicyError::CatalogMismatch);
         }
-        *self.write_policy() = Some(Arc::new(policy));
-        self.cache.invalidate_revisions(revision_set(state));
+        if policy.policy_revision != state.snapshot.policy_revision {
+            return Err(AuthorizationPolicyError::PolicyStateRevisionMismatch);
+        }
+        let mut installed = self.write_policy();
+        *installed = Some(Arc::new(policy));
+        self.cache.clear();
         Ok(())
     }
 
@@ -692,6 +696,16 @@ impl NativeAuthorizer {
         context: &AuthenticatedSubjectContext,
         request: &AuthorizationRequest,
         state: &AuthorizationState,
+    ) -> Result<AuthorizationGrant, AuthorizationDenial> {
+        self.authorize_before_grant(context, request, state, || {})
+    }
+
+    fn authorize_before_grant(
+        &self,
+        context: &AuthenticatedSubjectContext,
+        request: &AuthorizationRequest,
+        state: &AuthorizationState,
+        before_grant: impl FnOnce(),
     ) -> Result<AuthorizationGrant, AuthorizationDenial> {
         if request.targets.is_empty() {
             return Err(AuthorizationDenial::NoMatchingGrant);
@@ -713,9 +727,9 @@ impl NativeAuthorizer {
             return authorize_bootstrap(&self.admission, context, request, state, relay_hop);
         }
 
-        let policy = self
-            .read_policy()
-            .clone()
+        let installed = self.read_policy();
+        let policy = installed
+            .as_ref()
             .ok_or(AuthorizationDenial::PolicyUnavailable)?;
         if policy.policy_revision != state.snapshot.policy_revision {
             return Err(AuthorizationDenial::PolicyRevisionChanged);
@@ -724,7 +738,7 @@ impl NativeAuthorizer {
         let cache_key = cache_key(context, request, relay_hop);
         let revisions = revision_set(state);
         if !self.cache.contains(&cache_key, revisions, state.now_tick) {
-            evaluate_policy(&policy, context, request, relay_hop)?;
+            evaluate_policy(policy, context, request, relay_hop)?;
             self.cache.insert_allow(
                 cache_key,
                 revisions,
@@ -732,6 +746,7 @@ impl NativeAuthorizer {
                 state.now_tick,
             );
         }
+        before_grant();
         Ok(grant(&self.admission, context, request, state.snapshot))
     }
 
@@ -1311,6 +1326,7 @@ pub enum AuthorizationPolicyError {
     DuplicateRole,
     RelayGrantRestricted,
     PolicyRevisionZero,
+    PolicyStateRevisionMismatch,
 }
 
 impl core::fmt::Display for AuthorizationPolicyError {
@@ -1327,6 +1343,9 @@ impl core::fmt::Display for AuthorizationPolicyError {
             Self::DuplicateRole => "policy contains duplicate Role identities",
             Self::RelayGrantRestricted => "relay grant is not core or durable-admin authorized",
             Self::PolicyRevisionZero => "stored policy revision must be nonzero",
+            Self::PolicyStateRevisionMismatch => {
+                "installed policy revision does not match trusted runtime state"
+            }
         })
     }
 }
@@ -1553,6 +1572,91 @@ mod tests {
                 .authorize(&context, &request(), &state(5))
                 .unwrap_err(),
             AuthorizationDenial::PolicyUnavailable
+        );
+    }
+
+    #[test]
+    fn same_revision_policy_replacement_invalidates_a_cached_allow() {
+        let context = subject(Locality::Local, EvidenceClass::UnixPeer, "User/alice");
+        let engine = NativeAuthorizer::from_issuer(
+            ApiCatalog::standard(),
+            Some(policy(4, &context, Some(ResourceVerb::Get), false)),
+            test_issuer(),
+        )
+        .unwrap();
+        assert!(engine.authorize(&context, &request(), &state(4)).is_ok());
+
+        engine
+            .replace_policy(policy(4, &context, None, false), &state(4))
+            .unwrap();
+
+        assert_eq!(
+            engine
+                .authorize(&context, &request(), &state(4))
+                .unwrap_err(),
+            AuthorizationDenial::NoMatchingGrant
+        );
+    }
+
+    #[test]
+    fn replacement_and_permit_minting_are_linearized() {
+        use std::sync::mpsc::{self, TryRecvError};
+
+        let context = subject(Locality::Local, EvidenceClass::UnixPeer, "User/alice");
+        let engine = Arc::new(
+            NativeAuthorizer::from_issuer(
+                ApiCatalog::standard(),
+                Some(policy(4, &context, Some(ResourceVerb::Get), false)),
+                test_issuer(),
+            )
+            .unwrap(),
+        );
+        assert!(engine.authorize(&context, &request(), &state(4)).is_ok());
+
+        let (at_grant_tx, at_grant_rx) = mpsc::channel();
+        let (release_grant_tx, release_grant_rx) = mpsc::channel();
+        let authorizing_engine = Arc::clone(&engine);
+        let authorizing_context = context.clone();
+        let authorizing = std::thread::spawn(move || {
+            authorizing_engine.authorize_before_grant(
+                &authorizing_context,
+                &request(),
+                &state(4),
+                || {
+                    at_grant_tx.send(()).unwrap();
+                    release_grant_rx.recv().unwrap();
+                },
+            )
+        });
+        at_grant_rx.recv().unwrap();
+        assert!(
+            engine.policy.try_write().is_err(),
+            "permit minting released the policy guard before returning"
+        );
+
+        let (replacement_started_tx, replacement_started_rx) = mpsc::channel();
+        let (replacement_done_tx, replacement_done_rx) = mpsc::channel();
+        let replacing_engine = Arc::clone(&engine);
+        let replacing_context = context.clone();
+        let replacing = std::thread::spawn(move || {
+            replacement_started_tx.send(()).unwrap();
+            let result = replacing_engine
+                .replace_policy(policy(4, &replacing_context, None, false), &state(4));
+            replacement_done_tx.send(result).unwrap();
+        });
+        replacement_started_rx.recv().unwrap();
+        assert_eq!(replacement_done_rx.try_recv(), Err(TryRecvError::Empty));
+
+        release_grant_tx.send(()).unwrap();
+        assert!(authorizing.join().unwrap().is_ok());
+        replacement_done_rx.recv().unwrap().unwrap();
+        replacing.join().unwrap();
+
+        assert_eq!(
+            engine
+                .authorize(&context, &request(), &state(4))
+                .unwrap_err(),
+            AuthorizationDenial::NoMatchingGrant
         );
     }
 
@@ -2053,6 +2157,21 @@ mod tests {
                 "bootstrap subject near miss authorized: {subject_name} {method:?} {resource_type}"
             );
 
+            let wrong_subject_name = bootstrap_subject("system-subject-near-miss", core_uid);
+            let name_mismatch_state = bootstrap_state(BootstrapPhase::Unprovisioned {
+                zone: ZoneId::parse("dev").unwrap(),
+                controller_generation: ControllerGeneration::new(11).unwrap(),
+                provider_generation: ResourceGeneration::new(12).unwrap(),
+            });
+            assert_eq!(
+                engine
+                    .authorize(&wrong_subject_name, &exact, &name_mismatch_state)
+                    .unwrap_err(),
+                AuthorizationDenial::BootstrapDenied,
+                "bootstrap subject-name near miss authorized: \
+                 {subject_name} {method:?} {resource_type}"
+            );
+
             let mut wrong_verb = exact.clone();
             wrong_verb.targets[0].verb = ResourceVerb::UseCredential;
             assert_eq!(
@@ -2135,52 +2254,58 @@ mod tests {
 
     #[test]
     fn authorization_debug_surfaces_redact_policy_and_identity_fields() {
-        const MARKER: &str = "sentinel-observability-marker";
+        const ZONE_SENTINEL: &str = "authz-zone-sentinel";
+        const NAME_SENTINEL: &str = "authz-name-sentinel";
+        const REF_SENTINEL: &str = "authz-ref-sentinel";
+        const UID_SENTINEL: &str = "33333333-3333-4333-8333-333333333333";
+        const PAYLOAD_SENTINEL: &str = "authz-payload-sentinel";
+        const TYPE_SENTINEL: &str = "authz-sentinel.d2bus.org.Widget";
 
-        let extension = ResourceTypeName::parse(format!("{MARKER}.d2bus.org.Widget")).unwrap();
+        let extension = ResourceTypeName::parse(TYPE_SENTINEL).unwrap();
         let catalog = ApiCatalog::with_extensions([extension.clone()]).unwrap();
         let target = AuthorizationTarget {
             resource_type: extension.clone(),
-            resource_name: Some(ResourceName::parse(MARKER).unwrap()),
+            resource_name: Some(ResourceName::parse(NAME_SENTINEL).unwrap()),
             verb: ResourceVerb::Get,
-            subresource: Some(MARKER.to_owned()),
-            execution_ref: Some(ResourceRef::parse(&format!("Process/{MARKER}")).unwrap()),
+            subresource: Some(PAYLOAD_SENTINEL.to_owned()),
+            execution_ref: Some(ResourceRef::parse(&format!("Process/{REF_SENTINEL}")).unwrap()),
         };
         let request = AuthorizationRequest {
             method: ApiMethod::Get,
-            zone: ZoneId::parse(MARKER).unwrap(),
+            zone: ZoneId::parse(ZONE_SENTINEL).unwrap(),
             targets: vec![target.clone()],
         };
         let mut protected_state = state(9);
         protected_state.bootstrap_phase = BootstrapPhase::Unprovisioned {
-            zone: ZoneId::parse(MARKER).unwrap(),
+            zone: ZoneId::parse(ZONE_SENTINEL).unwrap(),
             controller_generation: ControllerGeneration::new(11).unwrap(),
             provider_generation: ResourceGeneration::new(12).unwrap(),
         };
         let bound_subject = BoundSubject {
-            subject_ref: ResourceRef::parse(&format!("User/{MARKER}")).unwrap(),
-            subject_uid: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+            subject_ref: ResourceRef::parse(&format!("User/{REF_SENTINEL}")).unwrap(),
+            subject_uid: ResourceUid::parse(UID_SENTINEL).unwrap(),
         };
         let scope = BindingScope {
-            zones: BTreeSet::from([ZoneId::parse(MARKER).unwrap()]),
-            resource_names: BTreeSet::from([ResourceName::parse(MARKER).unwrap()]),
-            execution_refs: BTreeSet::from([
-                ResourceRef::parse(&format!("Process/{MARKER}")).unwrap()
-            ]),
+            zones: BTreeSet::from([ZoneId::parse(ZONE_SENTINEL).unwrap()]),
+            resource_names: BTreeSet::from([ResourceName::parse(NAME_SENTINEL).unwrap()]),
+            execution_refs: BTreeSet::from([ResourceRef::parse(&format!(
+                "Process/{REF_SENTINEL}"
+            ))
+            .unwrap()]),
         };
         let rule = PolicyRule::new(
             &catalog,
             [extension],
             [ResourceVerb::Get],
             [SessionVerb::Connect],
-            [MARKER.to_owned()],
-            [ResourceName::parse(MARKER).unwrap()],
-            [ZoneId::parse(MARKER).unwrap()],
-            [ResourceRef::parse(&format!("Process/{MARKER}")).unwrap()],
+            [PAYLOAD_SENTINEL.to_owned()],
+            [ResourceName::parse(NAME_SENTINEL).unwrap()],
+            [ZoneId::parse(ZONE_SENTINEL).unwrap()],
+            [ResourceRef::parse(&format!("Process/{REF_SENTINEL}")).unwrap()],
         )
         .unwrap();
         let role = CompiledRole::new(
-            ResourceRef::parse(&format!("Role/{MARKER}")).unwrap(),
+            ResourceRef::parse(&format!("Role/{REF_SENTINEL}")).unwrap(),
             vec![rule.clone()],
         )
         .unwrap();
@@ -2200,7 +2325,7 @@ mod tests {
         let context = subject(
             Locality::Local,
             EvidenceClass::UnixPeer,
-            &format!("User/{MARKER}"),
+            &format!("User/{REF_SENTINEL}"),
         );
         let grant = grant(&test_issuer(), &context, &request, protected_state.snapshot);
         let authorizer =
@@ -2223,7 +2348,16 @@ mod tests {
             format!("{grant:?}"),
             format!("{authorizer:?}"),
         ] {
-            assert!(!rendered.contains(MARKER), "{rendered}");
+            for sentinel in [
+                ZONE_SENTINEL,
+                NAME_SENTINEL,
+                REF_SENTINEL,
+                UID_SENTINEL,
+                PAYLOAD_SENTINEL,
+                TYPE_SENTINEL,
+            ] {
+                assert!(!rendered.contains(sentinel), "{rendered}");
+            }
         }
     }
 }

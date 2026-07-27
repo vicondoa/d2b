@@ -13,9 +13,13 @@ use std::{fmt::Write as _, fs::File, io::Read, sync::Arc};
 #[derive(Debug)]
 struct AdmissionAuthority;
 
+#[derive(Debug)]
+struct StoreIdentityAuthority;
+
 /// Capability installed only in the native evaluator.
 pub(crate) struct AdmissionIssuer {
     authority: Arc<AdmissionAuthority>,
+    store_identity: Arc<StoreIdentityAuthority>,
 }
 
 impl core::fmt::Debug for AdmissionIssuer {
@@ -35,20 +39,37 @@ impl core::fmt::Debug for AdmissionVerifier {
     }
 }
 
+/// Unique identity owned by one concrete resource-store backend.
+pub struct StoreIdentity {
+    authority: Arc<StoreIdentityAuthority>,
+}
+
+impl core::fmt::Debug for StoreIdentity {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("StoreIdentity(<redacted>)")
+    }
+}
+
 /// Create the evaluator capability and its store verifier.
-pub(crate) fn admission_pair() -> (AdmissionIssuer, AdmissionVerifier) {
+pub(crate) fn admission_pair() -> (AdmissionIssuer, AdmissionVerifier, StoreIdentity) {
     let authority = Arc::new(AdmissionAuthority);
+    let store_identity = Arc::new(StoreIdentityAuthority);
     (
         AdmissionIssuer {
             authority: Arc::clone(&authority),
+            store_identity: Arc::clone(&store_identity),
         },
         AdmissionVerifier { authority },
+        StoreIdentity {
+            authority: store_identity,
+        },
     )
 }
 
 /// Positive evaluation result carrying the exact authorization and revisions.
 pub(crate) struct AdmissionPermit {
     authority: Arc<AdmissionAuthority>,
+    store_identity: Arc<StoreIdentityAuthority>,
     authorization: AdmittedAuthorization,
     policy_snapshot: PolicySnapshot,
 }
@@ -60,6 +81,7 @@ impl core::fmt::Debug for AdmissionPermit {
             .field("authorization", &"<redacted>")
             .field("policy_snapshot", &"<redacted>")
             .field("authority", &"<redacted>")
+            .field("store_identity", &"<redacted>")
             .finish()
     }
 }
@@ -73,6 +95,7 @@ impl AdmissionIssuer {
     ) -> AdmissionPermit {
         AdmissionPermit {
             authority: Arc::clone(&self.authority),
+            store_identity: Arc::clone(&self.store_identity),
             authorization,
             policy_snapshot,
         }
@@ -118,6 +141,7 @@ impl AdmissionPermit {
             policy_snapshot: self.policy_snapshot,
             operation,
             authority: self.authority,
+            store_identity: self.store_identity,
         })
     }
 }
@@ -137,6 +161,7 @@ pub struct AdmittedMutation {
     policy_snapshot: PolicySnapshot,
     operation: StoreOperationContext,
     authority: Arc<AdmissionAuthority>,
+    store_identity: Arc<StoreIdentityAuthority>,
 }
 
 impl AdmittedMutation {
@@ -165,6 +190,7 @@ impl core::fmt::Debug for AdmittedMutation {
             .field("policy_snapshot", &"<redacted>")
             .field("operation", &"<redacted>")
             .field("authority", &"<redacted>")
+            .field("store_identity", &"<redacted>")
             .finish()
     }
 }
@@ -209,43 +235,53 @@ impl core::fmt::Debug for PreparedStoreMutation {
 }
 
 impl VerifiedMutation {
-    fn check_authority(&self, verifier: &AdmissionVerifier) -> Result<(), StoreError> {
-        if Arc::ptr_eq(&verifier.authority, &self.admitted.authority) {
-            Ok(())
-        } else {
-            Err(authority_mismatch())
+    fn check_authority(
+        &self,
+        verifier: &AdmissionVerifier,
+        store_identity: &StoreIdentity,
+    ) -> Result<(), StoreError> {
+        if !Arc::ptr_eq(&verifier.authority, &self.admitted.authority) {
+            return Err(authority_mismatch());
         }
+        if !Arc::ptr_eq(&store_identity.authority, &self.admitted.store_identity) {
+            return Err(store_identity_mismatch());
+        }
+        Ok(())
     }
 
     pub fn mutations(
         &self,
         verifier: &AdmissionVerifier,
+        store_identity: &StoreIdentity,
     ) -> Result<&[PreparedStoreMutation], StoreError> {
-        self.check_authority(verifier)?;
+        self.check_authority(verifier, store_identity)?;
         Ok(&self.mutations)
     }
 
     pub fn authorization(
         &self,
         verifier: &AdmissionVerifier,
+        store_identity: &StoreIdentity,
     ) -> Result<&AdmittedAuthorization, StoreError> {
-        self.check_authority(verifier)?;
+        self.check_authority(verifier, store_identity)?;
         Ok(self.admitted.authorization())
     }
 
     pub fn policy_snapshot(
         &self,
         verifier: &AdmissionVerifier,
+        store_identity: &StoreIdentity,
     ) -> Result<PolicySnapshot, StoreError> {
-        self.check_authority(verifier)?;
+        self.check_authority(verifier, store_identity)?;
         Ok(self.admitted.policy_snapshot())
     }
 
     pub fn operation(
         &self,
         verifier: &AdmissionVerifier,
+        store_identity: &StoreIdentity,
     ) -> Result<&StoreOperationContext, StoreError> {
-        self.check_authority(verifier)?;
+        self.check_authority(verifier, store_identity)?;
         Ok(self.admitted.operation())
     }
 }
@@ -260,9 +296,13 @@ impl AdmissionVerifier {
     pub(super) fn verify(
         &self,
         admitted: AdmittedMutation,
+        store_identity: &StoreIdentity,
     ) -> Result<VerifiedMutation, StoreError> {
         if !Arc::ptr_eq(&self.authority, &admitted.authority) {
             return Err(authority_mismatch());
+        }
+        if !Arc::ptr_eq(&store_identity.authority, &admitted.store_identity) {
+            return Err(store_identity_mismatch());
         }
         let mutations = admitted
             .mutations
@@ -284,6 +324,16 @@ fn authority_mismatch() -> StoreError {
         None,
         RetryClass::Never,
         "admission-authority-mismatch",
+    )
+}
+
+fn store_identity_mismatch() -> StoreError {
+    StoreError::new(
+        StoreErrorKind::InternalIntegrityFailure,
+        None,
+        None,
+        RetryClass::Never,
+        "admission-store-identity-mismatch",
     )
 }
 
@@ -461,23 +511,33 @@ mod tests {
 
     #[test]
     fn evaluator_capability_mints_store_bound_admission() {
-        let (issuer, verifier) = admission_pair();
+        let (issuer, verifier, store_identity) = admission_pair();
         let permit = issuer.record_allow(authorization("work"), snapshot());
         let admitted = permit
             .admit(Vec::new(), operation())
             .expect("matching admission");
-        let verified = verifier.verify(admitted).expect("paired verifier");
+        let verified = verifier
+            .verify(admitted, &store_identity)
+            .expect("paired verifier");
 
-        assert!(verified.mutations(&verifier).unwrap().is_empty());
+        assert!(
+            verified
+                .mutations(&verifier, &store_identity)
+                .unwrap()
+                .is_empty()
+        );
         assert_eq!(
-            verified.policy_snapshot(&verifier).unwrap().policy_revision,
+            verified
+                .policy_snapshot(&verifier, &store_identity)
+                .unwrap()
+                .policy_revision,
             1
         );
     }
 
     #[test]
     fn mixed_zone_admission_is_impossible() {
-        let (issuer, _) = admission_pair();
+        let (issuer, _, _) = admission_pair();
         let permit = issuer.record_allow(authorization("work"), snapshot());
         let error = permit
             .admit(vec![mutation("work"), mutation("personal")], operation())
@@ -491,7 +551,7 @@ mod tests {
 
     #[test]
     fn create_uid_cannot_enter_through_the_store_boundary() {
-        let (issuer, verifier) = admission_pair();
+        let (issuer, verifier, store_identity) = admission_pair();
         let mut create = mutation("work");
         create.canonical_resource =
             Some(br#"{"metadata":{"uid":"123e4567-e89b-42d3-a456-426614174000"}}"#.to_vec());
@@ -500,7 +560,7 @@ mod tests {
             .admit(vec![create], operation())
             .unwrap();
 
-        let error = verifier.verify(admitted).unwrap_err();
+        let error = verifier.verify(admitted, &store_identity).unwrap_err();
         assert_eq!(error.kind(), StoreErrorKind::ResourceSchemaInvalid);
         assert_eq!(error.reason_code(), "create-resource-uid-present");
     }
@@ -520,76 +580,169 @@ mod tests {
 
     #[test]
     fn verifier_rejects_admission_from_another_store_instance() {
-        let (issuer, _) = admission_pair();
-        let (_, other_verifier) = admission_pair();
+        let (issuer, _, _) = admission_pair();
+        let (_, other_verifier, other_store_identity) = admission_pair();
         let admitted = issuer
             .record_allow(authorization("work"), snapshot())
             .admit(Vec::new(), operation())
             .unwrap();
 
-        let error = other_verifier.verify(admitted).unwrap_err();
+        let error = other_verifier
+            .verify(admitted, &other_store_identity)
+            .unwrap_err();
         assert_eq!(error.kind(), StoreErrorKind::InternalIntegrityFailure);
         assert_eq!(error.reason_code(), "admission-authority-mismatch");
     }
 
     #[test]
     fn verified_mutation_cannot_be_forwarded_to_another_backend() {
-        let (issuer, verifier) = admission_pair();
-        let (_, other_verifier) = admission_pair();
+        let (issuer, verifier, store_identity) = admission_pair();
+        let (_, other_verifier, other_store_identity) = admission_pair();
         let admitted = issuer
             .record_allow(authorization("work"), snapshot())
             .admit(Vec::new(), operation())
             .unwrap();
-        let verified = verifier.verify(admitted).unwrap();
+        let verified = verifier.verify(admitted, &store_identity).unwrap();
 
-        let error = verified.mutations(&other_verifier).unwrap_err();
+        let error = verified
+            .mutations(&other_verifier, &other_store_identity)
+            .unwrap_err();
         assert_eq!(error.kind(), StoreErrorKind::InternalIntegrityFailure);
         assert_eq!(error.reason_code(), "admission-authority-mismatch");
     }
 
     #[test]
+    fn shared_verifier_cannot_cross_store_identities() {
+        struct TestStore {
+            verifier: Arc<AdmissionVerifier>,
+            identity: StoreIdentity,
+        }
+
+        let (issuer, shared_verifier, first_identity) = admission_pair();
+        let (_, _, second_identity) = admission_pair();
+        let shared_verifier = Arc::new(shared_verifier);
+        let first_store = TestStore {
+            verifier: Arc::clone(&shared_verifier),
+            identity: first_identity,
+        };
+        let second_store = TestStore {
+            verifier: shared_verifier,
+            identity: second_identity,
+        };
+        let first_admitted = issuer
+            .record_allow(authorization("work"), snapshot())
+            .admit(Vec::new(), operation())
+            .unwrap();
+        assert!(
+            first_store
+                .verifier
+                .verify(first_admitted, &first_store.identity)
+                .is_ok()
+        );
+        let cross_store_admitted = issuer
+            .record_allow(authorization("work"), snapshot())
+            .admit(Vec::new(), operation())
+            .unwrap();
+
+        let error = second_store
+            .verifier
+            .verify(cross_store_admitted, &second_store.identity)
+            .unwrap_err();
+        assert_eq!(error.kind(), StoreErrorKind::InternalIntegrityFailure);
+        assert_eq!(error.reason_code(), "admission-store-identity-mismatch");
+    }
+
+    #[test]
     fn evaluation_snapshot_cannot_be_substituted_during_admission() {
-        let (issuer, verifier) = admission_pair();
+        let (issuer, verifier, store_identity) = admission_pair();
         let admitted = issuer
             .record_allow(authorization("work"), snapshot())
             .admit(Vec::new(), operation())
             .unwrap();
-        let verified = verifier.verify(admitted).unwrap();
+        let verified = verifier.verify(admitted, &store_identity).unwrap();
 
-        assert_eq!(verified.policy_snapshot(&verifier).unwrap(), snapshot());
+        assert_eq!(
+            verified
+                .policy_snapshot(&verifier, &store_identity)
+                .unwrap(),
+            snapshot()
+        );
     }
 
     #[test]
     fn admission_debug_surfaces_redact_protected_fields() {
-        const MARKER: &str = "sentinel-observability-marker";
+        const ZONE_SENTINEL: &str = "admission-zone-sentinel";
+        const NAME_SENTINEL: &str = "admission-name-sentinel";
+        const REF_SENTINEL: &str = "admission-ref-sentinel";
+        const UID_SENTINEL: &str = "44444444-4444-4444-8444-444444444444";
+        const PAYLOAD_SENTINEL: &str = "admission-payload-sentinel";
 
-        let (issuer, verifier) = admission_pair();
-        let permit = issuer.record_allow(authorization(MARKER), snapshot());
+        let protected_authorization = AdmittedAuthorization {
+            zone: ZoneId::parse(ZONE_SENTINEL).unwrap(),
+            subject_ref: ResourceRef::parse(&format!("Provider/{REF_SENTINEL}")).unwrap(),
+            subject_uid: ResourceUid::parse(UID_SENTINEL).unwrap(),
+            targets: vec![d2b_resource_store::AdmittedAuthorizationTarget {
+                resource_type: ResourceTypeName::parse("Host").unwrap(),
+                resource_name: Some(ResourceName::parse(NAME_SENTINEL).unwrap()),
+                verb: d2b_resource_store::AdmittedVerb::Delete,
+                subresource: Some(PAYLOAD_SENTINEL.to_owned()),
+                execution_ref: Some(
+                    ResourceRef::parse(&format!("Process/{REF_SENTINEL}")).unwrap(),
+                ),
+            }],
+        };
+        let (issuer, verifier, store_identity) = admission_pair();
+        let issuer_debug = format!("{issuer:?}");
+        let verifier_debug = format!("{verifier:?}");
+        let store_identity_debug = format!("{store_identity:?}");
+        let permit = issuer.record_allow(protected_authorization, snapshot());
         let permit_debug = format!("{permit:?}");
-        let mut protected_mutation = mutation(MARKER);
+        let mut protected_mutation = mutation(ZONE_SENTINEL);
         protected_mutation.kind = d2b_resource_store::ResourceMutationKind::Delete;
-        protected_mutation.target = ResourceRef::parse(&format!("Host/{MARKER}")).unwrap();
+        protected_mutation.target = ResourceRef::parse(&format!("Host/{REF_SENTINEL}")).unwrap();
         protected_mutation.expected =
             d2b_resource_store::ExpectedRevision::Exact(ZoneRevision::new(1));
+        protected_mutation.expected_uid = Some(ResourceUid::parse(UID_SENTINEL).unwrap());
+        protected_mutation.owner =
+            Some(ResourceRef::parse(&format!("Process/{REF_SENTINEL}")).unwrap());
         let admitted = permit
             .admit(
                 vec![protected_mutation],
                 StoreOperationContext {
-                    operation_id: MARKER.to_owned(),
-                    idempotency_key: Some(MARKER.to_owned()),
-                    correlation_id: MARKER.to_owned(),
-                    trace_id: Some(MARKER.to_owned()),
+                    operation_id: PAYLOAD_SENTINEL.to_owned(),
+                    idempotency_key: Some(PAYLOAD_SENTINEL.to_owned()),
+                    correlation_id: PAYLOAD_SENTINEL.to_owned(),
+                    trace_id: Some(PAYLOAD_SENTINEL.to_owned()),
                     deadline_ms: 1,
                 },
             )
             .unwrap();
         let admitted_debug = format!("{admitted:?}");
-        let verified = verifier.verify(admitted).unwrap();
-        let prepared_debug = format!("{:?}", verified.mutations(&verifier).unwrap()[0]);
+        let verified = verifier.verify(admitted, &store_identity).unwrap();
+        let prepared_debug = format!(
+            "{:?}",
+            verified.mutations(&verifier, &store_identity).unwrap()[0]
+        );
         let verified_debug = format!("{verified:?}");
 
-        for rendered in [permit_debug, admitted_debug, prepared_debug, verified_debug] {
-            assert!(!rendered.contains(MARKER), "{rendered}");
+        for rendered in [
+            issuer_debug,
+            verifier_debug,
+            store_identity_debug,
+            permit_debug,
+            admitted_debug,
+            prepared_debug,
+            verified_debug,
+        ] {
+            for sentinel in [
+                ZONE_SENTINEL,
+                NAME_SENTINEL,
+                REF_SENTINEL,
+                UID_SENTINEL,
+                PAYLOAD_SENTINEL,
+            ] {
+                assert!(!rendered.contains(sentinel), "{rendered}");
+            }
         }
     }
 }

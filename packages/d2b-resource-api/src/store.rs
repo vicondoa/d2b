@@ -8,11 +8,12 @@ use d2b_resource_store::{
     StoreWatchRequest, StoredResource, StoredSchema,
 };
 
-use crate::admission::{AdmissionVerifier, AdmittedMutation, VerifiedMutation};
+use crate::admission::{AdmissionVerifier, AdmittedMutation, StoreIdentity, VerifiedMutation};
 
 /// Backend seam reached only after instance-bound admission verification.
 pub trait ResourceStoreBackend: Send + Sync {
     fn admission_verifier(&self) -> &AdmissionVerifier;
+    fn store_identity(&self) -> &StoreIdentity;
 
     fn get(
         &self,
@@ -124,7 +125,9 @@ impl<T: ResourceStoreBackend> ResourceStore for T {
         &self,
         mutation: AdmittedMutation,
     ) -> impl Future<Output = Result<StoreCommitResult, StoreError>> + Send {
-        let verified = self.admission_verifier().verify(mutation);
+        let verified = self
+            .admission_verifier()
+            .verify(mutation, self.store_identity());
         async move { ResourceStoreBackend::commit_verified(self, verified?).await }
     }
 }
