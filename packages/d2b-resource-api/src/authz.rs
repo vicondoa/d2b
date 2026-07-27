@@ -14,7 +14,9 @@ use d2b_contracts::v3::{
 };
 use d2b_core_controller::rbac::{AuthorizationCacheKey, PolicyRevisionSet, PositiveDecisionCache};
 use d2b_resource_store::{
-    AdmittedAuthorization, AdmittedAuthorizationTarget, AdmittedVerb, AllowDecision, PolicySnapshot,
+    AdmissionError, AdmissionIssuer, AdmissionPermit, AdmittedAuthorization,
+    AdmittedAuthorizationTarget, AdmittedMutation, AdmittedVerb, PolicySnapshot, StoreMutation,
+    StoreOperationContext,
 };
 use sha2::{Digest, Sha256};
 
@@ -478,10 +480,19 @@ impl AuthorizationDenial {
 }
 
 /// Successful authorization evidence returned to the service.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct AuthorizationGrant {
-    pub admitted: AdmittedAuthorization,
-    pub allow: AllowDecision,
+    permit: AdmissionPermit,
+}
+
+impl AuthorizationGrant {
+    pub(crate) fn admit(
+        self,
+        mutations: Vec<StoreMutation>,
+        operation: StoreOperationContext,
+    ) -> Result<AdmittedMutation, AdmissionError> {
+        self.permit.admit(mutations, operation)
+    }
 }
 
 /// Single native evaluator and positive-decision cache.
@@ -490,12 +501,14 @@ pub struct NativeAuthorizer {
     catalog: ApiCatalog,
     policy: RwLock<Option<Arc<PolicySet>>>,
     cache: PositiveDecisionCache,
+    admission: AdmissionIssuer,
 }
 
 impl NativeAuthorizer {
     pub fn new(
         catalog: ApiCatalog,
         policy: Option<PolicySet>,
+        admission: AdmissionIssuer,
     ) -> Result<Self, AuthorizationPolicyError> {
         if policy
             .as_ref()
@@ -507,6 +520,7 @@ impl NativeAuthorizer {
             catalog,
             policy: RwLock::new(policy.map(Arc::new)),
             cache: PositiveDecisionCache::new(POSITIVE_CACHE_ENTRIES),
+            admission,
         })
     }
 
@@ -551,7 +565,7 @@ impl NativeAuthorizer {
         }
         let relay_hop = authenticated_relay_hop(context)?;
         if state.snapshot.policy_revision == 0 {
-            return authorize_bootstrap(context, request, state, relay_hop);
+            return authorize_bootstrap(&self.admission, context, request, state, relay_hop);
         }
 
         let policy = self
@@ -573,7 +587,7 @@ impl NativeAuthorizer {
                 state.now_tick,
             );
         }
-        Ok(grant(context, request))
+        Ok(grant(&self.admission, context, request, state.snapshot))
     }
 
     pub fn positive_capabilities(
@@ -720,27 +734,31 @@ fn evaluate_policy(
 }
 
 fn grant(
+    admission: &AdmissionIssuer,
     context: &AuthenticatedSubjectContext,
     request: &AuthorizationRequest,
+    policy_snapshot: PolicySnapshot,
 ) -> AuthorizationGrant {
     AuthorizationGrant {
-        admitted: AdmittedAuthorization {
-            zone: request.zone.clone(),
-            subject_ref: context.subject_ref().clone(),
-            subject_uid: context.subject_uid().clone(),
-            targets: request
-                .targets
-                .iter()
-                .map(|target| AdmittedAuthorizationTarget {
-                    resource_type: target.resource_type.clone(),
-                    resource_name: target.resource_name.clone(),
-                    verb: target.verb.admitted(),
-                    subresource: target.subresource.clone(),
-                    execution_ref: target.execution_ref.clone(),
-                })
-                .collect(),
-        },
-        allow: AllowDecision::from_native_evaluator(),
+        permit: admission.record_allow(
+            AdmittedAuthorization {
+                zone: request.zone.clone(),
+                subject_ref: context.subject_ref().clone(),
+                subject_uid: context.subject_uid().clone(),
+                targets: request
+                    .targets
+                    .iter()
+                    .map(|target| AdmittedAuthorizationTarget {
+                        resource_type: target.resource_type.clone(),
+                        resource_name: target.resource_name.clone(),
+                        verb: target.verb.admitted(),
+                        subresource: target.subresource.clone(),
+                        execution_ref: target.execution_ref.clone(),
+                    })
+                    .collect(),
+            },
+            policy_snapshot,
+        ),
     }
 }
 
@@ -1042,6 +1060,7 @@ const BOOTSTRAP_ROWS: &[BootstrapRow; 42] = &[
 ];
 
 fn authorize_bootstrap(
+    admission: &AdmissionIssuer,
     context: &AuthenticatedSubjectContext,
     request: &AuthorizationRequest,
     state: &AuthorizationState,
@@ -1130,7 +1149,7 @@ fn authorize_bootstrap(
             return Err(AuthorizationDenial::BootstrapDenied);
         }
     }
-    Ok(grant(context, request))
+    Ok(grant(admission, context, request, state.snapshot))
 }
 
 /// Invalid compiled policy projection.
@@ -1177,6 +1196,10 @@ mod tests {
         SchemaFingerprint, ServiceName, SessionBinding, SessionPurpose, TranscriptHash,
         TransportBinding,
     };
+
+    fn test_issuer() -> AdmissionIssuer {
+        d2b_resource_store::admission_pair().0
+    }
 
     fn subject(
         locality: Locality,
@@ -1337,6 +1360,7 @@ mod tests {
         let engine = NativeAuthorizer::new(
             ApiCatalog::standard(),
             Some(policy(4, &context, Some(ResourceVerb::Get), false)),
+            test_issuer(),
         )
         .unwrap();
         assert!(engine.authorize(&context, &request(), &state(4)).is_ok());
@@ -1345,15 +1369,17 @@ mod tests {
             .unwrap();
         assert_eq!(caps.resources, vec![target(ResourceVerb::Get)]);
         assert_eq!(
-            engine.authorize(
-                &context,
-                &AuthorizationRequest {
-                    targets: vec![target(ResourceVerb::Delete)],
-                    ..request()
-                },
-                &state(4)
-            ),
-            Err(AuthorizationDenial::NoMatchingGrant)
+            engine
+                .authorize(
+                    &context,
+                    &AuthorizationRequest {
+                        targets: vec![target(ResourceVerb::Delete)],
+                        ..request()
+                    },
+                    &state(4),
+                )
+                .unwrap_err(),
+            AuthorizationDenial::NoMatchingGrant
         );
     }
 
@@ -1363,6 +1389,7 @@ mod tests {
         let engine = NativeAuthorizer::new(
             ApiCatalog::standard(),
             Some(policy(4, &context, Some(ResourceVerb::Get), false)),
+            test_issuer(),
         )
         .unwrap();
         assert!(engine.authorize(&context, &request(), &state(4)).is_ok());
@@ -1370,13 +1397,17 @@ mod tests {
             .replace_policy(policy(5, &context, None, false), &state(5))
             .unwrap();
         assert_eq!(
-            engine.authorize(&context, &request(), &state(5)),
-            Err(AuthorizationDenial::NoMatchingGrant)
+            engine
+                .authorize(&context, &request(), &state(5))
+                .unwrap_err(),
+            AuthorizationDenial::NoMatchingGrant
         );
         engine.mark_policy_unavailable();
         assert_eq!(
-            engine.authorize(&context, &request(), &state(5)),
-            Err(AuthorizationDenial::PolicyUnavailable)
+            engine
+                .authorize(&context, &request(), &state(5))
+                .unwrap_err(),
+            AuthorizationDenial::PolicyUnavailable
         );
     }
 
@@ -1390,24 +1421,31 @@ mod tests {
         let no_relay = NativeAuthorizer::new(
             ApiCatalog::standard(),
             Some(policy(4, &context, Some(ResourceVerb::Get), false)),
+            test_issuer(),
         )
         .unwrap();
         assert_eq!(
-            no_relay.authorize(&context, &request(), &state(4)),
-            Err(AuthorizationDenial::RelayGrantMissing)
+            no_relay
+                .authorize(&context, &request(), &state(4))
+                .unwrap_err(),
+            AuthorizationDenial::RelayGrantMissing
         );
         let no_target = NativeAuthorizer::new(
             ApiCatalog::standard(),
             Some(policy(4, &context, None, true)),
+            test_issuer(),
         )
         .unwrap();
         assert_eq!(
-            no_target.authorize(&context, &request(), &state(4)),
-            Err(AuthorizationDenial::RelayTargetGrantMissing)
+            no_target
+                .authorize(&context, &request(), &state(4))
+                .unwrap_err(),
+            AuthorizationDenial::RelayTargetGrantMissing
         );
         let both = NativeAuthorizer::new(
             ApiCatalog::standard(),
             Some(policy(4, &context, Some(ResourceVerb::Get), true)),
+            test_issuer(),
         )
         .unwrap();
         assert!(both.authorize(&context, &request(), &state(4)).is_ok());
@@ -1423,11 +1461,14 @@ mod tests {
             let engine = NativeAuthorizer::new(
                 ApiCatalog::standard(),
                 Some(policy(4, &context, Some(ResourceVerb::Get), true)),
+                test_issuer(),
             )
             .unwrap();
             assert_eq!(
-                engine.authorize(&context, &request(), &state(4)),
-                Err(AuthorizationDenial::RelayOriginInvalid)
+                engine
+                    .authorize(&context, &request(), &state(4))
+                    .unwrap_err(),
+                AuthorizationDenial::RelayOriginInvalid
             );
         }
     }
@@ -1442,6 +1483,7 @@ mod tests {
         let engine = NativeAuthorizer::new(
             ApiCatalog::standard(),
             Some(policy(4, &enrolled, Some(ResourceVerb::Get), true)),
+            test_issuer(),
         )
         .unwrap();
         assert!(engine.authorize(&enrolled, &request(), &state(4)).is_ok());
@@ -1452,8 +1494,10 @@ mod tests {
             "ZoneLink/parent",
         );
         assert_eq!(
-            engine.authorize(&bootstrap, &request(), &state(4)),
-            Err(AuthorizationDenial::RelayOriginInvalid)
+            engine
+                .authorize(&bootstrap, &request(), &state(4))
+                .unwrap_err(),
+            AuthorizationDenial::RelayOriginInvalid
         );
     }
 
@@ -1467,13 +1511,16 @@ mod tests {
         let engine = NativeAuthorizer::new(
             ApiCatalog::standard(),
             Some(policy(4, &context, Some(ResourceVerb::Get), true)),
+            test_issuer(),
         )
         .unwrap();
         let mut wrong_zone = request();
         wrong_zone.zone = ZoneId::parse("other").unwrap();
         assert_eq!(
-            engine.authorize(&context, &wrong_zone, &state(4)),
-            Err(AuthorizationDenial::ZoneMismatch)
+            engine
+                .authorize(&context, &wrong_zone, &state(4))
+                .unwrap_err(),
+            AuthorizationDenial::ZoneMismatch
         );
     }
 
@@ -1582,12 +1629,14 @@ mod tests {
         );
 
         let context = subject(Locality::Local, EvidenceClass::UnixPeer, "User/alice");
-        let engine = NativeAuthorizer::new(catalog, None).unwrap();
+        let engine = NativeAuthorizer::new(catalog, None, test_issuer()).unwrap();
         let mut uninstalled = request();
         uninstalled.targets[0].resource_type = extension;
         assert_eq!(
-            engine.authorize(&context, &uninstalled, &state(4)),
-            Err(AuthorizationDenial::UnknownResourceType)
+            engine
+                .authorize(&context, &uninstalled, &state(4))
+                .unwrap_err(),
+            AuthorizationDenial::UnknownResourceType
         );
     }
 
@@ -1620,7 +1669,7 @@ mod tests {
             controller_generation: ControllerGeneration::new(11).unwrap(),
             provider_generation: ResourceGeneration::new(12).unwrap(),
         });
-        let engine = NativeAuthorizer::new(ApiCatalog::standard(), None).unwrap();
+        let engine = NativeAuthorizer::new(ApiCatalog::standard(), None, test_issuer()).unwrap();
 
         for row in BOOTSTRAP_ROWS {
             let uid = if row.subject_name == "system-core" {
@@ -1647,8 +1696,8 @@ mod tests {
             let mut near_miss = exact;
             near_miss.targets[0].verb = ResourceVerb::Delete;
             assert_eq!(
-                engine.authorize(&context, &near_miss, &state),
-                Err(AuthorizationDenial::BootstrapDenied),
+                engine.authorize(&context, &near_miss, &state).unwrap_err(),
+                AuthorizationDenial::BootstrapDenied,
                 "bootstrap near miss authorized: {} {:?} {}",
                 row.subject_name,
                 row.method,
@@ -1661,7 +1710,7 @@ mod tests {
     fn bootstrap_zone_and_provider_names_are_compiled_in_both_phases() {
         let core_uid = "123e4567-e89b-42d3-a456-426614174000";
         let context = bootstrap_subject("system-core", core_uid);
-        let engine = NativeAuthorizer::new(ApiCatalog::standard(), None).unwrap();
+        let engine = NativeAuthorizer::new(ApiCatalog::standard(), None, test_issuer()).unwrap();
         let phases = [
             BootstrapPhase::Unprovisioned {
                 zone: ZoneId::parse("dev").unwrap(),
@@ -1689,8 +1738,8 @@ mod tests {
                     targets: vec![target],
                 };
                 assert_eq!(
-                    engine.authorize(&context, &request, &state),
-                    Err(AuthorizationDenial::BootstrapDenied)
+                    engine.authorize(&context, &request, &state).unwrap_err(),
+                    AuthorizationDenial::BootstrapDenied
                 );
             }
         }

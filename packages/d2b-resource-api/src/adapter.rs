@@ -210,9 +210,11 @@ mod tests {
         SessionBinding, SessionPurpose, TranscriptHash, TransportBinding, ZoneId, ZoneRevision,
     };
     use d2b_resource_store::{
-        AdmittedMutation, PolicySnapshot, StoreCommitResult, StoreError, StoreGetRequest,
-        StoreInspectSchemaRequest, StoreListRequest, StoreListResult, StoreResolveRequest,
-        StoreResolvedIdentity, StoreWatchReceipt, StoreWatchRequest, StoredResource, StoredSchema,
+        AdmissionIssuer, AdmissionVerifier, PolicySnapshot, ResourceStoreBackend,
+        StoreCommitResult, StoreError, StoreGetRequest, StoreInspectSchemaRequest,
+        StoreListRequest, StoreListResult, StoreResolveRequest, StoreResolvedIdentity,
+        StoreWatchReceipt, StoreWatchRequest, StoredResource, StoredSchema, VerifiedMutation,
+        admission_pair,
     };
     use protobuf::{EnumOrUnknown, MessageField};
 
@@ -222,9 +224,22 @@ mod tests {
     };
 
     #[derive(Debug)]
-    struct UnreachableStore;
+    struct UnreachableStore {
+        admission_verifier: AdmissionVerifier,
+    }
 
-    impl ResourceStore for UnreachableStore {
+    impl UnreachableStore {
+        fn paired() -> (Arc<Self>, AdmissionIssuer) {
+            let (issuer, admission_verifier) = admission_pair();
+            (Arc::new(Self { admission_verifier }), issuer)
+        }
+    }
+
+    impl ResourceStoreBackend for UnreachableStore {
+        fn admission_verifier(&self) -> &AdmissionVerifier {
+            &self.admission_verifier
+        }
+
         async fn get(&self, _: StoreGetRequest) -> Result<StoredResource, StoreError> {
             unreachable!("authorization must run before the store")
         }
@@ -251,7 +266,10 @@ mod tests {
             unreachable!("authorization must run before the store")
         }
 
-        async fn commit(&self, _: AdmittedMutation) -> Result<StoreCommitResult, StoreError> {
+        async fn commit_verified(
+            &self,
+            _: VerifiedMutation,
+        ) -> Result<StoreCommitResult, StoreError> {
             unreachable!("authorization must run before the store")
         }
     }
@@ -293,9 +311,10 @@ mod tests {
     fn denied_adapter()
     -> Arc<AuthenticatedBusAdapter<UnreachableStore, crate::service::UnavailableUpgradeDispatcher>>
     {
+        let (store, issuer) = UnreachableStore::paired();
         let service = Arc::new(ResourceService::new(
-            Arc::new(UnreachableStore),
-            Arc::new(NativeAuthorizer::new(ApiCatalog::standard(), None).unwrap()),
+            store,
+            Arc::new(NativeAuthorizer::new(ApiCatalog::standard(), None, issuer).unwrap()),
         ));
         Arc::new(
             AuthenticatedBusAdapter::bind_authenticated_session(
@@ -313,6 +332,7 @@ mod tests {
         subresource: Option<&str>,
     ) -> Arc<AuthenticatedBusAdapter<UnreachableStore, crate::service::UnavailableUpgradeDispatcher>>
     {
+        let (store, issuer) = UnreachableStore::paired();
         let context = subject(Locality::Local, EvidenceClass::UnixPeer);
         let catalog = ApiCatalog::standard();
         let role = CompiledRole::new(
@@ -345,11 +365,12 @@ mod tests {
         )
         .unwrap();
         let service = Arc::new(ResourceService::new(
-            Arc::new(UnreachableStore),
+            store,
             Arc::new(
                 NativeAuthorizer::new(
                     catalog.clone(),
                     Some(PolicySet::new(&catalog, 4, vec![role], vec![binding]).unwrap()),
+                    issuer,
                 )
                 .unwrap(),
             ),
@@ -535,9 +556,10 @@ mod tests {
 
     #[test]
     fn adapter_rejects_locality_evidence_mismatches() {
+        let (store, issuer) = UnreachableStore::paired();
         let service = Arc::new(ResourceService::new(
-            Arc::new(UnreachableStore),
-            Arc::new(NativeAuthorizer::new(ApiCatalog::standard(), None).unwrap()),
+            store,
+            Arc::new(NativeAuthorizer::new(ApiCatalog::standard(), None, issuer).unwrap()),
         ));
         for (locality, evidence) in [
             (Locality::AdjacentZone, EvidenceClass::BootstrapIkpsk2),

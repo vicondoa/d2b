@@ -7,14 +7,9 @@ const API_AUTHZ: &str = include_str!("../../d2b-resource-api/src/authz.rs");
 const API_SERVICE: &str = include_str!("../../d2b-resource-api/src/service.rs");
 
 #[test]
-fn allow_witness_has_exactly_one_native_evaluator_call_site() {
-    assert_eq!(
-        API_AUTHZ
-            .matches("AllowDecision::from_native_evaluator()")
-            .count(),
-        1
-    );
-    assert!(!API_SERVICE.contains("AllowDecision::from_native_evaluator()"));
+fn admission_capability_has_exactly_one_native_evaluator_call_site() {
+    assert_eq!(API_AUTHZ.matches("admission.record_allow(").count(), 1);
+    assert!(!API_SERVICE.contains(".record_allow("));
 }
 
 #[test]
