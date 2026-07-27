@@ -133,7 +133,7 @@
         "D2B_ENABLE_FIXTURE_BUILD": "1"
       },
       "enforcesForSkip": "test-rust:D2B_SKIP_FIXTURE_BUILD",
-      "ciKind": "simple-nix",
+      "ciKind": "rust",
       "ciJobId": "test-fixture-contracts",
       "needs": ["test-rust"],
       "timeoutMinutes": 60,

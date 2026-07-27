@@ -147,11 +147,6 @@ jobs:
           shared-key: "test-rust-${{ runner.os }}"
           save-if: "true"
       - name: Rust workspace gate
-        # Skip the fixture nix-build (~35 min) - the same fixtures are
-        # already evaluated by the flake-eval-x86 (fixture-smoke) and
-        # (fixture-smoke-full) shards. The contract tests that depend on
-        # D2B_FIXTURES still run in those shards' eval; here we test only
-        # the Rust compilation + unit/integration tests.
         env:
           D2B_SKIP_FIXTURE_BUILD: "1"
         run: make test-rust
@@ -159,19 +154,70 @@ jobs:
   test-fixture-contracts:
     needs: [test-rust]
     runs-on: ubuntu-latest
+    # Warm (rust-cache hit): ~8-12 min. Cold (no cache): ~43 min.
     timeout-minutes: 60
     env:
-      D2B_ENABLE_FIXTURE_BUILD: "1"
+      # Disable sccache in CI - we use Swatinem/rust-cache (target-dir
+      # caching) instead, which caches ALL compiled artifacts including
+      # proc-macros and bin/lib crates that sccache cannot cache (~60% of
+      # compilations are "non-cacheable" by sccache due to crate-type).
+      # CARGO_INCREMENTAL=0 is still set: incremental compilation artifacts
+      # are non-deterministic and bloat the cache without benefit for CI
+      # (each PR run starts from a different commit).
+      CARGO_INCREMENTAL: "0"
+      # Override the repo .cargo/config.toml rustc-wrapper (sccache) so
+      # rust-cache's post-step `cargo metadata` doesn't fail looking for
+      # an sccache binary that isn't installed.
+      CARGO_BUILD_RUSTC_WRAPPER: ""
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077
         with:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
+      - name: Free runner disk for Rust gate
+        run: |
+          df -h
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL || true
+          docker system prune -af || true
+          df -h
+      - name: Install pinned Rust toolchain + ripgrep + acl
+        # MUST run BEFORE Swatinem/rust-cache: the cache action reads
+        # `rustc --version` to compute its key hash, so the pinned
+        # toolchain must be the active default when the cache step runs.
+        # Without this, the runner's pre-installed 1.96.0 is hashed,
+        # and the cache is keyed on the wrong compiler version.
+        run: |
+          PINNED=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' packages/rust-toolchain.toml | head -1)
+          rustup toolchain install "$PINNED" --profile minimal --component rustfmt --component clippy
+          rustup default "$PINNED"
+          echo "Rust toolchain: $(rustc --version)"
+          sudo apt-get update && sudo apt-get install -y ripgrep acl
+      - name: Rust dependency cache (target dirs + cargo registry)
+        # Swatinem/rust-cache caches dependency artifacts in target dirs
+        # and the cargo registry. It performs all I/O in its own action
+        # process (JavaScript pre/post steps) via @actions/cache - no
+        # ACTIONS_RUNTIME_TOKEN or cache credentials are exposed to `run:`
+        # steps where untrusted crate code (build scripts, proc-macros,
+        # `cargo test`) executes.
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          workspaces: |
+            packages -> target
+            packages/d2b-priv-broker -> target
+          cache-directories: |
+            packages/d2b-priv-broker/target-layer1
+            packages/d2b-priv-broker/target-fakebackends
+          prefix-key: "v0-rust"
+          shared-key: "test-rust-${{ runner.os }}"
+          save-if: "true"
       - name: Fixture-dependent Rust contract tests
+        env:
+          D2B_ENABLE_FIXTURE_BUILD: "1"
         run: make test-fixture-contracts
 
   test-proofs:
@@ -410,13 +456,8 @@ jobs:
           shared-key: "test-rust-${{ runner.os }}"
           save-if: "true"
       - name: Policy meta-gates
-        # Skip the fixture nix-build (~35 min) - the same fixtures are
-        # already evaluated by the flake-eval-x86 (fixture-smoke) and
-        # (fixture-smoke-full) shards. The contract tests that depend on
-        # D2B_FIXTURES still run in those shards' eval; here we test only
-        # the Rust compilation + unit/integration tests.
         env:
-          D2B_SKIP_FIXTURE_BUILD: "1"
+          {}
         run: make test-policy
 
   test-runtime-ledger:
@@ -484,13 +525,8 @@ jobs:
           shared-key: "test-rust-${{ runner.os }}"
           save-if: "true"
       - name: Runtime execution-budget ledger gate
-        # Skip the fixture nix-build (~35 min) - the same fixtures are
-        # already evaluated by the flake-eval-x86 (fixture-smoke) and
-        # (fixture-smoke-full) shards. The contract tests that depend on
-        # D2B_FIXTURES still run in those shards' eval; here we test only
-        # the Rust compilation + unit/integration tests.
         env:
-          D2B_SKIP_FIXTURE_BUILD: "1"
+          {}
         run: make test-runtime-ledger
 
   check:

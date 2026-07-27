@@ -161,6 +161,20 @@ def changelog_job(job: dict[str, Any]) -> str:
         run: make {job["makeTarget"]}"""
 
 
+def render_env(job: dict[str, Any]) -> str:
+    """Renders a job's declared environment as workflow step `env:` entries.
+
+    The environment comes from the manifest so the local runner and the
+    workflow cannot disagree about which lane executes which layer. Hardcoding
+    it here once let `test-rust` skip the fixture build in continuous
+    integration while the manifest said nothing about it.
+    """
+    env = job.get("localEnv", {})
+    if not env:
+        return "          {}"
+    return "\n".join(f'          {key}: "{value}"' for key, value in sorted(env.items()))
+
+
 def rust_job(job: dict[str, Any]) -> str:
     return f"""  {job["ciJobId"]}:
 {needs_line(job)}    runs-on: {job["runsOn"]}
@@ -222,13 +236,8 @@ def rust_job(job: dict[str, Any]) -> str:
           shared-key: "test-rust-${{{{ runner.os }}}}"
           save-if: "true"
       - name: {job["displayName"]}
-        # Skip the fixture nix-build (~35 min) - the same fixtures are
-        # already evaluated by the flake-eval-x86 (fixture-smoke) and
-        # (fixture-smoke-full) shards. The contract tests that depend on
-        # D2B_FIXTURES still run in those shards' eval; here we test only
-        # the Rust compilation + unit/integration tests.
         env:
-          D2B_SKIP_FIXTURE_BUILD: "1"
+{render_env(job)}
         run: make {job["makeTarget"]}"""
 
 
