@@ -5,6 +5,7 @@ use std::{
     sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
 
+use d2b_contracts::v3::identity::STANDARD_RESOURCE_TYPES;
 use d2b_contracts::v3::{
     AuthenticatedSubjectContext, ControllerGeneration, EvidenceClass, Locality,
     MAX_ROLE_BINDING_SUBJECTS, MAX_ROLE_RULE_EXECUTION_REFS, MAX_ROLE_RULE_RESOURCE_NAMES,
@@ -21,6 +22,52 @@ const POSITIVE_CACHE_ENTRIES: usize = 4096;
 const POSITIVE_CACHE_TICKS: u64 = 30;
 const RESOURCE_SERVICE: &str = "d2b.resource.v3";
 const BOOTSTRAP_PURPOSE: &str = "resource-bootstrap";
+
+/// Immutable set of ResourceTypes installed for one API binding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApiCatalog {
+    resource_types: BTreeSet<ResourceTypeName>,
+}
+
+impl ApiCatalog {
+    /// Construct the standard API catalog.
+    pub fn standard() -> Self {
+        Self {
+            resource_types: STANDARD_RESOURCE_TYPES
+                .into_iter()
+                .map(|value| {
+                    ResourceTypeName::parse(value)
+                        .expect("the standard ResourceType catalog is validated")
+                })
+                .collect(),
+        }
+    }
+
+    /// Extend the standard catalog with installed qualified ResourceTypes.
+    pub fn with_extensions(
+        extensions: impl IntoIterator<Item = ResourceTypeName>,
+    ) -> Result<Self, AuthorizationPolicyError> {
+        let mut catalog = Self::standard();
+        for resource_type in extensions {
+            if !resource_type.as_str().contains(".d2bus.org.")
+                || !catalog.resource_types.insert(resource_type)
+            {
+                return Err(AuthorizationPolicyError::CatalogShape);
+            }
+        }
+        Ok(catalog)
+    }
+
+    fn contains(&self, resource_type: &ResourceTypeName) -> bool {
+        self.resource_types.contains(resource_type)
+    }
+}
+
+impl Default for ApiCatalog {
+    fn default() -> Self {
+        Self::standard()
+    }
+}
 
 /// Resource methods distinguished from their authorization verb.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -175,6 +222,7 @@ pub struct PolicyRule {
 impl PolicyRule {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
+        catalog: &ApiCatalog,
         resource_types: impl IntoIterator<Item = ResourceTypeName>,
         resource_verbs: impl IntoIterator<Item = ResourceVerb>,
         session_verbs: impl IntoIterator<Item = SessionVerb>,
@@ -202,6 +250,13 @@ impl PolicyRule {
                 .any(|value| value.is_empty() || value.len() > 128 || !value.is_ascii())
         {
             return Err(AuthorizationPolicyError::RuleBounds);
+        }
+        if rule
+            .resource_types
+            .iter()
+            .any(|resource_type| !catalog.contains(resource_type))
+        {
+            return Err(AuthorizationPolicyError::UnknownResourceType);
         }
         if rule.resource_verbs.contains(&ResourceVerb::UseCredential)
             && (rule.resource_types.len() != 1
@@ -347,12 +402,14 @@ impl CompiledRoleBinding {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PolicySet {
     pub policy_revision: u64,
+    catalog: ApiCatalog,
     roles: BTreeMap<ResourceRef, CompiledRole>,
     bindings: Vec<CompiledRoleBinding>,
 }
 
 impl PolicySet {
     pub fn new(
+        catalog: &ApiCatalog,
         policy_revision: u64,
         roles: Vec<CompiledRole>,
         bindings: Vec<CompiledRoleBinding>,
@@ -382,6 +439,7 @@ impl PolicySet {
         }
         Ok(Self {
             policy_revision,
+            catalog: catalog.clone(),
             roles,
             bindings,
         })
@@ -406,6 +464,7 @@ pub enum AuthorizationDenial {
     RelayGrantMissing,
     RelayTargetGrantMissing,
     BootstrapDenied,
+    UnknownResourceType,
 }
 
 impl AuthorizationDenial {
@@ -428,21 +487,40 @@ pub struct AuthorizationGrant {
 /// Single native evaluator and positive-decision cache.
 #[derive(Debug)]
 pub struct NativeAuthorizer {
+    catalog: ApiCatalog,
     policy: RwLock<Option<Arc<PolicySet>>>,
     cache: PositiveDecisionCache,
 }
 
 impl NativeAuthorizer {
-    pub fn new(policy: Option<PolicySet>) -> Self {
-        Self {
+    pub fn new(
+        catalog: ApiCatalog,
+        policy: Option<PolicySet>,
+    ) -> Result<Self, AuthorizationPolicyError> {
+        if policy
+            .as_ref()
+            .is_some_and(|policy| policy.catalog != catalog)
+        {
+            return Err(AuthorizationPolicyError::CatalogMismatch);
+        }
+        Ok(Self {
+            catalog,
             policy: RwLock::new(policy.map(Arc::new)),
             cache: PositiveDecisionCache::new(POSITIVE_CACHE_ENTRIES),
-        }
+        })
     }
 
-    pub fn replace_policy(&self, policy: PolicySet, state: &AuthorizationState) {
+    pub fn replace_policy(
+        &self,
+        policy: PolicySet,
+        state: &AuthorizationState,
+    ) -> Result<(), AuthorizationPolicyError> {
+        if policy.catalog != self.catalog {
+            return Err(AuthorizationPolicyError::CatalogMismatch);
+        }
         *self.write_policy() = Some(Arc::new(policy));
         self.cache.invalidate_revisions(revision_set(state));
+        Ok(())
     }
 
     pub fn mark_policy_unavailable(&self) {
@@ -458,6 +536,13 @@ impl NativeAuthorizer {
     ) -> Result<AuthorizationGrant, AuthorizationDenial> {
         if request.targets.is_empty() {
             return Err(AuthorizationDenial::NoMatchingGrant);
+        }
+        if request
+            .targets
+            .iter()
+            .any(|target| !self.catalog.contains(&target.resource_type))
+        {
+            return Err(AuthorizationDenial::UnknownResourceType);
         }
         if context.zone_ref().resource_type().as_str() != "Zone"
             || context.zone_ref().name().as_str() != request.zone.as_str()
@@ -1048,6 +1133,9 @@ fn authorize_bootstrap(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthorizationPolicyError {
     RuleBounds,
+    UnknownResourceType,
+    CatalogShape,
+    CatalogMismatch,
     CredentialScope,
     RoleShape,
     BindingShape,
@@ -1061,6 +1149,9 @@ impl core::fmt::Display for AuthorizationPolicyError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str(match self {
             Self::RuleBounds => "Role rule exceeds a frozen bound",
+            Self::UnknownResourceType => "Role rule names an uninstalled ResourceType",
+            Self::CatalogShape => "API catalog extension set is invalid",
+            Self::CatalogMismatch => "policy was compiled for a different API catalog",
             Self::CredentialScope => "Credential verb requires an exact Credential subresource",
             Self::RoleShape => "Role evaluator projection is invalid",
             Self::BindingShape => "RoleBinding evaluator projection is invalid",
@@ -1137,10 +1228,12 @@ mod tests {
         target_verb: Option<ResourceVerb>,
         relay: bool,
     ) -> PolicySet {
+        let catalog = ApiCatalog::standard();
         let mut rules = Vec::new();
         if let Some(verb) = target_verb {
             rules.push(
                 PolicyRule::new(
+                    &catalog,
                     [ResourceTypeName::parse("Process").unwrap()],
                     [verb],
                     [],
@@ -1153,7 +1246,9 @@ mod tests {
             );
         }
         if relay {
-            rules.push(PolicyRule::new([], [], [SessionVerb::Relay], [], [], [], []).unwrap());
+            rules.push(
+                PolicyRule::new(&catalog, [], [], [SessionVerb::Relay], [], [], [], []).unwrap(),
+            );
         }
         let role = CompiledRole::new(ResourceRef::parse("Role/operator").unwrap(), rules).unwrap();
         let binding = CompiledRoleBinding::new(
@@ -1170,7 +1265,7 @@ mod tests {
             },
         )
         .unwrap();
-        PolicySet::new(revision, vec![role], vec![binding]).unwrap()
+        PolicySet::new(&catalog, revision, vec![role], vec![binding]).unwrap()
     }
 
     fn request() -> AuthorizationRequest {
@@ -1184,8 +1279,11 @@ mod tests {
     #[test]
     fn decision_matrix_and_positive_capabilities_are_exact() {
         let context = subject(Locality::Local, EvidenceClass::UnixPeer, "User/alice");
-        let engine =
-            NativeAuthorizer::new(Some(policy(4, &context, Some(ResourceVerb::Get), false)));
+        let engine = NativeAuthorizer::new(
+            ApiCatalog::standard(),
+            Some(policy(4, &context, Some(ResourceVerb::Get), false)),
+        )
+        .unwrap();
         assert!(engine.authorize(&context, &request(), &state(4)).is_ok());
         let caps = engine
             .positive_capabilities(&context, &ZoneId::parse("dev").unwrap(), &state(4))
@@ -1207,10 +1305,15 @@ mod tests {
     #[test]
     fn revocation_and_policy_outage_fail_closed() {
         let context = subject(Locality::Local, EvidenceClass::UnixPeer, "User/alice");
-        let engine =
-            NativeAuthorizer::new(Some(policy(4, &context, Some(ResourceVerb::Get), false)));
+        let engine = NativeAuthorizer::new(
+            ApiCatalog::standard(),
+            Some(policy(4, &context, Some(ResourceVerb::Get), false)),
+        )
+        .unwrap();
         assert!(engine.authorize(&context, &request(), &state(4)).is_ok());
-        engine.replace_policy(policy(5, &context, None, false), &state(5));
+        engine
+            .replace_policy(policy(5, &context, None, false), &state(5))
+            .unwrap();
         assert_eq!(
             engine.authorize(&context, &request(), &state(5)),
             Err(AuthorizationDenial::NoMatchingGrant)
@@ -1229,18 +1332,29 @@ mod tests {
             EvidenceClass::EnrolledKk,
             "ZoneLink/parent",
         );
-        let no_relay =
-            NativeAuthorizer::new(Some(policy(4, &context, Some(ResourceVerb::Get), false)));
+        let no_relay = NativeAuthorizer::new(
+            ApiCatalog::standard(),
+            Some(policy(4, &context, Some(ResourceVerb::Get), false)),
+        )
+        .unwrap();
         assert_eq!(
             no_relay.authorize(&context, &request(), &state(4)),
             Err(AuthorizationDenial::RelayGrantMissing)
         );
-        let no_target = NativeAuthorizer::new(Some(policy(4, &context, None, true)));
+        let no_target = NativeAuthorizer::new(
+            ApiCatalog::standard(),
+            Some(policy(4, &context, None, true)),
+        )
+        .unwrap();
         assert_eq!(
             no_target.authorize(&context, &request(), &state(4)),
             Err(AuthorizationDenial::RelayTargetGrantMissing)
         );
-        let both = NativeAuthorizer::new(Some(policy(4, &context, Some(ResourceVerb::Get), true)));
+        let both = NativeAuthorizer::new(
+            ApiCatalog::standard(),
+            Some(policy(4, &context, Some(ResourceVerb::Get), true)),
+        )
+        .unwrap();
         assert!(both.authorize(&context, &request(), &state(4)).is_ok());
     }
 
@@ -1251,8 +1365,11 @@ mod tests {
             (Locality::Remote, EvidenceClass::EnrolledKk),
         ] {
             let context = subject(locality, evidence, "ZoneLink/parent");
-            let engine =
-                NativeAuthorizer::new(Some(policy(4, &context, Some(ResourceVerb::Get), true)));
+            let engine = NativeAuthorizer::new(
+                ApiCatalog::standard(),
+                Some(policy(4, &context, Some(ResourceVerb::Get), true)),
+            )
+            .unwrap();
             assert_eq!(
                 engine.authorize(&context, &request(), &state(4)),
                 Err(AuthorizationDenial::RelayOriginInvalid)
@@ -1267,8 +1384,11 @@ mod tests {
             EvidenceClass::EnrolledKk,
             "ZoneLink/parent",
         );
-        let engine =
-            NativeAuthorizer::new(Some(policy(4, &enrolled, Some(ResourceVerb::Get), true)));
+        let engine = NativeAuthorizer::new(
+            ApiCatalog::standard(),
+            Some(policy(4, &enrolled, Some(ResourceVerb::Get), true)),
+        )
+        .unwrap();
         assert!(engine.authorize(&enrolled, &request(), &state(4)).is_ok());
 
         let bootstrap = subject(
@@ -1289,8 +1409,11 @@ mod tests {
             EvidenceClass::EnrolledKk,
             "ZoneLink/parent",
         );
-        let engine =
-            NativeAuthorizer::new(Some(policy(4, &context, Some(ResourceVerb::Get), true)));
+        let engine = NativeAuthorizer::new(
+            ApiCatalog::standard(),
+            Some(policy(4, &context, Some(ResourceVerb::Get), true)),
+        )
+        .unwrap();
         let mut wrong_zone = request();
         wrong_zone.zone = ZoneId::parse("other").unwrap();
         assert_eq!(
@@ -1304,8 +1427,18 @@ mod tests {
         let too_many_types = (0..=MAX_ROLE_RULE_RESOURCE_TYPES)
             .map(|index| ResourceTypeName::parse(format!("p{index}.d2bus.org.Type")).unwrap())
             .collect::<Vec<_>>();
+        let extension_catalog = ApiCatalog::with_extensions(too_many_types.clone()).unwrap();
         assert_eq!(
-            PolicyRule::new(too_many_types, [ResourceVerb::Get], [], [], [], [], []),
+            PolicyRule::new(
+                &extension_catalog,
+                too_many_types,
+                [ResourceVerb::Get],
+                [],
+                [],
+                [],
+                [],
+                [],
+            ),
             Err(AuthorizationPolicyError::RuleBounds)
         );
 
@@ -1316,7 +1449,19 @@ mod tests {
         );
         let relay_role = CompiledRole::new(
             ResourceRef::parse("Role/relay").unwrap(),
-            vec![PolicyRule::new([], [], [SessionVerb::Relay], [], [], [], []).unwrap()],
+            vec![
+                PolicyRule::new(
+                    &ApiCatalog::standard(),
+                    [],
+                    [],
+                    [SessionVerb::Relay],
+                    [],
+                    [],
+                    [],
+                    [],
+                )
+                .unwrap(),
+            ],
         )
         .unwrap();
         let binding = CompiledRoleBinding::new(
@@ -1330,12 +1475,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            PolicySet::new(4, vec![relay_role], vec![binding]),
+            PolicySet::new(&ApiCatalog::standard(), 4, vec![relay_role], vec![binding]),
             Err(AuthorizationPolicyError::RelayGrantRestricted)
         );
 
         assert_eq!(
             PolicyRule::new(
+                &ApiCatalog::standard(),
                 [ResourceTypeName::parse("Credential").unwrap()],
                 [ResourceVerb::AdminCredential],
                 [],
@@ -1359,6 +1505,34 @@ mod tests {
                 RelayGrantAuthority::None,
             ),
             Err(AuthorizationPolicyError::BindingShape)
+        );
+    }
+
+    #[test]
+    fn uninstalled_resource_types_are_rejected_in_rules_and_targets() {
+        let catalog = ApiCatalog::standard();
+        let extension = ResourceTypeName::parse("example.d2bus.org.Widget").unwrap();
+        assert_eq!(
+            PolicyRule::new(
+                &catalog,
+                [extension.clone()],
+                [ResourceVerb::Get],
+                [],
+                [],
+                [],
+                [],
+                [],
+            ),
+            Err(AuthorizationPolicyError::UnknownResourceType)
+        );
+
+        let context = subject(Locality::Local, EvidenceClass::UnixPeer, "User/alice");
+        let engine = NativeAuthorizer::new(catalog, None).unwrap();
+        let mut uninstalled = request();
+        uninstalled.targets[0].resource_type = extension;
+        assert_eq!(
+            engine.authorize(&context, &uninstalled, &state(4)),
+            Err(AuthorizationDenial::UnknownResourceType)
         );
     }
 

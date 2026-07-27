@@ -217,7 +217,7 @@ mod tests {
     use protobuf::{EnumOrUnknown, MessageField};
 
     use crate::authz::{
-        BindingScope, BootstrapPhase, BoundSubject, CompiledRole, CompiledRoleBinding,
+        ApiCatalog, BindingScope, BootstrapPhase, BoundSubject, CompiledRole, CompiledRoleBinding,
         NativeAuthorizer, PolicyRule, PolicySet, RelayGrantAuthority, ResourceVerb,
     };
 
@@ -295,7 +295,7 @@ mod tests {
     {
         let service = Arc::new(ResourceService::new(
             Arc::new(UnreachableStore),
-            Arc::new(NativeAuthorizer::new(None)),
+            Arc::new(NativeAuthorizer::new(ApiCatalog::standard(), None).unwrap()),
         ));
         Arc::new(
             AuthenticatedBusAdapter::bind_authenticated_session(
@@ -314,10 +314,12 @@ mod tests {
     ) -> Arc<AuthenticatedBusAdapter<UnreachableStore, crate::service::UnavailableUpgradeDispatcher>>
     {
         let context = subject(Locality::Local, EvidenceClass::UnixPeer);
+        let catalog = ApiCatalog::standard();
         let role = CompiledRole::new(
             ResourceRef::parse("Role/dispatch-test").unwrap(),
             vec![
                 PolicyRule::new(
+                    &catalog,
                     [ResourceTypeName::parse("Host").unwrap()],
                     [verb],
                     [],
@@ -344,9 +346,13 @@ mod tests {
         .unwrap();
         let service = Arc::new(ResourceService::new(
             Arc::new(UnreachableStore),
-            Arc::new(NativeAuthorizer::new(Some(
-                PolicySet::new(4, vec![role], vec![binding]).unwrap(),
-            ))),
+            Arc::new(
+                NativeAuthorizer::new(
+                    catalog.clone(),
+                    Some(PolicySet::new(&catalog, 4, vec![role], vec![binding]).unwrap()),
+                )
+                .unwrap(),
+            ),
         ));
         Arc::new(
             AuthenticatedBusAdapter::bind_authenticated_session(service, context, state()).unwrap(),
@@ -531,7 +537,7 @@ mod tests {
     fn adapter_rejects_locality_evidence_mismatches() {
         let service = Arc::new(ResourceService::new(
             Arc::new(UnreachableStore),
-            Arc::new(NativeAuthorizer::new(None)),
+            Arc::new(NativeAuthorizer::new(ApiCatalog::standard(), None).unwrap()),
         ));
         for (locality, evidence) in [
             (Locality::AdjacentZone, EvidenceClass::BootstrapIkpsk2),

@@ -1655,8 +1655,8 @@ mod tests {
     use protobuf::EnumOrUnknown;
 
     use crate::authz::{
-        BindingScope, BoundSubject, CompiledRole, CompiledRoleBinding, PolicyRule, PolicySet,
-        RelayGrantAuthority,
+        ApiCatalog, BindingScope, BoundSubject, CompiledRole, CompiledRoleBinding, PolicyRule,
+        PolicySet, RelayGrantAuthority,
     };
 
     const GOLDEN_HOST: &[u8] = br#"{"apiVersion":"resources.d2bus.org/v3","metadata":{"configurationGeneration":7,"createdAt":"2026-07-22T00:00:00.000Z","deletionRequestedAt":null,"finalizers":[],"generation":1,"managedBy":"configuration","name":"host-system","ownerRef":null,"revision":1,"uid":"123e4567-e89b-42d3-a456-426614174000","updatedAt":"2026-07-22T00:00:00.000Z","zone":"dev"},"spec":{"providerRef":"Provider/system-core","updatePolicy":{"disruptive":"manual","nonDisruptive":"automatic"}},"status":{"completedAt":null,"conditions":[],"lastReconciledAt":null,"observedGeneration":0,"outcome":null,"phase":"Pending","resource":{},"startedAt":null,"update":{"dependencies":{"count":0,"refs":[]},"disruption":"None","lastAssessedAt":null,"observedGeneration":0,"operationId":null,"owned":{"count":0,"refs":[]},"preserveState":true,"reasons":[],"state":"Unknown","targetGeneration":1}},"type":"Host"}"#;
@@ -1799,6 +1799,7 @@ mod tests {
 
     fn authorizer(verbs: impl IntoIterator<Item = ResourceVerb>) -> Arc<NativeAuthorizer> {
         let context = subject(None);
+        let catalog = ApiCatalog::standard();
         let verbs = verbs.into_iter().collect::<Vec<_>>();
         let subresources = if verbs.contains(&ResourceVerb::UpdateStatus) {
             vec!["status".to_owned()]
@@ -1811,6 +1812,7 @@ mod tests {
             ResourceRef::parse("Role/test").unwrap(),
             vec![
                 PolicyRule::new(
+                    &catalog,
                     [ResourceTypeName::parse("Host").unwrap()],
                     verbs,
                     [],
@@ -1833,9 +1835,13 @@ mod tests {
             RelayGrantAuthority::None,
         )
         .unwrap();
-        Arc::new(NativeAuthorizer::new(Some(
-            PolicySet::new(4, vec![role], vec![binding]).unwrap(),
-        )))
+        Arc::new(
+            NativeAuthorizer::new(
+                catalog.clone(),
+                Some(PolicySet::new(&catalog, 4, vec![role], vec![binding]).unwrap()),
+            )
+            .unwrap(),
+        )
     }
 
     fn request_meta() -> MessageField<wire::RequestMeta> {
