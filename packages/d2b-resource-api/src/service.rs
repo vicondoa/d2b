@@ -707,8 +707,8 @@ where
         {
             Ok(schema) => {
                 let mut identity = wire::ResourceIdentity::new();
-                identity.zone = subject_zone(&trusted).to_string();
-                identity.resource_type = schema.resource_type.to_string();
+                identity.zone = subject_zone(&trusted).to_canonical_string();
+                identity.resource_type = schema.resource_type.to_canonical_string();
                 let mut body = wire::ResourceEnvelopeBytes::new();
                 body.identity = MessageField::some(identity);
                 body.canonical_json = schema.canonical_json;
@@ -1412,7 +1412,7 @@ fn parse_mutation<T>(
         let expedited_subject = trusted.subject.evidence_class()
             == d2b_contracts::v3::EvidenceClass::UnixPeer
             && (trusted.subject.subject_ref().resource_type().as_str() == "User"
-                || trusted.subject.subject_ref().to_string() == "Provider/system-core");
+                || trusted.subject.subject_ref().to_canonical_string() == "Provider/system-core");
         if !expedited_subject {
             return Err(ResourceError::terminal(
                 ResourceErrorKind::ExpeditedNotAuthorized,
@@ -1654,9 +1654,9 @@ fn to_wire_resource(resource: StoredResource) -> wire::ResourceEnvelopeBytes {
 
 fn to_wire_identity(resource: &StoredResource) -> wire::ResourceIdentity {
     let mut identity = wire::ResourceIdentity::new();
-    identity.zone = resource.zone.to_string();
-    identity.resource_type = resource.resource_ref.resource_type().to_string();
-    identity.name = resource.resource_ref.name().to_string();
+    identity.zone = resource.zone.to_canonical_string();
+    identity.resource_type = resource.resource_ref.resource_type().to_canonical_string();
+    identity.name = resource.resource_ref.name().to_canonical_string();
     identity.uid = Some(resource.uid.as_str().to_owned());
     identity.generation = Some(resource.generation.get());
     identity.revision = Some(resource.revision.get());
@@ -1667,9 +1667,9 @@ fn to_wire_resolved_identity(
     resource: d2b_resource_store::StoreResolvedIdentity,
 ) -> wire::ResourceIdentity {
     let mut identity = wire::ResourceIdentity::new();
-    identity.zone = resource.zone.to_string();
-    identity.resource_type = resource.resource_ref.resource_type().to_string();
-    identity.name = resource.resource_ref.name().to_string();
+    identity.zone = resource.zone.to_canonical_string();
+    identity.resource_type = resource.resource_ref.resource_type().to_canonical_string();
+    identity.name = resource.resource_ref.name().to_canonical_string();
     identity.uid = Some(resource.uid.as_str().to_owned());
     identity.generation = Some(resource.generation.get());
     identity.revision = Some(resource.revision.get());

@@ -89,12 +89,6 @@ impl ResourceRef {
     pub fn to_canonical_string(&self) -> String {
         format!("{}/{}", self.resource_type.as_str(), self.name.as_str())
     }
-
-    /// Render the canonical reference when explicitly requested.
-    #[allow(clippy::inherent_to_string_shadow_display)]
-    pub fn to_string(&self) -> String {
-        self.to_canonical_string()
-    }
 }
 
 impl core::fmt::Display for ResourceRef {
@@ -223,7 +217,7 @@ mod tests {
     fn golden_vectors_parse_and_round_trip() {
         for value in VALID_REF_VECTORS {
             let parsed = ResourceRef::parse(value).expect("valid ref");
-            assert_eq!(parsed.to_string(), *value);
+            assert_eq!(parsed.to_canonical_string(), *value);
             assert_eq!(format!("{parsed:?}"), "ResourceRef(<redacted>)");
             let json = serde_json::to_string(&parsed).expect("serialize");
             assert_eq!(json, format!("\"{value}\""));
@@ -272,7 +266,10 @@ mod tests {
         let name = format!("a{}", "z".repeat(62));
         let value = format!("{provider}.d2bus.org.{local_type}/{name}");
         assert_eq!(value.len(), MAX_RESOURCE_REF_BYTES);
-        assert_eq!(ResourceRef::parse(&value).unwrap().to_string(), value);
+        assert_eq!(
+            ResourceRef::parse(&value).unwrap().to_canonical_string(),
+            value
+        );
     }
 
     #[test]
@@ -316,7 +313,11 @@ mod tests {
         let canonical = format!("{type_marker}/{name_marker}");
         let reference = ResourceRef::parse(&canonical).unwrap();
 
-        for rendered in [format!("{reference:?}"), format!("{reference}")] {
+        for rendered in [
+            format!("{reference:?}"),
+            format!("{reference}"),
+            reference.to_string(),
+        ] {
             assert!(!rendered.contains(&name_marker));
             assert!(!rendered.contains(&type_marker));
         }
