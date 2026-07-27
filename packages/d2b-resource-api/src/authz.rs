@@ -1657,9 +1657,213 @@ mod tests {
     }
 
     #[test]
-    fn every_bootstrap_row_allows_exactly_and_denies_a_near_miss() {
-        let _: &'static [BootstrapRow; 42] = BOOTSTRAP_ROWS;
-        assert_eq!(BOOTSTRAP_ROWS.len(), 42);
+    fn bootstrap_matrix_matches_literal_oracle_and_denies_every_dimension_near_miss() {
+        const EXPECTED_BOOTSTRAP_ROWS: [(&str, ApiMethod, &str, ResourceVerb); 42] = [
+            (
+                "system-core",
+                ApiMethod::Create,
+                "Zone",
+                ResourceVerb::Create,
+            ),
+            (
+                "system-core",
+                ApiMethod::Create,
+                "Provider",
+                ResourceVerb::Create,
+            ),
+            (
+                "system-core",
+                ApiMethod::Create,
+                "Host",
+                ResourceVerb::Create,
+            ),
+            (
+                "system-core",
+                ApiMethod::Create,
+                "User",
+                ResourceVerb::Create,
+            ),
+            (
+                "system-core",
+                ApiMethod::Create,
+                "Role",
+                ResourceVerb::Create,
+            ),
+            (
+                "system-core",
+                ApiMethod::Create,
+                "RoleBinding",
+                ResourceVerb::Create,
+            ),
+            (
+                "system-core",
+                ApiMethod::Create,
+                "Process",
+                ResourceVerb::Create,
+            ),
+            (
+                "system-core",
+                ApiMethod::UpdateStatus,
+                "Zone",
+                ResourceVerb::UpdateStatus,
+            ),
+            (
+                "system-core",
+                ApiMethod::UpdateStatus,
+                "Provider",
+                ResourceVerb::UpdateStatus,
+            ),
+            (
+                "system-core",
+                ApiMethod::UpdateStatus,
+                "Host",
+                ResourceVerb::UpdateStatus,
+            ),
+            (
+                "system-core",
+                ApiMethod::UpdateStatus,
+                "User",
+                ResourceVerb::UpdateStatus,
+            ),
+            (
+                "system-core",
+                ApiMethod::UpdateStatus,
+                "Process",
+                ResourceVerb::UpdateStatus,
+            ),
+            ("system-core", ApiMethod::Get, "Zone", ResourceVerb::Get),
+            ("system-core", ApiMethod::Get, "Provider", ResourceVerb::Get),
+            ("system-core", ApiMethod::Get, "Host", ResourceVerb::Get),
+            ("system-core", ApiMethod::Get, "User", ResourceVerb::Get),
+            ("system-core", ApiMethod::Get, "Process", ResourceVerb::Get),
+            ("system-core", ApiMethod::List, "Zone", ResourceVerb::List),
+            (
+                "system-core",
+                ApiMethod::List,
+                "Provider",
+                ResourceVerb::List,
+            ),
+            ("system-core", ApiMethod::List, "Host", ResourceVerb::List),
+            ("system-core", ApiMethod::List, "User", ResourceVerb::List),
+            (
+                "system-core",
+                ApiMethod::List,
+                "Process",
+                ResourceVerb::List,
+            ),
+            ("system-core", ApiMethod::Watch, "Zone", ResourceVerb::Watch),
+            (
+                "system-core",
+                ApiMethod::Watch,
+                "Provider",
+                ResourceVerb::Watch,
+            ),
+            ("system-core", ApiMethod::Watch, "Host", ResourceVerb::Watch),
+            ("system-core", ApiMethod::Watch, "User", ResourceVerb::Watch),
+            (
+                "system-core",
+                ApiMethod::Watch,
+                "Process",
+                ResourceVerb::Watch,
+            ),
+            (
+                "system-core",
+                ApiMethod::ResolveRef,
+                "Zone",
+                ResourceVerb::Get,
+            ),
+            (
+                "system-core",
+                ApiMethod::ResolveRef,
+                "Provider",
+                ResourceVerb::Get,
+            ),
+            (
+                "system-core",
+                ApiMethod::ResolveRef,
+                "Host",
+                ResourceVerb::Get,
+            ),
+            (
+                "system-core",
+                ApiMethod::ResolveRef,
+                "User",
+                ResourceVerb::Get,
+            ),
+            (
+                "system-core",
+                ApiMethod::ResolveRef,
+                "Process",
+                ResourceVerb::Get,
+            ),
+            (
+                "system-core",
+                ApiMethod::InspectSchema,
+                "Provider",
+                ResourceVerb::Get,
+            ),
+            (
+                "system-minijail",
+                ApiMethod::Get,
+                "Process",
+                ResourceVerb::Get,
+            ),
+            (
+                "system-minijail",
+                ApiMethod::Get,
+                "EphemeralProcess",
+                ResourceVerb::Get,
+            ),
+            (
+                "system-minijail",
+                ApiMethod::List,
+                "Process",
+                ResourceVerb::List,
+            ),
+            (
+                "system-minijail",
+                ApiMethod::List,
+                "EphemeralProcess",
+                ResourceVerb::List,
+            ),
+            (
+                "system-minijail",
+                ApiMethod::Watch,
+                "Process",
+                ResourceVerb::Watch,
+            ),
+            (
+                "system-minijail",
+                ApiMethod::Watch,
+                "EphemeralProcess",
+                ResourceVerb::Watch,
+            ),
+            (
+                "system-minijail",
+                ApiMethod::UpdateStatus,
+                "Process",
+                ResourceVerb::UpdateStatus,
+            ),
+            (
+                "system-minijail",
+                ApiMethod::UpdateStatus,
+                "EphemeralProcess",
+                ResourceVerb::UpdateStatus,
+            ),
+            (
+                "system-minijail",
+                ApiMethod::InspectSchema,
+                "Process",
+                ResourceVerb::Get,
+            ),
+        ];
+
+        let actual = BOOTSTRAP_ROWS
+            .iter()
+            .map(|row| (row.subject_name, row.method, row.resource_type, row.verb))
+            .collect::<Vec<_>>();
+        assert_eq!(actual.as_slice(), &EXPECTED_BOOTSTRAP_ROWS);
+
         let core_uid = "123e4567-e89b-42d3-a456-426614174000";
         let minijail_uid = "123e4567-e89b-42d3-a456-426614174001";
         let state = bootstrap_state(BootstrapPhase::Provisioned {
@@ -1671,37 +1875,74 @@ mod tests {
         });
         let engine = NativeAuthorizer::new(ApiCatalog::standard(), None, test_issuer()).unwrap();
 
-        for row in BOOTSTRAP_ROWS {
-            let uid = if row.subject_name == "system-core" {
+        for (subject_name, method, resource_type, verb) in EXPECTED_BOOTSTRAP_ROWS {
+            let uid = if subject_name == "system-core" {
                 core_uid
             } else {
                 minijail_uid
             };
-            let context = bootstrap_subject(row.subject_name, uid);
+            let context = bootstrap_subject(subject_name, uid);
             let exact = AuthorizationRequest {
-                method: row.method,
+                method,
                 zone: ZoneId::parse("dev").unwrap(),
-                targets: vec![bootstrap_target(row.resource_type, row.verb)],
+                targets: vec![bootstrap_target(resource_type, verb)],
             };
             assert_eq!(
                 engine.authorize(&context, &exact, &state).map(|_| ()),
                 Ok(()),
                 "bootstrap row did not authorize: {} {:?} {} {:?}",
-                row.subject_name,
-                row.method,
-                row.resource_type,
-                row.verb,
+                subject_name,
+                method,
+                resource_type,
+                verb,
             );
 
-            let mut near_miss = exact;
-            near_miss.targets[0].verb = ResourceVerb::Delete;
+            let wrong_subject =
+                bootstrap_subject(subject_name, "123e4567-e89b-42d3-a456-426614174099");
             assert_eq!(
-                engine.authorize(&context, &near_miss, &state).unwrap_err(),
+                engine
+                    .authorize(&wrong_subject, &exact, &state)
+                    .unwrap_err(),
                 AuthorizationDenial::BootstrapDenied,
-                "bootstrap near miss authorized: {} {:?} {}",
-                row.subject_name,
-                row.method,
-                row.resource_type,
+                "bootstrap subject near miss authorized: {subject_name} {method:?} {resource_type}"
+            );
+
+            let mut wrong_verb = exact.clone();
+            wrong_verb.targets[0].verb = ResourceVerb::UseCredential;
+            assert_eq!(
+                engine.authorize(&context, &wrong_verb, &state).unwrap_err(),
+                AuthorizationDenial::BootstrapDenied,
+                "bootstrap verb near miss authorized: {subject_name} {method:?} {resource_type}"
+            );
+
+            let mut wrong_method = exact.clone();
+            wrong_method.method = ApiMethod::Delete;
+            assert_eq!(
+                engine
+                    .authorize(&context, &wrong_method, &state)
+                    .unwrap_err(),
+                AuthorizationDenial::BootstrapDenied,
+                "bootstrap method near miss authorized: {subject_name} {method:?} {resource_type}"
+            );
+
+            let mut wrong_resource_type = exact.clone();
+            wrong_resource_type.targets[0].resource_type =
+                ResourceTypeName::parse("Credential").unwrap();
+            assert_eq!(
+                engine
+                    .authorize(&context, &wrong_resource_type, &state)
+                    .unwrap_err(),
+                AuthorizationDenial::BootstrapDenied,
+                "bootstrap resource type near miss authorized: \
+                 {subject_name} {method:?} {resource_type}"
+            );
+
+            let mut wrong_zone = exact;
+            wrong_zone.zone = ZoneId::parse("personal").unwrap();
+            assert_eq!(
+                engine.authorize(&context, &wrong_zone, &state).unwrap_err(),
+                AuthorizationDenial::ZoneMismatch,
+                "bootstrap Zone near miss authorized: {subject_name} {method:?} {resource_type}"
             );
         }
     }
