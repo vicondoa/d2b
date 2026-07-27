@@ -5,6 +5,7 @@ use std::{
     sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
 
+use d2b_contracts::v3::identity::STANDARD_RESOURCE_TYPES;
 use d2b_contracts::v3::{
     AuthenticatedSubjectContext, ControllerGeneration, EvidenceClass, Locality,
     MAX_ROLE_BINDING_SUBJECTS, MAX_ROLE_RULE_EXECUTION_REFS, MAX_ROLE_RULE_RESOURCE_NAMES,
@@ -21,6 +22,52 @@ const POSITIVE_CACHE_ENTRIES: usize = 4096;
 const POSITIVE_CACHE_TICKS: u64 = 30;
 const RESOURCE_SERVICE: &str = "d2b.resource.v3";
 const BOOTSTRAP_PURPOSE: &str = "resource-bootstrap";
+
+/// Immutable set of ResourceTypes installed for one API binding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApiCatalog {
+    resource_types: BTreeSet<ResourceTypeName>,
+}
+
+impl ApiCatalog {
+    /// Construct the standard API catalog.
+    pub fn standard() -> Self {
+        Self {
+            resource_types: STANDARD_RESOURCE_TYPES
+                .into_iter()
+                .map(|value| {
+                    ResourceTypeName::parse(value)
+                        .expect("the standard ResourceType catalog is validated")
+                })
+                .collect(),
+        }
+    }
+
+    /// Extend the standard catalog with installed qualified ResourceTypes.
+    pub fn with_extensions(
+        extensions: impl IntoIterator<Item = ResourceTypeName>,
+    ) -> Result<Self, AuthorizationPolicyError> {
+        let mut catalog = Self::standard();
+        for resource_type in extensions {
+            if !resource_type.as_str().contains(".d2bus.org.")
+                || !catalog.resource_types.insert(resource_type)
+            {
+                return Err(AuthorizationPolicyError::CatalogShape);
+            }
+        }
+        Ok(catalog)
+    }
+
+    fn contains(&self, resource_type: &ResourceTypeName) -> bool {
+        self.resource_types.contains(resource_type)
+    }
+}
+
+impl Default for ApiCatalog {
+    fn default() -> Self {
+        Self::standard()
+    }
+}
 
 /// Resource methods distinguished from their authorization verb.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -108,7 +155,6 @@ pub struct AuthorizationRequest {
     pub method: ApiMethod,
     pub zone: ZoneId,
     pub targets: Vec<AuthorizationTarget>,
-    pub relay_hop: bool,
 }
 
 /// Revision and bootstrap state captured from trusted runtime state.
@@ -176,6 +222,7 @@ pub struct PolicyRule {
 impl PolicyRule {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
+        catalog: &ApiCatalog,
         resource_types: impl IntoIterator<Item = ResourceTypeName>,
         resource_verbs: impl IntoIterator<Item = ResourceVerb>,
         session_verbs: impl IntoIterator<Item = SessionVerb>,
@@ -203,6 +250,13 @@ impl PolicyRule {
                 .any(|value| value.is_empty() || value.len() > 128 || !value.is_ascii())
         {
             return Err(AuthorizationPolicyError::RuleBounds);
+        }
+        if rule
+            .resource_types
+            .iter()
+            .any(|resource_type| !catalog.contains(resource_type))
+        {
+            return Err(AuthorizationPolicyError::UnknownResourceType);
         }
         if rule.resource_verbs.contains(&ResourceVerb::UseCredential)
             && (rule.resource_types.len() != 1
@@ -348,12 +402,14 @@ impl CompiledRoleBinding {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PolicySet {
     pub policy_revision: u64,
+    catalog: ApiCatalog,
     roles: BTreeMap<ResourceRef, CompiledRole>,
     bindings: Vec<CompiledRoleBinding>,
 }
 
 impl PolicySet {
     pub fn new(
+        catalog: &ApiCatalog,
         policy_revision: u64,
         roles: Vec<CompiledRole>,
         bindings: Vec<CompiledRoleBinding>,
@@ -383,6 +439,7 @@ impl PolicySet {
         }
         Ok(Self {
             policy_revision,
+            catalog: catalog.clone(),
             roles,
             bindings,
         })
@@ -407,6 +464,7 @@ pub enum AuthorizationDenial {
     RelayGrantMissing,
     RelayTargetGrantMissing,
     BootstrapDenied,
+    UnknownResourceType,
 }
 
 impl AuthorizationDenial {
@@ -429,21 +487,40 @@ pub struct AuthorizationGrant {
 /// Single native evaluator and positive-decision cache.
 #[derive(Debug)]
 pub struct NativeAuthorizer {
+    catalog: ApiCatalog,
     policy: RwLock<Option<Arc<PolicySet>>>,
     cache: PositiveDecisionCache,
 }
 
 impl NativeAuthorizer {
-    pub fn new(policy: Option<PolicySet>) -> Self {
-        Self {
+    pub fn new(
+        catalog: ApiCatalog,
+        policy: Option<PolicySet>,
+    ) -> Result<Self, AuthorizationPolicyError> {
+        if policy
+            .as_ref()
+            .is_some_and(|policy| policy.catalog != catalog)
+        {
+            return Err(AuthorizationPolicyError::CatalogMismatch);
+        }
+        Ok(Self {
+            catalog,
             policy: RwLock::new(policy.map(Arc::new)),
             cache: PositiveDecisionCache::new(POSITIVE_CACHE_ENTRIES),
-        }
+        })
     }
 
-    pub fn replace_policy(&self, policy: PolicySet, state: &AuthorizationState) {
+    pub fn replace_policy(
+        &self,
+        policy: PolicySet,
+        state: &AuthorizationState,
+    ) -> Result<(), AuthorizationPolicyError> {
+        if policy.catalog != self.catalog {
+            return Err(AuthorizationPolicyError::CatalogMismatch);
+        }
         *self.write_policy() = Some(Arc::new(policy));
         self.cache.invalidate_revisions(revision_set(state));
+        Ok(())
     }
 
     pub fn mark_policy_unavailable(&self) {
@@ -460,13 +537,21 @@ impl NativeAuthorizer {
         if request.targets.is_empty() {
             return Err(AuthorizationDenial::NoMatchingGrant);
         }
+        if request
+            .targets
+            .iter()
+            .any(|target| !self.catalog.contains(&target.resource_type))
+        {
+            return Err(AuthorizationDenial::UnknownResourceType);
+        }
         if context.zone_ref().resource_type().as_str() != "Zone"
             || context.zone_ref().name().as_str() != request.zone.as_str()
         {
             return Err(AuthorizationDenial::ZoneMismatch);
         }
+        let relay_hop = authenticated_relay_hop(context)?;
         if state.snapshot.policy_revision == 0 {
-            return authorize_bootstrap(context, request, state);
+            return authorize_bootstrap(context, request, state, relay_hop);
         }
 
         let policy = self
@@ -477,10 +562,10 @@ impl NativeAuthorizer {
             return Err(AuthorizationDenial::PolicyRevisionChanged);
         }
 
-        let cache_key = cache_key(context, request);
+        let cache_key = cache_key(context, request, relay_hop);
         let revisions = revision_set(state);
         if !self.cache.contains(&cache_key, revisions, state.now_tick) {
-            evaluate_policy(&policy, context, request)?;
+            evaluate_policy(&policy, context, request, relay_hop)?;
             self.cache.insert_allow(
                 cache_key,
                 revisions,
@@ -573,21 +658,31 @@ impl NativeAuthorizer {
     }
 }
 
+pub(crate) fn authenticated_relay_hop(
+    context: &AuthenticatedSubjectContext,
+) -> Result<bool, AuthorizationDenial> {
+    match context.transport_binding().locality() {
+        Locality::Local => Ok(false),
+        Locality::AdjacentZone
+            if context.evidence_class() == EvidenceClass::EnrolledKk
+                && matches!(
+                    context.subject_ref().resource_type().as_str(),
+                    "Zone" | "ZoneLink"
+                ) =>
+        {
+            Ok(true)
+        }
+        Locality::AdjacentZone | Locality::Remote => Err(AuthorizationDenial::RelayOriginInvalid),
+    }
+}
+
 fn evaluate_policy(
     policy: &PolicySet,
     context: &AuthenticatedSubjectContext,
     request: &AuthorizationRequest,
+    relay_hop: bool,
 ) -> Result<(), AuthorizationDenial> {
-    if request.relay_hop {
-        if context.transport_binding().locality() != Locality::AdjacentZone
-            || context.evidence_class() != EvidenceClass::EnrolledKk
-            || !matches!(
-                context.subject_ref().resource_type().as_str(),
-                "Zone" | "ZoneLink"
-            )
-        {
-            return Err(AuthorizationDenial::RelayOriginInvalid);
-        }
+    if relay_hop {
         let relay_allowed = policy
             .bindings
             .iter()
@@ -614,7 +709,7 @@ fn evaluate_policy(
             .flat_map(|role| &role.rules)
             .any(|rule| rule.permits_target(target, &request.zone));
         if !allowed {
-            return Err(if request.relay_hop {
+            return Err(if relay_hop {
                 AuthorizationDenial::RelayTargetGrantMissing
             } else {
                 AuthorizationDenial::NoMatchingGrant
@@ -652,11 +747,12 @@ fn grant(
 fn cache_key(
     context: &AuthenticatedSubjectContext,
     request: &AuthorizationRequest,
+    relay_hop: bool,
 ) -> AuthorizationCacheKey {
     let mut digest = Sha256::new();
     digest.update([request.method as u8]);
     digest.update(request.zone.as_str().as_bytes());
-    digest.update([u8::from(request.relay_hop)]);
+    digest.update([u8::from(relay_hop)]);
     digest.update([evidence_tag(context.evidence_class())]);
     digest.update([locality_tag(context.transport_binding().locality())]);
     digest.update(context.session_purpose().as_str().as_bytes());
@@ -949,6 +1045,7 @@ fn authorize_bootstrap(
     context: &AuthenticatedSubjectContext,
     request: &AuthorizationRequest,
     state: &AuthorizationState,
+    relay_hop: bool,
 ) -> Result<AuthorizationGrant, AuthorizationDenial> {
     let (zone, core_uid, minijail_uid, controller_generation, provider_generation, unprovisioned) =
         match &state.bootstrap_phase {
@@ -980,7 +1077,7 @@ fn authorize_bootstrap(
             ),
             BootstrapPhase::Disabled => return Err(AuthorizationDenial::BootstrapDenied),
         };
-    if request.relay_hop
+    if relay_hop
         || &request.zone != zone
         || context.evidence_class() != EvidenceClass::UnixPeer
         || context.transport_binding().locality() != Locality::Local
@@ -1015,18 +1112,22 @@ fn authorize_bootstrap(
         if !allowed {
             return Err(AuthorizationDenial::BootstrapDenied);
         }
-        if unprovisioned {
-            let exact_bootstrap_create = request.method == ApiMethod::Create
-                && match target.resource_type.as_str() {
-                    "Zone" => target.resource_name.as_ref() == Some(&zone_name),
-                    "Provider" => target.resource_name.as_ref().is_some_and(|name| {
-                        matches!(name.as_str(), "system-core" | "system-minijail")
-                    }),
-                    _ => false,
-                };
-            if !exact_bootstrap_create {
-                return Err(AuthorizationDenial::BootstrapDenied);
-            }
+        let compiled_name = match target.resource_type.as_str() {
+            "Zone" => target
+                .resource_name
+                .as_ref()
+                .is_none_or(|name| name == &zone_name),
+            "Provider" => target
+                .resource_name
+                .as_ref()
+                .is_none_or(|name| matches!(name.as_str(), "system-core" | "system-minijail")),
+            _ => true,
+        };
+        let unprovisioned_create = !unprovisioned
+            || (request.method == ApiMethod::Create
+                && matches!(target.resource_type.as_str(), "Zone" | "Provider"));
+        if !compiled_name || !unprovisioned_create {
+            return Err(AuthorizationDenial::BootstrapDenied);
         }
     }
     Ok(grant(context, request))
@@ -1036,6 +1137,9 @@ fn authorize_bootstrap(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthorizationPolicyError {
     RuleBounds,
+    UnknownResourceType,
+    CatalogShape,
+    CatalogMismatch,
     CredentialScope,
     RoleShape,
     BindingShape,
@@ -1049,6 +1153,9 @@ impl core::fmt::Display for AuthorizationPolicyError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str(match self {
             Self::RuleBounds => "Role rule exceeds a frozen bound",
+            Self::UnknownResourceType => "Role rule names an uninstalled ResourceType",
+            Self::CatalogShape => "API catalog extension set is invalid",
+            Self::CatalogMismatch => "policy was compiled for a different API catalog",
             Self::CredentialScope => "Credential verb requires an exact Credential subresource",
             Self::RoleShape => "Role evaluator projection is invalid",
             Self::BindingShape => "RoleBinding evaluator projection is invalid",
@@ -1109,6 +1216,57 @@ mod tests {
         }
     }
 
+    fn bootstrap_subject(subject_name: &str, subject_uid: &str) -> AuthenticatedSubjectContext {
+        AuthenticatedSubjectContext::new(
+            ResourceRef::parse(&format!("Provider/{subject_name}")).unwrap(),
+            ResourceUid::parse(subject_uid).unwrap(),
+            ResourceRef::parse("Zone/dev").unwrap(),
+            EvidenceClass::UnixPeer,
+            SessionPurpose::parse(BOOTSTRAP_PURPOSE).unwrap(),
+            ServiceName::parse(RESOURCE_SERVICE).unwrap(),
+            SessionBinding::new(
+                SchemaFingerprint::parse(format!("sha256:{}", "1".repeat(64))).unwrap(),
+                TransportBinding::new(
+                    Locality::Local,
+                    BindingDigest::parse(format!("sha256:{}", "2".repeat(64))).unwrap(),
+                ),
+                ReconnectGeneration::new(1).unwrap(),
+                TranscriptHash::from_bytes([3; 32]),
+            ),
+        )
+        .with_controller_generation(ControllerGeneration::new(11).unwrap())
+        .with_provider_generation(ResourceGeneration::new(12).unwrap())
+    }
+
+    fn bootstrap_state(phase: BootstrapPhase) -> AuthorizationState {
+        AuthorizationState {
+            snapshot: PolicySnapshot {
+                policy_revision: 0,
+                api_catalog_revision: 1,
+                active_configuration_revision: ConfigurationGeneration::new(1).unwrap(),
+                controller_generation: Some(ControllerGeneration::new(11).unwrap()),
+            },
+            zone_policy_revision: ZoneRevision::new(0),
+            bootstrap_phase: phase,
+            now_tick: 1,
+        }
+    }
+
+    fn bootstrap_target(resource_type: &str, verb: ResourceVerb) -> AuthorizationTarget {
+        let resource_name = match resource_type {
+            "Zone" => "dev",
+            "Provider" => "system-core",
+            _ => "app",
+        };
+        AuthorizationTarget {
+            resource_type: ResourceTypeName::parse(resource_type).unwrap(),
+            resource_name: Some(ResourceName::parse(resource_name).unwrap()),
+            verb,
+            subresource: None,
+            execution_ref: None,
+        }
+    }
+
     fn target(verb: ResourceVerb) -> AuthorizationTarget {
         AuthorizationTarget {
             resource_type: ResourceTypeName::parse("Process").unwrap(),
@@ -1125,10 +1283,12 @@ mod tests {
         target_verb: Option<ResourceVerb>,
         relay: bool,
     ) -> PolicySet {
+        let catalog = ApiCatalog::standard();
         let mut rules = Vec::new();
         if let Some(verb) = target_verb {
             rules.push(
                 PolicyRule::new(
+                    &catalog,
                     [ResourceTypeName::parse("Process").unwrap()],
                     [verb],
                     [],
@@ -1141,7 +1301,9 @@ mod tests {
             );
         }
         if relay {
-            rules.push(PolicyRule::new([], [], [SessionVerb::Relay], [], [], [], []).unwrap());
+            rules.push(
+                PolicyRule::new(&catalog, [], [], [SessionVerb::Relay], [], [], [], []).unwrap(),
+            );
         }
         let role = CompiledRole::new(ResourceRef::parse("Role/operator").unwrap(), rules).unwrap();
         let binding = CompiledRoleBinding::new(
@@ -1158,28 +1320,26 @@ mod tests {
             },
         )
         .unwrap();
-        PolicySet::new(revision, vec![role], vec![binding]).unwrap()
+        PolicySet::new(&catalog, revision, vec![role], vec![binding]).unwrap()
     }
 
-    fn request(relay_hop: bool) -> AuthorizationRequest {
+    fn request() -> AuthorizationRequest {
         AuthorizationRequest {
             method: ApiMethod::Get,
             zone: ZoneId::parse("dev").unwrap(),
             targets: vec![target(ResourceVerb::Get)],
-            relay_hop,
         }
     }
 
     #[test]
     fn decision_matrix_and_positive_capabilities_are_exact() {
         let context = subject(Locality::Local, EvidenceClass::UnixPeer, "User/alice");
-        let engine =
-            NativeAuthorizer::new(Some(policy(4, &context, Some(ResourceVerb::Get), false)));
-        assert!(
-            engine
-                .authorize(&context, &request(false), &state(4))
-                .is_ok()
-        );
+        let engine = NativeAuthorizer::new(
+            ApiCatalog::standard(),
+            Some(policy(4, &context, Some(ResourceVerb::Get), false)),
+        )
+        .unwrap();
+        assert!(engine.authorize(&context, &request(), &state(4)).is_ok());
         let caps = engine
             .positive_capabilities(&context, &ZoneId::parse("dev").unwrap(), &state(4))
             .unwrap();
@@ -1189,7 +1349,7 @@ mod tests {
                 &context,
                 &AuthorizationRequest {
                     targets: vec![target(ResourceVerb::Delete)],
-                    ..request(false)
+                    ..request()
                 },
                 &state(4)
             ),
@@ -1200,58 +1360,73 @@ mod tests {
     #[test]
     fn revocation_and_policy_outage_fail_closed() {
         let context = subject(Locality::Local, EvidenceClass::UnixPeer, "User/alice");
-        let engine =
-            NativeAuthorizer::new(Some(policy(4, &context, Some(ResourceVerb::Get), false)));
-        assert!(
-            engine
-                .authorize(&context, &request(false), &state(4))
-                .is_ok()
-        );
-        engine.replace_policy(policy(5, &context, None, false), &state(5));
+        let engine = NativeAuthorizer::new(
+            ApiCatalog::standard(),
+            Some(policy(4, &context, Some(ResourceVerb::Get), false)),
+        )
+        .unwrap();
+        assert!(engine.authorize(&context, &request(), &state(4)).is_ok());
+        engine
+            .replace_policy(policy(5, &context, None, false), &state(5))
+            .unwrap();
         assert_eq!(
-            engine.authorize(&context, &request(false), &state(5)),
+            engine.authorize(&context, &request(), &state(5)),
             Err(AuthorizationDenial::NoMatchingGrant)
         );
         engine.mark_policy_unavailable();
         assert_eq!(
-            engine.authorize(&context, &request(false), &state(5)),
+            engine.authorize(&context, &request(), &state(5)),
             Err(AuthorizationDenial::PolicyUnavailable)
         );
     }
 
     #[test]
-    fn relay_and_target_grants_are_independent() {
+    fn adjacent_route_cannot_disable_relay_admission() {
         let context = subject(
             Locality::AdjacentZone,
             EvidenceClass::EnrolledKk,
             "ZoneLink/parent",
         );
-        let no_relay =
-            NativeAuthorizer::new(Some(policy(4, &context, Some(ResourceVerb::Get), false)));
+        let no_relay = NativeAuthorizer::new(
+            ApiCatalog::standard(),
+            Some(policy(4, &context, Some(ResourceVerb::Get), false)),
+        )
+        .unwrap();
         assert_eq!(
-            no_relay.authorize(&context, &request(true), &state(4)),
+            no_relay.authorize(&context, &request(), &state(4)),
             Err(AuthorizationDenial::RelayGrantMissing)
         );
-        let no_target = NativeAuthorizer::new(Some(policy(4, &context, None, true)));
+        let no_target = NativeAuthorizer::new(
+            ApiCatalog::standard(),
+            Some(policy(4, &context, None, true)),
+        )
+        .unwrap();
         assert_eq!(
-            no_target.authorize(&context, &request(true), &state(4)),
+            no_target.authorize(&context, &request(), &state(4)),
             Err(AuthorizationDenial::RelayTargetGrantMissing)
         );
-        let both = NativeAuthorizer::new(Some(policy(4, &context, Some(ResourceVerb::Get), true)));
-        assert!(both.authorize(&context, &request(true), &state(4)).is_ok());
+        let both = NativeAuthorizer::new(
+            ApiCatalog::standard(),
+            Some(policy(4, &context, Some(ResourceVerb::Get), true)),
+        )
+        .unwrap();
+        assert!(both.authorize(&context, &request(), &state(4)).is_ok());
     }
 
     #[test]
-    fn relay_rejects_local_and_bootstrap_origins() {
+    fn relay_rejects_untrusted_adjacent_and_remote_origins() {
         for (locality, evidence) in [
-            (Locality::Local, EvidenceClass::UnixPeer),
             (Locality::AdjacentZone, EvidenceClass::BootstrapIkpsk2),
+            (Locality::Remote, EvidenceClass::EnrolledKk),
         ] {
             let context = subject(locality, evidence, "ZoneLink/parent");
-            let engine =
-                NativeAuthorizer::new(Some(policy(4, &context, Some(ResourceVerb::Get), true)));
+            let engine = NativeAuthorizer::new(
+                ApiCatalog::standard(),
+                Some(policy(4, &context, Some(ResourceVerb::Get), true)),
+            )
+            .unwrap();
             assert_eq!(
-                engine.authorize(&context, &request(true), &state(4)),
+                engine.authorize(&context, &request(), &state(4)),
                 Err(AuthorizationDenial::RelayOriginInvalid)
             );
         }
@@ -1264,13 +1439,12 @@ mod tests {
             EvidenceClass::EnrolledKk,
             "ZoneLink/parent",
         );
-        let engine =
-            NativeAuthorizer::new(Some(policy(4, &enrolled, Some(ResourceVerb::Get), true)));
-        assert!(
-            engine
-                .authorize(&enrolled, &request(true), &state(4))
-                .is_ok()
-        );
+        let engine = NativeAuthorizer::new(
+            ApiCatalog::standard(),
+            Some(policy(4, &enrolled, Some(ResourceVerb::Get), true)),
+        )
+        .unwrap();
+        assert!(engine.authorize(&enrolled, &request(), &state(4)).is_ok());
 
         let bootstrap = subject(
             Locality::AdjacentZone,
@@ -1278,7 +1452,7 @@ mod tests {
             "ZoneLink/parent",
         );
         assert_eq!(
-            engine.authorize(&bootstrap, &request(true), &state(4)),
+            engine.authorize(&bootstrap, &request(), &state(4)),
             Err(AuthorizationDenial::RelayOriginInvalid)
         );
     }
@@ -1290,9 +1464,12 @@ mod tests {
             EvidenceClass::EnrolledKk,
             "ZoneLink/parent",
         );
-        let engine =
-            NativeAuthorizer::new(Some(policy(4, &context, Some(ResourceVerb::Get), true)));
-        let mut wrong_zone = request(true);
+        let engine = NativeAuthorizer::new(
+            ApiCatalog::standard(),
+            Some(policy(4, &context, Some(ResourceVerb::Get), true)),
+        )
+        .unwrap();
+        let mut wrong_zone = request();
         wrong_zone.zone = ZoneId::parse("other").unwrap();
         assert_eq!(
             engine.authorize(&context, &wrong_zone, &state(4)),
@@ -1305,8 +1482,18 @@ mod tests {
         let too_many_types = (0..=MAX_ROLE_RULE_RESOURCE_TYPES)
             .map(|index| ResourceTypeName::parse(format!("p{index}.d2bus.org.Type")).unwrap())
             .collect::<Vec<_>>();
+        let extension_catalog = ApiCatalog::with_extensions(too_many_types.clone()).unwrap();
         assert_eq!(
-            PolicyRule::new(too_many_types, [ResourceVerb::Get], [], [], [], [], []),
+            PolicyRule::new(
+                &extension_catalog,
+                too_many_types,
+                [ResourceVerb::Get],
+                [],
+                [],
+                [],
+                [],
+                [],
+            ),
             Err(AuthorizationPolicyError::RuleBounds)
         );
 
@@ -1317,7 +1504,19 @@ mod tests {
         );
         let relay_role = CompiledRole::new(
             ResourceRef::parse("Role/relay").unwrap(),
-            vec![PolicyRule::new([], [], [SessionVerb::Relay], [], [], [], []).unwrap()],
+            vec![
+                PolicyRule::new(
+                    &ApiCatalog::standard(),
+                    [],
+                    [],
+                    [SessionVerb::Relay],
+                    [],
+                    [],
+                    [],
+                    [],
+                )
+                .unwrap(),
+            ],
         )
         .unwrap();
         let binding = CompiledRoleBinding::new(
@@ -1331,12 +1530,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            PolicySet::new(4, vec![relay_role], vec![binding]),
+            PolicySet::new(&ApiCatalog::standard(), 4, vec![relay_role], vec![binding]),
             Err(AuthorizationPolicyError::RelayGrantRestricted)
         );
 
         assert_eq!(
             PolicyRule::new(
+                &ApiCatalog::standard(),
                 [ResourceTypeName::parse("Credential").unwrap()],
                 [ResourceVerb::AdminCredential],
                 [],
@@ -1364,6 +1564,34 @@ mod tests {
     }
 
     #[test]
+    fn uninstalled_resource_types_are_rejected_in_rules_and_targets() {
+        let catalog = ApiCatalog::standard();
+        let extension = ResourceTypeName::parse("example.d2bus.org.Widget").unwrap();
+        assert_eq!(
+            PolicyRule::new(
+                &catalog,
+                [extension.clone()],
+                [ResourceVerb::Get],
+                [],
+                [],
+                [],
+                [],
+                [],
+            ),
+            Err(AuthorizationPolicyError::UnknownResourceType)
+        );
+
+        let context = subject(Locality::Local, EvidenceClass::UnixPeer, "User/alice");
+        let engine = NativeAuthorizer::new(catalog, None).unwrap();
+        let mut uninstalled = request();
+        uninstalled.targets[0].resource_type = extension;
+        assert_eq!(
+            engine.authorize(&context, &uninstalled, &state(4)),
+            Err(AuthorizationDenial::UnknownResourceType)
+        );
+    }
+
+    #[test]
     fn configuration_revision_is_a_monotonic_ordinal_in_the_snapshot() {
         let snapshot = state(4).snapshot;
         assert_eq!(snapshot.active_configuration_revision.get(), 3);
@@ -1380,8 +1608,91 @@ mod tests {
     }
 
     #[test]
-    fn bootstrap_allow_table_has_the_frozen_static_row_count() {
+    fn every_bootstrap_row_allows_exactly_and_denies_a_near_miss() {
         let _: &'static [BootstrapRow; 42] = BOOTSTRAP_ROWS;
         assert_eq!(BOOTSTRAP_ROWS.len(), 42);
+        let core_uid = "123e4567-e89b-42d3-a456-426614174000";
+        let minijail_uid = "123e4567-e89b-42d3-a456-426614174001";
+        let state = bootstrap_state(BootstrapPhase::Provisioned {
+            zone: ZoneId::parse("dev").unwrap(),
+            system_core_uid: ResourceUid::parse(core_uid).unwrap(),
+            system_minijail_uid: ResourceUid::parse(minijail_uid).unwrap(),
+            controller_generation: ControllerGeneration::new(11).unwrap(),
+            provider_generation: ResourceGeneration::new(12).unwrap(),
+        });
+        let engine = NativeAuthorizer::new(ApiCatalog::standard(), None).unwrap();
+
+        for row in BOOTSTRAP_ROWS {
+            let uid = if row.subject_name == "system-core" {
+                core_uid
+            } else {
+                minijail_uid
+            };
+            let context = bootstrap_subject(row.subject_name, uid);
+            let exact = AuthorizationRequest {
+                method: row.method,
+                zone: ZoneId::parse("dev").unwrap(),
+                targets: vec![bootstrap_target(row.resource_type, row.verb)],
+            };
+            assert_eq!(
+                engine.authorize(&context, &exact, &state).map(|_| ()),
+                Ok(()),
+                "bootstrap row did not authorize: {} {:?} {} {:?}",
+                row.subject_name,
+                row.method,
+                row.resource_type,
+                row.verb,
+            );
+
+            let mut near_miss = exact;
+            near_miss.targets[0].verb = ResourceVerb::Delete;
+            assert_eq!(
+                engine.authorize(&context, &near_miss, &state),
+                Err(AuthorizationDenial::BootstrapDenied),
+                "bootstrap near miss authorized: {} {:?} {}",
+                row.subject_name,
+                row.method,
+                row.resource_type,
+            );
+        }
+    }
+
+    #[test]
+    fn bootstrap_zone_and_provider_names_are_compiled_in_both_phases() {
+        let core_uid = "123e4567-e89b-42d3-a456-426614174000";
+        let context = bootstrap_subject("system-core", core_uid);
+        let engine = NativeAuthorizer::new(ApiCatalog::standard(), None).unwrap();
+        let phases = [
+            BootstrapPhase::Unprovisioned {
+                zone: ZoneId::parse("dev").unwrap(),
+                controller_generation: ControllerGeneration::new(11).unwrap(),
+                provider_generation: ResourceGeneration::new(12).unwrap(),
+            },
+            BootstrapPhase::Provisioned {
+                zone: ZoneId::parse("dev").unwrap(),
+                system_core_uid: ResourceUid::parse(core_uid).unwrap(),
+                system_minijail_uid: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174001")
+                    .unwrap(),
+                controller_generation: ControllerGeneration::new(11).unwrap(),
+                provider_generation: ResourceGeneration::new(12).unwrap(),
+            },
+        ];
+
+        for phase in phases {
+            let state = bootstrap_state(phase);
+            for resource_type in ["Zone", "Provider"] {
+                let mut target = bootstrap_target(resource_type, ResourceVerb::Create);
+                target.resource_name = Some(ResourceName::parse("attacker-selected").unwrap());
+                let request = AuthorizationRequest {
+                    method: ApiMethod::Create,
+                    zone: ZoneId::parse("dev").unwrap(),
+                    targets: vec![target],
+                };
+                assert_eq!(
+                    engine.authorize(&context, &request, &state),
+                    Err(AuthorizationDenial::BootstrapDenied)
+                );
+            }
+        }
     }
 }

@@ -5,13 +5,14 @@ use std::{future::Future, sync::Arc};
 use d2b_contracts::{
     resource_proto as wire,
     v3::{
-        AuthenticatedSubjectContext, DEFAULT_LIST_PAGE_SIZE, DEFAULT_REQUEST_DEADLINE_MS,
-        DEFAULT_WATCH_CREDITS, FinalizerId, MAX_BATCH_MUTATIONS, MAX_EXPEDITED_DEADLINE_MS,
-        MAX_FILTER_VALUES, MAX_LIST_FILTERS, MAX_LIST_PAGE_SIZE, MAX_LIST_RESOURCE_TYPES,
-        MAX_PAGE_CURSOR_BYTES, MAX_REQUEST_CANONICAL_BYTES, MAX_REQUEST_DEADLINE_MS,
-        MAX_RESPONSE_CANONICAL_BYTES, MAX_WATCH_CREDITS, MAX_WATCH_FILTERS,
-        MAX_WATCH_RESOURCE_TYPES, ResourceEnvelope, ResourceError, ResourceErrorKind, ResourceName,
-        ResourceRef, ResourceTypeName, ResourceUid, ZoneId, ZoneRevision,
+        AuthenticatedSubjectContext, CanonicalJsonValue, DEFAULT_LIST_PAGE_SIZE,
+        DEFAULT_REQUEST_DEADLINE_MS, DEFAULT_WATCH_CREDITS, FinalizerId, MAX_BATCH_MUTATIONS,
+        MAX_EXPEDITED_DEADLINE_MS, MAX_FILTER_VALUES, MAX_LIST_FILTERS, MAX_LIST_PAGE_SIZE,
+        MAX_LIST_RESOURCE_TYPES, MAX_PAGE_CURSOR_BYTES, MAX_REQUEST_CANONICAL_BYTES,
+        MAX_REQUEST_DEADLINE_MS, MAX_RESPONSE_CANONICAL_BYTES, MAX_WATCH_CREDITS,
+        MAX_WATCH_FILTERS, MAX_WATCH_RESOURCE_TYPES, RESOURCE_ENVELOPE_DOMAIN_TAG,
+        ResourceEnvelope, ResourceError, ResourceErrorKind, ResourceName, ResourceRef,
+        ResourceTypeName, ResourceUid, ZoneId, ZoneRevision, canonical_digest,
     },
 };
 use d2b_resource_store::{
@@ -34,22 +35,19 @@ use crate::{
 pub struct TrustedRequest<T> {
     subject: Arc<AuthenticatedSubjectContext>,
     authorization_state: AuthorizationState,
-    relay_hop: bool,
     request: T,
 }
 
 impl<T> TrustedRequest<T> {
     /// Bind a decoded request to authenticated session and live policy state.
-    pub fn from_component_session(
+    pub(crate) fn from_authenticated_bus(
         subject: Arc<AuthenticatedSubjectContext>,
         authorization_state: AuthorizationState,
-        relay_hop: bool,
         request: T,
     ) -> Self {
         Self {
             subject,
             authorization_state,
-            relay_hop,
             request,
         }
     }
@@ -149,12 +147,7 @@ where
             Ok(identity) => identity,
             Err(error) => return get_error(error),
         };
-        let auth = authorization_for_identity(
-            ApiMethod::Get,
-            ResourceVerb::Get,
-            &identity,
-            trusted.relay_hop,
-        );
+        let auth = authorization_for_identity(ApiMethod::Get, ResourceVerb::Get, &identity);
         if let Err(error) = self.authorize(&trusted, auth) {
             return get_error(error);
         }
@@ -195,19 +188,19 @@ where
     }
 
     pub async fn list(&self, trusted: TrustedRequest<wire::ListRequest>) -> wire::ListResponse {
-        let targets = match parse_collection_targets(
+        let parsed = match parse_collection_request(
             &trusted.request.resource_types,
             &trusted.request.filters,
-            ResourceVerb::List,
+            MAX_LIST_RESOURCE_TYPES,
+            MAX_LIST_FILTERS,
         ) {
-            Ok(targets) => targets,
+            Ok(parsed) => parsed,
             Err(error) => return list_error(error),
         };
         let auth = AuthorizationRequest {
             method: ApiMethod::List,
             zone: subject_zone(&trusted),
-            targets,
-            relay_hop: trusted.relay_hop,
+            targets: collection_targets(&parsed, ResourceVerb::List),
         };
         if let Err(error) = self.authorize(&trusted, auth) {
             return list_error(error);
@@ -221,15 +214,6 @@ where
             &trusted.authorization_state,
         ) {
             Ok(operation) => operation,
-            Err(error) => return list_error(error),
-        };
-        let parsed = match parse_collection_request(
-            &trusted.request.resource_types,
-            &trusted.request.filters,
-            MAX_LIST_RESOURCE_TYPES,
-            MAX_LIST_FILTERS,
-        ) {
-            Ok(parsed) => parsed,
             Err(error) => return list_error(error),
         };
         let page_size = if trusted.request.page_size == 0 {
@@ -293,19 +277,19 @@ where
     }
 
     pub async fn watch(&self, trusted: TrustedRequest<wire::WatchRequest>) -> wire::WatchResponse {
-        let targets = match parse_collection_targets(
+        let parsed = match parse_collection_request(
             &trusted.request.resource_types,
             &trusted.request.filters,
-            ResourceVerb::Watch,
+            MAX_WATCH_RESOURCE_TYPES,
+            MAX_WATCH_FILTERS,
         ) {
-            Ok(targets) => targets,
+            Ok(parsed) => parsed,
             Err(error) => return watch_error(error),
         };
         let auth = AuthorizationRequest {
             method: ApiMethod::Watch,
             zone: subject_zone(&trusted),
-            targets,
-            relay_hop: trusted.relay_hop,
+            targets: collection_targets(&parsed, ResourceVerb::Watch),
         };
         if let Err(error) = self.authorize(&trusted, auth) {
             return watch_error(error);
@@ -319,15 +303,6 @@ where
             &trusted.authorization_state,
         ) {
             Ok(operation) => operation,
-            Err(error) => return watch_error(error),
-        };
-        let parsed = match parse_collection_request(
-            &trusted.request.resource_types,
-            &trusted.request.filters,
-            MAX_WATCH_RESOURCE_TYPES,
-            MAX_WATCH_FILTERS,
-        ) {
-            Ok(parsed) => parsed,
             Err(error) => return watch_error(error),
         };
         let credits = trusted
@@ -510,14 +485,26 @@ where
             Ok(routes) => routes,
             Err(error) => return batch_error(error),
         };
+        let batch_zone = subject_zone(&trusted);
+        if routes.iter().any(|route| {
+            route.identity.zone != batch_zone
+                || route
+                    .owner
+                    .as_ref()
+                    .is_some_and(|owner| owner.zone != batch_zone)
+        }) {
+            return batch_error(ResourceError::terminal(
+                ResourceErrorKind::AuthorizationDenied,
+                "batch route is outside the authenticated Zone",
+            ));
+        }
         let auth = AuthorizationRequest {
             method: ApiMethod::CommitBatch,
-            zone: subject_zone(&trusted),
+            zone: batch_zone,
             targets: routes
                 .iter()
                 .flat_map(|item| item.authorizations.iter().cloned())
                 .collect(),
-            relay_hop: trusted.relay_hop,
         };
         let grant = match self.authorize(&trusted, auth) {
             Ok(grant) => grant,
@@ -560,7 +547,14 @@ where
                 let mut response = wire::CommitBatchResponse::new();
                 response.resources = result.resources.into_iter().map(to_wire_resource).collect();
                 response.revision = result.revision.get();
-                response
+                if response.compute_size() as usize > MAX_RESPONSE_CANONICAL_BYTES {
+                    let mut limited =
+                        batch_error(schema_error("batch response exceeds its byte bound"));
+                    limited.revision = response.revision;
+                    limited
+                } else {
+                    response
+                }
             }
             Err(error) => batch_error(map_store_error_with_revision_visibility(
                 error,
@@ -579,12 +573,7 @@ where
         };
         if let Err(error) = self.authorize(
             &trusted,
-            authorization_for_identity(
-                ApiMethod::ResolveRef,
-                ResourceVerb::Get,
-                &identity,
-                trusted.relay_hop,
-            ),
+            authorization_for_identity(ApiMethod::ResolveRef, ResourceVerb::Get, &identity),
         ) {
             return resolve_error(error);
         }
@@ -636,7 +625,6 @@ where
                 subresource: Some("schema".to_owned()),
                 execution_ref: None,
             }],
-            relay_hop: trusted.relay_hop,
         };
         if let Err(error) = self.authorize(&trusted, auth) {
             return inspect_error(error);
@@ -671,7 +659,11 @@ where
                 body.payload_digest = schema.payload_digest;
                 let mut response = wire::InspectSchemaResponse::new();
                 response.schema = MessageField::some(body);
-                response
+                if response.compute_size() as usize > MAX_RESPONSE_CANONICAL_BYTES {
+                    inspect_error(schema_error("schema response exceeds its byte bound"))
+                } else {
+                    response
+                }
             }
             Err(error) => inspect_error(map_store_error(error)),
         }
@@ -685,12 +677,8 @@ where
             Ok(identity) => identity,
             Err(error) => return upgrade_error(error),
         };
-        let auth = authorization_for_identity(
-            ApiMethod::Upgrade,
-            ResourceVerb::UpdateSpec,
-            &identity,
-            trusted.relay_hop,
-        );
+        let auth =
+            authorization_for_identity(ApiMethod::Upgrade, ResourceVerb::UpdateSpec, &identity);
         if let Err(error) = self.authorize(&trusted, auth) {
             return upgrade_error(error);
         }
@@ -736,7 +724,14 @@ where
                     .map(to_wire_resolved_identity)
                     .collect();
                 response.revision = result.revision.get();
-                response
+                if response.compute_size() as usize > MAX_RESPONSE_CANONICAL_BYTES {
+                    let mut limited =
+                        upgrade_error(schema_error("upgrade response exceeds its byte bound"));
+                    limited.revision = response.revision;
+                    limited
+                } else {
+                    response
+                }
             }
             Err(error) => upgrade_error(error),
         }
@@ -761,7 +756,6 @@ where
                 method,
                 zone: route.identity.zone.clone(),
                 targets: route.authorizations.clone(),
-                relay_hop: trusted.relay_hop,
             },
         )?;
         validate_request(&trusted.request)?;
@@ -825,7 +819,6 @@ where
                             execution_ref: trusted.subject.execution_ref().cloned(),
                         })
                         .collect(),
-                    relay_hop: trusted.relay_hop,
                 },
                 &trusted.authorization_state,
             )
@@ -1043,7 +1036,6 @@ fn authorization_for_identity(
     method: ApiMethod,
     verb: ResourceVerb,
     identity: &ParsedIdentity,
-    relay_hop: bool,
 ) -> AuthorizationRequest {
     AuthorizationRequest {
         method,
@@ -1055,7 +1047,6 @@ fn authorization_for_identity(
             subresource: None,
             execution_ref: None,
         }],
-        relay_hop,
     }
 }
 
@@ -1233,8 +1224,20 @@ fn parse_mutation<T>(
                 "resource body identity does not match its target",
             ));
         }
-        let envelope = ResourceEnvelope::from_json(&body.canonical_json)
-            .map_err(|_| schema_error("resource envelope is malformed"))?;
+        let (envelope, canonical_resource, payload_digest) = if kind == ResourceMutationKind::Create
+        {
+            parse_create_payload(&body.canonical_json)?
+        } else {
+            let envelope = ResourceEnvelope::from_json(&body.canonical_json)
+                .map_err(|_| schema_error("resource envelope is malformed"))?;
+            let canonical = envelope
+                .canonical_bytes()
+                .map_err(|_| schema_error("resource envelope is malformed"))?;
+            let digest = envelope
+                .digest()
+                .map_err(|_| schema_error("resource envelope is malformed"))?;
+            (envelope, canonical, digest)
+        };
         if envelope.resource_type() != identity.resource_ref.resource_type()
             || envelope.metadata().name() != identity.resource_ref.name()
             || envelope.metadata().zone() != &identity.zone
@@ -1242,7 +1245,7 @@ fn parse_mutation<T>(
                 .uid
                 .as_ref()
                 .is_some_and(|uid| uid != envelope.metadata().uid())
-            || body.payload_digest != envelope.digest().unwrap_or_default()
+            || body.payload_digest != payload_digest
         {
             return Err(schema_error(
                 "resource envelope identity or digest does not match",
@@ -1256,7 +1259,7 @@ fn parse_mutation<T>(
         {
             return Err(schema_error("typed owner does not match resource metadata"));
         }
-        Some(body.canonical_json.clone())
+        Some(canonical_resource)
     } else {
         None
     };
@@ -1296,6 +1299,12 @@ fn parse_mutation<T>(
         ));
     }
     if mutation.wait_for_reconcile {
+        if trusted.authorization_state.snapshot.policy_revision == 0 {
+            return Err(ResourceError::terminal(
+                ResourceErrorKind::ExpeditedNotAuthorized,
+                "expedited reconcile is disabled during bootstrap",
+            ));
+        }
         if !matches!(
             kind,
             ResourceMutationKind::Create
@@ -1367,44 +1376,64 @@ fn parse_precondition(
     }
 }
 
+fn parse_create_payload(
+    bytes: &[u8],
+) -> Result<(ResourceEnvelope, Vec<u8>, String), ResourceError> {
+    // Create admission validates with a non-authoritative placeholder; the store
+    // must mint and inject the durable UID in the same transaction as insertion.
+    let value = CanonicalJsonValue::parse(bytes)
+        .map_err(|_| schema_error("create resource payload is malformed"))?;
+    let canonical_resource = value.to_canonical_bytes();
+    let mut validation_value = value;
+    let CanonicalJsonValue::Object(root) = &mut validation_value else {
+        return Err(schema_error("create resource payload is malformed"));
+    };
+    let Some(CanonicalJsonValue::Object(metadata)) = root.get_mut("metadata") else {
+        return Err(schema_error("create resource metadata is required"));
+    };
+    if metadata.contains_key("uid") {
+        return Err(schema_error(
+            "create resource payload must not contain an authoritative UID",
+        ));
+    }
+    metadata.insert(
+        "uid".to_owned(),
+        CanonicalJsonValue::String("00000000-0000-4000-8000-000000000000".to_owned()),
+    );
+    let envelope = ResourceEnvelope::from_json(&validation_value.to_canonical_bytes())
+        .map_err(|_| schema_error("create resource payload is malformed"))?;
+    let payload_digest = canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical_resource);
+    Ok((envelope, canonical_resource, payload_digest))
+}
+
 struct ParsedCollection {
     resource_types: Vec<ResourceTypeName>,
     resource_names: Vec<ResourceName>,
     filters: Vec<StoreFilter>,
 }
 
-fn parse_collection_targets(
-    resource_types: &[String],
-    filters: &[wire::ListFilter],
-    verb: ResourceVerb,
-) -> Result<Vec<AuthorizationTarget>, ResourceError> {
-    if resource_types.is_empty() {
-        return Err(schema_error("at least one ResourceType is required"));
-    }
-    let resource_types = resource_types
-        .iter()
-        .map(ResourceTypeName::parse)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| ref_error("ResourceType is invalid"))?;
-    let resource_names = filters
-        .iter()
-        .filter(|filter| filter.field == "metadata.name")
-        .flat_map(|filter| filter.values.iter())
-        .map(ResourceName::parse)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| ref_error("resource-name filter is invalid"))?;
-    let mut targets = Vec::new();
-    for resource_type in resource_types {
-        if resource_names.is_empty() {
+fn collection_targets(parsed: &ParsedCollection, verb: ResourceVerb) -> Vec<AuthorizationTarget> {
+    let target_count = if parsed.resource_names.is_empty() {
+        parsed.resource_types.len()
+    } else {
+        parsed
+            .resource_types
+            .len()
+            .checked_mul(parsed.resource_names.len())
+            .expect("validated collection bounds cannot overflow")
+    };
+    let mut targets = Vec::with_capacity(target_count);
+    for resource_type in &parsed.resource_types {
+        if parsed.resource_names.is_empty() {
             targets.push(AuthorizationTarget {
-                resource_type,
+                resource_type: resource_type.clone(),
                 resource_name: None,
                 verb,
                 subresource: None,
                 execution_ref: None,
             });
         } else {
-            targets.extend(resource_names.iter().cloned().map(|resource_name| {
+            targets.extend(parsed.resource_names.iter().cloned().map(|resource_name| {
                 AuthorizationTarget {
                     resource_type: resource_type.clone(),
                     resource_name: Some(resource_name),
@@ -1415,7 +1444,7 @@ fn parse_collection_targets(
             }));
         }
     }
-    Ok(targets)
+    targets
 }
 
 fn parse_collection_request(
@@ -1667,8 +1696,8 @@ mod tests {
     use protobuf::EnumOrUnknown;
 
     use crate::authz::{
-        BindingScope, BoundSubject, CompiledRole, CompiledRoleBinding, PolicyRule, PolicySet,
-        RelayGrantAuthority,
+        ApiCatalog, BindingScope, BoundSubject, CompiledRole, CompiledRoleBinding, PolicyRule,
+        PolicySet, RelayGrantAuthority,
     };
 
     const GOLDEN_HOST: &[u8] = br#"{"apiVersion":"resources.d2bus.org/v3","metadata":{"configurationGeneration":7,"createdAt":"2026-07-22T00:00:00.000Z","deletionRequestedAt":null,"finalizers":[],"generation":1,"managedBy":"configuration","name":"host-system","ownerRef":null,"revision":1,"uid":"123e4567-e89b-42d3-a456-426614174000","updatedAt":"2026-07-22T00:00:00.000Z","zone":"dev"},"spec":{"providerRef":"Provider/system-core","updatePolicy":{"disruptive":"manual","nonDisruptive":"automatic"}},"status":{"completedAt":null,"conditions":[],"lastReconciledAt":null,"observedGeneration":0,"outcome":null,"phase":"Pending","resource":{},"startedAt":null,"update":{"dependencies":{"count":0,"refs":[]},"disruption":"None","lastAssessedAt":null,"observedGeneration":0,"operationId":null,"owned":{"count":0,"refs":[]},"preserveState":true,"reasons":[],"state":"Unknown","targetGeneration":1}},"type":"Host"}"#;
@@ -1685,6 +1714,9 @@ mod tests {
         commits: AtomicUsize,
         mutation_count: AtomicUsize,
         configuration_revision: AtomicU64,
+        commit_resources: Mutex<Vec<StoredResource>>,
+        schema_response: Mutex<Option<StoredSchema>>,
+        last_canonical_resource: Mutex<Option<Vec<u8>>>,
     }
 
     impl FakeStore {
@@ -1694,6 +1726,9 @@ mod tests {
                 commits: AtomicUsize::new(0),
                 mutation_count: AtomicUsize::new(0),
                 configuration_revision: AtomicU64::new(0),
+                commit_resources: Mutex::new(Vec::new()),
+                schema_response: Mutex::new(None),
+                last_canonical_resource: Mutex::new(None),
             }
         }
 
@@ -1735,7 +1770,11 @@ mod tests {
             &self,
             _request: StoreInspectSchemaRequest,
         ) -> Result<StoredSchema, StoreError> {
-            Err(Self::unavailable())
+            self.schema_response
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(Self::unavailable)
         }
 
         async fn commit(
@@ -1752,9 +1791,13 @@ mod tests {
                     .get(),
                 Ordering::SeqCst,
             );
+            *self.last_canonical_resource.lock().unwrap() = mutation
+                .mutations()
+                .first()
+                .and_then(|mutation| mutation.canonical_resource.clone());
             match *self.mode.lock().unwrap() {
                 CommitMode::Success => Ok(StoreCommitResult {
-                    resources: Vec::new(),
+                    resources: self.commit_resources.lock().unwrap().clone(),
                     revision: ZoneRevision::new(9),
                 }),
                 CommitMode::Conflict => Err(StoreError::new(
@@ -1811,6 +1854,7 @@ mod tests {
 
     fn authorizer(verbs: impl IntoIterator<Item = ResourceVerb>) -> Arc<NativeAuthorizer> {
         let context = subject(None);
+        let catalog = ApiCatalog::standard();
         let verbs = verbs.into_iter().collect::<Vec<_>>();
         let subresources = if verbs.contains(&ResourceVerb::UpdateStatus) {
             vec!["status".to_owned()]
@@ -1823,6 +1867,7 @@ mod tests {
             ResourceRef::parse("Role/test").unwrap(),
             vec![
                 PolicyRule::new(
+                    &catalog,
                     [ResourceTypeName::parse("Host").unwrap()],
                     verbs,
                     [],
@@ -1845,9 +1890,52 @@ mod tests {
             RelayGrantAuthority::None,
         )
         .unwrap();
-        Arc::new(NativeAuthorizer::new(Some(
-            PolicySet::new(4, vec![role], vec![binding]).unwrap(),
-        )))
+        Arc::new(
+            NativeAuthorizer::new(
+                catalog.clone(),
+                Some(PolicySet::new(&catalog, 4, vec![role], vec![binding]).unwrap()),
+            )
+            .unwrap(),
+        )
+    }
+
+    fn authorizer_for_subresource(verb: ResourceVerb, subresource: &str) -> Arc<NativeAuthorizer> {
+        let context = subject(None);
+        let catalog = ApiCatalog::standard();
+        let role = CompiledRole::new(
+            ResourceRef::parse("Role/test").unwrap(),
+            vec![
+                PolicyRule::new(
+                    &catalog,
+                    [ResourceTypeName::parse("Host").unwrap()],
+                    [verb],
+                    [],
+                    [subresource.to_owned()],
+                    [],
+                    [ZoneId::parse("dev").unwrap()],
+                    [],
+                )
+                .unwrap(),
+            ],
+        )
+        .unwrap();
+        let binding = CompiledRoleBinding::new(
+            role.role_ref.clone(),
+            [BoundSubject {
+                subject_ref: context.subject_ref().clone(),
+                subject_uid: context.subject_uid().clone(),
+            }],
+            BindingScope::default(),
+            RelayGrantAuthority::None,
+        )
+        .unwrap();
+        Arc::new(
+            NativeAuthorizer::new(
+                catalog.clone(),
+                Some(PolicySet::new(&catalog, 4, vec![role], vec![binding]).unwrap()),
+            )
+            .unwrap(),
+        )
     }
 
     fn request_meta() -> MessageField<wire::RequestMeta> {
@@ -1892,11 +1980,45 @@ mod tests {
         MessageField::some(body)
     }
 
+    fn create_payload() -> Vec<u8> {
+        let mut value = CanonicalJsonValue::parse(GOLDEN_HOST).unwrap();
+        let CanonicalJsonValue::Object(root) = &mut value else {
+            unreachable!()
+        };
+        let Some(CanonicalJsonValue::Object(metadata)) = root.get_mut("metadata") else {
+            unreachable!()
+        };
+        metadata.remove("uid");
+        value.to_canonical_bytes()
+    }
+
+    fn create_body(bytes: Vec<u8>) -> MessageField<wire::ResourceEnvelopeBytes> {
+        let canonical = CanonicalJsonValue::parse(&bytes)
+            .unwrap()
+            .to_canonical_bytes();
+        let mut body = wire::ResourceEnvelopeBytes::new();
+        body.identity = identity();
+        body.payload_digest = canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical);
+        body.canonical_json = bytes;
+        MessageField::some(body)
+    }
+
+    fn stored_resource(bytes: usize) -> StoredResource {
+        StoredResource {
+            resource_ref: ResourceRef::parse("Host/host-system").unwrap(),
+            zone: ZoneId::parse("dev").unwrap(),
+            uid: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+            generation: ResourceGeneration::new(1).unwrap(),
+            revision: ZoneRevision::new(9),
+            canonical_json: vec![b'x'; bytes],
+            payload_digest: format!("sha256:{}", "1".repeat(64)),
+        }
+    }
+
     fn trusted<T>(request: T, controller_generation: Option<u64>) -> TrustedRequest<T> {
-        TrustedRequest::from_component_session(
+        TrustedRequest::from_authenticated_bus(
             subject(controller_generation),
             state(controller_generation),
-            false,
             request,
         )
     }
@@ -1930,7 +2052,7 @@ mod tests {
         let mut request = wire::CreateRequest::new();
         request.meta = request_meta();
         let mut value = mutation(wire::MutationKind::MUTATION_KIND_CREATE);
-        value.resource = body(GOLDEN_HOST.to_vec());
+        value.resource = create_body(create_payload());
         let mut owner = wire::ResourceIdentity::new();
         owner.zone = "dev".to_owned();
         owner.resource_type = "Provider".to_owned();
@@ -1969,20 +2091,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stored_bytes_are_the_bytes_validated_by_the_digest() {
+        let store = Arc::new(FakeStore::new(CommitMode::Success));
+        let service = ResourceService::new(Arc::clone(&store), authorizer([ResourceVerb::Create]));
+        let mut request = wire::CreateRequest::new();
+        request.meta = request_meta();
+        let mut value = mutation(wire::MutationKind::MUTATION_KIND_CREATE);
+        let canonical_create = create_payload();
+        let mut noncanonical = b"\n  ".to_vec();
+        noncanonical.extend_from_slice(&canonical_create);
+        noncanonical.push(b'\n');
+        value.resource = create_body(noncanonical);
+        request.mutation = MessageField::some(value);
+
+        let response = service.create(trusted(request, None)).await;
+
+        assert!(response.error.is_none());
+        assert_eq!(
+            store.last_canonical_resource.lock().unwrap().as_deref(),
+            Some(canonical_create.as_slice())
+        );
+    }
+
+    #[tokio::test]
     async fn create_rejects_every_caller_supplied_uid_field() {
         let store = Arc::new(FakeStore::new(CommitMode::Success));
         let service = ResourceService::new(Arc::clone(&store), authorizer([ResourceVerb::Create]));
-        for uid_location in 0..2 {
+        for uid_location in 0..3 {
             let mut request = wire::CreateRequest::new();
             request.meta = request_meta();
             let mut value = mutation(wire::MutationKind::MUTATION_KIND_CREATE);
-            value.resource = body(GOLDEN_HOST.to_vec());
+            value.resource = create_body(create_payload());
             if uid_location == 0 {
                 value.target.mut_or_insert_default().uid =
                     Some("123e4567-e89b-42d3-a456-426614174000".to_owned());
-            } else {
+            } else if uid_location == 1 {
                 value.precondition.mut_or_insert_default().expected_uid =
                     Some("123e4567-e89b-42d3-a456-426614174000".to_owned());
+            } else {
+                value.resource = body(GOLDEN_HOST.to_vec());
             }
             request.mutation = MessageField::some(value);
             let response = service.create(trusted(request, None)).await;
@@ -1994,6 +2141,43 @@ mod tests {
         assert_eq!(store.commits.load(Ordering::SeqCst), 0);
     }
 
+    #[test]
+    fn expedited_reconcile_is_rejected_in_both_bootstrap_phases() {
+        let phases = [
+            crate::authz::BootstrapPhase::Unprovisioned {
+                zone: ZoneId::parse("dev").unwrap(),
+                controller_generation: ControllerGeneration::new(11).unwrap(),
+                provider_generation: ResourceGeneration::new(12).unwrap(),
+            },
+            crate::authz::BootstrapPhase::Provisioned {
+                zone: ZoneId::parse("dev").unwrap(),
+                system_core_uid: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174001")
+                    .unwrap(),
+                system_minijail_uid: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174002")
+                    .unwrap(),
+                controller_generation: ControllerGeneration::new(11).unwrap(),
+                provider_generation: ResourceGeneration::new(12).unwrap(),
+            },
+        ];
+
+        for phase in phases {
+            let mut authorization_state = state(None);
+            authorization_state.snapshot.policy_revision = 0;
+            authorization_state.bootstrap_phase = phase;
+            let mut value = mutation(wire::MutationKind::MUTATION_KIND_CREATE);
+            value.resource = create_body(create_payload());
+            value.wait_for_reconcile = true;
+            value.reconcile_deadline_ms = 1;
+            let trusted =
+                TrustedRequest::from_authenticated_bus(subject(None), authorization_state, ());
+            let route =
+                parse_mutation_route(&value, Some(ResourceMutationKind::Create), &trusted).unwrap();
+
+            let error = parse_mutation(&value, &route, &trusted).unwrap_err();
+            assert_eq!(error.kind(), ResourceErrorKind::ExpeditedNotAuthorized);
+        }
+    }
+
     #[tokio::test]
     async fn unknown_protobuf_fields_are_rejected_after_authorization() {
         let store = Arc::new(FakeStore::new(CommitMode::Success));
@@ -2001,7 +2185,7 @@ mod tests {
         let mut request = wire::CreateRequest::parse_from_bytes(&[0x98, 0x06, 0x01]).unwrap();
         request.meta = request_meta();
         let mut value = mutation(wire::MutationKind::MUTATION_KIND_CREATE);
-        value.resource = body(GOLDEN_HOST.to_vec());
+        value.resource = create_body(create_payload());
         request.mutation = MessageField::some(value);
 
         let response = service.create(trusted(request, None)).await;
@@ -2022,7 +2206,7 @@ mod tests {
         let mut request = wire::CreateRequest::new();
         request.meta = request_meta();
         let mut value = mutation(wire::MutationKind::MUTATION_KIND_CREATE);
-        value.resource = body(GOLDEN_HOST.to_vec());
+        value.resource = create_body(create_payload());
         request.mutation = MessageField::some(value);
 
         let response = service.create(trusted(request, None)).await;
@@ -2042,7 +2226,7 @@ mod tests {
         let mut request = wire::CreateRequest::new();
         request.meta = request_meta();
         let mut value = mutation(wire::MutationKind::MUTATION_KIND_CREATE);
-        value.resource = body(GOLDEN_HOST.to_vec());
+        value.resource = create_body(create_payload());
         request.mutation = MessageField::some(value);
 
         let response = service.create(trusted(request, None)).await;
@@ -2109,6 +2293,136 @@ mod tests {
         assert_eq!(store.commits.load(Ordering::SeqCst), 1);
         assert_eq!(store.mutation_count.load(Ordering::SeqCst), 2);
         assert_eq!(store.configuration_revision.load(Ordering::SeqCst), 6);
+    }
+
+    #[tokio::test]
+    async fn mixed_zone_batch_is_rejected_before_admission() {
+        let store = Arc::new(FakeStore::new(CommitMode::Success));
+        let service = ResourceService::new(Arc::clone(&store), authorizer([ResourceVerb::Delete]));
+        let mut batch = wire::CommitBatchRequest::new();
+        batch.meta = request_meta();
+        let dev = mutation(wire::MutationKind::MUTATION_KIND_DELETE);
+        let mut personal = mutation(wire::MutationKind::MUTATION_KIND_DELETE);
+        personal.target.mut_or_insert_default().zone = "personal".to_owned();
+        batch.mutations = vec![dev, personal];
+
+        let response = service.commit_batch(trusted(batch, None)).await;
+
+        assert_eq!(
+            error_kind(&response.error),
+            wire::ResourceErrorKind::RESOURCE_ERROR_KIND_AUTHORIZATION_DENIED
+        );
+        assert_eq!(store.commits.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn list_and_watch_validate_bounds_before_target_expansion() {
+        let mut filters = Vec::new();
+        let mut name_filter = wire::ListFilter::new();
+        name_filter.field = "metadata.name".to_owned();
+        name_filter.values = vec!["host-system".to_owned(); MAX_FILTER_VALUES.saturating_add(1)];
+        filters.push(name_filter);
+        assert!(
+            parse_collection_request(
+                &vec!["Host".to_owned(); MAX_LIST_RESOURCE_TYPES],
+                &filters,
+                MAX_LIST_RESOURCE_TYPES,
+                MAX_LIST_FILTERS,
+            )
+            .is_err()
+        );
+        assert!(
+            parse_collection_request(
+                &vec!["Host".to_owned(); MAX_WATCH_RESOURCE_TYPES + 1],
+                &[],
+                MAX_WATCH_RESOURCE_TYPES,
+                MAX_WATCH_FILTERS,
+            )
+            .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn batch_and_schema_responses_enforce_the_byte_limit() {
+        let store = Arc::new(FakeStore::new(CommitMode::Success));
+        store
+            .commit_resources
+            .lock()
+            .unwrap()
+            .extend((0..2).map(|_| stored_resource(MAX_RESPONSE_CANONICAL_BYTES / 2)));
+        let batch_service =
+            ResourceService::new(Arc::clone(&store), authorizer([ResourceVerb::Delete]));
+        let mut batch = wire::CommitBatchRequest::new();
+        batch.meta = request_meta();
+        batch
+            .mutations
+            .push(mutation(wire::MutationKind::MUTATION_KIND_DELETE));
+        let response = batch_service.commit_batch(trusted(batch, None)).await;
+        assert_eq!(
+            error_kind(&response.error),
+            wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_SCHEMA_INVALID
+        );
+        assert!(response.resources.is_empty());
+
+        *store.schema_response.lock().unwrap() = Some(StoredSchema {
+            resource_type: ResourceTypeName::parse("Host").unwrap(),
+            canonical_json: vec![b'x'; MAX_RESPONSE_CANONICAL_BYTES],
+            payload_digest: format!("sha256:{}", "1".repeat(64)),
+        });
+        let schema_service = ResourceService::new(
+            Arc::clone(&store),
+            authorizer_for_subresource(ResourceVerb::Get, "schema"),
+        );
+        let mut request = wire::InspectSchemaRequest::new();
+        request.meta = request_meta();
+        request.resource_type = "Host".to_owned();
+        let response = schema_service.inspect_schema(trusted(request, None)).await;
+        assert_eq!(
+            error_kind(&response.error),
+            wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_SCHEMA_INVALID
+        );
+        assert!(response.schema.is_none());
+    }
+
+    #[tokio::test]
+    async fn upgrade_response_enforces_the_byte_limit() {
+        #[derive(Debug)]
+        struct OversizeUpgrade;
+
+        impl UpgradeDispatcher for OversizeUpgrade {
+            async fn dispatch(
+                &self,
+                _request: AuthorizedUpgrade,
+            ) -> Result<UpgradeResult, ResourceError> {
+                Ok(UpgradeResult {
+                    resource: stored_resource(MAX_RESPONSE_CANONICAL_BYTES),
+                    plan: Vec::new(),
+                    revision: ZoneRevision::new(9),
+                })
+            }
+        }
+
+        let store = Arc::new(FakeStore::new(CommitMode::Success));
+        let service = ResourceService::with_upgrade(
+            store,
+            authorizer([ResourceVerb::UpdateSpec]),
+            Arc::new(OversizeUpgrade),
+        );
+        let mut request = wire::UpgradeRequest::new();
+        request.meta = request_meta();
+        request.target = identity();
+        request.action = EnumOrUnknown::new(wire::UpgradeAction::UPGRADE_ACTION_ASSESS);
+        let mut precondition = wire::Precondition::new();
+        precondition.kind =
+            EnumOrUnknown::new(wire::PreconditionKind::PRECONDITION_KIND_EXACT_REVISION);
+        precondition.expected_revision = Some(1);
+        request.precondition = MessageField::some(precondition);
+        let response = service.upgrade(trusted(request, None)).await;
+        assert_eq!(
+            error_kind(&response.error),
+            wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_SCHEMA_INVALID
+        );
+        assert!(response.resource.is_none());
     }
 
     #[test]

@@ -16,7 +16,6 @@ pub struct ResourceClient<S, U> {
     service: Arc<ResourceService<S, U>>,
     subject: Arc<AuthenticatedSubjectContext>,
     state: AuthorizationState,
-    relay_hop: bool,
 }
 
 impl<S, U> ResourceClient<S, U>
@@ -24,17 +23,15 @@ where
     S: ResourceStore,
     U: UpgradeDispatcher,
 {
-    pub fn from_component_session(
+    pub(crate) fn from_authenticated_bus(
         service: Arc<ResourceService<S, U>>,
         subject: Arc<AuthenticatedSubjectContext>,
         state: AuthorizationState,
-        relay_hop: bool,
     ) -> Self {
         Self {
             service,
             subject,
             state,
-            relay_hop,
         }
     }
 
@@ -106,10 +103,9 @@ where
     }
 
     fn trusted<T>(&self, request: T) -> TrustedRequest<T> {
-        TrustedRequest::from_component_session(
+        TrustedRequest::from_authenticated_bus(
             Arc::clone(&self.subject),
             self.state.clone(),
-            self.relay_hop,
             request,
         )
     }
