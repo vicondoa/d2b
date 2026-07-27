@@ -21600,7 +21600,7 @@
       ],
       "specId" : "ADR-046-resource-store-redb",
       "topologicalRank" : 4,
-      "validation" : "Literal codec golden vectors and decode-rejection cases; hermetic small-scale transaction semantics that make no scale claim; compile tests for `Send` futures and generic fake injection; proof-origin, single-owner binding, cross-store rejection, and in-transaction revision-recheck tests for sealed admission evidence; production-backend conformance tests proving verified-only mutation, no independent write path, and the required structural/atomic checks; security review of each registered backend; policy test forbidding resource-store dependency on API/RBAC symbols; exact redb pin/feature assertion",
+      "validation" : "Literal codec golden vectors and decode-rejection cases; hermetic small-scale transaction semantics that make no scale claim; compile tests for `Send` futures and generic fake injection; proof-origin, single-owner binding, cross-store rejection, and in-transaction revision-recheck tests for sealed admission evidence; policy test forbidding resource-store dependency on API/RBAC symbols; exact redb pin/feature assertion",
       "wave" : "W0"
     },
     {
@@ -21671,7 +21671,7 @@
       ],
       "specId" : "ADR-046-resource-store-redb",
       "topologicalRank" : 5,
-      "validation" : "Successful SPIKE-01 evidence; unit/property/fault tests and the hard benchmark including the 10,000-resource/100-watch RSS result; owned-fd and `FD_CLOEXEC` checks for direct and `SCM_RIGHTS` receipt plus fork/exec inheritance probes; exact dependency/feature-policy lint; queue/pool constant assertions; paused-clock read-expiry tests; no reduced-durability call-site lint",
+      "validation" : "Successful SPIKE-01 evidence; conformance tests proving verified-only mutation, no independent write path, and the required structural and atomic checks; security review of each registered backend; unit/property/fault tests and the hard benchmark including the 10,000-resource/100-watch RSS result; owned-fd and `FD_CLOEXEC` checks for direct and `SCM_RIGHTS` receipt plus fork/exec inheritance probes; exact dependency/feature-policy lint; queue/pool constant assertions; paused-clock read-expiry tests; no reduced-durability call-site lint",
       "wave" : "W1"
     },
     {
