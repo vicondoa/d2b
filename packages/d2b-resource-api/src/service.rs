@@ -510,9 +510,22 @@ where
             Ok(routes) => routes,
             Err(error) => return batch_error(error),
         };
+        let batch_zone = subject_zone(&trusted);
+        if routes.iter().any(|route| {
+            route.identity.zone != batch_zone
+                || route
+                    .owner
+                    .as_ref()
+                    .is_some_and(|owner| owner.zone != batch_zone)
+        }) {
+            return batch_error(ResourceError::terminal(
+                ResourceErrorKind::AuthorizationDenied,
+                "batch route is outside the authenticated Zone",
+            ));
+        }
         let auth = AuthorizationRequest {
             method: ApiMethod::CommitBatch,
-            zone: subject_zone(&trusted),
+            zone: batch_zone,
             targets: routes
                 .iter()
                 .flat_map(|item| item.authorizations.iter().cloned())
@@ -2109,6 +2122,26 @@ mod tests {
         assert_eq!(store.commits.load(Ordering::SeqCst), 1);
         assert_eq!(store.mutation_count.load(Ordering::SeqCst), 2);
         assert_eq!(store.configuration_revision.load(Ordering::SeqCst), 6);
+    }
+
+    #[tokio::test]
+    async fn mixed_zone_batch_is_rejected_before_admission() {
+        let store = Arc::new(FakeStore::new(CommitMode::Success));
+        let service = ResourceService::new(Arc::clone(&store), authorizer([ResourceVerb::Delete]));
+        let mut batch = wire::CommitBatchRequest::new();
+        batch.meta = request_meta();
+        let dev = mutation(wire::MutationKind::MUTATION_KIND_DELETE);
+        let mut personal = mutation(wire::MutationKind::MUTATION_KIND_DELETE);
+        personal.target.mut_or_insert_default().zone = "personal".to_owned();
+        batch.mutations = vec![dev, personal];
+
+        let response = service.commit_batch(trusted(batch, None)).await;
+
+        assert_eq!(
+            error_kind(&response.error),
+            wire::ResourceErrorKind::RESOURCE_ERROR_KIND_AUTHORIZATION_DENIED
+        );
+        assert_eq!(store.commits.load(Ordering::SeqCst), 0);
     }
 
     #[test]
