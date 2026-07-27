@@ -450,6 +450,8 @@ pre-start effects, fine-grained ACL/device policy, or restart semantics.
 | Data migration | Full reset; no role snapshot import |
 | Validation | Shared conformance/fault/latency tests |
 | Removal proof | Role/DAG path removed only per role disposition |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-process-002
 
@@ -465,3 +467,5 @@ pre-start effects, fine-grained ACL/device policy, or restart semantics.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Identical schema/status conformance plus provider-specific adoption |
 | Removal proof | Old helpers retained until host/user/guest parity |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |

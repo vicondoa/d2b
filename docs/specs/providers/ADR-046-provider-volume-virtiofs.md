@@ -1408,6 +1408,8 @@ it does not import session implementation internals directly.
 | Data migration | v3.0 reset; socket path format changes |
 | Validation | `tests/argv_golden.rs`: 14 migrated tests + `no_extra_args_ever_emitted`, `socket_path_is_not_in_args`, `shared_dir_is_fd_path`, `path_length_within_sunpath_limit`; `tests/socket_path_privacy.rs`: `socket_path_not_in_export_status`, `socket_path_not_in_volume_status`, `socket_path_not_in_audit_record`; `tests/schema_conformance.rs`: `process_spec_readiness_class_is_provider_defined`, `process_spec_readiness_has_no_kind_or_period_fields`, `process_spec_budget_cpu_request_limit_nested`, `process_spec_budget_memory_request_limit_nested`, `process_spec_budget_pids_limit_present`, `process_spec_budget_fds_limit_present`, `process_spec_sandbox_no_new_privileges_true`, `process_spec_sandbox_read_only_root_true`, `process_spec_no_host_uid_gid_in_spec` |
 | Removal proof | `packages/d2b-host/src/virtiofsd_argv.rs` removed only after parity confirmed by argv-shape gate |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-vvfs-export-001 - Export ResourceType declaration
 
@@ -1422,6 +1424,8 @@ it does not import session implementation internals directly.
 | Data migration | None; new type |
 | Validation | `tests/schema_conformance.rs`: `export_schema_canonical_json_stable`, `export_spec_denied_unknown_fields`, `export_status_exportready_is_boolean_not_path`, `export_owner_must_be_volume` |
 | Removal proof | N/A (new type) |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-vvfs-002 - ADR 0021 user-namespace conformance kit
 
@@ -1436,6 +1440,8 @@ it does not import session implementation internals directly.
 | Data migration | v3.0 reset; current `adr_carve_out` field in `SpawnRunnerPlanInput` removed; ADR 0021 path is now the default |
 | Validation | `tests/adr021_invariant.rs`: `virtiofsd_capability_classes_must_be_empty`, `virtiofsd_start_root_must_be_false`, `virtiofsd_no_new_privileges_must_be_true`, `virtiofsd_read_only_root_must_be_true`, `process_spec_has_no_host_uid_gid`, `sandbox_namespace_never_emitted`, `user_ns_single_entry_single_uid_mapping`, `uid_map_write_ordering_uid_setgroups_gid`, `child_setuid_in_ns_not_host_uid`, `clone_newns_not_in_clone3_flags`, `child_exits_user_ns_sync_on_pipe_eof` |
 | Removal proof | `adr_carve_out` field and virtiofsd-specific branch in current `SpawnRunnerPlanInput` removed only after v3 LaunchTicket covers all virtiofsd spawn cases |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-vvfs-003 - Export lifecycle controller
 
@@ -1450,6 +1456,8 @@ it does not import session implementation internals directly.
 | Data migration | Current `ProcessRole::Virtiofsd` dag nodes replaced by Export → Process resource lifecycle |
 | Validation | `tests/export_lifecycle.rs`: `export_create_spawns_virtiofsd_process`, `export_ready_when_socket_present`, `export_delete_terminates_virtiofsd`, `export_delete_waits_for_guest_mount_absent`, `export_delete_with_guest_unreachable_holds_finalizer_degraded`, `export_proof_of_ns_death_clears_finalizer`; `tests/multi_attachment.rs`: `two_guests_get_separate_exports_and_processes`, `process_failure_does_not_affect_sibling_export`; `tests/schema_conformance.rs`: `provider_state_set_volume_created_on_install`, `provider_state_set_volume_owner_ref_is_provider`, `provider_state_set_volume_layout_principal_is_user_not_component_principal`, `provider_state_set_no_cross_component_volume_sharing` |
 | Removal proof | `ProcessRole::Virtiofsd` branch in `d2bd/src/supervisor/dag.rs` removed only after v3 controller passes all lifecycle tests |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-vvfs-004 - readiness and guest-mount probe
 
@@ -1464,6 +1472,8 @@ it does not import session implementation internals directly.
 | Data migration | Current `UnixSocketExists` readiness kind adapted to FD-based path resolution |
 | Validation | `tests/export_lifecycle.rs` (extended); `integration/guest_mount_readiness/`: virtiofsd launches, socket appears, guest-control probe returns MountReady, guestMountReady flips to true; probe returns MountAbsent on umount |
 | Removal proof | Current `UnixSocketExists` readiness path in `d2bd` retired after volume-virtiofs readiness covers all cases |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-vvfs-005 - store-view attachment and marker prerequisite
 
@@ -1478,6 +1488,8 @@ it does not import session implementation internals directly.
 | Data migration | Current `roStoreSharedDir` redirect in `processes-json.nix` replaced by `ro-store` View definition in the store-view Volume resource |
 | Validation | `integration/store_view_readonly/`: mount from guest reads closure paths; no host-store path escapes; `tests/argv_golden.rs`: `store_view_shared_dir_is_live_not_nix_store`; `tests/export_lifecycle.rs`: `store_view_launch_waits_for_marker` |
 | Removal proof | `nixos-modules/processes-json.nix` `virtiofsdRunner` block and `roStoreSharedDir` sentinel removed only after store-view virtiofs Export resources pass parity gate |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-vvfs-006 - Nix resource compiler integration and cleanup
 
@@ -1492,6 +1504,8 @@ it does not import session implementation internals directly.
 | Data migration | `d2b.vms.<vm>.shares` virtiofs entries → Volume attachments; `d2b.vms.<vm>` store-view auto-emission replaces `nixos-modules/store.nix` virtiofsd portion |
 | Validation | nix-unit: `store_view_volume_auto_emitted_per_guest`, `volume_virtiofs_attachment_canonical_json`, `virtiofs_provider_emitted_when_attachment_configured`, `vfd_user_emitted_per_volume`, `second_read_write_attachment_rejected_at_eval`, `transport_virtiofs_requires_provider_installed`; drift-check gate for `nixos-modules/processes-json.nix` virtiofsdRunner removal |
 | Removal proof | `nixos-modules/processes-json.nix` virtiofsdRunner block, `nixos-modules/minijail-profiles.nix` virtiofsdProfiles removed only after Nix resource compiler produces parity output and all nix-unit cases pass |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 

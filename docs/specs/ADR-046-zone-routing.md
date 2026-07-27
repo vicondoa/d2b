@@ -2532,6 +2532,8 @@ The following transitions are NOT simple textual renames:
 | Data migration | Full reset; no v2 Realm route compatibility |
 | Validation | Golden advertisement/path/failure vectors shared by Rust/Nix; property tests for NCA/loop/allocated-capability narrowing; replay-window tests; hop-count tests |
 | Removal proof | v3 old `RealmPath` route types retired after zone-routing engine is live and all callers switched |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-routing-002
 
@@ -2548,6 +2550,8 @@ The following transitions are NOT simple textual renames:
 | Data migration | None (pure in-memory engine) |
 | Validation | Copy exact `route_engine.rs` test suite adapted to ZonePath; add relay/hop-count/RBAC-narrowing/shortcut integration tests |
 | Removal proof | `RouteTreeEngine` on v3 RealmPath types retired after ZoneRouteEngine is exercised in all bus routing paths |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-routing-003
 
@@ -2564,6 +2568,8 @@ The following transitions are NOT simple textual renames:
 | Data migration | None; ZoneLink resources created from Nix configuration at v3 reset |
 | Validation | Longest-suffix match vectors over sealed topology; child-local ZoneLink spec validation; resolver rejects unknown/stale/withdrawn/unauthenticated route projections; parent-store fixture contains no ZoneLink row or handler |
 | Removal proof | `RealmEntrypointTable` retired after all host-daemon routing paths use ZoneEntrypointResolver |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-routing-004
 
@@ -2581,6 +2587,8 @@ The following transitions are NOT simple textual renames:
 | Data migration | New ZoneLink resources from Nix configuration; no prior enrollment compatibility |
 | Validation | Session lifecycle tests; state-machine transition tests `Unenrolled -> IKpsk2 -> EnrollmentCommitted -> KK -> Ready`; fault-injection cells for each crash window (consumed-PSK crash fails closed `bootstrap-psk-consumed` and refuses PSK reuse; persist crash before enrollment commit stays `Unenrolled`; teardown crash re-derives `Unenrolled` from the durable invalidation marker); old-KK-rejection cell asserting a peer presenting a pre-revocation static key is refused before any resource exchange; resource-traffic-before-`Ready` rejection cell; key-lifecycle cells: an expired bootstrap PSK is refused with `bootstrap-psk-expired` and issuing a fresh PSK invalidates any prior outstanding PSK; a failed IKpsk2 handshake burns the PSK and returns `Unenrolled` with `bootstrap-handshake-failed`; an enrolled KK session past `KK_SESSION_MAX_LIFETIME_MS` performs a fresh enrolled KK rehandshake from `EnrollmentCommitted` (new `linkEpoch`, no PSK, no IKpsk2 reuse); an enrolled KK key mismatch fails closed `zone-link-enrollment-key-mismatch`, stays `EnrollmentCommitted`/`Degraded`, and retries only under the bounded reconnect budget; a `EnrollmentCommitted` link never downgrades to IKpsk2 or an unauthenticated pattern and only a durable revocation returns it to `Unenrolled`; reconnect/disabled/revocation/allocator-policy-change; revocation invalidates both enrollment and active session and re-enrollment requires a fresh PSK plus new IKpsk2; intent queue drain; cursor resync; advertisement renewal timing; fake-child tests; structural metric descriptor test asserts `vm`, `zone`, `zone_id`, `zone_uid`, and `link_name_hash` are absent and a ZoneLink-name canary never enters label values |
 | Removal proof | `RemoteNodeRegistry` retired after all enrolled peer routing moves to ZoneLink handler |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-routing-005
 
@@ -2598,6 +2606,8 @@ The following transitions are NOT simple textual renames:
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | End-to-end K0→K1→K2 resource call; relay-missing, target-verb-missing, wildcard/self-asserted relay, hop-limit, and FD-rejection tests; prove relay alone grants no CRUD/local lifecycle; idempotency namespace collision tests; cancellation delivery tests; watch resync tests |
 | Removal proof | Old direct-dispatch and gateway-backed paths retired per bus routing parity |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-routing-006
 
@@ -2614,6 +2624,8 @@ The following transitions are NOT simple textual renames:
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | All v3 baseline route_engine test cases must pass; p95 benchmark gate |
 | Removal proof | Not applicable |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-routing-007
 
@@ -2630,6 +2642,8 @@ The following transitions are NOT simple textual renames:
 | Data migration | None (new infrastructure) |
 | Validation | Port all `component_session.rs` tests; port `noise_vectors.rs`; add a ZoneLink IKpsk2 allocator-PSK bootstrap-enrollment test and the follow-on KK enrollment test; add ZoneLink reconnect/revocation integration test |
 | Removal proof | Not applicable (new crate) |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-routing-008
 
@@ -2646,6 +2660,8 @@ The following transitions are NOT simple textual renames:
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Port all `unix_session.rs` tests; add allocator-issued FD handoff test; add inherited-socket no-SD-listen test |
 | Removal proof | Not applicable (new infrastructure) |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-routing-009
 
@@ -2662,6 +2678,8 @@ The following transitions are NOT simple textual renames:
 | Data migration | None (new contract module) |
 | Validation | Updated `negotiate_offer`/`validate_exact` round-trip tests for v3 purposes; canonical encoding stability test; closed-enum exhaustiveness tests |
 | Removal proof | v2 contracts remain; v3 module is additive |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-routing-010
 
@@ -2678,6 +2696,8 @@ The following transitions are NOT simple textual renames:
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Port `client.rs` tests; add ZonePath routing test; add cross-Zone K0→K1 end-to-end test; add retry/cancellation forwarding test |
 | Removal proof | v2 `d2b-client` package remains for ADR45 callers; v3 `d2b-resource-client` is additive |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-routing-014
 
@@ -2694,6 +2714,8 @@ The following transitions are NOT simple textual renames:
 | Data migration | None (pure runtime) |
 | Validation | Port inline registry lifecycle/drain/shutdown tests; add v3 ZonePath routing test; prove provider admission cannot self-assert relay and each forward requires relay plus the target verb |
 | Removal proof | Provider registry is v3 core infrastructure; no retirement |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-routing-015
 
@@ -2710,6 +2732,8 @@ The following transitions are NOT simple textual renames:
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Port `audit_capacity_is_closed_and_bounded`; add v3 bootstrap-via-allocator test; add conformance test for new Provider ResourceType schema |
 | Removal proof | Provider toolkit is v3 core infrastructure; no retirement |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-routing-016
 
@@ -2726,6 +2750,8 @@ The following transitions are NOT simple textual renames:
 | Data migration | None; v3 Zone service is new; no v2 realm-service compatibility |
 | Validation | Bootstrap/enroll/resolve-route/shortcut integration tests against a child-local fake ZoneLink; topology list/inspect/watch golden vectors contain exact `{ childZone, parentZone }` rows plus authenticated status and no ZoneLink fields; stale/withdrawn/unauthenticated projection tests; parent-store no-row/no-handler test; relay-plus-target-verb RBAC tests; initial IKpsk2 bootstrap-enrollment test consuming the allocator-issued single-use PSK, follow-on KK enrollment test, KK reconnect test while enrollment remains valid, and fresh IKpsk2 bootstrap test after revocation; shortcut ZonePath addressing test; concurrent dispatch bound test (64 in-flight) |
 | Removal proof | `RealmServiceServer` on `d2b.realm.v2` retires after `ZoneServiceServer` handles all routing; display-session path migrates separately as part of Provider resource work |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-routing-011
 
@@ -2742,6 +2768,8 @@ The following transitions are NOT simple textual renames:
 | Data migration | None; Zone options are new; Realm options retained until migration PR |
 | Validation | `nix-unit: zone-name-regex`, all five `nix-unit: zone-parent-*` vectors, `nix-unit: zone-link-credential-ref`, `nix-unit: zone-link-child-name`, `nix-unit: zone-link-one-uplink`, `nix-unit: zone-link-closed-spec`, `nix-unit: zone-link-limits`, `nix-unit: transport-settings-secret-key`; add `drift: standard-resource-type-registry` asserting the generated standard subset is exactly all 19 canonical types with no omission/addition/duplicate/reordering, plus `drift: zone-nix-options` (`xtask gen-zone-nix-options && git diff --exit-code`); run `make nix-unit-pin` after adding eval cases |
 | Removal proof | `nixos-modules/options-realms-workloads.nix` `d2b.realms` namespace retires after all hosts migrate to `d2b.zones` |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-routing-012
 
@@ -2758,6 +2786,8 @@ The following transitions are NOT simple textual renames:
 | Data migration | None; new artifact file |
 | Validation | `drift: zone-resource-schema`, `drift: zone-nix-options`, `build: zone-bundle-deterministic`, `build: parent-topology-sealed`, `build: child-local-zonelink-bundle` (K0 has no ZoneLink; K1 contains its self-matching ZoneLink and same-Zone transport Provider; neither is copied to K0), `build: zone-link-exact-six-fields`, `build: transport-settings-unknown-field`, `build: transport-credential-ref`, `build: missing-transport-provider`; run `make flake-matrix-pin` after adding flake checks |
 | Removal proof | `realm-controllers.json` artifact retires after Zone runtime is live and all hosts migrated |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-routing-013
 
@@ -2774,3 +2804,5 @@ The following transitions are NOT simple textual renames:
 | Data migration | None; new runtime component |
 | Validation | `host-integration: cleanup-removed-zonelink`, `host-integration: rollback-restores-zonelink`, `host-integration: dynamic-child-not-deleted`, `host-integration: zonelink-no-reciprocal-row`; unit tests: deterministic generationId, no-op on same generationId, cross-ownership invariant enforcement, prior-bundle write/prune cycle, UpdateSpec canonical comparison, store-transaction-then-audit-append ordering, exactly-once audit dedup; activation-ordering tests: the atomic `generation.json` commit is performed before any intent is queued (before-rename ordering) and reconcile is notified only after the commit returns (before-notify ordering); restart-adoption of a committed active generation whose staged bundle integrity-verifies; quarantine of an ambiguous or interrupted generation with continued service from the recorded prior pointer; cleanup-order (adopt or quarantine before any prune, and no prune of a bundle that is still a rollback target or an in-flight Delete source) |
 | Removal proof | `realm_access_resolver.rs` (B) retires after `d2b-core-controller` configuration tracking is live; `RealmControllersJson` (C) retires after all hosts migrated to Zone bundles |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |

@@ -1949,6 +1949,8 @@ class.
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
 | Validation | `session_state_machine.rs`, `session_ring.rs`, `cancel_propagation.rs`, `session_timeout.rs`, `fair_queue.rs`, and `cid_isolation.rs` verify queue/active/completed/timeout transitions, ring eviction, LeaseId stale-release denial, cancel-all-CIDs, fair timeout, and per-session CID isolation with no daemon-global lease state or ceremony Resource. |
 | Removal proof | ADR046-security-key-030 deletes the superseded daemon-internal `packages/d2bd/src/security_key.rs` `SecurityKeyState`, `LeaseState`, `SkRegistry`, and accept-loop ownership after the provider relay/session tests pass. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-key-002
 
@@ -1963,6 +1965,8 @@ class.
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
 | Validation | `host_relay_guest_frontend/` integration fixture, `device_grant_no_path.rs`, `descriptor_validation.rs`, and `cancel_propagation.rs` prove relay fd injection, ComponentSession transport, cancel propagation, and absence of daemon-internal socket proxying. |
 | Removal proof | ADR046-security-key-030 and ADR046-security-key-031 remove `start_sk_accept_loop`, `SkAcceptHandle`, `relay_one_ceremony`, and the daemon-internal Unix socket proxy bind from `packages/d2bd/src/security_key.rs` and `packages/d2bd/src/lib.rs`. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-key-003
 
@@ -1977,6 +1981,8 @@ class.
 | Data migration | Full d2b 3.0 reset; no frontend session state import |
 | Validation | `host_relay_guest_frontend/`, `device_grant_no_path.rs`, `descriptor_validation.rs`, and guest Nix migration tests prove UHID fd injection, no `/dev/uhid` path, ComponentSession client use, and no raw `framing.rs`/`vsock.rs` protocol. |
 | Removal proof | ADR046-security-key-032 removes the legacy `d2b-sk-frontend.service` unit declaration, and the v3 frontend excludes the obsolete `packages/d2b-sk-frontend/src/framing.rs` and `vsock.rs` raw transport behavior. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-key-004
 
@@ -1991,6 +1997,8 @@ class.
 | Data migration | Full d2b 3.0 reset; no v2 device state import |
 | Validation | `packages/d2b-priv-broker/tests/security_key_broker.rs` updates for bundle table lookup and zone-field round trip; `device_grant_no_path.rs` proves Provider code does not call the broker and sees no device path; audit tests prove path-free grant records. |
 | Removal proof | The superseded iterative sysfs scan/fallback behavior in `packages/d2b-priv-broker/src/ops/security_key.rs` is removed once bundle-token lookup and revalidation tests pass. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-key-005
 
@@ -2005,6 +2013,8 @@ class.
 | Data migration | Full d2b 3.0 reset; no v2 DTO compatibility migration beyond serde-shape preservation where possible |
 | Validation | DTO serde round trips, exact provider-neutral ResourceType identity, provider-named alias rejection, canonical minimal base acceptance, Core projection `spec.provider` rejection, D088 `status.resource`/`status.provider` layering, base/Provider-extension field separation, unknown-field denial, zone-field round trip, path-redaction tests, and updated `usb_sk_contract.rs` assertions in the provider crate. |
 | Removal proof | ADR046-security-key-035 removes `SecurityKeyApplyUdevRulesRequest`, the `SecurityKeyApplyUdevRules` broker op, and related broker code after UHID DeviceGrant coverage is live. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-key-006
 
@@ -2019,6 +2029,8 @@ class.
 | Data migration | None - test-only move; no runtime state |
 | Validation | Moved tests pass under the provider crate; contract assertions are retained; D094 disposition records moved/adapted coverage before old duplicate tests are deleted. |
 | Removal proof | ADR046-security-key-033 deletes `packages/d2b-contract-tests/tests/usb_sk_contract.rs` only after the provider-crate successor test covers all prior assertions. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-key-007
 
@@ -2033,6 +2045,8 @@ class.
 | Data migration | None - test-only move; no runtime state |
 | Validation | Provider-crate tests retain zero-capability and seccomp assertions for relay/controller and assert no minijail profile is used for the frontend Process. |
 | Removal proof | ADR046-security-key-033 deletes `packages/d2b-contract-tests/tests/minijail_sk_frontend.rs` only after the provider-crate successor test covers all prior assertions. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### New items
 
@@ -2049,6 +2063,8 @@ class.
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
 | Validation | Workspace package-policy check rejects missing `src/`, `tests/`, `integration/`, or `README.md`; `cargo test -p d2b-provider-device-security-key --lib --tests` discovers the hermetic suite; README acceptance criteria from the provider crate standard layout are satisfied. |
 | Removal proof | None - net-new; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-key-009
 
@@ -2063,6 +2079,8 @@ class.
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
 | Validation | `controller_reconcile.rs`, `service_binding_projection.rs`, `mutual_exclusion.rs`, `status_binding.rs`, and deletion/finalizer tests cover authority/projection/Binding branches, signed-factory admission before projection reconcile, Service-owned Endpoint isolation from Export/Import identity, no Device projection, and no Volume API calls. |
 | Removal proof | None - net-new; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-key-010
 
@@ -2077,6 +2095,8 @@ class.
 | Data migration | Full d2b 3.0 reset; no relay session state import |
 | Validation | `host_relay_guest_frontend/`, `fair_queue.rs`, `device_grant_no_path.rs`, `descriptor_validation.rs`, `cancel_propagation.rs`, and `cid_isolation.rs` prove one authority open, multi-Binding fair serialization, fd-only access, LeaseId cancel, and CID isolation. |
 | Removal proof | Supersedes daemon-internal relay behavior removed by ADR046-security-key-030/ADR046-security-key-031 after relay Process tests pass. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-key-011
 
@@ -2091,6 +2111,8 @@ class.
 | Data migration | Full d2b 3.0 reset; no session ring import |
 | Validation | `session_state_machine.rs`, `session_ring.rs`, `fair_queue.rs`, `session_timeout.rs`, and `cancel_propagation.rs` cover queue fairness, eviction, stale LeaseId rejection, timeout, and cancel. |
 | Removal proof | None - net-new; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-key-012
 
@@ -2105,6 +2127,8 @@ class.
 | Data migration | Full d2b 3.0 reset; CID maps are transient and not imported |
 | Validation | `cid_isolation.rs` verifies per-session allocation, round trip, no sharing across relays, and eviction on session end. |
 | Removal proof | None - net-new; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-key-013
 
@@ -2119,6 +2143,8 @@ class.
 | Data migration | Full d2b 3.0 reset; no v2 probe state import |
 | Validation | `controller_reconcile.rs` scheduled-observe tests, `descriptor_validation.rs` Debug-redaction capture, and path-safety tests prove Provider never reads sysfs and receives only opaque observations. |
 | Removal proof | Supersedes provider-side or broker fallback sysfs scanning; ADR046-security-key-004/ADR046-security-key-018 removal proof verifies only bundle `device_token` lookup remains. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-key-014
 
@@ -2133,6 +2159,8 @@ class.
 | Data migration | Full d2b 3.0 reset; no v2 transport/session state import |
 | Validation | `descriptor_validation.rs` covers wrong service, wrong descriptor digest, wrong SO_PEERCRED uid, unenrolled key, oversized records, no ambient path, and redacted opaque IDs. |
 | Removal proof | None - net-new; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-key-015
 
@@ -2147,6 +2175,8 @@ class.
 | Data migration | Full d2b 3.0 reset; no sandbox state import |
 | Validation | `minijail_sk_frontend` successor tests, sandbox template tests, and zero-capability/seccomp assertions cover relay/controller minijail profiles and no frontend minijail profile. |
 | Removal proof | Supersedes `ProcessRole::SecurityKeyFrontend`-centric minijail test ownership removed by ADR046-security-key-033/ADR046-security-key-034 after Process-resource coverage passes. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-key-016
 
@@ -2161,6 +2191,8 @@ class.
 | Data migration | Full d2b 3.0 reset; no v2 processes.json import |
 | Validation | `controller_reconcile.rs`, Process template golden tests, Endpoint resource tests, and frontend `userRef` admission tests prove templates and Endpoint shape. |
 | Removal proof | Supersedes the legacy readiness-only `ProcessRole::SecurityKeyFrontend` tracking node removed by ADR046-security-key-034 after v3 Process resources are live. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-key-017
 
@@ -2175,6 +2207,8 @@ class.
 | Data migration | Full d2b 3.0 reset; no provider descriptor import |
 | Validation | Descriptor schema validation, semantic-base versus Provider-extension fingerprints, exact projection-schema/factory fingerprint derivation and stability under Provider/adapter identity changes, exact type/no-alias tests, service inventory tests, permission claim tests, empty ProviderStateSet tests, and README/provider package conformance checks. |
 | Removal proof | None - net-new; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-key-018
 
@@ -2189,6 +2223,8 @@ class.
 | Data migration | Full d2b 3.0 reset; no v2 broker state import |
 | Validation | Broker unit tests for zone field and token lookup, path-rejection tests, post-open revalidation tests, and provider tests proving no Provider broker call or sysfs path. |
 | Removal proof | Superseded broker iterative sysfs scan behavior is removed; tests prove only bundle `device_token` lookup is accepted for `SecurityKeyOpenDevice`. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-key-027
 
@@ -2203,6 +2239,8 @@ class.
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
 | Validation | `status_binding.rs` proves empty ProviderStateSet, no `/state` mounts, no Volume API calls, authority/import/attachment fields only under `status.resource`, implementation fields only under `status.provider`, no projection `spec.provider`, and no CTAP/fd/session secrets in status/log/audit/metrics. |
 | Removal proof | None - net-new; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-key-019
 
@@ -2217,6 +2255,8 @@ class.
 | Data migration | Full d2b 3.0 reset; current Nix options migrate to v3 Zone resources without state import |
 | Validation | Nix eval tests for label resolution, `busClass=hidraw`, exclusive arbitration, exact canonical Export/Import field emission and fingerprint matching, rejection of obsolete Export `endpointRef`/`exportedType`/`baseSchemaFingerprint`/`exportKey` and Import `expectedType`/`expectedBaseSchemaFingerprint`/`projectionType`, Core-only projection without `spec.provider`, byte-identical USB/security-key physical backing tuple collision, Provider-private-class bypass rejection, prohibited fields, and providerRef resolution. |
 | Removal proof | Supersedes current option shape only after v3 Zone resource option parity; legacy security-key/USBIP mutual-exclusion assertion is replaced by v3 resource assertion coverage. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-key-020
 
@@ -2231,6 +2271,8 @@ class.
 | Data migration | Full d2b 3.0 reset; no legacy frontend unit state import |
 | Validation | Nix eval tests show the legacy unit is absent by default with Provider installed, can be gated only during transition if required, and `uhid` module/binary wiring remains present. |
 | Removal proof | ADR046-security-key-032 deletes the superseded `nixos-modules/components/security-key-guest.nix` `d2b-sk-frontend.service` declaration after the gate defaults to false. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-key-021
 
@@ -2245,6 +2287,8 @@ class.
 | Data migration | Full d2b 3.0 reset; no v2 audit import |
 | Validation | Audit tests assert path-free fields, bounded digests, no guest name/session content/CTAP bytes, grant emitted by Core not Provider controller, and lifecycle emitted by controller. |
 | Removal proof | None - net-new; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-key-022
 
@@ -2259,6 +2303,8 @@ class.
 | Data migration | Full d2b 3.0 reset; no v2 telemetry import |
 | Validation | `telemetry_identity_canaries.rs` and metric inventory tests structurally assert closed label/span-attribute sets; exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, resource-name-derived keys, and `resource_name_digest`; Device/Service/Binding/Guest/Zone name, UID, ref, and digest canary absence from metrics and spans; retained `d2b.zone` Resource attributes; bounded ring behavior; and correct session/ceremony/restart counters. |
 | Removal proof | None - net-new; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-key-023
 
@@ -2273,6 +2319,8 @@ class.
 | Data migration | None - docs/tooling only; no runtime state |
 | Validation | README presence check from provider crate standard layout; documentation review verifies every listed section and command is present and matches the crate/package behavior. |
 | Removal proof | None - net-new; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-key-024
 
@@ -2287,6 +2335,8 @@ class.
 | Data migration | Full d2b 3.0 reset; no v2 transport state import |
 | Validation | `host_relay_guest_frontend/` and `descriptor_validation.rs` verify Endpoint resolution, Noise KK enrollment, attachment opacity, and no raw vsock CID/port in status/spec. |
 | Removal proof | Supersedes baseline `vsock.sock_14320` raw port usage; tests prove no `vsockPort` or raw AF_VSOCK framing remains for security-key transport. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-key-025
 
@@ -2301,6 +2351,8 @@ class.
 | Data migration | Full d2b 3.0 reset; no v2 effect-port state import |
 | Validation | Unit tests assert Debug redaction, controller calls `observe_inventory` with injected IDs, relay has no port dependency, and fake Core adapter returns bounded `InventoryObservation`. |
 | Removal proof | None - net-new; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-key-026
 
@@ -2315,6 +2367,8 @@ class.
 | Data migration | Full d2b 3.0 reset; no legacy Device/claim projection import |
 | Validation | Fast schema/lifecycle conformance consumes the ADR046-provider-004 fixtures, accepts canonical minimal base without `spec.provider`, includes a fake alternate security-key Provider, and proves Device→provider-neutral Service→export→import→projection Service→provider-neutral Binding→frontend, exact canonical Export/Import fields, no Endpoint export, projection `spec.provider` rejection, D088 status layering, strict base/Provider-extension separation, exact types with no aliases, strict ownership/finalizers, no Device projection, and no local hidraw open in consumer Zone. |
 | Removal proof | Supersedes legacy frontend/import Device modeling; ADR046-security-key-035 removes udev mutation and ADR046-security-key-032 removes the legacy unit once Binding-owned realization is live. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### Removal items
 
@@ -2331,6 +2385,8 @@ class.
 | Data migration | Full d2b 3.0 reset; no daemon session state migration |
 | Validation | Provider relay/session tests pass; daemon build has no references to removed symbols; no legacy security-key accept loop starts under d2bd. |
 | Removal proof | Concrete removed path/behavior: `packages/d2bd/src/security_key.rs` `start_sk_accept_loop`, `SecurityKeyState`, `LeaseState`, and `SkRegistry` daemon-internal accept/session ownership are absent. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-key-031
 
@@ -2345,6 +2401,8 @@ class.
 | Data migration | Full d2b 3.0 reset; no daemon socket state migration |
 | Validation | d2bd startup tests/build prove no `start_sk_accept_loop` call or security-key proxy bind remains; provider integration test proves CTAPHID flow through Endpoint/ComponentSession. |
 | Removal proof | Concrete removed path/behavior: `packages/d2bd/src/lib.rs` no longer calls `start_sk_accept_loop` and no longer binds the daemon-internal security-key Unix socket proxy. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-key-032
 
@@ -2359,6 +2417,8 @@ class.
 | Data migration | Full d2b 3.0 reset; no legacy unit state migration |
 | Validation | Nix eval tests prove no static `d2b-sk-frontend.service` is emitted with Provider installed; frontend Process integration proves replacement lifecycle. |
 | Removal proof | Concrete removed path/behavior: `nixos-modules/components/security-key-guest.nix` no longer declares the static `d2b-sk-frontend.service` unit. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-key-033
 
@@ -2373,6 +2433,8 @@ class.
 | Data migration | None - test-only move/delete; no runtime state |
 | Validation | Provider-crate tests pass with retained assertions; old contract-test paths are absent from manifests/CI; no duplicate old/new suite runs indefinitely. |
 | Removal proof | Concrete removed paths: `packages/d2b-contract-tests/tests/minijail_sk_frontend.rs` and `packages/d2b-contract-tests/tests/usb_sk_contract.rs` are deleted after provider-crate successor coverage passes. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-key-034
 
@@ -2387,6 +2449,8 @@ class.
 | Data migration | Full d2b 3.0 reset; no processes.json role migration |
 | Validation | Workspace build proves no `ProcessRole::SecurityKeyFrontend` references; provider Process template tests prove the v3 replacement; process conformance passes. |
 | Removal proof | Concrete removed path/behavior: `d2b-core/src/processes.rs` no longer contains `ProcessRole::SecurityKeyFrontend` or a security-key frontend role in the legacy ProcessRole/VmProcessDag model. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-key-035
 
@@ -2401,6 +2465,8 @@ class.
 | Data migration | Full d2b 3.0 reset; no udev rule state migration |
 | Validation | DTO unknown-field/capability tests prove `SecurityKeyApplyUdevRulesRequest` and op are absent; `device_grant_no_path.rs` proves frontend has UHID fd without udev/plugdev; broker build has no related code. |
 | Removal proof | Concrete removed path/behavior: `SecurityKeyApplyUdevRules` broker operation, `SecurityKeyApplyUdevRulesRequest` in `packages/d2b-contracts/src/security_key.rs`, and related broker code are absent. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-key-028
 
@@ -2415,6 +2481,8 @@ class.
 | Data migration | Full d2b 3.0 reset; no cross-Zone sharing state |
 | Validation | Fast fake-stream conformance proves owner Service→export→import→projection Service→Binding→frontend; exact canonical Export/Import type and fingerprint fields; rejection of Export `endpointRef`, `exportedType`, `baseSchemaFingerprint`, and `exportKey` plus Import `expectedType`, `expectedBaseSchemaFingerprint`, and `projectionType`; rejection of projection `spec.provider`; semantic factory-fingerprint stability when signed adapter identity changes; separate signed-descriptor identity authentication; one fair LeaseId-guarded ceremony; ciphertext to intermediaries; no Device projection/local hidraw/FD/USBIP; revocation degradation; and audit metadata only. |
 | Removal proof | Not applicable (new surface) |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-key-029
 
@@ -2430,6 +2498,8 @@ class.
 | Data migration | Full d2b 3.0 reset; no per-session/lease state persisted |
 | Validation | Fast hermetic tests adapt the existing `CidTranslator`/lease/cancel/UHID/broker-revalidation suites: CID alloc/translate/release, `LeaseId` stale-release, cancel-all-CIDs on disconnect, one-ceremony + 120 s timeout, 15 s fair-wait `ERR_CHANNEL_BUSY`, UHID frame round-trip, broker double-`fstat`+FIDO+HID revalidation, byte-identical USB/security-key backing tuple derivation for one fake token, and `physical-usb-backing-conflict` before effects under alternate labels/private authority classes - all with fakes/`FakeEffectPort`, no real hidraw. Integration proves cross-Zone CTAP ceremony **serialization** over the encrypted named stream and the shared physical USB collision. |
 | Removal proof | The legacy daemon accept loop, raw CTAPHID framing, fixed `SK_VSOCK_PORT`, and broker sysfs `/sys/class/hidraw/` scan fallback are deleted only after the relay `Endpoint`/named-stream successor and the `device_token`-only broker open are green (coordinated with ADR046-security-key-034 `ProcessRole` removal and ADR046-security-key-004 broker-op revalidation). |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 Per D094, each replaced current-code test is retired with an explicit
 keep/adapt/move/delete disposition and a removal gate: the minimum reusable

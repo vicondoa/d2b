@@ -431,6 +431,8 @@ systemd unit/minijail state; they write Process status.
 | Data migration | Full reset |
 | Validation | Schema vectors and folded-field/no-duplicate-type policy tests |
 | Removal proof | Old DTOs removed only by owning future slices |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-primitives-002
 
@@ -445,6 +447,8 @@ systemd unit/minijail state; they write Process status.
 | Data migration | Current ProcessRoles converted by exact disposition table |
 | Validation | Shared conformance plus Host/Guest/user integration |
 | Removal proof | Role branches removed only after successor Provider tests |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-primitives-003
 
@@ -459,3 +463,5 @@ systemd unit/minijail state; they write Process status.
 | Data migration | Full reset; Provider-specific state export only where separately specified |
 | Validation | ACL/no-follow/marker, sharing/views, virtiofs host/guest mount tests |
 | Removal proof | storage.json rows removed only after Volume successor parity |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |

@@ -1483,6 +1483,8 @@ All sources in this section are from main commit `a1cc0b2da4a08ca3240a770a972fe4
 | Data migration | Full d2b 3.0 reset; no v2 provider state compatibility |
 | Validation | Controller conformance suite; adoption/ambiguity tests; Endpoint create/adopt/finalize and generation tests; deadline/cancellation/backpressure matrix; redaction coverage; **gateway Guest placement validation: assert no Process has `executionRef: Host/*`**; Process spec field schema tests (`spec.template`, canonical `sandbox`/`budget`/`networkUsage`/`endpoints`/`readiness`/`restartPolicy` fields, `mounts` with `required: true`, `providerRef: Provider/system-minijail`); ProviderDeployment creates both Processes (controller never self-spawns); no raw endpoint/path or ZoneLink status/cursor/authority in Guest or Endpoint status |
 | Removal proof | `packages/d2b-provider-aca/` removed only after conformance suite green |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-aca-007
 
@@ -1497,6 +1499,8 @@ All sources in this section are from main commit `a1cc0b2da4a08ca3240a770a972fe4
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Nix eval assertion tests (wrong `executionRef` → assertion fires; correct setup → passes; ACA ZoneLink/child-Zone fields → `aca-sandbox-is-not-zone`); Endpoint template ownership/shape and §15.7 assertion coverage tests |
 | Removal proof | n/a - ongoing eval-time constraint |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-aca-002
 
@@ -1511,6 +1515,8 @@ All sources in this section are from main commit `a1cc0b2da4a08ca3240a770a972fe4
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Service dispatch matrix; RBAC refusal tests; redaction tests; shutdown deadline tests |
 | Removal proof | Old `GuestControlEndpointProvider` dispatch removed per ADR046-aca-001 |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-aca-003
 
@@ -1525,6 +1531,8 @@ All sources in this section are from main commit `a1cc0b2da4a08ca3240a770a972fe4
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Mock credential client tests; lease cleanup timeout tests; token non-exposure assertion |
 | Removal proof | Old `CredentialProvider` trait deleted after `credential-managed-identity` Provider conformance |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-aca-004
 
@@ -1539,6 +1547,8 @@ All sources in this section are from main commit `a1cc0b2da4a08ca3240a770a972fe4
 | Data migration | No relay session compatibility; re-enroll on first `RuntimeAdopt` |
 | Validation | Endpoint ownership/resolution tests; relay unavailability tests; KK re-enrollment after sandbox/controller restart; deadline/cancel/credit-backpressure tests; schema/status tests reject ZoneLink refs, phase, cursors, and authority |
 | Removal proof | `packages/d2b-provider-relay/` removed after `transport-azure-relay` Provider conformance; no ACA schema, Nix emitter, controller, status adapter, fixture, or test retains an ordinary-sandbox ZoneLink path |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-aca-005
 
@@ -1553,6 +1563,8 @@ All sources in this section are from main commit `a1cc0b2da4a08ca3240a770a972fe4
 | Data migration | None - no state Volume at v3 `1.0` |
 | Validation | Controller/service declare empty `stateNamespaces`; no `sandbox-state`/`service-state` Volume created; neither Process mounts a state Volume; `Guest.status` binding/adoption fields and standard Endpoint status are bounded, non-secret, and carry no credential/endpoint/poll-URL/ZoneLink cursor or authority bytes; restart re-derivation from status/core ledger/external `find_sandboxes`, Endpoint ensure, and fresh KK session without a Volume; core Operation ledger adapter integration test |
 | Removal proof | Old in-memory-only operation ledger removed after core Operation ledger adapter passes; `operation-ledger` stateNamespace absent from component descriptor |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-aca-006
 
@@ -1567,6 +1579,8 @@ All sources in this section are from main commit `a1cc0b2da4a08ca3240a770a972fe4
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Label cardinality policy test; audit commit-before-complete test; Nix assertion eval tests; generated resource scan proves no ACA sandbox ZoneLink is emitted |
 | Removal proof | Old Nix `ProviderManaged` workload options retired after Guest resource Nix emitter parity |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 

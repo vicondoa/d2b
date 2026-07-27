@@ -2248,6 +2248,8 @@ Old and new suites never run in parallel indefinitely.
 | Data migration | Full reset; existing socat bridge retired after cutover |
 | Validation | `integration/scenario_obs_zone_forwarding.rs`; adapted `minijail_relay_otel.rs` shape test for Provider-managed runner; assert `RunnerRole::OtelHostBridge` is absent from `d2b-contracts` after removal |
 | Removal proof | Legacy symbols removed only after Binding ownership/readiness and forwarding integration pass |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-otel-002
 
@@ -2263,6 +2265,8 @@ Old and new suites never run in parallel indefinitely.
 | Data migration | Existing SigNoz data not migrated; v3 starts fresh per Zone |
 | Validation | Common-fixture/fingerprint and canonical-minimal-base conformance (including a fake alternate telemetry Provider); `tests/emitter_socket_receive.rs`; table-driven `tests/ingress_metric_policy.rs` across all four ingress adapters; `tests/exporter_outage.rs`; `tests/exporter_backpressure.rs`; `integration/scenario_full_pipeline.rs`; adapted `policy_observability.rs` (retain all existing assertions; add new `d2b.zone`, `d2b.provider` allowlist entries) |
 | Removal proof | `guest.nix` per-VM guest collector retired after `integration/scenario_obs_zone_forwarding.rs` passes |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-otel-003
 
@@ -2278,6 +2282,8 @@ Old and new suites never run in parallel indefinitely.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Nix eval test: filter expression set when enabled; assert `_CMDLINE` and `INVOCATION_ID` in drop list; `tests/redaction.rs` for journald field redaction |
 | Removal proof | Not applicable |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-otel-004
 
@@ -2293,6 +2299,8 @@ Old and new suites never run in parallel indefinitely.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | All contract-tests pass after update; existing allowlist test does not regress |
 | Removal proof | Not applicable |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-otel-005: Cross-Zone telemetry-ingest export/import adapter (D096)
 
@@ -2309,6 +2317,8 @@ Old and new suites never run in parallel indefinitely.
 | Data migration | None - full d2b 3.0 reset |
 | Validation | Fast `projection_chain.rs` proves Service projection semantics with a fake stream, exact canonical Export/Import type and fingerprint fields, rejection of obsolete `endpointRef`/`exportedType`/`baseSchemaFingerprint`/`expectedType`/`expectedBaseSchemaFingerprint`/`projectionType`, rejection of projection `spec.provider`, and semantic-fingerprint stability under Provider/adapter identity mutation while signed descriptor authentication remains exact; integration alone runs real encrypted streams and SigNoz; revocation/reconnect, quotas, source stamp, redaction/cardinality, no FD crossing, and audit locality |
 | Removal proof | Not applicable |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-otel-006: TelemetryService authority and TelemetryBinding realization (D096/D097)
 
@@ -2325,6 +2335,8 @@ Old and new suites never run in parallel indefinitely.
 | Data migration | None - full d2b 3.0 reset |
 | Validation | Fast `resource_service_binding.rs` and `projection_chain.rs` plus reused nix-unit/policy tests prove provider-neutral names, base/Provider field separation, projection `spec.provider` rejection, exact D088 placement of semantic observations under `status.resource` and implementation observations under `status.provider`, ownership, schemas, stamping, quotas, redaction, and projection chain. Real SigNoz and real stream scenarios are integration-only. |
 | Removal proof | Legacy fixed per-source vsock ingress and old gates are removed only after the Service/Binding/ComponentSession successor passes; neither old provider-qualified ResourceType name nor any Endpoint-projection or ResourceType alias remains, and no duplicate suite remains. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 

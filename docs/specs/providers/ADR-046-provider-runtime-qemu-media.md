@@ -1611,6 +1611,8 @@ destination in `packages/d2b-provider-runtime-qemu-media/`.
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
 | Validation | `make test-policy` (workspace policy gate) |
 | Removal proof | None - net-new; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 
@@ -1627,6 +1629,8 @@ destination in `packages/d2b-provider-runtime-qemu-media/`.
 | Data migration | Full d2b 3.0 reset; media guests are reauthored as `Guest`/`Volume`/`Device` resources rather than importing v2 host media config |
 | Validation | `tests/guest_schema_roundtrip.rs`; `tests/guest_provider_settings_bounds.rs` |
 | Removal proof | `HostQemuMedia`/`QemuMediaSourceIntent` raw path surfaces are superseded once all media Guest specs use ResourceRefs and schema tests prove no path/argv/credential fields remain |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 
@@ -1643,6 +1647,8 @@ destination in `packages/d2b-provider-runtime-qemu-media/`.
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
 | Validation | `tests/config_schema_projection.rs` |
 | Removal proof | None - config projection is a new Provider resource surface; no prior owner is removed by this item |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 
@@ -1659,6 +1665,8 @@ destination in `packages/d2b-provider-runtime-qemu-media/`.
 | Data migration | None - status-first controller state only; no runtime state is migrated into a Provider state Volume |
 | Validation | `tests/state_status_spec.rs`; `tests/state_status_restart.rs`; `tests/state_mount_exclusivity.rs` |
 | Removal proof | None - this item prevents creation of a new Provider state Volume and has no prior state owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 
@@ -1675,6 +1683,8 @@ destination in `packages/d2b-provider-runtime-qemu-media/`.
 | Data migration | Full d2b 3.0 reset; runtime tmpfs state is ephemeral and not imported from v2 run directories |
 | Validation | `tests/runtime_volume_spec.rs`; `tests/volume_cleanup_policy.rs` |
 | Removal proof | Legacy raw run-directory handling from `qemu_media_argv.rs` is superseded once runtime storage is represented only by controller-created Volume resources |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 
@@ -1691,6 +1701,8 @@ destination in `packages/d2b-provider-runtime-qemu-media/`.
 | Data migration | Full d2b 3.0 reset; operator-authored media is declared as Volume resources rather than imported from raw qemu-media source paths |
 | Validation | `tests/media_volume_watch.rs`; `tests/media_attachment_validation.rs` |
 | Removal proof | Legacy media source path handling is superseded once media is delivered only through Volume ResourceRefs and virtio-blk attachments |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 
@@ -1707,6 +1719,8 @@ destination in `packages/d2b-provider-runtime-qemu-media/`.
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
 | Validation | `tests/kvm_device_watch.rs` |
 | Removal proof | None - Device-gated KVM readiness is a new v3 Resource dependency, not a removal item |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 
@@ -1723,6 +1737,8 @@ destination in `packages/d2b-provider-runtime-qemu-media/`.
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
 | Validation | `tests/wayland_session_create.rs`; `tests/wayland_session_attachment_read.rs`; `tests/wayland_session_missing_provider.rs` |
 | Removal proof | None - display proxy work is delegated to a new WaylandSession Resource dependency rather than removing a baseline owner in this item |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 
@@ -1739,6 +1755,8 @@ destination in `packages/d2b-provider-runtime-qemu-media/`.
 | Data migration | Full d2b 3.0 reset; existing QEMU runner process state is not imported and launch state is rebuilt from resources |
 | Validation | `tests/process_spec_golden.rs`; `tests/launch_ticket_fd_slots.rs`; `tests/launch_ticket_tap_fd_lifetime.rs`; `tests/no_controller_fd_or_broker_op.rs`; `tests/no_raw_argv_in_spec.rs` |
 | Removal proof | `ProcessRole::QemuMediaRunner` and raw qemu-media argv launch surfaces are removable after canonical Process specs and LaunchTickets cover every runner launch |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 
@@ -1755,6 +1773,8 @@ destination in `packages/d2b-provider-runtime-qemu-media/`.
 | Data migration | Full d2b 3.0 reset; no v2 QMP socket path/session state is imported |
 | Validation | `tests/qmp_capability_negotiation.rs`; `tests/qmp_command_dispatch.rs`; `tests/qmp_greeting_timeout.rs`; `tests/qmp_health_check.rs` |
 | Removal proof | `QemuMedia*` broker wire operations are superseded as public control surfaces once QMP is driven solely through Endpoint attachments and internal DTOs |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 
@@ -1771,6 +1791,8 @@ destination in `packages/d2b-provider-runtime-qemu-media/`.
 | Data migration | Full d2b 3.0 reset; removable media hotplug state is reconciled from Guest spec and Volume status, not imported from broker op history |
 | Validation | `tests/hotplug_attach_sequence.rs`; `tests/hotplug_detach_sequence.rs`; `tests/hotplug_qmp_failure.rs` |
 | Removal proof | `QemuMediaAttach`/`QemuMediaDetach` broker operations are removed after hotplug is implemented through Volume fd acquisition plus QMP Endpoint dispatch |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 
@@ -1787,6 +1809,8 @@ destination in `packages/d2b-provider-runtime-qemu-media/`.
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
 | Validation | `tests/tap_launch_routing.rs` proves `CreatePersistentTap → SetBridgePortFlags → ProviderSupervisor LaunchTicket` ordering; `tests/tap_fd_lifetime.rs` proves CLOEXEC, single child ownership, and close-before-`DeletePersistentTap`; `tests/tap_fd_no_bus_serialization.rs` rejects fd/broker DTOs at the qemu controller boundary; `tests/tap_fd_unavailable.rs` covers authorization and resolution failure |
 | Removal proof | None - Core-routed Network attachment resolution is a new v3 dependency path |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 
@@ -1803,6 +1827,8 @@ destination in `packages/d2b-provider-runtime-qemu-media/`.
 | Data migration | Full d2b 3.0 reset; lifecycle state is re-derived from Resource specs/status and Operation ledger rather than imported from v2 daemon state |
 | Validation | `tests/reconcile_dependency_gating.rs`; `tests/reconcile_runner_exit_handling.rs`; `tests/finalize_sequence.rs`; `tests/finalize_wayland_session_cleanup.rs` |
 | Removal proof | Legacy daemon-owned qemu-media lifecycle paths can be removed once reconcile/finalize owns all Guest lifecycle transitions |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 
@@ -1819,6 +1845,8 @@ destination in `packages/d2b-provider-runtime-qemu-media/`.
 | Data migration | None - status schema is new v3 observation state; no v2 status import |
 | Validation | `tests/status_phase_transitions.rs`; `tests/condition_reason_codes.rs` |
 | Removal proof | None - this item adds v3 status projection and does not by itself remove a prior owner |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 
@@ -1835,6 +1863,8 @@ destination in `packages/d2b-provider-runtime-qemu-media/`.
 | Data migration | None - audit-only work; no runtime state import |
 | Validation | `tests/audit_event_shapes.rs`; `tests/audit_no_sensitive_fields.rs` |
 | Removal proof | None - audit helpers are new for this Provider; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 
@@ -1851,6 +1881,8 @@ destination in `packages/d2b-provider-runtime-qemu-media/`.
 | Data migration | None - telemetry-only work; no runtime state import |
 | Validation | `tests/metrics_label_cardinality.rs` asserts exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys plus Guest/Zone-name canary absence; `tests/otel_span_attributes.rs` asserts the exact per-span semantic allowlist, preserves allowed OTEL Resource identity attributes, and rejects Zone/Guest/Process/Provider-resource names, refs, UIDs, shortened UIDs, digests, and identity canary values in span attributes |
 | Removal proof | None - telemetry helpers are new for this Provider; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 
@@ -1867,6 +1899,8 @@ destination in `packages/d2b-provider-runtime-qemu-media/`.
 | Data migration | Full d2b 3.0 reset; users reauthor qemu-media configuration as v3 resources and raw path options are not imported |
 | Validation | `tests/unit/nix/cases/guest-qemu-media-spec.nix`; `tests/assertions-eval.sh` new assertion cases |
 | Removal proof | `nixos-modules/components/qemu-media.nix` raw path option surface is superseded once v3 Guest resource emission and assertions cover the configuration |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 
@@ -1883,6 +1917,8 @@ destination in `packages/d2b-provider-runtime-qemu-media/`.
 | Data migration | None - test-only work; no runtime state import |
 | Validation | `make test-rust` (runs conformance suite) |
 | Removal proof | None - conformance coverage is additive test proof |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 
@@ -1899,6 +1935,8 @@ destination in `packages/d2b-provider-runtime-qemu-media/`.
 | Data migration | None - test-only work; no runtime state import |
 | Validation | `make test-integration` |
 | Removal proof | None - integration coverage is additive test proof |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 ## 22 Tests

@@ -1405,6 +1405,8 @@ download, or PATH scan.
 | Data migration | No compatibility with current relay sessions; v3 sessions are independent |
 | Validation | `tests/fake_relay_transport.rs`: connect/accept, framing, credential redaction, named stream roundtrip; `tests/listener_sender_conformance.rs`: named stream contract; enrolled Noise KK binding (established after the one-time IKpsk2 bootstrap enrollment); relay identity exclusion; enrollment-transition rejection: a rekey or continuation of the IKpsk2 bootstrap session is rejected, and any continuation or resource-API traffic offered on IKpsk2-derived transport keys (before durable `EnrollmentCommitted` and a distinct enrolled KK handshake reach `Ready`) fails closed |
 | Removal proof | `d2b-provider-relay/src/lib.rs` relay plumbing retained until ACA display migration completes |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-transport-relay-002
 
@@ -1419,6 +1421,8 @@ download, or PATH scan.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/credential_redaction.rs`: credential bytes never reach any Debug/log/audit/OTEL path; `src/tests/integration/credential_delivery.rs`: end-to-end credential delivery using injected fake Credential effect port |
 | Removal proof | N/A; new module |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-transport-relay-003
 
@@ -1433,6 +1437,8 @@ download, or PATH scan.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/reconnect_backoff.rs`: relay responds to CloseTransport/OpenTransport cycle; WebSocket starts on demand; ObserveTransport reports connect result; `src/tests/integration/reconnect_scenario.rs`: full reconnect cycle including Credential re-acquisition |
 | Removal proof | N/A; new module |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-transport-relay-004
 
@@ -1447,6 +1453,8 @@ download, or PATH scan.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/transport_settings_schema.rs`: valid/invalid schema vectors; `tests/transport_credentials.rs`: exact canonical ZoneLink field set, same-Zone ref/count/audience/scope checks, and rejection of credential refs inside `transportSettings`; eval-time Nix assertion coverage from `nix-unit: transport-settings-secret-key` test (see zone-routing spec) |
 | Removal proof | N/A; new contract |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-transport-relay-005
 
@@ -1461,6 +1469,8 @@ download, or PATH scan.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/backpressure_credit.rs`: slow relay writer saturates outbound queue; named-stream credit stalls before unbounded growth; source Zone never buffers beyond aggregate limit |
 | Removal proof | N/A; new module |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-transport-relay-006
 
@@ -1475,6 +1485,8 @@ download, or PATH scan.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/credential_redaction.rs` extended to cover audit/OTEL paths; `tests/metric_labels.rs` structurally asserts exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys and that a Zone-name canary never enters label values; `tests/fake_relay_transport.rs` asserts audit record fields against schema |
 | Removal proof | N/A; new module |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-transport-relay-007 (integration README)
 
@@ -1489,6 +1501,8 @@ download, or PATH scan.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | File must be present; workspace policy gate enforces `src/tests/integration/README` |
 | Removal proof | N/A; mandatory layout |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 

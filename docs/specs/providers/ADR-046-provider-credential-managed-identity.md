@@ -1822,6 +1822,8 @@ endpoint-role, and provider-factory code is explicitly excluded.
 | Data migration | Full d2b 3.0 reset; no v2 managed-identity process/session state import |
 | Validation | `tests/topology.rs`; `integration/host-guest-placement.nix`; `make test-rust`; `make test-integration`; `make test-host-integration` |
 | Removal proof | V2 single-process/trait topology is superseded once controller and agent Process split is integrated and all token delivery terminates in the agent |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-cred-mi-001
 
@@ -1838,6 +1840,8 @@ endpoint-role, and provider-factory code is explicitly excluded.
 | Data migration | Full v3 reset. `d2b-provider-aca:managed_identity_client_id` raw field migrated to a Credential resource reference in the v3 ACA Provider config; see removal precondition below. |
 | Validation | See §Tests. Run `cargo test -p d2b-provider-credential-managed-identity --lib --test lifecycle --test conformance --test faults --test canary --test delivery --test placement --test topology`; run `integration/{container-service.sh,aca-credential-ref.sh,cleanup-rollback.sh}` through `make test-integration` and `integration/host-guest-placement.nix` through `make test-host-integration`. |
 | Removal proof | `d2b-provider-aca:managed_identity_client_id` raw field removed only after the `credential-managed-identity` controller and agent are integrated and the ACA Provider config uses `credentialRef` exclusively; `ProviderWorkloadIdentity::ManagedIdentity` bootstrap path superseded only after the ACA Provider controller uses the Credential resource for token acquisition |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-cred-mi-002 (shared with other Credential Providers)
 
@@ -1852,6 +1856,8 @@ endpoint-role, and provider-factory code is explicitly excluded.
 | Data migration | None - controller lifecycle code only; no runtime state import |
 | Validation | Managed-identity reconcile/controller tests; shared Credential reconciliation tests; topology tests validating agent spawn/teardown and Deleted-phase cleanup |
 | Removal proof | V2 `CredentialProvider` status/enrollment trait lifecycle is superseded after shared controller reconcile and managed-identity agent lifecycle pass parity |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 This work item is shared with `credential-secret-service` and `credential-entra`;
 the table above is the `managed-identity-controller` entry point for this work
@@ -1870,6 +1876,8 @@ item.
 | Data migration | Full d2b 3.0 reset; raw ACA `managed_identity_client_id` config is replaced by a newly authored Credential resource reference rather than imported in place |
 | Validation | Nix eval assertion tests; artifact catalog validation tests; `integration/aca-credential-ref.sh` |
 | Removal proof | `managed_identity_client_id` raw fields in ACA config and daemon plumbing are removed only after ACA Provider config uses `credentialRef` exclusively |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-cred-mi-004 (shared audit/OTEL)
 
@@ -1884,6 +1892,8 @@ item.
 | Data migration | None - audit/telemetry only; no runtime state import |
 | Validation | `packages/d2b-contract-tests/tests/credential_audit.rs` requires `resource_name_digest` in authorized audit records and rejects raw Credential name/ResourceRef/UID; managed-identity `canary.rs` and audit/OTEL unit tests structurally assert exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, `credential_name`, `credential_ref`, `credential_uid`, `credential_digest`, `resource_name_digest`, and every resource-name-derived label key; reject Credential name/ref/UID/digest canaries from all OTEL Resource attributes, span attributes, and metric labels; preserve generic collector-allowlisted Resource attributes including `d2b.zone`, `d2b.provider`, `d2b.component`, and service fields; reject Zone-name span/label canaries and sensitive shapes; pass complete managed-identity metric/span frames through the shared collector ingress validator and prove that adding `d2b.credential.name` or any Credential identity key/value rejects the whole frame |
 | Removal proof | None - audit/telemetry helpers are additive; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 

@@ -400,6 +400,8 @@ transcript/session generation digest, route, and fixed outcome.
 | Data migration | No v2 session compatibility; reconnect on v3 |
 | Validation | Copied exact vectors/rejections plus subject/RBAC/revocation tests |
 | Removal proof | v3 old Realm PeerSession removed only after all v3 peer routes move |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-session-002
 
@@ -415,6 +417,8 @@ transcript/session generation digest, route, and fixed outcome.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Copied fd/peer/credit tests plus Host/Guest subject mapping |
 | Removal proof | Ad hoc guest/public/helper transport removed only per service cutover |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-bus-001
 
@@ -430,3 +434,5 @@ transcript/session generation digest, route, and fixed outcome.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Message isolation; closed session-verb enum including `relay`, `audit-export`, and `support-bundle`; exact diagnostic service/method binding with no implied resource grant; relay missing/target verb missing/provider self-assertion fail-closed vectors; named-target and nameless List/Watch selector/filter preservation at every hop; route/auth revocation; fairness; reconnect; no direct-store path |
 | Removal proof | Old direct dispatch branches removed only after route parity |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |

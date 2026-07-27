@@ -108,7 +108,7 @@ follow-on hardening of that generator and its fail-closed policy tests.
   lowercase SHA-256 of the exact Markdown bytes. It records the parent path and
   the `v3` baseline commit and carries no timestamp or host path.
 - `ADR-046-work-items.json` (`artifactKind: d2b-adr-work-items`, `schemaVersion`
-  1) enumerates every implementation work item extracted from the member specs,
+  2) enumerates every implementation work item extracted from the member specs,
   sorted by `workItemId`, each bound to its `specId` and `specPath`. Every
   canonical required field is nonempty; `reuseSource` is `null` when a spec
   declares no reuse source. Work-item IDs satisfy the canonical ID contract
@@ -310,15 +310,15 @@ Each spec contains an **Implementation work items** section. Every item has:
 | Data migration | State/config/artifact/reset behavior |
 | Validation | Exact test files/selectors and measurable acceptance |
 | Removal proof | Live successor path and tests required before deletion |
-| Implementation state | Optional source assertion from the closed delivery set: `Planned` until the complete item has landed, or `Merged` only when every named destination and validation obligation is present in the indexed tree |
-| Evidence | Optional exact committed destinations and validation selectors supporting `Merged`, or the concrete missing destination/unrun prerequisite supporting `Planned` |
+| Implementation state | Required source assertion from the closed delivery set: `Planned` until the complete item has landed, or `Merged` only when every named destination and validation obligation is present in the indexed tree |
+| Evidence | Required exact committed destinations and validation selectors supporting `Merged`, or the concrete missing destination/unrun prerequisite supporting `Planned` |
 
 `Implementation state` and `Evidence` remain in the owning work-item table, not
 a second delivery ledger. `xtask spec-registry` emits both fields for every
-item in `ADR-046-work-items.json`: an item without source rows defaults to
-`Planned` with no merge evidence. A `Merged` source row requires nonempty exact
-evidence. A spec's `Accepted` status says its design is settled; it does not
-imply that any implementation item is `Merged`.
+item in `ADR-046-work-items.json`. Missing or empty source rows fail generation.
+`Implementation state` accepts only `Planned` or `Merged`, and a `Merged` source
+row requires nonempty exact evidence. A spec's `Accepted` status says its design
+is settled; it does not imply that any implementation item is `Merged`.
 
 The exact work-item ID regex is
 `^ADR046-[a-z0-9]+(?:-[a-z0-9]+)*-(?:00[1-9]|0[1-9][0-9]|[1-9][0-9]{2})$`.
@@ -456,10 +456,10 @@ Implementation work items section is complete:
   set; `##` and `####` item declarations fail closed;
 - every item has exactly one nonempty `Dependency/owner`, `Current source`,
   `Reuse action`, `Destination`, `Detailed design`, `Integration`,
-  `Data migration`, `Validation`, and `Removal proof` field, with no duplicate
-  fields; an optional `Work item ID` row exactly matches its heading, an
-  optional `Reuse source` is nonempty, and optional `Implementation state` /
-  `Evidence` rows satisfy the generated-state rules above;
+  `Data migration`, `Validation`, `Removal proof`, `Implementation state`, and
+  `Evidence` field, with no duplicate fields; an optional `Work item ID` row
+  exactly matches its heading, an optional `Reuse source` is nonempty, and the
+  delivery rows satisfy the generated-state rules above;
 - every heading prefix appears in the owning member's bytewise-sorted
   `workItemPrefixes`; every registered prefix belongs globally to exactly one
   member, and a member with no work items has an empty array in the generated

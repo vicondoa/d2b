@@ -1974,6 +1974,8 @@ New `packages/d2b-core-controller/tests/config_cleanup.rs`:
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
 | Validation | Unit test for `RedactionGuard` attribute gate; unit test for `BoundedEmitter` ring-full drop and FIFO drain; table tests for `METRIC_LABEL_POLICY` exact keys, suffixes, and `metadata.name`/UID/ResourceRef identity canaries; `policy_telemetry_redaction.rs::startup_tracing_avoids_host_path_fields` port; assert `config_source = "realm-controllers"` absent; assert no `opentelemetry_sdk` dependency in `d2b-telemetry` Cargo.toml |
 | Removal proof | None - net-new; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-telem-002
 
@@ -1989,6 +1991,8 @@ New `packages/d2b-core-controller/tests/config_cleanup.rs`:
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
 | Validation | p95 write ≤10 ms benchmark fixture; metric inventory policy test asserting no `vm` label; assert old `d2b_daemon_vm_state` shape absent |
 | Removal proof | Hand-rolled registry in `d2bd/src/metrics.rs` retained until daemon-level ADR 0046 cutover |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-telem-003
 
@@ -2004,6 +2008,8 @@ New `packages/d2b-core-controller/tests/config_cleanup.rs`:
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
 | Validation | API request metric inventory test; session profile/outcome label cardinality gate; bus direction label gate; assert no `realm` field in span attributes |
 | Removal proof | None - net-new; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-telem-004
 
@@ -2019,6 +2025,8 @@ New `packages/d2b-core-controller/tests/config_cleanup.rs`:
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
 | Validation | `hint_to_handler_latency` benchmark with p95 ≤5 ms assertion; closed `handler` label set gate |
 | Removal proof | None - net-new; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-telem-005
 
@@ -2034,6 +2042,8 @@ New `packages/d2b-core-controller/tests/config_cleanup.rs`:
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
 | Validation | `commit_to_launch_latency` benchmark with p95 ≤20 ms assertion; assert no `vm` label in process metrics; `vmm→provider` label rename gate |
 | Removal proof | `d2b_daemon_vm_start_duration_seconds` (with `vm` label) retained in `d2bd/src/metrics.rs` until daemon-level ADR 0046 cutover |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-telem-006
 
@@ -2049,6 +2059,8 @@ New `packages/d2b-core-controller/tests/config_cleanup.rs`:
 | Data migration | Existing SigNoz data not migrated; v3 starts fresh |
 | Validation | `emitter_socket_receive`, `emitter_ring_drains_on_socket_available`, `emitter_ring_drop_on_overflow`, table-driven `ingress_metric_policy` across all four ingress adapters, `no_vm_label_in_metrics`, and `zone_startup_proceeds_without_provider` tests; adapted `policy_observability.rs` tests (retain `loki_native_otel_resource_attributes` and SigNoz-only backend assertions); adapted `minijail_relay_otel.rs` shape test for Provider-managed runner |
 | Removal proof | `otel_host_bridge_argv.rs` socat runner and `otel_host_bridge_readiness.rs` retired after `observability-otel` Provider delivers native OTLP/vsock and passes conformance; `ProcessRole::OtelHostBridge` and `RunnerRole::OtelHostBridge` retired from `d2b-core/src/processes.rs` and `d2b-contracts/src/broker_wire.rs` after Provider migration |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-audit-001
 
@@ -2064,6 +2076,8 @@ New `packages/d2b-core-controller/tests/config_cleanup.rs`:
 | Data migration | v3 bootstrap; existing daemon/broker JSONL files not migrated |
 | Validation | `audit_record_hash_chain`, `audit_record_schema` (no `realm`/`node` fields), `audit_segment_rotation`, `audit_rate_limit_privileged_never_dropped`, `audit_unavailable_blocks_privileged` |
 | Removal proof | `daemon_audit.rs`, broker `audit.rs`, `JsonlGatewayAudit` retired per-component after `d2b-audit` sink achieves parity |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-audit-002
 
@@ -2079,6 +2093,8 @@ New `packages/d2b-core-controller/tests/config_cleanup.rs`:
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
 | Validation | Integration test: 100 mutations → verify hash-chained audit records with `zone` field, no `realm` field |
 | Removal proof | None - net-new; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-audit-003
 
@@ -2094,6 +2110,8 @@ New `packages/d2b-core-controller/tests/config_cleanup.rs`:
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
 | Validation | Session connect/close/auth-failure audit tests; `GatewayAuditKind` → `SessionConnect` mapping test |
 | Removal proof | `NoopGatewayAudit` and gateway JSONL sink retired after gateway is on v3 resource API |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-audit-004
 
@@ -2109,6 +2127,8 @@ New `packages/d2b-core-controller/tests/config_cleanup.rs`:
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
 | Validation | `export_audit.rs`: admin-only, hash break inline, no old field names (`realm`/`node`/`workload_id`), no path/argv in output, exit 0 on clean chain |
 | Removal proof | `d2b audit` legacy command retained until `d2b zone audit export` covers all record classes |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-doctor-001
 
@@ -2124,6 +2144,8 @@ New `packages/d2b-core-controller/tests/config_cleanup.rs`:
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
 | Validation | `zone_doctor_contract.rs`: all-ready/degraded/quarantine/otel-absent/audit-absent fixtures; no resource names/paths/argv/PIDs; `zone_phase` field present; no legacy `broker_ready` field |
 | Removal proof | `d2b host doctor` retained until `d2b zone doctor` covers all check parity |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-doctor-002
 
@@ -2139,6 +2161,8 @@ New `packages/d2b-core-controller/tests/config_cleanup.rs`:
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
 | Validation | `zone_support_bundle_contract.rs`: complete/partial bundles; no spec/name/path/argv; field completeness |
 | Removal proof | None - net-new; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-telem-007
 
@@ -2154,6 +2178,8 @@ New `packages/d2b-core-controller/tests/config_cleanup.rs`:
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
 | Validation | Nix eval test: filter expression set when enabled; test that `_CMDLINE` and `INVOCATION_ID` appear in drop list |
 | Removal proof | None - net-new; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-telem-008
 
@@ -2169,6 +2195,8 @@ New `packages/d2b-core-controller/tests/config_cleanup.rs`:
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
 | Validation | These tests are their own validation artifact |
 | Removal proof | None - net-new; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-host-posture-001
 
@@ -2184,6 +2212,8 @@ New `packages/d2b-core-controller/tests/config_cleanup.rs`:
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
 | Validation | `host_posture_contract.rs` tests from the Host posture tests section of this spec; `d2b-contract-tests/tests/policy_telemetry_redaction.rs` asserts `no_isolation` key absent from all span/metric/log surfaces |
 | Removal proof | `d2b-unsafe-local-helper` binary and `DaemonToUnsafeLocalHelper`/`UnsafeLocalHelperToDaemon` wire types retired after `Provider/system-core` Process Provider supervisor ticket migration; `nixos-modules/unsafe-local-helper.nix` Nix unit retired after migration; `nixos-modules/unsafe-local-workloads-json.nix` adapted (not deleted) to emit Host resource spec format |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ## Main-commit reuse work items
 
@@ -2213,6 +2243,8 @@ excluded or adapted.
 | v3 Destination | `packages/d2b-session/` copied verbatim (zero ADR45 topology assumptions in the core crates). Wire constants in `v2_component_session.rs` are adopted without change. `EndpointPurpose` enum values renamed in v3 contract extension; existing values kept for backward wire compatibility during transition. |
 | Integration | `d2b-bus` route handler calls `serve_ttrpc_services`; `d2b-session-unix` provides `OwnedTransport` impl; `d2b-telemetry` `MetricsSink` impl feeds `d2b_session_*` metrics inventory from this spec. |
 | Validation | Adopt `tests/component_session.rs` and `tests/noise_vectors.rs` unchanged; extend with v3 `EndpointPurpose` enum gate test; add `d2b-contract-tests/tests/component_session_v2_vectors.rs` (existing at `a1cc0b2d`) as-is. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-reuse-002 - Unix transport substrate
 
@@ -2232,6 +2264,8 @@ excluded or adapted.
 | v3 Destination | `packages/d2b-session-unix/` copied verbatim. Feature flags `host-socket` / `native-vsock` retained unchanged. |
 | Integration | `d2b-bus` Zone-local listeners use `UnixSeqpacketTransport`; Provider agent connections use vsock transport from this crate; `CreditPool`/`CreditScopeSet` enforce per-Zone attachment FD budgets. |
 | Validation | Adopt all `unix_session.rs` tests unchanged. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-reuse-003 - Async client and retry layer
 
@@ -2251,6 +2285,8 @@ excluded or adapted.
 | v3 Destination | `packages/d2b-client/` copied; `DaemonClient`/`GuestClient` adapted to v3 service packages; `local_daemon_endpoint_identity` adapted to use Zone name; `MetadataInput::with_trace` drives `TraceContext` propagation into d2b-bus route requests. |
 | Integration | Every controller/service that makes outbound calls uses `Client`; `MetadataInput::with_trace` feeds `d2b_api_request_duration_seconds` trace-id into `d2b.bus.route` span. |
 | Validation | Adopt typed-route, proxy-reuse, and cancel tests unchanged. Add v3 service-package name gate test. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-reuse-004 - Provider registry, RPC proxy, and conformance toolkit
 
@@ -2270,6 +2306,8 @@ excluded or adapted.
 | v3 Destination | `packages/d2b-provider/` and `packages/d2b-provider-toolkit/` copied; `SessionIdentity` adapted to use Zone name; `ProviderRegistry` wired to v3 bus service via `d2b-bus` route handler instead of daemon embedding; `GeneratedProviderServiceServer` session admission adapted to v3 `EndpointPurpose` values. |
 | Integration | Each v3 Provider process embeds `ProviderRegistry` + `GeneratedProviderServiceServer`; `check_provider_conformance` runs in Provider install-time conformance check (feeds `d2b_provider_reconcile_total{outcome="error"}` on failure). |
 | Validation | Adopt all `conformance.rs` and `runtime.rs` tests unchanged. Add v3 `SessionIdentity` zone-name gate. Add conformance-failure → `d2b_provider_reconcile_total` metric integration test. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-reuse-005 - Provider agent process and gateway-runtime audit bridge
 
@@ -2289,6 +2327,8 @@ excluded or adapted.
 | v3 Destination | `packages/d2b-provider-observability-otel/src/agent.rs` (adapted); the `ComponentSessionDriver` mock from `tests/provider_agent_v2.rs` becomes the reusable test fixture for all v3 Provider session tests. |
 | Integration | `observability-otel` Provider embeds a `ProviderAgentProcess`; session connect/disconnect emits `SessionConnect` audit records via `d2b-audit`; `ProviderAgentAuditEvent` ring feeds `d2b_provider_reconcile_total` metric on session error. |
 | Validation | Adopt `provider_agent_v2.rs` mock harness unchanged as shared v3 Provider session fixture. Add v3 audit-bridge test: provider-agent session → `SessionConnect{transport_class="zone_link"}` record emitted. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-reuse-006 - Realm service v2 routing and remote-node routing state
 
@@ -2308,6 +2348,8 @@ excluded or adapted.
 | v3 Destination | `packages/d2b-bus/src/routing.rs` (adapted from `service_v2.rs`); `RemoteNodeErrorKind` → v3 `BusErrorKind` with same `code()` stable-label pattern; bounds adopted verbatim. |
 | Integration | `d2b-bus` route handler adapts `RealmServiceServer` dispatch table; `RemoteNodeErrorKind::code()` values feed `d2b_bus_route_total{outcome}` metric labels; `CredentialCustody::Host` maps to `purpose_class=local` in `d2b_session_connect_total`. |
 | Validation | Adopt `authority_keeps_remote_credentials_in_gateway_guests` test renamed to `authority_keeps_remote_credentials_in_zone_link_sessions`; adapt `RealmId` → Zone name; adopt `authenticated_bootstrap_enrollment_route_and_shortcut_lifecycle` renamed with zone terminology. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-reuse-007 - d2bd service routing, provider effects, and daemon session tests
 
@@ -2327,6 +2369,8 @@ excluded or adapted.
 | v3 Destination | `packages/d2b-bus/src/service_router.rs` (adapts route-gate pattern); `packages/d2b-core-controller/src/provider_effects.rs` (adapts `ProviderLifecycleDispatch`); route-gate policy tests adapted from `daemon_service_v2.rs` invariants. |
 | Integration | Bus service router uses `service.package` closed-set matching from route-gate pattern; `ProviderLifecycleDispatch` feeds `d2b_provider_component_phase` metric. |
 | Validation | Port `local_daemon_policy_is_fixed_and_has_no_negotiation_or_fd_surface` invariant to v3 bus local policy test; port `every_generated_daemon_method_has_one_typed_adapter` to v3 bus method adapter completeness test. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-reuse-008 - ComponentSession v2 vector tests and contract conformance
 
@@ -2346,6 +2390,8 @@ excluded or adapted.
 | v3 Destination | `packages/d2b-contract-tests/tests/component_session_v2_vectors.rs` copied verbatim. `tests/noise_vectors.rs` copied verbatim. Neither file requires modification. |
 | Integration | These tests run in `make test-rust` / `cargo test -p d2b-contract-tests` and `cargo test -p d2b-session`. They are gating for any Noise library update. |
 | Validation | These tests are self-validating. Add one gate: assert `COMPONENT_SESSION_MAJOR = 2` and `COMPONENT_SESSION_MINOR = 0` constants are unchanged in v3 contract. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-reuse-009 - Session MetricsSink → d2b-telemetry bridge
 
@@ -2365,6 +2411,8 @@ excluded or adapted.
 | v3 Destination | `packages/d2b-telemetry/src/session_metrics_sink.rs`: implements `MetricsSink` backed by the OTEL `d2b_session_*` instruments. `MetricEvent::ActiveSessions` → `d2b_session_active` gauge; `MetricEvent::Handshake` → `d2b_session_connect_total` counter; `MetricEvent::ReconnectAttempt` → `d2b_session_reconnect_total`; `MetricEvent::ControlCreditExhaustion` → `d2b_telemetry_drop_total{signal="session"}`. `MetricLabels.noise` → `profile` label using `NoiseProfile::as_str()`. |
 | Integration | `serve_ttrpc_services` receives a `Box<dyn MetricsSink>` from `d2b-telemetry`; all session endpoints call through this bridge. |
 | Validation | New test `packages/d2b-telemetry/tests/session_sink_bridge.rs`: drive `MetricEvent` variants through the sink; assert OTEL counter/gauge values; assert `MetricLabels` closed-set values map only to allowed label strings (no `DaemonLocal` string in v3 metric output). |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-telem-009 - Nix resource authoring shape, schema-driven options, and bundle emission
 
@@ -2380,6 +2428,8 @@ excluded or adapted.
 | Data migration | Current `d2b.observability.*` options are retained with compat warnings (same pattern as current `retention.*`/`sampling.*` compat options); the v3 `d2b.zones.<zone>.resources.*` option is the authoritative surface |
 | Validation | `eval_rejects_unknown_type`, `eval_rejects_invalid_emitter_ring_size`, `eval_rejects_unknown_provider_settings`, `eval_rejects_inline_secret_in_settings`, `eval_rejects_unresolved_credential_ref`, `eval_rejects_duplicate_resource_name` nix-unit cases; `bundle_is_sorted_canonically`, `bundle_digest_is_deterministic`, `bundle_contains_no_secret_values`, `bundle_schema_validates_against_provider_schema` contract tests |
 | Removal proof | `nixos-modules/options-observability.nix` predecessor options retained with compat warnings until `d2b.observability.enable` migration is complete |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-telem-010 - Build-time and runtime ResourceTypeSchema validation
 
@@ -2395,6 +2445,8 @@ excluded or adapted.
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
 | Validation | `bundle_schema_validates_against_provider_schema` bundle contract test; `generation_rejected_emits_audit_record` cleanup contract test with a `schema-validation-failed` reason; add a nix-unit case `eval_rejects_unknown_fields_against_signed_schema` that runs the bundle derivation with a schema mismatch and asserts build failure |
 | Removal proof | None - net-new; no prior owner to remove; this is new tooling |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-telem-011 - Configuration-owned resource cleanup contract implementation
 
@@ -2410,3 +2462,5 @@ excluded or adapted.
 | Data migration | None - the `managedBy`/`configurationGeneration`/`deletionRequestedAt` fields are new; existing resources gain them on first v3 activation |
 | Validation | All tests in "Configuration-owned cleanup contract tests" subsection; additionally: `managedby_configuration_set_on_activated_resources`, `controller_created_resources_have_managedby_controller`, `absent_resource_receives_delete_on_new_generation`, `deletion_sets_deletionrequestedat_not_phase`, `final_deletion_is_atomic`, `cleanup_does_not_touch_controller_children`, `pending_cleanup_condition_set_on_zone`, `zone_is_degraded_not_failed_during_cleanup`, `pending_cleanup_cleared_after_deletion_completes`, `prior_generation_retained_count_based`, `rollback_schedules_delete_for_new_generation_resources`, `audit_segments_preserved_on_provider_delete`, `cleanup_stall_condition_set`, `generation_rejected_emits_audit_record` |
 | Removal proof | None - net-new; no prior owner to remove; this is new behavior |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |

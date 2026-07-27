@@ -738,6 +738,8 @@ decisions/work items" row.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | SPIKE-03 metrics (1)-(3) and thresholds |
 | Removal proof | Deleted once `packages/d2b-controller-toolkit/benches/reaction.rs` and the Process Provider integration tests named by `ADR046-reconcile-003` reproduce equal-or-stricter coverage |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-feasibility-003
 
@@ -754,6 +756,8 @@ decisions/work items" row.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | SPIKE-04 heartbeat-jitter metric and threshold |
 | Removal proof | Deleted once `packages/d2b-provider-supervisor` and the volume-domain effect adapter each carry an equal-or-stricter in-tree blocking-adapter regression test |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-feasibility-004
 
@@ -770,6 +774,8 @@ decisions/work items" row.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | SPIKE-05 metrics (1)-(4) across 20 repeated randomized-order manifest loads |
 | Removal proof | Deleted once the real Provider-toolkit crate (`ADR046-provider-001` destination) ships equal-or-stricter manifest-parsing/enumeration/workspace-policy coverage |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-feasibility-005
 
@@ -786,6 +792,8 @@ decisions/work items" row.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | SPIKE-06 metrics (1)-(3), SPIKE-07 metrics (1)-(4) against the exact numeric gates already committed in the transport-unix/vsock dossiers, SPIKE-08 metrics (1)-(6) |
 | Removal proof | Deleted per each spike's own Cleanup row: `packages/d2b-bus/src/router.rs` for SPIKE-06; the three real transport Provider crates for SPIKE-07; the real Credential Provider crates for SPIKE-08 |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-feasibility-006
 
@@ -802,6 +810,8 @@ decisions/work items" row.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | SPIKE-09 metrics (1)-(4); SPIKE-10 metrics (1)-(5), zero-tolerance on path leakage |
 | Removal proof | Deleted per each spike's Cleanup row: the real `ADR-046-provider-state` work-item destination for SPIKE-09; `d2b-provider-volume-local`'s own `tests/`/`integration/` suite for SPIKE-10 |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-feasibility-007
 
@@ -818,6 +828,8 @@ decisions/work items" row.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | SPIKE-11 metrics (1)-(4), zero-tolerance on false adoption |
 | Removal proof | Deleted once `packages/d2b-provider-system-systemd` and `packages/d2b-provider-system-minijail` each carry this exact shared conformance suite in their own `tests/` |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-feasibility-008
 
@@ -834,6 +846,8 @@ decisions/work items" row.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | SPIKE-12 metrics (1)-(5), byte-for-byte reproducibility across 3 hermetic builds |
 | Removal proof | Deleted once the real `nixos-modules/resources.nix` and `packages/xtask` `gen-schemas` implementation reproduce these metrics as part of `make test-drift`/`make test-flake` |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-feasibility-009
 
@@ -850,6 +864,8 @@ decisions/work items" row.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | SPIKE-13 metrics (1)-(7); SPIKE-14 metrics (1)-(3), zero-tolerance on legacy-file access |
 | Removal proof | Deleted per each spike's Cleanup row: the real `d2b` CLI crate's own discovery conformance test for SPIKE-13; the real CLI crate's workspace-policy/lint gate plus the real bootstrap sequence for SPIKE-14 |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-feasibility-010
 
@@ -866,6 +882,8 @@ decisions/work items" row.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | SPIKE-15 metrics (1)-(4) across all three compositions |
 | Removal proof | Deleted once the real integration test suites named by the individual Provider dossiers (`integration/` per D059) collectively reproduce all three compositions against real, non-fake Zone/store/bus/broker code |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-feasibility-011
 
@@ -882,3 +900,5 @@ decisions/work items" row.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | The representative crate meets its aggregate process-CPU budget; a per-test wall-clock threshold breach remains advisory; a synthetic sleep/process/network test is flagged by placement policy; cold compile time is excluded from measurements |
 | Removal proof | Deleted once `ADR046-delivery-007`'s in-tree ledger/timing gate reproduces these budget checks against the real crate set |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |

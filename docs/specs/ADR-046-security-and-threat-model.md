@@ -1994,6 +1994,8 @@ close. Each maps to the attacker class it is scoped against.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Hermetic (`cargo test -p d2b-contract-tests policy_telemetry_redaction`); fails the build if a new Provider crate is added without a corresponding redaction test file under its `tests/` |
 | Removal proof | Not applicable - this is a permanent gate, not a migration |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-002
 
@@ -2010,6 +2012,8 @@ close. Each maps to the attacker class it is scoped against.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Hermetic vector tests plus fuzz corpus with a minimum 4-hour nightly run and zero crashes/hangs as acceptance |
 | Removal proof | Not applicable |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-003
 
@@ -2026,6 +2030,8 @@ close. Each maps to the attacker class it is scoped against.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Hermetic property test (`proptest`/`quickcheck`-style, minimum 10,000 cases per property) |
 | Removal proof | Not applicable |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-004
 
@@ -2042,6 +2048,8 @@ close. Each maps to the attacker class it is scoped against.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Fuzz corpus (`cargo fuzz run zonelink_frame -- -runs=1000000`, zero crashes); container test passes in `make test-integration` |
 | Removal proof | Not applicable |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-005
 
@@ -2058,6 +2066,8 @@ close. Each maps to the attacker class it is scoped against.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Hermetic (`cargo xtask effectport-boundary-check`); a negative test intentionally adds a forbidden dependency to a scratch crate and asserts the check fails |
 | Removal proof | Not applicable - permanent gate |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-006
 
@@ -2074,6 +2084,8 @@ close. Each maps to the attacker class it is scoped against.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Hermetic fault-injection test plus `make test-host-integration` NixOS/KVM test; acceptance is zero observable non-zero-capability or missing-cgroup-placement windows across 10,000 injected-fault iterations |
 | Removal proof | Not applicable |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-007
 
@@ -2090,6 +2102,8 @@ close. Each maps to the attacker class it is scoped against.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Matrix covers all five Providers listed; acceptance is 100% pass across all five with no signal sent to the ambiguous candidate in any case |
 | Removal proof | Not applicable |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-008
 
@@ -2106,6 +2120,8 @@ close. Each maps to the attacker class it is scoped against.
 | Data migration | None (closes the current `HelperRegistry::dispatch_launch` audit gap noted in `ADR-046-telemetry-audit-and-support.md`) |
 | Validation | Hermetic CLI/audit integration test; Nix eval test; acceptance is zero code paths reaching a live user-only-Host Process without all three surfaces firing |
 | Removal proof | Legacy `d2b-unsafe-local-helper` v2-protocol warning path removed only after this test passes against the v3 replacement and the legacy crate has no remaining callers |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-009
 
@@ -2122,6 +2138,8 @@ close. Each maps to the attacker class it is scoped against.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Hermetic + host/KVM fault-injection test; acceptance is 100% fail-closed across all three tamper scenarios |
 | Removal proof | Not applicable |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-010
 
@@ -2138,6 +2156,8 @@ close. Each maps to the attacker class it is scoped against.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Hermetic; the dynamic test additionally runs as a canary-byte test (a unique random marker is embedded in the token and searched for across every observability surface) |
 | Removal proof | Not applicable |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-011
 
@@ -2154,6 +2174,8 @@ close. Each maps to the attacker class it is scoped against.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Hermetic canary-byte test per Provider (4 Providers, shared helper crate); container test for the two D-Bus/Wayland-mediated cases |
 | Removal proof | Not applicable |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-012
 
@@ -2170,6 +2192,8 @@ close. Each maps to the attacker class it is scoped against.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Hermetic fault-injection test; acceptance is zero privileged-class operations that complete despite a failed durable audit write |
 | Removal proof | Not applicable |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-013
 
@@ -2186,6 +2210,8 @@ close. Each maps to the attacker class it is scoped against.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Hermetic fault-injection suite; container load test; acceptance is zero panics/unbounded-growth across all four scenarios |
 | Removal proof | Not applicable |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-014
 
@@ -2202,6 +2228,8 @@ close. Each maps to the attacker class it is scoped against.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Hermetic CLI test asserting no spec byte or `metadata.name` appears in a generated bundle; container test for the quarantined-Provider case |
 | Removal proof | Not applicable |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-015
 
@@ -2218,6 +2246,8 @@ close. Each maps to the attacker class it is scoped against.
 | Data migration | None (v3-native; no v1/v2 reset-generation state to migrate) |
 | Validation | Hermetic state-machine test; host/KVM crash-injection test at all four phases; acceptance is zero non-atomic outcomes across all injected crash points |
 | Removal proof | Not applicable |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-016
 
@@ -2234,6 +2264,8 @@ close. Each maps to the attacker class it is scoped against.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Hermetic shell-script gate; a negative test adds a scratch Provider dossier missing a Security section and asserts the gate fails |
 | Removal proof | Not applicable - permanent gate |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-017
 
@@ -2250,6 +2282,8 @@ close. Each maps to the attacker class it is scoped against.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Container integration test; acceptance is zero successful attacks across all five attempted vectors |
 | Removal proof | Not applicable |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-018
 
@@ -2266,6 +2300,8 @@ close. Each maps to the attacker class it is scoped against.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Checklist sign-off recorded in the release's validation evidence, not a CI gate (matches `D2b_LIVE=1` manual-tier precedent in `AGENTS.md`) |
 | Removal proof | Not applicable |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-security-019
 
@@ -2282,3 +2318,5 @@ close. Each maps to the attacker class it is scoped against.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Parent-only wait/reap, poll-readability-not-status, duplicate-holder signaling, setsid/PGID-reuse resistance, quarantine no-kill, exact-once reap, and Linux ≥5.14 platform-gate assertions all pass |
 | Removal proof | Old ProviderSupervisor/controller wait/reap and PGID-kill paths are removed only after this gate passes against the replacement |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
