@@ -126,6 +126,7 @@
     "test-fixture-contracts": {
       "displayName": "Fixture-dependent Rust contract tests",
       "makeTarget": "test-fixture-contracts",
+      "requiresHeavyGate": true,
       "localEnv": {
         "D2B_ENABLE_FIXTURE_BUILD": "1"
       },

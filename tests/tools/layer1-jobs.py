@@ -175,6 +175,22 @@ def render_env(job: dict[str, Any]) -> str:
     return "\n".join(f'          {key}: "{value}"' for key, value in sorted(env.items()))
 
 
+def heavy_gate_step(job: dict[str, Any]) -> str:
+    """Renders the heavy-gate provisioning step for jobs that need the gate.
+
+    The gate root is a protected runtime directory that a NixOS host gets from
+    tmpfiles. A continuous-integration runner has no such directory, and the
+    gate fails closed rather than falling back to an unprotected namespace, so
+    a job whose target acquires a slot must provision it first.
+    """
+    if not job.get("requiresHeavyGate"):
+        return ""
+    return (
+        "      - name: Provision the heavy-gate runtime root\n"
+        "        run: make heavy-gate-provision\n"
+    )
+
+
 def rust_job(job: dict[str, Any]) -> str:
     return f"""  {job["ciJobId"]}:
 {needs_line(job)}    runs-on: {job["runsOn"]}
@@ -235,7 +251,7 @@ def rust_job(job: dict[str, Any]) -> str:
           prefix-key: "v0-rust"
           shared-key: "test-rust-${{{{ runner.os }}}}"
           save-if: "true"
-      - name: {job["displayName"]}
+{heavy_gate_step(job)}      - name: {job["displayName"]}
         env:
 {render_env(job)}
         run: make {job["makeTarget"]}"""

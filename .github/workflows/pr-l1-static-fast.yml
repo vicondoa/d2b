@@ -215,6 +215,8 @@ jobs:
           prefix-key: "v0-rust"
           shared-key: "test-rust-${{ runner.os }}"
           save-if: "true"
+      - name: Provision the heavy-gate runtime root
+        run: make heavy-gate-provision
       - name: Fixture-dependent Rust contract tests
         env:
           D2B_ENABLE_FIXTURE_BUILD: "1"
