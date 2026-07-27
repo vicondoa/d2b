@@ -1,6 +1,36 @@
 //! Storage-neutral resource store errors.
 
-use d2b_contracts::v3::{RetryClass, ZoneRevision};
+use d2b_contracts::v3::{MAX_BATCH_MUTATIONS, RetryClass, ZoneRevision};
+
+/// Zero-based index of a mutation in a bounded commit batch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct MutationOrdinal(u8);
+
+impl MutationOrdinal {
+    /// Construct an ordinal inside the frozen batch bound.
+    pub fn new(value: u32) -> Result<Self, MutationOrdinalError> {
+        if usize::try_from(value).map_or(true, |value| value >= MAX_BATCH_MUTATIONS) {
+            return Err(MutationOrdinalError);
+        }
+        Ok(Self(u8::try_from(value).map_err(|_| MutationOrdinalError)?))
+    }
+
+    pub const fn get(self) -> u32 {
+        self.0 as u32
+    }
+}
+
+/// Mutation ordinal exceeded the frozen commit-batch bound.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MutationOrdinalError;
+
+impl core::fmt::Display for MutationOrdinalError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("mutation ordinal exceeds the commit-batch bound")
+    }
+}
+
+impl std::error::Error for MutationOrdinalError {}
 
 /// Closed store error classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -128,6 +158,7 @@ impl StoreErrorKind {
 pub struct StoreError {
     kind: StoreErrorKind,
     current_revision: Option<ZoneRevision>,
+    mutation_ordinal: Option<MutationOrdinal>,
     retry_after_ms: Option<u32>,
     retry_class: RetryClass,
     reason_code: &'static str,
@@ -145,7 +176,25 @@ impl StoreError {
         Self {
             kind,
             current_revision,
+            mutation_ordinal: None,
             retry_after_ms,
+            retry_class,
+            reason_code,
+        }
+    }
+
+    /// Construct a conflict that identifies the stale mutation in a batch.
+    pub const fn batch_conflict(
+        current_revision: ZoneRevision,
+        mutation_ordinal: MutationOrdinal,
+        retry_class: RetryClass,
+        reason_code: &'static str,
+    ) -> Self {
+        Self {
+            kind: StoreErrorKind::ResourceConflict,
+            current_revision: Some(current_revision),
+            mutation_ordinal: Some(mutation_ordinal),
+            retry_after_ms: None,
             retry_class,
             reason_code,
         }
@@ -157,6 +206,10 @@ impl StoreError {
 
     pub const fn current_revision(&self) -> Option<ZoneRevision> {
         self.current_revision
+    }
+
+    pub const fn mutation_ordinal(&self) -> Option<MutationOrdinal> {
+        self.mutation_ordinal
     }
 
     pub const fn retry_after_ms(&self) -> Option<u32> {
@@ -177,6 +230,7 @@ impl core::fmt::Debug for StoreError {
         f.debug_struct("StoreError")
             .field("kind", &self.kind)
             .field("current_revision", &self.current_revision)
+            .field("mutation_ordinal", &self.mutation_ordinal)
             .field("retry_after_ms", &self.retry_after_ms)
             .field("retry_class", &self.retry_class)
             .field("reason_code", &self.reason_code)
@@ -191,3 +245,39 @@ impl core::fmt::Display for StoreError {
 }
 
 impl std::error::Error for StoreError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mutation_ordinal_is_zero_based_and_bounded_by_batch_limit() {
+        assert_eq!(MutationOrdinal::new(0).unwrap().get(), 0);
+        assert_eq!(
+            MutationOrdinal::new(u32::try_from(MAX_BATCH_MUTATIONS - 1).unwrap())
+                .unwrap()
+                .get(),
+            u32::try_from(MAX_BATCH_MUTATIONS - 1).unwrap()
+        );
+        assert_eq!(
+            MutationOrdinal::new(u32::try_from(MAX_BATCH_MUTATIONS).unwrap()),
+            Err(MutationOrdinalError)
+        );
+    }
+
+    #[test]
+    fn batch_conflict_carries_only_revision_and_bounded_ordinal() {
+        let error = StoreError::batch_conflict(
+            ZoneRevision::new(9),
+            MutationOrdinal::new(3).unwrap(),
+            RetryClass::Reauthorize,
+            "revision-changed",
+        );
+
+        assert_eq!(error.kind(), StoreErrorKind::ResourceConflict);
+        assert_eq!(error.current_revision(), Some(ZoneRevision::new(9)));
+        assert_eq!(error.mutation_ordinal().unwrap().get(), 3);
+        assert_eq!(error.retry_after_ms(), None);
+        assert_eq!(error.reason_code(), "revision-changed");
+    }
+}

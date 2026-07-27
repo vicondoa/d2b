@@ -11,7 +11,7 @@ use d2b_contracts::v3::{
     ResourceRef, ResourceTypeName, ResourceUid, ZoneId, ZoneRevision,
 };
 
-pub use error::{StoreError, StoreErrorKind};
+pub use error::{MutationOrdinal, MutationOrdinalError, StoreError, StoreErrorKind};
 
 /// Exact optimistic precondition for a mutation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -255,80 +255,142 @@ pub struct StoreOperationContext {
     pub deadline_ms: u64,
 }
 
-/// Witness produced only after the native evaluator returns allow.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AllowDecision {
-    private: (),
-}
+mod admission {
+    use super::{AdmittedAuthorization, PolicySnapshot, StoreMutation, StoreOperationContext};
 
-impl AllowDecision {
-    /// Constructor reserved for the native authorization evaluator.
-    #[doc(hidden)]
-    pub const fn from_native_evaluator() -> Self {
-        Self { private: () }
+    /// Witness produced only after the native evaluator returns allow.
+    ///
+    /// External code cannot mint the witness:
+    ///
+    /// ```compile_fail
+    /// use d2b_resource_store::AllowDecision;
+    ///
+    /// let _forged = AllowDecision::from_native_evaluator();
+    /// ```
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub struct AllowDecision {
+        private: (),
     }
-}
 
-/// Mutation value accepted by the store boundary.
-#[derive(Clone, PartialEq, Eq)]
-pub struct AdmittedMutation {
-    mutations: Vec<StoreMutation>,
-    authorization: AdmittedAuthorization,
-    policy_snapshot: PolicySnapshot,
-    operation: StoreOperationContext,
-    allow: AllowDecision,
-}
+    impl AllowDecision {
+        const fn from_native_evaluator() -> Self {
+            Self { private: () }
+        }
+    }
 
-impl AdmittedMutation {
-    /// The sole constructor from evaluated request state.
-    pub fn new(
+    /// Mutation value accepted by the store boundary.
+    ///
+    /// External code cannot attach arbitrary request state to an allow witness:
+    ///
+    /// ```compile_fail
+    /// use d2b_resource_store::AdmittedMutation;
+    ///
+    /// let _forged = AdmittedMutation::new;
+    /// ```
+    #[derive(Clone, PartialEq, Eq)]
+    pub struct AdmittedMutation {
         mutations: Vec<StoreMutation>,
         authorization: AdmittedAuthorization,
         policy_snapshot: PolicySnapshot,
         operation: StoreOperationContext,
         allow: AllowDecision,
-    ) -> Self {
-        Self {
-            mutations,
-            authorization,
-            policy_snapshot,
-            operation,
-            allow,
+    }
+
+    impl AdmittedMutation {
+        fn new(
+            mutations: Vec<StoreMutation>,
+            authorization: AdmittedAuthorization,
+            policy_snapshot: PolicySnapshot,
+            operation: StoreOperationContext,
+            allow: AllowDecision,
+        ) -> Self {
+            Self {
+                mutations,
+                authorization,
+                policy_snapshot,
+                operation,
+                allow,
+            }
+        }
+
+        pub fn mutations(&self) -> &[StoreMutation] {
+            &self.mutations
+        }
+
+        pub const fn authorization(&self) -> &AdmittedAuthorization {
+            &self.authorization
+        }
+
+        pub const fn policy_snapshot(&self) -> PolicySnapshot {
+            self.policy_snapshot
+        }
+
+        pub const fn operation(&self) -> &StoreOperationContext {
+            &self.operation
         }
     }
 
-    pub fn mutations(&self) -> &[StoreMutation] {
-        &self.mutations
+    impl core::fmt::Debug for AdmittedMutation {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            f.debug_struct("AdmittedMutation")
+                .field("mutations", &self.mutations)
+                .field("authorization", &self.authorization)
+                .field("policy_snapshot", &self.policy_snapshot)
+                .field("operation", &self.operation)
+                .field("allow", &"<allow>")
+                .finish()
+        }
     }
 
-    pub const fn authorization(&self) -> &AdmittedAuthorization {
-        &self.authorization
-    }
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use d2b_contracts::v3::{
+            ConfigurationGeneration, ResourceName, ResourceRef, ResourceTypeName, ResourceUid,
+            ZoneId,
+        };
 
-    pub const fn policy_snapshot(&self) -> PolicySnapshot {
-        self.policy_snapshot
-    }
+        #[test]
+        fn evaluator_boundary_can_mint_admitted_mutation() {
+            let allow = AllowDecision::from_native_evaluator();
+            let admitted = AdmittedMutation::new(
+                Vec::new(),
+                AdmittedAuthorization {
+                    zone: ZoneId::parse("work").unwrap(),
+                    subject_ref: ResourceRef::parse("Provider/system-core").unwrap(),
+                    subject_uid: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000")
+                        .unwrap(),
+                    targets: vec![super::super::AdmittedAuthorizationTarget {
+                        resource_type: ResourceTypeName::parse("Host").unwrap(),
+                        resource_name: Some(ResourceName::parse("local").unwrap()),
+                        verb: super::super::AdmittedVerb::Create,
+                        subresource: None,
+                        execution_ref: None,
+                    }],
+                },
+                PolicySnapshot {
+                    policy_revision: 1,
+                    api_catalog_revision: 1,
+                    active_configuration_revision: ConfigurationGeneration::new(1).unwrap(),
+                    controller_generation: None,
+                },
+                StoreOperationContext {
+                    operation_id: "op-1".to_owned(),
+                    idempotency_key: None,
+                    correlation_id: "correlation-1".to_owned(),
+                    trace_id: None,
+                    deadline_ms: 1,
+                },
+                allow,
+            );
 
-    pub const fn operation(&self) -> &StoreOperationContext {
-        &self.operation
-    }
-
-    pub const fn allow_decision(&self) -> AllowDecision {
-        self.allow
+            assert_eq!(admitted.mutations(), &[]);
+            assert_eq!(admitted.policy_snapshot().policy_revision, 1);
+        }
     }
 }
 
-impl core::fmt::Debug for AdmittedMutation {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("AdmittedMutation")
-            .field("mutations", &self.mutations)
-            .field("authorization", &self.authorization)
-            .field("policy_snapshot", &self.policy_snapshot)
-            .field("operation", &self.operation)
-            .field("allow", &"<allow>")
-            .finish()
-    }
-}
+pub use admission::{AdmittedMutation, AllowDecision};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StoreCommitResult {

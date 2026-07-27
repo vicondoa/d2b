@@ -219,6 +219,7 @@ message CommitBatchResponse {
   repeated ResourceEnvelopeBytes resources = 1;
   uint64 revision = 2;
   ResourceError error = 3;
+  optional uint32 conflict_mutation_ordinal = 4;
 }
 
 message ResolveRefRequest {
