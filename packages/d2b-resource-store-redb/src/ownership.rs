@@ -568,8 +568,16 @@ mod tests {
         let child_ref = ResourceRef::parse(&format!("Process/{CHILD_NAME_SENTINEL}")).unwrap();
         let child_uid = ResourceUid::parse(CHILD_UID_SENTINEL).unwrap();
 
-        assert!(format!("{owner_ref:?}").contains(OWNER_NAME_SENTINEL));
-        assert!(format!("{child_ref:?}").contains(CHILD_NAME_SENTINEL));
+        assert!(
+            owner_ref
+                .to_canonical_string()
+                .contains(OWNER_NAME_SENTINEL)
+        );
+        assert!(
+            child_ref
+                .to_canonical_string()
+                .contains(CHILD_NAME_SENTINEL)
+        );
         assert_eq!(owner_uid.as_str(), OWNER_UID_SENTINEL);
         assert_eq!(child_uid.as_str(), CHILD_UID_SENTINEL);
 
