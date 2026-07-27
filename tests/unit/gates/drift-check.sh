@@ -55,6 +55,8 @@ run_xtask gen-cli-shell-artifacts
 run_xtask gen-cli-schemas
 run_xtask gen-guest-proto
 run_xtask gen-guest-ttrpc
+run_xtask gen-resource-proto
+run_xtask gen-resource-ttrpc
 run_xtask spec-registry
 run_xtask implementation-graph
 run_xtask process-marker-pin
