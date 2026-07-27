@@ -630,7 +630,18 @@ that evidence exists.
 The RSS row is not a contract-only store pass criterion. After SPIKE-01 runs,
 `ADR046-store-004` production backend work records the resource service/store
 median at the 10,000-resource/100-watch fixture and fails above 24 MiB; that
-evidence blocks backend completion. The work that lands the fixed controllers
+evidence blocks backend completion.
+
+`ADR046-store-004` also carries the production-registration gates that the
+contract item cannot satisfy, because the contract ships no backend. Sealing
+the wave that lands it requires, in addition to the spike evidence and the
+resident-set-size row: conformance evidence that a registered backend mutates
+only through verified admission and exposes no independent write path, and a
+recorded security review of each registered backend. The seal must not close
+without both. The admission seal prevents a caller forging authorization and
+binds evidence to one store, but a backend, once registered, is trusted, so
+these are the review obligations that stand in place of a structural guarantee.
+ The work that lands the fixed controllers
 separately fails above 22 MiB for `Provider/system-core` and 12 MiB for
 `Provider/system-minijail`. Provider integration alone may record the
 aggregate row as passing, after measuring all three processes live and at or
