@@ -14,11 +14,15 @@ use d2b_contracts::v3::{
 };
 use d2b_core_controller::rbac::{AuthorizationCacheKey, PolicyRevisionSet, PositiveDecisionCache};
 use d2b_resource_store::{
-    AdmissionError, AdmissionIssuer, AdmissionPermit, AdmittedAuthorization,
-    AdmittedAuthorizationTarget, AdmittedMutation, AdmittedVerb, PolicySnapshot, StoreMutation,
-    StoreOperationContext,
+    AdmittedAuthorization, AdmittedAuthorizationTarget, AdmittedVerb, PolicySnapshot,
+    StoreMutation, StoreOperationContext,
 };
 use sha2::{Digest, Sha256};
+
+use crate::admission::{
+    AdmissionError, AdmissionIssuer, AdmissionPermit, AdmissionVerifier, AdmittedMutation,
+    admission_pair,
+};
 
 const POSITIVE_CACHE_ENTRIES: usize = 4096;
 const POSITIVE_CACHE_TICKS: u64 = 30;
@@ -505,7 +509,17 @@ pub struct NativeAuthorizer {
 }
 
 impl NativeAuthorizer {
+    /// Build the evaluator and the verifier transferred to its store backend.
     pub fn new(
+        catalog: ApiCatalog,
+        policy: Option<PolicySet>,
+    ) -> Result<(Self, AdmissionVerifier), AuthorizationPolicyError> {
+        let (admission, verifier) = admission_pair();
+        let authorizer = Self::from_issuer(catalog, policy, admission)?;
+        Ok((authorizer, verifier))
+    }
+
+    fn from_issuer(
         catalog: ApiCatalog,
         policy: Option<PolicySet>,
         admission: AdmissionIssuer,
@@ -1198,7 +1212,7 @@ mod tests {
     };
 
     fn test_issuer() -> AdmissionIssuer {
-        d2b_resource_store::admission_pair().0
+        crate::admission::admission_pair().0
     }
 
     fn subject(
@@ -1357,7 +1371,7 @@ mod tests {
     #[test]
     fn decision_matrix_and_positive_capabilities_are_exact() {
         let context = subject(Locality::Local, EvidenceClass::UnixPeer, "User/alice");
-        let engine = NativeAuthorizer::new(
+        let engine = NativeAuthorizer::from_issuer(
             ApiCatalog::standard(),
             Some(policy(4, &context, Some(ResourceVerb::Get), false)),
             test_issuer(),
@@ -1386,7 +1400,7 @@ mod tests {
     #[test]
     fn revocation_and_policy_outage_fail_closed() {
         let context = subject(Locality::Local, EvidenceClass::UnixPeer, "User/alice");
-        let engine = NativeAuthorizer::new(
+        let engine = NativeAuthorizer::from_issuer(
             ApiCatalog::standard(),
             Some(policy(4, &context, Some(ResourceVerb::Get), false)),
             test_issuer(),
@@ -1418,7 +1432,7 @@ mod tests {
             EvidenceClass::EnrolledKk,
             "ZoneLink/parent",
         );
-        let no_relay = NativeAuthorizer::new(
+        let no_relay = NativeAuthorizer::from_issuer(
             ApiCatalog::standard(),
             Some(policy(4, &context, Some(ResourceVerb::Get), false)),
             test_issuer(),
@@ -1430,7 +1444,7 @@ mod tests {
                 .unwrap_err(),
             AuthorizationDenial::RelayGrantMissing
         );
-        let no_target = NativeAuthorizer::new(
+        let no_target = NativeAuthorizer::from_issuer(
             ApiCatalog::standard(),
             Some(policy(4, &context, None, true)),
             test_issuer(),
@@ -1442,7 +1456,7 @@ mod tests {
                 .unwrap_err(),
             AuthorizationDenial::RelayTargetGrantMissing
         );
-        let both = NativeAuthorizer::new(
+        let both = NativeAuthorizer::from_issuer(
             ApiCatalog::standard(),
             Some(policy(4, &context, Some(ResourceVerb::Get), true)),
             test_issuer(),
@@ -1458,7 +1472,7 @@ mod tests {
             (Locality::Remote, EvidenceClass::EnrolledKk),
         ] {
             let context = subject(locality, evidence, "ZoneLink/parent");
-            let engine = NativeAuthorizer::new(
+            let engine = NativeAuthorizer::from_issuer(
                 ApiCatalog::standard(),
                 Some(policy(4, &context, Some(ResourceVerb::Get), true)),
                 test_issuer(),
@@ -1480,7 +1494,7 @@ mod tests {
             EvidenceClass::EnrolledKk,
             "ZoneLink/parent",
         );
-        let engine = NativeAuthorizer::new(
+        let engine = NativeAuthorizer::from_issuer(
             ApiCatalog::standard(),
             Some(policy(4, &enrolled, Some(ResourceVerb::Get), true)),
             test_issuer(),
@@ -1508,7 +1522,7 @@ mod tests {
             EvidenceClass::EnrolledKk,
             "ZoneLink/parent",
         );
-        let engine = NativeAuthorizer::new(
+        let engine = NativeAuthorizer::from_issuer(
             ApiCatalog::standard(),
             Some(policy(4, &context, Some(ResourceVerb::Get), true)),
             test_issuer(),
@@ -1629,7 +1643,7 @@ mod tests {
         );
 
         let context = subject(Locality::Local, EvidenceClass::UnixPeer, "User/alice");
-        let engine = NativeAuthorizer::new(catalog, None, test_issuer()).unwrap();
+        let engine = NativeAuthorizer::from_issuer(catalog, None, test_issuer()).unwrap();
         let mut uninstalled = request();
         uninstalled.targets[0].resource_type = extension;
         assert_eq!(
@@ -1669,7 +1683,8 @@ mod tests {
             controller_generation: ControllerGeneration::new(11).unwrap(),
             provider_generation: ResourceGeneration::new(12).unwrap(),
         });
-        let engine = NativeAuthorizer::new(ApiCatalog::standard(), None, test_issuer()).unwrap();
+        let engine =
+            NativeAuthorizer::from_issuer(ApiCatalog::standard(), None, test_issuer()).unwrap();
 
         for row in BOOTSTRAP_ROWS {
             let uid = if row.subject_name == "system-core" {
@@ -1710,7 +1725,8 @@ mod tests {
     fn bootstrap_zone_and_provider_names_are_compiled_in_both_phases() {
         let core_uid = "123e4567-e89b-42d3-a456-426614174000";
         let context = bootstrap_subject("system-core", core_uid);
-        let engine = NativeAuthorizer::new(ApiCatalog::standard(), None, test_issuer()).unwrap();
+        let engine =
+            NativeAuthorizer::from_issuer(ApiCatalog::standard(), None, test_issuer()).unwrap();
         let phases = [
             BootstrapPhase::Unprovisioned {
                 zone: ZoneId::parse("dev").unwrap(),

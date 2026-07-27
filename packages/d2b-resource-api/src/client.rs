@@ -3,9 +3,9 @@
 use std::sync::Arc;
 
 use d2b_contracts::{resource_proto as wire, v3::AuthenticatedSubjectContext};
-use d2b_resource_store::ResourceStore;
 
 use crate::{
+    ResourceStore,
     authz::AuthorizationState,
     service::{ResourceService, TrustedRequest, UpgradeDispatcher},
 };

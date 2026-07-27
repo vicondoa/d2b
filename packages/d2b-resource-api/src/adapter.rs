@@ -4,9 +4,9 @@ use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
 use d2b_contracts::{resource_proto as wire, v3::AuthenticatedSubjectContext};
-use d2b_resource_store::ResourceStore;
 
 use crate::{
+    ResourceStore,
     authz::{AuthorizationState, authenticated_relay_hop},
     client::ResourceClient,
     generated::d2b_resource_v3_ttrpc,
@@ -210,11 +210,9 @@ mod tests {
         SessionBinding, SessionPurpose, TranscriptHash, TransportBinding, ZoneId, ZoneRevision,
     };
     use d2b_resource_store::{
-        AdmissionIssuer, AdmissionVerifier, PolicySnapshot, ResourceStoreBackend,
-        StoreCommitResult, StoreError, StoreGetRequest, StoreInspectSchemaRequest,
+        PolicySnapshot, StoreCommitResult, StoreError, StoreGetRequest, StoreInspectSchemaRequest,
         StoreListRequest, StoreListResult, StoreResolveRequest, StoreResolvedIdentity,
-        StoreWatchReceipt, StoreWatchRequest, StoredResource, StoredSchema, VerifiedMutation,
-        admission_pair,
+        StoreWatchReceipt, StoreWatchRequest, StoredResource, StoredSchema,
     };
     use protobuf::{EnumOrUnknown, MessageField};
 
@@ -222,6 +220,7 @@ mod tests {
         ApiCatalog, BindingScope, BootstrapPhase, BoundSubject, CompiledRole, CompiledRoleBinding,
         NativeAuthorizer, PolicyRule, PolicySet, RelayGrantAuthority, ResourceVerb,
     };
+    use crate::{AdmissionVerifier, ResourceStoreBackend, VerifiedMutation};
 
     #[derive(Debug)]
     struct UnreachableStore {
@@ -229,9 +228,12 @@ mod tests {
     }
 
     impl UnreachableStore {
-        fn paired() -> (Arc<Self>, AdmissionIssuer) {
-            let (issuer, admission_verifier) = admission_pair();
-            (Arc::new(Self { admission_verifier }), issuer)
+        fn paired(
+            catalog: ApiCatalog,
+            policy: Option<PolicySet>,
+        ) -> (Arc<Self>, Arc<NativeAuthorizer>) {
+            let (authorizer, admission_verifier) = NativeAuthorizer::new(catalog, policy).unwrap();
+            (Arc::new(Self { admission_verifier }), Arc::new(authorizer))
         }
     }
 
@@ -311,11 +313,8 @@ mod tests {
     fn denied_adapter()
     -> Arc<AuthenticatedBusAdapter<UnreachableStore, crate::service::UnavailableUpgradeDispatcher>>
     {
-        let (store, issuer) = UnreachableStore::paired();
-        let service = Arc::new(ResourceService::new(
-            store,
-            Arc::new(NativeAuthorizer::new(ApiCatalog::standard(), None, issuer).unwrap()),
-        ));
+        let (store, authorizer) = UnreachableStore::paired(ApiCatalog::standard(), None);
+        let service = Arc::new(ResourceService::new(store, authorizer));
         Arc::new(
             AuthenticatedBusAdapter::bind_authenticated_session(
                 service,
@@ -332,7 +331,6 @@ mod tests {
         subresource: Option<&str>,
     ) -> Arc<AuthenticatedBusAdapter<UnreachableStore, crate::service::UnavailableUpgradeDispatcher>>
     {
-        let (store, issuer) = UnreachableStore::paired();
         let context = subject(Locality::Local, EvidenceClass::UnixPeer);
         let catalog = ApiCatalog::standard();
         let role = CompiledRole::new(
@@ -364,17 +362,11 @@ mod tests {
             RelayGrantAuthority::None,
         )
         .unwrap();
-        let service = Arc::new(ResourceService::new(
-            store,
-            Arc::new(
-                NativeAuthorizer::new(
-                    catalog.clone(),
-                    Some(PolicySet::new(&catalog, 4, vec![role], vec![binding]).unwrap()),
-                    issuer,
-                )
-                .unwrap(),
-            ),
-        ));
+        let (store, authorizer) = UnreachableStore::paired(
+            catalog.clone(),
+            Some(PolicySet::new(&catalog, 4, vec![role], vec![binding]).unwrap()),
+        );
+        let service = Arc::new(ResourceService::new(store, authorizer));
         Arc::new(
             AuthenticatedBusAdapter::bind_authenticated_session(service, context, state()).unwrap(),
         )
@@ -556,11 +548,8 @@ mod tests {
 
     #[test]
     fn adapter_rejects_locality_evidence_mismatches() {
-        let (store, issuer) = UnreachableStore::paired();
-        let service = Arc::new(ResourceService::new(
-            store,
-            Arc::new(NativeAuthorizer::new(ApiCatalog::standard(), None, issuer).unwrap()),
-        ));
+        let (store, authorizer) = UnreachableStore::paired(ApiCatalog::standard(), None);
+        let service = Arc::new(ResourceService::new(store, authorizer));
         for (locality, evidence) in [
             (Locality::AdjacentZone, EvidenceClass::BootstrapIkpsk2),
             (Locality::Remote, EvidenceClass::EnrolledKk),

@@ -16,13 +16,14 @@ use d2b_contracts::{
     },
 };
 use d2b_resource_store::{
-    ExpectedRevision, ResourceMutationKind, ResourceStore, StoreCommitResult, StoreFilter,
-    StoreGetRequest, StoreInspectSchemaRequest, StoreListRequest, StoreMutation,
-    StoreOperationContext, StoreProjection, StoreResolveRequest, StoreWatchRequest, StoredResource,
+    ExpectedRevision, ResourceMutationKind, StoreCommitResult, StoreFilter, StoreGetRequest,
+    StoreInspectSchemaRequest, StoreListRequest, StoreMutation, StoreOperationContext,
+    StoreProjection, StoreResolveRequest, StoreWatchRequest, StoredResource,
 };
 use protobuf::{Message, MessageField};
 
 use crate::{
+    ResourceStore,
     authz::{
         ApiMethod, AuthorizationRequest, AuthorizationState, AuthorizationTarget, NativeAuthorizer,
         ResourceVerb,
@@ -1689,7 +1690,7 @@ mod tests {
     use std::{
         collections::BTreeMap,
         sync::{
-            Mutex,
+            Mutex, OnceLock,
             atomic::{AtomicU64, AtomicUsize, Ordering},
         },
     };
@@ -1700,9 +1701,8 @@ mod tests {
         SessionPurpose, TranscriptHash, TransportBinding,
     };
     use d2b_resource_store::{
-        AdmissionIssuer, AdmissionVerifier, MutationOrdinal, ResourceStoreBackend, StoreError,
-        StoreErrorKind, StoreListResult, StoreResolvedIdentity, StoreWatchReceipt, StoredSchema,
-        VerifiedMutation, admission_pair,
+        MutationOrdinal, StoreError, StoreErrorKind, StoreListResult, StoreResolvedIdentity,
+        StoreWatchReceipt, StoredSchema,
     };
     use protobuf::EnumOrUnknown;
 
@@ -1710,6 +1710,7 @@ mod tests {
         ApiCatalog, BindingScope, BoundSubject, CompiledRole, CompiledRoleBinding, PolicyRule,
         PolicySet, RelayGrantAuthority,
     };
+    use crate::{AdmissionVerifier, ResourceStoreBackend, VerifiedMutation};
 
     const GOLDEN_HOST: &[u8] = br#"{"apiVersion":"resources.d2bus.org/v3","metadata":{"configurationGeneration":7,"createdAt":"2026-07-22T00:00:00.000Z","deletionRequestedAt":null,"finalizers":[],"generation":1,"managedBy":"configuration","name":"host-system","ownerRef":null,"revision":1,"uid":"123e4567-e89b-42d3-a456-426614174000","updatedAt":"2026-07-22T00:00:00.000Z","zone":"dev"},"spec":{"providerRef":"Provider/system-core","updatePolicy":{"disruptive":"manual","nonDisruptive":"automatic"}},"status":{"completedAt":null,"conditions":[],"lastReconciledAt":null,"observedGeneration":0,"outcome":null,"phase":"Pending","resource":{},"startedAt":null,"update":{"dependencies":{"count":0,"refs":[]},"disruption":"None","lastAssessedAt":null,"observedGeneration":0,"operationId":null,"owned":{"count":0,"refs":[]},"preserveState":true,"reasons":[],"state":"Unknown","targetGeneration":1}},"type":"Host"}"#;
 
@@ -1731,13 +1732,11 @@ mod tests {
         last_resource_uid: Mutex<Option<ResourceUid>>,
         last_payload_digest: Mutex<Option<String>>,
         uid_index: Mutex<BTreeMap<ResourceUid, ResourceRef>>,
-        admission_issuer: AdmissionIssuer,
-        admission_verifier: AdmissionVerifier,
+        admission_verifier: OnceLock<AdmissionVerifier>,
     }
 
     impl FakeStore {
         fn new(mode: CommitMode) -> Self {
-            let (admission_issuer, admission_verifier) = admission_pair();
             Self {
                 mode: Mutex::new(mode),
                 commits: AtomicUsize::new(0),
@@ -1749,8 +1748,7 @@ mod tests {
                 last_resource_uid: Mutex::new(None),
                 last_payload_digest: Mutex::new(None),
                 uid_index: Mutex::new(BTreeMap::new()),
-                admission_issuer,
-                admission_verifier,
+                admission_verifier: OnceLock::new(),
             }
         }
 
@@ -1767,7 +1765,9 @@ mod tests {
 
     impl ResourceStoreBackend for FakeStore {
         fn admission_verifier(&self) -> &AdmissionVerifier {
-            &self.admission_verifier
+            self.admission_verifier
+                .get()
+                .expect("test authorizer installs the paired verifier")
         }
 
         async fn get(&self, _request: StoreGetRequest) -> Result<StoredResource, StoreError> {
@@ -1807,12 +1807,16 @@ mod tests {
             &self,
             mutation: VerifiedMutation,
         ) -> Result<StoreCommitResult, StoreError> {
-            let mutations = mutation.mutations(&self.admission_verifier)?;
+            let verifier = self
+                .admission_verifier
+                .get()
+                .expect("test authorizer installs the paired verifier");
+            let mutations = mutation.mutations(verifier)?;
             self.commits.fetch_add(1, Ordering::SeqCst);
             self.mutation_count.store(mutations.len(), Ordering::SeqCst);
             self.configuration_revision.store(
                 mutation
-                    .policy_snapshot(&self.admission_verifier)?
+                    .policy_snapshot(verifier)?
                     .active_configuration_revision
                     .get(),
                 Ordering::SeqCst,
@@ -1931,14 +1935,16 @@ mod tests {
             RelayGrantAuthority::None,
         )
         .unwrap();
-        Arc::new(
-            NativeAuthorizer::new(
-                catalog.clone(),
-                Some(PolicySet::new(&catalog, 4, vec![role], vec![binding]).unwrap()),
-                store.admission_issuer.clone(),
-            )
-            .unwrap(),
+        let (authorizer, verifier) = NativeAuthorizer::new(
+            catalog.clone(),
+            Some(PolicySet::new(&catalog, 4, vec![role], vec![binding]).unwrap()),
         )
+        .unwrap();
+        store
+            .admission_verifier
+            .set(verifier)
+            .expect("one authorizer is paired with each test store");
+        Arc::new(authorizer)
     }
 
     fn authorizer_for_subresource(
@@ -1975,14 +1981,16 @@ mod tests {
             RelayGrantAuthority::None,
         )
         .unwrap();
-        Arc::new(
-            NativeAuthorizer::new(
-                catalog.clone(),
-                Some(PolicySet::new(&catalog, 4, vec![role], vec![binding]).unwrap()),
-                store.admission_issuer.clone(),
-            )
-            .unwrap(),
+        let (authorizer, verifier) = NativeAuthorizer::new(
+            catalog.clone(),
+            Some(PolicySet::new(&catalog, 4, vec![role], vec![binding]).unwrap()),
         )
+        .unwrap();
+        store
+            .admission_verifier
+            .set(verifier)
+            .expect("one authorizer is paired with each test store");
+        Arc::new(authorizer)
     }
 
     fn request_meta() -> MessageField<wire::RequestMeta> {
@@ -2372,10 +2380,8 @@ mod tests {
     #[tokio::test]
     async fn finalizers_are_separate_and_batch_is_one_admitted_commit() {
         let store = Arc::new(FakeStore::new(CommitMode::Success));
-        let metadata_service = ResourceService::new(
-            Arc::clone(&store),
-            authorizer(&store, [ResourceVerb::UpdateMetadata]),
-        );
+        let authorizer = authorizer(&store, [ResourceVerb::UpdateMetadata, ResourceVerb::Delete]);
+        let metadata_service = ResourceService::new(Arc::clone(&store), Arc::clone(&authorizer));
         let mut request = wire::UpdateMetadataRequest::new();
         request.meta = request_meta();
         let mut value = mutation(wire::MutationKind::MUTATION_KIND_UPDATE_METADATA);
@@ -2390,10 +2396,7 @@ mod tests {
             wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_SCHEMA_INVALID
         );
 
-        let batch_service = ResourceService::new(
-            Arc::clone(&store),
-            authorizer(&store, [ResourceVerb::Delete]),
-        );
+        let batch_service = ResourceService::new(Arc::clone(&store), authorizer);
         let mut batch = wire::CommitBatchRequest::new();
         batch.meta = request_meta();
         batch.mutations = vec![
@@ -2482,14 +2485,15 @@ mod tests {
         );
         assert!(response.resources.is_empty());
 
-        *store.schema_response.lock().unwrap() = Some(StoredSchema {
+        let schema_store = Arc::new(FakeStore::new(CommitMode::Success));
+        *schema_store.schema_response.lock().unwrap() = Some(StoredSchema {
             resource_type: ResourceTypeName::parse("Host").unwrap(),
             canonical_json: vec![b'x'; MAX_RESPONSE_CANONICAL_BYTES],
             payload_digest: format!("sha256:{}", "1".repeat(64)),
         });
         let schema_service = ResourceService::new(
-            Arc::clone(&store),
-            authorizer_for_subresource(&store, ResourceVerb::Get, "schema"),
+            Arc::clone(&schema_store),
+            authorizer_for_subresource(&schema_store, ResourceVerb::Get, "schema"),
         );
         let mut request = wire::InspectSchemaRequest::new();
         request.meta = request_meta();
