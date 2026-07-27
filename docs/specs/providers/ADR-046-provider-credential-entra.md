@@ -660,6 +660,8 @@ or any digest derived from Credential identity.
 | Data migration | Full v3 reset of d2b Credential metadata; Entrablau Guest state is preserved unless explicitly destroyed by the sibling-owned reset flow |
 | Validation | See §13 |
 | Removal proof | Old abstract Host credential paths and any direct Entra effect client are deleted only after the Entrablau Endpoint-backed provider passes the test matrix |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 

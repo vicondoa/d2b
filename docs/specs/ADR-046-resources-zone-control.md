@@ -4261,6 +4261,8 @@ None of the following exist in baseline:
 | Data migration | Destructive d2b 3.0 reset; no v2/Realm Zone resource import |
 | Validation | `zone-self-resource-enforced`, `zone-uid-mismatch-quarantine`, `zone-name-mismatch-rejected`, `zone-cardinality-one`, `zone-cross-zone-ref-rejected`, `zone-owner-rejected`, `zone-deletion-only-on-drain` |
 | Removal proof | `d2b-realm-core` Realm struct removed only after Zone resource integration is live in Zone runtime |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-zone-control-002
 
@@ -4277,6 +4279,8 @@ None of the following exist in baseline:
 | Data migration | Destructive reset; no v2 Realm peer migration |
 | Validation | `zonelink-reconnect-child-uid-change`, `zonelink-disconnect-unknown-phase`, `zonelink-intent-queue-limit`, `zonelink-disabled-no-reconnect`, `zonelink-child-auth-denied-failed`, `zonelink-drain-closes-session`, `zonelink-child-name-matches-store`, `zonelink-one-child-local-uplink`, `zonelink-parent-bootstrap-binding`, `zonelink-parent-has-no-reciprocal-row`, `zonelink-unenrolled-runs-ikpsk2-bootstrap-first`, `zonelink-ikpsk2-consumes-single-use-psk-once`, `zonelink-enrollment-committed-before-kk-handshake`, `zonelink-reconnect-uses-kk-without-psk`, `zonelink-resource-traffic-before-ready-rejected`, `zonelink-transport-does-not-select-or-reorder-handshake-profile` |
 | Removal proof | `realm_stubs.rs` (`ApiFrontend`, `PeerOperationRouter`, `TargetResolver`) removed after ComponentSession integration (ADR046-zone-control-018); `realm_access_resolver.rs` module removed after ZoneLink replaces entrypoint-table resolution; gateway `PeerSession`/`SecurePeerSession` session types remain as dead code in d2b-realm-router until Provider session migration wave |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-zone-control-003
 
@@ -4293,6 +4297,8 @@ None of the following exist in baseline:
 | Data migration | Full reset; Provider packages recompiled and re-registered per new schema |
 | Validation | All §15.3 Provider tests including the resolved bounds checks |
 | Removal proof | `d2b-realm-provider` trait crate removed per ADR046-zone-control-017 after Provider resource integration |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-zone-control-004
 
@@ -4308,6 +4314,8 @@ None of the following exist in baseline:
 | Data migration | Initial Roles generated from Nix config; no v2 Role resource import |
 | Validation | All §15.4 Role tests including closed-enum, relay origin/scope/target-verb, and resolved-bounds checks |
 | Removal proof | `daemon-access` capability enum removed after RBAC Role engine covers all access decisions |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-zone-control-005
 
@@ -4323,6 +4331,8 @@ None of the following exist in baseline:
 | Data migration | Initial RoleBindings generated from Nix config |
 | Validation | All §15.5 RoleBinding tests, including the 128-subject admission bound and no-expiry lifecycle model |
 | Removal proof | Not applicable; new type |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-zone-control-006
 
@@ -4338,6 +4348,8 @@ None of the following exist in baseline:
 | Data migration | No migration; reset provisions a new store identity rather than clearing `policy_revision` |
 | Validation | All §15.6 bootstrap tests plus exact static-row-count/no-external-input policy test, both derived-phase cases, subject-UID recheck in provisioned-bootstrap, atomic 0-to-1 publication, and no-reentry-after-restart/reset vectors |
 | Removal proof | `daemon-access` bootstrap stub removed after Zone runtime bootstrap authz integrates |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-zone-control-007
 
@@ -4353,6 +4365,8 @@ None of the following exist in baseline:
 | Data migration | Full reset; Nix realm options (`d2b.realms.*`) remain until purge wave |
 | Validation | nix-unit vectors for each Zone control type schema; closed resource/session verb and relay restriction vectors; cross-field constraint tests; rendered JSON contract tests (`make test-drift`) |
 | Removal proof | `nixos-modules/options-realms.nix` and related realm options removed only after Zone resource Nix integration is live |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-zone-control-008
 
@@ -4368,6 +4382,8 @@ None of the following exist in baseline:
 | Data migration | Destructive reset; `unsafe-local-workloads.json` bundle artifact and `HelperRegistry` replaced by Host resource store entries + Process Provider launch |
 | Validation | `host-user-domain-no-isolation-warning-required`, `host-user-only-disallows-system-domain`, `host-allowUnsafeLocal-gates-creation`, `host-defaultUserRef-user-type-required`, `host-shell-policy-max-sessions-bound`, `host-launcher-item-max-count-bound`, `host-audit-body-isolation-label-present`, `host-otel-no-posture-label`, `host-cli-no-isolation-warning-present` |
 | Removal proof | `d2bd/src/unsafe_local_helper.rs` `HelperRegistry` removed after Zone runtime Host/Process broker integration; `unsafe-local-workloads.json` bundle artifact removed after Host resource store replaces it; `kind = "unsafe-local"` Nix enum value removed in purge wave |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 
 ### ADR046-zone-control-009
@@ -4385,6 +4401,8 @@ None of the following exist in baseline:
 | Data migration | Full reset; no prior Quota resources exist |
 | Validation | `quota-ceiling-hard-reject`, `quota-ceiling-soft-warn`, `quota-ceiling-pertype`, `quota-drain-blocks-on-dependents`, `quota-over-quota-status`, `quota-nix-eval-bounds`, `quota-nix-build-pertype-unknown-type` |
 | Removal proof | Additive; no existing code removed |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-zone-control-010
 
@@ -4401,6 +4419,8 @@ None of the following exist in baseline:
 | Data migration | Full reset; no prior EmergencyPolicy resources exist |
 | Validation | `emergency-policy-activates-gate`, `emergency-policy-disconnects-zonelinks`, `emergency-policy-union-most-restrictive`, `emergency-policy-multi-enabled-combined-scope`, `emergency-policy-stop-processes-no-delete`, `emergency-policy-deactivation-restores-gate`, `emergency-policy-drain-finalizer`, `emergency-nix-eval-drain-deadline-bound-tightest` |
 | Removal proof | Replaces the inline `emergencyDisable` field from the proposed Zone.spec option B; that option was not implemented |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 
@@ -4423,6 +4443,8 @@ Evidence class for all: `main-reuse-source`.
 | Data migration | Not applicable; new crate |
 | Validation | `session-lifecycle-reconnect-attempts-exhausted`, `session-lifecycle-keepalive-timeout-closes`, `session-lifecycle-nonce-exhausted-close-with-replace-generation-remediation`, `session-driver-cancelled-receiver-restores-event` (ported from test at line 707), `named-stream-credit-half-close-then-remote-close-transitions-closed`, `named-stream-reset-cancels-pending-send` |
 | Removal proof | `d2b-realm-router/src/{session.rs,secure_session.rs,mux_session.rs,session_lifecycle.rs}` removed after d2b-bus integration wave |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-zone-control-012
 
@@ -4438,6 +4460,8 @@ Evidence class for all: `main-reuse-source`.
 | Data migration | Not applicable; new crate |
 | Validation | `seqpacket-inherited-missing-credentials-rejected` (ported from `inherited_first_packet_requires_credentials`), `seqpacket-inherited-wrong-credentials-rejected` (ported from `inherited_first_packet_rejects_wrong_credentials`), `pidfd-double-read-race-guard-detects-pid-reuse`, `sealed-memfd-partial-seal-rejected`, `credit-scope-six-levels-ordered`, `ancillary-capacity-from-disabled-policy-is-zero`, `raw-control-unknown-header-rejected` (ported from `raw_control_scanner_rejects_unknown_and_partial_headers`), `raw-control-valid-rights-parsed` (ported from `raw_control_scanner_accepts_exact_rights_shape`) |
 | Removal proof | `d2b-realm-router/src/secure_session.rs` `SecurePeerSession` seqpacket layer removed after d2b-bus-unix provides the replacement |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-zone-control-013
 
@@ -4453,6 +4477,8 @@ Evidence class for all: `main-reuse-source`.
 | Data migration | Additive: new v3 tags appended to existing closed enums; ADR45 v2 tag values remain valid during coexistence |
 | Validation | `preface-magic-exact-16-bytes`, `preface-offer-len-zero-rejected`, `preface-offer-len-over-max-rejected`, `preface-offer-len-canonical-accepted`, `handshake-21-reject-reasons-all-covered`, `attachment-policy-packet-atomic-requires-seqpacket-or-inherited`, `limit-profile-local-default-all-fields-positive` |
 | Removal proof | `d2b-contracts/src/v2_component_session.rs` ADR45-specific tags retired after all v2 sessions decommissioned |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-zone-control-018
 
@@ -4468,6 +4494,8 @@ Evidence class for all: `main-reuse-source`.
 | Data migration | Not applicable; new implementation |
 | Validation | `zonelink-reconnect-child-uid-change`, `zonelink-disconnect-unknown-phase`, `zonelink-intent-queue-limit`, `zone-session-phase-forward-sequence-refuses-repeat` (ported from `forward_sequence_reaches_running_then_refuses_to_advance`), `zone-session-failure-records-phase` (ported from `failure_mid_establishment_rolls_into_teardown_and_records_phase`), `zone-session-stop-is-idempotent` (ported), `zone-bootstrap-session-nn-peer-uid-verified` |
 | Removal proof | `d2b-realm-router/src/service_v2.rs` `RealmServiceServer` removed after Zone API service layer replaces realm v2 service; `d2b-realm-router/src/session_lifecycle.rs` removed after d2b-bus lifecycle replaces realm-specific one |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-zone-control-017
 
@@ -4483,6 +4511,8 @@ Evidence class for all: `main-reuse-source`.
 | Data migration | Provider descriptors re-registered on Zone store bootstrap; no v2 provider state migration |
 | Validation | `provider-registry-drain-waiter-race-safe` (ported from both notify-race tests), `provider-registry-publish-validates-snapshot-before-swap`, `provider-rpc-proxy-placement-exact` (ported from `provider_and_user_agent_session_identities_are_placement_exact`), `provider-agent-adapter-rejects-non-monotone-attachment-indexes`, `provider-server-shutdown-drains-in-flight-requests`, `provider-conformance-health-inspection-observability-sequence` |
 | Removal proof | `d2b-realm-provider` trait crate removed after v3 Provider resource + registry integration (§16.5) |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-provider-agent-001
 
@@ -4498,6 +4528,8 @@ Evidence class for all: `main-reuse-source`.
 | Data migration | Not applicable; new implementation |
 | Validation | `provider-agent-dispatch-unsupported-service-returns-ttrpc-error`, `provider-agent-negative-timeout-rejected`, `provider-agent-session-closed-terminates-serve-loop`, `provider-agent-audit-ring-capacity-bounded` (ported from `audit_capacity_is_bounded`), `provider-registry-entry-fingerprint-generation-exact` (ported from `rejects_generation_and_exact_identity_mismatches`), `provider-registry-unknown-axis-fallback-non-exhaustive` (ported from `unknown_binding_axis_remains_rejected_on_the_wire`), `provider-registry-duplicate-ids-rejected` (ported from `rejects_duplicate_or_unbounded_mapping_ids`) |
 | Removal proof | Not applicable; new implementation |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-client-001
 
@@ -4513,6 +4545,8 @@ Evidence class for all: `main-reuse-source`.
 | Data migration | Not applicable; updated in place |
 | Validation | `client-retry-policy-max-8-attempts-enforced`, `client-named-stream-close-local-then-remote-close-transitions-closed`, `client-route-table-ambiguous-route-rejected`, `client-host-socket-peer-uid-verified-on-connect`, `client-retryable-failure-only-safe-mutations` |
 | Removal proof | `DaemonMethod` v2 verb enum retired after all v2 daemon operations migrated to Zone API |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-wire-001
 
@@ -4528,6 +4562,8 @@ Evidence class for all: `main-reuse-source`.
 | Data migration | v2 and v3 wire type namespaces coexist in the same contracts crate; no migration |
 | Validation | `v3-canonical-name-matches-ids-is-label-regex`, `v3-service-fingerprint-changes-on-method-mutation` (behavior ported from `public_endpoint_fingerprint_binds_daemon_and_guest_method_descriptors`), `v3-audit-gap-detection-covers-missing-segment`, `v3-strict-wire-rejects-unknown-fields`, `v3-state-envelope-digest-mismatch-rejected`, `v3-canonical-payload-verifier-binding-holds-under-mutation` |
 | Removal proof | `d2b-contracts/src/v2_{services,state,identity,provider}.rs` and `v2_component_session.rs` deprecated in contracts crate after all v2 clients decommissioned |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 
@@ -4546,6 +4582,8 @@ Evidence class for all: `main-reuse-source`.
 | Data migration | Replace `nixos-modules/options-realms.nix`-derived option trees once Zone controller is live and has reached parity |
 | Validation | All Phase 1 eval tests in §15.8 (`nix-eval-name-regex-enforced`, `nix-eval-verb-closed-enum`, `nix-eval-session-verb-closed-enum`, `nix-eval-relay-session-verb-known`, `nix-eval-roleref-format`, `nix-eval-subject-type-restricted`, `nix-eval-no-duplicate-subjects`, `nix-eval-bootstrap-provider-rejected`, `nix-eval-provider-missing-artifact-id`, `nix-eval-artifact-id-not-in-catalog`, `nix-eval-artifact-wrong-type`, `nix-eval-artifact-id-format`, `nix-eval-credentialref-declared`, `nix-eval-dollar-key-rejected`, all five `nix-eval-parent-zone-*` vectors, `nix-eval-zonelink-child-name-mismatch-rejected`, `nix-eval-zonelink-second-uplink-rejected`, `nix-eval-zonelink-limits-maxpendingintents-bound`); Phase 2 runs `nix-build-relay-scope-restricted`; drift test asserts the standard registry and generated option modules cover exactly all 19 canonical types; negative evals reject unknown strings, unqualified extensions, unsigned or uninstalled qualified types, and unknown `spec` fields; a positive fixture admits an installed signed qualified type and validates its strict generated schema |
 | Removal proof | `nixos-modules/options-realms.nix`, `nixos-modules/realm-controller-config-json.nix`, `nixos-modules/realm-identity-config-json.nix` deleted after Zone controller and resource compiler reach full parity; `nixos-modules/assertions.nix` lines referencing `allowUnsafeLocal`/realm names removed after Host admission validation replaces them |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-zone-control-015
 
@@ -4562,6 +4600,8 @@ Evidence class for all: `main-reuse-source`.
 | Data migration | Full reset; no prior bundle state exists to carry forward |
 | Validation | All Phase 2 build tests in §15.8 (`nix-build-artifact-id-missing-from-catalog`, `nix-build-artifact-wrong-type-rejected`, `nix-build-duplicate-artifact-id`, `nix-build-artifact-store-path-absent-from-bundle`, `nix-build-artifact-store-path-absent-from-config`, `nix-build-config-schema-failure`, `nix-build-schema-digest-mismatch`, `nix-build-manifest-digest-mismatch`, `nix-build-resourcetype-collision`, `nix-build-bundle-sorted`, `nix-build-bundle-digest-stable`, `nix-build-per-resource-digest-correct`, `nix-build-credential-ref-survives-build`, `nix-build-inline-secret-lint-warning`, `nix-build-inline-secret-strict-failure`) |
 | Removal proof | No current equivalent; additive only; no prior code removed |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-zone-control-016
 
@@ -4578,6 +4618,8 @@ Evidence class for all: `main-reuse-source`.
 | Data migration | Full reset; no prior bundle activation state exists to carry forward |
 | Validation | All Phase 3 runtime and cleanup tests in §15.8 (`nix-runtime-bundledigest-integrity`, `nix-runtime-generation-monotone`, `nix-runtime-zoneuid-mismatch-rejected`, `nix-runtime-zonename-mismatch-rejected`, `nix-runtime-activation-nonblocking`, `nix-runtime-provider-config-invalid-continues`, all `cleanup-*` and `rollback-*` tests) |
 | Removal proof | `d2bd/src/lib.rs` config-load at lines 1408 and 16741 removed after Zone configuration publication handler reaches parity; `realm-controller-config-json.nix` and `realm-identity-config-json.nix` Nix bundle-emit removed after resource compiler reaches parity |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-pkg-001
 
@@ -4594,6 +4636,8 @@ Evidence class for all: `main-reuse-source`.
 | Data migration | Additive; no existing `d2b-provider-*` crates in the pre-ADR45 baseline; first Provider crate created must comply from inception |
 | Validation | §15.3 layout conformance tests: `provider-crate-layout-src-required`, `provider-crate-layout-tests-required`, `provider-crate-layout-integration-required`, `provider-crate-layout-readme-required`, `provider-readme-sections-all-present`, `provider-readme-sections-partial-missing`, `provider-integration-target-declared`, `provider-integration-target-unique`, `provider-integration-target-valid-values`, `provider-crate-naming-convention`, `provider-crate-layout-non-provider-exempt` |
 | Removal proof | No existing code removed; additive policy test only |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-zone-control-019
 
@@ -4610,6 +4654,8 @@ Evidence class for all: `main-reuse-source`.
 | Data migration | None - full d2b 3.0 reset; no prior cross-Zone sharing state |
 | Validation | §8A.7: fast hermetic factory absent/mismatch/tamper, Service-only export target, exactly-one same-type projection Service, no Device/Endpoint/Binding projection, no auto-Binding, intent-only spec/status-only observations, backing/target allowlists, finalizer/update propagation, Provider classification, canonical Nix stability including compiler-only `d2b.zones.work.parentZone = "local-root"`, child-local `ZoneLink/work-uplink` in `d2b.zones.work.resources`, local `zoneLinkRef` resolution, quotas/reconnect/revoke, and no FD/secret/path tests; slower real encrypted-stream integration for audio/security-key/observability/policy-gated USBIP |
 | Removal proof | Not applicable (new surface) |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-zone-control-020
 
@@ -4626,6 +4672,8 @@ Evidence class for all: `main-reuse-source`.
 | Data migration | None - full d2b 3.0 reset |
 | Validation | Exactly one same-type Service projection owned by import; no Device/Endpoint/Binding projection; Binding never auto-created/deleted; Binding target allowlist; intent-only spec/status-only observations; owned Process/Endpoint child cleanup; pending finalizer while Binding refs remain; reconnect only after generation/factory/schema revalidation; hermetic fake-adapter + real-stream integration tiers |
 | Removal proof | Not applicable (new surface) |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-zone-control-021
 
@@ -4642,6 +4690,8 @@ Evidence class for all: `main-reuse-source`.
 | Data migration | Full d2b 3.0 reset; no process-global state persisted across the cutover |
 | Validation | Two Zones on one host do not share `USBIP_BACKGROUND_RECONCILE_ACTIVE`/`FORCE_SHUTDOWN_GENERATIONS`/activation-lock state; per-Zone configuration staging isolation; ZoneLink cursor adoption by `ownerProof` and quarantine on ambiguity; hermetic with fakes |
 | Removal proof | The process-global statics and per-VM staging symbols are deleted after the per-Zone coordinator reaches parity; confirmed by `cargo check` and a no-process-global lint |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-zone-control-022
 
@@ -4658,6 +4708,8 @@ Evidence class for all: `main-reuse-source`.
 | Data migration | None - full d2b 3.0 reset |
 | Validation | Second Provider controller for an `exactly-one` Provider rejected with `duplicateConflict`; second observability Provider rejected; single controller admitted; `Degraded` config activation names the incumbent digest; hermetic |
 | Removal proof | Not applicable (new surface) |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-zone-control-023
 
@@ -4674,6 +4726,8 @@ Evidence class for all: `main-reuse-source`.
 | Data migration | None - full d2b 3.0 reset |
 | Validation | Duplicate-scope `Quota`/`EmergencyPolicy` rejected with `duplicateConflict`; single-scope admitted; union/individual scope flags honored; fast hermetic tests |
 | Removal proof | Not applicable (new implementation) |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-zone-control-024
 
@@ -4690,6 +4744,8 @@ Evidence class for all: `main-reuse-source`.
 | Data migration | None - full d2b 3.0 reset |
 | Validation | Two Zones on one host cannot both claim one GPU/TPM/USB/`/dev/kvm`/passthru NIC/vsock CID/fixed port - second is `duplicateConflict`; security-key and USB implementations resolving the same physical token submit byte-identical `physical-usb-backing` tuple keys and the loser receives `physical-usb-backing-conflict` before any effect; a second USBIP relay `Endpoint` for one Core-derived Network UID/signed-policy-port digest receives `usbip-network-relay-authority-conflict`, while multiple admitted Services share the multiplexed owner and no `Network` authority owns the listener/firewall; Provider-private authority classes/digests cannot bypass the collision; render-node shared admits bounded holders; per-Guest swtpm exclusive and marker never wiped; host-global adoption by `ownerProof`; hardware D096 exportability (GPU/KVM/TPM/store/macvtap non-exportable; semantic USB policy-gated); fast hermetic with fakes |
 | Removal proof | Not applicable (new surface) |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 

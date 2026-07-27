@@ -120,6 +120,31 @@ run_policy_cargo_binary() {
   ok "$label ($passed passed)"
 }
 
+run_guest_workspace_guard() {
+  local label="guest-workspace-drift"
+  local tool="tests/tools/guest-workspace-drift.py"
+  log "--> $label"
+  if command -v python3 >/dev/null 2>&1; then
+    if python3 "$ROOT/$tool" --root "$ROOT"; then
+      ok "$label"
+    else
+      fail "$label"
+      rc=1
+    fi
+  elif command -v nix >/dev/null 2>&1; then
+    if nix shell --quiet --inputs-from "$ROOT" nixpkgs#python3 \
+      --command python3 "$ROOT/$tool" --root "$ROOT"; then
+      ok "$label"
+    else
+      fail "$label"
+      rc=1
+    fi
+  else
+    fail "$label requires python3 (or nix to provide it)"
+    rc=1
+  fi
+}
+
 run_policy_gate "adr-index-coverage"        tests/unit/meta/adr-index-coverage.sh
 run_policy_gate "w0-dep-direction"          tests/unit/meta/w0-dep-direction.sh
 run_policy_gate "deliverable-gate-inventory" tests/unit/meta/deliverable-gate-inventory.sh
@@ -142,6 +167,7 @@ run_policy_cargo_binary "policy-adr046-work-items" policy_adr046_work_items
 run_policy_cargo_binary "policy-changelog-gate"   policy_changelog_gate
 run_policy_cargo_binary "policy-adr046-spec-literals" policy_adr046_spec_literals
 run_policy_cargo_binary "policy-adr046-envelopes"     policy_adr046_envelopes
+run_guest_workspace_guard
 
 [ "$rc" -eq 0 ] || exit 1
 log "test-policy OK (duration: $((SECONDS - suite_started))s)"

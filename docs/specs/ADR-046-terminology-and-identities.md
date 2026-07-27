@@ -265,9 +265,9 @@ cgroup/scope, and provider-specific process identity.
 | Item | Treatment |
 | --- | --- |
 | Current anchor | `d2b-realm-core/src/ids.rs`, `realm.rs`, `target.rs`, `workload.rs`; `nixos-modules/options-realms*.nix`; `index.nix` |
-| Evidence class | Current Realm/Workload IDs are implemented-and-reachable; Zone/Host/Guest/ResourceRef/Provider resources are ADR-only |
+| Evidence class | The canonical Zone and resource identity contracts and Nix declarations named by the `Merged` work items have landed with tests; production resource dispatch and full Host/Guest/Provider integration are not wired yet |
 | Behavior retained | Bounded fail-closed IDs, canonical target parsing, opaque token redaction, stable current Workload identity |
-| Required delta | Zone term/type, universal ResourceRef, UID/generation/revision, Host/Guest split, Process domains |
+| Required delta | Wire the landed identity contracts and declarations into production resource dispatch, then complete Host/Guest/Provider integration and Process domains |
 | Reuse path | Adapt current ID validators/serde/redaction; map current Workload/Realm only where evidence says reachable |
 | Replacement/deletion | Realm public types/options remain until the v3 cutover work item supplies Zone successors |
 | Feasibility proof | Golden ref/ID vectors shared by Rust/Nix/other SDKs; collision and UID-recreate tests |
@@ -288,6 +288,8 @@ cgroup/scope, and provider-specific process identity.
 | Data migration | Destructive d2b 3.0 reset; no RealmRef parser compatibility |
 | Validation | Rust property/vector tests; pure-Nix vector parity; malformed/collision/UID-recreate tests; UUIDv4 canonical-form and CSPRNG failure vectors; exact ResourceType/ResourceRef bounds; `AuthenticatedSubjectContext` no-Deserialize/no-public-mutation and redacted-Debug policy tests |
 | Removal proof | Old public Realm target types removed only after all v3 callers consume Zone/ResourceRef |
+| Implementation state | Merged |
+| Evidence | Both destinations are present: `packages/d2b-contracts/src/v3/identity.rs` and `packages/d2b-contracts/src/v3/resource_ref.rs`, with their inline contract/vector tests. |
 
 ### ADR046-identities-002
 
@@ -302,3 +304,5 @@ cgroup/scope, and provider-specific process identity.
 | Data migration | Full reset and new Zone declarations |
 | Validation | W0 nix-unit vectors for accepted and rejected option shapes; Rust-to-Nix rendered contract parity is deferred to ADR046-W2 |
 | Removal proof | Realm-facing declarations removed only in the reset/purge wave |
+| Implementation state | Merged |
+| Evidence | All destinations are present: `nixos-modules/options-zones.nix`, `nixos-modules/resources.nix`, and `nixos-modules/index.nix`, with the W0 nix-unit option vectors. |

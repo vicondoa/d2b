@@ -22,6 +22,11 @@ members = [
     "d2b-exec-runner",
     "d2b-sk-frontend",
     "d2b-contracts",
+    "d2b-controller-toolkit",
+    "d2b-core-controller",
+    "d2b-resource-api",
+    "d2b-resource-store",
+    "d2b-resource-store-redb",
     "d2b",
     "d2bd",
     "d2b-clipd",
@@ -81,3 +86,7 @@ rtnetlink = "0.14"
 # rationalized fallback (typed NftBatch + `nft -f -` text rendering,
 # verified by the broker's hash readback).
 sha2 = "0.10"
+unicode-normalization = "0.1"
+redb = { version = "=4.1.0", default-features = false }
+tokio = { version = "1", default-features = false }
+ttrpc = { version = "0.9.0", default-features = false }

@@ -2089,6 +2089,8 @@ error listing the missing paths. There is no opt-out mechanism.
 | Data migration | Full reset; no v2 device object import |
 | Validation | Schema golden vectors; unknown-field denial; exclusive/shared conflict rejection; arbitration/maxClaims invariant; cross-Provider structural descriptor test asserts exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys plus Device/Zone-name canary absence while preserving `d2b.zone` resource attributes |
 | Removal proof | Old ProcessRole/DTO branches retained until Provider integrations are live |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-device-002
 
@@ -2103,6 +2105,8 @@ error listing the missing paths. There is no opt-out mechanism.
 | Data migration | State dir and tamper markers preserved across reset |
 | Validation | `src/`: swtpm argv golden, state-dir, flush sequencing, finalizer no-delete; `tests/`: `controller_state_machine.rs`, `conformance.rs`, `fault_swtpm_missing.rs`; `integration/`: `provision_and_reboot/`, `tamper_marker_survives/`, `finalizer_no_delete/`; workspace policy check: `make test-policy` passes with all four paths present |
 | Removal proof | ProcessRole::Swtpm and SwtpmPreStartFlush removed after parity |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-device-003
 
@@ -2117,6 +2121,8 @@ error listing the missing paths. There is no opt-out mechanism.
 | Data migration | None; full reset |
 | Validation | `src/`: bus ID corpus, firewall marker format, EphemeralProcess creation; `tests/`: `arbitration_conflict.rs`, `conformance.rs`, `firewall_marker.rs` (covering the `ApplyNftablesProjection` `Apply|Remove` projection contract, concurrent same-projection apply serialized by the ordered `inet d2b` OFD lock with idempotent convergence, concurrent independent release, and byte-preservation of sibling network-local and device-usbip markers with no whole-table replace), `explicit_attach_split.rs`; `integration/`: `arbitration_conflict/`, `busid_bind_cycle/`, `network_firewall_coexistence/` (asserting a network-local marker survives USBIP apply and release); workspace policy check: `make test-policy` passes with all four paths present |
 | Removal proof | ProcessRole::Usbip removed after parity |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-device-004
 
@@ -2131,6 +2137,8 @@ error listing the missing paths. There is no opt-out mechanism.
 | Data migration | None; full reset |
 | Validation | `src/`: lease transitions, session ring eviction, broker op path-free, CID round-trip; `tests/`: `lease_state_machine.rs`, `session_ring.rs`, `mutual_exclusion.rs` proves security-key and USB implementations resolve one token to a byte-identical physical backing key and the loser receives `physical-usb-backing-conflict` before any effect, `conformance.rs`, `guest_frontend_process.rs`; `integration/`: `lease_acquire_cancel/`, `session_ring_capacity/`, `guest_frontend_connect/`; workspace policy check: `make test-policy` passes with all four paths present |
 | Removal proof | ProcessRole::SecurityKeyFrontend removed after parity |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-device-005
 
@@ -2145,6 +2153,8 @@ error listing the missing paths. There is no opt-out mechanism.
 | Data migration | None; full reset |
 | Validation | `src/`: process role selection, wire-constant snapshot, render-node vs full-GPU branching; `tests/`: `combined_reconcile.rs`, `render_node_enforcement.rs`, `wire_constant_snapshot.rs`, `conformance.rs`; `integration/`: `gpu_worker_start/`, `render_node_shared/`, `video_dependency/`; workspace policy check: `make test-policy` passes with all four paths present |
 | Removal proof | ProcessRole::Gpu, GpuRenderNode, Video removed after parity |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-device-006
 
@@ -2159,6 +2169,8 @@ error listing the missing paths. There is no opt-out mechanism.
 | Data migration | Consumers migrate from per-VM options to Zone Device declarations; data migration guide references "Nix configuration" section migration table |
 | Validation | nix-unit: `device-tpm-eval.nix`, `device-usbip-eval.nix`, `device-security-key-eval.nix`, `device-gpu-eval.nix`, `device-schema-validation.nix`, `device-gen-cleanup-eval.nix`, `device-bundle-canonical.nix`, `device-inline-secret-rejected.nix`, `device-artifact-catalog.nix`; contract tests: `device_resource_schema.rs`, `device_bundle_canonical.rs`, `device_gen_cleanup.rs` |
 | Removal proof | Nix option `d2b.vms.<vm>.tpm.enable` etc. retained until v3 reset |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-device-007
 
@@ -2173,6 +2185,8 @@ error listing the missing paths. There is no opt-out mechanism.
 | Data migration | Full d2b 3.0 reset; no prior generation cleanup state or v2 Device resource import |
 | Validation | Fast hermetic (D094): in-process Rust selectors under the owning crate `tests/` - `packages/d2b-core-controller/tests/gen_cleanup.rs`, `packages/d2b-core-controller/tests/gen_cleanup_controller_protected.rs`, `packages/d2b-core-controller/tests/gen_cleanup_audit.rs` - driven by a fake Zone store/clock with deterministic ordering and no wall-clock sleep; slower coverage reuses the existing integration directory scenarios `tests/integration/containers/device-gen-cleanup.sh`, `device-controller-resource-protected.sh`, and `device-gen-cleanup-audit.sh`; feasibility proof: generation cleanup with fake Zone runtime. No new top-level shell gate is added. |
 | Removal proof | None - net-new; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-device-008
 
@@ -2187,3 +2201,5 @@ error listing the missing paths. There is no opt-out mechanism.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Policy gate passes once all four Device Provider crates exist with required paths; gate fails predictably when any path is removed from a Provider crate fixture; test fixture crate with one missing path must produce a named error identifying the exact missing path |
 | Removal proof | N/A (new tooling; not removed) |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |

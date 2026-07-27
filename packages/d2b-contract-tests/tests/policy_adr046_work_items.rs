@@ -27,14 +27,15 @@ const GRAPH_MD: &str = "docs/specs/ADR-046-implementation-graph.md";
 const EXPECTED_MEMBERS: usize = 55;
 /// The normative work-item count. The corpus is closed; a parser or source
 /// regression that changes it must fail rather than shrink the manifests.
-const EXPECTED_WORK_ITEMS: usize = 543;
+const EXPECTED_WORK_ITEMS: usize = 545;
 /// The certified graph shape. Pinned so a silent edge gain or loss fails here
 /// even when the generator regenerates itself consistently.
-const EXPECTED_NODES: u64 = 598;
-const EXPECTED_EDGES: u64 = 1940;
+const EXPECTED_NODES: u64 = 600;
+const EXPECTED_EDGES: u64 = 1948;
 const EXPECTED_MAX_RANK: u64 = 22;
 const EXPECTED_WAVES: u64 = 8;
 const EXPECTED_CRITICAL_PATH: usize = 23;
+const EXPECTED_WORK_ITEMS_SCHEMA: u64 = 2;
 
 const REUSE_ACTIONS: &[&str] = &[
     "adapt",
@@ -46,12 +47,16 @@ const REUSE_ACTIONS: &[&str] = &[
     "wrap",
 ];
 
+const IMPLEMENTATION_STATES: &[&str] = &["Merged", "Planned"];
+
 const MANDATORY_FIELDS: &[&str] = &[
     "Current source",
     "Data migration",
     "Dependency/owner",
     "Destination",
     "Detailed design",
+    "Evidence",
+    "Implementation state",
     "Integration",
     "Removal proof",
     "Reuse action",
@@ -260,6 +265,17 @@ fn check_work_items(
                     item.id
                 ));
             }
+            if let Some((_, state)) = item
+                .fields
+                .iter()
+                .find(|(label, _)| label == "Implementation state")
+                && !IMPLEMENTATION_STATES.contains(&state.as_str())
+            {
+                findings.push(format!(
+                    "work item `{}` declares free-form implementation state `{state}`",
+                    item.id
+                ));
+            }
 
             if let Some(entry) = manifest_by_id.get(item.id.as_str()) {
                 findings.extend(field_findings(item, spec_paths.get(spec_id), entry));
@@ -330,6 +346,15 @@ fn check_work_items(
         if action == "create" && !entry["reuseSource"].is_null() {
             findings.push(format!("`{id}` declares `create` with a reuse source"));
         }
+        let implementation_state = entry["implementationState"].as_str().unwrap_or_default();
+        if !IMPLEMENTATION_STATES.contains(&implementation_state) {
+            findings.push(format!(
+                "`{id}` manifest declares free-form implementation state `{implementation_state}`"
+            ));
+        }
+        if entry["evidence"].as_str().is_none_or(str::is_empty) {
+            findings.push(format!("`{id}` manifest has missing or empty evidence"));
+        }
         if let Some(owner) = owner_of.get(&id) {
             let spec_id = entry["specId"].as_str().unwrap_or_default();
             if spec_id != owner {
@@ -391,6 +416,8 @@ fn field_findings(item: &Declaration, spec_path: Option<&String>, entry: &Value)
         ("dependencyOwner", "Dependency/owner"),
         ("destination", "Destination"),
         ("detailedDesign", "Detailed design"),
+        ("evidence", "Evidence"),
+        ("implementationState", "Implementation state"),
         ("integration", "Integration"),
         ("removalProof", "Removal proof"),
         ("reuseAction", "Reuse action"),
@@ -674,6 +701,11 @@ fn the_real_spec_tree_declares_every_work_item_exactly_once() {
         total, EXPECTED_WORK_ITEMS,
         "the ADR 0046 corpus is closed at {EXPECTED_WORK_ITEMS} work items"
     );
+    assert_eq!(
+        work_items["schemaVersion"].as_u64(),
+        Some(EXPECTED_WORK_ITEMS_SCHEMA),
+        "the work-item artifact schema must be version {EXPECTED_WORK_ITEMS_SCHEMA}"
+    );
 
     let mut census: BTreeMap<&str, usize> = BTreeMap::new();
     for item in declared.values().flatten() {
@@ -682,7 +714,7 @@ fn the_real_spec_tree_declares_every_work_item_exactly_once() {
     assert_eq!(
         census,
         BTreeMap::from([
-            ("bare", 356),
+            ("bare", 358),
             ("dash title", 112),
             ("colon title", 51),
             ("parenthetical title", 24),
@@ -971,6 +1003,11 @@ mod fixtures {
             ("Reuse action", "create".to_string()),
             ("Destination", "`packages/fixture/src/lib.rs`".to_string()),
             ("Detailed design", "fixture design".to_string()),
+            (
+                "Evidence",
+                "Destination and validation remain outstanding.".to_string(),
+            ),
+            ("Implementation state", "Planned".to_string()),
             ("Integration", "fixture integration".to_string()),
             ("Data migration", "None".to_string()),
             ("Validation", "fixture validation".to_string()),
@@ -1027,6 +1064,8 @@ mod fixtures {
             "dependencyOwner": "fixture owner",
             "destination": "`packages/fixture/src/lib.rs`",
             "detailedDesign": "fixture design",
+            "evidence": "Destination and validation remain outstanding.",
+            "implementationState": "Planned",
             "integration": "fixture integration",
             "removalProof": "Not applicable",
             "reuseAction": action,
@@ -1209,6 +1248,39 @@ mod fixtures {
     }
 
     #[test]
+    fn a_missing_delivery_field_or_free_form_implementation_state_fails() {
+        let valid = markdown("###", "ADR046-fixture-001", &[]);
+        let row = manifest_row("ADR046-fixture-001", "create", Value::Null);
+        for (field, row_text) in [
+            ("Implementation state", "Planned"),
+            ("Evidence", "Destination and validation remain outstanding."),
+        ] {
+            let missing_field = valid.replace(&format!("| {field} | {row_text} |\n"), "");
+            let missing = run(&missing_field, vec![row.clone()], &["fixture"]);
+            assert!(
+                missing.iter().any(|finding| finding.contains(&format!(
+                    "work item `ADR046-fixture-001` is missing mandatory field `{field}`"
+                ))),
+                "a missing {field} must fail, got {missing:?}"
+            );
+        }
+
+        let free_form_state = valid.replace(
+            "| Implementation state | Planned |",
+            "| Implementation state | In progress |",
+        );
+        let mut invalid_row = row;
+        invalid_row["implementationState"] = Value::String("In progress".to_string());
+        let invalid = run(&free_form_state, vec![invalid_row], &["fixture"]);
+        assert!(
+            invalid
+                .iter()
+                .any(|finding| finding.contains("free-form implementation state `In progress`")),
+            "a free-form implementation state must fail, got {invalid:?}"
+        );
+    }
+
+    #[test]
     fn a_free_form_or_compound_action_fails() {
         let md = markdown("###", "ADR046-fixture-001", &[]);
         for action in ["extract and adapt", "refactor"] {
@@ -1254,6 +1326,12 @@ mod fixtures {
             }),
             ("detailedDesign", |row| {
                 row["detailedDesign"] = Value::String("drifted design".to_string())
+            }),
+            ("evidence", |row| {
+                row["evidence"] = Value::String("drifted evidence".to_string())
+            }),
+            ("implementationState", |row| {
+                row["implementationState"] = Value::String("Merged".to_string())
             }),
             ("integration", |row| {
                 row["integration"] = Value::String("drifted integration".to_string())

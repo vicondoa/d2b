@@ -2,12 +2,12 @@
   "adr" : "0046",
   "artifactKind" : "d2b-adr-implementation-graph",
   "counts" : {
-    "edges" : 1940,
+    "edges" : 1948,
     "maxTopologicalRank" : 22,
-    "nodes" : 598,
+    "nodes" : 600,
     "specNodes" : 55,
     "waves" : 8,
-    "workItemNodes" : 543
+    "workItemNodes" : 545
   },
   "criticalPath" : [
     "ADR-046-decision-register",
@@ -2199,6 +2199,16 @@
     },
     {
       "from" : "ADR046-store-003",
+      "to" : "ADR-046-resource-store-redb",
+      "type" : "implements-spec"
+    },
+    {
+      "from" : "ADR046-store-004",
+      "to" : "ADR-046-resource-store-redb",
+      "type" : "implements-spec"
+    },
+    {
+      "from" : "ADR046-store-005",
       "to" : "ADR-046-resource-store-redb",
       "type" : "implements-spec"
     },
@@ -7674,7 +7684,7 @@
     },
     {
       "from" : "ADR046-reset-005",
-      "to" : "ADR046-store-003",
+      "to" : "ADR046-store-005",
       "type" : "work-item-depends-on"
     },
     {
@@ -8689,12 +8699,42 @@
     },
     {
       "from" : "ADR046-store-002",
-      "to" : "ADR046-store-001",
+      "to" : "ADR046-feasibility-001",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-store-002",
+      "to" : "ADR046-store-004",
       "type" : "work-item-depends-on"
     },
     {
       "from" : "ADR046-store-003",
       "to" : "ADR046-store-001",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-store-004",
+      "to" : "ADR046-feasibility-001",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-store-004",
+      "to" : "ADR046-store-001",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-store-005",
+      "to" : "ADR046-feasibility-001",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-store-005",
+      "to" : "ADR046-store-003",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-store-005",
+      "to" : "ADR046-store-004",
       "type" : "work-item-depends-on"
     },
     {
@@ -12072,7 +12112,7 @@
     {
       "blockers" : [],
       "destinations" : [
-        "`packages/d2b-contracts/proto/d2b-resource-v3.proto`; `packages/d2b-contracts/src/generated/d2b_resource_v3.rs`; `packages/d2b-resource-api/src/generated/`, `service.rs`, `client.rs`; `packages/xtask/src/main.rs` codegen commands"
+        "`packages/d2b-contracts/proto/d2b-resource-v3.proto`; `packages/d2b-contracts/src/generated/d2b_resource_v3.rs`; `packages/d2b-resource-api/src/generated/`, `service.rs`, `client.rs`, `error.rs`; `packages/xtask/src/main.rs` codegen commands"
       ],
       "detailedDesign" : "Freeze the service as `d2b.resource.v3.ResourceService` and the D100 typed message set with one canonical-JSON bytes carrier. `xtask gen-resource-proto` emits message-only pure-Rust bindings into `d2b-contracts` from a service-stripped proto; `xtask gen-resource-ttrpc` emits async service/client bindings into `d2b-resource-api`. No `build.rs`, `google.protobuf.Any`, dynamically typed `oneof`, or domain error in transport status. Implement async methods, contexts, admitted-mutation preconditions, D112 contract constants, typed resource errors, status/finalizer separation, and batch API. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt.",
       "entryContracts" : [
@@ -15444,22 +15484,22 @@
       "destinations" : [
         "`proofs/redb-resource-store-spike/`"
       ],
-      "detailedDesign" : "Implements SPIKE-01 and SPIKE-02: the eight-table schema, fair write queue, blocking store-actor, watch registrar, and hint bus described in those two spike entries Primary reuse disposition: `adapt`. Preserved source-plan detail: `adapt` (the atomic-write/idempotency discipline in `storage.rs`/`sync.rs` is adapted into the spike's write-transaction algorithm; redb itself is used unmodified).",
+      "detailedDesign" : "Implements SPIKE-01 and SPIKE-02: the ten-table schema, fair write queue, blocking store-actor, watch registrar, and hint bus described in those two spike entries Primary reuse disposition: `adapt`. Preserved source-plan detail: `adapt` (the atomic-write/idempotency discipline in `storage.rs`/`sync.rs` is adapted into the spike's write-transaction algorithm; redb itself is used unmodified).",
       "entryContracts" : [
-        "ADR-046-feasibility-and-spikes"
+        "ADR-046-resource-store-redb"
       ],
-      "exitGate" : "ADR046-W7 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
+      "exitGate" : "ADR046-W1 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-feasibility-001",
       "kind" : "work-item",
       "owner" : "W0 shared contract root; store/reconciliation integrator",
-      "parallelGroup" : "wi:ADR-046-feasibility-and-spikes",
+      "parallelGroup" : "wi:resource-store-backend:w1",
       "prerequisites" : [
-        "ADR-046-feasibility-and-spikes"
+        "ADR-046-resource-store-redb"
       ],
       "specId" : "ADR-046-feasibility-and-spikes",
-      "topologicalRank" : 11,
+      "topologicalRank" : 4,
       "validation" : "SPIKE-01 metrics (1)-(5) and SPIKE-02 metrics (1) across all 3 concurrency profiles, per those entries' exact pass/fail thresholds",
-      "wave" : "W7"
+      "wave" : "W1"
     },
     {
       "blockers" : [],
@@ -15480,7 +15520,7 @@
         "ADR046-feasibility-001"
       ],
       "specId" : "ADR-046-feasibility-and-spikes",
-      "topologicalRank" : 12,
+      "topologicalRank" : 11,
       "validation" : "SPIKE-03 metrics (1)-(3) and thresholds",
       "wave" : "W7"
     },
@@ -19126,13 +19166,13 @@
       "exitGate" : "ADR046-W7 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-reset-005",
       "kind" : "work-item",
-      "owner" : "ADR046-reset-004; `d2b-resource-store-redb` owner (`ADR046-store-003`); core-controller owner (`ADR046-core-001`)",
+      "owner" : "ADR046-reset-004; `d2b-resource-store-redb` owner (`ADR046-store-005`); core-controller owner (`ADR046-core-001`)",
       "parallelGroup" : "wi:ADR-046-reset-and-cutover",
       "prerequisites" : [
         "ADR-046-reset-and-cutover",
         "ADR046-core-001",
         "ADR046-reset-004",
-        "ADR046-store-003"
+        "ADR046-store-005"
       ],
       "specId" : "ADR-046-reset-and-cutover",
       "topologicalRank" : 15,
@@ -21544,23 +21584,23 @@
     {
       "blockers" : [],
       "destinations" : [
-        "`packages/d2b-resource-store/src/lib.rs`, `packages/d2b-resource-store-redb/src/lib.rs`, `schema.rs`, `keys.rs`, `transaction.rs`"
+        "`packages/d2b-contracts/src/v3/error.rs`; `packages/d2b-resource-store/src/lib.rs`, `error.rs`; `packages/d2b-resource-store-redb/src/schema.rs`, `keys.rs`, `values.rs`"
       ],
-      "detailedDesign" : "Promote the exact `redb = { version = \"=4.1.0\", default-features = false }` workspace pin and consume it only from `d2b-resource-store-redb`. Keep `d2b-resource-store` free of redb and Tokio; expose native async trait methods returning `impl Future + Send`, hold one concrete store implementation, and inject generic test fakes without trait objects or `async-trait`. `ResourceStore::commit` accepts only the private-field `AdmittedMutation`, rechecks its captured policy/API-catalog/active-configuration/controller revisions inside the transaction, never evaluates RBAC, and never auto-retries a failed recheck. Implement redb tables/encodings, fd backend, store identity, fair actor, MVCC reads, atomic indexes/revisions/operations/conflicts, and the contract constants: write queue 256, group-commit batch 16, read pool 4, concurrent reads 16, read lifetime 250 ms, watch-dispatch queue 1024. Use full crash-safe durability with one fsync per write transaction; no reduced-durability mode. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt.",
+      "detailedDesign" : "Keep `d2b-resource-store` free of redb and Tokio; expose native async trait methods returning `impl Future + Send`; use generic test fakes without trait objects or `async-trait`; freeze the closed error set, store-neutral request/response/trait/transaction types, exact ten-table schema, `d2bkey/v1` and `d2bval/v1` codecs and discriminants, decode rejection rules, and literal golden vectors. The workspace pins `redb = { version = \"=4.1.0\", default-features = false }` here so the contract crate and future spike/backend consume one reviewed API. `ResourceService` consumes the evaluator's verifier and store-identity binding exactly once into a private checked store. A mutating call can reach `commit_verified` only after that store matches both authorities, consumes the admitted mutation, and prepares its final identity and digest. This prevents a caller from forging admission or replaying it against another store, but it does not constrain the backend after verification. The backend is trusted to mutate only from the supplied `VerifiedMutation`, recheck captured policy/API-catalog/active-configuration/controller revisions inside the same transaction, preserve structural and atomicity checks, expose no independent mutation path, never evaluate RBAC, and never auto-retry a failed recheck. Production registration therefore requires security review and backend conformance tests. This contract item makes no scale, latency, RSS, crash-recovery, or production-suitability claim and has no feasibility dependency. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt.",
       "entryContracts" : [
         "ADR-046-resource-store-redb"
       ],
       "exitGate" : "ADR046-W0 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-store-001",
       "kind" : "work-item",
-      "owner" : "W0; store integrator",
-      "parallelGroup" : "wi:ADR-046-resource-store-redb",
+      "owner" : "Resource-object contracts; store contract integrator",
+      "parallelGroup" : "wi:resource-store-foundation:w0",
       "prerequisites" : [
         "ADR-046-resource-store-redb"
       ],
       "specId" : "ADR-046-resource-store-redb",
       "topologicalRank" : 4,
-      "validation" : "Unit/property/fault tests and hard benchmark; exact dependency/feature-policy lint; compile tests for `Send` futures and generic fake injection; `AdmittedMutation` private-field/single-constructor and in-transaction revision-recheck tests; policy test forbidding resource-store dependency on API/RBAC symbols; queue/pool constant assertions; paused-clock read-expiry tests; no reduced-durability call-site lint",
+      "validation" : "Literal codec golden vectors and decode-rejection cases; hermetic small-scale transaction semantics that make no scale claim; compile tests for `Send` futures and generic fake injection; proof-origin, single-owner binding, cross-store rejection, and in-transaction revision-recheck tests for sealed admission evidence; policy test forbidding resource-store dependency on API/RBAC symbols; exact redb pin/feature assertion",
       "wave" : "W0"
     },
     {
@@ -21572,42 +21612,92 @@
       "entryContracts" : [
         "ADR-046-resource-store-redb"
       ],
-      "exitGate" : "ADR046-W0 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
+      "exitGate" : "ADR046-W1 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-store-002",
       "kind" : "work-item",
-      "owner" : "ADR046-store-001; watch/reconciliation integrator",
-      "parallelGroup" : "wi:ADR-046-resource-store-redb",
+      "owner" : "ADR046-store-004; ADR046-feasibility-001; watch/reconciliation integrator",
+      "parallelGroup" : "wi:resource-store-backend:w1",
       "prerequisites" : [
         "ADR-046-resource-store-redb",
-        "ADR046-store-001"
+        "ADR046-feasibility-001",
+        "ADR046-store-004"
       ],
       "specId" : "ADR-046-resource-store-redb",
-      "topologicalRank" : 5,
-      "validation" : "deterministic watch/compaction/disconnect/fan-in tests",
-      "wave" : "W0"
+      "topologicalRank" : 6,
+      "validation" : "SPIKE-01 correctness and SPIKE-02 latency evidence before implementation; deterministic watch/compaction/disconnect/fan-in tests afterward",
+      "wave" : "W1"
     },
     {
       "blockers" : [],
       "destinations" : [
-        "`packages/d2b-resource-store-redb/src/backup.rs`, `migration.rs`; `packages/d2b-contracts/src/v3/storage.rs`; `nixos-modules/zone-storage-json.nix`; `docs/reference/schemas/v3/zone-storage.json`; `packages/d2b-contract-tests/tests/zone_storage_contract.rs`"
+        "`packages/d2b-contracts/src/v3/storage.rs`; `nixos-modules/zone-storage-json.nix`; `docs/reference/schemas/v3/zone-storage.json`; `packages/d2b-contract-tests/tests/zone_storage_contract.rs`"
       ],
-      "detailedDesign" : "fd-backed provision/open, marker identity, logical backup, staged restore/upgrade, corruption quarantine; the closed `ZoneStoreStorageRow` carries only opaque ids and required ownership, filesystem, locking, marker, replacement-detection, fsync, and publication invariants, never a host path",
+      "detailedDesign" : "Freeze the closed `ZoneStoreStorageRow`: opaque zone-store and parent-directory ids plus required ownership, filesystem, locking, marker, replacement-detection, fsync, and publication invariants, never a host path",
       "entryContracts" : [
         "ADR-046-resource-store-redb"
       ],
-      "exitGate" : "ADR046-W0 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
+      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-store-003",
       "kind" : "work-item",
-      "owner" : "ADR046-store-001; storage/broker integrator",
-      "parallelGroup" : "wi:ADR-046-resource-store-redb",
+      "owner" : "ADR046-store-001; storage-row contract integrator",
+      "parallelGroup" : "wi:resource-store-integration:w5",
       "prerequisites" : [
         "ADR-046-resource-store-redb",
         "ADR046-store-001"
       ],
       "specId" : "ADR-046-resource-store-redb",
       "topologicalRank" : 5,
-      "validation" : "marker replacement, crash publication, backup/restore/upgrade tests",
-      "wave" : "W0"
+      "validation" : "Storage-row source validation, generated-schema drift, and rendered-contract parity",
+      "wave" : "W5"
+    },
+    {
+      "blockers" : [],
+      "destinations" : [
+        "`packages/d2b-resource-store-redb/src/lib.rs`, `actor.rs`, `transaction.rs`"
+      ],
+      "detailedDesign" : "After successful SPIKE-01 evidence, adopt the already-pinned redb API in the production engine. Implement the redb engine, owned-fd database open, store identity, fair actor, MVCC reads, atomic indexes/revisions/operations/conflicts, crash recovery, and the contract constants: write queue 256, group-commit batch 16, read pool 4, concurrent reads 16, read lifetime 250 ms, and watch-dispatch queue 1024. Use full crash-safe durability with one fsync per write transaction; no reduced-durability mode. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt.",
+      "entryContracts" : [
+        "ADR-046-resource-store-redb"
+      ],
+      "exitGate" : "ADR046-W1 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
+      "id" : "ADR046-store-004",
+      "kind" : "work-item",
+      "owner" : "ADR046-store-001; ADR046-feasibility-001; store backend integrator",
+      "parallelGroup" : "wi:resource-store-backend:w1",
+      "prerequisites" : [
+        "ADR-046-resource-store-redb",
+        "ADR046-feasibility-001",
+        "ADR046-store-001"
+      ],
+      "specId" : "ADR-046-resource-store-redb",
+      "topologicalRank" : 5,
+      "validation" : "Successful SPIKE-01 evidence; conformance tests proving verified-only mutation, no independent write path, and the required structural and atomic checks; security review of each registered backend; unit/property/fault tests and the hard benchmark including the 10,000-resource/100-watch RSS result; owned-fd and `FD_CLOEXEC` checks for direct and `SCM_RIGHTS` receipt plus fork/exec inheritance probes; exact dependency/feature-policy lint; queue/pool constant assertions; paused-clock read-expiry tests; no reduced-durability call-site lint",
+      "wave" : "W1"
+    },
+    {
+      "blockers" : [],
+      "destinations" : [
+        "`packages/d2b-resource-store-redb/src/backup.rs`, `migration.rs`; `packages/d2b-contracts/src/broker_wire.rs` (`OpenZoneStore` request/response); `packages/d2b-priv-broker/src/ops/zone_store.rs`, `live_handlers.rs`, `fd_passing.rs`; `packages/d2b-priv-broker/tests/zone_store.rs`"
+      ],
+      "detailedDesign" : "Consume the D115 storage-row contract for fd-backed provision/open and marker identity; implement logical backup, staged restore/upgrade, crash-safe publication, replacement detection, and corruption quarantine. Add a typed broker `OpenZoneStore` operation that accepts only opaque storage-row ids, resolves and validates the signed row, provisions or opens the database without a caller path, and returns exactly one owned descriptor with atomic close-on-exec receipt.",
+      "entryContracts" : [
+        "ADR-046-resource-store-redb"
+      ],
+      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
+      "id" : "ADR046-store-005",
+      "kind" : "work-item",
+      "owner" : "ADR046-store-003; ADR046-store-004; ADR046-feasibility-001; storage/broker backend integrator",
+      "parallelGroup" : "wi:resource-store-integration:w5",
+      "prerequisites" : [
+        "ADR-046-resource-store-redb",
+        "ADR046-feasibility-001",
+        "ADR046-store-003",
+        "ADR046-store-004"
+      ],
+      "specId" : "ADR-046-resource-store-redb",
+      "topologicalRank" : 6,
+      "validation" : "Successful SPIKE-01 evidence; marker replacement, crash publication, backup/restore/upgrade, and store-identity mismatch tests; broker wire codec/unknown-op tests; opaque-id/path-injection and signed-row mismatch rejection; provision/open idempotency; exactly-one-fd `SCM_RIGHTS` transfer with `MSG_CMSG_CLOEXEC`, `F_GETFD` verification, and fork/exec non-inheritance; audit record contains the operation/result but no host path",
+      "wave" : "W5"
     },
     {
       "blockers" : [],
@@ -24584,22 +24674,23 @@
         "wi:ADR-046-decision-register",
         "wi:ADR-046-resource-api-and-authorization",
         "wi:ADR-046-resource-object-model",
-        "wi:ADR-046-resource-store-redb",
-        "wi:ADR-046-terminology-and-identities"
+        "wi:ADR-046-terminology-and-identities",
+        "wi:resource-store-foundation:w0"
       ],
       "specCount" : 6,
       "wave" : "W0",
-      "workItemCount" : 10
+      "workItemCount" : 8
     },
     {
       "parallelGroups" : [
         "W1-reconcile-and-bus",
         "wi:ADR-046-componentsession-and-bus",
-        "wi:ADR-046-resource-reconciliation"
+        "wi:ADR-046-resource-reconciliation",
+        "wi:resource-store-backend:w1"
       ],
       "specCount" : 2,
       "wave" : "W1",
-      "workItemCount" : 6
+      "workItemCount" : 9
     },
     {
       "parallelGroups" : [
@@ -24644,11 +24735,12 @@
         "wi:ADR-046-resources-volume",
         "wi:ADR-046-resources-zone-control",
         "wi:ADR-046-telemetry-audit-and-support",
-        "wi:core-config-hub:w5"
+        "wi:core-config-hub:w5",
+        "wi:resource-store-integration:w5"
       ],
       "specCount" : 7,
       "wave" : "W5",
-      "workItemCount" : 141
+      "workItemCount" : 143
     },
     {
       "parallelGroups" : [
@@ -24701,7 +24793,7 @@
       ],
       "specCount" : 5,
       "wave" : "W7",
-      "workItemCount" : 74
+      "workItemCount" : 73
     }
   ]
 }

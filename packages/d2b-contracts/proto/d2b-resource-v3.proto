@@ -1,0 +1,353 @@
+syntax = "proto3";
+
+package d2b.resource.v3;
+
+service ResourceService {
+  rpc Get(GetRequest) returns (GetResponse);
+  rpc List(ListRequest) returns (ListResponse);
+  rpc Watch(WatchRequest) returns (WatchResponse);
+  rpc Create(CreateRequest) returns (CreateResponse);
+  rpc UpdateSpec(UpdateSpecRequest) returns (UpdateSpecResponse);
+  rpc UpdateStatus(UpdateStatusRequest) returns (UpdateStatusResponse);
+  rpc UpdateMetadata(UpdateMetadataRequest) returns (UpdateMetadataResponse);
+  rpc UpdateFinalizers(UpdateFinalizersRequest) returns (UpdateFinalizersResponse);
+  rpc Delete(DeleteRequest) returns (DeleteResponse);
+  rpc CommitBatch(CommitBatchRequest) returns (CommitBatchResponse);
+  rpc ResolveRef(ResolveRefRequest) returns (ResolveRefResponse);
+  rpc InspectSchema(InspectSchemaRequest) returns (InspectSchemaResponse);
+  rpc Upgrade(UpgradeRequest) returns (UpgradeResponse);
+}
+
+message RequestMeta {
+  string operation_id = 1;
+  string idempotency_key = 2;
+  string correlation_id = 3;
+  string trace_id = 4;
+  uint64 deadline_ms = 5;
+}
+
+message ResourceIdentity {
+  string zone = 1;
+  string resource_type = 2;
+  string name = 3;
+  optional string uid = 4;
+  optional uint64 generation = 5;
+  optional uint64 revision = 6;
+}
+
+message ResourceEnvelopeBytes {
+  ResourceIdentity identity = 1;
+  bytes canonical_json = 2;
+  string payload_digest = 3;
+}
+
+message Precondition {
+  PreconditionKind kind = 1;
+  optional uint64 expected_revision = 2;
+  optional string expected_uid = 3;
+}
+
+message Projection {
+  ProjectionKind kind = 1;
+}
+
+message ListFilter {
+  string field = 1;
+  repeated string values = 2;
+}
+
+message PageCursor {
+  string value = 1;
+}
+
+message WatchCredits {
+  uint32 initial = 1;
+}
+
+message ChangeEvent {
+  ChangeKind kind = 1;
+  uint64 revision = 2;
+  uint32 ordinal = 3;
+  ResourceIdentity identity = 4;
+  ResourceEnvelopeBytes resource = 5;
+}
+
+message ResourceError {
+  ResourceErrorKind kind = 1;
+  optional uint64 current_revision = 2;
+  optional uint32 retry_after_ms = 3;
+  RetryClass retry_class = 4;
+  string reason = 5;
+}
+
+message Mutation {
+  MutationKind kind = 1;
+  ResourceIdentity target = 2;
+  Precondition precondition = 3;
+  ResourceEnvelopeBytes resource = 4;
+  repeated string add_finalizers = 5;
+  repeated string remove_finalizers = 6;
+  bool wait_for_reconcile = 7;
+  uint64 reconcile_deadline_ms = 8;
+  ResourceIdentity owner = 9;
+}
+
+message GetRequest {
+  RequestMeta meta = 1;
+  ResourceIdentity target = 2;
+  Projection projection = 3;
+}
+
+message GetResponse {
+  ResourceEnvelopeBytes resource = 1;
+  ResourceError error = 2;
+}
+
+message ListRequest {
+  RequestMeta meta = 1;
+  repeated string resource_types = 2;
+  repeated ListFilter filters = 3;
+  uint32 page_size = 4;
+  PageCursor cursor = 5;
+  Projection projection = 6;
+}
+
+message ListResponse {
+  repeated ResourceEnvelopeBytes resources = 1;
+  uint64 snapshot_revision = 2;
+  PageCursor next_cursor = 3;
+  bool truncated = 4;
+  ResourceError error = 5;
+}
+
+message WatchRequest {
+  RequestMeta meta = 1;
+  repeated string resource_types = 2;
+  repeated ListFilter filters = 3;
+  uint64 after_revision = 4;
+  WatchCredits credits = 5;
+  Projection projection = 6;
+}
+
+message WatchResponse {
+  string stream_name = 1;
+  uint64 snapshot_revision = 2;
+  ResourceError error = 3;
+}
+
+message CreateRequest {
+  RequestMeta meta = 1;
+  Mutation mutation = 2;
+}
+
+message CreateResponse {
+  ResourceEnvelopeBytes resource = 1;
+  uint64 revision = 2;
+  ResourceError error = 3;
+  ReconcileDisposition disposition = 4;
+  StatusPersistence status_persistence = 5;
+  optional uint64 last_persisted_status_revision = 6;
+  ResourceEnvelopeBytes reconcile_projection = 7;
+}
+
+message UpdateSpecRequest {
+  RequestMeta meta = 1;
+  Mutation mutation = 2;
+}
+
+message UpdateSpecResponse {
+  ResourceEnvelopeBytes resource = 1;
+  uint64 revision = 2;
+  ResourceError error = 3;
+  ReconcileDisposition disposition = 4;
+  StatusPersistence status_persistence = 5;
+  optional uint64 last_persisted_status_revision = 6;
+  ResourceEnvelopeBytes reconcile_projection = 7;
+}
+
+message UpdateStatusRequest {
+  RequestMeta meta = 1;
+  Mutation mutation = 2;
+}
+
+message UpdateStatusResponse {
+  ResourceEnvelopeBytes resource = 1;
+  uint64 revision = 2;
+  ResourceError error = 3;
+}
+
+message UpdateMetadataRequest {
+  RequestMeta meta = 1;
+  Mutation mutation = 2;
+}
+
+message UpdateMetadataResponse {
+  ResourceEnvelopeBytes resource = 1;
+  uint64 revision = 2;
+  ResourceError error = 3;
+}
+
+message UpdateFinalizersRequest {
+  RequestMeta meta = 1;
+  Mutation mutation = 2;
+}
+
+message UpdateFinalizersResponse {
+  ResourceEnvelopeBytes resource = 1;
+  uint64 revision = 2;
+  ResourceError error = 3;
+}
+
+message DeleteRequest {
+  RequestMeta meta = 1;
+  Mutation mutation = 2;
+}
+
+message DeleteResponse {
+  ResourceIdentity resource = 1;
+  uint64 revision = 2;
+  ResourceError error = 3;
+  ReconcileDisposition disposition = 4;
+}
+
+message CommitBatchRequest {
+  RequestMeta meta = 1;
+  repeated Mutation mutations = 2;
+}
+
+message CommitBatchResponse {
+  repeated ResourceEnvelopeBytes resources = 1;
+  uint64 revision = 2;
+  ResourceError error = 3;
+  optional uint32 conflict_mutation_ordinal = 4;
+}
+
+message ResolveRefRequest {
+  RequestMeta meta = 1;
+  ResourceIdentity target = 2;
+}
+
+message ResolveRefResponse {
+  ResourceIdentity resource = 1;
+  ResourceError error = 2;
+}
+
+message InspectSchemaRequest {
+  RequestMeta meta = 1;
+  string resource_type = 2;
+}
+
+message InspectSchemaResponse {
+  ResourceEnvelopeBytes schema = 1;
+  ResourceError error = 2;
+}
+
+message UpgradeRequest {
+  RequestMeta meta = 1;
+  ResourceIdentity target = 2;
+  UpgradeAction action = 3;
+  bool recursive = 4;
+  Precondition precondition = 5;
+}
+
+message UpgradeResponse {
+  ResourceEnvelopeBytes resource = 1;
+  repeated ResourceIdentity plan = 2;
+  uint64 revision = 3;
+  ResourceError error = 4;
+}
+
+enum PreconditionKind {
+  PRECONDITION_KIND_UNSPECIFIED = 0;
+  PRECONDITION_KIND_CREATE_ABSENT = 1;
+  PRECONDITION_KIND_EXACT_REVISION = 2;
+}
+
+enum ProjectionKind {
+  PROJECTION_KIND_UNSPECIFIED = 0;
+  PROJECTION_KIND_FULL = 1;
+  PROJECTION_KIND_BASE_ONLY = 2;
+  PROJECTION_KIND_METADATA_ONLY = 3;
+}
+
+enum ChangeKind {
+  CHANGE_KIND_UNSPECIFIED = 0;
+  CHANGE_KIND_CREATED = 1;
+  CHANGE_KIND_UPDATED = 2;
+  CHANGE_KIND_DELETED = 3;
+}
+
+enum MutationKind {
+  MUTATION_KIND_UNSPECIFIED = 0;
+  MUTATION_KIND_CREATE = 1;
+  MUTATION_KIND_UPDATE_SPEC = 2;
+  MUTATION_KIND_UPDATE_STATUS = 3;
+  MUTATION_KIND_UPDATE_METADATA = 4;
+  MUTATION_KIND_UPDATE_FINALIZERS = 5;
+  MUTATION_KIND_DELETE = 6;
+}
+
+enum UpgradeAction {
+  UPGRADE_ACTION_UNSPECIFIED = 0;
+  UPGRADE_ACTION_ASSESS = 1;
+  UPGRADE_ACTION_PLAN = 2;
+  UPGRADE_ACTION_EXECUTE = 3;
+}
+
+enum ReconcileDisposition {
+  RECONCILE_DISPOSITION_UNSPECIFIED = 0;
+  RECONCILE_DISPOSITION_CONVERGED = 1;
+  RECONCILE_DISPOSITION_PROGRESSING = 2;
+  RECONCILE_DISPOSITION_BLOCKED = 3;
+  RECONCILE_DISPOSITION_UPGRADE_REQUIRED = 4;
+  RECONCILE_DISPOSITION_FAILED = 5;
+}
+
+enum StatusPersistence {
+  STATUS_PERSISTENCE_UNSPECIFIED = 0;
+  STATUS_PERSISTENCE_PENDING = 1;
+  STATUS_PERSISTENCE_COMMITTED = 2;
+}
+
+enum RetryClass {
+  RETRY_CLASS_UNSPECIFIED = 0;
+  RETRY_CLASS_NEVER = 1;
+  RETRY_CLASS_IMMEDIATE = 2;
+  RETRY_CLASS_AFTER_DELAY = 3;
+  RETRY_CLASS_REAUTHORIZE = 4;
+}
+
+enum ResourceErrorKind {
+  RESOURCE_ERROR_KIND_UNSPECIFIED = 0;
+  RESOURCE_ERROR_KIND_RESOURCE_NOT_FOUND = 1;
+  RESOURCE_ERROR_KIND_RESOURCE_ALREADY_EXISTS = 2;
+  RESOURCE_ERROR_KIND_RESOURCE_CONFLICT = 3;
+  RESOURCE_ERROR_KIND_RESOURCE_SCHEMA_INVALID = 4;
+  RESOURCE_ERROR_KIND_RESOURCE_REF_INVALID = 5;
+  RESOURCE_ERROR_KIND_RESOURCE_OWNER_CYCLE = 6;
+  RESOURCE_ERROR_KIND_RESOURCE_OWNER_DEPTH = 7;
+  RESOURCE_ERROR_KIND_RESOURCE_FINALIZER_DENIED = 8;
+  RESOURCE_ERROR_KIND_RESOURCE_PROVIDER_UNAVAILABLE = 9;
+  RESOURCE_ERROR_KIND_RESOURCE_CONTROLLER_MISMATCH = 10;
+  RESOURCE_ERROR_KIND_RESOURCE_STATUS_OWNER_MISMATCH = 11;
+  RESOURCE_ERROR_KIND_STATUS_OVERSIZE = 12;
+  RESOURCE_ERROR_KIND_STATUS_PROVIDER_SCHEMA_INVALID = 13;
+  RESOURCE_ERROR_KIND_STATUS_PROVIDER_OVERLAP = 14;
+  RESOURCE_ERROR_KIND_SPEC_PROVIDER_SCHEMA_INVALID = 15;
+  RESOURCE_ERROR_KIND_SPEC_PROVIDER_SHADOW = 16;
+  RESOURCE_ERROR_KIND_UNSUPPORTED_CAPABILITY = 17;
+  RESOURCE_ERROR_KIND_EXPEDITED_NOT_AUTHORIZED = 18;
+  RESOURCE_ERROR_KIND_EXPEDITED_QUOTA_EXCEEDED = 19;
+  RESOURCE_ERROR_KIND_EXPEDITED_RECONCILE_PENDING = 20;
+  RESOURCE_ERROR_KIND_UPGRADE_REQUIRED = 21;
+  RESOURCE_ERROR_KIND_ENDPOINT_RESOLVE_DENIED = 22;
+  RESOURCE_ERROR_KIND_RELAY_DENIED = 23;
+  RESOURCE_ERROR_KIND_ROLE_RELAY_GRANT_RESTRICTED = 24;
+  RESOURCE_ERROR_KIND_AUTHORIZATION_DENIED = 25;
+  RESOURCE_ERROR_KIND_REVISION_EXPIRED = 26;
+  RESOURCE_ERROR_KIND_BACKPRESSURE = 27;
+  RESOURCE_ERROR_KIND_TIMEOUT = 28;
+  RESOURCE_ERROR_KIND_CANCELLED = 29;
+  RESOURCE_ERROR_KIND_RESOURCE_PLANE_UNAVAILABLE = 30;
+  RESOURCE_ERROR_KIND_INTERNAL_INTEGRITY_FAILURE = 31;
+}

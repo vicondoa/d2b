@@ -2846,6 +2846,8 @@ remote lease are released.
 | Data migration | Parse v1/v2 once; require exactly one configured owner Service; write grants plus `serviceRef`; fail closed on missing/ambiguous Service; remove prior file only after successful commit. |
 | Validation | `tests/audio_policy.rs`: all existing tests from `d2b-core/tests/audio_policy.rs` plus AudioBinding spec serialization tests |
 | Removal proof | `d2b-core/src/audio_policy.rs` deleted when no `d2bd` caller references it; confirmed by `cargo check --no-default-features`. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-audio-002: Adapt `AudioArgvInput` into vhost-user-sound component template
 
@@ -2862,6 +2864,8 @@ remote lease are released.
 | Data migration | No runtime state migration; argv template output is regenerated from the v3 component template, and live Process specs never store argv. |
 | Validation | `tests/argv.rs`: rejection matrix (Nix store path, symlink, cross-guest copy, empty name); no-socket-in-argv assertion; no-argv-in-process-spec assertion |
 | Removal proof | `d2b-host/src/audio_argv.rs` deleted after `d2bd` has no callers; confirmed by `cargo check -p d2b-host`. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-audio-004: Implement AudioMediator SetGrant/SetLevel service and libpipewire enforcement
 
@@ -2878,6 +2882,8 @@ remote lease are released.
 | Data migration | No state migration; mediator applies current AudioBinding grants and levels from resource state during reconcile, replacing host-controller direct writes. |
 | Validation | `tests/mediator.rs` and `tests/enforcement.rs`: owner-Service SetGrant/SetLevel round-trip; speaker mixing; microphone queued consumers remain muted; release/lease-expiry mute-before-handoff and no-overlap proof; projection routing with fake streams; projection-PipeWire-open denial; no-node-id-in-bus-message; ProviderSessionUnavailable; captureAlias registry resolution |
 | Removal proof | `d2bd/src/audio_host_controller.rs` retired after `d2bd` audio dispatch path is replaced. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-audio-005: Implement `AudioService` and `AudioBinding` schemas and admission
 
@@ -2894,6 +2900,8 @@ remote lease are released.
 | Data migration | Full d2b 3.0 reset; owner Services and per-Guest AudioBindings are authored as new v3 resources; projection Services are core-generated from ResourceImport. |
 | Validation | `tests/resource_type.rs`: consume the ADR046-provider-004 common fixtures/fingerprints; canonical minimal base without `spec.provider`; neutral qualified-name registration; both schema/status round-trips including bounded aggregate owner queue status and per-Binding arbitration state; clean-break rejection of provider-qualified names, every AudioState spelling, and all aliases; fake alternate-provider base conformance; strict base/provider unknown-field matrices; projection `spec.provider` rejection; D088 `status.resource`/`status.provider` placement; PipeWire fields only in strict provider envelopes/config; Service role/AuthorityDescriptor/ownerRef/Endpoint-locality rules; initial-v3 exclusive-mic/mixed-speaker schema and consent/approval/priority/concurrent-capture rejection; Core-only projection admission; AudioBinding required same-Zone serviceRef and Guest owner; immutable refs; out-of-range levels/users; explicit tests that AudioBinding cannot be exported or projected |
 | Removal proof | None - both ResourceTypes are net-new |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-audio-006: Implement deterministic AudioService and AudioBinding handlers
 
@@ -2910,6 +2918,8 @@ remote lease are released.
 | Data migration | v1/v2 audio policy file migration is handled by ADR046-audio-001 before reconcile; the controller keeps no Provider state Volume and imports no additional runtime state. |
 | Validation | Fast hermetic `tests/audio_service_controller.rs`: neutral type/provider selection, foreign-provider ignore/deny, owner authority, bounded aggregate microphone status, projection ownerRef/import chain, core-only create/delete, projection no-PipeWire-open, revocation queue cancellation, and D091 propagation. `tests/audio_binding_controller.rs`: neutral type/provider selection, required same-Zone serviceRef, owner/projection dispatch, child Process/private Endpoint state machine, `Applied|Queued|MicQueueFull` status mapping, off/delete/revocation cancellation, grant changes, absence/failures/deletion. Conformance asserts no AudioBinding export/projection, no broker/pidfd/EphemeralProcess/Volume/User ops. ProviderDeployment integration remains fake-only and validates empty ProviderStateSet. |
 | Removal proof | Supersedes `audio_dispatch.rs`; `d2bd` audio dispatch deleted after e2e parity test confirms |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-audio-007: Implement `AudioMediator` user-session service
 
@@ -2926,6 +2936,8 @@ remote lease are released.
 | Data migration | No persisted mediator state migration; the service rebuilds its PipeWire node map from the registry on start and consumes current AudioBinding through controller calls. |
 | Validation | `tests/mediator.rs`: owner-Service FD handoff and calls; captureAlias; node-id sealing; session-unavailable; concurrent speaker Guest isolation; exclusive microphone no-overlap and mute-before-handoff; teardown; projection Service cannot resolve mediator Endpoint or portal attachment |
 | Removal proof | Supersedes `d2bd`'s `PipeWireHostController` direct session access; `d2bd` audio host controller deleted after e2e parity |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-audio-008: Nix module for v3 AudioService/AudioBinding authoring
 
@@ -2942,6 +2954,8 @@ remote lease are released.
 | Data migration | Full d2b 3.0 reset; legacy Nix audio options emit/deprecate to one owner AudioService plus per-Guest AudioBindings that reference it; no projection Service is authored. |
 | Validation | `tests/unit/nix/cases/audio-v3-resource.nix`: exact neutral type names; provider-qualified/AudioState/alias rejection; strict provider-field placement; owner Service and Binding round-trip; same-Zone serviceRef; exact canonical Export/Import Service type and both fingerprints; obsolete Export/Import field rejection; Export Endpoint-field rejection; projection core-only ownerRef chain; AudioBinding export/projection rejection; exclusive-mic/mixed-speaker and consent/approval/priority/concurrent-capture rejection; authority uniqueness; Endpoint locality; plus existing grants/users/captureAlias/deprecation/no-wpctl/no-audioFrontend assertions |
 | Removal proof | `host.nix` and `guest.nix` kept as compat shims until v3 module deployed on all Zones |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-audio-009: Minijail contract test migration
 
@@ -2958,6 +2972,8 @@ remote lease are released.
 | Data migration | None - test migration only; no runtime state. |
 | Validation | `cargo test -p d2b-provider-audio-pipewire -- minijail` must pass; existing cross-bundle tests must continue to pass |
 | Removal proof | The superseded duplicate shell validator `tests/minijail-validator-audio.sh` is deleted only after the successor Rust gate (`minijail_audio_usbip.rs` cross-bundle + provider-local `minijail_contract.rs`) is green and its removal-proof check passes; the `seccomp_policy_ref == "w1-audio"` assertion migrates to `spec.sandbox.seccompClass == "audio-pipewire-worker"` before removal. Cross-bundle Rust tests are retained. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-audio-010: OTEL telemetry and audit emitters
 
@@ -2974,6 +2990,8 @@ remote lease are released.
 | Data migration | No telemetry/audit data migration; v3 emits new closed-label OTEL/audit records after cutover and old audio_dispatch audit sites are removed. |
 | Validation | `tests/audio_telemetry.rs`: Service/Binding event separation, microphone aggregate metrics and transition audit, redaction of Zone/Binding/handle/position/timestamp, post-commit ordering, label cardinality, forbidden authority/import/stream/path fields, no ProcessEffect duplication |
 | Removal proof | `audio_dispatch.rs` audit call sites deleted after cutover |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-audio-011: Implement `GuestAudioAgent` in-guest service component
 
@@ -2990,6 +3008,8 @@ remote lease are released.
 | Data migration | No guest runtime state migration; GuestAudioAgent reconnects to guest PipeWire and applies current AudioBinding grants and levels on reconcile, replacing guestd wpctl dispatch. |
 | Validation | `tests/guest_agent.rs`: AudioSet service call → libpipewire apply; mute/route/level; session-unavailable path; reconnect state restore; no wpctl binary; no command path; N-agent creation (one per guestUser); parallel call and aggregated failure |
 | Removal proof | `d2b-guestd` wpctl audio dispatch path deleted after all Guests have GuestAudioAgent deployed and e2e parity test passes |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-audio-012: Cross-Zone audio export/import adapter (D096)
 
@@ -3006,6 +3026,8 @@ remote lease are released.
 | Data migration | None - full d2b 3.0 reset |
 | Validation | Fast hermetic `tests/share_adapter.rs`: exact neutral AudioService `serviceType`; exact projection-schema/factory fingerprint match; explicit rejection of obsolete `endpointRef`, `exportedType`, `baseSchemaFingerprint`, `expectedType`, `expectedBaseSchemaFingerprint`, and `projectionType`; reject every Export Endpoint field, provider-qualified alias, and AudioBinding export/projection; accept owner AudioService export; Core-only projection creation/deletion; exact ResourceImport -> projection AudioService ownerRef chain with no `spec.provider`; semantic factory fingerprint unchanged by Provider/adapter identity mutation while signed identity authentication remains exact; projection never opens PipeWire; reconnect/revocation/D091 propagation with fake streams. Only `integration/real_stream.rs` exercises a real encrypted named stream. |
 | Removal proof | Not applicable (new surface) |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-audio-013: Audio authority service - speaker mixer and mic arbiter (D096/D097)
 
@@ -3022,6 +3044,8 @@ remote lease are released.
 | Data migration | None - full d2b 3.0 reset; grants are authoritative in `AudioBinding.spec` (no state file). |
 | Validation | Fast hermetic `tests/authority.rs`: AuthorityDescriptor accepted only on owner AudioService; Binding/projection rejection; duplicate conflict; multiplexed speaker mix/quota; one active mic across local/imported Zones; per-Zone FIFO and cross-Zone round-robin; one-entry-per-handle, per-Zone/total bounds and `MicQueueFull`; idempotent cancellation; contended 30-second lease; mute-before-handoff/no overlap; restart-muted rebuild; multiplexed-capture and consent/approval/priority/concurrent-verb rejection; ownerProof adoption; D091 drain/recycle with fake clock/FakeHostController |
 | Removal proof | `audio_host_controller.rs` daemon-side controller deleted after the authority service reaches parity; confirmed by `cargo check`. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-audio-014: Per-import encrypted audio credit streams (D096)
 
@@ -3038,6 +3062,8 @@ remote lease are released.
 | Data migration | None - full d2b 3.0 reset |
 | Validation | Fast hermetic `tests/streams.rs`: projection-Service ownerRef/import binding, split-direction single-authz stream, credits, generation isolation, cancel/deadline, concurrent playback, one active capture across imports, route loss cancels that Zone's active/pending capture, ciphertext-only intermediary, redaction. Only `integration/real_stream.rs` runs the slower real encrypted stream. |
 | Removal proof | Not applicable (new surface) |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ## Required crate layout
 

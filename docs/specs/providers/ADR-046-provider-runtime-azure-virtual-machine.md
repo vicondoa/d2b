@@ -1402,6 +1402,8 @@ d2b.zones.dev.resources.corp-vm = {
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. Existing registry sentinels are deleted only after the Provider resource model replaces them. |
 | Validation | Provider catalog; descriptor fingerprint; schema/conformance tests |
 | Removal proof | `InfrastructureProvider` deleted; `AzureVmForbidden` removed after Provider resource model replaces registry |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-azure-vm-002
 
@@ -1416,6 +1418,8 @@ d2b.zones.dev.resources.corp-vm = {
 | Data migration | No persistent data migration; in-flight ARM operation handles are new v3 status/core-ledger records and are re-derived or adopted on reconcile when absent. |
 | Validation | `tests/lifecycle_hermetic.rs`; all ARM paths via `FakeAzureEffectPort`; no ARM URL in test assertions |
 | Removal proof | Old `InfrastructureProvider` ARM simulation deleted after parity |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-azure-vm-003
 
@@ -1430,6 +1434,8 @@ d2b.zones.dev.resources.corp-vm = {
 | Data migration | Full d2b 3.0 reset; old WorkloadProvider lifecycle state is not imported. Existing ARM resources may be adopted by tag/idempotency checks during reconcile. |
 | Validation | `tests/lifecycle_hermetic.rs`; `tests/conformance.rs` |
 | Removal proof | Old `WorkloadProvider::provision`/`deprovision` paths retired |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-azure-vm-004
 
@@ -1444,6 +1450,8 @@ d2b.zones.dev.resources.corp-vm = {
 | Data migration | No v2 bootstrap state import; the new sealed recovery Volume is initialized on first v3 activation, and old vsock bootstrap material is retired at cutover. |
 | Validation | `tests/bootstrap_hermetic.rs`; `tests/error_redaction.rs` |
 | Removal proof | Old vsock bootstrap path removed at v3 cutover |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-azure-vm-005
 
@@ -1458,6 +1466,8 @@ d2b.zones.dev.resources.corp-vm = {
 | Data migration | No ambient credential migration; v3 requires ResourceType Credential/ManagedIdentityRef plus enrolled KK, and the old direct IMDS fallback is removed. |
 | Validation | `tests/credential_hermetic.rs`; `tests/error_redaction.rs` |
 | Removal proof | Old direct IMDS calls from controller removed |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-azure-vm-006
 
@@ -1472,6 +1482,8 @@ d2b.zones.dev.resources.corp-vm = {
 | Data migration | Old `AtomicU64` operation IDs are not imported; v3 operations use deterministic keys, while missing handles are re-derived or adopted from ARM. |
 | Validation | `tests/idempotency.rs`; restart-recovery scenario |
 | Removal proof | `AtomicU64` lifecycle op ID removed after all ARM callers migrate |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-azure-vm-007
 
@@ -1486,6 +1498,8 @@ d2b.zones.dev.resources.corp-vm = {
 | Data migration | Full d2b 3.0 reset; old `d2b.realms.<r>.workloads.<w>` config is replaced by v3 resource authoring with no automatic v2 config import. |
 | Validation | Nix eval tests; `make test-flake`; `make test-drift` |
 | Removal proof | `d2b.realms.<r>.workloads.<w>` removed at v3 cutover |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-azure-vm-008
 
@@ -1500,6 +1514,8 @@ d2b.zones.dev.resources.corp-vm = {
 | Data migration | No metrics/audit data migration; new OTEL/audit surfaces start at v3 cutover and the old Prometheus registry is retired. |
 | Validation | `tests/error_redaction.rs`; `d2b-contract-tests/tests/policy_observability.rs` updated |
 | Removal proof | `d2bd/src/metrics.rs` hand-rolled registry removed after observability-otel Provider integration |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-azure-vm-009
 
@@ -1514,6 +1530,8 @@ d2b.zones.dev.resources.corp-vm = {
 | Data migration | None - test-only work; no runtime state. Old mock tests are removed only after parity. |
 | Validation | All tests pass |
 | Removal proof | Old `InfrastructureProvider` mock tests deleted after parity |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 

@@ -1298,6 +1298,8 @@ assumptions. Copied behavior is independently re-tested against v3
 | Data migration | No state migration; controller relists and adopts on restart |
 | Validation | `tests/conformance.rs` (shared conformance kit); `tests/identity_binding.rs` (InvocationID/cgroup/MainPID/start-time golden vectors via mock effect port); `tests/adoption.rs` (quarantine/identity-mismatch cases); `tests/restart.rs` (backoff/maxRestarts); latency assertions (p95 ≤5 ms hint→handler, ≤20 ms commit→effect port `start` call) |
 | Removal proof | `VmProcessDag` supervisor roles removed per role disposition table after each succeeds in conformance |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-systemd-002
 
@@ -1313,6 +1315,8 @@ assumptions. Copied behavior is independently re-tested against v3
 | Data migration | No configuration compatibility path; full reset at v3 cutover |
 | Validation | `tests/unit/nix/cases/provider-system-systemd.nix` (eval-time validation); `tests/unit/gates/drift-check.sh` covers generated option schema |
 | Removal proof | `nixos-modules/unsafe-local-helper.nix` removed after user-domain Host/Process parity |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-systemd-003
 
@@ -1328,6 +1332,8 @@ assumptions. Copied behavior is independently re-tested against v3
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | All conformance vectors pass; all fault injection scenarios reach expected phase/condition; all §19 Host and Guest test scenarios pass |
 | Removal proof | No removal; tests are permanent |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 

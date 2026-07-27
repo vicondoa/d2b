@@ -160,8 +160,20 @@ database built against the exact `ADR-046-resource-store-redb` schema (§
 ≤2 ms p95 read, ≤10 ms p95 write, ≤5 ms p95 commit-to-handler, or ≤20 ms p95
 ready-Process-to-launch-attempt targets in that spec's "Performance contract"
 table. Those targets are `unknown-requires-spike` and are covered by
-SPIKE-01 and SPIKE-02 below. Pinned version for every redb-touching spike in
-this document:
+SPIKE-01 and SPIKE-02 below.
+
+D117's exact redb version and initial runtime capacities are therefore
+provisional. The dependency already present in `packages/Cargo.toml` is an
+input to the disposable proof and to engine-neutral contract compilation, not
+evidence that redb has been adopted. Before the spikes run, implementation is
+limited to the ten-table layout, D099 codecs and discriminants, closed errors,
+store-neutral traits/transaction types, golden vectors, the D115 storage-row
+source contract, and hermetic small-scale semantic tests. Production
+`ADR046-store-004` backend work and redb backup/migration in
+`ADR046-store-005` wait for SPIKE-01. Production `ADR046-store-002`
+watch/dispatcher work waits for both SPIKE-01 and SPIKE-02.
+
+Pinned version for every redb-touching spike in this document:
 
 ```toml
 redb = { version = "=4.1.0", default-features = false }
@@ -250,12 +262,12 @@ in any of them and remain `ADR-only`.
 
 ## Evidence classification matrix
 
-| Subsystem / claim | Evidence class today | Spike required before its work item starts |
+| Subsystem / claim | Evidence class today | Implementation gate |
 | --- | --- | --- |
 | kcp unsuitable at recursive Host/Guest/Zone scale | completed evidence (E1) | No - see anti-claim rule 4 |
-| redb is the right embedding shape (single-writer/MVCC/pure-Rust/fd-backed) | design rationale, `ADR-only` for workload fit (E2) | Yes - SPIKE-01 |
-| redb meets the 10k-resource functional/index/revision/watch/group-commit/crash-recovery/RSS targets | `unknown-requires-spike` | Yes - SPIKE-01 |
-| p95 durable commit → controller handler start ≤5 ms | `unknown-requires-spike` | Yes - SPIKE-02 |
+| redb is the right embedding shape (single-writer/MVCC/pure-Rust/fd-backed) | design rationale, `ADR-only` for workload fit (E2) | SPIKE-01 before production backend adoption or redb backup/migration; engine-neutral store contracts may precede it |
+| redb meets the 10k-resource functional/index/revision/watch/group-commit/crash-recovery/RSS targets | `unknown-requires-spike` | SPIKE-01 before `ADR046-store-004`, production `ADR046-store-002`, or `ADR046-store-005` |
+| p95 durable commit → controller handler start ≤5 ms | `unknown-requires-spike` | SPIKE-02 before production `ADR046-store-002`; it does not gate codecs, errors, table definitions, or storage-row sources |
 | p95 ready-Process commit → launch-attempt start ≤20 ms under concurrent dispatch | `unknown-requires-spike` | Yes - SPIKE-03 |
 | Async EffectPort adapters never block the executor | `unknown-requires-spike` | Yes - SPIKE-04 |
 | Noise NN/KK/IKpsk2 handshake, records, fair scheduling, Unix/vsock transport (main shape) | `implemented-but-unwired` for v3, proven at main `a1cc0b2d` (E3) | Only the v3 integration delta - SPIKE-06/07/08 |
@@ -294,33 +306,33 @@ performed by this documentation-only spec.
 
 | Field | Value |
 | --- | --- |
-| Hypothesis | An embedded redb 4.1.0 database, built against the `ADR-046-resource-store-redb` physical schema (`store_meta`, `api_schemas`, `resources`, `type_index`, `owner_index`, `controller_index`, `revision_log`, `operations`, `zone_link_cursors`), sustains 10,000 resources with 100 live watches, correct revision/index maintenance, bounded group commit, and forced-crash recovery, inside the aggregate ≤64 MiB idle-RSS budget shared with the fixed system-core/system-minijail controllers. |
-| Minimal disposable artifact | `proofs/redb-resource-store-spike/` - a standalone crate implementing exactly the eight tables above over `redb::Database` with a `FileBackend::new(File)`-backed open, an async bounded fair write queue feeding one blocking store-actor thread (via `tokio::task::spawn_blocking`), and a minimal watch registrar replaying `revision_log`. No d2b-bus, no ComponentSession, no broker - a fake in-process caller drives the API directly. |
+| Hypothesis | An embedded redb 4.1.0 database, built against the `ADR-046-resource-store-redb` physical schema (`store_meta`, `api_schemas`, `resources`, `type_index`, `owner_index`, `producer_index`, `controller_index`, `revision_log`, `operations`, `zone_link_cursors`), sustains 10,000 resources with 100 live watches, correct revision/index maintenance, bounded group commit, and forced-crash recovery, inside the aggregate ≤64 MiB idle-RSS budget shared with the fixed system-core/system-minijail controllers. |
+| Minimal disposable artifact | `proofs/redb-resource-store-spike/` - a standalone crate implementing exactly the ten tables above over `redb::Database` with a `FileBackend::new(File)`-backed open, an async bounded fair write queue feeding one blocking store-actor thread (via `tokio::task::spawn_blocking`), and a minimal watch registrar replaying `revision_log`. No d2b-bus, no ComponentSession, no broker - a fake in-process caller drives the API directly. |
 | Inputs | (a) empty store; (b) 10,000 pre-seeded resources across 6 synthetic ResourceTypes with realistic key/value sizes (JSON spec/status ≤4 KiB each, matching `ADR-046-resource-object-model` bounded-message expectations); (c) 100 concurrently registered watches with mixed ResourceType filters; (d) an expected-revision conflict storm of 500 concurrent writers targeting 50 shared resources; (e) an owner-trigger fan-in tree 4 levels deep, 8 children per level; (f) `SIGKILL` injected at each of the 13 commit-transaction boundaries listed in the write-transaction algorithm. |
 | Command/harness | `cargo test --manifest-path proofs/redb-resource-store-spike/Cargo.toml -- --test-threads=1` for functional/index/revision/watch/conflict/owner-trigger/compaction cases; `cargo run --manifest-path proofs/redb-resource-store-spike/Cargo.toml --bin crash-fixture -- --kill-at-txn <n>` (13 invocations, one per boundary, each in a fresh subprocess) for crash recovery; `/usr/bin/time -v cargo run --manifest-path proofs/redb-resource-store-spike/Cargo.toml --bin rss-fixture -- --resources 10000 --watches 100` for RSS, read three times and take the median "Maximum resident set size (kbytes)". |
 | Metrics | (1) resource/index/revision correctness - exact match of 10k resources against a parallel `BTreeMap` oracle after every mutation; (2) watch replay/live no-gap - every one of 100 watchers receives every committed ChangeBatch entry after its `afterRevision`, verified by a monotonic per-watcher received-revision set with no gap; (3) group-commit batch size distribution under the conflict storm; (4) crash-recovery: process re-open succeeds or fails closed (never silently creates an empty replacement) at all 13 boundaries; (5) median RSS in KiB. |
 | Pass/fail threshold | (1) zero divergence from oracle across 10k resources / 5 repeated runs; (2) zero missed/duplicated ChangeBatch deliveries across 100 watchers; (3) non-conflicting writes in the storm achieve group commit (batch size > 1) at least 50% of the time; (4) 13/13 boundaries either recover to the last fully-committed state or refuse to open (never a silent empty store); (5) median RSS for the store+actor alone ≤ 24 MiB (leaving ≥40 MiB of the 64 MiB aggregate budget in `ADR-046-resource-store-redb` for the fixed system-core/system-minijail controllers measured separately in SPIKE-11/SPIKE-15). |
 | Expected resource budget | Single-threaded build+run ≤5 minutes on a 4-vCPU/8 GiB CI runner; peak build RSS ≤1 GiB; on-disk database file ≤200 MiB for the 10k-resource fixture. |
-| Failure interpretation | RSS miss → the schema/serialization plan in `ADR-046-resource-store-redb` §"Physical tables" changes (e.g., narrower key encoding, smaller in-memory index shape) before `ADR046-store-001` starts; a correctness miss on watch/crash-recovery → the async storage adapter or write-transaction algorithm in that same spec is revised, never the tolerance; group-commit batch-size miss → the "bounded group commit" admission window is retuned, but per anti-claim rule 3 not by weakening per-mutation validation. |
-| Affected decisions/work items | D003, D004, D005, D006, D008, D053; `ADR046-store-001`, `ADR046-store-002`, `ADR046-store-003`. |
-| Cleanup | `proofs/redb-resource-store-spike/` is deleted, and its entry removed from `tests/test-proofs.sh`, once `packages/d2b-resource-store-redb` (the real `ADR046-store-001` destination) has an in-tree benchmark reproducing metrics (1)-(5) at equal or stricter thresholds. |
-| Status | Specified - not yet executed (D024: documentation-only task; execution is separate future implementation work). |
+| Failure interpretation | RSS miss → the schema/serialization plan in `ADR-046-resource-store-redb` §"Physical tables" changes before `ADR046-store-004` starts; a correctness miss on watch/crash-recovery → the async storage adapter or write-transaction algorithm in that same spec is revised, never the tolerance; group-commit batch-size miss → the "bounded group commit" admission window is retuned, but per anti-claim rule 3 not by weakening per-mutation validation. Already-landed engine-neutral codecs and vectors change only through the D099 schema-version and migration rule. |
+| Affected decisions/work items | D003, D004, D005, D006, D008, D053, D117, D128; `ADR046-store-004`, all production `ADR046-store-002`, and `ADR046-store-005`. |
+| Cleanup | `proofs/redb-resource-store-spike/` is deleted, and its entry removed from `tests/test-proofs.sh`, once `packages/d2b-resource-store-redb` (the real `ADR046-store-004` destination) has an in-tree benchmark reproducing metrics (1)-(5) at equal or stricter thresholds. |
+| Status | Specified - not yet executed (D024: documentation-only task; execution is separate future implementation work). The provisional redb pin is not adoption evidence. |
 
 ### SPIKE-02 - durable commit → controller handler start, p95 ≤5 ms
 
 | Field | Value |
 | --- | --- |
 | Hypothesis | The post-commit dispatcher inside the Zone runtime (redb write-transaction commit → in-memory index swap → matching watch/reconcile-hint push) delivers a hint to a waiting async consumer with p95 latency ≤5 ms, independent of concurrent unrelated commit traffic. |
-| Minimal disposable artifact | `proofs/redb-commit-handler-latency-spike/` - extends SPIKE-01's store-actor with a minimal in-process "hint bus" (a bounded `tokio::sync::mpsc` per registered consumer, no real d2b-bus/ComponentSession) and a synthetic "controller" task that records `Instant::now()` on hint receipt. |
+| Minimal disposable artifact | `proofs/redb-resource-store-spike/` - a `commit_to_handler` bench target in SPIKE-01's owned crate that extends its store actor with a minimal in-process "hint bus" (a bounded `tokio::sync::mpsc` per registered consumer, no real d2b-bus/ComponentSession) and a synthetic "controller" task that records `Instant::now()` on hint receipt. |
 | Inputs | 1,000 sequential single-resource writes each immediately followed (same async task) by measuring elapsed time to the matching consumer's hint receipt; repeated under three concurrency profiles: (a) no background writers; (b) 10 background writer tasks issuing unrelated resource writes at a combined 500 writes/s; (c) 100 background writer tasks at a combined 2,000 writes/s. |
-| Command/harness | `cargo bench --manifest-path proofs/redb-commit-handler-latency-spike/Cargo.toml -- commit_to_handler` using `criterion` with `--sample-size 1000`; percentile computed by criterion's built-in estimator over the full 1,000-sample run per profile. |
+| Command/harness | `cargo bench --manifest-path proofs/redb-resource-store-spike/Cargo.toml -- commit_to_handler` using `criterion` with `--sample-size 1000`; percentile computed by criterion's built-in estimator over the full 1,000-sample run per profile. |
 | Metrics | p50/p95/p99 elapsed time in microseconds from `write_transaction.commit()` return to consumer task waking and reading the hint, for each of the 3 concurrency profiles. |
 | Pass/fail threshold | p95 ≤5,000 µs (5 ms) in all 3 profiles; p99 ≤10,000 µs recorded and reported (not gating, but any p99 >20 ms is a documented finding attached to the result). |
 | Expected resource budget | ≤3 minutes wall time per profile; single CI runner core pinned via `taskset`/`cset` where available, otherwise best-effort with reported CPU count and load. |
 | Failure interpretation | A miss under profile (a) is a dispatcher-design failure - the post-commit swap/push path in `ADR-046-resource-store-redb` §"Async storage adapter" changes. A miss only under profiles (b)/(c) is an admission-fairness failure - the "per-principal/controller fair admission" rule in the same section is retuned (e.g., smaller max group-commit batch, dedicated hint-delivery task priority) before `ADR046-store-002` starts. |
-| Affected decisions/work items | D030; `ADR046-store-001`, `ADR046-store-002`, `ADR046-reconcile-002`. |
+| Affected decisions/work items | D030, D117, D128; `ADR046-store-004`, production `ADR046-store-002`, and `ADR046-reconcile-002`. |
 | Cleanup | Deleted once `packages/d2b-controller-toolkit/benches/reaction.rs` (the real `ADR046-reconcile-003` destination named in `ADR-046-resource-reconciliation`) reproduces the same 3-profile p95/p99 gate against the real store. |
-| Status | Specified - not yet executed. |
+| Status | Specified - not yet executed. Production watch/dispatcher integration remains gated; codec, physical-schema, error, and storage-row source work does not. |
 
 ### SPIKE-03 - ready Process commit → launch-attempt start, p95 ≤20 ms, concurrent reading and dispatch
 
@@ -703,11 +715,13 @@ decisions/work items" row.
 | Reuse source | None (redb is a new external dependency; no main or v3 code implements it) |
 | Reuse action | adapt |
 | Destination | `proofs/redb-resource-store-spike/` |
-| Detailed design | Implements SPIKE-01 and SPIKE-02: the eight-table schema, fair write queue, blocking store-actor, watch registrar, and hint bus described in those two spike entries Primary reuse disposition: `adapt`. Preserved source-plan detail: `adapt` (the atomic-write/idempotency discipline in `storage.rs`/`sync.rs` is adapted into the spike's write-transaction algorithm; redb itself is used unmodified). |
+| Detailed design | Implements SPIKE-01 and SPIKE-02: the ten-table schema, fair write queue, blocking store-actor, watch registrar, and hint bus described in those two spike entries Primary reuse disposition: `adapt`. Preserved source-plan detail: `adapt` (the atomic-write/idempotency discipline in `storage.rs`/`sync.rs` is adapted into the spike's write-transaction algorithm; redb itself is used unmodified). |
 | Integration | None (standalone; no d2b-bus/ComponentSession/broker dependency) |
 | Data migration | None (disposable fixture data only) |
 | Validation | SPIKE-01 metrics (1)-(5) and SPIKE-02 metrics (1) across all 3 concurrency profiles, per those entries' exact pass/fail thresholds |
 | Removal proof | Per SPIKE-01/SPIKE-02 Cleanup rows: deleted once `packages/d2b-resource-store-redb` and `packages/d2b-controller-toolkit/benches/reaction.rs` reproduce equal-or-stricter coverage |
+| Implementation state | Planned |
+| Evidence | `proofs/redb-resource-store-spike/` is absent and SPIKE-01/SPIKE-02 both remain explicitly not executed. |
 
 ### ADR046-feasibility-002
 
@@ -724,6 +738,8 @@ decisions/work items" row.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | SPIKE-03 metrics (1)-(3) and thresholds |
 | Removal proof | Deleted once `packages/d2b-controller-toolkit/benches/reaction.rs` and the Process Provider integration tests named by `ADR046-reconcile-003` reproduce equal-or-stricter coverage |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-feasibility-003
 
@@ -740,6 +756,8 @@ decisions/work items" row.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | SPIKE-04 heartbeat-jitter metric and threshold |
 | Removal proof | Deleted once `packages/d2b-provider-supervisor` and the volume-domain effect adapter each carry an equal-or-stricter in-tree blocking-adapter regression test |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-feasibility-004
 
@@ -756,6 +774,8 @@ decisions/work items" row.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | SPIKE-05 metrics (1)-(4) across 20 repeated randomized-order manifest loads |
 | Removal proof | Deleted once the real Provider-toolkit crate (`ADR046-provider-001` destination) ships equal-or-stricter manifest-parsing/enumeration/workspace-policy coverage |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-feasibility-005
 
@@ -772,6 +792,8 @@ decisions/work items" row.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | SPIKE-06 metrics (1)-(3), SPIKE-07 metrics (1)-(4) against the exact numeric gates already committed in the transport-unix/vsock dossiers, SPIKE-08 metrics (1)-(6) |
 | Removal proof | Deleted per each spike's own Cleanup row: `packages/d2b-bus/src/router.rs` for SPIKE-06; the three real transport Provider crates for SPIKE-07; the real Credential Provider crates for SPIKE-08 |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-feasibility-006
 
@@ -788,6 +810,8 @@ decisions/work items" row.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | SPIKE-09 metrics (1)-(4); SPIKE-10 metrics (1)-(5), zero-tolerance on path leakage |
 | Removal proof | Deleted per each spike's Cleanup row: the real `ADR-046-provider-state` work-item destination for SPIKE-09; `d2b-provider-volume-local`'s own `tests/`/`integration/` suite for SPIKE-10 |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-feasibility-007
 
@@ -804,6 +828,8 @@ decisions/work items" row.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | SPIKE-11 metrics (1)-(4), zero-tolerance on false adoption |
 | Removal proof | Deleted once `packages/d2b-provider-system-systemd` and `packages/d2b-provider-system-minijail` each carry this exact shared conformance suite in their own `tests/` |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-feasibility-008
 
@@ -820,6 +846,8 @@ decisions/work items" row.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | SPIKE-12 metrics (1)-(5), byte-for-byte reproducibility across 3 hermetic builds |
 | Removal proof | Deleted once the real `nixos-modules/resources.nix` and `packages/xtask` `gen-schemas` implementation reproduce these metrics as part of `make test-drift`/`make test-flake` |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-feasibility-009
 
@@ -836,6 +864,8 @@ decisions/work items" row.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | SPIKE-13 metrics (1)-(7); SPIKE-14 metrics (1)-(3), zero-tolerance on legacy-file access |
 | Removal proof | Deleted per each spike's Cleanup row: the real `d2b` CLI crate's own discovery conformance test for SPIKE-13; the real CLI crate's workspace-policy/lint gate plus the real bootstrap sequence for SPIKE-14 |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-feasibility-010
 
@@ -852,6 +882,8 @@ decisions/work items" row.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | SPIKE-15 metrics (1)-(4) across all three compositions |
 | Removal proof | Deleted once the real integration test suites named by the individual Provider dossiers (`integration/` per D059) collectively reproduce all three compositions against real, non-fake Zone/store/bus/broker code |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-feasibility-011
 
@@ -868,3 +900,5 @@ decisions/work items" row.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | The representative crate meets its aggregate process-CPU budget; a per-test wall-clock threshold breach remains advisory; a synthetic sleep/process/network test is flagged by placement policy; cold compile time is excluded from measurements |
 | Removal proof | Deleted once `ADR046-delivery-007`'s in-tree ledger/timing gate reproduces these budget checks against the real crate set |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |

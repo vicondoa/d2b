@@ -277,14 +277,24 @@ route, Provider generation, or method fails closed.
 
 ### Admitted mutation boundary
 
-The native evaluator is the only constructor of `AllowDecision`. It captures
-the admitted mutation, exact authorization attributes, revisions, controller
-generation, request identity, and deadline into `AdmittedMutation`, whose
-fields are private. `ResourceStore::commit` accepts only that type. Inside the
-write transaction the store compares the captured policy, API-catalog, active
-configuration, and controller revisions against live `store_meta`; any mismatch
-aborts without mutation as `authorization-denied`. The store never evaluates
-RBAC and never auto-retries. The client must reissue through the evaluator.
+Mutation admission can originate only from a successful native authorization
+evaluation. The resulting sealed evidence carries the admitted mutation, exact
+authorization attributes, policy/API-catalog/active-configuration/controller
+revisions, request identity, and deadline. The verifier and store-identity
+halves of the admission binding are consumed into one private checked store,
+which verifies the evaluator authority and exact store identity before passing a
+`VerifiedMutation` to the backend. A caller therefore cannot mint admission
+without a real allow or replay evidence against another store.
+
+The seal ends at the backend boundary; it does not sandbox or attest the
+backend implementation. A registered backend is trusted to mutate only from
+the supplied `VerifiedMutation`, compare its captured revisions against live
+`store_meta` in the same write transaction, preserve all structural and
+atomicity checks, and expose no independent mutation path. Any mismatch aborts
+without mutation as `authorization-denied`; the store never evaluates RBAC or
+auto-retries, and the client must reissue through the evaluator. A production
+backend is admitted to the trusted computing base only after security review
+and conformance tests cover these obligations.
 
 ### Role
 
@@ -568,7 +578,7 @@ per-watch value is only a fairness ceiling.
 | Finalizers per resource | 8 | Unique and canonically sorted for the digest | `resource-schema-invalid` |
 | Finalizer ID | 128 bytes | Admitted forms are `core.<name>` and `<namespace>.d2bus.org/<name>`, each segment 1 to 63 bytes | `resource-schema-invalid` |
 | Labels, annotations | 32 each | Neither participates in authorization | `resource-schema-invalid` |
-| Label or annotation key | 128 bytes | Optional `<namespace>/` prefix, same grammar both sides | `resource-schema-invalid` |
+| Label or annotation key | 64 bytes | Printable ASCII; the optional `<namespace>/` prefix counts toward D101's canonical JSON object-key ceiling | `resource-schema-invalid` |
 | Label value | 256 bytes | UTF-8, control-character free | `resource-schema-invalid` |
 | Annotation value, aggregate annotations | 4 KiB, 16 KiB | Kept well inside the 256 KiB envelope cap | `resource-schema-invalid` |
 
@@ -647,6 +657,15 @@ the current revision but does not return an unauthorized resource body, and
 `revision-expired` and only when the caller is authorized to read that
 revision.
 
+The Rust homes and mapping boundary are frozen by D111.
+`ResourceErrorKind`/`ResourceError` live in
+`packages/d2b-contracts/src/v3/error.rs`;
+`StoreErrorKind`/`StoreError` live in
+`packages/d2b-resource-store/src/error.rs`; and the total one-way store-to-API
+mapping lives in `packages/d2b-resource-api/src/error.rs`. The resource set is
+the exact 31 strings above. The store set adds only
+`store-integrity-failure`, `store-backpressure`, and `store-quarantined`.
+
 ## Audit
 
 Audit records:
@@ -666,10 +685,10 @@ process data, and terminal bytes.
 
 | Item | Treatment |
 | --- | --- |
-| Current anchor | Public daemon/broker seqpacket auth; `d2b-daemon-access` admission types; `d2b-realm-router` principal/capability/idempotency checks; Realm access resolver; strict DTOs |
-| Evidence class | Local daemon auth is reachable; daemon-access/Realm peer abstractions are partly unwired; native RBAC/API are ADR-only |
+| Current anchor | Native ResourceService DTOs, methods, errors, Role/RoleBinding evaluation, checked service-to-store calls, and `UnregisteredBusAdapter` exist in `d2b-contracts` and `d2b-resource-api`. The adapter can construct the complete ttrpc service for an already-authenticated session, but deliberately has no registration path from production d2b-bus or a Zone runtime. Existing anchors remain public daemon/broker seqpacket auth, `d2b-daemon-access` admission types, `d2b-realm-router` principal/capability/idempotency checks, Realm access resolver, and strict DTOs |
+| Evidence class | Resource API, native RBAC, the single-owner checked store binding, service-to-store wiring, and `UnregisteredBusAdapter` are `implemented-but-unwired`; production bus dispatch, Zone wiring, and a vetted production store backend are absent. The adapter is named for that lack of production registration; constructing it is not production reachability. Local daemon auth is reachable, while daemon-access/Realm peer abstractions remain partly unwired |
 | Behavior retained | SO_PEERCRED/local identity, typed denials, positive capabilities, no relay-to-local auth, strict bounds/unknown-field rejection |
-| Required delta | Entire resource API, Provider API schemas/bindings, Role/RoleBinding engine, status ownership, parent resource routing |
+| Required delta | Dispatch the existing ttrpc adapter from d2b-bus, connect a Zone runtime and production backend, and implement Provider API schemas/bindings, status ownership, and parent resource routing |
 | Reuse path | Extract exact admission/error/id/ref validators and router authorization derivation |
 | Replacement/deletion | Old public wire remains until CLI/controllers consume new services |
 | Feasibility proof | Multi-process local/vsock/Zone resource calls, immediate revocation, conflict/no-leak tests |
@@ -684,12 +703,14 @@ process data, and terminal bytes.
 | Dependency/owner | W0; resource API integrator |
 | Current source | `packages/d2b-contracts/src/public_wire.rs`, `broker_wire.rs`; `d2b-daemon-access/src/lib.rs`; `d2b-realm-router/src/lib.rs` |
 | Reuse action | adapt |
-| Destination | `packages/d2b-contracts/proto/d2b-resource-v3.proto`; `packages/d2b-contracts/src/generated/d2b_resource_v3.rs`; `packages/d2b-resource-api/src/generated/`, `service.rs`, `client.rs`; `packages/xtask/src/main.rs` codegen commands |
+| Destination | `packages/d2b-contracts/proto/d2b-resource-v3.proto`; `packages/d2b-contracts/src/generated/d2b_resource_v3.rs`; `packages/d2b-resource-api/src/generated/`, `service.rs`, `client.rs`, `error.rs`; `packages/xtask/src/main.rs` codegen commands |
 | Detailed design | Freeze the service as `d2b.resource.v3.ResourceService` and the D100 typed message set with one canonical-JSON bytes carrier. `xtask gen-resource-proto` emits message-only pure-Rust bindings into `d2b-contracts` from a service-stripped proto; `xtask gen-resource-ttrpc` emits async service/client bindings into `d2b-resource-api`. No `build.rs`, `google.protobuf.Any`, dynamically typed `oneof`, or domain error in transport status. Implement async methods, contexts, admitted-mutation preconditions, D112 contract constants, typed resource errors, status/finalizer separation, and batch API. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | d2b-bus exact service → Zone auth → redb actor |
 | Data migration | None; v3 clean break |
 | Validation | Golden encoding/field-number vectors; generated-file drift tests for both outputs and byte-identical existing guest-proto output; no-build-script/Any/dynamic-oneof/transport-domain-error policy tests; D112 constant assertions; malformed/oversize/conflict/status-owner tests |
 | Removal proof | Old command/resource-equivalent paths removed only per integration wave |
+| Implementation state | Merged |
+| Evidence | All destinations are present, including generated protobuf/ttrpc bindings and `packages/d2b-resource-api/src/{service,client,error,adapter}.rs`; contract, generated-drift, malformed-input, batch, and adapter tests are committed. |
 
 ### ADR046-api-002
 
@@ -704,3 +725,5 @@ process data, and terminal bytes.
 | Data migration | Generate initial Roles/Bindings from Nix v3 config |
 | Validation | W0 evaluator-skeleton, cache-key, revision-invalidation, subject-mapping, relay-origin/scope, relay-missing, and target-verb-missing fail-closed tests; concrete Role/RoleBinding schema and revocation vectors land with the W5 Zone-control work items |
 | Removal proof | Legacy auth remains until every v3 route is covered |
+| Implementation state | Merged |
+| Evidence | Both destinations are present: `packages/d2b-resource-api/src/authz.rs` and `packages/d2b-core-controller/src/rbac.rs`, with native Role/RoleBinding evaluation, bootstrap, relay, cache, and revision tests. |

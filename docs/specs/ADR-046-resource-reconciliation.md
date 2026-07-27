@@ -461,6 +461,8 @@ core Operation ledger, and independent external observation.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Golden state-machine vectors, deterministic clocks, conflict/restart/queue tests; D090: commit-fails/Abort → no effect, controller finishes-before-commit gated on proof, effects-gate, status-write-delayed (`statusPersistence: pending`), normal-queued no-op/rejoin, concurrent mutation, delete event-only projection, expedited timeout committed-but-pending, restart re-entry no duplicate; D091: current/non-disruptive/each-trigger assess, UpgradeRequired-not-in-place, dependency propagation/topological drain-recycle-restart, GPU blocking, state/TPM preservation, crash/re-entry resume, single-flight reconcile-vs-upgrade serialization |
 | Removal proof | Current per-role orchestration removed only after ResourceType successors |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-reconcile-002
 
@@ -475,6 +477,8 @@ core Operation ledger, and independent external observation.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Owner/dependency chains, suppression/no-loss, restart/relist, lease withdrawal |
 | Removal proof | Not applicable |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-reconcile-003
 
@@ -489,3 +493,5 @@ core Operation ledger, and independent external observation.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Hard <=5 ms/<=20 ms p95 gates and 1/10/100 Process concurrency |
 | Removal proof | Not applicable |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |

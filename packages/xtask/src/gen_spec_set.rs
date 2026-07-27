@@ -32,13 +32,13 @@ const ADR: &str = "0046";
 const SPEC_SET_ARTIFACT_KIND: &str = "d2b-adr-spec-set";
 const SPEC_SET_SCHEMA_VERSION: u32 = 3;
 const WORK_ITEMS_ARTIFACT_KIND: &str = "d2b-adr-work-items";
-const WORK_ITEMS_SCHEMA_VERSION: u32 = 1;
+const WORK_ITEMS_SCHEMA_VERSION: u32 = 2;
 
 /// The ADR 0046 set is a fixed, closed corpus. A parser regression that
 /// silently finds fewer members or work items must fail the generator rather
 /// than quietly shrink the manifests.
 const EXPECTED_MEMBERS: usize = 55;
-const EXPECTED_WORK_ITEMS: usize = 543;
+const EXPECTED_WORK_ITEMS: usize = 545;
 
 /// The four spellings a work-item heading uses. All four are load-bearing:
 /// anchoring on one shape silently drops the rest.
@@ -57,11 +57,11 @@ pub enum HeadingForm {
     Parenthetical,
 }
 
-/// The recorded heading-form distribution across the 543 work items. A parser
+/// The recorded heading-form distribution across the 545 work items. A parser
 /// that stops matching one spelling changes this census, which fails the
 /// generator instead of silently shrinking the manifest.
 const EXPECTED_HEADING_FORMS: &[(HeadingForm, usize)] = &[
-    (HeadingForm::Bare, 356),
+    (HeadingForm::Bare, 358),
     (HeadingForm::Dash, 112),
     (HeadingForm::Colon, 51),
     (HeadingForm::Parenthetical, 24),
@@ -108,6 +108,9 @@ const REUSE_ACTIONS: &[&str] = &[
     "wrap",
 ];
 
+/// The closed `Implementation state` scalar domain.
+const IMPLEMENTATION_STATES: &[&str] = &["Merged", "Planned"];
+
 /// Mandatory work-item table fields, in manifest field order.
 const MANDATORY_FIELDS: &[&str] = &[
     "Current source",
@@ -115,6 +118,8 @@ const MANDATORY_FIELDS: &[&str] = &[
     "Dependency/owner",
     "Destination",
     "Detailed design",
+    "Evidence",
+    "Implementation state",
     "Integration",
     "Removal proof",
     "Reuse action",
@@ -177,6 +182,8 @@ pub struct WorkItemEntry {
     pub dependency_owner: String,
     pub destination: String,
     pub detailed_design: String,
+    pub evidence: String,
+    pub implementation_state: String,
     pub integration: String,
     pub removal_proof: String,
     pub reuse_action: String,
@@ -392,12 +399,21 @@ impl ParsedWorkItem {
                 self.id
             )));
         }
+        let implementation_state = self.field("Implementation state")?;
+        if !IMPLEMENTATION_STATES.contains(&implementation_state.as_str()) {
+            return Err(GenError(format!(
+                "work item `{}` declares free-form implementation state `{implementation_state}`; expected one of {IMPLEMENTATION_STATES:?}",
+                self.id
+            )));
+        }
         Ok(WorkItemEntry {
             current_source: self.field("Current source")?,
             data_migration: self.field("Data migration")?,
             dependency_owner: self.field("Dependency/owner")?,
             destination: self.field("Destination")?,
             detailed_design: self.field("Detailed design")?,
+            evidence: self.field("Evidence")?,
+            implementation_state,
             integration: self.field("Integration")?,
             removal_proof: self.field("Removal proof")?,
             reuse_action,
@@ -1015,6 +1031,17 @@ mod tests {
             assert!(
                 !REUSE_ACTIONS.contains(&compound),
                 "`{compound}` must not be an accepted reuse action"
+            );
+        }
+    }
+
+    #[test]
+    fn the_implementation_state_domain_is_closed() {
+        assert_eq!(IMPLEMENTATION_STATES, ["Merged", "Planned"]);
+        for free_form in ["In progress", "Complete", "merged", ""] {
+            assert!(
+                !IMPLEMENTATION_STATES.contains(&free_form),
+                "`{free_form}` must not be an accepted implementation state"
             );
         }
     }

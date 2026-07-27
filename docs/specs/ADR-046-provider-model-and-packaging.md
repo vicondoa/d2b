@@ -644,6 +644,8 @@ cannot alias, rename, or vendor-qualify the base types.
 | Data migration | Full reset |
 | Validation | Contract vectors, fake/malicious Provider, one-crate/one-identity policy |
 | Removal proof | Old trait crate retired only after all Provider dossiers migrate |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-provider-002
 
@@ -658,6 +660,8 @@ cannot alias, rename, or vendor-qualify the base types.
 | Data migration | No package compatibility path |
 | Validation | Workspace naming/dependency/output/dossier/catalog parity policy |
 | Removal proof | Combined crate removed only after every live implementation has a Provider successor |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-provider-003
 
@@ -672,6 +676,8 @@ cannot alias, rename, or vendor-qualify the base types.
 | Data migration | Current roles converted under reset |
 | Validation | Shared conformance and host/user/non-Host tests |
 | Removal proof | Current role launch paths removed after parity |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-provider-004
 
@@ -686,3 +692,5 @@ cannot alias, rename, or vendor-qualify the base types.
 | Data migration | Full d2b 3.0 reset; no prior public Service/Binding names or aliases are imported |
 | Validation | Shared contract tests cover exact names, strict serde/schema round trips, common base discoverability without any Provider package, canonical minimal base acceptance without `spec.provider`, same-Zone refs/targets, owner/projection discrimination, Core projection rejection of `spec.provider`, common fields only under `status.resource`, implementation observation only under `status.provider`, status-only observations, no Device/Endpoint/Binding projection, implementation-detail rejection, semantic factory-fingerprint stability under Provider/adapter identity changes, and rejection of every implementation-qualified/former `*State` alias. Each initial and fake alternate Provider must pass the identical base conformance fixture. |
 | Removal proof | Any Provider-local duplicate base DTO/schema is removed before that Provider is registered; only strict Provider extension DTOs remain implementation-owned. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |

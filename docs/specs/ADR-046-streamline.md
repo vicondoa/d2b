@@ -511,6 +511,8 @@ v3 source to extract from.
 | Adoption timing | Immediately; first Tier A item, since every other generator/lint below consumes its output |
 | Removal/supersession | None; this is the foundational generator for the remaining items |
 | Removal proof | None - net-new; no prior owner to remove; this is the foundational generator for the remaining items |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-streamline-002 - Canonical schema/snippet generator
 
@@ -533,6 +535,8 @@ v3 source to extract from.
 | Adoption timing | Tier A ships now; Tier B graduation happens only after the owning implementation work item for `d2b-core` resource schemas reaches Validation-complete |
 | Removal/supersession | Tier A hand-authored JSON is superseded (not deleted) by Tier B generated JSON once real Rust types exist; consumers are unaffected since the file shape is identical |
 | Removal proof | Tier A hand-authored JSON is superseded (not deleted) by Tier B generated JSON once real Rust types exist; consumers are unaffected since the file shape is identical |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-streamline-003 - Markdown fenced-YAML/JSON extractor and schema validator
 
@@ -555,6 +559,8 @@ v3 source to extract from.
 | Adoption timing | Immediately, before the ADR 0046 documentation set's own pre-panel gate, so any remaining spec iteration is caught before, not after, panel |
 | Removal/supersession | None - net-new; no prior owner to remove |
 | Removal proof | None - net-new; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-streamline-004 - Provider dossier scaffold/template
 
@@ -577,6 +583,8 @@ v3 source to extract from.
 | Adoption timing | Immediately; used for any future new Provider dossier and for re-basing an existing dossier onto the corrected shape during its next revision |
 | Removal/supersession | None - net-new; no prior owner to remove |
 | Removal proof | None - net-new; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-streamline-005 - Cross-spec vocabulary/ownership/finalizer/phase/source-policy lint
 
@@ -599,6 +607,8 @@ v3 source to extract from.
 | Adoption timing | Immediately, before the ADR 0046 documentation set's own pre-panel gate |
 | Removal/supersession | None; graduates to permanent per [Permanent methodology](#permanent-methodology-after-accepted) |
 | Removal proof | None - net-new; no prior owner to remove; graduates to permanent per [Permanent methodology](#permanent-methodology-after-accepted) |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-streamline-006 - ProviderStateSet/status-first/one-controller graph checker
 
@@ -621,6 +631,8 @@ v3 source to extract from.
 | Adoption timing | Streamline wave (Tier B); lands after the Zone resource-store and core-controller implementation work items reach Validation-complete |
 | Removal/supersession | None - net-new; no prior owner to remove |
 | Removal proof | None - net-new; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-streamline-007 - EffectPort/broker and worker-bus boundary lint
 
@@ -643,6 +655,8 @@ v3 source to extract from.
 | Adoption timing | Streamline wave (Tier B); lands after the first Provider-toolkit implementation work item reaches Validation-complete, so there is real Provider crate source to lint |
 | Removal/supersession | None - net-new; no prior owner to remove |
 | Removal proof | None - net-new; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-streamline-008 - Work-item schema and unique-ID/dependency validator
 
@@ -665,6 +679,8 @@ v3 source to extract from.
 | Adoption timing | Immediately, before the ADR 0046 documentation set's own pre-panel gate (D014's "set cannot become Accepted while it contains... a work item without exact v3 source and future destination paths" precondition) |
 | Removal/supersession | None; graduates to permanent |
 | Removal proof | None - net-new; no prior owner to remove; graduates to permanent |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-streamline-009 - Provider catalog/index generator
 
@@ -687,6 +703,8 @@ v3 source to extract from.
 | Adoption timing | Immediately |
 | Removal/supersession | None - net-new; no prior owner to remove |
 | Removal proof | None - net-new; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-streamline-010 - Stale-base/current-parent reconcile helper
 
@@ -709,6 +727,8 @@ v3 source to extract from.
 | Adoption timing | Immediately; this is the single highest-value item given F1 shows 100% of checked dossier branches were affected |
 | Removal/supersession | None - net-new; no prior owner to remove |
 | Removal proof | None - net-new; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-streamline-011 - Agent handoff manifest
 
@@ -731,6 +751,8 @@ v3 source to extract from.
 | Adoption timing | Immediately, for any remaining ADR 0046 spec-set round and for the future `ADR046-W0`-`ADR046-W8` implementation phase's parallel scopes |
 | Removal/supersession | None - net-new; no prior owner to remove |
 | Removal proof | None - net-new; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-streamline-012 - Task DB↔git consistency import
 
@@ -753,6 +775,8 @@ v3 source to extract from.
 | Adoption timing | Immediately |
 | Removal/supersession | None - net-new; no prior owner to remove |
 | Removal proof | None - net-new; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-streamline-013 - Anti-serialization ready/launched/blocker report
 
@@ -775,6 +799,8 @@ v3 source to extract from.
 | Adoption timing | Immediately |
 | Removal/supersession | None - net-new; no prior owner to remove |
 | Removal proof | None - net-new; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-streamline-014 - Bounded parallel test/fake-dependency harness
 
@@ -797,6 +823,8 @@ v3 source to extract from.
 | Adoption timing | Streamline wave (Tier B); lands after the Provider-toolkit implementation work item reaches Validation-complete |
 | Removal/supersession | None - net-new; no prior owner to remove |
 | Removal proof | None - net-new; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-streamline-015 - Conflict-aware generated-artifact regeneration
 
@@ -819,6 +847,8 @@ v3 source to extract from.
 | Adoption timing | Tier A part ships alongside ADR046-streamline-001/009; the Tier B part (real generated Rust artifacts) ships in the streamline wave once code generation exists |
 | Removal/supersession | None - net-new; no prior owner to remove |
 | Removal proof | None - net-new; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-streamline-016 - Pre-panel zero-open-decision gate
 
@@ -841,6 +871,8 @@ v3 source to extract from.
 | Adoption timing | Immediately; this is a precondition for the ADR 0046 documentation set's own remaining panel gate, not deferred tooling |
 | Removal/supersession | None; graduates to permanent panel-gate precondition |
 | Removal proof | None - net-new; no prior owner to remove; graduates to permanent panel-gate precondition |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-streamline-017 - External evidence command planning
 
@@ -863,6 +895,8 @@ v3 source to extract from.
 | Adoption timing | Immediately, as a follow-up documentation artifact; does not gate any other item in this spec |
 | Removal/supersession | None - net-new; no prior owner to remove |
 | Removal proof | None - net-new; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-streamline-018 - Worktree/disk/target cleanup reporting
 
@@ -885,6 +919,8 @@ v3 source to extract from.
 | Adoption timing | Immediately |
 | Removal/supersession | None - net-new; no prior owner to remove |
 | Removal proof | None - net-new; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-streamline-019 - Docs source-evidence old→new terminology helper
 
@@ -907,6 +943,8 @@ v3 source to extract from.
 | Adoption timing | Immediately |
 | Removal/supersession | None - net-new; no prior owner to remove |
 | Removal proof | None - net-new; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-streamline-020 - Hermetic test placement lint
 
@@ -929,6 +967,8 @@ v3 source to extract from.
 | Adoption timing | Immediately |
 | Removal/supersession | None - net-new; no prior owner to remove |
 | Removal proof | None - net-new; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-streamline-021 - Deterministic-clock/sleep lint
 
@@ -951,6 +991,8 @@ v3 source to extract from.
 | Adoption timing | Immediately |
 | Removal/supersession | None - net-new; no prior owner to remove |
 | Removal proof | None - net-new; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-streamline-022 - Test-runtime ledger and timing gate
 
@@ -973,6 +1015,8 @@ v3 source to extract from.
 | Adoption timing | Immediately |
 | Removal/supersession | None - net-new; no prior owner to remove |
 | Removal proof | None - net-new; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-streamline-023 - Legacy-test retirement generator
 
@@ -995,6 +1039,8 @@ v3 source to extract from.
 | Adoption timing | Immediately |
 | Removal/supersession | None - net-new; no prior owner to remove |
 | Removal proof | None - net-new; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-streamline-024 - Implementation-graph generator and duplicate-generator reconciliation
 
@@ -1017,3 +1063,5 @@ v3 source to extract from.
 | Adoption timing | Immediately after ADR046-streamline-001 |
 | Removal/supersession | Supersedes the hand-regeneration of the graph; the spec-set and test-runtime generators already run through the single `xtask` path, so no separate emitters remain to supersede |
 | Removal proof | No separate ad hoc emitters for spec-set or test-runtime remain: both already run through the single `xtask` dispatch (`spec-registry`, `test-runtime-ledger`) alongside `implementation-graph` |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |

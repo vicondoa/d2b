@@ -104,7 +104,7 @@ use super::{
         RepositoryRecord, SnapshotSha256, validate_bounded_string, validate_git_ref,
         validate_hash_for_format, validate_repository_id,
     },
-    panel::{ensure_artifact_kind, prepare_state, read_json_file},
+    panel::{ensure_artifact_kind, prepare_state, prepare_state_with_roots, read_json_file},
     seal::SealRecord,
     storage::{CandidateDir, HISTORY_PROOF_FILE, SEAL_FILE, StateRoot},
 };
@@ -199,12 +199,13 @@ pub fn run(args: &[String]) -> Result<WorkflowOutput> {
     let mut options = CliOptions::parse(args)?;
     let seal_path = options.required_path("--seal")?;
     let target_path = options.optional_path("--target")?;
-    let state = prepare_state(&mut options)?;
+    let (state, repository_roots) = prepare_state_with_roots(&mut options)?;
     options.finish()?;
 
     let seal_path = state.resolve_artifact_ref(&seal_path);
     let target_path = target_path.map(|path| state.resolve_artifact_ref(&path));
     let (candidate, seal) = open_sealed_candidate(&state, &seal_path)?;
+    super::work_item_state::require_current_wave_merged(&seal.material, &repository_roots)?;
     let target = load_target(&candidate, target_path.as_deref())?;
     evaluate(&candidate, &seal, &target)
 }

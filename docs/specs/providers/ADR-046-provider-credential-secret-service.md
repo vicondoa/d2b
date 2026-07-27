@@ -1259,6 +1259,8 @@ All controller handlers are async. The reconcile loop follows
 | Data migration | Full reset; no migration from old `CredentialProvider` trait |
 | Validation | See §16 |
 | Removal proof | Old `d2b-realm-provider:CredentialProvider` trait removed only after all three v3 Credential Provider controllers reach full reconcile parity |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-cred-ss-001 (dependency: contract types)
 
@@ -1273,6 +1275,8 @@ All controller handlers are async. The reconcile loop follows
 | Data migration | Full d2b 3.0 reset; no v2 CredentialProvider status/config import |
 | Validation | Credential ResourceType schema/serde/redaction tests from `ADR-046-resources-credential`; credential-secret-service conformance consumes the shared types |
 | Removal proof | Old `d2b-realm-provider:CredentialProvider` trait and `CredentialStatus` enum are removed only after all three v3 Credential Provider controllers reach full reconcile parity |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 Defines `CredentialSpec`, `CredentialStatus`, `CredentialLeaseHandle`,
 `OperationClass`, `PlacementBinding`, `CredentialConditionType`, and all
@@ -1294,6 +1298,8 @@ directly from v3 `d2b-realm-provider/src/credential.rs`. Full detail in
 | Data migration | Full d2b 3.0 reset; no v2 service state import |
 | Validation | Generated-code compile tests and credential service contract tests from `ADR-046-resources-credential`; credential-secret-service lifecycle/delivery tests consume the generated service |
 | Removal proof | V2 `CredentialProvider` trait calls are superseded by `d2b.credential.v3` only after all credential providers reach parity |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 Defines `d2b.credential.v3` protobuf/ttrpc service in
 `packages/d2b-contracts/proto/v3/credential.proto` and generates typed
@@ -1313,6 +1319,8 @@ client/server in `packages/d2b-credential-service/`. Full detail in
 | Data migration | None - controller toolkit code only; no runtime state migration |
 | Validation | Shared reconciliation tests from `ADR-046-resources-credential`; credential-secret-service lifecycle/fault tests verify the handler integration |
 | Removal proof | None - shared toolkit is additive; v2 trait removal is tracked by ADR046-cred-ss-003/001 parity |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 Implements the common Credential controller handler conforming to the
 `ADR-046-resource-reconciliation` async loop in
@@ -1332,6 +1340,8 @@ Implements the common Credential controller handler conforming to the
 | Data migration | Full d2b 3.0 reset; no old credential config is imported into v3 resources |
 | Validation | Nix eval/assertion/golden tests from `ADR-046-resources-credential`; credential-secret-service cleanup rollback integration fixture |
 | Removal proof | None - new v3 Nix resource surface; old trait removal waits for controller parity |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 Implements `d2b.zones.<zone>.resources.<name>` Nix authoring, eval-time
 assertions, canonical JSON emission, artifact catalog, bundle digest, and
@@ -1352,6 +1362,8 @@ generation cleanup contract in `nixos-modules/options-resources.nix` and
 | Data migration | None - audit/telemetry only; no runtime state migration |
 | Validation | Credential audit/OTEL tests from `ADR-046-resources-credential` require `resource_name_digest` in authorized audit records and reject raw Credential name/ResourceRef/UID; `tests/canary.rs` structurally asserts exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, `credential_name`, `credential_ref`, `credential_uid`, `credential_digest`, `resource_name_digest`, and every resource-name-derived metric key; Credential name/ref/UID/digest canaries are absent from all OTEL Resource attributes, span attributes, and metric labels; Zone-name canaries are absent from spans and labels while generic collector-allowlisted Resource attributes remain; complete secret-service metric/span frames pass the shared collector ingress validator, while adding `d2b.credential.name` or any Credential identity key/value rejects the whole frame; `tests/delivery.rs` covers credential-secret-service delivery |
 | Removal proof | None - audit/telemetry helpers are new; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 Implements audit record and OTEL span/metric emission for all credential
 service methods and controller events in

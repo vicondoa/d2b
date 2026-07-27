@@ -163,6 +163,59 @@ const WORK_ITEM_GROUP_OVERRIDES: &[(&str, &str)] = &[
     ("ADR046-core-002", "core-controller-coordination"),
 ];
 
+/// Self-contained work items that launch with an earlier shared contract root
+/// than the spec that owns their remaining work.
+/// Per-work-item wave and parallel-group overrides.
+///
+/// Waves are otherwise assigned per spec, so a spec whose items deliver in
+/// different phases cannot express that. An override also gives the item its
+/// own parallel group, which is what keeps the single-wave group invariant
+/// satisfiable when a spec's items are split across waves.
+///
+/// The store specification is the motivating case: its contract landed in the
+/// foundation wave, while the redb engine and the disposable proof crate that
+/// gates it have no destinations yet. Listing them here keeps the wave exit
+/// gate executable, because a wave may only close when every item in it is
+/// merged with its destinations present.
+const EARLY_WORK_ITEM_SCHEDULES: &[(&str, u8, &str, &str)] = &[
+    (
+        "ADR046-store-001",
+        0,
+        "ADR-046-resource-store-redb",
+        "resource-store-foundation",
+    ),
+    (
+        "ADR046-feasibility-001",
+        1,
+        "ADR-046-resource-store-redb",
+        "resource-store-backend",
+    ),
+    (
+        "ADR046-store-004",
+        1,
+        "ADR-046-resource-store-redb",
+        "resource-store-backend",
+    ),
+    (
+        "ADR046-store-002",
+        1,
+        "ADR-046-resource-store-redb",
+        "resource-store-backend",
+    ),
+    (
+        "ADR046-store-003",
+        5,
+        "ADR-046-resource-store-redb",
+        "resource-store-integration",
+    ),
+    (
+        "ADR046-store-005",
+        5,
+        "ADR-046-resource-store-redb",
+        "resource-store-integration",
+    ),
+];
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SpecSetView {
@@ -190,6 +243,7 @@ struct WorkItemView {
     dependency_owner: String,
     destination: String,
     detailed_design: String,
+    implementation_state: String,
     spec_id: String,
     validation: String,
     work_item_id: String,
@@ -285,10 +339,11 @@ pub fn build(root: &Path) -> Result<GraphDoc, Box<dyn std::error::Error>> {
     let spec_set: SpecSetView = serde_json::from_slice(&std::fs::read(root.join(SPEC_SET_PATH))?)?;
     let work_items: WorkItemsView =
         serde_json::from_slice(&std::fs::read(root.join(WORK_ITEMS_PATH))?)?;
-    build_from(&spec_set, &work_items)
+    build_from(root, &spec_set, &work_items)
 }
 
 fn build_from(
+    root: &Path,
     spec_set: &SpecSetView,
     work_items: &WorkItemsView,
 ) -> Result<GraphDoc, Box<dyn std::error::Error>> {
@@ -329,6 +384,7 @@ fn build_from(
     }
 
     let item_waves = item_waves(work_items, &spec_waves, &item_deps)?;
+    validate_w0_membership(root, work_items, &item_waves)?;
 
     let mut nodes: Vec<Node> = Vec::with_capacity(spec_set.members.len() + work_items.items.len());
     let mut prerequisites: HashMap<String, Vec<String>> = HashMap::new();
@@ -357,15 +413,16 @@ fn build_from(
 
     for item in &work_items.items {
         let wave = item_waves[&item.work_item_id];
+        let entry_contract = work_item_entry_contract(&item.work_item_id, &item.spec_id);
         let mut prereqs: BTreeSet<String> = item_deps[&item.work_item_id].clone();
-        prereqs.insert(item.spec_id.clone());
+        prereqs.insert(entry_contract.to_string());
         let prereqs: Vec<String> = prereqs.into_iter().collect();
         prerequisites.insert(item.work_item_id.clone(), prereqs.clone());
         nodes.push(Node {
             blockers: Vec::new(),
             destinations: vec![item.destination.clone()],
             detailed_design: Some(item.detailed_design.clone()),
-            entry_contracts: vec![item.spec_id.clone()],
+            entry_contracts: vec![entry_contract.to_string()],
             exit_gate: exit_gate(wave),
             id: item.work_item_id.clone(),
             kind: "work-item".to_string(),
@@ -490,11 +547,27 @@ fn spec_groups(
 }
 
 fn work_item_group(work_item_id: &str, spec_id: &str, wave: u8) -> String {
+    if let Some((_, _, group)) = early_work_item_schedule(work_item_id) {
+        return format!("wi:{group}:w{wave}");
+    }
     WORK_ITEM_GROUP_OVERRIDES
         .iter()
         .find(|(id, _)| *id == work_item_id)
         .map(|(_, group)| format!("wi:{group}:w{wave}"))
         .unwrap_or_else(|| format!("wi:{spec_id}"))
+}
+
+fn early_work_item_schedule(work_item_id: &str) -> Option<(u8, &'static str, &'static str)> {
+    EARLY_WORK_ITEM_SCHEDULES
+        .iter()
+        .find(|(id, _, _, _)| *id == work_item_id)
+        .map(|(_, wave, entry_contract, group)| (*wave, *entry_contract, *group))
+}
+
+fn work_item_entry_contract<'a>(work_item_id: &str, spec_id: &'a str) -> &'a str {
+    early_work_item_schedule(work_item_id)
+        .map(|(_, entry_contract, _)| entry_contract)
+        .unwrap_or(spec_id)
 }
 
 /// Resolves each work item's launch wave as the least fixpoint of
@@ -506,12 +579,15 @@ fn item_waves(
 ) -> Result<BTreeMap<String, u8>, Box<dyn std::error::Error>> {
     let mut waves: BTreeMap<String, u8> = BTreeMap::new();
     for item in &work_items.items {
-        let wave = *spec_waves.get(&item.spec_id).ok_or_else(|| {
-            format!(
-                "work item `{}` names spec `{}`, which is not a member of the set",
-                item.work_item_id, item.spec_id
-            )
-        })?;
+        let wave = match early_work_item_schedule(&item.work_item_id) {
+            Some((wave, _, _)) => wave,
+            None => *spec_waves.get(&item.spec_id).ok_or_else(|| {
+                format!(
+                    "work item `{}` names spec `{}`, which is not a member of the set",
+                    item.work_item_id, item.spec_id
+                )
+            })?,
+        };
         waves.insert(item.work_item_id.clone(), wave);
     }
     let limit = work_items.items.len() + 1;
@@ -535,6 +611,85 @@ fn item_waves(
         }
     }
     Err("work-item wave assignment did not converge; the dependency graph is cyclic".into())
+}
+
+fn validate_w0_membership(
+    root: &Path,
+    work_items: &WorkItemsView,
+    item_waves: &BTreeMap<String, u8>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    for item in &work_items.items {
+        if item_waves[&item.work_item_id] != 0 {
+            continue;
+        }
+        if item.implementation_state != "Merged" {
+            return Err(format!(
+                "work item `{}` cannot be placed in W0: implementationState is `{}`; \
+                 W0 is closed and requires `Merged` with every destination present",
+                item.work_item_id, item.implementation_state
+            )
+            .into());
+        }
+        for destination in destination_paths(&item.destination).map_err(|message| {
+            format!(
+                "work item `{}` cannot be placed in W0: {message}",
+                item.work_item_id
+            )
+        })? {
+            if !root.join(&destination).exists() {
+                return Err(format!(
+                    "work item `{}` cannot be placed in W0: missing destination `{}`",
+                    item.work_item_id,
+                    destination.display()
+                )
+                .into());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn destination_paths(destination: &str) -> Result<Vec<PathBuf>, String> {
+    let mut paths = Vec::new();
+    let mut base: Option<PathBuf> = None;
+    let mut spans = destination.split('`');
+    while let Some(_prose) = spans.next() {
+        let Some(raw_path) = spans.next() else {
+            break;
+        };
+        let raw_path = raw_path.trim();
+        if raw_path.is_empty() {
+            return Err("destination contains an empty path".to_string());
+        }
+        let path = Path::new(raw_path.trim_end_matches('/'));
+        if path.is_absolute()
+            || path
+                .components()
+                .any(|component| matches!(component, std::path::Component::ParentDir))
+        {
+            return Err(format!(
+                "destination path `{raw_path}` is not repository-relative"
+            ));
+        }
+        let resolved = if raw_path.contains('/') {
+            let parent = path.parent().ok_or_else(|| {
+                format!("destination path `{raw_path}` has no repository-relative parent")
+            })?;
+            base = Some(parent.to_path_buf());
+            path.to_path_buf()
+        } else {
+            base.as_ref()
+                .ok_or_else(|| {
+                    format!("destination shorthand `{raw_path}` has no preceding full path")
+                })?
+                .join(path)
+        };
+        paths.push(resolved);
+    }
+    if paths.is_empty() {
+        return Err("destination declares no backtick-delimited paths".to_string());
+    }
+    Ok(paths)
 }
 
 fn build_edges(
@@ -1173,7 +1328,60 @@ mod tests {
     }
 
     #[test]
-    fn work_item_groups_prefer_the_shared_file_barrier_override() {
+    fn work_item_groups_honor_schedule_and_barrier_overrides() {
+        const EXPECTED: &[(&str, u8, &str, &str)] = &[
+            (
+                "ADR046-store-001",
+                0,
+                "ADR-046-resource-store-redb",
+                "resource-store-foundation",
+            ),
+            (
+                "ADR046-feasibility-001",
+                1,
+                "ADR-046-resource-store-redb",
+                "resource-store-backend",
+            ),
+            (
+                "ADR046-store-004",
+                1,
+                "ADR-046-resource-store-redb",
+                "resource-store-backend",
+            ),
+            (
+                "ADR046-store-002",
+                1,
+                "ADR-046-resource-store-redb",
+                "resource-store-backend",
+            ),
+            (
+                "ADR046-store-003",
+                5,
+                "ADR-046-resource-store-redb",
+                "resource-store-integration",
+            ),
+            (
+                "ADR046-store-005",
+                5,
+                "ADR-046-resource-store-redb",
+                "resource-store-integration",
+            ),
+        ];
+        assert_eq!(EARLY_WORK_ITEM_SCHEDULES, EXPECTED);
+        for (id, wave, entry_contract, group) in EXPECTED {
+            assert_eq!(
+                early_work_item_schedule(id),
+                Some((*wave, *entry_contract, *group))
+            );
+            assert_eq!(
+                work_item_entry_contract(id, "ADR-046-owning-spec"),
+                *entry_contract
+            );
+            assert_eq!(
+                work_item_group(id, "ADR-046-owning-spec", *wave),
+                format!("wi:{group}:w{wave}")
+            );
+        }
         assert_eq!(
             work_item_group("ADR046-network-008", "ADR-046-resources-network", 4),
             "wi:core-config-hub:w4"
@@ -1181,6 +1389,58 @@ mod tests {
         assert_eq!(
             work_item_group("ADR046-nl-001", "ADR-046-provider-network-local", 6),
             "wi:ADR-046-provider-network-local"
+        );
+    }
+
+    fn work_item(id: &str, state: &str, destination: &str) -> WorkItemView {
+        WorkItemView {
+            dependency_owner: String::new(),
+            destination: destination.to_string(),
+            detailed_design: String::new(),
+            implementation_state: state.to_string(),
+            spec_id: "ADR-046-resource-store-redb".to_string(),
+            validation: String::new(),
+            work_item_id: id.to_string(),
+        }
+    }
+
+    #[test]
+    fn planned_work_item_is_rejected_from_w0() {
+        let items = WorkItemsView {
+            items: vec![work_item(
+                "ADR046-store-001",
+                "Planned",
+                "`packages/xtask/src/implementation_graph.rs`",
+            )],
+        };
+        let waves = BTreeMap::from([("ADR046-store-001".to_string(), 0)]);
+        let error = validate_w0_membership(Path::new("."), &items, &waves)
+            .expect_err("a Planned item must not enter W0");
+        let message = error.to_string();
+        assert!(message.contains("ADR046-store-001"), "{message}");
+        assert!(
+            message.contains("implementationState is `Planned`"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn merged_work_item_with_a_missing_destination_is_rejected_from_w0() {
+        let items = WorkItemsView {
+            items: vec![work_item(
+                "ADR046-store-001",
+                "Merged",
+                "`packages/xtask/src/destination-that-does-not-exist.rs`",
+            )],
+        };
+        let waves = BTreeMap::from([("ADR046-store-001".to_string(), 0)]);
+        let error = validate_w0_membership(Path::new("."), &items, &waves)
+            .expect_err("a missing destination must not enter W0");
+        let message = error.to_string();
+        assert!(message.contains("ADR046-store-001"), "{message}");
+        assert!(
+            message.contains("packages/xtask/src/destination-that-does-not-exist.rs"),
+            "{message}"
         );
     }
 

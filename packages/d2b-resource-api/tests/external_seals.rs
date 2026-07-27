@@ -1,0 +1,135 @@
+use std::{
+    fs,
+    os::unix::fs::PermissionsExt as _,
+    path::{Path, PathBuf},
+    process::Command,
+};
+
+struct CompileFailHarness<'a> {
+    cargo: &'a str,
+    manifest: &'a Path,
+    target: &'a Path,
+    temp: &'a Path,
+    rustc_wrapper: &'a Path,
+    cfg_test_marker: &'a Path,
+}
+
+impl CompileFailHarness<'_> {
+    fn check_rejected(&self, test: &str, expected: &[&str]) {
+        let output = Command::new(self.cargo)
+            .args([
+                "check",
+                "--quiet",
+                "--locked",
+                "--all-features",
+                "--manifest-path",
+                self.manifest.to_str().unwrap(),
+                "--test",
+                test,
+            ])
+            .env("CARGO_TARGET_DIR", self.target)
+            .env("D2B_CFG_TEST_MARKER", self.cfg_test_marker)
+            .env("RUSTC_WRAPPER", self.rustc_wrapper)
+            .env("TMPDIR", self.temp)
+            .output()
+            .expect("run dependent compile-fail crate");
+        let stderr = String::from_utf8(output.stderr).expect("compiler diagnostics are UTF-8");
+
+        assert!(!output.status.success(), "{test} unexpectedly compiled");
+        for diagnostic in expected {
+            assert!(
+                stderr.contains(diagnostic),
+                "{test} did not produce the expected privacy error {diagnostic:?}:\n{stderr}"
+            );
+        }
+    }
+}
+
+#[test]
+fn dependent_cannot_mint_admission_or_session_capabilities() {
+    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let repository_root = crate_root.parent().unwrap().parent().unwrap();
+    let fixture = crate_root.join("tests/ui/external-seals");
+    let scratch = repository_root.join(".scratch").join(format!(
+        "resource-api-external-seals-{}",
+        std::process::id()
+    ));
+    let target = scratch.join("target");
+    let temp = scratch.join("tmp");
+    fs::create_dir_all(&temp).expect("create repository-local compiler scratch");
+    let rustc_wrapper = scratch.join("force-resource-api-cfg-test.sh");
+    let cfg_test_marker = scratch.join("resource-api-cfg-test-active");
+    fs::write(
+        &rustc_wrapper,
+        r#"#!/bin/sh
+rustc="$1"
+shift
+previous=
+for argument in "$@"; do
+    if [ "$previous" = "--crate-name" ] && [ "$argument" = "d2b_resource_api" ]; then
+        : > "$D2B_CFG_TEST_MARKER"
+        exec "$rustc" --cfg test "$@"
+    fi
+    previous="$argument"
+done
+exec "$rustc" "$@"
+"#,
+    )
+    .expect("write selective cfg(test) rustc wrapper");
+    fs::set_permissions(&rustc_wrapper, fs::Permissions::from_mode(0o700))
+        .expect("make selective cfg(test) rustc wrapper executable");
+
+    let manifest = fixture.join("Cargo.toml");
+    let cargo = env!("CARGO");
+    let harness = CompileFailHarness {
+        cargo,
+        manifest: &manifest,
+        target: &target,
+        temp: &temp,
+        rustc_wrapper: &rustc_wrapper,
+        cfg_test_marker: &cfg_test_marker,
+    };
+    harness.check_rejected(
+        "forge_issuer",
+        &["error[E0432]", "no `AdmissionIssuer` in the root"],
+    );
+    harness.check_rejected(
+        "forge_permit",
+        &["error[E0432]", "no `AdmissionPermit` in the root"],
+    );
+    harness.check_rejected(
+        "forge_subject",
+        &["error[E0599]", "no function or associated item named `new`"],
+    );
+    harness.check_rejected(
+        "private_admission_path",
+        &["error[E0603]", "module `admission` is private"],
+    );
+    harness.check_rejected(
+        "private_test_issuer",
+        &["error[E0603]", "module `identity` is private"],
+    );
+    harness.check_rejected(
+        "private_fields",
+        &[
+            "error[E0616]",
+            "field `mutations` of struct `AdmittedMutation` is private",
+            "field `claims` of struct `AuthenticatedSubjectContext` is private",
+            "field `subject` of struct `TrustedRequest` is private",
+        ],
+    );
+    harness.check_rejected(
+        "shared_store_tokens",
+        &[
+            "error[E0432]",
+            "no `AdmissionVerifier` in the root",
+            "no `StoreIdentity` in the root",
+        ],
+    );
+    assert!(
+        cfg_test_marker.is_file(),
+        "the resource API was not compiled under forced cfg(test)"
+    );
+
+    fs::remove_dir_all(&scratch).expect("remove repository-local compiler scratch");
+}

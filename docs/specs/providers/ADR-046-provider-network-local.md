@@ -2493,6 +2493,8 @@ On controller binary upgrade:
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
 | Validation | `packages/d2b-provider-network-local/tests/fault_injection.rs` verifies fake `NetworkEffectPort` behavior, error mapping, no broker socket in provider context, and audit-safe adapter boundaries. |
 | Removal proof | None - net-new; no prior owner to remove. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nl-002
 | Field | Value |
@@ -2506,6 +2508,8 @@ On controller binary upgrade:
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
 | Validation | Broker tests cover `DeletePersistentTap` success, validated already-absent idempotency, stale Network/attachment generations, foreign-marker fail-closed behavior, path-free audit, and rejection of any IfName/path field; `ApplyNftablesProjection` tests cover apply/remove of exactly one ownership marker, sibling-Network and device-usbip marker preservation, never-whole-table-replace, generation-fence rejection of stale same-projection mutation, validated-absence idempotency, foreign-marker fail-closed, projection-scoped digest, and path-free audit with no rule text/IfName/path; `integration/host_fabric.rs` covers persistent-tap deletion, bridge create/delete, nftables projection apply/remove/digest, IPv6 suppression, NetworkManager unmanaged handling, and real `NetworkEffectPort` implementation. |
 | Removal proof | None - net-new broker ops; remove only if no Provider consumes them per the removal checklist. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nl-003
 | Field | Value |
@@ -2519,6 +2523,8 @@ On controller binary upgrade:
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
 | Validation | `tests/fault_injection.rs` and `tests/controller_state.rs` cover opaque-handle mismatch, generation-fenced `DeletePersistentTap`, retained handle until confirmation, and no raw IfName/IP/MAC/path public surface. |
 | Removal proof | None - net-new; no prior owner to remove. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nl-004
 | Field | Value |
@@ -2532,6 +2538,8 @@ On controller binary upgrade:
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
 | Validation | `integration/guest_lifecycle.rs` validates net-VM/workload Guest lifecycle, opaque attachment handle resolution, and `systemArtifactId` binding. |
 | Removal proof | None - net-new; no prior owner to remove. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nl-005
 | Field | Value |
@@ -2546,6 +2554,8 @@ On controller binary upgrade:
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
 | Validation | `tests/ifname_derive.rs`, `tests/fault_injection.rs`, and `integration/host_fabric.rs` prove derivation, adapter reuse, and real host-fabric behavior. |
 | Removal proof | None - reused modules remain owned by `d2b-host`; no prior provider-local copy to remove. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nl-006
 | Field | Value |
@@ -2559,6 +2569,8 @@ On controller binary upgrade:
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
 | Validation | `tests/controller_state.rs` covers normal reconcile, errors, finalizer ordering, adoption on restart, and observe/drift cycles with deterministic clock; `tests/metrics_labels.rs` structurally asserts exact identity-key absence and that a Network-name canary never enters metric label values. |
 | Removal proof | Supersedes static per-env lifecycle in `nixos-modules/network.nix` and `nixos-modules/net.nix`; removal proof is successor controller coverage plus deletion of duplicate old gates when this provider lands. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nl-007
 | Field | Value |
@@ -2572,6 +2584,8 @@ On controller binary upgrade:
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
 | Validation | `integration/agent_reload.rs` validates Reload, `nft_applied` and `routes_applied` predicates, reconnect behavior, and config digest matching. |
 | Removal proof | None - net-new ComponentSession service; no prior service endpoint to remove. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nl-008
 | Field | Value |
@@ -2586,6 +2600,8 @@ On controller binary upgrade:
 | Data migration | Full d2b 3.0 reset; config Volume is runtime tmpfs content regenerated from Network spec. |
 | Validation | `tests/controller_state.rs`, `integration/agent_reload.rs`, and `integration/delete_sequence.rs` validate rendering, write flow, reload, and cleanup ordering. |
 | Removal proof | Supersedes static per-env config generation in `nixos-modules/net.nix`; successor coverage retires duplicate old Nix/service assertions. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nl-009
 | Field | Value |
@@ -2599,6 +2615,8 @@ On controller binary upgrade:
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
 | Validation | `tests/controller_state.rs`, `integration/mdns_reflector.rs`, and eval case `process-sandbox-netns.nix` validate Process shape, optional mDNS, and guest-netns capability isolation. |
 | Removal proof | Supersedes static per-env systemd services; old duplicate service tests are retired after successor Process coverage passes. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nl-010
 | Field | Value |
@@ -2613,6 +2631,8 @@ On controller binary upgrade:
 | Data migration | Full d2b 3.0 reset; no per-Network v2 net-VM config import. |
 | Validation | Eval cases `net-vm-artifact-id-eval.nix` and `network-spec-eval.nix`, plus `tests/net-vm-network-eval.sh` for the lib.mkForce invariant. |
 | Removal proof | Supersedes implicit microvm/Nix path coupling; remove `net-vm-base` artifact catalog entry only after all Network resources and provider references are gone. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nl-011
 | Field | Value |
@@ -2626,6 +2646,8 @@ On controller binary upgrade:
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
 | Validation | Eval cases `network-spec-eval.nix`, `user-no-managed-by-eval.nix`, `net-vm-artifact-id-eval.nix`, and `make test-policy` for artifact/package paths. |
 | Removal proof | Supersedes v1 NixOS module declarations; removal proof is deletion of old resource emission and account/artifact entries when provider is retired. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nl-012
 | Field | Value |
@@ -2640,6 +2662,8 @@ On controller binary upgrade:
 | Data migration | None - docs/tooling only; no runtime state. |
 | Validation | Eval case `network-cidr-overlap-eval.nix` and `tests/cidr_overlap.rs` cover same-Network, cross-Network, external CIDR, and adjacency cases. |
 | Removal proof | None - validation net-new in v3 resource compiler; no prior owner to remove. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nl-013
 | Field | Value |
@@ -2653,6 +2677,8 @@ On controller binary upgrade:
 | Data migration | None - docs/tooling only; no runtime state. |
 | Validation | The listed conformance tests themselves are the validation, with workspace policy ensuring `tests/` exists. |
 | Removal proof | Retire replaced current-code tests only after successor hermetic tests cover the minimum reusable assertions and gate manifests/pins are updated. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nl-014
 | Field | Value |
@@ -2666,6 +2692,8 @@ On controller binary upgrade:
 | Data migration | None - docs/tooling only; no runtime state. |
 | Validation | `tests/controller_state.rs` covers normal path, CIDR conflict, User not Ready, Volume error, Guest timeout, agent reload failure, finalizer sequence, `DeletePersistentTap` validated absence, transient retry with retained handle, stale-generation refresh, foreign-marker block, adoption, and drift. |
 | Removal proof | None - net-new; no prior owner to remove. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nl-015
 | Field | Value |
@@ -2679,6 +2707,8 @@ On controller binary upgrade:
 | Data migration | None - docs/tooling only; no runtime state. |
 | Validation | `make test-integration` for container tests and `make test-host-integration` where guest lifecycle requires host/KVM coverage. |
 | Removal proof | Old duplicate tests, shell gates, fixtures, static artifacts, CI jobs, manifests, and pins are deleted once successor coverage and removal proof pass. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nl-016
 | Field | Value |
@@ -2692,6 +2722,8 @@ On controller binary upgrade:
 | Data migration | None - docs/tooling only; no runtime state. |
 | Validation | `tests/unit/nix/cases/process-sandbox-netns.nix` and provider Process-template tests assert no host capability or host network namespace grant. |
 | Removal proof | None - security invariant preserved; no prior owner to remove. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nl-017
 | Field | Value |
@@ -2705,6 +2737,8 @@ On controller binary upgrade:
 | Data migration | None - docs/tooling only; no runtime state. |
 | Validation | `make test-policy` / `xtask workspace-policy` verifies required provider crate paths and README presence. |
 | Removal proof | None - net-new documentation; no prior owner to remove. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nl-018
 | Field | Value |
@@ -2718,6 +2752,8 @@ On controller binary upgrade:
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
 | Validation | Network-local host and net-VM firewall intent tests assert no TCP/3240/USBIP rule; USBIP rule churn leaves Network digest/`FirewallReady` unchanged; device-usbip tests own exact scoping, drift, status, and release. |
 | Removal proof | Legacy generic `network.nix` and `net.nix` USBIP allow fragments and any golden expectation for them are removed after device-usbip host integration passes. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nl-019
 | Field | Value |
@@ -2731,6 +2767,8 @@ On controller binary upgrade:
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
 | Validation | `tests/state_schema_roundtrip.rs` and `tests/unit/nix/cases/provider-state-volume-eval.nix` validate empty ProviderStateSet, status bounds/redaction, and config Volume exclusion. |
 | Removal proof | None - net-new; no Provider state Volume or prior owner to remove. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nl-020
 | Field | Value |
@@ -2744,6 +2782,8 @@ On controller binary upgrade:
 | Data migration | Full d2b 3.0 reset; no legacy authority import. |
 | Validation | `external_nic_authority.rs` covers Core-derived identity, same-/cross-Zone conflicts, explicit same-Zone bridge multiplexing, categorical cross-Zone bridge multiplex rejection with `external-physical-nic-cross-zone-l2` and no host effect (INV-NET-011), incompatible policy, non-bridge multiplex denial, no-effect rejection, adoption ambiguity, owner transfer, disruptive update, release ordering, and redaction; Nix eval and host integration cover declared configuration and lifecycle. |
 | Removal proof | The old direct macvtap spawn path is unreachable unless Core supplies an admitted authority claim in the LaunchTicket. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 

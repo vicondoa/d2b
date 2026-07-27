@@ -1385,6 +1385,8 @@ column above are the complete removal-proof assignment for this dossier.
 | Data migration | Full d2b 3.0 reset; no Provider config, handler checkpoint, or audit state is imported. |
 | Validation | `config_schema_empty_only`, `provider_status_not_written_by_handlers`, `provider_state_set_empty`, `host_no_process_effect_emitted`, `host_resource_reconciled_audit`, and `user_resource_reconciled_audit`; manifest golden vector proves no Process descriptor and no state namespace for either handler. |
 | Removal proof | No independent destination removal. `ADR046-exec-009` owns unsafe-local helper/wire retirement, and `ADR046-telem-008` owns removal proofs for legacy unsafe-local and VM-name telemetry labels. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 

@@ -78,6 +78,16 @@ Rust tests (types 2-5: unit, integration, contract, policy-lint) live under
 | `make runtime-ledger-pin` | regenerate the runtime-ledger census pin after adding, removing or renaming a timed test | local |
 | `cargo run --manifest-path packages/Cargo.toml -p xtask -- heavy-gate -- env D2B_LIVE=1 bash tests/integration/live/<x>.sh` | type-11 live-host tests, through the heavy-gate semaphore | **manual, against a deployed d2b host** |
 
+`make test-policy` includes the fail-closed `guest-workspace-drift` guard. The
+guard checks that the crates copied by `mkGuestRustPackagesSrc`, the members and
+workspace dependencies in
+`tests/fixtures/guest-rust-workspace/Cargo.toml`, any
+`tests/fixtures/guest-rust-workspace/*.Cargo.toml` overrides, and
+`packages/Cargo.guest.lock` remain one resolvable locked workspace. When a
+mirrored shared crate gains or changes a dependency, update the guest workspace
+fixture and any affected override, refresh `packages/Cargo.guest.lock`, and run
+`make test-policy`.
+
 All Layer-2 lanes (types 9-12) run behind one sole-use semaphore, invoked
 from the repository root as `cargo run --manifest-path packages/Cargo.toml
 -p xtask -- heavy-gate` (two slots per uid via open file description locks), so

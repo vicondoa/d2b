@@ -15,6 +15,7 @@ let
 
   enabledEnvs = sortedAttrs (lib.filterAttrs (_: env: env.enable) cfg.envs);
   enabledVms = sortedAttrs (lib.filterAttrs (_: vm: vm.enable) cfg.vms);
+  declaredZones = sortedAttrs cfg.zones;
   declaredRealms = sortedAttrs cfg.realms;
   enabledRealms = sortedAttrs (lib.filterAttrs (_: realm: realm.enable) cfg.realms);
   normalNixosVms = sortedAttrs (d2bLib.normalNixosVms cfg.vms);
@@ -485,6 +486,38 @@ let
   # Flat list of all workload rows across all realms (declared, including disabled).
   allRealmWorkloadRows = lib.flatten (map (row: row.workloads) realmRows);
 
+  resourceIdentityLess = left: right:
+    if left.type == right.type
+    then lib.lessThan left.name right.name
+    else lib.lessThan left.type right.type;
+
+  zoneResourceIdentities = zoneName: zone:
+    lib.sort resourceIdentityLess (lib.mapAttrsToList
+      (resourceName: resource: {
+        inherit zoneName;
+        type = resource.type;
+        name = resourceName;
+        ref = "${resource.type}/${resourceName}";
+        ownerRef = resource.metadata.ownerRef;
+      })
+      zone.resources);
+
+  zoneRows = sortedMapAttrsToList
+    (zoneName: zone: {
+      name = zoneName;
+      resources = zoneResourceIdentities zoneName zone;
+    })
+    declaredZones;
+
+  zoneRowsByName = lib.listToAttrs (map
+    (zone: {
+      name = zone.name;
+      value = zone;
+    })
+    zoneRows);
+
+  zoneResourceIdentityRows = lib.concatMap (zone: zone.resources) zoneRows;
+
   # Flat list of workload rows for enabled realms whose workload.enable = true.
   enabledRealmWorkloadRows = lib.filter (w: w.enable)
     (lib.flatten (map (row: row.workloads) enabledRealmRows));
@@ -731,6 +764,13 @@ let
       kinds = sortNames (lib.unique (map (name: runtimeRows.${name}.kind) (sortedAttrNames runtimeRows)));
     };
 
+    zones = {
+      names = sortedAttrNames declaredZones;
+      list = zoneRows;
+      byName = zoneRowsByName;
+      resourceIdentities = zoneResourceIdentityRows;
+    };
+
     realms = {
       declared = declaredRealms;
       enabled = enabledRealms;
@@ -760,6 +800,8 @@ let
   };
 in
 {
+  imports = [ ./options-zones.nix ];
+
   options.d2b._index = lib.mkOption {
     type = lib.types.attrs;
     default = { };

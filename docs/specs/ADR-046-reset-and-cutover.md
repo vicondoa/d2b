@@ -588,7 +588,7 @@ any later time.
 
 Phase 5 creates the Zone's redb resource store from nothing, per
 `ADR-046-resource-store-redb` "Backup, restore, and physical schema upgrade"
-and work item `ADR046-store-003` ("Data migration: Destructive v3 bootstrap;
+and work item `ADR046-store-005` ("Data migration: Destructive v3 bootstrap;
 v3-to-v3 logical restore"). There is no logical import of any pre-cutover
 daemon state, Realm/Workload representation, or legacy JSON artifact into the
 redb store - the store's `store_meta` table is populated fresh:
@@ -1548,7 +1548,7 @@ owns the destination.
 | Current artifact | Evidence | Disposition | Target | Owning work item / dossier |
 | --- | --- | --- | --- | --- |
 | `storage.json` | ADR 0034 generated artifact | Preserve (read by legacy code until every storage id has a live Volume/resource successor), then Destroy per-id as each successor lands | Per-artifact `Volume`/resource storage declaration | `ADR046-store-003` |
-| `sync.json`/`locks.json` | ADR 0034 generated artifact | Preserve, then Destroy per-id as each lock's successor (OFD-lock-owning resource/controller) lands | Internal controller/transaction lock mechanics (not a ResourceType, per `ADR-046-resource-object-model` "Folded implementation detail") | `ADR046-store-001` |
+| `sync.json`/`locks.json` | ADR 0034 generated artifact | Preserve, then Destroy per-id as each lock's successor (OFD-lock-owning resource/controller) lands | Internal controller/transaction lock mechanics (not a ResourceType, per `ADR-046-resource-object-model` "Folded implementation detail") | `ADR046-store-004` |
 | Daemon degraded-state ledger | ADR 0034 | Preserve as historical evidence; new degraded conditions post-cutover use the Zone resource `status.conditions` model instead | `Resource.status.conditions` | `ADR046-core-001` |
 | OFD lock files under `/run/d2b` | ADR 0034 | Destroy only via normal reboot/tmpfs cleanup - never unlinked directly by cutover (explicit fail-closed hazard) | N/A (mechanism, not a resource) | N/A |
 
@@ -1726,6 +1726,8 @@ applies here exactly as everywhere else in the repository).
 | Data migration | New; no prior inventory/snapshot format exists |
 | Validation | `checkpoint_id` determinism property test; snapshot atomic-write crash-injection test; `cutover_preflight_refuses_dirty_flake_check` |
 | Removal proof | Not applicable (net-new capability) |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-reset-002 - Config/artifact/schema validation
 
@@ -1742,6 +1744,8 @@ applies here exactly as everywhere else in the repository).
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `cutover-candidate-bundle-validation.nix`; trust-preflight rejection tests for each of digest/publisher/signature/deny/provenance/conformance failure modes |
 | Removal proof | Not applicable |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-reset-003 - Consent, drain, and disposition executor
 
@@ -1758,6 +1762,8 @@ applies here exactly as everywhere else in the repository).
 | Data migration | Destructive; this is where Phase 3/4 boundary-of-no-return-approach begins (rollback still open through end of Phase 4) |
 | Validation | `cutover_apply_requires_exact_consent_phrase`; `cutover_drain_refuses_on_live_process` |
 | Removal proof | Not applicable |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-reset-004 - Adopt migration EphemeralProcess integration
 
@@ -1774,22 +1780,26 @@ applies here exactly as everywhere else in the repository).
 | Data migration | This work item *is* the data migration mechanism for TPM/store-view/disk-image/unsafe-local-scope bytes |
 | Validation | Crash-injection at every step boundary (Type 10 `cutover-crash-resume.nix`); TPM/durable-Volume Destroy-exclusion property test |
 | Removal proof | Not applicable (the mechanism is retained permanently for later Full/Provider/Guest reset relocation use, not retired after first use) |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-reset-005 - Resource-store bootstrap and Provider install sequencer
 
 | Field | Value |
 | --- | --- |
 | Work item ID | `ADR046-reset-005` |
-| Dependency/owner | ADR046-reset-004; `d2b-resource-store-redb` owner (`ADR046-store-003`); core-controller owner (`ADR046-core-001`) |
+| Dependency/owner | ADR046-reset-004; `d2b-resource-store-redb` owner (`ADR046-store-005`); core-controller owner (`ADR046-core-001`) |
 | Current source | None (bootstrap sequencing over Zone runtime startup, which is itself ADR-only) |
 | Reuse source | None |
 | Reuse action | create |
 | Destination | `packages/d2b-cutover/src/{store_bootstrap,provider_sequence}.rs` |
 | Detailed design | Phase 5 store creation per [Resource-store initialization](#resource-store-initialization); Phase 6 topological Provider install per [Provider install/topological start](#provider-installtopological-start), including the fixed staged default order and cycle-rejection check |
 | Integration | Invoked immediately after ADR046-reset-003/004 complete; hands off to Phase 7 (ADR046-reset-006) |
-| Data migration | Destructive v3 bootstrap; no v2 resource import (per `ADR046-store-003`, `ADR046-object-001`) |
+| Data migration | Destructive v3 bootstrap; no v2 resource import (per `ADR046-store-005`, `ADR046-object-001`) |
 | Validation | Provider install topological-order determinism test; cycle-rejection test; store-identity mismatch fail-closed test |
 | Removal proof | Not applicable |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-reset-006 - Child-local ZoneLink/Guest activation and gateway custody boundary
 
@@ -1806,6 +1816,8 @@ applies here exactly as everywhere else in the repository).
 | Data migration | None (the child-local ZoneLink is ordinary Nix-authored configuration, `parentZone` is recompiled into sealed allocator state, and neither is migrated credential material) |
 | Validation | Gateway-custody-boundary test asserting the parent inventory never contains a gateway-guest-internal path; child-local ZoneLink test asserting one uplink, self-matching `childZoneName`, and child-store ownership; compiler test asserting `parentZone` selects the allocator but appears only in sealed bootstrap state; no-reciprocal-parent-row/no-parent-handler test; child-local ZoneLink `Degraded/waiting-on-remote` non-blocking test |
 | Removal proof | Not applicable |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-reset-007 - Verification, doctor, and degraded-ledger integration
 
@@ -1822,6 +1834,8 @@ applies here exactly as everywhere else in the repository).
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Injected-digest-mismatch test for TPM/durable-Volume verify checks; audit-genesis-cross-check test; `cutover-full-rehearsal.nix` |
 | Removal proof | Not applicable |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-reset-008 - Old artifact/unit/schema removal gate engine (Phase 10)
 
@@ -1838,6 +1852,8 @@ applies here exactly as everywhere else in the repository).
 | Data migration | This work item is where every previously-Preserved legacy artifact is finally Destroyed, one gate at a time |
 | Validation | `policy_no_destroy_without_gate`; `policy_legacy_cli_verbs_absent_after_gate`; `tpm-adopt-retirement.nix` |
 | Removal proof | Each candidate's own row in [Old artifact/unit/schema removal gates](#old-artifactunitschema-removal-gates) states its exact removal proof |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-reset-009 - Rollback, journal resume, and incident hold
 
@@ -1854,6 +1870,8 @@ applies here exactly as everywhere else in the repository).
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `cutover_rollback_window_closes_after_phase_5`; incident-hold-blocks-destructive-step test |
 | Removal proof | Not applicable |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-reset-010 - Full/Provider/Guest reset CLI and scope isolation
 
@@ -1870,6 +1888,8 @@ applies here exactly as everywhere else in the repository).
 | Data migration | None (this is a post-cutover recovery operation, not part of the cutover data migration itself) |
 | Validation | `host_reset_scope_isolation`; `zone-provider-guest-reset-isolation.nix`; durable-Volume-preserved-by-default property test for both Provider and Guest scopes |
 | Removal proof | Not applicable |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-reset-011 - Live-host and hardware validation
 
@@ -1886,3 +1906,5 @@ applies here exactly as everywhere else in the repository).
 | Data migration | None (validation only) |
 | Validation | Manual pass/fail sign-off recorded per the project's existing live-host/hardware validation conventions |
 | Removal proof | Not applicable |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |

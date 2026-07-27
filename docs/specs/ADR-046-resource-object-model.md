@@ -88,7 +88,9 @@ generation cleanup.
 Labels/annotations are optional bounded presentation metadata. They never
 select authorization, provider/controller ownership, path, process identity,
 or implicit relationships. A ResourceType may declare a closed set of indexed
-exact-match metadata fields.
+exact-match metadata fields. Each label or annotation key is printable ASCII
+and at most 64 bytes total, including any optional `<namespace>/` prefix, so
+every admitted metadata object also satisfies D101 canonical JSON.
 
 ## Spec
 
@@ -714,9 +716,9 @@ The following are not standalone ResourceTypes:
 | Item | Treatment |
 | --- | --- |
 | Current anchor | `d2b-realm-core/src/ids.rs`, `workload.rs`, `allocator.rs`; `d2b-core/src/storage.rs`, `processes.rs`; daemon operation/readiness/status DTOs |
-| Evidence class | Current DTOs are mixed reachable/generated; universal resource envelope is ADR-only |
+| Evidence class | The universal resource envelope, schema/status/error, ownership-index, and owner-hint contracts named by the `Merged` work items have landed with tests; no production path dispatches the resource API yet |
 | Behavior retained | Strict serde, bounded IDs/messages, typed status/error enums, generation-bound exec/shell attach, storage owner/repair metadata |
-| Required delta | Universal metadata/spec/status, ResourceType schemas, owner index/triggers, revisions, conditions/outcome, native deletion |
+| Required delta | Register the resource API's deliberately named `UnregisteredBusAdapter` on `d2b-bus` in a later integration wave, wire runtime producers and consumers, and complete reconciliation and native deletion |
 | Reuse path | Extract validators/redaction/error constants and storage lifecycle fields named in work items |
 | Replacement/deletion | Existing manifest/process/storage DTOs remain until owning ResourceType integrations are live |
 | Feasibility proof | Schema golden vectors, owner property tests, optimistic conflicts, status redaction, deletion event/removal |
@@ -737,6 +739,8 @@ The following are not standalone ResourceTypes:
 | Data migration | Full d2b 3.0 reset; no v2 resource import |
 | Validation | Golden JSON/protobuf and cross-language canonical-JSON vectors; duplicate-key/float/non-NFC/control/key-bound rejection; serde unknown-field; three-layer spec shape round-trip; canonical minimal base-spec acceptance; base-schema version/fingerprint conformance; `spec.provider` deny-unknown/version-mismatch/shadow rejection and providerRef-binding; three-layer status shape round-trip, including required empty `status.resource`; base-only projection ignores/omits `status.provider`; `status.provider` unknown-field/version-mismatch rejection; status redaction/size/time/phase tests; exact D108 outcome scalar vectors; ResourceError codec and no-overlap-with-v2-kind policy tests; `status.update` currency object round-trip (state/reasons/disruption/preserveState/owned+dependency refs bounded); `spec.updatePolicy` base round-trip |
 | Removal proof | Old DTOs removed per owning ResourceType wave only after rendered/runtime consumers move |
+| Implementation state | Merged |
+| Evidence | All destinations are present: `packages/d2b-contracts/src/v3/resource.rs`, `resource_status.rs`, `resource_schema.rs`, and `error.rs`, with inline canonicalization, bounds, schema, status, and error tests. |
 
 ### ADR046-object-002
 
@@ -751,3 +755,5 @@ The following are not standalone ResourceTypes:
 | Data migration | None after reset |
 | Validation | Property tests for cycles/reparent/name reuse; store-dispatch tests for bounded hint coalescing and atomic index-plus-hint emission through a fake trait implementation |
 | Removal proof | Not applicable |
+| Implementation state | Merged |
+| Evidence | Both destinations are present: `packages/d2b-resource-store-redb/src/ownership.rs` and `packages/d2b-controller-toolkit/src/owner_hints.rs`, with ownership and bounded-hint tests. |

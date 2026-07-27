@@ -1318,6 +1318,8 @@ violated by any implementation:
 | Data migration | None - docs/tooling only; no runtime state |
 | Validation | Workspace provider layout policy plus README content review and follow-on make test-rust -p d2b-provider-clipboard-wayland once implementation exists. |
 | Removal proof | None - net-new; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 **Type:** implementation  
 **Inputs:** This dossier, `ADR-046-provider-model-and-packaging`
@@ -1342,6 +1344,8 @@ test commands, dependency on display-wayland fake in integration tests.
 | Data migration | Full d2b 3.0 reset; clipboard history is bounded process memory and no v2 clipboard runtime state is imported |
 | Validation | make test-rust -p d2b-provider-clipboard-wayland plus unit coverage for MIME policy, FD safety, audit fail-closed queue, history bounds, lifecycle purge and suspension, no filesystem bridge, and no bytes in status or audit. |
 | Removal proof | Baseline picker subprocess, direct compositor/Niri clients, Unix bridge socket server, bridge directories, SO_PEERCRED peer config, and per-Guest groups are absent from the provider crate and covered by invariant tests. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 **Type:** implementation  
 **Inputs:** ADR046-clipboard-001; ported from `packages/d2b-clipd/`
@@ -1376,6 +1380,8 @@ Conformance gates: `make test-rust -p d2b-provider-clipboard-wayland`.
 | Data migration | Full d2b 3.0 reset; no controller durable state import because ProviderStateSet is empty |
 | Validation | Controller unit tests for picker request validation, EphemeralProcess spec shape, terminal status callback, GuestStopped and GuestLocked handling, RBAC resources, status bounds, and empty ProviderStateSet. |
 | Removal proof | None - net-new; no prior controller owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 **Type:** implementation  
 **Inputs:** ADR046-clipboard-001
@@ -1412,6 +1418,8 @@ Process. Responsibilities:
 | Data migration | Full d2b 3.0 reset; picker state is per-operation EphemeralProcess status only |
 | Validation | Contract test that picker cannot bind zwlr_data_control_manager_v1 plus unit tests for processClass worker, no FDs or payload in picker config, TTL defaults, response framing, and requirePickerForPaste false bypass semantics in clipd-host. |
 | Removal proof | Old d2b-clipd subprocess picker path is absent once RequestPickerSession and picker EphemeralProcess tests pass. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 **Type:** implementation  
 **Inputs:** ADR046-clipboard-001, ADR046-clipboard-003
@@ -1454,6 +1462,8 @@ Contract test: picker binary must fail to bind `zwlr_data_control_manager_v1`
 | Data migration | None - docs/tooling only; no runtime state |
 | Validation | Contract tests for wire format, service-name collision rejection, attachment class matching, and descriptor handshake validation. |
 | Removal proof | Shared filesystem bridge path and SO_PEERCRED contract tests are removed in ADR046-clipboard-011 after ComponentSession contracts pass. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 **Type:** implementation  
 **Inputs:** ADR046-clipboard-001; `ADR-046-componentsession-and-bus`
@@ -1486,6 +1496,8 @@ the signed service descriptor and validated at ComponentSession handshake.
 | Data migration | Full d2b 3.0 reset; operators translate old d2b.clipboard.* options using the dossier mapping table |
 | Validation | Nix eval tests for resource shape, reference validation, null displayWaylandRef host-only mode, artifact catalog lookup, and absence of deprecated spec fields. |
 | Removal proof | nixos-modules/clipboard.nix import is removed and examples/static checks no longer reference old d2b.clipboard.* options. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 **Type:** implementation  
 **Inputs:** `ADR-046-nix-configuration`; this dossier Nix authoring section
@@ -1514,6 +1526,8 @@ Implement the d2b Nix module for `Provider/clipboard-wayland`:
 | Data migration | Full d2b 3.0 reset; no v2 RBAC state import |
 | Validation | Controller RBAC reconcile tests for create, idempotent update, provider deletion cleanup, selector scoping, bridge peer authorization, and denied unauthorized management calls. |
 | Removal proof | None - net-new; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 **Type:** implementation  
 **Inputs:** ADR046-clipboard-003; RBAC section of this dossier
@@ -1541,6 +1555,8 @@ deleted.
 | Data migration | Full d2b 3.0 reset; audit stream is v3 Zone-local and no v2 audit records are imported |
 | Validation | Audit tests for no bytes in events, closed ReasonCode deserialization, fail-closed queue rejection, SizeBucket discretization, excluded span attributes, and structural metric descriptor assertions for exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys plus clipboard/Zone-name canary absence while preserving `d2b.zone` resource attributes. |
 | Removal proof | Old audit shape with realm field names and exact byte counts is absent after ported tests assert the v3 ClipboardAuditEvent schema. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 **Type:** implementation  
 **Inputs:** ADR046-clipboard-002; `ADR-046-telemetry-audit-and-support`
@@ -1569,6 +1585,8 @@ Implement `ClipboardAuditEvent` and fail-closed queue in `service/audit.rs`:
 | Data migration | None - docs/tooling only; no runtime state |
 | Validation | All tests listed in the Required test coverage table must pass under make test-rust -p d2b-provider-clipboard-wayland. |
 | Removal proof | Replaced current-code tests receive explicit keep/adapt/move/delete dispositions and old duplicate tests are deleted once successor coverage passes. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 **Type:** test  
 **Inputs:** ADR046-clipboard-001 through ADR046-clipboard-008
@@ -1613,6 +1631,8 @@ Required test coverage (in `packages/d2b-provider-clipboard-wayland/tests/`):
 | Data migration | None - docs/tooling only; no runtime state |
 | Validation | All integration scenarios in the dossier table pass and assert no live Wayland compositor dependency. |
 | Removal proof | None - net-new; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 **Type:** test  
 **Inputs:** ADR046-clipboard-009; display-wayland fake
@@ -1647,6 +1667,8 @@ fake wayland-proxy bridge client. They do not require a live Wayland compositor.
 | Data migration | None - docs/tooling only; no runtime state |
 | Validation | packages/d2b-contract-tests policy_clipboard.rs passes with v3 wire format and attachment descriptor assertions. |
 | Removal proof | Tests for shared filesystem bridge paths and SO_PEERCRED config are removed from policy_clipboard.rs after v3 ComponentSession contract coverage lands. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 **Type:** test  
 **Inputs:** ADR046-clipboard-005; `packages/d2b-contract-tests/`
@@ -1672,6 +1694,8 @@ Update `packages/d2b-contract-tests/tests/policy_clipboard.rs`:
 | Data migration | Full d2b 3.0 reset; no v2 clipboard runtime state or option import |
 | Validation | New module eval tests pass and tests/static.sh example iteration has no references to removed option paths. |
 | Removal proof | nixos-modules/clipboard.nix is deleted, default.nix import removed, and grep/static checks show no old d2b.clipboard option references in examples. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 **Type:** removal  
 **Inputs:** ADR046-clipboard-006

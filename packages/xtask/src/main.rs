@@ -353,6 +353,12 @@ fn main() -> std::process::ExitCode {
         }
         [command] if command == "gen-guest-proto" => run_task("gen-guest-proto", gen_guest_proto),
         [command] if command == "gen-guest-ttrpc" => run_task("gen-guest-ttrpc", gen_guest_ttrpc),
+        [command] if command == "gen-resource-proto" => {
+            run_task("gen-resource-proto", gen_resource_proto)
+        }
+        [command] if command == "gen-resource-ttrpc" => {
+            run_task("gen-resource-ttrpc", gen_resource_ttrpc)
+        }
         [command] if command == "gen-daemon-api" => {
             run_task("gen-daemon-api", || gen_daemon_api().map(|p| vec![p]))
         }
@@ -383,7 +389,7 @@ fn main() -> std::process::ExitCode {
         }
         _ => {
             eprintln!(
-                "usage: cargo run --manifest-path packages/Cargo.toml -p xtask -- <gen-schemas|gen-cli-schemas|gen-error-codes|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-daemon-api|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|spec-registry|implementation-graph|process-marker-pin|test-runtime-ledger <record|check|lint|help> [options]|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|panel-request|panel-attest|seal|merge-target|merge-eligibility|help> [options]|heavy-gate <-- <command> [args...] | verify-slot>>"
+                "usage: cargo run --manifest-path packages/Cargo.toml -p xtask -- <gen-schemas|gen-cli-schemas|gen-error-codes|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|spec-registry|implementation-graph|process-marker-pin|test-runtime-ledger <record|check|lint|help> [options]|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|panel-request|panel-attest|seal|merge-target|merge-eligibility|help> [options]|heavy-gate <-- <command> [args...] | verify-slot>>"
             );
             std::process::ExitCode::FAILURE
         }
@@ -435,6 +441,29 @@ fn gen_guest_ttrpc() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     Ok(vec![out_file])
 }
 
+fn gen_resource_ttrpc() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
+    let repo_root = repo_root()?;
+    let proto_dir = repo_root.join("packages/d2b-contracts/proto");
+    let proto = proto_dir.join("d2b-resource-v3.proto");
+    let out_dir = repo_root.join("packages/d2b-resource-api/src/generated");
+    fs::create_dir_all(&out_dir)?;
+
+    ttrpc_codegen::Codegen::new()
+        .out_dir(&out_dir)
+        .input(&proto)
+        .include(&proto_dir)
+        .customize(ttrpc_codegen::Customize {
+            async_client: true,
+            async_server: true,
+            ..Default::default()
+        })
+        .run()?;
+
+    let out_file = out_dir.join("d2b_resource_v3_ttrpc.rs");
+    sanitize_generated_rust(&out_file)?;
+    Ok(vec![out_file])
+}
+
 fn gen_guest_proto() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let repo_root = repo_root()?;
     let proto_dir = repo_root.join("packages/d2b-contracts/proto");
@@ -446,7 +475,7 @@ fn gen_guest_proto() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     let temp_proto = temp_proto_dir.join("guest_control.proto");
     fs::write(
         &temp_proto,
-        message_only_proto(&fs::read_to_string(&proto)?)?,
+        message_only_proto(&fs::read_to_string(&proto)?, "GuestControl")?,
     )?;
 
     protobuf_codegen::Codegen::new()
@@ -457,17 +486,57 @@ fn gen_guest_proto() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
         .run()?;
 
     sanitize_generated_rust(&out_file)?;
+    write_contract_generated_mod(&out_dir)?;
     let _ = fs::remove_dir_all(&temp_proto_dir);
     Ok(vec![out_file])
 }
 
-fn message_only_proto(proto: &str) -> Result<String, Box<dyn std::error::Error>> {
+fn gen_resource_proto() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
+    let repo_root = repo_root()?;
+    let proto_dir = repo_root.join("packages/d2b-contracts/proto");
+    let proto = proto_dir.join("d2b-resource-v3.proto");
+    let out_dir = repo_root.join("packages/d2b-contracts/src/generated");
+    fs::create_dir_all(&out_dir)?;
+    let out_file = out_dir.join("d2b_resource_v3.rs");
+    let temp_proto_dir = create_exclusive_temp_dir("d2b-resource-proto")?;
+    let temp_proto = temp_proto_dir.join("d2b-resource-v3.proto");
+    fs::write(
+        &temp_proto,
+        message_only_proto(&fs::read_to_string(&proto)?, "ResourceService")?,
+    )?;
+
+    protobuf_codegen::Codegen::new()
+        .pure()
+        .include(&temp_proto_dir)
+        .input(&temp_proto)
+        .out_dir(&out_dir)
+        .run()?;
+
+    sanitize_generated_rust(&out_file)?;
+    redact_generated_protobuf_formatting(&out_file)?;
+    write_contract_generated_mod(&out_dir)?;
+    let _ = fs::remove_dir_all(&temp_proto_dir);
+    Ok(vec![out_file])
+}
+
+fn write_contract_generated_mod(out_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    fs::write(
+        out_dir.join("mod.rs"),
+        "// @generated\n\npub mod d2b_resource_v3;\npub mod guest_control;\n",
+    )?;
+    Ok(())
+}
+
+fn message_only_proto(
+    proto: &str,
+    service_name: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
     let mut out = String::new();
     let mut skipping_service = false;
     let mut depth = 0_i32;
     for line in proto.lines() {
         let trimmed = line.trim_start();
-        if !skipping_service && trimmed.starts_with("service GuestControl ") {
+        if !skipping_service && trimmed.starts_with(&format!("service {service_name} ")) {
             skipping_service = true;
         }
         if skipping_service {
@@ -483,7 +552,7 @@ fn message_only_proto(proto: &str) -> Result<String, Box<dyn std::error::Error>>
         out.push('\n');
     }
     if skipping_service || depth != 0 {
-        Err("guest_control.proto service block was not closed".into())
+        Err(format!("{service_name} service block was not closed").into())
     } else {
         Ok(out)
     }
@@ -503,6 +572,61 @@ fn sanitize_generated_rust(path: &Path) -> Result<(), Box<dyn std::error::Error>
         "// https://github.com/rust-lang/rust-clippy/issues/702\n\n",
         "#![allow(clippy::bool_comparison)]\n#![allow(clippy::derivable_impls)]\n#![allow(clippy::match_like_matches_macro)]\n#![allow(clippy::match_ref_pats)]\n#![allow(clippy::needless_borrow)]\n#![allow(clippy::redundant_static_lifetimes)]\n#![allow(clippy::vec_init_then_push)]\n\n",
     );
+    fs::write(path, generated)?;
+    Ok(())
+}
+
+fn redact_generated_protobuf_formatting(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    const DERIVE: &str = "#[derive(PartialEq,Clone,Default,Debug)]";
+    let mut generated = fs::read_to_string(path)?;
+    let message_names = generated
+        .lines()
+        .filter_map(|line| line.strip_prefix("pub struct "))
+        .filter_map(|line| line.strip_suffix(" {"))
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    let derive_count = generated.matches(DERIVE).count();
+    if message_names.is_empty() || derive_count != message_names.len() {
+        return Err(format!(
+            "resource protobuf format shape changed: {} messages but {derive_count} Debug derives",
+            message_names.len()
+        )
+        .into());
+    }
+    generated = generated.replace(DERIVE, "#[derive(PartialEq,Clone,Default)]");
+
+    for message_name in &message_names {
+        let raw_display = format!(
+            "impl ::std::fmt::Display for {message_name} {{\n\
+             \x20   fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {{\n\
+             \x20       ::protobuf::text_format::fmt(self, f)\n\
+             \x20   }}\n\
+             }}"
+        );
+        let redacted_formatting = format!(
+            "impl ::std::fmt::Debug for {message_name} {{\n\
+             \x20   fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {{\n\
+             \x20       f.write_str(\"{message_name}(<redacted>)\")\n\
+             \x20   }}\n\
+             }}\n\n\
+             impl ::std::fmt::Display for {message_name} {{\n\
+             \x20   fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {{\n\
+             \x20       f.write_str(\"{message_name}(<redacted>)\")\n\
+             \x20   }}\n\
+             }}"
+        );
+        if !generated.contains(&raw_display) {
+            return Err(format!(
+                "resource protobuf Display implementation changed for {message_name}"
+            )
+            .into());
+        }
+        generated = generated.replacen(&raw_display, &redacted_formatting, 1);
+    }
+
+    if generated.contains("::protobuf::text_format::fmt(self, f)") {
+        return Err("resource protobuf text formatting remained after redaction".into());
+    }
     fs::write(path, generated)?;
     Ok(())
 }

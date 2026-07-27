@@ -21,6 +21,26 @@
       systems = [ "x86_64-linux" "aarch64-linux" ];
       forAllSystems = nixpkgs.lib.genAttrs systems;
       nixpkgsFor = forAllSystems (system: import nixpkgs { inherit system; });
+      mkGuestRustPackagesSrc = pkgs:
+        pkgs.runCommand "d2b-guest-rust-src" { } ''
+          mkdir -p $out/packages
+          cp -r ${./packages/d2b-realm-core} $out/packages/d2b-realm-core
+          cp -r ${./packages/d2b-core} $out/packages/d2b-core
+          cp -r ${./packages/d2b-contracts} $out/packages/d2b-contracts
+          cp -r ${./packages/d2b-guestd} $out/packages/d2b-guestd
+          cp -r ${./packages/d2b-userd} $out/packages/d2b-userd
+          cp -r ${./packages/d2b-exec-runner} $out/packages/d2b-exec-runner
+          cp -r ${./packages/d2b-sk-frontend} $out/packages/d2b-sk-frontend
+          cp ${./packages/Cargo.guest.lock} $out/packages/Cargo.lock
+          chmod -R u+w $out/packages/d2b-core
+          chmod -R u+w $out/packages/d2b-realm-core
+          cp ${./tests/fixtures/guest-rust-workspace/d2b-realm-core.Cargo.toml} \
+            $out/packages/d2b-realm-core/Cargo.toml
+          cp ${./tests/fixtures/guest-rust-workspace/d2b-core.Cargo.toml} \
+            $out/packages/d2b-core/Cargo.toml
+          cp ${./tests/fixtures/guest-rust-workspace/Cargo.toml} \
+            $out/packages/Cargo.toml
+        '';
     in
     {
       # The public surface area - populated incrementally by the
@@ -60,97 +80,7 @@
           RUSTC_WRAPPER = "";
           SCCACHE_DIR = "";
         } // args);
-        guestRustPackagesSrc = pkgs.runCommand "d2b-guest-rust-src" { } ''
-          mkdir -p $out/packages
-          cp -r ${./packages/d2b-realm-core} $out/packages/d2b-realm-core
-          cp -r ${./packages/d2b-core} $out/packages/d2b-core
-          cp -r ${./packages/d2b-contracts} $out/packages/d2b-contracts
-          cp -r ${./packages/d2b-guestd} $out/packages/d2b-guestd
-          cp -r ${./packages/d2b-userd} $out/packages/d2b-userd
-          cp -r ${./packages/d2b-exec-runner} $out/packages/d2b-exec-runner
-          cp -r ${./packages/d2b-sk-frontend} $out/packages/d2b-sk-frontend
-          cp ${./packages/Cargo.guest.lock} $out/packages/Cargo.lock
-          chmod -R u+w $out/packages/d2b-core
-          chmod -R u+w $out/packages/d2b-realm-core
-          cat > $out/packages/d2b-realm-core/Cargo.toml <<'EOF'
-          [package]
-          name = "d2b-realm-core"
-          version = "0.0.0-bootstrap"
-          edition = "2024"
-          publish = false
-          license.workspace = true
-
-          [lib]
-          test = false
-          doctest = false
-
-          [lints]
-          workspace = true
-
-          [dependencies]
-          serde.workspace = true
-          schemars.workspace = true
-          EOF
-          cat > $out/packages/d2b-core/Cargo.toml <<'EOF'
-          [package]
-          name = "d2b-core"
-          version = "0.0.0-bootstrap"
-          edition = "2024"
-          publish = false
-          license.workspace = true
-
-          [lib]
-          test = false
-          doctest = false
-
-          [lints]
-          workspace = true
-
-          [features]
-          test-support = []
-
-          [dependencies]
-          serde.workspace = true
-          serde_json.workspace = true
-          schemars.workspace = true
-          d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
-          semver = "1"
-          rustix = { workspace = true }
-          sha2 = { workspace = true }
-          EOF
-          cat > $out/packages/Cargo.toml <<'EOF'
-          [workspace]
-          resolver = "2"
-          members = [
-            "d2b-realm-core",
-            "d2b-core",
-            "d2b-contracts",
-            "d2b-guestd",
-            "d2b-userd",
-            "d2b-exec-runner",
-            "d2b-sk-frontend",
-          ]
-
-          [workspace.package]
-          license = "Apache-2.0"
-
-          [workspace.lints.clippy]
-          all = "warn"
-
-          [workspace.lints.rust]
-          unsafe_code = "forbid"
-          unexpected_cfgs = { level = "warn", check-cfg = ["cfg(test_root)"] }
-
-          [workspace.dependencies]
-          serde = { version = "1", features = ["derive"] }
-          serde_json = "1"
-          schemars = { version = "0.8", features = ["derive"] }
-          rustix = { version = "0.38", features = ["fs", "process", "net", "pipe", "system", "pty", "termios", "stdio"] }
-          sha2 = "0.10"
-          tokio = { version = "1", features = ["io-util", "macros", "rt-multi-thread", "time", "fs"] }
-          tokio-vsock = "0.7"
-          EOF
-        '';
+        guestRustPackagesSrc = mkGuestRustPackagesSrc pkgs;
         cargoLock = {
           lockFile = ./packages/Cargo.guest.lock;
         };
@@ -610,97 +540,7 @@
           cp -r ${./tests/golden} $out/tests/golden
           cp -r ${./tests/fixtures} $out/tests/fixtures
         '';
-        guestRustPackagesSrc = pkgs.runCommand "d2b-guest-rust-src" { } ''
-          mkdir -p $out/packages
-          cp -r ${./packages/d2b-realm-core} $out/packages/d2b-realm-core
-          cp -r ${./packages/d2b-core} $out/packages/d2b-core
-          cp -r ${./packages/d2b-contracts} $out/packages/d2b-contracts
-          cp -r ${./packages/d2b-guestd} $out/packages/d2b-guestd
-          cp -r ${./packages/d2b-userd} $out/packages/d2b-userd
-          cp -r ${./packages/d2b-exec-runner} $out/packages/d2b-exec-runner
-          cp -r ${./packages/d2b-sk-frontend} $out/packages/d2b-sk-frontend
-          cp ${./packages/Cargo.guest.lock} $out/packages/Cargo.lock
-          chmod -R u+w $out/packages/d2b-core
-          chmod -R u+w $out/packages/d2b-realm-core
-          cat > $out/packages/d2b-realm-core/Cargo.toml <<'EOF'
-          [package]
-          name = "d2b-realm-core"
-          version = "0.0.0-bootstrap"
-          edition = "2024"
-          publish = false
-          license.workspace = true
-
-          [lib]
-          test = false
-          doctest = false
-
-          [lints]
-          workspace = true
-
-          [dependencies]
-          serde.workspace = true
-          schemars.workspace = true
-          EOF
-          cat > $out/packages/d2b-core/Cargo.toml <<'EOF'
-          [package]
-          name = "d2b-core"
-          version = "0.0.0-bootstrap"
-          edition = "2024"
-          publish = false
-          license.workspace = true
-
-          [lib]
-          test = false
-          doctest = false
-
-          [lints]
-          workspace = true
-
-          [features]
-          test-support = []
-
-          [dependencies]
-          serde.workspace = true
-          serde_json.workspace = true
-          schemars.workspace = true
-          d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
-          semver = "1"
-          rustix = { workspace = true }
-          sha2 = { workspace = true }
-          EOF
-          cat > $out/packages/Cargo.toml <<'EOF'
-          [workspace]
-          resolver = "2"
-          members = [
-            "d2b-realm-core",
-            "d2b-core",
-            "d2b-contracts",
-            "d2b-guestd",
-            "d2b-userd",
-            "d2b-exec-runner",
-            "d2b-sk-frontend",
-          ]
-
-          [workspace.package]
-          license = "Apache-2.0"
-
-          [workspace.lints.clippy]
-          all = "warn"
-
-          [workspace.lints.rust]
-          unsafe_code = "forbid"
-          unexpected_cfgs = { level = "warn", check-cfg = ["cfg(test_root)"] }
-
-          [workspace.dependencies]
-          serde = { version = "1", features = ["derive"] }
-          serde_json = "1"
-          schemars = { version = "0.8", features = ["derive"] }
-          rustix = { version = "0.38", features = ["fs", "process", "net", "pipe", "system", "pty", "termios", "stdio"] }
-          sha2 = "0.10"
-          tokio = { version = "1", features = ["io-util", "macros", "rt-multi-thread", "time", "fs"] }
-          tokio-vsock = "0.7"
-          EOF
-        '';
+        guestRustPackagesSrc = mkGuestRustPackagesSrc pkgs;
         rustWorkspace = args: pkgs.rustPlatform.buildRustPackage ({
           pname = "d2b-rust-workspace";
           version = "0.0.0-bootstrap";

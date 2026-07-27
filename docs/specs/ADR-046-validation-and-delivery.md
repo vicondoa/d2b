@@ -99,14 +99,14 @@ only prerequisite is `ADR046-W7`'s exit criteria (§4), and it runs that same
 
 | Wave | Specs (all must be `Accepted`; Gate 0 already covers this) | New/changed crates and modules (destination roots) |
 | --- | --- | --- |
-| `ADR046-W0` | `ADR-046-terminology-and-identities` → `ADR-046-resource-object-model` → `ADR-046-resource-store-redb` → `ADR-046-resource-api-and-authorization` (serial sub-steps, one integrator branch) | `packages/d2b-contracts/src/v3/{identity,resource_ref,resource,resource_status,resource_schema}.rs`; `packages/d2b-resource-store/`, `packages/d2b-resource-store-redb/`; `packages/d2b-contracts/proto/d2b-resource-v3.proto`; `packages/d2b-resource-api/`; `nixos-modules/{options-zones,resources,index}.nix` |
-| `ADR046-W1` | `ADR-046-resource-reconciliation` ‖ `ADR-046-componentsession-and-bus` | `packages/d2b-controller-toolkit/`; `packages/d2b-core-controller/src/{hints,dependencies,owner_reconcile}.rs`; `packages/d2b-contracts/src/v3/component_session.rs`; `packages/d2b-session/`; `packages/d2b-session-unix/`; `packages/d2b-bus/` |
+| `ADR046-W0` | `ADR-046-terminology-and-identities` → `ADR-046-resource-object-model` → `ADR046-store-001` → `ADR-046-resource-api-and-authorization` (serial contract sub-steps, one integrator branch) | `packages/d2b-contracts/src/v3/{identity,resource_ref,resource,resource_status,resource_schema,error}.rs`; `packages/d2b-resource-store/`; `packages/d2b-resource-store-redb/src/{schema,keys,values,ownership}.rs`; `packages/d2b-controller-toolkit/src/owner_hints.rs`; `packages/d2b-contracts/proto/d2b-resource-v3.proto`; `packages/d2b-resource-api/`; `nixos-modules/{options-zones,resources,index}.nix` |
+| `ADR046-W1` | `ADR046-feasibility-001` → `ADR046-store-004` → `ADR046-store-002` alongside `ADR-046-resource-reconciliation` ‖ `ADR-046-componentsession-and-bus`; the spike and backend chain is a prep barrier for production watch/reconciliation integration | `proofs/redb-resource-store-spike/`; `packages/d2b-resource-store-redb/src/{actor,transaction,revision_log}.rs`; `packages/d2b-resource-api/src/watch.rs`; `packages/d2b-controller-toolkit/`; `packages/d2b-core-controller/src/{hints,dependencies,owner_reconcile}.rs`; `packages/d2b-contracts/src/v3/component_session.rs`; `packages/d2b-session/`; `packages/d2b-session-unix/`; `packages/d2b-bus/` |
 | `ADR046-W2` | `ADR-046-primitive-resource-composition` ‖ `ADR-046-zone-routing` | `packages/d2b-contracts/src/v3/{host,guest,execution_policy,process,volume,user,network,device,credential}.rs`; `packages/d2b-process/`; `packages/d2b-provider-supervisor/`; `packages/d2b-zone-routing/` |
 | `ADR046-W3` | `ADR-046-provider-model-and-packaging` (single spec; strictly serial - every downstream Provider dossier depends on it) | `packages/d2b-provider/`; `packages/d2b-provider-toolkit/`; one `packages/d2b-provider-<base>-<implementation>/` skeleton generator |
 | `ADR046-W4` | `ADR-046-components-processes-and-sandbox` ‖ `ADR-046-core-controllers` ‖ `ADR-046-resources-network` ‖ `ADR-046-resources-credential` ‖ `ADR-046-provider-state` (five parallel specs) | `packages/d2b-process/`, `d2b-provider-supervisor/` (process effect ports); `packages/d2b-core-controller/`; `packages/d2b-provider-network-local/` schema half; `packages/d2b-provider-credential-*/` schema half; Volume `stateSchema`/`persistenceClass`/`sensitivityClass` extension |
-| `ADR046-W5` | `ADR-046-resources-zone-control` ‖ `ADR-046-resources-host-guest-process-user` ‖ `ADR-046-resources-volume` ‖ `ADR-046-resources-device` ‖ `ADR-046-telemetry-audit-and-support` ‖ `ADR-046-cli-and-operations` ‖ `ADR-046-nix-configuration` (seven parallel specs) | `packages/d2b-provider-system-{core,systemd,minijail}/`; `packages/d2b-provider-volume-{local,virtiofs}/` schema half; `packages/d2b-provider-device-*/` schema half; `packages/d2b-telemetry/`, `d2b-audit/`; `packages/d2b/` CLI; `nixos-modules/resources-*.nix` |
+| `ADR046-W5` | `ADR046-store-003` → `ADR046-store-005` alongside `ADR-046-resources-zone-control` ‖ `ADR-046-resources-host-guest-process-user` ‖ `ADR-046-resources-volume` ‖ `ADR-046-resources-device` ‖ `ADR-046-telemetry-audit-and-support` ‖ `ADR-046-cli-and-operations` ‖ `ADR-046-nix-configuration` (storage integration plus seven parallel specs) | `packages/d2b-contracts/src/v3/storage.rs`; `nixos-modules/zone-storage-json.nix`; `docs/reference/schemas/v3/zone-storage.json`; `packages/d2b-resource-store-redb/src/{backup,migration}.rs`; broker Zone-store operation/wire/test destinations; `packages/d2b-provider-system-{core,systemd,minijail}/`; `packages/d2b-provider-volume-{local,virtiofs}/` schema half; `packages/d2b-provider-device-*/` schema half; `packages/d2b-telemetry/`, `d2b-audit/`; `packages/d2b/` CLI; `nixos-modules/resources-*.nix` |
 | `ADR046-W6` | All 27 `ADR-046-provider-*` dossiers, grouped into five file-disjoint provider families (§3.3) | One `packages/d2b-provider-<base>-<implementation>/` per Provider (27 crates) |
-| `ADR046-W7` | `ADR-046-feasibility-and-spikes` ‖ `ADR-046-reset-and-cutover` ‖ `ADR-046-security-and-threat-model` ‖ `ADR-046-streamline` ‖ `ADR-046-validation-and-delivery` | Cross-cutting spec-scoped friction fixes, reset/cutover mechanics, feasibility closure, security closure, and the release-gate contract (§15, evaluated at `ADR046-W8` exit) |
+| `ADR046-W7` | `ADR-046-feasibility-and-spikes` (`ADR046-feasibility-002` through `ADR046-feasibility-011`) ‖ `ADR-046-reset-and-cutover` ‖ `ADR-046-security-and-threat-model` ‖ `ADR-046-streamline` ‖ `ADR-046-validation-and-delivery` | Cross-cutting spec-scoped friction fixes, reset/cutover mechanics, remaining feasibility closure, security closure, and the release-gate contract (§15, evaluated at `ADR046-W8` exit) |
 | `ADR046-W8` | None - no spec members (§3.1); the wave's contents are the tooling and process friction fixes accumulated across `ADR046-W0`-`ADR046-W7` (signoff, build, test, merge, codegen, disk), triaged at `ADR046-W7` close | `packages/xtask/`; `tests/tools/`; `packages/d2b-contract-tests/tests/`; `Makefile` |
 
 Waves are numbered `ADR046-W0`…`ADR046-W8` - an ADR-046-scoped namespace,
@@ -117,6 +117,25 @@ in `AGENTS.md`. Commit subjects for ADR 0046 implementation work use
 `AGENTS.md` already defines, so existing tooling and human reviewers read one
 consistent tag shape. `ADR046-W8` takes the same grammar with no exception:
 `( ADR046-W8 )`, `( ADR046-W8fu<m> )`, `( ADR046-W8fu<m> <S><n> )`.
+
+The store work-item split is intentionally finer than the owning spec's W0
+contract position:
+
+| Work item | Assigned wave | Delivery determination |
+| --- | --- | --- |
+| `ADR046-store-001` | `ADR046-W0` | The engine-neutral trait, closed errors, schema/codecs, and golden vectors are present; this is the complete W0 store contract. |
+| `ADR046-feasibility-001` | `ADR046-W1` | The disposable proof crate and both spike results are absent; it runs as the backend prep barrier. |
+| `ADR046-store-004` | `ADR046-W1` | Only contract modules exist in the crate; the actor and transaction engine destinations are absent and remain spike-gated. |
+| `ADR046-store-002` | `ADR046-W1` | Replay/live watch and API watch destinations are absent and belong with production reconciliation integration. |
+| `ADR046-store-003` | `ADR046-W5` | This is a generated storage-row integration contract, not an engine backend item; all Nix/schema/parity destinations are absent and belong with Nix and broker storage wiring. |
+| `ADR046-store-005` | `ADR046-W5` | Backup/migration and broker provisioning/fd-handoff destinations are absent; it follows the storage-row contract and production engine. |
+
+These assignments move no dependency edge. In particular, the eight downstream
+consumers remain direct dependents of `ADR046-store-001`:
+`ADR046-audit-002`, `ADR046-telem-002`, `ADR046-telem-010`,
+`ADR046-telem-011`, `ADR046-zone-control-001`,
+`ADR046-zone-control-009`, `ADR046-zone-control-010`, and
+`ADR046-zone-control-011`.
 
 ### 3.3 Wave 6 provider families (file-disjoint parallel tracks)
 
@@ -234,7 +253,12 @@ re-derives launch order or parallelism from this prose. Per D095:
   barrier whose `topologicalRank` precedes its consumers); every work item is
   mapped to a wave; a `parallelGroup` never implies ordering absent a
   dependency or file-overlap edge; the JSON is deterministic; and every Mermaid
-  node ID is a valid identifier.
+  node ID is a valid identifier. Graph generation also rejects any `W0` work
+  item unless its state is `Merged` and every backtick-delimited destination is
+  present. This generation-time check is deliberately specific to `W0`, the
+  already-closed baseline. Later waves legitimately carry `Planned` items until
+  implementation lands; their state is enforced at entry and seal time instead
+  of making the plan itself impossible to generate.
 - **Anti-serialization.** The graph embodies §6: all ready, file-disjoint
   parallel groups launch concurrently. A same-wave dependency is a
   `shared-contract`/`file-overlap-order` prep barrier before its specific
@@ -280,9 +304,11 @@ seal, and merge eligibility - applies to it unchanged.
 
 **Entry criteria (all required):**
 
-1. Gate 0 (§2) has passed, or - for `ADR046-W1` onward - every spec assigned
-   to this wave and every wave before it has a `Merged` implementation state
-   recorded in `docs/specs/ADR-046-work-items.json` (§8).
+1. Gate 0 (§2) has passed. For `ADR046-W1` onward, `wave snapshot` reads the
+   implementation graph and work-item state manifest from the candidate's exact
+   integrated Git tree and rejects entry unless every work item in every prior
+   wave is `Merged`. Items in the wave being entered may remain `Planned`; the
+   seal gate below is what requires their promotion after implementation.
 2. Every destination path this wave's work items name (§3.2, §7) is free of
    an open, unresolved contention flag from an earlier wave.
 3. The wave's Git Town stack (§5) has been proposed against the exact parent
@@ -306,8 +332,9 @@ seal, and merge eligibility - applies to it unchanged.
 3. The ten-role panel (§12.3) has returned unanimous `signoff: true` against
    that exact snapshot, with zero outstanding `recommendations`.
 4. `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave seal`
-   (§12.4) has produced a sealed record
-   binding this wave's `candidate_id`/`content_id`/`snapshot_sha256`.
+   (§12.4) has verified that every work item assigned to this wave is `Merged`,
+   then produced a sealed record binding this wave's
+   `candidate_id`/`content_id`/`snapshot_sha256`.
 5. `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave merge-eligibility`
    reports eligible for every
    PR in the wave's stack, and each has merged root-to-leaf through GitHub
@@ -470,6 +497,11 @@ parallelism (it does, until resolved).
    change without a matching `apiVersion`/`schemaVersion` bump fails this
    gate, per the existing manifest-contract convention in `AGENTS.md`
    ("Critical subsystems" → "Manifest contract").
+   For D115's Zone storage row, the implementation slice writes only the Rust
+   DTO and Nix emitter. After that slice merges, the integrator runs the schema
+   generator and owns the rendered-contract parity test under
+   `packages/d2b-contract-tests/tests/`; the implementation slice never writes
+   that forbidden cross-cutting destination.
 3. Generated Nix option types/docs for every `d2b.zones.<zone>.resources.<name>`
    surface are derived from the same `ResourceTypeSchema` and signed Provider
    schema used for build-time validation (per `ADR-046-nix-configuration`);
@@ -551,7 +583,7 @@ manifest/fixture, per that file's closed-set rule.
 
 | Row | Coverage | Location |
 | --- | --- | --- |
-| Unit | Every DTO/schema/validator introduced by `ADR046-object-001/002`, `ADR046-store-001..003`, `ADR046-api-001/002` - canonical JSON, bounds, redaction, unknown-field rejection | `packages/d2b-contracts/src/v3/**` `#[cfg(test)]`, `packages/d2b-resource-store-redb/src/**` |
+| Unit | Every DTO/schema/validator introduced by `ADR046-object-001/002`, `ADR046-store-001..005`, `ADR046-api-001/002` - canonical JSON, bounds, redaction, unknown-field rejection | `packages/d2b-contracts/src/v3/**` `#[cfg(test)]`, `packages/d2b-resource-store-redb/src/**` |
 | Property | Owner cycle/depth/reparent property tests (`ADR046-object-002`); expected-revision conflict storms; watch replay/no-gap; ResourceRef parse/collision vectors (`ADR046-identities-001`) | `packages/d2b-contracts/src/v3/resource_ref.rs`, `packages/d2b-resource-store-redb/tests/` |
 | Fuzz | Canonical offer/record fuzzing carried over from main's `d2b-session` Noise vectors (`ADR046-session-001`); redb key/encoding fuzz for `type_index`/`owner_index`/`revision_log` | `packages/d2b-session/tests/noise_vectors.rs` (ported), `packages/d2b-resource-store-redb/fuzz/` |
 | Fault injection | Forced crash at every commit boundary (resource-store-redb performance contract fixture list); controller-spawned Process exits unexpectedly → `phase: Degraded`/`Failed` (D059 `tests/` requirement); disconnect/relist/lease-withdrawal | `packages/d2b-resource-store-redb/tests/fault.rs`; every Provider crate's `tests/*.rs` |
@@ -571,6 +603,12 @@ name, field name, expected/actual type in the error.
 Exact benchmark fixtures from `ADR-046-resource-store-redb`'s performance
 contract, run in `packages/d2b-resource-store-redb/benches/`:
 
+These rows are completion gates, not existing evidence. SPIKE-01 and SPIKE-02
+remain unexecuted, so no production redb backend, watch/dispatcher integration,
+or redb backup/migration work may claim these rows. D128 permits only the
+engine-neutral contract and hermetic small-scale scope it enumerates before
+that evidence exists.
+
 | Fixture | Hard target |
 | --- | --- |
 | Empty store readiness | <=500 ms |
@@ -589,12 +627,25 @@ contract, run in `packages/d2b-resource-store-redb/benches/`:
 | Backup/restore/internal schema upgrade | staged validate → atomic publish → rollback-window retention |
 | Repeated open/close and long-reader rejection | no reader starves the single writer |
 
-The RSS row is not a W0 pass criterion as a whole. W0 records only the resource
-service/store median at the 10,000-resource/100-watch fixture and fails above
-24 MiB. The owning controller waves separately fail above 22 MiB for
-`Provider/system-core` and 12 MiB for `Provider/system-minijail`. W6 alone may
-record the aggregate row as passing, after measuring all three processes live
-and at or below 64 MiB; the unallocated 6 MiB is variance headroom.
+The RSS row is not a contract-only store pass criterion. After SPIKE-01 runs,
+`ADR046-store-004` production backend work records the resource service/store
+median at the 10,000-resource/100-watch fixture and fails above 24 MiB; that
+evidence blocks backend completion.
+
+`ADR046-store-004` also carries the production-registration gates that the
+contract item cannot satisfy, because the contract ships no backend. Sealing
+the wave that lands it requires, in addition to the spike evidence and the
+resident-set-size row: conformance evidence that a registered backend mutates
+only through verified admission and exposes no independent write path, and a
+recorded security review of each registered backend. The seal must not close
+without both. The admission seal prevents a caller forging authorization and
+binds evidence to one store, but a backend, once registered, is trusted, so
+these are the review obligations that stand in place of a structural guarantee.
+ The work that lands the fixed controllers
+separately fails above 22 MiB for `Provider/system-core` and 12 MiB for
+`Provider/system-minijail`. Provider integration alone may record the
+aggregate row as passing, after measuring all three processes live and at or
+below 64 MiB; the unallocated 6 MiB is variance headroom.
 
 Failure to meet a hard target changes the Proposed design (per the spec);
 it is never resolved by weakening durability, authorization, or audit.
@@ -1116,6 +1167,12 @@ both validator and panel evidence; the wave re-snapshots and both lanes
 rerun. A history-only rebase or retarget may reuse panel evidence only when
 the canonical proof tool (§12.6) verifies byte-identical integrated content.
 
+Before creating a snapshot for any wave after `W0`, the command reads
+`ADR-046-implementation-graph.json` and `ADR-046-work-items.json` from the
+candidate's exact integrated Git tree. It rejects entry when any item assigned
+to an earlier wave is not `Merged`; it does not reject `Planned` items in the
+wave being entered.
+
 Each repository requires at least one
 `--pull-request LOGICAL_ID=NUMBER:HEAD_REF` mapping, and the repeated mappings
 must name the complete expected pull-request set. The repository's `--head`
@@ -1221,7 +1278,11 @@ tooling (if not already present) is work item `ADR046-delivery-004`/`-005`
 `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave seal` requires all ten panel records
 present, unanimous, and bound to the same `candidate_id`/`content_id`/
 `snapshot_sha256`, plus every §12.2 validator lane reporting success on that
-exact snapshot.
+exact snapshot. It also reads the implementation graph and work-item state
+manifest from the snapshot's integrated Git tree and rejects the seal unless
+every item assigned to the current wave is `Merged`. The error names the item
+and the required state transition. `merge-eligibility` repeats this current-wave
+check so an eligibility result cannot bypass stale delivery state.
 
 `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave merge-target` then captures the wave's current
 pull-request stack into a canonical `merge-target.json` under the candidate.
@@ -1441,6 +1502,8 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | Data migration | None - net-new tooling |
 | Validation | Unit tests for slot acquisition/timeout/fail-closed paths; integration test spawning two concurrent heavy-gate invocations and asserting the second blocks until the first releases |
 | Removal proof | Not applicable (net-new; nothing to remove) |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-delivery-002
 
@@ -1457,6 +1520,8 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Unit tests asserting identical inputs produce identical digests and any single-byte content change produces a different `content_id` |
 | Removal proof | Not applicable |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-delivery-003
 
@@ -1473,6 +1538,8 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Test asserting evidence for a stale `candidate_id` is rejected; test asserting raw command output never lands in a tracked file |
 | Removal proof | Not applicable |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-delivery-004
 
@@ -1489,6 +1556,8 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Golden-fixture test against a small synthetic spec directory; drift test against the real `docs/specs/` tree |
 | Removal proof | Not applicable |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-delivery-005
 
@@ -1505,6 +1574,8 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Unit tests for every rejection class (wrong model, missing role, duplicate run_id, `signoff:true` with non-empty `recommendations`); integration test with ten synthetic valid records passing |
 | Removal proof | Not applicable |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-delivery-006
 
@@ -1521,6 +1592,8 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Unit tests for seal rejection on any missing/mismatched record; integration test proving a history-only rebase with identical content passes `history_proof` and reuses panel evidence, while any content change fails it |
 | Removal proof | Not applicable |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-delivery-007
 
@@ -1537,6 +1610,8 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Policy self-tests: intentional sleep/process/network behavior in a hermetic test is rejected; a per-test wall-clock threshold breach remains advisory; an over-budget aggregate crate process-CPU p95 fails; an incomplete, expanded, or shrunk exact census fails closed; parallel isolation holds under shuffled/parallel execution; a retired legacy selector is absent from `tests/layer1-jobs.json`, closed gate manifests, and CI shards |
 | Removal proof | Not applicable |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-delivery-008
 
@@ -1553,6 +1628,8 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | Data migration | None - docs/tooling only; no runtime state |
 | Validation | Every 55 spec node and every work item present exactly once; all edge endpoints resolve; graph acyclic; waves monotonic (dependencies earlier or explicit same-wave prep barrier); parallel groups claim no ordering absent a dependency/file-overlap edge; deterministic JSON with no timestamps/host paths; every Mermaid node ID valid; the ready-wave query returns the expected concurrently-launchable groups on a seeded fixture |
 | Removal proof | Not applicable |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-delivery-009
 
@@ -1569,3 +1646,5 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | Data migration | None - documentation/build-policy contract only |
 | Validation | Fixtures fail for a dropped heading, `##`/`####` item heading, extra manifest row, duplicate ID, duplicate cross-member prefix, unsorted/empty required prefix registry, wrong owner/path/prefix, heuristic-only prefix match, two-digit/zero ordinal, missing/duplicate mandatory field, free-form/compound action, `create` with a reuse source, dangling dependency, cyclic DAG, backward-wave dependency, and cross-wave parallel group; the exact 55-spec real tree passes with every item once |
 | Removal proof | Not applicable; the policy remains the permanent generated-artifact closure gate |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
