@@ -49,7 +49,7 @@ impl ValueKind {
 }
 
 /// Validated encoded value frame.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct EncodedValue(Vec<u8>);
 
 impl EncodedValue {
@@ -59,6 +59,27 @@ impl EncodedValue {
 
     pub fn into_bytes(self) -> Vec<u8> {
         self.0
+    }
+}
+
+impl core::fmt::Debug for EncodedValue {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let kind = self
+            .0
+            .get(1..3)
+            .and_then(|bytes| <[u8; 2]>::try_from(bytes).ok())
+            .and_then(|bytes| ValueKind::from_discriminant(u16::from_be_bytes(bytes)));
+        let mut debug = f.debug_struct("EncodedValue");
+        match kind {
+            Some(kind) => debug.field("kind", &kind),
+            None => debug.field("kind", &"<invalid>"),
+        };
+        debug
+            .field(
+                "payload_byte_length",
+                &self.0.len().saturating_sub(VALUE_HEADER_BYTES),
+            )
+            .finish()
     }
 }
 
@@ -113,10 +134,7 @@ impl core::fmt::Debug for DecodedValue {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("DecodedValue")
             .field("kind", &self.kind)
-            .field(
-                "canonical_json",
-                &format_args!("<{} bytes>", self.canonical_json.len()),
-            )
+            .field("payload_byte_length", &self.canonical_json.len())
             .finish()
     }
 }
@@ -267,5 +285,28 @@ mod tests {
             ),
             Err(ValueCodecError::ValueTooLong)
         );
+    }
+
+    #[test]
+    fn value_debug_redacts_canonical_json() {
+        const MARKER: &str = "debug-leak-sentinel-value";
+        let payload = format!(r#"{{"marker":"{MARKER}"}}"#);
+        let encoded = encode_value(ValueKind::ResourceRecord, payload.as_bytes()).unwrap();
+        let decoded = DecodedValue::decode(encoded.as_bytes()).unwrap();
+        let encoded_debug = format!("{encoded:?}");
+        let decoded_debug = format!("{decoded:?}");
+
+        assert!(
+            !encoded_debug.contains(MARKER),
+            "encoded value Debug exposed canonical JSON"
+        );
+        assert!(
+            !decoded_debug.contains(MARKER),
+            "decoded value Debug exposed canonical JSON"
+        );
+        for diagnostic in [encoded_debug, decoded_debug] {
+            assert!(diagnostic.contains("ResourceRecord"));
+            assert!(diagnostic.contains(&payload.len().to_string()));
+        }
     }
 }

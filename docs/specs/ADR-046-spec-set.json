@@ -84,7 +84,7 @@
     {
       "dependsOn" : [],
       "path" : "docs/specs/ADR-046-decision-register.md",
-      "sha256" : "347b67295bc1393e7c9fe762cc06336c9a9e19a5976503840e0ec0a12060388f",
+      "sha256" : "4535013560811b6fe84f91eed80060292536ba4b16da04e2d5d3fd819a53d5de",
       "specId" : "ADR-046-decision-register",
       "status" : "Accepted",
       "supersedes" : null,
@@ -112,7 +112,7 @@
         "ADR-046-zone-routing"
       ],
       "path" : "docs/specs/ADR-046-feasibility-and-spikes.md",
-      "sha256" : "7e5212c18553db950b1a12984efcd955971537c71dcad2aa54bef2d322874f7e",
+      "sha256" : "83978b12c960591e3df077d7df53cbcc488e08ede5de4d7fa046bb456b57299a",
       "specId" : "ADR-046-feasibility-and-spikes",
       "status" : "Accepted",
       "supersedes" : null,
@@ -848,7 +848,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-resource-api-and-authorization.md",
-      "sha256" : "5d9cc30f4463ae1009e2ac3831e2af2fe9c43d5c93f113fde990fdd00ff08842",
+      "sha256" : "247ea5f1b50d3357e35fd41cf694c18c078f0b5b1cc0942e41276b4e7a293126",
       "specId" : "ADR-046-resource-api-and-authorization",
       "status" : "Accepted",
       "supersedes" : null,
@@ -863,7 +863,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-resource-object-model.md",
-      "sha256" : "fd966dc075e766a83b1f97a06675cad5cd7badd05771cdde533f3dbd55728fac",
+      "sha256" : "982a4ebebf5c8386f4747974aabaa588f3eb35e5b6496f9c3406694431b2eeef",
       "specId" : "ADR-046-resource-object-model",
       "status" : "Accepted",
       "supersedes" : null,
@@ -894,7 +894,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-resource-store-redb.md",
-      "sha256" : "e6a5af27d544d89960e70e74928614d7d3b38cc08314a2c592558b36dd234cb6",
+      "sha256" : "7f0eedea43bf38647addd8fcdab389cab2eb6101989353d346a548c7f1934808",
       "specId" : "ADR-046-resource-store-redb",
       "status" : "Accepted",
       "supersedes" : null,
@@ -1140,7 +1140,7 @@
         "ADR-046-decision-register"
       ],
       "path" : "docs/specs/ADR-046-terminology-and-identities.md",
-      "sha256" : "efe2edbfce1465f15c98c5cccddb207969fe232764c0d32beff1147ff4867623",
+      "sha256" : "ac260fffbe9743f106b8180831205e9f70f3f577df717649713c1c9648b7e886",
       "specId" : "ADR-046-terminology-and-identities",
       "status" : "Accepted",
       "supersedes" : "Public Realm terminology selected by ADR 0043 for d2b v3",
@@ -1207,7 +1207,7 @@
         "ADR-046-zone-routing"
       ],
       "path" : "docs/specs/ADR-046-validation-and-delivery.md",
-      "sha256" : "66190355ba0deba4dde85d55850a54783e30adc30c6014ad9980d08128e71698",
+      "sha256" : "f0ca5b9fa5d920167dbc9973ca9409cf87ce1eb5b234cdbf119c7e03c572a786",
       "specId" : "ADR-046-validation-and-delivery",
       "status" : "Accepted",
       "supersedes" : "This repository's current `AGENTS.md` \"Panel review\" phase-gate as the *sole* review mechanism for ADR 0046 work (extended, not replaced, per §12); ad hoc per-agent validation ordering for ADR 0046 implementation",

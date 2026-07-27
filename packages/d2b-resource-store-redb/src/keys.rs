@@ -71,21 +71,47 @@ enum KeyComponentKind {
 }
 
 /// Borrowed key component accepted by the encoder.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum KeyComponent<'a> {
     Text(&'a str),
     U64(u64),
 }
 
+impl core::fmt::Debug for KeyComponent<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let (kind, byte_length) = match self {
+            Self::Text(text) => ("Text", text.len()),
+            Self::U64(_) => ("U64", core::mem::size_of::<u64>()),
+        };
+        f.debug_struct("KeyComponent")
+            .field("kind", &kind)
+            .field("byte_length", &byte_length)
+            .finish()
+    }
+}
+
 /// Owned component returned by the decoder.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum DecodedKeyComponent {
     Text(String),
     U64(u64),
 }
 
+impl core::fmt::Debug for DecodedKeyComponent {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let (kind, byte_length) = match self {
+            Self::Text(text) => ("Text", text.len()),
+            Self::U64(_) => ("U64", core::mem::size_of::<u64>()),
+        };
+        f.debug_struct("DecodedKeyComponent")
+            .field("kind", &kind)
+            .field("byte_length", &byte_length)
+            .finish()
+    }
+}
+
 /// Validated encoded key.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct EncodedKey(Vec<u8>);
 
 impl EncodedKey {
@@ -98,8 +124,25 @@ impl EncodedKey {
     }
 }
 
+impl core::fmt::Debug for EncodedKey {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match DecodedKey::decode(&self.0) {
+            Ok(decoded) => f
+                .debug_struct("EncodedKey")
+                .field("key_space", &decoded.key_space)
+                .field("components", &decoded.components)
+                .finish(),
+            Err(_) => f
+                .debug_struct("EncodedKey")
+                .field("key_space", &"<invalid>")
+                .field("components", &"<invalid>")
+                .finish(),
+        }
+    }
+}
+
 /// Validated decoded key.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct DecodedKey {
     key_space: KeySpace,
     components: Vec<DecodedKeyComponent>,
@@ -172,6 +215,15 @@ impl DecodedKey {
             key_space,
             components,
         })
+    }
+}
+
+impl core::fmt::Debug for DecodedKey {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("DecodedKey")
+            .field("key_space", &self.key_space)
+            .field("components", &self.components)
+            .finish()
     }
 }
 
@@ -257,38 +309,61 @@ mod tests {
 
     #[test]
     fn independent_literal_golden_vectors_pin_every_key_space() {
-        let vectors: &[(KeySpace, &[KeyComponent<'_>], &[u8])] = &[
+        let vectors: Vec<(
+            KeySpace,
+            &[KeyComponent<'_>],
+            &[u8],
+            Vec<DecodedKeyComponent>,
+        )> = vec![
             (
                 KeySpace::StoreMeta,
                 &[KeyComponent::Text("zone_name")],
                 b"\x01\x01\x00\x09zone_name",
+                vec![DecodedKeyComponent::Text("zone_name".to_owned())],
             ),
             (
                 KeySpace::ApiSchemas,
                 &[KeyComponent::Text("sha256:00")],
                 b"\x01\x02\x00\x09sha256:00",
+                vec![DecodedKeyComponent::Text("sha256:00".to_owned())],
             ),
             (
                 KeySpace::Resources,
                 &[KeyComponent::Text("Host"), KeyComponent::Text("local")],
                 b"\x01\x03\x00\x04Host\x00\x05local",
+                vec![
+                    DecodedKeyComponent::Text("Host".to_owned()),
+                    DecodedKeyComponent::Text("local".to_owned()),
+                ],
             ),
             (
                 KeySpace::TypeIndex,
                 &[KeyComponent::Text("Guest"), KeyComponent::Text("work")],
                 b"\x01\x04\x00\x05Guest\x00\x04work",
+                vec![
+                    DecodedKeyComponent::Text("Guest".to_owned()),
+                    DecodedKeyComponent::Text("work".to_owned()),
+                ],
             ),
             (
                 KeySpace::OwnerIndex,
                 &[KeyComponent::Text(UID_A), KeyComponent::Text(UID_B)],
                 b"\x01\x05\x00\x24123e4567-e89b-42d3-a456-426614174000\
                   \x00\x24123e4567-e89b-42d3-a456-426614174001",
+                vec![
+                    DecodedKeyComponent::Text("123e4567-e89b-42d3-a456-426614174000".to_owned()),
+                    DecodedKeyComponent::Text("123e4567-e89b-42d3-a456-426614174001".to_owned()),
+                ],
             ),
             (
                 KeySpace::ProducerIndex,
                 &[KeyComponent::Text(UID_A), KeyComponent::Text(UID_B)],
                 b"\x01\x06\x00\x24123e4567-e89b-42d3-a456-426614174000\
                   \x00\x24123e4567-e89b-42d3-a456-426614174001",
+                vec![
+                    DecodedKeyComponent::Text("123e4567-e89b-42d3-a456-426614174000".to_owned()),
+                    DecodedKeyComponent::Text("123e4567-e89b-42d3-a456-426614174001".to_owned()),
+                ],
             ),
             (
                 KeySpace::ControllerIndex,
@@ -298,32 +373,42 @@ mod tests {
                     KeyComponent::Text("local"),
                 ],
                 b"\x01\x07\x00\x04core\x00\x04Host\x00\x05local",
+                vec![
+                    DecodedKeyComponent::Text("core".to_owned()),
+                    DecodedKeyComponent::Text("Host".to_owned()),
+                    DecodedKeyComponent::Text("local".to_owned()),
+                ],
             ),
             (
                 KeySpace::RevisionLog,
                 &[KeyComponent::U64(42)],
                 b"\x01\x08\x00\x00\x00\x00\x00\x00\x00\x2a",
+                vec![DecodedKeyComponent::U64(42)],
             ),
             (
                 KeySpace::Operations,
                 &[KeyComponent::Text("op-1")],
                 b"\x01\x09\x00\x04op-1",
+                vec![DecodedKeyComponent::Text("op-1".to_owned())],
             ),
             (
                 KeySpace::ZoneLinkCursors,
                 &[KeyComponent::Text(UID_A)],
                 b"\x01\x0a\x00\x24123e4567-e89b-42d3-a456-426614174000",
+                vec![DecodedKeyComponent::Text(
+                    "123e4567-e89b-42d3-a456-426614174000".to_owned(),
+                )],
             ),
         ];
 
-        for (key_space, components, literal) in vectors {
+        for (key_space, components, literal, expected_decoded) in vectors {
             assert_eq!(
-                encode_key(*key_space, components).unwrap().as_bytes(),
-                *literal
+                encode_key(key_space, components).unwrap().as_bytes(),
+                literal
             );
             let decoded = DecodedKey::decode(literal).unwrap();
-            assert_eq!(decoded.key_space(), *key_space);
-            assert_eq!(decoded.components().len(), components.len());
+            assert_eq!(decoded.key_space(), key_space);
+            assert_eq!(decoded.components(), expected_decoded);
         }
     }
 
@@ -383,5 +468,29 @@ mod tests {
             encode_key(KeySpace::StoreMeta, &[KeyComponent::Text(&overlong)]),
             Err(KeyCodecError::TextComponentTooLong)
         );
+    }
+
+    #[test]
+    fn key_debug_redacts_component_material() {
+        const MARKER: &str = "debug-leak-sentinel-key";
+        let components = [KeyComponent::Text(MARKER)];
+        let encoded = encode_key(KeySpace::StoreMeta, &components).unwrap();
+        let decoded = DecodedKey::decode(encoded.as_bytes()).unwrap();
+        let rendered = [
+            format!("{:?}", components[0]),
+            format!("{encoded:?}"),
+            format!("{decoded:?}"),
+            format!("{:?}", decoded.components()[0]),
+        ];
+
+        for diagnostic in &rendered {
+            assert!(
+                !diagnostic.contains(MARKER),
+                "key Debug exposed component material"
+            );
+        }
+        assert!(rendered[1].contains("StoreMeta"));
+        assert!(rendered[2].contains("Text"));
+        assert!(rendered[2].contains(&MARKER.len().to_string()));
     }
 }

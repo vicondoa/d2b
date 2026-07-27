@@ -99,14 +99,14 @@ only prerequisite is `ADR046-W7`'s exit criteria (§4), and it runs that same
 
 | Wave | Specs (all must be `Accepted`; Gate 0 already covers this) | New/changed crates and modules (destination roots) |
 | --- | --- | --- |
-| `ADR046-W0` | `ADR-046-terminology-and-identities` → `ADR-046-resource-object-model` → `ADR-046-resource-store-redb` → `ADR-046-resource-api-and-authorization` (serial sub-steps, one integrator branch); self-contained `ADR046-feasibility-001` runs before store completion | `packages/d2b-contracts/src/v3/{identity,resource_ref,resource,resource_status,resource_schema}.rs`; `proofs/redb-resource-store-spike/`; `packages/d2b-resource-store/`, `packages/d2b-resource-store-redb/`; `packages/d2b-contracts/proto/d2b-resource-v3.proto`; `packages/d2b-resource-api/`; `nixos-modules/{options-zones,resources,index}.nix` |
-| `ADR046-W1` | `ADR-046-resource-reconciliation` ‖ `ADR-046-componentsession-and-bus` | `packages/d2b-controller-toolkit/`; `packages/d2b-core-controller/src/{hints,dependencies,owner_reconcile}.rs`; `packages/d2b-contracts/src/v3/component_session.rs`; `packages/d2b-session/`; `packages/d2b-session-unix/`; `packages/d2b-bus/` |
+| `ADR046-W0` | `ADR-046-terminology-and-identities` → `ADR-046-resource-object-model` → `ADR046-store-001` → `ADR-046-resource-api-and-authorization` (serial contract sub-steps, one integrator branch) | `packages/d2b-contracts/src/v3/{identity,resource_ref,resource,resource_status,resource_schema,error}.rs`; `packages/d2b-resource-store/`; `packages/d2b-resource-store-redb/src/{schema,keys,values,ownership}.rs`; `packages/d2b-controller-toolkit/src/owner_hints.rs`; `packages/d2b-contracts/proto/d2b-resource-v3.proto`; `packages/d2b-resource-api/`; `nixos-modules/{options-zones,resources,index}.nix` |
+| `ADR046-W1` | `ADR046-feasibility-001` → `ADR046-store-004` → `ADR046-store-002` alongside `ADR-046-resource-reconciliation` ‖ `ADR-046-componentsession-and-bus`; the spike and backend chain is a prep barrier for production watch/reconciliation integration | `proofs/redb-resource-store-spike/`; `packages/d2b-resource-store-redb/src/{actor,transaction,revision_log}.rs`; `packages/d2b-resource-api/src/watch.rs`; `packages/d2b-controller-toolkit/`; `packages/d2b-core-controller/src/{hints,dependencies,owner_reconcile}.rs`; `packages/d2b-contracts/src/v3/component_session.rs`; `packages/d2b-session/`; `packages/d2b-session-unix/`; `packages/d2b-bus/` |
 | `ADR046-W2` | `ADR-046-primitive-resource-composition` ‖ `ADR-046-zone-routing` | `packages/d2b-contracts/src/v3/{host,guest,execution_policy,process,volume,user,network,device,credential}.rs`; `packages/d2b-process/`; `packages/d2b-provider-supervisor/`; `packages/d2b-zone-routing/` |
 | `ADR046-W3` | `ADR-046-provider-model-and-packaging` (single spec; strictly serial - every downstream Provider dossier depends on it) | `packages/d2b-provider/`; `packages/d2b-provider-toolkit/`; one `packages/d2b-provider-<base>-<implementation>/` skeleton generator |
 | `ADR046-W4` | `ADR-046-components-processes-and-sandbox` ‖ `ADR-046-core-controllers` ‖ `ADR-046-resources-network` ‖ `ADR-046-resources-credential` ‖ `ADR-046-provider-state` (five parallel specs) | `packages/d2b-process/`, `d2b-provider-supervisor/` (process effect ports); `packages/d2b-core-controller/`; `packages/d2b-provider-network-local/` schema half; `packages/d2b-provider-credential-*/` schema half; Volume `stateSchema`/`persistenceClass`/`sensitivityClass` extension |
-| `ADR046-W5` | `ADR-046-resources-zone-control` ‖ `ADR-046-resources-host-guest-process-user` ‖ `ADR-046-resources-volume` ‖ `ADR-046-resources-device` ‖ `ADR-046-telemetry-audit-and-support` ‖ `ADR-046-cli-and-operations` ‖ `ADR-046-nix-configuration` (seven parallel specs) | `packages/d2b-provider-system-{core,systemd,minijail}/`; `packages/d2b-provider-volume-{local,virtiofs}/` schema half; `packages/d2b-provider-device-*/` schema half; `packages/d2b-telemetry/`, `d2b-audit/`; `packages/d2b/` CLI; `nixos-modules/resources-*.nix` |
+| `ADR046-W5` | `ADR046-store-003` → `ADR046-store-005` alongside `ADR-046-resources-zone-control` ‖ `ADR-046-resources-host-guest-process-user` ‖ `ADR-046-resources-volume` ‖ `ADR-046-resources-device` ‖ `ADR-046-telemetry-audit-and-support` ‖ `ADR-046-cli-and-operations` ‖ `ADR-046-nix-configuration` (storage integration plus seven parallel specs) | `packages/d2b-contracts/src/v3/storage.rs`; `nixos-modules/zone-storage-json.nix`; `docs/reference/schemas/v3/zone-storage.json`; `packages/d2b-resource-store-redb/src/{backup,migration}.rs`; broker Zone-store operation/wire/test destinations; `packages/d2b-provider-system-{core,systemd,minijail}/`; `packages/d2b-provider-volume-{local,virtiofs}/` schema half; `packages/d2b-provider-device-*/` schema half; `packages/d2b-telemetry/`, `d2b-audit/`; `packages/d2b/` CLI; `nixos-modules/resources-*.nix` |
 | `ADR046-W6` | All 27 `ADR-046-provider-*` dossiers, grouped into five file-disjoint provider families (§3.3) | One `packages/d2b-provider-<base>-<implementation>/` per Provider (27 crates) |
-| `ADR046-W7` | `ADR-046-feasibility-and-spikes` (remaining work items) ‖ `ADR-046-reset-and-cutover` ‖ `ADR-046-security-and-threat-model` ‖ `ADR-046-streamline` ‖ `ADR-046-validation-and-delivery` | Cross-cutting spec-scoped friction fixes, reset/cutover mechanics, remaining feasibility closure, security closure, and the release-gate contract (§15, evaluated at `ADR046-W8` exit) |
+| `ADR046-W7` | `ADR-046-feasibility-and-spikes` (`ADR046-feasibility-002` through `ADR046-feasibility-011`) ‖ `ADR-046-reset-and-cutover` ‖ `ADR-046-security-and-threat-model` ‖ `ADR-046-streamline` ‖ `ADR-046-validation-and-delivery` | Cross-cutting spec-scoped friction fixes, reset/cutover mechanics, remaining feasibility closure, security closure, and the release-gate contract (§15, evaluated at `ADR046-W8` exit) |
 | `ADR046-W8` | None - no spec members (§3.1); the wave's contents are the tooling and process friction fixes accumulated across `ADR046-W0`-`ADR046-W7` (signoff, build, test, merge, codegen, disk), triaged at `ADR046-W7` close | `packages/xtask/`; `tests/tools/`; `packages/d2b-contract-tests/tests/`; `Makefile` |
 
 Waves are numbered `ADR046-W0`…`ADR046-W8` - an ADR-046-scoped namespace,
@@ -117,6 +117,25 @@ in `AGENTS.md`. Commit subjects for ADR 0046 implementation work use
 `AGENTS.md` already defines, so existing tooling and human reviewers read one
 consistent tag shape. `ADR046-W8` takes the same grammar with no exception:
 `( ADR046-W8 )`, `( ADR046-W8fu<m> )`, `( ADR046-W8fu<m> <S><n> )`.
+
+The store work-item split is intentionally finer than the owning spec's W0
+contract position:
+
+| Work item | Assigned wave | Delivery determination |
+| --- | --- | --- |
+| `ADR046-store-001` | `ADR046-W0` | The engine-neutral trait, closed errors, schema/codecs, and golden vectors are present; this is the complete W0 store contract. |
+| `ADR046-feasibility-001` | `ADR046-W1` | The disposable proof crate and both spike results are absent; it runs as the backend prep barrier. |
+| `ADR046-store-004` | `ADR046-W1` | Only contract modules exist in the crate; the actor and transaction engine destinations are absent and remain spike-gated. |
+| `ADR046-store-002` | `ADR046-W1` | Replay/live watch and API watch destinations are absent and belong with production reconciliation integration. |
+| `ADR046-store-003` | `ADR046-W5` | This is a generated storage-row integration contract, not an engine backend item; all Nix/schema/parity destinations are absent and belong with Nix and broker storage wiring. |
+| `ADR046-store-005` | `ADR046-W5` | Backup/migration and broker provisioning/fd-handoff destinations are absent; it follows the storage-row contract and production engine. |
+
+These assignments move no dependency edge. In particular, the eight downstream
+consumers remain direct dependents of `ADR046-store-001`:
+`ADR046-audit-002`, `ADR046-telem-002`, `ADR046-telem-010`,
+`ADR046-telem-011`, `ADR046-zone-control-001`,
+`ADR046-zone-control-009`, `ADR046-zone-control-010`, and
+`ADR046-zone-control-011`.
 
 ### 3.3 Wave 6 provider families (file-disjoint parallel tracks)
 

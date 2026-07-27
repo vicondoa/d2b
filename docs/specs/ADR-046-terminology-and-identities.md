@@ -288,6 +288,8 @@ cgroup/scope, and provider-specific process identity.
 | Data migration | Destructive d2b 3.0 reset; no RealmRef parser compatibility |
 | Validation | Rust property/vector tests; pure-Nix vector parity; malformed/collision/UID-recreate tests; UUIDv4 canonical-form and CSPRNG failure vectors; exact ResourceType/ResourceRef bounds; `AuthenticatedSubjectContext` no-Deserialize/no-public-mutation and redacted-Debug policy tests |
 | Removal proof | Old public Realm target types removed only after all v3 callers consume Zone/ResourceRef |
+| Implementation state | Merged |
+| Evidence | Both destinations are present: `packages/d2b-contracts/src/v3/identity.rs` and `packages/d2b-contracts/src/v3/resource_ref.rs`, with their inline contract/vector tests. |
 
 ### ADR046-identities-002
 
@@ -302,3 +304,5 @@ cgroup/scope, and provider-specific process identity.
 | Data migration | Full reset and new Zone declarations |
 | Validation | W0 nix-unit vectors for accepted and rejected option shapes; Rust-to-Nix rendered contract parity is deferred to ADR046-W2 |
 | Removal proof | Realm-facing declarations removed only in the reset/purge wave |
+| Implementation state | Merged |
+| Evidence | All destinations are present: `nixos-modules/options-zones.nix`, `nixos-modules/resources.nix`, and `nixos-modules/index.nix`, with the W0 nix-unit option vectors. |
