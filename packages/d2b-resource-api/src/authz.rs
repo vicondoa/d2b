@@ -2153,6 +2153,21 @@ mod tests {
                 "bootstrap subject near miss authorized: {subject_name} {method:?} {resource_type}"
             );
 
+            let wrong_subject_name = bootstrap_subject("system-subject-near-miss", core_uid);
+            let name_mismatch_state = bootstrap_state(BootstrapPhase::Unprovisioned {
+                zone: ZoneId::parse("dev").unwrap(),
+                controller_generation: ControllerGeneration::new(11).unwrap(),
+                provider_generation: ResourceGeneration::new(12).unwrap(),
+            });
+            assert_eq!(
+                engine
+                    .authorize(&wrong_subject_name, &exact, &name_mismatch_state)
+                    .unwrap_err(),
+                AuthorizationDenial::BootstrapDenied,
+                "bootstrap subject-name near miss authorized: \
+                 {subject_name} {method:?} {resource_type}"
+            );
+
             let mut wrong_verb = exact.clone();
             wrong_verb.targets[0].verb = ResourceVerb::UseCredential;
             assert_eq!(
