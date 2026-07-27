@@ -27,10 +27,22 @@ authority to create/validate:
 - parent-directory fsync;
 - replacement/missing-state detection.
 
-The owner passes one already-open regular `File` to the Zone runtime. The
-pinned redb API must use `FileBackend::new(File)` or an equivalently reviewed
-fd-backed API. The Zone runtime does not resolve a caller-controlled store
-path.
+The owner passes one already-open regular database descriptor to the Zone
+runtime as an owned `File` or `OwnedFd`; borrowed descriptors and retained raw
+fd integers are forbidden. Before publishing the descriptor to any thread or
+task, the receiver verifies with `F_GETFD` that `FD_CLOEXEC` is set. An
+ordinary handoff without that bit fails closed. An `SCM_RIGHTS` receiver must
+use `recvmsg(..., MSG_CMSG_CLOEXEC)` so close-on-exec is set atomically as the
+descriptor enters the process, then perform the same verification. A reviewed
+equivalent must provide the same atomic receipt guarantee; repairing a
+received descriptor later with `F_SETFD` is forbidden because it races
+fork+exec.
+
+The pinned redb API must use `FileBackend::new(File)` or an equivalently
+reviewed owned-fd API. The Zone runtime does not resolve a caller-controlled
+store path. Tests cover direct and `SCM_RIGHTS` receipt, the defined fork
+inheritance behavior, and absence of the database descriptor after exec,
+including a receipt racing a fork+exec probe.
 
 Providers/controllers never receive a redb handle, database file/dir fd, path,
 table access, or direct store client. Only the resource service/store actor
@@ -450,7 +462,7 @@ types, or the storage-row source contract.
 | Detailed design | Promote the exact `redb = { version = "=4.1.0", default-features = false }` workspace pin and consume it only from `d2b-resource-store-redb`. Keep `d2b-resource-store` free of redb and Tokio; expose native async trait methods returning `impl Future + Send`, hold one concrete store implementation, and inject generic test fakes without trait objects or `async-trait`. `ResourceStore::commit` accepts only the private-field `AdmittedMutation`, rechecks its captured policy/API-catalog/active-configuration/controller revisions inside the transaction, never evaluates RBAC, and never auto-retries a failed recheck. Before SPIKE-01: closed errors, store-neutral types, exact table/discriminant codecs and golden vectors, and hermetic small-scale transaction semantics that make no scale claim. After SPIKE-01 passes, implement redb tables/encodings, fd backend, store identity, fair actor, MVCC reads, atomic indexes/revisions/operations/conflicts, and the contract constants: write queue 256, group-commit batch 16, read pool 4, concurrent reads 16, read lifetime 250 ms, watch-dispatch queue 1024. Use full crash-safe durability with one fsync per write transaction; no reduced-durability mode. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Zone runtime owns store; resource API is sole caller |
 | Data migration | Full reset; logical backup only for v3 stores |
-| Validation | Pre-spike codec/golden-vector and small-scale semantic tests make no scale claim; completion requires SPIKE-01 evidence. Unit/property/fault tests and hard benchmark; exact dependency/feature-policy lint; compile tests for `Send` futures and generic fake injection; `AdmittedMutation` private-field/single-constructor and in-transaction revision-recheck tests; policy test forbidding resource-store dependency on API/RBAC symbols; queue/pool constant assertions; paused-clock read-expiry tests; no reduced-durability call-site lint |
+| Validation | Pre-spike codec/golden-vector and small-scale semantic tests make no scale claim; completion requires SPIKE-01 evidence. Unit/property/fault tests and hard benchmark; owned-fd and `FD_CLOEXEC` checks for direct and `SCM_RIGHTS` receipt plus fork/exec inheritance probes; exact dependency/feature-policy lint; compile tests for `Send` futures and generic fake injection; `AdmittedMutation` private-field/single-constructor and in-transaction revision-recheck tests; policy test forbidding resource-store dependency on API/RBAC symbols; queue/pool constant assertions; paused-clock read-expiry tests; no reduced-durability call-site lint |
 | Removal proof | Existing ledgers removed only by owning future work items |
 
 ### ADR046-store-002

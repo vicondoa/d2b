@@ -6239,7 +6239,7 @@
       "reuseSource" : null,
       "specId" : "ADR-046-resource-store-redb",
       "specPath" : "docs/specs/ADR-046-resource-store-redb.md",
-      "validation" : "Pre-spike codec/golden-vector and small-scale semantic tests make no scale claim; completion requires SPIKE-01 evidence. Unit/property/fault tests and hard benchmark; exact dependency/feature-policy lint; compile tests for `Send` futures and generic fake injection; `AdmittedMutation` private-field/single-constructor and in-transaction revision-recheck tests; policy test forbidding resource-store dependency on API/RBAC symbols; queue/pool constant assertions; paused-clock read-expiry tests; no reduced-durability call-site lint",
+      "validation" : "Pre-spike codec/golden-vector and small-scale semantic tests make no scale claim; completion requires SPIKE-01 evidence. Unit/property/fault tests and hard benchmark; owned-fd and `FD_CLOEXEC` checks for direct and `SCM_RIGHTS` receipt plus fork/exec inheritance probes; exact dependency/feature-policy lint; compile tests for `Send` futures and generic fake injection; `AdmittedMutation` private-field/single-constructor and in-transaction revision-recheck tests; policy test forbidding resource-store dependency on API/RBAC symbols; queue/pool constant assertions; paused-clock read-expiry tests; no reduced-durability call-site lint",
       "workItemId" : "ADR046-store-001"
     },
     {

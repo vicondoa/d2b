@@ -894,7 +894,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-resource-store-redb.md",
-      "sha256" : "cecf43a49f763d7f2c2add5c4b69af5aba5a162ccbec559dd8f669a5d0a6fdeb",
+      "sha256" : "8a5aed11683d255c21dfe7f6a8ab4e368b5e3fe229b0083e50278766e68d9f42",
       "specId" : "ADR-046-resource-store-redb",
       "status" : "Accepted",
       "supersedes" : null,
