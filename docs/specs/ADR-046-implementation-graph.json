@@ -15488,18 +15488,18 @@
       "entryContracts" : [
         "ADR-046-resource-store-redb"
       ],
-      "exitGate" : "ADR046-W0 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
+      "exitGate" : "ADR046-W1 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-feasibility-001",
       "kind" : "work-item",
       "owner" : "W0 shared contract root; store/reconciliation integrator",
-      "parallelGroup" : "wi:resource-store-foundation:w0",
+      "parallelGroup" : "wi:resource-store-backend:w1",
       "prerequisites" : [
         "ADR-046-resource-store-redb"
       ],
       "specId" : "ADR-046-feasibility-and-spikes",
       "topologicalRank" : 4,
       "validation" : "SPIKE-01 metrics (1)-(5) and SPIKE-02 metrics (1) across all 3 concurrency profiles, per those entries' exact pass/fail thresholds",
-      "wave" : "W0"
+      "wave" : "W1"
     },
     {
       "blockers" : [],
@@ -21594,7 +21594,7 @@
       "id" : "ADR046-store-001",
       "kind" : "work-item",
       "owner" : "Resource-object contracts; store contract integrator",
-      "parallelGroup" : "wi:ADR-046-resource-store-redb",
+      "parallelGroup" : "wi:resource-store-foundation:w0",
       "prerequisites" : [
         "ADR-046-resource-store-redb"
       ],
@@ -21612,11 +21612,11 @@
       "entryContracts" : [
         "ADR-046-resource-store-redb"
       ],
-      "exitGate" : "ADR046-W0 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
+      "exitGate" : "ADR046-W1 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-store-002",
       "kind" : "work-item",
       "owner" : "ADR046-store-004; ADR046-feasibility-001; watch/reconciliation integrator",
-      "parallelGroup" : "wi:ADR-046-resource-store-redb",
+      "parallelGroup" : "wi:resource-store-backend:w1",
       "prerequisites" : [
         "ADR-046-resource-store-redb",
         "ADR046-feasibility-001",
@@ -21625,7 +21625,7 @@
       "specId" : "ADR-046-resource-store-redb",
       "topologicalRank" : 6,
       "validation" : "SPIKE-01 correctness and SPIKE-02 latency evidence before implementation; deterministic watch/compaction/disconnect/fan-in tests afterward",
-      "wave" : "W0"
+      "wave" : "W1"
     },
     {
       "blockers" : [],
@@ -21636,11 +21636,11 @@
       "entryContracts" : [
         "ADR-046-resource-store-redb"
       ],
-      "exitGate" : "ADR046-W0 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
+      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-store-003",
       "kind" : "work-item",
       "owner" : "ADR046-store-001; storage-row contract integrator",
-      "parallelGroup" : "wi:ADR-046-resource-store-redb",
+      "parallelGroup" : "wi:resource-store-integration:w5",
       "prerequisites" : [
         "ADR-046-resource-store-redb",
         "ADR046-store-001"
@@ -21648,7 +21648,7 @@
       "specId" : "ADR-046-resource-store-redb",
       "topologicalRank" : 5,
       "validation" : "Storage-row source validation, generated-schema drift, and rendered-contract parity",
-      "wave" : "W0"
+      "wave" : "W5"
     },
     {
       "blockers" : [],
@@ -21659,11 +21659,11 @@
       "entryContracts" : [
         "ADR-046-resource-store-redb"
       ],
-      "exitGate" : "ADR046-W0 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
+      "exitGate" : "ADR046-W1 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-store-004",
       "kind" : "work-item",
       "owner" : "ADR046-store-001; ADR046-feasibility-001; store backend integrator",
-      "parallelGroup" : "wi:ADR-046-resource-store-redb",
+      "parallelGroup" : "wi:resource-store-backend:w1",
       "prerequisites" : [
         "ADR-046-resource-store-redb",
         "ADR046-feasibility-001",
@@ -21672,7 +21672,7 @@
       "specId" : "ADR-046-resource-store-redb",
       "topologicalRank" : 5,
       "validation" : "Successful SPIKE-01 evidence; unit/property/fault tests and the hard benchmark including the 10,000-resource/100-watch RSS result; owned-fd and `FD_CLOEXEC` checks for direct and `SCM_RIGHTS` receipt plus fork/exec inheritance probes; exact dependency/feature-policy lint; queue/pool constant assertions; paused-clock read-expiry tests; no reduced-durability call-site lint",
-      "wave" : "W0"
+      "wave" : "W1"
     },
     {
       "blockers" : [],
@@ -21683,11 +21683,11 @@
       "entryContracts" : [
         "ADR-046-resource-store-redb"
       ],
-      "exitGate" : "ADR046-W0 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
+      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-store-005",
       "kind" : "work-item",
       "owner" : "ADR046-store-003; ADR046-store-004; ADR046-feasibility-001; storage/broker backend integrator",
-      "parallelGroup" : "wi:ADR-046-resource-store-redb",
+      "parallelGroup" : "wi:resource-store-integration:w5",
       "prerequisites" : [
         "ADR-046-resource-store-redb",
         "ADR046-feasibility-001",
@@ -21697,7 +21697,7 @@
       "specId" : "ADR-046-resource-store-redb",
       "topologicalRank" : 6,
       "validation" : "Successful SPIKE-01 evidence; marker replacement, crash publication, backup/restore/upgrade, and store-identity mismatch tests; broker wire codec/unknown-op tests; opaque-id/path-injection and signed-row mismatch rejection; provision/open idempotency; exactly-one-fd `SCM_RIGHTS` transfer with `MSG_CMSG_CLOEXEC`, `F_GETFD` verification, and fork/exec non-inheritance; audit record contains the operation/result but no host path",
-      "wave" : "W0"
+      "wave" : "W5"
     },
     {
       "blockers" : [],
@@ -24674,23 +24674,23 @@
         "wi:ADR-046-decision-register",
         "wi:ADR-046-resource-api-and-authorization",
         "wi:ADR-046-resource-object-model",
-        "wi:ADR-046-resource-store-redb",
         "wi:ADR-046-terminology-and-identities",
         "wi:resource-store-foundation:w0"
       ],
       "specCount" : 6,
       "wave" : "W0",
-      "workItemCount" : 13
+      "workItemCount" : 8
     },
     {
       "parallelGroups" : [
         "W1-reconcile-and-bus",
         "wi:ADR-046-componentsession-and-bus",
-        "wi:ADR-046-resource-reconciliation"
+        "wi:ADR-046-resource-reconciliation",
+        "wi:resource-store-backend:w1"
       ],
       "specCount" : 2,
       "wave" : "W1",
-      "workItemCount" : 6
+      "workItemCount" : 9
     },
     {
       "parallelGroups" : [
@@ -24735,11 +24735,12 @@
         "wi:ADR-046-resources-volume",
         "wi:ADR-046-resources-zone-control",
         "wi:ADR-046-telemetry-audit-and-support",
-        "wi:core-config-hub:w5"
+        "wi:core-config-hub:w5",
+        "wi:resource-store-integration:w5"
       ],
       "specCount" : 7,
       "wave" : "W5",
-      "workItemCount" : 141
+      "workItemCount" : 143
     },
     {
       "parallelGroups" : [
