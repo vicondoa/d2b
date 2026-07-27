@@ -29,7 +29,7 @@ pub enum OwnerChangeEvent {
 }
 
 /// One pending `owned-resource-changed` notification.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OwnedResourceChangedHint {
     owner_ref: ResourceRef,
@@ -38,6 +38,19 @@ pub struct OwnedResourceChangedHint {
     child_uid: ResourceUid,
     revision: ZoneRevision,
     event: OwnerChangeEvent,
+}
+
+impl core::fmt::Debug for OwnedResourceChangedHint {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("OwnedResourceChangedHint")
+            .field("owner_kind", self.owner_ref.resource_type())
+            .field("has_owner_uid", &true)
+            .field("child_kind", self.child_ref.resource_type())
+            .field("has_child_uid", &true)
+            .field("revision", &self.revision)
+            .field("event", &self.event)
+            .finish()
+    }
 }
 
 impl OwnedResourceChangedHint {
@@ -171,6 +184,50 @@ mod tests {
             event,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn owner_hint_debug_redacts_every_protected_field() {
+        const OWNER_NAME_SENTINEL: &str = "hint-owner-debug-sentinel";
+        const OWNER_UID_SENTINEL: &str = "deadbeef-dead-4bad-8bad-deadbeef0004";
+        const CHILD_NAME_SENTINEL: &str = "hint-child-debug-sentinel";
+        const CHILD_UID_SENTINEL: &str = "feedface-feed-4ace-9ace-feedface0005";
+
+        let hint = OwnedResourceChangedHint::new_pending(
+            ResourceRef::parse(&format!("Guest/{OWNER_NAME_SENTINEL}")).unwrap(),
+            ResourceUid::parse(OWNER_UID_SENTINEL).unwrap(),
+            ResourceRef::parse(&format!("Process/{CHILD_NAME_SENTINEL}")).unwrap(),
+            ResourceUid::parse(CHILD_UID_SENTINEL).unwrap(),
+            ZoneRevision::new(53),
+            OwnerChangeEvent::FinalizersUpdated,
+        )
+        .unwrap();
+
+        let serialized = serde_json::to_string(&hint).unwrap();
+        for marker in [
+            OWNER_NAME_SENTINEL,
+            OWNER_UID_SENTINEL,
+            CHILD_NAME_SENTINEL,
+            CHILD_UID_SENTINEL,
+        ] {
+            assert!(serialized.contains(marker), "{serialized}");
+        }
+
+        let debug = format!("{hint:?}");
+        for marker in [
+            OWNER_NAME_SENTINEL,
+            OWNER_UID_SENTINEL,
+            CHILD_NAME_SENTINEL,
+            CHILD_UID_SENTINEL,
+        ] {
+            assert!(!debug.contains(marker), "{debug}");
+        }
+        assert!(debug.contains("owner_kind"));
+        assert!(debug.contains("has_owner_uid: true"));
+        assert!(debug.contains("child_kind"));
+        assert!(debug.contains("has_child_uid: true"));
+        assert!(debug.contains("revision: ZoneRevision(53)"));
+        assert!(debug.contains("event: FinalizersUpdated"));
     }
 
     #[test]

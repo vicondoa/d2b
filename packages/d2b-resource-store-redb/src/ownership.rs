@@ -11,7 +11,7 @@ use d2b_controller_toolkit::owner_hints::{
 pub const MAX_OWNER_CHAIN_DEPTH: usize = MAX_OWNER_HINT_DEPTH;
 
 /// Immutable UID binding stored alongside a child's singular ownerRef.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct OwnerBinding {
     owner_ref: ResourceRef,
     owner_uid: ResourceUid,
@@ -29,12 +29,31 @@ impl OwnerBinding {
     }
 }
 
+impl core::fmt::Debug for OwnerBinding {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("OwnerBinding")
+            .field("owner_kind", self.owner_ref.resource_type())
+            .field("has_owner_uid", &true)
+            .finish()
+    }
+}
+
 /// Reverse-index value for one owned child.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ReverseOwnerEntry {
     child_ref: ResourceRef,
     child_uid: ResourceUid,
     latest_revision: ZoneRevision,
+}
+
+impl core::fmt::Debug for ReverseOwnerEntry {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ReverseOwnerEntry")
+            .field("child_kind", self.child_ref.resource_type())
+            .field("has_child_uid", &true)
+            .field("latest_revision", &self.latest_revision)
+            .finish()
+    }
 }
 
 impl ReverseOwnerEntry {
@@ -65,11 +84,44 @@ impl ReverseOwnerEntry {
 ///
 /// let _forged_dispatch = OwnerIndexMutation::dispatch;
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct OwnerIndexMutation {
     previous_owner: Option<OwnerBinding>,
     current_owner: Option<OwnerBinding>,
     hints: Vec<OwnedResourceChangedHint>,
+}
+
+impl core::fmt::Debug for OwnerIndexMutation {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let previous_owner_kind = self
+            .previous_owner
+            .as_ref()
+            .map(|binding| binding.owner_ref.resource_type());
+        let current_owner_kind = self
+            .current_owner
+            .as_ref()
+            .map(|binding| binding.owner_ref.resource_type());
+        let hint_events = self
+            .hints
+            .iter()
+            .map(|hint| hint.event())
+            .collect::<Vec<_>>();
+        let hint_revisions = self
+            .hints
+            .iter()
+            .map(|hint| hint.revision())
+            .collect::<Vec<_>>();
+
+        f.debug_struct("OwnerIndexMutation")
+            .field("has_previous_owner", &self.previous_owner.is_some())
+            .field("previous_owner_kind", &previous_owner_kind)
+            .field("has_current_owner", &self.current_owner.is_some())
+            .field("current_owner_kind", &current_owner_kind)
+            .field("hint_count", &self.hints.len())
+            .field("hint_events", &hint_events)
+            .field("hint_revisions", &hint_revisions)
+            .finish()
+    }
 }
 
 impl OwnerIndexMutation {
@@ -89,12 +141,44 @@ impl OwnerIndexMutation {
 /// Methods validate all fallible graph conditions before changing any map. The
 /// returned mutation contains the hint records that the enclosing redb write
 /// transaction stores in its change batch before commit.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct OwnerIndex {
     current_uid_by_ref: BTreeMap<ResourceRef, ResourceUid>,
     reference_by_uid: BTreeMap<ResourceUid, ResourceRef>,
     owner_by_child: BTreeMap<ResourceUid, OwnerBinding>,
     children_by_owner: BTreeMap<ResourceUid, BTreeMap<ResourceUid, ReverseOwnerEntry>>,
+}
+
+impl core::fmt::Debug for OwnerIndex {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut resource_kind_counts = BTreeMap::new();
+        for resource_ref in self.reference_by_uid.values() {
+            *resource_kind_counts
+                .entry(resource_ref.resource_type())
+                .or_insert(0usize) += 1;
+        }
+        let reverse_entry_count = self
+            .children_by_owner
+            .values()
+            .map(BTreeMap::len)
+            .sum::<usize>();
+        let latest_revisions = self
+            .children_by_owner
+            .values()
+            .flat_map(BTreeMap::values)
+            .map(ReverseOwnerEntry::latest_revision)
+            .collect::<BTreeSet<_>>();
+
+        f.debug_struct("OwnerIndex")
+            .field("resource_kind_counts", &resource_kind_counts)
+            .field("current_reference_count", &self.current_uid_by_ref.len())
+            .field("resource_count", &self.reference_by_uid.len())
+            .field("owned_child_count", &self.owner_by_child.len())
+            .field("owner_count", &self.children_by_owner.len())
+            .field("reverse_entry_count", &reverse_entry_count)
+            .field("latest_revisions", &latest_revisions)
+            .finish()
+    }
 }
 
 impl OwnerIndex {
@@ -457,6 +541,11 @@ impl std::error::Error for OwnershipError {}
 mod tests {
     use super::*;
 
+    const OWNER_NAME_SENTINEL: &str = "owner-debug-sentinel";
+    const OWNER_UID_SENTINEL: &str = "deadbeef-dead-4bad-8bad-deadbeef0002";
+    const CHILD_NAME_SENTINEL: &str = "child-debug-sentinel";
+    const CHILD_UID_SENTINEL: &str = "feedface-feed-4ace-9ace-feedface0003";
+
     fn uid(index: u8) -> ResourceUid {
         ResourceUid::parse(format!("123e4567-e89b-42d3-a456-4266141740{index:02}")).unwrap()
     }
@@ -473,6 +562,90 @@ mod tests {
                 .unwrap();
         }
         graph
+    }
+
+    fn assert_protected_markers_absent(debug: &str) {
+        for marker in [
+            OWNER_NAME_SENTINEL,
+            OWNER_UID_SENTINEL,
+            CHILD_NAME_SENTINEL,
+            CHILD_UID_SENTINEL,
+        ] {
+            assert!(!debug.contains(marker), "{debug}");
+        }
+    }
+
+    #[test]
+    fn ownership_debug_redacts_every_protected_field() {
+        let owner_ref = ResourceRef::parse(&format!("Guest/{OWNER_NAME_SENTINEL}")).unwrap();
+        let owner_uid = ResourceUid::parse(OWNER_UID_SENTINEL).unwrap();
+        let child_ref = ResourceRef::parse(&format!("Process/{CHILD_NAME_SENTINEL}")).unwrap();
+        let child_uid = ResourceUid::parse(CHILD_UID_SENTINEL).unwrap();
+
+        assert!(format!("{owner_ref:?}").contains(OWNER_NAME_SENTINEL));
+        assert!(format!("{child_ref:?}").contains(CHILD_NAME_SENTINEL));
+        assert_eq!(owner_uid.as_str(), OWNER_UID_SENTINEL);
+        assert_eq!(child_uid.as_str(), CHILD_UID_SENTINEL);
+
+        let binding = OwnerBinding {
+            owner_ref: owner_ref.clone(),
+            owner_uid: owner_uid.clone(),
+        };
+        let reverse_entry = ReverseOwnerEntry {
+            child_ref: child_ref.clone(),
+            child_uid: child_uid.clone(),
+            latest_revision: ZoneRevision::new(41),
+        };
+        let hint = OwnedResourceChangedHint::new_pending(
+            owner_ref.clone(),
+            owner_uid.clone(),
+            child_ref.clone(),
+            child_uid.clone(),
+            ZoneRevision::new(43),
+            OwnerChangeEvent::MetadataUpdated,
+        )
+        .unwrap();
+        let mutation = OwnerIndexMutation {
+            previous_owner: Some(binding.clone()),
+            current_owner: Some(binding.clone()),
+            hints: vec![hint],
+        };
+
+        let binding_debug = format!("{binding:?}");
+        assert_protected_markers_absent(&binding_debug);
+        assert!(binding_debug.contains("owner_kind"));
+        assert!(binding_debug.contains("has_owner_uid: true"));
+
+        let reverse_debug = format!("{reverse_entry:?}");
+        assert_protected_markers_absent(&reverse_debug);
+        assert!(reverse_debug.contains("child_kind"));
+        assert!(reverse_debug.contains("latest_revision: ZoneRevision(41)"));
+
+        let mutation_debug = format!("{mutation:?}");
+        assert_protected_markers_absent(&mutation_debug);
+        assert!(mutation_debug.contains("hint_count: 1"));
+        assert!(mutation_debug.contains("ZoneRevision(43)"));
+
+        let mut index = OwnerIndex::default();
+        index
+            .register_resource(owner_ref.clone(), owner_uid.clone())
+            .unwrap();
+        index
+            .register_resource(child_ref, child_uid.clone())
+            .unwrap();
+        index
+            .bind_owner(
+                &child_uid,
+                owner_ref,
+                ZoneRevision::new(47),
+                OwnerChangeEvent::Created,
+            )
+            .unwrap();
+        let index_debug = format!("{index:?}");
+        assert_protected_markers_absent(&index_debug);
+        assert!(index_debug.contains("resource_count: 2"));
+        assert!(index_debug.contains("owned_child_count: 1"));
+        assert!(index_debug.contains("ZoneRevision(47)"));
     }
 
     #[test]
