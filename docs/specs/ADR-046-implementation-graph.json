@@ -21586,7 +21586,7 @@
       "destinations" : [
         "`packages/d2b-contracts/src/v3/error.rs`; `packages/d2b-resource-store/src/lib.rs`, `error.rs`; `packages/d2b-resource-store-redb/src/schema.rs`, `keys.rs`, `values.rs`"
       ],
-      "detailedDesign" : "Keep `d2b-resource-store` free of redb and Tokio; expose native async trait methods returning `impl Future + Send`; use generic test fakes without trait objects or `async-trait`; freeze the closed error set, store-neutral request/response/trait/transaction types, exact ten-table schema, `d2bkey/v1` and `d2bval/v1` codecs and discriminants, decode rejection rules, and literal golden vectors. `ResourceStore::commit` accepts only the private-field `AdmittedMutation`, rechecks its captured policy/API-catalog/active-configuration/controller revisions inside the transaction, never evaluates RBAC, and never auto-retries a failed recheck. This contract item makes no scale, latency, RSS, crash-recovery, or production-suitability claim and has no feasibility dependency. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt.",
+      "detailedDesign" : "Keep `d2b-resource-store` free of redb and Tokio; expose native async trait methods returning `impl Future + Send`; use generic test fakes without trait objects or `async-trait`; freeze the closed error set, store-neutral request/response/trait/transaction types, exact ten-table schema, `d2bkey/v1` and `d2bval/v1` codecs and discriminants, decode rejection rules, and literal golden vectors. The workspace pins `redb = { version = \"=4.1.0\", default-features = false }` here so the contract crate and future spike/backend consume one reviewed API. A mutating commit accepts only sealed evidence produced by a successful native evaluation and verifiable by that store instance, rechecks captured policy/API-catalog/active-configuration/controller revisions inside the transaction, never evaluates RBAC, and never auto-retries a failed recheck. This contract item makes no scale, latency, RSS, crash-recovery, or production-suitability claim and has no feasibility dependency. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt.",
       "entryContracts" : [
         "ADR-046-resource-store-redb"
       ],
@@ -21600,7 +21600,7 @@
       ],
       "specId" : "ADR-046-resource-store-redb",
       "topologicalRank" : 4,
-      "validation" : "Literal codec golden vectors and decode-rejection cases; hermetic small-scale transaction semantics that make no scale claim; compile tests for `Send` futures and generic fake injection; `AdmittedMutation` private-field/single-constructor and in-transaction revision-recheck tests; policy test forbidding resource-store dependency on API/RBAC symbols",
+      "validation" : "Literal codec golden vectors and decode-rejection cases; hermetic small-scale transaction semantics that make no scale claim; compile tests for `Send` futures and generic fake injection; proof-origin, cross-store rejection, and in-transaction revision-recheck tests for sealed admission evidence; policy test forbidding resource-store dependency on API/RBAC symbols; exact redb pin/feature assertion",
       "wave" : "W0"
     },
     {
@@ -21655,7 +21655,7 @@
       "destinations" : [
         "`packages/d2b-resource-store-redb/src/lib.rs`, `actor.rs`, `transaction.rs`"
       ],
-      "detailedDesign" : "After successful SPIKE-01 evidence, promote the exact `redb = { version = \"=4.1.0\", default-features = false }` workspace pin and consume it only from `d2b-resource-store-redb`. Implement the redb engine, owned-fd database open, store identity, fair actor, MVCC reads, atomic indexes/revisions/operations/conflicts, crash recovery, and the contract constants: write queue 256, group-commit batch 16, read pool 4, concurrent reads 16, read lifetime 250 ms, and watch-dispatch queue 1024. Use full crash-safe durability with one fsync per write transaction; no reduced-durability mode. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt.",
+      "detailedDesign" : "After successful SPIKE-01 evidence, adopt the already-pinned redb API in the production engine. Implement the redb engine, owned-fd database open, store identity, fair actor, MVCC reads, atomic indexes/revisions/operations/conflicts, crash recovery, and the contract constants: write queue 256, group-commit batch 16, read pool 4, concurrent reads 16, read lifetime 250 ms, and watch-dispatch queue 1024. Use full crash-safe durability with one fsync per write transaction; no reduced-durability mode. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt.",
       "entryContracts" : [
         "ADR-046-resource-store-redb"
       ],
@@ -21677,9 +21677,9 @@
     {
       "blockers" : [],
       "destinations" : [
-        "`packages/d2b-resource-store-redb/src/backup.rs`, `migration.rs`"
+        "`packages/d2b-resource-store-redb/src/backup.rs`, `migration.rs`; `packages/d2b-contracts/src/broker_wire.rs` (`OpenZoneStore` request/response); `packages/d2b-priv-broker/src/ops/zone_store.rs`, `live_handlers.rs`, `fd_passing.rs`; `packages/d2b-priv-broker/tests/zone_store.rs`"
       ],
-      "detailedDesign" : "Consume the D115 storage-row contract for fd-backed provision/open and marker identity; implement logical backup, staged restore/upgrade, crash-safe publication, replacement detection, and corruption quarantine",
+      "detailedDesign" : "Consume the D115 storage-row contract for fd-backed provision/open and marker identity; implement logical backup, staged restore/upgrade, crash-safe publication, replacement detection, and corruption quarantine. Add a typed broker `OpenZoneStore` operation that accepts only opaque storage-row ids, resolves and validates the signed row, provisions or opens the database without a caller path, and returns exactly one owned descriptor with atomic close-on-exec receipt.",
       "entryContracts" : [
         "ADR-046-resource-store-redb"
       ],
@@ -21696,7 +21696,7 @@
       ],
       "specId" : "ADR-046-resource-store-redb",
       "topologicalRank" : 6,
-      "validation" : "Successful SPIKE-01 evidence; marker replacement, crash publication, backup/restore/upgrade, and store-identity mismatch tests",
+      "validation" : "Successful SPIKE-01 evidence; marker replacement, crash publication, backup/restore/upgrade, and store-identity mismatch tests; broker wire codec/unknown-op tests; opaque-id/path-injection and signed-row mismatch rejection; provision/open idempotency; exactly-one-fd `SCM_RIGHTS` transfer with `MSG_CMSG_CLOEXEC`, `F_GETFD` verification, and fork/exec non-inheritance; audit record contains the operation/result but no host path",
       "wave" : "W0"
     },
     {
