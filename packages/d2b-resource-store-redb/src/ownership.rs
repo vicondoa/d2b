@@ -151,32 +151,18 @@ pub struct OwnerIndex {
 
 impl core::fmt::Debug for OwnerIndex {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        let mut resource_kind_counts = BTreeMap::new();
-        for resource_ref in self.reference_by_uid.values() {
-            *resource_kind_counts
-                .entry(resource_ref.resource_type())
-                .or_insert(0usize) += 1;
-        }
         let reverse_entry_count = self
             .children_by_owner
             .values()
             .map(BTreeMap::len)
             .sum::<usize>();
-        let latest_revisions = self
-            .children_by_owner
-            .values()
-            .flat_map(BTreeMap::values)
-            .map(ReverseOwnerEntry::latest_revision)
-            .collect::<BTreeSet<_>>();
 
         f.debug_struct("OwnerIndex")
-            .field("resource_kind_counts", &resource_kind_counts)
             .field("current_reference_count", &self.current_uid_by_ref.len())
             .field("resource_count", &self.reference_by_uid.len())
             .field("owned_child_count", &self.owner_by_child.len())
             .field("owner_count", &self.children_by_owner.len())
             .field("reverse_entry_count", &reverse_entry_count)
-            .field("latest_revisions", &latest_revisions)
             .finish()
     }
 }
@@ -643,9 +629,11 @@ mod tests {
             .unwrap();
         let index_debug = format!("{index:?}");
         assert_protected_markers_absent(&index_debug);
-        assert!(index_debug.contains("resource_count: 2"));
-        assert!(index_debug.contains("owned_child_count: 1"));
-        assert!(index_debug.contains("ZoneRevision(47)"));
+        assert_eq!(
+            index_debug,
+            "OwnerIndex { current_reference_count: 2, resource_count: 2, \
+             owned_child_count: 1, owner_count: 1, reverse_entry_count: 1 }"
+        );
     }
 
     #[test]
