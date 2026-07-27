@@ -29,7 +29,7 @@
 const _PROTOBUF_VERSION_CHECK: () = ::protobuf::VERSION_3_7_2;
 
 // @@protoc_insertion_point(message:d2b.resource.v3.RequestMeta)
-#[derive(PartialEq,Clone,Default,Debug)]
+#[derive(PartialEq,Clone,Default)]
 pub struct RequestMeta {
     // message fields
     // @@protoc_insertion_point(field:d2b.resource.v3.RequestMeta.operation_id)
@@ -212,9 +212,15 @@ impl ::protobuf::MessageFull for RequestMeta {
     }
 }
 
+impl ::std::fmt::Debug for RequestMeta {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str("RequestMeta(<redacted>)")
+    }
+}
+
 impl ::std::fmt::Display for RequestMeta {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        ::protobuf::text_format::fmt(self, f)
+        f.write_str("RequestMeta(<redacted>)")
     }
 }
 
@@ -223,7 +229,7 @@ impl ::protobuf::reflect::ProtobufValue for RequestMeta {
 }
 
 // @@protoc_insertion_point(message:d2b.resource.v3.ResourceIdentity)
-#[derive(PartialEq,Clone,Default,Debug)]
+#[derive(PartialEq,Clone,Default)]
 pub struct ResourceIdentity {
     // message fields
     // @@protoc_insertion_point(field:d2b.resource.v3.ResourceIdentity.zone)
@@ -424,9 +430,15 @@ impl ::protobuf::MessageFull for ResourceIdentity {
     }
 }
 
+impl ::std::fmt::Debug for ResourceIdentity {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str("ResourceIdentity(<redacted>)")
+    }
+}
+
 impl ::std::fmt::Display for ResourceIdentity {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        ::protobuf::text_format::fmt(self, f)
+        f.write_str("ResourceIdentity(<redacted>)")
     }
 }
 
@@ -435,7 +447,7 @@ impl ::protobuf::reflect::ProtobufValue for ResourceIdentity {
 }
 
 // @@protoc_insertion_point(message:d2b.resource.v3.ResourceEnvelopeBytes)
-#[derive(PartialEq,Clone,Default,Debug)]
+#[derive(PartialEq,Clone,Default)]
 pub struct ResourceEnvelopeBytes {
     // message fields
     // @@protoc_insertion_point(field:d2b.resource.v3.ResourceEnvelopeBytes.identity)
@@ -583,9 +595,15 @@ impl ::protobuf::MessageFull for ResourceEnvelopeBytes {
     }
 }
 
+impl ::std::fmt::Debug for ResourceEnvelopeBytes {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str("ResourceEnvelopeBytes(<redacted>)")
+    }
+}
+
 impl ::std::fmt::Display for ResourceEnvelopeBytes {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        ::protobuf::text_format::fmt(self, f)
+        f.write_str("ResourceEnvelopeBytes(<redacted>)")
     }
 }
 
@@ -594,7 +612,7 @@ impl ::protobuf::reflect::ProtobufValue for ResourceEnvelopeBytes {
 }
 
 // @@protoc_insertion_point(message:d2b.resource.v3.Precondition)
-#[derive(PartialEq,Clone,Default,Debug)]
+#[derive(PartialEq,Clone,Default)]
 pub struct Precondition {
     // message fields
     // @@protoc_insertion_point(field:d2b.resource.v3.Precondition.kind)
@@ -741,9 +759,15 @@ impl ::protobuf::MessageFull for Precondition {
     }
 }
 
+impl ::std::fmt::Debug for Precondition {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str("Precondition(<redacted>)")
+    }
+}
+
 impl ::std::fmt::Display for Precondition {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        ::protobuf::text_format::fmt(self, f)
+        f.write_str("Precondition(<redacted>)")
     }
 }
 
@@ -752,7 +776,7 @@ impl ::protobuf::reflect::ProtobufValue for Precondition {
 }
 
 // @@protoc_insertion_point(message:d2b.resource.v3.Projection)
-#[derive(PartialEq,Clone,Default,Debug)]
+#[derive(PartialEq,Clone,Default)]
 pub struct Projection {
     // message fields
     // @@protoc_insertion_point(field:d2b.resource.v3.Projection.kind)
@@ -863,9 +887,15 @@ impl ::protobuf::MessageFull for Projection {
     }
 }
 
+impl ::std::fmt::Debug for Projection {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str("Projection(<redacted>)")
+    }
+}
+
 impl ::std::fmt::Display for Projection {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        ::protobuf::text_format::fmt(self, f)
+        f.write_str("Projection(<redacted>)")
     }
 }
 
@@ -874,7 +904,7 @@ impl ::protobuf::reflect::ProtobufValue for Projection {
 }
 
 // @@protoc_insertion_point(message:d2b.resource.v3.ListFilter)
-#[derive(PartialEq,Clone,Default,Debug)]
+#[derive(PartialEq,Clone,Default)]
 pub struct ListFilter {
     // message fields
     // @@protoc_insertion_point(field:d2b.resource.v3.ListFilter.field)
@@ -1003,9 +1033,15 @@ impl ::protobuf::MessageFull for ListFilter {
     }
 }
 
+impl ::std::fmt::Debug for ListFilter {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str("ListFilter(<redacted>)")
+    }
+}
+
 impl ::std::fmt::Display for ListFilter {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        ::protobuf::text_format::fmt(self, f)
+        f.write_str("ListFilter(<redacted>)")
     }
 }
 
@@ -1014,7 +1050,7 @@ impl ::protobuf::reflect::ProtobufValue for ListFilter {
 }
 
 // @@protoc_insertion_point(message:d2b.resource.v3.PageCursor)
-#[derive(PartialEq,Clone,Default,Debug)]
+#[derive(PartialEq,Clone,Default)]
 pub struct PageCursor {
     // message fields
     // @@protoc_insertion_point(field:d2b.resource.v3.PageCursor.value)
@@ -1125,9 +1161,15 @@ impl ::protobuf::MessageFull for PageCursor {
     }
 }
 
+impl ::std::fmt::Debug for PageCursor {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str("PageCursor(<redacted>)")
+    }
+}
+
 impl ::std::fmt::Display for PageCursor {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        ::protobuf::text_format::fmt(self, f)
+        f.write_str("PageCursor(<redacted>)")
     }
 }
 
@@ -1136,7 +1178,7 @@ impl ::protobuf::reflect::ProtobufValue for PageCursor {
 }
 
 // @@protoc_insertion_point(message:d2b.resource.v3.WatchCredits)
-#[derive(PartialEq,Clone,Default,Debug)]
+#[derive(PartialEq,Clone,Default)]
 pub struct WatchCredits {
     // message fields
     // @@protoc_insertion_point(field:d2b.resource.v3.WatchCredits.initial)
@@ -1247,9 +1289,15 @@ impl ::protobuf::MessageFull for WatchCredits {
     }
 }
 
+impl ::std::fmt::Debug for WatchCredits {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str("WatchCredits(<redacted>)")
+    }
+}
+
 impl ::std::fmt::Display for WatchCredits {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        ::protobuf::text_format::fmt(self, f)
+        f.write_str("WatchCredits(<redacted>)")
     }
 }
 
@@ -1258,7 +1306,7 @@ impl ::protobuf::reflect::ProtobufValue for WatchCredits {
 }
 
 // @@protoc_insertion_point(message:d2b.resource.v3.ChangeEvent)
-#[derive(PartialEq,Clone,Default,Debug)]
+#[derive(PartialEq,Clone,Default)]
 pub struct ChangeEvent {
     // message fields
     // @@protoc_insertion_point(field:d2b.resource.v3.ChangeEvent.kind)
@@ -1443,9 +1491,15 @@ impl ::protobuf::MessageFull for ChangeEvent {
     }
 }
 
+impl ::std::fmt::Debug for ChangeEvent {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str("ChangeEvent(<redacted>)")
+    }
+}
+
 impl ::std::fmt::Display for ChangeEvent {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        ::protobuf::text_format::fmt(self, f)
+        f.write_str("ChangeEvent(<redacted>)")
     }
 }
 
@@ -1454,7 +1508,7 @@ impl ::protobuf::reflect::ProtobufValue for ChangeEvent {
 }
 
 // @@protoc_insertion_point(message:d2b.resource.v3.ResourceError)
-#[derive(PartialEq,Clone,Default,Debug)]
+#[derive(PartialEq,Clone,Default)]
 pub struct ResourceError {
     // message fields
     // @@protoc_insertion_point(field:d2b.resource.v3.ResourceError.kind)
@@ -1637,9 +1691,15 @@ impl ::protobuf::MessageFull for ResourceError {
     }
 }
 
+impl ::std::fmt::Debug for ResourceError {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str("ResourceError(<redacted>)")
+    }
+}
+
 impl ::std::fmt::Display for ResourceError {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        ::protobuf::text_format::fmt(self, f)
+        f.write_str("ResourceError(<redacted>)")
     }
 }
 
@@ -1648,7 +1708,7 @@ impl ::protobuf::reflect::ProtobufValue for ResourceError {
 }
 
 // @@protoc_insertion_point(message:d2b.resource.v3.Mutation)
-#[derive(PartialEq,Clone,Default,Debug)]
+#[derive(PartialEq,Clone,Default)]
 pub struct Mutation {
     // message fields
     // @@protoc_insertion_point(field:d2b.resource.v3.Mutation.kind)
@@ -1907,9 +1967,15 @@ impl ::protobuf::MessageFull for Mutation {
     }
 }
 
+impl ::std::fmt::Debug for Mutation {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str("Mutation(<redacted>)")
+    }
+}
+
 impl ::std::fmt::Display for Mutation {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        ::protobuf::text_format::fmt(self, f)
+        f.write_str("Mutation(<redacted>)")
     }
 }
 
@@ -1918,7 +1984,7 @@ impl ::protobuf::reflect::ProtobufValue for Mutation {
 }
 
 // @@protoc_insertion_point(message:d2b.resource.v3.GetRequest)
-#[derive(PartialEq,Clone,Default,Debug)]
+#[derive(PartialEq,Clone,Default)]
 pub struct GetRequest {
     // message fields
     // @@protoc_insertion_point(field:d2b.resource.v3.GetRequest.meta)
@@ -2068,9 +2134,15 @@ impl ::protobuf::MessageFull for GetRequest {
     }
 }
 
+impl ::std::fmt::Debug for GetRequest {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str("GetRequest(<redacted>)")
+    }
+}
+
 impl ::std::fmt::Display for GetRequest {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        ::protobuf::text_format::fmt(self, f)
+        f.write_str("GetRequest(<redacted>)")
     }
 }
 
@@ -2079,7 +2151,7 @@ impl ::protobuf::reflect::ProtobufValue for GetRequest {
 }
 
 // @@protoc_insertion_point(message:d2b.resource.v3.GetResponse)
-#[derive(PartialEq,Clone,Default,Debug)]
+#[derive(PartialEq,Clone,Default)]
 pub struct GetResponse {
     // message fields
     // @@protoc_insertion_point(field:d2b.resource.v3.GetResponse.resource)
@@ -2210,9 +2282,15 @@ impl ::protobuf::MessageFull for GetResponse {
     }
 }
 
+impl ::std::fmt::Debug for GetResponse {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str("GetResponse(<redacted>)")
+    }
+}
+
 impl ::std::fmt::Display for GetResponse {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        ::protobuf::text_format::fmt(self, f)
+        f.write_str("GetResponse(<redacted>)")
     }
 }
 
@@ -2221,7 +2299,7 @@ impl ::protobuf::reflect::ProtobufValue for GetResponse {
 }
 
 // @@protoc_insertion_point(message:d2b.resource.v3.ListRequest)
-#[derive(PartialEq,Clone,Default,Debug)]
+#[derive(PartialEq,Clone,Default)]
 pub struct ListRequest {
     // message fields
     // @@protoc_insertion_point(field:d2b.resource.v3.ListRequest.meta)
@@ -2426,9 +2504,15 @@ impl ::protobuf::MessageFull for ListRequest {
     }
 }
 
+impl ::std::fmt::Debug for ListRequest {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str("ListRequest(<redacted>)")
+    }
+}
+
 impl ::std::fmt::Display for ListRequest {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        ::protobuf::text_format::fmt(self, f)
+        f.write_str("ListRequest(<redacted>)")
     }
 }
 
@@ -2437,7 +2521,7 @@ impl ::protobuf::reflect::ProtobufValue for ListRequest {
 }
 
 // @@protoc_insertion_point(message:d2b.resource.v3.ListResponse)
-#[derive(PartialEq,Clone,Default,Debug)]
+#[derive(PartialEq,Clone,Default)]
 pub struct ListResponse {
     // message fields
     // @@protoc_insertion_point(field:d2b.resource.v3.ListResponse.resources)
@@ -2623,9 +2707,15 @@ impl ::protobuf::MessageFull for ListResponse {
     }
 }
 
+impl ::std::fmt::Debug for ListResponse {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str("ListResponse(<redacted>)")
+    }
+}
+
 impl ::std::fmt::Display for ListResponse {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        ::protobuf::text_format::fmt(self, f)
+        f.write_str("ListResponse(<redacted>)")
     }
 }
 
@@ -2634,7 +2724,7 @@ impl ::protobuf::reflect::ProtobufValue for ListResponse {
 }
 
 // @@protoc_insertion_point(message:d2b.resource.v3.WatchRequest)
-#[derive(PartialEq,Clone,Default,Debug)]
+#[derive(PartialEq,Clone,Default)]
 pub struct WatchRequest {
     // message fields
     // @@protoc_insertion_point(field:d2b.resource.v3.WatchRequest.meta)
@@ -2839,9 +2929,15 @@ impl ::protobuf::MessageFull for WatchRequest {
     }
 }
 
+impl ::std::fmt::Debug for WatchRequest {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str("WatchRequest(<redacted>)")
+    }
+}
+
 impl ::std::fmt::Display for WatchRequest {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        ::protobuf::text_format::fmt(self, f)
+        f.write_str("WatchRequest(<redacted>)")
     }
 }
 
@@ -2850,7 +2946,7 @@ impl ::protobuf::reflect::ProtobufValue for WatchRequest {
 }
 
 // @@protoc_insertion_point(message:d2b.resource.v3.WatchResponse)
-#[derive(PartialEq,Clone,Default,Debug)]
+#[derive(PartialEq,Clone,Default)]
 pub struct WatchResponse {
     // message fields
     // @@protoc_insertion_point(field:d2b.resource.v3.WatchResponse.stream_name)
@@ -2998,9 +3094,15 @@ impl ::protobuf::MessageFull for WatchResponse {
     }
 }
 
+impl ::std::fmt::Debug for WatchResponse {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str("WatchResponse(<redacted>)")
+    }
+}
+
 impl ::std::fmt::Display for WatchResponse {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        ::protobuf::text_format::fmt(self, f)
+        f.write_str("WatchResponse(<redacted>)")
     }
 }
 
@@ -3009,7 +3111,7 @@ impl ::protobuf::reflect::ProtobufValue for WatchResponse {
 }
 
 // @@protoc_insertion_point(message:d2b.resource.v3.CreateRequest)
-#[derive(PartialEq,Clone,Default,Debug)]
+#[derive(PartialEq,Clone,Default)]
 pub struct CreateRequest {
     // message fields
     // @@protoc_insertion_point(field:d2b.resource.v3.CreateRequest.meta)
@@ -3140,9 +3242,15 @@ impl ::protobuf::MessageFull for CreateRequest {
     }
 }
 
+impl ::std::fmt::Debug for CreateRequest {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str("CreateRequest(<redacted>)")
+    }
+}
+
 impl ::std::fmt::Display for CreateRequest {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        ::protobuf::text_format::fmt(self, f)
+        f.write_str("CreateRequest(<redacted>)")
     }
 }
 
@@ -3151,7 +3259,7 @@ impl ::protobuf::reflect::ProtobufValue for CreateRequest {
 }
 
 // @@protoc_insertion_point(message:d2b.resource.v3.CreateResponse)
-#[derive(PartialEq,Clone,Default,Debug)]
+#[derive(PartialEq,Clone,Default)]
 pub struct CreateResponse {
     // message fields
     // @@protoc_insertion_point(field:d2b.resource.v3.CreateResponse.resource)
@@ -3373,9 +3481,15 @@ impl ::protobuf::MessageFull for CreateResponse {
     }
 }
 
+impl ::std::fmt::Debug for CreateResponse {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str("CreateResponse(<redacted>)")
+    }
+}
+
 impl ::std::fmt::Display for CreateResponse {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        ::protobuf::text_format::fmt(self, f)
+        f.write_str("CreateResponse(<redacted>)")
     }
 }
 
@@ -3384,7 +3498,7 @@ impl ::protobuf::reflect::ProtobufValue for CreateResponse {
 }
 
 // @@protoc_insertion_point(message:d2b.resource.v3.UpdateSpecRequest)
-#[derive(PartialEq,Clone,Default,Debug)]
+#[derive(PartialEq,Clone,Default)]
 pub struct UpdateSpecRequest {
     // message fields
     // @@protoc_insertion_point(field:d2b.resource.v3.UpdateSpecRequest.meta)
@@ -3515,9 +3629,15 @@ impl ::protobuf::MessageFull for UpdateSpecRequest {
     }
 }
 
+impl ::std::fmt::Debug for UpdateSpecRequest {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str("UpdateSpecRequest(<redacted>)")
+    }
+}
+
 impl ::std::fmt::Display for UpdateSpecRequest {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        ::protobuf::text_format::fmt(self, f)
+        f.write_str("UpdateSpecRequest(<redacted>)")
     }
 }
 
@@ -3526,7 +3646,7 @@ impl ::protobuf::reflect::ProtobufValue for UpdateSpecRequest {
 }
 
 // @@protoc_insertion_point(message:d2b.resource.v3.UpdateSpecResponse)
-#[derive(PartialEq,Clone,Default,Debug)]
+#[derive(PartialEq,Clone,Default)]
 pub struct UpdateSpecResponse {
     // message fields
     // @@protoc_insertion_point(field:d2b.resource.v3.UpdateSpecResponse.resource)
@@ -3748,9 +3868,15 @@ impl ::protobuf::MessageFull for UpdateSpecResponse {
     }
 }
 
+impl ::std::fmt::Debug for UpdateSpecResponse {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str("UpdateSpecResponse(<redacted>)")
+    }
+}
+
 impl ::std::fmt::Display for UpdateSpecResponse {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        ::protobuf::text_format::fmt(self, f)
+        f.write_str("UpdateSpecResponse(<redacted>)")
     }
 }
 
@@ -3759,7 +3885,7 @@ impl ::protobuf::reflect::ProtobufValue for UpdateSpecResponse {
 }
 
 // @@protoc_insertion_point(message:d2b.resource.v3.UpdateStatusRequest)
-#[derive(PartialEq,Clone,Default,Debug)]
+#[derive(PartialEq,Clone,Default)]
 pub struct UpdateStatusRequest {
     // message fields
     // @@protoc_insertion_point(field:d2b.resource.v3.UpdateStatusRequest.meta)
@@ -3890,9 +4016,15 @@ impl ::protobuf::MessageFull for UpdateStatusRequest {
     }
 }
 
+impl ::std::fmt::Debug for UpdateStatusRequest {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str("UpdateStatusRequest(<redacted>)")
+    }
+}
+
 impl ::std::fmt::Display for UpdateStatusRequest {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        ::protobuf::text_format::fmt(self, f)
+        f.write_str("UpdateStatusRequest(<redacted>)")
     }
 }
 
@@ -3901,7 +4033,7 @@ impl ::protobuf::reflect::ProtobufValue for UpdateStatusRequest {
 }
 
 // @@protoc_insertion_point(message:d2b.resource.v3.UpdateStatusResponse)
-#[derive(PartialEq,Clone,Default,Debug)]
+#[derive(PartialEq,Clone,Default)]
 pub struct UpdateStatusResponse {
     // message fields
     // @@protoc_insertion_point(field:d2b.resource.v3.UpdateStatusResponse.resource)
@@ -4050,9 +4182,15 @@ impl ::protobuf::MessageFull for UpdateStatusResponse {
     }
 }
 
+impl ::std::fmt::Debug for UpdateStatusResponse {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str("UpdateStatusResponse(<redacted>)")
+    }
+}
+
 impl ::std::fmt::Display for UpdateStatusResponse {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        ::protobuf::text_format::fmt(self, f)
+        f.write_str("UpdateStatusResponse(<redacted>)")
     }
 }
 
@@ -4061,7 +4199,7 @@ impl ::protobuf::reflect::ProtobufValue for UpdateStatusResponse {
 }
 
 // @@protoc_insertion_point(message:d2b.resource.v3.UpdateMetadataRequest)
-#[derive(PartialEq,Clone,Default,Debug)]
+#[derive(PartialEq,Clone,Default)]
 pub struct UpdateMetadataRequest {
     // message fields
     // @@protoc_insertion_point(field:d2b.resource.v3.UpdateMetadataRequest.meta)
@@ -4192,9 +4330,15 @@ impl ::protobuf::MessageFull for UpdateMetadataRequest {
     }
 }
 
+impl ::std::fmt::Debug for UpdateMetadataRequest {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str("UpdateMetadataRequest(<redacted>)")
+    }
+}
+
 impl ::std::fmt::Display for UpdateMetadataRequest {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        ::protobuf::text_format::fmt(self, f)
+        f.write_str("UpdateMetadataRequest(<redacted>)")
     }
 }
 
@@ -4203,7 +4347,7 @@ impl ::protobuf::reflect::ProtobufValue for UpdateMetadataRequest {
 }
 
 // @@protoc_insertion_point(message:d2b.resource.v3.UpdateMetadataResponse)
-#[derive(PartialEq,Clone,Default,Debug)]
+#[derive(PartialEq,Clone,Default)]
 pub struct UpdateMetadataResponse {
     // message fields
     // @@protoc_insertion_point(field:d2b.resource.v3.UpdateMetadataResponse.resource)
@@ -4352,9 +4496,15 @@ impl ::protobuf::MessageFull for UpdateMetadataResponse {
     }
 }
 
+impl ::std::fmt::Debug for UpdateMetadataResponse {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str("UpdateMetadataResponse(<redacted>)")
+    }
+}
+
 impl ::std::fmt::Display for UpdateMetadataResponse {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        ::protobuf::text_format::fmt(self, f)
+        f.write_str("UpdateMetadataResponse(<redacted>)")
     }
 }
 
@@ -4363,7 +4513,7 @@ impl ::protobuf::reflect::ProtobufValue for UpdateMetadataResponse {
 }
 
 // @@protoc_insertion_point(message:d2b.resource.v3.UpdateFinalizersRequest)
-#[derive(PartialEq,Clone,Default,Debug)]
+#[derive(PartialEq,Clone,Default)]
 pub struct UpdateFinalizersRequest {
     // message fields
     // @@protoc_insertion_point(field:d2b.resource.v3.UpdateFinalizersRequest.meta)
@@ -4494,9 +4644,15 @@ impl ::protobuf::MessageFull for UpdateFinalizersRequest {
     }
 }
 
+impl ::std::fmt::Debug for UpdateFinalizersRequest {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str("UpdateFinalizersRequest(<redacted>)")
+    }
+}
+
 impl ::std::fmt::Display for UpdateFinalizersRequest {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        ::protobuf::text_format::fmt(self, f)
+        f.write_str("UpdateFinalizersRequest(<redacted>)")
     }
 }
 
@@ -4505,7 +4661,7 @@ impl ::protobuf::reflect::ProtobufValue for UpdateFinalizersRequest {
 }
 
 // @@protoc_insertion_point(message:d2b.resource.v3.UpdateFinalizersResponse)
-#[derive(PartialEq,Clone,Default,Debug)]
+#[derive(PartialEq,Clone,Default)]
 pub struct UpdateFinalizersResponse {
     // message fields
     // @@protoc_insertion_point(field:d2b.resource.v3.UpdateFinalizersResponse.resource)
@@ -4654,9 +4810,15 @@ impl ::protobuf::MessageFull for UpdateFinalizersResponse {
     }
 }
 
+impl ::std::fmt::Debug for UpdateFinalizersResponse {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str("UpdateFinalizersResponse(<redacted>)")
+    }
+}
+
 impl ::std::fmt::Display for UpdateFinalizersResponse {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        ::protobuf::text_format::fmt(self, f)
+        f.write_str("UpdateFinalizersResponse(<redacted>)")
     }
 }
 
@@ -4665,7 +4827,7 @@ impl ::protobuf::reflect::ProtobufValue for UpdateFinalizersResponse {
 }
 
 // @@protoc_insertion_point(message:d2b.resource.v3.DeleteRequest)
-#[derive(PartialEq,Clone,Default,Debug)]
+#[derive(PartialEq,Clone,Default)]
 pub struct DeleteRequest {
     // message fields
     // @@protoc_insertion_point(field:d2b.resource.v3.DeleteRequest.meta)
@@ -4796,9 +4958,15 @@ impl ::protobuf::MessageFull for DeleteRequest {
     }
 }
 
+impl ::std::fmt::Debug for DeleteRequest {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str("DeleteRequest(<redacted>)")
+    }
+}
+
 impl ::std::fmt::Display for DeleteRequest {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        ::protobuf::text_format::fmt(self, f)
+        f.write_str("DeleteRequest(<redacted>)")
     }
 }
 
@@ -4807,7 +4975,7 @@ impl ::protobuf::reflect::ProtobufValue for DeleteRequest {
 }
 
 // @@protoc_insertion_point(message:d2b.resource.v3.DeleteResponse)
-#[derive(PartialEq,Clone,Default,Debug)]
+#[derive(PartialEq,Clone,Default)]
 pub struct DeleteResponse {
     // message fields
     // @@protoc_insertion_point(field:d2b.resource.v3.DeleteResponse.resource)
@@ -4974,9 +5142,15 @@ impl ::protobuf::MessageFull for DeleteResponse {
     }
 }
 
+impl ::std::fmt::Debug for DeleteResponse {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str("DeleteResponse(<redacted>)")
+    }
+}
+
 impl ::std::fmt::Display for DeleteResponse {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        ::protobuf::text_format::fmt(self, f)
+        f.write_str("DeleteResponse(<redacted>)")
     }
 }
 
@@ -4985,7 +5159,7 @@ impl ::protobuf::reflect::ProtobufValue for DeleteResponse {
 }
 
 // @@protoc_insertion_point(message:d2b.resource.v3.CommitBatchRequest)
-#[derive(PartialEq,Clone,Default,Debug)]
+#[derive(PartialEq,Clone,Default)]
 pub struct CommitBatchRequest {
     // message fields
     // @@protoc_insertion_point(field:d2b.resource.v3.CommitBatchRequest.meta)
@@ -5116,9 +5290,15 @@ impl ::protobuf::MessageFull for CommitBatchRequest {
     }
 }
 
+impl ::std::fmt::Debug for CommitBatchRequest {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str("CommitBatchRequest(<redacted>)")
+    }
+}
+
 impl ::std::fmt::Display for CommitBatchRequest {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        ::protobuf::text_format::fmt(self, f)
+        f.write_str("CommitBatchRequest(<redacted>)")
     }
 }
 
@@ -5127,7 +5307,7 @@ impl ::protobuf::reflect::ProtobufValue for CommitBatchRequest {
 }
 
 // @@protoc_insertion_point(message:d2b.resource.v3.CommitBatchResponse)
-#[derive(PartialEq,Clone,Default,Debug)]
+#[derive(PartialEq,Clone,Default)]
 pub struct CommitBatchResponse {
     // message fields
     // @@protoc_insertion_point(field:d2b.resource.v3.CommitBatchResponse.resources)
@@ -5294,9 +5474,15 @@ impl ::protobuf::MessageFull for CommitBatchResponse {
     }
 }
 
+impl ::std::fmt::Debug for CommitBatchResponse {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str("CommitBatchResponse(<redacted>)")
+    }
+}
+
 impl ::std::fmt::Display for CommitBatchResponse {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        ::protobuf::text_format::fmt(self, f)
+        f.write_str("CommitBatchResponse(<redacted>)")
     }
 }
 
@@ -5305,7 +5491,7 @@ impl ::protobuf::reflect::ProtobufValue for CommitBatchResponse {
 }
 
 // @@protoc_insertion_point(message:d2b.resource.v3.ResolveRefRequest)
-#[derive(PartialEq,Clone,Default,Debug)]
+#[derive(PartialEq,Clone,Default)]
 pub struct ResolveRefRequest {
     // message fields
     // @@protoc_insertion_point(field:d2b.resource.v3.ResolveRefRequest.meta)
@@ -5436,9 +5622,15 @@ impl ::protobuf::MessageFull for ResolveRefRequest {
     }
 }
 
+impl ::std::fmt::Debug for ResolveRefRequest {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str("ResolveRefRequest(<redacted>)")
+    }
+}
+
 impl ::std::fmt::Display for ResolveRefRequest {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        ::protobuf::text_format::fmt(self, f)
+        f.write_str("ResolveRefRequest(<redacted>)")
     }
 }
 
@@ -5447,7 +5639,7 @@ impl ::protobuf::reflect::ProtobufValue for ResolveRefRequest {
 }
 
 // @@protoc_insertion_point(message:d2b.resource.v3.ResolveRefResponse)
-#[derive(PartialEq,Clone,Default,Debug)]
+#[derive(PartialEq,Clone,Default)]
 pub struct ResolveRefResponse {
     // message fields
     // @@protoc_insertion_point(field:d2b.resource.v3.ResolveRefResponse.resource)
@@ -5578,9 +5770,15 @@ impl ::protobuf::MessageFull for ResolveRefResponse {
     }
 }
 
+impl ::std::fmt::Debug for ResolveRefResponse {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str("ResolveRefResponse(<redacted>)")
+    }
+}
+
 impl ::std::fmt::Display for ResolveRefResponse {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        ::protobuf::text_format::fmt(self, f)
+        f.write_str("ResolveRefResponse(<redacted>)")
     }
 }
 
@@ -5589,7 +5787,7 @@ impl ::protobuf::reflect::ProtobufValue for ResolveRefResponse {
 }
 
 // @@protoc_insertion_point(message:d2b.resource.v3.InspectSchemaRequest)
-#[derive(PartialEq,Clone,Default,Debug)]
+#[derive(PartialEq,Clone,Default)]
 pub struct InspectSchemaRequest {
     // message fields
     // @@protoc_insertion_point(field:d2b.resource.v3.InspectSchemaRequest.meta)
@@ -5719,9 +5917,15 @@ impl ::protobuf::MessageFull for InspectSchemaRequest {
     }
 }
 
+impl ::std::fmt::Debug for InspectSchemaRequest {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str("InspectSchemaRequest(<redacted>)")
+    }
+}
+
 impl ::std::fmt::Display for InspectSchemaRequest {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        ::protobuf::text_format::fmt(self, f)
+        f.write_str("InspectSchemaRequest(<redacted>)")
     }
 }
 
@@ -5730,7 +5934,7 @@ impl ::protobuf::reflect::ProtobufValue for InspectSchemaRequest {
 }
 
 // @@protoc_insertion_point(message:d2b.resource.v3.InspectSchemaResponse)
-#[derive(PartialEq,Clone,Default,Debug)]
+#[derive(PartialEq,Clone,Default)]
 pub struct InspectSchemaResponse {
     // message fields
     // @@protoc_insertion_point(field:d2b.resource.v3.InspectSchemaResponse.schema)
@@ -5861,9 +6065,15 @@ impl ::protobuf::MessageFull for InspectSchemaResponse {
     }
 }
 
+impl ::std::fmt::Debug for InspectSchemaResponse {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str("InspectSchemaResponse(<redacted>)")
+    }
+}
+
 impl ::std::fmt::Display for InspectSchemaResponse {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        ::protobuf::text_format::fmt(self, f)
+        f.write_str("InspectSchemaResponse(<redacted>)")
     }
 }
 
@@ -5872,7 +6082,7 @@ impl ::protobuf::reflect::ProtobufValue for InspectSchemaResponse {
 }
 
 // @@protoc_insertion_point(message:d2b.resource.v3.UpgradeRequest)
-#[derive(PartialEq,Clone,Default,Debug)]
+#[derive(PartialEq,Clone,Default)]
 pub struct UpgradeRequest {
     // message fields
     // @@protoc_insertion_point(field:d2b.resource.v3.UpgradeRequest.meta)
@@ -6058,9 +6268,15 @@ impl ::protobuf::MessageFull for UpgradeRequest {
     }
 }
 
+impl ::std::fmt::Debug for UpgradeRequest {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str("UpgradeRequest(<redacted>)")
+    }
+}
+
 impl ::std::fmt::Display for UpgradeRequest {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        ::protobuf::text_format::fmt(self, f)
+        f.write_str("UpgradeRequest(<redacted>)")
     }
 }
 
@@ -6069,7 +6285,7 @@ impl ::protobuf::reflect::ProtobufValue for UpgradeRequest {
 }
 
 // @@protoc_insertion_point(message:d2b.resource.v3.UpgradeResponse)
-#[derive(PartialEq,Clone,Default,Debug)]
+#[derive(PartialEq,Clone,Default)]
 pub struct UpgradeResponse {
     // message fields
     // @@protoc_insertion_point(field:d2b.resource.v3.UpgradeResponse.resource)
@@ -6237,9 +6453,15 @@ impl ::protobuf::MessageFull for UpgradeResponse {
     }
 }
 
+impl ::std::fmt::Debug for UpgradeResponse {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str("UpgradeResponse(<redacted>)")
+    }
+}
+
 impl ::std::fmt::Display for UpgradeResponse {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        ::protobuf::text_format::fmt(self, f)
+        f.write_str("UpgradeResponse(<redacted>)")
     }
 }
 
