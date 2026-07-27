@@ -23,12 +23,13 @@ use d2b_resource_store::{
 use protobuf::{Message, MessageField};
 
 use crate::{
-    ResourceStore,
+    ResourceStoreBackend, StoreBindingError,
     authz::{
         ApiMethod, AuthorizationRequest, AuthorizationState, AuthorizationTarget, NativeAuthorizer,
         ResourceVerb,
     },
     error::{map_store_error, map_store_error_with_revision_visibility, to_wire_error},
+    store::CheckedResourceStore,
 };
 
 /// Trusted envelope created only after ComponentSession authentication.
@@ -135,7 +136,7 @@ impl UpgradeDispatcher for UnavailableUpgradeDispatcher {
 
 /// Resource API over one concrete store and one native authorization engine.
 pub struct ResourceService<S, U = UnavailableUpgradeDispatcher> {
-    store: Arc<S>,
+    store: CheckedResourceStore<S>,
     authorizer: Arc<NativeAuthorizer>,
     upgrade: Arc<U>,
 }
@@ -146,29 +147,44 @@ impl<S, U> core::fmt::Debug for ResourceService<S, U> {
     }
 }
 
-impl<S> ResourceService<S, UnavailableUpgradeDispatcher> {
-    pub fn new(store: Arc<S>, authorizer: Arc<NativeAuthorizer>) -> Self {
-        Self {
-            store,
+impl<S> ResourceService<S, UnavailableUpgradeDispatcher>
+where
+    S: ResourceStoreBackend,
+{
+    pub fn new(
+        store: Arc<S>,
+        authorizer: Arc<NativeAuthorizer>,
+    ) -> Result<Self, StoreBindingError> {
+        let store_binding = authorizer.take_store_binding()?;
+        Ok(Self {
+            store: CheckedResourceStore::new(store, store_binding),
             authorizer,
             upgrade: Arc::new(UnavailableUpgradeDispatcher),
-        }
-    }
-}
-
-impl<S, U> ResourceService<S, U> {
-    pub fn with_upgrade(store: Arc<S>, authorizer: Arc<NativeAuthorizer>, upgrade: Arc<U>) -> Self {
-        Self {
-            store,
-            authorizer,
-            upgrade,
-        }
+        })
     }
 }
 
 impl<S, U> ResourceService<S, U>
 where
-    S: ResourceStore,
+    S: ResourceStoreBackend,
+{
+    pub fn with_upgrade(
+        store: Arc<S>,
+        authorizer: Arc<NativeAuthorizer>,
+        upgrade: Arc<U>,
+    ) -> Result<Self, StoreBindingError> {
+        let store_binding = authorizer.take_store_binding()?;
+        Ok(Self {
+            store: CheckedResourceStore::new(store, store_binding),
+            authorizer,
+            upgrade,
+        })
+    }
+}
+
+impl<S, U> ResourceService<S, U>
+where
+    S: ResourceStoreBackend,
     U: UpgradeDispatcher,
 {
     pub async fn get(&self, trusted: TrustedRequest<wire::GetRequest>) -> wire::GetResponse {
@@ -1744,7 +1760,7 @@ mod tests {
     use std::{
         collections::BTreeMap,
         sync::{
-            Mutex, OnceLock,
+            Mutex,
             atomic::{AtomicU64, AtomicUsize, Ordering},
         },
     };
@@ -1764,7 +1780,7 @@ mod tests {
         ApiCatalog, BindingScope, BoundSubject, CompiledRole, CompiledRoleBinding, PolicyRule,
         PolicySet, RelayGrantAuthority,
     };
-    use crate::{AdmissionVerifier, ResourceStoreBackend, StoreIdentity, VerifiedMutation};
+    use crate::{ResourceStoreBackend, VerifiedMutation};
 
     const GOLDEN_HOST: &[u8] = br#"{"apiVersion":"resources.d2bus.org/v3","metadata":{"configurationGeneration":7,"createdAt":"2026-07-22T00:00:00.000Z","deletionRequestedAt":null,"finalizers":[],"generation":1,"managedBy":"configuration","name":"host-system","ownerRef":null,"revision":1,"uid":"123e4567-e89b-42d3-a456-426614174000","updatedAt":"2026-07-22T00:00:00.000Z","zone":"dev"},"spec":{"providerRef":"Provider/system-core","updatePolicy":{"disruptive":"manual","nonDisruptive":"automatic"}},"status":{"completedAt":null,"conditions":[],"lastReconciledAt":null,"observedGeneration":0,"outcome":null,"phase":"Pending","resource":{},"startedAt":null,"update":{"dependencies":{"count":0,"refs":[]},"disruption":"None","lastAssessedAt":null,"observedGeneration":0,"operationId":null,"owned":{"count":0,"refs":[]},"preserveState":true,"reasons":[],"state":"Unknown","targetGeneration":1}},"type":"Host"}"#;
 
@@ -1787,8 +1803,6 @@ mod tests {
         last_resource_uid: Mutex<Option<ResourceUid>>,
         last_payload_digest: Mutex<Option<String>>,
         uid_index: Mutex<BTreeMap<ResourceUid, ResourceRef>>,
-        admission_verifier: OnceLock<AdmissionVerifier>,
-        store_identity: OnceLock<StoreIdentity>,
     }
 
     impl FakeStore {
@@ -1805,8 +1819,6 @@ mod tests {
                 last_resource_uid: Mutex::new(None),
                 last_payload_digest: Mutex::new(None),
                 uid_index: Mutex::new(BTreeMap::new()),
-                admission_verifier: OnceLock::new(),
-                store_identity: OnceLock::new(),
             }
         }
 
@@ -1829,18 +1841,6 @@ mod tests {
     }
 
     impl ResourceStoreBackend for FakeStore {
-        fn admission_verifier(&self) -> &AdmissionVerifier {
-            self.admission_verifier
-                .get()
-                .expect("test authorizer installs the paired verifier")
-        }
-
-        fn store_identity(&self) -> &StoreIdentity {
-            self.store_identity
-                .get()
-                .expect("test authorizer installs the paired store identity")
-        }
-
         async fn get(&self, _request: StoreGetRequest) -> Result<StoredResource, StoreError> {
             Err(Self::unavailable())
         }
@@ -1878,20 +1878,12 @@ mod tests {
             &self,
             mutation: VerifiedMutation,
         ) -> Result<StoreCommitResult, StoreError> {
-            let verifier = self
-                .admission_verifier
-                .get()
-                .expect("test authorizer installs the paired verifier");
-            let store_identity = self
-                .store_identity
-                .get()
-                .expect("test authorizer installs the paired store identity");
-            let mutations = mutation.mutations(verifier, store_identity)?;
+            let mutations = mutation.mutations();
             self.commits.fetch_add(1, Ordering::SeqCst);
             self.mutation_count.store(mutations.len(), Ordering::SeqCst);
             self.configuration_revision.store(
                 mutation
-                    .policy_snapshot(verifier, store_identity)?
+                    .policy_snapshot()
                     .active_configuration_revision
                     .get(),
                 Ordering::SeqCst,
@@ -1969,10 +1961,7 @@ mod tests {
         }
     }
 
-    fn authorizer(
-        store: &FakeStore,
-        verbs: impl IntoIterator<Item = ResourceVerb>,
-    ) -> Arc<NativeAuthorizer> {
+    fn authorizer(verbs: impl IntoIterator<Item = ResourceVerb>) -> Arc<NativeAuthorizer> {
         let context = subject(None);
         let catalog = ApiCatalog::standard();
         let verbs = verbs.into_iter().collect::<Vec<_>>();
@@ -2010,27 +1999,15 @@ mod tests {
             RelayGrantAuthority::None,
         )
         .unwrap();
-        let (authorizer, verifier, store_identity) = NativeAuthorizer::new(
+        let authorizer = NativeAuthorizer::new(
             catalog.clone(),
             Some(PolicySet::new(&catalog, 4, vec![role], vec![binding]).unwrap()),
         )
         .unwrap();
-        store
-            .admission_verifier
-            .set(verifier)
-            .expect("one authorizer is paired with each test store");
-        store
-            .store_identity
-            .set(store_identity)
-            .expect("one store identity is paired with each test store");
         Arc::new(authorizer)
     }
 
-    fn authorizer_for_subresource(
-        store: &FakeStore,
-        verb: ResourceVerb,
-        subresource: &str,
-    ) -> Arc<NativeAuthorizer> {
+    fn authorizer_for_subresource(verb: ResourceVerb, subresource: &str) -> Arc<NativeAuthorizer> {
         let context = subject(None);
         let catalog = ApiCatalog::standard();
         let role = CompiledRole::new(
@@ -2060,19 +2037,11 @@ mod tests {
             RelayGrantAuthority::None,
         )
         .unwrap();
-        let (authorizer, verifier, store_identity) = NativeAuthorizer::new(
+        let authorizer = NativeAuthorizer::new(
             catalog.clone(),
             Some(PolicySet::new(&catalog, 4, vec![role], vec![binding]).unwrap()),
         )
         .unwrap();
-        store
-            .admission_verifier
-            .set(verifier)
-            .expect("one authorizer is paired with each test store");
-        store
-            .store_identity
-            .set(store_identity)
-            .expect("one store identity is paired with each test store");
         Arc::new(authorizer)
     }
 
@@ -2165,10 +2134,26 @@ mod tests {
         error.as_ref().unwrap().kind.enum_value().unwrap()
     }
 
+    #[test]
+    fn two_backends_cannot_share_both_admission_tokens() {
+        let authorizer = authorizer([]);
+        let first = ResourceService::new(
+            Arc::new(FakeStore::new(CommitMode::Success)),
+            Arc::clone(&authorizer),
+        )
+        .expect("the first backend consumes the store binding");
+
+        let second =
+            ResourceService::new(Arc::new(FakeStore::new(CommitMode::Success)), authorizer);
+
+        assert_eq!(second.unwrap_err(), StoreBindingError);
+        drop(first);
+    }
+
     #[tokio::test]
     async fn native_authorization_precedes_body_validation() {
         let store = Arc::new(FakeStore::new(CommitMode::Success));
-        let service = ResourceService::new(Arc::clone(&store), authorizer(&store, []));
+        let service = ResourceService::new(Arc::clone(&store), authorizer([])).unwrap();
         let mut request = wire::CreateRequest::new();
         request.meta = request_meta();
         let mut value = mutation(wire::MutationKind::MUTATION_KIND_CREATE);
@@ -2186,10 +2171,8 @@ mod tests {
     #[tokio::test]
     async fn owner_reference_requires_an_independent_read_grant() {
         let store = Arc::new(FakeStore::new(CommitMode::Success));
-        let service = ResourceService::new(
-            Arc::clone(&store),
-            authorizer(&store, [ResourceVerb::Create]),
-        );
+        let service =
+            ResourceService::new(Arc::clone(&store), authorizer([ResourceVerb::Create])).unwrap();
         let mut request = wire::CreateRequest::new();
         request.meta = request_meta();
         let mut value = mutation(wire::MutationKind::MUTATION_KIND_CREATE);
@@ -2212,10 +2195,8 @@ mod tests {
     #[tokio::test]
     async fn malformed_and_oversize_envelopes_never_reach_the_store() {
         let store = Arc::new(FakeStore::new(CommitMode::Success));
-        let service = ResourceService::new(
-            Arc::clone(&store),
-            authorizer(&store, [ResourceVerb::Create]),
-        );
+        let service =
+            ResourceService::new(Arc::clone(&store), authorizer([ResourceVerb::Create])).unwrap();
         for bytes in [
             b"{}".to_vec(),
             vec![b'x'; d2b_contracts::v3::MAX_RESOURCE_ENVELOPE_BYTES + 1],
@@ -2237,10 +2218,8 @@ mod tests {
     #[tokio::test]
     async fn store_mints_create_uid_and_updates_canonical_identity_digest_and_index() {
         let store = Arc::new(FakeStore::new(CommitMode::Success));
-        let service = ResourceService::new(
-            Arc::clone(&store),
-            authorizer(&store, [ResourceVerb::Create]),
-        );
+        let service =
+            ResourceService::new(Arc::clone(&store), authorizer([ResourceVerb::Create])).unwrap();
         let mut request = wire::CreateRequest::new();
         request.meta = request_meta();
         let mut value = mutation(wire::MutationKind::MUTATION_KIND_CREATE);
@@ -2282,10 +2261,8 @@ mod tests {
     #[tokio::test]
     async fn create_rejects_every_caller_supplied_uid_field() {
         let store = Arc::new(FakeStore::new(CommitMode::Success));
-        let service = ResourceService::new(
-            Arc::clone(&store),
-            authorizer(&store, [ResourceVerb::Create]),
-        );
+        let service =
+            ResourceService::new(Arc::clone(&store), authorizer([ResourceVerb::Create])).unwrap();
         for uid_location in 0..3 {
             let mut request = wire::CreateRequest::new();
             request.meta = request_meta();
@@ -2350,10 +2327,8 @@ mod tests {
     #[tokio::test]
     async fn unknown_protobuf_fields_are_rejected_after_authorization() {
         let store = Arc::new(FakeStore::new(CommitMode::Success));
-        let service = ResourceService::new(
-            Arc::clone(&store),
-            authorizer(&store, [ResourceVerb::Create]),
-        );
+        let service =
+            ResourceService::new(Arc::clone(&store), authorizer([ResourceVerb::Create])).unwrap();
         let mut request = wire::CreateRequest::parse_from_bytes(&[0x98, 0x06, 0x01]).unwrap();
         request.meta = request_meta();
         let mut value = mutation(wire::MutationKind::MUTATION_KIND_CREATE);
@@ -2373,8 +2348,9 @@ mod tests {
         let store = Arc::new(FakeStore::new(CommitMode::Conflict));
         let service = ResourceService::new(
             Arc::clone(&store),
-            authorizer(&store, [ResourceVerb::Create, ResourceVerb::Get]),
-        );
+            authorizer([ResourceVerb::Create, ResourceVerb::Get]),
+        )
+        .unwrap();
         let mut request = wire::CreateRequest::new();
         request.meta = request_meta();
         let mut value = mutation(wire::MutationKind::MUTATION_KIND_CREATE);
@@ -2394,10 +2370,8 @@ mod tests {
     #[tokio::test]
     async fn conflict_hides_revision_without_read_authority() {
         let store = Arc::new(FakeStore::new(CommitMode::Conflict));
-        let service = ResourceService::new(
-            Arc::clone(&store),
-            authorizer(&store, [ResourceVerb::Create]),
-        );
+        let service =
+            ResourceService::new(Arc::clone(&store), authorizer([ResourceVerb::Create])).unwrap();
         let mut request = wire::CreateRequest::new();
         request.meta = request_meta();
         let mut value = mutation(wire::MutationKind::MUTATION_KIND_CREATE);
@@ -2419,8 +2393,9 @@ mod tests {
         let store = Arc::new(FakeStore::new(CommitMode::Conflict));
         let service = ResourceService::new(
             Arc::clone(&store),
-            authorizer(&store, [ResourceVerb::Delete, ResourceVerb::Get]),
-        );
+            authorizer([ResourceVerb::Delete, ResourceVerb::Get]),
+        )
+        .unwrap();
         let mut request = wire::CommitBatchRequest::new();
         request.meta = request_meta();
         request.mutations = vec![
@@ -2442,10 +2417,9 @@ mod tests {
     #[tokio::test]
     async fn status_owner_generation_is_checked_after_authorization() {
         let store = Arc::new(FakeStore::new(CommitMode::Success));
-        let service = ResourceService::new(
-            Arc::clone(&store),
-            authorizer(&store, [ResourceVerb::UpdateStatus]),
-        );
+        let service =
+            ResourceService::new(Arc::clone(&store), authorizer([ResourceVerb::UpdateStatus]))
+                .unwrap();
         let mut request = wire::UpdateStatusRequest::new();
         request.meta = request_meta();
         let mut value = mutation(wire::MutationKind::MUTATION_KIND_UPDATE_STATUS);
@@ -2463,30 +2437,27 @@ mod tests {
     #[tokio::test]
     async fn finalizers_are_separate_and_batch_is_one_admitted_commit() {
         let store = Arc::new(FakeStore::new(CommitMode::Success));
-        let authorizer = authorizer(&store, [ResourceVerb::UpdateMetadata, ResourceVerb::Delete]);
-        let metadata_service = ResourceService::new(Arc::clone(&store), Arc::clone(&authorizer));
+        let authorizer = authorizer([ResourceVerb::UpdateMetadata, ResourceVerb::Delete]);
+        let service = ResourceService::new(Arc::clone(&store), authorizer).unwrap();
         let mut request = wire::UpdateMetadataRequest::new();
         request.meta = request_meta();
         let mut value = mutation(wire::MutationKind::MUTATION_KIND_UPDATE_METADATA);
         value.resource = body(GOLDEN_HOST.to_vec());
         value.add_finalizers.push("core.cleanup".to_owned());
         request.mutation = MessageField::some(value);
-        let response = metadata_service
-            .update_metadata(trusted(request, None))
-            .await;
+        let response = service.update_metadata(trusted(request, None)).await;
         assert_eq!(
             error_kind(&response.error),
             wire::ResourceErrorKind::RESOURCE_ERROR_KIND_RESOURCE_SCHEMA_INVALID
         );
 
-        let batch_service = ResourceService::new(Arc::clone(&store), authorizer);
         let mut batch = wire::CommitBatchRequest::new();
         batch.meta = request_meta();
         batch.mutations = vec![
             mutation(wire::MutationKind::MUTATION_KIND_DELETE),
             mutation(wire::MutationKind::MUTATION_KIND_DELETE),
         ];
-        let response = batch_service.commit_batch(trusted(batch, None)).await;
+        let response = service.commit_batch(trusted(batch, None)).await;
         assert!(response.error.is_none());
         assert_eq!(response.revision, 9);
         assert_eq!(store.commits.load(Ordering::SeqCst), 1);
@@ -2497,10 +2468,8 @@ mod tests {
     #[tokio::test]
     async fn mixed_zone_batch_is_rejected_before_admission() {
         let store = Arc::new(FakeStore::new(CommitMode::Success));
-        let service = ResourceService::new(
-            Arc::clone(&store),
-            authorizer(&store, [ResourceVerb::Delete]),
-        );
+        let service =
+            ResourceService::new(Arc::clone(&store), authorizer([ResourceVerb::Delete])).unwrap();
         let mut batch = wire::CommitBatchRequest::new();
         batch.meta = request_meta();
         let dev = mutation(wire::MutationKind::MUTATION_KIND_DELETE);
@@ -2552,10 +2521,8 @@ mod tests {
             .lock()
             .unwrap()
             .extend((0..2).map(|_| stored_resource(MAX_RESPONSE_CANONICAL_BYTES / 2)));
-        let batch_service = ResourceService::new(
-            Arc::clone(&store),
-            authorizer(&store, [ResourceVerb::Delete]),
-        );
+        let batch_service =
+            ResourceService::new(Arc::clone(&store), authorizer([ResourceVerb::Delete])).unwrap();
         let mut batch = wire::CommitBatchRequest::new();
         batch.meta = request_meta();
         batch
@@ -2576,8 +2543,9 @@ mod tests {
         });
         let schema_service = ResourceService::new(
             Arc::clone(&schema_store),
-            authorizer_for_subresource(&schema_store, ResourceVerb::Get, "schema"),
-        );
+            authorizer_for_subresource(ResourceVerb::Get, "schema"),
+        )
+        .unwrap();
         let mut request = wire::InspectSchemaRequest::new();
         request.meta = request_meta();
         request.resource_type = "Host".to_owned();
@@ -2610,9 +2578,10 @@ mod tests {
         let store = Arc::new(FakeStore::new(CommitMode::Success));
         let service = ResourceService::with_upgrade(
             Arc::clone(&store),
-            authorizer(&store, [ResourceVerb::UpdateSpec]),
+            authorizer([ResourceVerb::UpdateSpec]),
             Arc::new(OversizeUpgrade),
-        );
+        )
+        .unwrap();
         let mut request = wire::UpgradeRequest::new();
         request.meta = request_meta();
         request.target = identity();
@@ -2653,7 +2622,7 @@ mod tests {
             PAYLOAD_SENTINEL,
         ));
         assert_eq!(store.debug_marker, PAYLOAD_SENTINEL);
-        let service = ResourceService::new(Arc::clone(&store), authorizer(&store, []));
+        let service = ResourceService::new(Arc::clone(&store), authorizer([])).unwrap();
         let upgrade = AuthorizedUpgrade {
             operation: StoreOperationContext {
                 operation_id: PAYLOAD_SENTINEL.to_owned(),

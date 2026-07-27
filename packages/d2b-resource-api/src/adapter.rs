@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use d2b_contracts::resource_proto as wire;
 
 use crate::{
-    ResourceStore,
+    ResourceStoreBackend,
     authz::authenticated_relay_hop,
     client::UnregisteredResourceClient,
     generated::d2b_resource_v3_ttrpc,
@@ -52,7 +52,7 @@ impl<S, U> core::fmt::Debug for UnregisteredBusAdapter<S, U> {
 
 impl<S, U> UnregisteredBusAdapter<S, U>
 where
-    S: ResourceStore,
+    S: ResourceStoreBackend,
     U: UpgradeDispatcher,
 {
     /// Seal authenticated identity and policy state to one ComponentSession.
@@ -88,7 +88,7 @@ where
 
 impl<S, U> UnregisteredBusAdapter<S, U>
 where
-    S: ResourceStore + 'static,
+    S: ResourceStoreBackend + 'static,
     U: UpgradeDispatcher + 'static,
 {
     /// Build the generated service map without registering it on a bus server.
@@ -102,7 +102,7 @@ where
 #[async_trait]
 impl<S, U> d2b_resource_v3_ttrpc::ResourceService for UnregisteredBusAdapter<S, U>
 where
-    S: ResourceStore + 'static,
+    S: ResourceStoreBackend + 'static,
     U: UpgradeDispatcher + 'static,
 {
     async fn get(
@@ -241,42 +241,24 @@ mod tests {
     };
     use crate::identity::issue_test_subject;
     use crate::service::{AuthorizedUpgrade, UpgradeResult};
-    use crate::{AdmissionVerifier, ResourceStoreBackend, StoreIdentity, VerifiedMutation};
+    use crate::{ResourceStoreBackend, VerifiedMutation};
 
     const GOLDEN_HOST: &[u8] = br#"{"apiVersion":"resources.d2bus.org/v3","metadata":{"configurationGeneration":7,"createdAt":"2026-07-22T00:00:00.000Z","deletionRequestedAt":null,"finalizers":[],"generation":1,"managedBy":"configuration","name":"host-system","ownerRef":null,"revision":1,"uid":"123e4567-e89b-42d3-a456-426614174000","updatedAt":"2026-07-22T00:00:00.000Z","zone":"dev"},"spec":{"providerRef":"Provider/system-core","updatePolicy":{"disruptive":"manual","nonDisruptive":"automatic"}},"status":{"completedAt":null,"conditions":[],"lastReconciledAt":null,"observedGeneration":0,"outcome":null,"phase":"Pending","resource":{},"startedAt":null,"update":{"dependencies":{"count":0,"refs":[]},"disruption":"None","lastAssessedAt":null,"observedGeneration":0,"operationId":null,"owned":{"count":0,"refs":[]},"preserveState":true,"reasons":[],"state":"Unknown","targetGeneration":1}},"type":"Host"}"#;
 
     #[derive(Debug)]
-    struct UnreachableStore {
-        admission_verifier: AdmissionVerifier,
-        store_identity: StoreIdentity,
-    }
+    struct UnreachableStore;
 
     impl UnreachableStore {
         fn paired(
             catalog: ApiCatalog,
             policy: Option<PolicySet>,
         ) -> (Arc<Self>, Arc<NativeAuthorizer>) {
-            let (authorizer, admission_verifier, store_identity) =
-                NativeAuthorizer::new(catalog, policy).unwrap();
-            (
-                Arc::new(Self {
-                    admission_verifier,
-                    store_identity,
-                }),
-                Arc::new(authorizer),
-            )
+            let authorizer = NativeAuthorizer::new(catalog, policy).unwrap();
+            (Arc::new(Self), Arc::new(authorizer))
         }
     }
 
     impl ResourceStoreBackend for UnreachableStore {
-        fn admission_verifier(&self) -> &AdmissionVerifier {
-            &self.admission_verifier
-        }
-
-        fn store_identity(&self) -> &StoreIdentity {
-            &self.store_identity
-        }
-
         async fn get(&self, _: StoreGetRequest) -> Result<StoredResource, StoreError> {
             unreachable!("authorization must run before the store")
         }
@@ -353,22 +335,12 @@ mod tests {
 
     #[derive(Debug)]
     struct RecordingStore {
-        admission_verifier: AdmissionVerifier,
-        store_identity: StoreIdentity,
         calls: Arc<Mutex<Vec<DispatchObservation>>>,
     }
 
     impl RecordingStore {
-        fn new(
-            calls: Arc<Mutex<Vec<DispatchObservation>>>,
-            admission_verifier: AdmissionVerifier,
-            store_identity: StoreIdentity,
-        ) -> Arc<Self> {
-            Arc::new(Self {
-                admission_verifier,
-                store_identity,
-                calls,
-            })
+        fn new(calls: Arc<Mutex<Vec<DispatchObservation>>>) -> Arc<Self> {
+            Arc::new(Self { calls })
         }
 
         fn record(&self, observation: DispatchObservation) {
@@ -377,14 +349,6 @@ mod tests {
     }
 
     impl ResourceStoreBackend for RecordingStore {
-        fn admission_verifier(&self) -> &AdmissionVerifier {
-            &self.admission_verifier
-        }
-
-        fn store_identity(&self) -> &StoreIdentity {
-            &self.store_identity
-        }
-
         async fn get(&self, request: StoreGetRequest) -> Result<StoredResource, StoreError> {
             self.record(DispatchObservation::one(
                 ApiMethod::Get,
@@ -490,13 +454,9 @@ mod tests {
             &self,
             mutation: VerifiedMutation,
         ) -> Result<StoreCommitResult, StoreError> {
-            let operation_id = mutation
-                .operation(&self.admission_verifier, &self.store_identity)?
-                .operation_id
-                .clone();
-            let authorization =
-                mutation.authorization(&self.admission_verifier, &self.store_identity)?;
-            let mutations = mutation.mutations(&self.admission_verifier, &self.store_identity)?;
+            let operation_id = mutation.operation().operation_id.clone();
+            let authorization = mutation.authorization();
+            let mutations = mutation.mutations();
             let (method, revision) = if mutations.len() > 1 {
                 (ApiMethod::CommitBatch, 110)
             } else {
@@ -623,7 +583,7 @@ mod tests {
     -> Arc<UnregisteredBusAdapter<UnreachableStore, crate::service::UnavailableUpgradeDispatcher>>
     {
         let (store, authorizer) = UnreachableStore::paired(ApiCatalog::standard(), None);
-        let service = Arc::new(ResourceService::new(store, authorizer));
+        let service = Arc::new(ResourceService::new(store, authorizer).unwrap());
         Arc::new(
             UnregisteredBusAdapter::bind_unregistered_session(
                 service,
@@ -712,17 +672,13 @@ mod tests {
         )
         .unwrap();
         let policy = PolicySet::new(&catalog, 4, vec![role], vec![binding]).unwrap();
-        let (authorizer, admission_verifier, store_identity) =
-            NativeAuthorizer::new(catalog, Some(policy)).unwrap();
-        let store = RecordingStore::new(Arc::clone(&calls), admission_verifier, store_identity);
+        let authorizer = NativeAuthorizer::new(catalog, Some(policy)).unwrap();
+        let store = RecordingStore::new(Arc::clone(&calls));
         let upgrade = Arc::new(RecordingUpgrade {
             calls: Arc::clone(&calls),
         });
-        let service = Arc::new(ResourceService::with_upgrade(
-            store,
-            Arc::new(authorizer),
-            upgrade,
-        ));
+        let service =
+            Arc::new(ResourceService::with_upgrade(store, Arc::new(authorizer), upgrade).unwrap());
         (
             Arc::new(
                 UnregisteredBusAdapter::bind_unregistered_session(
@@ -873,7 +829,7 @@ mod tests {
         const MARKER: &str = "sentinel-observability-marker";
 
         let (store, authorizer) = UnreachableStore::paired(ApiCatalog::standard(), None);
-        let service = Arc::new(ResourceService::new(store, authorizer));
+        let service = Arc::new(ResourceService::new(store, authorizer).unwrap());
         let adapter = UnregisteredBusAdapter::bind_unregistered_session(
             service,
             issue_test_subject(
@@ -1177,7 +1133,7 @@ mod tests {
     #[test]
     fn adapter_rejects_locality_evidence_mismatches() {
         let (store, authorizer) = UnreachableStore::paired(ApiCatalog::standard(), None);
-        let service = Arc::new(ResourceService::new(store, authorizer));
+        let service = Arc::new(ResourceService::new(store, authorizer).unwrap());
         for (locality, evidence) in [
             (Locality::AdjacentZone, EvidenceClass::BootstrapIkpsk2),
             (Locality::Remote, EvidenceClass::EnrolledKk),

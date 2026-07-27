@@ -2,7 +2,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
+    sync::{Arc, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
 
 use d2b_contracts::v3::identity::STANDARD_RESOURCE_TYPES;
@@ -20,9 +20,10 @@ use d2b_resource_store::{
 use sha2::{Digest, Sha256};
 
 use crate::admission::{
-    AdmissionError, AdmissionIssuer, AdmissionPermit, AdmissionVerifier, AdmittedMutation,
-    StoreIdentity, admission_pair,
+    AdmissionError, AdmissionIssuer, AdmissionPermit, AdmittedMutation, StoreAdmissionBinding,
+    admission_pair,
 };
+use crate::store::StoreBindingError;
 
 const POSITIVE_CACHE_ENTRIES: usize = 4096;
 const POSITIVE_CACHE_TICKS: u64 = 30;
@@ -631,6 +632,7 @@ pub struct NativeAuthorizer {
     policy: RwLock<Option<Arc<PolicySet>>>,
     cache: PositiveDecisionCache,
     admission: AdmissionIssuer,
+    store_binding: Mutex<Option<StoreAdmissionBinding>>,
 }
 
 impl core::fmt::Debug for NativeAuthorizer {
@@ -640,20 +642,29 @@ impl core::fmt::Debug for NativeAuthorizer {
 }
 
 impl NativeAuthorizer {
-    /// Build the evaluator and the verifier transferred to its store backend.
+    /// Build an evaluator carrying one single-owner store binding.
     pub fn new(
         catalog: ApiCatalog,
         policy: Option<PolicySet>,
-    ) -> Result<(Self, AdmissionVerifier, StoreIdentity), AuthorizationPolicyError> {
-        let (admission, verifier, store_identity) = admission_pair();
-        let authorizer = Self::from_issuer(catalog, policy, admission)?;
-        Ok((authorizer, verifier, store_identity))
+    ) -> Result<Self, AuthorizationPolicyError> {
+        let (admission, store_binding) = admission_pair();
+        Self::from_issuer_with_binding(catalog, policy, admission, Some(store_binding))
     }
 
+    #[cfg(test)]
     fn from_issuer(
         catalog: ApiCatalog,
         policy: Option<PolicySet>,
         admission: AdmissionIssuer,
+    ) -> Result<Self, AuthorizationPolicyError> {
+        Self::from_issuer_with_binding(catalog, policy, admission, None)
+    }
+
+    fn from_issuer_with_binding(
+        catalog: ApiCatalog,
+        policy: Option<PolicySet>,
+        admission: AdmissionIssuer,
+        store_binding: Option<StoreAdmissionBinding>,
     ) -> Result<Self, AuthorizationPolicyError> {
         if policy
             .as_ref()
@@ -666,7 +677,16 @@ impl NativeAuthorizer {
             policy: RwLock::new(policy.map(Arc::new)),
             cache: PositiveDecisionCache::new(POSITIVE_CACHE_ENTRIES),
             admission,
+            store_binding: Mutex::new(store_binding),
         })
+    }
+
+    pub(super) fn take_store_binding(&self) -> Result<StoreAdmissionBinding, StoreBindingError> {
+        self.store_binding
+            .lock()
+            .map_err(|_| StoreBindingError)?
+            .take()
+            .ok_or(StoreBindingError)
     }
 
     pub fn replace_policy(

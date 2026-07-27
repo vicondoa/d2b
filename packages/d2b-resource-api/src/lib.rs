@@ -16,11 +16,8 @@ mod store;
 pub use adapter::{
     AdapterBindingError, RESOURCE_API_REACHABILITY, ResourceApiReachability, UnregisteredBusAdapter,
 };
-pub use admission::{
-    AdmissionError, AdmissionVerifier, AdmittedMutation, PreparedStoreMutation, StoreIdentity,
-    VerifiedMutation,
-};
+pub use admission::{AdmissionError, AdmittedMutation, PreparedStoreMutation, VerifiedMutation};
 pub use client::UnregisteredResourceClient;
 pub use identity::AuthenticatedSubjectContext;
 pub use service::ResourceService;
-pub use store::{ResourceStore, ResourceStoreBackend};
+pub use store::{ResourceStoreBackend, StoreBindingError};
