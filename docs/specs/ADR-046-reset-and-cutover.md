@@ -588,7 +588,7 @@ any later time.
 
 Phase 5 creates the Zone's redb resource store from nothing, per
 `ADR-046-resource-store-redb` "Backup, restore, and physical schema upgrade"
-and work item `ADR046-store-003` ("Data migration: Destructive v3 bootstrap;
+and work item `ADR046-store-005` ("Data migration: Destructive v3 bootstrap;
 v3-to-v3 logical restore"). There is no logical import of any pre-cutover
 daemon state, Realm/Workload representation, or legacy JSON artifact into the
 redb store - the store's `store_meta` table is populated fresh:
@@ -1548,7 +1548,7 @@ owns the destination.
 | Current artifact | Evidence | Disposition | Target | Owning work item / dossier |
 | --- | --- | --- | --- | --- |
 | `storage.json` | ADR 0034 generated artifact | Preserve (read by legacy code until every storage id has a live Volume/resource successor), then Destroy per-id as each successor lands | Per-artifact `Volume`/resource storage declaration | `ADR046-store-003` |
-| `sync.json`/`locks.json` | ADR 0034 generated artifact | Preserve, then Destroy per-id as each lock's successor (OFD-lock-owning resource/controller) lands | Internal controller/transaction lock mechanics (not a ResourceType, per `ADR-046-resource-object-model` "Folded implementation detail") | `ADR046-store-001` |
+| `sync.json`/`locks.json` | ADR 0034 generated artifact | Preserve, then Destroy per-id as each lock's successor (OFD-lock-owning resource/controller) lands | Internal controller/transaction lock mechanics (not a ResourceType, per `ADR-046-resource-object-model` "Folded implementation detail") | `ADR046-store-004` |
 | Daemon degraded-state ledger | ADR 0034 | Preserve as historical evidence; new degraded conditions post-cutover use the Zone resource `status.conditions` model instead | `Resource.status.conditions` | `ADR046-core-001` |
 | OFD lock files under `/run/d2b` | ADR 0034 | Destroy only via normal reboot/tmpfs cleanup - never unlinked directly by cutover (explicit fail-closed hazard) | N/A (mechanism, not a resource) | N/A |
 
@@ -1780,14 +1780,14 @@ applies here exactly as everywhere else in the repository).
 | Field | Value |
 | --- | --- |
 | Work item ID | `ADR046-reset-005` |
-| Dependency/owner | ADR046-reset-004; `d2b-resource-store-redb` owner (`ADR046-store-003`); core-controller owner (`ADR046-core-001`) |
+| Dependency/owner | ADR046-reset-004; `d2b-resource-store-redb` owner (`ADR046-store-005`); core-controller owner (`ADR046-core-001`) |
 | Current source | None (bootstrap sequencing over Zone runtime startup, which is itself ADR-only) |
 | Reuse source | None |
 | Reuse action | create |
 | Destination | `packages/d2b-cutover/src/{store_bootstrap,provider_sequence}.rs` |
 | Detailed design | Phase 5 store creation per [Resource-store initialization](#resource-store-initialization); Phase 6 topological Provider install per [Provider install/topological start](#provider-installtopological-start), including the fixed staged default order and cycle-rejection check |
 | Integration | Invoked immediately after ADR046-reset-003/004 complete; hands off to Phase 7 (ADR046-reset-006) |
-| Data migration | Destructive v3 bootstrap; no v2 resource import (per `ADR046-store-003`, `ADR046-object-001`) |
+| Data migration | Destructive v3 bootstrap; no v2 resource import (per `ADR046-store-005`, `ADR046-object-001`) |
 | Validation | Provider install topological-order determinism test; cycle-rejection test; store-identity mismatch fail-closed test |
 | Removal proof | Not applicable |
 

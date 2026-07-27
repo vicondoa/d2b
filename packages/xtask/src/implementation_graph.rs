@@ -163,6 +163,15 @@ const WORK_ITEM_GROUP_OVERRIDES: &[(&str, &str)] = &[
     ("ADR046-core-002", "core-controller-coordination"),
 ];
 
+/// Self-contained work items that launch with an earlier shared contract root
+/// than the spec that owns their remaining work.
+const EARLY_WORK_ITEM_SCHEDULES: &[(&str, u8, &str, &str)] = &[(
+    "ADR046-feasibility-001",
+    0,
+    "ADR-046-resource-store-redb",
+    "resource-store-foundation",
+)];
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SpecSetView {
@@ -357,15 +366,16 @@ fn build_from(
 
     for item in &work_items.items {
         let wave = item_waves[&item.work_item_id];
+        let entry_contract = work_item_entry_contract(&item.work_item_id, &item.spec_id);
         let mut prereqs: BTreeSet<String> = item_deps[&item.work_item_id].clone();
-        prereqs.insert(item.spec_id.clone());
+        prereqs.insert(entry_contract.to_string());
         let prereqs: Vec<String> = prereqs.into_iter().collect();
         prerequisites.insert(item.work_item_id.clone(), prereqs.clone());
         nodes.push(Node {
             blockers: Vec::new(),
             destinations: vec![item.destination.clone()],
             detailed_design: Some(item.detailed_design.clone()),
-            entry_contracts: vec![item.spec_id.clone()],
+            entry_contracts: vec![entry_contract.to_string()],
             exit_gate: exit_gate(wave),
             id: item.work_item_id.clone(),
             kind: "work-item".to_string(),
@@ -490,11 +500,27 @@ fn spec_groups(
 }
 
 fn work_item_group(work_item_id: &str, spec_id: &str, wave: u8) -> String {
+    if let Some((_, _, group)) = early_work_item_schedule(work_item_id) {
+        return format!("wi:{group}:w{wave}");
+    }
     WORK_ITEM_GROUP_OVERRIDES
         .iter()
         .find(|(id, _)| *id == work_item_id)
         .map(|(_, group)| format!("wi:{group}:w{wave}"))
         .unwrap_or_else(|| format!("wi:{spec_id}"))
+}
+
+fn early_work_item_schedule(work_item_id: &str) -> Option<(u8, &'static str, &'static str)> {
+    EARLY_WORK_ITEM_SCHEDULES
+        .iter()
+        .find(|(id, _, _, _)| *id == work_item_id)
+        .map(|(_, wave, entry_contract, group)| (*wave, *entry_contract, *group))
+}
+
+fn work_item_entry_contract<'a>(work_item_id: &str, spec_id: &'a str) -> &'a str {
+    early_work_item_schedule(work_item_id)
+        .map(|(_, entry_contract, _)| entry_contract)
+        .unwrap_or(spec_id)
 }
 
 /// Resolves each work item's launch wave as the least fixpoint of
@@ -506,12 +532,15 @@ fn item_waves(
 ) -> Result<BTreeMap<String, u8>, Box<dyn std::error::Error>> {
     let mut waves: BTreeMap<String, u8> = BTreeMap::new();
     for item in &work_items.items {
-        let wave = *spec_waves.get(&item.spec_id).ok_or_else(|| {
-            format!(
-                "work item `{}` names spec `{}`, which is not a member of the set",
-                item.work_item_id, item.spec_id
-            )
-        })?;
+        let wave = match early_work_item_schedule(&item.work_item_id) {
+            Some((wave, _, _)) => wave,
+            None => *spec_waves.get(&item.spec_id).ok_or_else(|| {
+                format!(
+                    "work item `{}` names spec `{}`, which is not a member of the set",
+                    item.work_item_id, item.spec_id
+                )
+            })?,
+        };
         waves.insert(item.work_item_id.clone(), wave);
     }
     let limit = work_items.items.len() + 1;
@@ -1173,7 +1202,27 @@ mod tests {
     }
 
     #[test]
-    fn work_item_groups_prefer_the_shared_file_barrier_override() {
+    fn work_item_groups_honor_schedule_and_barrier_overrides() {
+        assert_eq!(
+            early_work_item_schedule("ADR046-feasibility-001"),
+            Some((
+                0,
+                "ADR-046-resource-store-redb",
+                "resource-store-foundation"
+            ))
+        );
+        assert_eq!(
+            work_item_entry_contract("ADR046-feasibility-001", "ADR-046-feasibility-and-spikes"),
+            "ADR-046-resource-store-redb"
+        );
+        assert_eq!(
+            work_item_group(
+                "ADR046-feasibility-001",
+                "ADR-046-feasibility-and-spikes",
+                0
+            ),
+            "wi:resource-store-foundation:w0"
+        );
         assert_eq!(
             work_item_group("ADR046-network-008", "ADR-046-resources-network", 4),
             "wi:core-config-hub:w4"

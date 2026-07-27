@@ -515,7 +515,7 @@ They are the replacement target, not a reuse source. ComponentSession copies fro
 
 | Symbol | Evidence | Disposition | Target | Work Item |
 |--------|----------|-------------|--------|-----------|
-| Atomic state / OFD locks / leases | production-reachable | RETAIN/ADAPT | Zone resource store state backend; D006 embeds redb store | `ADR046-store-001` |
+| Atomic state / OFD locks / leases | production-reachable | RETAIN/ADAPT | Zone resource store state backend; D006 embeds redb store | `ADR046-store-004` |
 | Audit segment writer | production-reachable | RETAIN | Keep audit segment append; update Zone-scoped paths | `ADR046-core-001` |
 
 ### 1.10 `d2b-guestd` / `d2b-userd`
