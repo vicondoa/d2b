@@ -466,28 +466,50 @@ mod admission {
     }
 
     impl VerifiedMutation {
-        pub fn mutations(&self) -> &[PreparedStoreMutation] {
-            &self.mutations
+        fn check_authority(&self, verifier: &AdmissionVerifier) -> Result<(), StoreError> {
+            if Arc::ptr_eq(&verifier.authority, &self.admitted.authority) {
+                Ok(())
+            } else {
+                Err(authority_mismatch())
+            }
         }
 
-        pub const fn authorization(&self) -> &AdmittedAuthorization {
-            self.admitted.authorization()
+        pub fn mutations(
+            &self,
+            verifier: &AdmissionVerifier,
+        ) -> Result<&[PreparedStoreMutation], StoreError> {
+            self.check_authority(verifier)?;
+            Ok(&self.mutations)
         }
 
-        pub const fn policy_snapshot(&self) -> PolicySnapshot {
-            self.admitted.policy_snapshot()
+        pub fn authorization(
+            &self,
+            verifier: &AdmissionVerifier,
+        ) -> Result<&AdmittedAuthorization, StoreError> {
+            self.check_authority(verifier)?;
+            Ok(self.admitted.authorization())
         }
 
-        pub const fn operation(&self) -> &StoreOperationContext {
-            self.admitted.operation()
+        pub fn policy_snapshot(
+            &self,
+            verifier: &AdmissionVerifier,
+        ) -> Result<PolicySnapshot, StoreError> {
+            self.check_authority(verifier)?;
+            Ok(self.admitted.policy_snapshot())
+        }
+
+        pub fn operation(
+            &self,
+            verifier: &AdmissionVerifier,
+        ) -> Result<&StoreOperationContext, StoreError> {
+            self.check_authority(verifier)?;
+            Ok(self.admitted.operation())
         }
     }
 
     impl core::fmt::Debug for VerifiedMutation {
         fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-            f.debug_tuple("VerifiedMutation")
-                .field(&self.admitted)
-                .finish()
+            f.write_str("VerifiedMutation(<redacted>)")
         }
     }
 
@@ -497,13 +519,7 @@ mod admission {
             admitted: AdmittedMutation,
         ) -> Result<VerifiedMutation, StoreError> {
             if !Arc::ptr_eq(&self.authority, &admitted.authority) {
-                return Err(StoreError::new(
-                    StoreErrorKind::InternalIntegrityFailure,
-                    None,
-                    None,
-                    RetryClass::Never,
-                    "admission-authority-mismatch",
-                ));
+                return Err(authority_mismatch());
             }
             let mutations = admitted
                 .mutations
@@ -516,6 +532,16 @@ mod admission {
                 mutations,
             })
         }
+    }
+
+    fn authority_mismatch() -> StoreError {
+        StoreError::new(
+            StoreErrorKind::InternalIntegrityFailure,
+            None,
+            None,
+            RetryClass::Never,
+            "admission-authority-mismatch",
+        )
     }
 
     fn prepare_mutation(mut mutation: StoreMutation) -> Result<PreparedStoreMutation, StoreError> {
@@ -699,8 +725,11 @@ mod admission {
                 .expect("matching admission");
             let verified = verifier.verify(admitted).expect("paired verifier");
 
-            assert!(verified.mutations().is_empty());
-            assert_eq!(verified.policy_snapshot().policy_revision, 1);
+            assert!(verified.mutations(&verifier).unwrap().is_empty());
+            assert_eq!(
+                verified.policy_snapshot(&verifier).unwrap().policy_revision,
+                1
+            );
         }
 
         #[test]
@@ -761,6 +790,21 @@ mod admission {
         }
 
         #[test]
+        fn verified_mutation_cannot_be_forwarded_to_another_backend() {
+            let (issuer, verifier) = admission_pair();
+            let (_, other_verifier) = admission_pair();
+            let admitted = issuer
+                .record_allow(authorization("work"), snapshot())
+                .admit(Vec::new(), operation())
+                .unwrap();
+            let verified = verifier.verify(admitted).unwrap();
+
+            let error = verified.mutations(&other_verifier).unwrap_err();
+            assert_eq!(error.kind(), StoreErrorKind::InternalIntegrityFailure);
+            assert_eq!(error.reason_code(), "admission-authority-mismatch");
+        }
+
+        #[test]
         fn evaluation_snapshot_cannot_be_substituted_during_admission() {
             let (issuer, verifier) = admission_pair();
             let admitted = issuer
@@ -769,7 +813,7 @@ mod admission {
                 .unwrap();
             let verified = verifier.verify(admitted).unwrap();
 
-            assert_eq!(verified.policy_snapshot(), snapshot());
+            assert_eq!(verified.policy_snapshot(&verifier).unwrap(), snapshot());
         }
     }
 }

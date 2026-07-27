@@ -1807,17 +1807,17 @@ mod tests {
             &self,
             mutation: VerifiedMutation,
         ) -> Result<StoreCommitResult, StoreError> {
+            let mutations = mutation.mutations(&self.admission_verifier)?;
             self.commits.fetch_add(1, Ordering::SeqCst);
-            self.mutation_count
-                .store(mutation.mutations().len(), Ordering::SeqCst);
+            self.mutation_count.store(mutations.len(), Ordering::SeqCst);
             self.configuration_revision.store(
                 mutation
-                    .policy_snapshot()
+                    .policy_snapshot(&self.admission_verifier)?
                     .active_configuration_revision
                     .get(),
                 Ordering::SeqCst,
             );
-            let first = mutation.mutations().first();
+            let first = mutations.first();
             *self.last_canonical_resource.lock().unwrap() =
                 first.and_then(|prepared| prepared.mutation().canonical_resource.clone());
             *self.last_resource_uid.lock().unwrap() =
@@ -1841,7 +1841,7 @@ mod tests {
                 }
                 CommitMode::Conflict => Err(StoreError::batch_conflict(
                     ZoneRevision::new(8),
-                    MutationOrdinal::new(u32::from(mutation.mutations().len() > 1)).unwrap(),
+                    MutationOrdinal::new(u32::from(mutations.len() > 1)).unwrap(),
                     d2b_contracts::v3::RetryClass::Reauthorize,
                     "revision-changed",
                 )),
