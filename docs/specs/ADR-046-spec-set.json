@@ -863,7 +863,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-resource-object-model.md",
-      "sha256" : "982a4ebebf5c8386f4747974aabaa588f3eb35e5b6496f9c3406694431b2eeef",
+      "sha256" : "29eb8e5bb2cb20422ead72a82d8044cc9c929e2a43b3708a27031f30864abee2",
       "specId" : "ADR-046-resource-object-model",
       "status" : "Accepted",
       "supersedes" : null,
@@ -1140,7 +1140,7 @@
         "ADR-046-decision-register"
       ],
       "path" : "docs/specs/ADR-046-terminology-and-identities.md",
-      "sha256" : "ac260fffbe9743f106b8180831205e9f70f3f577df717649713c1c9648b7e886",
+      "sha256" : "8717acdb40ec9092ce35cd0018f9d4df8169b3dd5d64e5e930b15067626e0af4",
       "specId" : "ADR-046-terminology-and-identities",
       "status" : "Accepted",
       "supersedes" : "Public Realm terminology selected by ADR 0043 for d2b v3",
