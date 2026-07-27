@@ -1629,6 +1629,10 @@ mod tests {
             )
         });
         at_grant_rx.recv().unwrap();
+        assert!(
+            engine.policy.try_write().is_err(),
+            "permit minting released the policy guard before returning"
+        );
 
         let (replacement_started_tx, replacement_started_rx) = mpsc::channel();
         let (replacement_done_tx, replacement_done_rx) = mpsc::channel();
