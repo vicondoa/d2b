@@ -21,7 +21,7 @@ use sha2::{Digest, Sha256};
 
 use crate::admission::{
     AdmissionError, AdmissionIssuer, AdmissionPermit, AdmissionVerifier, AdmittedMutation,
-    admission_pair,
+    StoreIdentity, admission_pair,
 };
 
 const POSITIVE_CACHE_ENTRIES: usize = 4096;
@@ -644,10 +644,10 @@ impl NativeAuthorizer {
     pub fn new(
         catalog: ApiCatalog,
         policy: Option<PolicySet>,
-    ) -> Result<(Self, AdmissionVerifier), AuthorizationPolicyError> {
-        let (admission, verifier) = admission_pair();
+    ) -> Result<(Self, AdmissionVerifier, StoreIdentity), AuthorizationPolicyError> {
+        let (admission, verifier, store_identity) = admission_pair();
         let authorizer = Self::from_issuer(catalog, policy, admission)?;
-        Ok((authorizer, verifier))
+        Ok((authorizer, verifier, store_identity))
     }
 
     fn from_issuer(
@@ -1636,10 +1636,8 @@ mod tests {
         let replacing_context = context.clone();
         let replacing = std::thread::spawn(move || {
             replacement_started_tx.send(()).unwrap();
-            let result = replacing_engine.replace_policy(
-                policy(4, &replacing_context, None, false),
-                &state(4),
-            );
+            let result = replacing_engine
+                .replace_policy(policy(4, &replacing_context, None, false), &state(4));
             replacement_done_tx.send(result).unwrap();
         });
         replacement_started_rx.recv().unwrap();

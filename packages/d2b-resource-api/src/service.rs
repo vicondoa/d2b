@@ -1764,7 +1764,7 @@ mod tests {
         ApiCatalog, BindingScope, BoundSubject, CompiledRole, CompiledRoleBinding, PolicyRule,
         PolicySet, RelayGrantAuthority,
     };
-    use crate::{AdmissionVerifier, ResourceStoreBackend, VerifiedMutation};
+    use crate::{AdmissionVerifier, ResourceStoreBackend, StoreIdentity, VerifiedMutation};
 
     const GOLDEN_HOST: &[u8] = br#"{"apiVersion":"resources.d2bus.org/v3","metadata":{"configurationGeneration":7,"createdAt":"2026-07-22T00:00:00.000Z","deletionRequestedAt":null,"finalizers":[],"generation":1,"managedBy":"configuration","name":"host-system","ownerRef":null,"revision":1,"uid":"123e4567-e89b-42d3-a456-426614174000","updatedAt":"2026-07-22T00:00:00.000Z","zone":"dev"},"spec":{"providerRef":"Provider/system-core","updatePolicy":{"disruptive":"manual","nonDisruptive":"automatic"}},"status":{"completedAt":null,"conditions":[],"lastReconciledAt":null,"observedGeneration":0,"outcome":null,"phase":"Pending","resource":{},"startedAt":null,"update":{"dependencies":{"count":0,"refs":[]},"disruption":"None","lastAssessedAt":null,"observedGeneration":0,"operationId":null,"owned":{"count":0,"refs":[]},"preserveState":true,"reasons":[],"state":"Unknown","targetGeneration":1}},"type":"Host"}"#;
 
@@ -1788,6 +1788,7 @@ mod tests {
         last_payload_digest: Mutex<Option<String>>,
         uid_index: Mutex<BTreeMap<ResourceUid, ResourceRef>>,
         admission_verifier: OnceLock<AdmissionVerifier>,
+        store_identity: OnceLock<StoreIdentity>,
     }
 
     impl FakeStore {
@@ -1805,6 +1806,7 @@ mod tests {
                 last_payload_digest: Mutex::new(None),
                 uid_index: Mutex::new(BTreeMap::new()),
                 admission_verifier: OnceLock::new(),
+                store_identity: OnceLock::new(),
             }
         }
 
@@ -1831,6 +1833,12 @@ mod tests {
             self.admission_verifier
                 .get()
                 .expect("test authorizer installs the paired verifier")
+        }
+
+        fn store_identity(&self) -> &StoreIdentity {
+            self.store_identity
+                .get()
+                .expect("test authorizer installs the paired store identity")
         }
 
         async fn get(&self, _request: StoreGetRequest) -> Result<StoredResource, StoreError> {
@@ -1874,12 +1882,16 @@ mod tests {
                 .admission_verifier
                 .get()
                 .expect("test authorizer installs the paired verifier");
-            let mutations = mutation.mutations(verifier)?;
+            let store_identity = self
+                .store_identity
+                .get()
+                .expect("test authorizer installs the paired store identity");
+            let mutations = mutation.mutations(verifier, store_identity)?;
             self.commits.fetch_add(1, Ordering::SeqCst);
             self.mutation_count.store(mutations.len(), Ordering::SeqCst);
             self.configuration_revision.store(
                 mutation
-                    .policy_snapshot(verifier)?
+                    .policy_snapshot(verifier, store_identity)?
                     .active_configuration_revision
                     .get(),
                 Ordering::SeqCst,
@@ -1998,7 +2010,7 @@ mod tests {
             RelayGrantAuthority::None,
         )
         .unwrap();
-        let (authorizer, verifier) = NativeAuthorizer::new(
+        let (authorizer, verifier, store_identity) = NativeAuthorizer::new(
             catalog.clone(),
             Some(PolicySet::new(&catalog, 4, vec![role], vec![binding]).unwrap()),
         )
@@ -2007,6 +2019,10 @@ mod tests {
             .admission_verifier
             .set(verifier)
             .expect("one authorizer is paired with each test store");
+        store
+            .store_identity
+            .set(store_identity)
+            .expect("one store identity is paired with each test store");
         Arc::new(authorizer)
     }
 
@@ -2044,7 +2060,7 @@ mod tests {
             RelayGrantAuthority::None,
         )
         .unwrap();
-        let (authorizer, verifier) = NativeAuthorizer::new(
+        let (authorizer, verifier, store_identity) = NativeAuthorizer::new(
             catalog.clone(),
             Some(PolicySet::new(&catalog, 4, vec![role], vec![binding]).unwrap()),
         )
@@ -2053,6 +2069,10 @@ mod tests {
             .admission_verifier
             .set(verifier)
             .expect("one authorizer is paired with each test store");
+        store
+            .store_identity
+            .set(store_identity)
+            .expect("one store identity is paired with each test store");
         Arc::new(authorizer)
     }
 

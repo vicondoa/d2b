@@ -241,13 +241,14 @@ mod tests {
     };
     use crate::identity::issue_test_subject;
     use crate::service::{AuthorizedUpgrade, UpgradeResult};
-    use crate::{AdmissionVerifier, ResourceStoreBackend, VerifiedMutation};
+    use crate::{AdmissionVerifier, ResourceStoreBackend, StoreIdentity, VerifiedMutation};
 
     const GOLDEN_HOST: &[u8] = br#"{"apiVersion":"resources.d2bus.org/v3","metadata":{"configurationGeneration":7,"createdAt":"2026-07-22T00:00:00.000Z","deletionRequestedAt":null,"finalizers":[],"generation":1,"managedBy":"configuration","name":"host-system","ownerRef":null,"revision":1,"uid":"123e4567-e89b-42d3-a456-426614174000","updatedAt":"2026-07-22T00:00:00.000Z","zone":"dev"},"spec":{"providerRef":"Provider/system-core","updatePolicy":{"disruptive":"manual","nonDisruptive":"automatic"}},"status":{"completedAt":null,"conditions":[],"lastReconciledAt":null,"observedGeneration":0,"outcome":null,"phase":"Pending","resource":{},"startedAt":null,"update":{"dependencies":{"count":0,"refs":[]},"disruption":"None","lastAssessedAt":null,"observedGeneration":0,"operationId":null,"owned":{"count":0,"refs":[]},"preserveState":true,"reasons":[],"state":"Unknown","targetGeneration":1}},"type":"Host"}"#;
 
     #[derive(Debug)]
     struct UnreachableStore {
         admission_verifier: AdmissionVerifier,
+        store_identity: StoreIdentity,
     }
 
     impl UnreachableStore {
@@ -255,14 +256,25 @@ mod tests {
             catalog: ApiCatalog,
             policy: Option<PolicySet>,
         ) -> (Arc<Self>, Arc<NativeAuthorizer>) {
-            let (authorizer, admission_verifier) = NativeAuthorizer::new(catalog, policy).unwrap();
-            (Arc::new(Self { admission_verifier }), Arc::new(authorizer))
+            let (authorizer, admission_verifier, store_identity) =
+                NativeAuthorizer::new(catalog, policy).unwrap();
+            (
+                Arc::new(Self {
+                    admission_verifier,
+                    store_identity,
+                }),
+                Arc::new(authorizer),
+            )
         }
     }
 
     impl ResourceStoreBackend for UnreachableStore {
         fn admission_verifier(&self) -> &AdmissionVerifier {
             &self.admission_verifier
+        }
+
+        fn store_identity(&self) -> &StoreIdentity {
+            &self.store_identity
         }
 
         async fn get(&self, _: StoreGetRequest) -> Result<StoredResource, StoreError> {
@@ -342,6 +354,7 @@ mod tests {
     #[derive(Debug)]
     struct RecordingStore {
         admission_verifier: AdmissionVerifier,
+        store_identity: StoreIdentity,
         calls: Arc<Mutex<Vec<DispatchObservation>>>,
     }
 
@@ -349,9 +362,11 @@ mod tests {
         fn new(
             calls: Arc<Mutex<Vec<DispatchObservation>>>,
             admission_verifier: AdmissionVerifier,
+            store_identity: StoreIdentity,
         ) -> Arc<Self> {
             Arc::new(Self {
                 admission_verifier,
+                store_identity,
                 calls,
             })
         }
@@ -364,6 +379,10 @@ mod tests {
     impl ResourceStoreBackend for RecordingStore {
         fn admission_verifier(&self) -> &AdmissionVerifier {
             &self.admission_verifier
+        }
+
+        fn store_identity(&self) -> &StoreIdentity {
+            &self.store_identity
         }
 
         async fn get(&self, request: StoreGetRequest) -> Result<StoredResource, StoreError> {
@@ -472,11 +491,12 @@ mod tests {
             mutation: VerifiedMutation,
         ) -> Result<StoreCommitResult, StoreError> {
             let operation_id = mutation
-                .operation(&self.admission_verifier)?
+                .operation(&self.admission_verifier, &self.store_identity)?
                 .operation_id
                 .clone();
-            let authorization = mutation.authorization(&self.admission_verifier)?;
-            let mutations = mutation.mutations(&self.admission_verifier)?;
+            let authorization =
+                mutation.authorization(&self.admission_verifier, &self.store_identity)?;
+            let mutations = mutation.mutations(&self.admission_verifier, &self.store_identity)?;
             let (method, revision) = if mutations.len() > 1 {
                 (ApiMethod::CommitBatch, 110)
             } else {
@@ -692,9 +712,9 @@ mod tests {
         )
         .unwrap();
         let policy = PolicySet::new(&catalog, 4, vec![role], vec![binding]).unwrap();
-        let (authorizer, admission_verifier) =
+        let (authorizer, admission_verifier, store_identity) =
             NativeAuthorizer::new(catalog, Some(policy)).unwrap();
-        let store = RecordingStore::new(Arc::clone(&calls), admission_verifier);
+        let store = RecordingStore::new(Arc::clone(&calls), admission_verifier, store_identity);
         let upgrade = Arc::new(RecordingUpgrade {
             calls: Arc::clone(&calls),
         });

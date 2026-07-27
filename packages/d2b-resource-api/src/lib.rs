@@ -17,7 +17,8 @@ pub use adapter::{
     AdapterBindingError, RESOURCE_API_REACHABILITY, ResourceApiReachability, UnregisteredBusAdapter,
 };
 pub use admission::{
-    AdmissionError, AdmissionVerifier, AdmittedMutation, PreparedStoreMutation, VerifiedMutation,
+    AdmissionError, AdmissionVerifier, AdmittedMutation, PreparedStoreMutation, StoreIdentity,
+    VerifiedMutation,
 };
 pub use client::UnregisteredResourceClient;
 pub use identity::AuthenticatedSubjectContext;
