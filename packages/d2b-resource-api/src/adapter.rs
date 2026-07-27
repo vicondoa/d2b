@@ -325,7 +325,7 @@ mod tests {
                 zone: zone.to_string(),
                 targets: vec![ObservedTarget {
                     resource_type: resource_type.to_string(),
-                    resource_name: resource_name.map(ToString::to_string),
+                    resource_name: resource_name.map(ResourceName::to_canonical_string),
                     verb,
                     subresource: subresource.map(str::to_owned),
                 }],
@@ -478,7 +478,10 @@ mod tests {
                     .iter()
                     .map(|target| ObservedTarget {
                         resource_type: target.resource_type.to_string(),
-                        resource_name: target.resource_name.as_ref().map(ToString::to_string),
+                        resource_name: target
+                            .resource_name
+                            .as_ref()
+                            .map(ResourceName::to_canonical_string),
                         verb: admitted_verb(target.verb),
                         subresource: target.subresource.clone(),
                     })
@@ -1087,13 +1090,13 @@ mod tests {
                 targets: vec![
                     ObservedTarget {
                         resource_type: "Host".to_owned(),
-                        resource_name: Some(format!("{:?}", name())),
+                        resource_name: Some("host-system".to_owned()),
                         verb: ResourceVerb::Delete,
                         subresource: None,
                     },
                     ObservedTarget {
                         resource_type: "Host".to_owned(),
-                        resource_name: Some(format!("{:?}", name())),
+                        resource_name: Some("host-system".to_owned()),
                         verb: ResourceVerb::Delete,
                         subresource: None,
                     },
