@@ -71,21 +71,47 @@ enum KeyComponentKind {
 }
 
 /// Borrowed key component accepted by the encoder.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum KeyComponent<'a> {
     Text(&'a str),
     U64(u64),
 }
 
+impl core::fmt::Debug for KeyComponent<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let (kind, byte_length) = match self {
+            Self::Text(text) => ("Text", text.len()),
+            Self::U64(_) => ("U64", core::mem::size_of::<u64>()),
+        };
+        f.debug_struct("KeyComponent")
+            .field("kind", &kind)
+            .field("byte_length", &byte_length)
+            .finish()
+    }
+}
+
 /// Owned component returned by the decoder.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum DecodedKeyComponent {
     Text(String),
     U64(u64),
 }
 
+impl core::fmt::Debug for DecodedKeyComponent {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let (kind, byte_length) = match self {
+            Self::Text(text) => ("Text", text.len()),
+            Self::U64(_) => ("U64", core::mem::size_of::<u64>()),
+        };
+        f.debug_struct("DecodedKeyComponent")
+            .field("kind", &kind)
+            .field("byte_length", &byte_length)
+            .finish()
+    }
+}
+
 /// Validated encoded key.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct EncodedKey(Vec<u8>);
 
 impl EncodedKey {
@@ -98,8 +124,25 @@ impl EncodedKey {
     }
 }
 
+impl core::fmt::Debug for EncodedKey {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match DecodedKey::decode(&self.0) {
+            Ok(decoded) => f
+                .debug_struct("EncodedKey")
+                .field("key_space", &decoded.key_space)
+                .field("components", &decoded.components)
+                .finish(),
+            Err(_) => f
+                .debug_struct("EncodedKey")
+                .field("key_space", &"<invalid>")
+                .field("components", &"<invalid>")
+                .finish(),
+        }
+    }
+}
+
 /// Validated decoded key.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct DecodedKey {
     key_space: KeySpace,
     components: Vec<DecodedKeyComponent>,
@@ -172,6 +215,15 @@ impl DecodedKey {
             key_space,
             components,
         })
+    }
+}
+
+impl core::fmt::Debug for DecodedKey {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("DecodedKey")
+            .field("key_space", &self.key_space)
+            .field("components", &self.components)
+            .finish()
     }
 }
 
@@ -416,5 +468,29 @@ mod tests {
             encode_key(KeySpace::StoreMeta, &[KeyComponent::Text(&overlong)]),
             Err(KeyCodecError::TextComponentTooLong)
         );
+    }
+
+    #[test]
+    fn key_debug_redacts_component_material() {
+        const MARKER: &str = "debug-leak-sentinel-key";
+        let components = [KeyComponent::Text(MARKER)];
+        let encoded = encode_key(KeySpace::StoreMeta, &components).unwrap();
+        let decoded = DecodedKey::decode(encoded.as_bytes()).unwrap();
+        let rendered = [
+            format!("{:?}", components[0]),
+            format!("{encoded:?}"),
+            format!("{decoded:?}"),
+            format!("{:?}", decoded.components()[0]),
+        ];
+
+        for diagnostic in &rendered {
+            assert!(
+                !diagnostic.contains(MARKER),
+                "key Debug exposed component material"
+            );
+        }
+        assert!(rendered[1].contains("StoreMeta"));
+        assert!(rendered[2].contains("Text"));
+        assert!(rendered[2].contains(&MARKER.len().to_string()));
     }
 }
