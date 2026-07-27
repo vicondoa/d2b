@@ -63,14 +63,19 @@ pub struct PositiveDecisionCache {
 impl core::fmt::Debug for PositiveDecisionCache {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let is_poisoned = self.entries.is_poisoned();
-        let entries = self
-            .entries
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // A diagnostic must never wait on a lock: formatting can happen inside
+        // a panic or a log line while another thread holds the cache, and a
+        // blocking acquire would stall that thread behind the holder. Report
+        // the count only when it can be read without contending.
+        let entry_count = match self.entries.try_lock() {
+            Ok(entries) => Some(entries.len()),
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => Some(poisoned.into_inner().len()),
+            Err(std::sync::TryLockError::WouldBlock) => None,
+        };
 
         f.debug_struct("PositiveDecisionCache")
             .field("max_entries", &self.max_entries)
-            .field("entry_count", &entries.len())
+            .field("entry_count", &entry_count)
             .field("is_poisoned", &is_poisoned)
             .finish()
     }
@@ -197,7 +202,7 @@ mod tests {
         let cache_debug = format!("{cache:?}");
         assert_eq!(
             cache_debug,
-            "PositiveDecisionCache { max_entries: 2, entry_count: 1, is_poisoned: false }"
+            "PositiveDecisionCache { max_entries: 2, entry_count: Some(1), is_poisoned: false }"
         );
     }
 
