@@ -9,3 +9,7 @@
   storage-contract artifacts.
 - Aligned label and annotation keys with the canonical JSON 64-byte object-key
   ceiling.
+- Kept only delivered engine-neutral contract work in the foundation delivery
+  group and moved unrun feasibility, production backend, watch, storage-row,
+  and migration work to their actual implementation groups without changing
+  contract-consumer dependencies.
