@@ -19,6 +19,20 @@ pub const OPERATIONS: TableDefinition<'static, &[u8], &[u8]> = TableDefinition::
 pub const ZONE_LINK_CURSORS: TableDefinition<'static, &[u8], &[u8]> =
     TableDefinition::new("zone_link_cursors");
 
+/// Exact ten physical table definitions.
+pub const TABLE_DEFINITIONS: [TableDefinition<'static, &[u8], &[u8]>; 10] = [
+    STORE_META,
+    API_SCHEMAS,
+    RESOURCES,
+    TYPE_INDEX,
+    OWNER_INDEX,
+    PRODUCER_INDEX,
+    CONTROLLER_INDEX,
+    REVISION_LOG,
+    OPERATIONS,
+    ZONE_LINK_CURSORS,
+];
+
 /// One permanent table/discriminant assignment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TableSchema {
@@ -84,7 +98,7 @@ pub const TABLE_SCHEMAS: [TableSchema; 10] = [
 #[cfg(test)]
 mod tests {
     use super::*;
-    use redb::TableHandle;
+    use redb::{Database, ReadableDatabase, TableHandle, backends::InMemoryBackend};
 
     #[test]
     fn ten_table_names_and_discriminants_are_contiguous_and_literal() {
@@ -119,5 +133,22 @@ mod tests {
         assert_eq!(REVISION_LOG.name(), "revision_log");
         assert_eq!(OPERATIONS.name(), "operations");
         assert_eq!(ZONE_LINK_CURSORS.name(), "zone_link_cursors");
+    }
+
+    #[test]
+    fn all_ten_tables_open_in_one_hermetic_transaction() {
+        let database = Database::builder()
+            .create_with_backend(InMemoryBackend::new())
+            .unwrap();
+        let write = database.begin_write().unwrap();
+        for definition in TABLE_DEFINITIONS {
+            drop(write.open_table(definition).unwrap());
+        }
+        write.commit().unwrap();
+
+        let read = database.begin_read().unwrap();
+        for definition in TABLE_DEFINITIONS {
+            drop(read.open_table(definition).unwrap());
+        }
     }
 }

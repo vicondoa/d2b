@@ -16,7 +16,7 @@ pub use ownership::{
     MAX_OWNER_CHAIN_DEPTH, OwnerBinding, OwnerIndex, OwnerIndexMutation, OwnershipError,
     ReverseOwnerEntry,
 };
-pub use schema::{TABLE_SCHEMAS, TableSchema};
+pub use schema::{TABLE_DEFINITIONS, TABLE_SCHEMAS, TableSchema};
 pub use values::{
     DecodedValue, EncodedValue, MAX_ENCODED_VALUE_BYTES, MAX_VALUE_PAYLOAD_BYTES, ValueCodecError,
     ValueKind, encode_value,
