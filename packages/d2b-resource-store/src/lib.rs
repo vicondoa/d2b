@@ -257,10 +257,15 @@ pub struct StoreOperationContext {
 
 mod admission {
     use super::{
-        AdmittedAuthorization, MutationOrdinal, PolicySnapshot, RetryClass, StoreError,
-        StoreErrorKind, StoreMutation, StoreOperationContext,
+        AdmittedAuthorization, ExpectedRevision, MutationOrdinal, PolicySnapshot,
+        ResourceMutationKind, RetryClass, StoreError, StoreErrorKind, StoreMutation,
+        StoreOperationContext,
     };
-    use std::sync::Arc;
+    use d2b_contracts::v3::{
+        CanonicalJsonValue, RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceEnvelope, ResourceUid,
+        canonical_digest,
+    };
+    use std::{fmt::Write as _, fs::File, io::Read, sync::Arc};
 
     #[derive(Debug)]
     struct AdmissionAuthority;
@@ -424,11 +429,45 @@ mod admission {
     /// Mutation whose admission authority was matched to the store instance.
     pub struct VerifiedMutation {
         admitted: AdmittedMutation,
+        mutations: Vec<PreparedStoreMutation>,
+    }
+
+    /// Backend-ready mutation carrying the final canonical identity and digest.
+    pub struct PreparedStoreMutation {
+        mutation: StoreMutation,
+        resource_uid: Option<ResourceUid>,
+        payload_digest: Option<String>,
+    }
+
+    impl PreparedStoreMutation {
+        pub const fn mutation(&self) -> &StoreMutation {
+            &self.mutation
+        }
+
+        /// Final UID used by the resource record and every UID-keyed index.
+        pub const fn resource_uid(&self) -> Option<&ResourceUid> {
+            self.resource_uid.as_ref()
+        }
+
+        /// Digest of the final canonical bytes persisted by the backend.
+        pub fn payload_digest(&self) -> Option<&str> {
+            self.payload_digest.as_deref()
+        }
+    }
+
+    impl core::fmt::Debug for PreparedStoreMutation {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            f.debug_struct("PreparedStoreMutation")
+                .field("mutation", &self.mutation)
+                .field("resource_uid", &self.resource_uid)
+                .field("payload_digest", &self.payload_digest)
+                .finish()
+        }
     }
 
     impl VerifiedMutation {
-        pub fn mutations(&self) -> &[StoreMutation] {
-            self.admitted.mutations()
+        pub fn mutations(&self) -> &[PreparedStoreMutation] {
+            &self.mutations
         }
 
         pub const fn authorization(&self) -> &AdmittedAuthorization {
@@ -466,8 +505,131 @@ mod admission {
                     "admission-authority-mismatch",
                 ));
             }
-            Ok(VerifiedMutation { admitted })
+            let mutations = admitted
+                .mutations
+                .iter()
+                .cloned()
+                .map(prepare_mutation)
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(VerifiedMutation {
+                admitted,
+                mutations,
+            })
         }
+    }
+
+    fn prepare_mutation(mut mutation: StoreMutation) -> Result<PreparedStoreMutation, StoreError> {
+        let (resource_uid, payload_digest) = match mutation.kind {
+            ResourceMutationKind::Create => {
+                if mutation.expected != ExpectedRevision::CreateAbsent
+                    || mutation.expected_uid.is_some()
+                {
+                    return Err(preparation_error("create-identity-precondition-invalid"));
+                }
+                let source = mutation
+                    .canonical_resource
+                    .as_deref()
+                    .ok_or_else(|| preparation_error("create-resource-body-missing"))?;
+                let (canonical, uid, digest) = finalize_create(source, &mutation)?;
+                mutation.canonical_resource = Some(canonical);
+                (Some(uid), Some(digest))
+            }
+            _ => match mutation.canonical_resource.as_deref() {
+                Some(source) => {
+                    let envelope = ResourceEnvelope::from_json(source)
+                        .map_err(|_| preparation_error("resource-envelope-invalid"))?;
+                    validate_envelope_identity(&envelope, &mutation)?;
+                    let canonical = envelope
+                        .canonical_bytes()
+                        .map_err(|_| preparation_error("resource-envelope-invalid"))?;
+                    let digest = canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical);
+                    let uid = envelope.metadata().uid().clone();
+                    mutation.canonical_resource = Some(canonical);
+                    (Some(uid), Some(digest))
+                }
+                None => (mutation.expected_uid.clone(), None),
+            },
+        };
+        Ok(PreparedStoreMutation {
+            mutation,
+            resource_uid,
+            payload_digest,
+        })
+    }
+
+    fn finalize_create(
+        source: &[u8],
+        mutation: &StoreMutation,
+    ) -> Result<(Vec<u8>, ResourceUid, String), StoreError> {
+        let mut value = CanonicalJsonValue::parse(source)
+            .map_err(|_| preparation_error("create-resource-body-invalid"))?;
+        let CanonicalJsonValue::Object(root) = &mut value else {
+            return Err(preparation_error("create-resource-body-invalid"));
+        };
+        let Some(CanonicalJsonValue::Object(metadata)) = root.get_mut("metadata") else {
+            return Err(preparation_error("create-resource-metadata-missing"));
+        };
+        if metadata.contains_key("uid") {
+            return Err(preparation_error("create-resource-uid-present"));
+        }
+        let uid = mint_resource_uid()?;
+        metadata.insert(
+            "uid".to_owned(),
+            CanonicalJsonValue::String(uid.as_str().to_owned()),
+        );
+        let canonical = value.to_canonical_bytes();
+        let envelope = ResourceEnvelope::from_json(&canonical)
+            .map_err(|_| preparation_error("create-resource-body-invalid"))?;
+        validate_envelope_identity(&envelope, mutation)?;
+        if envelope.metadata().uid() != &uid {
+            return Err(preparation_error("create-resource-uid-mismatch"));
+        }
+        let digest = canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical);
+        Ok((canonical, uid, digest))
+    }
+
+    fn validate_envelope_identity(
+        envelope: &ResourceEnvelope,
+        mutation: &StoreMutation,
+    ) -> Result<(), StoreError> {
+        if envelope.resource_type() != mutation.target.resource_type()
+            || envelope.metadata().name() != mutation.target.name()
+            || envelope.metadata().zone() != &mutation.zone
+            || mutation
+                .expected_uid
+                .as_ref()
+                .is_some_and(|expected| expected != envelope.metadata().uid())
+        {
+            return Err(preparation_error("resource-envelope-identity-mismatch"));
+        }
+        Ok(())
+    }
+
+    fn mint_resource_uid() -> Result<ResourceUid, StoreError> {
+        let mut bytes = [0u8; 16];
+        File::open("/dev/urandom")
+            .and_then(|mut source| source.read_exact(&mut bytes))
+            .map_err(|_| preparation_error("resource-uid-entropy-unavailable"))?;
+        bytes[6] = (bytes[6] & 0x0f) | 0x40;
+        bytes[8] = (bytes[8] & 0x3f) | 0x80;
+        let mut rendered = String::with_capacity(36);
+        for (index, byte) in bytes.into_iter().enumerate() {
+            if matches!(index, 4 | 6 | 8 | 10) {
+                rendered.push('-');
+            }
+            write!(&mut rendered, "{byte:02x}").expect("writing to a String cannot fail");
+        }
+        ResourceUid::parse(rendered).map_err(|_| preparation_error("resource-uid-mint-invalid"))
+    }
+
+    fn preparation_error(reason_code: &'static str) -> StoreError {
+        StoreError::new(
+            StoreErrorKind::ResourceSchemaInvalid,
+            None,
+            None,
+            RetryClass::Never,
+            reason_code,
+        )
     }
 
     #[cfg(test)]
@@ -537,7 +699,7 @@ mod admission {
                 .expect("matching admission");
             let verified = verifier.verify(admitted).expect("paired verifier");
 
-            assert_eq!(verified.mutations(), &[]);
+            assert!(verified.mutations().is_empty());
             assert_eq!(verified.policy_snapshot().policy_revision, 1);
         }
 
@@ -553,6 +715,35 @@ mod admission {
                 error,
                 AdmissionError::ZoneMismatch(MutationOrdinal::new(1).unwrap())
             );
+        }
+
+        #[test]
+        fn create_uid_cannot_enter_through_the_store_boundary() {
+            let (issuer, verifier) = admission_pair();
+            let mut create = mutation("work");
+            create.canonical_resource =
+                Some(br#"{"metadata":{"uid":"123e4567-e89b-42d3-a456-426614174000"}}"#.to_vec());
+            let admitted = issuer
+                .record_allow(authorization("work"), snapshot())
+                .admit(vec![create], operation())
+                .unwrap();
+
+            let error = verifier.verify(admitted).unwrap_err();
+            assert_eq!(error.kind(), StoreErrorKind::ResourceSchemaInvalid);
+            assert_eq!(error.reason_code(), "create-resource-uid-present");
+        }
+
+        #[test]
+        fn minted_resource_uids_are_canonical_uuid_v4_values() {
+            let first = mint_resource_uid().unwrap();
+            let second = mint_resource_uid().unwrap();
+
+            assert_ne!(first, second);
+            assert_eq!(first.as_str().as_bytes()[14], b'4');
+            assert!(matches!(
+                first.as_str().as_bytes()[19],
+                b'8' | b'9' | b'a' | b'b'
+            ));
         }
 
         #[test]
@@ -585,7 +776,7 @@ mod admission {
 
 pub use admission::{
     AdmissionError, AdmissionIssuer, AdmissionPermit, AdmissionVerifier, AdmittedMutation,
-    VerifiedMutation, admission_pair,
+    PreparedStoreMutation, VerifiedMutation, admission_pair,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]

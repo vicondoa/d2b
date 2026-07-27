@@ -1680,9 +1680,12 @@ response_error!(upgrade_error, wire::UpgradeResponse);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{
-        Mutex,
-        atomic::{AtomicU64, AtomicUsize, Ordering},
+    use std::{
+        collections::BTreeMap,
+        sync::{
+            Mutex,
+            atomic::{AtomicU64, AtomicUsize, Ordering},
+        },
     };
 
     use d2b_contracts::v3::{
@@ -1719,6 +1722,9 @@ mod tests {
         commit_resources: Mutex<Vec<StoredResource>>,
         schema_response: Mutex<Option<StoredSchema>>,
         last_canonical_resource: Mutex<Option<Vec<u8>>>,
+        last_resource_uid: Mutex<Option<ResourceUid>>,
+        last_payload_digest: Mutex<Option<String>>,
+        uid_index: Mutex<BTreeMap<ResourceUid, ResourceRef>>,
         admission_issuer: AdmissionIssuer,
         admission_verifier: AdmissionVerifier,
     }
@@ -1734,6 +1740,9 @@ mod tests {
                 commit_resources: Mutex::new(Vec::new()),
                 schema_response: Mutex::new(None),
                 last_canonical_resource: Mutex::new(None),
+                last_resource_uid: Mutex::new(None),
+                last_payload_digest: Mutex::new(None),
+                uid_index: Mutex::new(BTreeMap::new()),
                 admission_issuer,
                 admission_verifier,
             }
@@ -1802,15 +1811,28 @@ mod tests {
                     .get(),
                 Ordering::SeqCst,
             );
-            *self.last_canonical_resource.lock().unwrap() = mutation
-                .mutations()
-                .first()
-                .and_then(|mutation| mutation.canonical_resource.clone());
+            let first = mutation.mutations().first();
+            *self.last_canonical_resource.lock().unwrap() =
+                first.and_then(|prepared| prepared.mutation().canonical_resource.clone());
+            *self.last_resource_uid.lock().unwrap() =
+                first.and_then(|prepared| prepared.resource_uid().cloned());
+            *self.last_payload_digest.lock().unwrap() =
+                first.and_then(|prepared| prepared.payload_digest().map(str::to_owned));
             match *self.mode.lock().unwrap() {
-                CommitMode::Success => Ok(StoreCommitResult {
-                    resources: self.commit_resources.lock().unwrap().clone(),
-                    revision: ZoneRevision::new(9),
-                }),
+                CommitMode::Success => {
+                    if let Some(prepared) = first
+                        && let Some(uid) = prepared.resource_uid()
+                    {
+                        self.uid_index
+                            .lock()
+                            .unwrap()
+                            .insert(uid.clone(), prepared.mutation().target.clone());
+                    }
+                    Ok(StoreCommitResult {
+                        resources: self.commit_resources.lock().unwrap().clone(),
+                        revision: ZoneRevision::new(9),
+                    })
+                }
                 CommitMode::Conflict => Err(StoreError::new(
                     StoreErrorKind::ResourceConflict,
                     Some(ZoneRevision::new(8)),
@@ -2117,7 +2139,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stored_bytes_are_the_bytes_validated_by_the_digest() {
+    async fn store_mints_create_uid_and_updates_canonical_identity_digest_and_index() {
         let store = Arc::new(FakeStore::new(CommitMode::Success));
         let service = ResourceService::new(
             Arc::clone(&store),
@@ -2136,9 +2158,28 @@ mod tests {
         let response = service.create(trusted(request, None)).await;
 
         assert!(response.error.is_none());
+        let stored = store
+            .last_canonical_resource
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("store received canonical bytes");
+        assert_ne!(stored, canonical_create);
+        let envelope = ResourceEnvelope::from_json(&stored).unwrap();
+        let uid = store
+            .last_resource_uid
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("store minted a UID");
+        assert_eq!(envelope.metadata().uid(), &uid);
         assert_eq!(
-            store.last_canonical_resource.lock().unwrap().as_deref(),
-            Some(canonical_create.as_slice())
+            store.last_payload_digest.lock().unwrap().as_deref(),
+            Some(envelope.digest().unwrap().as_str())
+        );
+        assert_eq!(
+            store.uid_index.lock().unwrap().get(&uid),
+            Some(&ResourceRef::parse("Host/host-system").unwrap())
         );
     }
 
