@@ -1246,7 +1246,11 @@ fn parse_mutation<T>(
         {
             return Err(schema_error("typed owner does not match resource metadata"));
         }
-        Some(body.canonical_json.clone())
+        Some(
+            envelope
+                .canonical_bytes()
+                .map_err(|_| schema_error("resource envelope is malformed"))?,
+        )
     } else {
         None
     };
@@ -1673,6 +1677,7 @@ mod tests {
         configuration_revision: AtomicU64,
         commit_resources: Mutex<Vec<StoredResource>>,
         schema_response: Mutex<Option<StoredSchema>>,
+        last_canonical_resource: Mutex<Option<Vec<u8>>>,
     }
 
     impl FakeStore {
@@ -1684,6 +1689,7 @@ mod tests {
                 configuration_revision: AtomicU64::new(0),
                 commit_resources: Mutex::new(Vec::new()),
                 schema_response: Mutex::new(None),
+                last_canonical_resource: Mutex::new(None),
             }
         }
 
@@ -1746,6 +1752,10 @@ mod tests {
                     .get(),
                 Ordering::SeqCst,
             );
+            *self.last_canonical_resource.lock().unwrap() = mutation
+                .mutations()
+                .first()
+                .and_then(|mutation| mutation.canonical_resource.clone());
             match *self.mode.lock().unwrap() {
                 CommitMode::Success => Ok(StoreCommitResult {
                     resources: self.commit_resources.lock().unwrap().clone(),
@@ -2016,6 +2026,28 @@ mod tests {
             );
         }
         assert_eq!(store.commits.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn stored_bytes_are_the_bytes_validated_by_the_digest() {
+        let store = Arc::new(FakeStore::new(CommitMode::Success));
+        let service = ResourceService::new(Arc::clone(&store), authorizer([ResourceVerb::Create]));
+        let mut request = wire::CreateRequest::new();
+        request.meta = request_meta();
+        let mut value = mutation(wire::MutationKind::MUTATION_KIND_CREATE);
+        let mut noncanonical = b"\n  ".to_vec();
+        noncanonical.extend_from_slice(GOLDEN_HOST);
+        noncanonical.push(b'\n');
+        value.resource = body(noncanonical);
+        request.mutation = MessageField::some(value);
+
+        let response = service.create(trusted(request, None)).await;
+
+        assert!(response.error.is_none());
+        assert_eq!(
+            store.last_canonical_resource.lock().unwrap().as_deref(),
+            Some(GOLDEN_HOST)
+        );
     }
 
     #[tokio::test]
