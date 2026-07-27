@@ -541,6 +541,11 @@ impl std::error::Error for OwnershipError {}
 mod tests {
     use super::*;
 
+    const OWNER_NAME_SENTINEL: &str = "owner-debug-sentinel";
+    const OWNER_UID_SENTINEL: &str = "deadbeef-dead-4bad-8bad-deadbeef0002";
+    const CHILD_NAME_SENTINEL: &str = "child-debug-sentinel";
+    const CHILD_UID_SENTINEL: &str = "feedface-feed-4ace-9ace-feedface0003";
+
     fn uid(index: u8) -> ResourceUid {
         ResourceUid::parse(format!("123e4567-e89b-42d3-a456-4266141740{index:02}")).unwrap()
     }
@@ -557,6 +562,90 @@ mod tests {
                 .unwrap();
         }
         graph
+    }
+
+    fn assert_protected_markers_absent(debug: &str) {
+        for marker in [
+            OWNER_NAME_SENTINEL,
+            OWNER_UID_SENTINEL,
+            CHILD_NAME_SENTINEL,
+            CHILD_UID_SENTINEL,
+        ] {
+            assert!(!debug.contains(marker), "{debug}");
+        }
+    }
+
+    #[test]
+    fn ownership_debug_redacts_every_protected_field() {
+        let owner_ref = ResourceRef::parse(&format!("Guest/{OWNER_NAME_SENTINEL}")).unwrap();
+        let owner_uid = ResourceUid::parse(OWNER_UID_SENTINEL).unwrap();
+        let child_ref = ResourceRef::parse(&format!("Process/{CHILD_NAME_SENTINEL}")).unwrap();
+        let child_uid = ResourceUid::parse(CHILD_UID_SENTINEL).unwrap();
+
+        assert!(format!("{owner_ref:?}").contains(OWNER_NAME_SENTINEL));
+        assert!(format!("{child_ref:?}").contains(CHILD_NAME_SENTINEL));
+        assert_eq!(owner_uid.as_str(), OWNER_UID_SENTINEL);
+        assert_eq!(child_uid.as_str(), CHILD_UID_SENTINEL);
+
+        let binding = OwnerBinding {
+            owner_ref: owner_ref.clone(),
+            owner_uid: owner_uid.clone(),
+        };
+        let reverse_entry = ReverseOwnerEntry {
+            child_ref: child_ref.clone(),
+            child_uid: child_uid.clone(),
+            latest_revision: ZoneRevision::new(41),
+        };
+        let hint = OwnedResourceChangedHint::new_pending(
+            owner_ref.clone(),
+            owner_uid.clone(),
+            child_ref.clone(),
+            child_uid.clone(),
+            ZoneRevision::new(43),
+            OwnerChangeEvent::MetadataUpdated,
+        )
+        .unwrap();
+        let mutation = OwnerIndexMutation {
+            previous_owner: Some(binding.clone()),
+            current_owner: Some(binding.clone()),
+            hints: vec![hint],
+        };
+
+        let binding_debug = format!("{binding:?}");
+        assert_protected_markers_absent(&binding_debug);
+        assert!(binding_debug.contains("owner_kind"));
+        assert!(binding_debug.contains("has_owner_uid: true"));
+
+        let reverse_debug = format!("{reverse_entry:?}");
+        assert_protected_markers_absent(&reverse_debug);
+        assert!(reverse_debug.contains("child_kind"));
+        assert!(reverse_debug.contains("latest_revision: ZoneRevision(41)"));
+
+        let mutation_debug = format!("{mutation:?}");
+        assert_protected_markers_absent(&mutation_debug);
+        assert!(mutation_debug.contains("hint_count: 1"));
+        assert!(mutation_debug.contains("ZoneRevision(43)"));
+
+        let mut index = OwnerIndex::default();
+        index
+            .register_resource(owner_ref.clone(), owner_uid.clone())
+            .unwrap();
+        index
+            .register_resource(child_ref, child_uid.clone())
+            .unwrap();
+        index
+            .bind_owner(
+                &child_uid,
+                owner_ref,
+                ZoneRevision::new(47),
+                OwnerChangeEvent::Created,
+            )
+            .unwrap();
+        let index_debug = format!("{index:?}");
+        assert_protected_markers_absent(&index_debug);
+        assert!(index_debug.contains("resource_count: 2"));
+        assert!(index_debug.contains("owned_child_count: 1"));
+        assert!(index_debug.contains("ZoneRevision(47)"));
     }
 
     #[test]

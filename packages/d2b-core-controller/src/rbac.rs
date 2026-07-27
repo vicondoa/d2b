@@ -166,6 +166,46 @@ mod tests {
     }
 
     #[test]
+    fn authorization_cache_debug_redacts_every_protected_field() {
+        const SUBJECT_NAME_SENTINEL: &str = "rbac-debug-sentinel";
+        const SUBJECT_UID_SENTINEL: &str = "deadbeef-dead-4bad-8bad-deadbeef0001";
+        const DIGEST_BYTE_SENTINEL: u8 = 197;
+        const DIGEST_DEBUG_SENTINEL: &str = "197";
+
+        let subject_ref = ResourceRef::parse(&format!("Provider/{SUBJECT_NAME_SENTINEL}")).unwrap();
+        let subject_uid = ResourceUid::parse(SUBJECT_UID_SENTINEL).unwrap();
+        assert!(format!("{subject_ref:?}").contains(SUBJECT_NAME_SENTINEL));
+        assert_eq!(subject_uid.as_str(), SUBJECT_UID_SENTINEL);
+
+        let key = AuthorizationCacheKey::new(subject_ref, subject_uid, [DIGEST_BYTE_SENTINEL; 32]);
+        let key_debug = format!("{key:?}");
+        for marker in [
+            SUBJECT_NAME_SENTINEL,
+            SUBJECT_UID_SENTINEL,
+            DIGEST_DEBUG_SENTINEL,
+        ] {
+            assert!(!key_debug.contains(marker), "{key_debug}");
+        }
+        assert!(key_debug.contains("subject_kind"));
+        assert!(key_debug.contains("has_subject_uid: true"));
+        assert!(key_debug.contains("has_attributes_digest: true"));
+
+        let cache = PositiveDecisionCache::new(2);
+        cache.insert_allow(key, revisions(11), 23, 1);
+        let cache_debug = format!("{cache:?}");
+        for marker in [
+            SUBJECT_NAME_SENTINEL,
+            SUBJECT_UID_SENTINEL,
+            DIGEST_DEBUG_SENTINEL,
+        ] {
+            assert!(!cache_debug.contains(marker), "{cache_debug}");
+        }
+        assert!(cache_debug.contains("entry_count: 1"));
+        assert!(cache_debug.contains("policy_revision: 11"));
+        assert!(cache_debug.contains("is_poisoned: false"));
+    }
+
+    #[test]
     fn positives_expire_and_revision_changes_invalidate_immediately() {
         let cache = PositiveDecisionCache::new(4);
         cache.insert_allow(key(1), revisions(2), 10, 1);
