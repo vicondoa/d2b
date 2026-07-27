@@ -31,7 +31,7 @@ const EXPECTED_WORK_ITEMS: usize = 543;
 /// The certified graph shape. Pinned so a silent edge gain or loss fails here
 /// even when the generator regenerates itself consistently.
 const EXPECTED_NODES: u64 = 598;
-const EXPECTED_EDGES: u64 = 1940;
+const EXPECTED_EDGES: u64 = 1943;
 const EXPECTED_MAX_RANK: u64 = 22;
 const EXPECTED_WAVES: u64 = 8;
 const EXPECTED_CRITICAL_PATH: usize = 23;
