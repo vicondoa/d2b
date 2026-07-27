@@ -27,11 +27,11 @@ const GRAPH_MD: &str = "docs/specs/ADR-046-implementation-graph.md";
 const EXPECTED_MEMBERS: usize = 55;
 /// The normative work-item count. The corpus is closed; a parser or source
 /// regression that changes it must fail rather than shrink the manifests.
-const EXPECTED_WORK_ITEMS: usize = 543;
+const EXPECTED_WORK_ITEMS: usize = 545;
 /// The certified graph shape. Pinned so a silent edge gain or loss fails here
 /// even when the generator regenerates itself consistently.
-const EXPECTED_NODES: u64 = 598;
-const EXPECTED_EDGES: u64 = 1943;
+const EXPECTED_NODES: u64 = 600;
+const EXPECTED_EDGES: u64 = 1948;
 const EXPECTED_MAX_RANK: u64 = 22;
 const EXPECTED_WAVES: u64 = 8;
 const EXPECTED_CRITICAL_PATH: usize = 23;
@@ -682,7 +682,7 @@ fn the_real_spec_tree_declares_every_work_item_exactly_once() {
     assert_eq!(
         census,
         BTreeMap::from([
-            ("bare", 356),
+            ("bare", 358),
             ("dash title", 112),
             ("colon title", 51),
             ("parenthetical title", 24),
