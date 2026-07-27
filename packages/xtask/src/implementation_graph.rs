@@ -1247,12 +1247,27 @@ mod tests {
 
     #[test]
     fn work_item_groups_honor_schedule_and_barrier_overrides() {
+        // The store contract lands in the foundation wave; the proof crate and
+        // the engine it gates do not, so they carry later waves and their own
+        // parallel groups.
         assert_eq!(
-            early_work_item_schedule("ADR046-feasibility-001"),
+            early_work_item_schedule("ADR046-store-001"),
             Some((
                 0,
                 "ADR-046-resource-store-redb",
                 "resource-store-foundation"
+            ))
+        );
+        assert_eq!(
+            early_work_item_schedule("ADR046-feasibility-001"),
+            Some((1, "ADR-046-resource-store-redb", "resource-store-backend"))
+        );
+        assert_eq!(
+            early_work_item_schedule("ADR046-store-003"),
+            Some((
+                5,
+                "ADR-046-resource-store-redb",
+                "resource-store-integration"
             ))
         );
         assert_eq!(
@@ -1263,9 +1278,9 @@ mod tests {
             work_item_group(
                 "ADR046-feasibility-001",
                 "ADR-046-feasibility-and-spikes",
-                0
+                1
             ),
-            "wi:resource-store-foundation:w0"
+            "wi:resource-store-backend:w1"
         );
         assert_eq!(
             work_item_group("ADR046-network-008", "ADR-046-resources-network", 4),
