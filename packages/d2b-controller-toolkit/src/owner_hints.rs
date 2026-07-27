@@ -1,4 +1,7 @@
-//! Bounded child-change hints emitted after ownership-index commits.
+//! Bounded pending child-change hints.
+//!
+//! This module intentionally exposes no dispatch seam. The production backend
+//! must first provide a writer-issued durable-commit proof.
 
 use d2b_contracts::v3::{ResourceRef, ResourceUid, ZoneRevision};
 use schemars::JsonSchema;
@@ -25,7 +28,7 @@ pub enum OwnerChangeEvent {
     Reparented,
 }
 
-/// One `owned-resource-changed` notification.
+/// One pending `owned-resource-changed` notification.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OwnedResourceChangedHint {
@@ -38,8 +41,11 @@ pub struct OwnedResourceChangedHint {
 }
 
 impl OwnedResourceChangedHint {
-    /// Construct a committed child-change hint.
-    pub fn new(
+    /// Construct a pending child-change hint.
+    ///
+    /// A nonzero revision proves only that a revision was allocated. It does
+    /// not prove the enclosing write reached durable storage.
+    pub fn new_pending(
         owner_ref: ResourceRef,
         owner_uid: ResourceUid,
         child_ref: ResourceRef,
@@ -51,7 +57,7 @@ impl OwnedResourceChangedHint {
             return Err(OwnerHintCoalesceError::SelfOwnership);
         }
         if revision.get() == 0 {
-            return Err(OwnerHintCoalesceError::UncommittedRevision);
+            return Err(OwnerHintCoalesceError::UnallocatedRevision);
         }
         Ok(Self {
             owner_ref,
@@ -83,7 +89,7 @@ impl OwnedResourceChangedHint {
         &self.child_uid
     }
 
-    /// Return the committed revision.
+    /// Return the allocated revision.
     pub const fn revision(&self) -> ZoneRevision {
         self.revision
     }
@@ -97,7 +103,10 @@ impl OwnedResourceChangedHint {
     ///
     /// Queue ownership decides when coalescing is allowed; this method only
     /// enforces that two already-eligible hints name the same immutable UIDs.
-    pub fn coalesce(&mut self, newer: Self) -> Result<OwnerHintDispatch, OwnerHintCoalesceError> {
+    pub fn coalesce(
+        &mut self,
+        newer: Self,
+    ) -> Result<OwnerHintCoalesceOutcome, OwnerHintCoalesceError> {
         if self.owner_uid != newer.owner_uid || self.child_uid != newer.child_uid {
             return Err(OwnerHintCoalesceError::DifferentBinding);
         }
@@ -105,17 +114,17 @@ impl OwnedResourceChangedHint {
             return Err(OwnerHintCoalesceError::UidReferenceMismatch);
         }
         if newer.revision <= self.revision {
-            return Ok(OwnerHintDispatch::AlreadyCovered);
+            return Ok(OwnerHintCoalesceOutcome::AlreadyCovered);
         }
         self.revision = newer.revision;
         self.event = newer.event;
-        Ok(OwnerHintDispatch::Replaced)
+        Ok(OwnerHintCoalesceOutcome::Replaced)
     }
 }
 
 /// Result of bounded hint coalescing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OwnerHintDispatch {
+pub enum OwnerHintCoalesceOutcome {
     Replaced,
     AlreadyCovered,
 }
@@ -124,7 +133,7 @@ pub enum OwnerHintDispatch {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OwnerHintCoalesceError {
     SelfOwnership,
-    UncommittedRevision,
+    UnallocatedRevision,
     DifferentBinding,
     UidReferenceMismatch,
 }
@@ -133,7 +142,9 @@ impl core::fmt::Display for OwnerHintCoalesceError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::SelfOwnership => f.write_str("owner and child must be distinct"),
-            Self::UncommittedRevision => f.write_str("owner hints require a committed revision"),
+            Self::UnallocatedRevision => {
+                f.write_str("pending owner hints require a nonzero allocated revision")
+            }
             Self::DifferentBinding => {
                 f.write_str("only hints for the same owner-child UID binding can coalesce")
             }
@@ -146,20 +157,12 @@ impl core::fmt::Display for OwnerHintCoalesceError {
 
 impl std::error::Error for OwnerHintCoalesceError {}
 
-/// Post-commit dispatcher seam implemented by the controller runtime.
-pub trait OwnerHintDispatcher: Send + Sync {
-    type Error: std::error::Error + Send + Sync + 'static;
-
-    /// Submit a committed hint. Implementations must enforce bounded queueing.
-    fn dispatch(&self, hint: OwnedResourceChangedHint) -> Result<(), Self::Error>;
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn hint(revision: u64, event: OwnerChangeEvent) -> OwnedResourceChangedHint {
-        OwnedResourceChangedHint::new(
+        OwnedResourceChangedHint::new_pending(
             ResourceRef::parse("Guest/work").unwrap(),
             ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
             ResourceRef::parse("Process/app").unwrap(),
@@ -191,7 +194,7 @@ mod tests {
             queued
                 .coalesce(hint(6, OwnerChangeEvent::DeletionRequested))
                 .unwrap(),
-            OwnerHintDispatch::Replaced
+            OwnerHintCoalesceOutcome::Replaced
         );
         assert_eq!(queued.revision(), ZoneRevision::new(6));
         assert_eq!(queued.event(), OwnerChangeEvent::DeletionRequested);
@@ -199,7 +202,7 @@ mod tests {
             queued
                 .coalesce(hint(5, OwnerChangeEvent::MetadataUpdated))
                 .unwrap(),
-            OwnerHintDispatch::AlreadyCovered
+            OwnerHintCoalesceOutcome::AlreadyCovered
         );
         assert_eq!(queued.revision(), ZoneRevision::new(6));
     }

@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use d2b_contracts::v3::{ResourceRef, ResourceUid, ZoneRevision};
 use d2b_controller_toolkit::owner_hints::{
-    MAX_OWNER_HINT_DEPTH, OwnedResourceChangedHint, OwnerChangeEvent, OwnerHintDispatcher,
+    MAX_OWNER_HINT_DEPTH, OwnedResourceChangedHint, OwnerChangeEvent,
 };
 
 /// Maximum accepted singular owner-chain depth.
@@ -55,6 +55,16 @@ impl ReverseOwnerEntry {
 }
 
 /// Atomic ownership-index delta persisted with a resource mutation.
+///
+/// Pending hints are deliberately inaccessible outside this crate until a
+/// production writer can exchange a successful durable commit for a dispatch
+/// capability.
+///
+/// ```compile_fail
+/// use d2b_resource_store_redb::OwnerIndexMutation;
+///
+/// let _forged_dispatch = OwnerIndexMutation::dispatch;
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OwnerIndexMutation {
     previous_owner: Option<OwnerBinding>,
@@ -71,22 +81,6 @@ impl OwnerIndexMutation {
     /// Borrow the new binding installed by this mutation.
     pub fn current_owner(&self) -> Option<&OwnerBinding> {
         self.current_owner.as_ref()
-    }
-
-    /// Borrow post-commit hints recorded with the same mutation.
-    pub fn hints(&self) -> &[OwnedResourceChangedHint] {
-        &self.hints
-    }
-
-    /// Dispatch every hint after the enclosing redb transaction commits.
-    pub fn dispatch<D>(&self, dispatcher: &D) -> Result<(), D::Error>
-    where
-        D: OwnerHintDispatcher,
-    {
-        for hint in &self.hints {
-            dispatcher.dispatch(hint.clone())?;
-        }
-        Ok(())
     }
 }
 
@@ -153,7 +147,7 @@ impl OwnerIndex {
         revision: ZoneRevision,
         event: OwnerChangeEvent,
     ) -> Result<OwnerIndexMutation, OwnershipError> {
-        ensure_committed_revision(revision)?;
+        ensure_allocated_revision(revision)?;
         let child_ref = self
             .reference_by_uid
             .get(child_uid)
@@ -223,7 +217,7 @@ impl OwnerIndex {
         revision: ZoneRevision,
         event: OwnerChangeEvent,
     ) -> Result<OwnerIndexMutation, OwnershipError> {
-        ensure_committed_revision(revision)?;
+        ensure_allocated_revision(revision)?;
         let child_ref = self
             .reference_by_uid
             .get(child_uid)
@@ -260,7 +254,7 @@ impl OwnerIndex {
         revision: ZoneRevision,
         event: OwnerChangeEvent,
     ) -> Result<OwnerIndexMutation, OwnershipError> {
-        ensure_committed_revision(revision)?;
+        ensure_allocated_revision(revision)?;
         let child_ref = self
             .reference_by_uid
             .get(child_uid)
@@ -381,9 +375,9 @@ impl OwnerIndex {
     }
 }
 
-fn ensure_committed_revision(revision: ZoneRevision) -> Result<(), OwnershipError> {
+fn ensure_allocated_revision(revision: ZoneRevision) -> Result<(), OwnershipError> {
     if revision.get() == 0 {
-        return Err(OwnershipError::UncommittedRevision);
+        return Err(OwnershipError::UnallocatedRevision);
     }
     Ok(())
 }
@@ -395,7 +389,7 @@ fn make_hint(
     revision: ZoneRevision,
     event: OwnerChangeEvent,
 ) -> Result<OwnedResourceChangedHint, OwnershipError> {
-    OwnedResourceChangedHint::new(
+    OwnedResourceChangedHint::new_pending(
         owner.owner_ref.clone(),
         owner.owner_uid.clone(),
         child_ref.clone(),
@@ -429,7 +423,7 @@ pub enum OwnershipError {
     OwnerCycle,
     OwnerDepth,
     ChildrenRemain,
-    UncommittedRevision,
+    UnallocatedRevision,
     InvalidHint,
     ReverseIndexMissing,
 }
@@ -446,8 +440,8 @@ impl core::fmt::Display for OwnershipError {
             Self::OwnerCycle => f.write_str("resource-owner-cycle"),
             Self::OwnerDepth => f.write_str("resource-owner-depth"),
             Self::ChildrenRemain => f.write_str("owned children must be deleted first"),
-            Self::UncommittedRevision => {
-                f.write_str("ownership update requires a committed revision")
+            Self::UnallocatedRevision => {
+                f.write_str("ownership update requires a nonzero allocated revision")
             }
             Self::InvalidHint => f.write_str("ownership mutation could not create an owner hint"),
             Self::ReverseIndexMissing => {
@@ -571,7 +565,7 @@ mod tests {
                 OwnerChangeEvent::StatusUpdated,
             )
             .unwrap();
-        assert_eq!(mutation.hints()[0].owner_uid(), &uid(0));
+        assert_eq!(mutation.hints[0].owner_uid(), &uid(0));
         assert_eq!(
             graph.children_of(&uid(0))[0].latest_revision(),
             ZoneRevision::new(2)
@@ -626,8 +620,8 @@ mod tests {
             .unwrap();
         assert!(graph.children_of(&uid(0)).is_empty());
         assert_eq!(graph.children_of(&uid(1)).len(), 1);
-        assert_eq!(mutation.hints().len(), 2);
-        assert_eq!(mutation.hints()[0].owner_uid(), &uid(0));
-        assert_eq!(mutation.hints()[1].owner_uid(), &uid(1));
+        assert_eq!(mutation.hints.len(), 2);
+        assert_eq!(mutation.hints[0].owner_uid(), &uid(0));
+        assert_eq!(mutation.hints[1].owner_uid(), &uid(1));
     }
 }
