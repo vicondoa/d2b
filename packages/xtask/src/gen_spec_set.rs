@@ -38,7 +38,7 @@ const WORK_ITEMS_SCHEMA_VERSION: u32 = 1;
 /// silently finds fewer members or work items must fail the generator rather
 /// than quietly shrink the manifests.
 const EXPECTED_MEMBERS: usize = 55;
-const EXPECTED_WORK_ITEMS: usize = 543;
+const EXPECTED_WORK_ITEMS: usize = 545;
 
 /// The four spellings a work-item heading uses. All four are load-bearing:
 /// anchoring on one shape silently drops the rest.
@@ -57,11 +57,11 @@ pub enum HeadingForm {
     Parenthetical,
 }
 
-/// The recorded heading-form distribution across the 543 work items. A parser
+/// The recorded heading-form distribution across the 545 work items. A parser
 /// that stops matching one spelling changes this census, which fails the
 /// generator instead of silently shrinking the manifest.
 const EXPECTED_HEADING_FORMS: &[(HeadingForm, usize)] = &[
-    (HeadingForm::Bare, 356),
+    (HeadingForm::Bare, 358),
     (HeadingForm::Dash, 112),
     (HeadingForm::Colon, 51),
     (HeadingForm::Parenthetical, 24),

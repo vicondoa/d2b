@@ -24,16 +24,16 @@ Each JSON work-item node also embeds the manifest's exact `detailedDesign` and
 | --- | --- |
 | Waves | 8 |
 | Spec nodes | 55 |
-| Work-item nodes | 543 |
-| Total nodes | 598 |
-| Edges | 1943 |
+| Work-item nodes | 545 |
+| Total nodes | 600 |
+| Edges | 1948 |
 | Max topological rank | 22 |
 
 ## Waves (W0-W7)
 
 | Wave | Specs | #Specs | #Work items | Parallel groups |
 | --- | --- | --- | --- | --- |
-| W0 | current-code-migration-map, decision-register, resource-api-and-authorization, resource-object-model, resource-store-redb, terminology-and-identities | 6 | 11 | W0-foundation-chain, W0-reference-docs |
+| W0 | current-code-migration-map, decision-register, resource-api-and-authorization, resource-object-model, resource-store-redb, terminology-and-identities | 6 | 13 | W0-foundation-chain, W0-reference-docs |
 | W1 | componentsession-and-bus, resource-reconciliation | 2 | 6 | W1-reconcile-and-bus |
 | W2 | primitive-resource-composition, zone-routing | 2 | 19 | W2-composition-and-routing |
 | W3 | provider-model-and-packaging | 1 | 4 | W3-provider-contract |
@@ -238,7 +238,7 @@ file; all other destinations retain their existing parallelism.
 | `wi:ADR-046-resource-api-and-authorization` | W0 | 2 |
 | `wi:ADR-046-resource-object-model` | W0 | 2 |
 | `wi:ADR-046-resource-reconciliation` | W1 | 3 |
-| `wi:ADR-046-resource-store-redb` | W0 | 3 |
+| `wi:ADR-046-resource-store-redb` | W0 | 5 |
 | `wi:ADR-046-resources-credential` | W4 | 8 |
 | `wi:ADR-046-resources-device` | W5 | 7 |
 | `wi:ADR-046-resources-host-guest-process-user` | W5 | 22 |
@@ -284,7 +284,7 @@ file; all other destinations retain their existing parallelism.
 
 ## Regeneration findings (D095-D098)
 
-- Regenerated from 55 member specs and 543 current work items; every declared heading is represented exactly once.
+- Regenerated from 55 member specs and 545 current work items; every declared heading is represented exactly once.
 - `ADR046-provider-004` owns the common D098 Service/Binding base DTOs and schemas; the four implementation Providers own only strict extensions and controllers.
 - `ADR046-zone-control-024` owns the shared Core-derived `physical-usb-backing` tuple; both the security-key and USB effect DAGs depend on it.
 - Every `ADR046-security-key-*` dependency in `Dependency/owner` is encoded. The dependency subgraph is acyclic and uses no generator tie-break.

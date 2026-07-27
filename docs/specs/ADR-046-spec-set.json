@@ -74,7 +74,7 @@
     {
       "dependsOn" : [],
       "path" : "docs/specs/ADR-046-current-code-migration-map.md",
-      "sha256" : "ab23109fa28d69019f58e92cd2b4ac7c3bb6770ff2e7f1e0fe16aea06f78f604",
+      "sha256" : "0c93a53a981db0563effc23d6557666e6e7966724d328cb6056c7f9dc13d432c",
       "specId" : "ADR-046-current-code-migration-map",
       "status" : "Accepted",
       "supersedes" : null,
@@ -84,7 +84,7 @@
     {
       "dependsOn" : [],
       "path" : "docs/specs/ADR-046-decision-register.md",
-      "sha256" : "305559b76d2e57cdd680402d1796ae8354bf7355cff394e77a036feab783375e",
+      "sha256" : "347b67295bc1393e7c9fe762cc06336c9a9e19a5976503840e0ec0a12060388f",
       "specId" : "ADR-046-decision-register",
       "status" : "Accepted",
       "supersedes" : null,
@@ -112,7 +112,7 @@
         "ADR-046-zone-routing"
       ],
       "path" : "docs/specs/ADR-046-feasibility-and-spikes.md",
-      "sha256" : "b5d5fb1416595d245fc83ed552e0ce9a05e19fa2c71bbc51c1ac77d7fa2f1412",
+      "sha256" : "7e5212c18553db950b1a12984efcd955971537c71dcad2aa54bef2d322874f7e",
       "specId" : "ADR-046-feasibility-and-spikes",
       "status" : "Accepted",
       "supersedes" : null,
@@ -832,7 +832,7 @@
         "ADR-046-zone-routing"
       ],
       "path" : "docs/specs/ADR-046-reset-and-cutover.md",
-      "sha256" : "6bc1ea504acec3b0f2873532d26c9a209a88d8b3d4a0cc3d7bea32c0b40763c4",
+      "sha256" : "c10c4f59be545d8c570a5f3ee53d86d5e7f960e4fd4cda27a2c012f09a6e2f05",
       "specId" : "ADR-046-reset-and-cutover",
       "status" : "Accepted",
       "supersedes" : "[ADR 0034](../adr/0034-storage-lifecycle-restart-and-synchronization.md) \"Migration decision\" section for the d2b 3.0 cutover; the current `d2b host migrate-storage` verb (retired per `ADR-046-current-code-migration-map` §6 and `ADR-046-cli-and-operations` \"v2 command surface removed at 3.0 clean break\": it served the one-time v1→v2 storage layout cutover only and has no v3 successor)",
@@ -894,7 +894,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-resource-store-redb.md",
-      "sha256" : "8a5aed11683d255c21dfe7f6a8ab4e368b5e3fe229b0083e50278766e68d9f42",
+      "sha256" : "e6a5af27d544d89960e70e74928614d7d3b38cc08314a2c592558b36dd234cb6",
       "specId" : "ADR-046-resource-store-redb",
       "status" : "Accepted",
       "supersedes" : null,
@@ -1207,7 +1207,7 @@
         "ADR-046-zone-routing"
       ],
       "path" : "docs/specs/ADR-046-validation-and-delivery.md",
-      "sha256" : "d9cec827e3acfb2609fc23587d750c6abecc028b5a97b75599c0b6f8c0175745",
+      "sha256" : "66190355ba0deba4dde85d55850a54783e30adc30c6014ad9980d08128e71698",
       "specId" : "ADR-046-validation-and-delivery",
       "status" : "Accepted",
       "supersedes" : "This repository's current `AGENTS.md` \"Panel review\" phase-gate as the *sole* review mechanism for ADR 0046 work (extended, not replaced, per §12); ad hoc per-agent validation ordering for ADR 0046 implementation",

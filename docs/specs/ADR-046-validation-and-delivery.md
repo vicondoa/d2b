@@ -556,7 +556,7 @@ manifest/fixture, per that file's closed-set rule.
 
 | Row | Coverage | Location |
 | --- | --- | --- |
-| Unit | Every DTO/schema/validator introduced by `ADR046-object-001/002`, `ADR046-store-001..003`, `ADR046-api-001/002` - canonical JSON, bounds, redaction, unknown-field rejection | `packages/d2b-contracts/src/v3/**` `#[cfg(test)]`, `packages/d2b-resource-store-redb/src/**` |
+| Unit | Every DTO/schema/validator introduced by `ADR046-object-001/002`, `ADR046-store-001..005`, `ADR046-api-001/002` - canonical JSON, bounds, redaction, unknown-field rejection | `packages/d2b-contracts/src/v3/**` `#[cfg(test)]`, `packages/d2b-resource-store-redb/src/**` |
 | Property | Owner cycle/depth/reparent property tests (`ADR046-object-002`); expected-revision conflict storms; watch replay/no-gap; ResourceRef parse/collision vectors (`ADR046-identities-001`) | `packages/d2b-contracts/src/v3/resource_ref.rs`, `packages/d2b-resource-store-redb/tests/` |
 | Fuzz | Canonical offer/record fuzzing carried over from main's `d2b-session` Noise vectors (`ADR046-session-001`); redb key/encoding fuzz for `type_index`/`owner_index`/`revision_log` | `packages/d2b-session/tests/noise_vectors.rs` (ported), `packages/d2b-resource-store-redb/fuzz/` |
 | Fault injection | Forced crash at every commit boundary (resource-store-redb performance contract fixture list); controller-spawned Process exits unexpectedly → `phase: Degraded`/`Failed` (D059 `tests/` requirement); disconnect/relist/lease-withdrawal | `packages/d2b-resource-store-redb/tests/fault.rs`; every Provider crate's `tests/*.rs` |
@@ -601,7 +601,7 @@ that evidence exists.
 | Repeated open/close and long-reader rejection | no reader starves the single writer |
 
 The RSS row is not a contract-only store pass criterion. After SPIKE-01 runs,
-`ADR046-store-001` production backend work records the resource service/store
+`ADR046-store-004` production backend work records the resource service/store
 median at the 10,000-resource/100-watch fixture and fails above 24 MiB; that
 evidence blocks backend completion. The work that lands the fixed controllers
 separately fails above 22 MiB for `Provider/system-core` and 12 MiB for
