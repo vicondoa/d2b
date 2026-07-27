@@ -74,6 +74,7 @@ drift_paths=(
   docs/specs/ADR-046-implementation-graph.md
   packages/d2b-contracts/src/generated
   packages/d2b-guestd/src/generated
+  packages/d2b-resource-api/src/generated
 )
 
 if git -C "$ROOT" --no-pager diff --exit-code -- "${drift_paths[@]}" >/dev/null; then
