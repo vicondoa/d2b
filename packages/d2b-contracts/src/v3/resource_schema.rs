@@ -479,17 +479,24 @@ impl SchemaVersion {
                 .map_err(|_| ResourceSchemaError::InvalidSchemaVersion)?,
         )
     }
+
+    /// Render the canonical schema version.
+    pub fn to_canonical_string(self) -> String {
+        format!("{}.{}", self.major, self.minor)
+    }
 }
 
 impl core::fmt::Display for SchemaVersion {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{}.{}", self.major, self.minor)
+        f.write_str(&self.to_canonical_string())
     }
 }
 
 impl core::fmt::Debug for SchemaVersion {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "SchemaVersion(\"{self}\")")
+        f.debug_tuple("SchemaVersion")
+            .field(&self.to_canonical_string())
+            .finish()
     }
 }
 
@@ -498,7 +505,7 @@ impl Serialize for SchemaVersion {
     where
         S: Serializer,
     {
-        serializer.serialize_str(&self.to_string())
+        serializer.serialize_str(&self.to_canonical_string())
     }
 }
 
@@ -605,25 +612,33 @@ impl ExtensionSchemaId {
     pub const fn layer(&self) -> ExtensionSchemaLayer {
         self.layer
     }
+
+    /// Render the canonical schema ID for an authorized encoding or key surface.
+    pub fn to_canonical_string(&self) -> String {
+        format!(
+            "{}.d2bus.org/{}/{}",
+            self.provider_name.as_str(),
+            self.resource_type.as_str(),
+            self.layer.as_str()
+        )
+    }
+
+    /// Render the canonical schema ID when explicitly requested.
+    #[allow(clippy::inherent_to_string_shadow_display)]
+    pub fn to_string(&self) -> String {
+        self.to_canonical_string()
+    }
 }
 
 impl core::fmt::Display for ExtensionSchemaId {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(
-            f,
-            "{}.d2bus.org/{}/{}",
-            self.provider_name,
-            self.resource_type,
-            self.layer.as_str()
-        )
+        f.write_str("ExtensionSchemaId(<redacted>)")
     }
 }
 
 impl core::fmt::Debug for ExtensionSchemaId {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_tuple("ExtensionSchemaId")
-            .field(&self.to_string())
-            .finish()
+        f.write_str("ExtensionSchemaId(<redacted>)")
     }
 }
 
@@ -632,7 +647,7 @@ impl Serialize for ExtensionSchemaId {
     where
         S: Serializer,
     {
-        serializer.serialize_str(&self.to_string())
+        serializer.serialize_str(&self.to_canonical_string())
     }
 }
 
@@ -661,21 +676,21 @@ impl JsonSchema for ExtensionSchemaId {
 }
 
 /// Version and fingerprint implemented for one ResourceType base layer.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct BaseSchemaIdentity {
     pub version: SchemaVersion,
     pub fingerprint: SchemaFingerprint,
 }
 
 /// Provider-advertised base schema identities.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct BaseSchemaBinding {
     pub spec: BaseSchemaIdentity,
     pub status: BaseSchemaIdentity,
 }
 
 /// Strict schema for one dynamic object.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ObjectFieldSchema {
     allowed: BTreeSet<String>,
     required: BTreeSet<String>,
@@ -734,7 +749,7 @@ impl ObjectFieldSchema {
 }
 
 /// Registered Provider extension schemas for one ResourceType.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ProviderExtensionRegistration {
     pub provider_ref: ResourceRef,
     pub spec_schema_id: ExtensionSchemaId,
@@ -746,13 +761,46 @@ pub struct ProviderExtensionRegistration {
 }
 
 /// The single base and Provider-extension contract for one ResourceType.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ResourceSchemaContract {
     resource_type: ResourceTypeName,
     base_binding: BaseSchemaBinding,
     base_spec: ObjectFieldSchema,
     base_status: ObjectFieldSchema,
     provider_extensions: BTreeMap<ResourceRef, ProviderExtensionRegistration>,
+}
+
+impl core::fmt::Debug for BaseSchemaIdentity {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("BaseSchemaIdentity(<redacted>)")
+    }
+}
+
+impl core::fmt::Debug for BaseSchemaBinding {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("BaseSchemaBinding(<redacted>)")
+    }
+}
+
+impl core::fmt::Debug for ObjectFieldSchema {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ObjectFieldSchema")
+            .field("allowed", &self.allowed.len())
+            .field("required", &self.required.len())
+            .finish()
+    }
+}
+
+impl core::fmt::Debug for ProviderExtensionRegistration {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("ProviderExtensionRegistration(<redacted>)")
+    }
+}
+
+impl core::fmt::Debug for ResourceSchemaContract {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("ResourceSchemaContract(<redacted>)")
+    }
 }
 
 impl ResourceSchemaContract {
@@ -991,7 +1039,7 @@ fn validate_extension_id(
 }
 
 /// Schema or Provider-layer conformance failure.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum ResourceSchemaError {
     InvalidSchemaVersion,
     InvalidSchemaId,
@@ -1012,6 +1060,31 @@ pub enum ResourceSchemaError {
     ProviderExtensionNotMinimal,
 }
 
+impl core::fmt::Debug for ResourceSchemaError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let kind = match self {
+            Self::InvalidSchemaVersion => "InvalidSchemaVersion",
+            Self::InvalidSchemaId => "InvalidSchemaId",
+            Self::InvalidFieldName => "InvalidFieldName",
+            Self::RequiredFieldNotAllowed => "RequiredFieldNotAllowed",
+            Self::UnknownField(_) => "UnknownField",
+            Self::MissingField(_) => "MissingField",
+            Self::DuplicateProviderRegistration => "DuplicateProviderRegistration",
+            Self::ResourceTypeMismatch => "ResourceTypeMismatch",
+            Self::BaseSchemaMismatch => "BaseSchemaMismatch",
+            Self::ProviderRefRequired => "ProviderRefRequired",
+            Self::ProviderRefWrongType => "ProviderRefWrongType",
+            Self::ProviderRefMismatch => "ProviderRefMismatch",
+            Self::ProviderNotRegistered => "ProviderNotRegistered",
+            Self::ProviderSchemaBinding => "ProviderSchemaBinding",
+            Self::ProviderSchemaMismatch => "ProviderSchemaMismatch",
+            Self::ProviderFieldShadowsBase(_) => "ProviderFieldShadowsBase",
+            Self::ProviderExtensionNotMinimal => "ProviderExtensionNotMinimal",
+        };
+        write!(f, "ResourceSchemaError::{kind}")
+    }
+}
+
 impl core::fmt::Display for ResourceSchemaError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
@@ -1021,8 +1094,8 @@ impl core::fmt::Display for ResourceSchemaError {
             Self::RequiredFieldNotAllowed => {
                 f.write_str("required schema field is not in the allowed set")
             }
-            Self::UnknownField(field) => write!(f, "unknown schema field: {field}"),
-            Self::MissingField(field) => write!(f, "required schema field is missing: {field}"),
+            Self::UnknownField(_) => f.write_str("schema contains an unknown field"),
+            Self::MissingField(_) => f.write_str("schema is missing a required field"),
             Self::DuplicateProviderRegistration => {
                 f.write_str("Provider extension is registered more than once")
             }
@@ -1048,8 +1121,8 @@ impl core::fmt::Display for ResourceSchemaError {
             Self::ProviderSchemaMismatch => {
                 f.write_str("Provider extension schema ID or version does not match")
             }
-            Self::ProviderFieldShadowsBase(field) => {
-                write!(f, "Provider extension shadows a base field: {field}")
+            Self::ProviderFieldShadowsBase(_) => {
+                f.write_str("Provider extension shadows a base field")
             }
             Self::ProviderExtensionNotMinimal => {
                 f.write_str("minimal base spec must not require a Provider extension")
@@ -1340,5 +1413,99 @@ key":1}"#,
             ),
             Err(ResourceSchemaError::ProviderFieldShadowsBase(field)) if field == "imageId"
         ));
+    }
+
+    #[test]
+    fn schema_diagnostics_redact_identity_field_and_payload_markers() {
+        let nonce = u64::from(std::process::id());
+        let name_marker = format!("name-{nonce:x}");
+        let payload_marker = format!("payload-marker-{nonce:x}");
+        let resource_type_marker = format!("provider-{nonce:x}.d2bus.org.Marker");
+        let markers = [
+            name_marker.as_str(),
+            payload_marker.as_str(),
+            resource_type_marker.as_str(),
+        ];
+        let resource_type = ResourceTypeName::parse(&resource_type_marker).unwrap();
+        let provider_ref = ResourceRef::parse(&format!("Provider/{name_marker}")).unwrap();
+        let spec_schema_id = ExtensionSchemaId::new(
+            ResourceName::parse(&name_marker).unwrap(),
+            resource_type.clone(),
+            ExtensionSchemaLayer::Spec,
+        );
+        let status_schema_id = ExtensionSchemaId::new(
+            ResourceName::parse(&name_marker).unwrap(),
+            resource_type.clone(),
+            ExtensionSchemaLayer::Status,
+        );
+        let object = ObjectFieldSchema::new(
+            [payload_marker.clone()],
+            [payload_marker.clone()],
+        )
+        .unwrap();
+        let digest = SchemaFingerprint::parse(format!("sha256:{nonce:064x}")).unwrap();
+        let identity = BaseSchemaIdentity {
+            version: SchemaVersion::parse("1.0").unwrap(),
+            fingerprint: digest,
+        };
+        let binding = BaseSchemaBinding {
+            spec: identity.clone(),
+            status: identity.clone(),
+        };
+        let registration = ProviderExtensionRegistration {
+            provider_ref,
+            spec_schema_id: spec_schema_id.clone(),
+            spec_schema_version: SchemaVersion::parse("1.0").unwrap(),
+            spec_settings: ObjectFieldSchema::empty(),
+            status_schema_id,
+            status_schema_version: SchemaVersion::parse("1.0").unwrap(),
+            status_details: ObjectFieldSchema::empty(),
+        };
+        let contract = ResourceSchemaContract::new(
+            resource_type,
+            binding.clone(),
+            ObjectFieldSchema::empty(),
+            ObjectFieldSchema::empty(),
+            [registration.clone()],
+        )
+        .unwrap();
+        let dynamic = CanonicalJsonValue::parse(
+            format!(r#"{{"{payload_marker}":"{payload_marker}"}}"#).as_bytes(),
+        )
+        .unwrap();
+        let dynamic_object = CanonicalJsonObject::parse(
+            format!(r#"{{"{payload_marker}":"{payload_marker}"}}"#).as_bytes(),
+        )
+        .unwrap();
+        let schema_error = ResourceSchemaError::UnknownField(payload_marker.clone());
+
+        let formatted = [
+            format!("{spec_schema_id:?}"),
+            format!("{spec_schema_id}"),
+            format!("{identity:?}"),
+            format!("{binding:?}"),
+            format!("{object:?}"),
+            format!("{registration:?}"),
+            format!("{contract:?}"),
+            format!("{dynamic:?}"),
+            format!("{dynamic_object:?}"),
+            format!("{schema_error:?}"),
+            format!("{schema_error}"),
+        ];
+        for rendered in formatted {
+            for marker in &markers {
+                assert!(
+                    !rendered.contains(marker),
+                    "schema marker appeared in diagnostic formatting"
+                );
+            }
+        }
+
+        assert!(spec_schema_id
+            .to_canonical_string()
+            .contains(&name_marker));
+        assert!(String::from_utf8(dynamic_object.to_canonical_bytes())
+            .unwrap()
+            .contains(&payload_marker));
     }
 }

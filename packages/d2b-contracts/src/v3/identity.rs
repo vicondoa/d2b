@@ -197,17 +197,28 @@ macro_rules! label_identity {
             pub fn as_str(&self) -> &str {
                 &self.0
             }
+
+            /// Render the canonical value for an authorized encoding or key surface.
+            pub fn to_canonical_string(&self) -> String {
+                self.0.clone()
+            }
+
+            /// Render the canonical value when explicitly requested.
+            #[allow(clippy::inherent_to_string_shadow_display)]
+            pub fn to_string(&self) -> String {
+                self.to_canonical_string()
+            }
         }
 
         impl core::fmt::Display for $name {
             fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-                f.write_str(&self.0)
+                write!(f, "{}(<redacted>)", stringify!($name))
             }
         }
 
         impl core::fmt::Debug for $name {
             fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-                f.debug_tuple(stringify!($name)).field(&self.0).finish()
+                write!(f, "{}(<redacted>)", stringify!($name))
             }
         }
 
@@ -310,6 +321,17 @@ impl ResourceTypeName {
         &self.0
     }
 
+    /// Render the canonical value for an authorized encoding or key surface.
+    pub fn to_canonical_string(&self) -> String {
+        self.0.clone()
+    }
+
+    /// Render the canonical value when explicitly requested.
+    #[allow(clippy::inherent_to_string_shadow_display)]
+    pub fn to_string(&self) -> String {
+        self.to_canonical_string()
+    }
+
     /// Whether this is one of the standard unqualified ResourceTypes.
     pub fn is_standard(&self) -> bool {
         !self.0.contains(RESOURCE_TYPE_QUALIFIER)
@@ -318,13 +340,13 @@ impl ResourceTypeName {
 
 impl core::fmt::Display for ResourceTypeName {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str(&self.0)
+        f.write_str("ResourceTypeName(<redacted>)")
     }
 }
 
 impl core::fmt::Debug for ResourceTypeName {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_tuple("ResourceTypeName").field(&self.0).finish()
+        f.write_str("ResourceTypeName(<redacted>)")
     }
 }
 
@@ -415,17 +437,28 @@ impl ResourceUid {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// Render the canonical value for an authorized encoding or key surface.
+    pub fn to_canonical_string(&self) -> String {
+        self.0.clone()
+    }
+
+    /// Render the canonical value when explicitly requested.
+    #[allow(clippy::inherent_to_string_shadow_display)]
+    pub fn to_string(&self) -> String {
+        self.to_canonical_string()
+    }
 }
 
 impl core::fmt::Display for ResourceUid {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str(&self.0)
+        f.write_str("ResourceUid(<redacted>)")
     }
 }
 
 impl core::fmt::Debug for ResourceUid {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "ResourceUid(<{} bytes>)", self.0.len())
+        f.write_str("ResourceUid(<redacted>)")
     }
 }
 
@@ -488,6 +521,17 @@ impl Timestamp {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// Render the canonical value for an authorized encoding or key surface.
+    pub fn to_canonical_string(&self) -> String {
+        self.0.clone()
+    }
+
+    /// Render the canonical value when explicitly requested.
+    #[allow(clippy::inherent_to_string_shadow_display)]
+    pub fn to_string(&self) -> String {
+        self.to_canonical_string()
+    }
 }
 
 fn is_valid_timestamp(value: &str) -> bool {
@@ -535,13 +579,13 @@ fn is_valid_timestamp(value: &str) -> bool {
 
 impl core::fmt::Display for Timestamp {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str(&self.0)
+        f.write_str("Timestamp(<redacted>)")
     }
 }
 
 impl core::fmt::Debug for Timestamp {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_tuple("Timestamp").field(&self.0).finish()
+        f.write_str("Timestamp(<redacted>)")
     }
 }
 
@@ -622,17 +666,28 @@ impl ServiceName {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// Render the canonical value for an authorized encoding or key surface.
+    pub fn to_canonical_string(&self) -> String {
+        self.0.clone()
+    }
+
+    /// Render the canonical value when explicitly requested.
+    #[allow(clippy::inherent_to_string_shadow_display)]
+    pub fn to_string(&self) -> String {
+        self.to_canonical_string()
+    }
 }
 
 impl core::fmt::Display for ServiceName {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str(&self.0)
+        f.write_str("ServiceName(<redacted>)")
     }
 }
 
 impl core::fmt::Debug for ServiceName {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_tuple("ServiceName").field(&self.0).finish()
+        f.write_str("ServiceName(<redacted>)")
     }
 }
 
@@ -705,11 +760,8 @@ macro_rules! digest_identity {
 
         impl core::fmt::Debug for $name {
             fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-                if $clear {
-                    f.debug_tuple(stringify!($name)).field(&self.0).finish()
-                } else {
-                    write!(f, "{}(<{} bytes>)", stringify!($name), self.0.len())
-                }
+                let _ = $clear;
+                write!(f, "{}(<redacted>)", stringify!($name))
             }
         }
 
@@ -1336,7 +1388,7 @@ mod tests {
         for value in VALID_UUIDS {
             let uid = ResourceUid::parse(*value).expect("valid UUIDv4");
             assert_eq!(uid.as_str(), *value);
-            assert_eq!(format!("{uid:?}"), "ResourceUid(<36 bytes>)");
+            assert_eq!(format!("{uid:?}"), "ResourceUid(<redacted>)");
             assert!(!format!("{uid:?}").contains(value));
             let json = serde_json::to_string(&uid).expect("serialize");
             assert_eq!(json, format!("\"{value}\""));
@@ -1439,7 +1491,7 @@ mod tests {
         );
         assert_eq!(
             format!("{generation_id:?}"),
-            format!("ResourceBundleGenerationId(\"{digest}\")")
+            "ResourceBundleGenerationId(<redacted>)"
         );
         assert_eq!(
             serde_json::to_string(&generation_id).unwrap(),
@@ -1551,5 +1603,70 @@ mod tests {
             serde_json::to_string(&TranscriptHash::from_bytes([0x5a; 32])).unwrap(),
             format!("\"{}\"", "5a".repeat(32))
         );
+    }
+
+    #[test]
+    fn identity_diagnostics_are_redacted_but_explicit_encodings_are_exact() {
+        let nonce = u64::from(std::process::id());
+        let zone_marker = format!("zone-{nonce:x}");
+        let name_marker = format!("name-{nonce:x}");
+        let uid_marker = format!("123e4567-e89b-4abc-a456-{nonce:012x}");
+        let payload_marker = format!("payload-marker-{nonce:x}");
+        let markers = [
+            zone_marker.as_str(),
+            name_marker.as_str(),
+            uid_marker.as_str(),
+            payload_marker.as_str(),
+        ];
+        let zone = ZoneId::parse(&zone_marker).unwrap();
+        let name = ResourceName::parse(&name_marker).unwrap();
+        let resource_type =
+            ResourceTypeName::parse(format!("{payload_marker}.d2bus.org.Marker")).unwrap();
+        let uid = ResourceUid::parse(&uid_marker).unwrap();
+        let timestamp = Timestamp::parse("2026-07-27T02:14:20.413Z").unwrap();
+        let purpose = SessionPurpose::parse(&payload_marker).unwrap();
+        let service = ServiceName::parse(format!("payload.{nonce:x}")).unwrap();
+        let digest = format!("sha256:{:064x}", nonce);
+        let fingerprint = SchemaFingerprint::parse(&digest).unwrap();
+        let binding = BindingDigest::parse(&digest).unwrap();
+        let generation = ResourceBundleGenerationId::parse(&digest).unwrap();
+
+        let formatted = [
+            format!("{zone:?}"),
+            format!("{zone}"),
+            format!("{name:?}"),
+            format!("{name}"),
+            format!("{resource_type:?}"),
+            format!("{resource_type}"),
+            format!("{uid:?}"),
+            format!("{uid}"),
+            format!("{timestamp:?}"),
+            format!("{timestamp}"),
+            format!("{purpose:?}"),
+            format!("{purpose}"),
+            format!("{service:?}"),
+            format!("{service}"),
+            format!("{fingerprint:?}"),
+            format!("{binding:?}"),
+            format!("{generation:?}"),
+        ];
+        for rendered in formatted {
+            for marker in &markers {
+                assert!(
+                    !rendered.contains(marker),
+                    "identity marker appeared in diagnostic formatting"
+                );
+            }
+            assert!(!rendered.contains(&digest));
+        }
+
+        assert_eq!(zone.as_str(), zone_marker);
+        assert_eq!(name.to_canonical_string(), name_marker);
+        assert_eq!(uid.to_canonical_string(), uid_marker);
+        assert_eq!(
+            serde_json::to_string(&resource_type).unwrap(),
+            format!("\"{payload_marker}.d2bus.org.Marker\"")
+        );
+        assert_eq!(fingerprint.as_str(), digest);
     }
 }

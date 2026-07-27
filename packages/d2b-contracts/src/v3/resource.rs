@@ -65,17 +65,28 @@ impl FinalizerId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// Render the canonical ID for an authorized encoding or key surface.
+    pub fn to_canonical_string(&self) -> String {
+        self.0.clone()
+    }
+
+    /// Render the canonical ID when explicitly requested.
+    #[allow(clippy::inherent_to_string_shadow_display)]
+    pub fn to_string(&self) -> String {
+        self.to_canonical_string()
+    }
 }
 
 impl core::fmt::Display for FinalizerId {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str(&self.0)
+        f.write_str("FinalizerId(<redacted>)")
     }
 }
 
 impl core::fmt::Debug for FinalizerId {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_tuple("FinalizerId").field(&self.0).finish()
+        f.write_str("FinalizerId(<redacted>)")
     }
 }
 
@@ -296,18 +307,7 @@ impl ResourceMetadata {
 
 impl core::fmt::Debug for ResourceMetadata {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("ResourceMetadata")
-            .field("name", &self.name)
-            .field("zone", &self.zone)
-            .field("uid", &self.uid)
-            .field("generation", &self.generation)
-            .field("revision", &self.revision)
-            .field("owner_ref", &self.owner_ref)
-            .field("finalizers", &self.finalizers)
-            .field("managed_by", &self.managed_by)
-            .field("labels", &self.labels.len())
-            .field("annotations", &self.annotations.len())
-            .finish_non_exhaustive()
+        f.write_str("ResourceMetadata(<redacted>)")
     }
 }
 
@@ -455,11 +455,7 @@ impl ProviderSpecExtension {
 
 impl core::fmt::Debug for ProviderSpecExtension {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("ProviderSpecExtension")
-            .field("schema_id", &self.schema_id)
-            .field("schema_version", &self.schema_version)
-            .field("settings", &"<redacted>")
-            .finish()
+        f.write_str("ProviderSpecExtension(<redacted>)")
     }
 }
 
@@ -562,12 +558,7 @@ impl ResourceSpec {
 
 impl core::fmt::Debug for ResourceSpec {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("ResourceSpec")
-            .field("provider_ref", &self.provider_ref)
-            .field("update_policy", &self.update_policy)
-            .field("base", &"<redacted>")
-            .field("provider", &self.provider.is_some())
-            .finish()
+        f.write_str("ResourceSpec(<redacted>)")
     }
 }
 
@@ -754,13 +745,7 @@ impl ResourceEnvelope {
 
 impl core::fmt::Debug for ResourceEnvelope {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("ResourceEnvelope")
-            .field("api_version", &self.api_version)
-            .field("resource_type", &self.resource_type)
-            .field("metadata", &self.metadata)
-            .field("spec", &"<redacted>")
-            .field("status", &self.status)
-            .finish()
+        f.write_str("ResourceEnvelope(<redacted>)")
     }
 }
 
@@ -1099,5 +1084,100 @@ mod tests {
             ResourceEnvelope::from_json(duplicate),
             Err(ResourceError::CanonicalJson(_))
         ));
+    }
+
+    #[test]
+    fn resource_diagnostics_redact_identity_and_payload_layers() {
+        let nonce = u64::from(std::process::id());
+        let zone_marker = format!("zone-{nonce:x}");
+        let name_marker = format!("name-{nonce:x}");
+        let uid_marker = format!("123e4567-e89b-4abc-a456-{nonce:012x}");
+        let payload_marker = format!("payload-marker-{nonce:x}");
+        let markers = [
+            zone_marker.as_str(),
+            name_marker.as_str(),
+            uid_marker.as_str(),
+            payload_marker.as_str(),
+        ];
+        let finalizer = FinalizerId::parse(format!(
+            "{name_marker}.d2bus.org/{payload_marker}"
+        ))
+        .unwrap();
+        let presentation = PresentationMetadata::new(
+            BTreeMap::from([("marker".to_owned(), payload_marker.clone())]),
+            BTreeMap::from([("marker".to_owned(), payload_marker.clone())]),
+        )
+        .unwrap();
+        let timestamp = Timestamp::parse("2026-07-27T02:14:20.413Z").unwrap();
+        let metadata = ResourceMetadata::new(
+            ResourceName::parse(&name_marker).unwrap(),
+            ZoneId::parse(&zone_marker).unwrap(),
+            ResourceUid::parse(&uid_marker).unwrap(),
+            ResourceGeneration::new(1).unwrap(),
+            ZoneRevision::new(1),
+            Some(ResourceRef::parse(&format!("Provider/{name_marker}")).unwrap()),
+            vec![finalizer.clone()],
+            None,
+            timestamp.clone(),
+            timestamp,
+            ManagedBy::Api,
+            None,
+            None,
+            None,
+            presentation.clone(),
+        )
+        .unwrap();
+        let extension = ProviderSpecExtension::new(
+            ExtensionSchemaId::parse(&format!(
+                "{name_marker}.d2bus.org/Host/spec"
+            ))
+            .unwrap(),
+            SchemaVersion::parse("1.0").unwrap(),
+            CanonicalJsonObject::parse(
+                format!(r#"{{"marker":"{payload_marker}"}}"#).as_bytes(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let spec = ResourceSpec::new(
+            Some(ResourceRef::parse(&format!("Provider/{name_marker}")).unwrap()),
+            None,
+            CanonicalJsonObject::parse(
+                format!(r#"{{"marker":"{payload_marker}"}}"#).as_bytes(),
+            )
+            .unwrap(),
+            Some(extension.clone()),
+        )
+        .unwrap();
+        let envelope = ResourceEnvelope::new(
+            ResourceTypeName::parse("Host").unwrap(),
+            metadata.clone(),
+            spec.clone(),
+            status(None),
+        )
+        .unwrap();
+
+        let formatted = [
+            format!("{finalizer:?}"),
+            format!("{finalizer}"),
+            format!("{presentation:?}"),
+            format!("{metadata:?}"),
+            format!("{extension:?}"),
+            format!("{spec:?}"),
+            format!("{envelope:?}"),
+        ];
+        for rendered in formatted {
+            for marker in &markers {
+                assert!(
+                    !rendered.contains(marker),
+                    "resource marker appeared in diagnostic formatting"
+                );
+            }
+        }
+
+        assert!(String::from_utf8(envelope.canonical_bytes().unwrap())
+            .unwrap()
+            .contains(&payload_marker));
+        assert!(finalizer.to_canonical_string().contains(&payload_marker));
     }
 }

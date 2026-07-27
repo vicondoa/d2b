@@ -84,17 +84,28 @@ impl ResourceRef {
     pub const fn name(&self) -> &ResourceName {
         &self.name
     }
+
+    /// Render the canonical reference for an authorized encoding or key surface.
+    pub fn to_canonical_string(&self) -> String {
+        format!("{}/{}", self.resource_type.as_str(), self.name.as_str())
+    }
+
+    /// Render the canonical reference when explicitly requested.
+    #[allow(clippy::inherent_to_string_shadow_display)]
+    pub fn to_string(&self) -> String {
+        self.to_canonical_string()
+    }
 }
 
 impl core::fmt::Display for ResourceRef {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{}/{}", self.resource_type, self.name)
+        f.write_str("ResourceRef(<redacted>)")
     }
 }
 
 impl core::fmt::Debug for ResourceRef {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "ResourceRef(\"{self}\")")
+        f.write_str("ResourceRef(<redacted>)")
     }
 }
 
@@ -111,7 +122,7 @@ impl Serialize for ResourceRef {
     where
         S: Serializer,
     {
-        serializer.serialize_str(&self.to_string())
+        serializer.serialize_str(&self.to_canonical_string())
     }
 }
 
@@ -213,7 +224,7 @@ mod tests {
         for value in VALID_REF_VECTORS {
             let parsed = ResourceRef::parse(value).expect("valid ref");
             assert_eq!(parsed.to_string(), *value);
-            assert_eq!(format!("{parsed:?}"), format!("ResourceRef(\"{value}\")"));
+            assert_eq!(format!("{parsed:?}"), "ResourceRef(<redacted>)");
             let json = serde_json::to_string(&parsed).expect("serialize");
             assert_eq!(json, format!("\"{value}\""));
             assert_eq!(
@@ -295,5 +306,24 @@ mod tests {
 
         assert_eq!(resource_ref, ResourceRef::parse("Host/work").unwrap());
         assert_ne!(first_uid, recreated_uid);
+    }
+
+    #[test]
+    fn reference_diagnostics_redact_both_identity_components() {
+        let nonce = u64::from(std::process::id());
+        let name_marker = format!("name-{nonce:x}");
+        let type_marker = format!("provider-{nonce:x}.d2bus.org.Marker");
+        let canonical = format!("{type_marker}/{name_marker}");
+        let reference = ResourceRef::parse(&canonical).unwrap();
+
+        for rendered in [format!("{reference:?}"), format!("{reference}")] {
+            assert!(!rendered.contains(&name_marker));
+            assert!(!rendered.contains(&type_marker));
+        }
+        assert_eq!(reference.to_canonical_string(), canonical);
+        assert_eq!(
+            serde_json::to_string(&reference).unwrap(),
+            format!("\"{canonical}\"")
+        );
     }
 }
