@@ -310,6 +310,15 @@ Each spec contains an **Implementation work items** section. Every item has:
 | Data migration | State/config/artifact/reset behavior |
 | Validation | Exact test files/selectors and measurable acceptance |
 | Removal proof | Live successor path and tests required before deletion |
+| Implementation state | Optional source assertion from the closed delivery set: `Planned` until the complete item has landed, or `Merged` only when every named destination and validation obligation is present in the indexed tree |
+| Evidence | Optional exact committed destinations and validation selectors supporting `Merged`, or the concrete missing destination/unrun prerequisite supporting `Planned` |
+
+`Implementation state` and `Evidence` remain in the owning work-item table, not
+a second delivery ledger. `xtask spec-registry` emits both fields for every
+item in `ADR-046-work-items.json`: an item without source rows defaults to
+`Planned` with no merge evidence. A `Merged` source row requires nonempty exact
+evidence. A spec's `Accepted` status says its design is settled; it does not
+imply that any implementation item is `Merged`.
 
 The exact work-item ID regex is
 `^ADR046-[a-z0-9]+(?:-[a-z0-9]+)*-(?:00[1-9]|0[1-9][0-9]|[1-9][0-9]{2})$`.
@@ -448,8 +457,9 @@ Implementation work items section is complete:
 - every item has exactly one nonempty `Dependency/owner`, `Current source`,
   `Reuse action`, `Destination`, `Detailed design`, `Integration`,
   `Data migration`, `Validation`, and `Removal proof` field, with no duplicate
-  fields; an optional `Work item ID` row exactly matches its heading and an
-  optional `Reuse source` is nonempty;
+  fields; an optional `Work item ID` row exactly matches its heading, an
+  optional `Reuse source` is nonempty, and optional `Implementation state` /
+  `Evidence` rows satisfy the generated-state rules above;
 - every heading prefix appears in the owning member's bytewise-sorted
   `workItemPrefixes`; every registered prefix belongs globally to exactly one
   member, and a member with no work items has an empty array in the generated

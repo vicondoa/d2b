@@ -739,6 +739,8 @@ The following are not standalone ResourceTypes:
 | Data migration | Full d2b 3.0 reset; no v2 resource import |
 | Validation | Golden JSON/protobuf and cross-language canonical-JSON vectors; duplicate-key/float/non-NFC/control/key-bound rejection; serde unknown-field; three-layer spec shape round-trip; canonical minimal base-spec acceptance; base-schema version/fingerprint conformance; `spec.provider` deny-unknown/version-mismatch/shadow rejection and providerRef-binding; three-layer status shape round-trip, including required empty `status.resource`; base-only projection ignores/omits `status.provider`; `status.provider` unknown-field/version-mismatch rejection; status redaction/size/time/phase tests; exact D108 outcome scalar vectors; ResourceError codec and no-overlap-with-v2-kind policy tests; `status.update` currency object round-trip (state/reasons/disruption/preserveState/owned+dependency refs bounded); `spec.updatePolicy` base round-trip |
 | Removal proof | Old DTOs removed per owning ResourceType wave only after rendered/runtime consumers move |
+| Implementation state | Merged |
+| Evidence | All destinations are present: `packages/d2b-contracts/src/v3/resource.rs`, `resource_status.rs`, `resource_schema.rs`, and `error.rs`, with inline canonicalization, bounds, schema, status, and error tests. |
 
 ### ADR046-object-002
 
@@ -753,3 +755,5 @@ The following are not standalone ResourceTypes:
 | Data migration | None after reset |
 | Validation | Property tests for cycles/reparent/name reuse; store-dispatch tests for bounded hint coalescing and atomic index-plus-hint emission through a fake trait implementation |
 | Removal proof | Not applicable |
+| Implementation state | Merged |
+| Evidence | Both destinations are present: `packages/d2b-resource-store-redb/src/ownership.rs` and `packages/d2b-controller-toolkit/src/owner_hints.rs`, with ownership and bounded-hint tests. |

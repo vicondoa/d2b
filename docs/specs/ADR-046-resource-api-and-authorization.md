@@ -277,14 +277,14 @@ route, Provider generation, or method fails closed.
 
 ### Admitted mutation boundary
 
-The native evaluator is the only constructor of `AllowDecision`. It captures
-the admitted mutation, exact authorization attributes, revisions, controller
-generation, request identity, and deadline into `AdmittedMutation`, whose
-fields are private. `ResourceStore::commit` accepts only that type. Inside the
-write transaction the store compares the captured policy, API-catalog, active
-configuration, and controller revisions against live `store_meta`; any mismatch
-aborts without mutation as `authorization-denied`. The store never evaluates
-RBAC and never auto-retries. The client must reissue through the evaluator.
+Mutation admission can originate only from a successful native authorization
+evaluation. The resulting sealed evidence carries the admitted mutation, exact
+authorization attributes, policy/API-catalog/active-configuration/controller
+revisions, request identity, and deadline, and is bound to one store instance.
+A different store cannot verify it. Inside the write transaction the store
+compares the captured revisions against live `store_meta`; any mismatch aborts
+without mutation as `authorization-denied`. The store never evaluates RBAC and
+never auto-retries. The client must reissue through the evaluator.
 
 ### Role
 
@@ -675,10 +675,10 @@ process data, and terminal bytes.
 
 | Item | Treatment |
 | --- | --- |
-| Current anchor | The native ResourceService DTO, method, error, and authorization boundary contract exists in `d2b-contracts` and `d2b-resource-api` but is not dispatched from d2b-bus. Existing anchors remain public daemon/broker seqpacket auth, `d2b-daemon-access` admission types, `d2b-realm-router` principal/capability/idempotency checks, Realm access resolver, and strict DTOs |
-| Evidence class | Resource API contract is `implemented-but-unwired`; d2b-bus dispatch and the native RBAC execution path are unimplemented. Local daemon auth is reachable, while daemon-access/Realm peer abstractions remain partly unwired |
+| Current anchor | Native ResourceService DTOs, methods, errors, Role/RoleBinding evaluation, service-to-store calls, and an authenticated ttrpc adapter exist in `d2b-contracts` and `d2b-resource-api`. The adapter can register the complete ttrpc service for an already-authenticated session, but no production d2b-bus or Zone path dispatches it. Existing anchors remain public daemon/broker seqpacket auth, `d2b-daemon-access` admission types, `d2b-realm-router` principal/capability/idempotency checks, Realm access resolver, and strict DTOs |
+| Evidence class | Resource API, native RBAC, service-to-store wiring, and the ttrpc adapter are `implemented-but-unwired`; production bus dispatch, Zone wiring, and a production store backend are absent. The adapter's existence is not production reachability. Local daemon auth is reachable, while daemon-access/Realm peer abstractions remain partly unwired |
 | Behavior retained | SO_PEERCRED/local identity, typed denials, positive capabilities, no relay-to-local auth, strict bounds/unknown-field rejection |
-| Required delta | Dispatch the contract from d2b-bus and wire it to the store and authorization evaluator; implement Provider API schemas/bindings, the Role/RoleBinding engine, status ownership, and parent resource routing |
+| Required delta | Dispatch the existing ttrpc adapter from d2b-bus, connect a Zone runtime and production backend, and implement Provider API schemas/bindings, status ownership, and parent resource routing |
 | Reuse path | Extract exact admission/error/id/ref validators and router authorization derivation |
 | Replacement/deletion | Old public wire remains until CLI/controllers consume new services |
 | Feasibility proof | Multi-process local/vsock/Zone resource calls, immediate revocation, conflict/no-leak tests |
@@ -699,6 +699,8 @@ process data, and terminal bytes.
 | Data migration | None; v3 clean break |
 | Validation | Golden encoding/field-number vectors; generated-file drift tests for both outputs and byte-identical existing guest-proto output; no-build-script/Any/dynamic-oneof/transport-domain-error policy tests; D112 constant assertions; malformed/oversize/conflict/status-owner tests |
 | Removal proof | Old command/resource-equivalent paths removed only per integration wave |
+| Implementation state | Merged |
+| Evidence | All destinations are present, including generated protobuf/ttrpc bindings and `packages/d2b-resource-api/src/{service,client,error,adapter}.rs`; contract, generated-drift, malformed-input, batch, and adapter tests are committed. |
 
 ### ADR046-api-002
 
@@ -713,3 +715,5 @@ process data, and terminal bytes.
 | Data migration | Generate initial Roles/Bindings from Nix v3 config |
 | Validation | W0 evaluator-skeleton, cache-key, revision-invalidation, subject-mapping, relay-origin/scope, relay-missing, and target-verb-missing fail-closed tests; concrete Role/RoleBinding schema and revocation vectors land with the W5 Zone-control work items |
 | Removal proof | Legacy auth remains until every v3 route is covered |
+| Implementation state | Merged |
+| Evidence | Both destinations are present: `packages/d2b-resource-api/src/authz.rs` and `packages/d2b-core-controller/src/rbac.rs`, with native Role/RoleBinding evaluation, bootstrap, relay, cache, and revision tests. |

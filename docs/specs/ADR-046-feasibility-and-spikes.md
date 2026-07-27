@@ -323,9 +323,9 @@ performed by this documentation-only spec.
 | Field | Value |
 | --- | --- |
 | Hypothesis | The post-commit dispatcher inside the Zone runtime (redb write-transaction commit → in-memory index swap → matching watch/reconcile-hint push) delivers a hint to a waiting async consumer with p95 latency ≤5 ms, independent of concurrent unrelated commit traffic. |
-| Minimal disposable artifact | `proofs/redb-commit-handler-latency-spike/` - extends SPIKE-01's store-actor with a minimal in-process "hint bus" (a bounded `tokio::sync::mpsc` per registered consumer, no real d2b-bus/ComponentSession) and a synthetic "controller" task that records `Instant::now()` on hint receipt. |
+| Minimal disposable artifact | `proofs/redb-resource-store-spike/` - a `commit_to_handler` bench target in SPIKE-01's owned crate that extends its store actor with a minimal in-process "hint bus" (a bounded `tokio::sync::mpsc` per registered consumer, no real d2b-bus/ComponentSession) and a synthetic "controller" task that records `Instant::now()` on hint receipt. |
 | Inputs | 1,000 sequential single-resource writes each immediately followed (same async task) by measuring elapsed time to the matching consumer's hint receipt; repeated under three concurrency profiles: (a) no background writers; (b) 10 background writer tasks issuing unrelated resource writes at a combined 500 writes/s; (c) 100 background writer tasks at a combined 2,000 writes/s. |
-| Command/harness | `cargo bench --manifest-path proofs/redb-commit-handler-latency-spike/Cargo.toml -- commit_to_handler` using `criterion` with `--sample-size 1000`; percentile computed by criterion's built-in estimator over the full 1,000-sample run per profile. |
+| Command/harness | `cargo bench --manifest-path proofs/redb-resource-store-spike/Cargo.toml -- commit_to_handler` using `criterion` with `--sample-size 1000`; percentile computed by criterion's built-in estimator over the full 1,000-sample run per profile. |
 | Metrics | p50/p95/p99 elapsed time in microseconds from `write_transaction.commit()` return to consumer task waking and reading the hint, for each of the 3 concurrency profiles. |
 | Pass/fail threshold | p95 ≤5,000 µs (5 ms) in all 3 profiles; p99 ≤10,000 µs recorded and reported (not gating, but any p99 >20 ms is a documented finding attached to the result). |
 | Expected resource budget | ≤3 minutes wall time per profile; single CI runner core pinned via `taskset`/`cset` where available, otherwise best-effort with reported CPU count and load. |
@@ -720,6 +720,8 @@ decisions/work items" row.
 | Data migration | None (disposable fixture data only) |
 | Validation | SPIKE-01 metrics (1)-(5) and SPIKE-02 metrics (1) across all 3 concurrency profiles, per those entries' exact pass/fail thresholds |
 | Removal proof | Per SPIKE-01/SPIKE-02 Cleanup rows: deleted once `packages/d2b-resource-store-redb` and `packages/d2b-controller-toolkit/benches/reaction.rs` reproduce equal-or-stricter coverage |
+| Implementation state | Planned |
+| Evidence | `proofs/redb-resource-store-spike/` is absent and SPIKE-01/SPIKE-02 both remain explicitly not executed. |
 
 ### ADR046-feasibility-002
 
