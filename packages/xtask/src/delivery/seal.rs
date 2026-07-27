@@ -39,21 +39,22 @@
 //! wave's own content. Reusing that result would assert something the run
 //! never established.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+};
 
 use serde::{Deserialize, Serialize};
 
 use super::{
     DELIVERY_SCHEMA_VERSION, DeliveryError, Result,
-    command::{WaveCommand, WorkflowOutput},
+    command::{CliOptions, WaveCommand, WorkflowOutput},
     evidence::{self, EvidenceLane, REQUIRED_EVIDENCE_LANES},
     model::{
         CandidateId, CandidateMaterial, ContentId, SEAL_ARTIFACT_KIND, SnapshotSha256,
         sha256_bytes, validate_identifier, validate_program_wave, validate_sha256,
     },
-    panel::{
-        self, PanelAttestation, SnapshotView, ensure_artifact_kind, parse_snapshot_invocation,
-    },
+    panel::{self, PanelAttestation, SnapshotView, ensure_artifact_kind},
     storage::{CandidateDir, PANEL_REQUEST_FILE, SEAL_FILE},
 };
 
@@ -140,8 +141,21 @@ impl SealRecord {
 
 /// `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave seal`.
 pub fn run(args: &[String]) -> Result<WorkflowOutput> {
-    let (state, snapshot_path) = parse_snapshot_invocation(args)?;
+    let mut options = CliOptions::parse(args)?;
+    let snapshot_path = options.required_path("--snapshot")?;
+    let (state, repository_roots) = panel::prepare_state_with_roots(&mut options)?;
+    options.finish()?;
+    let snapshot_path = state.resolve_artifact_ref(&snapshot_path);
     let (candidate, snapshot) = panel::open_candidate(&state, &snapshot_path)?;
+    seal_checked(&candidate, &snapshot, &repository_roots)
+}
+
+fn seal_checked(
+    candidate: &CandidateDir,
+    snapshot: &SnapshotView,
+    repository_roots: &BTreeMap<String, PathBuf>,
+) -> Result<WorkflowOutput> {
+    super::work_item_state::require_current_wave_merged(&snapshot.material, &repository_roots)?;
     seal(&candidate, &snapshot)
 }
 
@@ -237,6 +251,7 @@ pub(crate) mod tests {
         panel::tests::{
             candidate_with_snapshot, candidate_with_snapshot_from, record_files, write_record_dir,
         },
+        snapshot::tests::{GitFixture, take},
         storage::tests::Scratch,
     };
     use std::path::Path;
@@ -328,6 +343,33 @@ pub(crate) mod tests {
         assert_eq!(record.panel.records.len(), PANEL_ROLES.len());
         assert!(record.panel.unanimous);
         assert_eq!(record.evidence.len(), 2);
+    }
+
+    #[test]
+    fn seal_command_rejects_stale_planned_work_item_state() {
+        let repository = GitFixture::new("seal-planned-state-repository");
+        repository.write(
+            "docs/specs/ADR-046-implementation-graph.json",
+            r#"{"nodes":[{"id":"ADR046-foundation-001","kind":"work-item","wave":"W0"}]}"#,
+        );
+        repository.write(
+            "docs/specs/ADR-046-work-items.json",
+            r#"{"items":[{"workItemId":"ADR046-foundation-001","implementationState":"Planned"}]}"#,
+        );
+        repository.commit("planned work-item state");
+        let material = take(&repository).material;
+
+        let scratch = Scratch::new("seal-planned-state");
+        let (candidate, snapshot) = sealable_from(&scratch, material);
+        let roots = BTreeMap::from([("github.com/example/d2b".to_string(), repository.repo())]);
+        let error = seal_checked(&candidate, &snapshot, &roots)
+            .expect_err("a Planned item must block the seal command");
+        assert!(error.message().contains("cannot seal W0"), "{error}");
+        assert!(error.message().contains("ADR046-foundation-001"), "{error}");
+        assert!(
+            error.message().contains("Implementation state to Merged"),
+            "{error}"
+        );
     }
 
     #[test]

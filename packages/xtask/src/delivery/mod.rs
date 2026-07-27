@@ -31,6 +31,7 @@ pub mod panel;
 pub mod seal;
 pub mod snapshot;
 pub mod storage;
+pub mod work_item_state;
 
 pub use command::{WaveCommand, WorkflowOutput, dispatch};
 pub use model::{

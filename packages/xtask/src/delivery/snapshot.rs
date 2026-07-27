@@ -122,12 +122,22 @@ impl WaveSnapshot {
 /// Routes `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave snapshot`.
 pub fn run(args: &[String]) -> Result<WorkflowOutput> {
     let request = SnapshotRequest::parse(args)?;
-    let root = StateRoot::prepare(&request.checkout_roots()?, request.state_dir.as_deref())?;
-    run_with_root(&request, &root)
+    let repository_roots = request.checkout_roots()?;
+    let root = StateRoot::prepare(
+        &repository_roots.values().cloned().collect::<Vec<_>>(),
+        request.state_dir.as_deref(),
+    )?;
+    run_with_root(&request, &root, &repository_roots)
 }
 
-fn run_with_root(request: &SnapshotRequest, root: &StateRoot) -> Result<WorkflowOutput> {
-    let snapshot = WaveSnapshot::seal(discover(request)?)?;
+fn run_with_root(
+    request: &SnapshotRequest,
+    root: &StateRoot,
+    repository_roots: &BTreeMap<String, PathBuf>,
+) -> Result<WorkflowOutput> {
+    let material = discover(request)?;
+    super::work_item_state::require_prior_waves_merged(&material, repository_roots)?;
+    let snapshot = WaveSnapshot::seal(material)?;
     let candidate = root.candidate(snapshot.wave(), &snapshot.candidate_id)?;
     write(&candidate, &snapshot)?;
     WorkflowOutput::ok(WaveCommand::Snapshot)
@@ -376,10 +386,12 @@ impl SnapshotRequest {
 
     /// Git working-tree roots of every repository the wave spans, used to keep
     /// delivery state outside all of them.
-    fn checkout_roots(&self) -> Result<Vec<PathBuf>> {
+    fn checkout_roots(&self) -> Result<BTreeMap<String, PathBuf>> {
         self.repositories
             .iter()
-            .map(|repository| toplevel(&repository.checkout))
+            .map(|repository| {
+                toplevel(&repository.checkout).map(|root| (repository.id.clone(), root))
+            })
             .collect()
     }
 }
@@ -951,7 +963,12 @@ pub(crate) mod tests {
     pub(crate) fn take(fixture: &GitFixture) -> WaveSnapshot {
         let request = SnapshotRequest::parse(&fixture.snapshot_args()).expect("parse request");
         let root = StateRoot::for_tests(&fixture.state()).expect("anchor state root");
-        run_with_root(&request, &root).expect("snapshot");
+        run_with_root(
+            &request,
+            &root,
+            &BTreeMap::from([("github.com/example/d2b".to_string(), fixture.repo())]),
+        )
+        .expect("snapshot");
         read_file(
             &root
                 .path()

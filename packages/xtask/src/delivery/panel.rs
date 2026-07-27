@@ -33,7 +33,7 @@
 //! root, and because no record content is ever rendered to stdout.
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, File},
     io::Read,
     path::{Path, PathBuf},
@@ -647,12 +647,17 @@ fn parse_attest_invocation(args: &[String]) -> Result<(StateRoot, PathBuf, PathB
 /// Resolves the delivery state root from `--state-dir` and the `--repo`
 /// checkouts delivery state must stay outside of.
 pub(crate) fn prepare_state(options: &mut CliOptions) -> Result<StateRoot> {
+    prepare_state_with_roots(options).map(|(state, _)| state)
+}
+
+pub(crate) fn prepare_state_with_roots(
+    options: &mut CliOptions,
+) -> Result<(StateRoot, BTreeMap<String, PathBuf>)> {
     let state_dir = options.optional_path("--state-dir")?;
-    let roots = options
-        .repository_roots()?
-        .into_values()
-        .collect::<Vec<_>>();
-    StateRoot::prepare(&roots, state_dir.as_deref())
+    let roots = options.repository_roots()?;
+    let checkout_paths = roots.values().cloned().collect::<Vec<_>>();
+    let state = StateRoot::prepare(&checkout_paths, state_dir.as_deref())?;
+    Ok((state, roots))
 }
 
 pub(crate) fn ensure_artifact_kind(found: &str, expected: &str, label: &str) -> Result<()> {
