@@ -677,8 +677,12 @@ impl NativeAuthorizer {
         if policy.catalog != self.catalog {
             return Err(AuthorizationPolicyError::CatalogMismatch);
         }
-        *self.write_policy() = Some(Arc::new(policy));
-        self.cache.invalidate_revisions(revision_set(state));
+        if policy.policy_revision != state.snapshot.policy_revision {
+            return Err(AuthorizationPolicyError::PolicyStateRevisionMismatch);
+        }
+        let mut installed = self.write_policy();
+        *installed = Some(Arc::new(policy));
+        self.cache.clear();
         Ok(())
     }
 
@@ -692,6 +696,16 @@ impl NativeAuthorizer {
         context: &AuthenticatedSubjectContext,
         request: &AuthorizationRequest,
         state: &AuthorizationState,
+    ) -> Result<AuthorizationGrant, AuthorizationDenial> {
+        self.authorize_before_grant(context, request, state, || {})
+    }
+
+    fn authorize_before_grant(
+        &self,
+        context: &AuthenticatedSubjectContext,
+        request: &AuthorizationRequest,
+        state: &AuthorizationState,
+        before_grant: impl FnOnce(),
     ) -> Result<AuthorizationGrant, AuthorizationDenial> {
         if request.targets.is_empty() {
             return Err(AuthorizationDenial::NoMatchingGrant);
@@ -713,9 +727,9 @@ impl NativeAuthorizer {
             return authorize_bootstrap(&self.admission, context, request, state, relay_hop);
         }
 
-        let policy = self
-            .read_policy()
-            .clone()
+        let installed = self.read_policy();
+        let policy = installed
+            .as_ref()
             .ok_or(AuthorizationDenial::PolicyUnavailable)?;
         if policy.policy_revision != state.snapshot.policy_revision {
             return Err(AuthorizationDenial::PolicyRevisionChanged);
@@ -732,6 +746,7 @@ impl NativeAuthorizer {
                 state.now_tick,
             );
         }
+        before_grant();
         Ok(grant(&self.admission, context, request, state.snapshot))
     }
 
@@ -1311,6 +1326,7 @@ pub enum AuthorizationPolicyError {
     DuplicateRole,
     RelayGrantRestricted,
     PolicyRevisionZero,
+    PolicyStateRevisionMismatch,
 }
 
 impl core::fmt::Display for AuthorizationPolicyError {
@@ -1327,6 +1343,9 @@ impl core::fmt::Display for AuthorizationPolicyError {
             Self::DuplicateRole => "policy contains duplicate Role identities",
             Self::RelayGrantRestricted => "relay grant is not core or durable-admin authorized",
             Self::PolicyRevisionZero => "stored policy revision must be nonzero",
+            Self::PolicyStateRevisionMismatch => {
+                "installed policy revision does not match trusted runtime state"
+            }
         })
     }
 }
@@ -1553,6 +1572,89 @@ mod tests {
                 .authorize(&context, &request(), &state(5))
                 .unwrap_err(),
             AuthorizationDenial::PolicyUnavailable
+        );
+    }
+
+    #[test]
+    fn same_revision_policy_replacement_invalidates_a_cached_allow() {
+        let context = subject(Locality::Local, EvidenceClass::UnixPeer, "User/alice");
+        let engine = NativeAuthorizer::from_issuer(
+            ApiCatalog::standard(),
+            Some(policy(4, &context, Some(ResourceVerb::Get), false)),
+            test_issuer(),
+        )
+        .unwrap();
+        assert!(engine.authorize(&context, &request(), &state(4)).is_ok());
+
+        engine
+            .replace_policy(policy(4, &context, None, false), &state(4))
+            .unwrap();
+
+        assert_eq!(
+            engine
+                .authorize(&context, &request(), &state(4))
+                .unwrap_err(),
+            AuthorizationDenial::NoMatchingGrant
+        );
+    }
+
+    #[test]
+    fn replacement_and_permit_minting_are_linearized() {
+        use std::sync::mpsc::{self, TryRecvError};
+
+        let context = subject(Locality::Local, EvidenceClass::UnixPeer, "User/alice");
+        let engine = Arc::new(
+            NativeAuthorizer::from_issuer(
+                ApiCatalog::standard(),
+                Some(policy(4, &context, Some(ResourceVerb::Get), false)),
+                test_issuer(),
+            )
+            .unwrap(),
+        );
+        assert!(engine.authorize(&context, &request(), &state(4)).is_ok());
+
+        let (at_grant_tx, at_grant_rx) = mpsc::channel();
+        let (release_grant_tx, release_grant_rx) = mpsc::channel();
+        let authorizing_engine = Arc::clone(&engine);
+        let authorizing_context = context.clone();
+        let authorizing = std::thread::spawn(move || {
+            authorizing_engine.authorize_before_grant(
+                &authorizing_context,
+                &request(),
+                &state(4),
+                || {
+                    at_grant_tx.send(()).unwrap();
+                    release_grant_rx.recv().unwrap();
+                },
+            )
+        });
+        at_grant_rx.recv().unwrap();
+
+        let (replacement_started_tx, replacement_started_rx) = mpsc::channel();
+        let (replacement_done_tx, replacement_done_rx) = mpsc::channel();
+        let replacing_engine = Arc::clone(&engine);
+        let replacing_context = context.clone();
+        let replacing = std::thread::spawn(move || {
+            replacement_started_tx.send(()).unwrap();
+            let result = replacing_engine.replace_policy(
+                policy(4, &replacing_context, None, false),
+                &state(4),
+            );
+            replacement_done_tx.send(result).unwrap();
+        });
+        replacement_started_rx.recv().unwrap();
+        assert_eq!(replacement_done_rx.try_recv(), Err(TryRecvError::Empty));
+
+        release_grant_tx.send(()).unwrap();
+        assert!(authorizing.join().unwrap().is_ok());
+        replacement_done_rx.recv().unwrap().unwrap();
+        replacing.join().unwrap();
+
+        assert_eq!(
+            engine
+                .authorize(&context, &request(), &state(4))
+                .unwrap_err(),
+            AuthorizationDenial::NoMatchingGrant
         );
     }
 
