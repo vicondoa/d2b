@@ -10,7 +10,21 @@ use d2b_resource_store::{
 
 use crate::admission::{AdmittedMutation, StoreAdmissionBinding, VerifiedMutation};
 
-/// Backend seam reached only after instance-bound admission verification.
+/// Trusted persistence seam reached only after instance-bound admission verification.
+///
+/// The checked store guarantees that a caller cannot construct the
+/// [`VerifiedMutation`] passed to [`ResourceStoreBackend::commit_verified`]
+/// without a successful native authorization evaluation, and that the
+/// resulting evidence is verified against the identity of this store.
+///
+/// This seal does not constrain the backend implementation. A backend could
+/// ignore a verified mutation, change storage through another path, or omit
+/// required transaction checks. Implementations are therefore part of the
+/// trusted computing base: they must mutate only from the supplied
+/// [`VerifiedMutation`], recheck its captured revisions in the write
+/// transaction, preserve the store's structural and atomicity invariants, and
+/// expose no independent mutation path. A production backend requires security
+/// review and conformance tests for these obligations before it is registered.
 pub trait ResourceStoreBackend: Send + Sync {
     fn get(
         &self,

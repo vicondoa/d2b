@@ -280,11 +280,21 @@ route, Provider generation, or method fails closed.
 Mutation admission can originate only from a successful native authorization
 evaluation. The resulting sealed evidence carries the admitted mutation, exact
 authorization attributes, policy/API-catalog/active-configuration/controller
-revisions, request identity, and deadline, and is bound to one store instance.
-A different store cannot verify it. Inside the write transaction the store
-compares the captured revisions against live `store_meta`; any mismatch aborts
-without mutation as `authorization-denied`. The store never evaluates RBAC and
-never auto-retries. The client must reissue through the evaluator.
+revisions, request identity, and deadline. The native authorizer and store
+identity are consumed into one private checked store, which verifies the
+evaluator authority and exact store identity before passing a
+`VerifiedMutation` to the backend. A caller therefore cannot mint admission
+without a real allow or replay evidence against another store.
+
+The seal ends at the backend boundary; it does not sandbox or attest the
+backend implementation. A registered backend is trusted to mutate only from
+the supplied `VerifiedMutation`, compare its captured revisions against live
+`store_meta` in the same write transaction, preserve all structural and
+atomicity checks, and expose no independent mutation path. Any mismatch aborts
+without mutation as `authorization-denied`; the store never evaluates RBAC or
+auto-retries, and the client must reissue through the evaluator. A production
+backend is admitted to the trusted computing base only after security review
+and conformance tests cover these obligations.
 
 ### Role
 
