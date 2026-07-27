@@ -671,24 +671,48 @@ mod tests {
 
     #[test]
     fn admission_debug_surfaces_redact_protected_fields() {
-        const MARKER: &str = "sentinel-observability-marker";
+        const ZONE_SENTINEL: &str = "admission-zone-sentinel";
+        const NAME_SENTINEL: &str = "admission-name-sentinel";
+        const REF_SENTINEL: &str = "admission-ref-sentinel";
+        const UID_SENTINEL: &str = "44444444-4444-4444-8444-444444444444";
+        const PAYLOAD_SENTINEL: &str = "admission-payload-sentinel";
 
+        let protected_authorization = AdmittedAuthorization {
+            zone: ZoneId::parse(ZONE_SENTINEL).unwrap(),
+            subject_ref: ResourceRef::parse(&format!("Provider/{REF_SENTINEL}")).unwrap(),
+            subject_uid: ResourceUid::parse(UID_SENTINEL).unwrap(),
+            targets: vec![d2b_resource_store::AdmittedAuthorizationTarget {
+                resource_type: ResourceTypeName::parse("Host").unwrap(),
+                resource_name: Some(ResourceName::parse(NAME_SENTINEL).unwrap()),
+                verb: d2b_resource_store::AdmittedVerb::Delete,
+                subresource: Some(PAYLOAD_SENTINEL.to_owned()),
+                execution_ref: Some(
+                    ResourceRef::parse(&format!("Process/{REF_SENTINEL}")).unwrap(),
+                ),
+            }],
+        };
         let (issuer, verifier, store_identity) = admission_pair();
-        let permit = issuer.record_allow(authorization(MARKER), snapshot());
+        let issuer_debug = format!("{issuer:?}");
+        let verifier_debug = format!("{verifier:?}");
+        let store_identity_debug = format!("{store_identity:?}");
+        let permit = issuer.record_allow(protected_authorization, snapshot());
         let permit_debug = format!("{permit:?}");
-        let mut protected_mutation = mutation(MARKER);
+        let mut protected_mutation = mutation(ZONE_SENTINEL);
         protected_mutation.kind = d2b_resource_store::ResourceMutationKind::Delete;
-        protected_mutation.target = ResourceRef::parse(&format!("Host/{MARKER}")).unwrap();
+        protected_mutation.target = ResourceRef::parse(&format!("Host/{REF_SENTINEL}")).unwrap();
         protected_mutation.expected =
             d2b_resource_store::ExpectedRevision::Exact(ZoneRevision::new(1));
+        protected_mutation.expected_uid = Some(ResourceUid::parse(UID_SENTINEL).unwrap());
+        protected_mutation.owner =
+            Some(ResourceRef::parse(&format!("Process/{REF_SENTINEL}")).unwrap());
         let admitted = permit
             .admit(
                 vec![protected_mutation],
                 StoreOperationContext {
-                    operation_id: MARKER.to_owned(),
-                    idempotency_key: Some(MARKER.to_owned()),
-                    correlation_id: MARKER.to_owned(),
-                    trace_id: Some(MARKER.to_owned()),
+                    operation_id: PAYLOAD_SENTINEL.to_owned(),
+                    idempotency_key: Some(PAYLOAD_SENTINEL.to_owned()),
+                    correlation_id: PAYLOAD_SENTINEL.to_owned(),
+                    trace_id: Some(PAYLOAD_SENTINEL.to_owned()),
                     deadline_ms: 1,
                 },
             )
@@ -701,8 +725,24 @@ mod tests {
         );
         let verified_debug = format!("{verified:?}");
 
-        for rendered in [permit_debug, admitted_debug, prepared_debug, verified_debug] {
-            assert!(!rendered.contains(MARKER), "{rendered}");
+        for rendered in [
+            issuer_debug,
+            verifier_debug,
+            store_identity_debug,
+            permit_debug,
+            admitted_debug,
+            prepared_debug,
+            verified_debug,
+        ] {
+            for sentinel in [
+                ZONE_SENTINEL,
+                NAME_SENTINEL,
+                REF_SENTINEL,
+                UID_SENTINEL,
+                PAYLOAD_SENTINEL,
+            ] {
+                assert!(!rendered.contains(sentinel), "{rendered}");
+            }
         }
     }
 }

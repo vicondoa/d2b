@@ -2235,52 +2235,58 @@ mod tests {
 
     #[test]
     fn authorization_debug_surfaces_redact_policy_and_identity_fields() {
-        const MARKER: &str = "sentinel-observability-marker";
+        const ZONE_SENTINEL: &str = "authz-zone-sentinel";
+        const NAME_SENTINEL: &str = "authz-name-sentinel";
+        const REF_SENTINEL: &str = "authz-ref-sentinel";
+        const UID_SENTINEL: &str = "33333333-3333-4333-8333-333333333333";
+        const PAYLOAD_SENTINEL: &str = "authz-payload-sentinel";
+        const TYPE_SENTINEL: &str = "authz-sentinel.d2bus.org.Widget";
 
-        let extension = ResourceTypeName::parse(format!("{MARKER}.d2bus.org.Widget")).unwrap();
+        let extension = ResourceTypeName::parse(TYPE_SENTINEL).unwrap();
         let catalog = ApiCatalog::with_extensions([extension.clone()]).unwrap();
         let target = AuthorizationTarget {
             resource_type: extension.clone(),
-            resource_name: Some(ResourceName::parse(MARKER).unwrap()),
+            resource_name: Some(ResourceName::parse(NAME_SENTINEL).unwrap()),
             verb: ResourceVerb::Get,
-            subresource: Some(MARKER.to_owned()),
-            execution_ref: Some(ResourceRef::parse(&format!("Process/{MARKER}")).unwrap()),
+            subresource: Some(PAYLOAD_SENTINEL.to_owned()),
+            execution_ref: Some(ResourceRef::parse(&format!("Process/{REF_SENTINEL}")).unwrap()),
         };
         let request = AuthorizationRequest {
             method: ApiMethod::Get,
-            zone: ZoneId::parse(MARKER).unwrap(),
+            zone: ZoneId::parse(ZONE_SENTINEL).unwrap(),
             targets: vec![target.clone()],
         };
         let mut protected_state = state(9);
         protected_state.bootstrap_phase = BootstrapPhase::Unprovisioned {
-            zone: ZoneId::parse(MARKER).unwrap(),
+            zone: ZoneId::parse(ZONE_SENTINEL).unwrap(),
             controller_generation: ControllerGeneration::new(11).unwrap(),
             provider_generation: ResourceGeneration::new(12).unwrap(),
         };
         let bound_subject = BoundSubject {
-            subject_ref: ResourceRef::parse(&format!("User/{MARKER}")).unwrap(),
-            subject_uid: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+            subject_ref: ResourceRef::parse(&format!("User/{REF_SENTINEL}")).unwrap(),
+            subject_uid: ResourceUid::parse(UID_SENTINEL).unwrap(),
         };
         let scope = BindingScope {
-            zones: BTreeSet::from([ZoneId::parse(MARKER).unwrap()]),
-            resource_names: BTreeSet::from([ResourceName::parse(MARKER).unwrap()]),
-            execution_refs: BTreeSet::from([
-                ResourceRef::parse(&format!("Process/{MARKER}")).unwrap()
-            ]),
+            zones: BTreeSet::from([ZoneId::parse(ZONE_SENTINEL).unwrap()]),
+            resource_names: BTreeSet::from([ResourceName::parse(NAME_SENTINEL).unwrap()]),
+            execution_refs: BTreeSet::from([ResourceRef::parse(&format!(
+                "Process/{REF_SENTINEL}"
+            ))
+            .unwrap()]),
         };
         let rule = PolicyRule::new(
             &catalog,
             [extension],
             [ResourceVerb::Get],
             [SessionVerb::Connect],
-            [MARKER.to_owned()],
-            [ResourceName::parse(MARKER).unwrap()],
-            [ZoneId::parse(MARKER).unwrap()],
-            [ResourceRef::parse(&format!("Process/{MARKER}")).unwrap()],
+            [PAYLOAD_SENTINEL.to_owned()],
+            [ResourceName::parse(NAME_SENTINEL).unwrap()],
+            [ZoneId::parse(ZONE_SENTINEL).unwrap()],
+            [ResourceRef::parse(&format!("Process/{REF_SENTINEL}")).unwrap()],
         )
         .unwrap();
         let role = CompiledRole::new(
-            ResourceRef::parse(&format!("Role/{MARKER}")).unwrap(),
+            ResourceRef::parse(&format!("Role/{REF_SENTINEL}")).unwrap(),
             vec![rule.clone()],
         )
         .unwrap();
@@ -2300,7 +2306,7 @@ mod tests {
         let context = subject(
             Locality::Local,
             EvidenceClass::UnixPeer,
-            &format!("User/{MARKER}"),
+            &format!("User/{REF_SENTINEL}"),
         );
         let grant = grant(&test_issuer(), &context, &request, protected_state.snapshot);
         let authorizer =
@@ -2323,7 +2329,16 @@ mod tests {
             format!("{grant:?}"),
             format!("{authorizer:?}"),
         ] {
-            assert!(!rendered.contains(MARKER), "{rendered}");
+            for sentinel in [
+                ZONE_SENTINEL,
+                NAME_SENTINEL,
+                REF_SENTINEL,
+                UID_SENTINEL,
+                PAYLOAD_SENTINEL,
+                TYPE_SENTINEL,
+            ] {
+                assert!(!rendered.contains(sentinel), "{rendered}");
+            }
         }
     }
 }
