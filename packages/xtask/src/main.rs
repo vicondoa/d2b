@@ -513,6 +513,7 @@ fn gen_resource_proto() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
         .run()?;
 
     sanitize_generated_rust(&out_file)?;
+    redact_generated_protobuf_formatting(&out_file)?;
     write_contract_generated_mod(&out_dir)?;
     let _ = fs::remove_dir_all(&temp_proto_dir);
     Ok(vec![out_file])
@@ -571,6 +572,63 @@ fn sanitize_generated_rust(path: &Path) -> Result<(), Box<dyn std::error::Error>
         "// https://github.com/rust-lang/rust-clippy/issues/702\n\n",
         "#![allow(clippy::bool_comparison)]\n#![allow(clippy::derivable_impls)]\n#![allow(clippy::match_like_matches_macro)]\n#![allow(clippy::match_ref_pats)]\n#![allow(clippy::needless_borrow)]\n#![allow(clippy::redundant_static_lifetimes)]\n#![allow(clippy::vec_init_then_push)]\n\n",
     );
+    fs::write(path, generated)?;
+    Ok(())
+}
+
+fn redact_generated_protobuf_formatting(
+    path: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    const DERIVE: &str = "#[derive(PartialEq,Clone,Default,Debug)]";
+    let mut generated = fs::read_to_string(path)?;
+    let message_names = generated
+        .lines()
+        .filter_map(|line| line.strip_prefix("pub struct "))
+        .filter_map(|line| line.strip_suffix(" {"))
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    let derive_count = generated.matches(DERIVE).count();
+    if message_names.is_empty() || derive_count != message_names.len() {
+        return Err(format!(
+            "resource protobuf format shape changed: {} messages but {derive_count} Debug derives",
+            message_names.len()
+        )
+        .into());
+    }
+    generated = generated.replace(DERIVE, "#[derive(PartialEq,Clone,Default)]");
+
+    for message_name in &message_names {
+        let raw_display = format!(
+            "impl ::std::fmt::Display for {message_name} {{\n\
+             \x20   fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {{\n\
+             \x20       ::protobuf::text_format::fmt(self, f)\n\
+             \x20   }}\n\
+             }}"
+        );
+        let redacted_formatting = format!(
+            "impl ::std::fmt::Debug for {message_name} {{\n\
+             \x20   fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {{\n\
+             \x20       f.write_str(\"{message_name}(<redacted>)\")\n\
+             \x20   }}\n\
+             }}\n\n\
+             impl ::std::fmt::Display for {message_name} {{\n\
+             \x20   fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {{\n\
+             \x20       f.write_str(\"{message_name}(<redacted>)\")\n\
+             \x20   }}\n\
+             }}"
+        );
+        if !generated.contains(&raw_display) {
+            return Err(format!(
+                "resource protobuf Display implementation changed for {message_name}"
+            )
+            .into());
+        }
+        generated = generated.replacen(&raw_display, &redacted_formatting, 1);
+    }
+
+    if generated.contains("::protobuf::text_format::fmt(self, f)") {
+        return Err("resource protobuf text formatting remained after redaction".into());
+    }
     fs::write(path, generated)?;
     Ok(())
 }

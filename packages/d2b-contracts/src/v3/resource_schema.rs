@@ -33,11 +33,40 @@ pub const SCHEMA_DOMAIN_TAG: &str = "d2b:v3:schema";
 /// Maximum bytes in a printable ASCII canonical JSON object key.
 pub const MAX_CANONICAL_KEY_BYTES: usize = 64;
 
+/// Closed serde JSON failure class retained without attacker-controlled text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CanonicalJsonCodecReason {
+    Io,
+    Syntax,
+    Data,
+    UnexpectedEof,
+}
+
+impl CanonicalJsonCodecReason {
+    /// Return the closed diagnostic label.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Io => "I/O",
+            Self::Syntax => "syntax",
+            Self::Data => "data",
+            Self::UnexpectedEof => "unexpected EOF",
+        }
+    }
+}
+
 /// Failure to parse or render the canonical JSON profile.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CanonicalJsonError {
-    Syntax(String),
-    DuplicateKey(String),
+    Syntax {
+        reason: CanonicalJsonCodecReason,
+        line: u32,
+        column: u32,
+    },
+    DuplicateKey {
+        key_ordinal: u32,
+        line: u32,
+        column: u32,
+    },
     InvalidKey,
     InvalidString,
     IntegerOutOfRange,
@@ -47,8 +76,23 @@ pub enum CanonicalJsonError {
 impl core::fmt::Display for CanonicalJsonError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::Syntax(reason) => write!(f, "invalid canonical JSON: {reason}"),
-            Self::DuplicateKey(key) => write!(f, "duplicate canonical JSON key: {key}"),
+            Self::Syntax {
+                reason,
+                line,
+                column,
+            } => write!(
+                f,
+                "invalid canonical JSON: {} at line {line}, column {column}",
+                reason.as_str()
+            ),
+            Self::DuplicateKey {
+                key_ordinal,
+                line,
+                column,
+            } => write!(
+                f,
+                "duplicate canonical JSON key at ordinal {key_ordinal}, line {line}, column {column}"
+            ),
             Self::InvalidKey => {
                 f.write_str("canonical JSON key is not printable ASCII or is too long")
             }
@@ -64,6 +108,58 @@ impl core::fmt::Display for CanonicalJsonError {
 }
 
 impl std::error::Error for CanonicalJsonError {}
+
+const DUPLICATE_KEY_MARKER: &str = "d2b-cjson duplicate-key ordinal=";
+
+struct DuplicateKeyMarker(u32);
+
+impl core::fmt::Display for DuplicateKeyMarker {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{DUPLICATE_KEY_MARKER}{}", self.0)
+    }
+}
+
+fn bounded_position(value: usize) -> u32 {
+    u32::try_from(value).unwrap_or(u32::MAX)
+}
+
+pub(crate) fn serde_json_error_metadata(
+    error: &serde_json::Error,
+) -> (CanonicalJsonCodecReason, u32, u32) {
+    let reason = match error.classify() {
+        serde_json::error::Category::Io => CanonicalJsonCodecReason::Io,
+        serde_json::error::Category::Syntax => CanonicalJsonCodecReason::Syntax,
+        serde_json::error::Category::Data => CanonicalJsonCodecReason::Data,
+        serde_json::error::Category::Eof => CanonicalJsonCodecReason::UnexpectedEof,
+    };
+    (
+        reason,
+        bounded_position(error.line()),
+        bounded_position(error.column()),
+    )
+}
+
+fn canonical_json_error(error: serde_json::Error) -> CanonicalJsonError {
+    let (reason, line, column) = serde_json_error_metadata(&error);
+    let rendered = error.to_string();
+    if let Some(key_ordinal) = rendered
+        .strip_prefix(DUPLICATE_KEY_MARKER)
+        .and_then(|suffix| suffix.split_whitespace().next())
+        .and_then(|value| value.parse::<u32>().ok())
+    {
+        CanonicalJsonError::DuplicateKey {
+            key_ordinal,
+            line,
+            column,
+        }
+    } else {
+        CanonicalJsonError::Syntax {
+            reason,
+            line,
+            column,
+        }
+    }
+}
 
 /// A JSON value that cannot contain data outside `d2b-cjson/v1`.
 #[derive(Clone, PartialEq, Eq)]
@@ -81,11 +177,8 @@ impl CanonicalJsonValue {
     pub fn parse(bytes: &[u8]) -> Result<Self, CanonicalJsonError> {
         validate_number_tokens(bytes)?;
         let mut deserializer = serde_json::Deserializer::from_slice(bytes);
-        let value = Self::deserialize(&mut deserializer)
-            .map_err(|error| CanonicalJsonError::Syntax(error.to_string()))?;
-        deserializer
-            .end()
-            .map_err(|error| CanonicalJsonError::Syntax(error.to_string()))?;
+        let value = Self::deserialize(&mut deserializer).map_err(canonical_json_error)?;
+        deserializer.end().map_err(canonical_json_error)?;
         Ok(value)
     }
 
@@ -212,12 +305,12 @@ impl<'de> Visitor<'de> for CanonicalJsonVisitor {
         A: MapAccess<'de>,
     {
         let mut values = BTreeMap::new();
+        let mut key_ordinal = 0_u32;
         while let Some(key) = map.next_key::<String>()? {
+            key_ordinal = key_ordinal.saturating_add(1);
             validate_canonical_key(&key).map_err(serde::de::Error::custom)?;
             if values.contains_key(&key) {
-                return Err(serde::de::Error::custom(CanonicalJsonError::DuplicateKey(
-                    key,
-                )));
+                return Err(serde::de::Error::custom(DuplicateKeyMarker(key_ordinal)));
             }
             let value = map.next_value()?;
             values.insert(key, value);
@@ -417,8 +510,7 @@ pub(crate) fn validate_canonical_string(value: &str) -> Result<(), CanonicalJson
 
 /// Canonicalize a serializable contract value.
 pub fn canonical_json_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>, CanonicalJsonError> {
-    let json =
-        serde_json::to_vec(value).map_err(|error| CanonicalJsonError::Syntax(error.to_string()))?;
+    let json = serde_json::to_vec(value).map_err(canonical_json_error)?;
     Ok(CanonicalJsonValue::parse(&json)?.to_canonical_bytes())
 }
 
@@ -479,17 +571,24 @@ impl SchemaVersion {
                 .map_err(|_| ResourceSchemaError::InvalidSchemaVersion)?,
         )
     }
+
+    /// Render the canonical schema version.
+    pub fn to_canonical_string(self) -> String {
+        format!("{}.{}", self.major, self.minor)
+    }
 }
 
 impl core::fmt::Display for SchemaVersion {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{}.{}", self.major, self.minor)
+        f.write_str(&self.to_canonical_string())
     }
 }
 
 impl core::fmt::Debug for SchemaVersion {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "SchemaVersion(\"{self}\")")
+        f.debug_tuple("SchemaVersion")
+            .field(&self.to_canonical_string())
+            .finish()
     }
 }
 
@@ -498,7 +597,7 @@ impl Serialize for SchemaVersion {
     where
         S: Serializer,
     {
-        serializer.serialize_str(&self.to_string())
+        serializer.serialize_str(&self.to_canonical_string())
     }
 }
 
@@ -605,25 +704,33 @@ impl ExtensionSchemaId {
     pub const fn layer(&self) -> ExtensionSchemaLayer {
         self.layer
     }
+
+    /// Render the canonical schema ID for an authorized encoding or key surface.
+    pub fn to_canonical_string(&self) -> String {
+        format!(
+            "{}.d2bus.org/{}/{}",
+            self.provider_name.as_str(),
+            self.resource_type.as_str(),
+            self.layer.as_str()
+        )
+    }
+
+    /// Render the canonical schema ID when explicitly requested.
+    #[allow(clippy::inherent_to_string_shadow_display)]
+    pub fn to_string(&self) -> String {
+        self.to_canonical_string()
+    }
 }
 
 impl core::fmt::Display for ExtensionSchemaId {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(
-            f,
-            "{}.d2bus.org/{}/{}",
-            self.provider_name,
-            self.resource_type,
-            self.layer.as_str()
-        )
+        f.write_str("ExtensionSchemaId(<redacted>)")
     }
 }
 
 impl core::fmt::Debug for ExtensionSchemaId {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_tuple("ExtensionSchemaId")
-            .field(&self.to_string())
-            .finish()
+        f.write_str("ExtensionSchemaId(<redacted>)")
     }
 }
 
@@ -632,7 +739,7 @@ impl Serialize for ExtensionSchemaId {
     where
         S: Serializer,
     {
-        serializer.serialize_str(&self.to_string())
+        serializer.serialize_str(&self.to_canonical_string())
     }
 }
 
@@ -661,21 +768,21 @@ impl JsonSchema for ExtensionSchemaId {
 }
 
 /// Version and fingerprint implemented for one ResourceType base layer.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct BaseSchemaIdentity {
     pub version: SchemaVersion,
     pub fingerprint: SchemaFingerprint,
 }
 
 /// Provider-advertised base schema identities.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct BaseSchemaBinding {
     pub spec: BaseSchemaIdentity,
     pub status: BaseSchemaIdentity,
 }
 
 /// Strict schema for one dynamic object.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ObjectFieldSchema {
     allowed: BTreeSet<String>,
     required: BTreeSet<String>,
@@ -734,7 +841,7 @@ impl ObjectFieldSchema {
 }
 
 /// Registered Provider extension schemas for one ResourceType.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ProviderExtensionRegistration {
     pub provider_ref: ResourceRef,
     pub spec_schema_id: ExtensionSchemaId,
@@ -746,13 +853,46 @@ pub struct ProviderExtensionRegistration {
 }
 
 /// The single base and Provider-extension contract for one ResourceType.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ResourceSchemaContract {
     resource_type: ResourceTypeName,
     base_binding: BaseSchemaBinding,
     base_spec: ObjectFieldSchema,
     base_status: ObjectFieldSchema,
     provider_extensions: BTreeMap<ResourceRef, ProviderExtensionRegistration>,
+}
+
+impl core::fmt::Debug for BaseSchemaIdentity {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("BaseSchemaIdentity(<redacted>)")
+    }
+}
+
+impl core::fmt::Debug for BaseSchemaBinding {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("BaseSchemaBinding(<redacted>)")
+    }
+}
+
+impl core::fmt::Debug for ObjectFieldSchema {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ObjectFieldSchema")
+            .field("allowed", &self.allowed.len())
+            .field("required", &self.required.len())
+            .finish()
+    }
+}
+
+impl core::fmt::Debug for ProviderExtensionRegistration {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("ProviderExtensionRegistration(<redacted>)")
+    }
+}
+
+impl core::fmt::Debug for ResourceSchemaContract {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("ResourceSchemaContract(<redacted>)")
+    }
 }
 
 impl ResourceSchemaContract {
@@ -991,7 +1131,7 @@ fn validate_extension_id(
 }
 
 /// Schema or Provider-layer conformance failure.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum ResourceSchemaError {
     InvalidSchemaVersion,
     InvalidSchemaId,
@@ -1012,6 +1152,31 @@ pub enum ResourceSchemaError {
     ProviderExtensionNotMinimal,
 }
 
+impl core::fmt::Debug for ResourceSchemaError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let kind = match self {
+            Self::InvalidSchemaVersion => "InvalidSchemaVersion",
+            Self::InvalidSchemaId => "InvalidSchemaId",
+            Self::InvalidFieldName => "InvalidFieldName",
+            Self::RequiredFieldNotAllowed => "RequiredFieldNotAllowed",
+            Self::UnknownField(_) => "UnknownField",
+            Self::MissingField(_) => "MissingField",
+            Self::DuplicateProviderRegistration => "DuplicateProviderRegistration",
+            Self::ResourceTypeMismatch => "ResourceTypeMismatch",
+            Self::BaseSchemaMismatch => "BaseSchemaMismatch",
+            Self::ProviderRefRequired => "ProviderRefRequired",
+            Self::ProviderRefWrongType => "ProviderRefWrongType",
+            Self::ProviderRefMismatch => "ProviderRefMismatch",
+            Self::ProviderNotRegistered => "ProviderNotRegistered",
+            Self::ProviderSchemaBinding => "ProviderSchemaBinding",
+            Self::ProviderSchemaMismatch => "ProviderSchemaMismatch",
+            Self::ProviderFieldShadowsBase(_) => "ProviderFieldShadowsBase",
+            Self::ProviderExtensionNotMinimal => "ProviderExtensionNotMinimal",
+        };
+        write!(f, "ResourceSchemaError::{kind}")
+    }
+}
+
 impl core::fmt::Display for ResourceSchemaError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
@@ -1021,8 +1186,8 @@ impl core::fmt::Display for ResourceSchemaError {
             Self::RequiredFieldNotAllowed => {
                 f.write_str("required schema field is not in the allowed set")
             }
-            Self::UnknownField(field) => write!(f, "unknown schema field: {field}"),
-            Self::MissingField(field) => write!(f, "required schema field is missing: {field}"),
+            Self::UnknownField(_) => f.write_str("schema contains an unknown field"),
+            Self::MissingField(_) => f.write_str("schema is missing a required field"),
             Self::DuplicateProviderRegistration => {
                 f.write_str("Provider extension is registered more than once")
             }
@@ -1048,8 +1213,8 @@ impl core::fmt::Display for ResourceSchemaError {
             Self::ProviderSchemaMismatch => {
                 f.write_str("Provider extension schema ID or version does not match")
             }
-            Self::ProviderFieldShadowsBase(field) => {
-                write!(f, "Provider extension shadows a base field: {field}")
+            Self::ProviderFieldShadowsBase(_) => {
+                f.write_str("Provider extension shadows a base field")
             }
             Self::ProviderExtensionNotMinimal => {
                 f.write_str("minimal base spec must not require a Provider extension")
@@ -1241,6 +1406,48 @@ key":1}"#,
     }
 
     #[test]
+    fn canonical_json_errors_keep_only_closed_reasons_and_safe_positions() {
+        let payload_marker = format!("payload-marker-{:x}", std::process::id());
+        let duplicate = format!(
+            r#"{{"{payload_marker}":1,"{payload_marker}":2}}"#
+        );
+        let duplicate_error = CanonicalJsonValue::parse(duplicate.as_bytes()).unwrap_err();
+        assert!(matches!(
+            &duplicate_error,
+            CanonicalJsonError::DuplicateKey {
+                key_ordinal: 2,
+                line: 1,
+                column
+            } if *column > 0
+        ));
+        for rendered in [
+            format!("{duplicate_error:?}"),
+            format!("{duplicate_error}"),
+        ] {
+            assert!(!rendered.contains(&payload_marker));
+        }
+        assert!(std::error::Error::source(&duplicate_error).is_none());
+
+        let malformed = format!(
+            r#"{{"safe":"{payload_marker}","broken":}}"#
+        );
+        let syntax_error = CanonicalJsonValue::parse(malformed.as_bytes()).unwrap_err();
+        assert!(matches!(
+            &syntax_error,
+            CanonicalJsonError::Syntax {
+                reason: CanonicalJsonCodecReason::Syntax
+                    | CanonicalJsonCodecReason::UnexpectedEof,
+                line: 1,
+                column
+            } if *column > 0
+        ));
+        for rendered in [format!("{syntax_error:?}"), format!("{syntax_error}")] {
+            assert!(!rendered.contains(&payload_marker));
+        }
+        assert!(std::error::Error::source(&syntax_error).is_none());
+    }
+
+    #[test]
     fn schema_version_and_extension_id_have_one_spelling() {
         assert_eq!(SchemaVersion::parse("1.0").unwrap().to_string(), "1.0");
         for invalid in ["", "0.1", "01.0", "1", "1.00", "1.0.0"] {
@@ -1340,5 +1547,99 @@ key":1}"#,
             ),
             Err(ResourceSchemaError::ProviderFieldShadowsBase(field)) if field == "imageId"
         ));
+    }
+
+    #[test]
+    fn schema_diagnostics_redact_identity_field_and_payload_markers() {
+        let nonce = u64::from(std::process::id());
+        let name_marker = format!("name-{nonce:x}");
+        let payload_marker = format!("payload-marker-{nonce:x}");
+        let resource_type_marker = format!("provider-{nonce:x}.d2bus.org.Marker");
+        let markers = [
+            name_marker.as_str(),
+            payload_marker.as_str(),
+            resource_type_marker.as_str(),
+        ];
+        let resource_type = ResourceTypeName::parse(&resource_type_marker).unwrap();
+        let provider_ref = ResourceRef::parse(&format!("Provider/{name_marker}")).unwrap();
+        let spec_schema_id = ExtensionSchemaId::new(
+            ResourceName::parse(&name_marker).unwrap(),
+            resource_type.clone(),
+            ExtensionSchemaLayer::Spec,
+        );
+        let status_schema_id = ExtensionSchemaId::new(
+            ResourceName::parse(&name_marker).unwrap(),
+            resource_type.clone(),
+            ExtensionSchemaLayer::Status,
+        );
+        let object = ObjectFieldSchema::new(
+            [payload_marker.clone()],
+            [payload_marker.clone()],
+        )
+        .unwrap();
+        let digest = SchemaFingerprint::parse(format!("sha256:{nonce:064x}")).unwrap();
+        let identity = BaseSchemaIdentity {
+            version: SchemaVersion::parse("1.0").unwrap(),
+            fingerprint: digest,
+        };
+        let binding = BaseSchemaBinding {
+            spec: identity.clone(),
+            status: identity.clone(),
+        };
+        let registration = ProviderExtensionRegistration {
+            provider_ref,
+            spec_schema_id: spec_schema_id.clone(),
+            spec_schema_version: SchemaVersion::parse("1.0").unwrap(),
+            spec_settings: ObjectFieldSchema::empty(),
+            status_schema_id,
+            status_schema_version: SchemaVersion::parse("1.0").unwrap(),
+            status_details: ObjectFieldSchema::empty(),
+        };
+        let contract = ResourceSchemaContract::new(
+            resource_type,
+            binding.clone(),
+            ObjectFieldSchema::empty(),
+            ObjectFieldSchema::empty(),
+            [registration.clone()],
+        )
+        .unwrap();
+        let dynamic = CanonicalJsonValue::parse(
+            format!(r#"{{"{payload_marker}":"{payload_marker}"}}"#).as_bytes(),
+        )
+        .unwrap();
+        let dynamic_object = CanonicalJsonObject::parse(
+            format!(r#"{{"{payload_marker}":"{payload_marker}"}}"#).as_bytes(),
+        )
+        .unwrap();
+        let schema_error = ResourceSchemaError::UnknownField(payload_marker.clone());
+
+        let formatted = [
+            format!("{spec_schema_id:?}"),
+            format!("{spec_schema_id}"),
+            format!("{identity:?}"),
+            format!("{binding:?}"),
+            format!("{object:?}"),
+            format!("{registration:?}"),
+            format!("{contract:?}"),
+            format!("{dynamic:?}"),
+            format!("{dynamic_object:?}"),
+            format!("{schema_error:?}"),
+            format!("{schema_error}"),
+        ];
+        for rendered in formatted {
+            for marker in &markers {
+                assert!(
+                    !rendered.contains(marker),
+                    "schema marker appeared in diagnostic formatting"
+                );
+            }
+        }
+
+        assert!(spec_schema_id
+            .to_canonical_string()
+            .contains(&name_marker));
+        assert!(String::from_utf8(dynamic_object.to_canonical_bytes())
+            .unwrap()
+            .contains(&payload_marker));
     }
 }

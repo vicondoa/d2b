@@ -568,3 +568,6 @@ mod tests {
 }
 
 pub mod v3;
+
+#[cfg(test)]
+mod resource_proto_formatting_tests;

@@ -76,7 +76,7 @@ impl StatusCode {
 
 impl core::fmt::Debug for StatusCode {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_tuple("StatusCode").field(&self.0).finish()
+        f.write_str("StatusCode(<redacted>)")
     }
 }
 
@@ -163,7 +163,7 @@ impl JsonSchema for StatusMessage {
 }
 
 /// Latest value for one condition type.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ResourceCondition {
     #[serde(rename = "type")]
@@ -173,6 +173,12 @@ pub struct ResourceCondition {
     message: StatusMessage,
     observed_generation: ObservedGeneration,
     last_transition_at: Timestamp,
+}
+
+impl core::fmt::Debug for ResourceCondition {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("ResourceCondition(<redacted>)")
+    }
 }
 
 impl ResourceCondition {
@@ -230,7 +236,7 @@ impl<'de> Deserialize<'de> for ResourceCondition {
 }
 
 /// Latest bounded reconcile outcome.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ResourceOutcome {
     code: StatusCode,
@@ -241,6 +247,12 @@ pub struct ResourceOutcome {
     #[serde(skip_serializing_if = "Option::is_none")]
     retry_after_ms: Option<u32>,
     occurred_at: Timestamp,
+}
+
+impl core::fmt::Debug for ResourceOutcome {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("ResourceOutcome(<redacted>)")
+    }
 }
 
 impl ResourceOutcome {
@@ -335,11 +347,17 @@ pub enum UpdateDisruption {
 }
 
 /// Bounded current currency of an owned or dependency resource set.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ResourceCurrencySet {
     count: u64,
     refs: Vec<ResourceRef>,
+}
+
+impl core::fmt::Debug for ResourceCurrencySet {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("ResourceCurrencySet(<redacted>)")
+    }
 }
 
 impl ResourceCurrencySet {
@@ -385,7 +403,7 @@ impl<'de> Deserialize<'de> for ResourceCurrencySet {
 }
 
 /// Universal update currency object.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ResourceUpdateStatus {
     state: UpdateState,
@@ -398,6 +416,12 @@ pub struct ResourceUpdateStatus {
     last_assessed_at: Option<Timestamp>,
     owned: ResourceCurrencySet,
     dependencies: ResourceCurrencySet,
+}
+
+impl core::fmt::Debug for ResourceUpdateStatus {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("ResourceUpdateStatus(<redacted>)")
+    }
 }
 
 impl ResourceUpdateStatus {
@@ -531,16 +555,7 @@ impl ProviderStatusExtension {
 
 impl core::fmt::Debug for ProviderStatusExtension {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("ProviderStatusExtension")
-            .field("provider_ref", &self.provider_ref)
-            .field("schema_id", &self.schema_id)
-            .field("schema_version", &self.schema_version)
-            .field(
-                "observed_provider_generation",
-                &self.observed_provider_generation,
-            )
-            .field("details", &"<redacted>")
-            .finish()
+        f.write_str("ProviderStatusExtension(<redacted>)")
     }
 }
 
@@ -670,13 +685,7 @@ impl ResourceStatus {
 
 impl core::fmt::Debug for ResourceStatus {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("ResourceStatus")
-            .field("observed_generation", &self.observed_generation)
-            .field("phase", &self.phase)
-            .field("conditions", &self.conditions.len())
-            .field("resource", &"<redacted>")
-            .field("provider", &self.provider.is_some())
-            .finish_non_exhaustive()
+        f.write_str("ResourceStatus(<redacted>)")
     }
 }
 
@@ -997,5 +1006,98 @@ mod tests {
         for phase in ["pending", "Starting", "Deleting", ""] {
             assert!(serde_json::from_str::<ResourcePhase>(&format!("\"{phase}\"")).is_err());
         }
+    }
+
+    #[test]
+    fn status_diagnostics_redact_refs_codes_messages_and_dynamic_layers() {
+        let nonce = u64::from(std::process::id());
+        let name_marker = format!("name-{nonce:x}");
+        let payload_marker = format!("payload-marker-{nonce:x}");
+        let markers = [name_marker.as_str(), payload_marker.as_str()];
+        let code = StatusCode::parse(&payload_marker).unwrap();
+        let message = StatusMessage::parse(&payload_marker).unwrap();
+        let condition = ResourceCondition::new(
+            code.clone(),
+            ConditionState::True,
+            code.clone(),
+            message.clone(),
+            ObservedGeneration::new(1),
+            timestamp(),
+        );
+        let outcome = ResourceOutcome::new(
+            code.clone(),
+            Some(1),
+            message.clone(),
+            false,
+            None,
+            timestamp(),
+        )
+        .unwrap();
+        let reference = ResourceRef::parse(&format!("Provider/{name_marker}")).unwrap();
+        let currency = ResourceCurrencySet::new(1, vec![reference.clone()]).unwrap();
+        let update = ResourceUpdateStatus::new(
+            UpdateState::Current,
+            vec![UpdateReason::SpecChanged],
+            ObservedGeneration::new(1),
+            ResourceGeneration::new(1).unwrap(),
+            UpdateDisruption::None,
+            true,
+            None,
+            Some(timestamp()),
+            currency.clone(),
+            currency.clone(),
+        )
+        .unwrap();
+        let details = CanonicalJsonObject::parse(
+            format!(r#"{{"marker":"{payload_marker}"}}"#).as_bytes(),
+        )
+        .unwrap();
+        let provider = ProviderStatusExtension::new(
+            reference,
+            ExtensionSchemaId::parse(&format!(
+                "{name_marker}.d2bus.org/Host/status"
+            ))
+            .unwrap(),
+            SchemaVersion::parse("1.0").unwrap(),
+            ResourceGeneration::new(1).unwrap(),
+            details.clone(),
+        )
+        .unwrap();
+        let status = ResourceStatus::new(
+            ObservedGeneration::new(1),
+            ResourcePhase::Ready,
+            vec![condition.clone()],
+            Some(timestamp()),
+            Some(timestamp()),
+            Some(timestamp()),
+            Some(outcome.clone()),
+            update.clone(),
+            details,
+            Some(provider.clone()),
+        )
+        .unwrap();
+
+        let formatted = [
+            format!("{code:?}"),
+            format!("{message:?}"),
+            format!("{condition:?}"),
+            format!("{outcome:?}"),
+            format!("{currency:?}"),
+            format!("{update:?}"),
+            format!("{provider:?}"),
+            format!("{status:?}"),
+        ];
+        for rendered in formatted {
+            for marker in &markers {
+                assert!(
+                    !rendered.contains(marker),
+                    "status marker appeared in diagnostic formatting"
+                );
+            }
+        }
+
+        assert!(String::from_utf8(canonical_json_bytes(&status).unwrap())
+            .unwrap()
+            .contains(&payload_marker));
     }
 }
