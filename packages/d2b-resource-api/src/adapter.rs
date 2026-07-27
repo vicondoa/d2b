@@ -322,9 +322,9 @@ mod tests {
             Self {
                 method,
                 operation_id: operation_id.to_owned(),
-                zone: zone.to_string(),
+                zone: zone.to_canonical_string(),
                 targets: vec![ObservedTarget {
-                    resource_type: resource_type.to_string(),
+                    resource_type: resource_type.to_canonical_string(),
                     resource_name: resource_name.map(ResourceName::to_canonical_string),
                     verb,
                     subresource: subresource.map(str::to_owned),
@@ -366,12 +366,12 @@ mod tests {
             self.record(DispatchObservation {
                 method: ApiMethod::List,
                 operation_id: request.operation.operation_id,
-                zone: request.zone.to_string(),
+                zone: request.zone.to_canonical_string(),
                 targets: request
                     .resource_types
                     .iter()
                     .map(|resource_type| ObservedTarget {
-                        resource_type: resource_type.to_string(),
+                        resource_type: resource_type.to_canonical_string(),
                         resource_name: None,
                         verb: ResourceVerb::List,
                         subresource: None,
@@ -390,12 +390,12 @@ mod tests {
             self.record(DispatchObservation {
                 method: ApiMethod::Watch,
                 operation_id: request.operation.operation_id,
-                zone: request.zone.to_string(),
+                zone: request.zone.to_canonical_string(),
                 targets: request
                     .resource_types
                     .iter()
                     .map(|resource_type| ObservedTarget {
-                        resource_type: resource_type.to_string(),
+                        resource_type: resource_type.to_canonical_string(),
                         resource_name: None,
                         verb: ResourceVerb::Watch,
                         subresource: None,
@@ -472,12 +472,12 @@ mod tests {
             self.record(DispatchObservation {
                 method,
                 operation_id,
-                zone: authorization.zone.to_string(),
+                zone: authorization.zone.to_canonical_string(),
                 targets: authorization
                     .targets
                     .iter()
                     .map(|target| ObservedTarget {
-                        resource_type: target.resource_type.to_string(),
+                        resource_type: target.resource_type.to_canonical_string(),
                         resource_name: target
                             .resource_name
                             .as_ref()

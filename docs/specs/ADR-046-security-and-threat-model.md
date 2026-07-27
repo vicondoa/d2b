@@ -130,8 +130,15 @@ testable:
    [Signed package/manifest/schema/config trust](#signed-packagemanifestschemaconfig-trust-and-publisher-roots).
 2. **Zone resource store boundary.** Only the Zone runtime's redb coordinator
    reads/writes the store. Providers/controllers reach it only through
-   ComponentSession/d2b-bus and the native RBAC engine - never a direct
-   handle, path, or ambient socket (D011, D006).
+   ComponentSession/d2b-bus, the native RBAC engine, and a private checked
+   store - never a direct handle, path, or ambient socket (D011, D006). The
+   checked store consumes one verifier/store-identity binding and prevents a
+   caller from forging admission or replaying it against another store. The
+   seal does not constrain the backend after verification: a registered
+   backend is trusted to write only from verified mutations, perform every
+   required transaction check, and expose no independent mutation path. Each
+   production backend therefore requires security review and conformance
+   coverage as part of the trusted computing base.
 3. **Component/process boundary.** Every controller, service, and worker is a
    distinct process/UID pair with least-privilege sandboxing; privileged
    effects cross this boundary only through an injected `EffectPort` trait
@@ -1968,11 +1975,11 @@ close. Each maps to the attacker class it is scoped against.
 
 | Item | Treatment |
 | --- | --- |
-| v3 current anchor | `packages/d2b-priv-broker/src/{sys.rs,ops/*}` (broker sole-executor, cgroup/namespace pre-establishment); `packages/d2b-core/src/{storage,processes,privileges,minijail_profile}.rs` (typed process DAG/minijail profiles/broker effects); `packages/d2b-realm-core/src/workload.rs` (`IsolationPosture::UnsafeLocal`); `packages/d2bd/src/{exec_session.rs,realm_access_resolver.rs}`; `nixos-modules/{assertions.nix,net.nix,manifest.nix,bundle-artifacts.nix}`; `SECURITY.md` (disclosure policy, v1/v2 trust-boundary deltas) |
-| v3 evidence class | Mixed. Broker sole-executor, cgroup/namespace pre-establishment, TPM/USBIP device hardening, and Nix eval-time assertions are `implemented-and-reachable`. ComponentSession, native RBAC, Zone resource store, every standard ResourceType, and every frozen Provider are `ADR-only` (no `Provider/*` crate exists in the protected v3 baseline; see `ADR-046-current-code-migration-map.md` §8.3 disposition table) |
+| v3 current anchor | `packages/d2b-priv-broker/src/{sys.rs,ops/*}` (broker sole-executor, cgroup/namespace pre-establishment); `packages/d2b-core/src/{storage,processes,privileges,minijail_profile}.rs` (typed process DAG/minijail profiles/broker effects); `packages/d2b-contracts/src/v3/*`, `packages/d2b-resource-store*`, and `packages/d2b-resource-api` (strict resource DTOs/codecs, engine-neutral store contracts, native RBAC, single-owner checked store binding, service wiring, and `UnregisteredBusAdapter`); `packages/d2b-realm-core/src/workload.rs` (`IsolationPosture::UnsafeLocal`); `packages/d2bd/src/{exec_session.rs,realm_access_resolver.rs}`; `nixos-modules/{assertions.nix,net.nix,manifest.nix,bundle-artifacts.nix}`; `SECURITY.md` (disclosure policy, v1/v2 trust-boundary deltas) |
+| v3 evidence class | Mixed. Broker sole-executor, cgroup/namespace pre-establishment, TPM/USBIP device hardening, and Nix eval-time assertions are `implemented-and-reachable`. Resource DTOs/codecs, native RBAC, the checked service/store boundary, and the authenticated ttrpc adapter are `implemented-but-unwired`: `UnregisteredBusAdapter` has no production d2b-bus or Zone dispatch, and no production redb backend has passed the required vetting and conformance gate. ComponentSession production routing, every standard ResourceType implementation, and every frozen Provider remain planned (no `Provider/*` crate exists in the protected v3 baseline; see `ADR-046-current-code-migration-map.md` §8.3 disposition table) |
 | Main reuse source | main `a1cc0b2d`: `d2b-session`/`d2b-session-unix` (ComponentSession Noise/record/attachment machinery), `d2b-contracts/src/{public_wire.rs,provider_registry_v2.rs}` (typed RPC/registry shape), `d2b-priv-broker/src/ops/{swtpm_dir.rs,storage_contract.rs}` (fail-closed marker/quarantine pattern) |
 | Behavior retained | Broker-as-sole-privileged-executor; fail-closed typed errors; pidfd/InvocationID adoption identity; positive-capability provider traits; argv/secret/path redaction discipline; OTEL/audit architectural separation; quarantine-not-kill on ambiguous adoption (ADR 0034 continuation) |
-| Required delta | Native Zone resource plane/redb store; ComponentSession production wiring with native RBAC; Provider packaging/signing/trust/quarantine; primitive ResourceSpecs (Host/Guest/Process/Volume/Network/Device/User/Credential); ZoneLink/d2b-bus routing; per-Provider EffectPort boundary; StateReset audit contract |
+| Required delta | Register and dispatch the existing resource adapter from production d2b-bus/Zone routing; implement, review, and conformance-test the production redb backend; complete ComponentSession production wiring; add Provider packaging/signing/trust/quarantine; implement primitive ResourceSpecs (Host/Guest/Process/Volume/Network/Device/User/Credential); complete the per-Provider EffectPort boundary and StateReset audit contract |
 | Excluded assumptions | Historical main ADR 0045's Realm/gateway-VM-as-ResourceKind model, per-realm PID1 broker sockets, long-lived guest-control HMAC token, and whole-host factory-reset generation are not v3 architecture - D050 (Guest replaces gateway-VM-as-special-realm), D016/D017 (Zone/ZoneLink replace Realm), and this spec's own [reset boundary](#reset-boundary) supersede them for v3 |
 | Feasibility proof | Per-spec hermetic/Nix-eval/container/host-integration/fuzz suites named in [Implementation work items](#implementation-work-items) below and in every owning spec's own work-item validation column |
 | Future owner | `ADR046-security-*` work items below own cross-cutting security validation; each ResourceType/Provider spec's own `ADR046-*` work items own the implementation itself |

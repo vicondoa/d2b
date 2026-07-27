@@ -71,12 +71,6 @@ impl FinalizerId {
     pub fn to_canonical_string(&self) -> String {
         self.0.clone()
     }
-
-    /// Render the canonical ID when explicitly requested.
-    #[allow(clippy::inherent_to_string_shadow_display)]
-    pub fn to_string(&self) -> String {
-        self.to_canonical_string()
-    }
 }
 
 impl core::fmt::Display for FinalizerId {
@@ -1020,7 +1014,7 @@ mod tests {
         }"#;
         let spec: ResourceSpec = serde_json::from_slice(spec_json).unwrap();
         assert_eq!(
-            spec.provider_ref().unwrap().to_string(),
+            spec.provider_ref().unwrap().to_canonical_string(),
             "Provider/runtime-qemu-media"
         );
         assert_eq!(
@@ -1221,6 +1215,7 @@ mod tests {
         let formatted = [
             format!("{finalizer:?}"),
             format!("{finalizer}"),
+            finalizer.to_string(),
             format!("{presentation:?}"),
             format!("{metadata:?}"),
             format!("{extension:?}"),

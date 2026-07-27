@@ -202,12 +202,6 @@ macro_rules! label_identity {
             pub fn to_canonical_string(&self) -> String {
                 self.0.clone()
             }
-
-            /// Render the canonical value when explicitly requested.
-            #[allow(clippy::inherent_to_string_shadow_display)]
-            pub fn to_string(&self) -> String {
-                self.to_canonical_string()
-            }
         }
 
         impl core::fmt::Display for $name {
@@ -326,12 +320,6 @@ impl ResourceTypeName {
         self.0.clone()
     }
 
-    /// Render the canonical value when explicitly requested.
-    #[allow(clippy::inherent_to_string_shadow_display)]
-    pub fn to_string(&self) -> String {
-        self.to_canonical_string()
-    }
-
     /// Whether this is one of the standard unqualified ResourceTypes.
     pub fn is_standard(&self) -> bool {
         !self.0.contains(RESOURCE_TYPE_QUALIFIER)
@@ -442,12 +430,6 @@ impl ResourceUid {
     pub fn to_canonical_string(&self) -> String {
         self.0.clone()
     }
-
-    /// Render the canonical value when explicitly requested.
-    #[allow(clippy::inherent_to_string_shadow_display)]
-    pub fn to_string(&self) -> String {
-        self.to_canonical_string()
-    }
 }
 
 impl core::fmt::Display for ResourceUid {
@@ -525,12 +507,6 @@ impl Timestamp {
     /// Render the canonical value for an authorized encoding or key surface.
     pub fn to_canonical_string(&self) -> String {
         self.0.clone()
-    }
-
-    /// Render the canonical value when explicitly requested.
-    #[allow(clippy::inherent_to_string_shadow_display)]
-    pub fn to_string(&self) -> String {
-        self.to_canonical_string()
     }
 }
 
@@ -670,12 +646,6 @@ impl ServiceName {
     /// Render the canonical value for an authorized encoding or key surface.
     pub fn to_canonical_string(&self) -> String {
         self.0.clone()
-    }
-
-    /// Render the canonical value when explicitly requested.
-    #[allow(clippy::inherent_to_string_shadow_display)]
-    pub fn to_string(&self) -> String {
-        self.to_canonical_string()
     }
 }
 
@@ -1634,18 +1604,25 @@ mod tests {
         let formatted = [
             format!("{zone:?}"),
             format!("{zone}"),
+            zone.to_string(),
             format!("{name:?}"),
             format!("{name}"),
+            name.to_string(),
             format!("{resource_type:?}"),
             format!("{resource_type}"),
+            resource_type.to_string(),
             format!("{uid:?}"),
             format!("{uid}"),
+            uid.to_string(),
             format!("{timestamp:?}"),
             format!("{timestamp}"),
+            timestamp.to_string(),
             format!("{purpose:?}"),
             format!("{purpose}"),
+            purpose.to_string(),
             format!("{service:?}"),
             format!("{service}"),
+            service.to_string(),
             format!("{fingerprint:?}"),
             format!("{binding:?}"),
             format!("{generation:?}"),

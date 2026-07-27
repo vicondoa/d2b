@@ -280,11 +280,21 @@ route, Provider generation, or method fails closed.
 Mutation admission can originate only from a successful native authorization
 evaluation. The resulting sealed evidence carries the admitted mutation, exact
 authorization attributes, policy/API-catalog/active-configuration/controller
-revisions, request identity, and deadline, and is bound to one store instance.
-A different store cannot verify it. Inside the write transaction the store
-compares the captured revisions against live `store_meta`; any mismatch aborts
-without mutation as `authorization-denied`. The store never evaluates RBAC and
-never auto-retries. The client must reissue through the evaluator.
+revisions, request identity, and deadline. The verifier and store-identity
+halves of the admission binding are consumed into one private checked store,
+which verifies the evaluator authority and exact store identity before passing a
+`VerifiedMutation` to the backend. A caller therefore cannot mint admission
+without a real allow or replay evidence against another store.
+
+The seal ends at the backend boundary; it does not sandbox or attest the
+backend implementation. A registered backend is trusted to mutate only from
+the supplied `VerifiedMutation`, compare its captured revisions against live
+`store_meta` in the same write transaction, preserve all structural and
+atomicity checks, and expose no independent mutation path. Any mismatch aborts
+without mutation as `authorization-denied`; the store never evaluates RBAC or
+auto-retries, and the client must reissue through the evaluator. A production
+backend is admitted to the trusted computing base only after security review
+and conformance tests cover these obligations.
 
 ### Role
 
@@ -675,8 +685,8 @@ process data, and terminal bytes.
 
 | Item | Treatment |
 | --- | --- |
-| Current anchor | Native ResourceService DTOs, methods, errors, Role/RoleBinding evaluation, service-to-store calls, and an authenticated ttrpc adapter exist in `d2b-contracts` and `d2b-resource-api`. The adapter can register the complete ttrpc service for an already-authenticated session, but no production d2b-bus or Zone path dispatches it. Existing anchors remain public daemon/broker seqpacket auth, `d2b-daemon-access` admission types, `d2b-realm-router` principal/capability/idempotency checks, Realm access resolver, and strict DTOs |
-| Evidence class | Resource API, native RBAC, service-to-store wiring, and the ttrpc adapter are `implemented-but-unwired`; production bus dispatch, Zone wiring, and a production store backend are absent. The adapter's existence is not production reachability. Local daemon auth is reachable, while daemon-access/Realm peer abstractions remain partly unwired |
+| Current anchor | Native ResourceService DTOs, methods, errors, Role/RoleBinding evaluation, checked service-to-store calls, and `UnregisteredBusAdapter` exist in `d2b-contracts` and `d2b-resource-api`. The adapter can construct the complete ttrpc service for an already-authenticated session, but deliberately has no registration path from production d2b-bus or a Zone runtime. Existing anchors remain public daemon/broker seqpacket auth, `d2b-daemon-access` admission types, `d2b-realm-router` principal/capability/idempotency checks, Realm access resolver, and strict DTOs |
+| Evidence class | Resource API, native RBAC, the single-owner checked store binding, service-to-store wiring, and `UnregisteredBusAdapter` are `implemented-but-unwired`; production bus dispatch, Zone wiring, and a vetted production store backend are absent. The adapter is named for that lack of production registration; constructing it is not production reachability. Local daemon auth is reachable, while daemon-access/Realm peer abstractions remain partly unwired |
 | Behavior retained | SO_PEERCRED/local identity, typed denials, positive capabilities, no relay-to-local auth, strict bounds/unknown-field rejection |
 | Required delta | Dispatch the existing ttrpc adapter from d2b-bus, connect a Zone runtime and production backend, and implement Provider API schemas/bindings, status ownership, and parent resource routing |
 | Reuse path | Extract exact admission/error/id/ref validators and router authorization derivation |

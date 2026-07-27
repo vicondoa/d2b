@@ -981,7 +981,7 @@ fn cache_key(
         }
         if let Some(execution_ref) = &target.execution_ref {
             digest.update([0]);
-            digest.update(execution_ref.to_string().as_bytes());
+            digest.update(execution_ref.to_canonical_string().as_bytes());
         }
     }
     AuthorizationCacheKey::new(

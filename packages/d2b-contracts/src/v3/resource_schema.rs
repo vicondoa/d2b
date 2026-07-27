@@ -714,12 +714,6 @@ impl ExtensionSchemaId {
             self.layer.as_str()
         )
     }
-
-    /// Render the canonical schema ID when explicitly requested.
-    #[allow(clippy::inherent_to_string_shadow_display)]
-    pub fn to_string(&self) -> String {
-        self.to_canonical_string()
-    }
 }
 
 impl core::fmt::Display for ExtensionSchemaId {
@@ -1451,7 +1445,10 @@ key":1}"#,
         assert_eq!(id.provider_name().as_str(), "runtime-qemu-media");
         assert_eq!(id.resource_type().as_str(), "Guest");
         assert_eq!(id.layer(), ExtensionSchemaLayer::Spec);
-        assert_eq!(id.to_string(), "runtime-qemu-media.d2bus.org/Guest/spec");
+        assert_eq!(
+            id.to_canonical_string(),
+            "runtime-qemu-media.d2bus.org/Guest/spec"
+        );
     }
 
     #[test]
@@ -1606,6 +1603,7 @@ key":1}"#,
         let formatted = [
             format!("{spec_schema_id:?}"),
             format!("{spec_schema_id}"),
+            spec_schema_id.to_string(),
             format!("{identity:?}"),
             format!("{binding:?}"),
             format!("{object:?}"),
