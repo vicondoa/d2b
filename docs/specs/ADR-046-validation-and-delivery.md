@@ -99,14 +99,14 @@ only prerequisite is `ADR046-W7`'s exit criteria (§4), and it runs that same
 
 | Wave | Specs (all must be `Accepted`; Gate 0 already covers this) | New/changed crates and modules (destination roots) |
 | --- | --- | --- |
-| `ADR046-W0` | `ADR-046-terminology-and-identities` → `ADR-046-resource-object-model` → `ADR-046-resource-store-redb` → `ADR-046-resource-api-and-authorization` (serial sub-steps, one integrator branch) | `packages/d2b-contracts/src/v3/{identity,resource_ref,resource,resource_status,resource_schema}.rs`; `packages/d2b-resource-store/`, `packages/d2b-resource-store-redb/`; `packages/d2b-contracts/proto/d2b-resource-v3.proto`; `packages/d2b-resource-api/`; `nixos-modules/{options-zones,resources,index}.nix` |
+| `ADR046-W0` | `ADR-046-terminology-and-identities` → `ADR-046-resource-object-model` → `ADR-046-resource-store-redb` → `ADR-046-resource-api-and-authorization` (serial sub-steps, one integrator branch); self-contained `ADR046-feasibility-001` runs before store completion | `packages/d2b-contracts/src/v3/{identity,resource_ref,resource,resource_status,resource_schema}.rs`; `proofs/redb-resource-store-spike/`; `packages/d2b-resource-store/`, `packages/d2b-resource-store-redb/`; `packages/d2b-contracts/proto/d2b-resource-v3.proto`; `packages/d2b-resource-api/`; `nixos-modules/{options-zones,resources,index}.nix` |
 | `ADR046-W1` | `ADR-046-resource-reconciliation` ‖ `ADR-046-componentsession-and-bus` | `packages/d2b-controller-toolkit/`; `packages/d2b-core-controller/src/{hints,dependencies,owner_reconcile}.rs`; `packages/d2b-contracts/src/v3/component_session.rs`; `packages/d2b-session/`; `packages/d2b-session-unix/`; `packages/d2b-bus/` |
 | `ADR046-W2` | `ADR-046-primitive-resource-composition` ‖ `ADR-046-zone-routing` | `packages/d2b-contracts/src/v3/{host,guest,execution_policy,process,volume,user,network,device,credential}.rs`; `packages/d2b-process/`; `packages/d2b-provider-supervisor/`; `packages/d2b-zone-routing/` |
 | `ADR046-W3` | `ADR-046-provider-model-and-packaging` (single spec; strictly serial - every downstream Provider dossier depends on it) | `packages/d2b-provider/`; `packages/d2b-provider-toolkit/`; one `packages/d2b-provider-<base>-<implementation>/` skeleton generator |
 | `ADR046-W4` | `ADR-046-components-processes-and-sandbox` ‖ `ADR-046-core-controllers` ‖ `ADR-046-resources-network` ‖ `ADR-046-resources-credential` ‖ `ADR-046-provider-state` (five parallel specs) | `packages/d2b-process/`, `d2b-provider-supervisor/` (process effect ports); `packages/d2b-core-controller/`; `packages/d2b-provider-network-local/` schema half; `packages/d2b-provider-credential-*/` schema half; Volume `stateSchema`/`persistenceClass`/`sensitivityClass` extension |
 | `ADR046-W5` | `ADR-046-resources-zone-control` ‖ `ADR-046-resources-host-guest-process-user` ‖ `ADR-046-resources-volume` ‖ `ADR-046-resources-device` ‖ `ADR-046-telemetry-audit-and-support` ‖ `ADR-046-cli-and-operations` ‖ `ADR-046-nix-configuration` (seven parallel specs) | `packages/d2b-provider-system-{core,systemd,minijail}/`; `packages/d2b-provider-volume-{local,virtiofs}/` schema half; `packages/d2b-provider-device-*/` schema half; `packages/d2b-telemetry/`, `d2b-audit/`; `packages/d2b/` CLI; `nixos-modules/resources-*.nix` |
 | `ADR046-W6` | All 27 `ADR-046-provider-*` dossiers, grouped into five file-disjoint provider families (§3.3) | One `packages/d2b-provider-<base>-<implementation>/` per Provider (27 crates) |
-| `ADR046-W7` | `ADR-046-feasibility-and-spikes` ‖ `ADR-046-reset-and-cutover` ‖ `ADR-046-security-and-threat-model` ‖ `ADR-046-streamline` ‖ `ADR-046-validation-and-delivery` | Cross-cutting spec-scoped friction fixes, reset/cutover mechanics, feasibility closure, security closure, and the release-gate contract (§15, evaluated at `ADR046-W8` exit) |
+| `ADR046-W7` | `ADR-046-feasibility-and-spikes` (remaining work items) ‖ `ADR-046-reset-and-cutover` ‖ `ADR-046-security-and-threat-model` ‖ `ADR-046-streamline` ‖ `ADR-046-validation-and-delivery` | Cross-cutting spec-scoped friction fixes, reset/cutover mechanics, remaining feasibility closure, security closure, and the release-gate contract (§15, evaluated at `ADR046-W8` exit) |
 | `ADR046-W8` | None - no spec members (§3.1); the wave's contents are the tooling and process friction fixes accumulated across `ADR046-W0`-`ADR046-W7` (signoff, build, test, merge, codegen, disk), triaged at `ADR046-W7` close | `packages/xtask/`; `tests/tools/`; `packages/d2b-contract-tests/tests/`; `Makefile` |
 
 Waves are numbered `ADR046-W0`…`ADR046-W8` - an ADR-046-scoped namespace,
@@ -600,12 +600,14 @@ that evidence exists.
 | Backup/restore/internal schema upgrade | staged validate → atomic publish → rollback-window retention |
 | Repeated open/close and long-reader rejection | no reader starves the single writer |
 
-The RSS row is not a W0 pass criterion as a whole. W0 records only the resource
-service/store median at the 10,000-resource/100-watch fixture and fails above
-24 MiB. The owning controller waves separately fail above 22 MiB for
-`Provider/system-core` and 12 MiB for `Provider/system-minijail`. W6 alone may
-record the aggregate row as passing, after measuring all three processes live
-and at or below 64 MiB; the unallocated 6 MiB is variance headroom.
+The RSS row is not a contract-only store pass criterion. After SPIKE-01 runs,
+`ADR046-store-001` production backend work records the resource service/store
+median at the 10,000-resource/100-watch fixture and fails above 24 MiB; that
+evidence blocks backend completion. The work that lands the fixed controllers
+separately fails above 22 MiB for `Provider/system-core` and 12 MiB for
+`Provider/system-minijail`. Provider integration alone may record the
+aggregate row as passing, after measuring all three processes live and at or
+below 64 MiB; the unallocated 6 MiB is variance headroom.
 
 Failure to meet a hard target changes the Proposed design (per the spec);
 it is never resolved by weakening durability, authorization, or audit.

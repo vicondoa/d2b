@@ -27,10 +27,22 @@ authority to create/validate:
 - parent-directory fsync;
 - replacement/missing-state detection.
 
-The owner passes one already-open regular `File` to the Zone runtime. The
-pinned redb API must use `FileBackend::new(File)` or an equivalently reviewed
-fd-backed API. The Zone runtime does not resolve a caller-controlled store
-path.
+The owner passes one already-open regular database descriptor to the Zone
+runtime as an owned `File` or `OwnedFd`; borrowed descriptors and retained raw
+fd integers are forbidden. Before publishing the descriptor to any thread or
+task, the receiver verifies with `F_GETFD` that `FD_CLOEXEC` is set. An
+ordinary handoff without that bit fails closed. An `SCM_RIGHTS` receiver must
+use `recvmsg(..., MSG_CMSG_CLOEXEC)` so close-on-exec is set atomically as the
+descriptor enters the process, then perform the same verification. A reviewed
+equivalent must provide the same atomic receipt guarantee; repairing a
+received descriptor later with `F_SETFD` is forbidden because it races
+fork+exec.
+
+The pinned redb API must use `FileBackend::new(File)` or an equivalently
+reviewed owned-fd API. The Zone runtime does not resolve a caller-controlled
+store path. Tests cover direct and `SCM_RIGHTS` receipt, the defined fork
+inheritance behavior, and absence of the database descriptor after exec,
+including a receipt racing a fork+exec probe.
 
 Providers/controllers never receive a redb handle, database file/dir fd, path,
 table access, or direct store client. Only the resource service/store actor
@@ -367,13 +379,16 @@ On the pinned reference host/release profile:
 | p95 durable commit → matching controller handler start | <=5 ms |
 | p95 ready Process commit → launch-attempt start | <=20 ms |
 
-Evidence for the aggregate RSS row is staged. W0 records only the Zone resource
+Evidence for the aggregate RSS row is staged. After SPIKE-01 passes,
+`ADR046-store-001` production backend work records the Zone resource
 service/store median at the 10,000-resource/100-watch fixture and must meet
-<=24 MiB; it must not report the aggregate row as passing. The wave that lands
-each fixed controller separately records `Provider/system-core <=22 MiB` and
-`Provider/system-minijail <=12 MiB`. W6 records the first valid all-three-live
-aggregate result, which must remain <=64 MiB. The sub-budgets total 58 MiB; the
-remaining 6 MiB is variance headroom, not an independently spendable budget.
+<=24 MiB. That result gates backend completion; contract-only store work has
+no RSS exit criterion and must not report the aggregate row as passing.
+The work items that land each fixed controller separately record
+`Provider/system-core <=22 MiB` and `Provider/system-minijail <=12 MiB`.
+Provider integration records the first valid all-three-live aggregate result,
+which must remain <=64 MiB. The sub-budgets total 58 MiB; the remaining 6 MiB
+is variance headroom, not an independently spendable budget.
 
 Benchmark fixtures include:
 
@@ -395,10 +410,10 @@ authorization, or audit cannot be weakened to pass.
 
 | Item | Treatment |
 | --- | --- |
-| Current anchor | No generic store. Reuse `d2b-core/src/storage.rs`, `sync.rs`; daemon snapshot/operation records; `d2b-realm-router` idempotency; broker fd/path safety |
-| Evidence class | Current storage/locks/ledgers are mixed reachable/generated; redb store is ADR-only |
+| Current anchor | The engine-neutral generic store contract exists in `d2b-resource-store` and `d2b-resource-store-redb` contract modules but is not wired to the Zone runtime. Reuse `d2b-core/src/storage.rs`, `sync.rs`; daemon snapshot/operation records; `d2b-realm-router` idempotency; broker fd/path safety |
+| Evidence class | Generic store contract is `implemented-but-unwired`; the production redb backend is unimplemented and remains spike-gated. Current storage/locks/ledgers are mixed reachable/generated |
 | Behavior retained | Single repair owner, no-follow/fd-relative safety, atomic rename/fsync, OFD locks, bounded records, pidfd non-persistence, idempotency/quarantine |
-| Required delta | Entire redb schema, store actor, revisions, indexes, watches, conflicts, backup/upgrade |
+| Required delta | Wire the contract into the resource API and Zone runtime; after the feasibility gate, implement the redb database, store actor, revisions, indexes, watches, conflicts, backup, and upgrade |
 | Reuse path | Extract exact storage/atomic/idempotency validators named below; redb only supplies ACID B-trees |
 | Replacement/deletion | No existing state file/ledger is removed until its owning resource/operation migration lands |
 | Feasibility proof | SPIKE-01 and SPIKE-02 are specified but unexecuted; the redb pin and production backend remain provisional |
@@ -440,21 +455,21 @@ types, or the storage-row source contract.
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | Resource-object contracts; store integrator. Contract-only scope may proceed, but production redb backend completion depends on successful SPIKE-01 evidence |
+| Dependency/owner | ADR046-feasibility-001; resource-object contracts; store integrator |
 | Current source | `packages/d2b-core/src/storage.rs`, `sync.rs`; `packages/d2bd/src/supervisor/state.rs`, `daemon_audit.rs`; `d2b-realm-router/src/lib.rs` |
 | Reuse action | adapt |
 | Destination | `packages/d2b-contracts/src/v3/error.rs`; `packages/d2b-resource-store/src/lib.rs`, `error.rs`, `packages/d2b-resource-store-redb/src/lib.rs`, `schema.rs`, `keys.rs`, `transaction.rs` |
 | Detailed design | Promote the exact `redb = { version = "=4.1.0", default-features = false }` workspace pin and consume it only from `d2b-resource-store-redb`. Keep `d2b-resource-store` free of redb and Tokio; expose native async trait methods returning `impl Future + Send`, hold one concrete store implementation, and inject generic test fakes without trait objects or `async-trait`. `ResourceStore::commit` accepts only the private-field `AdmittedMutation`, rechecks its captured policy/API-catalog/active-configuration/controller revisions inside the transaction, never evaluates RBAC, and never auto-retries a failed recheck. Before SPIKE-01: closed errors, store-neutral types, exact table/discriminant codecs and golden vectors, and hermetic small-scale transaction semantics that make no scale claim. After SPIKE-01 passes, implement redb tables/encodings, fd backend, store identity, fair actor, MVCC reads, atomic indexes/revisions/operations/conflicts, and the contract constants: write queue 256, group-commit batch 16, read pool 4, concurrent reads 16, read lifetime 250 ms, watch-dispatch queue 1024. Use full crash-safe durability with one fsync per write transaction; no reduced-durability mode. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Zone runtime owns store; resource API is sole caller |
 | Data migration | Full reset; logical backup only for v3 stores |
-| Validation | Pre-spike codec/golden-vector and small-scale semantic tests make no scale claim; completion requires SPIKE-01 evidence. Unit/property/fault tests and hard benchmark; exact dependency/feature-policy lint; compile tests for `Send` futures and generic fake injection; `AdmittedMutation` private-field/single-constructor and in-transaction revision-recheck tests; policy test forbidding resource-store dependency on API/RBAC symbols; queue/pool constant assertions; paused-clock read-expiry tests; no reduced-durability call-site lint |
+| Validation | Pre-spike codec/golden-vector and small-scale semantic tests make no scale claim; completion requires SPIKE-01 evidence. Unit/property/fault tests and hard benchmark; owned-fd and `FD_CLOEXEC` checks for direct and `SCM_RIGHTS` receipt plus fork/exec inheritance probes; exact dependency/feature-policy lint; compile tests for `Send` futures and generic fake injection; `AdmittedMutation` private-field/single-constructor and in-transaction revision-recheck tests; policy test forbidding resource-store dependency on API/RBAC symbols; queue/pool constant assertions; paused-clock read-expiry tests; no reduced-durability call-site lint |
 | Removal proof | Existing ledgers removed only by owning future work items |
 
 ### ADR046-store-002
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | ADR046-store-001 contract scope plus successful SPIKE-01 and SPIKE-02 evidence; watch/reconciliation integrator |
+| Dependency/owner | ADR046-store-001; ADR046-feasibility-001; watch/reconciliation integrator |
 | Current source | `packages/d2b-realm-core/src/mux.rs`, `d2b-realm-router/src/mux_session.rs`, `route_engine.rs` |
 | Reuse action | adapt |
 | Destination | `packages/d2b-resource-store-redb/src/revision_log.rs`, `packages/d2b-resource-api/src/watch.rs` |
@@ -468,7 +483,7 @@ types, or the storage-row source contract.
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | ADR046-store-001 contract scope; storage-row source contract may proceed, but redb backup/migration completion depends on successful SPIKE-01 evidence; storage/broker integrator |
+| Dependency/owner | ADR046-store-001; ADR046-feasibility-001; storage/broker integrator |
 | Current source | `nixos-modules/storage-json.nix`, `packages/d2b-priv-broker/src/ops/storage_contract.rs`, existing marker/ownership tests |
 | Reuse action | adapt |
 | Destination | `packages/d2b-resource-store-redb/src/backup.rs`, `migration.rs`; `packages/d2b-contracts/src/v3/storage.rs`; `nixos-modules/zone-storage-json.nix`; `docs/reference/schemas/v3/zone-storage.json`; `packages/d2b-contract-tests/tests/zone_storage_contract.rs` |

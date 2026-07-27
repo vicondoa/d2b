@@ -26,21 +26,21 @@ Each JSON work-item node also embeds the manifest's exact `detailedDesign` and
 | Spec nodes | 55 |
 | Work-item nodes | 543 |
 | Total nodes | 598 |
-| Edges | 1940 |
+| Edges | 1943 |
 | Max topological rank | 22 |
 
 ## Waves (W0-W7)
 
 | Wave | Specs | #Specs | #Work items | Parallel groups |
 | --- | --- | --- | --- | --- |
-| W0 | current-code-migration-map, decision-register, resource-api-and-authorization, resource-object-model, resource-store-redb, terminology-and-identities | 6 | 10 | W0-foundation-chain, W0-reference-docs |
+| W0 | current-code-migration-map, decision-register, resource-api-and-authorization, resource-object-model, resource-store-redb, terminology-and-identities | 6 | 11 | W0-foundation-chain, W0-reference-docs |
 | W1 | componentsession-and-bus, resource-reconciliation | 2 | 6 | W1-reconcile-and-bus |
 | W2 | primitive-resource-composition, zone-routing | 2 | 19 | W2-composition-and-routing |
 | W3 | provider-model-and-packaging | 1 | 4 | W3-provider-contract |
 | W4 | components-processes-and-sandbox, core-controllers, provider-state, resources-credential, resources-network | 5 | 32 | W4-parallel-specs |
 | W5 | cli-and-operations, nix-configuration, resources-device, resources-host-guest-process-user, resources-volume, resources-zone-control, telemetry-audit-and-support | 7 | 141 | W5-parallel-specs |
 | W6 | provider-activation-nixos, provider-audio-pipewire, provider-clipboard-wayland, provider-credential-entra, provider-credential-managed-identity, provider-credential-secret-service, provider-device-gpu, provider-device-security-key, provider-device-tpm, provider-device-usbip, provider-display-wayland, provider-network-local, provider-notification-desktop, provider-observability-otel, provider-runtime-azure-container-apps, provider-runtime-azure-virtual-machine, provider-runtime-cloud-hypervisor, provider-runtime-qemu-media, provider-shell-terminal, provider-system-core, provider-system-minijail, provider-system-systemd, provider-transport-azure-relay, provider-transport-unix, provider-transport-vsock, provider-volume-local, provider-volume-virtiofs | 27 | 257 | W6-credentials, W6-interaction, W6-storage-network-device, W6-system-host-guest, W6-transport-observability-activation |
-| W7 | feasibility-and-spikes, reset-and-cutover, security-and-threat-model, streamline, validation-and-delivery | 5 | 74 | W7-closing |
+| W7 | feasibility-and-spikes, reset-and-cutover, security-and-threat-model, streamline, validation-and-delivery | 5 | 73 | W7-closing |
 
 ## Dependency DAG (waves and prep barriers)
 
@@ -202,7 +202,7 @@ file; all other destinations retain their existing parallelism.
 | `wi:ADR-046-componentsession-and-bus` | W1 | 3 |
 | `wi:ADR-046-core-controllers` | W4 | 1 |
 | `wi:ADR-046-decision-register` | W0 | 1 |
-| `wi:ADR-046-feasibility-and-spikes` | W7 | 11 |
+| `wi:ADR-046-feasibility-and-spikes` | W7 | 10 |
 | `wi:ADR-046-nix-configuration` | W5 | 35 |
 | `wi:ADR-046-primitive-resource-composition` | W2 | 3 |
 | `wi:ADR-046-provider-activation-nixos` | W6 | 7 |
@@ -254,6 +254,7 @@ file; all other destinations retain their existing parallelism.
 | `wi:core-config-hub:w4` | W4 | 1 |
 | `wi:core-config-hub:w5` | W5 | 6 |
 | `wi:core-controller-coordination:w6` | W6 | 1 |
+| `wi:resource-store-foundation:w0` | W0 | 1 |
 
 ## Critical path (longest dependency chain)
 
