@@ -3,13 +3,14 @@
 use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
-use d2b_contracts::{resource_proto as wire, v3::AuthenticatedSubjectContext};
+use d2b_contracts::resource_proto as wire;
 
 use crate::{
     ResourceStore,
-    authz::{AuthorizationState, authenticated_relay_hop},
+    authz::authenticated_relay_hop,
     client::ResourceClient,
     generated::d2b_resource_v3_ttrpc,
+    identity::AuthenticatedSubjectContext,
     service::{ResourceService, TrustedRequest, UpgradeDispatcher},
 };
 
@@ -29,8 +30,7 @@ impl std::error::Error for AdapterBindingError {}
 #[derive(Debug)]
 pub struct AuthenticatedBusAdapter<S, U> {
     service: Arc<ResourceService<S, U>>,
-    subject: Arc<AuthenticatedSubjectContext>,
-    state: AuthorizationState,
+    session: AuthenticatedSubjectContext,
 }
 
 impl<S, U> AuthenticatedBusAdapter<S, U>
@@ -41,23 +41,18 @@ where
     /// Seal authenticated identity and policy state to one ComponentSession.
     pub fn bind_authenticated_session(
         service: Arc<ResourceService<S, U>>,
-        subject: Arc<AuthenticatedSubjectContext>,
-        state: AuthorizationState,
+        session: AuthenticatedSubjectContext,
     ) -> Result<Self, AdapterBindingError> {
-        authenticated_relay_hop(&subject).map_err(|_| AdapterBindingError)?;
-        Ok(Self {
-            service,
-            subject,
-            state,
-        })
+        authenticated_relay_hop(session.claims()).map_err(|_| AdapterBindingError)?;
+        Ok(Self { service, session })
     }
 
     /// Return an in-process client bound to the same authenticated session.
     pub fn client(&self) -> ResourceClient<S, U> {
         ResourceClient::from_authenticated_bus(
             Arc::clone(&self.service),
-            Arc::clone(&self.subject),
-            self.state.clone(),
+            Arc::clone(self.session.claims()),
+            self.session.authorization_state().clone(),
         )
     }
 
@@ -67,8 +62,8 @@ where
 
     pub(crate) fn trusted<T>(&self, request: T) -> TrustedRequest<T> {
         TrustedRequest::from_authenticated_bus(
-            Arc::clone(&self.subject),
-            self.state.clone(),
+            Arc::clone(self.session.claims()),
+            self.session.authorization_state().clone(),
             request,
         )
     }
@@ -205,9 +200,10 @@ mod tests {
     use std::collections::BTreeSet;
 
     use d2b_contracts::v3::{
-        BindingDigest, ConfigurationGeneration, EvidenceClass, Locality, ReconnectGeneration,
-        ResourceName, ResourceRef, ResourceTypeName, ResourceUid, SchemaFingerprint, ServiceName,
-        SessionBinding, SessionPurpose, TranscriptHash, TransportBinding, ZoneId, ZoneRevision,
+        AuthenticatedSubjectContext as SessionClaims, BindingDigest, ConfigurationGeneration,
+        EvidenceClass, Locality, ReconnectGeneration, ResourceName, ResourceRef, ResourceTypeName,
+        ResourceUid, SchemaFingerprint, ServiceName, SessionBinding, SessionPurpose,
+        TranscriptHash, TransportBinding, ZoneId, ZoneRevision,
     };
     use d2b_resource_store::{
         PolicySnapshot, StoreCommitResult, StoreError, StoreGetRequest, StoreInspectSchemaRequest,
@@ -217,9 +213,11 @@ mod tests {
     use protobuf::{EnumOrUnknown, MessageField};
 
     use crate::authz::{
-        ApiCatalog, BindingScope, BootstrapPhase, BoundSubject, CompiledRole, CompiledRoleBinding,
-        NativeAuthorizer, PolicyRule, PolicySet, RelayGrantAuthority, ResourceVerb,
+        ApiCatalog, AuthorizationState, BindingScope, BootstrapPhase, BoundSubject, CompiledRole,
+        CompiledRoleBinding, NativeAuthorizer, PolicyRule, PolicySet, RelayGrantAuthority,
+        ResourceVerb,
     };
+    use crate::identity::issue_test_subject;
     use crate::{AdmissionVerifier, ResourceStoreBackend, VerifiedMutation};
 
     #[derive(Debug)]
@@ -276,8 +274,8 @@ mod tests {
         }
     }
 
-    fn subject(locality: Locality, evidence: EvidenceClass) -> Arc<AuthenticatedSubjectContext> {
-        Arc::new(AuthenticatedSubjectContext::new(
+    fn subject(locality: Locality, evidence: EvidenceClass) -> Arc<SessionClaims> {
+        Arc::new(SessionClaims::new(
             ResourceRef::parse("User/alice").unwrap(),
             ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
             ResourceRef::parse("Zone/dev").unwrap(),
@@ -318,8 +316,7 @@ mod tests {
         Arc::new(
             AuthenticatedBusAdapter::bind_authenticated_session(
                 service,
-                subject(Locality::Local, EvidenceClass::UnixPeer),
-                state(),
+                issue_test_subject(subject(Locality::Local, EvidenceClass::UnixPeer), state()),
             )
             .unwrap(),
         )
@@ -368,7 +365,11 @@ mod tests {
         );
         let service = Arc::new(ResourceService::new(store, authorizer));
         Arc::new(
-            AuthenticatedBusAdapter::bind_authenticated_session(service, context, state()).unwrap(),
+            AuthenticatedBusAdapter::bind_authenticated_session(
+                service,
+                issue_test_subject(context, state()),
+            )
+            .unwrap(),
         )
     }
 
@@ -557,8 +558,7 @@ mod tests {
             assert!(
                 AuthenticatedBusAdapter::bind_authenticated_session(
                     Arc::clone(&service),
-                    subject(locality, evidence),
-                    state(),
+                    issue_test_subject(subject(locality, evidence), state()),
                 )
                 .is_err()
             );
