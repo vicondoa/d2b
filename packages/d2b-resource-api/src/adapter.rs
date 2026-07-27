@@ -1087,13 +1087,13 @@ mod tests {
                 targets: vec![
                     ObservedTarget {
                         resource_type: "Host".to_owned(),
-                        resource_name: Some("host-system".to_owned()),
+                        resource_name: Some(format!("{:?}", name())),
                         verb: ResourceVerb::Delete,
                         subresource: None,
                     },
                     ObservedTarget {
                         resource_type: "Host".to_owned(),
-                        resource_name: Some("host-system".to_owned()),
+                        resource_name: Some(format!("{:?}", name())),
                         verb: ResourceVerb::Delete,
                         subresource: None,
                     },
