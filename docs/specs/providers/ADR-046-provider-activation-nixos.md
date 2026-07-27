@@ -1055,6 +1055,8 @@ Required adaptations (work item `ADR046-activation-001`):
 | Data migration | Full d2b 3.0 reset; no v2 activation-helper invocation compatibility |
 | Validation | Unit tests for JSON protocol, bounded outcomes, no resource metadata writes, and no Command::new bash fallback. |
 | Removal proof | Legacy flag-based helper invocation is removed from activation-nixos paths once runner JSON protocol tests pass. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 **Scope:** `packages/d2b-host/src/bin/d2b-activation-helper.rs`
 
@@ -1075,6 +1077,8 @@ Required adaptations (work item `ADR046-activation-001`):
 | Data migration | Full d2b 3.0 reset; no v2 generation resource import |
 | Validation | Schema golden vectors, serde unknown-field rejection, phase enum tests, activationDetail-not-in-spec test, and no-store-path-in-spec-or-status test. |
 | Removal proof | None - net-new; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 **Scope:** `docs/reference/schemas/v3/activation-nixos.d2bus.org.NixosGeneration.json`,
 `packages/d2b-contracts/src/activation_nixos.rs`
@@ -1096,6 +1100,8 @@ Define JSON schema and Rust DTOs. Enforce:
 | Data migration | Full d2b 3.0 reset; adopt mode records an existing active generation but does not import v2 controller state |
 | Validation | Controller tests for retention, finalizer sequence, no TTL retention, no direct store ops, no store path in status, deleted event-only removal, runner shape, and a structural metric descriptor assertion that `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys are absent and a generation/Zone-name canary never enters labels. |
 | Removal proof | Direct hardlink-farm and garbage-collection calls from activation-nixos reachable paths are absent after controller and runner tests pass. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 **Scope:** `packages/d2b-provider-activation-nixos/src/controller/`
 
@@ -1120,6 +1126,8 @@ Reconcile loop for `activation-nixos.d2bus.org.NixosGeneration`. Key invariants:
 | Data migration | Full d2b 3.0 reset; no v2 runner state import |
 | Validation | Runner tests for artifact lookup, JSON helper invocation, Host and Guest target parity, no raw argv, no SSH, no store path in output, and terminal nonzero handling. |
 | Removal proof | No old SSH or raw command fallback path exists in activation-runner after tests assert typed helper dispatch only. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 **Scope:** `packages/d2b-provider-activation-nixos/src/runner/`
 
@@ -1147,6 +1155,8 @@ use the same contract with no bypass.
 | Data migration | Full d2b 3.0 reset; CLI command surface changes with no runtime state import |
 | Validation | CLI integration tests for subcommand parsing, authorization, resource creation/listing, rollback priorGenerationRef, gc ownership release, and output redaction. |
 | Removal proof | Legacy top-level verb removal is gated on ADR046-activation-007 after the d2b activation integration matrix passes. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 **Scope:** `packages/d2b/src/activation.rs` (new subcommand module)
 
@@ -1166,6 +1176,8 @@ only after this lands (work item ADR046-activation-007).
 | Data migration | Full d2b 3.0 reset; existing d2b.vms activation settings are reauthored as Zone resources rather than imported |
 | Validation | Nix eval tests for Provider config, NixosGeneration shape, retainedGenerations source, no systemStorePath in bundle, no state Volume or state-layout principal, and artifact ID resolution. |
 | Removal proof | Old implicit activation Nix paths are unused by activation-nixos once resource emitter parity tests pass. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 **Scope:** `nixos-modules/providers/activation-nixos.nix`
 
@@ -1188,6 +1200,8 @@ Provider's normal principal model.
 | Data migration | Full d2b 3.0 reset; no command alias compatibility window |
 | Validation | CLI integration matrix for d2b activation passes; grep or contract test confirms old cmd_* symbols and dispatcher registrations are absent. |
 | Removal proof | cmd_switch, cmd_boot, cmd_test, cmd_rollback, cmd_build, cmd_generations, cmd_gc, cmd_migrate and their registrations are deleted from packages/d2b/src/lib.rs. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 **Scope:** `packages/d2b/src/lib.rs`
 

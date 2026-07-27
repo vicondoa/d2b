@@ -1766,6 +1766,8 @@ assert resolve(export.resourceRef).spec.mode == "authority";
 | Data migration | None - docs/tooling only; no runtime state |
 | Validation | d2b-contracts compile tests for native async trait method signatures and generic fake injection, generation-fenced firewall apply/observe/release signatures (release requires NetworkUid and token), `FirewallGenerationMismatch`, `UsbipEffectError: Clone + PartialEq + Eq`, `TransientDetail` clone/equality, redacted Debug/Display behavior, and no implementation leakage. |
 | Removal proof | None - net-new; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 Define the `UsbipEffectPort` async trait with the method set in § UsbipEffectPort.
 Define `DeviceUid`, `NetworkUid`, `UsbBindingUid`, `LeaseToken`,
@@ -1789,6 +1791,8 @@ in `d2b-contracts`; trait only. Add conformance tests in `d2b-contracts/tests/us
 | Data migration | Full d2b 3.0 reset; adapter resumes from Service/Binding status and authority owner proofs rather than daemon-coupled snapshots |
 | Validation | Fast packages/d2b-core/tests/device_usbip_adapter.rs covers same-Zone gate, exact shared physical backing tuple derivation, byte-identical keys for USB/security-key views of one fake token, Provider-private-class/digest bypass rejection, `physical-usb-backing-conflict` before effects, separate USBIP module/relay authorities, one-module/one-relay reuse, exact closed `Apply|Remove` decoding and same `ApplyNftablesProjection` broker mapping, unknown-action rejection, `expected_generation_id` fence binding, exact Network/busid firewall scoping, validated-absence `Remove`, foreign-marker failure without mutation, sibling network-local and device-usbip marker preservation, ownership-scoped drift/status, transient retry with retained token/authority, independent per-busid release, no network-local dependency, anti-spoof, redaction, and no digest/busid/path/fd exposure. |
 | Removal proof | Old daemon-coupled adapter call sites are removed by ADR046-usbip-009 after Provider wiring and adapter tests pass. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 Implement the adapter: busid lookup from signed bundle, same-Zone check, OFD lock
 management, broker dispatch of `ApplyNftablesProjection` actions
@@ -1812,6 +1816,8 @@ type to the trait caller. Add unit tests for same-Zone gate and anti-spoof logic
 | Data migration | None - docs/tooling only; no runtime state |
 | Validation | make test-policy passes; Cargo.toml has no d2b-priv-broker dependency; fast schema/manifest tests consume the common fixtures, accept canonical minimal base without `spec.provider`, prove a fake direct-local Provider can implement the same base, and cover Service-only exportability, Binding non-exportability, Core projection ownerRef/base fields with explicit `spec.provider` rejection, D088 status layering, semantic factory-fingerprint stability across Provider/adapter identity changes, strict refs, and trait injection. |
 | Removal proof | None - net-new; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 Create the crate with the layout in § Crate layout. Implement `lib.rs`, `validation.rs`
 (bus-id corpus from `d2b-contracts::usbip`), and stub controller with compile-checked
@@ -1839,6 +1845,8 @@ Volume, and the controller Process has no `/state` mount.
 | Data migration | Full d2b 3.0 reset; no direct import of d2bd usbip_reconcile_state snapshots |
 | Validation | Fast tests/controller_state_machine.rs, service_binding_schema.rs, export_import.rs, authority_conflict.rs, async_loop.rs, finalizer.rs, and wrong_zone.rs cover authority/projection/Binding lifecycle, Service-only export, projection `spec.provider` rejection, semantic fingerprint stability under adapter identity changes plus separate descriptor authentication, D088 `status.resource`/`status.provider` placement, shared physical tuple collision before effects, encrypted fake streams, no physical projection effect, exclusivity, restart, WrongZone degradation, exact `Apply|Remove` `ApplyNftablesProjection` mapping, and firewall status/token/authority retention until `Remove` confirmation. |
 | Removal proof | packages/d2bd/src/usbip_state_machine.rs and usbip_reconcile_state.rs are deleted by ADR046-usbip-009 once Provider parity tests pass. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 Implement the Service authority/projection and Binding attachment step machines.
 Map legacy desired/carrier/bind/proxy observations to Service/Binding status,
@@ -1870,6 +1878,8 @@ Tests required:
 | Data migration | Full d2b 3.0 reset; old per-env runners become Host/Network authorities and per-Device port-3240 workers are forbidden |
 | Validation | Fast Process/Endpoint shape tests prove one backend per Host, one Core-derived multiplexed TCP 3240 Endpoint/firewall authority per Network, deterministic duplicate conflict, adapter/exact-Binding-only resolution, LaunchTicket-connected stream, no generic Network reader access, Binding ownership/private Guest policy, no per-Device listener, no raw address/argv/path/fd, and readiness before bind/attach. |
 | Removal proof | Old per-env usbipd autostart and ProcessRole::Usbip paths are removed by ADR046-usbip-009 after Process resource lifecycle tests pass. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 Implement the three worker classes in § Worker Process resources using
 `ResourceMutationBatch`. Confirm that two Services on one Host/Network reuse
@@ -1891,6 +1901,8 @@ private proxies/Endpoints. Attach/detach remains an EffectPort call.
 | Data migration | Full d2b 3.0 reset; current d2bd reconcile state is not imported |
 | Validation | Fast tests/status_serde.rs covers generic base status plus three strict USBIP detail schemas, exact `status.resource` placement for access/import/attachment/backing claim, exact `status.provider` placement for relay/firewall implementation observations, drift transition and ownership, `releasing` retention until `Remove` confirmation, rejection of semantic fields directly under `status`, mode-dependent omissions, bounded counts/refs, unknown-field denial, and a deny corpus proving USBIP-only fields are rejected from base and Network status. |
 | Removal proof | Old d2bd USBIP reconcile-state structs are removed by ADR046-usbip-009 after status extension coverage passes. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 Define generic `UsbServiceStatus`/`UsbBindingStatus` base projections and strict
 `UsbipDeviceDetails`, `UsbipServiceDetails::{Authority,Projection}`, and
@@ -1913,6 +1925,8 @@ not ResourceTypes or compatibility aliases.
 | Data migration | None - docs/tooling only; no runtime state |
 | Validation | `make test-host-integration` runs the non-hardware real-kernel case on a capable host; `make test-hardware` runs the explicit manual device case. No Layer-1 test opens a device, loads a module, creates a namespace, or listens on a socket. |
 | Removal proof | Old usbip_policy_network_scoping coverage is retired only after the fast wrong-Zone admission test and `tests/host-integration/usbip-service.nix` successor both pass and the migration ledger is updated. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 Required tests:
 
@@ -1943,6 +1957,8 @@ Required tests:
 | Data migration | Full d2b 3.0 reset; operators reauthor old per-VM options as Device + authority/projection Service + per-Guest Binding |
 | Validation | Fast tests/unit/nix/cases/usbip-*.nix cover schema shape, Core projection `spec.provider` rejection, D088 layered status fixtures including USBIP-owned firewall state and `releasing` retention, all reference/owner/export assertions, byte-identical USB/security-key tuple collision and private-class bypass rejection, one Core-derived 3240 Endpoint/firewall authority per Network, exact `Apply|Remove` `ApplyNftablesProjection` action surface with unknown values rejected and no USBIP-specific second projection op, least-privilege consumer policy, absence of network-local 3240 rules, old-option removal, and guest module retention. |
 | Removal proof | d2b.vms.<vm>.usbip.yubikey and host-side USBIP module paths are removed at reset once Zone resource emitter coverage passes. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 - Add `d2b.zones.<zone>.providers.device-usbip.config.controllerExecutionRef` option.
 - Remove `d2b.vms.<vm>.usbip.yubikey` at v3 reset; add deprecation warning until removal.
@@ -1970,6 +1986,8 @@ Required tests:
 | Data migration | Full d2b 3.0 reset; no daemon-coupled USBIP runtime state import |
 | Validation | make test-unit and make test-flake plus grep or contract checks for removed symbols and no residual d2bd/network.nix USBIP lifecycle references. |
 | Removal proof | usbipd_perenv_autostart.rs, usbip_state_machine.rs, usbip_reconcile_state.rs, network.nix USBIP firewall block, and ProcessRole::Usbip are deleted after parity. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 Deletion sequence:
 1. Confirm Provider tests and integration tests pass.

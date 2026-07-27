@@ -972,6 +972,8 @@ expression.
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
 | Validation | Proof type: hermetic unit + redaction test; `tests/effect_port_mock.rs` and `tests/redaction.rs`. |
 | Removal proof | None - net-new; no prior owner to remove. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-vsock-002
 | Field | Value |
@@ -986,6 +988,8 @@ expression.
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
 | Validation | Proof type: hermetic framing tests; `tests/framing.rs` covers partial/coalesced records, oversized frames, EOF/reset classification, and no real socket. |
 | Removal proof | None for framing; raw socket portions from the source are deliberately not copied into the Provider crate. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-vsock-003
 | Field | Value |
@@ -999,6 +1003,8 @@ expression.
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
 | Validation | Proof type: service round-trip plus exact-shape tests; `tests/open_close.rs`, `tests/observe.rs`, `tests/topology.rs::{canonical_zonelink_spec_fields_are_exact,legacy_zonelink_provider_fields_are_rejected,transport_credentials_must_be_empty}`, and provider conformance tests. |
 | Removal proof | None - net-new; no prior owner to remove. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-vsock-004
 | Field | Value |
@@ -1012,6 +1018,8 @@ expression.
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
 | Validation | Proof type: integration test; `integration/host_guest.rs` exercises live open/close byte round-trip with the injected effect and proves the selected parent has only sealed allocator/route state, with no parent-store Provider/ZoneLink row. |
 | Removal proof | None - net-new core adapter; no prior owner to remove. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-vsock-005
 | Field | Value |
@@ -1025,6 +1033,8 @@ expression.
 | Data migration | Full d2b 3.0 reset; no v2 state/config import; state Volume is created fresh with `migrationPolicy: none`. |
 | Validation | Proof type: unit + integration test; `tests/state_volume.rs` and Provider install/remove integration tests verify schema, user refs, marker lifecycle, and no ComponentPrincipal. |
 | Removal proof | Remove the state Volume and its broker-maintained identity marker during Provider deletion; no operator-authored Volume remains. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-vsock-006
 | Field | Value |
@@ -1038,6 +1048,8 @@ expression.
 | Data migration | None - docs/tooling only; no runtime state. |
 | Validation | Proof type: integration test; `make test-integration` runs `host_guest.rs` and `no_fd_transfer.rs`. |
 | Removal proof | None - test coverage net-new; old duplicate vsock tests are retired only after successor assertions migrate. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-vsock-007
 | Field | Value |
@@ -1051,6 +1063,8 @@ expression.
 | Data migration | Full d2b 3.0 reset; no v2 relay or guest-control state/config import. |
 | Validation | Proof type: deletion + parity test; parity tests for observability-otel and Guest lifecycle plus redaction checks that no raw CID/socat vsock path remains. |
 | Removal proof | Delete `packages/d2b-host/src/vsock_relay_argv.rs` socat path after observability parity, delete `packages/d2bd/src/guest_control_vsock.rs` CONNECT-proxy after Guest lifecycle parity, and prove no raw CID or socat vsock path remains. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 

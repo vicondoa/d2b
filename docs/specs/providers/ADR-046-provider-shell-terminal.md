@@ -1468,6 +1468,8 @@ per-test advisory threshold.
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
 | Validation | `packages/d2b-provider-shell-terminal/tests/resource_schema.rs` |
 | Removal proof | None - net-new; no prior owner to remove. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-sterm-002
 | Field | Value |
@@ -1481,6 +1483,8 @@ per-test advisory threshold.
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
 | Validation | `packages/d2b-provider-shell-terminal/tests/controller_reconcile.rs` |
 | Removal proof | None - net-new controller; legacy controller-equivalent state owner does not exist. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-sterm-003
 | Field | Value |
@@ -1495,6 +1499,8 @@ per-test advisory threshold.
 | Data migration | Full d2b 3.0 reset; no v2 shell state import; PTY/ring state is live process memory only. |
 | Validation | `packages/d2b-provider-shell-terminal/tests/supervisor_runtime.rs` |
 | Removal proof | Supersedes `guestd/src/shell.rs` managed runtime and unsafe-local helper shell supervisor; removed once successor supervisor coverage passes. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-sterm-004
 | Field | Value |
@@ -1508,6 +1514,8 @@ per-test advisory threshold.
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
 | Validation | `packages/d2b-provider-shell-terminal/tests/process_templates.rs` |
 | Removal proof | Removes forbidden pool-wide supervisor, disguised system-domain supervisor, management EphemeralProcess, and sealed output Volume concepts from the template surface. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-sterm-005
 | Field | Value |
@@ -1521,6 +1529,8 @@ per-test advisory threshold.
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
 | Validation | `packages/d2b-provider-shell-terminal/tests/open_session.rs` |
 | Removal proof | None - net-new resource lifecycle; no prior owner to remove. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-sterm-006
 | Field | Value |
@@ -1535,6 +1545,8 @@ per-test advisory threshold.
 | Data migration | Full d2b 3.0 reset; no terminal byte or ring-state import. |
 | Validation | `packages/d2b-provider-shell-terminal/tests/ring_buffer.rs` |
 | Removal proof | Proves no controller-owned PTY, management worker, EphemeralProcess, or sealed output Volume remains for shell output/management responses. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-sterm-007
 | Field | Value |
@@ -1549,6 +1561,8 @@ per-test advisory threshold.
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
 | Validation | `packages/d2b-provider-shell-terminal/tests/adoption.rs` |
 | Removal proof | Supersedes unsafe-local helper adoption storage/protocol; proof is degraded-ambiguity and stale-generation tests with no helper state dependency. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-sterm-008
 | Field | Value |
@@ -1562,6 +1576,8 @@ per-test advisory threshold.
 | Data migration | Full d2b 3.0 reset; no unsafe-local shell state/config import. |
 | Validation | `packages/d2b-provider-shell-terminal/tests/host_rules.rs` |
 | Removal proof | Supersedes unsafe-local Host shell supervisor path; proof requires no SSH/direct-host fallback and relay denial coverage. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-sterm-009
 | Field | Value |
@@ -1575,6 +1591,8 @@ per-test advisory threshold.
 | Data migration | Full d2b 3.0 reset; no guestd shell runtime state/config import. |
 | Validation | `packages/d2b-provider-shell-terminal/tests/guest_rules.rs` |
 | Removal proof | Supersedes independent guestd session-limit/runtime authority; proof is rejection of Guests without `user` domain and no guestd-managed shell path. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-sterm-010
 | Field | Value |
@@ -1588,6 +1606,8 @@ per-test advisory threshold.
 | Data migration | Full d2b 3.0 reset; no v2 state/config import. |
 | Validation | `packages/d2b-provider-shell-terminal/tests/authz.rs` |
 | Removal proof | Supersedes public-wire shell protocol authorization; proof requires no `ShellOp` or `ShellOpResponse` path remains. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-sterm-011
 | Field | Value |
@@ -1601,6 +1621,8 @@ per-test advisory threshold.
 | Data migration | Full d2b 3.0 reset; no v2 audit/telemetry state import. |
 | Validation | `packages/d2b-provider-shell-terminal/tests/redaction.rs` |
 | Removal proof | None - net-new observability surface; legacy paths must be removed or adapted to pass redaction tests. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-sterm-012
 | Field | Value |
@@ -1614,6 +1636,8 @@ per-test advisory threshold.
 | Data migration | Full d2b 3.0 reset; no v2 shell state/config import. |
 | Validation | `packages/d2b-provider-shell-terminal/tests/migration.rs` |
 | Removal proof | Delete `packages/d2b-guestd/src/shell.rs` managed runtime flow, `packages/d2b-unsafe-local-helper/src/services/shell/`, and `ShellOp`/`ShellOpResponse`; update closed gate manifests, flake/matrix/Nix-unit pins, generated ledgers, and CI workflow shards. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-sterm-013
 | Field | Value |
@@ -1628,6 +1652,8 @@ per-test advisory threshold.
 | Data migration | Full d2b 3.0 reset; no v2 service/session state import. |
 | Validation | `packages/d2b-provider-shell-terminal/tests/service_contract.rs` |
 | Removal proof | Supersedes public-wire shell protocol and helper supervisor protocol once ComponentSession service-contract tests pass. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ## Baseline reuse and removal
 

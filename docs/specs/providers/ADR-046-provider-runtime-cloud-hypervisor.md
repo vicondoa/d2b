@@ -1704,6 +1704,8 @@ per-test advisory threshold.
 | Data migration | None (spike) |
 | Validation | Unit: reconcile state machine, fast-path latency, adoption/ambiguity, finalize ordering. Integration: end-to-end VMM boot with real KVM and guest-control session (requires `make test-host-integration`) |
 | Removal proof | Not applicable (new crate) |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-ch-002 (Guest bootstrap graph)
 
@@ -1718,6 +1720,8 @@ per-test advisory threshold.
 | Data migration | v3 reset; no v2 process graph migration |
 | Validation | Golden VMM Process spec vectors; dependency-ordering tests; parallel Guest tests (8 concurrent); net-VM creation tests; Device/kvm explicit-ref enforcement; tap launch routing proves `CreatePersistentTap → SetBridgePortFlags → ProviderSupervisor LaunchTicket`; fd-lifetime tests prove CLOEXEC, one inheritable child slot, and close-before-generation-fenced-delete on every failed launch; boundary tests prove the controller and bus payloads contain only opaque refs |
 | Removal proof | `ProcessRole::CloudHypervisor`, `ProcessRole::Swtpm`, `ProcessRole::NetVm` variant callers deleted; `nixos-modules/processes-json.nix` VMM emitter deleted after parity |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-ch-003 (VMM argv builder v3)
 
@@ -1732,6 +1736,8 @@ per-test advisory threshold.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Golden argv vectors matching `cloud-hypervisor-argv-*.txt` shapes with v3 adaptations; tap vector accepts only the declared LaunchTicket child fd slot; redaction test (no store path in Debug output) |
 | Removal proof | `d2b-host/src/ch_argv.rs::generate_ch_argv` callers removed; the old network-handoff mode and tap-name branches have no v3 callers; old golden test files adapted |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-ch-004 (Nix resource compiler)
 
@@ -1746,6 +1752,8 @@ per-test advisory threshold.
 | Data migration | `d2b.vms.<vm>` → `d2b.zones.<z>.resources.<n>` documented in migration guide |
 | Validation | nix-unit eval tests: rule CH-1 through CH-4 + rules 1-17; golden resource bundle JSON (no store path); type-mismatch eval errors; raw locator rejection; `spec.systemArtifactId` at top-level in JSON (not in `spec.provider.settings`) |
 | Removal proof | `options-vms.nix`; `options-realms-workloads.nix` (LocalVm path); `nixos-modules/processes-json.nix` (VMM emitter); `nixos-modules/store.nix` removed after integration parity |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-ch-005 (guest-control health and adoption)
 
@@ -1760,6 +1768,8 @@ per-test advisory threshold.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Fake guest-control server test; health check timeout/failure/retry; adoption property test (ambiguity, gone, stale pid); graceful shutdown ordering |
 | Removal proof | `ProcessRole::GuestControlHealth` observation path; `ProcessRole::GuestSshReadiness` deleted at cutover |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-ch-006 (metrics and audit)
 
@@ -1774,6 +1784,8 @@ per-test advisory threshold.
 | Data migration | `d2b_daemon_vm_*` metrics retired; consumers must update dashboards |
 | Validation | `policy_observability.rs` updated with v3 allowlist; structural descriptor tests assert exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys plus Guest/Zone-name canary absence; bounded message/field tests; audit record schema golden vectors |
 | Removal proof | Hand-rolled Prometheus registry (`d2bd/src/metrics.rs` `d2b_daemon_vm_*` section) deleted after migration |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-ch-007 (controller status-first operational state)
 
@@ -1788,6 +1800,8 @@ per-test advisory threshold.
 | Data migration | v3 reset; no v2 state storage migration |
 | Validation | `state_status_test.rs` (hermetic): status projection round-trip and bound enforcement; restart re-derivation from store/ledger/external observation without a state Volume; no secret/path/argv/PID in status |
 | Removal proof | `d2b-core/src/storage.rs` `StoragePathSpec` / `SensitivityClass` retired only after all Provider state consumers migrate to v3 status/optional-Volume helpers |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 Per `ADR-046-provider-model-and-packaging` and `ADR-046-nix-configuration`, the
 workspace policy gate rejects the crate unless all four paths exist:

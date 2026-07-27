@@ -41,6 +41,9 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- Made ADR 0046 work-item delivery state machine-readable and fail-closed:
+  every item now records a closed `Planned` or `Merged` state plus nonempty
+  evidence, and the generated work-item artifact advances to schema version 2.
 - Accepted ADR 0046 and all 55 members of its specification set (28 top-level
   specs plus 27 Provider dossiers), flipping each metadata `Status` from
   `Proposed` to `Accepted`. This satisfies the manifest-acceptance portion of

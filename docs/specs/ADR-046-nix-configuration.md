@@ -2583,6 +2583,8 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Tests | `tests/unit/nix/cases/zones-options.nix`, `tests/unit/nix/cases/zones-ref-validation.nix`, `tests/unit/nix/cases/zones-zonelink.nix`, `tests/unit/nix/cases/provider-catalog-artifact-id-unique.nix` |
 | Drift pin | `make nix-unit-pin` after adding cases |
 | Removal proof | `options-realms*.nix` removed after `options-zones*.nix` achieves parity and parity drift test passes |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nix-002
 
@@ -2599,6 +2601,8 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Tests | `tests/unit/nix/cases/zones-network.nix`, `tests/assertions-eval.sh` extended |
 | Drift pin | `make nix-unit-pin` |
 | Removal proof | `options-envs.nix`, `options-vms.nix` removed after migration parity test passes |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nix-003
 
@@ -2615,6 +2619,8 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Tests | `tests/unit/nix/cases/site-options.nix` |
 | Drift pin | `make nix-unit-pin` |
 | Removal proof | No removal; file extended only |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nix-004
 
@@ -2631,6 +2637,8 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Tests | `tests/unit/nix/cases/index-zones.nix`; `tests/unit/gates/drift-check.sh` extended |
 | Drift pin | `make nix-unit-pin`; `make flake-matrix-pin` if flake checks change |
 | Removal proof | `cfg._index.envMeta`, `cfg._index.realms.*` sub-trees removed after all callers migrate to Zone resource lookups |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nix-005
 
@@ -2647,6 +2655,8 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Tests | `tests/unit/nix/cases/bundle-zones.nix`; `tests/unit/gates/drift-check.sh` for schema drift |
 | Drift pin | `make test-drift` |
 | Removal proof | The v2 `d2b._bundle` artifact table is retired after all Zone bundle tests pass |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nix-006
 
@@ -2663,6 +2673,8 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Tests | `tests/unit/nix/cases/zones-processes.nix`; `tests/unit/nix/cases/zones-process-exact-mirror.nix`; `packages/d2b-contract-tests/tests/processes-schema.rs` |
 | Drift pin | `make test-drift` after schema changes |
 | Removal proof | `processes-json.nix` and the current `processes.json` schema removed after all Process Providers consume the Process/EphemeralProcess resources from `zones/<z>/resource-bundle.json` |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nix-007
 
@@ -2679,6 +2691,8 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Tests | `tests/unit/nix/cases/zones-volumes.nix`; `packages/d2b-contract-tests/tests/volumes-schema.rs` |
 | Drift pin | `make test-drift` |
 | Removal proof | `storage-json.nix`, `sync-json.nix`, and `/etc/d2b/storage.json`/`sync.json` removed after Volume controller parity |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nix-008
 
@@ -2695,6 +2709,8 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Tests | `tests/unit/nix/cases/zones-bootstrap.nix`; `realm_access_resolver` contract test |
 | Drift pin | `make nix-unit-pin` |
 | Removal proof | Legacy `allocator-json.nix`, `realm-controller-config-json.nix`, and `/etc/d2b/allocator.json`/`realm-controllers.json` removed ONLY after the sealed `parentZone` topology and ZoneLink resolver are live; the allocator bootstrap mechanism itself remains |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nix-009
 
@@ -2711,6 +2727,8 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Tests | `tests/unit/nix/cases/zones-launcher-metadata.nix`; `tests/unit/nix/cases/zones-credential-entra.nix` covers both required subjects, provider visibility, zone-visibility rejection, and exact Endpoint operations; no-secret vectors |
 | Drift pin | `make nix-unit-pin` |
 | Removal proof | `realm-workloads-launcher-v2-json.nix`/`realm-identity-config-json.nix` and `/etc/d2b/realm-workloads-launcher-v2.json`/`realm-identity.json` removed ONLY after display/credential Providers read resource configs |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nix-010
 
@@ -2727,6 +2745,8 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Tests | `tests/unit/nix/cases/zones-unsafe-local.nix`; `tests/host-integration/unsafe-local-helper.nix` extended |
 | Drift pin | `make nix-unit-pin` |
 | Removal proof | `unsafe-local-workloads-json.nix` and unsafe-local-specific Nix code removed after user-only Host/Process resources pass all `tests/host-integration/unsafe-local-helper.nix` tests |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nix-011
 
@@ -2741,6 +2761,8 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
 | Validation | Existing `tests/unit/gates/drift-check.sh` |
 | Removal proof | Not removed in this spec |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nix-012
 
@@ -2757,6 +2779,8 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Tests | `tests/unit/nix/cases/closures-zones.nix`; `tests/unit/nix/cases/artifact-catalog-store-path-public-absent.nix` |
 | Drift pin | `make nix-unit-pin` |
 | Removal proof | Old `d2b.vms.*`-keyed closure entries removed after all Guests use `zones/<z>/resource-bundle.json` Guest resources and the artifact catalog |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nix-013
 
@@ -2773,6 +2797,8 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Tests | `tests/unit/gates/drift-check.sh` extended for `schemaVersion` |
 | Drift pin | `make test-drift` |
 | Removal proof | `manifest.nix` and `host.json` emitters removed after Zone bundle activation path passes |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nix-014
 
@@ -2789,6 +2815,8 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Tests | `tests/assertions-eval.sh` extended; `tests/unit/nix/cases/assertions-zones.nix` |
 | Drift pin | `make nix-unit-pin` |
 | Removal proof | No removal; extended only |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nix-015
 
@@ -2804,6 +2832,8 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Validation | Host-integration test with Zone bundle activation and daemon readiness |
 | Tests | `tests/host-integration/` extended for Zone activation |
 | Removal proof | No removal; adapted in place |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nix-016
 
@@ -2820,6 +2850,8 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Tests | `tests/unit/nix/cases/zones-network-parity.nix` |
 | Drift pin | `make nix-unit-pin` |
 | Removal proof | `network.nix`/`net.nix` removed after `Provider/network-local` parity and `tests/net-vm-network-eval.sh` passes |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nix-017
 
@@ -2835,6 +2867,8 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Validation | Store hardlink integrity; no direct `/nix/store` export |
 | Tests | Existing store integrity tests extended with Zone/Guest resource fixture |
 | Removal proof | `store.nix` removed after `Provider/volume-virtiofs` manages farm lifecycle and existing store tests pass |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nix-018
 
@@ -2851,6 +2885,8 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Tests | `tests/unit/nix/cases/zones-devices.nix` |
 | Drift pin | `make nix-unit-pin` |
 | Removal proof | `components/` Nix units removed after Provider resource install achieves parity and all component eval tests pass against Zone resource configs |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nix-019
 
@@ -2867,6 +2903,8 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Tests | `tests/unit/nix/cases/resource-schema-validation.nix`; `tests/unit/nix/cases/provider-settings-validation.nix`; `tests/unit/nix/cases/credential-ref-enforcement.nix`; `tests/unit/nix/cases/managed-by-rejection.nix`; `packages/d2b-contract-tests/tests/resource-schema-round-trip.rs` |
 | Drift pin | `make test-drift` after any `gen-schemas` run; `make nix-unit-pin` after adding cases |
 | Removal proof | Not removed; extended as new ResourceTypes are added |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nix-020
 
@@ -2883,6 +2921,8 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Tests | `tests/unit/nix/cases/cleanup-two-generation.nix` (bundle diff); `tests/host-integration/cleanup-activation.nix` (async cleanup, Pending→Deleted, single store transaction appends `Deleted` revision + removes row/indexes, subsequent `Get` not-found, `ResourceDelete` audit event appended afterward with dedup/exactly-once recovery, Zone Pending→Degraded→Ready); `tests/host-integration/cleanup-finalizer.nix` (DeletionBlocked, stays Pending, cleared on finalizer removal, single store transaction appends `Deleted` revision + removes row/indexes, subsequent `Get` not-found); `tests/host-integration/cleanup-controller-managed.nix` (managedBy=controller preserved); `tests/host-integration/cleanup-api-managed.nix` (managedBy=api preserved); `tests/host-integration/cleanup-rollback.nix` (rollback re-adoption); `tests/host-integration/cleanup-retention-window.nix` (generation pruning) |
 | Drift pin | `make nix-unit-pin`; `make test-drift` if status/audit schema changes |
 | Removal proof | Not removed; extended as new ResourceTypes are added |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nix-021
 
@@ -2899,6 +2939,8 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Tests | `packages/d2b-contract-tests/tests/provider-crate-layout.rs` with fixture sub-directories under `packages/d2b-contract-tests/fixtures/`; included in `make test-policy` |
 | Drift pin | `make test-policy`; re-run after any new `d2b-provider-*-*` crate is added to the workspace |
 | Removal proof | Not removed; extended as new Provider crates are added to the workspace |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nix-022
 
@@ -2915,6 +2957,8 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Tests | `tests/unit/nix/cases/artifact-catalog.nix` (declaration, resolution, storePath present in private catalog); `tests/unit/nix/cases/artifact-catalog-type-mismatch.nix` (build failure for wrong type); `tests/unit/nix/cases/artifact-catalog-missing-id.nix` (build failure for absent ID); `tests/unit/nix/cases/artifact-catalog-public-surfaces.nix` (storePath absent from all emitted ResourceSpecs); `packages/d2b-contract-tests/tests/artifact-catalog-schema.rs` |
 | Drift pin | `make test-drift` (artifact catalog schema); `make nix-unit-pin` |
 | Removal proof | Not removed; extended as new artifact types are added |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 
 ### ADR046-nix-023
@@ -2936,6 +2980,8 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | v3 destination | `packages/d2b-bus/src/session/` (new crate `d2b-bus`); `ComponentSessionDriver` becomes the central abstraction for all Zone bus sessions (local-root controller ↔ broker, controller ↔ guest agent, controller ↔ provider agent) |
 | ADR45 exclusions | `HandshakeOffer` fields `purpose: EndpointPurpose` and `service: ServicePackage` reference ADR45 enum values (`RealmPeer`, `RealmBootstrap`, `RealmV2`); adapt variant names per ADR-046-componentsession-and-bus owning spec; wire tag values are stable and must not change; `Locality::GuestLocal` remains valid for vsock guest sessions |
 | Drift pin | `make test-rust` (session crate); Noise KAT vectors must pass after copy |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nix-024
 
@@ -2955,6 +3001,8 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Selected behavior | Attachment lifecycle: `OwnedAttachment::unbound()` for transport-received before descriptor auth; `validate_descriptor()` called only after authenticated decryption; `into_payload()` transfers ownership without close; `Drop` closes remaining payload. `NamedStreamMux` with per-stream and aggregate queue byte limits; half-close semantics; credit-based flow control |
 | v3 destination | `packages/d2b-bus/src/session/` (same crate as ADR046-nix-023); `AttachmentPayload` and `OwnedAttachment` are transport-neutral and require no ADR45 adaptation |
 | ADR45 exclusions | `AttachmentDescriptor` from `v2_component_session` has `kind: AttachmentKind` and `object_type: KernelObjectType`; these values are wire-stable and carry no ADR45 realm naming; no exclusions for this item |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nix-025
 
@@ -2974,6 +3022,8 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Selected behavior | `RequestRegistry` is per-generation; calling `cancel_all()` cancels every outstanding request; `DeadlineBudget::admit_metadata()` is the single gate for all inbound request metadata; `BootstrapAdmission::consume()` single-use PSK prevents replay |
 | v3 destination | `packages/d2b-bus/src/session/` |
 | ADR45 exclusions | `cancel_generated()` calls `common::CancelRequest`/`CancelResponse` from `v2_services`; the `common.rs` proto type paths may change when services are versioned to v3 (ADR046-nix-028); the underlying `CancelRequest`/`CancelAck`/`CancelResult` contract from `v2_component_session` is wire-stable and requires no change |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nix-026
 
@@ -2993,6 +3043,8 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Selected behavior | Audited Unix seqpacket and stream transports implementing `OwnedTransport`; pidfd identity verification reads `/proc/<pid>/fdinfo/<pidfd>` for `st_dev`/`st_ino`; 6-scope credit pool with per-process and per-host limits (`MAX_PROCESS_ATTACHMENT_CREDITS=2048`, `MAX_HOST_ATTACHMENT_CREDITS=8192`); systemd `SD_LISTEN_FDS` seqpacket activation; vsock framing with length-prefixed records |
 | v3 destination | `packages/d2b-bus/src/transport/unix/` - adapt as the Unix transport backend for `d2b-bus` sessions; keep the `host-socket`/`native-vsock` feature gates intact; the transport code itself has no ADR45 realm bindings |
 | ADR45 exclusions | `ActivatedSeqpacketListeners` reads socket names from `SD_LISTEN_FDS`; socket names are bound to the shipped `d2b-priv-broker.socket` unit and the daemon-owned `public.sock` (bound by `d2bd` itself, `Type=notify`; there is no `d2bd.socket` unit); v3 socket paths come from Zone bootstrap config - activation code is reusable, socket name strings are not. `PeerIdentityPolicy::accepted()` is transport-layer code and has no ADR45 binding |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nix-027
 
@@ -3012,6 +3064,8 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Selected behavior | Canonical wire values and fail-closed validation for the session protocol; `BoundedVec` serde+JsonSchema; all binary size constants are stable wire commitments and must not change without a `COMPONENT_SESSION_MAJOR` bump |
 | v3 destination | `packages/d2b-contracts/src/v3/component_session.rs`; `COMPONENT_SESSION_MAJOR` stays 2 unless the wire handshake format changes; KAT vectors in `docs/reference/component-session-v2-vectors.json` must still pass after copy |
 | ADR45 exclusions | `EndpointRole` variants `RealmController`(3), `RealmBroker`(5): may rename per ADR-046-componentsession-and-bus owning spec; wire tag values 3 and 5 are stable and must not change. `ServicePackage` variants `RealmV2`(2, `"d2b.realm.v2"`) and `DaemonV2`(1): `RealmV2` may rename per owning spec; wire tag 2 is stable. `EndpointPurpose` variants `RealmPeer`(3), `RealmBootstrap`(4): may rename per owning spec; wire tags 3 and 4 are stable. `PurposeClass` and `Locality` variant names: confirm per owning spec; no "realm" prefix in either enum so rename is unlikely but must be verified before adoption |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nix-028
 
@@ -3031,6 +3085,8 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Selected behavior | Each `*_ttrpc.rs` defines the ttrpc `Arc<dyn XxxTtrpc>` server type and method dispatch table; `common.rs` defines shared `RequestMetadata`, `CancelRequest`/`CancelResponse`, `Outcome`, `ErrorKind`; `SERVICE_INVENTORY` indexes all services for schema-fingerprint verification |
 | v3 destination | `packages/d2b-contracts/src/v3/services/` (versioned sub-path); service interfaces adopted as-is initially; breaking method changes require a new proto major version |
 | ADR45 exclusions | `realm.rs` service `"d2b.realm.v2.RealmService"` and its `RealmId`-typed fields → rename per ADR-046-componentsession-and-bus owning spec; `user.rs` and `runtime_systemd_user.rs` reference `WorkloadId` in some method contexts → adapt to `ResourceName` on copy; the 11 provider service files (`provider_*.rs`) carry no realm naming and require no ADR45 adaptation |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nix-029
 
@@ -3050,6 +3106,8 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Selected behavior | `ProviderRegistry` admits sessions against a versioned generational snapshot and drains before rotation; per-provider in-flight cap prevents one slow provider from consuming all capacity; `RpcProviderProxy` converts typed `RpcCall` into the correct per-ProviderType ttrpc service invocation through `AuthenticatedProviderRpc`; `RegistryLimits` validated at build time |
 | v3 destination | `packages/d2b-provider/src/` (adapt in place); `ProviderRegistry` becomes the Zone controller's active Provider registry; `ProviderInstance` enum extended with new Provider types as dossiers are ratified |
 | ADR45 exclusions | `AdmissionOptions.peer_role: EndpointRole` contains ADR45 role values - update variant names per ADR-046-componentsession-and-bus owning spec; `SessionIdentity` contains `provider_generation` and `service: ServicePackage` - the generation type is stable; `ServicePackage::ProviderV2` may rename per owning spec; `v2_identity::ProviderId`/`ProviderType` carry no realm naming and require no adaptation |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nix-030
 
@@ -3069,6 +3127,8 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Selected behavior | `ProviderAgentAdapter` is the descriptor-bound validation gate between a ComponentSession and a provider instance; `GeneratedProviderServiceServer` is the agent-side ttrpc dispatch engine; conformance kit provides a reference test harness for every Provider implementation; `register_exact_instances` is the canonical pattern for building a test registry from static descriptors |
 | v3 destination | `packages/d2b-provider-toolkit/src/` (adapt in place); conformance tests in `packages/d2b-provider-toolkit/tests/conformance.rs` must pass unchanged after the ADR45 exclusions are adapted |
 | ADR45 exclusions | `ProviderAgentAdapter::new()` hard-checks `peer_role == EndpointRole::ProviderAgent` (tag 7) and `service == ServicePackage::ProviderV2` (tag 4) - update the Rust enum variant names if the owning spec renames them per ADR-046-componentsession-and-bus; wire tag values 7 and 4 must not change. `v2_identity::{RealmId, WorkloadId}` appear in test context imports - adapt `RealmId` → `ZoneId`, `WorkloadId` → `ResourceName` on copy |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nix-031
 
@@ -3083,6 +3143,8 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Data migration | Full d2b 3.0 reset; old audio/USB/security-key/observability options lower to new authority Service plus authored Binding only where the owning dossier explicitly preserves migration, and no old public type alias survives |
 | Validation | Fast Nix eval/build tests cover all four exact pairs, common base schema discovery, canonical minimal base without `spec.provider`, stable lowering across repeated evaluations, same-Zone refs/targets, strict Provider extension placement, Service-only export, exactly-one Core projection metadata with no `spec.provider`, no auto-Binding, status-field rejection in spec, USB/security-key resolution to one byte-identical Host-global `(Host, physical-usb-backing, opaqueKeyDigest)` collision before effects, Provider-private-class bypass rejection, and rejection of all forbidden names/aliases. |
 | Removal proof | Provider-local duplicate Nix base schemas and old direct Device/Endpoint/`*State` projection emitters are removed after the shared emitter and all four dossier migration tests pass. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nix-032
 
@@ -3102,6 +3164,8 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Selected behavior | Transport-neutral typed async client; `ComponentSessionConnector` abstracts connection setup; `SessionFailure` provides precise failure classification for retry policy; `MetadataInput` constructs signed request envelopes with clock-bounded lifetimes; `NamedStream` exposes named-stream channel as a client-side abstraction; `HostSocketConnector` is the reference Unix socket connection implementation |
 | v3 destination | `packages/d2b-client/src/` (adapt in place); client becomes the primary CLI and controller access path for Zone-local and cross-Zone ComponentSession services |
 | ADR45 exclusions | `TargetInput::Workload { realm: RealmId, workload: WorkloadId }` → v3 shape addresses resources as `ResourceRef` (e.g., `Zone/<z>`, `Guest/<name>`) per ADR-046-componentsession-and-bus owning spec; `TargetInput::Realm(RealmId)` → `TargetInput::Zone(ZoneId)`; `ServiceOwner::Workload { realm, workload }` → `ServiceOwner::Resource { zone: ZoneId, resource: ResourceName }`. `HostSocketConnector::local_daemon_endpoint_identity()` returns identity pinned to the current daemon-owned `public.sock` path (there is no `d2bd.socket` unit) - v3 socket path comes from Zone bootstrap config and must not be hard-coded. `DaemonClient`/`DaemonMethod` verb set per resource-api/authz foundation spec |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nix-033
 
@@ -3121,6 +3185,8 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Selected behavior | `RealmSessionAuthority` enforces that host-local sessions hold no realm credentials (`CredentialCustody::None`) while gateway sessions hold `GatewayGuest` custody - this is the runtime enforcement of ADR 0032 "relay identity is not local auth"; concurrent dispatch with `Semaphore(64)` bound; 5-second graceful shutdown via `JoinSet` |
 | v3 destination | `packages/d2b-bus/src/routing/zone_service.rs`; `RealmSessionAuthority` renames to `ZoneSessionAuthority`; `CredentialCustody` is behavior-stable and requires no rename; `REALM_SERVICE_NAME` updates per ADR-046-componentsession-and-bus owning spec |
 | ADR45 exclusions | `realm: RealmId` field in `RealmSessionAuthority` → `zone: ZoneId`; `REALM_SERVICE_NAME = "d2b.realm.v2.RealmService"` → v3 service name per ADR-046-componentsession-and-bus owning spec; `EndpointRole::LocalRootController`, `RealmController`, `RemotePeer` used in `new()` validation - may rename per owning spec; wire tags remain stable; `PurposeClass::Local`/`Enrolled`/`Bootstrap` - confirm per owning spec |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nix-034
 
@@ -3140,6 +3206,8 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Selected behavior | Fail-closed composition: every error is named; `AzureVmForbidden` explicitly rejects non-production implementations; bundle loaded through `load_bundle_resolver()` and validated against `PROVIDER_BUNDLE_VERSION`; `NEXT_LIFECYCLE_OPERATION_ID` provides monotone IDs across restarts |
 | v3 destination | `packages/d2bd/src/provider_registry.rs` (adapt in place); `PROVIDER_BUNDLE_VERSION` bumps when bundle artifact format changes; `PROVIDER_BUNDLE_SCHEMA_VERSION` updates from `"v2"` to `"v3"`; `ProviderCompositionError` variants retained with v3-specific variants added |
 | ADR45 exclusions | Uses `d2b_contracts::v2_identity::{RealmId, WorkloadId, RealmPath as ProviderRealmPath}` in binding contexts → adapt to `ZoneId`/`ResourceName`; `d2b_contracts::provider_registry_v2` module types (`ProviderBindingV2ConsumerView`, `ProviderRegistryEntryV2`, `ProviderRegistryV2`) are ADR45 bundle artifact types → v3 replaces with `d2b_contracts::v3::provider_registry`; `PROVIDER_BUNDLE_VERSION = 13` is the ADR45 pinned version - a bump is required before v3 adoption; numeric value is determined when the v3 bundle format is finalized in this work item |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-nix-035
 
@@ -3159,3 +3227,5 @@ contract work item (ADR046-nix-034/ADR046-nix-035). Cross-reference:
 | Selected behavior | Each effect adapter is descriptor-bound at composition time in `provider_registry.rs`; `ProviderLifecycleDispatch` tracks in-flight lifecycle mutations with a bounded BTreeMap and idempotency-keyed deduplication; `dispatch_broker_vm_start/stop_on_blocking_adapter` routes to the broker via a blocking task adapter; test helpers provide per-test reset of lifecycle call counters |
 | v3 destination | `packages/d2bd/src/provider_effects.rs` (adapt in place); effect port bindings retained; lifecycle dispatch updated from `VmLifecycleRequest` to a v3 Guest lifecycle op addressed by `ResourceRef` (`Guest/<name>`) with Zone context (`Zone/<z>`); exact wire type per ADR-046-componentsession-and-bus owning spec |
 | ADR45 exclusions | `VmLifecycleRequest` from `d2b-contracts/src/public_wire.rs` uses `vm_name: String` (ADR45 daemon wire); v3 requires a `GuestLifecycleRequest` or equivalent with `ResourceRef` addressing; `BrokerCallerRole` from `broker_wire.rs` is an ADR45 broker identity type - keep in place and flag for broker wire update when broker contract is versioned; `DaemonAuditSinkStatus` references current audit shape - keep until v3 audit contract is defined |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |

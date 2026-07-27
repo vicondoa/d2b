@@ -346,6 +346,8 @@ Keeping handlers in one process does not union arbitrary Provider privilege:
 | Data migration | Full reset |
 | Validation | Per-handler unit/property tests plus multi-process startup/restart |
 | Removal proof | Current daemon branches removed after handler/Provider parity |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-core-002
 
@@ -361,3 +363,5 @@ Keeping handlers in one process does not union arbitrary Provider privilege:
 | Data migration | New v3 resources from Nix |
 | Validation | Coordination test asserts one Host handler owner, one User handler owner, manifest load after bootstrap ordering, and no duplicate Host/User destination or reconcile path in core-controller |
 | Removal proof | No independent implementation removal; canonical exec/system-core work items own legacy Host/User removal proofs |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |

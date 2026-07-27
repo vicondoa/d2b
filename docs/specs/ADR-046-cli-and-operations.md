@@ -2455,6 +2455,8 @@ baseline (only a deprecation notice remains at `lib.rs:2424`).
 | Data migration | None; context discovery replaces env-var path lookups |
 | Validation | Zone-unavailable/fallback tests; ResourceRef parse/reject vectors; exit-code round-trip tests; TTY detection tests; adapt `client.rs:typed_routes_select_exact_transport_without_fallback` (line 1053), `connector_discovers_and_authenticates_the_driver_generation` (line 1254), `daemon_transport_rejects_ancillary_data_and_oversized_packets` (line 1312) |
 | Removal proof | Old `Context` struct removed only after all command functions use `ZoneContext` |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-cli-002
 
@@ -2471,6 +2473,8 @@ baseline (only a deprecation notice remains at `lib.rs:2424`).
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Dry-run/apply/wait/no-wait-ready tests; zone-unavailable degraded path; JSON output schema tests; confirm v2 command paths are absent (compilation failure if any cmd_vm_start/stop alias re-introduced) |
 | Removal proof | Old `cmd_vm_start/stop/restart` seqpacket paths removed after Guest resource API paths are live with full test coverage |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-cli-003
 
@@ -2487,6 +2491,8 @@ baseline (only a deprecation notice remains at `lib.rs:2424`).
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Full `exec_client.rs` test suite migrated; adapted tests from main `client.rs:terminal_*` and `guest_exec_*`; TTY/raw-mode/RAII/signal tests; `--json` envelope/disambiguation tests; capacity/transport/auth/protocol exit-code tests; confirm v2 `cmd_vm_exec` path is absent |
 | Removal proof | Old `cmd_vm_exec` seqpacket path removed after `d2b exec` paths have equivalent coverage |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-cli-004
 
@@ -2503,6 +2509,8 @@ baseline (only a deprecation notice remains at `lib.rs:2424`).
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Shell list/detach/kill/attach unit tests (adapted from existing); adapted `client.rs:shell_management_*` and `named_stream_*` tests; TTY RAII/signal tests; confirm v2 `cmd_shell` path is absent |
 | Removal proof | Old `cmd_shell` seqpacket path removed after new shell commands have equivalent coverage |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-cli-005
 
@@ -2519,6 +2527,8 @@ baseline (only a deprecation notice remains at `lib.rs:2424`).
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Projection size/name/timeout bounds tests; registry-completeness test asserting exact equality with all built-in parser commands; bind-time built-in and Provider/Provider collision rejection tests; negative test proving no collision fallback dispatch exists; audio/clipboard/display projection conformance tests asserting `d2b audio ...`, `d2b clipboard ...`, and `d2b display ...` rendering; completion script safety tests; adapted `conformance.rs` tests |
 | Removal proof | Built-in `cmd_audio`/`cmd_clipboard_arm`/`cmd_vm_display` removed only after Provider projection paths pass equivalence tests |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-cli-006
 
@@ -2535,6 +2545,8 @@ baseline (only a deprecation notice remains at `lib.rs:2424`).
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Completion script tests (bash/zsh/fish syntax valid); projection injection safety tests; deadline/partial-Provider tests |
 | Removal proof | Not applicable |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-cli-007
 
@@ -2551,6 +2563,8 @@ baseline (only a deprecation notice remains at `lib.rs:2424`).
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | All existing switch/boot/test/rollback/keys tests adapted; config sync/diff/approve/reject tests; confirm v2 top-level activation paths are absent; adapted `client.rs:daemon_typed_list_preserves_projection_and_truncation` apply pattern |
 | Removal proof | Old top-level activation verbs removed only after `d2b activation *` paths have equivalent coverage |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-cli-008
 
@@ -2567,6 +2581,8 @@ baseline (only a deprecation notice remains at `lib.rs:2424`).
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | All existing host-check/prepare/destroy/doctor/install/reconcile/validate tests; exit-code 3 regression; doctor Zone-fallback/local-state-fallback tests |
 | Removal proof | Raw broker-socket paths removed only after Host resource API routes have equivalent coverage |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-cli-009
 
@@ -2583,6 +2599,8 @@ baseline (only a deprecation notice remains at `lib.rs:2424`).
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Zone self-get plus topology list/get/status/watch tests; disconnected and stale authenticated-route projections; golden output contains `{ childZone, parentZone }` and route/projection status but no ZoneLink fields; parent store has no ZoneLink row or watch; confirm v2 `cmd_realm_*` paths are absent |
 | Removal proof | `cmd_realm_*` and `target_routing.rs` removed only after zone routes pass equivalence tests |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-cli-010
 
@@ -2599,6 +2617,8 @@ baseline (only a deprecation notice remains at `lib.rs:2424`).
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Get/list/watch/create/update-spec/delete tests per ResourceType; pagination/filter/watch-deadline tests; error-class/exit-code tests; adapted `client.rs:metadata_retries_*` and `mutating_retries_*` and `concurrent_named_streams_*` tests |
 | Removal proof | Not applicable (new surface) |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-cli-011
 
@@ -2615,6 +2635,8 @@ baseline (only a deprecation notice remains at `lib.rs:2424`).
 | Data migration | Full reset from current manifest/processes/realm-entrypoints JSON format; prior Nix-generated artifacts (`/etc/d2b/processes.json`, `/etc/d2b/realm-entrypoints.json`) deleted after Zone resource bundle activates |
 | Validation | Runtime integration: all CLI-visible cleanup/status/rollback/gc/audit tests (§CLI-visible tests for activation and cleanup), including no force-finalizer path; Nix unit and build tests owned by ADR-046-nix-configuration spec; canonical-example fixture validates every authored resource against the authoritative Host, Guest, and Provider schemas, resolves every artifact/resource reference, rejects unsupported fields, and proves the compiled Guest `spec` is field-for-field identical to the adjacent JSON |
 | Removal proof | Old `nixos-modules/manifest.nix`, `nixos-modules/bundle-artifacts.nix` emitters removed only after `bundle-emit.nix` produces equivalent-or-superseding output and all downstream consumers of the old bundle format are migrated |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-cli-012
 
@@ -2631,6 +2653,8 @@ baseline (only a deprecation notice remains at `lib.rs:2424`).
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `Endpoint` accepted as a frozen standard type; `Endpoint/<name>` parses locally without a Zone round-trip; `d2b endpoint get/list/watch/status/resolve` parse and route correctly; `get`/`resolve` output carries no raw path/address/CID/port/fd/credential; provider status projection is bounded/redacted; `d2b list Endpoint --updates` and `d2b upgrade Endpoint/<name>` expose `status.update` currency and disruption; operator `create`/`update-spec`/`delete` rejected for controller-owned Endpoints |
 | Removal proof | Not applicable (new surface) |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-cli-013
 
@@ -2647,3 +2671,5 @@ baseline (only a deprecation notice remains at `lib.rs:2424`).
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Both standard types parse locally; qualified semantic Service/Binding resolve dynamically; verbs route; Service-only export and factory/type/fingerprint/policy/capability rejections; projection preserves semantic Service type across local implementation selection; canonical minimal base works without `spec.provider`; graph shape exact and bounded; Binding never auto-created/deleted; Binding spec intent-only/status observations; no implementation detail/backing/remote-ref/session/stream/FD/secret/path/locator/bytes leakage |
 | Removal proof | Not applicable (new surface) |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |

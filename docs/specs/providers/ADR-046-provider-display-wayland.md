@@ -1811,6 +1811,8 @@ produces the guest binary (see §19 removal table).
 | Data migration | Full reset; no v2 session compatibility |
 | Validation | conformance vectors, fake-bus tests, filter policy golden tests (migrate from `packages/d2b-wayland-proxy/`), redaction/audit contract tests, no-fallback test, `controller_unknown_interface_fails_closed`, `controller_finalizer_ambiguous_retained`, `user_portal_unavailable_blocks_pending`, `provider_state_set_empty_status_first` |
 | Removal proof | `packages/d2b-host-providers/src/lib.rs` `LocalCrossDomainWaylandProvider` removed only after `display-controller` passes conformance; `packages/d2b-host/src/wayland_proxy_argv.rs` removed only after Process template sealing verified |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-display-002
 
@@ -1825,6 +1827,8 @@ produces the guest binary (see §19 removal table).
 | Data migration | Legacy `graphics.waylandProxy.*` Nix options accepted with deprecation warning during migration window; removed after parity |
 | Validation | nix-unit spec-shape tests, eval-time guard tests (crossDomainTrusted=false rejected), color derivation golden tests, principal provisioning count bound test |
 | Removal proof | `nixos-modules/components/graphics.nix` `graphics.waylandProxy.*` and `nixos-modules/ui-colors.nix` VM color resolution removed only after Zone bundle emitter parity verified by a full nix-unit pass |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-display-003
 
@@ -1839,6 +1843,8 @@ produces the guest binary (see §19 removal table).
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Redaction contract tests (`policy_observability.rs` pattern), audit record schema tests, structural label-policy tests asserting exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys plus WaylandSession/Zone-name canary absence |
 | Removal proof | N/A (new code) |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-display-004
 
@@ -1853,6 +1859,8 @@ produces the guest binary (see §19 removal table).
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | All six scenarios above pass; no socket paths in test output |
 | Removal proof | N/A (new code) |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 

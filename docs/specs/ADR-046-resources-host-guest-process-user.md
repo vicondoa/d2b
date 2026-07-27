@@ -2368,6 +2368,8 @@ A work item whose `Destination` row introduces a new `d2b-provider-*` crate must
 | Data migration | Full reset; no v2 resource import |
 | Validation | Golden JSON vectors for each ResourceType; Endpoint vectors accept only `owner\|provider\|zone`, reject every legacy/private visibility alias, reject scalar/array `consumerPolicy` aliases, and cover each canonical consumer allowlist; a docs drift test parses every `type: Endpoint` YAML/Nix example and fails unless visibility is canonical and finer gates occur only under `consumerPolicy`; serde unknown-field rejection; bounds enforcement; `UserSpec.osUsername` OS-username validation (underscore allowed, NUL rejected) |
 | Removal proof | Old DTO types removed only after owning Resource/Provider integrations are live |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-exec-002
 
@@ -2383,6 +2385,8 @@ A work item whose `Destination` row introduces a new `d2b-provider-*` crate must
 | Data migration | Full reset |
 | Validation | Golden LaunchTicket and BrokerTerminalResult vectors; field redaction test; digest-binding test; duplicate/mismatched/non-parent terminal relay rejection |
 | Removal proof | None - net-new types; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-exec-003
 
@@ -2398,6 +2402,8 @@ A work item whose `Destination` row introduces a new `d2b-provider-*` crate must
 | Data migration | New Host resources from Nix; no v2 state import |
 | Validation | Multiple Hosts per Zone; system-only and user-only Hosts; capability probe mocks; Linux <5.14 and missing/unwritable `cgroup.kill` reject system-minijail before spawn; Linux ≥5.14 positive probe; `isolationPosture="none"` rejection of system processes; budget overcommit rejection; `tests/` all pass under `cargo test`; `integration/` scenario passes in container fixture; `README.md` present and covers all required sections (provider crate standard layout acceptance) |
 | Removal proof | Current host capability checks in `d2bd` removed after Host reconcile parity |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-exec-004
 
@@ -2413,6 +2419,8 @@ A work item whose `Destination` row introduces a new `d2b-provider-*` crate must
 | Data migration | New User resources from Nix; no v2 state import |
 | Validation | User found/not-found; group membership; sessionManagerAvailable; multiple Users; deletion blocked by Process userRef; `spec.osUsername` with underscore succeeds NSS lookup where ResourceName grammar would reject it; `metadata.name` and `spec.osUsername` differ (e.g. `alice-admin` / `alice_admin`); `spec.osUsername` containing NUL/control/path-separator rejected at admission |
 | Removal proof | Current local uid/group lookup in `d2bd/src/admission.rs` removed after User resource parity |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-exec-005
 
@@ -2428,6 +2436,8 @@ A work item whose `Destination` row introduces a new `d2b-provider-*` crate must
 | Data migration | Full v3 reset |
 | Validation | Bootstrap without prior Host; User-before-Process ordering; compilation bootstrap authorization closed-set tests |
 | Removal proof | Current d2bd initialization sequence removed after bootstrap parity |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-exec-006
 
@@ -2443,6 +2453,8 @@ A work item whose `Destination` row introduces a new `d2b-provider-*` crate must
 | Data migration | Current ProcessRole/systemd unit roles converted by ProcessRole disposition table after parity |
 | Validation | Shared process conformance test matrix (lifecycle/readiness/crash/drain/adoption/user-domain/sandboxSpec/pidfd); system-specific InvocationID binding; no-static-unit test; `tests/` all pass under `cargo test`; `integration/` scenario passes in container fixture; `README.md` present and covers all required sections (provider crate standard layout acceptance) |
 | Removal proof | ProcessRole roles using systemd (Audio, WaylandProxy, VsockRelay, etc.) removed per disposition table after system-systemd parity |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-exec-007
 
@@ -2458,6 +2470,8 @@ A work item whose `Destination` row introduces a new `d2b-provider-*` crate must
 | Data migration | Current RoleProfile/NamespaceSet/MountPolicy/CgroupPlacement adapted to SandboxSpec/BudgetSpec |
 | Validation | Shared process conformance test matrix; minijail-specific sandbox compilation tests; user namespace tests; clone3 parent-only wait/reap and broker-relay tests; poll-readability-not-status test; pidfd_send_signal duplicate-holder test; setsid descendant/recycled-PGID cgroup.kill teardown test; Linux 5.14/cgroup.kill platform-gate tests; adoption quarantine asserts no signal/cgroup.kill; `tests/` all pass under `cargo test`; `integration/` scenario passes; `README.md` present and covers all required sections (provider crate standard layout acceptance) |
 | Removal proof | ProcessRole roles using minijail (Virtiofsd, Swtpm, SecurityKeyFrontend, etc.) removed per disposition table after system-minijail parity |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-exec-008
 
@@ -2473,6 +2487,8 @@ A work item whose `Destination` row introduces a new `d2b-provider-*` crate must
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
 | Validation | Hard pass/fail per-test; latency gates enforced; no exception for partial conformance |
 | Removal proof | None - permanent conformance tests; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-exec-009
 
@@ -2488,6 +2504,8 @@ A work item whose `Destination` row introduces a new `d2b-provider-*` crate must
 | Data migration | Full reset; no unsafe-local session state migration |
 | Validation | User-only no-isolation Host rejected for system processes; `isolationPosture="none"` Host rejected for `allowedDomains` containing `system`; `allowedDomains=["user"]`+`defaultDomain=user`+`defaultUserRef` set with `isolationPosture=null` rejected at eval time (bidirectional evasion test); posture warning visible in CLI/UI status; `no_isolation=true` attribute present on ProcessEffect launch/stop/adopt/quarantine audit records for child Processes/EphemeralProcesses; `no_isolation=true` absent from OTEL span attributes, metric labels, log fields, and non-ProcessEffect audit records; user-domain Process under user-only Host starts correctly with normal Process Provider |
 | Removal proof | `d2b-unsafe-local-helper` helper binary and protocol removed after user-only Host + shell-terminal Provider parity; `options-realms-workloads.nix` unsafe-local kind removed in Nix reset |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-exec-010
 
@@ -2503,6 +2521,8 @@ A work item whose `Destination` row introduces a new `d2b-provider-*` crate must
 | Data migration | Full reset; no guestd session state migration |
 | Validation | Guest EphemeralProcess exec lifecycle; detached exec TTL; guestd auth replaced by ComponentSession; no SSH fallback |
 | Removal proof | `d2b-guestd` binary removed after all guest-side behaviors have Process/EphemeralProcess/ComponentSession successors and tests pass |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-exec-011
 
@@ -2518,6 +2538,8 @@ A work item whose `Destination` row introduces a new `d2b-provider-*` crate must
 | Data migration | Full reset; no session state import |
 | Validation | Attach/detach; TTY size; stream close; error path parity with UserdError variants |
 | Removal proof | `d2b-userd` binary removed after ComponentSession attach parity on EphemeralProcess; all d2b exec CLI paths must use new attach mechanism |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-exec-012
 
@@ -2533,6 +2555,8 @@ A work item whose `Destination` row introduces a new `d2b-provider-*` crate must
 | Data migration | Full reset; Realm/Workload options removed in the Nix reset wave |
 | Validation | nix-unit eval/build tests 1-18 from the "Tests" section; eval validation rule tests 1-17 with expected error messages and stable codes; `spec` fields in emitted JSON match `spec` submodule values exactly (1:1 invariant test); `type` field in JSON matches `type` option value; `metadata.name` = attrset key; `metadata.zone` = enclosing zone key; `Guest.spec.systemArtifactId` plain string in resource bundle JSON at top-level spec (no store path, not in `spec.provider.settings`); missing/wrong-type artifact ID raises rule 17 eval error |
 | Removal proof | Realm/Workload Nix options removed only after Zone resource Nix option parity and successful eval tests |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-exec-013
 
@@ -2548,6 +2572,8 @@ A work item whose `Destination` row introduces a new `d2b-provider-*` crate must
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
 | Validation | Succeeded TTL default 1h; Failed TTL default 24h; incidentHold blocking; finalizer blocking; Delete with expected revision; cleanup controller restart recovery |
 | Removal proof | None - net-new controller; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-exec-014
 
@@ -2563,6 +2589,8 @@ A work item whose `Destination` row introduces a new `d2b-provider-*` crate must
 | Data migration | Full d2b 3.0 reset; new artifact replaces current `processes.json` and `manifest.json` pattern for Zone resources without importing v2 state |
 | Validation | nix-unit test: bundle sort order (Host < Guest < Process; within type, names alphabetical); nix-unit test: `contentHash` recomputed from resources array matches recorded value; nix-unit test: schema fingerprints appear in private bundle file fields, not in any individual ResourceEnvelope `metadata` or `spec` object; nix-unit test: `artifactCatalogDigest` changes when any artifact derivation changes; nix-unit test: `schemaFingerprint` changes when ResourceTypeSchema JSON changes; nix-unit test: `providerSchemaFingerprint` changes when Provider settings schema changes and is null when Provider declares no schema; nix-unit test: no inline secret value passes through to bundle JSON; nix-unit test: identical configuration produces byte-identical bundle JSON across two builds; nix-unit test: artifact catalog JSON contains `storePath` field for each entry; nix-unit test: no envelope in `resources` array contains `storePath`, `nixSystem`, `schemaFingerprint`, or `providerSchemaFingerprint` |
 | Removal proof | `nixos-modules/processes-json.nix` and current `manifest.nix` bundle artifact for Host/Guest/Process retained in parallel until Zone resource bundle replaces all roles; then removed |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-exec-015
 
@@ -2578,6 +2606,8 @@ A work item whose `Destination` row introduces a new `d2b-provider-*` crate must
 | Data migration | Full d2b 3.0 reset; no v2 state/config import |
 | Validation | Runtime/integration tests 19-23 from the "Tests for Nix configuration and ResourceType-specific lifecycle" section in this spec; additionally: `GenerationDiff` hermetic unit tests (new/changed/unchanged/removed classification); `contentHash` integrity failure aborts and emits correct audit event; `artifactCatalogDigest` mismatch aborts bundle; UpdateSpec optimistic lock conflict retried correctly; Watch `Deleted` revision events consumed (not polling GET) to track cleanup completion; Zone `phase=Pending` while intents outstanding; Zone `phase=Degraded` immediately when any cleanup outstanding (no grace window); Zone `phase=Ready` when complete; activation point is the durable `generation.json` commit (owned by ADR046-routing-013) and precedes intent queuing; intent queuing and reconcile completion are post-activation and do not block it; same-name `managedBy=controller` OR `managedBy=api` collision emits per-item `config-collision` error without seizing resource, other intents continue; unchanged spec refreshes `configurationGeneration` without triggering controller reconcile; final deletion: atomic tx commits `Deleted` revision event + row/index removal only; audit append follows committed revision via dedup/exactly-once recovery (NOT part of atomic tx); recovery retry produces no duplicate audit record; prior bundle record released after cleanup-complete and retention count exceeded; activation with zero diff and identical `contentHash` is a no-op |
 | Removal proof | None - net-new controller; no prior owner to remove |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-user-session-001
 
@@ -2594,6 +2624,8 @@ A work item whose `Destination` row introduces a new `d2b-provider-*` crate must
 | Data migration | None - full d2b 3.0 reset |
 | Validation | Single session authority per `(Host, User, session)`; duplicate same-user session authority / desktop service rejected with `duplicateConflict`; multi-seat declared-limit enforcement; Guest-stop invalidates all bound desktop/audio/notification/credential/shell authorities and leases (no stale compositor/PipeWire/session-bus FD); seat-input second claimant rejected; adoption by `ownerProof` and quarantine on ambiguity; hermetic with fakes |
 | Removal proof | Not applicable (net-new named authority; replaces ambient prose) |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 
@@ -2625,6 +2657,8 @@ integration point.
 | Validation | Copy tests verbatim; all tests must pass on v3 baseline without modification; re-run `tests/noise_vectors.rs` golden vectors; add one v3-specific test: endpoint policy identity uses v3 `ZoneId`/zone-name binding rather than ADR45 `RealmId` |
 | Removal proof | None - net-new; no prior owner to remove |
 | Excluded ADR45 assumptions | `d2b_contracts::v2_component_session as contract` import alias points at v2 wire types; v3 must point at v3 bus wire types. No other realm/workload assumption exists in this crate. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-exec-017
 
@@ -2642,6 +2676,8 @@ integration point.
 | Validation | Copy all 20+ tests verbatim; all must pass; add v3-specific test: `PathnamePeerVerifier` verifies against `d2b-zonert` daemon uid; credit pool per-Zone-runtime limits match v3 constants |
 | Removal proof | If the crate is renamed, the superseded `packages/d2b-session-unix/` owner is removed or reduced to a compatibility wrapper after `packages/d2b-bus-session-unix/` passes copied and v3-specific tests; if the name is retained, no prior owner is removed. |
 | Excluded ADR45 assumptions | `d2b-daemon-access` uses `d2b_contracts::v2_identity::RealmId/RealmPath/WorkloadName` for its route table - not present in session-unix itself; no exclusions needed in this crate |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-exec-018
 
@@ -2659,6 +2695,8 @@ integration point.
 | Validation | Compile-time assertions on all copied numeric constants matching source values; `EndpointPolicyIdentity` golden-vector test with v3 zone name encoding; `LimitProfile::local_default()` round-trip test |
 | Removal proof | None - net-new; no prior owner to remove |
 | Excluded ADR45 assumptions | `v2_identity.rs` `RealmId`/`RealmPath`/`WorkloadName` in the `EndpointPolicyIdentity` fingerprint must be replaced with v3 zone name string. `ServicePackage` enum variants referencing ADR45 realm/guest service names must be reviewed against v3 service inventory. `GUEST_SESSION_CREDENTIAL_*` constants are for guest-control bootstrap; adapt for v3 guest bootstrap credential if the format changes. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-exec-019
 
@@ -2676,6 +2714,8 @@ integration point.
 | Validation | Copy `d2b-provider` tests; `RegistryLimits::validate` enforces non-zero and per≤total; `InFlightPermit` RAII release; drain/retire state machine; `RpcProviderProxy` round-trip over `FakeProvider` (from toolkit ADR046-exec-020) |
 | Removal proof | Supersedes the baseline `packages/d2b-realm-provider/src/provider.rs` runtime/provider trait owner after `packages/d2b-provider-runtime/` registry/RPC tests pass and no v3 registry path imports ADR45 workload terminology. |
 | Excluded ADR45 assumptions | `ProviderRegistrySnapshot`/`ProviderRegistryUpdate` and the `d2b_contracts::v2_provider::RegistryLifecycle`/`RegistryDrainPolicy` protocol belongs to the ADR45 provider-agent registration handshake; v3 replaces with Provider resource lifecycle. `ProviderRegistryAxis` - not needed in v3 flat provider registry. `ProviderId`/`ProviderType` from `v2_identity` must be rebased on v3 `Provider/<name>` ResourceRef. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-exec-020
 
@@ -2694,6 +2734,8 @@ integration point.
 | Validation | Copy conformance tests verbatim; `check_descriptor_conformance` passes on a `FakeProvider` descriptor; `check_provider_conformance` covers all five `ConformanceError` variants; `ProviderAgentProcess` shutdown within deadline test; `MAX_DISPATCH_IN_FLIGHT` semaphore back-pressure test |
 | Removal proof | Supersedes baseline `packages/d2b-realm-provider/src/conformance.rs` ownership only after `packages/d2b-provider-toolkit/` conformance coverage passes; ADR45 provider-agent registration behavior is not retained in the v3 provider-agent path. |
 | Excluded ADR45 assumptions | `ProviderAgentAdapter` and `ProviderAgentProcess` use `d2b_contracts::v2_identity::ProviderId`/`ProviderType` and ADR45 `ProviderRegistrySnapshot` for registration - v3 replaces with Provider resource `spec.providerRef` and static registration. `GeneratedProviderServiceServer` registers ADR45 generated stubs; v3 must regenerate stubs from v3 service protobuf definitions (ADR046-exec-021). Audit ring in `provider_agent.rs` uses bounded `VecDeque` - retain size constants, adapt audit event type. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-exec-021
 
@@ -2711,6 +2753,8 @@ integration point.
 | Validation | `StrictWireMessage` decode rejects unknown fields on all v3 message types; `service_schema_fingerprint` is stable across builds; `ZoneCallContext` deadline enforcement test; `DaemonSeqpacketTransport` → `ZoneSeqpacketTransport` end-to-end roundtrip; generated v3 stub compile check |
 | Removal proof | None - net-new; no prior owner to remove |
 | Excluded ADR45 assumptions | ADR45 realm/workload/guest service operations (`realm_ttrpc.rs`, `guest_ttrpc.rs`, `v2_guest_services.rs`) map to ADR45 `WorkloadId`/`RealmId` - do NOT import these stub types directly into v3; regenerate from v3 proto definitions. ADR45 `DaemonMethod` variants that reference `ExecOp`/`ExecOpResponse`, workload-target routing, and realm management are replaced by v3 Resource verbs. `daemon_channel_binding(uid, gid)` channel binding token uses UID/GID directly - v3 uses `User/<name>` ResourceRef binding; adapt. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-exec-022
 
@@ -2729,6 +2773,8 @@ integration point.
 | Validation | Copy `tests/client.rs` verbatim; add v3-specific tests: `ResourceWatch` streaming teardown; `ZoneSocketConnector` peer-uid mismatch rejection; retry policy respects `RetryClass::Transient`/`Permanent`; `TargetInput`→`ResolvedTarget` for local-only v3 Zone; `local_daemon_endpoint_identity` returns correct v3 zone-rt uid |
 | Removal proof | None - net-new; no prior owner to remove |
 | Excluded ADR45 assumptions | `DaemonClient` methods reference `DaemonMethod` variants tied to ADR45 workload ops (`ExecOp`, `AllocatorOp`, workload lifecycle) - do NOT import ADR45 daemon service stubs; generate v3-specific client stubs from v3 service definitions. `GuestClient` / `GuestOperation` reference `WorkloadId`/`WorkloadName` scoping - replaced by `EphemeralProcess/<name>` ResourceRef in v3. `d2b-daemon-access` connects via hardcoded `d2bd` user lookup - adapt to Zone runtime `d2b-zonert` user. `RouteTable` dedup key uses `(realm, workload)` tuples - v3 uses `(zone, resource-type, resource-name)`. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-exec-023
 
@@ -2746,3 +2792,5 @@ integration point.
 | Validation | Idempotency replay returns original result; conflict returns error; expired tombstone fails closed; `MAX_DISPATCH_IN_FLIGHT` semaphore back-pressure; principal-binding enforcement (mismatched principal returns auth-denied); `DurableExecTable` capacity limit; v3 5-tuple dedup key golden vector test |
 | Removal proof | Supersedes the baseline `packages/d2b-realm-router/src/` routing owner after `packages/d2b-zone-router/` passes idempotency, dispatch-limit, and principal-binding tests; ADR45 realm/workload route tables are not imported into v3. |
 | Excluded ADR45 assumptions | `OperationRequest` envelope format uses ADR45 `RealmId`/`PrincipalId`/`NodeId`/`OperationKind` from `d2b-realm-core` - v3 `ZoneOperationRequest` uses v3 `ResourceRef`, `User/<name>` principal, Resource verb enum; do NOT import `d2b-realm-core` types. `d2b-realm-router` `REALM_SERVICE_NAME = "d2b.realm.v2.RealmService"` - v3 uses `"d2b.zone.v3.ZoneService"`. `TargetResolver` resolves `RealmTarget` to node/provider - v3 `ZoneTargetResolver` resolves `ResourceRef` to local vs remote Zone runtime. `RemoteFullHostAdapter`/`RemotePeerClient` gateway routing is ADR45 constellation; v3 remote routing shape is out of scope for this spec. |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |

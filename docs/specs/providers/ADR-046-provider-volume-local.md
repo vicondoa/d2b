@@ -2567,6 +2567,8 @@ Documents:
 | Data migration | Full v3 reset; no row-level import |
 | Validation | Schema golden vectors; round-trip serde; ACL principal validation rejects numeric forms; `sourcePolicyId` present; no `hostPath` field in any volume_spec contract; compile-time assertions for the exact `Clone + Serialize + DeserializeOwned` ID bounds and `Serialize + DeserializeOwned` request bounds; sealing-rotation request canonical-string/round-trip and deny-unknown tests; exact redacted-Debug assertions; deserialization rejects empty, over-128-byte, non-ASCII, whitespace, and control-byte IDs without echoing input; compile-time trait conformance includes `rotate_sealing_key` |
 | Removal proof | `d2b-core/src/storage.rs` StoragePathSpec/policy enums removed only after all Provider descriptor consumers are on v3 Volume spec |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-vl-002 - Crate scaffold and filesystem primitives
 
@@ -2583,6 +2585,8 @@ Documents:
 | Data migration | New marker written for each Volume at v3 first-boot |
 | Validation | All `tests/marker.rs`, `tests/state.rs` scenarios; all `integration/provision.rs` scenarios; `cargo deny check` verifies no `d2b-priv-broker`/`d2bd` dependency |
 | Removal proof | `swtpm_dir.rs` marker implementation retired only after device-tpm Provider Volume is live and marker-check parity is confirmed |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-vl-003 - Controller reconcile loop and layout engine
 
@@ -2598,6 +2602,8 @@ Documents:
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/layout_provision.rs`, `tests/layout_repair.rs`, `tests/layout_adopt.rs`, `tests/acl.rs`, `tests/view_rights.rs`, `tests/source.rs`, `integration/provision.rs` |
 | Removal proof | `d2b-priv-broker/src/ops/storage_contract.rs` `reconcile_storage_scope` retired only after Volume controller parity confirmed |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-vl-004 - Store-view Volume
 
@@ -2613,6 +2619,8 @@ Documents:
 | Data migration | None (format preserved; activation changed from Nix to Volume controller) |
 | Validation | `tests/store_view.rs` all invariants; `integration/store_view.rs` same-filesystem boundary; private-NS sync with concurrent reader |
 | Removal proof | `nixos-modules/store.nix` activation and `d2b-priv-broker/src/ops/store_sync.rs` retired only after store-view Volume controller is live and passes all parity tests |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-vl-005 - TPM Volume
 
@@ -2628,6 +2636,8 @@ Documents:
 | Data migration | None (full v3 reset; TPM NVRAM must be backed up by operator) |
 | Validation | `tests/swtpm_volume.rs` all scenarios; `integration/swtpm_marker.rs` real broker-maintained marker |
 | Removal proof | `d2b-priv-broker/src/ops/swtpm_dir.rs` retired only after device-tpm Provider TPM Volume is live and fail-closed tests pass |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-vl-006 - Block-image and tmpfs source kinds
 
@@ -2643,6 +2653,8 @@ Documents:
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/source.rs` allowlist pass/fail; block-image/tmpfs eval constraints; `integration/block_image.rs` real image lifecycle |
 | Removal proof | Not applicable (new) |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-vl-007 - Migration and snapshots
 
@@ -2658,6 +2670,8 @@ Documents:
 | Data migration | None (new protocol) |
 | Validation | All `tests/migration_unit.rs`, `tests/snapshot_unit.rs`, `tests/sealing_unit.rs`, `integration/migration.rs`, `integration/snapshot.rs`, and `integration/sealing.rs` scenarios, including restart/idempotency and status-before-effect assertions |
 | Removal proof | Not applicable (new) |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-vl-008 - Relocation, retention, incident hold, unclaimed GC, destruction
 
@@ -2673,6 +2687,8 @@ Documents:
 | Data migration | Not applicable |
 | Validation | All `tests/relocation_unit.rs`, `integration/relocation.rs` scenarios; destruction ordering under fault injection |
 | Removal proof | Not applicable (new) |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-vl-009 - Audit, OTEL, and error catalog
 
@@ -2688,6 +2704,8 @@ Documents:
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/audit_unit.rs` golden records and structural metric descriptor assertions for exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys plus resource-name canary absence; rotation audit exact-once/digest-only vectors; `tests/error_messages.rs` bounded messages; `integration/audit.rs` live stream |
 | Removal proof | Not applicable |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-vl-010 - Nix configuration and resource compiler integration
 
@@ -2703,6 +2721,8 @@ Documents:
 | Data migration | `nixos-modules/storage-json.nix` path rows superseded by Volume resources; `nixos-modules/store.nix` activation superseded by store-view Volume |
 | Validation | All Nix eval-time validation rules; `contentHash` determinism; credential-ref guard; unknown Provider config key → build fail |
 | Removal proof | `nixos-modules/storage-json.nix` and `nixos-modules/store.nix` per-VM rows retired only after Volume resources replace every path row and all consumers complete bundle-format migration |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-vl-011 - Workspace policy gate
 
@@ -2718,6 +2738,8 @@ Documents:
 | Data migration | Not applicable |
 | Validation | Gate detects each missing path; idempotent across re-runs; existing non-provider `d2b-*` crates not flagged |
 | Removal proof | Not applicable (permanent gate) |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-vl-012 - Core/broker adapter implementing VolumeEffectPort
 
@@ -2734,6 +2756,8 @@ Documents:
 | Data migration | None (adapter replaces direct broker-op call sites) |
 | Validation | Adapter hermetic tests: each effect op called with mock FD table and bundle; rotation authorization, policy binding, all generation/revision preconditions, canonical idempotency vectors, byte-identical duplicate/retry, different-payload conflict, typed retry classification, and no key/path/handle in wire/Debug/error/audit; broker crash injection at every journal boundary with old-or-target visibility, roll-forward, and exactly-once success audit; anchored-path rejection for RESOLVE_BENEATH violations; `cargo deny check` verifies adapter exposes neither raw paths nor broker implementation to Provider crate; `integration/{provision,sealing}.rs` exercise full adapter paths |
 | Removal proof | Baseline broker op handlers (`state_dir.rs`, `storage_contract.rs`, `swtpm_dir.rs`, `store_sync.rs`, `store_view_posture.rs`) retired only after Volume controller parity is confirmed and all callers are on the adapter |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-vl-013 - No bootstrap-state exception (status-first controller start)
 
@@ -2750,6 +2774,8 @@ Documents:
 | Data migration | None; pre-existing baseline `StorageRoot` rows for the volume-local controller are superseded on v3 reset |
 | Validation | `integration/provider_state.rs`: controller starts and reaches Ready with no state Volume; served Volumes reconciled and markers re-verified after restart; no bootstrap Volume and no bootstrap Provider Process in the resource list |
 | Removal proof | Not applicable (new) |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 

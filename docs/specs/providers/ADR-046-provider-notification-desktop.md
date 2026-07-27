@@ -1377,6 +1377,8 @@ The v2 `d2b.notify.v2.NotifyService` ttrpc contract is superseded by
 | Data migration | No v2 compatibility; reset |
 | Validation | `tests/stream_record.rs` - DTO schema vectors; `tests/action_nonce.rs` - single-use/TTL/capacity/replay |
 | Removal proof | v2 `d2b.notify.v2` generated stubs removed after v3 service established |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-notify-002
 
@@ -1391,6 +1393,8 @@ The v2 `d2b.notify.v2.NotifyService` ttrpc contract is superseded by
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/stream_admission.rs` - all rejection vectors |
 | Removal proof | Old `DesktopServices` session admitted under v2 contract removed when v3 session established |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-notify-003
 
@@ -1405,6 +1409,8 @@ The v2 `d2b.notify.v2.NotifyService` ttrpc contract is superseded by
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Unit tests for placement FSM in `tests/stream_record.rs`; Volume creation/deletion lifecycle in `tests/volume_lifecycle.rs`; see also `integration/cross_zone_source.rs` end-to-end |
 | Removal proof | Not applicable (new controller) |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-notify-004
 
@@ -1419,6 +1425,8 @@ The v2 `d2b.notify.v2.NotifyService` ttrpc contract is superseded by
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `integration/dbus_sink.rs`, `integration/observer_client.rs`, `integration/action_invoke.rs` |
 | Removal proof | `nixos-modules/notifications.nix` state-dir tmpfiles rule retired; all notification state is in-memory per-session with no Volume replacement |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-notify-005
 
@@ -1433,6 +1441,8 @@ The v2 `d2b.notify.v2.NotifyService` ttrpc contract is superseded by
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `integration/cross_zone_source.rs` |
 | Removal proof | v3 baseline security-key notification path in `d2b-notify` is superseded; clipd direct `notify_rust` call superseded |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-notify-006
 
@@ -1447,6 +1457,8 @@ The v2 `d2b.notify.v2.NotifyService` ttrpc contract is superseded by
 | Data migration | `d2b.notifications.*` Nix options retired; `d2b.zones.<z>.resources.notification-desktop` with `spec.config.guestSources` replaces |
 | Validation | Eval tests for category enforcement, displayWaylandRef assertion, guestRef resolution; `tests/stream_redaction.rs` for content-free telemetry; `tests/metrics_labels.rs` for structural exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys plus notification/Zone-name canary absence |
 | Removal proof | `nixos-modules/notifications.nix` removed after Zone resource equivalence confirmed by eval test |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### 17.3 Removal items
 

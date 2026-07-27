@@ -1491,6 +1491,8 @@ Old and new suites never run in parallel indefinitely.
 | Data migration | None; v3 constants freeze independently |
 | Validation | `tests/credit.rs::ancillary_capacity_is_derived_from_closed_hard_bounds` passes against v3 constants |
 | Removal proof | No current code imports v3 transport constants; new import |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 
@@ -1509,6 +1511,8 @@ Old and new suites never run in parallel indefinitely.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Copy all 12 test functions; add `peercred_reported_to_componentsession_not_resolved_to_subject_here` |
 | Removal proof | `d2b-realm-transport` seqpacket path retired after ZoneLink sessions migrate to child-local Providers and tests prove no reciprocal parent-store resource or cross-Zone FD transfer remains |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 
@@ -1527,6 +1531,8 @@ Old and new suites never run in parallel indefinitely.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/portal.rs::stream_open_transport_forces_no_attachments`; `tests/identity.rs::stream_transport_reassembles_partial_and_coalesced_records` |
 | Removal proof | No current stream ZoneLink path exists; stream is net-new |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 
@@ -1545,6 +1551,8 @@ Old and new suites never run in parallel indefinitely.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Copy all 4 credit test functions; add `credit_released_on_attachment_close` and `emergency_headroom_constant_across_fd_counts` |
 | Removal proof | No current code path uses this crate directly; new |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 
@@ -1563,6 +1571,8 @@ Old and new suites never run in parallel indefinitely.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Copy `pidfd_identity_requires_live_launch_evidence_and_rejects_unrelated_process` and `duplicate_kernel_objects_are_rejected_and_cleaned_up` |
 | Removal proof | Broker pidfd-open path in `d2b-priv-broker/src/sys.rs` serves different purpose (process supervision); no removal dependency |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 
@@ -1581,6 +1591,8 @@ Old and new suites never run in parallel indefinitely.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/admission.rs::seqpacket_fd_passes_seqpacket_kind`; `stream_fd_passes_stream_kind`; `seqpacket_fd_rejects_stream_kind_declaration`; `zone_link_with_attachments_enabled_fails`; `local_portal_seqpacket_with_attachments_accepted`; `stream_with_attachments_enabled_rejected` |
 | Removal proof | No current code has this gate; new path |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 
@@ -1599,6 +1611,8 @@ Old and new suites never run in parallel indefinitely.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/portal.rs::open_transport_zone_link_validates_and_returns_ownedtransport`; `open_transport_uses_child_bootstrap_endpoint_only`; `parent_endpoint_never_enters_provider_portal`; `open_transport_local_portal_seqpacket_with_attachments_accepted`; `open_transport_zone_link_attachments_enabled_rejected`; `close_transport_is_idempotent_after_handle_removed`; `observe_transport_delivers_pollhup_as_peer_disconnected`; `handle_table_rejects_at_max_capacity`; `restart_clears_all_handles` |
 | Removal proof | Ad-hoc IPC stubs in `d2bd/src/` retired after portal migration |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 
@@ -1617,6 +1631,8 @@ Old and new suites never run in parallel indefinitely.
 | Data migration | None (fresh Provider resource) |
 | Validation | `tests/conformance.rs::process_resource_matches_component_descriptor`; `tests/conformance.rs::provider_state_set_is_empty`; `tests/conformance.rs::no_state_volume_mount`; sandbox policy tests against minijail conformance kit |
 | Removal proof | No current transport-service Process exists; new path |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 
@@ -1635,6 +1651,8 @@ Old and new suites never run in parallel indefinitely.
 | Data migration | `d2b.realms.*` Nix options superseded by `d2b.zones.*`; no compatibility bridge (v3 reset) |
 | Validation | All eval/build tests in the Nix section, including `transport-unix-exact-zonelink-spec`, `transport-unix-child-local-topology`, legacy-field rejection, empty-credential enforcement, and a generated-bundle assertion that the parent store has no reciprocal Provider/ZoneLink row |
 | Removal proof | `nixos-modules/options-realms.nix` realm wiring retired after Zone resource bundle activation replaces it |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 
@@ -1653,6 +1671,8 @@ Old and new suites never run in parallel indefinitely.
 | Data migration | Existing `d2bd/src/metrics.rs` VM-label metrics superseded by v3 metrics; not migrated |
 | Validation | `tests/conformance.rs::audit_records_contain_no_pid_uid_or_handle`; `tests/conformance.rs::metric_labels_are_closed_set`; `tests/conformance.rs::span_attributes_contain_no_sensitive_fields` |
 | Removal proof | `d2bd/src/metrics.rs` hand-rolled registry retired after metric surface migration |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 
@@ -1671,3 +1691,5 @@ Old and new suites never run in parallel indefinitely.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | All four scenarios pass in CI; latency assertions enforced using monotonic timestamps; scavenge correctness verified by open-FD count before/after error injection |
 | Removal proof | Ad-hoc IPC test stubs retired after scenario parity |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |

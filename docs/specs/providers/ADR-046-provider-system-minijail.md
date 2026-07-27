@@ -1603,6 +1603,8 @@ delivery assumptions are not copied.
 | Data migration | Full reset; current `MinijailProfile` not import-compatible with v3 SandboxSpec |
 | Validation | `tests/sandbox_compilation.rs`; `tests/schema.rs`; golden vectors |
 | Removal proof | Current `MinijailProfile`/`NamespaceSet` types in `d2b-core` removed after all callers migrate to SandboxSpec |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-minijail-002 (Dependency: ADR046-minijail-001, ADR046-process-001)
 
@@ -1617,6 +1619,8 @@ delivery assumptions are not copied.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/lifecycle.rs`; `tests/fault_injection.rs`; `tests/fast_path.rs` |
 | Removal proof | Current `process_builder.rs` removed after parity |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-minijail-003 (Dependency: ADR046-minijail-001)
 
@@ -1631,6 +1635,8 @@ delivery assumptions are not copied.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/fault_injection.rs`; `tests/platform_gate.rs`; `tests/broker_wait_contract.rs`; `tests/cgroup_kill_finalize.rs`; `integration/clone3_pidfd/`; `integration/user_namespace/`; `integration/broker_parent_reap/`; `integration/cgroup_kill_subtree/`; `integration/kernel_platform_gate/` |
 | Removal proof | Old broker `SpawnRunner` direct-caller paths in `d2bd` removed after system-minijail Provider integration |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-minijail-004 (Dependency: ADR046-minijail-003)
 
@@ -1645,6 +1651,8 @@ delivery assumptions are not copied.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/lifecycle.rs`; `tests/broker_wait_contract.rs` (only clone3 parent calls waitid/reaps; poll readability cannot supply status); `tests/cgroup_kill_finalize.rs` (setsid descendant and PGID reuse); `tests/redaction.rs` (PID never in log/status/audit); `tests/blocking_adapter.rs` (duplicate/status relay via adapter; timeout → error) |
 | Removal proof | Old `PidfdTable` in `d2bd` supervisor removed after Provider integration |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-minijail-005 (Dependency: ADR046-minijail-002, ADR046-minijail-004, ADR046-session-001, ADR046-bus-001)
 
@@ -1659,6 +1667,8 @@ delivery assumptions are not copied.
 | Data migration | Full reset; current DAG/role snapshot import not required |
 | Validation | `tests/lifecycle.rs`; `tests/ephemeral_lifecycle.rs`; `tests/conformance.rs`; `tests/adoption_quarantine.rs`; `tests/broker_wait_contract.rs`; `tests/cgroup_kill_finalize.rs`; `tests/platform_gate.rs`; `tests/bootstrap_authz.rs`; `tests/fast_path.rs`; `tests/blocking_adapter.rs`; `integration/adoption_restart/`; `integration/quarantine_scenario/`; `integration/broker_parent_reap/`; `integration/cgroup_kill_subtree/`; `integration/kernel_platform_gate/`; `integration/latency_gate/`; shared conformance suite in `d2b-process-conformance` |
 | Removal proof | Current `d2bd` DAG executor and direct spawn paths removed only after all ProcessRoles in the role-disposition table (ADR-046-components-processes-and-sandbox, §Representative baseline mapping) reach parity under system-minijail or system-systemd |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-minijail-006 (Dependency: ADR046-minijail-005)
 
@@ -1673,6 +1683,8 @@ delivery assumptions are not copied.
 | Data migration | Current `nixos-modules/processes-json.nix` and minijail profile Nix removed at cutover |
 | Validation | `nix-unit` eval cases for every validation rule; schema drift gate; `tests/schema.rs` |
 | Removal proof | `processes-json.nix`, `minijail-profiles.nix`, and `programs-json.nix` removed after v3 Nix parity |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ---
 

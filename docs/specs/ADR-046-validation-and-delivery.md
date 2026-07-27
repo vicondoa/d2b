@@ -1473,6 +1473,8 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | Data migration | None - net-new tooling |
 | Validation | Unit tests for slot acquisition/timeout/fail-closed paths; integration test spawning two concurrent heavy-gate invocations and asserting the second blocks until the first releases |
 | Removal proof | Not applicable (net-new; nothing to remove) |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-delivery-002
 
@@ -1489,6 +1491,8 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Unit tests asserting identical inputs produce identical digests and any single-byte content change produces a different `content_id` |
 | Removal proof | Not applicable |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-delivery-003
 
@@ -1505,6 +1509,8 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Test asserting evidence for a stale `candidate_id` is rejected; test asserting raw command output never lands in a tracked file |
 | Removal proof | Not applicable |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-delivery-004
 
@@ -1521,6 +1527,8 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Golden-fixture test against a small synthetic spec directory; drift test against the real `docs/specs/` tree |
 | Removal proof | Not applicable |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-delivery-005
 
@@ -1537,6 +1545,8 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Unit tests for every rejection class (wrong model, missing role, duplicate run_id, `signoff:true` with non-empty `recommendations`); integration test with ten synthetic valid records passing |
 | Removal proof | Not applicable |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-delivery-006
 
@@ -1553,6 +1563,8 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Unit tests for seal rejection on any missing/mismatched record; integration test proving a history-only rebase with identical content passes `history_proof` and reuses panel evidence, while any content change fails it |
 | Removal proof | Not applicable |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-delivery-007
 
@@ -1569,6 +1581,8 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Policy self-tests: intentional sleep/process/network behavior in a hermetic test is rejected; a per-test wall-clock threshold breach remains advisory; an over-budget aggregate crate process-CPU p95 fails; an incomplete, expanded, or shrunk exact census fails closed; parallel isolation holds under shuffled/parallel execution; a retired legacy selector is absent from `tests/layer1-jobs.json`, closed gate manifests, and CI shards |
 | Removal proof | Not applicable |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-delivery-008
 
@@ -1585,6 +1599,8 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | Data migration | None - docs/tooling only; no runtime state |
 | Validation | Every 55 spec node and every work item present exactly once; all edge endpoints resolve; graph acyclic; waves monotonic (dependencies earlier or explicit same-wave prep barrier); parallel groups claim no ordering absent a dependency/file-overlap edge; deterministic JSON with no timestamps/host paths; every Mermaid node ID valid; the ready-wave query returns the expected concurrently-launchable groups on a seeded fixture |
 | Removal proof | Not applicable |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-delivery-009
 
@@ -1601,3 +1617,5 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | Data migration | None - documentation/build-policy contract only |
 | Validation | Fixtures fail for a dropped heading, `##`/`####` item heading, extra manifest row, duplicate ID, duplicate cross-member prefix, unsorted/empty required prefix registry, wrong owner/path/prefix, heuristic-only prefix match, two-digit/zero ordinal, missing/duplicate mandatory field, free-form/compound action, `create` with a reuse source, dangling dependency, cyclic DAG, backward-wave dependency, and cross-wave parallel group; the exact 55-spec real tree passes with every item once |
 | Removal proof | Not applicable; the policy remains the permanent generated-artifact closure gate |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |

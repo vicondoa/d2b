@@ -2013,6 +2013,8 @@ config formalizes this as an `OpaqueAzureRef` with the same charset restriction.
 | Data migration | Full d2b 3.0 reset; no v2 credential import |
 | Validation | Schema golden vectors; charset/length tests; serde unknown-field rejection; `OpaqueAzureRef` round-trip and secret-shape rejection parity; `leaseHandle` and `sourceVersion` opaque newtype tests; status/error redaction tests with Credential name/ResourceRef/UID/digest canaries |
 | Removal proof | Old `CredentialProvider` trait and `CredentialStatus` enum removed only after all v3 Credential Provider controllers consume this contract |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-credential-002
 
@@ -2029,6 +2031,8 @@ config formalizes this as an `OpaqueAzureRef` with the same charset restriction.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Protocol golden vectors for each method; Role matrix for the five exact allowed-operation subresources under `use-credential` and exact `create`, `update-spec`, and `delete` subresources under `admin-credential`; prove admin permission is supplemental to ordinary CRUD; deny empty/wildcard/unknown/mismatched subresources, alternate Credential-operation Role fields, and method-name aliases before Provider dispatch; malformed/oversize rejection; `leaseHandle` opacity tests (secret-canary must not appear in outer DTO or delivery routing metadata); locked/unavailable/denied/expired state tests; delivery session binding contract round-trip; zeroizing record type unit tests; delivery channel never materialized in non-delivery method tests |
 | Removal proof | Old v2 `CredentialProviderService` proto removed only after all v3 callers migrate |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-credential-003
 
@@ -2045,6 +2049,8 @@ config formalizes this as an `OpaqueAzureRef` with the same charset restriction.
 | Data migration | Full reset; no migration from old `CredentialProvider` trait |
 | Validation | **`src/` unit** (`#[cfg(test)]` in `src/`): `Oo7SecretServicePort` trait API surface, `SecretServiceOwner` placement guard, `collectionAlias` charset, `lockPolicy` state transitions. **`tests/` Cargo integration** (`cargo test -p d2b-provider-credential-secret-service`): copied test suite from main with v3 type substitutions; add `lifecycle.rs` (acquire/refresh/revoke/inspect end-to-end with `FakeOo7Port`); `conformance.rs` (all 11 `check_provider_conformance` arms pass); `faults.rs` (locked state → `credential-provider-unavailable`, unavailable, cardinality limit); `canary.rs` (`credential_canary` and `object_path_canary` absent from every response, status field, and delivery record); `delivery.rs` (delivery-session binding contract, zeroizing buffer, replay-safe sequence); `placement.rs` (system-domain and guest-agent construction rejected). **`integration/` fixtures**: `container-service.sh` (container-backed Provider service start/stop/drain); `host-placement.nix` (user-domain Host/Process placement in runNixOSTest); `cleanup-rollback.sh` (Nix-generation removal triggers async Delete and Provider-revoke finalizer). |
 | Removal proof | Old `d2b-realm-provider:CredentialProvider` trait removed only after this controller and the other two Credential controllers reach full reconcile parity |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-credential-004
 
@@ -2061,6 +2067,8 @@ config formalizes this as an `OpaqueAzureRef` with the same charset restriction.
 | Data migration | Full reset |
 | Validation | **`src/` unit**: `EntraCredentialClient` trait API, `OpaqueAzureRef::parse` on `tenantId`, `EntraCredentialOwner::ExactConsumer` guard, `EntraClientState` transitions. **`tests/` Cargo integration**: `lifecycle.rs` (acquire/refresh/revoke/inspect with `FakeEntraClient`); `conformance.rs` (all conformance arms, canonical Endpoint visibility/consumer policy, and exact Role verb/subresource mapping); `faults.rs` (interaction-required → unavailable, generation-mismatch, colocated-consumer and mismatched Role-subresource rejection); `canary.rs` (secret plus Credential name/ResourceRef/UID/digest canaries absent from status/errors/logs and every OTEL Resource/span attribute/metric label; authorized audit retains only `resource_name_digest`); `delivery.rs` (delivery-session binding, zeroizing, replay-safe); `placement.rs` (host-system placement rejected). **`integration/` fixtures**: `container-service.sh`; `guest-placement.nix` (user-domain and system-domain Process on Guest in runNixOSTest); `cleanup-rollback.sh`. |
 | Removal proof | Same as ADR046-credential-003 |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-credential-005
 
@@ -2077,6 +2085,8 @@ config formalizes this as an `OpaqueAzureRef` with the same charset restriction.
 | Data migration | Full reset; `d2b-provider-aca` managed_identity_client_id config field migrated to a Credential resource reference in the v3 ACA Provider config |
 | Validation | **`src/` unit**: `ManagedIdentityCredentialClient` trait, `OpaqueAzureRef::parse` on `clientId`, `ManagedIdentityCredentialOwner::ExactSdkConsumer` guard, `imdsEndpointAlias` validation, `sign-challenge` schema-invalid fast path. **`tests/` Cargo integration**: `lifecycle.rs` (acquire/refresh/revoke/inspect with `FakeClient`); `conformance.rs`; `faults.rs` (unavailable state, colocated-consumer rejection); `canary.rs` (canary absent from all responses and delivery records); `delivery.rs`; `placement.rs` (user-agent placement rejected). **`integration/` fixtures**: `container-service.sh`; `host-guest-placement.nix` (system-domain Host and Guest placement in runNixOSTest); `aca-credential-ref.sh` (ACA Provider config uses `credentialRef`; raw `managed_identity_client_id` absent); `cleanup-rollback.sh`. |
 | Removal proof | `d2b-provider-aca:managed_identity_client_id` raw field removed only after `credential-managed-identity` Provider controller is integrated and the ACA Provider config uses `credentialRef` |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-credential-006
 
@@ -2093,6 +2103,8 @@ config formalizes this as an `OpaqueAzureRef` with the same charset restriction.
 | Data migration | None; v3 reset |
 | Validation | Controller state-machine golden vectors; rotation-policy matrix (proactive/on-demand/on-expiry × success/locked/unavailable/expired); exact Role-subresource admission matrix; finalizer execution tests; provider-generation-change revocation tests; idempotency key derivation tests; observe-interval drift detection test; canary tests confirm zero secret bytes and no Credential name/ResourceRef/UID/digest in any controller-written status or error |
 | Removal proof | Not applicable (new controller) |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-credential-007
 
@@ -2108,6 +2120,8 @@ config formalizes this as an `OpaqueAzureRef` with the same charset restriction.
 | Data migration | None; v3 reset |
 | Validation | **(eval/build)**: nix-unit golden JSON envelope for each example (spec shape, no management labels in Nix output, sort, digest); assertion-failure tests for secret-shaped audience, mismatched providerRef/domainFilter, proactiveWindow > half maxLifetime, duplicate binding tuple, unresolved refs; generated activation Role contains `admin-credential` with exact `subresources = [ "create" "update-spec" "delete" ]`, no coarse alias, and no undeclared Role field; permission tests prove each lifecycle action also requires its ordinary CRUD verb; artifact catalog: assertion-failure for missing `artifactId`, wrong-type `artifactId`, duplicate catalog ID; bundle + artifact catalog digest round-trip; artifact catalog store-path absence from resource bundle and status; Provider-specific schema cross-check; `make test-drift` schema drift gate. **(runtime integration in `tests/host-integration/`)**: `credential-cleanup-basic` (removed resource reaches Deleted); `credential-cleanup-nonblocking` (activation Ready before cleanup finalizer finishes); `credential-cleanup-pending-status` (Cleanup=True on removed resource, PendingCleanup=True on Provider); `credential-cleanup-stalled` (Degraded stall detection and recovery); `credential-cleanup-controller-children-preserved` (ownerRef children cleaned by Credential controller); `credential-cleanup-no-dynamic-deletion` (controller-created Credential with `managedBy = "controller"` not deleted); `credential-retained-generation-count` (up to retainedGenerations bundles retained; rollback re-creates from retained bundle; oldest pruned when count exceeded); `credential-bundle-digest-mismatch` (tampered bundle aborts activation). |
 | Removal proof | Not applicable (new module) |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-credential-008
 
@@ -2123,3 +2137,5 @@ config formalizes this as an `OpaqueAzureRef` with the same charset restriction.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Canary tests across all three Provider crates; authorized audit record field-presence tests require `resource_name_digest` and reject raw Credential name/ResourceRef/UID, while denied-request tests emit no identity-bearing audit; structural metric descriptor tests assert exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, `credential_name`, `credential_ref`, `credential_uid`, `credential_digest`, `resource_name_digest`, and every resource-name-derived key; Credential name/ref/UID/digest canaries are absent from every status field, error, log/Debug line, collector diagnostic, OTEL Resource attribute, span attribute, and metric label; Zone-name canaries are absent from spans and labels while resource-attribute tests preserve the generic collector allowlist including `d2b.zone`, `d2b.provider`, `d2b.component`, and service fields; complete Credential metric/span frames pass the shared collector ingress validator, while adding `d2b.credential.name` or any Credential identity key/value rejects the whole frame |
 | Removal proof | Not applicable |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |

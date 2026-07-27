@@ -1660,6 +1660,8 @@ disposition contract test passes.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `cargo build -p d2b-provider-device-gpu`; workspace policy crate-layout check passes |
 | Removal proof | N/A (new crate) |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-gpu-002: Implement async reconcile controller
 
@@ -1676,6 +1678,8 @@ disposition contract test passes.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `cargo test -p d2b-provider-device-gpu --test combined_reconcile`; all five trigger handlers must reach their expected output state; structural metric descriptor test asserts exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys plus GPU Device/Zone-name canary absence while preserving `d2b.zone` resource attributes |
 | Removal proof | Current ProcessRole::Gpu/Video/GpuRenderNode retained until this test passes; see ProcessRole disposition table |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-gpu-003: DRM sysfs probe and observe scheduler
 
@@ -1692,6 +1696,8 @@ disposition contract test passes.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `tests/conformance.rs` contains probe-mock path; `cargo test` passes |
 | Removal proof | N/A (new module) |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-gpu-004: Exclusive/shared arbitration enforcement
 
@@ -1708,6 +1714,8 @@ disposition contract test passes.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `cargo test -p d2b-provider-device-gpu --test arbitration_conflict`; `cargo test -p d2b-provider-device-gpu --test render_node_enforcement` |
 | Removal proof | N/A (new module) |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-gpu-005: GPU and render-node worker Process management
 
@@ -1724,6 +1732,8 @@ disposition contract test passes.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `cargo test -p d2b-provider-device-gpu`; `cargo test -p d2b-contract-tests --test minijail_gpu` continues to pass |
 | Removal proof | `ProcessRole::Gpu` and `ProcessRole::GpuRenderNode` removed from `processes.rs` only after both integration tests pass and the ProcessRole disposition contract test confirms zero remaining references |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-gpu-006: Video decoder Process management and wire-contract check
 
@@ -1740,6 +1750,8 @@ disposition contract test passes.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `cargo test -p d2b-provider-device-gpu --test video_dependency`; `cargo test -p d2b-provider-device-gpu --test wire_constant_snapshot`; `cargo test -p d2b-contract-tests --test video_binary_contract` continues to pass |
 | Removal proof | `ProcessRole::Video` removed from `processes.rs` only after `integration/video_dependency/` passes and the video Process reaches `Ready` in a live Zone |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-gpu-007: Nix option migration and eval validation
 
@@ -1756,6 +1768,8 @@ disposition contract test passes.
 | Data migration | Consumer config migration guide: replace `d2b.vms.<vm>.graphics.enable = true` with a Device resource declaration. Old options emit deprecation warnings, not hard failures, during the transition window. |
 | Validation | `nix-unit tests/unit/nix/cases/device-gpu-eval.nix`; `make test-drift`; `make test-flake` |
 | Removal proof | `d2b.vms.<vm>.graphics.*` options removed only after migration guide ships and the deprecation warning has been live for one minor release |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-gpu-008: Assert status-first Provider state
 
@@ -1772,6 +1786,8 @@ disposition contract test passes.
 | Data migration | None - no Provider state Volume exists to migrate. |
 | Validation | `cargo test -p d2b-provider-device-gpu --test status_state`; component descriptor golden has no Provider state Volume declaration; controller Process template has no `/state` mount; ProviderStateSet query is empty; status/core-ledger fields carry bounded operational observations |
 | Removal proof | `StorageRoot`/`StoragePathSpec` lifecycle tracking entries for GPU/video roles in `d2b-core/src/storage.rs` removed after Device/Process status-first lifecycle and restart-adoption integration tests pass in a live Zone |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ### ADR046-gpu-009: Provider `README.md`
 
@@ -1789,6 +1805,8 @@ disposition contract test passes.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | `make test-policy` (workspace crate layout policy check) |
 | Removal proof | N/A (new file) |
+| Implementation state | Planned |
+| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
 
 ## Current-code fit
 
