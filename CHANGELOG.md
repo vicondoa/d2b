@@ -77,7 +77,6 @@ deprecations ship one minor release before removal.
   validation and delivery, and streamline contracts. No crates, services,
   controllers, or Providers are created.
 
-### Changed
 
 - Made ADR 0046 work-item delivery state machine-readable and fail-closed:
   every item now records a closed `Planned` or `Merged` state plus nonempty
