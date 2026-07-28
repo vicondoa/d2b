@@ -1302,6 +1302,7 @@ dependencies = [
  "envmnt",
  "libc",
  "listenfd",
+ "nix 0.29.0",
  "rustix 0.38.44",
  "tokio",
  "tokio-vsock",

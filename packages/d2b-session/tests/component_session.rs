@@ -378,6 +378,11 @@ fn protected_records_are_directional_sequenced_and_replay_safe() {
         receiver.unprotect(&replay).unwrap_err().code(),
         SessionErrorCode::RecordReplay
     );
+    assert_eq!(sender.reconnect_generation(), 7);
+    assert_eq!(
+        format!("{sender:?}"),
+        "RecordProtector { generation: \"<redacted>\", cryptographic_state: \"<redacted>\", .. }"
+    );
 
     let mut truncated = sender
         .protect(
@@ -392,7 +397,6 @@ fn protected_records_are_directional_sequenced_and_replay_safe() {
         receiver.unprotect(&truncated).unwrap_err().code(),
         SessionErrorCode::RecordTruncated
     );
-    assert!(!format!("{sender:?}").contains("opaque"));
 }
 
 #[test]
@@ -847,6 +851,26 @@ async fn metrics_are_emitted_by_a_real_driver_failure_path() {
     assert_eq!(events[0].0, MetricEvent::RejectedRecord);
     assert_eq!(events[0].1.result, MetricResult::Rejected);
     assert_eq!(events[0].1.reason, MetricReason::InternalInvariant);
+}
+
+#[tokio::test]
+async fn handshake_failure_is_emitted_by_the_pre_establishment_sink() {
+    let sink = Arc::new(CapturingMetrics::default());
+    let endpoint = policy(&offer(NoiseProfile::Kk25519ChaChaPolySha256));
+    let error = SessionEngine::establish_initiator_with_metrics(
+        MemoryTransport::default(),
+        endpoint,
+        credentials(NoiseProfile::Kk25519ChaChaPolySha256).0,
+        Instant::now(),
+        sink.clone(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.code(), SessionErrorCode::AuthenticationFailed);
+    let events = sink.0.lock().unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].0, MetricEvent::Handshake);
+    assert_eq!(events[0].1.result, MetricResult::Rejected);
 }
 
 struct FakeTransport {
@@ -1432,7 +1456,7 @@ async fn driver_handle_is_clonable_object_safe_and_leaves_ttrpc_correlation_to_a
 }
 
 #[tokio::test]
-async fn driver_rejects_a_message_larger_than_retained_receive_credit() {
+async fn driver_accepts_the_advertised_named_stream_boundary() {
     let (initiator, responder, _) = engine_pair().await;
     let initiator: Arc<dyn ComponentSessionDriver> = Arc::new(initiator.into_driver());
     let responder: Arc<dyn ComponentSessionDriver> = Arc::new(responder.into_driver());
@@ -1456,6 +1480,25 @@ async fn driver_rejects_a_message_larger_than_retained_receive_credit() {
         .unwrap();
 
     let payload = vec![0xa5; limits.logical_named_stream_bytes as usize];
+    initiator.send_named_stream(stream, payload).await.unwrap();
+}
+
+#[tokio::test]
+async fn driver_rejects_above_the_advertised_named_stream_boundary() {
+    let (initiator, _responder, _) = engine_pair().await;
+    let initiator: Arc<dyn ComponentSessionDriver> = Arc::new(initiator.into_driver());
+    let stream = StreamId::new(0x100).unwrap();
+    let limits = LimitProfile::local_default();
+    initiator
+        .open_named_stream(
+            stream,
+            limits.named_stream_queue_bytes,
+            limits.named_stream_queue_bytes,
+        )
+        .await
+        .unwrap();
+
+    let payload = vec![0xa5; limits.logical_named_stream_bytes as usize + 1];
     assert_eq!(
         initiator
             .send_named_stream(stream, payload)

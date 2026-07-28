@@ -55,7 +55,6 @@ impl BusAuthorizer {
         self.lock().native.mark_policy_unavailable();
     }
 
-    #[cfg(test)]
     pub(crate) fn authorize_connect(
         &self,
         context: &AuthenticatedSubjectContext,

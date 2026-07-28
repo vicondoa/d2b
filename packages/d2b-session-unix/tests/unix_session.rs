@@ -21,7 +21,9 @@ use rustix::{
     fd::BorrowedFd,
     fs::fstat,
     io::{DupFlags, FdFlags, dup3, fcntl_getfd},
-    net::{AddressFamily, SocketFlags, SocketType, socketpair},
+    net::{
+        AddressFamily, SocketFlags, SocketType, socketpair, sockopt::set_socket_send_buffer_size,
+    },
     pipe::{PipeFlags, pipe, pipe_with},
     process::{PidfdFlags, getpid, getppid, pidfd_open},
 };
@@ -627,6 +629,16 @@ async fn stream_transport_distinguishes_clean_and_partial_eof() {
     ));
 
     let (sender, receiver) = stream_pair();
+    sender.write_all(&3_u32.to_be_bytes()).await.unwrap();
+    sender.close().unwrap();
+    let mut receiver =
+        UnixStreamTransport::new(receiver, Locality::HostLocal, LimitProfile::local_default());
+    assert!(matches!(
+        receiver.receive(64).await,
+        Err(d2b_session::TransportError::Truncated)
+    ));
+
+    let (sender, receiver) = stream_pair();
     sender.write_all(&[0, 0, 0, 3, 1]).await.unwrap();
     sender.close().unwrap();
     let mut receiver =
@@ -635,6 +647,43 @@ async fn stream_transport_distinguishes_clean_and_partial_eof() {
         receiver.receive(64).await,
         Err(d2b_session::TransportError::Truncated)
     ));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn stream_transport_resumes_a_cancelled_partial_frame() {
+    let (left, right) = socketpair(
+        AddressFamily::UNIX,
+        SocketType::STREAM,
+        SocketFlags::NONBLOCK | SocketFlags::CLOEXEC,
+        None,
+    )
+    .unwrap();
+    set_socket_send_buffer_size(&left, 1024).unwrap();
+    let mut sender = UnixStreamTransport::new(
+        StreamSocket::from_owned(left).unwrap(),
+        Locality::HostLocal,
+        LimitProfile::local_default(),
+    );
+    let mut receiver = UnixStreamTransport::new(
+        StreamSocket::from_owned(right).unwrap(),
+        Locality::HostLocal,
+        LimitProfile::local_default(),
+    );
+    let payload = vec![0x5a; 60_000];
+    assert!(
+        tokio::time::timeout(
+            Duration::from_millis(5),
+            sender.send(TransportPacket::new(payload.clone())),
+        )
+        .await
+        .is_err()
+    );
+    let (sent, received) = tokio::join!(
+        sender.send(TransportPacket::new(payload.clone())),
+        receiver.receive(payload.len()),
+    );
+    sent.unwrap();
+    assert_eq!(received.unwrap().as_bytes(), payload);
 }
 
 #[tokio::test(flavor = "current_thread")]

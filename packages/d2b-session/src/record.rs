@@ -54,6 +54,11 @@ impl RecordProtector {
         }
     }
 
+    /// Return the reconnect generation bound into protected record headers.
+    pub const fn reconnect_generation(&self) -> u64 {
+        self.generation
+    }
+
     pub fn protect(
         &mut self,
         kind: RecordKind,

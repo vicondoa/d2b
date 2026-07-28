@@ -40,17 +40,20 @@ pub use handshake::{
 };
 pub use lifecycle::{KeepaliveAction, SessionLifecycle, SessionPhase};
 pub use metrics::{MetricEvent, MetricsSink, NoopMetrics};
-pub use operation::{OperationKind, OperationMember, SessionOperation};
+pub use operation::{
+    GENERATED_OPERATION_CATALOG, OperationCatalogEntry, OperationKind, OperationMember,
+    SessionOperation, operation_catalog_entry, resource_operation,
+};
 pub use record::{ProtectedRecord, RecordProtector};
 pub use scheduler::{FairScheduler, OutboundFrame, QueueClass};
-pub use server::{SessionServerError, serve_ttrpc_services};
+pub use server::{SessionServerError, serve_ttrpc_services, ttrpc_request_id};
 pub use streams::{NamedStreamMux, StreamEvent, StreamId, StreamPhase};
 pub use transport::{OwnedTransport, TransportDescriptor, TransportError, TransportPacket};
 
 pub use admission::{
-    AdmittedComponentSession, AdmittedSessionRouteBinding, AuthorizedSessionOperation,
-    ComponentSessionRegistrar, SessionAcceptor, SessionAuthenticationBinding, SessionAuthority,
-    SessionAuthorizationRequest, TransportEvidence,
+    AuthenticatedComponentSession, AuthenticatedSessionRouteBinding, AuthorizedSessionOperation,
+    SessionAcceptor, SessionAuthenticationBinding, SessionAuthority, SessionAuthorizationRequest,
+    SessionCancellationHandle, TransportEvidence,
 };
 pub use attachment::{AttachmentPayload, AttachmentValidationError, OwnedAttachment};
 pub use d2b_contracts::v3::component_session as contract;

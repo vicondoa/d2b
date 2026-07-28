@@ -12,7 +12,7 @@ use d2b_contracts::v3::{
     ServiceName, ZoneId,
 };
 use d2b_resource_api::authz::SessionVerb;
-use d2b_session::{AdmittedSessionRouteBinding, OperationMember};
+use d2b_session::{AuthenticatedSessionRouteBinding, OperationMember};
 
 use crate::{
     operations::SessionId,
@@ -226,6 +226,37 @@ pub enum EndpointError {
     Unavailable,
     Rejected,
     Internal,
+    Session(EndpointFailureClass),
+}
+
+/// Identity-free session failure classes preserved across bus dispatch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EndpointFailureClass {
+    Authentication,
+    Authorization,
+    Generation,
+    Backpressure,
+    Deadline,
+    Transport,
+    Protocol,
+    Internal,
+}
+
+impl From<d2b_session::SessionError> for EndpointError {
+    fn from(error: d2b_session::SessionError) -> Self {
+        use d2b_session::SessionErrorClass as Source;
+        let class = match error.class() {
+            Source::Authentication => EndpointFailureClass::Authentication,
+            Source::Authorization => EndpointFailureClass::Authorization,
+            Source::Generation => EndpointFailureClass::Generation,
+            Source::Backpressure => EndpointFailureClass::Backpressure,
+            Source::Deadline => EndpointFailureClass::Deadline,
+            Source::Transport => EndpointFailureClass::Transport,
+            Source::Protocol => EndpointFailureClass::Protocol,
+            Source::Internal => EndpointFailureClass::Internal,
+        };
+        Self::Session(class)
+    }
 }
 
 impl core::fmt::Display for EndpointError {
@@ -234,6 +265,16 @@ impl core::fmt::Display for EndpointError {
             Self::Unavailable => "endpoint is unavailable",
             Self::Rejected => "endpoint rejected the request",
             Self::Internal => "endpoint failed",
+            Self::Session(class) => match class {
+                EndpointFailureClass::Authentication => "endpoint authentication failed",
+                EndpointFailureClass::Authorization => "endpoint authorization failed",
+                EndpointFailureClass::Generation => "endpoint generation is stale",
+                EndpointFailureClass::Backpressure => "endpoint is backpressured",
+                EndpointFailureClass::Deadline => "endpoint deadline elapsed",
+                EndpointFailureClass::Transport => "endpoint transport failed",
+                EndpointFailureClass::Protocol => "endpoint protocol failed",
+                EndpointFailureClass::Internal => "endpoint failed",
+            },
         })
     }
 }
@@ -285,13 +326,19 @@ pub trait BusEndpoint: Send + Sync + 'static {
     async fn open_stream(&self, request: DeliveredStream) -> Result<(), EndpointError>;
 
     /// Notify the exact destination of an authorized cancellation.
-    async fn cancel(&self, _operation: &crate::operations::OperationId) {}
+    async fn cancel(
+        &self,
+        _operation: &crate::operations::OperationId,
+    ) -> Result<(), EndpointError> {
+        Err(EndpointError::Unavailable)
+    }
 }
 
 /// Registration input consumed by the Zone's single registration authority.
 pub(crate) struct SessionRegistration {
     identity: SessionIdentity,
     context: Option<AuthenticatedSubjectContext>,
+    session_authorization: bool,
     routes: Vec<RouteKey>,
     endpoint: Arc<dyn BusEndpoint>,
 }
@@ -306,19 +353,21 @@ impl SessionRegistration {
         Self {
             identity: SessionIdentity::from_context(&context),
             context: Some(context),
+            session_authorization: false,
             routes,
             endpoint,
         }
     }
 
     pub(crate) fn admitted(
-        binding: AdmittedSessionRouteBinding,
+        binding: AuthenticatedSessionRouteBinding,
         routes: Vec<RouteKey>,
         endpoint: Arc<dyn BusEndpoint>,
     ) -> Self {
         Self {
-            identity: SessionIdentity::from_admitted(&binding),
-            context: None,
+            identity: SessionIdentity::from_authenticated(&binding),
+            context: Some(binding.context().clone()),
+            session_authorization: true,
             routes,
             endpoint,
         }
@@ -342,6 +391,7 @@ impl core::fmt::Debug for SessionRegistration {
 struct RegisteredSession {
     identity: SessionIdentity,
     context: Option<AuthenticatedSubjectContext>,
+    session_authorization: bool,
     routes: BTreeSet<RouteKey>,
     endpoint: Arc<dyn BusEndpoint>,
     route_lease: Arc<RouteLeaseState>,
@@ -391,7 +441,7 @@ impl SessionIdentity {
         }
     }
 
-    fn from_admitted(binding: &AdmittedSessionRouteBinding) -> Self {
+    fn from_authenticated(binding: &AuthenticatedSessionRouteBinding) -> Self {
         Self {
             zone: binding.zone().clone(),
             subject_ref: binding.subject_ref().clone(),
@@ -472,6 +522,7 @@ impl RevocableRouteLease {
 pub(crate) struct ResolvedSource {
     pub(crate) context: Option<AuthenticatedSubjectContext>,
     pub(crate) endpoint: Arc<dyn BusEndpoint>,
+    pub(crate) session_authorization: bool,
 }
 
 pub(crate) struct Registry {
@@ -603,6 +654,7 @@ impl Registry {
             RegisteredSession {
                 identity: registration.identity,
                 context: registration.context,
+                session_authorization: registration.session_authorization,
                 routes,
                 endpoint: registration.endpoint,
                 route_lease: Arc::new(RouteLeaseState {
@@ -635,6 +687,7 @@ impl Registry {
         Ok(ResolvedSource {
             context: registered.context.clone(),
             endpoint: Arc::clone(&registered.endpoint),
+            session_authorization: registered.session_authorization,
         })
     }
 

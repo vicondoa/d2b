@@ -8,7 +8,8 @@ use d2b_contracts::v3::{
     ZoneId,
     component_session::{
         AuthorizationLease, BootstrapIdentityBinding, ChannelClass, EndpointPolicy, HandshakeOffer,
-        MetricReason, MetricResult, NoiseProfile, OperationClass, SessionErrorCode, TransportClass,
+        MetricReason, MetricResult, NoiseProfile, OperationClass, RequestId, SessionErrorCode,
+        TransportClass,
     },
 };
 use d2b_resource_api::authz::SessionVerb;
@@ -334,13 +335,13 @@ impl SessionAcceptor {
         self
     }
 
-    /// Consume a completed session engine and mint one admitted session.
+    /// Consume a completed session engine and mint one authenticated candidate.
     pub async fn admit<T>(
         mut self,
         mut engine: SessionEngine<T>,
         evidence: TransportEvidence,
         now_tick: u64,
-    ) -> Result<AdmittedComponentSession>
+    ) -> Result<AuthenticatedComponentSession>
     where
         T: OwnedTransport + 'static,
     {
@@ -399,7 +400,7 @@ impl SessionAcceptor {
             MetricResult::Accepted,
             MetricReason::None,
         );
-        Ok(AdmittedComponentSession {
+        Ok(AuthenticatedComponentSession {
             expected_zone: self.expected_zone,
             subject,
             lease,
@@ -415,8 +416,11 @@ impl fmt::Debug for SessionAcceptor {
     }
 }
 
-/// Authenticated, policy-bound session capability owned by a router.
-pub struct AdmittedComponentSession {
+/// Authenticated session candidate that has not passed bus registration.
+///
+/// This value is not a routing capability. A registrar must consume it and
+/// run native authorization before installing any routes.
+pub struct AuthenticatedComponentSession {
     expected_zone: ZoneId,
     subject: AuthenticatedSubjectContext,
     lease: AuthorizationLease,
@@ -424,12 +428,38 @@ pub struct AdmittedComponentSession {
     driver: SessionDriverHandle,
 }
 
-/// Redacted routing metadata derived only from an admitted session.
+/// Restricted concurrent cancellation surface for one authenticated session.
+#[derive(Clone)]
+pub struct SessionCancellationHandle {
+    driver: SessionDriverHandle,
+}
+
+impl SessionCancellationHandle {
+    /// Signal cancellation for one exact request in the current generation.
+    pub async fn cancel(&self, request_id: RequestId) -> Result<()> {
+        self.driver
+            .cancel(self.driver.generation(), request_id.clone())
+            .await?;
+        // A stopped driver has already dropped its request registry, so local
+        // completion after successful cancellation delivery is best effort.
+        let _ = self.driver.complete_ttrpc(request_id).await;
+        Ok(())
+    }
+}
+
+impl fmt::Debug for SessionCancellationHandle {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("SessionCancellationHandle(<redacted>)")
+    }
+}
+
+/// Redacted routing metadata derived only from an authenticated candidate.
 ///
 /// This value carries no driver, authority, lease, transport binding, or
 /// transcript and cannot be converted back into an admitted session.
 #[derive(Clone, PartialEq, Eq)]
-pub struct AdmittedSessionRouteBinding {
+pub struct AuthenticatedSessionRouteBinding {
+    context: AuthenticatedSubjectContext,
     zone: ZoneId,
     subject_ref: ResourceRef,
     subject_uid: ResourceUid,
@@ -443,7 +473,12 @@ pub struct AdmittedSessionRouteBinding {
     controller_generation: Option<ControllerGeneration>,
 }
 
-impl AdmittedSessionRouteBinding {
+impl AuthenticatedSessionRouteBinding {
+    /// Borrow the authenticated context for registrar-owned authorization.
+    pub fn context(&self) -> &AuthenticatedSubjectContext {
+        &self.context
+    }
+
     pub fn zone(&self) -> &ZoneId {
         &self.zone
     }
@@ -489,21 +524,29 @@ impl AdmittedSessionRouteBinding {
     }
 }
 
-impl fmt::Debug for AdmittedSessionRouteBinding {
+impl fmt::Debug for AuthenticatedSessionRouteBinding {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("AdmittedSessionRouteBinding(<redacted>)")
+        formatter.write_str("AuthenticatedSessionRouteBinding(<redacted>)")
     }
 }
 
-impl AdmittedComponentSession {
+impl AuthenticatedComponentSession {
+    /// Clone a cancellation-only handle that carries no claims or send access.
+    pub fn cancellation_handle(&self) -> SessionCancellationHandle {
+        SessionCancellationHandle {
+            driver: self.driver.clone(),
+        }
+    }
+
     /// Return the active authorization revision.
     pub const fn authorization_revision(&self) -> u64 {
         self.lease.policy_revision()
     }
 
     /// Snapshot non-authority routing metadata without exposing session claims.
-    pub fn route_binding(&self) -> AdmittedSessionRouteBinding {
-        AdmittedSessionRouteBinding {
+    pub fn route_binding(&self) -> AuthenticatedSessionRouteBinding {
+        AuthenticatedSessionRouteBinding {
+            context: self.subject.clone(),
             zone: self.expected_zone.clone(),
             subject_ref: self.subject.subject_ref().clone(),
             subject_uid: self.subject.subject_uid().clone(),
@@ -526,11 +569,13 @@ impl AdmittedComponentSession {
     ) -> Result<AuthorizedSessionOperation> {
         validate_zone(&self.subject, &self.expected_zone)?;
         let zone_scope_valid = if request.verb == SessionVerb::Relay {
-            request.target_zone != self.expected_zone
-                && request
-                    .next_hop_zone
-                    .as_ref()
-                    .is_some_and(|next_hop| next_hop != &self.expected_zone)
+            let next_hop = request.next_hop_zone.as_ref();
+            let forwarded = self.subject.transport_binding().locality() == Locality::AdjacentZone
+                && request.target_zone == self.expected_zone
+                && next_hop == Some(&self.expected_zone);
+            let outbound = request.target_zone != self.expected_zone
+                && next_hop.is_some_and(|next_hop| next_hop != &self.expected_zone);
+            forwarded || outbound
         } else {
             request.target_zone == self.expected_zone
         };
@@ -572,12 +617,36 @@ impl AdmittedComponentSession {
         }
         self.driver.send_ttrpc(frame).await
     }
+
+    /// Start one correlated ttrpc request under a consumed operation permit.
+    pub async fn start_authorized_ttrpc(
+        &mut self,
+        permit: AuthorizedSessionOperation,
+        request_id: RequestId,
+        frame: Vec<u8>,
+        now_tick: u64,
+    ) -> Result<()> {
+        if !permit.lease.is_valid_at(now_tick)
+            || !matches!(
+                permit.request.verb,
+                SessionVerb::Invoke | SessionVerb::AuditExport | SessionVerb::SupportBundle
+            )
+        {
+            return Err(SessionError::new(SessionErrorCode::PolicyDenied));
+        }
+        self.driver.start_ttrpc(request_id, frame).await
+    }
+
+    /// Remove one terminal correlated request.
+    pub async fn complete_ttrpc(&mut self, request_id: RequestId) -> Result<bool> {
+        self.driver.complete_ttrpc(request_id).await
+    }
 }
 
-impl fmt::Debug for AdmittedComponentSession {
+impl fmt::Debug for AuthenticatedComponentSession {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("AdmittedComponentSession")
+            .debug_struct("AuthenticatedComponentSession")
             .field("subject", &"<redacted>")
             .field("authorization", &"<redacted>")
             .field("driver", &"<redacted>")
@@ -616,32 +685,6 @@ impl fmt::Debug for AuthorizedSessionOperation {
             .field("lease", &"<redacted>")
             .finish()
     }
-}
-
-/// Interface the exact-addressed bus must implement to take sole session ownership.
-#[async_trait]
-pub trait ComponentSessionRegistrar: Send {
-    type Registration: Send;
-    type Error: std::error::Error + Send + Sync + 'static;
-
-    /// Register one authenticated session capability.
-    async fn register_component_session(
-        &mut self,
-        session: AdmittedComponentSession,
-    ) -> std::result::Result<Self::Registration, Self::Error>;
-
-    /// Atomically replace one registration with the next reconnect generation.
-    async fn reconnect_component_session(
-        &mut self,
-        previous: Self::Registration,
-        session: AdmittedComponentSession,
-    ) -> std::result::Result<Self::Registration, Self::Error>;
-
-    /// Disconnect one registration and revoke all work bound to it.
-    async fn disconnect_component_session(
-        &mut self,
-        registration: Self::Registration,
-    ) -> std::result::Result<(), Self::Error>;
 }
 
 fn authentication_binding(

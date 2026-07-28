@@ -257,11 +257,24 @@ impl OperationTable {
         Ok(())
     }
 
-    pub(crate) fn abort(&mut self, operation: &OperationId, source: SessionId) {
-        self.remove(&OperationKey {
+    pub(crate) fn abort(
+        &mut self,
+        operation: &OperationId,
+        source: SessionId,
+    ) -> Option<CancelTarget> {
+        let key = OperationKey {
             source,
             id: operation.clone(),
-        });
+        };
+        if let Some(record) = self.records.get(&key) {
+            record.cancellation.cancel();
+        }
+        self.remove(&key).map(|record| CancelTarget {
+            route: record.reverse_route,
+            endpoint: record.endpoint,
+            generation: record.generation,
+            cancellation: record.cancellation,
+        })
     }
 
     pub(crate) fn route_for_cancel(
@@ -288,8 +301,12 @@ impl OperationTable {
             source,
             id: operation.clone(),
         };
+        self.records
+            .get(&key)
+            .ok_or(OperationError::OperationNotFound)?
+            .cancellation
+            .cancel();
         let record = self.remove(&key).ok_or(OperationError::OperationNotFound)?;
-        record.cancellation.cancel();
         Ok(CancelTarget {
             route: record.reverse_route,
             endpoint: record.endpoint,

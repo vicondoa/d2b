@@ -65,6 +65,15 @@ impl fmt::Display for UnixSessionError {
 
 impl Error for UnixSessionError {}
 
+impl UnixSessionError {
+    pub const fn errno(self) -> Option<i32> {
+        match self {
+            Self::Io { errno } => errno,
+            _ => None,
+        }
+    }
+}
+
 #[cfg(feature = "host-socket")]
 pub(crate) trait IoErrno {
     fn errno(&self) -> Option<i32>;

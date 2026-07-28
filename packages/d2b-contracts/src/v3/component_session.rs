@@ -472,7 +472,7 @@ impl LimitProfile {
             handshake_offer_bytes: MAX_HANDSHAKE_OFFER_BYTES as u32,
             protected_ciphertext_bytes: MAX_PROTECTED_CIPHERTEXT_BYTES,
             logical_ttrpc_bytes: MAX_LOGICAL_MESSAGE_BYTES,
-            logical_named_stream_bytes: MAX_LOGICAL_MESSAGE_BYTES,
+            logical_named_stream_bytes: MAX_NAMED_STREAM_QUEUE_BYTES,
             active_named_streams: MAX_ACTIVE_NAMED_STREAMS,
             named_stream_queue_bytes: MAX_NAMED_STREAM_QUEUE_BYTES,
             aggregate_named_stream_queue_bytes: MAX_AGGREGATE_NAMED_STREAM_QUEUE_BYTES,
@@ -527,7 +527,8 @@ impl LimitProfile {
             && self.reconnect_attempts <= MAX_RECONNECT_ATTEMPTS
             && self.reconnect_window_ms <= MAX_RECONNECT_WINDOW_MS;
         let ordered = self.keepalive_timeout_ms < self.keepalive_interval_ms
-            && self.aggregate_named_stream_queue_bytes >= self.named_stream_queue_bytes;
+            && self.aggregate_named_stream_queue_bytes >= self.named_stream_queue_bytes
+            && self.logical_named_stream_bytes <= self.named_stream_queue_bytes;
         if nonzero && bounded && ordered {
             Ok(())
         } else {
@@ -584,7 +585,7 @@ impl LimitProfile {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct TransportBinding {
     pub transport: TransportClass,
@@ -593,7 +594,19 @@ pub struct TransportBinding {
     pub identity_evidence: IdentityEvidenceRequirement,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+impl fmt::Debug for TransportBinding {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("TransportBinding")
+            .field("transport", &self.transport)
+            .field("locality", &self.locality)
+            .field("channel_binding", &"<redacted>")
+            .field("identity_evidence", &self.identity_evidence)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct HandshakeOffer {
     pub purpose: EndpointPurpose,
@@ -609,7 +622,26 @@ pub struct HandshakeOffer {
     pub attachment_policy: AttachmentPolicy,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+impl fmt::Debug for HandshakeOffer {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("HandshakeOffer")
+            .field("purpose", &self.purpose)
+            .field("purpose_class", &self.purpose_class)
+            .field("initiator_role", &self.initiator_role)
+            .field("responder_role", &self.responder_role)
+            .field("service", &self.service)
+            .field("schema_fingerprint", &"<redacted>")
+            .field("noise_profile", &self.noise_profile)
+            .field("limits", &self.limits)
+            .field("transport_binding", &self.transport_binding)
+            .field("reconnect_generation", &self.reconnect_generation)
+            .field("attachment_policy", &self.attachment_policy)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct EndpointPolicy {
     pub purpose: EndpointPurpose,
@@ -625,10 +657,16 @@ pub struct EndpointPolicy {
     pub attachment_policy: AttachmentPolicy,
 }
 
+impl fmt::Debug for EndpointPolicy {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("EndpointPolicy(<redacted>)")
+    }
+}
+
 /// Exact endpoint policy fields that are stable before a local daemon restart
 /// generation is known. This is not an authenticated session policy and cannot
 /// validate a request until a nonzero generation has been negotiated.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct EndpointPolicyIdentity {
     pub purpose: EndpointPurpose,
@@ -641,6 +679,12 @@ pub struct EndpointPolicyIdentity {
     pub limits: LimitProfile,
     pub transport_binding: TransportBinding,
     pub attachment_policy: AttachmentPolicy,
+}
+
+impl fmt::Debug for EndpointPolicyIdentity {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("EndpointPolicyIdentity(<redacted>)")
+    }
 }
 
 fn validate_profile_policy(
@@ -988,11 +1032,21 @@ impl HandshakeOffer {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct HandshakeAccept {
     pub offer: HandshakeOffer,
     pub transcript_binding: [u8; 32],
+}
+
+impl fmt::Debug for HandshakeAccept {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("HandshakeAccept")
+            .field("offer", &self.offer)
+            .field("transcript_binding", &"<redacted>")
+            .finish()
+    }
 }
 
 impl HandshakeAccept {
@@ -1819,6 +1873,57 @@ mod bounded_identifier_tests {
         assert_eq!(format!("{trace:?}"), "TraceId(<redacted>)");
         assert_eq!(format!("{idempotency:?}"), "IdempotencyKey(<redacted>)");
         assert_eq!(format!("{operation:?}"), "OperationId(<redacted>)");
+    }
+
+    #[test]
+    fn named_stream_contract_never_advertises_more_than_one_queue_can_retain() {
+        let limits = LimitProfile::local_default();
+        assert_eq!(
+            limits.logical_named_stream_bytes,
+            limits.named_stream_queue_bytes
+        );
+        let mut invalid = limits;
+        invalid.logical_named_stream_bytes += 1;
+        assert_eq!(invalid.validate(), Err(ContractError::LimitExceeded));
+    }
+
+    #[test]
+    fn handshake_debug_redacts_bindings_after_accessor_preconditions() {
+        let offer = HandshakeOffer {
+            purpose: EndpointPurpose::LocalLifecycle,
+            purpose_class: PurposeClass::Local,
+            initiator_role: EndpointRole::ZoneController,
+            responder_role: EndpointRole::Component,
+            service: ServicePackage::ResourceV3,
+            schema_fingerprint: [0x51; 32],
+            noise_profile: NoiseProfile::Nn25519ChaChaPolySha256,
+            limits: LimitProfile::local_default(),
+            transport_binding: TransportBinding {
+                transport: TransportClass::UnixStream,
+                locality: Locality::HostLocal,
+                channel_binding: [0x52; 32],
+                identity_evidence: IdentityEvidenceRequirement::DirectionalUnix,
+            },
+            reconnect_generation: 1,
+            attachment_policy: AttachmentPolicy::disabled(),
+        };
+        let accept = HandshakeAccept {
+            offer: offer.clone(),
+            transcript_binding: [0x53; 32],
+        };
+        assert_eq!(offer.schema_fingerprint, [0x51; 32]);
+        assert_eq!(offer.transport_binding.channel_binding, [0x52; 32]);
+        assert_eq!(accept.transcript_binding, [0x53; 32]);
+        let raw_bindings = [
+            format!("{:?}", offer.schema_fingerprint),
+            format!("{:?}", offer.transport_binding.channel_binding),
+            format!("{:?}", accept.transcript_binding),
+        ];
+        let rendered = format!("{accept:?}");
+        for raw_binding in raw_bindings {
+            assert!(!rendered.contains(&raw_binding), "{rendered}");
+        }
+        assert!(rendered.contains("<redacted>"), "{rendered}");
     }
 }
 
