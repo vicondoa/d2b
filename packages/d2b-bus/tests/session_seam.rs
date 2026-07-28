@@ -9,7 +9,8 @@ use std::{
 use async_trait::async_trait;
 use d2b_bus::{
     BusAuthorizer, BusConfig, BusError, ComponentSessionAdmission, OperationId, OperationSpec,
-    ResourceCall, RouteGenerations, RouteKey, RouteMember, RouteTarget, ZoneBus, ZoneRegistrar,
+    ResourceCall, RouteGenerations, RouteKey, RouteMember, RouteTarget, UnixSubjectConfig, ZoneBus,
+    ZoneRegistrar,
 };
 use d2b_contracts::v3::{
     BindingDigest, ConfigurationGeneration, ControllerGeneration, EvidenceClass,
@@ -32,7 +33,7 @@ use d2b_session::{
     SessionDriverHandle, SessionEngine, TransportDescriptor, TransportError, TransportEvidence,
     TransportPacket, ttrpc_request_id, ttrpc_stream_id,
 };
-use d2b_session_unix::{SeqpacketSocket, UnixSubjectIdentity, prearmed_seqpacket_pair};
+use d2b_session_unix::{SeqpacketSocket, VerifiedUnixPeer, prearmed_seqpacket_pair};
 use tokio::sync::{Notify, mpsc};
 
 const PROVIDER_GENERATION: u64 = 2;
@@ -126,7 +127,7 @@ impl d2b_session::TransportWriter for TestTransportWriter {
         if let Some(pause) = &self.writer_pause {
             if !pause.entered.swap(true, Ordering::AcqRel) {
                 pause.notify.notify_waiters();
-                std::future::pending::<()>().await;
+                pause.release.notified().await;
             }
             pause.sent.fetch_add(1, Ordering::AcqRel);
         }
@@ -146,6 +147,7 @@ struct WriterPause {
     entered: AtomicBool,
     sent: AtomicUsize,
     notify: Notify,
+    release: Notify,
 }
 
 impl WriterPause {
@@ -266,8 +268,8 @@ async fn admit_with_writer_pause(
     let (proof_fd, _peer_fd) = prearmed_seqpacket_pair().unwrap();
     let proof_socket = SeqpacketSocket::from_parent_prearmed(proof_fd).unwrap();
     let expected_peer = proof_socket.acceptor_peer_credentials().unwrap();
-    let identity = if subject_ref.resource_type().as_str() == "Provider" {
-        UnixSubjectIdentity::provider(
+    let subject_config = if subject_ref.resource_type().as_str() == "Provider" {
+        UnixSubjectConfig::provider(
             subject_ref,
             subject_uid,
             ResourceRef::parse("Zone/dev").unwrap(),
@@ -276,7 +278,7 @@ async fn admit_with_writer_pause(
         )
         .unwrap()
     } else {
-        UnixSubjectIdentity::host(
+        UnixSubjectConfig::host(
             subject_ref,
             subject_uid,
             ResourceRef::parse("Zone/dev").unwrap(),
@@ -287,9 +289,10 @@ async fn admit_with_writer_pause(
         .unwrap()
     }
     .with_controller_generation(ControllerGeneration::new(CONTROLLER_GENERATION).unwrap());
-    let verified_identity = identity.verify_seqpacket(&proof_socket).unwrap();
+    registrar.register_unix_subject(subject_config).unwrap();
+    let verified_peer = VerifiedUnixPeer::verify_seqpacket(&proof_socket).unwrap();
     let session = registrar
-        .component_session_acceptor(policy, verified_identity)
+        .component_session_acceptor(policy, verified_peer)
         .unwrap()
         .admit(
             initiator.unwrap(),
@@ -365,6 +368,29 @@ fn bus_with_config(config: BusConfig) -> (ZoneBus, d2b_bus::ZoneRegistrar) {
         now_tick: 1,
     };
     ZoneBus::new(zone, BusAuthorizer::new(native, state).unwrap(), config).unwrap()
+}
+
+#[tokio::test]
+async fn verified_peer_evidence_cannot_author_a_subject_without_registrar_state() {
+    let (_bus, registrar) = bus();
+    let (proof_fd, _peer_fd) = prearmed_seqpacket_pair().unwrap();
+    let proof_socket = SeqpacketSocket::from_parent_prearmed(proof_fd).unwrap();
+    let verified_peer = VerifiedUnixPeer::verify_seqpacket(&proof_socket).unwrap();
+    let error = match registrar.component_session_acceptor(
+        policy(
+            ServicePackage::ResourceV3,
+            EndpointPurpose::ResourceService,
+            1,
+        ),
+        verified_peer,
+    ) {
+        Ok(_) => panic!("unmapped peer evidence minted a session acceptor"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        error.code(),
+        d2b_session::contract::SessionErrorCode::SubjectMismatch
+    );
 }
 
 #[tokio::test]
@@ -977,7 +1003,7 @@ async fn uncorrelatable_response_terminates_every_waiter() {
 }
 
 #[tokio::test]
-async fn revocation_fences_an_admitted_batch_before_transport_send() {
+async fn revocation_waits_for_an_admitted_batch_before_returning() {
     let (_bus, mut registrar) = bus();
     let pause = Arc::new(WriterPause::default());
     let (endpoint, _remote, endpoint_echo) = admit_with_writer_pause(
@@ -1034,13 +1060,18 @@ async fn revocation_fences_an_admitted_batch_before_transport_send() {
     )
     .await
     .expect("request batch must reach the paused writer");
-    registrar
-        .disconnect_component_session(endpoint)
-        .await
-        .unwrap();
+    let mut revocation = Box::pin(registrar.disconnect_component_session(endpoint));
+    tokio::select! {
+        result = &mut revocation => {
+            panic!("revocation returned before admitted transport send: {result:?}")
+        }
+        () = tokio::task::yield_now() => {}
+    }
+    pause.release.notify_one();
+    revocation.await.unwrap();
 
     assert!(invocation.await.unwrap().is_err());
-    assert_eq!(pause.sent.load(Ordering::Acquire), 0);
+    assert_eq!(pause.sent.load(Ordering::Acquire), 1);
     endpoint_echo.abort();
     caller_echo.abort();
 }

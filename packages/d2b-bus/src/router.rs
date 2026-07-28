@@ -9,26 +9,29 @@ use std::{
     time::{Duration, Instant},
 };
 
-use d2b_contracts::v3::{ResourceName, ResourceRef, ResourceTypeName, ZoneId};
+use d2b_contracts::v3::{
+    AuthenticatedSubjectContext, ControllerGeneration, EvidenceClass, Locality, ResourceGeneration,
+    ResourceName, ResourceRef, ResourceTypeName, ResourceUid, SessionBinding, ZoneId,
+};
 use d2b_resource_api::authz::{
     ApiMethod, AuthorizationRequest, AuthorizationState, AuthorizationTarget, PolicySet,
     ResourceVerb, SessionVerb,
 };
 use d2b_session::{
     AuthenticatedComponentSession, AuthenticatedSessionRouteBinding, AuthenticatedTtrpcHandle,
-    GENERATED_OPERATION_CATALOG, OperationKind, SessionAcceptor, SessionAuthorizationRequest,
-    SessionCancellationHandle, SessionOperation, SessionRegistrationCapability,
-    contract::EndpointPolicy, resource_operation, rewrite_ttrpc_stream_id, ttrpc_request_id,
-    ttrpc_stream_id,
+    GENERATED_OPERATION_CATALOG, OperationKind, SessionAcceptor, SessionAuthenticationBinding,
+    SessionAuthorizationRequest, SessionCancellationHandle, SessionOperation,
+    SessionRegistrationCapability, TransportEvidence, contract::EndpointPolicy, resource_operation,
+    rewrite_ttrpc_stream_id, ttrpc_request_id, ttrpc_stream_id,
 };
-use d2b_session_unix::VerifiedUnixSubject;
+use d2b_session_unix::{PeerCredentials, VerifiedUnixPeer};
 use tokio::sync::{Mutex as AsyncMutex, oneshot};
 
 use crate::{
     authorization::{AuthorizationError, BusAuthorizer},
     operations::{
-        CancelDispatch, Cancellation, OperationError, OperationId, OperationSpec, OperationTable,
-        SessionId,
+        CancelDeliveryAdmission, CancelDispatch, Cancellation, OperationError, OperationId,
+        OperationSpec, OperationTable, PendingCancelDeliveries, SessionId,
     },
     registry::{
         BusResponse, EndpointError, Registry, RegistryError, RouteKey, RouteTarget,
@@ -564,6 +567,7 @@ struct BusCore {
     registry: Mutex<Registry>,
     authorizer: Arc<BusAuthorizer>,
     operations: Mutex<OperationTable>,
+    cancel_deliveries: Mutex<PendingCancelDeliveries>,
     streams: Arc<StreamBridge>,
     clock: Arc<dyn BusClock>,
     max_payload_bytes: usize,
@@ -578,6 +582,7 @@ struct BusCore {
 struct InvocationHooks {
     after_resolve: Option<Arc<InvocationHook>>,
     before_invoke: Option<Arc<InvocationHook>>,
+    before_cancel_transition: Option<Arc<InvocationHook>>,
 }
 
 #[cfg(test)]
@@ -586,45 +591,82 @@ struct InvocationHook {
     release: tokio::sync::Notify,
 }
 
+struct PendingCancelDeliveryLease {
+    core: Arc<BusCore>,
+    operation: OperationId,
+    source: SessionId,
+    cancellation: Cancellation,
+}
+
+impl Drop for PendingCancelDeliveryLease {
+    fn drop(&mut self) {
+        self.core.lock_cancel_deliveries().complete(
+            &self.operation,
+            self.source,
+            &self.cancellation,
+        );
+    }
+}
+
 impl BusCore {
-    fn cleanup_session(self: &Arc<Self>, session: SessionId) {
-        self.lock_registry().invalidate(session);
+    fn begin_cleanup_session(
+        self: &Arc<Self>,
+        session: SessionId,
+    ) -> Option<crate::registry::SessionInvalidation> {
+        let invalidation = self.lock_registry().invalidate(session);
         self.lock_registry().remove(session);
         let targets = self.lock_operations().cancel_session(session);
         self.streams.cancel_session(session);
         self.dispatch_cancel_targets(targets);
+        invalidation
+    }
+
+    async fn cleanup_session(self: &Arc<Self>, session: SessionId) {
+        if let Some(invalidation) = self.begin_cleanup_session(session) {
+            invalidation.await;
+        }
     }
 
     fn dispatch_cancel_targets(self: &Arc<Self>, targets: Vec<CancelDispatch>) {
         for dispatch in targets {
+            if dispatch.target.route.generations().session() != dispatch.target.generation {
+                self.observe_error(BusEvent::Cancel, &BusError::SessionMismatch);
+                continue;
+            }
+            match self.lock_cancel_deliveries().admit(&dispatch) {
+                CancelDeliveryAdmission::Duplicate => continue,
+                CancelDeliveryAdmission::Full => {
+                    self.observer
+                        .record(BusEvent::Cancel, BusFailureReason::Abandoned);
+                    continue;
+                }
+                CancelDeliveryAdmission::Admitted => {}
+            }
             let CancelDispatch {
                 operation,
                 source,
                 target,
             } = dispatch;
-            if target.route.generations().session() != target.generation {
-                self.observe_error(BusEvent::Cancel, &BusError::SessionMismatch);
-                continue;
-            }
             if let Ok(runtime) = tokio::runtime::Handle::try_current() {
                 let core = Arc::clone(self);
                 runtime.spawn(async move {
-                    match target
+                    let _pending = PendingCancelDeliveryLease {
+                        core: Arc::clone(&core),
+                        operation: operation.clone(),
+                        source,
+                        cancellation: target.cancellation.clone(),
+                    };
+                    if let Err(error) = target
                         .endpoint
                         .cancel(&operation, &target.cancellation)
                         .await
                     {
-                        Ok(()) => core.lock_operations().complete_abort(
-                            &operation,
-                            source,
-                            &target.cancellation,
-                        ),
-                        Err(error) => {
-                            core.observe_error(BusEvent::Cancel, &BusError::Endpoint(error));
-                        }
+                        core.observe_error(BusEvent::Cancel, &BusError::Endpoint(error));
                     }
                 });
             } else {
+                self.lock_cancel_deliveries()
+                    .complete(&operation, source, &target.cancellation);
                 self.observer
                     .record(BusEvent::Cancel, BusFailureReason::Abandoned);
             }
@@ -644,6 +686,12 @@ impl BusCore {
 
     fn lock_operations(&self) -> MutexGuard<'_, OperationTable> {
         self.operations
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn lock_cancel_deliveries(&self) -> MutexGuard<'_, PendingCancelDeliveries> {
+        self.cancel_deliveries
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
@@ -787,6 +835,7 @@ impl ZoneBus {
             zone,
             authorizer: Arc::new(authorizer),
             operations: Mutex::new(operations),
+            cancel_deliveries: Mutex::new(PendingCancelDeliveries::new(config.max_operations)),
             streams,
             clock,
             max_payload_bytes: config.max_payload_bytes,
@@ -804,6 +853,8 @@ impl ZoneBus {
                 component_admission: ComponentSessionRegistrar {
                     identity: Arc::new(ComponentSessionAdmissionIdentity),
                 },
+                unix_subjects: Mutex::new(Vec::new()),
+                max_pending_unix_subjects: config.max_total_routes,
             },
         ))
     }
@@ -830,10 +881,196 @@ impl core::fmt::Debug for ZoneBus {
     }
 }
 
+enum UnixSubjectKind {
+    Host,
+    Guest,
+    Provider,
+}
+
+/// Configured Unix subject mapping consumed into one Zone registrar.
+pub struct UnixSubjectConfig {
+    kind: UnixSubjectKind,
+    subject_ref: ResourceRef,
+    subject_uid: ResourceUid,
+    zone_ref: ResourceRef,
+    expected_peer: PeerCredentials,
+    provider_ref: Option<ResourceRef>,
+    provider_generation: Option<ResourceGeneration>,
+    controller_generation: Option<ControllerGeneration>,
+}
+
+impl UnixSubjectConfig {
+    /// Configure a Host subject mapping.
+    pub fn host(
+        subject_ref: ResourceRef,
+        subject_uid: ResourceUid,
+        zone_ref: ResourceRef,
+        expected_peer: PeerCredentials,
+    ) -> d2b_session::Result<Self> {
+        Self::new(
+            UnixSubjectKind::Host,
+            subject_ref,
+            subject_uid,
+            zone_ref,
+            expected_peer,
+        )
+    }
+
+    /// Configure a Guest subject mapping.
+    pub fn guest(
+        subject_ref: ResourceRef,
+        subject_uid: ResourceUid,
+        zone_ref: ResourceRef,
+        expected_peer: PeerCredentials,
+    ) -> d2b_session::Result<Self> {
+        Self::new(
+            UnixSubjectKind::Guest,
+            subject_ref,
+            subject_uid,
+            zone_ref,
+            expected_peer,
+        )
+    }
+
+    /// Configure a Provider subject mapping.
+    pub fn provider(
+        subject_ref: ResourceRef,
+        subject_uid: ResourceUid,
+        zone_ref: ResourceRef,
+        expected_peer: PeerCredentials,
+        provider_generation: ResourceGeneration,
+    ) -> d2b_session::Result<Self> {
+        let mut config = Self::new(
+            UnixSubjectKind::Provider,
+            subject_ref,
+            subject_uid,
+            zone_ref,
+            expected_peer,
+        )?;
+        config.provider_ref = Some(config.subject_ref.clone());
+        config.provider_generation = Some(provider_generation);
+        Ok(config)
+    }
+
+    fn new(
+        kind: UnixSubjectKind,
+        subject_ref: ResourceRef,
+        subject_uid: ResourceUid,
+        zone_ref: ResourceRef,
+        expected_peer: PeerCredentials,
+    ) -> d2b_session::Result<Self> {
+        let expected_type = match kind {
+            UnixSubjectKind::Host => "Host",
+            UnixSubjectKind::Guest => "Guest",
+            UnixSubjectKind::Provider => "Provider",
+        };
+        if subject_ref.resource_type().as_str() != expected_type
+            || zone_ref.resource_type().as_str() != "Zone"
+        {
+            return Err(d2b_session::SessionError::new(
+                d2b_session::contract::SessionErrorCode::SubjectMismatch,
+            ));
+        }
+        Ok(Self {
+            kind,
+            subject_ref,
+            subject_uid,
+            zone_ref,
+            expected_peer,
+            provider_ref: None,
+            provider_generation: None,
+            controller_generation: None,
+        })
+    }
+
+    /// Bind a Provider selected by trusted registrar configuration.
+    pub fn with_provider(
+        mut self,
+        provider_ref: ResourceRef,
+        generation: ResourceGeneration,
+    ) -> d2b_session::Result<Self> {
+        if provider_ref.resource_type().as_str() != "Provider" {
+            return Err(d2b_session::SessionError::new(
+                d2b_session::contract::SessionErrorCode::SubjectMismatch,
+            ));
+        }
+        self.provider_ref = Some(provider_ref);
+        self.provider_generation = Some(generation);
+        Ok(self)
+    }
+
+    /// Bind a controller generation selected by trusted registrar configuration.
+    pub fn with_controller_generation(mut self, generation: ControllerGeneration) -> Self {
+        self.controller_generation = Some(generation);
+        self
+    }
+
+    fn bind(
+        self,
+        peer: VerifiedUnixPeer,
+        evidence: &TransportEvidence,
+        binding: &SessionAuthenticationBinding,
+        expected_zone: &ZoneId,
+    ) -> d2b_session::Result<AuthenticatedSubjectContext> {
+        let expected_type = match self.kind {
+            UnixSubjectKind::Host => "Host",
+            UnixSubjectKind::Guest => "Guest",
+            UnixSubjectKind::Provider => "Provider",
+        };
+        peer.validate_transport(binding.transport_class())?;
+        if peer.credentials() != self.expected_peer
+            || evidence.class() != EvidenceClass::UnixPeer
+            || binding.evidence_class() != EvidenceClass::UnixPeer
+            || binding.transport_binding().locality() != Locality::Local
+            || self.subject_ref.resource_type().as_str() != expected_type
+            || self.zone_ref.name().as_str() != expected_zone.as_str()
+            || evidence.binding_digest() != binding.transport_binding().binding_digest()
+        {
+            return Err(d2b_session::SessionError::new(
+                d2b_session::contract::SessionErrorCode::SubjectMismatch,
+            ));
+        }
+        let subject_ref = self.subject_ref;
+        let mut context = AuthenticatedSubjectContext::new(
+            subject_ref.clone(),
+            self.subject_uid,
+            self.zone_ref,
+            EvidenceClass::UnixPeer,
+            binding.purpose().clone(),
+            binding.service().clone(),
+            SessionBinding::new(
+                binding.schema_fingerprint().clone(),
+                binding.transport_binding().clone(),
+                binding.reconnect_generation(),
+                binding.transcript_hash().clone(),
+            ),
+        );
+        if let (Some(provider_ref), Some(provider_generation)) =
+            (self.provider_ref, self.provider_generation)
+        {
+            context = context
+                .with_provider_ref(provider_ref)
+                .with_provider_generation(provider_generation);
+        }
+        if let Some(controller_generation) = self.controller_generation {
+            context = context.with_controller_generation(controller_generation);
+        }
+        Ok(context)
+    }
+}
+
+impl core::fmt::Debug for UnixSubjectConfig {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("UnixSubjectConfig(<redacted>)")
+    }
+}
+
 /// Single, non-cloneable authority that consumes authenticated registrations.
 pub struct ZoneRegistrar {
     core: Arc<BusCore>,
     component_admission: ComponentSessionRegistrar,
+    unix_subjects: Mutex<Vec<UnixSubjectConfig>>,
+    max_pending_unix_subjects: usize,
 }
 
 struct ComponentSessionAdmissionIdentity;
@@ -867,6 +1104,46 @@ impl SessionRegistrationCapability<ComponentSessionRegistrar> for ComponentSessi
 }
 
 impl ZoneRegistrar {
+    /// Consume one configured mapping into this registrar's private admission state.
+    pub fn register_unix_subject(&self, subject: UnixSubjectConfig) -> d2b_session::Result<()> {
+        if subject.zone_ref.name().as_str() != self.core.zone.as_str() {
+            return Err(d2b_session::SessionError::new(
+                d2b_session::contract::SessionErrorCode::SubjectMismatch,
+            ));
+        }
+        let mut subjects = self
+            .unix_subjects
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if subjects.len() >= self.max_pending_unix_subjects
+            || subjects
+                .iter()
+                .any(|pending| pending.expected_peer == subject.expected_peer)
+        {
+            return Err(d2b_session::SessionError::new(
+                d2b_session::contract::SessionErrorCode::SubjectMismatch,
+            ));
+        }
+        subjects.push(subject);
+        Ok(())
+    }
+
+    fn take_unix_subject(&self, peer: PeerCredentials) -> d2b_session::Result<UnixSubjectConfig> {
+        let mut subjects = self
+            .unix_subjects
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let index = subjects
+            .iter()
+            .position(|subject| subject.expected_peer == peer)
+            .ok_or_else(|| {
+                d2b_session::SessionError::new(
+                    d2b_session::contract::SessionErrorCode::SubjectMismatch,
+                )
+            })?;
+        Ok(subjects.swap_remove(index))
+    }
+
     #[cfg(test)]
     pub(crate) fn register(
         &mut self,
@@ -886,7 +1163,7 @@ impl ZoneRegistrar {
 
     /// Replace a session with the exact next reconnect generation.
     #[cfg(test)]
-    pub(crate) fn reconnect(
+    pub(crate) async fn reconnect(
         &mut self,
         mut previous: BusIngress,
         registration: SessionRegistration,
@@ -898,6 +1175,13 @@ impl ZoneRegistrar {
         self.core
             .authorizer
             .authorize_connect(context, &self.core.zone)?;
+        self.core
+            .lock_registry()
+            .validate_reconnect(previous.session, &registration)?;
+        let invalidation = self.core.lock_registry().invalidate(previous.session);
+        if let Some(invalidation) = invalidation {
+            invalidation.await;
+        }
         let session = self
             .core
             .lock_registry()
@@ -1167,14 +1451,19 @@ impl ComponentActivity {
             .cloned()
     }
 
-    fn revoke(&mut self) {
+    fn revoke(&mut self) -> Vec<crate::registry::SessionInvalidation> {
         self.revoked = true;
-        for requests in self.requests.values() {
-            for request in requests {
+        self.requests
+            .values()
+            .flat_map(|requests| requests.iter())
+            .map(|request| {
                 request.valid.store(false, Ordering::Release);
-                request.write_guard.cancel();
-            }
-        }
+                let revocation = request.write_guard.cancel_and_wait();
+                Box::pin(async move {
+                    revocation.await;
+                }) as crate::registry::SessionInvalidation
+            })
+            .collect()
     }
 }
 
@@ -1227,12 +1516,17 @@ impl ComponentEndpoint {
 
 #[async_trait::async_trait]
 impl crate::registry::BusEndpoint for ComponentEndpoint {
-    fn invalidate_session(&self) {
-        let mut activity = self
+    fn invalidate_session(&self) -> crate::registry::SessionInvalidation {
+        let revocations = self
             .activity
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        activity.revoke();
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .revoke();
+        Box::pin(async move {
+            for revocation in revocations {
+                revocation.await;
+            }
+        })
     }
 
     async fn authorize(
@@ -1424,18 +1718,20 @@ impl ZoneRegistrar {
     pub fn component_session_acceptor(
         &self,
         policy: EndpointPolicy,
-        verified_identity: VerifiedUnixSubject,
+        verified_peer: VerifiedUnixPeer,
     ) -> d2b_session::Result<SessionAcceptor<ComponentSessionAdmission>> {
+        verified_peer.validate_transport(policy.transport_binding.transport)?;
+        let subject = self.take_unix_subject(verified_peer.credentials())?;
         let connect_authorizer = Arc::clone(&self.core.authorizer);
         let request_authorizer = Arc::clone(&self.core.authorizer);
         SessionAcceptor::from_verified_adapter(
             policy,
             self.core.zone.clone(),
             move |evidence, binding, expected_zone, now_tick| {
-                let subject = verified_identity.bind(&evidence, binding, expected_zone)?;
+                let context = subject.bind(verified_peer, &evidence, binding, expected_zone)?;
                 let lease =
-                    connect_authorizer.authenticate_session(&subject, expected_zone, now_tick)?;
-                Ok((subject, lease))
+                    connect_authorizer.authenticate_session(&context, expected_zone, now_tick)?;
+                Ok((context, lease))
             },
             move |subject, request, previous_lease, now_tick| {
                 request_authorizer.authorize_session(subject, request, previous_lease, now_tick)
@@ -1524,6 +1820,13 @@ impl ZoneRegistrar {
             )),
         });
         let registration = SessionRegistration::admitted(binding, routes, endpoint);
+        self.core
+            .lock_registry()
+            .validate_reconnect(previous.session, &registration)?;
+        let invalidation = self.core.lock_registry().invalidate(previous.session);
+        if let Some(invalidation) = invalidation {
+            invalidation.await;
+        }
         let session = self
             .core
             .lock_registry()
@@ -1543,7 +1846,7 @@ impl ZoneRegistrar {
         &mut self,
         registration: BusIngress,
     ) -> Result<(), BusError> {
-        self.revoke(registration)
+        self.revoke(registration).await
     }
 }
 
@@ -1590,11 +1893,11 @@ fn routes_for_admitted_session(
 
 impl ZoneRegistrar {
     /// Revoke a session, its routes, operations, and streams.
-    pub fn revoke(&mut self, mut ingress: BusIngress) -> Result<(), BusError> {
+    pub async fn revoke(&mut self, mut ingress: BusIngress) -> Result<(), BusError> {
         if !Arc::ptr_eq(&self.core, &ingress.core) || ingress.closed {
             return Err(BusError::SessionMismatch);
         }
-        self.core.cleanup_session(ingress.session);
+        self.core.cleanup_session(ingress.session).await;
         ingress.closed = true;
         Ok(())
     }
@@ -1651,7 +1954,7 @@ impl OperationLease {
         Ok(())
     }
 
-    fn abort(&mut self) -> Option<crate::operations::CancelTarget> {
+    fn abort(&mut self) -> Option<CancelDispatch> {
         if !self.armed {
             return None;
         }
@@ -1664,39 +1967,10 @@ impl OperationLease {
 
 impl Drop for OperationLease {
     fn drop(&mut self) {
-        let Some(target) = self.abort() else {
+        let Some(dispatch) = self.abort() else {
             return;
         };
-        if target.route.generations().session() != target.generation {
-            self.core
-                .observe_error(BusEvent::Cancel, &BusError::SessionMismatch);
-            return;
-        }
-        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            let core = Arc::clone(&self.core);
-            let operation = self.operation.clone();
-            let source = self.source;
-            runtime.spawn(async move {
-                match target
-                    .endpoint
-                    .cancel(&operation, &target.cancellation)
-                    .await
-                {
-                    Ok(()) => core.lock_operations().complete_abort(
-                        &operation,
-                        source,
-                        &target.cancellation,
-                    ),
-                    Err(error) => {
-                        core.observe_error(BusEvent::Cancel, &BusError::Endpoint(error));
-                    }
-                }
-            });
-        } else {
-            self.core
-                .observer
-                .record(BusEvent::Cancel, BusFailureReason::Abandoned);
-        }
+        self.core.dispatch_cancel_targets(vec![dispatch]);
     }
 }
 
@@ -1828,21 +2102,8 @@ impl BusIngress {
             InvokeOutcome::Response(response) => response,
             InvokeOutcome::Cancelled => return Err(BusError::Cancelled),
             InvokeOutcome::Deadline => {
-                if let Some(target) = lease.abort() {
-                    match target
-                        .endpoint
-                        .cancel(operation.id(), &target.cancellation)
-                        .await
-                    {
-                        Ok(()) => self.core.lock_operations().complete_abort(
-                            operation.id(),
-                            self.session,
-                            &target.cancellation,
-                        ),
-                        Err(error) => self
-                            .core
-                            .observe_error(BusEvent::Cancel, &BusError::Endpoint(error)),
-                    }
+                if let Some(dispatch) = lease.abort() {
+                    self.core.dispatch_cancel_targets(vec![dispatch]);
                 }
                 return Err(BusError::Operation(OperationError::DeadlineExceeded));
             }
@@ -1961,21 +2222,8 @@ impl BusIngress {
             StreamOutcome::Cancelled => return Err(BusError::Cancelled),
             StreamOutcome::Deadline => {
                 let mut lease = lease;
-                if let Some(target) = lease.abort() {
-                    match target
-                        .endpoint
-                        .cancel(operation.id(), &target.cancellation)
-                        .await
-                    {
-                        Ok(()) => self.core.lock_operations().complete_abort(
-                            operation.id(),
-                            self.session,
-                            &target.cancellation,
-                        ),
-                        Err(error) => self
-                            .core
-                            .observe_error(BusEvent::Cancel, &BusError::Endpoint(error)),
-                    }
+                if let Some(dispatch) = lease.abort() {
+                    self.core.dispatch_cancel_targets(vec![dispatch]);
                 }
                 return Err(BusError::Operation(OperationError::DeadlineExceeded));
             }
@@ -1998,26 +2246,24 @@ impl BusIngress {
 
     async fn cancel_inner(&self, operation: &OperationId) -> Result<(), BusError> {
         self.ensure_open()?;
-        if self
+        let Some(admission) = self
             .core
             .lock_operations()
-            .cancellation_complete(operation, self.session)?
-        {
+            .cancel_admission(operation, self.session)?
+        else {
             return Ok(());
-        }
-        let route = self
-            .core
-            .lock_operations()
-            .route_for_cancel(operation, self.session)?;
+        };
         let source = self.core.lock_registry().source(self.session)?;
         if let Some(context) = source.context.as_ref() {
-            self.core.authorizer.authorize_cancel(context, &route)?;
+            self.core
+                .authorizer
+                .authorize_cancel(context, &admission.route)?;
         }
         if source.session_authorization {
             source
                 .endpoint
                 .authorize(
-                    &route,
+                    &admission.route,
                     SessionVerb::Cancel,
                     None,
                     self.core.clock.now_tick(),
@@ -2025,27 +2271,17 @@ impl BusIngress {
                 .await
                 .map_err(BusError::Endpoint)?;
         }
-        let Some(target) = self
-            .core
-            .lock_operations()
-            .cancel(operation, self.session)?
+        #[cfg(test)]
+        self.wait_for_cancel_transition_hook().await;
+        let Some(dispatch) =
+            self.core
+                .lock_operations()
+                .cancel_admitted(operation, self.session, &admission)?
         else {
             return Ok(());
         };
-        debug_assert!(target.cancellation.is_cancelled());
-        if target.route.generations().session() != target.generation {
-            return Err(BusError::SessionMismatch);
-        }
-        target
-            .endpoint
-            .cancel(operation, &target.cancellation)
-            .await
-            .map_err(BusError::Endpoint)?;
-        self.core.lock_operations().complete_cancel(
-            operation,
-            self.session,
-            &target.cancellation,
-        )?;
+        debug_assert!(dispatch.target.cancellation.is_cancelled());
+        self.core.dispatch_cancel_targets(vec![dispatch]);
         Ok(())
     }
 
@@ -2076,6 +2312,21 @@ impl BusIngress {
             hook.release.notified().await;
         }
     }
+
+    #[cfg(test)]
+    async fn wait_for_cancel_transition_hook(&self) {
+        let hook = self
+            .core
+            .invocation_hooks
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .before_cancel_transition
+            .clone();
+        if let Some(hook) = hook {
+            hook.reached.notify_one();
+            hook.release.notified().await;
+        }
+    }
 }
 
 impl core::fmt::Debug for BusIngress {
@@ -2090,7 +2341,11 @@ impl Drop for BusIngress {
             self.core
                 .observer
                 .record(BusEvent::Cleanup, BusFailureReason::Abandoned);
-            self.core.cleanup_session(self.session);
+            if let Some(invalidation) = self.core.begin_cleanup_session(self.session)
+                && let Ok(runtime) = tokio::runtime::Handle::try_current()
+            {
+                runtime.spawn(invalidation);
+            }
             self.closed = true;
         }
     }
@@ -2328,9 +2583,11 @@ mod tests {
             })
         }
 
-        fn failing_first_cancel() -> Arc<Self> {
+        fn failing_cancel() -> Arc<Self> {
             let endpoint = Self::blocking();
-            endpoint.cancel_failures.store(1, Ordering::Release);
+            endpoint
+                .cancel_failures
+                .store(usize::MAX, Ordering::Release);
             endpoint
         }
 
@@ -2453,7 +2710,7 @@ mod tests {
                 .is_same_attempt(&second_attempt)
         );
 
-        activity.revoke();
+        let _ = activity.revoke();
         assert!(!second_valid.load(Ordering::Acquire));
         assert!(second_write_guard.is_cancelled());
         assert!(!activity.insert(
@@ -2905,7 +3162,7 @@ mod tests {
             Err(BusError::InvalidResourceCall)
         );
         assert_eq!(harness.endpoint.call_count(), 1);
-        harness.registrar.revoke(resource_ingress).unwrap();
+        harness.registrar.revoke(resource_ingress).await.unwrap();
 
         let unregistered = RouteKey::new(
             harness.route.zone().clone(),
@@ -3241,7 +3498,7 @@ mod tests {
             Locality::Local,
             EvidenceClass::EnrolledKk,
         );
-        list.registrar.revoke(list.endpoint_ingress).unwrap();
+        list.registrar.revoke(list.endpoint_ingress).await.unwrap();
         list.endpoint_ingress = list
             .registrar
             .register(SessionRegistration::new(
@@ -3377,6 +3634,7 @@ mod tests {
                 endpoint_ingress,
                 SessionRegistration::new(new_endpoint, vec![new_route.clone()], endpoint.clone()),
             )
+            .await
             .unwrap();
         let new_caller = context(
             "User/alice",
@@ -3392,6 +3650,7 @@ mod tests {
                 caller,
                 SessionRegistration::new(new_caller, Vec::new(), endpoint.clone()),
             )
+            .await
             .unwrap();
         assert_eq!(
             caller
@@ -3451,7 +3710,7 @@ mod tests {
         );
         let revoke = async {
             hook.reached.notified().await;
-            registrar.revoke(harness.endpoint_ingress).unwrap();
+            registrar.revoke(harness.endpoint_ingress).await.unwrap();
             hook.release.notify_one();
         };
         let (result, ()) = tokio::join!(invoke, revoke);
@@ -3492,7 +3751,7 @@ mod tests {
         );
         let revoke = async {
             hook.reached.notified().await;
-            registrar.revoke(harness.endpoint_ingress).unwrap();
+            registrar.revoke(harness.endpoint_ingress).await.unwrap();
             hook.release.notify_one();
         };
         let (result, ()) = tokio::join!(invoke, revoke);
@@ -3523,7 +3782,7 @@ mod tests {
         );
         let revoke = async {
             endpoint.started.notified().await;
-            registrar.revoke(harness.endpoint_ingress).unwrap();
+            registrar.revoke(harness.endpoint_ingress).await.unwrap();
         };
         let (result, ()) = tokio::join!(invoke, revoke);
         assert_eq!(result, Err(BusError::Cancelled));
@@ -3579,6 +3838,7 @@ mod tests {
                 }
                 registrar
                     .reconnect(harness.endpoint_ingress, replacement)
+                    .await
                     .unwrap();
                 if let Some(hook) = &hook {
                     hook.release.notify_one();
@@ -3626,8 +3886,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cancellation_retries_delivery_and_retains_terminal_success() {
-        let endpoint = RecordingEndpoint::failing_first_cancel();
+    async fn cancellation_revalidates_the_attempt_after_authorization() {
+        let endpoint = RecordingEndpoint::blocking();
         let harness = harness(HarnessSpec {
             service: "d2b.resource.v3",
             member: RouteMember::method("ResourceService/Get").unwrap(),
@@ -3642,28 +3902,107 @@ mod tests {
             resource_verbs: vec![ResourceVerb::Get],
             endpoint: endpoint.clone(),
         });
-        let id = OperationId::parse("retry-cancel").unwrap();
-        let invoke = harness.caller.invoke_resource(
+        let hook = Arc::new(InvocationHook {
+            reached: Notify::new(),
+            release: Notify::new(),
+        });
+        harness
+            .caller
+            .core
+            .invocation_hooks
+            .lock()
+            .unwrap()
+            .before_cancel_transition = Some(Arc::clone(&hook));
+        let id = OperationId::parse("cancel-admission-race").unwrap();
+        let mut first = Box::pin(harness.caller.invoke_resource(
             harness.route.clone(),
             OperationSpec::new(id.clone(), 100).unwrap(),
             ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
             Vec::new(),
-        );
-        let first_cancel = async {
-            endpoint.started.notified().await;
-            harness.caller.cancel(&id).await
-        };
-        let (invoke_result, first_result) = tokio::join!(invoke, first_cancel);
-        assert_eq!(invoke_result, Err(BusError::Cancelled));
+        ));
+        tokio::select! {
+            result = &mut first => panic!("first attempt unexpectedly completed: {result:?}"),
+            () = endpoint.started.notified() => {}
+        }
+        let mut cancel = Box::pin(harness.caller.cancel(&id));
+        tokio::select! {
+            result = &mut cancel => panic!("cancel unexpectedly completed: {result:?}"),
+            () = hook.reached.notified() => {}
+        }
+
+        endpoint.release.notify_one();
+        assert!(first.await.is_ok());
+        let mut replacement = Box::pin(harness.caller.invoke_resource(
+            harness.route.clone(),
+            OperationSpec::new(id.clone(), 100).unwrap(),
+            ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
+            Vec::new(),
+        ));
+        tokio::select! {
+            result = &mut replacement => {
+                panic!("replacement attempt unexpectedly completed: {result:?}")
+            }
+            () = endpoint.started.notified() => {}
+        }
+
+        hook.release.notify_one();
         assert_eq!(
-            first_result,
-            Err(BusError::Endpoint(EndpointError::Unavailable))
+            cancel.await,
+            Err(BusError::Operation(OperationError::OperationNotFound))
+        );
+        assert_eq!(endpoint.cancellation_count(), 0);
+        endpoint.release.notify_one();
+        assert!(replacement.await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn cancellation_delivery_failure_never_holds_operation_capacity() {
+        let endpoint = RecordingEndpoint::failing_cancel();
+        let harness = harness_with_config(
+            HarnessSpec {
+                service: "d2b.resource.v3",
+                member: RouteMember::method("ResourceService/Get").unwrap(),
+                caller_ref: "User/alice",
+                locality: Locality::Local,
+                evidence: EvidenceClass::UnixPeer,
+                session_verbs: vec![
+                    SessionVerb::Connect,
+                    SessionVerb::Invoke,
+                    SessionVerb::Cancel,
+                ],
+                resource_verbs: vec![ResourceVerb::Get],
+                endpoint: endpoint.clone(),
+            },
+            BusConfig {
+                max_operations: 1,
+                max_operations_per_session: 1,
+                ..BusConfig::default()
+            },
         );
 
-        assert_eq!(harness.caller.cancel(&id).await, Ok(()));
-        assert_eq!(endpoint.cancellation_count(), 2);
-        assert_eq!(harness.caller.cancel(&id).await, Ok(()));
-        assert_eq!(endpoint.cancellation_count(), 2);
+        for index in 0..3 {
+            let id = OperationId::parse(format!("failed-cancel-{index}")).unwrap();
+            let invoke = harness.caller.invoke_resource(
+                harness.route.clone(),
+                OperationSpec::new(id.clone(), 100).unwrap(),
+                ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
+                Vec::new(),
+            );
+            let cancel = async {
+                while endpoint.call_count() <= index {
+                    tokio::task::yield_now().await;
+                }
+                harness.caller.cancel(&id).await
+            };
+            let (invoke_result, cancel_result) = tokio::join!(invoke, cancel);
+            assert_eq!(invoke_result, Err(BusError::Cancelled));
+            assert_eq!(cancel_result, Ok(()));
+            while endpoint.cancellation_count() <= index {
+                tokio::task::yield_now().await;
+            }
+        }
+        assert_eq!(endpoint.call_count(), 3);
+        assert_eq!(endpoint.cancellation_count(), 3);
     }
 
     #[tokio::test]
@@ -3835,8 +4174,8 @@ mod tests {
             .caller
             .core
             .lock_operations()
-            .route_for_cancel(operation.id(), harness.caller.session)
-            .is_ok()
+            .cancel_admission(operation.id(), harness.caller.session)
+            .is_ok_and(|admission| admission.is_some())
         {
             tokio::task::yield_now().await;
         }

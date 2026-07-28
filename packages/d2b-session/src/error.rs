@@ -56,15 +56,19 @@ impl SessionError {
         match self.code {
             SessionErrorCode::AuthenticationFailed
             | SessionErrorCode::TranscriptMismatch
-            | SessionErrorCode::IdentityEvidenceMismatch => SessionErrorClass::Authentication,
+            | SessionErrorCode::IdentityEvidenceMismatch
+            | SessionErrorCode::SubjectMismatch => SessionErrorClass::Authentication,
             SessionErrorCode::PolicyDenied
             | SessionErrorCode::PurposeMismatch
             | SessionErrorCode::PurposeClassMismatch
             | SessionErrorCode::RoleMismatch
             | SessionErrorCode::ServiceMismatch
             | SessionErrorCode::SchemaMismatch
-            | SessionErrorCode::ChannelBindingMismatch => SessionErrorClass::Authorization,
-            SessionErrorCode::GenerationMismatch => SessionErrorClass::Generation,
+            | SessionErrorCode::ChannelBindingMismatch
+            | SessionErrorCode::BootstrapOperationMismatch => SessionErrorClass::Authorization,
+            SessionErrorCode::GenerationMismatch | SessionErrorCode::NonceExhausted => {
+                SessionErrorClass::Generation
+            }
             SessionErrorCode::QueueBackpressure
             | SessionErrorCode::ControlResourceExhausted
             | SessionErrorCode::AttachmentCreditExceeded
@@ -72,12 +76,15 @@ impl SessionError {
             SessionErrorCode::HandshakeTimeout
             | SessionErrorCode::DeadlineInvalid
             | SessionErrorCode::DeadlineExpired
-            | SessionErrorCode::KeepaliveTimeout => SessionErrorClass::Deadline,
+            | SessionErrorCode::KeepaliveTimeout
+            | SessionErrorCode::BootstrapExpired => SessionErrorClass::Deadline,
             SessionErrorCode::Cancelled => SessionErrorClass::Cancellation,
-            SessionErrorCode::SessionDisconnected => SessionErrorClass::Transport,
-            SessionErrorCode::ArithmeticOverflow | SessionErrorCode::InternalInvariant => {
-                SessionErrorClass::Internal
+            SessionErrorCode::SessionDisconnected | SessionErrorCode::TransportMismatch => {
+                SessionErrorClass::Transport
             }
+            SessionErrorCode::SchedulerStalled
+            | SessionErrorCode::ArithmeticOverflow
+            | SessionErrorCode::InternalInvariant => SessionErrorClass::Internal,
             SessionErrorCode::MalformedPreface
             | SessionErrorCode::UnsupportedVersion
             | SessionErrorCode::MalformedHandshake
@@ -87,7 +94,6 @@ impl SessionError {
             | SessionErrorCode::RecordMalformed
             | SessionErrorCode::RecordReplay
             | SessionErrorCode::RecordOutOfOrder
-            | SessionErrorCode::NonceExhausted
             | SessionErrorCode::FragmentTruncated
             | SessionErrorCode::FragmentDuplicate
             | SessionErrorCode::FragmentReordered
@@ -102,26 +108,66 @@ impl SessionError {
             | SessionErrorCode::AttachmentObjectMismatch
             | SessionErrorCode::AttachmentAccessMismatch
             | SessionErrorCode::AttachmentMissingCloexec
-            | SessionErrorCode::SchedulerStalled
-            | SessionErrorCode::BootstrapExpired
-            | SessionErrorCode::BootstrapReplayed
-            | SessionErrorCode::BootstrapOperationMismatch
-            | SessionErrorCode::SubjectMismatch
-            | SessionErrorCode::TransportMismatch => SessionErrorClass::Protocol,
+            | SessionErrorCode::BootstrapReplayed => SessionErrorClass::Protocol,
         }
     }
 
     pub const fn remediation(self) -> Remediation {
-        match self.class() {
-            SessionErrorClass::Authentication => Remediation::ReEnrollPeer,
-            SessionErrorClass::Authorization => Remediation::RepairConfiguration,
-            SessionErrorClass::Generation => Remediation::ReplaceGeneration,
-            SessionErrorClass::Backpressure => Remediation::ReduceLoad,
-            SessionErrorClass::Deadline => Remediation::RetryBounded,
-            SessionErrorClass::Cancellation => Remediation::None,
-            SessionErrorClass::Transport => Remediation::RestartAgent,
-            SessionErrorClass::Protocol => Remediation::RepairConfiguration,
-            SessionErrorClass::Internal => Remediation::RestartAgent,
+        match self.code {
+            SessionErrorCode::AuthenticationFailed
+            | SessionErrorCode::TranscriptMismatch
+            | SessionErrorCode::IdentityEvidenceMismatch
+            | SessionErrorCode::SubjectMismatch => Remediation::ReEnrollPeer,
+            SessionErrorCode::GenerationMismatch | SessionErrorCode::NonceExhausted => {
+                Remediation::ReplaceGeneration
+            }
+            SessionErrorCode::QueueBackpressure
+            | SessionErrorCode::ControlResourceExhausted
+            | SessionErrorCode::AttachmentCreditExceeded
+            | SessionErrorCode::ReassemblyLimitExceeded => Remediation::ReduceLoad,
+            SessionErrorCode::HandshakeTimeout
+            | SessionErrorCode::DeadlineInvalid
+            | SessionErrorCode::DeadlineExpired
+            | SessionErrorCode::KeepaliveTimeout
+            | SessionErrorCode::BootstrapExpired => Remediation::RetryBounded,
+            SessionErrorCode::Cancelled => Remediation::None,
+            SessionErrorCode::SessionDisconnected
+            | SessionErrorCode::SchedulerStalled
+            | SessionErrorCode::ArithmeticOverflow
+            | SessionErrorCode::InternalInvariant => Remediation::RestartAgent,
+            SessionErrorCode::MalformedPreface
+            | SessionErrorCode::UnsupportedVersion
+            | SessionErrorCode::MalformedHandshake
+            | SessionErrorCode::PurposeMismatch
+            | SessionErrorCode::PurposeClassMismatch
+            | SessionErrorCode::RoleMismatch
+            | SessionErrorCode::ServiceMismatch
+            | SessionErrorCode::SchemaMismatch
+            | SessionErrorCode::LimitMismatch
+            | SessionErrorCode::ChannelBindingMismatch
+            | SessionErrorCode::AttachmentPolicyMismatch
+            | SessionErrorCode::RecordTruncated
+            | SessionErrorCode::RecordMalformed
+            | SessionErrorCode::RecordReplay
+            | SessionErrorCode::RecordOutOfOrder
+            | SessionErrorCode::FragmentTruncated
+            | SessionErrorCode::FragmentDuplicate
+            | SessionErrorCode::FragmentReordered
+            | SessionErrorCode::FragmentOverlap
+            | SessionErrorCode::InvalidChannel
+            | SessionErrorCode::UnknownControl
+            | SessionErrorCode::RequestIdDuplicate
+            | SessionErrorCode::AttachmentTruncated
+            | SessionErrorCode::AttachmentControlTruncated
+            | SessionErrorCode::AttachmentCountMismatch
+            | SessionErrorCode::AttachmentDescriptorMismatch
+            | SessionErrorCode::AttachmentObjectMismatch
+            | SessionErrorCode::AttachmentAccessMismatch
+            | SessionErrorCode::AttachmentMissingCloexec
+            | SessionErrorCode::BootstrapReplayed
+            | SessionErrorCode::BootstrapOperationMismatch
+            | SessionErrorCode::PolicyDenied
+            | SessionErrorCode::TransportMismatch => Remediation::RepairConfiguration,
         }
     }
 }
@@ -268,6 +314,13 @@ mod tests {
         let generation = SessionError::new(SessionErrorCode::GenerationMismatch);
         assert_eq!(generation.class(), SessionErrorClass::Generation);
         assert_eq!(generation.remediation(), Remediation::ReplaceGeneration);
+        let exhausted = SessionError::new(SessionErrorCode::NonceExhausted);
+        assert_eq!(exhausted.class(), SessionErrorClass::Generation);
+        assert_eq!(exhausted.remediation(), Remediation::ReplaceGeneration);
+
+        let stalled = SessionError::new(SessionErrorCode::SchedulerStalled);
+        assert_eq!(stalled.class(), SessionErrorClass::Internal);
+        assert_eq!(stalled.remediation(), Remediation::RestartAgent);
 
         let cancelled = SessionError::new(SessionErrorCode::Cancelled);
         assert_eq!(cancelled.class(), SessionErrorClass::Cancellation);
