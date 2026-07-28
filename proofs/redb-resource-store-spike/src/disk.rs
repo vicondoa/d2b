@@ -218,6 +218,14 @@ impl DiskStore {
     }
 
     pub(crate) fn apply_group(&self, mutations: &[Mutation]) -> StoreResult<AppliedGroup> {
+        self.apply_group_with_commit_hook(mutations, || {})
+    }
+
+    fn apply_group_with_commit_hook(
+        &self,
+        mutations: &[Mutation],
+        before_commit: impl FnOnce(),
+    ) -> StoreResult<AppliedGroup> {
         let mut write = self.database.begin_write().map_err(integrity)?;
         write
             .set_durability(Durability::Immediate)
@@ -313,6 +321,7 @@ impl DiskStore {
             meta.insert(meta_key.as_slice(), meta_value.as_slice())
                 .map_err(integrity)?;
         }
+        before_commit();
         write.commit().map_err(integrity)?;
 
         Ok(AppliedGroup {
@@ -759,6 +768,24 @@ pub enum CrashRecovery {
     RefusedToOpen,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CrashCheckpoint {
+    resources: BTreeMap<Vec<u8>, Vec<u8>>,
+    type_index: BTreeMap<Vec<u8>, Vec<u8>>,
+    owner_index: BTreeMap<Vec<u8>, Vec<u8>>,
+    producer_index: BTreeMap<Vec<u8>, Vec<u8>>,
+    controller_index: BTreeMap<Vec<u8>, Vec<u8>>,
+    operations: BTreeMap<Vec<u8>, Vec<u8>>,
+    revision_log: BTreeMap<Vec<u8>, Vec<u8>>,
+    store_meta: BTreeMap<Vec<u8>, Vec<u8>>,
+}
+
+#[derive(Debug)]
+pub struct CrashCheckpoints {
+    old: CrashCheckpoint,
+    new: CrashCheckpoint,
+}
+
 pub fn crash_database_path(boundary: u8) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("target")
@@ -766,7 +793,7 @@ pub fn crash_database_path(boundary: u8) -> PathBuf {
         .join(format!("crash-{}-{boundary}.redb", std::process::id()))
 }
 
-pub fn prepare_crash_database(path: &Path) -> StoreResult<()> {
+pub fn prepare_crash_database(path: &Path) -> StoreResult<CrashCheckpoints> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(integrity)?;
     }
@@ -779,7 +806,9 @@ pub fn prepare_crash_database(path: &Path) -> StoreResult<()> {
             "failed-to-create-crash-baseline".to_owned(),
         ));
     }
-    Ok(())
+    let old = CrashCheckpoint::capture(&store)?;
+    let new = old.with_crash_transaction()?;
+    Ok(CrashCheckpoints { old, new })
 }
 
 fn kill_at(boundary: u8, selected: u8) -> StoreResult<()> {
@@ -888,41 +917,445 @@ pub fn run_crash_transaction(path: &Path, selected: u8) -> StoreResult<()> {
     Ok(())
 }
 
-pub fn verify_crash_database(path: &Path) -> StoreResult<CrashRecovery> {
+pub fn verify_crash_database(
+    path: &Path,
+    expected: &CrashCheckpoints,
+) -> StoreResult<CrashRecovery> {
     let store = match DiskStore::open_existing(path) {
         Ok(store) => store,
         Err(_) => return Ok(CrashRecovery::RefusedToOpen),
     };
-    let snapshot = store.snapshot()?;
-    if snapshot.is_empty() {
-        return Err(StoreError::Integrity(
-            "silent-empty-store-after-crash".to_owned(),
-        ));
+    let actual = CrashCheckpoint::capture(&store)?;
+    if actual == expected.old {
+        Ok(CrashRecovery::LastCommittedState)
+    } else if actual == expected.new {
+        Ok(CrashRecovery::NewCommittedState)
+    } else {
+        Err(StoreError::Integrity(
+            "recovered-state-matches-neither-full-checkpoint".to_owned(),
+        ))
     }
-    let baseline_key = crate::model::synthetic_resource(0).key;
-    if !snapshot.contains_key(&baseline_key) {
-        return Err(StoreError::Integrity(
-            "committed-baseline-missing-after-crash".to_owned(),
-        ));
+}
+
+impl CrashCheckpoint {
+    fn capture(store: &DiskStore) -> StoreResult<Self> {
+        let read = store.database.begin_read().map_err(integrity)?;
+        Ok(Self {
+            resources: raw_table(&read, RESOURCES)?,
+            type_index: raw_table(&read, TYPE_INDEX)?,
+            owner_index: raw_table(&read, OWNER_INDEX)?,
+            producer_index: raw_table(&read, PRODUCER_INDEX)?,
+            controller_index: raw_table(&read, CONTROLLER_INDEX)?,
+            operations: raw_table(&read, OPERATIONS)?,
+            revision_log: raw_table(&read, REVISION_LOG)?,
+            store_meta: raw_table(&read, STORE_META)?,
+        })
     }
-    let candidate_key = crate::model::synthetic_resource(10_001).key;
-    let revision = store.current_revision()?;
-    let batches = store.revision_batches_after(0)?;
-    let state = match (
-        revision,
-        snapshot.contains_key(&candidate_key),
-        batches.len(),
-    ) {
-        (1, false, 1) => CrashRecovery::LastCommittedState,
-        (2, true, 2) => CrashRecovery::NewCommittedState,
-        _ => {
-            return Err(StoreError::Integrity(format!(
-                "partial-state-after-crash:revision={revision} resources={} batches={}",
-                snapshot.len(),
-                batches.len()
-            )));
+
+    fn with_crash_transaction(&self) -> StoreResult<Self> {
+        let mut next = self.clone();
+        let mut candidate = crate::model::synthetic_resource(10_001);
+        candidate.revision = 2;
+        next.resources.insert(
+            resource_key_bytes(&candidate.key),
+            value(0x0003, &candidate)?,
+        );
+        next.type_index.insert(
+            type_index_key_bytes(&candidate.key),
+            value(0x0004, &candidate.uid)?,
+        );
+        if let Some(owner_uid) = &candidate.owner_uid {
+            next.owner_index.insert(
+                key(
+                    0x05,
+                    &[KeyPart::Text(owner_uid), KeyPart::Text(&candidate.uid)],
+                ),
+                value(
+                    0x0005,
+                    &OwnerIndexRecord {
+                        resource_type: candidate.key.resource_type.clone(),
+                        name: candidate.key.name.clone(),
+                        latest_revision: candidate.revision,
+                    },
+                )?,
+            );
         }
-    };
-    store.verify(&snapshot)?;
-    Ok(state)
+        if let Some(producer_uid) = &candidate.producer_uid {
+            next.producer_index.insert(
+                key(
+                    0x06,
+                    &[KeyPart::Text(producer_uid), KeyPart::Text(&candidate.uid)],
+                ),
+                value(
+                    0x0006,
+                    &ProducerIndexRecord {
+                        endpoint_type: candidate.key.resource_type.clone(),
+                        endpoint_name: candidate.key.name.clone(),
+                    },
+                )?,
+            );
+        }
+        next.controller_index.insert(
+            key(
+                0x07,
+                &[
+                    KeyPart::Text(&candidate.controller),
+                    KeyPart::Text(&candidate.key.resource_type),
+                    KeyPart::Text(&candidate.key.name),
+                ],
+            ),
+            value(0x0007, &candidate.uid)?,
+        );
+        next.operations.insert(
+            key(0x09, &[KeyPart::Text("crash-operation")]),
+            value(
+                0x0009,
+                &OperationRecord {
+                    resource_uid: candidate.uid.clone(),
+                    accepted_revision: 2,
+                    outcome: "Committed".to_owned(),
+                },
+            )?,
+        );
+        let batch = ChangeBatch {
+            revision: 2,
+            entries: vec![ChangeEntry {
+                ordinal: 0,
+                resource: candidate,
+                event: "Created".to_owned(),
+                operation_id: "crash-operation".to_owned(),
+            }],
+        };
+        next.revision_log
+            .insert(key(0x08, &[KeyPart::Revision(2)]), value(0x0008, &batch)?);
+        next.store_meta.insert(
+            key(0x01, &[KeyPart::Text("store")]),
+            value(
+                0x0001,
+                &StoreMetaRecord {
+                    schema_version: 1,
+                    current_revision: 2,
+                    sentinel: "redb-resource-store-spike".to_owned(),
+                },
+            )?,
+        );
+        Ok(next)
+    }
+}
+
+fn raw_table(
+    read: &redb::ReadTransaction,
+    definition: TableDefinition<'static, &[u8], &[u8]>,
+) -> StoreResult<BTreeMap<Vec<u8>, Vec<u8>>> {
+    read.open_table(definition)
+        .map_err(integrity)?
+        .iter()
+        .map_err(integrity)?
+        .map(|row| {
+            row.map(|(raw_key, raw_value)| (raw_key.value().to_vec(), raw_value.value().to_vec()))
+                .map_err(integrity)
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs::OpenOptions;
+    use std::io;
+    use std::sync::{Arc, Mutex};
+
+    use redb::StorageBackend;
+
+    use super::*;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum FaultMode {
+        BeforeData,
+        PartialData,
+        BeforeHeader,
+        PartialHeader,
+        DuringSync,
+    }
+
+    #[derive(Debug, Default)]
+    struct FaultState {
+        armed: Option<FaultMode>,
+        fired: bool,
+    }
+
+    #[derive(Debug, Clone, Default)]
+    struct FaultController {
+        state: Arc<Mutex<FaultState>>,
+    }
+
+    impl FaultController {
+        fn arm(&self, mode: FaultMode) {
+            let mut state = self.state.lock().unwrap();
+            state.armed = Some(mode);
+            state.fired = false;
+        }
+
+        fn take_if(&self, predicate: impl FnOnce(FaultMode) -> bool) -> Option<FaultMode> {
+            let mut state = self.state.lock().unwrap();
+            let mode = state.armed.filter(|mode| predicate(*mode))?;
+            state.armed = None;
+            state.fired = true;
+            Some(mode)
+        }
+
+        fn fired(&self) -> bool {
+            self.state.lock().unwrap().fired
+        }
+    }
+
+    #[derive(Debug)]
+    struct FaultBackend {
+        inner: FileBackend,
+        controller: FaultController,
+    }
+
+    impl StorageBackend for FaultBackend {
+        fn len(&self) -> Result<u64, io::Error> {
+            self.inner.len()
+        }
+
+        fn read(&self, offset: u64, out: &mut [u8]) -> Result<(), io::Error> {
+            self.inner.read(offset, out)
+        }
+
+        fn set_len(&self, len: u64) -> Result<(), io::Error> {
+            self.inner.set_len(len)
+        }
+
+        fn sync_data(&self) -> Result<(), io::Error> {
+            if self
+                .controller
+                .take_if(|mode| mode == FaultMode::DuringSync)
+                .is_some()
+            {
+                return Err(eio());
+            }
+            self.inner.sync_data()
+        }
+
+        fn write(&self, offset: u64, data: &[u8]) -> Result<(), io::Error> {
+            let mode = self.controller.take_if(|mode| match mode {
+                FaultMode::BeforeData | FaultMode::PartialData => offset != 0,
+                FaultMode::BeforeHeader | FaultMode::PartialHeader => offset == 0,
+                FaultMode::DuringSync => false,
+            });
+            match mode {
+                Some(FaultMode::BeforeData | FaultMode::BeforeHeader) => Err(eio()),
+                Some(FaultMode::PartialData | FaultMode::PartialHeader) => {
+                    let partial_len = (data.len() / 2).max(1).min(data.len());
+                    self.inner.write(offset, &data[..partial_len])?;
+                    Err(eio())
+                }
+                Some(FaultMode::DuringSync) | None => self.inner.write(offset, data),
+            }
+        }
+
+        fn close(&self) -> Result<(), io::Error> {
+            self.inner.close()
+        }
+    }
+
+    fn eio() -> io::Error {
+        io::Error::from_raw_os_error(nix::libc::EIO)
+    }
+
+    fn open_fault_store(path: &Path, controller: FaultController) -> StoreResult<DiskStore> {
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .map_err(integrity)?;
+        let inner = FileBackend::new(file).map_err(integrity)?;
+        let database = Database::builder()
+            .create_with_backend(FaultBackend { inner, controller })
+            .map_err(integrity)?;
+        let store = DiskStore { database };
+        store.validate_meta()?;
+        Ok(store)
+    }
+
+    fn apply_one(store: &DiskStore, mutation: Mutation) -> Resource {
+        let mut outcome = store.apply_group(&[mutation]).unwrap();
+        assert_eq!(outcome.receipts.len(), 1);
+        outcome.receipts.remove(0).unwrap().resource
+    }
+
+    fn table_contains(
+        store: &DiskStore,
+        definition: TableDefinition<'static, &[u8], &[u8]>,
+        encoded_key: &[u8],
+    ) -> bool {
+        let read = store.database.begin_read().unwrap();
+        let table = read.open_table(definition).unwrap();
+        table.get(encoded_key).unwrap().is_some()
+    }
+
+    #[test]
+    fn commit_faults_recover_only_complete_raw_checkpoints_or_refuse_open() {
+        for mode in [
+            FaultMode::BeforeData,
+            FaultMode::PartialData,
+            FaultMode::BeforeHeader,
+            FaultMode::PartialHeader,
+            FaultMode::DuringSync,
+        ] {
+            let path = crate::fixture_path(&format!("commit-fault-{mode:?}"));
+            let checkpoints = prepare_crash_database(&path).unwrap();
+            let controller = FaultController::default();
+            let store = open_fault_store(&path, controller.clone()).unwrap();
+            let mutation = Mutation::update(
+                crate::model::synthetic_resource(10_001),
+                0,
+                "crash-operation".to_owned(),
+            );
+            let arm = controller.clone();
+            let result = store.apply_group_with_commit_hook(&[mutation], || arm.arm(mode));
+            assert!(result.is_err(), "{mode:?} did not fail commit");
+            assert!(controller.fired(), "{mode:?} did not reach its fault point");
+            drop(store);
+
+            let recovery = verify_crash_database(&path, &checkpoints).unwrap();
+            println!("fault={mode:?} recovery={recovery:?} result=PASS");
+            assert!(
+                matches!(
+                    recovery,
+                    CrashRecovery::LastCommittedState
+                        | CrashRecovery::NewCommittedState
+                        | CrashRecovery::RefusedToOpen
+                ),
+                "{mode:?} recovered an unclassified state"
+            );
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    #[test]
+    fn updates_remove_and_replace_every_mutable_index_across_reopen() {
+        let path = crate::fixture_path("index-update-removal");
+        let store = DiskStore::open_or_create(&path).unwrap();
+        let mut initial = crate::model::synthetic_resource(1);
+        initial.owner_uid = Some("owner-old".to_owned());
+        initial.producer_uid = Some("producer-old".to_owned());
+        initial.controller = "controller-old".to_owned();
+        let initial = apply_one(&store, Mutation::create(initial));
+        let mut oracle = BTreeMap::from([(initial.key.clone(), initial.clone())]);
+        store.verify(&oracle).unwrap();
+
+        let old_owner = key(
+            0x05,
+            &[
+                KeyPart::Text(initial.owner_uid.as_deref().unwrap()),
+                KeyPart::Text(&initial.uid),
+            ],
+        );
+        let old_producer = key(
+            0x06,
+            &[
+                KeyPart::Text(initial.producer_uid.as_deref().unwrap()),
+                KeyPart::Text(&initial.uid),
+            ],
+        );
+        let old_controller = key(
+            0x07,
+            &[
+                KeyPart::Text(&initial.controller),
+                KeyPart::Text(&initial.key.resource_type),
+                KeyPart::Text(&initial.key.name),
+            ],
+        );
+
+        let mut changed = initial.clone();
+        changed.generation += 1;
+        changed.owner_uid = Some("owner-new".to_owned());
+        changed.producer_uid = Some("producer-new".to_owned());
+        changed.controller = "controller-new".to_owned();
+        let changed = apply_one(
+            &store,
+            Mutation::update(changed, initial.revision, "change-bindings".to_owned()),
+        );
+        oracle.insert(changed.key.clone(), changed.clone());
+        store.verify(&oracle).unwrap();
+        assert!(!table_contains(&store, OWNER_INDEX, &old_owner));
+        assert!(!table_contains(&store, PRODUCER_INDEX, &old_producer));
+        assert!(!table_contains(&store, CONTROLLER_INDEX, &old_controller));
+
+        let new_owner = key(
+            0x05,
+            &[
+                KeyPart::Text(changed.owner_uid.as_deref().unwrap()),
+                KeyPart::Text(&changed.uid),
+            ],
+        );
+        let new_producer = key(
+            0x06,
+            &[
+                KeyPart::Text(changed.producer_uid.as_deref().unwrap()),
+                KeyPart::Text(&changed.uid),
+            ],
+        );
+        let new_controller = key(
+            0x07,
+            &[
+                KeyPart::Text(&changed.controller),
+                KeyPart::Text(&changed.key.resource_type),
+                KeyPart::Text(&changed.key.name),
+            ],
+        );
+        assert!(table_contains(&store, OWNER_INDEX, &new_owner));
+        assert!(table_contains(&store, PRODUCER_INDEX, &new_producer));
+        assert!(table_contains(&store, CONTROLLER_INDEX, &new_controller));
+
+        let mut removed = changed.clone();
+        removed.generation += 1;
+        removed.owner_uid = None;
+        removed.producer_uid = None;
+        removed.controller = "controller-final".to_owned();
+        let removed = apply_one(
+            &store,
+            Mutation::update(removed, changed.revision, "remove-bindings".to_owned()),
+        );
+        oracle.insert(removed.key.clone(), removed.clone());
+        store.verify(&oracle).unwrap();
+        assert!(!table_contains(&store, OWNER_INDEX, &new_owner));
+        assert!(!table_contains(&store, PRODUCER_INDEX, &new_producer));
+        assert!(!table_contains(&store, CONTROLLER_INDEX, &new_controller));
+        let final_controller = key(
+            0x07,
+            &[
+                KeyPart::Text(&removed.controller),
+                KeyPart::Text(&removed.key.resource_type),
+                KeyPart::Text(&removed.key.name),
+            ],
+        );
+        assert!(table_contains(&store, CONTROLLER_INDEX, &final_controller));
+
+        drop(store);
+        let reopened = DiskStore::open_existing(&path).unwrap();
+        reopened.verify(&oracle).unwrap();
+        assert!(!table_contains(&reopened, OWNER_INDEX, &old_owner));
+        assert!(!table_contains(&reopened, OWNER_INDEX, &new_owner));
+        assert!(!table_contains(&reopened, PRODUCER_INDEX, &old_producer));
+        assert!(!table_contains(&reopened, PRODUCER_INDEX, &new_producer));
+        assert!(!table_contains(
+            &reopened,
+            CONTROLLER_INDEX,
+            &old_controller
+        ));
+        assert!(!table_contains(
+            &reopened,
+            CONTROLLER_INDEX,
+            &new_controller
+        ));
+        assert!(table_contains(
+            &reopened,
+            CONTROLLER_INDEX,
+            &final_controller
+        ));
+        let _ = std::fs::remove_file(path);
+    }
 }

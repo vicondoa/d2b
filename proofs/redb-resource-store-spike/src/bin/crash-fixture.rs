@@ -38,7 +38,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let path = crash_database_path(boundary);
-    prepare_crash_database(&path)?;
+    let checkpoints = prepare_crash_database(&path)?;
     let status = Command::new(std::env::current_exe()?)
         .arg("--worker")
         .arg("--kill-at-txn")
@@ -49,7 +49,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if status.signal() != Some(9) {
         return Err(format!("worker exit was not SIGKILL: {status}").into());
     }
-    let recovery = verify_crash_database(&path)?;
+    let recovery = verify_crash_database(&path, &checkpoints)?;
     println!("boundary={boundary} worker_signal=9 recovery={recovery:?} result=PASS");
     std::fs::remove_file(path)?;
     Ok(())
