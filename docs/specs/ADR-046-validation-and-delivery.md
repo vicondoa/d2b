@@ -607,10 +607,19 @@ Exact benchmark fixtures from `ADR-046-resource-store-redb`'s performance
 contract, run in `packages/d2b-resource-store-redb/benches/`:
 
 These rows are completion gates, not existing evidence. SPIKE-01 and SPIKE-02
-remain unexecuted, so no production redb backend, watch/dispatcher integration,
-or redb backup/migration work may claim these rows. D128 permits only the
-engine-neutral contract and hermetic small-scale scope it enumerates before
-that evidence exists.
+have both been executed. SPIKE-02 passed every profile; SPIKE-01 passed
+correctness, watch delivery, group commit and crash recovery but **failed its
+RSS gate** at a measured median of 25,216 KiB against a 24,576 KiB threshold.
+That failure is why `ADR046-store-004`, `ADR046-store-002` and
+`ADR046-reconcile-003` are scheduled in W5 rather than W1, and why the revised
+physical-schema plan in `ADR-046-resource-store-redb` is binding on them.
+
+Executing the spikes does not satisfy the rows below. They remain future
+completion gates for the production redb backend, watch and dispatcher
+integration, and backup/migration work, and the unchanged RSS gate must be
+re-run against the real backend before any of that is accepted. D128 continues
+to permit only the engine-neutral contract and the hermetic small-scale scope
+it enumerates.
 
 | Fixture | Hard target |
 | --- | --- |
