@@ -212,8 +212,8 @@ impl core::fmt::Debug for Cancellation {
 
 /// Typed durable-commit evidence consumed by an expedited pass.
 ///
-/// Production issuance remains inside the registered transport adapter. The
-/// toolkit exposes no public constructor or field accessors.
+/// The toolkit exposes no public constructor or fields. Production issuance
+/// remains unavailable until a trusted durable commit adapter lands.
 pub struct CommittedRevisionProof {
     zone: ZoneId,
     resource_uid: ResourceUid,
@@ -223,6 +223,7 @@ pub struct CommittedRevisionProof {
 }
 
 impl CommittedRevisionProof {
+    #[cfg(test)]
     pub(crate) fn issue(
         zone: ZoneId,
         resource_uid: ResourceUid,
@@ -237,6 +238,22 @@ impl CommittedRevisionProof {
             revision,
             operation_id,
         }
+    }
+
+    pub(crate) const fn zone(&self) -> &ZoneId {
+        &self.zone
+    }
+
+    pub(crate) const fn generation(&self) -> ResourceGeneration {
+        self.generation
+    }
+
+    pub(crate) const fn revision(&self) -> ZoneRevision {
+        self.revision
+    }
+
+    pub(crate) fn operation_id(&self) -> &str {
+        &self.operation_id
     }
 }
 
