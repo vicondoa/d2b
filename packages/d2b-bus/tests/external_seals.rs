@@ -1,7 +1,7 @@
 use std::{fs, path::PathBuf, process::Command};
 
 #[test]
-fn dependent_cannot_forge_registration_or_clone_admitted_session() {
+fn dependent_cannot_forge_registration_or_mint_admitted_session() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repository_root = crate_root.parent().unwrap().parent().unwrap();
     let fixture = crate_root.join("tests/ui/external-seals");
@@ -19,8 +19,15 @@ fn dependent_cannot_forge_registration_or_clone_admitted_session() {
         (
             "clone_admitted",
             [
-                "no method named `clone` found for struct `AdmittedComponentSession`",
+                "no method named `clone` found for struct `AuthenticatedComponentSession`",
                 "error[E0599]",
+            ],
+        ),
+        (
+            "forge_admission",
+            [
+                "no `AdmittedComponentSession` in the root",
+                "error[E0432]",
             ],
         ),
     ] {

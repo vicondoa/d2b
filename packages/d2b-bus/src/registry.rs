@@ -12,7 +12,7 @@ use d2b_contracts::v3::{
     ServiceName, ZoneId,
 };
 use d2b_resource_api::authz::SessionVerb;
-use d2b_session::{AdmittedSessionRouteBinding, OperationMember};
+use d2b_session::{AuthenticatedSessionRouteBinding, OperationMember};
 
 use crate::{
     operations::SessionId,
@@ -292,6 +292,7 @@ pub trait BusEndpoint: Send + Sync + 'static {
 pub(crate) struct SessionRegistration {
     identity: SessionIdentity,
     context: Option<AuthenticatedSubjectContext>,
+    session_authorization: bool,
     routes: Vec<RouteKey>,
     endpoint: Arc<dyn BusEndpoint>,
 }
@@ -306,19 +307,21 @@ impl SessionRegistration {
         Self {
             identity: SessionIdentity::from_context(&context),
             context: Some(context),
+            session_authorization: false,
             routes,
             endpoint,
         }
     }
 
     pub(crate) fn admitted(
-        binding: AdmittedSessionRouteBinding,
+        binding: AuthenticatedSessionRouteBinding,
         routes: Vec<RouteKey>,
         endpoint: Arc<dyn BusEndpoint>,
     ) -> Self {
         Self {
-            identity: SessionIdentity::from_admitted(&binding),
-            context: None,
+            identity: SessionIdentity::from_authenticated(&binding),
+            context: Some(binding.context().clone()),
+            session_authorization: true,
             routes,
             endpoint,
         }
@@ -328,6 +331,7 @@ impl SessionRegistration {
     pub(crate) const fn context(&self) -> Option<&AuthenticatedSubjectContext> {
         self.context.as_ref()
     }
+
 }
 
 impl core::fmt::Debug for SessionRegistration {
@@ -342,6 +346,7 @@ impl core::fmt::Debug for SessionRegistration {
 struct RegisteredSession {
     identity: SessionIdentity,
     context: Option<AuthenticatedSubjectContext>,
+    session_authorization: bool,
     routes: BTreeSet<RouteKey>,
     endpoint: Arc<dyn BusEndpoint>,
     route_lease: Arc<RouteLeaseState>,
@@ -391,7 +396,7 @@ impl SessionIdentity {
         }
     }
 
-    fn from_admitted(binding: &AdmittedSessionRouteBinding) -> Self {
+    fn from_authenticated(binding: &AuthenticatedSessionRouteBinding) -> Self {
         Self {
             zone: binding.zone().clone(),
             subject_ref: binding.subject_ref().clone(),
@@ -472,6 +477,7 @@ impl RevocableRouteLease {
 pub(crate) struct ResolvedSource {
     pub(crate) context: Option<AuthenticatedSubjectContext>,
     pub(crate) endpoint: Arc<dyn BusEndpoint>,
+    pub(crate) session_authorization: bool,
 }
 
 pub(crate) struct Registry {
@@ -603,6 +609,7 @@ impl Registry {
             RegisteredSession {
                 identity: registration.identity,
                 context: registration.context,
+                session_authorization: registration.session_authorization,
                 routes,
                 endpoint: registration.endpoint,
                 route_lease: Arc::new(RouteLeaseState {
@@ -635,6 +642,7 @@ impl Registry {
         Ok(ResolvedSource {
             context: registered.context.clone(),
             endpoint: Arc::clone(&registered.endpoint),
+            session_authorization: registered.session_authorization,
         })
     }
 

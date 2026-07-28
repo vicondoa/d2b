@@ -16,14 +16,15 @@ use d2b_contracts::v3::{
     },
 };
 use d2b_resource_api::authz::{
-    ApiCatalog, AuthorizationState, BootstrapPhase, NativeAuthorizer, SessionVerb,
+    ApiCatalog, AuthorizationState, BindingScope, BootstrapPhase, BoundSubject, CompiledRole,
+    CompiledRoleBinding, NativeAuthorizer, PolicyRule, PolicySet, RelayGrantAuthority,
+    ResourceVerb, SessionVerb,
 };
 use d2b_resource_store::PolicySnapshot;
 use d2b_session::{
-    AdmittedComponentSession, ComponentSessionDriver, ComponentSessionRegistrar,
-    HandshakeCredentials, OwnedTransport, SessionAcceptor, SessionAuthenticationBinding,
-    SessionAuthority, SessionAuthorizationRequest, SessionEngine, TransportDescriptor,
-    TransportError, TransportEvidence, TransportPacket,
+    AuthenticatedComponentSession, ComponentSessionDriver, HandshakeCredentials, OwnedTransport,
+    SessionAcceptor, SessionAuthenticationBinding, SessionAuthority, SessionAuthorizationRequest,
+    SessionEngine, TransportDescriptor, TransportError, TransportEvidence, TransportPacket,
 };
 use tokio::sync::mpsc;
 
@@ -160,7 +161,7 @@ async fn admit(
     uid: &str,
     provider: &str,
     allowed: impl IntoIterator<Item = SessionVerb>,
-) -> (AdmittedComponentSession, tokio::task::JoinHandle<()>) {
+) -> (AuthenticatedComponentSession, tokio::task::JoinHandle<()>) {
     let descriptor = TransportDescriptor {
         class: policy.transport_binding.transport,
         locality: policy.transport_binding.locality,
@@ -224,7 +225,52 @@ async fn admit(
 }
 
 fn bus() -> (ZoneBus, d2b_bus::ZoneRegistrar) {
-    let native = NativeAuthorizer::new(ApiCatalog::standard(), None).unwrap();
+    let catalog = ApiCatalog::standard();
+    let zone = ZoneId::parse("dev").unwrap();
+    let rule = PolicyRule::new(
+        &catalog,
+        [d2b_contracts::v3::ResourceTypeName::parse("Host").unwrap()],
+        [ResourceVerb::Get],
+        [
+            SessionVerb::Connect,
+            SessionVerb::Invoke,
+            SessionVerb::AuditExport,
+            SessionVerb::SupportBundle,
+        ],
+        [],
+        [],
+        [zone.clone()],
+        [],
+    )
+    .unwrap();
+    let role = CompiledRole::new(
+        ResourceRef::parse("Role/session-seam").unwrap(),
+        vec![rule],
+    )
+    .unwrap();
+    let subjects = [
+        (
+            "Provider/system-core",
+            "11111111-1111-4111-8111-111111111111",
+        ),
+        ("Host/alice", "22222222-2222-4222-8222-222222222222"),
+        ("Provider/audit", "33333333-3333-4333-8333-333333333333"),
+        ("Host/bob", "44444444-4444-4444-8444-444444444444"),
+    ]
+    .into_iter()
+    .map(|(subject, uid)| BoundSubject {
+        subject_ref: ResourceRef::parse(subject).unwrap(),
+        subject_uid: ResourceUid::parse(uid).unwrap(),
+    });
+    let binding = CompiledRoleBinding::new(
+        role.role_ref.clone(),
+        subjects,
+        BindingScope::default(),
+        RelayGrantAuthority::None,
+    )
+    .unwrap();
+    let policy_set = PolicySet::new(&catalog, 1, vec![role], vec![binding]).unwrap();
+    let native = NativeAuthorizer::new(catalog, Some(policy_set)).unwrap();
     let state = AuthorizationState {
         snapshot: PolicySnapshot {
             policy_revision: 1,
@@ -237,7 +283,7 @@ fn bus() -> (ZoneBus, d2b_bus::ZoneRegistrar) {
         now_tick: 1,
     };
     ZoneBus::new(
-        ZoneId::parse("dev").unwrap(),
+        zone,
         BusAuthorizer::new(native, state).unwrap(),
         BusConfig::default(),
     )
@@ -261,7 +307,7 @@ fn route(service: &str, member: &str, generation: u64, provider: &str) -> RouteK
 
 #[tokio::test]
 async fn admitted_sessions_route_resource_and_diagnostic_calls_and_revoke_lifecycle() {
-    let (_bus, mut registrar) = bus();
+    let (bus, mut registrar) = bus();
     let (resource_endpoint, resource_echo) = admit(
         policy(
             ServicePackage::ResourceV3,
@@ -326,6 +372,22 @@ async fn admitted_sessions_route_resource_and_diagnostic_calls_and_revoke_lifecy
         .reconnect_component_session(resource_endpoint, reconnected_endpoint)
         .await
         .unwrap();
+    let (reconnected_caller, reconnected_caller_echo) = admit(
+        policy(
+            ServicePackage::ResourceV3,
+            EndpointPurpose::ResourceService,
+            2,
+        ),
+        "Host/alice",
+        "22222222-2222-4222-8222-222222222222",
+        "Provider/system-core",
+        [SessionVerb::Invoke],
+    )
+    .await;
+    let resource_caller = registrar
+        .reconnect_component_session(resource_caller, reconnected_caller)
+        .await
+        .unwrap();
     let reconnected_route = route(
         "d2b.resource.v3",
         "ResourceService/Get",
@@ -334,7 +396,7 @@ async fn admitted_sessions_route_resource_and_diagnostic_calls_and_revoke_lifecy
     );
     let response = resource_caller
         .invoke_resource(
-            reconnected_route,
+            reconnected_route.clone(),
             OperationSpec::new(
                 OperationId::parse("resource-after-reconnect").unwrap(),
                 10_000,
@@ -399,6 +461,27 @@ async fn admitted_sessions_route_resource_and_diagnostic_calls_and_revoke_lifecy
         d2b_bus::BusError::Registry(d2b_bus::registry::RegistryError::RouteNotFound)
     ));
 
+    bus.mark_policy_unavailable();
+    assert!(matches!(
+        resource_caller
+            .invoke_resource(
+                reconnected_route,
+                OperationSpec::new(
+                    OperationId::parse("resource-policy-outage").unwrap(),
+                    10_000,
+                )
+                .unwrap(),
+                ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
+                Vec::new(),
+            )
+            .await,
+        Err(d2b_bus::BusError::Authorization(
+            d2b_bus::AuthorizationError::Native(
+                d2b_resource_api::authz::AuthorizationDenial::PolicyUnavailable
+            )
+        ))
+    ));
+
     registrar
         .disconnect_component_session(resource_endpoint)
         .await
@@ -408,6 +491,7 @@ async fn admitted_sessions_route_resource_and_diagnostic_calls_and_revoke_lifecy
         resource_echo,
         reconnected_echo,
         caller_echo,
+        reconnected_caller_echo,
         audit_echo,
         audit_caller_echo,
     ] {

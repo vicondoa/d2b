@@ -315,7 +315,9 @@ dependencies = [
 name = "d2b-bus-external-seals"
 version = "0.0.0"
 dependencies = [
+ "async-trait",
  "d2b-bus",
+ "d2b-contracts",
  "d2b-session",
 ]
 

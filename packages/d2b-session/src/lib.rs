@@ -48,9 +48,9 @@ pub use streams::{NamedStreamMux, StreamEvent, StreamId, StreamPhase};
 pub use transport::{OwnedTransport, TransportDescriptor, TransportError, TransportPacket};
 
 pub use admission::{
-    AdmittedComponentSession, AdmittedSessionRouteBinding, AuthorizedSessionOperation,
-    ComponentSessionRegistrar, SessionAcceptor, SessionAuthenticationBinding, SessionAuthority,
-    SessionAuthorizationRequest, TransportEvidence,
+    AuthenticatedComponentSession, AuthenticatedSessionRouteBinding, AuthorizedSessionOperation,
+    SessionAcceptor, SessionAuthenticationBinding, SessionAuthority, SessionAuthorizationRequest,
+    TransportEvidence,
 };
 pub use attachment::{AttachmentPayload, AttachmentValidationError, OwnedAttachment};
 pub use d2b_contracts::v3::component_session as contract;

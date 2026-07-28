@@ -1,5 +1,5 @@
-use d2b_session::AdmittedComponentSession;
+use d2b_session::AuthenticatedComponentSession;
 
-fn probe(value: AdmittedComponentSession) {
+fn probe(value: AuthenticatedComponentSession) {
     let _ = value.clone();
 }

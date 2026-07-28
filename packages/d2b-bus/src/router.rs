@@ -14,8 +14,8 @@ use d2b_resource_api::authz::{
     ResourceVerb, SessionVerb,
 };
 use d2b_session::{
-    AdmittedComponentSession, AdmittedSessionRouteBinding, ComponentSessionRegistrar,
-    SessionAuthorizationRequest, SessionOperation,
+    AuthenticatedComponentSession, AuthenticatedSessionRouteBinding, SessionAuthorizationRequest,
+    SessionOperation,
 };
 use tokio::sync::Mutex as AsyncMutex;
 
@@ -806,8 +806,9 @@ impl ZoneRegistrar {
 }
 
 struct ComponentEndpoint {
-    session: AsyncMutex<AdmittedComponentSession>,
+    session: AsyncMutex<AuthenticatedComponentSession>,
     clock: Arc<dyn BusClock>,
+    locality: d2b_contracts::v3::Locality,
 }
 
 #[async_trait::async_trait]
@@ -819,13 +820,24 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
         target: Option<&ResourceRef>,
         now_tick: u64,
     ) -> Result<(), EndpointError> {
-        let request = SessionAuthorizationRequest::new(
-            verb,
-            route.service().clone(),
-            route.member().as_str(),
-            route.zone().clone(),
-            target.cloned(),
-        )
+        let request = if self.locality == d2b_contracts::v3::Locality::AdjacentZone {
+            SessionAuthorizationRequest::relay(
+                route.service().clone(),
+                route.member().as_str(),
+                route.zone().clone(),
+                target.cloned(),
+                verb,
+                route.zone().clone(),
+            )
+        } else {
+            SessionAuthorizationRequest::new(
+                verb,
+                route.service().clone(),
+                route.member().as_str(),
+                route.zone().clone(),
+                target.cloned(),
+            )
+        }
         .map_err(|_| EndpointError::Rejected)?;
         self.session
             .lock()
@@ -845,16 +857,28 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
         .map_err(|_| EndpointError::Rejected)?;
         let verb = operation.required_verb(ordinary);
         let now_tick = self.clock.now_tick();
-        let authorization = SessionAuthorizationRequest::new(
-            verb,
-            request.route().service().clone(),
-            request.route().member().as_str(),
-            request.route().zone().clone(),
-            request
-                .resource_call()
-                .and_then(ResourceCall::session_target)
-                .cloned(),
-        )
+        let target = request
+            .resource_call()
+            .and_then(ResourceCall::session_target)
+            .cloned();
+        let authorization = if self.locality == d2b_contracts::v3::Locality::AdjacentZone {
+            SessionAuthorizationRequest::relay(
+                request.route().service().clone(),
+                request.route().member().as_str(),
+                request.route().zone().clone(),
+                target,
+                verb,
+                request.route().zone().clone(),
+            )
+        } else {
+            SessionAuthorizationRequest::new(
+                verb,
+                request.route().service().clone(),
+                request.route().member().as_str(),
+                request.route().zone().clone(),
+                target,
+            )
+        }
         .map_err(|_| EndpointError::Rejected)?;
         let mut session = self.session.lock().await;
         let permit = session
@@ -877,23 +901,25 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
     }
 }
 
-#[async_trait::async_trait]
-impl ComponentSessionRegistrar for ZoneRegistrar {
-    type Registration = BusIngress;
-    type Error = BusError;
-
-    async fn register_component_session(
+impl ZoneRegistrar {
+    /// Consume an authenticated candidate and install it only after native
+    /// connect authorization succeeds.
+    pub async fn register_component_session(
         &mut self,
-        session: AdmittedComponentSession,
-    ) -> Result<Self::Registration, Self::Error> {
+        session: AuthenticatedComponentSession,
+    ) -> Result<BusIngress, BusError> {
         let binding = session.route_binding();
         if binding.zone() != &self.core.zone {
             return Err(BusError::SessionMismatch);
         }
+        self.core
+            .authorizer
+            .authorize_connect(binding.context(), &self.core.zone)?;
         let routes = routes_for_admitted_session(&binding)?;
         let endpoint: Arc<dyn crate::registry::BusEndpoint> = Arc::new(ComponentEndpoint {
             session: AsyncMutex::new(session),
             clock: Arc::clone(&self.core.clock),
+            locality: binding.locality(),
         });
         let registration = SessionRegistration::admitted(binding, routes, endpoint);
         let session = self.core.lock_registry().register(registration)?;
@@ -904,11 +930,11 @@ impl ComponentSessionRegistrar for ZoneRegistrar {
         })
     }
 
-    async fn reconnect_component_session(
+    pub async fn reconnect_component_session(
         &mut self,
-        mut previous: Self::Registration,
-        session: AdmittedComponentSession,
-    ) -> Result<Self::Registration, Self::Error> {
+        mut previous: BusIngress,
+        session: AuthenticatedComponentSession,
+    ) -> Result<BusIngress, BusError> {
         if !Arc::ptr_eq(&self.core, &previous.core) || previous.closed {
             return Err(BusError::SessionMismatch);
         }
@@ -916,10 +942,14 @@ impl ComponentSessionRegistrar for ZoneRegistrar {
         if binding.zone() != &self.core.zone {
             return Err(BusError::SessionMismatch);
         }
+        self.core
+            .authorizer
+            .authorize_connect(binding.context(), &self.core.zone)?;
         let routes = routes_for_admitted_session(&binding)?;
         let endpoint: Arc<dyn crate::registry::BusEndpoint> = Arc::new(ComponentEndpoint {
             session: AsyncMutex::new(session),
             clock: Arc::clone(&self.core.clock),
+            locality: binding.locality(),
         });
         let registration = SessionRegistration::admitted(binding, routes, endpoint);
         let session = self
@@ -936,16 +966,16 @@ impl ComponentSessionRegistrar for ZoneRegistrar {
         })
     }
 
-    async fn disconnect_component_session(
+    pub async fn disconnect_component_session(
         &mut self,
-        registration: Self::Registration,
-    ) -> Result<(), Self::Error> {
+        registration: BusIngress,
+    ) -> Result<(), BusError> {
         self.revoke(registration)
     }
 }
 
 fn routes_for_admitted_session(
-    binding: &AdmittedSessionRouteBinding,
+    binding: &AuthenticatedSessionRouteBinding,
 ) -> Result<Vec<RouteKey>, BusError> {
     if binding.subject_ref().resource_type().as_str() != "Provider" {
         return Ok(Vec::new());
@@ -1080,12 +1110,12 @@ impl BusIngress {
         stream: bool,
     ) -> Result<(), BusError> {
         let source = self.core.lock_registry().source(self.session)?;
-        if let Some(context) = source.context {
+        if let Some(context) = source.context.as_ref() {
             self.core
                 .authorizer
-                .authorize_dispatch(&context, route, resource_call, stream)?;
-            Ok(())
-        } else {
+                .authorize_dispatch(context, route, resource_call, stream)?;
+        }
+        if source.session_authorization {
             source
                 .endpoint
                 .authorize(
@@ -1096,6 +1126,8 @@ impl BusIngress {
                 )
                 .await
                 .map_err(BusError::Endpoint)
+        } else {
+            Ok(())
         }
     }
 
@@ -1303,9 +1335,10 @@ impl BusIngress {
             .lock_operations()
             .route_for_cancel(operation, self.session)?;
         let source = self.core.lock_registry().source(self.session)?;
-        if let Some(context) = source.context {
-            self.core.authorizer.authorize_cancel(&context, &route)?;
-        } else {
+        if let Some(context) = source.context.as_ref() {
+            self.core.authorizer.authorize_cancel(context, &route)?;
+        }
+        if source.session_authorization {
             source
                 .endpoint
                 .authorize(
