@@ -56,9 +56,11 @@ deprecations ship one minor release before removal.
 
 - Unified Core and toolkit controller identity, selector, trigger, registration,
   retry, and resync contracts. Core changes now drive the executor-native
-  reconciliation runner through a concrete source/reconciler adapter with
-  bounded cancellation, deadlines, typed failure persistence, remediation
-  reasons, and cardinality-safe queue and worker observations.
+  reconciliation runner through a bounded, coalescing registered-resource
+  adapter with explicit admission and backpressure counters. Until a durable
+  store backend is registered, expedited commit authorization fails closed
+  rather than manufacturing evidence. Terminal runner failures retain the
+  complete accumulated report alongside typed failure details.
 
 - `tests/test-proofs.sh` now discovers proof crates by scanning
   `proofs/*/Cargo.toml` instead of iterating a hardcoded list. The previous

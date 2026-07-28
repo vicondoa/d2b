@@ -9,13 +9,14 @@ pub mod runtime;
 pub use dependencies::{DependencyError, DependencyIndex, DependencyTrigger, UpgradeOrder};
 pub use hints::{
     ChangeField, ChangeRecord, ControllerBinding, ControllerHint, ControllerLeaseKey,
-    CoreTriggerReason, FairAdmission, HintAdmissionError, HintTarget, SuppressionDecision,
-    WatchPlan, WatchPlanError, WatchRegistry, WatchSelector,
+    CoreTriggerReason, FairAdmission, HintAdmissionError, HintAdmissionOutcome, HintTarget,
+    SuppressionDecision, WatchPlan, WatchPlanError, WatchRegistry, WatchSelector,
 };
 pub use owner_reconcile::{
     DesiredChild, ObservedChild, OwnerGraph, OwnerGraphError, OwnerIndex, OwnerLimits,
     OwnerMutation, OwnerReconcileError, OwnerReconcilePlan, OwnerTrigger,
 };
 pub use runtime::{
-    CoreControllerSource, CoreReconcileError, CoreResourceReconciler, CoreSourceError,
+    CoreAdmissionCounts, CoreControllerSource, CoreDispatchOutcome, CoreReconcileError,
+    CoreResourceReconciler, CoreSourceError, DurableCommitEvidence, RegisteredControllerApi,
 };
