@@ -25,7 +25,7 @@ pub struct Cancellation {
 }
 
 impl Cancellation {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             inner: Arc::new(CancellationInner {
                 cancelled: AtomicBool::new(false),

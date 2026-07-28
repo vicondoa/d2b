@@ -192,6 +192,7 @@ d2b_session::AuthenticatedSessionRouteBinding::method:subject_ref
 d2b_session::AuthenticatedSessionRouteBinding::method:subject_uid
 d2b_session::AuthenticatedSessionRouteBinding::method:zone
 d2b_session::AuthenticatedTtrpcHandle
+d2b_session::AuthenticatedTtrpcHandle::method:attempt_guard
 d2b_session::AuthenticatedTtrpcHandle::method:complete
 d2b_session::AuthenticatedTtrpcHandle::method:receive
 d2b_session::AuthenticatedTtrpcHandle::method:start

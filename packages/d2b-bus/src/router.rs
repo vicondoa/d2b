@@ -1121,6 +1121,7 @@ struct ActiveComponentRequest {
     request_id: d2b_session::contract::RequestId,
     valid: Arc<AtomicBool>,
     attempt: Cancellation,
+    write_guard: d2b_session::Cancellation,
 }
 
 #[derive(Default)]
@@ -1171,6 +1172,7 @@ impl ComponentActivity {
         for requests in self.requests.values() {
             for request in requests {
                 request.valid.store(false, Ordering::Release);
+                request.write_guard.cancel();
             }
         }
     }
@@ -1335,12 +1337,14 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
         };
         let valid = Arc::new(AtomicBool::new(true));
         let attempt = request.cancellation().clone();
+        let write_guard = self.ttrpc.attempt_guard();
         self.insert_active(
             request.operation().id().clone(),
             ActiveComponentRequest {
                 request_id: request_id.clone(),
                 valid: Arc::clone(&valid),
                 attempt: attempt.clone(),
+                write_guard: write_guard.clone(),
             },
         )?;
         let response = match self.responses.register(request_id.clone()) {
@@ -1352,7 +1356,13 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
         };
         if let Err(error) = self
             .ttrpc
-            .start(permit, request_id.clone(), outbound_frame, now_tick)
+            .start(
+                permit,
+                request_id.clone(),
+                outbound_frame,
+                write_guard,
+                now_tick,
+            )
             .await
         {
             self.responses.remove(&request_id);
@@ -1391,6 +1401,7 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
         let active = self.active_request(operation, attempt);
         if let Some(active) = active {
             active.valid.store(false, Ordering::Release);
+            active.write_guard.cancel();
             self.cancellation
                 .cancel(active.request_id.clone())
                 .await
@@ -2401,11 +2412,19 @@ mod tests {
 
     #[test]
     fn component_activity_binds_reuse_and_revocation_to_exact_attempts() {
+        fn write_guard(byte: u8) -> d2b_session::Cancellation {
+            let mut requests = d2b_session::RequestRegistry::new(1).unwrap();
+            requests
+                .register(d2b_session::contract::RequestId::new(vec![byte; 16]).unwrap())
+                .unwrap()
+        }
+
         let operation = OperationId::parse("reused").unwrap();
         let first_attempt = Cancellation::new();
         let second_attempt = Cancellation::new();
         let first_valid = Arc::new(AtomicBool::new(true));
         let second_valid = Arc::new(AtomicBool::new(true));
+        let second_write_guard = write_guard(2);
         let mut activity = ComponentActivity::default();
         assert!(activity.insert(
             operation.clone(),
@@ -2413,6 +2432,7 @@ mod tests {
                 request_id: d2b_session::contract::RequestId::new(vec![1; 16]).unwrap(),
                 valid: first_valid,
                 attempt: first_attempt.clone(),
+                write_guard: write_guard(1),
             },
         ));
         assert!(activity.insert(
@@ -2421,6 +2441,7 @@ mod tests {
                 request_id: d2b_session::contract::RequestId::new(vec![2; 16]).unwrap(),
                 valid: Arc::clone(&second_valid),
                 attempt: second_attempt.clone(),
+                write_guard: second_write_guard.clone(),
             },
         ));
 
@@ -2434,12 +2455,14 @@ mod tests {
 
         activity.revoke();
         assert!(!second_valid.load(Ordering::Acquire));
+        assert!(second_write_guard.is_cancelled());
         assert!(!activity.insert(
             operation,
             ActiveComponentRequest {
                 request_id: d2b_session::contract::RequestId::new(vec![3; 16]).unwrap(),
                 valid: Arc::new(AtomicBool::new(true)),
                 attempt: Cancellation::new(),
+                write_guard: write_guard(3),
             },
         ));
     }

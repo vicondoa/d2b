@@ -546,16 +546,24 @@ fn validate_ttrpc_permit(permit: &AuthorizedSessionOperation, now_tick: u64) -> 
 }
 
 impl AuthenticatedTtrpcHandle {
+    /// Mint an attempt guard that can synchronously fence an admitted write.
+    pub fn attempt_guard(&self) -> crate::Cancellation {
+        crate::Cancellation::new()
+    }
+
     /// Start one request under a permit minted by the authenticated session.
     pub async fn start(
         &self,
         permit: AuthorizedSessionOperation,
         request_id: RequestId,
         frame: Vec<u8>,
+        cancellation: crate::Cancellation,
         now_tick: u64,
     ) -> Result<()> {
         validate_ttrpc_permit(&permit, now_tick)?;
-        self.driver.start_ttrpc(request_id, frame).await
+        self.driver
+            .start_ttrpc_guarded(request_id, frame, cancellation)
+            .await
     }
 
     /// Receive the next authenticated ttrpc frame.
@@ -898,8 +906,10 @@ impl<C> AuthenticatedComponentSession<C> {
         frame: Vec<u8>,
         now_tick: u64,
     ) -> Result<()> {
-        self.ttrpc_handle()
-            .start(permit, request_id, frame, now_tick)
+        let handle = self.ttrpc_handle();
+        let cancellation = handle.attempt_guard();
+        handle
+            .start(permit, request_id, frame, cancellation, now_tick)
             .await
     }
 

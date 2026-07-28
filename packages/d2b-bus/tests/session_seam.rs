@@ -1,4 +1,10 @@
-use std::time::Instant;
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
+    time::Instant,
+};
 
 use async_trait::async_trait;
 use d2b_bus::{
@@ -27,7 +33,7 @@ use d2b_session::{
     TransportPacket, ttrpc_request_id, ttrpc_stream_id,
 };
 use d2b_session_unix::{SeqpacketSocket, UnixSubjectIdentity, prearmed_seqpacket_pair};
-use tokio::sync::mpsc;
+use tokio::sync::{Notify, mpsc};
 
 const PROVIDER_GENERATION: u64 = 2;
 const CONTROLLER_GENERATION: u64 = 3;
@@ -36,6 +42,7 @@ struct TestTransport {
     sender: mpsc::Sender<TransportPacket>,
     receiver: mpsc::Receiver<TransportPacket>,
     descriptor: TransportDescriptor,
+    writer_pause: Option<Arc<WriterPause>>,
 }
 
 #[async_trait]
@@ -54,10 +61,14 @@ impl OwnedTransport for TestTransport {
             sender,
             receiver,
             descriptor: _,
+            writer_pause,
         } = *self;
         (
             Box::new(TestTransportReader { receiver }),
-            Box::new(TestTransportWriter { sender }),
+            Box::new(TestTransportWriter {
+                sender,
+                writer_pause,
+            }),
         )
     }
 
@@ -106,11 +117,19 @@ impl d2b_session::TransportReader for TestTransportReader {
 
 struct TestTransportWriter {
     sender: mpsc::Sender<TransportPacket>,
+    writer_pause: Option<Arc<WriterPause>>,
 }
 
 #[async_trait]
 impl d2b_session::TransportWriter for TestTransportWriter {
     async fn send(&mut self, packet: TransportPacket) -> Result<(), TransportError> {
+        if let Some(pause) = &self.writer_pause {
+            if !pause.entered.swap(true, Ordering::AcqRel) {
+                pause.notify.notify_waiters();
+                std::future::pending::<()>().await;
+            }
+            pause.sent.fetch_add(1, Ordering::AcqRel);
+        }
         self.sender
             .send(packet)
             .await
@@ -119,6 +138,25 @@ impl d2b_session::TransportWriter for TestTransportWriter {
 
     async fn close(&mut self) -> Result<(), TransportError> {
         Ok(())
+    }
+}
+
+#[derive(Default)]
+struct WriterPause {
+    entered: AtomicBool,
+    sent: AtomicUsize,
+    notify: Notify,
+}
+
+impl WriterPause {
+    async fn wait_until_entered(&self) {
+        loop {
+            let notified = self.notify.notified();
+            if self.entered.load(Ordering::Acquire) {
+                return;
+            }
+            notified.await;
+        }
     }
 }
 
@@ -162,6 +200,22 @@ async fn admit(
     SessionDriverHandle,
     tokio::task::JoinHandle<()>,
 ) {
+    admit_with_writer_pause(registrar, policy, subject, uid, provider, _allowed, None).await
+}
+
+async fn admit_with_writer_pause(
+    registrar: &ZoneRegistrar,
+    policy: EndpointPolicy,
+    subject: &str,
+    uid: &str,
+    provider: &str,
+    _allowed: impl IntoIterator<Item = SessionVerb>,
+    writer_pause: Option<Arc<WriterPause>>,
+) -> (
+    AuthenticatedComponentSession<ComponentSessionAdmission>,
+    SessionDriverHandle,
+    tokio::task::JoinHandle<()>,
+) {
     let descriptor = TransportDescriptor {
         class: policy.transport_binding.transport,
         locality: policy.transport_binding.locality,
@@ -174,11 +228,13 @@ async fn admit(
         sender: left_sender,
         receiver: right_receiver,
         descriptor,
+        writer_pause,
     };
     let right = TestTransport {
         sender: right_sender,
         receiver: left_receiver,
         descriptor,
+        writer_pause: None,
     };
     let (initiator, responder) = tokio::join!(
         SessionEngine::establish_initiator(
@@ -917,6 +973,75 @@ async fn uncorrelatable_response_terminates_every_waiter() {
         .disconnect_component_session(endpoint)
         .await
         .unwrap();
+    caller_echo.abort();
+}
+
+#[tokio::test]
+async fn revocation_fences_an_admitted_batch_before_transport_send() {
+    let (_bus, mut registrar) = bus();
+    let pause = Arc::new(WriterPause::default());
+    let (endpoint, _remote, endpoint_echo) = admit_with_writer_pause(
+        &registrar,
+        policy(
+            ServicePackage::ResourceV3,
+            EndpointPurpose::ResourceService,
+            1,
+        ),
+        "Provider/system-core",
+        "11111111-1111-4111-8111-111111111111",
+        "Provider/system-core",
+        [SessionVerb::Invoke],
+        Some(Arc::clone(&pause)),
+    )
+    .await;
+    let endpoint = registrar
+        .register_component_session(endpoint)
+        .await
+        .unwrap();
+    let (caller, _, caller_echo) = admit(
+        &registrar,
+        policy(
+            ServicePackage::ResourceV3,
+            EndpointPurpose::ResourceService,
+            1,
+        ),
+        "Host/alice",
+        "22222222-2222-4222-8222-222222222222",
+        "Provider/system-core",
+        [SessionVerb::Invoke],
+    )
+    .await;
+    let caller = registrar.register_component_session(caller).await.unwrap();
+    let invocation = tokio::spawn(async move {
+        caller
+            .invoke_resource(
+                route(
+                    "d2b.resource.v3",
+                    "ResourceService/Get",
+                    1,
+                    "Provider/system-core",
+                ),
+                OperationSpec::new(OperationId::parse("revoked-write").unwrap(), 10_000).unwrap(),
+                ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
+                ttrpc_frame(12, b"must-not-send"),
+            )
+            .await
+    });
+
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        pause.wait_until_entered(),
+    )
+    .await
+    .expect("request batch must reach the paused writer");
+    registrar
+        .disconnect_component_session(endpoint)
+        .await
+        .unwrap();
+
+    assert!(invocation.await.unwrap().is_err());
+    assert_eq!(pause.sent.load(Ordering::Acquire), 0);
+    endpoint_echo.abort();
     caller_echo.abort();
 }
 
