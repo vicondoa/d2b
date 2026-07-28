@@ -14,14 +14,13 @@ Commands set `TMPDIR=$PWD/.scratch/tmp`, `RUSTUP_TOOLCHAIN=1.94.1`,
 | 100 watches, no misses, duplicates, or gaps | MEASURED-PASS | 21,866 ChangeBatch deliveries, 3,686 matching entries, 0 misses, 0 duplicates, 0 gaps |
 | More than half of non-conflicting storm writes use a batch larger than 1 | MEASURED-PASS | 47/50, 94% |
 | All 13 crash boundaries recover atomically or refuse to open | MEASURED-PASS | 13/13; boundaries 1-11 reopened at revision 1, boundaries 12-13 reopened at revision 2 |
-| Median maximum RSS at or below 24 MiB | NOT-MEASURED | `/usr/bin/time` was absent; the fixture itself completed with 10,000 resources and 100 watches |
+| Median maximum RSS at or below 24 MiB | MEASURED-FAIL | 25,068 KiB (24.48 MiB), 492 KiB or about 2.0% over the 24,576 KiB threshold |
 | Commit-to-handler p95 at or below 5,000 us in all profiles | MEASURED-PASS | 110.640 us / 109.250 us / 12.640 us |
 | Commit-to-handler p99 reported; document any value above 20 ms | MEASURED-PASS | 125.597 us / 123.210 us / 36.546 us; none exceeded 20 ms |
 
-No measured result requires an admission-fairness or post-commit dispatcher
-change. RSS remains unresolved and must be measured on a host providing GNU
-`/usr/bin/time` before the physical schema plan can be treated as satisfying
-the 24 MiB store budget.
+No latency result requires an admission-fairness or post-commit dispatcher
+change. The whole-process RSS result requires the physical schema and watch
+serialization plan to change before `ADR046-store-004` starts.
 
 ## Functional scale metrics
 
@@ -97,25 +96,78 @@ baseline resource, a partial index, or a noncontiguous revision log.
 
 ## RSS
 
-Required command, attempted three times:
+GNU time was supplied through nix after the original `/usr/bin/time` attempt
+failed. Each command was run three times from
+`proofs/redb-resource-store-spike/`:
 
 ```text
-/usr/bin/time -v cargo run --manifest-path proofs/redb-resource-store-spike/Cargo.toml --bin rss-fixture -- --resources 10000 --watches 100
+nix shell --impure --expr '(import <nixpkgs> {}).time' --command bash -c 'TMPDIR=$PWD/.scratch/tmp time -v ./target/release/rss-fixture --resources 0 --watches 0'
+nix shell --impure --expr '(import <nixpkgs> {}).time' --command bash -c 'TMPDIR=$PWD/.scratch/tmp time -v ./target/release/rss-fixture --resources 10000 --watches 0'
+nix shell --impure --expr '(import <nixpkgs> {}).time' --command bash -c 'TMPDIR=$PWD/.scratch/tmp time -v ./target/release/rss-fixture --resources 10000 --watches 100'
 ```
 
-Raw output for each attempt:
+Raw maximum-RSS lines from three fresh runs per configuration:
 
 ```text
-/bin/bash: line 1: /usr/bin/time: No such file or directory
+--resources 0 --watches 0
+Maximum resident set size (kbytes): 4092
+Maximum resident set size (kbytes): 4048
+Maximum resident set size (kbytes): 4028
+
+--resources 10000 --watches 0
+Maximum resident set size (kbytes): 18468
+Maximum resident set size (kbytes): 18276
+Maximum resident set size (kbytes): 18020
+
+--resources 10000 --watches 100
+Maximum resident set size (kbytes): 24924
+Maximum resident set size (kbytes): 25264
+Maximum resident set size (kbytes): 25068
 ```
 
-The required maximum-RSS metric is therefore NOT-MEASURED. It was not replaced
-with an estimate or a different measurement source. The fixture was run
-without GNU time to establish that it reaches the requested steady state:
+The computed medians are 4,048 KiB, 18,276 KiB, and 25,068 KiB respectively.
+The headline whole-process median is 25,068 KiB (24.48 MiB), so it is
+MEASURED-FAIL: 492 KiB, about 2.0%, above the 24,576 KiB threshold. The wording
+"store+actor alone" also permits a baseline-subtracted reading. Subtracting the
+4,048 KiB empty-process median yields 21,020 KiB (20.53 MiB), which passes with
+3,556 KiB (3.47 MiB) of margin. Both readings are recorded because the
+threshold does not say whether Rust runtime/process overhead counts. The
+parenthetical reserving the remainder of one 64 MiB aggregate budget for other
+controller processes most naturally implies the conservative whole-process
+reading: every deployed process has runtime overhead that must be budgeted.
+The panel must settle this ambiguity; this spike does not silently choose the
+baseline-subtracted pass.
 
-```text
-resources=10000 watches=100 revision=10000 file_bytes=52314112 result=READY
-```
+The measured increments are 14,228 KiB for 10,000 resources, about 1.42 KiB
+per resource, and 6,792 KiB for 100 watches, about 67.92 KiB per watch. Resource
+encoding is therefore not the observed pressure. The watch registrar creates
+one Tokio mpsc channel with logical capacity 1,024 per watcher. Tokio initially
+allocates one message block rather than all 1,024 slots, so channel capacity
+alone does not explain the full delta. Registration also calls
+`revision_batches_after`, which scans and JSON-decodes all 10,000 revision-log
+values before comparing `afterRevision`; the RSS fixture registers at the
+current revision, so those 100 full scans deliver nothing but still raise redb
+page and allocator high-water RSS. No revision-log slice remains retained: the
+returned replay vectors are empty. The measured per-watch slope therefore
+captures the dedicated channel state plus repeated full-log replay work and
+retained allocator/page high-water, not a persistent 68 KiB replay buffer.
+
+## Design implications for ADR046-store-004
+
+Treat the whole-process miss as the gate result until the panel resolves the
+wording. Before `ADR046-store-004`, revise the physical-schema/serialization
+plan so replay seeks the big-endian revision key and streams only rows after
+`afterRevision`, without decoding older complete envelopes. Live fan-out should
+share one immutable decoded ChangeBatch rather than cloning its envelope per
+watcher. The 1,024-entry watch-dispatch bound should be a global budget with
+small per-watch cursor/filter state, not a fresh logical 1,024-entry channel
+for every registration.
+
+`ADR046-store-002` should make that global admission and memory bound explicit,
+including typed backpressure or slow-watcher eviction when the shared budget
+is exhausted. `ADR046-store-004` should implement revision-key range replay,
+streaming decode, shared batch fan-out, and bounded watch registration, then
+repeat the three RSS configurations before the production backend is accepted.
 
 ## Commit-to-handler latency
 
@@ -165,7 +217,7 @@ cargo test --manifest-path proofs/redb-resource-store-spike/Cargo.toml
 Raw summaries:
 
 ```text
-Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.19s
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.23s
 ```
 
 ```text
