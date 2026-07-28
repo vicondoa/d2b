@@ -352,13 +352,16 @@ log "--> cargo fmt --check"
 cargo fmt --manifest-path "$manifest" --all --check
 ok "cargo fmt --check"
 
-log "--> cargo clippy --workspace --all-targets -- -D warnings"
-CARGO_TARGET_DIR="$workspace_target_dir" cargo clippy --manifest-path "$manifest" --workspace --all-targets -- -D warnings
+# --locked so a stale committed Cargo.lock fails the gate instead of being
+# silently regenerated. flake.nix vendors the committed lockfile, so a lock
+# that cargo quietly rewrites here cannot be reproduced by a Nix build.
+log "--> cargo clippy --locked --workspace --all-targets -- -D warnings"
+CARGO_TARGET_DIR="$workspace_target_dir" cargo clippy --locked --manifest-path "$manifest" --workspace --all-targets -- -D warnings
 ok "cargo clippy"
 
 log "--> cargo test --workspace ${workspace_test_excludes[*]}"
 workspace_test_started=$SECONDS
-CARGO_TARGET_DIR="$workspace_target_dir" cargo test --manifest-path "$manifest" --workspace "${workspace_test_excludes[@]}"
+CARGO_TARGET_DIR="$workspace_target_dir" cargo test --locked --manifest-path "$manifest" --workspace "${workspace_test_excludes[@]}"
 ok "cargo test (duration: $((SECONDS - workspace_test_started))s)"
 
 # The d2b-contract-tests crate is excluded from the workspace test above because
