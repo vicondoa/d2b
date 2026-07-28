@@ -82,6 +82,10 @@ deprecations ship one minor release before removal.
   bound, preventing normal repeated cancellation from exhausting and
   disconnecting a component session.
 
+- Released bus correlation and operation slots on every post-start response
+  path, including malformed responses and terminal receive failures, while
+  observing cleanup errors and propagating those not caused by driver teardown.
+
 - Unified Core and toolkit controller identity, selector, trigger, registration,
   retry, and resync contracts. Core changes now drive the executor-native
   reconciliation runner through a bounded, coalescing registered-resource
