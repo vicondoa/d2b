@@ -55,6 +55,25 @@ fn public_api_has_only_the_approved_capability_mint_surface() {
         &scratch.path().join("snapshot"),
         Some(&snapshot_crates),
     );
+    // Fail loudly when rustdoc did not render a crate the snapshot expects.
+    // Without this, an incomplete or racing doc build shows up as that crate's
+    // entire API having been "removed", which reads like a capability change
+    // and sends the reader looking for a defect that is not there.
+    let rendered = snapshot_docs
+        .iter()
+        .map(|documented| documented.crate_name.as_str())
+        .collect::<BTreeSet<_>>();
+    let missing = snapshot_crates
+        .iter()
+        .filter(|crate_name| !rendered.contains(**crate_name))
+        .collect::<Vec<_>>();
+    assert!(
+        missing.is_empty(),
+        "rustdoc output is incomplete: {missing:?} appear in approved-public-api.txt \
+         but were not rendered, so the comparison below would report their whole \
+         API as removed. This is a doc-build problem, not an API change."
+    );
+
     let actual = snapshot_public_api(&snapshot_docs, &approved);
     let (_, capability_surface) = workspace_public_api(&workspace_docs, &BTreeSet::new(), true);
     if std::env::var_os("D2B_UPDATE_BUS_PUBLIC_API").is_some() {
