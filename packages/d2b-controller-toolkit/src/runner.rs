@@ -94,6 +94,10 @@ impl ControllerDescriptor {
     pub const fn initial_watch_credits(&self) -> u32 {
         self.initial_watch_credits
     }
+
+    fn event_channel_capacity(&self) -> usize {
+        self.reconcile_concurrency.saturating_add(1)
+    }
 }
 
 impl core::fmt::Debug for ControllerDescriptor {
@@ -548,7 +552,7 @@ where
         ));
         queue.rebuild(initial_hints(&descriptor, initial.resources)?)?;
 
-        let (sender, receiver) = mpsc::channel();
+        let (sender, receiver) = mpsc::sync_channel(descriptor.event_channel_capacity());
         spawn_receiver(Arc::clone(&self.source), sender.clone());
         let mut report = RunnerReport::default();
         let mut active = 0_usize;
@@ -773,7 +777,7 @@ enum WorkerOutcome {
     SourceFailed(SourceError),
 }
 
-fn spawn_receiver<S>(source: Arc<S>, sender: mpsc::Sender<RunnerEvent>)
+fn spawn_receiver<S>(source: Arc<S>, sender: mpsc::SyncSender<RunnerEvent>)
 where
     S: ControllerSource,
 {
@@ -795,7 +799,7 @@ fn spawn_worker<R, S>(
     identity: ControllerIdentity,
     config: RunnerConfig,
     work: QueuedWork,
-    sender: mpsc::Sender<RunnerEvent>,
+    sender: mpsc::SyncSender<RunnerEvent>,
 ) where
     R: ResourceReconciler,
     S: ControllerSource,
@@ -2738,5 +2742,20 @@ mod tests {
                 .unwrap_err(),
             RunnerError::InvalidDescriptor
         );
+    }
+
+    #[test]
+    fn internal_event_budget_tracks_workers_not_pending_resources() {
+        let descriptor = ControllerDescriptor::new(
+            identity(),
+            vec![ResourceTypeName::parse("Process").unwrap()],
+            4,
+            4_096,
+            2,
+            8,
+        )
+        .unwrap();
+
+        assert_eq!(descriptor.event_channel_capacity(), 5);
     }
 }
