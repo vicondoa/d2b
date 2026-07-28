@@ -6,14 +6,13 @@ use d2b_bus::{
     ResourceCall, RouteGenerations, RouteKey, RouteMember, RouteTarget, ZoneBus, ZoneRegistrar,
 };
 use d2b_contracts::v3::{
-    AuthenticatedSubjectContext, BindingDigest, ConfigurationGeneration, ControllerGeneration,
-    EvidenceClass, ResourceGeneration, ResourceRef, ResourceUid, SchemaFingerprint, ServiceName,
-    SessionBinding, ZoneId, ZoneRevision,
+    BindingDigest, ConfigurationGeneration, ControllerGeneration, EvidenceClass,
+    ResourceGeneration, ResourceRef, ResourceUid, SchemaFingerprint, ServiceName, ZoneId,
+    ZoneRevision,
     component_session::{
-        AttachmentPolicy, AuthorizationLease, CloseReason, EndpointPolicy, EndpointPurpose,
-        EndpointRole, IdentityEvidenceRequirement, LimitProfile, Locality, NoiseProfile,
-        PurposeClass, Remediation, ServicePackage, SessionErrorCode, TransportBinding,
-        TransportClass,
+        AttachmentPolicy, CloseReason, EndpointPolicy, EndpointPurpose, EndpointRole,
+        IdentityEvidenceRequirement, LimitProfile, Locality, NoiseProfile, PurposeClass,
+        Remediation, ServicePackage, TransportBinding, TransportClass,
     },
 };
 use d2b_resource_api::authz::{
@@ -23,10 +22,10 @@ use d2b_resource_api::authz::{
 };
 use d2b_resource_store::PolicySnapshot;
 use d2b_session::{
-    AuthenticatedComponentSession, ComponentSessionDriver, HandshakeCredentials, OwnedTransport,
-    SessionAuthenticationBinding, SessionAuthority, SessionAuthorizationRequest,
-    SessionDriverHandle, SessionEngine, TransportDescriptor, TransportError, TransportEvidence,
-    TransportPacket, ttrpc_request_id, ttrpc_stream_id,
+    AuthenticatedComponentSession, ComponentSessionDriver, HandshakeCredentials,
+    NativeSessionAuthority, NativeSessionSubject, OwnedTransport, SessionDriverHandle,
+    SessionEngine, TransportDescriptor, TransportError, TransportEvidence, TransportPacket,
+    ttrpc_request_id, ttrpc_stream_id,
 };
 use tokio::sync::mpsc;
 
@@ -123,66 +122,6 @@ impl d2b_session::TransportWriter for TestTransportWriter {
     }
 }
 
-struct AllowAuthority {
-    subject: ResourceRef,
-    uid: ResourceUid,
-    provider: ResourceRef,
-    allowed: BTreeSet<SessionVerb>,
-}
-
-#[async_trait]
-impl SessionAuthority for AllowAuthority {
-    async fn authenticate_connect(
-        &mut self,
-        evidence: TransportEvidence,
-        binding: &SessionAuthenticationBinding,
-        expected_zone: &ZoneId,
-        now_tick: u64,
-    ) -> d2b_session::Result<(AuthenticatedSubjectContext, AuthorizationLease)> {
-        if evidence.class() != binding.evidence_class() {
-            return Err(d2b_session::SessionError::new(
-                SessionErrorCode::IdentityEvidenceMismatch,
-            ));
-        }
-        let context = AuthenticatedSubjectContext::new(
-            self.subject.clone(),
-            self.uid.clone(),
-            ResourceRef::parse(&format!("Zone/{}", expected_zone.as_str())).unwrap(),
-            binding.evidence_class(),
-            binding.purpose().clone(),
-            binding.service().clone(),
-            SessionBinding::new(
-                binding.schema_fingerprint().clone(),
-                binding.transport_binding().clone(),
-                binding.reconnect_generation(),
-                binding.transcript_hash().clone(),
-            ),
-        )
-        .with_provider_ref(self.provider.clone())
-        .with_provider_generation(ResourceGeneration::new(PROVIDER_GENERATION).unwrap())
-        .with_controller_generation(ControllerGeneration::new(CONTROLLER_GENERATION).unwrap());
-        Ok((
-            context,
-            AuthorizationLease::new(1, now_tick + 10_000).unwrap(),
-        ))
-    }
-
-    async fn authorize(
-        &mut self,
-        _subject: &AuthenticatedSubjectContext,
-        request: &SessionAuthorizationRequest,
-        _previous_lease: AuthorizationLease,
-        now_tick: u64,
-    ) -> d2b_session::Result<AuthorizationLease> {
-        if !self.allowed.contains(&request.verb()) {
-            return Err(d2b_session::SessionError::new(
-                SessionErrorCode::PolicyDenied,
-            ));
-        }
-        AuthorizationLease::new(1, now_tick + 10_000).map_err(d2b_session::SessionError::from)
-    }
-}
-
 fn policy(service: ServicePackage, purpose: EndpointPurpose, generation: u64) -> EndpointPolicy {
     EndpointPolicy {
         purpose,
@@ -264,12 +203,63 @@ async fn admit(
             }
         }
     });
-    let authority = AllowAuthority {
-        subject: ResourceRef::parse(subject).unwrap(),
-        uid: ResourceUid::parse(uid).unwrap(),
-        provider: ResourceRef::parse(provider).unwrap(),
-        allowed: allowed.into_iter().collect(),
+    let subject_ref = ResourceRef::parse(subject).unwrap();
+    let subject_uid = ResourceUid::parse(uid).unwrap();
+    let mut allowed = allowed.into_iter().collect::<BTreeSet<_>>();
+    allowed.insert(SessionVerb::Connect);
+    let catalog = ApiCatalog::standard();
+    let rule = PolicyRule::new(
+        &catalog,
+        [],
+        [],
+        allowed,
+        [],
+        [],
+        [ZoneId::parse("dev").unwrap()],
+        [],
+    )
+    .unwrap();
+    let role = CompiledRole::new(
+        ResourceRef::parse("Role/session-authority").unwrap(),
+        vec![rule],
+    )
+    .unwrap();
+    let binding = CompiledRoleBinding::new(
+        role.role_ref.clone(),
+        [BoundSubject {
+            subject_ref: subject_ref.clone(),
+            subject_uid: subject_uid.clone(),
+        }],
+        BindingScope::default(),
+        RelayGrantAuthority::None,
+    )
+    .unwrap();
+    let policy_set = PolicySet::new(&catalog, 1, vec![role], vec![binding]).unwrap();
+    let native = NativeAuthorizer::new(catalog, Some(policy_set)).unwrap();
+    let state = AuthorizationState {
+        snapshot: PolicySnapshot {
+            policy_revision: 1,
+            api_catalog_revision: 1,
+            active_configuration_revision: ConfigurationGeneration::new(1).unwrap(),
+            controller_generation: Some(ControllerGeneration::new(CONTROLLER_GENERATION).unwrap()),
+        },
+        zone_policy_revision: ZoneRevision::new(1),
+        bootstrap_phase: BootstrapPhase::Disabled,
+        now_tick: 1,
     };
+    let authority = NativeSessionAuthority::new(
+        NativeSessionSubject::new(subject_ref, subject_uid, ZoneId::parse("dev").unwrap())
+            .unwrap()
+            .with_provider(
+                ResourceRef::parse(provider).unwrap(),
+                ResourceGeneration::new(PROVIDER_GENERATION).unwrap(),
+            )
+            .with_controller_generation(ControllerGeneration::new(CONTROLLER_GENERATION).unwrap()),
+        native,
+        state,
+        10_000,
+    )
+    .unwrap();
     let session = registrar
         .component_session_acceptor(policy, Box::new(authority))
         .unwrap()

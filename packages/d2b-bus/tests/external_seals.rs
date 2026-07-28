@@ -26,8 +26,8 @@ fn dependent_cannot_forge_registration_or_mint_admitted_session() {
         (
             "forge_admission",
             [
-                "expected `ComponentSessionAdmission`, found `ForeignAdmission`",
-                "error[E0308]",
+                "the trait bound `ForeignAuthority: d2b_session::admission::authority_seal::Sealed` is not satisfied",
+                "error[E0277]",
             ],
         ),
     ] {
@@ -47,6 +47,12 @@ fn dependent_cannot_forge_registration_or_mint_admitted_session() {
             .expect("run dependent compile-fail crate");
         let stderr = String::from_utf8(output.stderr).expect("compiler diagnostics are UTF-8");
         assert!(!output.status.success(), "{test} unexpectedly compiled");
+        if test == "forge_admission" {
+            assert!(
+                !stderr.contains("error[E0432]"),
+                "forge_admission failed because of an unrelated import error:\n{stderr}"
+            );
+        }
         for diagnostic in expected {
             assert!(
                 stderr.contains(diagnostic),
