@@ -1665,7 +1665,7 @@ async fn cancelled_reply_is_removed_from_the_blocked_writer_queue() {
     first_send.await.unwrap().unwrap();
     assert_eq!(
         cancelled_send.await.unwrap().unwrap_err().code(),
-        SessionErrorCode::SessionDisconnected
+        SessionErrorCode::Cancelled
     );
     for _ in 0..2 {
         match tokio::time::timeout(Duration::from_millis(50), responder.receive_ttrpc()).await {
@@ -1710,12 +1710,57 @@ async fn cancellation_aborts_an_in_progress_guarded_write() {
             .unwrap()
             .unwrap_err()
             .code(),
-        SessionErrorCode::SessionDisconnected
+        SessionErrorCode::Cancelled
     );
     if let Ok(Ok(_)) =
         tokio::time::timeout(Duration::from_millis(50), responder.receive_ttrpc()).await
     {
         panic!("cancelled in-progress response reached the peer");
+    }
+}
+
+#[tokio::test]
+async fn outbound_cancel_fails_closed_before_a_queued_call_dispatch() {
+    let (initiator, responder, handles) = engine_pair().await;
+    handles.block_sends_a.store(true, Ordering::Release);
+    let initiator: Arc<dyn ComponentSessionDriver> = Arc::new(initiator.into_driver());
+    let responder: Arc<dyn ComponentSessionDriver> = Arc::new(responder.into_driver());
+    let first_send = {
+        let initiator = Arc::clone(&initiator);
+        tokio::spawn(async move { initiator.send_ttrpc(vec![0x11]).await })
+    };
+    tokio::task::yield_now().await;
+    let request_id = RequestId::new(vec![0x91; 16]).unwrap();
+    let queued_call = {
+        let initiator = Arc::clone(&initiator);
+        let request_id = request_id.clone();
+        tokio::spawn(async move { initiator.start_ttrpc(request_id, vec![0x22]).await })
+    };
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    let cancel = {
+        let initiator = Arc::clone(&initiator);
+        tokio::spawn(async move { initiator.cancel(7, request_id).await })
+    };
+    tokio::time::sleep(Duration::from_millis(10)).await;
+
+    handles.block_sends_a.store(false, Ordering::Release);
+    handles.send_release_a.notify_waiters();
+    first_send.await.unwrap().unwrap();
+    assert_eq!(
+        cancel.await.unwrap().unwrap_err().code(),
+        SessionErrorCode::SessionDisconnected
+    );
+    let queued_error = queued_call.await.unwrap().unwrap_err();
+    assert!(
+        handles.closed_a.load(Ordering::Acquire),
+        "sequence-bearing queued cancellation did not close with {}",
+        queued_error.code().as_str()
+    );
+    assert_eq!(queued_error.code(), SessionErrorCode::Cancelled);
+    if let Ok(Ok(frame)) =
+        tokio::time::timeout(Duration::from_millis(50), responder.receive_ttrpc()).await
+    {
+        assert_ne!(frame, vec![0x22], "cancelled outbound call reached peer");
     }
 }
 

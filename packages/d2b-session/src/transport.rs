@@ -110,6 +110,18 @@ pub trait OwnedTransport: Send + 'static {
     /// write. Direct transports complete writes inline and need no guard.
     fn set_write_cancellation(&mut self, _cancellation: Option<Cancellation>) {}
 
+    /// Begins driver-owned atomic collection for one logical write.
+    #[doc(hidden)]
+    fn begin_write_batch(&mut self, cancellation: Option<Cancellation>) {
+        self.set_write_cancellation(cancellation);
+    }
+
+    /// Takes one driver-owned logical write and its close disposition.
+    #[doc(hidden)]
+    fn take_write_batch(&mut self) -> Option<(Vec<TransportPacket>, Option<Cancellation>, bool)> {
+        None
+    }
+
     /// Receives protected bytes and opaque transport-owned payloads.
     ///
     /// A transport must construct received attachments with
