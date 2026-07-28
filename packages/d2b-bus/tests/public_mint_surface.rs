@@ -69,7 +69,13 @@ fn public_api_has_only_the_approved_capability_mint_surface() {
          {APPROVED_CAPABILITY_MINT_POINTS:?}. Review every API delta across d2b-bus \
          and d2b-session for a new \
          constructor, factory, capability accessor, or externally implementable \
-         producer before updating tests/approved-public-api.txt."
+         producer before updating tests/approved-public-api.txt.\n\
+         \n\
+         If the delta is only inherent methods on container types such as \
+         BoundedVec, regenerate this list under the toolchain pinned in \
+         rust-toolchain.toml rather than whatever rustc is on your PATH: the \
+         snapshot includes std-derived inherent methods, so a newer local \
+         compiler adds entries that the pinned CI toolchain does not render."
     );
     for mint in APPROVED_CAPABILITY_MINT_POINTS {
         let mint = format!("d2b_bus::{mint}");
@@ -218,6 +224,15 @@ fn collect_members(
     public: &mut BTreeSet<String>,
     capability_surface: &mut BTreeSet<String>,
 ) {
+    // Methods surfaced through `Deref` come from the standard library, not from
+    // this crate, so they cannot widen the capability surface - and they change
+    // with the compiler version, which makes the snapshot fail on a toolchain
+    // bump for a reason that has nothing to do with the invariant. Everything
+    // after the first deref-methods block is dropped.
+    let html = html
+        .split_once("id=\"deref-methods-")
+        .map_or(html, |(own, _)| own);
+
     for section in html.split("<section id=\"").skip(1) {
         let Some((id, rest)) = section.split_once('"') else {
             continue;
