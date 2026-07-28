@@ -18,5 +18,5 @@ pub use owner_reconcile::{
 };
 pub use runtime::{
     CoreAdmissionCounts, CoreControllerSource, CoreDispatchOutcome, CoreReconcileError,
-    CoreResourceReconciler, CoreSourceError, DurableCommitEvidence, RegisteredControllerApi,
+    CoreResourceReconciler, CoreSourceError, RegisteredControllerApi,
 };

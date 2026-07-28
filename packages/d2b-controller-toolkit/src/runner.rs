@@ -183,13 +183,7 @@ impl core::fmt::Debug for FreshSnapshot {
 
 /// Expedited admission decision.
 pub enum CommitDecision {
-    Committed {
-        zone: ZoneId,
-        resource_uid: d2b_contracts::v3::ResourceUid,
-        generation: ResourceGeneration,
-        revision: ZoneRevision,
-        operation_id: String,
-    },
+    Committed(CommittedRevisionProof),
     Abort,
 }
 
@@ -197,7 +191,7 @@ impl CommitDecision {
     /// Borrow the committed Zone when durable evidence is present.
     pub const fn zone(&self) -> Option<&ZoneId> {
         match self {
-            Self::Committed { zone, .. } => Some(zone),
+            Self::Committed(proof) => Some(proof.zone()),
             Self::Abort => None,
         }
     }
@@ -205,7 +199,7 @@ impl CommitDecision {
     /// Borrow the operation ID for protocol correlation.
     pub fn operation_id(&self) -> Option<&str> {
         match self {
-            Self::Committed { operation_id, .. } => Some(operation_id),
+            Self::Committed(proof) => Some(proof.operation_id()),
             Self::Abort => None,
         }
     }
@@ -214,16 +208,12 @@ impl CommitDecision {
 impl core::fmt::Debug for CommitDecision {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::Committed {
-                generation,
-                revision,
-                ..
-            } => f
+            Self::Committed(proof) => f
                 .debug_struct("CommitDecision::Committed")
                 .field("has_zone", &true)
                 .field("has_resource_uid", &true)
-                .field("generation", generation)
-                .field("revision", revision)
+                .field("generation", &proof.generation())
+                .field("revision", &proof.revision())
                 .field("has_operation_id", &true)
                 .finish(),
             Self::Abort => f.write_str("CommitDecision::Abort"),
@@ -1572,20 +1562,7 @@ where
 
     if work.lane() == PriorityLane::Expedited {
         match source.await_expedited_commit(&context).await {
-            Ok(CommitDecision::Committed {
-                zone,
-                resource_uid,
-                generation,
-                revision,
-                operation_id,
-            }) => {
-                let proof = CommittedRevisionProof::issue(
-                    zone,
-                    resource_uid,
-                    generation,
-                    revision,
-                    operation_id,
-                );
+            Ok(CommitDecision::Committed(proof)) => {
                 context = match context.bind_committed_proof(proof) {
                     Ok(context) => context,
                     Err(_) => {
@@ -2145,13 +2122,13 @@ mod tests {
             Ok(if self.abort_expedited.load(Ordering::SeqCst) {
                 CommitDecision::Abort
             } else {
-                CommitDecision::Committed {
-                    zone: context.target().zone().clone(),
-                    resource_uid: context.target().uid().clone(),
-                    generation: context.generation(),
-                    revision: context.revision(),
-                    operation_id: context.operation().operation_id().to_owned(),
-                }
+                CommitDecision::Committed(CommittedRevisionProof::issue(
+                    context.target().zone().clone(),
+                    context.target().uid().clone(),
+                    context.generation(),
+                    context.revision(),
+                    context.operation().operation_id().to_owned(),
+                ))
             })
         }
 
@@ -3886,13 +3863,13 @@ mod tests {
         const OPERATION: &str = "commit-operation-debug-sentinel";
         const ZONE: &str = "commit-zone-debug-sentinel";
         const UID: &str = "deadbeef-dead-4bad-8bad-deadbeef0009";
-        let decision = CommitDecision::Committed {
-            zone: ZoneId::parse(ZONE).unwrap(),
-            resource_uid: ResourceUid::parse(UID).unwrap(),
-            generation: ResourceGeneration::new(2).unwrap(),
-            revision: ZoneRevision::new(3),
-            operation_id: OPERATION.to_owned(),
-        };
+        let decision = CommitDecision::Committed(CommittedRevisionProof::issue(
+            ZoneId::parse(ZONE).unwrap(),
+            ResourceUid::parse(UID).unwrap(),
+            ResourceGeneration::new(2).unwrap(),
+            ZoneRevision::new(3),
+            OPERATION.to_owned(),
+        ));
         assert_eq!(decision.operation_id(), Some(OPERATION));
         assert_eq!(decision.zone().unwrap().as_str(), ZONE);
 

@@ -9,7 +9,7 @@ use std::{
     },
 };
 
-use d2b_contracts::v3::{ResourceGeneration, ResourceUid, ZoneId, ZoneRevision};
+use d2b_contracts::v3::ZoneRevision;
 use d2b_controller_toolkit::{
     CommitDecision, CommitOutcome, ControllerDescriptor, ControllerHealth, ControllerSource,
     DependencySnapshot, DisruptionClass, DrainResult, FinalizeResult, FreshSnapshot,
@@ -58,60 +58,6 @@ pub struct CoreAdmissionCounts {
     pub backpressure: usize,
 }
 
-/// Durable commit evidence consumed from the registered resource plane.
-///
-/// There is intentionally no public constructor. The production resource
-/// backend is not registered yet, so no production implementation can mint
-/// this authority until that integration lands.
-pub struct DurableCommitEvidence {
-    zone: ZoneId,
-    resource_uid: ResourceUid,
-    generation: ResourceGeneration,
-    revision: ZoneRevision,
-    operation_id: String,
-}
-
-impl DurableCommitEvidence {
-    fn into_decision(self) -> CommitDecision {
-        CommitDecision::Committed {
-            zone: self.zone,
-            resource_uid: self.resource_uid,
-            generation: self.generation,
-            revision: self.revision,
-            operation_id: self.operation_id,
-        }
-    }
-
-    #[cfg(test)]
-    fn for_test(
-        zone: ZoneId,
-        resource_uid: ResourceUid,
-        generation: ResourceGeneration,
-        revision: ZoneRevision,
-        operation_id: String,
-    ) -> Self {
-        Self {
-            zone,
-            resource_uid,
-            generation,
-            revision,
-            operation_id,
-        }
-    }
-}
-
-impl core::fmt::Debug for DurableCommitEvidence {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("DurableCommitEvidence")
-            .field("has_zone", &true)
-            .field("has_resource_uid", &true)
-            .field("generation", &self.generation)
-            .field("revision", &self.revision)
-            .field("has_operation_id", &true)
-            .finish()
-    }
-}
-
 mod registered_api {
     pub trait Sealed {}
 }
@@ -146,11 +92,6 @@ pub trait RegisteredControllerApi: registered_api::Sealed + Send + Sync + 'stati
         &self,
         context: &ReconcileContext,
     ) -> impl Future<Output = Result<(), SourceError>> + Send;
-
-    fn consume_expedited_commit(
-        &self,
-        context: &ReconcileContext,
-    ) -> impl Future<Output = Result<Option<DurableCommitEvidence>, SourceError>> + Send;
 
     fn commit_result(
         &self,
@@ -400,12 +341,9 @@ where
 
     async fn await_expedited_commit(
         &self,
-        context: &ReconcileContext,
+        _context: &ReconcileContext,
     ) -> Result<CommitDecision, SourceError> {
-        Ok(match self.api.consume_expedited_commit(context).await? {
-            Some(evidence) => evidence.into_decision(),
-            None => CommitDecision::Abort,
-        })
+        Ok(CommitDecision::Abort)
     }
 
     fn commit_result(
@@ -625,8 +563,6 @@ mod tests {
     struct TestRegisteredApi {
         initial: InitialList,
         snapshots: Mutex<BTreeMap<ResourceKey, FreshSnapshot>>,
-        commit_evidence: Mutex<Option<DurableCommitEvidence>>,
-        commit_consumptions: AtomicUsize,
         starting: Mutex<BTreeSet<(ResourceKey, ZoneRevision)>>,
         commits: Mutex<BTreeSet<(ResourceKey, ZoneRevision)>>,
         checkpoints: Mutex<BTreeSet<(ResourceKey, ZoneRevision)>>,
@@ -640,8 +576,6 @@ mod tests {
             Arc::new(Self {
                 initial,
                 snapshots: Mutex::new(snapshots),
-                commit_evidence: Mutex::new(None),
-                commit_consumptions: AtomicUsize::new(0),
                 starting: Mutex::new(BTreeSet::new()),
                 commits: Mutex::new(BTreeSet::new()),
                 checkpoints: Mutex::new(BTreeSet::new()),
@@ -649,13 +583,6 @@ mod tests {
                 checkpoint_notify: tokio::sync::Notify::new(),
                 outcomes: Mutex::new(VecDeque::new()),
             })
-        }
-
-        fn install_commit_evidence(&self, evidence: DurableCommitEvidence) {
-            *self
-                .commit_evidence
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(evidence);
         }
 
         fn starting_count(&self) -> usize {
@@ -756,19 +683,6 @@ mod tests {
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .insert((context.target().clone(), context.revision()));
             std::future::ready(Ok(()))
-        }
-
-        fn consume_expedited_commit(
-            &self,
-            _context: &ReconcileContext,
-        ) -> impl Future<Output = Result<Option<DurableCommitEvidence>, SourceError>> + Send
-        {
-            self.commit_consumptions.fetch_add(1, Ordering::Release);
-            std::future::ready(Ok(self
-                .commit_evidence
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .take()))
         }
 
         fn commit_result(
@@ -993,7 +907,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn absent_durable_commit_evidence_cannot_authorize_expedited_effects() {
+    async fn production_core_source_cannot_authorize_expedited_effects() {
         let target = key("expedited", 2);
         let descriptor = descriptor(8);
         let (api, source) = source_with_snapshot(&descriptor, &target, 2);
@@ -1031,52 +945,12 @@ mod tests {
         assert_eq!(report.checkpointed, 0);
         assert_eq!(api.starting_count(), 0);
         assert_eq!(api.commit_count(), 0);
-        assert_eq!(api.commit_consumptions.load(Ordering::Acquire), 1);
-    }
-
-    #[tokio::test]
-    async fn consumed_commit_evidence_is_not_reconstructed_from_the_context() {
-        let target = key("mismatch", 3);
-        let descriptor = descriptor(8);
-        let (api, source) = source_with_snapshot(&descriptor, &target, 2);
-        api.install_commit_evidence(DurableCommitEvidence::for_test(
-            target.zone().clone(),
-            target.uid().clone(),
-            ResourceGeneration::new(3).unwrap(),
-            ZoneRevision::new(3),
-            "independent-commit".to_owned(),
-        ));
-        let runner = Runner::new(
-            CoreResourceReconciler::new(descriptor),
-            Arc::clone(&source),
-            RunnerConfig {
-                policy_revision: 1,
-                api_revision: 1,
-                configuration_revision: ConfigurationGeneration::new(1).unwrap(),
-                deadline_tick: 5_000,
-                max_attempts: 3,
-            },
-        )
-        .run();
-
-        source
-            .dispatch_change(
-                controller_key(),
-                change(
-                    target,
-                    2,
-                    BTreeSet::from([CoreTriggerReason::ExpeditedMutation]),
-                ),
-                operation("context"),
-            )
-            .unwrap();
-        source.close_watch().unwrap();
-
-        let report = runner.await.unwrap();
-        assert_eq!(report.dispatched, 1);
-        assert_eq!(api.starting_count(), 0);
-        assert_eq!(api.commit_count(), 0);
-        assert_eq!(api.commit_consumptions.load(Ordering::Acquire), 1);
+        assert!(
+            api.outcomes
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .is_empty()
+        );
     }
 
     #[tokio::test]
