@@ -7,6 +7,7 @@ description = "Provider-neutral host-side Wayland proxy for d2b workloads"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
+d2b-chrome-engine = { path = "../../lab/chrome-engine" }
 d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
 d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
 libc = "0.2"

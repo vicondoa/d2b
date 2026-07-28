@@ -43,7 +43,10 @@ use wl_proxy::{
 use crate::diag::{DiagRateLimiter, bounded_error_detail};
 
 pub const DEFAULT_BORDER_THICKNESS: u32 = 4;
-pub const WRAPPER_RAIL_WIDTH: u32 = 9;
+/// Prototype: the reserved identity band replaces the 9px rail. The band is a
+/// minimum; the engine grows it from measured content. Horizontal offsets in
+/// the wrapper path become vertical ones throughout.
+pub const WRAPPER_RAIL_WIDTH: u32 = 32;
 const MAX_LABEL_CHARS: usize = 64;
 const BYTES_PER_PIXEL: u32 = 4;
 const MAX_DECORATION_DIMENSION: u32 = 16_384;
@@ -480,30 +483,53 @@ pub fn draw_decoration(input: &DrawInput) -> Option<Vec<u8>> {
     Some(pixels)
 }
 
+/// Draw the reserved identity band using the prototype chrome engine, so the
+/// live proxy and the offline sheets render from one implementation.
+///
+/// `band_height` is the band, not the window: the buffer is a full-width strip
+/// at the top of the wrapper, with the guest subsurface placed below it.
 fn draw_wrapper_rail(
     width: u32,
-    height: u32,
+    band_height: u32,
     color: Color,
     label: Option<&SanitizedLabel>,
 ) -> Option<Vec<u8>> {
-    let size = Size::new(width, height);
+    use d2b_chrome_engine::{
+        color::Rgba,
+        text::TextRenderer,
+        variant::{render, Candidate, ChromeSpec},
+        PROTOTYPE_FONT,
+    };
+
+    let size = Size::new(width, band_height);
     let layout = decoration_buffer_layout(size)?;
-    let mut pixels = vec![0_u8; layout.len];
-    let color_bytes = color.argb8888_bytes();
-    for y in 0..layout.height {
-        for x in 0..layout.width.min(WRAPPER_RAIL_WIDTH as usize) {
-            set_pixel(&mut pixels, layout.width, x, y, color_bytes);
-        }
+
+    let fonts = TextRenderer::from_bytes(PROTOTYPE_FONT).ok()?;
+    let mut spec = ChromeSpec::new(
+        Candidate::BandNeutral,
+        label.map(SanitizedLabel::as_str).unwrap_or("workload"),
+        Rgba::rgba(color.r, color.g, color.b, color.a),
+    );
+    spec.content_width = width;
+    // The engine renders band plus content; we only need the band, so ask for
+    // the smallest legal content area and copy the band rows out.
+    spec.content_height = 1;
+    if let Ok(status) = std::env::var("D2B_CHROME_STATUS")
+        && !status.is_empty()
+    {
+        spec.status = Some(status);
     }
-    if let Some(label) = label {
-        draw_vertical_label(
-            &mut pixels,
-            layout.width,
-            layout.height,
-            WRAPPER_RAIL_WIDTH,
-            color,
-            label.as_str(),
-        );
+
+    let rendered = render(&spec, &fonts, Rgba::TRANSPARENT);
+    let mut pixels = vec![0_u8; layout.len];
+    for y in 0..layout.height.min(rendered.canvas.height) {
+        for x in 0..layout.width.min(rendered.canvas.width) {
+            let p = rendered.canvas.get(x, y);
+            if p.a == 0 {
+                continue;
+            }
+            set_pixel(&mut pixels, layout.width, x, y, [p.b, p.g, p.r, p.a]);
+        }
     }
     Some(pixels)
 }
@@ -1085,19 +1111,21 @@ impl WrapperGeometry {
             u32::try_from(geometry.width).ok()?,
             u32::try_from(geometry.height).ok()?,
         );
+        // The band is reserved at the TOP: width is untouched and the guest is
+        // pushed down, so niri lays out and borders the band-inclusive rect.
         let outer = Size::new(
-            content.width.checked_add(WRAPPER_RAIL_WIDTH)?,
-            content.height,
+            content.width,
+            content.height.checked_add(WRAPPER_RAIL_WIDTH)?,
         );
         Some(Self {
             rail_width: WRAPPER_RAIL_WIDTH,
             content,
             outer,
             guest_offset: Point {
-                x: i32::try_from(WRAPPER_RAIL_WIDTH)
+                x: geometry.x.checked_neg()?,
+                y: i32::try_from(WRAPPER_RAIL_WIDTH)
                     .ok()?
-                    .checked_sub(geometry.x)?,
-                y: geometry.y.checked_neg()?,
+                    .checked_sub(geometry.y)?,
             },
         })
     }
@@ -1443,7 +1471,7 @@ impl DecorationManager {
         wrapper_toplevel.set_forward_to_client(false);
         let guest_subsurface = subcompositor.new_send_get_subsurface(surface, &wrapper_surface);
         guest_subsurface.set_forward_to_client(false);
-        guest_subsurface.send_set_position(i32::try_from(WRAPPER_RAIL_WIDTH).unwrap_or(0), 0);
+        guest_subsurface.send_set_position(0, i32::try_from(WRAPPER_RAIL_WIDTH).unwrap_or(0));
         guest_subsurface.send_place_below(&wrapper_surface);
         guest_subsurface.send_set_desync();
 
@@ -1609,10 +1637,10 @@ impl DecorationManager {
         else {
             return false;
         };
-        let width = if width > 0 {
-            width.saturating_add(i32::try_from(WRAPPER_RAIL_WIDTH).unwrap_or(0))
+        let height = if height > 0 {
+            height.saturating_add(i32::try_from(WRAPPER_RAIL_WIDTH).unwrap_or(0))
         } else {
-            width
+            height
         };
         wrapper.wrapper_toplevel.send_set_min_size(width, height);
         true
@@ -1626,10 +1654,10 @@ impl DecorationManager {
         else {
             return false;
         };
-        let width = if width > 0 {
-            width.saturating_add(i32::try_from(WRAPPER_RAIL_WIDTH).unwrap_or(0))
+        let height = if height > 0 {
+            height.saturating_add(i32::try_from(WRAPPER_RAIL_WIDTH).unwrap_or(0))
         } else {
-            width
+            height
         };
         wrapper.wrapper_toplevel.send_set_max_size(width, height);
         true
@@ -1672,13 +1700,11 @@ impl DecorationManager {
         };
         state.visual.fullscreen = xdg_state_contains(states, XdgToplevelState::FULLSCREEN.0);
         state.visual.active = xdg_state_contains(states, XdgToplevelState::ACTIVATED.0);
-        let rail = if state.visual.fullscreen {
-            0
-        } else {
-            i32::try_from(WRAPPER_RAIL_WIDTH).unwrap_or(0)
-        };
-        let content_width = if width > 0 {
-            width.saturating_sub(rail).max(1)
+        // The band is retained in fullscreen: that is exactly when a guest
+        // could otherwise impersonate a whole desktop.
+        let band = i32::try_from(WRAPPER_RAIL_WIDTH).unwrap_or(0);
+        let content_height = if height > 0 {
+            height.saturating_sub(band).max(1)
         } else {
             0
         };
@@ -1686,7 +1712,7 @@ impl DecorationManager {
             wrapper.current_configure = ConfigureSize::new(width, height);
             wrapper
                 .guest_toplevel
-                .send_configure(content_width, height, states);
+                .send_configure(width, content_height, states);
         }
     }
 
@@ -1863,8 +1889,8 @@ impl DecorationManager {
         };
         let new_buffer = if needs_buffer && wrapper_geometry.rail_width > 0 {
             match self.create_wrapper_rail_buffer(
+                wrapper_geometry.outer.width,
                 wrapper_geometry.rail_width,
-                wrapper_geometry.outer.height,
                 key.color,
                 key.label.as_ref(),
             ) {
@@ -1902,12 +1928,21 @@ impl DecorationManager {
         if let Some(compositor) = &compositor {
             let region = compositor.new_send_create_region();
             if wrapper_geometry.rail_width > 0 {
-                region.send_add(
-                    0,
-                    0,
-                    i32::try_from(wrapper_geometry.rail_width).unwrap_or(i32::MAX),
-                    i32::try_from(wrapper_geometry.outer.height).unwrap_or(i32::MAX),
-                );
+                // The input region covers the identity button alone, not the
+                // whole band and never a window edge. This is the fix for the
+                // rail swallowing every left-edge event.
+                use d2b_chrome_engine::geom::{resolve, LayoutInput, Size as ESize};
+                let input = LayoutInput {
+                    content: ESize::new(
+                        wrapper_geometry.content.width,
+                        wrapper_geometry.content.height,
+                    ),
+                    ..Default::default()
+                };
+                if let Some(l) = resolve(input).layout() {
+                    let r = l.input_region();
+                    region.send_add(r.x, r.y, r.width as i32, r.height as i32);
+                }
             }
             wrapper.wrapper_surface.send_set_input_region(Some(&region));
             region.send_destroy();
