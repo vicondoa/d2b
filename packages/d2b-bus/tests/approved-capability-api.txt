@@ -34,6 +34,9 @@ d2b_session::AuthenticatedComponentSession::method:start_authorized_ttrpc
 d2b_session::AuthenticatedComponentSession::method:try_from
 d2b_session::AuthenticatedComponentSession::method:try_into
 d2b_session::AuthenticatedComponentSession::method:type_id
+d2b_session::AuthenticatedSessionRouteBinding::method:context
+d2b_session::AuthenticatedSessionRouteBinding::method:subject_ref
+d2b_session::AuthenticatedSessionRouteBinding::method:subject_uid
 d2b_session::SessionAcceptor
 d2b_session::SessionAcceptor::associatedtype:Error
 d2b_session::SessionAcceptor::associatedtype:Error-1
@@ -52,6 +55,7 @@ d2b_session::SessionAcceptor::method:with_metrics
 d2b_session::SessionRegistrationCapability
 d2b_session::SessionRegistrationCapability::associatedtype:Error
 d2b_session::SessionRegistrationCapability::tymethod:consume
+d2b_session::contract::BootstrapIdentityBinding
 d2b_session_unix::VerifiedUnixPeer
 d2b_session_unix::VerifiedUnixPeer::associatedtype:Error
 d2b_session_unix::VerifiedUnixPeer::associatedtype:Error-1

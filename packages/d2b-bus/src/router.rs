@@ -3,27 +3,31 @@
 use std::{
     collections::BTreeMap,
     sync::{
-        Arc, Mutex, MutexGuard,
+        Arc, Mutex, MutexGuard, Weak,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
 
 use d2b_contracts::v3::{
-    AuthenticatedSubjectContext, ControllerGeneration, EvidenceClass, Locality, ResourceGeneration,
-    ResourceName, ResourceRef, ResourceTypeName, ResourceUid, SessionBinding, ZoneId,
+    AuthenticatedSubjectContext, EvidenceClass, Locality, ResourceName, ResourceRef,
+    ResourceTypeName, ZoneId,
 };
+#[cfg(test)]
+use d2b_contracts::v3::{ControllerGeneration, ResourceGeneration, ResourceUid, SessionBinding};
 use d2b_resource_api::authz::{
     ApiMethod, AuthorizationRequest, AuthorizationState, AuthorizationTarget, PolicySet,
     ResourceVerb, SessionVerb,
 };
 use d2b_session::{
     AuthenticatedComponentSession, AuthenticatedSessionRouteBinding, AuthenticatedTtrpcHandle,
-    GENERATED_OPERATION_CATALOG, OperationKind, SessionAcceptor, SessionAuthenticationBinding,
-    SessionAuthorizationRequest, SessionCancellationHandle, SessionOperation,
-    SessionRegistrationCapability, TransportEvidence, contract::EndpointPolicy, resource_operation,
-    rewrite_ttrpc_stream_id, ttrpc_request_id, ttrpc_stream_id,
+    GENERATED_OPERATION_CATALOG, OperationKind, SessionAcceptor, SessionAuthorizationRequest,
+    SessionCancellationHandle, SessionOperation, SessionRegistrationCapability,
+    contract::EndpointPolicy, resource_operation, rewrite_ttrpc_stream_id, ttrpc_request_id,
+    ttrpc_stream_id,
 };
+#[cfg(test)]
+use d2b_session::{SessionAuthenticationBinding, TransportEvidence};
 use d2b_session_unix::{PeerCredentials, VerifiedUnixPeer};
 use tokio::sync::{Mutex as AsyncMutex, oneshot};
 
@@ -48,6 +52,7 @@ pub const DEFAULT_MAX_ROUTES_PER_SESSION: usize = 128;
 pub const DEFAULT_MAX_TOTAL_ROUTES: usize = 4096;
 const DEFAULT_MAX_CORRELATIONS_PER_GENERATION: u64 =
     u32::MAX as u64 - RESERVED_CORRELATION_MAX as u64;
+const CANCEL_DELIVERY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Monotonic clock used for operation deadlines.
 pub trait BusClock: Send + Sync + 'static {
@@ -567,7 +572,7 @@ struct BusCore {
     registry: Mutex<Registry>,
     authorizer: Arc<BusAuthorizer>,
     operations: Mutex<OperationTable>,
-    cancel_deliveries: Mutex<PendingCancelDeliveries>,
+    cancel_deliveries: Arc<PendingCancelDeliveries>,
     streams: Arc<StreamBridge>,
     clock: Arc<dyn BusClock>,
     max_payload_bytes: usize,
@@ -592,7 +597,7 @@ struct InvocationHook {
 }
 
 struct PendingCancelDeliveryLease {
-    core: Arc<BusCore>,
+    pending: Weak<PendingCancelDeliveries>,
     operation: OperationId,
     source: SessionId,
     cancellation: Cancellation,
@@ -600,11 +605,9 @@ struct PendingCancelDeliveryLease {
 
 impl Drop for PendingCancelDeliveryLease {
     fn drop(&mut self) {
-        self.core.lock_cancel_deliveries().complete(
-            &self.operation,
-            self.source,
-            &self.cancellation,
-        );
+        if let Some(pending) = self.pending.upgrade() {
+            pending.complete(&self.operation, self.source, &self.cancellation);
+        }
     }
 }
 
@@ -618,6 +621,7 @@ impl BusCore {
         let targets = self.lock_operations().cancel_session(session);
         self.streams.cancel_session(session);
         self.dispatch_cancel_targets(targets);
+        self.cancel_deliveries.abort_destination(session);
         invalidation
     }
 
@@ -629,44 +633,58 @@ impl BusCore {
 
     fn dispatch_cancel_targets(self: &Arc<Self>, targets: Vec<CancelDispatch>) {
         for dispatch in targets {
+            let delivery = dispatch
+                .target
+                .endpoint
+                .terminalize_cancel(&dispatch.operation, &dispatch.target.cancellation);
             if dispatch.target.route.generations().session() != dispatch.target.generation {
                 self.observe_error(BusEvent::Cancel, &BusError::SessionMismatch);
                 continue;
             }
-            match self.lock_cancel_deliveries().admit(&dispatch) {
-                CancelDeliveryAdmission::Duplicate => continue,
-                CancelDeliveryAdmission::Full => {
-                    self.observer
-                        .record(BusEvent::Cancel, BusFailureReason::Abandoned);
-                    continue;
-                }
-                CancelDeliveryAdmission::Admitted => {}
-            }
-            let CancelDispatch {
-                operation,
-                source,
-                target,
-            } = dispatch;
             if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-                let core = Arc::clone(self);
-                runtime.spawn(async move {
+                let operation = dispatch.operation.clone();
+                let source = dispatch.source;
+                let cancellation = dispatch.target.cancellation.clone();
+                let pending = Arc::clone(&self.cancel_deliveries);
+                let pending_weak = Arc::downgrade(&pending);
+                let observer = Arc::clone(&self.observer);
+                let (start, started) = oneshot::channel();
+                let task = runtime.spawn(async move {
+                    if started.await.is_err() {
+                        return;
+                    }
                     let _pending = PendingCancelDeliveryLease {
-                        core: Arc::clone(&core),
+                        pending: pending_weak,
                         operation: operation.clone(),
                         source,
-                        cancellation: target.cancellation.clone(),
+                        cancellation,
                     };
-                    if let Err(error) = target
-                        .endpoint
-                        .cancel(&operation, &target.cancellation)
-                        .await
-                    {
-                        core.observe_error(BusEvent::Cancel, &BusError::Endpoint(error));
+                    match tokio::time::timeout(CANCEL_DELIVERY_TIMEOUT, delivery).await {
+                        Ok(Ok(())) => {}
+                        Ok(Err(error)) => observer.record(
+                            BusEvent::Cancel,
+                            BusFailureReason::from_error(&BusError::Endpoint(error)),
+                        ),
+                        Err(_) => {
+                            observer.record(BusEvent::Cancel, BusFailureReason::Abandoned);
+                        }
                     }
                 });
+                match pending.admit(&dispatch, task.abort_handle()) {
+                    CancelDeliveryAdmission::Admitted => {
+                        let _ = start.send(());
+                    }
+                    CancelDeliveryAdmission::Duplicate => {
+                        task.abort();
+                    }
+                    CancelDeliveryAdmission::Full => {
+                        task.abort();
+                        self.observer
+                            .record(BusEvent::Cancel, BusFailureReason::Abandoned);
+                    }
+                }
             } else {
-                self.lock_cancel_deliveries()
-                    .complete(&operation, source, &target.cancellation);
+                drop(delivery);
                 self.observer
                     .record(BusEvent::Cancel, BusFailureReason::Abandoned);
             }
@@ -686,12 +704,6 @@ impl BusCore {
 
     fn lock_operations(&self) -> MutexGuard<'_, OperationTable> {
         self.operations
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
-
-    fn lock_cancel_deliveries(&self) -> MutexGuard<'_, PendingCancelDeliveries> {
-        self.cancel_deliveries
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
@@ -835,7 +847,10 @@ impl ZoneBus {
             zone,
             authorizer: Arc::new(authorizer),
             operations: Mutex::new(operations),
-            cancel_deliveries: Mutex::new(PendingCancelDeliveries::new(config.max_operations)),
+            cancel_deliveries: Arc::new(PendingCancelDeliveries::new(
+                config.max_operations,
+                config.max_operations_per_session,
+            )),
             streams,
             clock,
             max_payload_bytes: config.max_payload_bytes,
@@ -853,8 +868,7 @@ impl ZoneBus {
                 component_admission: ComponentSessionRegistrar {
                     identity: Arc::new(ComponentSessionAdmissionIdentity),
                 },
-                unix_subjects: Mutex::new(Vec::new()),
-                max_pending_unix_subjects: config.max_total_routes,
+                unix_subjects: AuthoritativeUnixSubjectResolver::deny_all(config.max_total_routes),
             },
         ))
     }
@@ -881,14 +895,15 @@ impl core::fmt::Debug for ZoneBus {
     }
 }
 
+#[cfg(test)]
 enum UnixSubjectKind {
     Host,
     Guest,
     Provider,
 }
 
-/// Configured Unix subject mapping consumed into one Zone registrar.
-pub struct UnixSubjectConfig {
+#[cfg(test)]
+pub(crate) struct UnixSubjectRecord {
     kind: UnixSubjectKind,
     subject_ref: ResourceRef,
     subject_uid: ResourceUid,
@@ -899,9 +914,9 @@ pub struct UnixSubjectConfig {
     controller_generation: Option<ControllerGeneration>,
 }
 
-impl UnixSubjectConfig {
-    /// Configure a Host subject mapping.
-    pub fn host(
+#[cfg(test)]
+impl UnixSubjectRecord {
+    pub(crate) fn host(
         subject_ref: ResourceRef,
         subject_uid: ResourceUid,
         zone_ref: ResourceRef,
@@ -916,8 +931,7 @@ impl UnixSubjectConfig {
         )
     }
 
-    /// Configure a Guest subject mapping.
-    pub fn guest(
+    pub(crate) fn guest(
         subject_ref: ResourceRef,
         subject_uid: ResourceUid,
         zone_ref: ResourceRef,
@@ -932,8 +946,7 @@ impl UnixSubjectConfig {
         )
     }
 
-    /// Configure a Provider subject mapping.
-    pub fn provider(
+    pub(crate) fn provider(
         subject_ref: ResourceRef,
         subject_uid: ResourceUid,
         zone_ref: ResourceRef,
@@ -983,8 +996,7 @@ impl UnixSubjectConfig {
         })
     }
 
-    /// Bind a Provider selected by trusted registrar configuration.
-    pub fn with_provider(
+    pub(crate) fn with_provider(
         mut self,
         provider_ref: ResourceRef,
         generation: ResourceGeneration,
@@ -999,13 +1011,12 @@ impl UnixSubjectConfig {
         Ok(self)
     }
 
-    /// Bind a controller generation selected by trusted registrar configuration.
-    pub fn with_controller_generation(mut self, generation: ControllerGeneration) -> Self {
+    pub(crate) fn with_controller_generation(mut self, generation: ControllerGeneration) -> Self {
         self.controller_generation = Some(generation);
         self
     }
 
-    fn bind(
+    pub(crate) fn bind(
         self,
         peer: VerifiedUnixPeer,
         evidence: &TransportEvidence,
@@ -1059,9 +1070,78 @@ impl UnixSubjectConfig {
     }
 }
 
-impl core::fmt::Debug for UnixSubjectConfig {
+#[cfg(test)]
+impl core::fmt::Debug for UnixSubjectRecord {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        formatter.write_str("UnixSubjectConfig(<redacted>)")
+        formatter.write_str("UnixSubjectRecord(<redacted>)")
+    }
+}
+
+struct AuthoritativeUnixSubjectResolver {
+    #[cfg(test)]
+    subjects: Mutex<Vec<UnixSubjectRecord>>,
+    #[cfg(test)]
+    max_subjects: usize,
+}
+
+impl AuthoritativeUnixSubjectResolver {
+    fn deny_all(_max_subjects: usize) -> Self {
+        Self {
+            #[cfg(test)]
+            subjects: Mutex::new(Vec::new()),
+            #[cfg(test)]
+            max_subjects: _max_subjects,
+        }
+    }
+
+    #[cfg(not(test))]
+    fn resolve(&self, _peer: PeerCredentials) -> d2b_session::Result<AuthenticatedSubjectContext> {
+        Err(d2b_session::SessionError::new(
+            d2b_session::contract::SessionErrorCode::SubjectMismatch,
+        ))
+    }
+
+    #[cfg(test)]
+    fn resolve(&self, peer: PeerCredentials) -> d2b_session::Result<UnixSubjectRecord> {
+        let mut subjects = self
+            .subjects
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let index = subjects
+            .iter()
+            .position(|subject| subject.expected_peer == peer)
+            .ok_or_else(|| {
+                d2b_session::SessionError::new(
+                    d2b_session::contract::SessionErrorCode::SubjectMismatch,
+                )
+            })?;
+        Ok(subjects.swap_remove(index))
+    }
+
+    #[cfg(test)]
+    fn install(&self, subject: UnixSubjectRecord, zone: &ZoneId) -> d2b_session::Result<()> {
+        if subject.zone_ref.name().as_str() != zone.as_str() {
+            return Err(d2b_session::SessionError::new(
+                d2b_session::contract::SessionErrorCode::SubjectMismatch,
+            ));
+        }
+        let mut subjects = self
+            .subjects
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if subjects.len() >= self.max_subjects {
+            return Err(d2b_session::SessionError::new(
+                d2b_session::contract::SessionErrorCode::SubjectMismatch,
+            ));
+        }
+        subjects.push(subject);
+        Ok(())
+    }
+}
+
+impl core::fmt::Debug for AuthoritativeUnixSubjectResolver {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("AuthoritativeUnixSubjectResolver(<redacted>)")
     }
 }
 
@@ -1069,8 +1149,7 @@ impl core::fmt::Debug for UnixSubjectConfig {
 pub struct ZoneRegistrar {
     core: Arc<BusCore>,
     component_admission: ComponentSessionRegistrar,
-    unix_subjects: Mutex<Vec<UnixSubjectConfig>>,
-    max_pending_unix_subjects: usize,
+    unix_subjects: AuthoritativeUnixSubjectResolver,
 }
 
 struct ComponentSessionAdmissionIdentity;
@@ -1104,44 +1183,12 @@ impl SessionRegistrationCapability<ComponentSessionRegistrar> for ComponentSessi
 }
 
 impl ZoneRegistrar {
-    /// Consume one configured mapping into this registrar's private admission state.
-    pub fn register_unix_subject(&self, subject: UnixSubjectConfig) -> d2b_session::Result<()> {
-        if subject.zone_ref.name().as_str() != self.core.zone.as_str() {
-            return Err(d2b_session::SessionError::new(
-                d2b_session::contract::SessionErrorCode::SubjectMismatch,
-            ));
-        }
-        let mut subjects = self
-            .unix_subjects
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if subjects.len() >= self.max_pending_unix_subjects
-            || subjects
-                .iter()
-                .any(|pending| pending.expected_peer == subject.expected_peer)
-        {
-            return Err(d2b_session::SessionError::new(
-                d2b_session::contract::SessionErrorCode::SubjectMismatch,
-            ));
-        }
-        subjects.push(subject);
-        Ok(())
-    }
-
-    fn take_unix_subject(&self, peer: PeerCredentials) -> d2b_session::Result<UnixSubjectConfig> {
-        let mut subjects = self
-            .unix_subjects
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let index = subjects
-            .iter()
-            .position(|subject| subject.expected_peer == peer)
-            .ok_or_else(|| {
-                d2b_session::SessionError::new(
-                    d2b_session::contract::SessionErrorCode::SubjectMismatch,
-                )
-            })?;
-        Ok(subjects.swap_remove(index))
+    #[cfg(test)]
+    pub(crate) fn install_test_unix_subject(
+        &self,
+        subject: UnixSubjectRecord,
+    ) -> d2b_session::Result<()> {
+        self.unix_subjects.install(subject, &self.core.zone)
     }
 
     #[cfg(test)]
@@ -1189,6 +1236,9 @@ impl ZoneRegistrar {
         let targets = self.core.lock_operations().cancel_session(previous.session);
         self.core.streams.cancel_session(previous.session);
         self.core.dispatch_cancel_targets(targets);
+        self.core
+            .cancel_deliveries
+            .abort_destination(previous.session);
         previous.closed = true;
         Ok(BusIngress {
             core: Arc::clone(&self.core),
@@ -1268,11 +1318,18 @@ impl ComponentResponses {
     }
 
     fn remove(&self, request_id: &d2b_session::contract::RequestId) {
-        let mut state = self
-            .state
+        Self::remove_component_waiter(&self.state, request_id);
+    }
+
+    fn remove_component_waiter(
+        responses: &Mutex<ComponentResponseState>,
+        request_id: &d2b_session::contract::RequestId,
+    ) {
+        responses
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        state.waiters.remove(request_id);
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .waiters
+            .remove(request_id);
     }
 
     async fn run(&self) {
@@ -1439,18 +1496,6 @@ impl ComponentActivity {
         Some(request)
     }
 
-    fn get(
-        &self,
-        operation: &OperationId,
-        attempt: &Cancellation,
-    ) -> Option<ActiveComponentRequest> {
-        self.requests
-            .get(operation)?
-            .iter()
-            .find(|request| request.attempt.is_same_attempt(attempt))
-            .cloned()
-    }
-
     fn revoke(&mut self) -> Vec<crate::registry::SessionInvalidation> {
         self.revoked = true;
         self.requests
@@ -1501,28 +1546,37 @@ impl ComponentEndpoint {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         activity.remove(operation, attempt)
     }
+}
 
-    fn active_request(
-        &self,
-        operation: &OperationId,
-        attempt: &Cancellation,
-    ) -> Option<ActiveComponentRequest> {
-        self.activity
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .get(operation, attempt)
+fn terminalize_component_request(
+    activity: &Mutex<ComponentActivity>,
+    responses: &Mutex<ComponentResponseState>,
+    operation: &OperationId,
+    attempt: &Cancellation,
+) -> Option<ActiveComponentRequest> {
+    let active = activity
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(operation, attempt);
+    if let Some(active) = &active {
+        active.valid.store(false, Ordering::Release);
+        active.write_guard.cancel();
+        ComponentResponses::remove_component_waiter(responses, &active.request_id);
     }
+    active
 }
 
 #[async_trait::async_trait]
 impl crate::registry::BusEndpoint for ComponentEndpoint {
     fn invalidate_session(&self) -> crate::registry::SessionInvalidation {
+        let writer_fence = self.cancellation.revoke_generation_writes();
         let revocations = self
             .activity
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .revoke();
         Box::pin(async move {
+            writer_fence.await;
             for revocation in revocations {
                 revocation.await;
             }
@@ -1687,23 +1741,28 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
         Err(EndpointError::Unavailable)
     }
 
-    async fn cancel(
+    fn terminalize_cancel(
         &self,
         operation: &OperationId,
         attempt: &Cancellation,
-    ) -> Result<(), EndpointError> {
-        let active = self.active_request(operation, attempt);
-        if let Some(active) = active {
-            active.valid.store(false, Ordering::Release);
-            active.write_guard.cancel();
-            self.cancellation
-                .cancel(active.request_id.clone())
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<(), EndpointError>> + Send + 'static>,
+    > {
+        let Some(active) = terminalize_component_request(
+            &self.activity,
+            &self.responses.state,
+            operation,
+            attempt,
+        ) else {
+            return Box::pin(async { Ok(()) });
+        };
+        let cancellation = self.cancellation.clone();
+        Box::pin(async move {
+            cancellation
+                .cancel(active.request_id)
                 .await
-                .map_err(EndpointError::from)?;
-            self.responses.remove(&active.request_id);
-            self.remove_active(operation, attempt);
-        }
-        Ok(())
+                .map_err(EndpointError::from)
+        })
     }
 }
 
@@ -1721,14 +1780,32 @@ impl ZoneRegistrar {
         verified_peer: VerifiedUnixPeer,
     ) -> d2b_session::Result<SessionAcceptor<ComponentSessionAdmission>> {
         verified_peer.validate_transport(policy.transport_binding.transport)?;
-        let subject = self.take_unix_subject(verified_peer.credentials())?;
+        #[cfg(test)]
+        let subject = self.unix_subjects.resolve(verified_peer.credentials())?;
+        #[cfg(not(test))]
+        let context = self.unix_subjects.resolve(verified_peer.credentials())?;
         let connect_authorizer = Arc::clone(&self.core.authorizer);
         let request_authorizer = Arc::clone(&self.core.authorizer);
         SessionAcceptor::from_verified_adapter(
             policy,
             self.core.zone.clone(),
             move |evidence, binding, expected_zone, now_tick| {
+                #[cfg(test)]
                 let context = subject.bind(verified_peer, &evidence, binding, expected_zone)?;
+                #[cfg(not(test))]
+                {
+                    verified_peer.validate_transport(binding.transport_class())?;
+                    if evidence.class() != EvidenceClass::UnixPeer
+                        || binding.evidence_class() != EvidenceClass::UnixPeer
+                        || binding.transport_binding().locality() != Locality::Local
+                        || context.zone_ref().name().as_str() != expected_zone.as_str()
+                        || evidence.binding_digest() != binding.transport_binding().binding_digest()
+                    {
+                        return Err(d2b_session::SessionError::new(
+                            d2b_session::contract::SessionErrorCode::SubjectMismatch,
+                        ));
+                    }
+                }
                 let lease =
                     connect_authorizer.authenticate_session(&context, expected_zone, now_tick)?;
                 Ok((context, lease))
@@ -1834,6 +1911,9 @@ impl ZoneRegistrar {
         let targets = self.core.lock_operations().cancel_session(previous.session);
         self.core.streams.cancel_session(previous.session);
         self.core.dispatch_cancel_targets(targets);
+        self.core
+            .cancel_deliveries
+            .abort_destination(previous.session);
         previous.closed = true;
         Ok(BusIngress {
             core: Arc::clone(&self.core),
@@ -2532,11 +2612,20 @@ mod tests {
 
     type RecordedCall = (RouteKey, Option<ResourceCall>, Vec<u8>);
 
+    #[derive(Clone, Copy)]
+    enum CancelDelivery {
+        Succeed,
+        Fail,
+        Pending,
+    }
+
     struct RecordingEndpoint {
         calls: Mutex<Vec<RecordedCall>>,
         incoming: Mutex<Vec<IncomingStream>>,
+        active_requests: Mutex<BTreeMap<OperationId, ()>>,
+        response_waiters: Mutex<BTreeMap<OperationId, ()>>,
         cancel_count: AtomicUsize,
-        cancel_failures: AtomicUsize,
+        cancel_delivery: CancelDelivery,
         blocking: bool,
         response: Vec<u8>,
         started: Notify,
@@ -2548,8 +2637,10 @@ mod tests {
             Arc::new(Self {
                 calls: Mutex::new(Vec::new()),
                 incoming: Mutex::new(Vec::new()),
+                active_requests: Mutex::new(BTreeMap::new()),
+                response_waiters: Mutex::new(BTreeMap::new()),
                 cancel_count: AtomicUsize::new(0),
-                cancel_failures: AtomicUsize::new(0),
+                cancel_delivery: CancelDelivery::Succeed,
                 blocking: false,
                 response: b"response".to_vec(),
                 started: Notify::new(),
@@ -2561,8 +2652,10 @@ mod tests {
             Arc::new(Self {
                 calls: Mutex::new(Vec::new()),
                 incoming: Mutex::new(Vec::new()),
+                active_requests: Mutex::new(BTreeMap::new()),
+                response_waiters: Mutex::new(BTreeMap::new()),
                 cancel_count: AtomicUsize::new(0),
-                cancel_failures: AtomicUsize::new(0),
+                cancel_delivery: CancelDelivery::Succeed,
                 blocking: true,
                 response: b"response".to_vec(),
                 started: Notify::new(),
@@ -2574,8 +2667,10 @@ mod tests {
             Arc::new(Self {
                 calls: Mutex::new(Vec::new()),
                 incoming: Mutex::new(Vec::new()),
+                active_requests: Mutex::new(BTreeMap::new()),
+                response_waiters: Mutex::new(BTreeMap::new()),
                 cancel_count: AtomicUsize::new(0),
-                cancel_failures: AtomicUsize::new(0),
+                cancel_delivery: CancelDelivery::Succeed,
                 blocking: false,
                 response: vec![0; DEFAULT_MAX_PAYLOAD_BYTES + 1],
                 started: Notify::new(),
@@ -2584,11 +2679,33 @@ mod tests {
         }
 
         fn failing_cancel() -> Arc<Self> {
-            let endpoint = Self::blocking();
-            endpoint
-                .cancel_failures
-                .store(usize::MAX, Ordering::Release);
-            endpoint
+            Arc::new(Self {
+                calls: Mutex::new(Vec::new()),
+                incoming: Mutex::new(Vec::new()),
+                active_requests: Mutex::new(BTreeMap::new()),
+                response_waiters: Mutex::new(BTreeMap::new()),
+                cancel_count: AtomicUsize::new(0),
+                cancel_delivery: CancelDelivery::Fail,
+                blocking: true,
+                response: b"response".to_vec(),
+                started: Notify::new(),
+                release: Notify::new(),
+            })
+        }
+
+        fn pending_cancel() -> Arc<Self> {
+            Arc::new(Self {
+                calls: Mutex::new(Vec::new()),
+                incoming: Mutex::new(Vec::new()),
+                active_requests: Mutex::new(BTreeMap::new()),
+                response_waiters: Mutex::new(BTreeMap::new()),
+                cancel_count: AtomicUsize::new(0),
+                cancel_delivery: CancelDelivery::Pending,
+                blocking: true,
+                response: b"response".to_vec(),
+                started: Notify::new(),
+                release: Notify::new(),
+            })
         }
 
         fn call_count(&self) -> usize {
@@ -2598,11 +2715,31 @@ mod tests {
         fn cancellation_count(&self) -> usize {
             self.cancel_count.load(Ordering::Acquire)
         }
+
+        fn has_active_request(&self, operation: &OperationId) -> bool {
+            self.active_requests.lock().unwrap().contains_key(operation)
+        }
+
+        fn has_response_waiter(&self, operation: &OperationId) -> bool {
+            self.response_waiters
+                .lock()
+                .unwrap()
+                .contains_key(operation)
+        }
     }
 
     #[async_trait]
     impl BusEndpoint for RecordingEndpoint {
         async fn invoke(&self, request: DeliveredInvocation) -> Result<BusResponse, EndpointError> {
+            let operation = request.operation().id().clone();
+            self.active_requests
+                .lock()
+                .unwrap()
+                .insert(operation.clone(), ());
+            self.response_waiters
+                .lock()
+                .unwrap()
+                .insert(operation.clone(), ());
             self.calls.lock().unwrap().push((
                 request.route().clone(),
                 request.resource_call().cloned(),
@@ -2612,6 +2749,8 @@ mod tests {
                 self.started.notify_one();
                 self.release.notified().await;
             }
+            self.active_requests.lock().unwrap().remove(&operation);
+            self.response_waiters.lock().unwrap().remove(&operation);
             Ok(BusResponse::new(self.response.clone()))
         }
 
@@ -2625,23 +2764,21 @@ mod tests {
             Ok(())
         }
 
-        async fn cancel(
+        fn terminalize_cancel(
             &self,
-            _operation: &OperationId,
+            operation: &OperationId,
             _attempt: &Cancellation,
-        ) -> Result<(), EndpointError> {
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<(), EndpointError>> + Send + 'static>,
+        > {
             self.cancel_count.fetch_add(1, Ordering::AcqRel);
-            if self
-                .cancel_failures
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
-                    remaining.checked_sub(1)
-                })
-                .is_ok()
-            {
-                return Err(EndpointError::Unavailable);
+            self.active_requests.lock().unwrap().remove(operation);
+            self.response_waiters.lock().unwrap().remove(operation);
+            match self.cancel_delivery {
+                CancelDelivery::Succeed => Box::pin(async { Ok(()) }),
+                CancelDelivery::Fail => Box::pin(async { Err(EndpointError::Unavailable) }),
+                CancelDelivery::Pending => Box::pin(std::future::pending()),
             }
-            self.release.notify_one();
-            Ok(())
         }
     }
 
@@ -2721,6 +2858,44 @@ mod tests {
                 attempt: Cancellation::new(),
                 write_guard: write_guard(3),
             },
+        ));
+    }
+
+    #[test]
+    fn component_cancel_terminalization_removes_activity_and_response_waiter() {
+        let operation = OperationId::parse("component-cancel").unwrap();
+        let attempt = Cancellation::new();
+        let request_id = d2b_session::contract::RequestId::new(vec![7; 16]).unwrap();
+        let valid = Arc::new(AtomicBool::new(true));
+        let mut requests = d2b_session::RequestRegistry::new(1).unwrap();
+        let write_guard = requests.register(request_id.clone()).unwrap();
+        let mut activity = ComponentActivity::default();
+        assert!(activity.insert(
+            operation.clone(),
+            ActiveComponentRequest {
+                request_id: request_id.clone(),
+                valid: Arc::clone(&valid),
+                attempt: attempt.clone(),
+                write_guard: write_guard.clone(),
+            },
+        ));
+        let (response, mut receiver) = oneshot::channel();
+        let mut response_state = ComponentResponseState::default();
+        response_state.waiters.insert(request_id.clone(), response);
+        let activity = Mutex::new(activity);
+        let responses = Mutex::new(response_state);
+
+        let active =
+            terminalize_component_request(&activity, &responses, &operation, &attempt).unwrap();
+
+        assert!(active.attempt.is_same_attempt(&attempt));
+        assert!(!valid.load(Ordering::Acquire));
+        assert!(write_guard.is_cancelled());
+        assert!(!activity.lock().unwrap().requests.contains_key(&operation));
+        assert!(!responses.lock().unwrap().waiters.contains_key(&request_id));
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Closed)
         ));
     }
 
@@ -3997,12 +4172,112 @@ mod tests {
             let (invoke_result, cancel_result) = tokio::join!(invoke, cancel);
             assert_eq!(invoke_result, Err(BusError::Cancelled));
             assert_eq!(cancel_result, Ok(()));
+            assert!(!endpoint.has_active_request(&id));
+            assert!(!endpoint.has_response_waiter(&id));
             while endpoint.cancellation_count() <= index {
                 tokio::task::yield_now().await;
             }
         }
         assert_eq!(endpoint.call_count(), 3);
         assert_eq!(endpoint.cancellation_count(), 3);
+    }
+
+    #[tokio::test]
+    async fn full_cancel_delivery_pool_still_terminalizes_and_teardown_aborts_pending() {
+        let endpoint = RecordingEndpoint::pending_cancel();
+        let harness = harness_with_config(
+            HarnessSpec {
+                service: "d2b.resource.v3",
+                member: RouteMember::method("ResourceService/Get").unwrap(),
+                caller_ref: "User/alice",
+                locality: Locality::Local,
+                evidence: EvidenceClass::UnixPeer,
+                session_verbs: vec![
+                    SessionVerb::Connect,
+                    SessionVerb::Invoke,
+                    SessionVerb::Cancel,
+                ],
+                resource_verbs: vec![ResourceVerb::Get],
+                endpoint: endpoint.clone(),
+            },
+            BusConfig {
+                max_operations: 1,
+                max_operations_per_session: 1,
+                ..BusConfig::default()
+            },
+        );
+
+        for index in 0..2 {
+            let id = OperationId::parse(format!("pending-cancel-{index}")).unwrap();
+            let invoke = harness.caller.invoke_resource(
+                harness.route.clone(),
+                OperationSpec::new(id.clone(), 100).unwrap(),
+                ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
+                Vec::new(),
+            );
+            let cancel = async {
+                while endpoint.call_count() <= index {
+                    tokio::task::yield_now().await;
+                }
+                harness.caller.cancel(&id).await
+            };
+            let (invoke_result, cancel_result) = tokio::join!(invoke, cancel);
+            assert_eq!(invoke_result, Err(BusError::Cancelled));
+            assert_eq!(cancel_result, Ok(()));
+            assert!(!endpoint.has_active_request(&id));
+            assert!(!endpoint.has_response_waiter(&id));
+            assert_eq!(harness.caller.core.cancel_deliveries.len(), 1);
+        }
+
+        let mut registrar = harness.registrar;
+        registrar.revoke(harness.endpoint_ingress).await.unwrap();
+        assert_eq!(harness.caller.core.cancel_deliveries.len(), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn pending_cancel_delivery_has_a_fixed_timeout() {
+        let endpoint = RecordingEndpoint::pending_cancel();
+        let harness = harness_with_config(
+            HarnessSpec {
+                service: "d2b.resource.v3",
+                member: RouteMember::method("ResourceService/Get").unwrap(),
+                caller_ref: "User/alice",
+                locality: Locality::Local,
+                evidence: EvidenceClass::UnixPeer,
+                session_verbs: vec![
+                    SessionVerb::Connect,
+                    SessionVerb::Invoke,
+                    SessionVerb::Cancel,
+                ],
+                resource_verbs: vec![ResourceVerb::Get],
+                endpoint: endpoint.clone(),
+            },
+            BusConfig {
+                max_operations: 1,
+                max_operations_per_session: 1,
+                ..BusConfig::default()
+            },
+        );
+        let id = OperationId::parse("timed-cancel").unwrap();
+        let invoke = harness.caller.invoke_resource(
+            harness.route.clone(),
+            OperationSpec::new(id.clone(), 100).unwrap(),
+            ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
+            Vec::new(),
+        );
+        let cancel = async {
+            endpoint.started.notified().await;
+            harness.caller.cancel(&id).await
+        };
+        let (invoke_result, cancel_result) = tokio::join!(invoke, cancel);
+        assert_eq!(invoke_result, Err(BusError::Cancelled));
+        assert_eq!(cancel_result, Ok(()));
+        assert_eq!(harness.caller.core.cancel_deliveries.len(), 1);
+
+        tokio::time::advance(CANCEL_DELIVERY_TIMEOUT + Duration::from_millis(1)).await;
+        while harness.caller.core.cancel_deliveries.len() != 0 {
+            tokio::task::yield_now().await;
+        }
     }
 
     #[tokio::test]
@@ -4116,7 +4391,7 @@ mod tests {
 
         let second = harness.caller.invoke_resource(
             harness.route.clone(),
-            OperationSpec::new(OperationId::parse("hung").unwrap(), 100).unwrap(),
+            OperationSpec::new(OperationId::parse("after-hung").unwrap(), 100).unwrap(),
             ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
             Vec::new(),
         );
@@ -4131,7 +4406,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dropping_invoke_future_reclaims_operation_id_and_capacity() {
+    async fn dropping_invoke_future_reclaims_capacity_and_retains_the_id_tombstone() {
         let harness = resource_harness(
             RouteMember::method("ResourceService/Get").unwrap(),
             vec![SessionVerb::Connect, SessionVerb::Invoke],
@@ -4151,10 +4426,10 @@ mod tests {
             .lock()
             .unwrap()
             .before_invoke = Some(Arc::clone(&hook));
-        let operation = operation("dropped-future");
+        let dropped_operation = operation("dropped-future");
         let mut invoke = Box::pin(harness.caller.invoke_resource(
             harness.route.clone(),
-            operation.clone(),
+            dropped_operation.clone(),
             ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
             Vec::new(),
         ));
@@ -4174,17 +4449,29 @@ mod tests {
             .caller
             .core
             .lock_operations()
-            .cancel_admission(operation.id(), harness.caller.session)
+            .cancel_admission(dropped_operation.id(), harness.caller.session)
             .is_ok_and(|admission| admission.is_some())
         {
             tokio::task::yield_now().await;
         }
+        assert_eq!(
+            harness
+                .caller
+                .invoke_resource(
+                    harness.route.clone(),
+                    dropped_operation,
+                    ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
+                    Vec::new(),
+                )
+                .await,
+            Err(BusError::Operation(OperationError::DuplicateOperation))
+        );
         assert!(
             harness
                 .caller
                 .invoke_resource(
                     harness.route.clone(),
-                    operation,
+                    operation("after-dropped-future"),
                     ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
                     Vec::new(),
                 )

@@ -7,4 +7,5 @@ publish = false
 [workspace]
 
 [dependencies]
+d2b-contracts = { path = "../../../../d2b-contracts" }
 d2b-session = { path = "../../../../d2b-session" }

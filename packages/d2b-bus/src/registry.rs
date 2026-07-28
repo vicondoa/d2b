@@ -378,13 +378,13 @@ pub trait BusEndpoint: Send + Sync + 'static {
     /// Open one already-authorized named stream.
     async fn open_stream(&self, request: DeliveredStream) -> Result<(), EndpointError>;
 
-    /// Notify the exact destination of an authorized cancellation.
-    async fn cancel(
+    /// Terminalize local endpoint state and return only the remote notification.
+    fn terminalize_cancel(
         &self,
         _operation: &crate::operations::OperationId,
         _attempt: &crate::operations::Cancellation,
-    ) -> Result<(), EndpointError> {
-        Err(EndpointError::Unavailable)
+    ) -> Pin<Box<dyn Future<Output = Result<(), EndpointError>> + Send + 'static>> {
+        Box::pin(async { Err(EndpointError::Unavailable) })
     }
 }
 

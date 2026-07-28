@@ -651,9 +651,18 @@ where
 pub struct SessionCancellationHandle {
     driver: Arc<dyn SessionCancellationDriver>,
     cleanup_observer: SessionCleanupObserver,
+    writer_fence: crate::Cancellation,
 }
 
 impl SessionCancellationHandle {
+    #[doc(hidden)]
+    pub fn revoke_generation_writes(&self) -> impl Future<Output = ()> + Send + 'static {
+        let fence = self.writer_fence.cancel_and_wait();
+        async move {
+            fence.await;
+        }
+    }
+
     /// Signal cancellation for one exact request in the current generation.
     pub async fn cancel(&self, request_id: RequestId) -> Result<()> {
         let delivery = self
@@ -815,6 +824,7 @@ impl<C> AuthenticatedComponentSession<C> {
         SessionCancellationHandle {
             driver: Arc::new(self.driver.clone()),
             cleanup_observer: self.cleanup_observer.clone(),
+            writer_fence: self.driver.writer_fence(),
         }
     }
 
@@ -1188,6 +1198,7 @@ mod tests {
         let handle = SessionCancellationHandle {
             driver: driver.clone(),
             cleanup_observer: cleanup_observer(metrics.clone()),
+            writer_fence: crate::Cancellation::new(),
         };
 
         handle.cancel(request_id()).await.unwrap();
@@ -1210,6 +1221,7 @@ mod tests {
         let handle = SessionCancellationHandle {
             driver: driver.clone(),
             cleanup_observer: cleanup_observer(metrics.clone()),
+            writer_fence: crate::Cancellation::new(),
         };
 
         let error = handle.cancel(request_id()).await.unwrap_err();
@@ -1248,6 +1260,7 @@ mod tests {
         let handle = SessionCancellationHandle {
             driver: driver.clone(),
             cleanup_observer: cleanup_observer(Arc::new(CapturingMetrics::default())),
+            writer_fence: crate::Cancellation::new(),
         };
 
         let error = handle.cancel(active).await.unwrap_err();
@@ -1271,6 +1284,7 @@ mod tests {
         let handle = SessionCancellationHandle {
             driver,
             cleanup_observer: cleanup_observer(metrics.clone()),
+            writer_fence: crate::Cancellation::new(),
         };
 
         let error = handle.cancel(request_id()).await.unwrap_err();
