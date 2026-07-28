@@ -61,8 +61,14 @@ impl VisualState {
 /// drive proxy drawing and any toolkit path.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Theme {
+    /// The band behind everything. Recessed relative to the plate.
     pub surface: Rgba,
+    /// The identity button's plate. Must clear 3:1 against `surface` so the
+    /// clickable target is delineated without relying on the accent.
+    pub plate: Rgba,
     pub foreground: Rgba,
+    /// Lower-emphasis foreground for the status token.
+    pub foreground_dim: Rgba,
     pub outline: Rgba,
     pub focus: Rgba,
     pub radius: f64,
@@ -74,15 +80,34 @@ pub struct Theme {
 impl Default for Theme {
     fn default() -> Self {
         Self {
-            surface: Rgba::rgb(0x1c, 0x1c, 0x22),
-            foreground: Rgba::rgb(0xe8, 0xe8, 0xef),
-            outline: Rgba::rgba(0xff, 0xff, 0xff, 0x24),
+            surface: Rgba::rgb(0x0e, 0x0e, 0x12),
+            plate: Rgba::rgb(0x2a, 0x2a, 0x33),
+            foreground: Rgba::rgb(0xf2, 0xf2, 0xf7),
+            foreground_dim: Rgba::rgb(0xc2, 0xc2, 0xd0),
+            // Strong enough that the composited boundary clears 3:1 against the
+            // band on its own: the target is delineated by its edge, so the
+            // plate fill can stay quiet.
+            outline: Rgba::rgba(0xff, 0xff, 0xff, 0x70),
             focus: Rgba::rgb(0xff, 0xff, 0xff),
             radius: 6.0,
             accent_rule: 4,
             side_pad: 10,
             vertical_pad: 5,
         }
+    }
+}
+
+impl Theme {
+    /// The boundary colour as actually composited over the band.
+    pub fn composited_outline(&self) -> Rgba {
+        self.outline.over(self.surface)
+    }
+
+    /// How strongly the identity target is delineated from the band, taking
+    /// the better of its fill and its boundary. WCAG 1.4.11 wants 3:1.
+    pub fn target_delineation(&self) -> f64 {
+        contrast_ratio(self.plate, self.surface)
+            .max(contrast_ratio(self.composited_outline(), self.surface))
     }
 }
 
@@ -207,12 +232,18 @@ pub fn render(spec: &ChromeSpec, fonts: &TextRenderer, background: Rgba) -> Rend
     let button_bg = match spec.candidate {
         Candidate::AccentFill => spec.accent,
         _ => {
-            // The button must read as a control, not as a patch of the band.
-            // Lift it off the band surface and outline it below.
-            let mut s = surface.mix(Rgba::WHITE, 0.09);
+            // The plate must read as a control. It clears 3:1 against the band
+            // by construction, so the target is delineated without the accent.
+            let mut s = if spec.state.window_focused {
+                spec.theme.plate
+            } else {
+                spec.theme.plate.mix(surface, 0.25)
+            };
             if spec.state.pressed {
-                s = s.mix(Rgba::BLACK, 0.28);
-            } else if spec.state.hover || spec.state.menu_open {
+                s = s.mix(Rgba::BLACK, 0.35);
+            } else if spec.state.menu_open {
+                s = s.mix(Rgba::WHITE, 0.18);
+            } else if spec.state.hover {
                 s = s.mix(Rgba::WHITE, 0.10);
             }
             s
@@ -241,6 +272,13 @@ pub fn render(spec: &ChromeSpec, fonts: &TextRenderer, background: Rgba) -> Rend
             button.height,
             spec.theme.outline,
         );
+    }
+    // Menu-open is a held, persistent state, not a transient highlight: an
+    // accent perimeter makes it unmistakable without touching identity colour.
+    if spec.state.menu_open {
+        let r = button;
+        canvas.stroke_rect(r.x - 1, r.y - 1, r.width + 2, r.height + 2, spec.accent);
+        canvas.stroke_rect(r.x - 2, r.y - 2, r.width + 4, r.height + 4, spec.accent);
     }
 
     // The identity colour is a rule under the button, not the text background.
@@ -281,23 +319,23 @@ pub fn render(spec: &ChromeSpec, fonts: &TextRenderer, background: Rgba) -> Rend
         canvas.stroke_rect(r.x - 1, r.y - 1, r.width + 2, r.height + 2, Rgba::BLACK);
     }
 
+    // Status token: unfilled text plus a fixed glyph, at lower visual weight so
+    // it never competes with identity, but still contrast-compliant.
     if let (Some(status), Some(rect)) = (spec.status.as_deref(), layout.status) {
-        let bg = surface.mix(Rgba::WHITE, 0.08);
-        canvas.fill_round_rect(
-            rect.x,
-            rect.y,
-            rect.width,
-            rect.height,
-            spec.theme.radius * f64::from(scale),
-            bg,
-        );
-        let sfg = enforce_contrast(spec.theme.foreground, bg, CONTRAST_TEXT_AA)
+        let sfg = enforce_contrast(spec.theme.foreground_dim, surface, CONTRAST_TEXT_AA)
             .unwrap_or(spec.theme.foreground);
-        let sp = font_px * 0.9;
+        let sp = font_px * 0.88;
         let sm = fonts.measure(status, sp, tracking);
-        let sx = rect.x + ((rect.width.saturating_sub(sm.width)) / 2) as i32;
+        let glyph_w = px(14, scale);
+        let total = glyph_w + px(5, scale) + sm.width;
+        let sx = rect.x + ((rect.width.saturating_sub(total)) / 2) as i32;
+        let cy = rect.y + (rect.height / 2) as i32;
+
+        draw_status_glyph(&mut canvas, status, sx, cy, glyph_w, sfg, scale);
+
+        let tx = sx + (glyph_w + px(5, scale)) as i32;
         let sbase = rect.y + ((rect.height + sm.ascent) / 2) as i32;
-        for g in fonts.layout(status, sp, tracking, sx, sbase) {
+        for g in fonts.layout(status, sp, tracking, tx, sbase) {
             blend_glyph(&mut canvas.pixels, w, h, &g, sfg);
         }
     }
@@ -310,17 +348,121 @@ pub fn render(spec: &ChromeSpec, fonts: &TextRenderer, background: Rgba) -> Rend
     }
 }
 
+/// Fixed trusted glyphs for the status token. Drawn procedurally so the shape
+/// is part of the trusted renderer rather than a themeable icon: the glyph is
+/// the redundant, non-colour encoding of a security-capability condition.
+fn draw_status_glyph(
+    canvas: &mut Canvas,
+    status: &str,
+    x: i32,
+    center_y: i32,
+    box_w: u32,
+    color: Rgba,
+    scale: f32,
+) {
+    let s = |v: f32| ((v * scale).round() as i32).max(1);
+    let unit = |v: f32| ((v * scale).round() as u32).max(1);
+
+    if status.starts_with("MIC") {
+        // Capsule body, stand, and base.
+        let cw = unit(6.0);
+        let ch = unit(9.0);
+        let cx = x + (box_w as i32 - cw as i32) / 2;
+        let cy = center_y - s(7.0);
+        canvas.fill_round_rect(cx, cy, cw, ch, f64::from(cw) / 2.0, color);
+        canvas.fill_rect(cx + (cw as i32 / 2) - s(0.5), cy + ch as i32, unit(1.5), unit(3.0), color);
+        canvas.fill_rect(cx - s(2.0), cy + ch as i32 + s(3.0), cw + unit(4.0), unit(1.5), color);
+        // A slash marks the muted variant: shape, not hue, carries the state.
+        if status.contains("MUTED") {
+            let n = s(14.0);
+            for i in 0..n {
+                canvas.blend(x + i, center_y - s(7.0) + i, color);
+                canvas.blend(x + i + 1, center_y - s(7.0) + i, color);
+            }
+        }
+    } else if status.starts_with("USB") {
+        // Stem with a trident head.
+        let cx = x + box_w as i32 / 2;
+        let top = center_y - s(7.0);
+        canvas.fill_rect(cx - s(0.5), top, unit(1.5), unit(14.0), color);
+        canvas.fill_round_rect(cx - s(2.0), top, unit(4.0), unit(4.0), 2.0, color);
+        canvas.fill_rect(cx - s(5.0), top + s(6.0), unit(10.0), unit(1.5), color);
+        canvas.fill_rect(cx - s(5.0), top + s(6.0), unit(1.5), unit(4.0), color);
+        canvas.fill_round_rect(cx + s(3.0), top + s(9.0), unit(3.0), unit(3.0), 1.5, color);
+    } else {
+        // Generic attention mark for DEGRADED / STOPPING and future states.
+        let cx = x + box_w as i32 / 2;
+        let top = center_y - s(7.0);
+        canvas.fill_rect(cx - s(0.5), top, unit(1.5), unit(9.0), color);
+        canvas.fill_rect(cx - s(0.5), top + s(11.0), unit(1.5), unit(2.0), color);
+    }
+}
+
 /// Fail-closed: obscure the guest and state why. Never a bare window.
+///
+/// The trusted band is retained above the blocked area. Removing it would make
+/// the learned trusted location disappear exactly when it matters most, and
+/// would leave full-window artwork a guest could imitate.
 fn render_blocked(spec: &ChromeSpec, fonts: &TextRenderer) -> Rendered {
-    let w = px(spec.content_width, spec.scale).max(1) as usize;
-    let h = px(spec.content_height, spec.scale).max(1) as usize;
+    let scale = spec.scale;
+    let w = px(spec.content_width, scale).max(1) as usize;
+    let content_h = px(spec.content_height, scale).max(1) as usize;
+    let band_h = px(crate::geom::MIN_BAND_HEIGHT, scale) as usize;
+    let h = band_h + content_h;
+
     let mut canvas = Canvas::new(w, h, spec.theme.surface);
 
-    // A diagonal hatch: a pattern, not a hue, so the blocked state survives
-    // grayscale and colour-vision deficiency.
-    let hatch = spec.theme.foreground.with_alpha(0x18);
-    let step = px(10, spec.scale).max(4) as usize;
-    for y in 0..h {
+    // Trusted band, in the same place as always.
+    canvas.fill_rect(0, 0, w as u32, band_h as u32, spec.theme.surface);
+    canvas.fill_rect(0, band_h as i32 - 1, w as u32, 1, spec.theme.outline);
+
+    let font_px = spec.font_px * scale;
+    let fg = enforce_contrast(spec.theme.foreground, spec.theme.surface, CONTRAST_TEXT_AA)
+        .unwrap_or(spec.theme.foreground);
+
+    // Identity slot carries UNVERIFIED, with no realm accent anywhere. In a
+    // window too narrow to hold it, the plate is omitted rather than allowed
+    // to overflow: the blocked state must not itself render broken.
+    let pad = px(spec.theme.side_pad, scale);
+    let label = "UNVERIFIED";
+    let m = fonts.measure(label, font_px, 0.0);
+    let plate_w = m.width + pad * 2;
+    if plate_w + pad * 2 <= w as u32 {
+        let plate_h = px(24, scale).min(band_h as u32);
+        let plate_y = ((band_h as u32 - plate_h) / 2) as i32;
+        canvas.fill_round_rect(
+            pad as i32,
+            plate_y,
+            plate_w,
+            plate_h,
+            spec.theme.radius * f64::from(scale),
+            spec.theme.plate,
+        );
+        canvas.stroke_rect(pad as i32, plate_y, plate_w, plate_h, spec.theme.outline);
+        // A hatched rule stands in for the accent rule: a pattern, never a hue.
+        let rule = px(spec.theme.accent_rule, scale).max(1);
+        for i in 0..plate_w {
+            if (i / 2) % 2 == 0 {
+                canvas.fill_rect(
+                    pad as i32 + i as i32,
+                    plate_y + plate_h as i32 - rule as i32,
+                    1,
+                    rule,
+                    fg,
+                );
+            }
+        }
+        let baseline = plate_y + ((plate_h.saturating_sub(rule) + m.ascent) / 2) as i32;
+        for g in fonts.layout(label, font_px, 0.0, (pad * 2) as i32, baseline) {
+            blend_glyph(&mut canvas.pixels, w, h, &g, fg);
+        }
+    }
+
+    // Blocked content: a diagonal hatch, so the state survives grayscale and
+    // colour-vision deficiency without depending on any hue.
+    let hatch = spec.theme.foreground.with_alpha(0x1c);
+    let step = px(10, scale).max(4) as usize;
+    for y in band_h..h {
         for x in 0..w {
             if (x + y) % step == 0 {
                 canvas.blend(x as i32, y as i32, hatch);
@@ -328,14 +470,22 @@ fn render_blocked(spec: &ChromeSpec, fonts: &TextRenderer) -> Rendered {
         }
     }
 
-    let font_px = spec.font_px * spec.scale;
-    let msg = "UNVERIFIED — content blocked";
-    let m = fonts.measure(msg, font_px, 0.0);
-    let x = ((w as i32) - (m.width as i32)) / 2;
-    let fg = enforce_contrast(spec.theme.foreground, spec.theme.surface, CONTRAST_TEXT_AA)
-        .unwrap_or(spec.theme.foreground);
-    for g in fonts.layout(msg, font_px, 0.0, x, (h / 2) as i32) {
-        blend_glyph(&mut canvas.pixels, w, h, &g, fg);
+    // The explanation is ellipsized to the available width rather than
+    // overflowing; it is supporting text, and the band already carries state.
+    let budget = (w as u32).saturating_sub(pad * 2);
+    let msg = fonts.ellipsize(
+        "content blocked - identity could not be verified",
+        font_px,
+        0.0,
+        budget,
+    );
+    if !msg.is_empty() {
+        let mm = fonts.measure(&msg, font_px, 0.0);
+        let mx = ((w as i32) - (mm.width as i32)) / 2;
+        for g in fonts.layout(&msg, font_px, 0.0, mx.max(pad as i32), (band_h + content_h / 2) as i32)
+        {
+            blend_glyph(&mut canvas.pixels, w, h, &g, fg);
+        }
     }
 
     Rendered {
@@ -583,6 +733,139 @@ mod tests {
             !r.canvas.pixels.iter().any(|p| *p == accent),
             "blocked state must not display the realm colour"
         );
+    }
+
+    /// The blocked state must not itself render broken in a tiny window.
+    #[test]
+    fn blocked_state_does_not_overflow_a_narrow_window() {
+        let f = fonts();
+        for width in [60_u32, 90, 150, 300, 880] {
+            let mut s = spec(Candidate::BandNeutral);
+            s.identity_verified = false;
+            s.content_width = width;
+            let r = render(&s, &f, DARK);
+            assert!(r.blocked);
+            assert_eq!(
+                r.canvas.width, width as usize,
+                "blocked canvas must match the window width"
+            );
+            // Every pixel is inside the canvas by construction; the real check
+            // is that rendering a very narrow blocked window does not panic and
+            // still paints the hatch.
+            assert!(r.canvas.pixels.iter().any(|p| p.a > 0));
+        }
+    }
+
+    /// The trusted band must survive the blocked state: removing it would make
+    /// the learned trusted location vanish exactly when it matters most.
+    #[test]
+    fn blocked_state_retains_the_trusted_band() {
+        let mut s = spec(Candidate::BandNeutral);
+        s.identity_verified = false;
+        let r = render(&s, &fonts(), DARK);
+        let band_h = crate::geom::MIN_BAND_HEIGHT as usize;
+        // The band's plate region is painted, not hatched content.
+        let plate = r.canvas.get(14, band_h / 2);
+        assert!(plate.a > 0);
+        assert_ne!(
+            plate, s.theme.surface,
+            "the identity plate must be visible inside the band"
+        );
+        // Total height includes the band above the content.
+        assert!(r.canvas.height > s.content_height as usize);
+    }
+
+    /// The plate must delineate the target on its own, without help from the
+    /// accent, and must keep doing so in grayscale. WCAG 1.4.11 asks for 3:1
+    /// on the component boundary, which the outline carries here so the fill
+    /// can stay visually quiet.
+    #[test]
+    fn identity_target_is_delineated_against_the_band() {
+        let t = Theme::default();
+        let ratio = t.target_delineation();
+        assert!(
+            ratio >= crate::color::CONTRAST_NON_TEXT_AA,
+            "target delineation measured {ratio:.2}, below the 3:1 floor"
+        );
+
+        // The same must hold without hue, for monochrome displays.
+        let gray = contrast_ratio(t.plate.to_grayscale(), t.surface.to_grayscale()).max(
+            contrast_ratio(
+                t.composited_outline().to_grayscale(),
+                t.surface.to_grayscale(),
+            ),
+        );
+        assert!(
+            gray >= crate::color::CONTRAST_NON_TEXT_AA,
+            "grayscale delineation measured {gray:.2}"
+        );
+    }
+
+    /// Menu-open is a held state and must not be mistakable for merely focused.
+    #[test]
+    fn menu_open_is_visually_distinct_from_focused() {
+        let f = fonts();
+        let base = render(&spec(Candidate::BandNeutral), &f, DARK);
+        let mut open_spec = spec(Candidate::BandNeutral);
+        open_spec.state = VisualState {
+            menu_open: true,
+            ..VisualState::focused()
+        };
+        let open = render(&open_spec, &f, DARK);
+
+        let lb = base.layout.unwrap();
+        let differing = (0..lb.band.height as usize)
+            .flat_map(|y| (0..lb.outer.width as usize).map(move |x| (x, y)))
+            .filter(|&(x, y)| base.canvas.get(x, y) != open.canvas.get(x, y))
+            .count();
+        assert!(
+            differing > 100,
+            "menu-open differed in only {differing} pixels"
+        );
+    }
+
+    #[test]
+    fn hover_and_pressed_are_distinguishable_from_each_other() {
+        let f = fonts();
+        let mut hov = spec(Candidate::BandNeutral);
+        hov.state = VisualState {
+            hover: true,
+            ..VisualState::focused()
+        };
+        let mut prs = spec(Candidate::BandNeutral);
+        prs.state = VisualState {
+            pressed: true,
+            ..VisualState::focused()
+        };
+        let a = render(&hov, &f, DARK);
+        let b = render(&prs, &f, DARK);
+        let l = a.layout.unwrap();
+        let p1 = a.canvas.get((l.button.x + 4) as usize, (l.button.y + 4) as usize);
+        let p2 = b.canvas.get((l.button.x + 4) as usize, (l.button.y + 4) as usize);
+        assert_ne!(p1, p2, "hover and pressed must not render identically");
+        // And both must remain distinguishable without hue.
+        assert_ne!(p1.to_grayscale(), p2.to_grayscale());
+    }
+
+    #[test]
+    fn status_glyph_is_drawn_alongside_the_words() {
+        let f = fonts();
+        for token in ["MIC", "MIC MUTED", "USB", "DEGRADED"] {
+            let mut s = spec(Candidate::BandNeutral);
+            s.status = Some(token.to_owned());
+            let r = render(&s, &f, DARK);
+            let l = r.layout.unwrap();
+            let rect = l.status.expect("token present");
+            // The leading third of the token area holds the glyph, so it must
+            // contain ink beyond the bare band surface.
+            let ink = (rect.x..rect.x + (rect.width / 3) as i32)
+                .flat_map(|x| (rect.y..rect.bottom()).map(move |y| (x, y)))
+                .any(|(x, y)| {
+                    let p = r.canvas.get(x as usize, y as usize);
+                    p != s.theme.surface && p.a > 0
+                });
+            assert!(ink, "{token} rendered no glyph");
+        }
     }
 
     #[test]

@@ -17,13 +17,24 @@ use d2b_chrome_engine::{
     PROTOTYPE_FONT,
 };
 
-/// Spread in luminance as well as hue, since colour is supportive and text
-/// carries identity.
+/// Human display names lead; canonical targets are a deliberate control.
+/// Accents are spread in luminance as well as hue, since colour is supportive
+/// and text carries identity.
 const PALETTE: &[(&str, &str)] = &[
-    ("work", "#ffa500"),
-    ("personal", "#7fc8ff"),
-    ("media", "#c792ea"),
-    ("banking", "#4ade80"),
+    ("Work", "#ffa500"),
+    ("Personal", "#7fc8ff"),
+    ("Media", "#c792ea"),
+    ("Banking", "#4ade80"),
+];
+
+/// Accents chosen to stress control C: a very light fill, a very dark fill, and
+/// one sitting right at the black/white selection threshold where the naive
+/// luma rule flips and the true worst case (4.58:1) lives.
+const STRESS_ACCENTS: &[(&str, &str)] = &[
+    ("light accent", "#f8e08e"),
+    ("dark accent", "#3b2d6b"),
+    ("threshold accent", "#2f72de"),
+    ("naive-luma trap", "#04d800"),
 ];
 
 const DARK: Rgba = Rgba::rgb(0x10, 0x10, 0x14);
@@ -52,6 +63,8 @@ fn main() {
         ("03-labels-and-scaling", labels(&fonts)),
         ("04-status-and-blocked", status_and_blocked(&fonts)),
         ("05-accessibility-passes", accessibility(&fonts)),
+        ("06-accent-fill-across-palette", accent_fill_stress(&fonts)),
+        ("07-compound-reflow", compound_reflow(&fonts)),
     ];
 
     let mut failed = false;
@@ -133,7 +146,7 @@ fn states(f: &TextRenderer) -> Vec<Cell> {
     ]
     .into_iter()
     .map(|(name, state)| {
-        let mut s = spec(Candidate::BandNeutral, "work", PALETTE[0].1);
+        let mut s = spec(Candidate::BandNeutral, "Work", PALETTE[0].1);
         s.state = state;
         Cell {
             caption: format!("A / {name}"),
@@ -160,20 +173,20 @@ fn labels(f: &TextRenderer) -> Vec<Cell> {
         canvas: render(&long, f, DARK).canvas,
     });
 
-    let light = spec(Candidate::BandNeutral, "work", PALETTE[0].1);
+    let light = spec(Candidate::BandNeutral, "Work", PALETTE[0].1);
     cells.push(Cell {
         caption: "A / light guest content".to_owned(),
         canvas: render(&light, f, LIGHT).canvas,
     });
 
-    let mut scaled = spec(Candidate::BandNeutral, "work", PALETTE[0].1);
+    let mut scaled = spec(Candidate::BandNeutral, "Work", PALETTE[0].1);
     scaled.scale = 1.5;
     cells.push(Cell {
         caption: "A / scale 1.5".to_owned(),
         canvas: render(&scaled, f, DARK).canvas,
     });
 
-    let mut big = spec(Candidate::BandNeutral, "work", PALETTE[0].1);
+    let mut big = spec(Candidate::BandNeutral, "Work", PALETTE[0].1);
     big.font_px = 28.0;
     cells.push(Cell {
         caption: "A / 200% text - band grows".to_owned(),
@@ -185,14 +198,14 @@ fn labels(f: &TextRenderer) -> Vec<Cell> {
 fn status_and_blocked(f: &TextRenderer) -> Vec<Cell> {
     let mut cells = Vec::new();
     for token in ["MIC", "MIC MUTED", "USB", "MIC . USB", "DEGRADED"] {
-        let mut s = spec(Candidate::BandNeutral, "work", PALETTE[0].1);
+        let mut s = spec(Candidate::BandNeutral, "Work", PALETTE[0].1);
         s.status = Some(token.to_owned());
         cells.push(Cell {
             caption: format!("A / status {token}"),
             canvas: render(&s, f, DARK).canvas,
         });
     }
-    let mut blocked = spec(Candidate::BandNeutral, "work", PALETTE[0].1);
+    let mut blocked = spec(Candidate::BandNeutral, "Work", PALETTE[0].1);
     blocked.identity_verified = false;
     cells.push(Cell {
         caption: "A / unverified - guest blocked".to_owned(),
@@ -204,7 +217,7 @@ fn status_and_blocked(f: &TextRenderer) -> Vec<Cell> {
 fn accessibility(f: &TextRenderer) -> Vec<Cell> {
     let mut cells = Vec::new();
 
-    let base = spec(Candidate::BandNeutral, "work", PALETTE[0].1);
+    let base = spec(Candidate::BandNeutral, "Work", PALETTE[0].1);
     cells.push(Cell {
         caption: "A / grayscale display".to_owned(),
         canvas: render(&base, f, DARK).canvas.to_grayscale(),
@@ -212,7 +225,7 @@ fn accessibility(f: &TextRenderer) -> Vec<Cell> {
 
     cells.push(Cell {
         caption: "C / grayscale - accent fill".to_owned(),
-        canvas: render(&spec(Candidate::AccentFill, "work", PALETTE[0].1), f, DARK)
+        canvas: render(&spec(Candidate::AccentFill, "Work", PALETTE[0].1), f, DARK)
             .canvas
             .to_grayscale(),
     });
@@ -235,6 +248,132 @@ fn accessibility(f: &TextRenderer) -> Vec<Cell> {
                 .to_grayscale(),
         });
     }
+    cells
+}
+
+/// Control C across accents that actually stress it, including the threshold
+/// where auto-contrast text flips. Showing C only on two favourable accents
+/// made it look better than it is.
+fn accent_fill_stress(f: &TextRenderer) -> Vec<Cell> {
+    let mut cells = Vec::new();
+    for (name, accent) in STRESS_ACCENTS {
+        let c = render(&spec(Candidate::AccentFill, "Work", accent), f, DARK);
+        cells.push(Cell {
+            caption: format!("C / {name} {accent} - text contrast {:.2}:1", c.label_contrast),
+            canvas: c.canvas,
+        });
+        let a = render(&spec(Candidate::BandNeutral, "Work", accent), f, DARK);
+        cells.push(Cell {
+            caption: format!("A / {name} {accent} - text contrast {:.2}:1", a.label_contrast),
+            canvas: a.canvas,
+        });
+    }
+    // The same comparison without hue, where a fill has nothing left to offer.
+    for (name, accent) in [STRESS_ACCENTS[0], STRESS_ACCENTS[1]] {
+        cells.push(Cell {
+            caption: format!("C / {name} in grayscale"),
+            canvas: render(&spec(Candidate::AccentFill, "Work", accent), f, DARK)
+                .canvas
+                .to_grayscale(),
+        });
+        cells.push(Cell {
+            caption: format!("A / {name} in grayscale"),
+            canvas: render(&spec(Candidate::BandNeutral, "Work", accent), f, DARK)
+                .canvas
+                .to_grayscale(),
+        });
+    }
+    cells
+}
+
+/// The combination the panel called failure-prone: a narrow window, a long
+/// label, enlarged text, and a status token all at once. Captions are derived
+/// from what actually happened, not from what was intended.
+fn compound_reflow(f: &TextRenderer) -> Vec<Cell> {
+    let mut cells = Vec::new();
+
+    let describe = |r: &d2b_chrome_engine::variant::Rendered, prefix: &str| -> String {
+        if r.blocked {
+            return format!("{prefix} - fails closed, guest blocked");
+        }
+        match r.layout {
+            Some(l) => {
+                let mut notes = Vec::new();
+                if l.reflow.grew_band {
+                    notes.push(format!("band grew to {}px", l.band.height));
+                }
+                if l.reflow.dropped_status {
+                    notes.push("token yielded".to_owned());
+                } else if l.status.is_some() {
+                    notes.push("token kept".to_owned());
+                }
+                if notes.is_empty() {
+                    prefix.to_owned()
+                } else {
+                    format!("{prefix} - {}", notes.join(", "))
+                }
+            }
+            None => prefix.to_owned(),
+        }
+    };
+
+    let mut narrow = spec(Candidate::BandNeutral, "Work", PALETTE[0].1);
+    narrow.content_width = 240;
+    narrow.status = Some("MIC MUTED".to_owned());
+    let r = render(&narrow, f, DARK);
+    cells.push(Cell {
+        caption: describe(&r, "A / narrow window"),
+        canvas: r.canvas,
+    });
+
+    let mut squeezed = spec(Candidate::BandNeutral, "Work", PALETTE[0].1);
+    squeezed.content_width = 150;
+    squeezed.status = Some("MIC MUTED".to_owned());
+    let r = render(&squeezed, f, DARK);
+    cells.push(Cell {
+        caption: describe(&r, "A / very narrow window"),
+        canvas: r.canvas,
+    });
+
+    let mut long_big = spec(Candidate::BandNeutral, "corp-workstation.work", PALETTE[0].1);
+    long_big.content_width = 620;
+    long_big.font_px = 28.0;
+    let r = render(&long_big, f, DARK);
+    cells.push(Cell {
+        caption: describe(&r, "A / long label at 200% text"),
+        canvas: r.canvas,
+    });
+
+    let mut everything = spec(Candidate::BandNeutral, "corp-workstation.work", PALETTE[0].1);
+    everything.content_width = 620;
+    everything.font_px = 28.0;
+    everything.status = Some("MIC . USB".to_owned());
+    everything.tracking_em = 0.12;
+    let r = render(&everything, f, DARK);
+    cells.push(Cell {
+        caption: describe(&r, "A / long + 200% + spacing + token"),
+        canvas: r.canvas,
+    });
+
+    let mut tiny = spec(Candidate::BandNeutral, "Work", PALETTE[0].1);
+    tiny.content_width = 150;
+    tiny.font_px = 28.0;
+    tiny.status = Some("USB".to_owned());
+    let r = render(&tiny, f, DARK);
+    cells.push(Cell {
+        caption: describe(&r, "A / very narrow at 200% text"),
+        canvas: r.canvas,
+    });
+
+    // Narrow enough that even the compact name cannot fit: the terminal case.
+    let mut impossible = spec(Candidate::BandNeutral, "corp-workstation.work", PALETTE[0].1);
+    impossible.content_width = 90;
+    impossible.font_px = 28.0;
+    let r = render(&impossible, f, DARK);
+    cells.push(Cell {
+        caption: describe(&r, "A / identity cannot fit"),
+        canvas: r.canvas,
+    });
     cells
 }
 
