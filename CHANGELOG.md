@@ -28,6 +28,14 @@ deprecations ship one minor release before removal.
   named streams. It remains disconnected from production adapters until the
   authenticated ComponentSession integration lands.
 
+- Added the transport-neutral ComponentSession v3 contract and runtime with
+  strict Noise NN/KK/IKpsk2 authentication, replay-safe records, native
+  authorization leases, fair named streams, cancellation, deadlines, and
+  reconnect handling. Added Unix seqpacket, stream, socketpair, and vsock
+  adapters with consumed peer-to-subject mapping, exact descriptor identity,
+  multi-scope attachment credits, and fail-closed cleanup; bus registration
+  remains an explicit unconnected interface.
+
 ### Changed
 
 - `tests/test-proofs.sh` now discovers proof crates by scanning

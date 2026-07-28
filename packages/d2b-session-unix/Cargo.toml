@@ -5,12 +5,33 @@ edition = "2024"
 publish = false
 license.workspace = true
 
-[lints]
-workspace = true
+[features]
+default = ["host-socket", "native-vsock"]
+host-socket = ["dep:tokio"]
+native-vsock = [
+    "dep:tokio",
+    "dep:tokio-vsock",
+]
 
 [dependencies]
+async-trait = "0.1"
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 d2b-session = { path = "../d2b-session", version = "0.0.0-bootstrap" }
+libc = "0.2"
+rustix.workspace = true
+tokio = { workspace = true, optional = true, features = ["io-util", "net"] }
+tokio-vsock = { version = "0.7.2", optional = true }
 
 [dev-dependencies]
-serde_json.workspace = true
+tokio = { workspace = true, features = ["macros", "net", "rt", "sync", "time"] }
+
+[lints.rust]
+unsafe_code = "deny"
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(test_root)"] }
+
+[lints.clippy]
+all = "warn"
+
+[[test]]
+name = "unix_session"
+required-features = ["host-socket"]

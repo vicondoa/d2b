@@ -1,3 +1,65 @@
-//! Unix-domain ComponentSession transport adapter.
+#![deny(unsafe_code)]
+//! Audited Unix transport substrate for ComponentSession.
 //!
-//! Populated by `ADR046-session-002`.
+//! The default feature set exercises both Linux host sockets and native vsock.
+
+#[cfg(all(feature = "host-socket", not(target_os = "linux")))]
+compile_error!("the host-socket feature requires Linux");
+#[cfg(all(feature = "native-vsock", not(target_os = "linux")))]
+compile_error!("the native-vsock feature requires Linux");
+
+#[cfg(feature = "host-socket")]
+mod adapter;
+#[cfg(feature = "host-socket")]
+mod credit;
+#[cfg(feature = "host-socket")]
+mod descriptor;
+#[cfg(feature = "host-socket")]
+mod error;
+#[cfg(feature = "host-socket")]
+mod pidfd;
+#[cfg(feature = "host-socket")]
+mod socket;
+#[cfg(feature = "host-socket")]
+mod subject;
+#[cfg(feature = "host-socket")]
+mod systemd;
+#[cfg(feature = "native-vsock")]
+mod vsock;
+
+#[cfg(feature = "host-socket")]
+pub use adapter::{
+    DescriptorPolicyResolver, OwnedUnixAttachment, PathnamePeerVerifier, PeerIdentityPolicy,
+    UnixAttachmentPayload, UnixSeqpacketTransport, UnixStreamTransport,
+};
+#[cfg(feature = "host-socket")]
+pub use credit::{
+    CreditBundle, CreditError, CreditPool, CreditScope, CreditScopeSet, ProcessCreditLimit,
+};
+#[cfg(feature = "host-socket")]
+pub use descriptor::ReceivedPacket;
+#[cfg(feature = "host-socket")]
+pub use descriptor::{
+    AcceptedAttachment, DescriptorPolicy, FirstPacketCredentials, ObjectIdentity, PeerCredentials,
+    PidfdIdentityPolicy, VerifiedPacket,
+};
+#[cfg(feature = "host-socket")]
+pub use error::UnixSessionError;
+#[cfg(feature = "host-socket")]
+pub use pidfd::{
+    DigestEvidenceCallback, PidfdEvidence, PidfdIdentityVerifier, PidfdInfoSource,
+    ProcPidfdIdentityVerifier, ProcSelfFdInfoSource, parse_pidfd_fdinfo,
+};
+#[cfg(feature = "host-socket")]
+pub use socket::{
+    AncillaryCapacity, OutboundPacket, PacketBurst, SendBurst, SentPacket, SeqpacketSocket,
+    StreamRead, StreamSocket, prearmed_seqpacket_pair,
+};
+#[cfg(feature = "host-socket")]
+pub use subject::{UnixSubjectIdentity, VerifiedUnixSubject};
+#[cfg(feature = "host-socket")]
+pub use systemd::{
+    ActivatedSeqpacketListener, ActivatedSeqpacketListeners, SystemdActivationError,
+};
+#[cfg(feature = "native-vsock")]
+pub use vsock::{FramedVsockTransport, NativeVsockListener, NativeVsockTransport};

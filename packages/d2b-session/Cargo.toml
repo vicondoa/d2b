@@ -5,12 +5,23 @@ edition = "2024"
 publish = false
 license.workspace = true
 
+[features]
+default = []
+
+[dependencies]
+async-trait = "0.1"
+d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
+d2b-resource-api = { path = "../d2b-resource-api", version = "0.0.0-bootstrap" }
+futures-util = "0.3"
+sha2.workspace = true
+snow = { version = "0.10", features = ["risky-raw-split"] }
+tokio = { workspace = true, features = ["io-util", "rt", "sync", "time"] }
+ttrpc = { workspace = true, default-features = false, features = ["async"] }
+zeroize = "1"
+
 [lints]
 workspace = true
 
-[dependencies]
-d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
-serde.workspace = true
-
 [dev-dependencies]
-serde_json.workspace = true
+d2b-resource-store = { path = "../d2b-resource-store", version = "0.0.0-bootstrap" }
+tokio = { workspace = true, features = ["macros", "rt", "test-util"] }

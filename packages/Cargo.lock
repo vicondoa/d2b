@@ -852,9 +852,13 @@ dependencies = [
 name = "d2b-bus"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "async-trait",
  "d2b-contracts",
+ "d2b-resource-api",
+ "d2b-resource-store",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
