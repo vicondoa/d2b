@@ -35,7 +35,7 @@ use crate::{
     authorization::{AuthorizationError, BusAuthorizer},
     operations::{
         CancelDeliveryAdmission, CancelDispatch, Cancellation, OperationError, OperationId,
-        OperationSpec, OperationTable, PendingCancelDeliveries, SessionId,
+        OperationSpec, OperationTable, PendingCancelDeliveries, SessionId, TombstoneEviction,
     },
     registry::{
         BusResponse, EndpointError, Registry, RegistryError, RouteKey, RouteTarget,
@@ -690,6 +690,9 @@ impl BusCore {
         self: &Arc<Self>,
         dispatch: CancelDispatch,
     ) -> oneshot::Receiver<CancellationOutcome> {
+        if let Some(eviction) = dispatch.tombstone_eviction {
+            self.observe_tombstone_eviction(eviction);
+        }
         let delivery = dispatch
             .target
             .endpoint
@@ -761,6 +764,14 @@ impl BusCore {
             .record(event, BusFailureReason::from_error(error));
     }
 
+    fn observe_tombstone_eviction(&self, eviction: TombstoneEviction) {
+        let reason = match eviction {
+            TombstoneEviction::PerSource => BusFailureReason::PerSourceRetention,
+            TombstoneEviction::Global => BusFailureReason::GlobalRetention,
+        };
+        self.observer.record(BusEvent::TombstoneEviction, reason);
+    }
+
     fn lock_registry(&self) -> MutexGuard<'_, Registry> {
         self.registry
             .lock()
@@ -785,6 +796,7 @@ pub enum BusEvent {
     OpenStream,
     Cancel,
     Cleanup,
+    TombstoneEviction,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -804,6 +816,8 @@ pub enum BusFailureReason {
     Endpoint,
     Abandoned,
     StreamShed,
+    PerSourceRetention,
+    GlobalRetention,
 }
 
 impl BusFailureReason {
@@ -2359,8 +2373,8 @@ impl BusIngress {
         })
     }
 
-    /// Cancel one operation owned by this exact ingress.
-    pub async fn cancel(&self, operation: &OperationId) -> Result<CancellationReceipt, BusError> {
+    /// Cancel one exact operation attempt owned by this ingress.
+    pub async fn cancel(&self, operation: &OperationSpec) -> Result<CancellationReceipt, BusError> {
         let result = self.cancel_inner(operation).await;
         if let Err(error) = &result {
             self.core.observe_error(BusEvent::Cancel, error);
@@ -2368,7 +2382,10 @@ impl BusIngress {
         result
     }
 
-    async fn cancel_inner(&self, operation: &OperationId) -> Result<CancellationReceipt, BusError> {
+    async fn cancel_inner(
+        &self,
+        operation: &OperationSpec,
+    ) -> Result<CancellationReceipt, BusError> {
         self.ensure_open()?;
         let Some(admission) = self
             .core
@@ -4116,15 +4133,16 @@ mod tests {
             endpoint: endpoint.clone(),
         });
         let id = OperationId::parse("cancel-operation").unwrap();
+        let operation = OperationSpec::new(id, 100).unwrap();
         let invoke = harness.caller.invoke_resource(
             harness.route.clone(),
-            OperationSpec::new(id.clone(), 100).unwrap(),
+            operation.clone(),
             ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
             Vec::new(),
         );
         let cancel = async {
             endpoint.started.notified().await;
-            harness.caller.cancel(&id).await
+            harness.caller.cancel(&operation).await
         };
         let (invoke_result, cancel_result) = tokio::join!(invoke, cancel);
         assert_eq!(invoke_result, Err(BusError::Cancelled));
@@ -4166,9 +4184,10 @@ mod tests {
             .unwrap()
             .before_cancel_transition = Some(Arc::clone(&hook));
         let id = OperationId::parse("cancel-admission-race").unwrap();
+        let first_operation = OperationSpec::new(id.clone(), 100).unwrap();
         let mut first = Box::pin(harness.caller.invoke_resource(
             harness.route.clone(),
-            OperationSpec::new(id.clone(), 100).unwrap(),
+            first_operation.clone(),
             ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
             Vec::new(),
         ));
@@ -4176,7 +4195,7 @@ mod tests {
             result = &mut first => panic!("first attempt unexpectedly completed: {result:?}"),
             () = endpoint.started.notified() => {}
         }
-        let mut cancel = Box::pin(harness.caller.cancel(&id));
+        let mut cancel = Box::pin(harness.caller.cancel(&first_operation));
         tokio::select! {
             result = &mut cancel => panic!("cancel unexpectedly completed: {result:?}"),
             () = hook.reached.notified() => {}
@@ -4234,9 +4253,10 @@ mod tests {
 
         for index in 0..3 {
             let id = OperationId::parse(format!("failed-cancel-{index}")).unwrap();
+            let operation = OperationSpec::new(id.clone(), 100).unwrap();
             let invoke = harness.caller.invoke_resource(
                 harness.route.clone(),
-                OperationSpec::new(id.clone(), 100).unwrap(),
+                operation.clone(),
                 ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
                 Vec::new(),
             );
@@ -4244,7 +4264,7 @@ mod tests {
                 while endpoint.call_count() <= index {
                     tokio::task::yield_now().await;
                 }
-                harness.caller.cancel(&id).await
+                harness.caller.cancel(&operation).await
             };
             let (invoke_result, cancel_result) = tokio::join!(invoke, cancel);
             assert_eq!(invoke_result, Err(BusError::Cancelled));
@@ -4291,9 +4311,10 @@ mod tests {
 
         for index in 0..2 {
             let id = OperationId::parse(format!("pending-cancel-{index}")).unwrap();
+            let operation = OperationSpec::new(id.clone(), 100).unwrap();
             let invoke = harness.caller.invoke_resource(
                 harness.route.clone(),
-                OperationSpec::new(id.clone(), 100).unwrap(),
+                operation.clone(),
                 ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
                 Vec::new(),
             );
@@ -4301,7 +4322,7 @@ mod tests {
                 while endpoint.call_count() <= index {
                     tokio::task::yield_now().await;
                 }
-                harness.caller.cancel(&id).await
+                harness.caller.cancel(&operation).await
             };
             let (invoke_result, cancel_result) = tokio::join!(invoke, cancel);
             assert_eq!(invoke_result, Err(BusError::Cancelled));
@@ -4344,15 +4365,16 @@ mod tests {
             },
         );
         let id = OperationId::parse("timed-cancel").unwrap();
+        let operation = OperationSpec::new(id, 100).unwrap();
         let invoke = harness.caller.invoke_resource(
             harness.route.clone(),
-            OperationSpec::new(id.clone(), 100).unwrap(),
+            operation.clone(),
             ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
             Vec::new(),
         );
         let cancel = async {
             endpoint.started.notified().await;
-            harness.caller.cancel(&id).await
+            harness.caller.cancel(&operation).await
         };
         let (invoke_result, cancel_result) = tokio::join!(invoke, cancel);
         assert_eq!(invoke_result, Err(BusError::Cancelled));
@@ -4537,7 +4559,7 @@ mod tests {
             .caller
             .core
             .lock_operations()
-            .cancel_admission(dropped_operation.id(), harness.caller.session)
+            .cancel_admission(&dropped_operation, harness.caller.session)
             .is_ok_and(|admission| admission.is_some())
         {
             tokio::task::yield_now().await;
@@ -4636,9 +4658,27 @@ mod tests {
                 .await,
             Err(BusError::InvalidResourceCall)
         );
+        harness
+            .caller
+            .core
+            .observe_tombstone_eviction(TombstoneEviction::PerSource);
+        harness
+            .caller
+            .core
+            .observe_tombstone_eviction(TombstoneEviction::Global);
         assert_eq!(
             observer.0.lock().unwrap().as_slice(),
-            &[(BusEvent::Invoke, BusFailureReason::Route)]
+            &[
+                (BusEvent::Invoke, BusFailureReason::Route),
+                (
+                    BusEvent::TombstoneEviction,
+                    BusFailureReason::PerSourceRetention,
+                ),
+                (
+                    BusEvent::TombstoneEviction,
+                    BusFailureReason::GlobalRetention,
+                ),
+            ]
         );
     }
 

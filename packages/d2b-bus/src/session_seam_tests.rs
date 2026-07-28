@@ -702,16 +702,17 @@ async fn cancelled_stream_id_reuse_rejects_the_late_response() {
     );
     let first_id = OperationId::parse("reuse-first").unwrap();
     let second_id = OperationId::parse("reuse-second").unwrap();
+    let first_operation = OperationSpec::new(first_id, 10_000).unwrap();
     let first = caller.invoke_resource(
         route.clone(),
-        OperationSpec::new(first_id.clone(), 10_000).unwrap(),
+        first_operation.clone(),
         ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
         ttrpc_frame(7, b"first"),
     );
     let sequence = async {
         let first_frame = remote.receive_ttrpc().await.unwrap();
         let first_internal_id = ttrpc_stream_id(&first_frame).unwrap();
-        caller.cancel(&first_id).await.unwrap();
+        caller.cancel(&first_operation).await.unwrap();
         let second = caller.invoke_resource(
             route.clone(),
             OperationSpec::new(second_id, 10_000).unwrap(),
@@ -1147,7 +1148,7 @@ async fn reconnect_rejects_a_control_batch_queued_behind_an_admitted_write() {
             1,
             "Provider/system-core",
         ),
-        OperationSpec::new(operation_id.clone(), 10_000).unwrap(),
+        OperationSpec::new(operation_id, 10_000).unwrap(),
         ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
         ttrpc_frame(13, b"admitted"),
     );
@@ -1219,6 +1220,7 @@ async fn receive_failure_terminates_without_retaining_the_operation() {
     .await;
     let caller = registrar.register_component_session(caller).await.unwrap();
     let operation_id = OperationId::parse("receive-failure").unwrap();
+    let operation = OperationSpec::new(operation_id, 10_000).unwrap();
     let invoke = caller.invoke_resource(
         route(
             "d2b.resource.v3",
@@ -1226,7 +1228,7 @@ async fn receive_failure_terminates_without_retaining_the_operation() {
             1,
             "Provider/system-core",
         ),
-        OperationSpec::new(operation_id.clone(), 10_000).unwrap(),
+        operation.clone(),
         ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
         ttrpc_frame(10, b"request"),
     );
@@ -1240,7 +1242,7 @@ async fn receive_failure_terminates_without_retaining_the_operation() {
     let (result, ()) = tokio::join!(invoke, disconnect);
     assert!(matches!(result, Err(BusError::Endpoint(_))));
     assert!(matches!(
-        caller.cancel(&operation_id).await,
+        caller.cancel(&operation).await,
         Err(BusError::Operation(_))
     ));
 
@@ -1390,8 +1392,9 @@ async fn explicit_cancel_signals_the_correlated_remote_request() {
         cancelled.send(()).unwrap();
     });
     let operation_id = OperationId::parse("explicit-cancel").unwrap();
+    let operation = OperationSpec::new(operation_id, 10_000).unwrap();
     let invoking = std::sync::Arc::clone(&caller);
-    let invoked_operation_id = operation_id.clone();
+    let invoked_operation = operation.clone();
     let invoke = tokio::spawn(async move {
         invoking
             .invoke_resource(
@@ -1401,7 +1404,7 @@ async fn explicit_cancel_signals_the_correlated_remote_request() {
                     1,
                     "Provider/system-core",
                 ),
-                OperationSpec::new(invoked_operation_id, 10_000).unwrap(),
+                invoked_operation,
                 ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
                 ttrpc_frame(42, b"wait"),
             )
@@ -1411,7 +1414,7 @@ async fn explicit_cancel_signals_the_correlated_remote_request() {
         .await
         .expect("invoke must reach the remote request")
         .unwrap();
-    caller.cancel(&operation_id).await.unwrap();
+    caller.cancel(&operation).await.unwrap();
     assert!(matches!(
         invoke.await.unwrap(),
         Err(d2b_bus::BusError::Cancelled)
