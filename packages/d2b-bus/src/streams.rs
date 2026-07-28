@@ -432,6 +432,7 @@ impl std::error::Error for StreamError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::sync::{Barrier, mpsc};
 
     fn bridge(aggregate: usize) -> Arc<StreamBridge> {
         StreamBridge::new(StreamLimits {
@@ -549,5 +550,98 @@ mod tests {
             incoming.receive_next().await,
             Err(StreamError::NoFrameAvailable)
         );
+    }
+
+    #[tokio::test]
+    async fn concurrent_stream_opens_saturate_aggregate_credit() {
+        const ATTEMPTS: usize = 16;
+        let bridge = StreamBridge::new(StreamLimits {
+            max_stream_credit: 8,
+            max_aggregate_bytes: 32,
+            max_streams: ATTEMPTS,
+            max_frame_bytes: 8,
+        })
+        .unwrap();
+        let release = Arc::new(Barrier::new(ATTEMPTS + 1));
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut tasks = Vec::new();
+
+        for index in 0..ATTEMPTS {
+            let bridge = Arc::clone(&bridge);
+            let release = Arc::clone(&release);
+            let tx = tx.clone();
+            tasks.push(tokio::spawn(async move {
+                let opened = bridge.open(
+                    StreamName::parse(format!("stream:{index}")).unwrap(),
+                    SessionId(1),
+                    SessionId(2),
+                    8,
+                );
+                tx.send(opened.as_ref().map(|_| ()).map_err(|error| *error))
+                    .unwrap();
+                release.wait().await;
+                drop(opened);
+            }));
+        }
+        drop(tx);
+
+        let mut opened = 0;
+        let mut backpressured = 0;
+        for _ in 0..ATTEMPTS {
+            match rx.recv().await.unwrap() {
+                Ok(()) => opened += 1,
+                Err(StreamError::AggregateBackpressure) => backpressured += 1,
+                Err(error) => panic!("unexpected concurrent open error: {error}"),
+            }
+        }
+        assert_eq!(opened, 4);
+        assert_eq!(backpressured, ATTEMPTS - opened);
+        release.wait().await;
+        for task in tasks {
+            task.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn concurrent_senders_exhaust_exact_byte_credit() {
+        const ATTEMPTS: usize = 32;
+        let bridge = StreamBridge::new(StreamLimits {
+            max_stream_credit: 16,
+            max_aggregate_bytes: 32,
+            max_streams: 1,
+            max_frame_bytes: 1,
+        })
+        .unwrap();
+        let (outgoing, _incoming) = bridge
+            .open(
+                StreamName::parse("stream:contention").unwrap(),
+                SessionId(1),
+                SessionId(2),
+                16,
+            )
+            .unwrap();
+        let outgoing = Arc::new(outgoing);
+        let start = Arc::new(Barrier::new(ATTEMPTS));
+        let mut tasks = Vec::new();
+        for _ in 0..ATTEMPTS {
+            let outgoing = Arc::clone(&outgoing);
+            let start = Arc::clone(&start);
+            tasks.push(tokio::spawn(async move {
+                start.wait().await;
+                outgoing.send(vec![1])
+            }));
+        }
+
+        let mut accepted = 0;
+        let mut rejected = 0;
+        for task in tasks {
+            match task.await.unwrap() {
+                Ok(()) => accepted += 1,
+                Err(StreamError::CreditExceeded) => rejected += 1,
+                Err(error) => panic!("unexpected concurrent send error: {error}"),
+            }
+        }
+        assert_eq!(accepted, 16);
+        assert_eq!(rejected, ATTEMPTS - accepted);
     }
 }

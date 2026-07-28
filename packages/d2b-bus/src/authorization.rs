@@ -274,3 +274,659 @@ impl From<crate::router::BusError> for AuthorizationError {
         Self::InvalidResourceCall
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use d2b_contracts::v3::{
+        BindingDigest, ConfigurationGeneration, ControllerGeneration, ReconnectGeneration,
+        ResourceGeneration, ResourceRef, ResourceTypeName, ResourceUid, SchemaFingerprint,
+        ServiceName, SessionBinding, SessionPurpose, TranscriptHash, TransportBinding,
+        ZoneRevision,
+    };
+    use d2b_resource_api::authz::{
+        ApiCatalog, BindingScope, BootstrapPhase, BoundSubject, CompiledRole, CompiledRoleBinding,
+        PolicyRule, RelayGrantAuthority, ResourceVerb,
+    };
+    use d2b_resource_store::PolicySnapshot;
+
+    use super::*;
+    use crate::{
+        registry::{RouteGenerations, RouteMember, RouteTarget},
+        router::{ResourceCall, ResourceQuery},
+    };
+
+    const SUBJECT_UID: &str = "11111111-1111-4111-8111-111111111111";
+
+    fn fingerprint(value: char) -> SchemaFingerprint {
+        SchemaFingerprint::parse(format!("sha256:{}", value.to_string().repeat(64))).unwrap()
+    }
+
+    fn context(
+        zone: &str,
+        service: &str,
+        locality: Locality,
+        evidence: EvidenceClass,
+    ) -> AuthenticatedSubjectContext {
+        AuthenticatedSubjectContext::new(
+            ResourceRef::parse(if locality == Locality::Local {
+                "User/alice"
+            } else {
+                "ZoneLink/parent"
+            })
+            .unwrap(),
+            ResourceUid::parse(SUBJECT_UID).unwrap(),
+            ResourceRef::parse(&format!("Zone/{zone}")).unwrap(),
+            evidence,
+            SessionPurpose::parse("zone-bus").unwrap(),
+            ServiceName::parse(service).unwrap(),
+            SessionBinding::new(
+                fingerprint('1'),
+                TransportBinding::new(
+                    locality,
+                    BindingDigest::parse(format!("sha256:{}", "2".repeat(64))).unwrap(),
+                ),
+                ReconnectGeneration::new(1).unwrap(),
+                TranscriptHash::from_bytes([3; 32]),
+            ),
+        )
+        .with_provider_ref(ResourceRef::parse("Provider/system-core").unwrap())
+        .with_provider_generation(ResourceGeneration::new(2).unwrap())
+        .with_controller_generation(ControllerGeneration::new(3).unwrap())
+    }
+
+    fn route(zone: &str, service: &str, member: RouteMember) -> RouteKey {
+        RouteKey::new(
+            ZoneId::parse(zone).unwrap(),
+            ServiceName::parse(service).unwrap(),
+            member,
+            RouteTarget::provider(ResourceRef::parse("Provider/system-core").unwrap()).unwrap(),
+            fingerprint('1'),
+            RouteGenerations::new(
+                Some(ResourceGeneration::new(2).unwrap()),
+                Some(ControllerGeneration::new(3).unwrap()),
+                ReconnectGeneration::new(1).unwrap(),
+            ),
+        )
+    }
+
+    fn state(revision: u64) -> AuthorizationState {
+        AuthorizationState {
+            snapshot: PolicySnapshot {
+                policy_revision: revision,
+                api_catalog_revision: 1,
+                active_configuration_revision: ConfigurationGeneration::new(1).unwrap(),
+                controller_generation: Some(ControllerGeneration::new(3).unwrap()),
+            },
+            zone_policy_revision: ZoneRevision::new(revision),
+            bootstrap_phase: BootstrapPhase::Disabled,
+            now_tick: revision,
+        }
+    }
+
+    fn policy(
+        revision: u64,
+        context: &AuthenticatedSubjectContext,
+        session_verbs: &[SessionVerb],
+        resource_types: &[ResourceTypeName],
+        resource_verbs: &[ResourceVerb],
+        scoped_zones: &[ZoneId],
+    ) -> PolicySet {
+        let catalog = ApiCatalog::standard();
+        let rule = PolicyRule::new(
+            &catalog,
+            resource_types.iter().cloned(),
+            resource_verbs.iter().copied(),
+            session_verbs.iter().copied(),
+            [],
+            [],
+            scoped_zones.iter().cloned(),
+            [],
+        )
+        .unwrap();
+        let role = CompiledRole::new(
+            ResourceRef::parse("Role/authorization-test").unwrap(),
+            vec![rule],
+        )
+        .unwrap();
+        let binding = CompiledRoleBinding::new(
+            role.role_ref.clone(),
+            [BoundSubject {
+                subject_ref: context.subject_ref().clone(),
+                subject_uid: context.subject_uid().clone(),
+            }],
+            BindingScope::default(),
+            if session_verbs.contains(&SessionVerb::Relay) {
+                RelayGrantAuthority::CoreGenerated
+            } else {
+                RelayGrantAuthority::None
+            },
+        )
+        .unwrap();
+        PolicySet::new(&catalog, revision, vec![role], vec![binding]).unwrap()
+    }
+
+    fn authorizer(
+        context: &AuthenticatedSubjectContext,
+        session_verbs: &[SessionVerb],
+        resource_verbs: &[ResourceVerb],
+    ) -> BusAuthorizer {
+        let resource_types = (!resource_verbs.is_empty())
+            .then(|| ResourceTypeName::parse("Host").unwrap())
+            .into_iter()
+            .collect::<Vec<_>>();
+        let native = NativeAuthorizer::new(
+            ApiCatalog::standard(),
+            Some(policy(
+                1,
+                context,
+                session_verbs,
+                &resource_types,
+                resource_verbs,
+                &[],
+            )),
+        )
+        .unwrap();
+        BusAuthorizer::new(native, state(1)).unwrap()
+    }
+
+    #[test]
+    fn cross_zone_dispatch_fails_only_on_authenticated_zone_inequality() {
+        let claims = context(
+            "dev",
+            "d2b.resource.v3",
+            Locality::Local,
+            EvidenceClass::UnixPeer,
+        );
+        let dev_authorizer = authorizer(&claims, &[SessionVerb::Connect, SessionVerb::Invoke], &[]);
+        let personal_route = route(
+            "personal",
+            "d2b.resource.v3",
+            RouteMember::method("ResourceService/Get").unwrap(),
+        );
+
+        assert_eq!(claims.zone_ref().name().as_str(), "dev");
+        assert_eq!(personal_route.zone().as_str(), "personal");
+        assert_eq!(claims.service(), personal_route.service());
+        assert_eq!(claims.schema_fingerprint(), personal_route.schema());
+        assert_eq!(
+            claims.reconnect_generation(),
+            personal_route.generations().session()
+        );
+        assert_eq!(
+            dev_authorizer.authorize_dispatch(&claims, &personal_route, None, false),
+            Err(AuthorizationError::ZoneMismatch)
+        );
+
+        let personal_claims = context(
+            "personal",
+            "d2b.resource.v3",
+            Locality::Local,
+            EvidenceClass::UnixPeer,
+        );
+        let personal_authorizer = authorizer(
+            &personal_claims,
+            &[SessionVerb::Connect, SessionVerb::Invoke],
+            &[],
+        );
+        assert_eq!(
+            personal_authorizer.authorize_dispatch(&personal_claims, &personal_route, None, false,),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn cross_zone_connect_precedes_policy_availability() {
+        let claims = context(
+            "dev",
+            "d2b.echo.v3",
+            Locality::Local,
+            EvidenceClass::UnixPeer,
+        );
+        let authorizer = authorizer(&claims, &[SessionVerb::Connect], &[]);
+        authorizer.mark_policy_unavailable();
+        assert_eq!(
+            authorizer.authorize_connect(&claims, &ZoneId::parse("personal").unwrap()),
+            Err(AuthorizationError::ZoneMismatch)
+        );
+    }
+
+    #[test]
+    fn cross_zone_cancel_fails_only_on_authenticated_zone_inequality() {
+        let claims = context(
+            "dev",
+            "d2b.echo.v3",
+            Locality::Local,
+            EvidenceClass::UnixPeer,
+        );
+        let authorizer = authorizer(&claims, &[SessionVerb::Connect, SessionVerb::Cancel], &[]);
+        let personal_route = route(
+            "personal",
+            "d2b.echo.v3",
+            RouteMember::method("EchoService/Call").unwrap(),
+        );
+
+        assert_eq!(claims.service(), personal_route.service());
+        assert_eq!(claims.schema_fingerprint(), personal_route.schema());
+        assert_eq!(
+            claims.reconnect_generation(),
+            personal_route.generations().session()
+        );
+        assert_eq!(
+            authorizer.authorize_cancel(&claims, &personal_route),
+            Err(AuthorizationError::ZoneMismatch)
+        );
+    }
+
+    #[test]
+    fn zero_policy_revision_is_not_a_bus_bootstrap_escape_hatch() {
+        let native = NativeAuthorizer::new(ApiCatalog::standard(), None).unwrap();
+        assert!(matches!(
+            BusAuthorizer::new(native, state(0)),
+            Err(AuthorizationError::PolicyRevisionZero)
+        ));
+    }
+
+    #[test]
+    fn every_session_binding_dimension_is_checked() {
+        let claims = context(
+            "dev",
+            "d2b.echo.v3",
+            Locality::Local,
+            EvidenceClass::UnixPeer,
+        );
+        let authorizer = authorizer(&claims, &[SessionVerb::Connect, SessionVerb::Invoke], &[]);
+        let exact = route(
+            "dev",
+            "d2b.echo.v3",
+            RouteMember::method("EchoService/Call").unwrap(),
+        );
+        assert_eq!(
+            authorizer.authorize_dispatch(&claims, &exact, None, false),
+            Ok(())
+        );
+        let mutations = [
+            RouteKey::new(
+                exact.zone().clone(),
+                ServiceName::parse("d2b.other.v3").unwrap(),
+                exact.member().clone(),
+                exact.target().clone(),
+                exact.schema().clone(),
+                exact.generations(),
+            ),
+            RouteKey::new(
+                exact.zone().clone(),
+                exact.service().clone(),
+                exact.member().clone(),
+                exact.target().clone(),
+                fingerprint('9'),
+                exact.generations(),
+            ),
+            RouteKey::new(
+                exact.zone().clone(),
+                exact.service().clone(),
+                exact.member().clone(),
+                exact.target().clone(),
+                exact.schema().clone(),
+                RouteGenerations::new(
+                    exact.generations().provider(),
+                    exact.generations().controller(),
+                    ReconnectGeneration::new(2).unwrap(),
+                ),
+            ),
+            RouteKey::new(
+                exact.zone().clone(),
+                exact.service().clone(),
+                exact.member().clone(),
+                exact.target().clone(),
+                exact.schema().clone(),
+                RouteGenerations::new(
+                    Some(ResourceGeneration::new(9).unwrap()),
+                    exact.generations().controller(),
+                    exact.generations().session(),
+                ),
+            ),
+            RouteKey::new(
+                exact.zone().clone(),
+                exact.service().clone(),
+                exact.member().clone(),
+                exact.target().clone(),
+                exact.schema().clone(),
+                RouteGenerations::new(
+                    exact.generations().provider(),
+                    Some(ControllerGeneration::new(9).unwrap()),
+                    exact.generations().session(),
+                ),
+            ),
+            RouteKey::new(
+                exact.zone().clone(),
+                exact.service().clone(),
+                exact.member().clone(),
+                RouteTarget::provider(ResourceRef::parse("Provider/other").unwrap()).unwrap(),
+                exact.schema().clone(),
+                exact.generations(),
+            ),
+        ];
+        for mutation in mutations {
+            assert_eq!(
+                authorizer.authorize_dispatch(&claims, &mutation, None, false),
+                Err(AuthorizationError::SessionBindingMismatch)
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_relay_evidence_is_denied_before_policy_lookup() {
+        let claims = context(
+            "dev",
+            "d2b.echo.v3",
+            Locality::AdjacentZone,
+            EvidenceClass::BootstrapIkpsk2,
+        );
+        let authorizer = authorizer(
+            &claims,
+            &[
+                SessionVerb::Connect,
+                SessionVerb::Invoke,
+                SessionVerb::Relay,
+            ],
+            &[],
+        );
+        authorizer.mark_policy_unavailable();
+        assert_eq!(
+            authorizer.authorize_dispatch(
+                &claims,
+                &route(
+                    "dev",
+                    "d2b.echo.v3",
+                    RouteMember::method("EchoService/Call").unwrap(),
+                ),
+                None,
+                false,
+            ),
+            Err(AuthorizationError::RelayOriginInvalid)
+        );
+    }
+
+    #[test]
+    fn relay_grant_and_forwarded_target_grant_fail_independently() {
+        let claims = context(
+            "dev",
+            "d2b.resource.v3",
+            Locality::AdjacentZone,
+            EvidenceClass::EnrolledKk,
+        );
+        let target_route = route(
+            "dev",
+            "d2b.resource.v3",
+            RouteMember::method("ResourceService/Get").unwrap(),
+        );
+        let call = ResourceCall::Get(ResourceRef::parse("Host/system").unwrap());
+        let no_relay = authorizer(
+            &claims,
+            &[SessionVerb::Connect, SessionVerb::Invoke],
+            &[ResourceVerb::Get],
+        );
+        assert_eq!(
+            no_relay.authorize_dispatch(&claims, &target_route, Some(&call), false),
+            Err(AuthorizationError::RelayGrantMissing)
+        );
+
+        let no_target = authorizer(
+            &claims,
+            &[
+                SessionVerb::Connect,
+                SessionVerb::Invoke,
+                SessionVerb::Relay,
+            ],
+            &[],
+        );
+        assert_eq!(
+            no_target.authorize_dispatch(&claims, &target_route, Some(&call), false),
+            Err(AuthorizationError::Native(
+                AuthorizationDenial::RelayTargetGrantMissing
+            ))
+        );
+    }
+
+    #[test]
+    fn diagnostic_verbs_are_exact_and_cannot_carry_resource_authority() {
+        for (service, member, verb) in [
+            (
+                "d2b.audit.v3",
+                "AuditService/Export",
+                SessionVerb::AuditExport,
+            ),
+            (
+                "d2b.support.v3",
+                "SupportService/GenerateBundle",
+                SessionVerb::SupportBundle,
+            ),
+        ] {
+            let claims = context("dev", service, Locality::Local, EvidenceClass::UnixPeer);
+            let exact_authorizer = authorizer(&claims, &[SessionVerb::Connect, verb], &[]);
+            let exact = route("dev", service, RouteMember::method(member).unwrap());
+            assert_eq!(
+                exact_authorizer.authorize_dispatch(&claims, &exact, None, false),
+                Ok(())
+            );
+            assert_eq!(
+                authorizer(&claims, &[SessionVerb::Connect], &[])
+                    .authorize_dispatch(&claims, &exact, None, false),
+                Err(AuthorizationError::SessionVerbMissing(verb))
+            );
+            assert_eq!(
+                exact_authorizer.authorize_dispatch(
+                    &claims,
+                    &exact,
+                    Some(&ResourceCall::Get(
+                        ResourceRef::parse("Host/system").unwrap()
+                    )),
+                    false,
+                ),
+                Err(AuthorizationError::DiagnosticBinding)
+            );
+            let near_miss = route(
+                "dev",
+                service,
+                RouteMember::method("OtherService/Other").unwrap(),
+            );
+            assert_eq!(
+                exact_authorizer.authorize_dispatch(&claims, &near_miss, None, false),
+                Err(AuthorizationError::DiagnosticBinding)
+            );
+        }
+    }
+
+    #[test]
+    fn each_dispatch_session_verb_is_independently_required() {
+        let claims = context(
+            "dev",
+            "d2b.echo.v3",
+            Locality::Local,
+            EvidenceClass::UnixPeer,
+        );
+        let no_connect = authorizer(&claims, &[], &[]);
+        assert_eq!(
+            no_connect.authorize_connect(&claims, &ZoneId::parse("dev").unwrap()),
+            Err(AuthorizationError::SessionVerbMissing(SessionVerb::Connect))
+        );
+
+        let connect_only = authorizer(&claims, &[SessionVerb::Connect], &[]);
+        assert_eq!(
+            connect_only.authorize_dispatch(
+                &claims,
+                &route(
+                    "dev",
+                    "d2b.echo.v3",
+                    RouteMember::method("EchoService/Call").unwrap(),
+                ),
+                None,
+                false,
+            ),
+            Err(AuthorizationError::SessionVerbMissing(SessionVerb::Invoke))
+        );
+        assert_eq!(
+            connect_only.authorize_dispatch(
+                &claims,
+                &route(
+                    "dev",
+                    "d2b.echo.v3",
+                    RouteMember::stream("EchoService/Stream").unwrap(),
+                ),
+                None,
+                true,
+            ),
+            Err(AuthorizationError::SessionVerbMissing(
+                SessionVerb::OpenStream
+            ))
+        );
+        assert_eq!(
+            connect_only.authorize_cancel(
+                &claims,
+                &route(
+                    "dev",
+                    "d2b.echo.v3",
+                    RouteMember::method("EchoService/Call").unwrap(),
+                ),
+            ),
+            Err(AuthorizationError::SessionVerbMissing(SessionVerb::Cancel))
+        );
+    }
+
+    #[test]
+    fn native_policy_outage_revision_denial_and_unknown_type_are_preserved() {
+        let claims = context(
+            "dev",
+            "d2b.resource.v3",
+            Locality::Local,
+            EvidenceClass::UnixPeer,
+        );
+        let target_route = route(
+            "dev",
+            "d2b.resource.v3",
+            RouteMember::method("ResourceService/Get").unwrap(),
+        );
+        let no_resource_grant =
+            authorizer(&claims, &[SessionVerb::Connect, SessionVerb::Invoke], &[]);
+        assert_eq!(
+            no_resource_grant.authorize_dispatch(
+                &claims,
+                &target_route,
+                Some(&ResourceCall::Get(
+                    ResourceRef::parse("Host/system").unwrap()
+                )),
+                false,
+            ),
+            Err(AuthorizationError::Native(
+                AuthorizationDenial::NoMatchingGrant
+            ))
+        );
+        let outage = authorizer(
+            &claims,
+            &[SessionVerb::Connect, SessionVerb::Invoke],
+            &[ResourceVerb::Get],
+        );
+        outage.mark_policy_unavailable();
+        assert_eq!(
+            outage.authorize_connect(&claims, &ZoneId::parse("dev").unwrap()),
+            Err(AuthorizationError::Native(
+                AuthorizationDenial::PolicyUnavailable
+            ))
+        );
+
+        let mismatched_native = NativeAuthorizer::new(
+            ApiCatalog::standard(),
+            Some(policy(1, &claims, &[SessionVerb::Connect], &[], &[], &[])),
+        )
+        .unwrap();
+        let mismatched = BusAuthorizer::new(mismatched_native, state(2)).unwrap();
+        assert_eq!(
+            mismatched.authorize_connect(&claims, &ZoneId::parse("dev").unwrap()),
+            Err(AuthorizationError::Native(
+                AuthorizationDenial::PolicyRevisionChanged
+            ))
+        );
+
+        let extension_call = ResourceCall::InspectSchema(
+            ResourceTypeName::parse("example.d2bus.org.Widget").unwrap(),
+        );
+        assert_eq!(
+            authorizer(&claims, &[SessionVerb::Connect, SessionVerb::Invoke], &[],)
+                .authorize_dispatch(
+                    &claims,
+                    &route(
+                        "dev",
+                        "d2b.resource.v3",
+                        RouteMember::method("ResourceService/InspectSchema").unwrap(),
+                    ),
+                    Some(&extension_call),
+                    false,
+                ),
+            Err(AuthorizationError::Native(
+                AuthorizationDenial::UnknownResourceType
+            ))
+        );
+    }
+
+    #[test]
+    fn malformed_resource_call_and_policy_replacement_fail_closed() {
+        let claims = context(
+            "dev",
+            "d2b.resource.v3",
+            Locality::Local,
+            EvidenceClass::UnixPeer,
+        );
+        let authorizer = authorizer(&claims, &[SessionVerb::Connect, SessionVerb::Invoke], &[]);
+        let empty_batch = ResourceCall::CommitBatch(Vec::new());
+        assert_eq!(
+            authorizer.authorize_dispatch(
+                &claims,
+                &route(
+                    "dev",
+                    "d2b.resource.v3",
+                    RouteMember::method("ResourceService/CommitBatch").unwrap(),
+                ),
+                Some(&empty_batch),
+                false,
+            ),
+            Err(AuthorizationError::InvalidResourceCall)
+        );
+
+        let replacement = policy(2, &claims, &[SessionVerb::Connect], &[], &[], &[]);
+        assert_eq!(
+            authorizer.replace_policy(replacement, state(3)),
+            Err(AuthorizationError::Policy(
+                AuthorizationPolicyError::PolicyStateRevisionMismatch
+            ))
+        );
+
+        let extended_catalog =
+            ApiCatalog::with_extensions([
+                ResourceTypeName::parse("example.d2bus.org.Widget").unwrap()
+            ])
+            .unwrap();
+        let foreign_catalog_policy =
+            PolicySet::new(&extended_catalog, 2, Vec::new(), Vec::new()).unwrap();
+        assert_eq!(
+            authorizer.replace_policy(foreign_catalog_policy, state(2)),
+            Err(AuthorizationError::Policy(
+                AuthorizationPolicyError::CatalogMismatch
+            ))
+        );
+    }
+
+    #[test]
+    fn nameless_query_is_not_an_authorization_target_omission() {
+        let query = ResourceQuery::new(
+            vec![ResourceTypeName::parse("Host").unwrap()],
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
+        let request = ResourceCall::List(query)
+            .authorization_request(ZoneId::parse("dev").unwrap())
+            .unwrap();
+        assert_eq!(request.targets.len(), 1);
+        assert!(request.targets[0].resource_name.is_none());
+    }
+}

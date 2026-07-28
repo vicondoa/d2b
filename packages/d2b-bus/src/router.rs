@@ -1183,6 +1183,10 @@ mod tests {
     }
 
     fn harness(spec: HarnessSpec<'_>) -> Harness {
+        harness_with_config(spec, BusConfig::default())
+    }
+
+    fn harness_with_config(spec: HarnessSpec<'_>, config: BusConfig) -> Harness {
         let zone = ZoneId::parse("dev").unwrap();
         let schema = fingerprint('1');
         let generations = RouteGenerations::new(
@@ -1222,7 +1226,7 @@ mod tests {
         let authorizer = BusAuthorizer::new(native, state(1)).unwrap();
         let clock = Arc::new(ManualClock::new(1));
         let (bus, mut registrar) =
-            ZoneBus::with_clock(zone, authorizer, BusConfig::default(), clock.clone()).unwrap();
+            ZoneBus::with_clock(zone, authorizer, config, clock.clone()).unwrap();
         let endpoint_ingress = registrar
             .register(SessionRegistration::new(
                 endpoint_context,
@@ -1408,6 +1412,82 @@ mod tests {
         }
     }
 
+    #[test]
+    fn consumed_session_identity_cannot_be_registered_twice() {
+        let mut harness = resource_harness(
+            RouteMember::method("ResourceService/Get").unwrap(),
+            vec![SessionVerb::Connect, SessionVerb::Invoke],
+            vec![ResourceVerb::Get],
+            "User/alice",
+            Locality::Local,
+            EvidenceClass::UnixPeer,
+        );
+        let duplicate = context(
+            "User/alice",
+            CALLER_UID,
+            "d2b.resource.v3",
+            harness.route.schema().clone(),
+            harness.route.generations(),
+            Locality::Local,
+            EvidenceClass::UnixPeer,
+        );
+
+        assert!(matches!(
+            harness.registrar.register(SessionRegistration::new(
+                duplicate,
+                Vec::new(),
+                harness.endpoint.clone(),
+            )),
+            Err(BusError::Registry(RegistryError::DuplicateSessionIdentity))
+        ));
+    }
+
+    #[test]
+    fn exact_route_cannot_be_claimed_by_a_second_identity() {
+        let mut harness = resource_harness(
+            RouteMember::method("ResourceService/Get").unwrap(),
+            vec![SessionVerb::Connect, SessionVerb::Invoke],
+            vec![ResourceVerb::Get],
+            "User/alice",
+            Locality::Local,
+            EvidenceClass::UnixPeer,
+        );
+        let second = context(
+            "User/bob",
+            "33333333-3333-4333-8333-333333333333",
+            "d2b.resource.v3",
+            harness.route.schema().clone(),
+            harness.route.generations(),
+            Locality::Local,
+            EvidenceClass::UnixPeer,
+        );
+        harness
+            .bus
+            .replace_policy(
+                policy(
+                    2,
+                    &[
+                        harness.subjects[0].clone(),
+                        harness.subjects[1].clone(),
+                        bound_subject(&second),
+                    ],
+                    &[SessionVerb::Connect, SessionVerb::Invoke],
+                    &[ResourceVerb::Get],
+                ),
+                state(2),
+            )
+            .unwrap();
+
+        assert!(matches!(
+            harness.registrar.register(SessionRegistration::new(
+                second,
+                vec![harness.route.clone()],
+                harness.endpoint.clone(),
+            )),
+            Err(BusError::Registry(RegistryError::DuplicateRoute))
+        ));
+    }
+
     #[tokio::test]
     async fn exact_route_is_required_and_no_direct_resource_fallback_exists() {
         let mut harness = resource_harness(
@@ -1440,14 +1520,30 @@ mod tests {
             harness.route.generations(),
         );
         let resource_endpoint = context(
-            "Provider/system-core",
-            ENDPOINT_UID,
+            "User/resource-endpoint",
+            "44444444-4444-4444-8444-444444444444",
             "d2b.resource.v3",
             harness.route.schema().clone(),
             harness.route.generations(),
             Locality::Local,
-            EvidenceClass::EnrolledKk,
+            EvidenceClass::UnixPeer,
         );
+        harness
+            .bus
+            .replace_policy(
+                policy(
+                    2,
+                    &[
+                        harness.subjects[0].clone(),
+                        harness.subjects[1].clone(),
+                        bound_subject(&resource_endpoint),
+                    ],
+                    &[SessionVerb::Connect, SessionVerb::Invoke],
+                    &[ResourceVerb::Get],
+                ),
+                state(2),
+            )
+            .unwrap();
         let resource_ingress = harness
             .registrar
             .register(SessionRegistration::new(
@@ -2019,6 +2115,54 @@ mod tests {
         assert_eq!(invoke_result, Err(BusError::Cancelled));
         assert_eq!(cancel_result, Ok(()));
         assert_eq!(endpoint.cancel_count.load(Ordering::Acquire), 1);
+    }
+
+    #[tokio::test]
+    async fn concurrent_invocations_saturate_the_operation_bound() {
+        let endpoint = RecordingEndpoint::blocking();
+        let harness = harness_with_config(
+            HarnessSpec {
+                service: "d2b.resource.v3",
+                member: RouteMember::method("ResourceService/Get").unwrap(),
+                caller_ref: "User/alice",
+                locality: Locality::Local,
+                evidence: EvidenceClass::UnixPeer,
+                session_verbs: vec![SessionVerb::Connect, SessionVerb::Invoke],
+                resource_verbs: vec![ResourceVerb::Get],
+                endpoint: endpoint.clone(),
+            },
+            BusConfig {
+                max_operations: 1,
+                ..BusConfig::default()
+            },
+        );
+        let first = harness.caller.invoke_resource(
+            harness.route.clone(),
+            operation("first-in-flight"),
+            ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
+            Vec::new(),
+        );
+        let second = async {
+            endpoint.started.notified().await;
+            let result = harness
+                .caller
+                .invoke_resource(
+                    harness.route.clone(),
+                    operation("second-in-flight"),
+                    ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
+                    Vec::new(),
+                )
+                .await;
+            endpoint.release.notify_one();
+            result
+        };
+        let (first_result, second_result) = tokio::join!(first, second);
+        assert!(first_result.is_ok());
+        assert_eq!(
+            second_result,
+            Err(BusError::Operation(OperationError::CapacityExceeded))
+        );
+        assert_eq!(endpoint.call_count(), 1);
     }
 
     #[tokio::test]

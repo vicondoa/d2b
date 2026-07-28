@@ -405,6 +405,13 @@ impl Registry {
     ) -> Result<(), RegistryError> {
         ensure_context_zone(&registration.context, &self.zone)?;
         ensure_transport_evidence(&registration.context)?;
+        if self.sessions.iter().any(|(session, registered)| {
+            Some(*session) != replacing
+                && registered.context.subject_ref() == registration.context.subject_ref()
+                && registered.context.subject_uid() == registration.context.subject_uid()
+        }) {
+            return Err(RegistryError::DuplicateSessionIdentity);
+        }
 
         let distinct = registration.routes.iter().cloned().collect::<BTreeSet<_>>();
         if distinct.len() != registration.routes.len() {
@@ -563,6 +570,7 @@ pub enum RegistryError {
     UnauthenticatedTransport,
     SessionBindingMismatch,
     ProviderAssertion,
+    DuplicateSessionIdentity,
     DuplicateRoute,
     RouteNotFound,
     SessionNotFound,
@@ -582,6 +590,9 @@ impl core::fmt::Display for RegistryError {
                 "route does not match the authenticated session binding"
             }
             Self::ProviderAssertion => "Provider route is not bound to authenticated evidence",
+            Self::DuplicateSessionIdentity => {
+                "authenticated session identity is already registered"
+            }
             Self::DuplicateRoute => "exact route is already registered",
             Self::RouteNotFound => "exact route is not registered",
             Self::SessionNotFound => "bus session is not registered",

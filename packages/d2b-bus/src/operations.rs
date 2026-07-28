@@ -412,4 +412,35 @@ mod tests {
         assert!(first_cancel.is_cancelled());
         assert!(second_cancel.is_cancelled());
     }
+
+    #[test]
+    fn finish_and_cancel_errors_do_not_release_another_sessions_operation() {
+        let mut table = OperationTable::new(1).unwrap();
+        let operation = operation("owned", 5);
+        table
+            .begin(&operation, SessionId(1), SessionId(2), route(), 1)
+            .unwrap();
+
+        assert_eq!(
+            table.finish(operation.id(), SessionId(9), 2).unwrap_err(),
+            OperationError::OperationOwnerMismatch
+        );
+        assert!(matches!(
+            table.cancel(operation.id(), SessionId(9)),
+            Err(OperationError::OperationOwnerMismatch)
+        ));
+        assert!(table.route_for_cancel(operation.id(), SessionId(1)).is_ok());
+        assert_eq!(
+            table.finish(operation.id(), SessionId(1), 5).unwrap_err(),
+            OperationError::DeadlineExceeded
+        );
+        assert!(matches!(
+            table.cancel(operation.id(), SessionId(1)),
+            Err(OperationError::OperationNotFound)
+        ));
+        assert_eq!(
+            table.finish(operation.id(), SessionId(1), 6).unwrap_err(),
+            OperationError::OperationNotFound
+        );
+    }
 }
