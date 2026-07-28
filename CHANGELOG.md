@@ -56,6 +56,10 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- Made the canonical spike-measurement policy guard cover all seven result
+  rows, every registered numeric copy and qualitative evidence summary, and
+  in-memory mutations of each measurement class.
+
 - Unified Core and toolkit controller identity, selector, trigger, registration,
   retry, and resync contracts. Core changes now drive the executor-native
   reconciliation runner through a bounded, coalescing registered-resource

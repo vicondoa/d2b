@@ -46,7 +46,10 @@
 //! rule and legitimately quotes the form it rejects (a lint that fails on the
 //! decision defining it is worse than no lint). Nothing else is exempt.
 
-use std::path::{Path, PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
 use d2b_contract_tests::repo_root;
 use regex::Regex;
@@ -1005,18 +1008,648 @@ fn normalized_whitespace(content: &str) -> String {
     content.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn final_measurement(results: &str, threshold: &str) -> String {
-    let prefix = format!("| {threshold} |");
-    let row = results
+#[derive(Debug)]
+struct CanonicalMeasurement {
+    outcome: String,
+    measurement: String,
+}
+
+#[derive(Clone, Copy)]
+enum DerivedExpectation {
+    CanonicalMeasurement,
+    CanonicalFragment {
+        source: &'static str,
+        derived: &'static str,
+    },
+    OutcomeSummary(&'static str),
+}
+
+#[derive(Clone, Copy)]
+struct DerivedMeasurementSite {
+    path: &'static str,
+    expectation: DerivedExpectation,
+    copies: usize,
+}
+
+struct MeasurementSpec {
+    name: &'static str,
+    threshold: &'static str,
+    expected_outcome: &'static str,
+    fingerprint: &'static str,
+    fingerprint_copies: usize,
+    sites: Vec<DerivedMeasurementSite>,
+    mutation_path: &'static str,
+    mutation_needle: &'static str,
+}
+
+fn canonical_measurement(results: &str, threshold: &str) -> Result<CanonicalMeasurement, String> {
+    let rows = results
         .lines()
-        .find(|line| line.starts_with(&prefix))
-        .unwrap_or_else(|| panic!("missing canonical spike threshold row: {threshold}"));
-    row.split('|')
-        .nth(3)
-        .map(str::trim)
-        .filter(|measurement| !measurement.is_empty())
-        .unwrap_or_else(|| panic!("missing final measurement for threshold: {threshold}"))
-        .to_string()
+        .filter_map(|line| {
+            let cells = line.split('|').map(str::trim).collect::<Vec<_>>();
+            (cells.get(1) == Some(&threshold)).then_some(cells)
+        })
+        .collect::<Vec<_>>();
+    if rows.len() != 1 {
+        return Err(format!(
+            "canonical threshold {threshold:?} must occur exactly once, found {}",
+            rows.len()
+        ));
+    }
+    let outcome = rows[0]
+        .get(2)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("missing outcome for canonical threshold {threshold:?}"))?;
+    let measurement = rows[0]
+        .get(3)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            format!("missing final measurement for canonical threshold {threshold:?}")
+        })?;
+    Ok(CanonicalMeasurement {
+        outcome: (*outcome).to_string(),
+        measurement: (*measurement).to_string(),
+    })
+}
+
+fn collect_measurement_documents(dir: &Path, out: &mut Vec<PathBuf>) {
+    let entries = std::fs::read_dir(dir)
+        .unwrap_or_else(|err| panic!("policy-lint: cannot read {}: {err}", rel_display(dir)));
+    for entry in entries {
+        let entry = entry.expect("dir entry");
+        let path = entry.path();
+        let file_type = entry.file_type().expect("file type");
+        if file_type.is_dir() {
+            collect_measurement_documents(&path, out);
+        } else if file_type.is_file()
+            && path
+                .extension()
+                .is_some_and(|extension| extension == "md" || extension == "json")
+        {
+            out.push(path);
+        }
+    }
+}
+
+fn measurement_documents() -> BTreeMap<String, String> {
+    let root = repo_root();
+    let mut paths = vec![root.join("CHANGELOG.md")];
+    collect_measurement_documents(&root.join("docs"), &mut paths);
+    paths.sort();
+    paths
+        .into_iter()
+        .map(|path| {
+            let relative = rel_display(&path);
+            let content = std::fs::read_to_string(&path)
+                .unwrap_or_else(|err| panic!("cannot read {relative}: {err}"));
+            (relative, content)
+        })
+        .collect()
+}
+
+fn spike_measurement_specs() -> Vec<MeasurementSpec> {
+    const FEASIBILITY: &str = "docs/specs/ADR-046-feasibility-and-spikes.md";
+    const STORE: &str = "docs/specs/ADR-046-resource-store-redb.md";
+    const DECISIONS: &str = "docs/specs/ADR-046-decision-register.md";
+    const VALIDATION: &str = "docs/specs/ADR-046-validation-and-delivery.md";
+    const WORK_ITEMS: &str = "docs/specs/ADR-046-work-items.json";
+
+    let spike_01_summary_sites = || {
+        vec![
+            DerivedMeasurementSite {
+                path: "CHANGELOG.md",
+                expectation: DerivedExpectation::OutcomeSummary(
+                    "Functional, watch, conflict, crash-recovery",
+                ),
+                copies: 1,
+            },
+            DerivedMeasurementSite {
+                path: FEASIBILITY,
+                expectation: DerivedExpectation::OutcomeSummary(
+                    "functional, watch, conflict, crash-recovery, and commit-to-handler thresholds passed",
+                ),
+                copies: 1,
+            },
+            DerivedMeasurementSite {
+                path: FEASIBILITY,
+                expectation: DerivedExpectation::OutcomeSummary(
+                    "functional/index/revision/watch/group-commit/crash-recovery passed",
+                ),
+                copies: 1,
+            },
+            DerivedMeasurementSite {
+                path: FEASIBILITY,
+                expectation: DerivedExpectation::OutcomeSummary(
+                    "Functional scale, watch correctness",
+                ),
+                copies: 1,
+            },
+            DerivedMeasurementSite {
+                path: FEASIBILITY,
+                expectation: DerivedExpectation::OutcomeSummary(
+                    "SPIKE-01 functional scale, watch correctness",
+                ),
+                copies: 1,
+            },
+            DerivedMeasurementSite {
+                path: STORE,
+                expectation: DerivedExpectation::OutcomeSummary(
+                    "Functional, crash, watch, conflict, and commit-to-handler thresholds passed",
+                ),
+                copies: 1,
+            },
+            DerivedMeasurementSite {
+                path: DECISIONS,
+                expectation: DerivedExpectation::OutcomeSummary(
+                    "Functional, watch, conflict, crash-recovery, and commit-to-handler thresholds passed",
+                ),
+                copies: 1,
+            },
+            DerivedMeasurementSite {
+                path: VALIDATION,
+                expectation: DerivedExpectation::OutcomeSummary(
+                    "Functional, watch, conflict, crash-recovery, and latency thresholds passed",
+                ),
+                copies: 1,
+            },
+            DerivedMeasurementSite {
+                path: WORK_ITEMS,
+                expectation: DerivedExpectation::OutcomeSummary(
+                    "SPIKE-01 functional scale, watch correctness",
+                ),
+                copies: 1,
+            },
+        ]
+    };
+
+    vec![
+        MeasurementSpec {
+            name: "10k correctness",
+            threshold: "10,000 resources, 5 runs, zero oracle divergence",
+            expected_outcome: "MEASURED-PASS",
+            fingerprint: "5/5 runs",
+            fingerprint_copies: 0,
+            sites: spike_01_summary_sites(),
+            mutation_path: FEASIBILITY,
+            mutation_needle: "Functional scale",
+        },
+        MeasurementSpec {
+            name: "watch no-gap",
+            threshold: "100 watches, no misses, duplicates, or gaps",
+            expected_outcome: "MEASURED-PASS",
+            fingerprint: "21,866 exact ChangeBatch comparisons",
+            fingerprint_copies: 0,
+            sites: spike_01_summary_sites(),
+            mutation_path: FEASIBILITY,
+            mutation_needle: "watch correctness",
+        },
+        MeasurementSpec {
+            name: "group commit",
+            threshold: "More than half of non-conflicting storm writes use a batch larger than 1",
+            expected_outcome: "MEASURED-PASS",
+            fingerprint: "48/50, 96%",
+            fingerprint_copies: 4,
+            sites: vec![
+                DerivedMeasurementSite {
+                    path: "CHANGELOG.md",
+                    expectation: DerivedExpectation::CanonicalMeasurement,
+                    copies: 1,
+                },
+                DerivedMeasurementSite {
+                    path: FEASIBILITY,
+                    expectation: DerivedExpectation::CanonicalMeasurement,
+                    copies: 2,
+                },
+                DerivedMeasurementSite {
+                    path: WORK_ITEMS,
+                    expectation: DerivedExpectation::CanonicalMeasurement,
+                    copies: 1,
+                },
+                DerivedMeasurementSite {
+                    path: FEASIBILITY,
+                    expectation: DerivedExpectation::OutcomeSummary(
+                        "functional, watch, conflict, crash-recovery, and commit-to-handler thresholds passed",
+                    ),
+                    copies: 1,
+                },
+                DerivedMeasurementSite {
+                    path: FEASIBILITY,
+                    expectation: DerivedExpectation::OutcomeSummary(
+                        "functional/index/revision/watch/group-commit/crash-recovery passed",
+                    ),
+                    copies: 1,
+                },
+                DerivedMeasurementSite {
+                    path: STORE,
+                    expectation: DerivedExpectation::OutcomeSummary(
+                        "Functional, crash, watch, conflict, and commit-to-handler thresholds passed",
+                    ),
+                    copies: 1,
+                },
+                DerivedMeasurementSite {
+                    path: DECISIONS,
+                    expectation: DerivedExpectation::OutcomeSummary(
+                        "Functional, watch, conflict, crash-recovery, and commit-to-handler thresholds passed",
+                    ),
+                    copies: 1,
+                },
+                DerivedMeasurementSite {
+                    path: VALIDATION,
+                    expectation: DerivedExpectation::OutcomeSummary(
+                        "Functional, watch, conflict, crash-recovery, and latency thresholds passed",
+                    ),
+                    copies: 1,
+                },
+            ],
+            mutation_path: "CHANGELOG.md",
+            mutation_needle: "48/50, 96%",
+        },
+        MeasurementSpec {
+            name: "crash boundaries",
+            threshold: "All 13 crash boundaries recover atomically or refuse to open",
+            expected_outcome: "MEASURED-PASS",
+            fingerprint: "13/13",
+            fingerprint_copies: 3,
+            sites: vec![
+                DerivedMeasurementSite {
+                    path: "CHANGELOG.md",
+                    expectation: DerivedExpectation::OutcomeSummary(
+                        "Functional, watch, conflict, crash-recovery",
+                    ),
+                    copies: 1,
+                },
+                DerivedMeasurementSite {
+                    path: FEASIBILITY,
+                    expectation: DerivedExpectation::OutcomeSummary(
+                        "functional, watch, conflict, crash-recovery, and commit-to-handler thresholds passed",
+                    ),
+                    copies: 1,
+                },
+                DerivedMeasurementSite {
+                    path: FEASIBILITY,
+                    expectation: DerivedExpectation::OutcomeSummary(
+                        "functional/index/revision/watch/group-commit/crash-recovery passed",
+                    ),
+                    copies: 1,
+                },
+                DerivedMeasurementSite {
+                    path: FEASIBILITY,
+                    expectation: DerivedExpectation::CanonicalFragment {
+                        source: "13/13",
+                        derived: "all 13 crash boundaries",
+                    },
+                    copies: 1,
+                },
+                DerivedMeasurementSite {
+                    path: FEASIBILITY,
+                    expectation: DerivedExpectation::CanonicalFragment {
+                        source: "13/13",
+                        derived: "13/13 crash boundaries",
+                    },
+                    copies: 1,
+                },
+                DerivedMeasurementSite {
+                    path: STORE,
+                    expectation: DerivedExpectation::OutcomeSummary(
+                        "Functional, crash, watch, conflict, and commit-to-handler thresholds passed",
+                    ),
+                    copies: 1,
+                },
+                DerivedMeasurementSite {
+                    path: DECISIONS,
+                    expectation: DerivedExpectation::OutcomeSummary(
+                        "Functional, watch, conflict, crash-recovery, and commit-to-handler thresholds passed",
+                    ),
+                    copies: 1,
+                },
+                DerivedMeasurementSite {
+                    path: VALIDATION,
+                    expectation: DerivedExpectation::OutcomeSummary(
+                        "Functional, watch, conflict, crash-recovery, and latency thresholds passed",
+                    ),
+                    copies: 1,
+                },
+                DerivedMeasurementSite {
+                    path: WORK_ITEMS,
+                    expectation: DerivedExpectation::CanonicalFragment {
+                        source: "13/13",
+                        derived: "13/13 crash boundaries",
+                    },
+                    copies: 1,
+                },
+            ],
+            mutation_path: WORK_ITEMS,
+            mutation_needle: "13/13 crash boundaries",
+        },
+        MeasurementSpec {
+            name: "median RSS",
+            threshold: "Median whole-process maximum RSS at or below 24 MiB",
+            expected_outcome: "MEASURED-FAIL",
+            fingerprint: "25,216 KiB (24.625 MiB), 640 KiB or about 2.6% above 24,576 KiB",
+            fingerprint_copies: 10,
+            sites: vec![
+                DerivedMeasurementSite {
+                    path: "CHANGELOG.md",
+                    expectation: DerivedExpectation::CanonicalMeasurement,
+                    copies: 1,
+                },
+                DerivedMeasurementSite {
+                    path: FEASIBILITY,
+                    expectation: DerivedExpectation::CanonicalMeasurement,
+                    copies: 4,
+                },
+                DerivedMeasurementSite {
+                    path: STORE,
+                    expectation: DerivedExpectation::CanonicalMeasurement,
+                    copies: 2,
+                },
+                DerivedMeasurementSite {
+                    path: DECISIONS,
+                    expectation: DerivedExpectation::CanonicalMeasurement,
+                    copies: 1,
+                },
+                DerivedMeasurementSite {
+                    path: VALIDATION,
+                    expectation: DerivedExpectation::CanonicalMeasurement,
+                    copies: 1,
+                },
+                DerivedMeasurementSite {
+                    path: WORK_ITEMS,
+                    expectation: DerivedExpectation::CanonicalMeasurement,
+                    copies: 1,
+                },
+                DerivedMeasurementSite {
+                    path: FEASIBILITY,
+                    expectation: DerivedExpectation::OutcomeSummary(
+                        "SPIKE-01's whole-process RSS failure",
+                    ),
+                    copies: 1,
+                },
+                DerivedMeasurementSite {
+                    path: STORE,
+                    expectation: DerivedExpectation::OutcomeSummary(
+                        "SPIKE-01 failed the whole-process RSS",
+                    ),
+                    copies: 2,
+                },
+                DerivedMeasurementSite {
+                    path: STORE,
+                    expectation: DerivedExpectation::OutcomeSummary(
+                        "SPIKE-01 executed and failed the whole-process RSS threshold",
+                    ),
+                    copies: 1,
+                },
+                DerivedMeasurementSite {
+                    path: STORE,
+                    expectation: DerivedExpectation::OutcomeSummary(
+                        "SPIKE-01 executed but failed the whole-process RSS threshold",
+                    ),
+                    copies: 1,
+                },
+                DerivedMeasurementSite {
+                    path: WORK_ITEMS,
+                    expectation: DerivedExpectation::OutcomeSummary(
+                        "SPIKE-01 failed the whole-process RSS threshold",
+                    ),
+                    copies: 1,
+                },
+                DerivedMeasurementSite {
+                    path: WORK_ITEMS,
+                    expectation: DerivedExpectation::OutcomeSummary(
+                        "SPIKE-01 executed and failed the whole-process RSS threshold",
+                    ),
+                    copies: 1,
+                },
+                DerivedMeasurementSite {
+                    path: WORK_ITEMS,
+                    expectation: DerivedExpectation::OutcomeSummary(
+                        "SPIKE-01 executed but failed the whole-process RSS threshold",
+                    ),
+                    copies: 1,
+                },
+            ],
+            mutation_path: STORE,
+            mutation_needle: "25,216 KiB",
+        },
+        MeasurementSpec {
+            name: "SPIKE-02 p95",
+            threshold: "Commit-to-handler p95 at or below 5,000 us in all profiles",
+            expected_outcome: "MEASURED-PASS",
+            fingerprint: "115.043 us / 116.195 us / 128.902 us",
+            fingerprint_copies: 3,
+            sites: vec![
+                DerivedMeasurementSite {
+                    path: FEASIBILITY,
+                    expectation: DerivedExpectation::CanonicalMeasurement,
+                    copies: 2,
+                },
+                DerivedMeasurementSite {
+                    path: WORK_ITEMS,
+                    expectation: DerivedExpectation::CanonicalMeasurement,
+                    copies: 1,
+                },
+                DerivedMeasurementSite {
+                    path: "CHANGELOG.md",
+                    expectation: DerivedExpectation::OutcomeSummary("latency thresholds passed"),
+                    copies: 1,
+                },
+                DerivedMeasurementSite {
+                    path: FEASIBILITY,
+                    expectation: DerivedExpectation::OutcomeSummary(
+                        "commit-to-handler thresholds passed",
+                    ),
+                    copies: 1,
+                },
+                DerivedMeasurementSite {
+                    path: FEASIBILITY,
+                    expectation: DerivedExpectation::OutcomeSummary(
+                        "all three SPIKE-02 profiles passed",
+                    ),
+                    copies: 1,
+                },
+                DerivedMeasurementSite {
+                    path: STORE,
+                    expectation: DerivedExpectation::OutcomeSummary(
+                        "commit-to-handler thresholds passed",
+                    ),
+                    copies: 1,
+                },
+                DerivedMeasurementSite {
+                    path: STORE,
+                    expectation: DerivedExpectation::OutcomeSummary("SPIKE-02 passed"),
+                    copies: 2,
+                },
+                DerivedMeasurementSite {
+                    path: DECISIONS,
+                    expectation: DerivedExpectation::OutcomeSummary(
+                        "commit-to-handler thresholds passed",
+                    ),
+                    copies: 1,
+                },
+                DerivedMeasurementSite {
+                    path: VALIDATION,
+                    expectation: DerivedExpectation::OutcomeSummary("latency thresholds passed"),
+                    copies: 1,
+                },
+                DerivedMeasurementSite {
+                    path: WORK_ITEMS,
+                    expectation: DerivedExpectation::OutcomeSummary("SPIKE-02 passed"),
+                    copies: 1,
+                },
+            ],
+            mutation_path: FEASIBILITY,
+            mutation_needle: "115.043 us / 116.195 us / 128.902 us",
+        },
+        MeasurementSpec {
+            name: "SPIKE-02 p99",
+            threshold: "Commit-to-handler p99 reported; document any value above 20 ms",
+            expected_outcome: "MEASURED-PASS",
+            fingerprint: "134.834 us / 140.928 us / 1,009.871 us; none exceeded 20 ms",
+            fingerprint_copies: 3,
+            sites: vec![
+                DerivedMeasurementSite {
+                    path: FEASIBILITY,
+                    expectation: DerivedExpectation::CanonicalMeasurement,
+                    copies: 2,
+                },
+                DerivedMeasurementSite {
+                    path: WORK_ITEMS,
+                    expectation: DerivedExpectation::CanonicalMeasurement,
+                    copies: 1,
+                },
+                DerivedMeasurementSite {
+                    path: "CHANGELOG.md",
+                    expectation: DerivedExpectation::OutcomeSummary("latency thresholds passed"),
+                    copies: 1,
+                },
+                DerivedMeasurementSite {
+                    path: FEASIBILITY,
+                    expectation: DerivedExpectation::OutcomeSummary(
+                        "commit-to-handler thresholds passed",
+                    ),
+                    copies: 1,
+                },
+                DerivedMeasurementSite {
+                    path: STORE,
+                    expectation: DerivedExpectation::OutcomeSummary(
+                        "commit-to-handler thresholds passed",
+                    ),
+                    copies: 1,
+                },
+                DerivedMeasurementSite {
+                    path: STORE,
+                    expectation: DerivedExpectation::OutcomeSummary("SPIKE-02 passed"),
+                    copies: 2,
+                },
+                DerivedMeasurementSite {
+                    path: DECISIONS,
+                    expectation: DerivedExpectation::OutcomeSummary(
+                        "commit-to-handler thresholds passed",
+                    ),
+                    copies: 1,
+                },
+                DerivedMeasurementSite {
+                    path: VALIDATION,
+                    expectation: DerivedExpectation::OutcomeSummary("latency thresholds passed"),
+                    copies: 1,
+                },
+                DerivedMeasurementSite {
+                    path: WORK_ITEMS,
+                    expectation: DerivedExpectation::OutcomeSummary("SPIKE-02 passed"),
+                    copies: 1,
+                },
+            ],
+            mutation_path: WORK_ITEMS,
+            mutation_needle: "134.834 us / 140.928 us / 1,009.871 us",
+        },
+    ]
+}
+
+fn validate_spike_measurement(
+    spec: &MeasurementSpec,
+    canonical: &CanonicalMeasurement,
+    documents: &BTreeMap<String, String>,
+) -> Vec<String> {
+    let mut errors = Vec::new();
+    if canonical.outcome != spec.expected_outcome {
+        errors.push(format!(
+            "{}: canonical outcome is {:?}, expected {:?}",
+            spec.name, canonical.outcome, spec.expected_outcome
+        ));
+    }
+    if !canonical.measurement.contains(spec.fingerprint) {
+        errors.push(format!(
+            "{}: canonical measurement {:?} no longer contains discovery fingerprint {:?}",
+            spec.name, canonical.measurement, spec.fingerprint
+        ));
+    }
+
+    for site in &spec.sites {
+        let Some(content) = documents.get(site.path) else {
+            errors.push(format!("{}: missing derived site {}", spec.name, site.path));
+            continue;
+        };
+        let needle = match site.expectation {
+            DerivedExpectation::CanonicalMeasurement => canonical.measurement.as_str(),
+            DerivedExpectation::CanonicalFragment { source, derived } => {
+                if !canonical.measurement.contains(source) {
+                    errors.push(format!(
+                        "{}: canonical measurement {:?} no longer supports derived fragment {:?}",
+                        spec.name, canonical.measurement, derived
+                    ));
+                }
+                derived
+            }
+            DerivedExpectation::OutcomeSummary(summary) => summary,
+        };
+        let actual = normalized_whitespace(content)
+            .matches(&normalized_whitespace(needle))
+            .count();
+        if actual != site.copies {
+            errors.push(format!(
+                "{}: {} must contain {:?} exactly {} time(s), found {actual}",
+                spec.name, site.path, needle, site.copies
+            ));
+        }
+    }
+
+    let fingerprint = normalized_whitespace(spec.fingerprint);
+    let fingerprint_copies = documents
+        .values()
+        .map(|content| normalized_whitespace(content).matches(&fingerprint).count())
+        .sum::<usize>();
+    if fingerprint_copies != spec.fingerprint_copies {
+        errors.push(format!(
+            "{}: derived-document fingerprint {:?} must occur exactly {} time(s), found {fingerprint_copies}; register every new numeric copy",
+            spec.name, spec.fingerprint, spec.fingerprint_copies
+        ));
+    }
+
+    errors
+}
+
+fn validate_spike_measurements(results: &str, documents: &BTreeMap<String, String>) -> Vec<String> {
+    let specs = spike_measurement_specs();
+    let canonical_row_count = results
+        .lines()
+        .filter(|line| line.contains("| MEASURED-"))
+        .count();
+    let mut errors = Vec::new();
+    if canonical_row_count != specs.len() {
+        errors.push(format!(
+            "canonical final-threshold table has {canonical_row_count} measurement rows but the guard registers {}",
+            specs.len()
+        ));
+    }
+    for spec in &specs {
+        match canonical_measurement(results, spec.threshold) {
+            Ok(canonical) => {
+                errors.extend(validate_spike_measurement(spec, &canonical, documents));
+            }
+            Err(error) => errors.push(format!("{}: {error}", spec.name)),
+        }
+    }
+    errors
 }
 
 // ---------------------------------------------------------------------------
@@ -1621,80 +2254,8 @@ fn derived_spike_measurements_match_the_canonical_results() {
     let results_path = root.join("proofs/redb-resource-store-spike/RESULTS.md");
     let results = std::fs::read_to_string(&results_path)
         .unwrap_or_else(|err| panic!("cannot read {}: {err}", rel_display(&results_path)));
-
-    let rss = final_measurement(
-        &results,
-        "Median whole-process maximum RSS at or below 24 MiB",
-    );
-    let p95 = final_measurement(
-        &results,
-        "Commit-to-handler p95 at or below 5,000 us in all profiles",
-    );
-    let p99 = final_measurement(
-        &results,
-        "Commit-to-handler p99 reported; document any value above 20 ms",
-    );
-    let group_commit = final_measurement(
-        &results,
-        "More than half of non-conflicting storm writes use a batch larger than 1",
-    );
-
-    for (relative, expected) in [
-        ("docs/specs/ADR-046-feasibility-and-spikes.md", 4),
-        ("docs/specs/ADR-046-resource-store-redb.md", 2),
-        ("docs/specs/ADR-046-decision-register.md", 1),
-        ("docs/specs/ADR-046-validation-and-delivery.md", 1),
-        ("docs/specs/ADR-046-work-items.json", 1),
-        ("CHANGELOG.md", 1),
-    ] {
-        let path = root.join(relative);
-        let content = std::fs::read_to_string(&path)
-            .unwrap_or_else(|err| panic!("cannot read {relative}: {err}"));
-        assert_eq!(
-            normalized_whitespace(&content)
-                .matches(&normalized_whitespace(&rss))
-                .count(),
-            expected,
-            "{relative} must carry exactly {expected} canonical RSS measurement copy/copies"
-        );
-    }
-
-    for (measurement, copies) in [
-        (
-            p95,
-            [
-                ("docs/specs/ADR-046-feasibility-and-spikes.md", 2),
-                ("docs/specs/ADR-046-work-items.json", 1),
-            ],
-        ),
-        (
-            p99,
-            [
-                ("docs/specs/ADR-046-feasibility-and-spikes.md", 2),
-                ("docs/specs/ADR-046-work-items.json", 1),
-            ],
-        ),
-        (
-            group_commit,
-            [
-                ("docs/specs/ADR-046-feasibility-and-spikes.md", 2),
-                ("docs/specs/ADR-046-work-items.json", 1),
-            ],
-        ),
-    ] {
-        for (relative, expected) in copies {
-            let path = root.join(relative);
-            let content = std::fs::read_to_string(&path)
-                .unwrap_or_else(|err| panic!("cannot read {relative}: {err}"));
-            assert_eq!(
-                normalized_whitespace(&content)
-                    .matches(&normalized_whitespace(&measurement))
-                    .count(),
-                expected,
-                "{relative} must carry exactly {expected} canonical measurement copy/copies"
-            );
-        }
-    }
+    let errors = validate_spike_measurements(&results, &measurement_documents());
+    assert!(errors.is_empty(), "{}", errors.join("\n"));
 
     let feasibility =
         std::fs::read_to_string(root.join("docs/specs/ADR-046-feasibility-and-spikes.md"))
@@ -1707,6 +2268,42 @@ fn derived_spike_measurements_match_the_canonical_results() {
         "time -v proofs/redb-resource-store-spike/target/release/rss-fixture \
          --resources 10000 --watches 100"
     ));
+}
+
+#[test]
+fn derived_spike_measurement_guard_rejects_each_class_mutation() {
+    let root = repo_root();
+    let results_path = root.join("proofs/redb-resource-store-spike/RESULTS.md");
+    let results = std::fs::read_to_string(&results_path)
+        .unwrap_or_else(|err| panic!("cannot read {}: {err}", rel_display(&results_path)));
+    let documents = measurement_documents();
+
+    for spec in spike_measurement_specs() {
+        let canonical = canonical_measurement(&results, spec.threshold)
+            .unwrap_or_else(|error| panic!("{}: {error}", spec.name));
+        let original = documents
+            .get(spec.mutation_path)
+            .unwrap_or_else(|| panic!("missing mutation site {}", spec.mutation_path));
+        assert!(
+            original.contains(spec.mutation_needle),
+            "{} mutation needle {:?} is absent from {}",
+            spec.name,
+            spec.mutation_needle,
+            spec.mutation_path
+        );
+        let mut mutated = documents.clone();
+        mutated.insert(
+            spec.mutation_path.to_string(),
+            original.replacen(spec.mutation_needle, "[mutated measurement]", 1),
+        );
+        let errors = validate_spike_measurement(&spec, &canonical, &mutated);
+        assert!(
+            !errors.is_empty(),
+            "{} guard accepted a perturbed derived copy in {}",
+            spec.name,
+            spec.mutation_path
+        );
+    }
 }
 
 #[test]
