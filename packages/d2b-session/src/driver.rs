@@ -456,6 +456,7 @@ async fn run_writer(
                 WriterCommand::Close => writer.close().await.map_err(SessionError::from),
             };
             if let Err(error) = result {
+                let _ = writer.close().await;
                 let _ = failures.try_send(error);
                 return;
             }
@@ -779,24 +780,24 @@ async fn run_driver<T: OwnedTransport>(
         let work = match fairness_turn {
             0 => tokio::select! {
                 biased;
+                error = writer_failures.recv() => Work::WriterFailure(error),
                 command = commands.recv() => Work::Command(command),
                 event = engine.receive() => Work::Inbound(event),
                 () = named_work => Work::NamedStream,
-                error = writer_failures.recv() => Work::WriterFailure(error),
             },
             1 => tokio::select! {
                 biased;
+                error = writer_failures.recv() => Work::WriterFailure(error),
                 event = engine.receive() => Work::Inbound(event),
                 () = named_work => Work::NamedStream,
                 command = commands.recv() => Work::Command(command),
-                error = writer_failures.recv() => Work::WriterFailure(error),
             },
             _ => tokio::select! {
                 biased;
+                error = writer_failures.recv() => Work::WriterFailure(error),
                 () = named_work => Work::NamedStream,
                 command = commands.recv() => Work::Command(command),
                 event = engine.receive() => Work::Inbound(event),
-                error = writer_failures.recv() => Work::WriterFailure(error),
             },
         };
         fairness_turn = (fairness_turn + 1) % 3;
@@ -1126,7 +1127,55 @@ fn backpressure() -> SessionError {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::AtomicBool;
+
     use super::*;
+
+    struct FailingWriter {
+        closed: Arc<AtomicBool>,
+    }
+
+    #[async_trait]
+    impl TransportWriter for FailingWriter {
+        async fn send(
+            &mut self,
+            _packet: TransportPacket,
+        ) -> std::result::Result<(), TransportError> {
+            Err(TransportError::Other)
+        }
+
+        async fn close(&mut self) -> std::result::Result<(), TransportError> {
+            self.closed.store(true, Ordering::Release);
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn writer_closes_transport_before_reporting_packet_failure() {
+        let closed = Arc::new(AtomicBool::new(false));
+        let (writes, receiver) = mpsc::channel(1);
+        let (failures, mut failure_receiver) = mpsc::channel(1);
+        let task = tokio::spawn(run_writer(
+            Box::new(FailingWriter {
+                closed: Arc::clone(&closed),
+            }),
+            receiver,
+            failures,
+            Duration::from_secs(1),
+        ));
+        writes
+            .send(WriterCommand::Packet {
+                packet: TransportPacket::new(vec![1]),
+                cancellation: None,
+            })
+            .await
+            .unwrap();
+
+        let error = failure_receiver.recv().await.unwrap();
+        assert_eq!(error.code(), SessionErrorCode::InternalInvariant);
+        assert!(closed.load(Ordering::Acquire));
+        task.await.unwrap();
+    }
 
     #[test]
     fn cancelled_immediate_receiver_restores_queued_event() {
