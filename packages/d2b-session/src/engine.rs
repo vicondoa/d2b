@@ -607,6 +607,11 @@ impl<T: OwnedTransport> SessionEngine<T> {
         self.outbound_requests.complete(request_id)
     }
 
+    pub(crate) fn cancel_and_complete_call(&mut self, request_id: &RequestId) -> bool {
+        self.outbound_requests.signal(request_id);
+        self.outbound_requests.complete(request_id)
+    }
+
     pub fn register_inbound_call(&mut self, request_id: RequestId) -> Result<Cancellation> {
         self.inbound_requests.register(request_id)
     }

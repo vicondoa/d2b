@@ -1298,40 +1298,6 @@ impl ComponentResponses {
         ComponentResponseTask(task.abort_handle())
     }
 
-    fn register(
-        &self,
-        request_id: d2b_session::contract::RequestId,
-    ) -> Result<oneshot::Receiver<ComponentResponse>, EndpointError> {
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(error) = state.terminal {
-            return Err(error);
-        }
-        if state.waiters.contains_key(&request_id) {
-            return Err(EndpointError::Internal);
-        }
-        let (sender, receiver) = oneshot::channel();
-        state.waiters.insert(request_id, sender);
-        Ok(receiver)
-    }
-
-    fn remove(&self, request_id: &d2b_session::contract::RequestId) {
-        Self::remove_component_waiter(&self.state, request_id);
-    }
-
-    fn remove_component_waiter(
-        responses: &Mutex<ComponentResponseState>,
-        request_id: &d2b_session::contract::RequestId,
-    ) {
-        responses
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .waiters
-            .remove(request_id);
-    }
-
     async fn run(&self) {
         loop {
             match self.ttrpc.receive().await {
@@ -1520,21 +1486,6 @@ impl ComponentEndpoint {
             .revoked
     }
 
-    fn insert_active(
-        &self,
-        operation: OperationId,
-        request: ActiveComponentRequest,
-    ) -> Result<(), EndpointError> {
-        let mut activity = self
-            .activity
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if !activity.insert(operation, request) {
-            return Err(cancelled_endpoint());
-        }
-        Ok(())
-    }
-
     fn remove_active(
         &self,
         operation: &OperationId,
@@ -1548,20 +1499,54 @@ impl ComponentEndpoint {
     }
 }
 
+fn publish_component_request(
+    activity: &Mutex<ComponentActivity>,
+    responses: &Mutex<ComponentResponseState>,
+    operation: OperationId,
+    request: ActiveComponentRequest,
+) -> Result<oneshot::Receiver<ComponentResponse>, EndpointError> {
+    let mut activity = activity
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut responses = responses
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if request.attempt.is_cancelled() || activity.revoked {
+        return Err(cancelled_endpoint());
+    }
+    if let Some(error) = responses.terminal {
+        return Err(error);
+    }
+    if responses.waiters.contains_key(&request.request_id) {
+        return Err(EndpointError::Internal);
+    }
+    let (sender, receiver) = oneshot::channel();
+    responses.waiters.insert(request.request_id.clone(), sender);
+    let inserted = activity.insert(operation, request);
+    debug_assert!(
+        inserted,
+        "revocation cannot change while activity is locked"
+    );
+    Ok(receiver)
+}
+
 fn terminalize_component_request(
     activity: &Mutex<ComponentActivity>,
     responses: &Mutex<ComponentResponseState>,
     operation: &OperationId,
     attempt: &Cancellation,
 ) -> Option<ActiveComponentRequest> {
-    let active = activity
+    let mut activity = activity
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .remove(operation, attempt);
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut responses = responses
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let active = activity.remove(operation, attempt);
     if let Some(active) = &active {
         active.valid.store(false, Ordering::Release);
         active.write_guard.cancel();
-        ComponentResponses::remove_component_waiter(responses, &active.request_id);
+        responses.waiters.remove(&active.request_id);
     }
     active
 }
@@ -1686,7 +1671,9 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
         let valid = Arc::new(AtomicBool::new(true));
         let attempt = request.cancellation().clone();
         let write_guard = self.ttrpc.attempt_guard();
-        self.insert_active(
+        let response = publish_component_request(
+            &self.activity,
+            &self.responses.state,
             request.operation().id().clone(),
             ActiveComponentRequest {
                 request_id: request_id.clone(),
@@ -1695,13 +1682,6 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
                 write_guard: write_guard.clone(),
             },
         )?;
-        let response = match self.responses.register(request_id.clone()) {
-            Ok(response) => response,
-            Err(error) => {
-                self.remove_active(request.operation().id(), &attempt);
-                return Err(error);
-            }
-        };
         if let Err(error) = self
             .ttrpc
             .start(
@@ -1713,8 +1693,12 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
             )
             .await
         {
-            self.responses.remove(&request_id);
-            self.remove_active(request.operation().id(), &attempt);
+            terminalize_component_request(
+                &self.activity,
+                &self.responses.state,
+                request.operation().id(),
+                &attempt,
+            );
             return Err(EndpointError::from(error));
         }
         let response = response.await.unwrap_or(Err(EndpointError::Internal));
@@ -1756,13 +1740,8 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
         ) else {
             return Box::pin(async { Ok(()) });
         };
-        let cancellation = self.cancellation.clone();
-        Box::pin(async move {
-            cancellation
-                .cancel(active.request_id)
-                .await
-                .map_err(EndpointError::from)
-        })
+        let delivery = self.cancellation.cancel(active.request_id);
+        Box::pin(async move { delivery.await.map_err(EndpointError::from) })
     }
 }
 
@@ -2869,8 +2848,11 @@ mod tests {
         let valid = Arc::new(AtomicBool::new(true));
         let mut requests = d2b_session::RequestRegistry::new(1).unwrap();
         let write_guard = requests.register(request_id.clone()).unwrap();
-        let mut activity = ComponentActivity::default();
-        assert!(activity.insert(
+        let activity = Mutex::new(ComponentActivity::default());
+        let responses = Mutex::new(ComponentResponseState::default());
+        let mut receiver = publish_component_request(
+            &activity,
+            &responses,
             operation.clone(),
             ActiveComponentRequest {
                 request_id: request_id.clone(),
@@ -2878,12 +2860,8 @@ mod tests {
                 attempt: attempt.clone(),
                 write_guard: write_guard.clone(),
             },
-        ));
-        let (response, mut receiver) = oneshot::channel();
-        let mut response_state = ComponentResponseState::default();
-        response_state.waiters.insert(request_id.clone(), response);
-        let activity = Mutex::new(activity);
-        let responses = Mutex::new(response_state);
+        )
+        .unwrap();
 
         let active =
             terminalize_component_request(&activity, &responses, &operation, &attempt).unwrap();
@@ -2897,6 +2875,35 @@ mod tests {
             receiver.try_recv(),
             Err(tokio::sync::oneshot::error::TryRecvError::Closed)
         ));
+    }
+
+    #[test]
+    fn component_publication_rejects_an_already_cancelled_attempt_without_state() {
+        let operation = OperationId::parse("component-pre-cancel").unwrap();
+        let attempt = Cancellation::new();
+        attempt.cancel();
+        let request_id = d2b_session::contract::RequestId::new(vec![8; 16]).unwrap();
+        let mut requests = d2b_session::RequestRegistry::new(1).unwrap();
+        let write_guard = requests.register(request_id.clone()).unwrap();
+        let activity = Mutex::new(ComponentActivity::default());
+        let responses = Mutex::new(ComponentResponseState::default());
+
+        let error = publish_component_request(
+            &activity,
+            &responses,
+            operation.clone(),
+            ActiveComponentRequest {
+                request_id: request_id.clone(),
+                valid: Arc::new(AtomicBool::new(true)),
+                attempt,
+                write_guard,
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error, cancelled_endpoint());
+        assert!(!activity.lock().unwrap().requests.contains_key(&operation));
+        assert!(!responses.lock().unwrap().waiters.contains_key(&request_id));
     }
 
     #[test]

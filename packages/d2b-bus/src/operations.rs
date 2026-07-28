@@ -105,7 +105,7 @@ impl Cancellation {
         self.0.cancelled.load(Ordering::Acquire)
     }
 
-    fn cancel(&self) {
+    pub(crate) fn cancel(&self) {
         if !self.0.cancelled.swap(true, Ordering::AcqRel) {
             self.0.notify.notify_waiters();
         }

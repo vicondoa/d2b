@@ -1,4 +1,4 @@
-use std::{fmt, sync::Arc};
+use std::{fmt, future::Future, pin::Pin, sync::Arc};
 
 use async_trait::async_trait;
 use d2b_contracts::v3::{
@@ -621,28 +621,31 @@ impl SessionCleanupObserver {
     }
 }
 
-#[async_trait]
 trait SessionCancellationDriver: Send + Sync {
     fn generation(&self) -> u64;
-    async fn cancel(&self, generation: u64, request_id: RequestId) -> Result<()>;
-    async fn complete_ttrpc(&self, request_id: RequestId) -> Result<bool>;
+    fn cancel(
+        &self,
+        generation: u64,
+        request_id: RequestId,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'static>>;
 }
 
-#[async_trait]
-impl<T> SessionCancellationDriver for T
-where
-    T: ComponentSessionDriver + Send + Sync + ?Sized,
-{
+impl SessionCancellationDriver for SessionDriverHandle {
     fn generation(&self) -> u64 {
         ComponentSessionDriver::generation(self)
     }
 
-    async fn cancel(&self, generation: u64, request_id: RequestId) -> Result<()> {
-        ComponentSessionDriver::cancel(self, generation, request_id).await
-    }
-
-    async fn complete_ttrpc(&self, request_id: RequestId) -> Result<bool> {
-        ComponentSessionDriver::complete_ttrpc(self, request_id).await
+    fn cancel(
+        &self,
+        generation: u64,
+        request_id: RequestId,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'static>> {
+        let completion = self.queue_cancellation(generation, request_id);
+        Box::pin(async move {
+            completion?
+                .await
+                .map_err(|_| SessionError::new(SessionErrorCode::SessionDisconnected))?
+        })
     }
 }
 
@@ -650,7 +653,6 @@ where
 #[derive(Clone)]
 pub struct SessionCancellationHandle {
     driver: Arc<dyn SessionCancellationDriver>,
-    cleanup_observer: SessionCleanupObserver,
     writer_fence: crate::Cancellation,
 }
 
@@ -664,20 +666,11 @@ impl SessionCancellationHandle {
     }
 
     /// Signal cancellation for one exact request in the current generation.
-    pub async fn cancel(&self, request_id: RequestId) -> Result<()> {
-        let delivery = self
-            .driver
-            .cancel(self.driver.generation(), request_id.clone())
-            .await;
-        let completion = self.driver.complete_ttrpc(request_id).await;
-        if let Err(error) = completion {
-            self.cleanup_observer.record(OperationClass::Cancel, error);
-        }
-        delivery?;
-        match completion {
-            Err(error) if error.code() != SessionErrorCode::SessionDisconnected => Err(error),
-            _ => Ok(()),
-        }
+    pub fn cancel(
+        &self,
+        request_id: RequestId,
+    ) -> impl Future<Output = Result<()>> + Send + 'static {
+        self.driver.cancel(self.driver.generation(), request_id)
     }
 }
 
@@ -823,7 +816,6 @@ impl<C> AuthenticatedComponentSession<C> {
     pub fn cancellation_handle(&self) -> SessionCancellationHandle {
         SessionCancellationHandle {
             driver: Arc::new(self.driver.clone()),
-            cleanup_observer: self.cleanup_observer.clone(),
             writer_fence: self.driver.writer_fence(),
         }
     }
@@ -1129,57 +1121,26 @@ mod tests {
         atomic::{AtomicUsize, Ordering},
     };
 
-    use d2b_contracts::v3::component_session::{EndpointPurpose, Locality, ServicePackage};
-
     use super::*;
-
-    #[derive(Default)]
-    struct CapturingMetrics(Mutex<Vec<(MetricEvent, MetricLabels, u64)>>);
-
-    impl MetricsSink for CapturingMetrics {
-        fn record(&self, event: MetricEvent, labels: MetricLabels, value: u64) {
-            self.0.lock().unwrap().push((event, labels, value));
-        }
-    }
 
     struct MockCancellationDriver {
         cancel_error: Option<SessionError>,
-        complete_error: Option<SessionError>,
-        complete_calls: AtomicUsize,
+        local_complete_calls: AtomicUsize,
     }
 
-    #[async_trait]
     impl SessionCancellationDriver for MockCancellationDriver {
         fn generation(&self) -> u64 {
             7
         }
 
-        async fn cancel(&self, _generation: u64, _request_id: RequestId) -> Result<()> {
-            self.cancel_error.map_or(Ok(()), Err)
-        }
-
-        async fn complete_ttrpc(&self, _request_id: RequestId) -> Result<bool> {
-            self.complete_calls.fetch_add(1, Ordering::AcqRel);
-            self.complete_error.map_or(Ok(true), Err)
-        }
-    }
-
-    fn cleanup_observer(metrics: Arc<dyn MetricsSink>) -> SessionCleanupObserver {
-        SessionCleanupObserver {
-            metrics,
-            labels: MetricLabels {
-                transport: TransportClass::UnixSeqpacket,
-                purpose: EndpointPurpose::LocalLifecycle,
-                service: ServicePackage::ResourceV3,
-                channel_class: ChannelClass::TtrpcControl,
-                noise: NoiseProfile::Nn25519ChaChaPolySha256,
-                locality: Locality::HostLocal,
-                operation_class: OperationClass::Cancel,
-                attachment_class: None,
-                health_state: HealthState::Degraded,
-                result: MetricResult::Rejected,
-                reason: MetricReason::InternalInvariant,
-            },
+        fn cancel(
+            &self,
+            _generation: u64,
+            _request_id: RequestId,
+        ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'static>> {
+            self.local_complete_calls.fetch_add(1, Ordering::AcqRel);
+            let result = self.cancel_error.map_or(Ok(()), Err);
+            Box::pin(async move { result })
         }
     }
 
@@ -1188,64 +1149,52 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cancellation_succeeds_when_terminal_cleanup_is_disconnected() {
-        let metrics = Arc::new(CapturingMetrics::default());
+    async fn cancellation_schedules_local_completion_before_delivery() {
         let driver = Arc::new(MockCancellationDriver {
             cancel_error: None,
-            complete_error: Some(SessionError::new(SessionErrorCode::SessionDisconnected)),
-            complete_calls: AtomicUsize::new(0),
+            local_complete_calls: AtomicUsize::new(0),
         });
         let handle = SessionCancellationHandle {
             driver: driver.clone(),
-            cleanup_observer: cleanup_observer(metrics.clone()),
             writer_fence: crate::Cancellation::new(),
         };
 
         handle.cancel(request_id()).await.unwrap();
-        assert_eq!(driver.complete_calls.load(Ordering::Acquire), 1);
-        let events = metrics.0.lock().unwrap();
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].0, MetricEvent::CleanupFailure);
-        assert_eq!(events[0].1.operation_class, OperationClass::Cancel);
-        assert_eq!(events[0].1.reason, MetricReason::Transport);
+        assert_eq!(driver.local_complete_calls.load(Ordering::Acquire), 1);
     }
 
     #[tokio::test]
     async fn cancellation_propagates_delivery_failure_after_local_cleanup() {
-        let metrics = Arc::new(CapturingMetrics::default());
         let driver = Arc::new(MockCancellationDriver {
             cancel_error: Some(SessionError::new(SessionErrorCode::SessionDisconnected)),
-            complete_error: None,
-            complete_calls: AtomicUsize::new(0),
+            local_complete_calls: AtomicUsize::new(0),
         });
         let handle = SessionCancellationHandle {
             driver: driver.clone(),
-            cleanup_observer: cleanup_observer(metrics.clone()),
             writer_fence: crate::Cancellation::new(),
         };
 
         let error = handle.cancel(request_id()).await.unwrap_err();
         assert_eq!(error.code(), SessionErrorCode::SessionDisconnected);
-        assert_eq!(driver.complete_calls.load(Ordering::Acquire), 1);
-        assert!(metrics.0.lock().unwrap().is_empty());
+        assert_eq!(driver.local_complete_calls.load(Ordering::Acquire), 1);
     }
 
     struct SaturatedCancellationDriver {
         registry: Mutex<crate::RequestRegistry>,
     }
 
-    #[async_trait]
     impl SessionCancellationDriver for SaturatedCancellationDriver {
         fn generation(&self) -> u64 {
             7
         }
 
-        async fn cancel(&self, _generation: u64, _request_id: RequestId) -> Result<()> {
-            Err(SessionError::new(SessionErrorCode::QueueBackpressure))
-        }
-
-        async fn complete_ttrpc(&self, request_id: RequestId) -> Result<bool> {
-            Ok(self.registry.lock().unwrap().complete(&request_id))
+        fn cancel(
+            &self,
+            _generation: u64,
+            request_id: RequestId,
+        ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'static>> {
+            self.registry.lock().unwrap().complete(&request_id);
+            Box::pin(async { Err(SessionError::new(SessionErrorCode::QueueBackpressure)) })
         }
     }
 
@@ -1259,7 +1208,6 @@ mod tests {
         });
         let handle = SessionCancellationHandle {
             driver: driver.clone(),
-            cleanup_observer: cleanup_observer(Arc::new(CapturingMetrics::default())),
             writer_fence: crate::Cancellation::new(),
         };
 
@@ -1273,25 +1221,25 @@ mod tests {
             .unwrap();
     }
 
-    #[tokio::test]
-    async fn live_cleanup_failure_is_recorded_and_propagated() {
-        let metrics = Arc::new(CapturingMetrics::default());
-        let driver = Arc::new(MockCancellationDriver {
-            cancel_error: None,
-            complete_error: Some(SessionError::new(SessionErrorCode::InternalInvariant)),
-            complete_calls: AtomicUsize::new(0),
+    #[test]
+    fn dropping_remote_delivery_still_releases_local_request_capacity() {
+        let active = request_id();
+        let mut registry = crate::RequestRegistry::with_limit(7, 1).unwrap();
+        registry.register(active.clone()).unwrap();
+        let driver = Arc::new(SaturatedCancellationDriver {
+            registry: Mutex::new(registry),
         });
         let handle = SessionCancellationHandle {
-            driver,
-            cleanup_observer: cleanup_observer(metrics.clone()),
+            driver: driver.clone(),
             writer_fence: crate::Cancellation::new(),
         };
 
-        let error = handle.cancel(request_id()).await.unwrap_err();
-        assert_eq!(error.code(), SessionErrorCode::InternalInvariant);
-        let events = metrics.0.lock().unwrap();
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].0, MetricEvent::CleanupFailure);
-        assert_eq!(events[0].1.reason, MetricReason::InternalInvariant);
+        drop(handle.cancel(active));
+        driver
+            .registry
+            .lock()
+            .unwrap()
+            .register(RequestId::new(vec![8; 16]).unwrap())
+            .unwrap();
     }
 }
