@@ -163,8 +163,7 @@ const WORK_ITEM_GROUP_OVERRIDES: &[(&str, &str)] = &[
     ("ADR046-core-002", "core-controller-coordination"),
 ];
 
-/// Self-contained work items that launch with an earlier shared contract root
-/// than the spec that owns their remaining work.
+/// Work items whose delivery wave differs from their owning spec's default.
 /// Per-work-item wave and parallel-group overrides.
 ///
 /// Waves are otherwise assigned per spec, so a spec whose items deliver in
@@ -173,10 +172,10 @@ const WORK_ITEM_GROUP_OVERRIDES: &[(&str, &str)] = &[
 /// satisfiable when a spec's items are split across waves.
 ///
 /// The store specification is the motivating case: its contract landed in the
-/// foundation wave, while the redb engine and the disposable proof crate that
-/// gates it have no destinations yet. Listing them here keeps the wave exit
-/// gate executable, because a wave may only close when every item in it is
-/// merged with its destinations present.
+/// foundation wave, the disposable proof landed separately, and the failed RSS
+/// gate deferred the production backend and watch integration. Listing each
+/// split item here keeps every wave exit gate executable, because a wave may
+/// only close when every item in it is merged with its destinations present.
 const EARLY_WORK_ITEM_SCHEDULES: &[(&str, u8, &str, &str)] = &[
     (
         "ADR046-store-001",
@@ -188,19 +187,25 @@ const EARLY_WORK_ITEM_SCHEDULES: &[(&str, u8, &str, &str)] = &[
         "ADR046-feasibility-001",
         1,
         "ADR-046-resource-store-redb",
-        "resource-store-backend",
+        "resource-store-feasibility",
     ),
     (
         "ADR046-store-004",
-        1,
+        5,
         "ADR-046-resource-store-redb",
         "resource-store-backend",
     ),
     (
         "ADR046-store-002",
-        1,
+        5,
         "ADR-046-resource-store-redb",
-        "resource-store-backend",
+        "resource-store-watch",
+    ),
+    (
+        "ADR046-reconcile-003",
+        5,
+        "ADR-046-resource-reconciliation",
+        "reconciliation-real-backend",
     ),
     (
         "ADR046-store-003",
@@ -1340,19 +1345,25 @@ mod tests {
                 "ADR046-feasibility-001",
                 1,
                 "ADR-046-resource-store-redb",
-                "resource-store-backend",
+                "resource-store-feasibility",
             ),
             (
                 "ADR046-store-004",
-                1,
+                5,
                 "ADR-046-resource-store-redb",
                 "resource-store-backend",
             ),
             (
                 "ADR046-store-002",
-                1,
+                5,
                 "ADR-046-resource-store-redb",
-                "resource-store-backend",
+                "resource-store-watch",
+            ),
+            (
+                "ADR046-reconcile-003",
+                5,
+                "ADR-046-resource-reconciliation",
+                "reconciliation-real-backend",
             ),
             (
                 "ADR046-store-003",

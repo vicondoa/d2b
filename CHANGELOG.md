@@ -56,6 +56,16 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- Made the canonical spike-measurement policy guard cover all seven result
+  rows, every registered numeric copy and qualitative evidence summary, and
+  in-memory mutations of each measurement class.
+
+- Deferred the production redb backend, watch dispatcher, and real-backend
+  reaction benchmark to the storage-integration wave after the feasibility
+  spike missed its RSS gate. Backend acceptance now owns only independently
+  satisfiable backend signals; watch-budget saturation evidence belongs solely
+  to the watch item.
+
 - Unified Core and toolkit controller identity, selector, trigger, registration,
   retry, and resync contracts. Core changes now drive the executor-native
   reconciliation runner through a bounded, coalescing registered-resource

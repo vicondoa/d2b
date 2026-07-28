@@ -279,4 +279,38 @@ mod tests {
         )
         .expect("entry checks prior waves, not planned work in the entered wave");
     }
+
+    #[test]
+    fn committed_first_delivery_wave_contains_exactly_the_shipped_items_and_seals() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(Path::parent)
+            .expect("xtask lives under packages/")
+            .to_path_buf();
+        let graph = std::fs::read(root.join(GRAPH_PATH)).expect("read implementation graph");
+        let work_items = std::fs::read(root.join(WORK_ITEMS_PATH)).expect("read work-item states");
+
+        validate_state("W1", Gate::Seal, &graph, &work_items)
+            .expect("the committed first delivery wave must pass the seal membership gate");
+
+        let graph: GraphView = serde_json::from_slice(&graph).expect("parse implementation graph");
+        let actual = graph
+            .nodes
+            .into_iter()
+            .filter(|node| node.kind == "work-item" && node.wave == "W1")
+            .map(|node| node.id)
+            .collect::<BTreeSet<_>>();
+        let expected = [
+            "ADR046-bus-001",
+            "ADR046-feasibility-001",
+            "ADR046-reconcile-001",
+            "ADR046-reconcile-002",
+            "ADR046-session-001",
+            "ADR046-session-002",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+        assert_eq!(actual, expected);
+    }
 }
