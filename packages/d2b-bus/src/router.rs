@@ -4391,7 +4391,7 @@ mod tests {
 
         let second = harness.caller.invoke_resource(
             harness.route.clone(),
-            OperationSpec::new(OperationId::parse("hung").unwrap(), 100).unwrap(),
+            OperationSpec::new(OperationId::parse("after-hung").unwrap(), 100).unwrap(),
             ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
             Vec::new(),
         );
@@ -4406,7 +4406,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dropping_invoke_future_reclaims_operation_id_and_capacity() {
+    async fn dropping_invoke_future_reclaims_capacity_and_retains_the_id_tombstone() {
         let harness = resource_harness(
             RouteMember::method("ResourceService/Get").unwrap(),
             vec![SessionVerb::Connect, SessionVerb::Invoke],
@@ -4426,10 +4426,10 @@ mod tests {
             .lock()
             .unwrap()
             .before_invoke = Some(Arc::clone(&hook));
-        let operation = operation("dropped-future");
+        let dropped_operation = operation("dropped-future");
         let mut invoke = Box::pin(harness.caller.invoke_resource(
             harness.route.clone(),
-            operation.clone(),
+            dropped_operation.clone(),
             ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
             Vec::new(),
         ));
@@ -4449,17 +4449,29 @@ mod tests {
             .caller
             .core
             .lock_operations()
-            .cancel_admission(operation.id(), harness.caller.session)
+            .cancel_admission(dropped_operation.id(), harness.caller.session)
             .is_ok_and(|admission| admission.is_some())
         {
             tokio::task::yield_now().await;
         }
+        assert_eq!(
+            harness
+                .caller
+                .invoke_resource(
+                    harness.route.clone(),
+                    dropped_operation,
+                    ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
+                    Vec::new(),
+                )
+                .await,
+            Err(BusError::Operation(OperationError::DuplicateOperation))
+        );
         assert!(
             harness
                 .caller
                 .invoke_resource(
                     harness.route.clone(),
-                    operation,
+                    operation("after-dropped-future"),
                     ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
                     Vec::new(),
                 )
