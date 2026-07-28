@@ -660,7 +660,11 @@ async fn handle_command<T: OwnedTransport>(
             reply,
         } => {
             let result = if generation == engine.generation() {
-                engine.cancel_call(&request_id).await
+                let result = engine.cancel_call(&request_id).await;
+                if result.is_ok() {
+                    engine.complete_call(&request_id);
+                }
+                result
             } else {
                 Err(SessionError::new(SessionErrorCode::GenerationMismatch))
             };

@@ -438,10 +438,8 @@ impl SessionCancellationHandle {
     /// Signal cancellation for one exact request in the current generation.
     pub async fn cancel(&self, request_id: RequestId) -> Result<()> {
         self.driver
-            .cancel(self.driver.generation(), request_id.clone())
-            .await?;
-        let _ = self.driver.complete_ttrpc(request_id).await?;
-        Ok(())
+            .cancel(self.driver.generation(), request_id)
+            .await
     }
 }
 

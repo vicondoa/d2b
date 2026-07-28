@@ -27,9 +27,10 @@ deprecations ship one minor release before removal.
 - Added the self-contained, test-only per-Zone `d2b-bus` exact-address router with native
   Role/RoleBinding authorization, relay and diagnostic verb enforcement,
   single-owner authenticated registration, revision-bound revocation,
-  pinned cancellation routes, reconnect replacement, and credit-bounded fair
-  named streams, now connected to authenticated ComponentSession capabilities
-  through consuming registration and reconnect/disconnect lifecycle handling.
+  pinned transport-correlated cancellation routes, reconnect replacement, and
+  credit-bounded fair named streams, now connected to authenticated
+  ComponentSession capabilities through consuming registration and
+  reconnect/disconnect lifecycle handling.
 
 - Added the test-only, production-unwired transport-neutral ComponentSession v3
   contract and runtime with
