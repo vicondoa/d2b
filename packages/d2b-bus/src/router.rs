@@ -27,8 +27,8 @@ use tokio::sync::{Mutex as AsyncMutex, oneshot};
 use crate::{
     authorization::{AuthorizationError, BusAuthorizer},
     operations::{
-        CancelDispatch, Cancellation, OperationError, OperationId, OperationSpec, OperationTable,
-        SessionId,
+        CancelDeliveryAdmission, CancelDispatch, Cancellation, OperationError, OperationId,
+        OperationSpec, OperationTable, PendingCancelDeliveries, SessionId,
     },
     registry::{
         BusResponse, EndpointError, Registry, RegistryError, RouteKey, RouteTarget,
@@ -564,6 +564,7 @@ struct BusCore {
     registry: Mutex<Registry>,
     authorizer: Arc<BusAuthorizer>,
     operations: Mutex<OperationTable>,
+    cancel_deliveries: Mutex<PendingCancelDeliveries>,
     streams: Arc<StreamBridge>,
     clock: Arc<dyn BusClock>,
     max_payload_bytes: usize,
@@ -578,12 +579,30 @@ struct BusCore {
 struct InvocationHooks {
     after_resolve: Option<Arc<InvocationHook>>,
     before_invoke: Option<Arc<InvocationHook>>,
+    before_cancel_transition: Option<Arc<InvocationHook>>,
 }
 
 #[cfg(test)]
 struct InvocationHook {
     reached: tokio::sync::Notify,
     release: tokio::sync::Notify,
+}
+
+struct PendingCancelDeliveryLease {
+    core: Arc<BusCore>,
+    operation: OperationId,
+    source: SessionId,
+    cancellation: Cancellation,
+}
+
+impl Drop for PendingCancelDeliveryLease {
+    fn drop(&mut self) {
+        self.core.lock_cancel_deliveries().complete(
+            &self.operation,
+            self.source,
+            &self.cancellation,
+        );
+    }
 }
 
 impl BusCore {
@@ -597,34 +616,44 @@ impl BusCore {
 
     fn dispatch_cancel_targets(self: &Arc<Self>, targets: Vec<CancelDispatch>) {
         for dispatch in targets {
+            if dispatch.target.route.generations().session() != dispatch.target.generation {
+                self.observe_error(BusEvent::Cancel, &BusError::SessionMismatch);
+                continue;
+            }
+            match self.lock_cancel_deliveries().admit(&dispatch) {
+                CancelDeliveryAdmission::Duplicate => continue,
+                CancelDeliveryAdmission::Full => {
+                    self.observer
+                        .record(BusEvent::Cancel, BusFailureReason::Abandoned);
+                    continue;
+                }
+                CancelDeliveryAdmission::Admitted => {}
+            }
             let CancelDispatch {
                 operation,
                 source,
                 target,
             } = dispatch;
-            if target.route.generations().session() != target.generation {
-                self.observe_error(BusEvent::Cancel, &BusError::SessionMismatch);
-                continue;
-            }
             if let Ok(runtime) = tokio::runtime::Handle::try_current() {
                 let core = Arc::clone(self);
                 runtime.spawn(async move {
-                    match target
+                    let _pending = PendingCancelDeliveryLease {
+                        core: Arc::clone(&core),
+                        operation: operation.clone(),
+                        source,
+                        cancellation: target.cancellation.clone(),
+                    };
+                    if let Err(error) = target
                         .endpoint
                         .cancel(&operation, &target.cancellation)
                         .await
                     {
-                        Ok(()) => core.lock_operations().complete_abort(
-                            &operation,
-                            source,
-                            &target.cancellation,
-                        ),
-                        Err(error) => {
-                            core.observe_error(BusEvent::Cancel, &BusError::Endpoint(error));
-                        }
+                        core.observe_error(BusEvent::Cancel, &BusError::Endpoint(error));
                     }
                 });
             } else {
+                self.lock_cancel_deliveries()
+                    .complete(&operation, source, &target.cancellation);
                 self.observer
                     .record(BusEvent::Cancel, BusFailureReason::Abandoned);
             }
@@ -644,6 +673,12 @@ impl BusCore {
 
     fn lock_operations(&self) -> MutexGuard<'_, OperationTable> {
         self.operations
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn lock_cancel_deliveries(&self) -> MutexGuard<'_, PendingCancelDeliveries> {
+        self.cancel_deliveries
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
@@ -787,6 +822,7 @@ impl ZoneBus {
             zone,
             authorizer: Arc::new(authorizer),
             operations: Mutex::new(operations),
+            cancel_deliveries: Mutex::new(PendingCancelDeliveries::new(config.max_operations)),
             streams,
             clock,
             max_payload_bytes: config.max_payload_bytes,
@@ -1651,7 +1687,7 @@ impl OperationLease {
         Ok(())
     }
 
-    fn abort(&mut self) -> Option<crate::operations::CancelTarget> {
+    fn abort(&mut self) -> Option<CancelDispatch> {
         if !self.armed {
             return None;
         }
@@ -1664,39 +1700,10 @@ impl OperationLease {
 
 impl Drop for OperationLease {
     fn drop(&mut self) {
-        let Some(target) = self.abort() else {
+        let Some(dispatch) = self.abort() else {
             return;
         };
-        if target.route.generations().session() != target.generation {
-            self.core
-                .observe_error(BusEvent::Cancel, &BusError::SessionMismatch);
-            return;
-        }
-        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-            let core = Arc::clone(&self.core);
-            let operation = self.operation.clone();
-            let source = self.source;
-            runtime.spawn(async move {
-                match target
-                    .endpoint
-                    .cancel(&operation, &target.cancellation)
-                    .await
-                {
-                    Ok(()) => core.lock_operations().complete_abort(
-                        &operation,
-                        source,
-                        &target.cancellation,
-                    ),
-                    Err(error) => {
-                        core.observe_error(BusEvent::Cancel, &BusError::Endpoint(error));
-                    }
-                }
-            });
-        } else {
-            self.core
-                .observer
-                .record(BusEvent::Cancel, BusFailureReason::Abandoned);
-        }
+        self.core.dispatch_cancel_targets(vec![dispatch]);
     }
 }
 
@@ -1828,21 +1835,8 @@ impl BusIngress {
             InvokeOutcome::Response(response) => response,
             InvokeOutcome::Cancelled => return Err(BusError::Cancelled),
             InvokeOutcome::Deadline => {
-                if let Some(target) = lease.abort() {
-                    match target
-                        .endpoint
-                        .cancel(operation.id(), &target.cancellation)
-                        .await
-                    {
-                        Ok(()) => self.core.lock_operations().complete_abort(
-                            operation.id(),
-                            self.session,
-                            &target.cancellation,
-                        ),
-                        Err(error) => self
-                            .core
-                            .observe_error(BusEvent::Cancel, &BusError::Endpoint(error)),
-                    }
+                if let Some(dispatch) = lease.abort() {
+                    self.core.dispatch_cancel_targets(vec![dispatch]);
                 }
                 return Err(BusError::Operation(OperationError::DeadlineExceeded));
             }
@@ -1961,21 +1955,8 @@ impl BusIngress {
             StreamOutcome::Cancelled => return Err(BusError::Cancelled),
             StreamOutcome::Deadline => {
                 let mut lease = lease;
-                if let Some(target) = lease.abort() {
-                    match target
-                        .endpoint
-                        .cancel(operation.id(), &target.cancellation)
-                        .await
-                    {
-                        Ok(()) => self.core.lock_operations().complete_abort(
-                            operation.id(),
-                            self.session,
-                            &target.cancellation,
-                        ),
-                        Err(error) => self
-                            .core
-                            .observe_error(BusEvent::Cancel, &BusError::Endpoint(error)),
-                    }
+                if let Some(dispatch) = lease.abort() {
+                    self.core.dispatch_cancel_targets(vec![dispatch]);
                 }
                 return Err(BusError::Operation(OperationError::DeadlineExceeded));
             }
@@ -1998,26 +1979,24 @@ impl BusIngress {
 
     async fn cancel_inner(&self, operation: &OperationId) -> Result<(), BusError> {
         self.ensure_open()?;
-        if self
+        let Some(admission) = self
             .core
             .lock_operations()
-            .cancellation_complete(operation, self.session)?
-        {
+            .cancel_admission(operation, self.session)?
+        else {
             return Ok(());
-        }
-        let route = self
-            .core
-            .lock_operations()
-            .route_for_cancel(operation, self.session)?;
+        };
         let source = self.core.lock_registry().source(self.session)?;
         if let Some(context) = source.context.as_ref() {
-            self.core.authorizer.authorize_cancel(context, &route)?;
+            self.core
+                .authorizer
+                .authorize_cancel(context, &admission.route)?;
         }
         if source.session_authorization {
             source
                 .endpoint
                 .authorize(
-                    &route,
+                    &admission.route,
                     SessionVerb::Cancel,
                     None,
                     self.core.clock.now_tick(),
@@ -2025,27 +2004,17 @@ impl BusIngress {
                 .await
                 .map_err(BusError::Endpoint)?;
         }
-        let Some(target) = self
-            .core
-            .lock_operations()
-            .cancel(operation, self.session)?
+        #[cfg(test)]
+        self.wait_for_cancel_transition_hook().await;
+        let Some(dispatch) =
+            self.core
+                .lock_operations()
+                .cancel_admitted(operation, self.session, &admission)?
         else {
             return Ok(());
         };
-        debug_assert!(target.cancellation.is_cancelled());
-        if target.route.generations().session() != target.generation {
-            return Err(BusError::SessionMismatch);
-        }
-        target
-            .endpoint
-            .cancel(operation, &target.cancellation)
-            .await
-            .map_err(BusError::Endpoint)?;
-        self.core.lock_operations().complete_cancel(
-            operation,
-            self.session,
-            &target.cancellation,
-        )?;
+        debug_assert!(dispatch.target.cancellation.is_cancelled());
+        self.core.dispatch_cancel_targets(vec![dispatch]);
         Ok(())
     }
 
@@ -2071,6 +2040,21 @@ impl BusIngress {
                 hooks.before_invoke.clone()
             }
         };
+        if let Some(hook) = hook {
+            hook.reached.notify_one();
+            hook.release.notified().await;
+        }
+    }
+
+    #[cfg(test)]
+    async fn wait_for_cancel_transition_hook(&self) {
+        let hook = self
+            .core
+            .invocation_hooks
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .before_cancel_transition
+            .clone();
         if let Some(hook) = hook {
             hook.reached.notify_one();
             hook.release.notified().await;
@@ -2328,9 +2312,11 @@ mod tests {
             })
         }
 
-        fn failing_first_cancel() -> Arc<Self> {
+        fn failing_cancel() -> Arc<Self> {
             let endpoint = Self::blocking();
-            endpoint.cancel_failures.store(1, Ordering::Release);
+            endpoint
+                .cancel_failures
+                .store(usize::MAX, Ordering::Release);
             endpoint
         }
 
@@ -3626,8 +3612,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cancellation_retries_delivery_and_retains_terminal_success() {
-        let endpoint = RecordingEndpoint::failing_first_cancel();
+    async fn cancellation_revalidates_the_attempt_after_authorization() {
+        let endpoint = RecordingEndpoint::blocking();
         let harness = harness(HarnessSpec {
             service: "d2b.resource.v3",
             member: RouteMember::method("ResourceService/Get").unwrap(),
@@ -3642,28 +3628,107 @@ mod tests {
             resource_verbs: vec![ResourceVerb::Get],
             endpoint: endpoint.clone(),
         });
-        let id = OperationId::parse("retry-cancel").unwrap();
-        let invoke = harness.caller.invoke_resource(
+        let hook = Arc::new(InvocationHook {
+            reached: Notify::new(),
+            release: Notify::new(),
+        });
+        harness
+            .caller
+            .core
+            .invocation_hooks
+            .lock()
+            .unwrap()
+            .before_cancel_transition = Some(Arc::clone(&hook));
+        let id = OperationId::parse("cancel-admission-race").unwrap();
+        let mut first = Box::pin(harness.caller.invoke_resource(
             harness.route.clone(),
             OperationSpec::new(id.clone(), 100).unwrap(),
             ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
             Vec::new(),
-        );
-        let first_cancel = async {
-            endpoint.started.notified().await;
-            harness.caller.cancel(&id).await
-        };
-        let (invoke_result, first_result) = tokio::join!(invoke, first_cancel);
-        assert_eq!(invoke_result, Err(BusError::Cancelled));
+        ));
+        tokio::select! {
+            result = &mut first => panic!("first attempt unexpectedly completed: {result:?}"),
+            () = endpoint.started.notified() => {}
+        }
+        let mut cancel = Box::pin(harness.caller.cancel(&id));
+        tokio::select! {
+            result = &mut cancel => panic!("cancel unexpectedly completed: {result:?}"),
+            () = hook.reached.notified() => {}
+        }
+
+        endpoint.release.notify_one();
+        assert!(first.await.is_ok());
+        let mut replacement = Box::pin(harness.caller.invoke_resource(
+            harness.route.clone(),
+            OperationSpec::new(id.clone(), 100).unwrap(),
+            ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
+            Vec::new(),
+        ));
+        tokio::select! {
+            result = &mut replacement => {
+                panic!("replacement attempt unexpectedly completed: {result:?}")
+            }
+            () = endpoint.started.notified() => {}
+        }
+
+        hook.release.notify_one();
         assert_eq!(
-            first_result,
-            Err(BusError::Endpoint(EndpointError::Unavailable))
+            cancel.await,
+            Err(BusError::Operation(OperationError::OperationNotFound))
+        );
+        assert_eq!(endpoint.cancellation_count(), 0);
+        endpoint.release.notify_one();
+        assert!(replacement.await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn cancellation_delivery_failure_never_holds_operation_capacity() {
+        let endpoint = RecordingEndpoint::failing_cancel();
+        let harness = harness_with_config(
+            HarnessSpec {
+                service: "d2b.resource.v3",
+                member: RouteMember::method("ResourceService/Get").unwrap(),
+                caller_ref: "User/alice",
+                locality: Locality::Local,
+                evidence: EvidenceClass::UnixPeer,
+                session_verbs: vec![
+                    SessionVerb::Connect,
+                    SessionVerb::Invoke,
+                    SessionVerb::Cancel,
+                ],
+                resource_verbs: vec![ResourceVerb::Get],
+                endpoint: endpoint.clone(),
+            },
+            BusConfig {
+                max_operations: 1,
+                max_operations_per_session: 1,
+                ..BusConfig::default()
+            },
         );
 
-        assert_eq!(harness.caller.cancel(&id).await, Ok(()));
-        assert_eq!(endpoint.cancellation_count(), 2);
-        assert_eq!(harness.caller.cancel(&id).await, Ok(()));
-        assert_eq!(endpoint.cancellation_count(), 2);
+        for index in 0..3 {
+            let id = OperationId::parse(format!("failed-cancel-{index}")).unwrap();
+            let invoke = harness.caller.invoke_resource(
+                harness.route.clone(),
+                OperationSpec::new(id.clone(), 100).unwrap(),
+                ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
+                Vec::new(),
+            );
+            let cancel = async {
+                while endpoint.call_count() <= index {
+                    tokio::task::yield_now().await;
+                }
+                harness.caller.cancel(&id).await
+            };
+            let (invoke_result, cancel_result) = tokio::join!(invoke, cancel);
+            assert_eq!(invoke_result, Err(BusError::Cancelled));
+            assert_eq!(cancel_result, Ok(()));
+            while endpoint.cancellation_count() <= index {
+                tokio::task::yield_now().await;
+            }
+        }
+        assert_eq!(endpoint.call_count(), 3);
+        assert_eq!(endpoint.cancellation_count(), 3);
     }
 
     #[tokio::test]
@@ -3835,8 +3900,8 @@ mod tests {
             .caller
             .core
             .lock_operations()
-            .route_for_cancel(operation.id(), harness.caller.session)
-            .is_ok()
+            .cancel_admission(operation.id(), harness.caller.session)
+            .is_ok_and(|admission| admission.is_some())
         {
             tokio::task::yield_now().await;
         }
