@@ -600,7 +600,11 @@ impl BusCore {
             if let Ok(runtime) = tokio::runtime::Handle::try_current() {
                 let core = Arc::new(self.clone_for_dispatch());
                 runtime.spawn(async move {
-                    if let Err(error) = target.endpoint.cancel(&operation).await {
+                    if let Err(error) = target
+                        .endpoint
+                        .cancel(&operation, &target.cancellation)
+                        .await
+                    {
                         core.observe_error(BusEvent::Cancel, &BusError::Endpoint(error));
                     }
                 });
@@ -914,9 +918,8 @@ struct ComponentEndpoint {
     locality: d2b_contracts::v3::Locality,
     generation: u64,
     cancellation: SessionCancellationHandle,
-    active: Mutex<BTreeMap<OperationId, ActiveComponentRequest>>,
+    activity: Mutex<ComponentActivity>,
     correlations: Mutex<CorrelationIds>,
-    revoked: AtomicBool,
 }
 
 const RESERVED_CORRELATION_MAX: u32 = 1024;
@@ -968,20 +971,94 @@ impl CorrelationIds {
 struct ActiveComponentRequest {
     request_id: d2b_session::contract::RequestId,
     valid: Arc<AtomicBool>,
+    attempt: Cancellation,
+}
+
+#[derive(Default)]
+struct ComponentActivity {
+    revoked: bool,
+    requests: BTreeMap<OperationId, Vec<ActiveComponentRequest>>,
+}
+
+impl ComponentActivity {
+    fn insert(&mut self, operation: OperationId, request: ActiveComponentRequest) -> bool {
+        if self.revoked {
+            return false;
+        }
+        self.requests.entry(operation).or_default().push(request);
+        true
+    }
+
+    fn remove(
+        &mut self,
+        operation: &OperationId,
+        attempt: &Cancellation,
+    ) -> Option<ActiveComponentRequest> {
+        let requests = self.requests.get_mut(operation)?;
+        let index = requests
+            .iter()
+            .position(|request| request.attempt.is_same_attempt(attempt))?;
+        let request = requests.remove(index);
+        if requests.is_empty() {
+            self.requests.remove(operation);
+        }
+        Some(request)
+    }
+
+    fn revoke(&mut self) {
+        self.revoked = true;
+        for requests in self.requests.values() {
+            for request in requests {
+                request.valid.store(false, Ordering::Release);
+            }
+        }
+    }
+}
+
+impl ComponentEndpoint {
+    fn is_revoked(&self) -> bool {
+        self.activity
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .revoked
+    }
+
+    fn insert_active(
+        &self,
+        operation: OperationId,
+        request: ActiveComponentRequest,
+    ) -> Result<(), EndpointError> {
+        let mut activity = self
+            .activity
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !activity.insert(operation, request) {
+            return Err(cancelled_endpoint());
+        }
+        Ok(())
+    }
+
+    fn remove_active(
+        &self,
+        operation: &OperationId,
+        attempt: &Cancellation,
+    ) -> Option<ActiveComponentRequest> {
+        let mut activity = self
+            .activity
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        activity.remove(operation, attempt)
+    }
 }
 
 #[async_trait::async_trait]
 impl crate::registry::BusEndpoint for ComponentEndpoint {
     fn invalidate_session(&self) {
-        self.revoked.store(true, Ordering::Release);
-        for active in self
-            .active
+        let mut activity = self
+            .activity
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .values()
-        {
-            active.valid.store(false, Ordering::Release);
-        }
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        activity.revoke();
     }
 
     async fn authorize(
@@ -1020,7 +1097,7 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
     }
 
     async fn invoke(&self, request: DeliveredInvocation) -> Result<BusResponse, EndpointError> {
-        if self.revoked.load(Ordering::Acquire) {
+        if self.is_revoked() {
             return Err(cancelled_endpoint());
         }
         let ordinary = d2b_resource_api::authz::SessionVerb::Invoke;
@@ -1071,32 +1148,25 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
             .authorize(authorization, now_tick)
             .await
             .map_err(EndpointError::from)?;
-        if self.revoked.load(Ordering::Acquire) {
-            return Err(cancelled_endpoint());
-        }
         let valid = Arc::new(AtomicBool::new(true));
-        self.active
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(
-                request.operation().id().clone(),
-                ActiveComponentRequest {
-                    request_id: request_id.clone(),
-                    valid: Arc::clone(&valid),
-                },
-            );
+        let attempt = request.cancellation().clone();
+        self.insert_active(
+            request.operation().id().clone(),
+            ActiveComponentRequest {
+                request_id: request_id.clone(),
+                valid: Arc::clone(&valid),
+                attempt: attempt.clone(),
+            },
+        )?;
         if let Err(error) = session
             .start_authorized_ttrpc(permit, request_id.clone(), outbound_frame, now_tick)
             .await
         {
-            self.active
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .remove(request.operation().id());
+            self.remove_active(request.operation().id(), &attempt);
             return Err(EndpointError::from(error));
         }
         let response = async {
-            if self.revoked.load(Ordering::Acquire) || !valid.load(Ordering::Acquire) {
+            if self.is_revoked() || !valid.load(Ordering::Acquire) {
                 return Err(cancelled_endpoint());
             }
             loop {
@@ -1111,10 +1181,7 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
             }
         }
         .await;
-        self.active
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .remove(request.operation().id());
+        self.remove_active(request.operation().id(), &attempt);
         match session.complete_ttrpc(request_id).await {
             Err(cleanup_error)
                 if cleanup_error.code()
@@ -1125,7 +1192,7 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
             _ => {}
         }
         let response = response?;
-        if self.revoked.load(Ordering::Acquire) || !valid.load(Ordering::Acquire) {
+        if self.is_revoked() || !valid.load(Ordering::Acquire) {
             return Err(cancelled_endpoint());
         }
         Ok(BusResponse::new(response))
@@ -1135,12 +1202,12 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
         Err(EndpointError::Unavailable)
     }
 
-    async fn cancel(&self, operation: &OperationId) -> Result<(), EndpointError> {
-        let active = self
-            .active
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .remove(operation);
+    async fn cancel(
+        &self,
+        operation: &OperationId,
+        attempt: &Cancellation,
+    ) -> Result<(), EndpointError> {
+        let active = self.remove_active(operation, attempt);
         if let Some(active) = active {
             active.valid.store(false, Ordering::Release);
             self.cancellation
@@ -1197,9 +1264,8 @@ impl ZoneRegistrar {
             locality: binding.locality(),
             generation: binding.reconnect_generation().get(),
             cancellation,
-            active: Mutex::new(BTreeMap::new()),
+            activity: Mutex::new(ComponentActivity::default()),
             correlations: Mutex::new(CorrelationIds::new()),
-            revoked: AtomicBool::new(false),
         });
         let registration = SessionRegistration::admitted(binding, routes, endpoint);
         let session = self.core.lock_registry().register(registration)?;
@@ -1234,9 +1300,8 @@ impl ZoneRegistrar {
             locality: binding.locality(),
             generation: binding.reconnect_generation().get(),
             cancellation,
-            active: Mutex::new(BTreeMap::new()),
+            activity: Mutex::new(ComponentActivity::default()),
             correlations: Mutex::new(CorrelationIds::new()),
-            revoked: AtomicBool::new(false),
         });
         let registration = SessionRegistration::admitted(binding, routes, endpoint);
         let session = self
@@ -1383,7 +1448,11 @@ impl Drop for OperationLease {
             let core = Arc::clone(&self.core);
             let operation = self.operation.clone();
             runtime.spawn(async move {
-                if let Err(error) = target.endpoint.cancel(&operation).await {
+                if let Err(error) = target
+                    .endpoint
+                    .cancel(&operation, &target.cancellation)
+                    .await
+                {
                     core.observe_error(BusEvent::Cancel, &BusError::Endpoint(error));
                 }
             });
@@ -1519,8 +1588,12 @@ impl BusIngress {
             InvokeOutcome::Response(response) => response,
             InvokeOutcome::Cancelled => return Err(BusError::Cancelled),
             InvokeOutcome::Deadline => {
-                let _ = lease.abort();
-                if let Err(error) = endpoint.cancel(operation.id()).await {
+                if let Some(target) = lease.abort()
+                    && let Err(error) = target
+                        .endpoint
+                        .cancel(operation.id(), &target.cancellation)
+                        .await
+                {
                     self.core
                         .observe_error(BusEvent::Cancel, &BusError::Endpoint(error));
                 }
@@ -1637,8 +1710,12 @@ impl BusIngress {
             StreamOutcome::Cancelled => return Err(BusError::Cancelled),
             StreamOutcome::Deadline => {
                 let mut lease = lease;
-                let _ = lease.abort();
-                if let Err(error) = endpoint.cancel(operation.id()).await {
+                if let Some(target) = lease.abort()
+                    && let Err(error) = target
+                        .endpoint
+                        .cancel(operation.id(), &target.cancellation)
+                        .await
+                {
                     self.core
                         .observe_error(BusEvent::Cancel, &BusError::Endpoint(error));
                 }
@@ -1693,7 +1770,7 @@ impl BusIngress {
         }
         target
             .endpoint
-            .cancel(operation)
+            .cancel(operation, &target.cancellation)
             .await
             .map_err(BusError::Endpoint)?;
         Ok(())
@@ -2008,7 +2085,11 @@ mod tests {
             Ok(())
         }
 
-        async fn cancel(&self, _operation: &OperationId) -> Result<(), EndpointError> {
+        async fn cancel(
+            &self,
+            _operation: &OperationId,
+            _attempt: &Cancellation,
+        ) -> Result<(), EndpointError> {
             self.cancel_count.fetch_add(1, Ordering::AcqRel);
             self.release.notify_one();
             Ok(())
@@ -2035,6 +2116,51 @@ mod tests {
         session_verbs: Vec<SessionVerb>,
         resource_verbs: Vec<ResourceVerb>,
         endpoint: Arc<RecordingEndpoint>,
+    }
+
+    #[test]
+    fn component_activity_binds_reuse_and_revocation_to_exact_attempts() {
+        let operation = OperationId::parse("reused").unwrap();
+        let first_attempt = Cancellation::new();
+        let second_attempt = Cancellation::new();
+        let first_valid = Arc::new(AtomicBool::new(true));
+        let second_valid = Arc::new(AtomicBool::new(true));
+        let mut activity = ComponentActivity::default();
+        assert!(activity.insert(
+            operation.clone(),
+            ActiveComponentRequest {
+                request_id: d2b_session::contract::RequestId::new(vec![1; 16]).unwrap(),
+                valid: first_valid,
+                attempt: first_attempt.clone(),
+            },
+        ));
+        assert!(activity.insert(
+            operation.clone(),
+            ActiveComponentRequest {
+                request_id: d2b_session::contract::RequestId::new(vec![2; 16]).unwrap(),
+                valid: Arc::clone(&second_valid),
+                attempt: second_attempt.clone(),
+            },
+        ));
+
+        let removed = activity.remove(&operation, &first_attempt).unwrap();
+        assert!(removed.attempt.is_same_attempt(&first_attempt));
+        assert!(
+            activity.requests[&operation][0]
+                .attempt
+                .is_same_attempt(&second_attempt)
+        );
+
+        activity.revoke();
+        assert!(!second_valid.load(Ordering::Acquire));
+        assert!(!activity.insert(
+            operation,
+            ActiveComponentRequest {
+                request_id: d2b_session::contract::RequestId::new(vec![3; 16]).unwrap(),
+                valid: Arc::new(AtomicBool::new(true)),
+                attempt: Cancellation::new(),
+            },
+        ));
     }
 
     fn harness(spec: HarnessSpec<'_>) -> Harness {

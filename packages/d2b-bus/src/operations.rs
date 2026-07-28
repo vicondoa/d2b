@@ -93,7 +93,7 @@ struct CancellationState {
 pub struct Cancellation(Arc<CancellationState>);
 
 impl Cancellation {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self(Arc::new(CancellationState {
             cancelled: AtomicBool::new(false),
             notify: Notify::new(),
@@ -109,6 +109,10 @@ impl Cancellation {
         if !self.0.cancelled.swap(true, Ordering::AcqRel) {
             self.0.notify.notify_waiters();
         }
+    }
+
+    pub(crate) fn is_same_attempt(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
     }
 
     pub(crate) async fn cancelled(&self) {

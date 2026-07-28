@@ -376,6 +376,7 @@ pub trait BusEndpoint: Send + Sync + 'static {
     async fn cancel(
         &self,
         _operation: &crate::operations::OperationId,
+        _attempt: &crate::operations::Cancellation,
     ) -> Result<(), EndpointError> {
         Err(EndpointError::Unavailable)
     }
