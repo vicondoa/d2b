@@ -265,13 +265,26 @@ fn collect_members(
     capability_surface: &mut BTreeSet<String>,
 ) {
     // Methods surfaced through `Deref` come from the standard library, not from
-    // this crate, so they cannot widen the capability surface - and they change
-    // with the compiler version, which makes the snapshot fail on a toolchain
-    // bump for a reason that has nothing to do with the invariant. Everything
-    // after the first deref-methods block is dropped.
-    let html = html
-        .split_once("id=\"deref-methods-")
-        .map_or(html, |(own, _)| own);
+    // these crates, so they cannot widen the capability surface - and they
+    // change with the compiler version, which would make the snapshot fail on a
+    // toolchain bump for a reason unrelated to the invariant.
+    //
+    // Excise only that region. rustdoc emits the deref block between
+    // `id="implementations"` and `id="trait-implementations"`, so truncating at
+    // the deref block would also discard every trait implementation - and a
+    // trait method declared by these crates on a `Deref` type is exactly the
+    // kind of capability accessor this guard exists to catch.
+    let owned;
+    let html = match html.split_once("id=\"deref-methods-") {
+        Some((before, after)) => {
+            let rest = after
+                .split_once("id=\"trait-implementations")
+                .map_or("", |(_, rest)| rest);
+            owned = format!("{before}{rest}");
+            owned.as_str()
+        }
+        None => html,
+    };
 
     for section in html.split("<section id=\"").skip(1) {
         let Some((id, rest)) = section.split_once('"') else {
