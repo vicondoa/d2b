@@ -1,7 +1,7 @@
 //! Exact Zone router and the single-owner registration surface.
 
 use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
+    collections::{BTreeMap, VecDeque},
     sync::{
         Arc, Mutex, MutexGuard,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -26,7 +26,8 @@ use tokio::sync::{Mutex as AsyncMutex, oneshot};
 use crate::{
     authorization::{AuthorizationError, BusAuthorizer},
     operations::{
-        Cancellation, OperationError, OperationId, OperationSpec, OperationTable, SessionId,
+        CancelDispatch, Cancellation, OperationError, OperationId, OperationSpec, OperationTable,
+        SessionId,
     },
     registry::{
         BusResponse, EndpointError, Registry, RegistryError, RouteKey, RouteTarget,
@@ -41,6 +42,8 @@ use crate::{
 pub const DEFAULT_MAX_PAYLOAD_BYTES: usize = 1024 * 1024;
 pub const DEFAULT_MAX_ROUTES_PER_SESSION: usize = 128;
 pub const DEFAULT_MAX_TOTAL_ROUTES: usize = 4096;
+const DEFAULT_MAX_CORRELATIONS_PER_GENERATION: u64 =
+    u32::MAX as u64 - RESERVED_CORRELATION_MAX as u64;
 
 /// Monotonic clock used for operation deadlines.
 pub trait BusClock: Send + Sync + 'static {
@@ -97,6 +100,7 @@ pub struct BusConfig {
     pub max_operations_per_session: usize,
     pub max_routes_per_session: usize,
     pub max_total_routes: usize,
+    pub max_correlations_per_generation: u64,
     pub stream_limits: StreamLimits,
 }
 
@@ -108,6 +112,7 @@ impl Default for BusConfig {
             max_operations_per_session: crate::operations::DEFAULT_MAX_OPERATIONS_PER_SESSION,
             max_routes_per_session: DEFAULT_MAX_ROUTES_PER_SESSION,
             max_total_routes: DEFAULT_MAX_TOTAL_ROUTES,
+            max_correlations_per_generation: DEFAULT_MAX_CORRELATIONS_PER_GENERATION,
             stream_limits: StreamLimits::default(),
         }
     }
@@ -561,6 +566,7 @@ struct BusCore {
     streams: Arc<StreamBridge>,
     clock: Arc<dyn BusClock>,
     max_payload_bytes: usize,
+    max_correlations_per_generation: u64,
     observer: Arc<dyn BusObserver>,
     #[cfg(test)]
     invocation_hooks: Mutex<InvocationHooks>,
@@ -580,7 +586,7 @@ struct InvocationHook {
 }
 
 impl BusCore {
-    fn cleanup_session(&self, session: SessionId) {
+    fn cleanup_session(self: &Arc<Self>, session: SessionId) {
         self.lock_registry().invalidate(session);
         self.lock_registry().remove(session);
         let targets = self.lock_operations().cancel_session(session);
@@ -588,24 +594,33 @@ impl BusCore {
         self.dispatch_cancel_targets(targets);
     }
 
-    fn dispatch_cancel_targets(
-        &self,
-        targets: Vec<(OperationId, crate::operations::CancelTarget)>,
-    ) {
-        for (operation, target) in targets {
+    fn dispatch_cancel_targets(self: &Arc<Self>, targets: Vec<CancelDispatch>) {
+        for dispatch in targets {
+            let CancelDispatch {
+                operation,
+                source,
+                target,
+            } = dispatch;
             if target.route.generations().session() != target.generation {
                 self.observe_error(BusEvent::Cancel, &BusError::SessionMismatch);
                 continue;
             }
             if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-                let core = Arc::new(self.clone_for_dispatch());
+                let core = Arc::clone(self);
                 runtime.spawn(async move {
-                    if let Err(error) = target
+                    match target
                         .endpoint
                         .cancel(&operation, &target.cancellation)
                         .await
                     {
-                        core.observe_error(BusEvent::Cancel, &BusError::Endpoint(error));
+                        Ok(()) => core.lock_operations().complete_abort(
+                            &operation,
+                            source,
+                            &target.cancellation,
+                        ),
+                        Err(error) => {
+                            core.observe_error(BusEvent::Cancel, &BusError::Endpoint(error));
+                        }
                     }
                 });
             } else {
@@ -630,23 +645,6 @@ impl BusCore {
         self.operations
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
-
-    fn clone_for_dispatch(&self) -> BusDispatchObserver {
-        BusDispatchObserver {
-            observer: Arc::clone(&self.observer),
-        }
-    }
-}
-
-struct BusDispatchObserver {
-    observer: Arc<dyn BusObserver>,
-}
-
-impl BusDispatchObserver {
-    fn observe_error(&self, event: BusEvent, error: &BusError) {
-        self.observer
-            .record(event, BusFailureReason::from_error(error));
     }
 }
 
@@ -771,6 +769,8 @@ impl ZoneBus {
             || config.max_routes_per_session == 0
             || config.max_total_routes == 0
             || config.max_routes_per_session > config.max_total_routes
+            || config.max_correlations_per_generation == 0
+            || config.max_correlations_per_generation > DEFAULT_MAX_CORRELATIONS_PER_GENERATION
         {
             return Err(BusError::InvalidConfig);
         }
@@ -789,6 +789,7 @@ impl ZoneBus {
             streams,
             clock,
             max_payload_bytes: config.max_payload_bytes,
+            max_correlations_per_generation: config.max_correlations_per_generation,
             observer,
             #[cfg(test)]
             invocation_hooks: Mutex::new(InvocationHooks::default()),
@@ -1054,49 +1055,82 @@ impl ComponentResponses {
 }
 
 const RESERVED_CORRELATION_MAX: u32 = 1024;
-const RANDOM_CORRELATION_ATTEMPTS: usize = 32;
 
 struct CorrelationIds {
-    used: BTreeSet<u32>,
-    remaining: u64,
+    key: Option<u64>,
+    issued: u64,
+    limit: u64,
 }
 
 impl CorrelationIds {
-    fn new() -> Self {
+    fn new(limit: u64) -> Self {
         Self {
-            used: BTreeSet::new(),
-            remaining: u64::from(u32::MAX - RESERVED_CORRELATION_MAX),
+            key: None,
+            issued: 0,
+            limit,
         }
     }
 
-    fn allocate(&mut self) -> Result<u32, EndpointError> {
-        if self.remaining == 0 {
-            return Err(EndpointError::Internal);
-        }
-        let mut last = RESERVED_CORRELATION_MAX + 1;
-        for _ in 0..RANDOM_CORRELATION_ATTEMPTS {
-            let mut bytes = [0_u8; 4];
-            getrandom::fill(&mut bytes).map_err(|_| EndpointError::Internal)?;
-            let candidate = u32::from_ne_bytes(bytes);
-            last = candidate;
-            if candidate > RESERVED_CORRELATION_MAX && self.used.insert(candidate) {
-                self.remaining -= 1;
-                return Ok(candidate);
-            }
-        }
-        let mut candidate = last.max(RESERVED_CORRELATION_MAX + 1);
-        loop {
-            if self.used.insert(candidate) {
-                self.remaining -= 1;
-                return Ok(candidate);
-            }
-            candidate = if candidate == u32::MAX {
-                RESERVED_CORRELATION_MAX + 1
-            } else {
-                candidate + 1
-            };
+    #[cfg(test)]
+    fn with_key(limit: u64, key: u64) -> Self {
+        Self {
+            key: Some(key),
+            issued: 0,
+            limit,
         }
     }
+
+    fn allocate(&mut self) -> Result<u32, CorrelationAllocationError> {
+        if self.issued >= self.limit {
+            return Err(CorrelationAllocationError::ReconnectRequired);
+        }
+        let key = match self.key {
+            Some(key) => key,
+            None => {
+                let mut bytes = [0_u8; 8];
+                getrandom::fill(&mut bytes).map_err(|_| CorrelationAllocationError::Entropy)?;
+                let key = u64::from_ne_bytes(bytes);
+                self.key = Some(key);
+                key
+            }
+        };
+        let input = RESERVED_CORRELATION_MAX + 1 + self.issued as u32;
+        self.issued += 1;
+        let mut candidate = permute_correlation(input, key);
+        loop {
+            if candidate > RESERVED_CORRELATION_MAX {
+                return Ok(candidate);
+            }
+            candidate = permute_correlation(candidate, key);
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CorrelationAllocationError {
+    Entropy,
+    ReconnectRequired,
+}
+
+fn permute_correlation(value: u32, key: u64) -> u32 {
+    let mut left = (value >> 16) as u16;
+    let mut right = value as u16;
+    for round in 0..6_u64 {
+        let next = left ^ correlation_round(right, key, round);
+        left = right;
+        right = next;
+    }
+    (u32::from(left) << 16) | u32::from(right)
+}
+
+fn correlation_round(value: u16, key: u64, round: u64) -> u16 {
+    let mut mixed = key ^ u64::from(value) ^ (round + 1).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    mixed ^= mixed >> 30;
+    mixed = mixed.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    mixed ^= mixed >> 27;
+    mixed = mixed.wrapping_mul(0x94d0_49bb_1331_11eb);
+    mixed ^= mixed >> 31;
+    (mixed ^ (mixed >> 16)) as u16
 }
 
 #[derive(Clone)]
@@ -1265,11 +1299,22 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
         let now_tick = self.clock.now_tick();
         let caller_stream_id =
             ttrpc_stream_id(request.payload()).map_err(|_| EndpointError::Rejected)?;
-        let internal_stream_id = self
+        let internal_stream_id = match self
             .correlations
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .allocate()?;
+            .allocate()
+        {
+            Ok(stream_id) => stream_id,
+            Err(CorrelationAllocationError::Entropy) => return Err(EndpointError::Internal),
+            Err(CorrelationAllocationError::ReconnectRequired) => {
+                let error = EndpointError::from(d2b_session::SessionError::new(
+                    d2b_session::contract::SessionErrorCode::SessionDisconnected,
+                ));
+                self.responses.terminate(error);
+                return Err(error);
+            }
+        };
         let mut outbound_frame = request.payload().to_vec();
         rewrite_ttrpc_stream_id(&mut outbound_frame, internal_stream_id)
             .map_err(|_| EndpointError::Rejected)?;
@@ -1426,7 +1471,9 @@ impl ZoneRegistrar {
             generation: binding.reconnect_generation().get(),
             cancellation,
             activity: Mutex::new(ComponentActivity::default()),
-            correlations: Mutex::new(CorrelationIds::new()),
+            correlations: Mutex::new(CorrelationIds::new(
+                self.core.max_correlations_per_generation,
+            )),
         });
         let registration = SessionRegistration::admitted(binding, routes, endpoint);
         let session = self.core.lock_registry().register(registration)?;
@@ -1468,7 +1515,9 @@ impl ZoneRegistrar {
             generation: binding.reconnect_generation().get(),
             cancellation,
             activity: Mutex::new(ComponentActivity::default()),
-            correlations: Mutex::new(CorrelationIds::new()),
+            correlations: Mutex::new(CorrelationIds::new(
+                self.core.max_correlations_per_generation,
+            )),
         });
         let registration = SessionRegistration::admitted(binding, routes, endpoint);
         let session = self
@@ -1564,15 +1613,22 @@ struct OperationLease {
     core: Arc<BusCore>,
     source: SessionId,
     operation: OperationId,
+    cancellation: Cancellation,
     armed: bool,
 }
 
 impl OperationLease {
-    fn new(core: Arc<BusCore>, source: SessionId, operation: OperationId) -> Self {
+    fn new(
+        core: Arc<BusCore>,
+        source: SessionId,
+        operation: OperationId,
+        cancellation: Cancellation,
+    ) -> Self {
         Self {
             core,
             source,
             operation,
+            cancellation,
             armed: true,
         }
     }
@@ -1585,6 +1641,7 @@ impl OperationLease {
         self.core.lock_operations().finish(
             &self.operation,
             self.source,
+            &self.cancellation,
             self.core.clock.now_tick(),
         )?;
         Ok(())
@@ -1597,7 +1654,7 @@ impl OperationLease {
         self.armed = false;
         self.core
             .lock_operations()
-            .abort(&self.operation, self.source)
+            .abort(&self.operation, self.source, &self.cancellation)
     }
 }
 
@@ -1736,8 +1793,12 @@ impl BusIngress {
             route.clone(),
             now,
         )?;
-        let mut lease =
-            OperationLease::new(Arc::clone(&self.core), self.session, operation.id().clone());
+        let mut lease = OperationLease::new(
+            Arc::clone(&self.core),
+            self.session,
+            operation.id().clone(),
+            cancellation.clone(),
+        );
         let delivered = DeliveredInvocation {
             route,
             operation: operation.clone(),
@@ -1866,8 +1927,12 @@ impl BusIngress {
             route.clone(),
             now,
         )?;
-        let lease =
-            OperationLease::new(Arc::clone(&self.core), self.session, operation.id().clone());
+        let lease = OperationLease::new(
+            Arc::clone(&self.core),
+            self.session,
+            operation.id().clone(),
+            cancellation.clone(),
+        );
         let dispatch = DeliveredStream {
             route,
             operation: operation.clone(),
@@ -2384,6 +2449,26 @@ mod tests {
                 attempt: Cancellation::new(),
             },
         ));
+    }
+
+    #[test]
+    fn correlation_allocator_is_bounded_nonrepeating_and_requires_reconnect() {
+        let mut correlations = CorrelationIds::with_key(4, 0x1234_5678_9abc_def0);
+        let mut allocated = std::collections::BTreeSet::new();
+        for _ in 0..4 {
+            let correlation = correlations.allocate().unwrap();
+            assert!(correlation > RESERVED_CORRELATION_MAX);
+            assert!(allocated.insert(correlation));
+        }
+        assert!(matches!(
+            correlations.allocate(),
+            Err(CorrelationAllocationError::ReconnectRequired)
+        ));
+
+        let mut next_generation = CorrelationIds::with_key(1, 0x0fed_cba9_8765_4321);
+        let next = next_generation.allocate().unwrap();
+        assert!(next > RESERVED_CORRELATION_MAX);
+        assert_ne!(next, *allocated.iter().next().unwrap());
     }
 
     fn harness(spec: HarnessSpec<'_>) -> Harness {

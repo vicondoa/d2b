@@ -277,6 +277,10 @@ async fn admit(
 }
 
 fn bus() -> (ZoneBus, d2b_bus::ZoneRegistrar) {
+    bus_with_config(BusConfig::default())
+}
+
+fn bus_with_config(config: BusConfig) -> (ZoneBus, d2b_bus::ZoneRegistrar) {
     let catalog = ApiCatalog::standard();
     let zone = ZoneId::parse("dev").unwrap();
     let rule = PolicyRule::new(
@@ -332,12 +336,7 @@ fn bus() -> (ZoneBus, d2b_bus::ZoneRegistrar) {
         bootstrap_phase: BootstrapPhase::Disabled,
         now_tick: 1,
     };
-    ZoneBus::new(
-        zone,
-        BusAuthorizer::new(native, state).unwrap(),
-        BusConfig::default(),
-    )
-    .unwrap()
+    ZoneBus::new(zone, BusAuthorizer::new(native, state).unwrap(), config).unwrap()
 }
 
 #[tokio::test]
@@ -592,7 +591,10 @@ async fn admitted_sessions_route_resource_and_diagnostic_calls_and_revoke_lifecy
 
 #[tokio::test]
 async fn cancelled_stream_id_reuse_rejects_the_late_response() {
-    let (_bus, mut registrar) = bus();
+    let (_bus, mut registrar) = bus_with_config(BusConfig {
+        max_correlations_per_generation: 2,
+        ..BusConfig::default()
+    });
     let (endpoint, remote, endpoint_echo) = admit(
         &registrar,
         policy(
@@ -644,7 +646,7 @@ async fn cancelled_stream_id_reuse_rejects_the_late_response() {
         let first_internal_id = ttrpc_stream_id(&first_frame).unwrap();
         caller.cancel(&first_id).await.unwrap();
         let second = caller.invoke_resource(
-            route,
+            route.clone(),
             OperationSpec::new(second_id, 10_000).unwrap(),
             ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
             ttrpc_frame(7, b"second"),
@@ -670,6 +672,21 @@ async fn cancelled_stream_id_reuse_rejects_the_late_response() {
     let second = second.unwrap();
     assert_eq!(ttrpc_stream_id(second.as_bytes()).unwrap(), 7);
     assert!(second.as_bytes().ends_with(b"second-response"));
+    let exhausted = caller
+        .invoke_resource(
+            route,
+            OperationSpec::new(OperationId::parse("requires-reconnect").unwrap(), 10_000).unwrap(),
+            ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
+            ttrpc_frame(7, b"third"),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        exhausted,
+        BusError::Endpoint(d2b_bus::EndpointError::Session(failure))
+            if failure.code()
+                == d2b_session::contract::SessionErrorCode::SessionDisconnected
+    ));
 
     registrar
         .disconnect_component_session(endpoint)
