@@ -1543,6 +1543,29 @@ mod tests {
         closed: Arc<AtomicBool>,
     }
 
+    struct BlockingCloseWriter {
+        entered: Arc<Notify>,
+        release: Arc<Notify>,
+        closed: Arc<AtomicBool>,
+    }
+
+    #[async_trait]
+    impl TransportWriter for BlockingCloseWriter {
+        async fn send(
+            &mut self,
+            _packet: TransportPacket,
+        ) -> std::result::Result<(), TransportError> {
+            Ok(())
+        }
+
+        async fn close(&mut self) -> std::result::Result<(), TransportError> {
+            self.entered.notify_one();
+            self.release.notified().await;
+            self.closed.store(true, Ordering::Release);
+            Ok(())
+        }
+    }
+
     #[async_trait]
     impl TransportWriter for RecordingPausedWriter {
         async fn send(
@@ -1752,15 +1775,16 @@ mod tests {
 
     #[tokio::test]
     async fn post_protection_error_closes_writer_before_reply() {
+        let close_entered = Arc::new(Notify::new());
+        let release_close = Arc::new(Notify::new());
         let closed = Arc::new(AtomicBool::new(false));
         let (writes, receiver) = mpsc::channel(1);
         let (priority, priority_receiver) = mpsc::unbounded_channel();
         let (failures, _failure_receiver) = mpsc::channel(1);
         let task = tokio::spawn(run_writer(
-            Box::new(PausedWriter {
-                entered: Arc::new(Notify::new()),
-                release: Arc::new(Notify::new()),
-                sent: Arc::new(AtomicBool::new(false)),
+            Box::new(BlockingCloseWriter {
+                entered: Arc::clone(&close_entered),
+                release: Arc::clone(&release_close),
                 closed: Arc::clone(&closed),
             }),
             receiver,
@@ -1768,21 +1792,29 @@ mod tests {
             failures,
             Duration::from_secs(1),
         ));
-        let permit = writes.reserve().await.unwrap();
-        let mut prepared =
-            PreparedWriteFixture(Some((vec![TransportPacket::new(vec![1])], None, false)));
-        let (reply, result) = oneshot::channel();
-        let writer_fence = Cancellation::new();
-        complete_after_write(
-            &mut prepared,
-            permit,
-            &priority,
-            &writer_fence,
-            reply,
-            Err(SessionError::new(SessionErrorCode::Cancelled)),
-        )
-        .await;
+        let writes_for_completion = writes.clone();
+        let priority_for_completion = priority.clone();
+        let (reply, mut result) = oneshot::channel();
+        let completion = tokio::spawn(async move {
+            let permit = writes_for_completion.reserve().await.unwrap();
+            let mut prepared =
+                PreparedWriteFixture(Some((vec![TransportPacket::new(vec![1])], None, false)));
+            complete_after_write(
+                &mut prepared,
+                permit,
+                &priority_for_completion,
+                &Cancellation::new(),
+                reply,
+                Err(SessionError::new(SessionErrorCode::Cancelled)),
+            )
+            .await;
+        });
 
+        close_entered.notified().await;
+        assert_eq!(result.try_recv(), Err(oneshot::error::TryRecvError::Empty));
+        assert!(!closed.load(Ordering::Acquire));
+        release_close.notify_one();
+        completion.await.unwrap();
         assert_eq!(
             result.await.unwrap().unwrap_err().code(),
             SessionErrorCode::Cancelled
