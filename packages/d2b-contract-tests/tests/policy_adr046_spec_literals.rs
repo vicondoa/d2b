@@ -1031,15 +1031,29 @@ struct DerivedMeasurementSite {
     copies: usize,
 }
 
+/// A measurement-shaped signature inventoried across every Markdown or JSON
+/// document under `docs/**` plus `CHANGELOG.md`. These intentionally combine a
+/// value with its denominator, unit, or canonical subject phrase instead of
+/// scanning ambiguous bare numbers such as `13`, `20`, or `48`. A paraphrase
+/// that drops every such signature is not mechanically identifiable and
+/// remains review-only.
+#[derive(Clone, Copy)]
+struct MeasurementInventoryPattern {
+    description: &'static str,
+    regex: &'static str,
+    copies: usize,
+}
+
 struct MeasurementSpec {
     name: &'static str,
     threshold: &'static str,
     expected_outcome: &'static str,
     fingerprint: &'static str,
-    fingerprint_copies: usize,
+    inventory_patterns: Vec<MeasurementInventoryPattern>,
     sites: Vec<DerivedMeasurementSite>,
     mutation_path: &'static str,
     mutation_needle: &'static str,
+    planted_unregistered_copy: &'static str,
 }
 
 fn canonical_measurement(results: &str, threshold: &str) -> Result<CanonicalMeasurement, String> {
@@ -1188,27 +1202,41 @@ fn spike_measurement_specs() -> Vec<MeasurementSpec> {
             threshold: "10,000 resources, 5 runs, zero oracle divergence",
             expected_outcome: "MEASURED-PASS",
             fingerprint: "5/5 runs",
-            fingerprint_copies: 0,
+            inventory_patterns: vec![MeasurementInventoryPattern {
+                description: "five-run pass ratio",
+                regex: r"(?i)\b(?:5/5|5\s+(?:of|out\s+of)\s+5|all\s+(?:5|five))\s+runs?\b",
+                copies: 0,
+            }],
             sites: spike_01_summary_sites(),
             mutation_path: FEASIBILITY,
             mutation_needle: "Functional scale",
+            planted_unregistered_copy: "Independent result: all five runs passed.",
         },
         MeasurementSpec {
             name: "watch no-gap",
             threshold: "100 watches, no misses, duplicates, or gaps",
             expected_outcome: "MEASURED-PASS",
             fingerprint: "21,866 exact ChangeBatch comparisons",
-            fingerprint_copies: 0,
+            inventory_patterns: vec![MeasurementInventoryPattern {
+                description: "21,866 comparisons",
+                regex: r"(?i)\b21,?866(?:\s+\S+){0,3}\s+comparisons?\b",
+                copies: 0,
+            }],
             sites: spike_01_summary_sites(),
             mutation_path: FEASIBILITY,
             mutation_needle: "watch correctness",
+            planted_unregistered_copy: "Independent result: 21,866 watch comparisons passed.",
         },
         MeasurementSpec {
             name: "group commit",
             threshold: "More than half of non-conflicting storm writes use a batch larger than 1",
             expected_outcome: "MEASURED-PASS",
             fingerprint: "48/50, 96%",
-            fingerprint_copies: 4,
+            inventory_patterns: vec![MeasurementInventoryPattern {
+                description: "48-of-50 group-commit denominator",
+                regex: r"\b(?:48/50|48\s+(?:of|out\s+of)\s+50)\b",
+                copies: 4,
+            }],
             sites: vec![
                 DerivedMeasurementSite {
                     path: "CHANGELOG.md",
@@ -1263,13 +1291,18 @@ fn spike_measurement_specs() -> Vec<MeasurementSpec> {
             ],
             mutation_path: "CHANGELOG.md",
             mutation_needle: "48/50, 96%",
+            planted_unregistered_copy: "Independent group commit result: 48 of 50 writes batched.",
         },
         MeasurementSpec {
             name: "crash boundaries",
             threshold: "All 13 crash boundaries recover atomically or refuse to open",
             expected_outcome: "MEASURED-PASS",
             fingerprint: "13/13",
-            fingerprint_copies: 3,
+            inventory_patterns: vec![MeasurementInventoryPattern {
+                description: "13 crash boundaries",
+                regex: r"(?i)\b(?:(?:all\s+)?(?:13|thirteen)|13/13)\s+crash(?:[- ]recovery)?\s+boundar(?:y|ies)\b",
+                copies: 3,
+            }],
             sites: vec![
                 DerivedMeasurementSite {
                     path: "CHANGELOG.md",
@@ -1340,13 +1373,35 @@ fn spike_measurement_specs() -> Vec<MeasurementSpec> {
             ],
             mutation_path: WORK_ITEMS,
             mutation_needle: "13/13 crash boundaries",
+            planted_unregistered_copy: "Independent result: all 13 crash boundaries passed.",
         },
         MeasurementSpec {
             name: "median RSS",
             threshold: "Median whole-process maximum RSS at or below 24 MiB",
             expected_outcome: "MEASURED-FAIL",
             fingerprint: "25,216 KiB (24.625 MiB), 640 KiB or about 2.6% above 24,576 KiB",
-            fingerprint_copies: 10,
+            inventory_patterns: vec![
+                MeasurementInventoryPattern {
+                    description: "25,216 KiB whole-process RSS",
+                    regex: r"(?i)\b25,?216\s+KiB\b",
+                    copies: 10,
+                },
+                MeasurementInventoryPattern {
+                    description: "24.625 MiB whole-process RSS",
+                    regex: r"(?i)\b24\.625\s+MiB\b",
+                    copies: 10,
+                },
+                MeasurementInventoryPattern {
+                    description: "640 KiB threshold excess",
+                    regex: r"(?i)\b640\s+KiB\b",
+                    copies: 10,
+                },
+                MeasurementInventoryPattern {
+                    description: "2.6 percent excess over 24,576 KiB",
+                    regex: r"(?i)\b2\.6%\s+above\s+24,?576\s+KiB\b",
+                    copies: 10,
+                },
+            ],
             sites: vec![
                 DerivedMeasurementSite {
                     path: "CHANGELOG.md",
@@ -1430,13 +1485,30 @@ fn spike_measurement_specs() -> Vec<MeasurementSpec> {
             ],
             mutation_path: STORE,
             mutation_needle: "25,216 KiB",
+            planted_unregistered_copy: "Independent RSS result: 25,216 KiB.",
         },
         MeasurementSpec {
             name: "SPIKE-02 p95",
             threshold: "Commit-to-handler p95 at or below 5,000 us in all profiles",
             expected_outcome: "MEASURED-PASS",
             fingerprint: "115.043 us / 116.195 us / 128.902 us",
-            fingerprint_copies: 3,
+            inventory_patterns: vec![
+                MeasurementInventoryPattern {
+                    description: "115.043 us p95",
+                    regex: r"\b115\.043\s+us\b",
+                    copies: 3,
+                },
+                MeasurementInventoryPattern {
+                    description: "116.195 us p95",
+                    regex: r"\b116\.195\s+us\b",
+                    copies: 3,
+                },
+                MeasurementInventoryPattern {
+                    description: "128.902 us p95",
+                    regex: r"\b128\.902\s+us\b",
+                    copies: 3,
+                },
+            ],
             sites: vec![
                 DerivedMeasurementSite {
                     path: FEASIBILITY,
@@ -1499,13 +1571,35 @@ fn spike_measurement_specs() -> Vec<MeasurementSpec> {
             ],
             mutation_path: FEASIBILITY,
             mutation_needle: "115.043 us / 116.195 us / 128.902 us",
+            planted_unregistered_copy: "Independent p95 result: 115.043 us.",
         },
         MeasurementSpec {
             name: "SPIKE-02 p99",
             threshold: "Commit-to-handler p99 reported; document any value above 20 ms",
             expected_outcome: "MEASURED-PASS",
             fingerprint: "134.834 us / 140.928 us / 1,009.871 us; none exceeded 20 ms",
-            fingerprint_copies: 3,
+            inventory_patterns: vec![
+                MeasurementInventoryPattern {
+                    description: "134.834 us p99",
+                    regex: r"\b134\.834\s+us\b",
+                    copies: 3,
+                },
+                MeasurementInventoryPattern {
+                    description: "140.928 us p99",
+                    regex: r"\b140\.928\s+us\b",
+                    copies: 3,
+                },
+                MeasurementInventoryPattern {
+                    description: "1,009.871 us p99",
+                    regex: r"\b1,?009\.871\s+us\b",
+                    copies: 3,
+                },
+                MeasurementInventoryPattern {
+                    description: "no p99 value exceeded 20 ms",
+                    regex: r"(?i)\bnone\s+exceeded\s+20\s+ms\b",
+                    copies: 3,
+                },
+            ],
             sites: vec![
                 DerivedMeasurementSite {
                     path: FEASIBILITY,
@@ -1561,6 +1655,7 @@ fn spike_measurement_specs() -> Vec<MeasurementSpec> {
             ],
             mutation_path: WORK_ITEMS,
             mutation_needle: "134.834 us / 140.928 us / 1,009.871 us",
+            planted_unregistered_copy: "Independent p99 result: 134.834 us.",
         },
     ]
 }
@@ -1613,16 +1708,31 @@ fn validate_spike_measurement(
         }
     }
 
-    let fingerprint = normalized_whitespace(spec.fingerprint);
-    let fingerprint_copies = documents
-        .values()
-        .map(|content| normalized_whitespace(content).matches(&fingerprint).count())
-        .sum::<usize>();
-    if fingerprint_copies != spec.fingerprint_copies {
-        errors.push(format!(
-            "{}: derived-document fingerprint {:?} must occur exactly {} time(s), found {fingerprint_copies}; register every new numeric copy",
-            spec.name, spec.fingerprint, spec.fingerprint_copies
-        ));
+    for pattern in &spec.inventory_patterns {
+        let regex = Regex::new(pattern.regex).expect("valid measurement inventory regex");
+        let occurrences = documents
+            .iter()
+            .filter_map(|(path, content)| {
+                let count = regex.find_iter(&normalized_whitespace(content)).count();
+                (count > 0).then_some((path, count))
+            })
+            .collect::<Vec<_>>();
+        let actual = occurrences.iter().map(|(_, count)| count).sum::<usize>();
+        if actual != pattern.copies {
+            let locations = occurrences
+                .iter()
+                .map(|(path, count)| format!("{path} ({count})"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            errors.push(format!(
+                "{}: global docs/** and CHANGELOG.md inventory for {} ({:?}) must contain exactly {} copy/copies, found {actual} at [{}]; register or remove every new measurement-shaped copy",
+                spec.name,
+                pattern.description,
+                pattern.regex,
+                pattern.copies,
+                locations
+            ));
+        }
     }
 
     errors
@@ -2302,6 +2412,48 @@ fn derived_spike_measurement_guard_rejects_each_class_mutation() {
             "{} guard accepted a perturbed derived copy in {}",
             spec.name,
             spec.mutation_path
+        );
+    }
+}
+
+#[test]
+fn global_spike_measurement_inventory_rejects_each_unregistered_class_copy() {
+    const UNREGISTERED_DOCUMENT: &str = "docs/explanation/unregistered-spike-copy.md";
+
+    let root = repo_root();
+    let results_path = root.join("proofs/redb-resource-store-spike/RESULTS.md");
+    let results = std::fs::read_to_string(&results_path)
+        .unwrap_or_else(|err| panic!("cannot read {}: {err}", rel_display(&results_path)));
+    let documents = measurement_documents();
+    assert!(
+        !documents.contains_key(UNREGISTERED_DOCUMENT),
+        "plant path must not replace a real documentation file"
+    );
+
+    for spec in spike_measurement_specs() {
+        assert!(
+            spec.sites
+                .iter()
+                .all(|site| site.path != UNREGISTERED_DOCUMENT),
+            "{} plant path is unexpectedly registered",
+            spec.name
+        );
+        let canonical = canonical_measurement(&results, spec.threshold)
+            .unwrap_or_else(|error| panic!("{}: {error}", spec.name));
+        let mut mutated = documents.clone();
+        mutated.insert(
+            UNREGISTERED_DOCUMENT.to_string(),
+            spec.planted_unregistered_copy.to_string(),
+        );
+        let errors = validate_spike_measurement(&spec, &canonical, &mutated);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("global docs/** and CHANGELOG.md inventory")),
+            "{} global inventory accepted unregistered copy {:?}; errors: {}",
+            spec.name,
+            spec.planted_unregistered_copy,
+            errors.join("\n")
         );
     }
 }

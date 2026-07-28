@@ -57,8 +57,12 @@ deprecations ship one minor release before removal.
 ### Changed
 
 - Made the canonical spike-measurement policy guard cover all seven result
-  rows, every registered numeric copy and qualitative evidence summary, and
-  in-memory mutations of each measurement class.
+  rows, registered qualitative evidence summaries, and a global inventory of
+  measurement-shaped fragments under `docs/**` and `CHANGELOG.md`. Per-class
+  mutations now plant differently phrased or partial copies in an unregistered
+  document and prove that the inventory rejects them; paraphrases that omit
+  every number-and-unit, denominator, or canonical class phrase remain outside
+  this mechanical check.
 
 - Deferred the production redb backend, watch dispatcher, and real-backend
   reaction benchmark to the storage-integration wave after the feasibility
