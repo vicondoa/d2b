@@ -1,9 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
+use std::time::Duration;
 
 use redb_resource_store_spike::{
-    HintKind, Mutation, OracleCheckpoint, Resource, Store, StoreError, fixture_path,
-    put_with_backpressure_retry, synthetic_resource,
+    ChangeBatch, ChangeEntry, HintKind, Mutation, OracleCheckpoint, Resource, Store, StoreError,
+    fixture_path, put_with_backpressure_retry, synthetic_resource,
 };
 use tokio::sync::Barrier;
 
@@ -24,6 +25,46 @@ async fn insert_group(
         receipts.push(result.unwrap().unwrap());
     }
     receipts
+}
+
+fn expected_watch_batch(revision: u64, filter: &str) -> ChangeBatch {
+    let mut resource = synthetic_resource(usize::try_from(revision - 1).unwrap());
+    resource.revision = revision;
+    let entries = if resource.key.resource_type == filter {
+        vec![ChangeEntry {
+            ordinal: 0,
+            operation_id: format!("create-{}", resource.uid),
+            resource,
+            event: "Created".to_owned(),
+        }]
+    } else {
+        Vec::new()
+    };
+    ChangeBatch { revision, entries }
+}
+
+fn check_watch_batch(actual: &ChangeBatch, revision: u64, filter: &str) -> Result<(), String> {
+    let expected = expected_watch_batch(revision, filter);
+    if *actual == expected {
+        Ok(())
+    } else {
+        Err(format!(
+            "watch oracle divergence at revision {revision} for {filter}: actual_entries={} expected_entries={}",
+            actual.entries.len(),
+            expected.entries.len()
+        ))
+    }
+}
+
+#[test]
+fn watch_oracle_rejects_removed_matching_delivery() {
+    let expected = expected_watch_batch(1, "Process");
+    assert_eq!(expected.entries.len(), 1);
+    let removed = ChangeBatch {
+        revision: 1,
+        entries: Vec::new(),
+    };
+    assert!(check_watch_batch(&removed, 1, "Process").is_err());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -111,6 +152,11 @@ async fn watches_100_have_no_misses_duplicates_or_gaps() {
         });
     }
 
+    let mut watches = Vec::new();
+    while let Some(result) = registrations.join_next().await {
+        watches.push(result.unwrap());
+    }
+
     let writer_store = store.clone();
     let writer = tokio::spawn(async move {
         for index in 24..224 {
@@ -123,10 +169,6 @@ async fn watches_100_have_no_misses_duplicates_or_gaps() {
             .unwrap();
         }
     });
-    let mut watches = Vec::new();
-    while let Some(result) = registrations.join_next().await {
-        watches.push(result.unwrap());
-    }
     writer.await.unwrap();
     let final_revision = store.current_revision().await.unwrap();
 
@@ -134,16 +176,21 @@ async fn watches_100_have_no_misses_duplicates_or_gaps() {
     let mut delivered_entries = 0_u64;
     for (after_revision, filter, mut watch) in watches {
         let mut observed = BTreeSet::new();
+        let mut replay_matches = 0_u64;
+        let mut live_matches = 0_u64;
         for expected_revision in after_revision + 1..=final_revision {
-            let batch = watch.recv().await.expect("every revision is delivered");
-            assert_eq!(batch.revision, expected_revision);
+            let batch = tokio::time::timeout(Duration::from_secs(1), watch.recv())
+                .await
+                .expect("every revision is delivered without timeout")
+                .expect("watch remains open");
+            check_watch_batch(&batch, expected_revision, &filter).unwrap();
             assert!(observed.insert(batch.revision), "duplicate revision");
-            assert!(
-                batch
-                    .entries
-                    .iter()
-                    .all(|entry| entry.resource.key.resource_type == filter)
-            );
+            if !batch.entries.is_empty() && expected_revision <= 24 {
+                replay_matches += 1;
+            }
+            if !batch.entries.is_empty() && expected_revision > 24 {
+                live_matches += 1;
+            }
             delivered_batches += 1;
             delivered_entries += u64::try_from(batch.entries.len()).unwrap();
         }
@@ -151,6 +198,8 @@ async fn watches_100_have_no_misses_duplicates_or_gaps() {
             observed.len(),
             usize::try_from(final_revision - after_revision).unwrap()
         );
+        assert!(replay_matches > 0, "filter {filter} has replay matches");
+        assert!(live_matches > 0, "filter {filter} has live matches");
     }
     let stats = store.stats().await.unwrap();
     assert_eq!(stats.watch_delivery_failures, 0);
