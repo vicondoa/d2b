@@ -3,7 +3,7 @@
 use std::{
     collections::{BTreeMap, VecDeque},
     sync::{
-        Arc,
+        Arc, Mutex, MutexGuard,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -165,6 +165,7 @@ pub(crate) struct CancelAdmission {
 pub(crate) struct CancelTarget {
     pub(crate) route: RouteKey,
     pub(crate) endpoint: Arc<dyn BusEndpoint>,
+    pub(crate) destination: SessionId,
     pub(crate) generation: d2b_contracts::v3::ReconnectGeneration,
     pub(crate) cancellation: Cancellation,
 }
@@ -179,7 +180,9 @@ pub(crate) struct CancelDispatch {
 struct PendingCancelDelivery {
     operation: OperationId,
     source: SessionId,
+    destination: SessionId,
     cancellation: Cancellation,
+    task: tokio::task::AbortHandle,
 }
 
 pub(crate) enum CancelDeliveryAdmission {
@@ -191,19 +194,26 @@ pub(crate) enum CancelDeliveryAdmission {
 /// Bounded delivery accounting independent from active operation capacity.
 pub(crate) struct PendingCancelDeliveries {
     max_pending: usize,
-    entries: Vec<PendingCancelDelivery>,
+    max_pending_per_source: usize,
+    entries: Mutex<Vec<PendingCancelDelivery>>,
 }
 
 impl PendingCancelDeliveries {
-    pub(crate) fn new(max_pending: usize) -> Self {
+    pub(crate) fn new(max_pending: usize, max_pending_per_source: usize) -> Self {
         Self {
             max_pending,
-            entries: Vec::new(),
+            max_pending_per_source,
+            entries: Mutex::new(Vec::new()),
         }
     }
 
-    pub(crate) fn admit(&mut self, dispatch: &CancelDispatch) -> CancelDeliveryAdmission {
-        if self.entries.iter().any(|entry| {
+    pub(crate) fn admit(
+        &self,
+        dispatch: &CancelDispatch,
+        task: tokio::task::AbortHandle,
+    ) -> CancelDeliveryAdmission {
+        let mut entries = self.lock_entries();
+        if entries.iter().any(|entry| {
             entry.source == dispatch.source
                 && entry.operation == dispatch.operation
                 && entry
@@ -212,35 +222,81 @@ impl PendingCancelDeliveries {
         }) {
             return CancelDeliveryAdmission::Duplicate;
         }
-        if self.entries.len() >= self.max_pending {
+        if entries.len() >= self.max_pending
+            || entries
+                .iter()
+                .filter(|entry| entry.source == dispatch.source)
+                .count()
+                >= self.max_pending_per_source
+        {
             return CancelDeliveryAdmission::Full;
         }
-        self.entries.push(PendingCancelDelivery {
+        entries.push(PendingCancelDelivery {
             operation: dispatch.operation.clone(),
             source: dispatch.source,
+            destination: dispatch.target.destination,
             cancellation: dispatch.target.cancellation.clone(),
+            task,
         });
         CancelDeliveryAdmission::Admitted
     }
 
     pub(crate) fn complete(
-        &mut self,
+        &self,
         operation: &OperationId,
         source: SessionId,
         cancellation: &Cancellation,
     ) {
-        if let Some(index) = self.entries.iter().position(|entry| {
+        let mut entries = self.lock_entries();
+        if let Some(index) = entries.iter().position(|entry| {
             entry.source == source
                 && entry.operation == *operation
                 && entry.cancellation.is_same_attempt(cancellation)
         }) {
-            self.entries.swap_remove(index);
+            entries.remove(index);
+        }
+    }
+
+    pub(crate) fn abort_destination(&self, session: SessionId) {
+        let tasks = {
+            let mut entries = self.lock_entries();
+            let mut tasks = Vec::new();
+            entries.retain(|entry| {
+                if entry.destination == session {
+                    tasks.push(entry.task.clone());
+                    false
+                } else {
+                    true
+                }
+            });
+            tasks
+        };
+        for task in tasks {
+            task.abort();
         }
     }
 
     #[cfg(test)]
-    fn len(&self) -> usize {
-        self.entries.len()
+    pub(crate) fn len(&self) -> usize {
+        self.lock_entries().len()
+    }
+
+    fn lock_entries(&self) -> MutexGuard<'_, Vec<PendingCancelDelivery>> {
+        self.entries
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+impl Drop for PendingCancelDeliveries {
+    fn drop(&mut self) {
+        let entries = self
+            .entries
+            .get_mut()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for entry in entries.drain(..) {
+            entry.task.abort();
+        }
     }
 }
 
@@ -380,6 +436,7 @@ impl OperationTable {
         let target = CancelTarget {
             route: record.reverse_route.clone(),
             endpoint: Arc::clone(&record.endpoint),
+            destination: record.destination,
             generation: record.generation,
             cancellation: record.cancellation.clone(),
         };
@@ -475,6 +532,7 @@ impl OperationTable {
         let target = CancelTarget {
             route: record.reverse_route.clone(),
             endpoint: Arc::clone(&record.endpoint),
+            destination: record.destination,
             generation: record.generation,
             cancellation: record.cancellation.clone(),
         };
@@ -508,6 +566,7 @@ impl OperationTable {
                 let target = CancelTarget {
                     route: record.reverse_route.clone(),
                     endpoint: Arc::clone(&record.endpoint),
+                    destination: record.destination,
                     generation: record.generation,
                     cancellation: record.cancellation.clone(),
                 };
@@ -899,8 +958,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn pending_cancel_delivery_state_is_attempt_keyed_and_bounded() {
+    #[tokio::test]
+    async fn pending_cancel_delivery_state_is_attempt_keyed_and_bounded() {
         let mut table = OperationTable::new(2, 2).unwrap();
         let first = operation("first-pending", 10);
         let second = operation("second-pending", 10);
@@ -916,18 +975,19 @@ mod tests {
         let second_dispatch = cancel_now(&mut table, second.id(), SessionId(1))
             .unwrap()
             .unwrap();
-        let mut pending = PendingCancelDeliveries::new(1);
+        let pending = PendingCancelDeliveries::new(1, 1);
+        let task = || tokio::spawn(async {}).abort_handle();
 
         assert!(matches!(
-            pending.admit(&first_dispatch),
+            pending.admit(&first_dispatch, task()),
             CancelDeliveryAdmission::Admitted
         ));
         assert!(matches!(
-            pending.admit(&first_dispatch),
+            pending.admit(&first_dispatch, task()),
             CancelDeliveryAdmission::Duplicate
         ));
         assert!(matches!(
-            pending.admit(&second_dispatch),
+            pending.admit(&second_dispatch, task()),
             CancelDeliveryAdmission::Full
         ));
         assert_eq!(pending.len(), 1);
@@ -937,9 +997,51 @@ mod tests {
             &first_dispatch.target.cancellation,
         );
         assert!(matches!(
-            pending.admit(&second_dispatch),
+            pending.admit(&second_dispatch, task()),
             CancelDeliveryAdmission::Admitted
         ));
         assert_eq!(pending.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn pending_cancel_delivery_has_an_independent_per_source_bound() {
+        let mut table = OperationTable::new(3, 3).unwrap();
+        let first = operation("source-one-first", 10);
+        let second = operation("source-one-second", 10);
+        let third = operation("source-two", 10);
+        table
+            .begin(&first, SessionId(1), lease(SessionId(9)), route(), 1)
+            .unwrap();
+        table
+            .begin(&second, SessionId(1), lease(SessionId(9)), route(), 1)
+            .unwrap();
+        table
+            .begin(&third, SessionId(2), lease(SessionId(9)), route(), 1)
+            .unwrap();
+        let first = cancel_now(&mut table, first.id(), SessionId(1))
+            .unwrap()
+            .unwrap();
+        let second = cancel_now(&mut table, second.id(), SessionId(1))
+            .unwrap()
+            .unwrap();
+        let third = cancel_now(&mut table, third.id(), SessionId(2))
+            .unwrap()
+            .unwrap();
+        let pending = PendingCancelDeliveries::new(3, 1);
+        let task = || tokio::spawn(async {}).abort_handle();
+
+        assert!(matches!(
+            pending.admit(&first, task()),
+            CancelDeliveryAdmission::Admitted
+        ));
+        assert!(matches!(
+            pending.admit(&second, task()),
+            CancelDeliveryAdmission::Full
+        ));
+        assert!(matches!(
+            pending.admit(&third, task()),
+            CancelDeliveryAdmission::Admitted
+        ));
+        assert_eq!(pending.len(), 2);
     }
 }
