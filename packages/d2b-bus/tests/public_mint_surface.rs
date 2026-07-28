@@ -42,7 +42,7 @@ fn public_api_has_only_the_approved_capability_mint_surface() {
     let workspace_docs = render_workspace_docs(
         &crate_root.parent().unwrap().join("Cargo.toml"),
         scratch.path(),
-        None,
+        &[],
     );
 
     let approved = approved_entries(include_str!("approved-public-api.txt"));
@@ -50,19 +50,11 @@ fn public_api_has_only_the_approved_capability_mint_surface() {
         .iter()
         .filter_map(|symbol| symbol.split_once("::").map(|(crate_name, _)| crate_name))
         .collect::<BTreeSet<_>>();
-    // Reuse the workspace render rather than rendering a second time. Two full
-    // rustdoc passes doubled both the wall-clock cost and the number of ways a
-    // cold or contended build can yield partial output - which is how this gate
-    // produced two spurious "API removed" failures.
     let snapshot_docs = workspace_docs
         .iter()
         .filter(|documented| snapshot_crates.contains(documented.crate_name.as_str()))
         .cloned()
         .collect::<Vec<_>>();
-    // Fail loudly when rustdoc did not render a crate the snapshot expects.
-    // Without this, an incomplete or racing doc build shows up as that crate's
-    // entire API having been "removed", which reads like a capability change
-    // and sends the reader looking for a defect that is not there.
     let rendered = snapshot_docs
         .iter()
         .map(|documented| documented.crate_name.as_str())
@@ -78,34 +70,12 @@ fn public_api_has_only_the_approved_capability_mint_surface() {
          API as removed. This is a doc-build problem, not an API change."
     );
     let actual = snapshot_public_api(&snapshot_docs, &approved);
-
-    // A crate that renders but yields no public item means rustdoc produced no
-    // usable output for it, not that its API was withdrawn. Checking only that
-    // the crate was listed is not enough: a failed or partial render still
-    // reports the crate, and the comparison then blames every one of its
-    // symbols as removed. Fail on the real cause instead.
-    let empty = snapshot_crates
-        .iter()
-        .filter(|crate_name| {
-            let prefix = format!("{crate_name}::");
-            !actual.iter().any(|symbol| symbol.starts_with(&prefix))
-        })
-        .collect::<Vec<_>>();
-    assert!(
-        empty.is_empty(),
-        "rustdoc produced no public items for {empty:?}, which appear in \
-         approved-public-api.txt. The comparison below would report their whole \
-         API as removed. This is a doc-build problem, not an API change."
-    );
     let (_, capability_surface) = workspace_public_api(&workspace_docs, &BTreeSet::new(), true);
-    let optional_capabilities = approved_entries(include_str!("approved-capability-optional.txt"));
     if std::env::var_os("D2B_UPDATE_BUS_PUBLIC_API").is_some() {
         write_snapshot(&crate_root.join("tests/approved-public-api.txt"), &actual);
-        let mut reviewed_capabilities = capability_surface.clone();
-        reviewed_capabilities.extend(optional_capabilities.iter().cloned());
         write_snapshot(
             &crate_root.join("tests/approved-capability-api.txt"),
-            &reviewed_capabilities,
+            &capability_surface,
         );
         return;
     }
@@ -123,11 +93,7 @@ fn public_api_has_only_the_approved_capability_mint_surface() {
         );
     }
     let approved_capabilities = approved_entries(include_str!("approved-capability-api.txt"));
-    assert_capability_inventory(
-        &capability_surface,
-        &approved_capabilities,
-        &optional_capabilities,
-    );
+    assert_capability_inventory(&capability_surface, &approved_capabilities);
 
     let router = fs::read_to_string(crate_root.join("src/router.rs")).expect("read router source");
     assert_eq!(
@@ -140,10 +106,11 @@ fn public_api_has_only_the_approved_capability_mint_surface() {
         1,
         "SessionAcceptor construction widened beyond the approved registrar mint point"
     );
-    assert_mutation_fixture();
+    assert_mutation_fixture(&workspace_docs);
+    assert_partial_render_fails_closed(&workspace_docs);
 }
 
-fn assert_mutation_fixture() {
+fn assert_mutation_fixture(workspace_docs: &[DocumentedCrate]) {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repository_root = crate_root.parent().unwrap().parent().unwrap();
     let fixture = crate_root.join("tests/ui/public-api-mutations");
@@ -154,11 +121,9 @@ fn assert_mutation_fixture() {
     );
     let temp = scratch.path().join("tmp");
     fs::create_dir_all(&temp).expect("create repository-local mutation scratch");
-    render_fixture_type_roots(
-        &crate_root.parent().unwrap().join("Cargo.toml"),
-        scratch.path(),
-    );
-    let docs = render_workspace_docs(&fixture.join("Cargo.toml"), scratch.path(), None);
+    let docs = render_workspace_docs(&fixture.join("Cargo.toml"), scratch.path(), workspace_docs);
+    let mut all_docs = workspace_docs.to_vec();
+    all_docs.extend(docs.iter().cloned());
     let doc_root = docs
         .iter()
         .find(|docs| docs.crate_name == "d2b_bus_public_api_mutations")
@@ -189,7 +154,21 @@ fn assert_mutation_fixture() {
             "opaque wrapper {wrapper} publicly exposes its private claim type: {constructor}"
         );
     }
-    let (_, capabilities) = workspace_public_api(&docs, &BTreeSet::new(), false);
+    let (_, capabilities) = workspace_public_api(&all_docs, &BTreeSet::new(), true);
+    let rogue_admission = capabilities
+        .iter()
+        .find(|symbol| symbol.ends_with("::rogue_admission"))
+        .unwrap_or_else(|| {
+            panic!("rogue public ComponentSessionAdmission factory escaped classification")
+        });
+    let mut mutation_approved = capabilities.clone();
+    mutation_approved.remove(rogue_admission);
+    let error = capability_inventory_error(&capabilities, &mutation_approved)
+        .expect("rogue public ComponentSessionAdmission factory passed the inventory");
+    assert!(
+        error.contains(rogue_admission),
+        "capability inventory did not name the rogue admission factory: {error}"
+    );
     assert!(
         capabilities
             .iter()
@@ -222,6 +201,27 @@ fn assert_mutation_fixture() {
             .iter()
             .any(|symbol| symbol.ends_with("RogueSubjectClaims::method:inject")),
         "a public subject-claim injection method escaped the capability inventory"
+    );
+}
+
+fn assert_partial_render_fails_closed(docs: &[DocumentedCrate]) {
+    let documented = docs
+        .iter()
+        .find(|documented| !documented.advertised.is_empty())
+        .expect("workspace rustdoc has an advertised item");
+    let advertised = documented
+        .advertised
+        .first()
+        .expect("selected rustdoc crate has an advertised item");
+    fs::remove_file(documented.root.join(&advertised.href))
+        .expect("remove one advertised item to simulate a partial rustdoc render");
+
+    let error = validate_documented_crate(&documented.crate_name, &documented.root)
+        .expect_err("partial rustdoc render passed completeness validation");
+    let symbol = format!("{}::{}", documented.crate_name, advertised.name);
+    assert!(
+        error.contains(&symbol) && error.contains("doc-build problem"),
+        "partial-render failure did not name the missing advertised item: {error}"
     );
 }
 
@@ -270,50 +270,43 @@ fn assert_snapshot(actual: &BTreeSet<String>, approved: &BTreeSet<String>, messa
     );
 }
 
-fn assert_capability_inventory(
+fn assert_capability_inventory(actual: &BTreeSet<String>, approved: &BTreeSet<String>) {
+    if let Some(error) = capability_inventory_error(actual, approved) {
+        panic!("{error}");
+    }
+}
+
+fn capability_inventory_error(
     actual: &BTreeSet<String>,
     approved: &BTreeSet<String>,
-    optional: &BTreeSet<String>,
-) {
-    assert!(
-        optional.is_subset(approved),
-        "optional capability entries must also be approved"
-    );
+) -> Option<String> {
     let unapproved = actual.difference(approved).take(40).collect::<Vec<_>>();
-    let required = approved
-        .difference(optional)
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    let missing = required
+    let missing = approved
         .iter()
         .filter(|entry| !actual.contains(*entry))
         .take(40)
         .collect::<Vec<_>>();
-    // Fail on unapproved entries only. A public signature newly exposing a
-    // capability or claim type is the widening this gate exists to catch; an
-    // entry that is approved but absent cannot widen the boundary. Failing on
-    // absence made the gate hostage to rustdoc, which yields partial output
-    // when the doc build is contended - running this test alongside the rest of
-    // the workspace suite reported 57 `d2b-core-controller` entries missing
-    // while the same test passed in isolation. Report absences instead.
-    assert!(
-        unapproved.is_empty(),
-        "a public signature now exposes a capability or claim type outside the \
-         explicitly approved capability API; unapproved {} (first 40: \
-         {unapproved:?}). Review whether this widens the capability mint \
-         surface before adding it to approved-capability-api.txt.",
-        actual.difference(approved).count()
-    );
-    if !missing.is_empty() {
-        eprintln!(
-            "note: {} approved capability entries were not observed this run. \
-             This cannot widen the boundary; prune them once the render is \
-             stable. First 40: {missing:?}",
-            required
+    if !unapproved.is_empty() {
+        return Some(format!(
+            "a public signature now exposes a capability or claim type outside the \
+             explicitly approved capability API; unapproved {} (first 40: \
+             {unapproved:?}). Review whether this widens the capability mint \
+             surface before adding it to approved-capability-api.txt.",
+            actual.difference(approved).count()
+        ));
+    }
+    if missing.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "{} required approved capability entries are absent from the complete \
+             rustdoc inventory (first 40: {missing:?}); review whether the API was \
+             intentionally removed before updating approved-capability-api.txt",
+            approved
                 .iter()
                 .filter(|entry| !actual.contains(*entry))
                 .count()
-        );
+        ))
     }
 }
 
@@ -330,6 +323,20 @@ fn approved_entries(snapshot: &str) -> BTreeSet<String> {
 struct DocumentedCrate {
     crate_name: String,
     root: PathBuf,
+    advertised: Vec<AdvertisedItem>,
+}
+
+#[derive(Debug, Clone)]
+struct AdvertisedItem {
+    href: PathBuf,
+    name: String,
+}
+
+#[derive(Debug)]
+struct RenderPackage {
+    crate_name: String,
+    dependency_features: BTreeSet<String>,
+    workspace_dependencies: BTreeSet<String>,
 }
 
 #[derive(Debug)]
@@ -344,7 +351,7 @@ struct DocumentedItem {
 fn render_workspace_docs(
     manifest: &Path,
     scratch: &Path,
-    selected_crates: Option<&BTreeSet<&str>>,
+    external_docs: &[DocumentedCrate],
 ) -> Vec<DocumentedCrate> {
     let metadata = Command::new(env!("CARGO"))
         .args([
@@ -372,11 +379,39 @@ fn render_workspace_docs(
         .iter()
         .map(|member| member.as_str().expect("workspace member id"))
         .collect::<BTreeSet<_>>();
-    let mut packages = BTreeSet::new();
-    for package in metadata["packages"].as_array().expect("packages array") {
-        if !workspace_members.contains(package["id"].as_str().expect("package id")) {
-            continue;
+    let workspace_packages = metadata["packages"]
+        .as_array()
+        .expect("packages array")
+        .iter()
+        .filter(|package| workspace_members.contains(package["id"].as_str().expect("package id")))
+        .collect::<Vec<_>>();
+    let workspace_package_names = workspace_packages
+        .iter()
+        .map(|package| package["name"].as_str().expect("workspace package name"))
+        .collect::<BTreeSet<_>>();
+    let mut unified_dependency_features = BTreeMap::<&str, BTreeSet<&str>>::new();
+    for package in &workspace_packages {
+        for dependency in package["dependencies"]
+            .as_array()
+            .expect("package dependencies")
+            .iter()
+            .filter(|dependency| dependency["kind"].is_null())
+        {
+            let dependency_name = dependency["name"].as_str().expect("dependency name");
+            unified_dependency_features
+                .entry(dependency_name)
+                .or_default()
+                .extend(
+                    dependency["features"]
+                        .as_array()
+                        .expect("dependency features")
+                        .iter()
+                        .map(|feature| feature.as_str().expect("dependency feature")),
+                );
         }
+    }
+    let mut packages = BTreeMap::new();
+    for package in workspace_packages {
         let library = package["targets"]
             .as_array()
             .expect("package targets")
@@ -390,79 +425,213 @@ fn render_workspace_docs(
             });
         if let Some(library) = library {
             let crate_name = library["name"].as_str().expect("library target name");
-            if selected_crates.is_some_and(|selected| !selected.contains(crate_name)) {
-                continue;
+            let mut dependency_features = BTreeSet::new();
+            let mut workspace_dependencies = BTreeSet::new();
+            for dependency in package["dependencies"]
+                .as_array()
+                .expect("package dependencies")
+                .iter()
+                .filter(|dependency| dependency["kind"].is_null())
+            {
+                let dependency_name = dependency["name"].as_str().expect("dependency name");
+                let command_name = dependency["rename"].as_str().unwrap_or(dependency_name);
+                if let Some(features) = unified_dependency_features.get(dependency_name) {
+                    dependency_features.extend(
+                        features
+                            .iter()
+                            .map(|feature| format!("{command_name}/{feature}")),
+                    );
+                }
+                if workspace_package_names.contains(dependency_name) {
+                    workspace_dependencies.insert(dependency_name.to_owned());
+                }
             }
             packages.insert(
                 package["name"]
                     .as_str()
                     .expect("workspace package name")
                     .to_owned(),
+                RenderPackage {
+                    crate_name: crate_name.to_owned(),
+                    dependency_features,
+                    workspace_dependencies,
+                },
             );
         }
     }
     assert!(!packages.is_empty(), "workspace has no library crates");
 
-    let target = scratch.join("target");
     let temp = scratch.join("tmp");
     fs::create_dir_all(&temp).expect("create rustdoc temporary directory");
-    let mut command = Command::new(env!("CARGO"));
-    command.args([
-        "doc",
-        "--quiet",
-        "--locked",
-        "--no-deps",
-        "--document-private-items",
-    ]);
-    command.arg("--manifest-path").arg(manifest);
-    for package in packages {
-        command.arg("-p").arg(package);
-    }
-    let output = command
-        .arg("--target-dir")
-        .arg(&target)
-        .env("TMPDIR", &temp)
-        .output()
-        .expect("render workspace public APIs");
-    assert!(
-        output.status.success(),
-        "rustdoc failed:\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let doc_root = target.join("doc");
-    let mut docs = fs::read_dir(&doc_root)
-        .expect("read rustdoc output")
-        .filter_map(|entry| {
-            let root = entry.ok()?.path();
-            if !root.join("all.html").is_file() {
-                return None;
+    let build = scratch.join("build");
+    let mut docs = Vec::new();
+    for (package_name, package) in dependency_order(packages) {
+        let crate_name = package.crate_name;
+        let target = scratch.join("renders").join(&crate_name);
+        let doc_root = target.join("doc");
+        fs::create_dir_all(&doc_root).unwrap_or_else(|error| {
+            panic!("create isolated rustdoc output for package {package_name}: {error}")
+        });
+        for documented in external_docs.iter().chain(docs.iter()) {
+            let link = doc_root.join(&documented.crate_name);
+            if link.exists() {
+                continue;
             }
-            let crate_name = root.file_name()?.to_str()?.to_owned();
-            Some(DocumentedCrate { crate_name, root })
-        })
-        .collect::<Vec<_>>();
+            std::os::unix::fs::symlink(&documented.root, &link).unwrap_or_else(|error| {
+                panic!(
+                    "link dependency rustdoc root {} -> {}: {error}",
+                    link.display(),
+                    documented.root.display()
+                )
+            });
+        }
+        let mut command = Command::new(env!("CARGO"));
+        command
+            .args([
+                "doc",
+                "--quiet",
+                "--locked",
+                "--no-deps",
+                "--document-private-items",
+                "--manifest-path",
+            ])
+            .arg(manifest)
+            .arg("-p")
+            .arg(&package_name);
+        if !package.dependency_features.is_empty() {
+            command.arg("--features").arg(
+                package
+                    .dependency_features
+                    .into_iter()
+                    .collect::<Vec<_>>()
+                    .join(","),
+            );
+        }
+        let output = command
+            .arg("--target-dir")
+            .arg(&target)
+            .env("CARGO_BUILD_BUILD_DIR", &build)
+            .env("TMPDIR", &temp)
+            .output()
+            .unwrap_or_else(|error| {
+                panic!("render public API for package {package_name}: {error}")
+            });
+        assert!(
+            output.status.success(),
+            "rustdoc failed for package {package_name}:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let root = target.join("doc").join(&crate_name);
+        let advertised =
+            validate_documented_crate(&crate_name, &root).unwrap_or_else(|error| panic!("{error}"));
+        docs.push(DocumentedCrate {
+            crate_name,
+            root,
+            advertised,
+        });
+    }
     docs.sort_by(|left, right| left.crate_name.cmp(&right.crate_name));
-    assert!(!docs.is_empty(), "rustdoc rendered no library crates");
     docs
 }
 
-fn render_fixture_type_roots(manifest: &Path, scratch: &Path) {
-    let temp = scratch.join("tmp");
-    fs::create_dir_all(&temp).expect("create fixture rustdoc temporary directory");
-    let output = Command::new(env!("CARGO"))
-        .args(["doc", "--quiet", "--locked", "--no-deps", "--manifest-path"])
-        .arg(manifest)
-        .args(["-p", "d2b-contracts", "-p", "d2b-session", "--target-dir"])
-        .arg(scratch.join("target"))
-        .env("TMPDIR", temp)
-        .output()
-        .expect("render mutation fixture type roots");
-    assert!(
-        output.status.success(),
-        "fixture type rustdoc failed:\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+fn dependency_order(mut packages: BTreeMap<String, RenderPackage>) -> Vec<(String, RenderPackage)> {
+    let mut ordered = Vec::with_capacity(packages.len());
+    let mut rendered = BTreeSet::new();
+    while !packages.is_empty() {
+        let ready = packages
+            .iter()
+            .filter(|(_, package)| package.workspace_dependencies.is_subset(&rendered))
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>();
+        assert!(
+            !ready.is_empty(),
+            "workspace library dependency graph is cyclic or incomplete: {:?}",
+            packages.keys().collect::<Vec<_>>()
+        );
+        for name in ready {
+            let package = packages
+                .remove(&name)
+                .expect("ready rustdoc package remains pending");
+            rendered.insert(name.clone());
+            ordered.push((name, package));
+        }
+    }
+    ordered
+}
+
+fn validate_documented_crate(crate_name: &str, root: &Path) -> Result<Vec<AdvertisedItem>, String> {
+    let all_path = root.join("all.html");
+    let all = fs::read_to_string(&all_path).map_err(|error| {
+        format!(
+            "rustdoc output for {crate_name} is incomplete: cannot read {}: \
+             {error}. This is a doc-build problem.",
+            all_path.display()
+        )
+    })?;
+    let marker = "<li><a href=\"";
+    let mut advertised = Vec::new();
+    for (index, entry) in all.split(marker).skip(1).enumerate() {
+        let (href, rest) = entry.split_once('"').ok_or_else(|| {
+            format!(
+                "rustdoc output for {crate_name} has malformed all-items entry {}. \
+                 This is a doc-build problem.",
+                index + 1
+            )
+        })?;
+        let (_, rest) = rest.split_once('>').ok_or_else(|| {
+            format!(
+                "rustdoc output for {crate_name} has malformed all-items link {href:?}. \
+                 This is a doc-build problem."
+            )
+        })?;
+        let (name, _) = rest.split_once("</a>").ok_or_else(|| {
+            format!(
+                "rustdoc output for {crate_name} has malformed all-items label for \
+                 {href:?}. This is a doc-build problem."
+            )
+        })?;
+        if href.starts_with('#') {
+            continue;
+        }
+        if href.starts_with('/')
+            || href.split('/').any(|component| component == "..")
+            || !href.ends_with(".html")
+        {
+            return Err(format!(
+                "rustdoc output for {crate_name} advertises invalid item path \
+                 {href:?}. This is a doc-build problem."
+            ));
+        }
+        let symbol = format!("{crate_name}::{name}");
+        let path = root.join(href);
+        let html = fs::read_to_string(&path).map_err(|error| {
+            format!(
+                "rustdoc output is incomplete: advertised item {symbol} has no \
+                 readable page at {}: {error}. This is a doc-build problem.",
+                path.display()
+            )
+        })?;
+        if item_declaration(&html).is_none() {
+            return Err(format!(
+                "rustdoc output is incomplete: advertised item {symbol} could not \
+                 be parsed from {}. This is a doc-build problem.",
+                path.display()
+            ));
+        }
+        advertised.push(AdvertisedItem {
+            href: PathBuf::from(href),
+            name: name.to_owned(),
+        });
+    }
+    if advertised.is_empty() {
+        return Err(format!(
+            "rustdoc output for {crate_name} advertises no items in {}. This is \
+             a doc-build problem.",
+            all_path.display()
+        ));
+    }
+    Ok(advertised)
 }
 
 fn workspace_public_api(
@@ -541,25 +710,8 @@ fn documented_items(docs: &[DocumentedCrate]) -> Vec<DocumentedItem> {
     let mut items = Vec::new();
     for docs in docs {
         let restricted_modules = restricted_module_directories(&docs.root);
-        let all =
-            fs::read_to_string(docs.root.join("all.html")).expect("read rustdoc all-items page");
-        for entry in all.split("<li><a href=\"").skip(1) {
-            let Some((href, rest)) = entry.split_once('"') else {
-                continue;
-            };
-            if href.starts_with('#') || !href.ends_with(".html") {
-                continue;
-            }
-            let Some((_, text)) = rest.split_once('>') else {
-                continue;
-            };
-            let Some((name, _)) = text.split_once("</a>") else {
-                continue;
-            };
-            let rendered_path = docs.root.join(href);
-            if !rendered_path.is_file() {
-                continue;
-            }
+        for advertised in &docs.advertised {
+            let rendered_path = docs.root.join(&advertised.href);
             let rendered_path =
                 fs::canonicalize(&rendered_path).expect("canonicalize rendered rustdoc item page");
             if restricted_modules
@@ -581,7 +733,7 @@ fn documented_items(docs: &[DocumentedCrate]) -> Vec<DocumentedItem> {
             }
             items.push(DocumentedItem {
                 crate_name: docs.crate_name.clone(),
-                symbol: format!("{}::{name}", docs.crate_name),
+                symbol: format!("{}::{}", docs.crate_name, advertised.name),
                 path,
                 html,
                 rendered_html,
