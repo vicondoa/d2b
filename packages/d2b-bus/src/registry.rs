@@ -10,6 +10,7 @@ use d2b_contracts::v3::{
     AuthenticatedSubjectContext, ControllerGeneration, EvidenceClass, Locality,
     ReconnectGeneration, ResourceGeneration, ResourceRef, ResourceUid, SchemaFingerprint,
     ServiceName, ZoneId,
+    component_session::{Remediation, SessionErrorCode},
 };
 use d2b_resource_api::authz::SessionVerb;
 use d2b_session::{AuthenticatedSessionRouteBinding, OperationMember};
@@ -226,7 +227,7 @@ pub enum EndpointError {
     Unavailable,
     Rejected,
     Internal,
-    Session(EndpointFailureClass),
+    Session(EndpointSessionFailure),
 }
 
 /// Identity-free session failure classes preserved across bus dispatch.
@@ -242,6 +243,28 @@ pub enum EndpointFailureClass {
     Internal,
 }
 
+/// Identity-free, actionable session failure preserved at the bus seam.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EndpointSessionFailure {
+    class: EndpointFailureClass,
+    code: SessionErrorCode,
+    remediation: Remediation,
+}
+
+impl EndpointSessionFailure {
+    pub const fn class(self) -> EndpointFailureClass {
+        self.class
+    }
+
+    pub const fn code(self) -> SessionErrorCode {
+        self.code
+    }
+
+    pub const fn remediation(self) -> Remediation {
+        self.remediation
+    }
+}
+
 impl From<d2b_session::SessionError> for EndpointError {
     fn from(error: d2b_session::SessionError) -> Self {
         use d2b_session::SessionErrorClass as Source;
@@ -255,7 +278,11 @@ impl From<d2b_session::SessionError> for EndpointError {
             Source::Protocol => EndpointFailureClass::Protocol,
             Source::Internal => EndpointFailureClass::Internal,
         };
-        Self::Session(class)
+        Self::Session(EndpointSessionFailure {
+            class,
+            code: error.code(),
+            remediation: error.remediation(),
+        })
     }
 }
 
@@ -265,17 +292,31 @@ impl core::fmt::Display for EndpointError {
             Self::Unavailable => "endpoint is unavailable",
             Self::Rejected => "endpoint rejected the request",
             Self::Internal => "endpoint failed",
-            Self::Session(class) => match class {
-                EndpointFailureClass::Authentication => "endpoint authentication failed",
-                EndpointFailureClass::Authorization => "endpoint authorization failed",
-                EndpointFailureClass::Generation => "endpoint generation is stale",
-                EndpointFailureClass::Backpressure => "endpoint is backpressured",
-                EndpointFailureClass::Deadline => "endpoint deadline elapsed",
-                EndpointFailureClass::Transport => "endpoint transport failed",
-                EndpointFailureClass::Protocol => "endpoint protocol failed",
-                EndpointFailureClass::Internal => "endpoint failed",
-            },
+            Self::Session(failure) => {
+                return write!(
+                    f,
+                    "endpoint session failed class={} code={} remediation={}",
+                    failure.class().as_str(),
+                    failure.code().as_str(),
+                    failure.remediation().as_str()
+                );
+            }
         })
+    }
+}
+
+impl EndpointFailureClass {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Authentication => "authentication",
+            Self::Authorization => "authorization",
+            Self::Generation => "generation",
+            Self::Backpressure => "backpressure",
+            Self::Deadline => "deadline",
+            Self::Transport => "transport",
+            Self::Protocol => "protocol",
+            Self::Internal => "internal",
+        }
     }
 }
 
@@ -308,6 +349,9 @@ impl core::fmt::Debug for BusResponse {
 /// An exact generated service endpoint.
 #[async_trait]
 pub trait BusEndpoint: Send + Sync + 'static {
+    /// Invalidate correlated sends synchronously before route revocation.
+    fn invalidate_session(&self) {}
+
     /// Revalidate the source session's exact operation before dispatch.
     async fn authorize(
         &self,
@@ -594,6 +638,7 @@ impl Registry {
             .next_session
             .checked_add(1)
             .ok_or(RegistryError::SessionIdExhausted)?;
+        prior.endpoint.invalidate_session();
         self.remove(previous);
         self.install(session, registration);
         Ok(session)
@@ -676,6 +721,14 @@ impl Registry {
         for route in registered.routes {
             self.routes.remove(&route);
         }
+        true
+    }
+
+    pub(crate) fn invalidate(&self, session: SessionId) -> bool {
+        let Some(registered) = self.sessions.get(&session) else {
+            return false;
+        };
+        registered.endpoint.invalidate_session();
         true
     }
 

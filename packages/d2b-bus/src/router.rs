@@ -4,7 +4,7 @@ use std::{
     collections::BTreeMap,
     sync::{
         Arc, Mutex, MutexGuard,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -16,8 +16,10 @@ use d2b_resource_api::authz::{
 };
 use d2b_session::{
     AuthenticatedComponentSession, AuthenticatedSessionRouteBinding, GENERATED_OPERATION_CATALOG,
-    OperationKind, SessionAuthorizationRequest, SessionCancellationHandle, SessionOperation,
-    resource_operation, ttrpc_request_id,
+    OperationKind, SessionAcceptor, SessionAuthority, SessionAuthorizationRequest,
+    SessionCancellationHandle, SessionOperation, SessionRegistrationCapability,
+    contract::EndpointPolicy, resource_operation, rewrite_ttrpc_stream_id, ttrpc_request_id,
+    ttrpc_stream_id,
 };
 use tokio::sync::Mutex as AsyncMutex;
 
@@ -579,11 +581,34 @@ struct InvocationHook {
 
 impl BusCore {
     fn cleanup_session(&self, session: SessionId) {
-        // Revoke first so no new operation can acquire a lease after the
-        // cancellation sweep has started.
+        self.lock_registry().invalidate(session);
         self.lock_registry().remove(session);
-        self.lock_operations().cancel_session(session);
+        let targets = self.lock_operations().cancel_session(session);
         self.streams.cancel_session(session);
+        self.dispatch_cancel_targets(targets);
+    }
+
+    fn dispatch_cancel_targets(
+        &self,
+        targets: Vec<(OperationId, crate::operations::CancelTarget)>,
+    ) {
+        for (operation, target) in targets {
+            if target.route.generations().session() != target.generation {
+                self.observe_error(BusEvent::Cancel, &BusError::SessionMismatch);
+                continue;
+            }
+            if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+                let core = Arc::new(self.clone_for_dispatch());
+                runtime.spawn(async move {
+                    if let Err(error) = target.endpoint.cancel(&operation).await {
+                        core.observe_error(BusEvent::Cancel, &BusError::Endpoint(error));
+                    }
+                });
+            } else {
+                self.observer
+                    .record(BusEvent::Cancel, BusFailureReason::Abandoned);
+            }
+        }
     }
 
     fn observe_error(&self, event: BusEvent, error: &BusError) {
@@ -601,6 +626,23 @@ impl BusCore {
         self.operations
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn clone_for_dispatch(&self) -> BusDispatchObserver {
+        BusDispatchObserver {
+            observer: Arc::clone(&self.observer),
+        }
+    }
+}
+
+struct BusDispatchObserver {
+    observer: Arc<dyn BusObserver>,
+}
+
+impl BusDispatchObserver {
+    fn observe_error(&self, event: BusEvent, error: &BusError) {
+        self.observer
+            .record(event, BusFailureReason::from_error(error));
     }
 }
 
@@ -633,6 +675,7 @@ pub enum BusFailureReason {
     Protocol,
     Endpoint,
     Abandoned,
+    StreamShed,
 }
 
 impl BusFailureReason {
@@ -651,7 +694,7 @@ impl BusFailureReason {
             | BusError::Stream(StreamError::StreamCapacityExceeded)
             | BusError::Stream(StreamError::PrincipalCapacityExceeded) => Self::Capacity,
             BusError::Operation(_) | BusError::Stream(_) => Self::Backpressure,
-            BusError::Endpoint(EndpointError::Session(class)) => match class {
+            BusError::Endpoint(EndpointError::Session(failure)) => match failure.class() {
                 crate::registry::EndpointFailureClass::Authentication => Self::Authentication,
                 crate::registry::EndpointFailureClass::Authorization => Self::Authorization,
                 crate::registry::EndpointFailureClass::Generation => Self::Generation,
@@ -728,7 +771,7 @@ impl ZoneBus {
         }
         let operations =
             OperationTable::new(config.max_operations, config.max_operations_per_session)?;
-        let streams = StreamBridge::new(config.stream_limits)?;
+        let streams = StreamBridge::with_observer(config.stream_limits, Arc::clone(&observer))?;
         let core = Arc::new(BusCore {
             registry: Mutex::new(Registry::new(
                 zone.clone(),
@@ -749,7 +792,12 @@ impl ZoneBus {
             Self {
                 core: Arc::clone(&core),
             },
-            ZoneRegistrar { core },
+            ZoneRegistrar {
+                core,
+                component_admission: ComponentSessionRegistrar {
+                    identity: Arc::new(ComponentSessionAdmissionIdentity),
+                },
+            },
         ))
     }
 
@@ -778,6 +826,37 @@ impl core::fmt::Debug for ZoneBus {
 /// Single, non-cloneable authority that consumes authenticated registrations.
 pub struct ZoneRegistrar {
     core: Arc<BusCore>,
+    component_admission: ComponentSessionRegistrar,
+}
+
+struct ComponentSessionAdmissionIdentity;
+
+struct ComponentSessionRegistrar {
+    identity: Arc<ComponentSessionAdmissionIdentity>,
+}
+
+/// Single-use proof that a ComponentSession candidate was minted by one
+/// concrete Zone registrar.
+pub struct ComponentSessionAdmission {
+    identity: Arc<ComponentSessionAdmissionIdentity>,
+}
+
+impl core::fmt::Debug for ComponentSessionAdmission {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("ComponentSessionAdmission(<redacted>)")
+    }
+}
+
+impl SessionRegistrationCapability<ComponentSessionRegistrar> for ComponentSessionAdmission {
+    type Error = BusError;
+
+    fn consume(self, registrar: &ComponentSessionRegistrar) -> Result<(), Self::Error> {
+        if Arc::ptr_eq(&self.identity, &registrar.identity) {
+            Ok(())
+        } else {
+            Err(BusError::SessionMismatch)
+        }
+    }
 }
 
 impl ZoneRegistrar {
@@ -816,8 +895,9 @@ impl ZoneRegistrar {
             .core
             .lock_registry()
             .reconnect(previous.session, registration)?;
-        self.core.lock_operations().cancel_session(previous.session);
+        let targets = self.core.lock_operations().cancel_session(previous.session);
         self.core.streams.cancel_session(previous.session);
+        self.core.dispatch_cancel_targets(targets);
         previous.closed = true;
         Ok(BusIngress {
             core: Arc::clone(&self.core),
@@ -828,16 +908,35 @@ impl ZoneRegistrar {
 }
 
 struct ComponentEndpoint {
-    session: AsyncMutex<AuthenticatedComponentSession>,
+    session: AsyncMutex<AuthenticatedComponentSession<()>>,
     clock: Arc<dyn BusClock>,
     locality: d2b_contracts::v3::Locality,
     generation: u64,
     cancellation: SessionCancellationHandle,
-    active: Mutex<BTreeMap<OperationId, d2b_session::contract::RequestId>>,
+    active: Mutex<BTreeMap<OperationId, ActiveComponentRequest>>,
+    next_stream_id: AtomicU64,
+    revoked: AtomicBool,
+}
+
+struct ActiveComponentRequest {
+    request_id: d2b_session::contract::RequestId,
+    valid: Arc<AtomicBool>,
 }
 
 #[async_trait::async_trait]
 impl crate::registry::BusEndpoint for ComponentEndpoint {
+    fn invalidate_session(&self) {
+        self.revoked.store(true, Ordering::Release);
+        for active in self
+            .active
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .values()
+        {
+            active.valid.store(false, Ordering::Release);
+        }
+    }
+
     async fn authorize(
         &self,
         route: &RouteKey,
@@ -874,6 +973,9 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
     }
 
     async fn invoke(&self, request: DeliveredInvocation) -> Result<BusResponse, EndpointError> {
+        if self.revoked.load(Ordering::Acquire) {
+            return Err(cancelled_endpoint());
+        }
         let ordinary = d2b_resource_api::authz::SessionVerb::Invoke;
         let operation = SessionOperation::method(
             request.route().service().clone(),
@@ -882,7 +984,19 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
         .map_err(|_| EndpointError::Rejected)?;
         let verb = operation.required_verb(ordinary);
         let now_tick = self.clock.now_tick();
-        let request_id = ttrpc_request_id(self.generation, request.payload())
+        let caller_stream_id =
+            ttrpc_stream_id(request.payload()).map_err(|_| EndpointError::Rejected)?;
+        let internal_stream_id = self
+            .next_stream_id
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                (current <= u64::from(u32::MAX)).then_some(current + 1)
+            })
+            .map_err(|_| EndpointError::Rejected)
+            .and_then(|stream_id| u32::try_from(stream_id).map_err(|_| EndpointError::Rejected))?;
+        let mut outbound_frame = request.payload().to_vec();
+        rewrite_ttrpc_stream_id(&mut outbound_frame, internal_stream_id)
+            .map_err(|_| EndpointError::Rejected)?;
+        let request_id = ttrpc_request_id(self.generation, &outbound_frame)
             .map_err(|_| EndpointError::Rejected)?;
         let target = request
             .resource_call()
@@ -912,17 +1026,22 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
             .authorize(authorization, now_tick)
             .await
             .map_err(EndpointError::from)?;
+        if self.revoked.load(Ordering::Acquire) {
+            return Err(cancelled_endpoint());
+        }
+        let valid = Arc::new(AtomicBool::new(true));
         self.active
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(request.operation().id().clone(), request_id.clone());
+            .insert(
+                request.operation().id().clone(),
+                ActiveComponentRequest {
+                    request_id: request_id.clone(),
+                    valid: Arc::clone(&valid),
+                },
+            );
         if let Err(error) = session
-            .start_authorized_ttrpc(
-                permit,
-                request_id.clone(),
-                request.payload().to_vec(),
-                now_tick,
-            )
+            .start_authorized_ttrpc(permit, request_id.clone(), outbound_frame, now_tick)
             .await
         {
             self.active
@@ -931,11 +1050,17 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
                 .remove(request.operation().id());
             return Err(EndpointError::from(error));
         }
+        if self.revoked.load(Ordering::Acquire) || !valid.load(Ordering::Acquire) {
+            let _ = session.complete_ttrpc(request_id).await;
+            return Err(cancelled_endpoint());
+        }
         let response = loop {
-            let response = session.receive_ttrpc().await.map_err(EndpointError::from)?;
+            let mut response = session.receive_ttrpc().await.map_err(EndpointError::from)?;
             let response_id = ttrpc_request_id(self.generation, &response)
                 .map_err(|_| EndpointError::Rejected)?;
             if response_id == request_id {
+                rewrite_ttrpc_stream_id(&mut response, caller_stream_id)
+                    .map_err(|_| EndpointError::Rejected)?;
                 break response;
             }
         };
@@ -944,6 +1069,9 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .remove(request.operation().id());
+        if self.revoked.load(Ordering::Acquire) || !valid.load(Ordering::Acquire) {
+            return Err(cancelled_endpoint());
+        }
         Ok(BusResponse::new(response))
     }
 
@@ -952,14 +1080,15 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
     }
 
     async fn cancel(&self, operation: &OperationId) -> Result<(), EndpointError> {
-        let request_id = self
+        let active = self
             .active
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .remove(operation);
-        if let Some(request_id) = request_id {
+        if let Some(active) = active {
+            active.valid.store(false, Ordering::Release);
             self.cancellation
-                .cancel(request_id)
+                .cancel(active.request_id)
                 .await
                 .map_err(EndpointError::from)?;
         }
@@ -967,13 +1096,36 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
     }
 }
 
+fn cancelled_endpoint() -> EndpointError {
+    EndpointError::from(d2b_session::SessionError::new(
+        d2b_session::contract::SessionErrorCode::Cancelled,
+    ))
+}
+
 impl ZoneRegistrar {
+    /// Mint a single-use acceptor bound to this registrar instance.
+    pub fn component_session_acceptor(
+        &self,
+        policy: EndpointPolicy,
+        authority: Box<dyn SessionAuthority>,
+    ) -> d2b_session::Result<SessionAcceptor<ComponentSessionAdmission>> {
+        SessionAcceptor::new(
+            policy,
+            self.core.zone.clone(),
+            authority,
+            ComponentSessionAdmission {
+                identity: Arc::clone(&self.component_admission.identity),
+            },
+        )
+    }
+
     /// Consume an authenticated candidate and install it only after native
     /// connect authorization succeeds.
     pub async fn register_component_session(
         &mut self,
-        session: AuthenticatedComponentSession,
+        session: AuthenticatedComponentSession<ComponentSessionAdmission>,
     ) -> Result<BusIngress, BusError> {
+        let session = session.consume_registration(&self.component_admission)?;
         let binding = session.route_binding();
         if binding.zone() != &self.core.zone {
             return Err(BusError::SessionMismatch);
@@ -990,6 +1142,8 @@ impl ZoneRegistrar {
             generation: binding.reconnect_generation().get(),
             cancellation,
             active: Mutex::new(BTreeMap::new()),
+            next_stream_id: AtomicU64::new(1),
+            revoked: AtomicBool::new(false),
         });
         let registration = SessionRegistration::admitted(binding, routes, endpoint);
         let session = self.core.lock_registry().register(registration)?;
@@ -1003,11 +1157,12 @@ impl ZoneRegistrar {
     pub async fn reconnect_component_session(
         &mut self,
         mut previous: BusIngress,
-        session: AuthenticatedComponentSession,
+        session: AuthenticatedComponentSession<ComponentSessionAdmission>,
     ) -> Result<BusIngress, BusError> {
         if !Arc::ptr_eq(&self.core, &previous.core) || previous.closed {
             return Err(BusError::SessionMismatch);
         }
+        let session = session.consume_registration(&self.component_admission)?;
         let binding = session.route_binding();
         if binding.zone() != &self.core.zone {
             return Err(BusError::SessionMismatch);
@@ -1024,14 +1179,17 @@ impl ZoneRegistrar {
             generation: binding.reconnect_generation().get(),
             cancellation,
             active: Mutex::new(BTreeMap::new()),
+            next_stream_id: AtomicU64::new(1),
+            revoked: AtomicBool::new(false),
         });
         let registration = SessionRegistration::admitted(binding, routes, endpoint);
         let session = self
             .core
             .lock_registry()
             .reconnect(previous.session, registration)?;
-        self.core.lock_operations().cancel_session(previous.session);
+        let targets = self.core.lock_operations().cancel_session(previous.session);
         self.core.streams.cancel_session(previous.session);
+        self.core.dispatch_cancel_targets(targets);
         previous.closed = true;
         Ok(BusIngress {
             core: Arc::clone(&self.core),
@@ -1763,6 +1921,10 @@ mod tests {
         fn call_count(&self) -> usize {
             self.calls.lock().unwrap().len()
         }
+
+        fn cancellation_count(&self) -> usize {
+            self.cancel_count.load(Ordering::Acquire)
+        }
     }
 
     #[async_trait]
@@ -1897,6 +2059,42 @@ mod tests {
             subjects,
             clock,
         }
+    }
+
+    fn replacement_endpoint_registration(harness: &Harness) -> SessionRegistration {
+        let generations = RouteGenerations::new(
+            harness.route.generations().provider(),
+            harness.route.generations().controller(),
+            ReconnectGeneration::new(2).unwrap(),
+        );
+        let route = RouteKey::new(
+            harness.route.zone().clone(),
+            harness.route.service().clone(),
+            harness.route.member().clone(),
+            harness.route.target().clone(),
+            harness.route.schema().clone(),
+            generations,
+        );
+        let endpoint = context(
+            "Provider/system-core",
+            ENDPOINT_UID,
+            "d2b.resource.v3",
+            harness.route.schema().clone(),
+            generations,
+            Locality::Local,
+            EvidenceClass::EnrolledKk,
+        );
+        SessionRegistration::new(endpoint, vec![route], harness.endpoint.clone())
+    }
+
+    async fn wait_for_endpoint_cancellation(endpoint: &RecordingEndpoint) {
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while endpoint.cancellation_count() == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("endpoint cancellation was not dispatched");
     }
 
     #[derive(Default)]
@@ -2794,6 +2992,97 @@ mod tests {
         let (result, ()) = tokio::join!(invoke, revoke);
         assert_eq!(result, Err(BusError::Cancelled));
         assert_eq!(harness.endpoint.call_count(), 0);
+        wait_for_endpoint_cancellation(&harness.endpoint).await;
+    }
+
+    #[tokio::test]
+    async fn revoke_cancels_an_in_progress_endpoint_invocation() {
+        let endpoint = RecordingEndpoint::blocking();
+        let harness = harness(HarnessSpec {
+            service: "d2b.resource.v3",
+            member: RouteMember::method("ResourceService/Get").unwrap(),
+            caller_ref: "User/alice",
+            locality: Locality::Local,
+            evidence: EvidenceClass::UnixPeer,
+            session_verbs: vec![SessionVerb::Connect, SessionVerb::Invoke],
+            resource_verbs: vec![ResourceVerb::Get],
+            endpoint: endpoint.clone(),
+        });
+        let mut registrar = harness.registrar;
+        let invoke = harness.caller.invoke_resource(
+            harness.route,
+            operation("revoke-in-progress"),
+            ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
+            Vec::new(),
+        );
+        let revoke = async {
+            endpoint.started.notified().await;
+            registrar.revoke(harness.endpoint_ingress).unwrap();
+        };
+        let (result, ()) = tokio::join!(invoke, revoke);
+        assert_eq!(result, Err(BusError::Cancelled));
+        assert_eq!(endpoint.cancellation_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn reconnect_cancels_queued_and_in_progress_invocations() {
+        for queued in [true, false] {
+            let endpoint = RecordingEndpoint::blocking();
+            let harness = harness(HarnessSpec {
+                service: "d2b.resource.v3",
+                member: RouteMember::method("ResourceService/Get").unwrap(),
+                caller_ref: "User/alice",
+                locality: Locality::Local,
+                evidence: EvidenceClass::UnixPeer,
+                session_verbs: vec![SessionVerb::Connect, SessionVerb::Invoke],
+                resource_verbs: vec![ResourceVerb::Get],
+                endpoint: endpoint.clone(),
+            });
+            let replacement = replacement_endpoint_registration(&harness);
+            let hook = queued.then(|| {
+                Arc::new(InvocationHook {
+                    reached: Notify::new(),
+                    release: Notify::new(),
+                })
+            });
+            if let Some(hook) = &hook {
+                harness
+                    .caller
+                    .core
+                    .invocation_hooks
+                    .lock()
+                    .unwrap()
+                    .before_invoke = Some(Arc::clone(hook));
+            }
+            let mut registrar = harness.registrar;
+            let invoke = harness.caller.invoke_resource(
+                harness.route,
+                operation(if queued {
+                    "reconnect-queued"
+                } else {
+                    "reconnect-in-progress"
+                }),
+                ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
+                Vec::new(),
+            );
+            let reconnect = async {
+                if let Some(hook) = &hook {
+                    hook.reached.notified().await;
+                } else {
+                    endpoint.started.notified().await;
+                }
+                registrar
+                    .reconnect(harness.endpoint_ingress, replacement)
+                    .unwrap();
+                if let Some(hook) = &hook {
+                    hook.release.notify_one();
+                }
+            };
+            let (result, ()) = tokio::join!(invoke, reconnect);
+            assert_eq!(result, Err(BusError::Cancelled));
+            wait_for_endpoint_cancellation(&endpoint).await;
+            assert_eq!(endpoint.call_count(), usize::from(!queued));
+        }
     }
 
     #[tokio::test]
@@ -3084,36 +3373,75 @@ mod tests {
     }
 
     #[test]
-    fn endpoint_session_failures_preserve_closed_classes() {
+    fn endpoint_session_failures_preserve_actionable_details_and_closed_labels() {
         use crate::registry::EndpointFailureClass;
+        use d2b_contracts::v3::component_session::{Remediation, SessionErrorCode};
 
         let cases = [
             (
+                SessionErrorCode::AuthenticationFailed,
                 EndpointFailureClass::Authentication,
                 BusFailureReason::Authentication,
+                Remediation::ReEnrollPeer,
             ),
             (
+                SessionErrorCode::PolicyDenied,
                 EndpointFailureClass::Authorization,
                 BusFailureReason::Authorization,
+                Remediation::RepairConfiguration,
             ),
             (
+                SessionErrorCode::GenerationMismatch,
                 EndpointFailureClass::Generation,
                 BusFailureReason::Generation,
+                Remediation::ReplaceGeneration,
             ),
             (
+                SessionErrorCode::QueueBackpressure,
                 EndpointFailureClass::Backpressure,
                 BusFailureReason::Backpressure,
+                Remediation::ReduceLoad,
             ),
-            (EndpointFailureClass::Deadline, BusFailureReason::Deadline),
-            (EndpointFailureClass::Transport, BusFailureReason::Transport),
-            (EndpointFailureClass::Protocol, BusFailureReason::Protocol),
-            (EndpointFailureClass::Internal, BusFailureReason::Endpoint),
+            (
+                SessionErrorCode::DeadlineExpired,
+                EndpointFailureClass::Deadline,
+                BusFailureReason::Deadline,
+                Remediation::RetryBounded,
+            ),
+            (
+                SessionErrorCode::SessionDisconnected,
+                EndpointFailureClass::Transport,
+                BusFailureReason::Transport,
+                Remediation::RestartAgent,
+            ),
+            (
+                SessionErrorCode::RecordMalformed,
+                EndpointFailureClass::Protocol,
+                BusFailureReason::Protocol,
+                Remediation::RepairConfiguration,
+            ),
+            (
+                SessionErrorCode::InternalInvariant,
+                EndpointFailureClass::Internal,
+                BusFailureReason::Endpoint,
+                Remediation::RestartAgent,
+            ),
         ];
-        for (class, expected) in cases {
+        for (code, class, expected_label, remediation) in cases {
+            let endpoint_error = EndpointError::from(d2b_session::SessionError::new(code));
+            let EndpointError::Session(failure) = endpoint_error else {
+                panic!("session errors preserve their endpoint failure");
+            };
+            assert_eq!(failure.class(), class);
+            assert_eq!(failure.code(), code);
+            assert_eq!(failure.remediation(), remediation);
             assert_eq!(
-                BusFailureReason::from_error(&BusError::Endpoint(EndpointError::Session(class))),
-                expected
+                BusFailureReason::from_error(&BusError::Endpoint(EndpointError::Session(failure))),
+                expected_label
             );
+            let display = EndpointError::Session(failure).to_string();
+            assert!(display.contains(code.as_str()));
+            assert!(display.contains(remediation.as_str()));
         }
         assert_eq!(
             BusFailureReason::from_error(&BusError::Operation(OperationError::RouteRevoked)),

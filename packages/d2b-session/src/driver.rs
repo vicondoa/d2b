@@ -5,7 +5,7 @@ use std::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use async_trait::async_trait;
@@ -16,11 +16,14 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::{
     Cancellation, Fragment, MetricEvent, OwnedAttachment, OwnedTransport, Result, SessionEngine,
-    SessionError, SessionEvent, StreamEvent, StreamId,
+    SessionError, SessionEvent, StreamEvent, StreamId, TransportDescriptor, TransportError,
+    TransportPacket, TransportReader, TransportWriter,
 };
 
 const DRIVER_COMMAND_CAPACITY: usize = 128;
 const DRIVER_EVENT_CAPACITY: usize = 128;
+const DRIVER_WRITE_CAPACITY: usize = 128;
+const WRITER_RECORD_BUDGET: usize = 8;
 
 /// Object-safe, clonable control surface for one established ComponentSession.
 ///
@@ -42,6 +45,18 @@ pub trait ComponentSessionDriver: Send + Sync {
     async fn cancel(&self, generation: u64, request_id: RequestId) -> Result<()>;
 
     async fn send_ttrpc(&self, frame: Vec<u8>) -> Result<()>;
+
+    async fn send_ttrpc_cancellable(
+        &self,
+        frame: Vec<u8>,
+        cancellation: Cancellation,
+    ) -> Result<()> {
+        if cancellation.is_cancelled() {
+            Err(SessionError::new(SessionErrorCode::Cancelled))
+        } else {
+            self.send_ttrpc(frame).await
+        }
+    }
 
     async fn receive_ttrpc(&self) -> Result<Vec<u8>>;
 
@@ -147,8 +162,25 @@ impl ComponentSessionDriver for SessionDriverHandle {
     }
 
     async fn send_ttrpc(&self, frame: Vec<u8>) -> Result<()> {
-        self.request(|reply| DriverCommand::SendTtrpc { frame, reply })
-            .await
+        self.request(|reply| DriverCommand::SendTtrpc {
+            frame,
+            cancellation: None,
+            reply,
+        })
+        .await
+    }
+
+    async fn send_ttrpc_cancellable(
+        &self,
+        frame: Vec<u8>,
+        cancellation: Cancellation,
+    ) -> Result<()> {
+        self.request(|reply| DriverCommand::SendTtrpc {
+            frame,
+            cancellation: Some(cancellation),
+            reply,
+        })
+        .await
     }
 
     async fn receive_ttrpc(&self) -> Result<Vec<u8>> {
@@ -251,14 +283,187 @@ impl ComponentSessionDriver for SessionDriverHandle {
 }
 
 impl<T: OwnedTransport + 'static> SessionEngine<T> {
-    pub fn into_driver(self) -> SessionDriverHandle {
+    pub fn into_driver(mut self) -> SessionDriverHandle {
         let generation = Arc::new(AtomicU64::new(self.generation()));
         let (commands, receiver) = mpsc::channel(DRIVER_COMMAND_CAPACITY);
-        tokio::spawn(run_driver(self, receiver));
+        let descriptor = self.transport_descriptor();
+        let timeout = Duration::from_millis(u64::from(self.keepalive_timeout_ms()));
+        let (write_sender, write_receiver) = mpsc::channel(DRIVER_WRITE_CAPACITY);
+        let placeholder = Box::new(DriverTransport::placeholder(descriptor));
+        let (reader, writer) = self.split_transport(placeholder);
+        self.install_driver_transport(Box::new(DriverTransport {
+            descriptor,
+            reader,
+            writes: write_sender.clone(),
+            write_cancellation: None,
+        }));
+        let (writer_failures, writer_failure_receiver) = mpsc::channel(1);
+        tokio::spawn(run_writer(writer, write_receiver, writer_failures, timeout));
+        tokio::spawn(run_driver(
+            self,
+            receiver,
+            writer_failure_receiver,
+            write_sender,
+        ));
         SessionDriverHandle {
             commands,
             generation,
         }
+    }
+}
+
+enum WriterCommand {
+    Packet {
+        packet: TransportPacket,
+        cancellation: Option<Cancellation>,
+    },
+    Barrier(Reply<()>),
+    Close,
+}
+
+struct DriverTransport {
+    descriptor: TransportDescriptor,
+    reader: Box<dyn TransportReader>,
+    writes: mpsc::Sender<WriterCommand>,
+    write_cancellation: Option<Cancellation>,
+}
+
+impl DriverTransport {
+    fn placeholder(descriptor: TransportDescriptor) -> Self {
+        let (writes, _receiver) = mpsc::channel(1);
+        Self {
+            descriptor,
+            reader: Box::new(DisconnectedReader),
+            writes,
+            write_cancellation: None,
+        }
+    }
+}
+
+struct DisconnectedReader;
+
+#[async_trait]
+impl TransportReader for DisconnectedReader {
+    async fn receive(
+        &mut self,
+        _protected_limit: usize,
+    ) -> std::result::Result<TransportPacket, TransportError> {
+        Err(TransportError::Disconnected)
+    }
+}
+
+#[async_trait]
+impl OwnedTransport for DriverTransport {
+    fn descriptor(&self) -> TransportDescriptor {
+        self.descriptor
+    }
+
+    fn into_split(self: Box<Self>) -> (Box<dyn TransportReader>, Box<dyn TransportWriter>) {
+        crate::serialized_transport_split(self)
+    }
+
+    fn set_write_cancellation(&mut self, cancellation: Option<Cancellation>) {
+        self.write_cancellation = cancellation;
+    }
+
+    async fn receive(
+        &mut self,
+        protected_limit: usize,
+    ) -> std::result::Result<TransportPacket, TransportError> {
+        self.reader.receive(protected_limit).await
+    }
+
+    async fn send(&mut self, packet: TransportPacket) -> std::result::Result<(), TransportError> {
+        self.writes
+            .try_send(WriterCommand::Packet {
+                packet,
+                cancellation: self.write_cancellation.clone(),
+            })
+            .map_err(|error| match error {
+                mpsc::error::TrySendError::Full(_) => TransportError::WouldBlock,
+                mpsc::error::TrySendError::Closed(_) => TransportError::Disconnected,
+            })
+    }
+
+    async fn close(&mut self) -> std::result::Result<(), TransportError> {
+        self.writes
+            .try_send(WriterCommand::Close)
+            .map_err(|error| match error {
+                mpsc::error::TrySendError::Full(_) => TransportError::WouldBlock,
+                mpsc::error::TrySendError::Closed(_) => TransportError::Disconnected,
+            })
+    }
+}
+
+async fn run_writer(
+    mut writer: Box<dyn TransportWriter>,
+    mut writes: mpsc::Receiver<WriterCommand>,
+    failures: mpsc::Sender<SessionError>,
+    timeout: Duration,
+) {
+    loop {
+        let Some(first) = writes.recv().await else {
+            let _ = writer.close().await;
+            return;
+        };
+        let mut batch = VecDeque::from([first]);
+        while batch.len() < WRITER_RECORD_BUDGET {
+            match writes.try_recv() {
+                Ok(command) => batch.push_back(command),
+                Err(mpsc::error::TryRecvError::Empty) => break,
+                Err(mpsc::error::TryRecvError::Disconnected) => break,
+            }
+        }
+        for command in batch {
+            let closes = matches!(command, WriterCommand::Close);
+            let result: Result<()> = match command {
+                WriterCommand::Packet {
+                    packet,
+                    cancellation,
+                } => {
+                    if cancellation
+                        .as_ref()
+                        .is_some_and(Cancellation::is_cancelled)
+                    {
+                        let _ = writer.close().await;
+                        let _ = failures.try_send(SessionError::new(SessionErrorCode::Cancelled));
+                        return;
+                    }
+                    if let Some(cancellation) = cancellation {
+                        tokio::select! {
+                            result = tokio::time::timeout(timeout, writer.send(packet)) => {
+                                match result {
+                                    Ok(result) => result.map_err(SessionError::from),
+                                    Err(_) => Err(SessionError::new(SessionErrorCode::KeepaliveTimeout)),
+                                }
+                            }
+                            () = cancellation.cancelled() => {
+                                let _ = writer.close().await;
+                                Err(SessionError::new(SessionErrorCode::Cancelled))
+                            }
+                        }
+                    } else {
+                        match tokio::time::timeout(timeout, writer.send(packet)).await {
+                            Ok(result) => result.map_err(SessionError::from),
+                            Err(_) => Err(SessionError::new(SessionErrorCode::KeepaliveTimeout)),
+                        }
+                    }
+                }
+                WriterCommand::Barrier(reply) => {
+                    let _ = reply.send(Ok(()));
+                    Ok(())
+                }
+                WriterCommand::Close => writer.close().await.map_err(SessionError::from),
+            };
+            if let Err(error) = result {
+                let _ = failures.try_send(error);
+                return;
+            }
+            if closes {
+                return;
+            }
+        }
+        tokio::task::yield_now().await;
     }
 }
 
@@ -279,6 +484,7 @@ enum DriverCommand {
     },
     SendTtrpc {
         frame: Vec<u8>,
+        cancellation: Option<Cancellation>,
         reply: Reply<()>,
     },
     ReceiveTtrpc(Reply<Vec<u8>>),
@@ -551,6 +757,8 @@ impl<T: EventBytes> EventQueue<T> {
 async fn run_driver<T: OwnedTransport>(
     mut engine: SessionEngine<T>,
     mut commands: mpsc::Receiver<DriverCommand>,
+    mut writer_failures: mpsc::Receiver<SessionError>,
+    write_commands: mpsc::Sender<WriterCommand>,
 ) {
     let mut queues = DriverQueues::new(&engine);
     let mut fairness_turn = 0_u8;
@@ -559,6 +767,7 @@ async fn run_driver<T: OwnedTransport>(
             Command(Option<DriverCommand>),
             Inbound(Result<SessionEvent>),
             NamedStream,
+            WriterFailure(Option<SessionError>),
         }
         let named_ready = queues.has_sendable_named(&engine);
         let named_work = async {
@@ -572,18 +781,21 @@ async fn run_driver<T: OwnedTransport>(
                 command = commands.recv() => Work::Command(command),
                 event = engine.receive() => Work::Inbound(event),
                 () = named_work => Work::NamedStream,
+                error = writer_failures.recv() => Work::WriterFailure(error),
             },
             1 => tokio::select! {
                 biased;
                 event = engine.receive() => Work::Inbound(event),
                 () = named_work => Work::NamedStream,
                 command = commands.recv() => Work::Command(command),
+                error = writer_failures.recv() => Work::WriterFailure(error),
             },
             _ => tokio::select! {
                 biased;
                 () = named_work => Work::NamedStream,
                 command = commands.recv() => Work::Command(command),
                 event = engine.receive() => Work::Inbound(event),
+                error = writer_failures.recv() => Work::WriterFailure(error),
             },
         };
         fairness_turn = (fairness_turn + 1) % 3;
@@ -592,7 +804,7 @@ async fn run_driver<T: OwnedTransport>(
                 let Some(command) = command else {
                     break Err(disconnected());
                 };
-                match handle_command(&mut engine, &mut queues, command).await {
+                match handle_command(&mut engine, &mut queues, &write_commands, command).await {
                     Ok(DriverAction::Continue) => {}
                     Ok(DriverAction::Close) => break Ok(()),
                     Err(error) => break Err(error),
@@ -622,6 +834,9 @@ async fn run_driver<T: OwnedTransport>(
                     break Err(error);
                 }
             },
+            Work::WriterFailure(error) => {
+                break Err(error.unwrap_or_else(disconnected));
+            }
         }
     };
 
@@ -637,6 +852,7 @@ enum DriverAction {
 async fn handle_command<T: OwnedTransport>(
     engine: &mut SessionEngine<T>,
     queues: &mut DriverQueues,
+    write_commands: &mpsc::Sender<WriterCommand>,
     command: DriverCommand,
 ) -> Result<DriverAction> {
     match command {
@@ -648,8 +864,15 @@ async fn handle_command<T: OwnedTransport>(
             if reply.is_closed() {
                 return Ok(DriverAction::Continue);
             }
+            let barrier = match reserve_write_barrier(write_commands) {
+                Ok(barrier) => barrier,
+                Err(error) => {
+                    let _ = reply.send(Err(error));
+                    return Ok(DriverAction::Continue);
+                }
+            };
             let result = engine.call(request_id, frame).await.map(|_| ());
-            let _ = reply.send(result);
+            complete_after_write(barrier, reply, result);
         }
         DriverCommand::CompleteTtrpc { request_id, reply } => {
             let _ = reply.send(Ok(engine.complete_call(&request_id)));
@@ -659,20 +882,45 @@ async fn handle_command<T: OwnedTransport>(
             request_id,
             reply,
         } => {
+            let barrier = match reserve_write_barrier(write_commands) {
+                Ok(barrier) => barrier,
+                Err(error) => {
+                    let _ = reply.send(Err(error));
+                    return Ok(DriverAction::Continue);
+                }
+            };
             let result = if generation == engine.generation() {
                 engine.cancel_call(&request_id).await
             } else {
                 Err(SessionError::new(SessionErrorCode::GenerationMismatch))
             };
-            let _ = reply.send(result);
+            complete_after_write(barrier, reply, result);
         }
-        DriverCommand::SendTtrpc { frame, reply } => {
-            let result = if reply.is_closed() {
+        DriverCommand::SendTtrpc {
+            frame,
+            cancellation,
+            reply,
+        } => {
+            let barrier = match reserve_write_barrier(write_commands) {
+                Ok(barrier) => barrier,
+                Err(error) => {
+                    let _ = reply.send(Err(error));
+                    return Ok(DriverAction::Continue);
+                }
+            };
+            let result = if reply.is_closed()
+                || cancellation
+                    .as_ref()
+                    .is_some_and(Cancellation::is_cancelled)
+            {
                 Err(SessionError::new(SessionErrorCode::Cancelled))
             } else {
-                engine.send_ttrpc(frame).await
+                engine.set_write_cancellation(cancellation);
+                let result = engine.send_ttrpc(frame).await;
+                engine.set_write_cancellation(None);
+                result
             };
-            let _ = reply.send(result);
+            complete_after_write(barrier, reply, result);
         }
         DriverCommand::ReceiveTtrpc(reply) => queues.ttrpc.receive(reply)?,
         DriverCommand::RegisterInboundCall { request_id, reply } => {
@@ -774,6 +1022,31 @@ async fn handle_command<T: OwnedTransport>(
         }
     }
     Ok(DriverAction::Continue)
+}
+
+fn reserve_write_barrier(
+    write_commands: &mpsc::Sender<WriterCommand>,
+) -> Result<mpsc::Permit<'_, WriterCommand>> {
+    write_commands.try_reserve().map_err(|error| match error {
+        mpsc::error::TrySendError::Full(()) => {
+            SessionError::new(SessionErrorCode::QueueBackpressure)
+        }
+        mpsc::error::TrySendError::Closed(()) => {
+            SessionError::new(SessionErrorCode::SessionDisconnected)
+        }
+    })
+}
+
+fn complete_after_write(
+    barrier: mpsc::Permit<'_, WriterCommand>,
+    reply: Reply<()>,
+    result: Result<()>,
+) {
+    if let Err(error) = result {
+        let _ = reply.send(Err(error));
+        return;
+    }
+    barrier.send(WriterCommand::Barrier(reply));
 }
 
 async fn pump_named_stream<T: OwnedTransport>(

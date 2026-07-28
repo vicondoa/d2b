@@ -66,6 +66,29 @@ deprecations ship one minor release before removal.
   satisfiable backend signals; watch-budget saturation evidence belongs solely
   to the watch item.
 
+- Bound ComponentSession minting and bus registration to an instance-specific,
+  registrar-issued single-use capability, with a compile-fail seal covering
+  foreign session authorities.
+
+- Preserved stable ComponentSession error codes and prescribed remediation
+  through bus endpoint failures while retaining class-only observer labels.
+
+- Added closed-label observations for failed correlation cleanup and queued
+  stream shedding, classified expected handshake failures without internal-bug
+  labels, and redacted channel identifiers from debug output.
+
+- Propagated inbound cancellation into generated service handlers, suppressed
+  cancelled replies, dispatched pinned endpoint cancellation during revocation
+  and reconnect, and made ttrpc response correlation independent of
+  caller-selected stream identifiers.
+
+- Split established transport read and write ownership behind a bounded
+  record-budgeted writer queue so blocked writes no longer stall inbound
+  records, cancellation, or control work. Cancellation now removes queued
+  replies before transport delivery or fails the session closed if protection
+  has already committed their record sequence.
+
+
 - Unified Core and toolkit controller identity, selector, trigger, registration,
   retry, and resync contracts. Core changes now drive the executor-native
   reconciliation runner through a bounded, coalescing registered-resource

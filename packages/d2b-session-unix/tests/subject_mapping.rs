@@ -171,7 +171,7 @@ async fn so_peercred_maps_host_and_guest_subjects() {
         let policy = endpoint_policy(TransportClass::UnixStream);
         let engine = stream_engine(&policy, initiator_socket, responder_socket).await;
         let zone = ZoneId::parse("work").unwrap();
-        let _session = SessionAcceptor::new(policy.clone(), zone, Box::new(authority))
+        let _session = SessionAcceptor::new(policy.clone(), zone, Box::new(authority), ())
             .unwrap()
             .admit(engine, evidence(), 1)
             .await
@@ -219,6 +219,7 @@ async fn unix_subject_proof_rejects_transport_rebinding() {
         policy.clone(),
         ZoneId::parse("work").unwrap(),
         Box::new(authority),
+        (),
     )
     .unwrap()
     .admit(engine, evidence(), 1)

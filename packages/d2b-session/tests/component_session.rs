@@ -784,6 +784,15 @@ impl OwnedTransport for MemoryTransport {
         }
     }
 
+    fn into_split(
+        self: Box<Self>,
+    ) -> (
+        Box<dyn d2b_session::TransportReader>,
+        Box<dyn d2b_session::TransportWriter>,
+    ) {
+        d2b_session::serialized_transport_split(self)
+    }
+
     async fn receive(
         &mut self,
         protected_limit: usize,
@@ -850,7 +859,7 @@ async fn metrics_are_emitted_by_a_real_driver_failure_path() {
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].0, MetricEvent::RejectedRecord);
     assert_eq!(events[0].1.result, MetricResult::Rejected);
-    assert_eq!(events[0].1.reason, MetricReason::InternalInvariant);
+    assert_eq!(events[0].1.reason, MetricReason::Malformed);
 }
 
 #[tokio::test]
@@ -881,6 +890,7 @@ struct FakeTransport {
     attachment_sends: Arc<AtomicUsize>,
     closed: Arc<AtomicBool>,
     block_sends: Arc<AtomicBool>,
+    send_release: Arc<tokio::sync::Notify>,
 }
 
 #[async_trait]
@@ -892,6 +902,36 @@ impl OwnedTransport for FakeTransport {
             packet_atomic: true,
             supports_attachments: true,
         }
+    }
+
+    fn into_split(
+        self: Box<Self>,
+    ) -> (
+        Box<dyn d2b_session::TransportReader>,
+        Box<dyn d2b_session::TransportWriter>,
+    ) {
+        let Self {
+            sender,
+            receiver,
+            corrupt_attachment,
+            attachment_mode,
+            attachment_sends,
+            closed,
+            block_sends,
+            send_release,
+        } = *self;
+        (
+            Box::new(FakeTransportReader { receiver }),
+            Box::new(FakeTransportWriter {
+                sender,
+                corrupt_attachment,
+                attachment_mode,
+                attachment_sends,
+                closed,
+                block_sends,
+                send_release,
+            }),
+        )
     }
 
     async fn receive(
@@ -911,7 +951,90 @@ impl OwnedTransport for FakeTransport {
 
     async fn send(&mut self, packet: TransportPacket) -> std::result::Result<(), TransportError> {
         if self.block_sends.load(Ordering::Acquire) {
-            std::future::pending::<()>().await;
+            self.send_release.notified().await;
+        }
+        let (mut bytes, attachments) = packet.into_parts();
+        if !attachments.is_empty() {
+            self.attachment_sends.fetch_add(1, Ordering::AcqRel);
+        }
+        if !attachments.is_empty() && self.corrupt_attachment.swap(false, Ordering::AcqRel) {
+            let last = bytes.last_mut().ok_or(TransportError::Truncated)?;
+            *last ^= 1;
+        }
+        let attachment_mode = self.attachment_mode.swap(0, Ordering::AcqRel);
+        let attachments = attachments
+            .into_iter()
+            .map(|attachment| {
+                let mut descriptor = attachment.descriptor().cloned();
+                let payload = attachment
+                    .into_payload()
+                    .ok_or(TransportError::InvalidAttachment)?;
+                match attachment_mode {
+                    0 => Ok(OwnedAttachment::unbound(payload)),
+                    1 => descriptor
+                        .take()
+                        .map(|descriptor| OwnedAttachment::new(descriptor, payload))
+                        .ok_or(TransportError::InvalidAttachment),
+                    2 => descriptor
+                        .take()
+                        .map(|mut descriptor| {
+                            descriptor.method_id = descriptor.method_id.saturating_add(1);
+                            OwnedAttachment::new(descriptor, payload)
+                        })
+                        .ok_or(TransportError::InvalidAttachment),
+                    _ => Err(TransportError::Other),
+                }
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        self.sender
+            .send(TransportPacket::with_attachments(bytes, attachments))
+            .await
+            .map_err(|_| TransportError::Disconnected)
+    }
+
+    async fn close(&mut self) -> std::result::Result<(), TransportError> {
+        self.closed.store(true, Ordering::Release);
+        Ok(())
+    }
+}
+
+struct FakeTransportReader {
+    receiver: mpsc::Receiver<TransportPacket>,
+}
+
+#[async_trait]
+impl d2b_session::TransportReader for FakeTransportReader {
+    async fn receive(
+        &mut self,
+        protected_limit: usize,
+    ) -> std::result::Result<TransportPacket, TransportError> {
+        let packet = self
+            .receiver
+            .recv()
+            .await
+            .ok_or(TransportError::Disconnected)?;
+        if packet.as_bytes().len() > protected_limit {
+            return Err(TransportError::LimitExceeded);
+        }
+        Ok(packet)
+    }
+}
+
+struct FakeTransportWriter {
+    sender: mpsc::Sender<TransportPacket>,
+    corrupt_attachment: Arc<AtomicBool>,
+    attachment_mode: Arc<AtomicU8>,
+    attachment_sends: Arc<AtomicUsize>,
+    closed: Arc<AtomicBool>,
+    block_sends: Arc<AtomicBool>,
+    send_release: Arc<tokio::sync::Notify>,
+}
+
+#[async_trait]
+impl d2b_session::TransportWriter for FakeTransportWriter {
+    async fn send(&mut self, packet: TransportPacket) -> std::result::Result<(), TransportError> {
+        if self.block_sends.load(Ordering::Acquire) {
+            self.send_release.notified().await;
         }
         let (mut bytes, attachments) = packet.into_parts();
         if !attachments.is_empty() {
@@ -965,6 +1088,7 @@ struct FakeHandles {
     closed_a: Arc<AtomicBool>,
     closed_b: Arc<AtomicBool>,
     block_sends_a: Arc<AtomicBool>,
+    send_release_a: Arc<tokio::sync::Notify>,
 }
 
 fn fake_transport_pair() -> (FakeTransport, FakeTransport, FakeHandles) {
@@ -976,6 +1100,7 @@ fn fake_transport_pair() -> (FakeTransport, FakeTransport, FakeHandles) {
     let closed_a = Arc::new(AtomicBool::new(false));
     let closed_b = Arc::new(AtomicBool::new(false));
     let block_sends_a = Arc::new(AtomicBool::new(false));
+    let send_release_a = Arc::new(tokio::sync::Notify::new());
     (
         FakeTransport {
             sender: a_to_b_tx,
@@ -985,6 +1110,7 @@ fn fake_transport_pair() -> (FakeTransport, FakeTransport, FakeHandles) {
             attachment_sends: Arc::clone(&attachment_sends_a),
             closed: Arc::clone(&closed_a),
             block_sends: Arc::clone(&block_sends_a),
+            send_release: Arc::clone(&send_release_a),
         },
         FakeTransport {
             sender: b_to_a_tx,
@@ -994,6 +1120,7 @@ fn fake_transport_pair() -> (FakeTransport, FakeTransport, FakeHandles) {
             attachment_sends: Arc::new(AtomicUsize::new(0)),
             closed: Arc::clone(&closed_b),
             block_sends: Arc::new(AtomicBool::new(false)),
+            send_release: Arc::new(tokio::sync::Notify::new()),
         },
         FakeHandles {
             corrupt_a,
@@ -1002,6 +1129,7 @@ fn fake_transport_pair() -> (FakeTransport, FakeTransport, FakeHandles) {
             closed_a,
             closed_b,
             block_sends_a,
+            send_release_a,
         },
     )
 }
@@ -1453,6 +1581,142 @@ async fn driver_handle_is_clonable_object_safe_and_leaves_ttrpc_correlation_to_a
     assert_eq!(attachments.len(), 1);
     drop(attachments);
     assert_eq!(closes.load(Ordering::Acquire), 1);
+}
+
+#[tokio::test]
+async fn driver_reads_and_delivers_cancellation_while_its_writer_is_blocked() {
+    let (initiator, responder, handles) = engine_pair().await;
+    handles.block_sends_a.store(true, Ordering::Release);
+    let initiator: Arc<dyn ComponentSessionDriver> = Arc::new(initiator.into_driver());
+    let responder: Arc<dyn ComponentSessionDriver> = Arc::new(responder.into_driver());
+
+    let blocked_send = {
+        let initiator = Arc::clone(&initiator);
+        tokio::spawn(async move { initiator.send_ttrpc(vec![0x11]).await })
+    };
+    tokio::task::yield_now().await;
+    responder.send_ttrpc(vec![0x22]).await.unwrap();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(1), initiator.receive_ttrpc())
+            .await
+            .expect("blocked writer must not stop reads")
+            .unwrap(),
+        vec![0x22]
+    );
+
+    let request_id = RequestId::new(vec![0x33; 16]).unwrap();
+    let cancellation = initiator
+        .register_inbound_call(request_id.clone())
+        .await
+        .unwrap();
+    initiator
+        .mark_inbound_dispatched(request_id.clone())
+        .await
+        .unwrap();
+    responder.cancel(7, request_id).await.unwrap();
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(1), initiator.receive_control())
+            .await
+            .expect("blocked writer must not stop cancellation")
+            .unwrap(),
+        SessionEvent::CancelRequest(_)
+    ));
+    assert!(cancellation.is_cancelled());
+    handles.block_sends_a.store(false, Ordering::Release);
+    handles.send_release_a.notify_waiters();
+    blocked_send.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn cancelled_reply_is_removed_from_the_blocked_writer_queue() {
+    let (initiator, responder, handles) = engine_pair().await;
+    handles.block_sends_a.store(true, Ordering::Release);
+    let initiator: Arc<dyn ComponentSessionDriver> = Arc::new(initiator.into_driver());
+    let responder: Arc<dyn ComponentSessionDriver> = Arc::new(responder.into_driver());
+    let request_id = RequestId::new(vec![0x44; 16]).unwrap();
+    let cancellation = initiator
+        .register_inbound_call(request_id.clone())
+        .await
+        .unwrap();
+    initiator
+        .mark_inbound_dispatched(request_id.clone())
+        .await
+        .unwrap();
+
+    let first_send = {
+        let initiator = Arc::clone(&initiator);
+        tokio::spawn(async move { initiator.send_ttrpc(vec![0x55]).await })
+    };
+    tokio::task::yield_now().await;
+    let cancelled_send = {
+        let initiator = Arc::clone(&initiator);
+        tokio::spawn(async move {
+            initiator
+                .send_ttrpc_cancellable(vec![0x66], cancellation)
+                .await
+        })
+    };
+    tokio::task::yield_now().await;
+    responder.cancel(7, request_id).await.unwrap();
+    let _ = initiator.receive_control().await.unwrap();
+
+    handles.block_sends_a.store(false, Ordering::Release);
+    handles.send_release_a.notify_waiters();
+    first_send.await.unwrap().unwrap();
+    assert_eq!(
+        cancelled_send.await.unwrap().unwrap_err().code(),
+        SessionErrorCode::SessionDisconnected
+    );
+    for _ in 0..2 {
+        match tokio::time::timeout(Duration::from_millis(50), responder.receive_ttrpc()).await {
+            Ok(Ok(frame)) if frame == vec![0x66] => {
+                panic!("cancelled queued response reached the peer")
+            }
+            Ok(Ok(_)) => {}
+            Ok(Err(_)) | Err(_) => break,
+        }
+    }
+}
+
+#[tokio::test]
+async fn cancellation_aborts_an_in_progress_guarded_write() {
+    let (initiator, responder, handles) = engine_pair().await;
+    handles.block_sends_a.store(true, Ordering::Release);
+    let initiator: Arc<dyn ComponentSessionDriver> = Arc::new(initiator.into_driver());
+    let responder: Arc<dyn ComponentSessionDriver> = Arc::new(responder.into_driver());
+    let request_id = RequestId::new(vec![0x77; 16]).unwrap();
+    let cancellation = initiator
+        .register_inbound_call(request_id.clone())
+        .await
+        .unwrap();
+    initiator
+        .mark_inbound_dispatched(request_id.clone())
+        .await
+        .unwrap();
+    let guarded_send = {
+        let initiator = Arc::clone(&initiator);
+        tokio::spawn(async move {
+            initiator
+                .send_ttrpc_cancellable(vec![0x88], cancellation)
+                .await
+        })
+    };
+    tokio::task::yield_now().await;
+    responder.cancel(7, request_id).await.unwrap();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(1), guarded_send)
+            .await
+            .expect("guarded write did not observe cancellation")
+            .unwrap()
+            .unwrap_err()
+            .code(),
+        SessionErrorCode::SessionDisconnected
+    );
+    if let Ok(Ok(_)) =
+        tokio::time::timeout(Duration::from_millis(50), responder.receive_ttrpc()).await
+    {
+        panic!("cancelled in-progress response reached the peer");
+    }
 }
 
 #[tokio::test]

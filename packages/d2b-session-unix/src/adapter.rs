@@ -10,7 +10,7 @@ use d2b_contracts::v3::component_session::{
 };
 use d2b_session::{
     AttachmentPayload, AttachmentValidationError, OwnedAttachment, OwnedTransport,
-    TransportDescriptor, TransportError, TransportPacket,
+    TransportDescriptor, TransportError, TransportPacket, TransportReader, TransportWriter,
 };
 use rustix::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::{
@@ -316,7 +316,7 @@ impl ReceivedPacketState {
 }
 
 pub struct UnixSeqpacketTransport {
-    socket: SeqpacketSocket,
+    socket: Arc<SeqpacketSocket>,
     class: TransportClass,
     locality: Locality,
     limits: LimitProfile,
@@ -381,7 +381,7 @@ impl UnixSeqpacketTransport {
         }
         let capacity = AncillaryCapacity::from_policy(ancillary_policy)?;
         Ok(Self {
-            socket,
+            socket: Arc::new(socket),
             class,
             locality,
             limits,
@@ -567,6 +567,28 @@ impl OwnedTransport for UnixSeqpacketTransport {
         }
     }
 
+    fn into_split(self: Box<Self>) -> (Box<dyn TransportReader>, Box<dyn TransportWriter>) {
+        let reader = *self;
+        let writer = Self {
+            socket: Arc::clone(&reader.socket),
+            class: reader.class,
+            locality: reader.locality,
+            limits: reader.limits,
+            policy: reader.policy,
+            capacity: reader.capacity,
+            credits: reader.credits.clone(),
+            resolver: Arc::clone(&reader.resolver),
+            peer_identity: reader.peer_identity,
+            received: VecDeque::new(),
+            closed: reader.closed,
+            observer: Arc::clone(&reader.observer),
+        };
+        (
+            Box::new(UnixTransportReader(reader)),
+            Box::new(UnixTransportWriter(writer)),
+        )
+    }
+
     async fn receive(&mut self, protected_limit: usize) -> Result<TransportPacket, TransportError> {
         let packet = match self.receive_raw(protected_limit).await {
             Ok(packet) => packet,
@@ -610,7 +632,7 @@ impl OwnedTransport for UnixSeqpacketTransport {
 }
 
 pub struct UnixStreamTransport {
-    socket: StreamSocket,
+    socket: Arc<StreamSocket>,
     locality: Locality,
     limits: LimitProfile,
     receive_header: Vec<u8>,
@@ -638,7 +660,7 @@ impl fmt::Debug for UnixStreamTransport {
 impl UnixStreamTransport {
     pub fn new(socket: StreamSocket, locality: Locality, limits: LimitProfile) -> Self {
         Self {
-            socket,
+            socket: Arc::new(socket),
             locality,
             limits,
             receive_header: Vec::with_capacity(4),
@@ -763,6 +785,25 @@ impl OwnedTransport for UnixStreamTransport {
         }
     }
 
+    fn into_split(self: Box<Self>) -> (Box<dyn TransportReader>, Box<dyn TransportWriter>) {
+        let mut reader = *self;
+        let writer = Self {
+            socket: Arc::clone(&reader.socket),
+            locality: reader.locality,
+            limits: reader.limits,
+            receive_header: Vec::with_capacity(4),
+            receive_body: Vec::new(),
+            receive_declared: None,
+            outbound: reader.outbound.take(),
+            closed: reader.closed,
+            observer: Arc::clone(&reader.observer),
+        };
+        (
+            Box::new(UnixTransportReader(reader)),
+            Box::new(UnixTransportWriter(writer)),
+        )
+    }
+
     async fn receive(&mut self, protected_limit: usize) -> Result<TransportPacket, TransportError> {
         let result = self.receive_packet(protected_limit).await;
         if let Err(error) = &result {
@@ -830,6 +871,28 @@ impl OwnedTransport for UnixStreamTransport {
             self.closed = true;
         }
         Ok(())
+    }
+}
+
+struct UnixTransportReader<T>(T);
+
+#[async_trait]
+impl<T: OwnedTransport> TransportReader for UnixTransportReader<T> {
+    async fn receive(&mut self, protected_limit: usize) -> Result<TransportPacket, TransportError> {
+        self.0.receive(protected_limit).await
+    }
+}
+
+struct UnixTransportWriter<T>(T);
+
+#[async_trait]
+impl<T: OwnedTransport> TransportWriter for UnixTransportWriter<T> {
+    async fn send(&mut self, packet: TransportPacket) -> Result<(), TransportError> {
+        self.0.send(packet).await
+    }
+
+    async fn close(&mut self) -> Result<(), TransportError> {
+        self.0.close().await
     }
 }
 

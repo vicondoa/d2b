@@ -24,4 +24,5 @@ workspace = true
 
 [dev-dependencies]
 d2b-resource-store = { path = "../d2b-resource-store", version = "0.0.0-bootstrap" }
+protobuf = "3.7.2"
 tokio = { workspace = true, features = ["macros", "rt", "test-util"] }

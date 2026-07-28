@@ -208,7 +208,8 @@ impl From<TransportError> for SessionError {
         use SessionErrorCode as S;
         use TransportError as T;
         Self::new(match error {
-            T::Disconnected | T::WouldBlock => S::SessionDisconnected,
+            T::Disconnected => S::SessionDisconnected,
+            T::WouldBlock => S::QueueBackpressure,
             T::Truncated => S::RecordTruncated,
             T::LimitExceeded => S::ReassemblyLimitExceeded,
             T::InvalidAttachment => S::AttachmentDescriptorMismatch,

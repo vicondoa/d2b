@@ -16,12 +16,12 @@ pub use authorization::{
 pub use d2b_resource_api::authz::SessionVerb;
 pub use operations::{Cancellation, OperationId, OperationSpec};
 pub use registry::{
-    BusEndpoint, BusResponse, EndpointError, EndpointFailureClass, RouteGenerations, RouteKey,
-    RouteMember, RouteTarget,
+    BusEndpoint, BusResponse, EndpointError, EndpointFailureClass, EndpointSessionFailure,
+    RouteGenerations, RouteKey, RouteMember, RouteTarget,
 };
 pub use router::{
     BusClock, BusConfig, BusError, BusEvent, BusFailureReason, BusIngress, BusObserver, BusStream,
-    DeliveredInvocation, DeliveredStream, ManualClock, NoopBusObserver, ResourceCall,
-    ResourceFilter, ResourceQuery, ZoneBus, ZoneRegistrar,
+    ComponentSessionAdmission, DeliveredInvocation, DeliveredStream, ManualClock, NoopBusObserver,
+    ResourceCall, ResourceFilter, ResourceQuery, ZoneBus, ZoneRegistrar,
 };
 pub use streams::{IncomingStream, ReceivedFrame, StreamError, StreamLimits, StreamName};

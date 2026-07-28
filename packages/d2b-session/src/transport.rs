@@ -2,8 +2,9 @@ use std::{error::Error, fmt};
 
 use async_trait::async_trait;
 use d2b_contracts::v3::component_session::{Locality, TransportClass};
+use tokio::sync::Mutex;
 
-use crate::OwnedAttachment;
+use crate::{Cancellation, OwnedAttachment};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TransportDescriptor {
@@ -80,8 +81,34 @@ impl fmt::Display for TransportError {
 impl Error for TransportError {}
 
 #[async_trait]
-pub trait OwnedTransport: Send {
+pub trait TransportReader: Send {
+    async fn receive(
+        &mut self,
+        protected_limit: usize,
+    ) -> std::result::Result<TransportPacket, TransportError>;
+}
+
+#[async_trait]
+pub trait TransportWriter: Send {
+    async fn send(&mut self, packet: TransportPacket) -> std::result::Result<(), TransportError>;
+
+    async fn close(&mut self) -> std::result::Result<(), TransportError>;
+}
+
+#[async_trait]
+pub trait OwnedTransport: Send + 'static {
     fn descriptor(&self) -> TransportDescriptor;
+
+    /// Separates established-session reads from writes.
+    ///
+    /// Implementations used by the async session driver must return halves
+    /// that can make progress concurrently. This ownership split happens only
+    /// after the authenticated handshake has completed.
+    fn into_split(self: Box<Self>) -> (Box<dyn TransportReader>, Box<dyn TransportWriter>);
+
+    /// Applies a cancellation guard to packets enqueued by the next logical
+    /// write. Direct transports complete writes inline and need no guard.
+    fn set_write_cancellation(&mut self, _cancellation: Option<Cancellation>) {}
 
     /// Receives protected bytes and opaque transport-owned payloads.
     ///
@@ -103,4 +130,49 @@ pub trait OwnedTransport: Send {
     async fn send(&mut self, packet: TransportPacket) -> std::result::Result<(), TransportError>;
 
     async fn close(&mut self) -> std::result::Result<(), TransportError>;
+}
+
+struct SerializedReader {
+    transport: std::sync::Arc<Mutex<Box<dyn OwnedTransport>>>,
+}
+
+struct SerializedWriter {
+    transport: std::sync::Arc<Mutex<Box<dyn OwnedTransport>>>,
+}
+
+/// Compatibility split for transports that are never driven concurrently.
+///
+/// Production transports and driver tests must provide independent halves;
+/// this helper exists for direct engine-only test transports.
+pub fn serialized_transport_split(
+    transport: Box<dyn OwnedTransport>,
+) -> (Box<dyn TransportReader>, Box<dyn TransportWriter>) {
+    let transport = std::sync::Arc::new(Mutex::new(transport));
+    (
+        Box::new(SerializedReader {
+            transport: std::sync::Arc::clone(&transport),
+        }),
+        Box::new(SerializedWriter { transport }),
+    )
+}
+
+#[async_trait]
+impl TransportReader for SerializedReader {
+    async fn receive(
+        &mut self,
+        protected_limit: usize,
+    ) -> std::result::Result<TransportPacket, TransportError> {
+        self.transport.lock().await.receive(protected_limit).await
+    }
+}
+
+#[async_trait]
+impl TransportWriter for SerializedWriter {
+    async fn send(&mut self, packet: TransportPacket) -> std::result::Result<(), TransportError> {
+        self.transport.lock().await.send(packet).await
+    }
+
+    async fn close(&mut self) -> std::result::Result<(), TransportError> {
+        self.transport.lock().await.close().await
+    }
 }

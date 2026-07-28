@@ -114,6 +114,23 @@ impl OwnedTransport for TestTransport {
         self.descriptor
     }
 
+    fn into_split(
+        self: Box<Self>,
+    ) -> (
+        Box<dyn d2b_session::TransportReader>,
+        Box<dyn d2b_session::TransportWriter>,
+    ) {
+        let Self {
+            sender,
+            receiver,
+            descriptor: _,
+        } = *self;
+        (
+            Box::new(TestTransportReader { receiver }),
+            Box::new(TestTransportWriter { sender }),
+        )
+    }
+
     async fn receive(&mut self, protected_limit: usize) -> Result<TransportPacket, TransportError> {
         let packet = self
             .receiver
@@ -126,6 +143,43 @@ impl OwnedTransport for TestTransport {
         Ok(packet)
     }
 
+    async fn send(&mut self, packet: TransportPacket) -> Result<(), TransportError> {
+        self.sender
+            .send(packet)
+            .await
+            .map_err(|_| TransportError::Disconnected)
+    }
+
+    async fn close(&mut self) -> Result<(), TransportError> {
+        Ok(())
+    }
+}
+
+struct TestTransportReader {
+    receiver: mpsc::Receiver<TransportPacket>,
+}
+
+#[async_trait]
+impl d2b_session::TransportReader for TestTransportReader {
+    async fn receive(&mut self, protected_limit: usize) -> Result<TransportPacket, TransportError> {
+        let packet = self
+            .receiver
+            .recv()
+            .await
+            .ok_or(TransportError::Disconnected)?;
+        if packet.as_bytes().len() > protected_limit {
+            return Err(TransportError::LimitExceeded);
+        }
+        Ok(packet)
+    }
+}
+
+struct TestTransportWriter {
+    sender: mpsc::Sender<TransportPacket>,
+}
+
+#[async_trait]
+impl d2b_session::TransportWriter for TestTransportWriter {
     async fn send(&mut self, packet: TransportPacket) -> Result<(), TransportError> {
         self.sender
             .send(packet)
@@ -398,7 +452,8 @@ async fn native_rbac_connect_and_invoke_are_executed() {
         false,
     );
     let policy = endpoint_policy();
-    let acceptor = SessionAcceptor::new(policy.clone(), zone.clone(), Box::new(authority)).unwrap();
+    let acceptor =
+        SessionAcceptor::new(policy.clone(), zone.clone(), Box::new(authority), ()).unwrap();
     let mut session = acceptor
         .admit(engine(&policy).await, evidence(), 1)
         .await
@@ -430,7 +485,7 @@ async fn admitted_session_retains_transport_and_consumes_send_permits() {
     );
     let policy = endpoint_policy();
     let (initiator, responder) = engine_pair(&policy).await;
-    let mut session = SessionAcceptor::new(policy, zone.clone(), Box::new(authority))
+    let mut session = SessionAcceptor::new(policy, zone.clone(), Box::new(authority), ())
         .unwrap()
         .admit(initiator, evidence(), 1)
         .await
@@ -521,7 +576,7 @@ async fn cross_zone_subject_fails_before_connect_mint() {
         false,
     );
     let policy = endpoint_policy();
-    let error = SessionAcceptor::new(policy.clone(), expected_zone, Box::new(authority))
+    let error = SessionAcceptor::new(policy.clone(), expected_zone, Box::new(authority), ())
         .unwrap()
         .admit(engine(&policy).await, evidence(), 1)
         .await
@@ -534,7 +589,7 @@ async fn bootstrap_identity_is_consumed_through_handshake_and_session_admission(
     let zone = ZoneId::parse("work").unwrap();
     let policy = bootstrap_policy();
     let authority = NativeTestAuthority::new(zone.clone(), [SessionVerb::Connect], false);
-    SessionAcceptor::new(policy.clone(), zone.clone(), Box::new(authority))
+    SessionAcceptor::new(policy.clone(), zone.clone(), Box::new(authority), ())
         .unwrap()
         .admit(
             bootstrap_engine(&policy, "Host/alice-host", "work").await,
@@ -546,7 +601,7 @@ async fn bootstrap_identity_is_consumed_through_handshake_and_session_admission(
 
     let authority = NativeTestAuthority::new(zone.clone(), [SessionVerb::Connect], false);
     assert_eq!(
-        SessionAcceptor::new(policy.clone(), zone.clone(), Box::new(authority))
+        SessionAcceptor::new(policy.clone(), zone.clone(), Box::new(authority), ())
             .unwrap()
             .admit(
                 bootstrap_engine(&policy, "Guest/corp-vm", "work").await,
@@ -561,7 +616,7 @@ async fn bootstrap_identity_is_consumed_through_handshake_and_session_admission(
 
     let authority = NativeTestAuthority::new(zone.clone(), [SessionVerb::Connect], false);
     assert_eq!(
-        SessionAcceptor::new(policy.clone(), zone, Box::new(authority))
+        SessionAcceptor::new(policy.clone(), zone, Box::new(authority), ())
             .unwrap()
             .admit(
                 bootstrap_engine(&policy, "Host/alice-host", "personal").await,
@@ -584,7 +639,7 @@ async fn policy_revision_change_revokes_new_work() {
         true,
     );
     let policy = endpoint_policy();
-    let mut session = SessionAcceptor::new(policy.clone(), zone.clone(), Box::new(authority))
+    let mut session = SessionAcceptor::new(policy.clone(), zone.clone(), Box::new(authority), ())
         .unwrap()
         .admit(engine(&policy).await, evidence(), 1)
         .await
@@ -612,7 +667,7 @@ async fn native_rbac_relay_mints_only_for_a_distinct_next_zone() {
         false,
     );
     let policy = endpoint_policy();
-    let mut session = SessionAcceptor::new(policy.clone(), zone.clone(), Box::new(authority))
+    let mut session = SessionAcceptor::new(policy.clone(), zone.clone(), Box::new(authority), ())
         .unwrap()
         .admit(engine(&policy).await, evidence(), 1)
         .await
@@ -655,7 +710,7 @@ async fn forged_evidence_class_is_rejected_before_authority() {
         EvidenceClass::EnrolledKk,
         BindingDigest::parse(format!("sha256:{}", "22".repeat(32))).unwrap(),
     );
-    let error = SessionAcceptor::new(policy.clone(), zone, Box::new(authority))
+    let error = SessionAcceptor::new(policy.clone(), zone, Box::new(authority), ())
         .unwrap()
         .admit(engine(&policy).await, forged, 1)
         .await
