@@ -437,13 +437,13 @@ core Operation ledger, and independent external observation.
 
 | Item | Treatment |
 | --- | --- |
-| Current anchor | `d2b-realm-router` shared OperationRouter/mux/session lifecycle; d2bd DAG/topological executor/readiness/pidfd; role-specific state machines |
-| Evidence class | Current route/DAG logic is tested; generic controller loop/hints are ADR-only |
+| Current anchor | `packages/d2b-controller-toolkit/src/{runner,queue,context,result,owner_hints}.rs`; `packages/d2b-core-controller/src/{hints,dependencies,owner_reconcile}.rs`; existing `d2b-realm-router` and d2bd DAG state machines |
+| Evidence class | The generic controller loop and core hint/dependency/owner engines are implemented and tested but deliberately unwired from the absent production store/watch and bus paths. Current route/DAG logic remains reachable. |
 | Behavior retained | Deterministic ordering, capability denial, idempotency, bounded queues, cancellation, fail-fast typed errors, pidfd adoption |
-| Required delta | Async controller SDK/loop, store watches/hints, owner triggers, cross-resource concurrency, status batches |
+| Required delta | Wire authenticated store watches and bus streams into the implemented controller toolkit/core engines, without allowing any EffectPort call before a consumed `CommittedRevisionProof`; then replace role-specific production paths only after parity. |
 | Reuse path | Extract pure state machines/limits and deterministic test clocks; replace role branches with ResourceType controllers |
 | Replacement/deletion | DAG/role path remains until each successor controller/Process graph is integrated |
-| Feasibility proof | Real multi-process controller over d2b-bus; latency/load/conflict/owner/finalizer tests |
+| Feasibility proof | Deterministic toolkit/core unit tests cover conflict, restart, queue, commit-gated effects, upgrade serialization, owner/dependency propagation, suppression, leases, and fair hint admission. Real multi-process store-watch and d2b-bus integration remains gated future work. |
 | Future owner | Work items below |
 
 ## Implementation work items
@@ -461,8 +461,8 @@ core Operation ledger, and independent external observation.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Golden state-machine vectors, deterministic clocks, conflict/restart/queue tests; D090: commit-fails/Abort → no effect, controller finishes-before-commit gated on proof, effects-gate, status-write-delayed (`statusPersistence: pending`), normal-queued no-op/rejoin, concurrent mutation, delete event-only projection, expedited timeout committed-but-pending, restart re-entry no duplicate; D091: current/non-disruptive/each-trigger assess, UpgradeRequired-not-in-place, dependency propagation/topological drain-recycle-restart, GPU blocking, state/TPM preservation, crash/re-entry resume, single-flight reconcile-vs-upgrade serialization |
 | Removal proof | Current per-role orchestration removed only after ResourceType successors |
-| Implementation state | Planned |
-| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
+| Implementation state | Merged |
+| Evidence | `packages/d2b-controller-toolkit/src/{lib,runner,queue,context,result,owner_hints}.rs` are present. Inline deterministic tests exercise queue fairness/coalescing, per-resource single flight, conflict/restart paths, status persistence, serialized upgrades, and consumed `CommittedRevisionProof` gating that prevents effects before durable commit. The toolkit is test-only until store/watch and bus integration lands. |
 
 ### ADR046-reconcile-002
 
@@ -477,8 +477,8 @@ core Operation ledger, and independent external observation.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Owner/dependency chains, suppression/no-loss, restart/relist, lease withdrawal |
 | Removal proof | Not applicable |
-| Implementation state | Planned |
-| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
+| Implementation state | Merged |
+| Evidence | `packages/d2b-core-controller/src/{hints,dependencies,owner_reconcile}.rs` are present. Inline tests exercise owner/dependency chains, suppression/no-loss, relist/restart behavior, lease withdrawal, bounded fair admission, and owner fan-in. The engines remain unwired from the absent production store/watch dispatcher. |
 
 ### ADR046-reconcile-003
 
