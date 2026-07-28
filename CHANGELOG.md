@@ -12,6 +12,12 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added the self-contained per-Zone `d2b-bus` exact-address router with native
+  Role/RoleBinding authorization, relay and diagnostic verb enforcement,
+  single-owner authenticated registration, revision-bound revocation,
+  pinned cancellation routes, reconnect replacement, and credit-bounded fair
+  named streams. It remains disconnected from production adapters until the
+  authenticated ComponentSession integration lands.
 - Added the shared `cargo xtask delivery wave` dispatch skeleton for the
   ADR 0046 delivery contract: the `snapshot`, `validate-import`,
   `panel-request`, `panel-attest`, `seal`, `merge-eligibility`, and `help`
