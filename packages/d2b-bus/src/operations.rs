@@ -351,7 +351,9 @@ impl OperationTable {
         };
         route_lease
             .with_active(|| {
-                if self.records.contains_key(&key) {
+                if self.records.contains_key(&key)
+                    || self.tombstones.iter().any(|tombstone| tombstone.key == key)
+                {
                     return Err(OperationError::DuplicateOperation);
                 }
                 if self.records.len() >= self.max_operations {
@@ -898,45 +900,74 @@ mod tests {
     }
 
     #[test]
-    fn reused_id_is_isolated_from_stale_cancel_admission_at_capacity_one() {
+    fn cancel_retry_cannot_reach_a_same_id_replacement_while_tombstone_is_retained() {
         let mut table = OperationTable::new(1, 1).unwrap();
-        let operation = operation("reused", 10);
+        let reused_operation = operation("reused", 10);
         let first = table
-            .begin(&operation, SessionId(1), lease(SessionId(2)), route(), 1)
+            .begin(
+                &reused_operation,
+                SessionId(1),
+                lease(SessionId(2)),
+                route(),
+                1,
+            )
             .unwrap();
         let first_admission = table
-            .cancel_admission(operation.id(), SessionId(1))
+            .cancel_admission(reused_operation.id(), SessionId(1))
             .unwrap();
         let first_admission = first_admission.unwrap();
         table
-            .cancel_admitted(operation.id(), SessionId(1), &first_admission)
+            .cancel_admitted(reused_operation.id(), SessionId(1), &first_admission)
             .unwrap()
             .unwrap();
 
-        let second = table
-            .begin(&operation, SessionId(1), lease(SessionId(2)), route(), 1)
-            .unwrap();
         assert!(
-            table
-                .cancel_admitted(operation.id(), SessionId(1), &first_admission)
+            matches!(
+                table.begin(
+                    &reused_operation,
+                    SessionId(1),
+                    lease(SessionId(2)),
+                    route(),
+                    1
+                ),
+                Err(OperationError::DuplicateOperation)
+            ),
+            "same-id reuse must remain blocked while cancellation retry state exists"
+        );
+        assert!(
+            cancel_now(&mut table, reused_operation.id(), SessionId(1))
                 .unwrap()
                 .is_none()
         );
         assert!(
-            !table
-                .cancellation_complete(operation.id(), SessionId(1))
+            table
+                .cancellation_complete(reused_operation.id(), SessionId(1))
                 .unwrap()
         );
         assert_eq!(
             table
-                .finish(operation.id(), SessionId(1), &first, 2)
+                .finish(reused_operation.id(), SessionId(1), &first, 2)
                 .unwrap_err(),
             OperationError::Cancelled
         );
-        assert!(!second.is_cancelled());
+
+        let replacement = operation("replacement", 10);
         table
-            .finish(operation.id(), SessionId(1), &second, 2)
+            .begin(&replacement, SessionId(1), lease(SessionId(2)), route(), 1)
             .unwrap();
+        cancel_now(&mut table, replacement.id(), SessionId(1))
+            .unwrap()
+            .unwrap();
+        let reused = table
+            .begin(
+                &reused_operation,
+                SessionId(1),
+                lease(SessionId(2)),
+                route(),
+                1,
+            )
+            .unwrap();
+        assert!(!reused.is_cancelled());
     }
 
     #[test]
