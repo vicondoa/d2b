@@ -378,6 +378,11 @@ fn protected_records_are_directional_sequenced_and_replay_safe() {
         receiver.unprotect(&replay).unwrap_err().code(),
         SessionErrorCode::RecordReplay
     );
+    assert_eq!(sender.reconnect_generation(), 7);
+    assert_eq!(
+        format!("{sender:?}"),
+        "RecordProtector { generation: \"<redacted>\", cryptographic_state: \"<redacted>\", .. }"
+    );
 
     let mut truncated = sender
         .protect(
@@ -392,7 +397,6 @@ fn protected_records_are_directional_sequenced_and_replay_safe() {
         receiver.unprotect(&truncated).unwrap_err().code(),
         SessionErrorCode::RecordTruncated
     );
-    assert!(!format!("{sender:?}").contains("opaque"));
 }
 
 #[test]

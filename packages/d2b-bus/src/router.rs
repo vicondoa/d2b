@@ -3164,6 +3164,20 @@ mod tests {
             Locality::Local,
             EvidenceClass::UnixPeer,
         );
+        let source = harness
+            .caller
+            .core
+            .lock_registry()
+            .source(harness.caller.session)
+            .unwrap();
+        let subject = source.context.as_ref().unwrap().subject_ref();
+        assert_eq!(subject.resource_type().as_str(), "User");
+        assert_eq!(subject.name().as_str(), "sentinel-subject");
+        assert_eq!(harness.route.service().as_str(), "d2b.resource.v3");
+        assert_eq!(
+            harness.route.target().resource_ref().name().as_str(),
+            "system-core"
+        );
         let rendered = format!(
             "{:?} {:?} {:?} {:?}",
             harness.bus, harness.registrar, harness.caller, harness.route

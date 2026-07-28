@@ -1914,9 +1914,14 @@ mod bounded_identifier_tests {
         assert_eq!(offer.schema_fingerprint, [0x51; 32]);
         assert_eq!(offer.transport_binding.channel_binding, [0x52; 32]);
         assert_eq!(accept.transcript_binding, [0x53; 32]);
+        let raw_bindings = [
+            format!("{:?}", offer.schema_fingerprint),
+            format!("{:?}", offer.transport_binding.channel_binding),
+            format!("{:?}", accept.transcript_binding),
+        ];
         let rendered = format!("{accept:?}");
-        for sentinel in ["51, 51", "52, 52", "53, 53"] {
-            assert!(!rendered.contains(sentinel), "{rendered}");
+        for raw_binding in raw_bindings {
+            assert!(!rendered.contains(&raw_binding), "{rendered}");
         }
         assert!(rendered.contains("<redacted>"), "{rendered}");
     }
