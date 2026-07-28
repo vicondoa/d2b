@@ -12,6 +12,11 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added the async controller toolkit and core reconciliation engine with
+  store-watch relisting, bounded per-resource single-flight dispatch,
+  cross-resource concurrency, commit-gated expedited effects, serialized
+  upgrades, owner/dependency propagation, suppression, leases, and fair hint
+  admission.
 - Added the shared `cargo xtask delivery wave` dispatch skeleton for the
   ADR 0046 delivery contract: the `snapshot`, `validate-import`,
   `panel-request`, `panel-attest`, `seal`, `merge-eligibility`, and `help`
