@@ -1,4 +1,10 @@
-use std::{collections::BTreeSet, time::Instant};
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
+    time::Instant,
+};
 
 use async_trait::async_trait;
 use d2b_bus::{
@@ -22,12 +28,12 @@ use d2b_resource_api::authz::{
 };
 use d2b_resource_store::PolicySnapshot;
 use d2b_session::{
-    AuthenticatedComponentSession, ComponentSessionDriver, HandshakeCredentials,
-    NativeSessionAuthority, NativeSessionSubject, OwnedTransport, SessionDriverHandle,
-    SessionEngine, TransportDescriptor, TransportError, TransportEvidence, TransportPacket,
-    ttrpc_request_id, ttrpc_stream_id,
+    AuthenticatedComponentSession, ComponentSessionDriver, HandshakeCredentials, OwnedTransport,
+    SessionDriverHandle, SessionEngine, TransportDescriptor, TransportError, TransportEvidence,
+    TransportPacket, ttrpc_request_id, ttrpc_stream_id,
 };
-use tokio::sync::{mpsc, oneshot};
+use d2b_session_unix::{SeqpacketSocket, UnixSubjectIdentity, prearmed_seqpacket_pair};
+use tokio::sync::{Notify, mpsc};
 
 const PROVIDER_GENERATION: u64 = 2;
 const CONTROLLER_GENERATION: u64 = 3;
@@ -36,6 +42,7 @@ struct TestTransport {
     sender: mpsc::Sender<TransportPacket>,
     receiver: mpsc::Receiver<TransportPacket>,
     descriptor: TransportDescriptor,
+    writer_pause: Option<Arc<WriterPause>>,
 }
 
 #[async_trait]
@@ -54,10 +61,14 @@ impl OwnedTransport for TestTransport {
             sender,
             receiver,
             descriptor: _,
+            writer_pause,
         } = *self;
         (
             Box::new(TestTransportReader { receiver }),
-            Box::new(TestTransportWriter { sender }),
+            Box::new(TestTransportWriter {
+                sender,
+                writer_pause,
+            }),
         )
     }
 
@@ -106,11 +117,19 @@ impl d2b_session::TransportReader for TestTransportReader {
 
 struct TestTransportWriter {
     sender: mpsc::Sender<TransportPacket>,
+    writer_pause: Option<Arc<WriterPause>>,
 }
 
 #[async_trait]
 impl d2b_session::TransportWriter for TestTransportWriter {
     async fn send(&mut self, packet: TransportPacket) -> Result<(), TransportError> {
+        if let Some(pause) = &self.writer_pause {
+            if !pause.entered.swap(true, Ordering::AcqRel) {
+                pause.notify.notify_waiters();
+                std::future::pending::<()>().await;
+            }
+            pause.sent.fetch_add(1, Ordering::AcqRel);
+        }
         self.sender
             .send(packet)
             .await
@@ -119,6 +138,25 @@ impl d2b_session::TransportWriter for TestTransportWriter {
 
     async fn close(&mut self) -> Result<(), TransportError> {
         Ok(())
+    }
+}
+
+#[derive(Default)]
+struct WriterPause {
+    entered: AtomicBool,
+    sent: AtomicUsize,
+    notify: Notify,
+}
+
+impl WriterPause {
+    async fn wait_until_entered(&self) {
+        loop {
+            let notified = self.notify.notified();
+            if self.entered.load(Ordering::Acquire) {
+                return;
+            }
+            notified.await;
+        }
     }
 }
 
@@ -156,7 +194,23 @@ async fn admit(
     subject: &str,
     uid: &str,
     provider: &str,
-    allowed: impl IntoIterator<Item = SessionVerb>,
+    _allowed: impl IntoIterator<Item = SessionVerb>,
+) -> (
+    AuthenticatedComponentSession<ComponentSessionAdmission>,
+    SessionDriverHandle,
+    tokio::task::JoinHandle<()>,
+) {
+    admit_with_writer_pause(registrar, policy, subject, uid, provider, _allowed, None).await
+}
+
+async fn admit_with_writer_pause(
+    registrar: &ZoneRegistrar,
+    policy: EndpointPolicy,
+    subject: &str,
+    uid: &str,
+    provider: &str,
+    _allowed: impl IntoIterator<Item = SessionVerb>,
+    writer_pause: Option<Arc<WriterPause>>,
 ) -> (
     AuthenticatedComponentSession<ComponentSessionAdmission>,
     SessionDriverHandle,
@@ -174,11 +228,13 @@ async fn admit(
         sender: left_sender,
         receiver: right_receiver,
         descriptor,
+        writer_pause,
     };
     let right = TestTransport {
         sender: right_sender,
         receiver: left_receiver,
         descriptor,
+        writer_pause: None,
     };
     let (initiator, responder) = tokio::join!(
         SessionEngine::establish_initiator(
@@ -205,63 +261,35 @@ async fn admit(
     });
     let subject_ref = ResourceRef::parse(subject).unwrap();
     let subject_uid = ResourceUid::parse(uid).unwrap();
-    let mut allowed = allowed.into_iter().collect::<BTreeSet<_>>();
-    allowed.insert(SessionVerb::Connect);
-    let catalog = ApiCatalog::standard();
-    let rule = PolicyRule::new(
-        &catalog,
-        [],
-        [],
-        allowed,
-        [],
-        [],
-        [ZoneId::parse("dev").unwrap()],
-        [],
-    )
-    .unwrap();
-    let role = CompiledRole::new(
-        ResourceRef::parse("Role/session-authority").unwrap(),
-        vec![rule],
-    )
-    .unwrap();
-    let binding = CompiledRoleBinding::new(
-        role.role_ref.clone(),
-        [BoundSubject {
-            subject_ref: subject_ref.clone(),
-            subject_uid: subject_uid.clone(),
-        }],
-        BindingScope::default(),
-        RelayGrantAuthority::None,
-    )
-    .unwrap();
-    let policy_set = PolicySet::new(&catalog, 1, vec![role], vec![binding]).unwrap();
-    let native = NativeAuthorizer::new(catalog, Some(policy_set)).unwrap();
-    let state = AuthorizationState {
-        snapshot: PolicySnapshot {
-            policy_revision: 1,
-            api_catalog_revision: 1,
-            active_configuration_revision: ConfigurationGeneration::new(1).unwrap(),
-            controller_generation: Some(ControllerGeneration::new(CONTROLLER_GENERATION).unwrap()),
-        },
-        zone_policy_revision: ZoneRevision::new(1),
-        bootstrap_phase: BootstrapPhase::Disabled,
-        now_tick: 1,
-    };
-    let authority = NativeSessionAuthority::new(
-        NativeSessionSubject::new(subject_ref, subject_uid, ZoneId::parse("dev").unwrap())
-            .unwrap()
-            .with_provider(
-                ResourceRef::parse(provider).unwrap(),
-                ResourceGeneration::new(PROVIDER_GENERATION).unwrap(),
-            )
-            .with_controller_generation(ControllerGeneration::new(CONTROLLER_GENERATION).unwrap()),
-        native,
-        state,
-        10_000,
-    )
-    .unwrap();
+    let provider_ref = ResourceRef::parse(provider).unwrap();
+    let provider_generation = ResourceGeneration::new(PROVIDER_GENERATION).unwrap();
+    let (proof_fd, _peer_fd) = prearmed_seqpacket_pair().unwrap();
+    let proof_socket = SeqpacketSocket::from_parent_prearmed(proof_fd).unwrap();
+    let expected_peer = proof_socket.acceptor_peer_credentials().unwrap();
+    let identity = if subject_ref.resource_type().as_str() == "Provider" {
+        UnixSubjectIdentity::provider(
+            subject_ref,
+            subject_uid,
+            ResourceRef::parse("Zone/dev").unwrap(),
+            expected_peer,
+            provider_generation,
+        )
+        .unwrap()
+    } else {
+        UnixSubjectIdentity::host(
+            subject_ref,
+            subject_uid,
+            ResourceRef::parse("Zone/dev").unwrap(),
+            expected_peer,
+        )
+        .unwrap()
+        .with_provider(provider_ref, provider_generation)
+        .unwrap()
+    }
+    .with_controller_generation(ControllerGeneration::new(CONTROLLER_GENERATION).unwrap());
+    let verified_identity = identity.verify_seqpacket(&proof_socket).unwrap();
     let session = registrar
-        .component_session_acceptor(policy, Box::new(authority))
+        .component_session_acceptor(policy, verified_identity)
         .unwrap()
         .admit(
             initiator.unwrap(),
@@ -277,6 +305,10 @@ async fn admit(
 }
 
 fn bus() -> (ZoneBus, d2b_bus::ZoneRegistrar) {
+    bus_with_config(BusConfig::default())
+}
+
+fn bus_with_config(config: BusConfig) -> (ZoneBus, d2b_bus::ZoneRegistrar) {
     let catalog = ApiCatalog::standard();
     let zone = ZoneId::parse("dev").unwrap();
     let rule = PolicyRule::new(
@@ -332,12 +364,7 @@ fn bus() -> (ZoneBus, d2b_bus::ZoneRegistrar) {
         bootstrap_phase: BootstrapPhase::Disabled,
         now_tick: 1,
     };
-    ZoneBus::new(
-        zone,
-        BusAuthorizer::new(native, state).unwrap(),
-        BusConfig::default(),
-    )
-    .unwrap()
+    ZoneBus::new(zone, BusAuthorizer::new(native, state).unwrap(), config).unwrap()
 }
 
 #[tokio::test]
@@ -351,9 +378,9 @@ async fn registrar_rejects_a_session_minted_for_another_bus_instance() {
             EndpointPurpose::ResourceService,
             1,
         ),
-        "Provider/resource",
+        "Provider/system-core",
         "11111111-1111-4111-8111-111111111111",
-        "Provider/resource",
+        "Provider/system-core",
         [SessionVerb::Connect],
     )
     .await;
@@ -592,7 +619,10 @@ async fn admitted_sessions_route_resource_and_diagnostic_calls_and_revoke_lifecy
 
 #[tokio::test]
 async fn cancelled_stream_id_reuse_rejects_the_late_response() {
-    let (_bus, mut registrar) = bus();
+    let (_bus, mut registrar) = bus_with_config(BusConfig {
+        max_correlations_per_generation: 2,
+        ..BusConfig::default()
+    });
     let (endpoint, remote, endpoint_echo) = admit(
         &registrar,
         policy(
@@ -644,7 +674,7 @@ async fn cancelled_stream_id_reuse_rejects_the_late_response() {
         let first_internal_id = ttrpc_stream_id(&first_frame).unwrap();
         caller.cancel(&first_id).await.unwrap();
         let second = caller.invoke_resource(
-            route,
+            route.clone(),
             OperationSpec::new(second_id, 10_000).unwrap(),
             ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
             ttrpc_frame(7, b"second"),
@@ -670,6 +700,21 @@ async fn cancelled_stream_id_reuse_rejects_the_late_response() {
     let second = second.unwrap();
     assert_eq!(ttrpc_stream_id(second.as_bytes()).unwrap(), 7);
     assert!(second.as_bytes().ends_with(b"second-response"));
+    let exhausted = caller
+        .invoke_resource(
+            route,
+            OperationSpec::new(OperationId::parse("requires-reconnect").unwrap(), 10_000).unwrap(),
+            ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
+            ttrpc_frame(7, b"third"),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        exhausted,
+        BusError::Endpoint(d2b_bus::EndpointError::Session(failure))
+            if failure.code()
+                == d2b_session::contract::SessionErrorCode::SessionDisconnected
+    ));
 
     registrar
         .disconnect_component_session(endpoint)
@@ -842,9 +887,7 @@ async fn concurrent_invocations_dispatch_out_of_order_responses() {
 }
 
 #[tokio::test]
-async fn malformed_responses_release_every_correlation_slot() {
-    const MALFORMED_RESPONSES: usize = 300;
-
+async fn uncorrelatable_response_terminates_every_waiter() {
     let (_bus, mut registrar) = bus();
     let (endpoint, remote, endpoint_echo) = admit(
         &registrar,
@@ -884,56 +927,121 @@ async fn malformed_responses_release_every_correlation_slot() {
         1,
         "Provider/system-core",
     );
-    let (release_remote, hold_remote) = oneshot::channel();
     let remote_task = tokio::spawn(async move {
-        for _ in 0..MALFORMED_RESPONSES {
-            let _ = remote.receive_ttrpc().await.unwrap();
-            remote.send_ttrpc(vec![0x01]).await.unwrap();
-        }
-        let request = remote.receive_ttrpc().await.unwrap();
-        let stream_id = ttrpc_stream_id(&request).unwrap();
+        let first = remote.receive_ttrpc().await.unwrap();
+        let second = remote.receive_ttrpc().await.unwrap();
+        let later_valid = ttrpc_stream_id(&second).unwrap();
+        remote.send_ttrpc(vec![0x01]).await.unwrap();
         remote
-            .send_ttrpc(ttrpc_frame(stream_id, b"healthy"))
+            .send_ttrpc(ttrpc_frame(later_valid, b"must-not-deliver"))
             .await
             .unwrap();
-        let _ = hold_remote.await;
+        (first, second)
     });
-
-    for index in 0..MALFORMED_RESPONSES {
-        let result = caller
-            .invoke_resource(
-                route.clone(),
-                OperationSpec::new(
-                    OperationId::parse(format!("malformed-{index}")).unwrap(),
-                    10_000,
-                )
-                .unwrap(),
-                ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
-                ttrpc_frame(9, b"request"),
-            )
-            .await;
-        assert_eq!(
-            result,
-            Err(BusError::Endpoint(d2b_bus::EndpointError::Rejected))
-        );
-    }
-    let response = caller
-        .invoke_resource(
-            route,
-            OperationSpec::new(OperationId::parse("after-malformed").unwrap(), 10_000).unwrap(),
+    let invoke = |id: &str, stream_id| {
+        caller.invoke_resource(
+            route.clone(),
+            OperationSpec::new(OperationId::parse(id).unwrap(), 10_000).unwrap(),
             ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
-            ttrpc_frame(9, b"request"),
+            ttrpc_frame(stream_id, b"request"),
         )
-        .await
-        .unwrap();
-    assert!(response.as_bytes().ends_with(b"healthy"));
-    let _ = release_remote.send(());
-    remote_task.await.unwrap();
+    };
+    let (first, second, frames) = tokio::join!(
+        invoke("malformed-first", 9),
+        invoke("malformed-second", 10),
+        remote_task
+    );
+    assert_eq!(
+        first,
+        Err(BusError::Endpoint(d2b_bus::EndpointError::Rejected))
+    );
+    assert_eq!(
+        second,
+        Err(BusError::Endpoint(d2b_bus::EndpointError::Rejected))
+    );
+    let (first_frame, second_frame) = frames.unwrap();
+    assert_ne!(
+        ttrpc_stream_id(&first_frame).unwrap(),
+        ttrpc_stream_id(&second_frame).unwrap()
+    );
+    assert_eq!(
+        invoke("after-malformed", 11).await,
+        Err(BusError::Endpoint(d2b_bus::EndpointError::Rejected))
+    );
 
     registrar
         .disconnect_component_session(endpoint)
         .await
         .unwrap();
+    caller_echo.abort();
+}
+
+#[tokio::test]
+async fn revocation_fences_an_admitted_batch_before_transport_send() {
+    let (_bus, mut registrar) = bus();
+    let pause = Arc::new(WriterPause::default());
+    let (endpoint, _remote, endpoint_echo) = admit_with_writer_pause(
+        &registrar,
+        policy(
+            ServicePackage::ResourceV3,
+            EndpointPurpose::ResourceService,
+            1,
+        ),
+        "Provider/system-core",
+        "11111111-1111-4111-8111-111111111111",
+        "Provider/system-core",
+        [SessionVerb::Invoke],
+        Some(Arc::clone(&pause)),
+    )
+    .await;
+    let endpoint = registrar
+        .register_component_session(endpoint)
+        .await
+        .unwrap();
+    let (caller, _, caller_echo) = admit(
+        &registrar,
+        policy(
+            ServicePackage::ResourceV3,
+            EndpointPurpose::ResourceService,
+            1,
+        ),
+        "Host/alice",
+        "22222222-2222-4222-8222-222222222222",
+        "Provider/system-core",
+        [SessionVerb::Invoke],
+    )
+    .await;
+    let caller = registrar.register_component_session(caller).await.unwrap();
+    let invocation = tokio::spawn(async move {
+        caller
+            .invoke_resource(
+                route(
+                    "d2b.resource.v3",
+                    "ResourceService/Get",
+                    1,
+                    "Provider/system-core",
+                ),
+                OperationSpec::new(OperationId::parse("revoked-write").unwrap(), 10_000).unwrap(),
+                ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
+                ttrpc_frame(12, b"must-not-send"),
+            )
+            .await
+    });
+
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        pause.wait_until_entered(),
+    )
+    .await
+    .expect("request batch must reach the paused writer");
+    registrar
+        .disconnect_component_session(endpoint)
+        .await
+        .unwrap();
+
+    assert!(invocation.await.unwrap().is_err());
+    assert_eq!(pause.sent.load(Ordering::Acquire), 0);
+    endpoint_echo.abort();
     caller_echo.abort();
 }
 

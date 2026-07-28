@@ -129,6 +129,21 @@ impl SessionDriverHandle {
             .map_err(|_| disconnected())?;
         receive.await.map_err(|_| disconnected())?
     }
+
+    pub(crate) async fn start_ttrpc_guarded(
+        &self,
+        request_id: RequestId,
+        frame: Vec<u8>,
+        cancellation: Cancellation,
+    ) -> Result<()> {
+        self.request(|reply| DriverCommand::StartTtrpc {
+            request_id,
+            frame,
+            cancellation,
+            reply,
+        })
+        .await
+    }
 }
 
 #[async_trait]
@@ -138,12 +153,8 @@ impl ComponentSessionDriver for SessionDriverHandle {
     }
 
     async fn start_ttrpc(&self, request_id: RequestId, frame: Vec<u8>) -> Result<()> {
-        self.request(|reply| DriverCommand::StartTtrpc {
-            request_id,
-            frame,
-            reply,
-        })
-        .await
+        self.start_ttrpc_guarded(request_id, frame, Cancellation::new())
+            .await
     }
 
     async fn complete_ttrpc(&self, request_id: RequestId) -> Result<bool> {
@@ -419,6 +430,9 @@ impl OwnedTransport for DriverTransport {
             batch.packets.push(packet);
             return Ok(());
         }
+        if self.writes.capacity() <= 1 {
+            return Err(TransportError::WouldBlock);
+        }
         self.writes
             .try_send(WriterCommand::Batch {
                 packets: vec![packet],
@@ -563,6 +577,7 @@ enum DriverCommand {
     StartTtrpc {
         request_id: RequestId,
         frame: Vec<u8>,
+        cancellation: Cancellation,
         reply: Reply<()>,
     },
     CompleteTtrpc {
@@ -966,9 +981,11 @@ async fn handle_command<T: OwnedTransport>(
         DriverCommand::StartTtrpc {
             request_id,
             frame,
+            cancellation,
             reply,
         } => {
-            if reply.is_closed() {
+            if reply.is_closed() || cancellation.is_cancelled() {
+                let _ = reply.send(Err(SessionError::new(SessionErrorCode::Cancelled)));
                 return Ok(DriverAction::Continue);
             }
             let batch = match reserve_write_batch(write_commands, priority_writes) {
@@ -978,8 +995,11 @@ async fn handle_command<T: OwnedTransport>(
                     return Err(error);
                 }
             };
-            engine.begin_write_batch(None);
-            let result = engine.call(request_id, frame).await.map(|_| ());
+            engine.begin_write_batch(Some(cancellation.clone()));
+            let result = engine
+                .call_guarded(request_id, frame, cancellation)
+                .await
+                .map(|_| ());
             complete_after_write(engine, batch, reply, result);
         }
         DriverCommand::CompleteTtrpc { request_id, reply } => {
@@ -990,13 +1010,20 @@ async fn handle_command<T: OwnedTransport>(
             request_id,
             reply,
         } => {
+            let batch = match reserve_cancellation_write(write_commands, priority_writes) {
+                Ok(batch) => batch,
+                Err(error) => {
+                    let _ = reply.send(Err(error));
+                    return Err(error);
+                }
+            };
             engine.begin_write_batch(None);
             let result = if generation == engine.generation() {
                 engine.cancel_call(&request_id).await
             } else {
                 Err(SessionError::new(SessionErrorCode::GenerationMismatch))
             };
-            complete_reserved_write(engine, write_commands, priority_writes, reply, result)?;
+            complete_after_write(engine, batch, reply, result);
         }
         DriverCommand::SendTtrpc {
             frame,
@@ -1153,10 +1180,17 @@ async fn handle_command<T: OwnedTransport>(
             remediation,
             reply,
         } => {
+            let batch = match reserve_cancellation_write(write_commands, priority_writes) {
+                Ok(batch) => batch,
+                Err(error) => {
+                    let _ = reply.send(Err(error));
+                    return Err(error);
+                }
+            };
             engine.begin_write_batch(None);
             let result = engine.close(reason, remediation).await;
             let closed = result.is_ok();
-            complete_reserved_write(engine, write_commands, priority_writes, reply, result)?;
+            complete_after_write(engine, batch, reply, result);
             if closed {
                 return Ok(DriverAction::Close);
             }
@@ -1209,35 +1243,21 @@ fn complete_after_write(
     });
 }
 
-fn complete_reserved_write(
-    engine: &mut SessionEngine<impl OwnedTransport>,
-    write_commands: &mpsc::Sender<WriterCommand>,
+fn reserve_cancellation_write<'a>(
+    write_commands: &'a mpsc::Sender<WriterCommand>,
     priority_writes: &mpsc::UnboundedSender<WriterCommand>,
-    reply: Reply<()>,
-    result: Result<()>,
-) -> Result<()> {
-    let prepared = engine.take_write_batch();
-    if let Err(error) = result {
-        let _ = reply.send(Err(error));
-        return Ok(());
-    }
-    let Some((packets, cancellation, close_after)) = prepared else {
-        let error = SessionError::new(SessionErrorCode::InternalInvariant);
-        let _ = reply.send(Err(error));
+) -> Result<mpsc::Permit<'a, WriterCommand>> {
+    if write_commands.capacity() == 0 {
+        let error = backpressure();
+        let _ = priority_writes.send(WriterCommand::Abort(error));
         return Err(error);
-    };
-    let command = WriterCommand::Batch {
-        packets,
-        cancellation,
-        completion: Some(reply),
-        close_after,
-    };
-    write_commands.try_send(command).map_err(|error| {
+    }
+    write_commands.try_reserve().map_err(|error| {
         let error = match error {
-            mpsc::error::TrySendError::Full(_) => {
+            mpsc::error::TrySendError::Full(()) => {
                 SessionError::new(SessionErrorCode::QueueBackpressure)
             }
-            mpsc::error::TrySendError::Closed(_) => disconnected(),
+            mpsc::error::TrySendError::Closed(()) => disconnected(),
         };
         let _ = priority_writes.send(WriterCommand::Abort(error));
         error
@@ -1396,6 +1416,51 @@ mod tests {
         assert_eq!(error.code(), SessionErrorCode::InternalInvariant);
         assert!(closed.load(Ordering::Acquire));
         task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn unbatched_writes_preserve_the_cancellation_slot() {
+        let descriptor = TransportDescriptor {
+            class: d2b_contracts::v3::component_session::TransportClass::UnixSeqpacket,
+            locality: d2b_contracts::v3::component_session::Locality::HostLocal,
+            packet_atomic: true,
+            supports_attachments: false,
+        };
+        let (writes, mut receiver) = mpsc::channel(2);
+        let (priority, _priority_receiver) = mpsc::unbounded_channel();
+        let mut transport = DriverTransport {
+            descriptor,
+            reader: Box::new(DisconnectedReader),
+            writes: writes.clone(),
+            priority: priority.clone(),
+            write_cancellation: None,
+            batch: None,
+        };
+        transport.send(TransportPacket::new(vec![1])).await.unwrap();
+        assert_eq!(
+            transport
+                .send(TransportPacket::new(vec![9]))
+                .await
+                .unwrap_err(),
+            TransportError::WouldBlock
+        );
+
+        reserve_cancellation_write(&writes, &priority)
+            .unwrap()
+            .send(WriterCommand::Batch {
+                packets: vec![TransportPacket::new(vec![2])],
+                cancellation: None,
+                completion: None,
+                close_after: false,
+            });
+        let WriterCommand::Batch { packets, .. } = receiver.recv().await.unwrap() else {
+            panic!("ordinary write was not queued");
+        };
+        assert_eq!(packets[0].as_bytes(), &[1]);
+        let WriterCommand::Batch { packets, .. } = receiver.recv().await.unwrap() else {
+            panic!("cancellation write was not queued");
+        };
+        assert_eq!(packets[0].as_bytes(), &[2]);
     }
 
     #[tokio::test]

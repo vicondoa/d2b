@@ -7,7 +7,10 @@ use d2b_resource_api::authz::{
     AuthorizationDenial, AuthorizationPolicyError, AuthorizationState, NativeAuthorizer, PolicySet,
     SessionVerb,
 };
-use d2b_session::{OperationMember, SessionOperation};
+use d2b_session::{
+    OperationMember, SessionAuthorizationRequest, SessionError, SessionOperation,
+    contract::{AuthorizationLease, SessionErrorCode},
+};
 
 use crate::{
     registry::{RouteKey, RouteTarget},
@@ -133,10 +136,62 @@ impl BusAuthorizer {
         Ok(())
     }
 
+    pub(crate) fn authenticate_session(
+        &self,
+        context: &AuthenticatedSubjectContext,
+        zone: &ZoneId,
+        now_tick: u64,
+    ) -> d2b_session::Result<AuthorizationLease> {
+        ensure_zone(context, zone).map_err(Self::session_denied)?;
+        let mut runtime = self.lock();
+        runtime.state.now_tick = now_tick;
+        let capabilities = runtime
+            .native
+            .positive_capabilities(context, zone, &runtime.state)
+            .map_err(Self::session_denied)?;
+        require(&capabilities.session_verbs, SessionVerb::Connect).map_err(Self::session_denied)?;
+        Self::session_lease(runtime.state.snapshot.policy_revision, now_tick)
+    }
+
+    pub(crate) fn authorize_session(
+        &self,
+        context: &AuthenticatedSubjectContext,
+        request: &SessionAuthorizationRequest,
+        previous_lease: AuthorizationLease,
+        now_tick: u64,
+    ) -> d2b_session::Result<AuthorizationLease> {
+        let mut runtime = self.lock();
+        if previous_lease.policy_revision() != runtime.state.snapshot.policy_revision {
+            return Err(SessionError::new(SessionErrorCode::PolicyDenied));
+        }
+        runtime.state.now_tick = now_tick;
+        let zone = ZoneId::parse(context.zone_ref().name().as_str())
+            .map_err(|_| SessionError::new(SessionErrorCode::PolicyDenied))?;
+        let capabilities = runtime
+            .native
+            .positive_capabilities(context, &zone, &runtime.state)
+            .map_err(Self::session_denied)?;
+        require(&capabilities.session_verbs, SessionVerb::Connect).map_err(Self::session_denied)?;
+        require(&capabilities.session_verbs, request.verb()).map_err(Self::session_denied)?;
+        Self::session_lease(runtime.state.snapshot.policy_revision, now_tick)
+    }
+
     fn lock(&self) -> MutexGuard<'_, AuthorizationRuntime> {
         self.runtime
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn session_lease(
+        policy_revision: u64,
+        now_tick: u64,
+    ) -> d2b_session::Result<AuthorizationLease> {
+        AuthorizationLease::new(policy_revision, now_tick.saturating_add(10_000))
+            .map_err(SessionError::from)
+    }
+
+    fn session_denied<T>(_error: T) -> SessionError {
+        SessionError::new(SessionErrorCode::PolicyDenied)
     }
 }
 

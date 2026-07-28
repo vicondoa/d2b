@@ -5,10 +5,12 @@ fn dependent_cannot_forge_registration_or_mint_admitted_session() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repository_root = crate_root.parent().unwrap().parent().unwrap();
     let fixture = crate_root.join("tests/ui/external-seals");
-    let scratch = repository_root
-        .join(".scratch")
-        .join(format!("bus-external-seals-{}", std::process::id()));
-    let temp = scratch.join("tmp");
+    let scratch = Scratch::new(
+        repository_root
+            .join(".scratch")
+            .join(format!("bus-external-seals-{}", std::process::id())),
+    );
+    let temp = scratch.path().join("tmp");
     fs::create_dir_all(&temp).expect("create repository-local compiler scratch");
 
     for (test, expected) in [
@@ -25,10 +27,11 @@ fn dependent_cannot_forge_registration_or_mint_admitted_session() {
         ),
         (
             "forge_admission",
-            [
-                "the trait bound `ForeignAuthority: d2b_session::admission::authority_seal::Sealed` is not satisfied",
-                "error[E0277]",
-            ],
+            ["no `SessionAuthority` in the root", "error[E0432]"],
+        ),
+        (
+            "forge_native_authority",
+            ["no `NativeSessionAuthority` in the root", "error[E0432]"],
         ),
     ] {
         let output = Command::new(env!("CARGO"))
@@ -41,18 +44,12 @@ fn dependent_cannot_forge_registration_or_mint_admitted_session() {
                 "--test",
                 test,
             ])
-            .env("CARGO_TARGET_DIR", scratch.join("target"))
+            .env("CARGO_TARGET_DIR", scratch.path().join("target"))
             .env("TMPDIR", &temp)
             .output()
             .expect("run dependent compile-fail crate");
         let stderr = String::from_utf8(output.stderr).expect("compiler diagnostics are UTF-8");
         assert!(!output.status.success(), "{test} unexpectedly compiled");
-        if test == "forge_admission" {
-            assert!(
-                !stderr.contains("error[E0432]"),
-                "forge_admission failed because of an unrelated import error:\n{stderr}"
-            );
-        }
         for diagnostic in expected {
             assert!(
                 stderr.contains(diagnostic),
@@ -60,6 +57,26 @@ fn dependent_cannot_forge_registration_or_mint_admitted_session() {
             );
         }
     }
+}
 
-    fs::remove_dir_all(&scratch).expect("remove repository-local compiler scratch");
+struct Scratch(PathBuf);
+
+impl Scratch {
+    fn new(path: PathBuf) -> Self {
+        if path.exists() {
+            fs::remove_dir_all(&path).expect("remove stale repository-local scratch");
+        }
+        fs::create_dir_all(&path).expect("create repository-local scratch");
+        Self(path)
+    }
+
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
 }

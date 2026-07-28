@@ -78,7 +78,36 @@ impl SessionError {
             SessionErrorCode::ArithmeticOverflow | SessionErrorCode::InternalInvariant => {
                 SessionErrorClass::Internal
             }
-            _ => SessionErrorClass::Protocol,
+            SessionErrorCode::MalformedPreface
+            | SessionErrorCode::UnsupportedVersion
+            | SessionErrorCode::MalformedHandshake
+            | SessionErrorCode::LimitMismatch
+            | SessionErrorCode::AttachmentPolicyMismatch
+            | SessionErrorCode::RecordTruncated
+            | SessionErrorCode::RecordMalformed
+            | SessionErrorCode::RecordReplay
+            | SessionErrorCode::RecordOutOfOrder
+            | SessionErrorCode::NonceExhausted
+            | SessionErrorCode::FragmentTruncated
+            | SessionErrorCode::FragmentDuplicate
+            | SessionErrorCode::FragmentReordered
+            | SessionErrorCode::FragmentOverlap
+            | SessionErrorCode::InvalidChannel
+            | SessionErrorCode::UnknownControl
+            | SessionErrorCode::RequestIdDuplicate
+            | SessionErrorCode::AttachmentTruncated
+            | SessionErrorCode::AttachmentControlTruncated
+            | SessionErrorCode::AttachmentCountMismatch
+            | SessionErrorCode::AttachmentDescriptorMismatch
+            | SessionErrorCode::AttachmentObjectMismatch
+            | SessionErrorCode::AttachmentAccessMismatch
+            | SessionErrorCode::AttachmentMissingCloexec
+            | SessionErrorCode::SchedulerStalled
+            | SessionErrorCode::BootstrapExpired
+            | SessionErrorCode::BootstrapReplayed
+            | SessionErrorCode::BootstrapOperationMismatch
+            | SessionErrorCode::SubjectMismatch
+            | SessionErrorCode::TransportMismatch => SessionErrorClass::Protocol,
         }
     }
 

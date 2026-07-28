@@ -1,0 +1,10 @@
+[package]
+name = "d2b-bus-public-api-mutations"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+d2b-session = { path = "../../../../d2b-session" }
