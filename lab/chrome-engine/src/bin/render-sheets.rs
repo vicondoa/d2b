@@ -65,6 +65,7 @@ fn main() {
         ("05-accessibility-passes", accessibility(&fonts)),
         ("06-accent-fill-across-palette", accent_fill_stress(&fonts)),
         ("07-compound-reflow", compound_reflow(&fonts)),
+        ("08-status-token-states", status_token_states(&fonts)),
     ];
 
     let mut failed = false;
@@ -214,6 +215,63 @@ fn status_and_blocked(f: &TextRenderer) -> Vec<Cell> {
     cells
 }
 
+/// The status token opens the same menu as identity, so it must show the same
+/// states with the same delineation and focus guarantees.
+fn status_token_states(f: &TextRenderer) -> Vec<Cell> {
+    let states = [
+        ("resting", VisualState::default()),
+        (
+            "hover",
+            VisualState {
+                hover: true,
+                ..VisualState::focused()
+            },
+        ),
+        (
+            "pressed",
+            VisualState {
+                pressed: true,
+                ..VisualState::focused()
+            },
+        ),
+        (
+            "menu open",
+            VisualState {
+                menu_open: true,
+                ..VisualState::focused()
+            },
+        ),
+        (
+            "keyboard focus",
+            VisualState {
+                keyboard_focus: true,
+                ..VisualState::focused()
+            },
+        ),
+    ];
+    let mut cells = Vec::new();
+    for (name, st) in states {
+        let mut s = spec(Candidate::BandNeutral, "Work", PALETTE[0].1);
+        s.status = Some("MIC".to_owned());
+        s.status_state = st;
+        cells.push(Cell {
+            caption: format!("token / {name}"),
+            canvas: render(&s, f, DARK).canvas,
+        });
+    }
+    // The same states without hue, since delineation must not depend on colour.
+    for (name, st) in [states[1], states[4]] {
+        let mut s = spec(Candidate::BandNeutral, "Work", PALETTE[0].1);
+        s.status = Some("MIC".to_owned());
+        s.status_state = st;
+        cells.push(Cell {
+            caption: format!("token / {name} in grayscale"),
+            canvas: render(&s, f, DARK).canvas.to_grayscale(),
+        });
+    }
+    cells
+}
+
 fn accessibility(f: &TextRenderer) -> Vec<Cell> {
     let mut cells = Vec::new();
 
@@ -302,10 +360,10 @@ fn compound_reflow(f: &TextRenderer) -> Vec<Cell> {
                 if l.reflow.grew_band {
                     notes.push(format!("band grew to {}px", l.band.height));
                 }
-                if l.reflow.dropped_status {
-                    notes.push("token yielded".to_owned());
+                if l.reflow.status_second_row {
+                    notes.push("token moved to second row".to_owned());
                 } else if l.status.is_some() {
-                    notes.push("token kept".to_owned());
+                    notes.push("token inline".to_owned());
                 }
                 if notes.is_empty() {
                     prefix.to_owned()

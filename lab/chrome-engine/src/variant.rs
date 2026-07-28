@@ -92,7 +92,7 @@ impl Default for Theme {
             radius: 6.0,
             accent_rule: 4,
             side_pad: 10,
-            vertical_pad: 5,
+            vertical_pad: 2,
         }
     }
 }
@@ -122,6 +122,9 @@ pub struct ChromeSpec {
     pub accent: Rgba,
     pub theme: Theme,
     pub state: VisualState,
+    /// Interaction state of the status token, which activates the same menu
+    /// and therefore needs the same visible states as the identity button.
+    pub status_state: VisualState,
     /// Logical to physical scale.
     pub scale: f32,
     /// Label size in logical px. 14 default, 12 floor.
@@ -143,6 +146,7 @@ impl ChromeSpec {
             accent,
             theme: Theme::default(),
             state: VisualState::focused(),
+            status_state: VisualState::default(),
             scale: 1.0,
             font_px: 14.0,
             tracking_em: 0.0,
@@ -319,24 +323,80 @@ pub fn render(spec: &ChromeSpec, fonts: &TextRenderer, background: Rgba) -> Rend
         canvas.stroke_rect(r.x - 1, r.y - 1, r.width + 2, r.height + 2, Rgba::BLACK);
     }
 
-    // Status token: unfilled text plus a fixed glyph, at lower visual weight so
-    // it never competes with identity, but still contrast-compliant.
+    // Status token: unfilled text plus a fixed glyph per capability, at lower
+    // visual weight so it never competes with identity. Every concurrent
+    // capability keeps its own glyph, since the shape is the non-colour
+    // encoding of that capability.
     if let (Some(status), Some(rect)) = (spec.status.as_deref(), layout.status) {
-        let sfg = enforce_contrast(spec.theme.foreground_dim, surface, CONTRAST_TEXT_AA)
+        let st = spec.status_state;
+        // The token opens the same menu, so it carries the same visible states
+        // and the same delineation guarantee when it is being interacted with.
+        if st.hover || st.pressed || st.menu_open || st.keyboard_focus {
+            let mut bg = spec.theme.plate;
+            if st.pressed {
+                bg = bg.mix(Rgba::BLACK, 0.35);
+            } else if st.menu_open {
+                bg = bg.mix(Rgba::WHITE, 0.18);
+            } else if st.hover {
+                bg = bg.mix(Rgba::WHITE, 0.10);
+            }
+            canvas.fill_round_rect(
+                rect.x,
+                rect.y,
+                rect.width,
+                rect.height,
+                spec.theme.radius * f64::from(scale),
+                bg,
+            );
+            canvas.stroke_rect(rect.x, rect.y, rect.width, rect.height, spec.theme.outline);
+            if st.menu_open {
+                canvas.stroke_rect(rect.x - 1, rect.y - 1, rect.width + 2, rect.height + 2, spec.accent);
+                canvas.stroke_rect(rect.x - 2, rect.y - 2, rect.width + 4, rect.height + 4, spec.accent);
+            }
+            if st.keyboard_focus {
+                canvas.stroke_rect(rect.x - 3, rect.y - 3, rect.width + 6, rect.height + 6, spec.theme.focus);
+                canvas.stroke_rect(rect.x - 2, rect.y - 2, rect.width + 4, rect.height + 4, spec.theme.focus);
+                canvas.stroke_rect(rect.x - 1, rect.y - 1, rect.width + 2, rect.height + 2, Rgba::BLACK);
+            }
+        }
+        let token_bg = if st.hover || st.pressed || st.menu_open || st.keyboard_focus {
+            spec.theme.plate
+        } else {
+            surface
+        };
+        let sfg = enforce_contrast(spec.theme.foreground_dim, token_bg, CONTRAST_TEXT_AA)
             .unwrap_or(spec.theme.foreground);
         let sp = font_px * 0.88;
-        let sm = fonts.measure(status, sp, tracking);
         let glyph_w = px(14, scale);
-        let total = glyph_w + px(5, scale) + sm.width;
-        let sx = rect.x + ((rect.width.saturating_sub(total)) / 2) as i32;
+        let gap = px(5, scale);
+        let sep = px(8, scale);
+
+        // Composed tokens are separated on the wire; each part gets a glyph.
+        let parts: Vec<&str> = status.split(" . ").map(str::trim).collect();
+        let total: u32 = parts
+            .iter()
+            .map(|p| glyph_w + gap + fonts.measure(p, sp, tracking).width)
+            .sum::<u32>()
+            + sep * (parts.len().saturating_sub(1)) as u32;
+
+        let mut x = if layout.reflow.status_second_row {
+            rect.x
+        } else {
+            rect.x + ((rect.width.saturating_sub(total)) / 2) as i32
+        };
         let cy = rect.y + (rect.height / 2) as i32;
+        let sbase = rect.y + ((rect.height + fonts.measure("M", sp, 0.0).ascent) / 2) as i32;
 
-        draw_status_glyph(&mut canvas, status, sx, cy, glyph_w, sfg, scale);
-
-        let tx = sx + (glyph_w + px(5, scale)) as i32;
-        let sbase = rect.y + ((rect.height + sm.ascent) / 2) as i32;
-        for g in fonts.layout(status, sp, tracking, tx, sbase) {
-            blend_glyph(&mut canvas.pixels, w, h, &g, sfg);
+        for (i, part) in parts.iter().enumerate() {
+            draw_status_glyph(&mut canvas, part, x, cy, glyph_w, sfg, scale);
+            let tx = x + (glyph_w + gap) as i32;
+            for g in fonts.layout(part, sp, tracking, tx, sbase) {
+                blend_glyph(&mut canvas.pixels, w, h, &g, sfg);
+            }
+            x = tx + fonts.measure(part, sp, tracking).width as i32;
+            if i + 1 < parts.len() {
+                x += sep as i32;
+            }
         }
     }
 
@@ -395,6 +455,30 @@ fn draw_status_glyph(
         let top = center_y - s(7.0);
         canvas.fill_rect(cx - s(0.5), top, unit(1.5), unit(9.0), color);
         canvas.fill_rect(cx - s(0.5), top + s(11.0), unit(1.5), unit(2.0), color);
+    }
+}
+
+/// A deliberate blocked mark for windows too narrow for legible text: a barred
+/// circle. Shape, never hue, and never an ellipsis that reads as corruption.
+fn draw_blocked_glyph(canvas: &mut Canvas, cx: i32, cy: i32, scale: f32, color: Rgba) {
+    let r = ((14.0 * scale).round() as i32).max(6);
+    let thick = ((2.0 * scale).round() as u32).max(1);
+    // Ring, drawn as a filled disc minus an inner disc.
+    for dy in -r..=r {
+        for dx in -r..=r {
+            let d2 = dx * dx + dy * dy;
+            let outer = r * r;
+            let inner = (r - thick as i32) * (r - thick as i32);
+            if d2 <= outer && d2 >= inner {
+                canvas.blend(cx + dx, cy + dy, color);
+            }
+        }
+    }
+    // Diagonal bar.
+    for i in -r..=r {
+        for t in 0..thick as i32 {
+            canvas.blend(cx + i, cy + i + t, color);
+        }
     }
 }
 
@@ -470,22 +554,28 @@ fn render_blocked(spec: &ChromeSpec, fonts: &TextRenderer) -> Rendered {
         }
     }
 
-    // The explanation is ellipsized to the available width rather than
-    // overflowing; it is supporting text, and the band already carries state.
+    // The explanation is shown only when it fits legibly. Below that width an
+    // ellipsis would read as rendering corruption, so a deliberate blocked
+    // glyph carries the state instead; the full text remains available to AT.
     let budget = (w as u32).saturating_sub(pad * 2);
-    let msg = fonts.ellipsize(
-        "content blocked - identity could not be verified",
-        font_px,
-        0.0,
-        budget,
-    );
-    if !msg.is_empty() {
-        let mm = fonts.measure(&msg, font_px, 0.0);
-        let mx = ((w as i32) - (mm.width as i32)) / 2;
-        for g in fonts.layout(&msg, font_px, 0.0, mx.max(pad as i32), (band_h + content_h / 2) as i32)
-        {
+    let full = "content blocked - identity could not be verified";
+    let full_w = fonts.measure(full, font_px, 0.0).width;
+    let short = "blocked";
+    let short_w = fonts.measure(short, font_px, 0.0).width;
+
+    let content_mid = (band_h + content_h / 2) as i32;
+    if full_w <= budget {
+        let mx = ((w as i32) - (full_w as i32)) / 2;
+        for g in fonts.layout(full, font_px, 0.0, mx, content_mid) {
             blend_glyph(&mut canvas.pixels, w, h, &g, fg);
         }
+    } else if short_w <= budget {
+        let mx = ((w as i32) - (short_w as i32)) / 2;
+        for g in fonts.layout(short, font_px, 0.0, mx, content_mid) {
+            blend_glyph(&mut canvas.pixels, w, h, &g, fg);
+        }
+    } else {
+        draw_blocked_glyph(&mut canvas, (w / 2) as i32, content_mid, scale, fg);
     }
 
     Rendered {

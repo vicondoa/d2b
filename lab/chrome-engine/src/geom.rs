@@ -113,12 +113,14 @@ pub struct ChromeLayout {
 }
 
 /// The steps a layout took to fit, in the order the panel fixed:
-/// short name, then wrap, then drop the status token, then grow the band.
-/// Identity always wins; the status token always yields first.
+/// short name, then wrap, then grow the band. Identity always wins, and
+/// security-capability state is never dropped — it moves to a second row and
+/// grows the band rather than disappearing into the menu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Reflow {
     pub wrapped_label: bool,
-    pub dropped_status: bool,
+    /// The status token moved below identity instead of sitting beside it.
+    pub status_second_row: bool,
     pub grew_band: bool,
 }
 
@@ -155,7 +157,7 @@ impl Default for LayoutInput {
             label_wrapped: false,
             status_width: 0,
             side_pad: 8,
-            vertical_pad: 5,
+            vertical_pad: 2,
             accent_rule: 4,
             identity_verified: true,
         }
@@ -204,11 +206,27 @@ impl ChromeOutcome {
 /// The band height this content requires: the floor, or more if measured
 /// content needs it. Never less than the floor, never clipping content.
 pub fn required_band_height(input: LayoutInput) -> u32 {
-    let measured = input
-        .label_block_height
-        .saturating_add(input.vertical_pad.saturating_mul(2))
-        .saturating_add(input.accent_rule);
-    measured.max(MIN_BAND_HEIGHT)
+    band_height_for(input, false)
+}
+
+/// The height of one row inside the band. A row is never shorter than the
+/// visible-face floor, so the band is derived from rows rather than the other
+/// way round; otherwise a forced-up face overflows its own band.
+fn row_height(input: LayoutInput) -> u32 {
+    MIN_VISIBLE_FACE.max(input.label_block_height)
+}
+
+/// Band height, accounting for a status token that had to move to a second row.
+fn band_height_for(input: LayoutInput, status_second_row: bool) -> u32 {
+    let row = row_height(input);
+    let rows = if status_second_row {
+        row.saturating_mul(2).saturating_add(input.vertical_pad)
+    } else {
+        row
+    };
+    rows.saturating_add(input.vertical_pad.saturating_mul(2))
+        .saturating_add(input.accent_rule)
+        .max(MIN_BAND_HEIGHT)
 }
 
 /// Resolve chrome layout, or fail closed.
@@ -223,10 +241,28 @@ pub fn resolve(input: LayoutInput) -> ChromeOutcome {
     if !input.identity_verified {
         return ChromeOutcome::FailClosed(FailClosedReason::UnverifiedIdentity);
     }
-    let band_height = required_band_height(input);
-    let mut reflow = Reflow {
+
+    // Identity has absolute priority. If even the compact name cannot fit the
+    // enforced minimum width, fail closed rather than clip or shrink it.
+    let avail = input.content.width.saturating_sub(input.side_pad * 2);
+    let button_w = input.button_width.max(MIN_TARGET);
+    if avail < button_w {
+        return ChromeOutcome::FailClosed(FailClosedReason::IdentityDoesNotFit);
+    }
+
+    // Security-capability state is never dropped. If it cannot sit beside
+    // identity, it moves to a second row and the band grows to hold it.
+    let status_second_row =
+        input.status_width > 0 && avail < button_w + input.status_width + input.side_pad;
+    if status_second_row && avail < input.status_width {
+        // Not even a dedicated row can hold it: refuse rather than hide it.
+        return ChromeOutcome::FailClosed(FailClosedReason::IdentityDoesNotFit);
+    }
+
+    let band_height = band_height_for(input, status_second_row);
+    let reflow = Reflow {
         wrapped_label: input.label_wrapped,
-        dropped_status: false,
+        status_second_row,
         grew_band: band_height > MIN_BAND_HEIGHT,
     };
 
@@ -241,49 +277,48 @@ pub fn resolve(input: LayoutInput) -> ChromeOutcome {
     };
     let band = Rect::new(0, band_y, outer.width, band_height);
 
-    // The button's visible face is centred vertically in the band, at least
-    // MIN_VISIBLE_FACE tall, and never taller than the band itself.
-    let face_h = MIN_VISIBLE_FACE
-        .max(band_height.saturating_sub(input.vertical_pad))
-        .min(band_height);
-    let face_y = band_y + ((band_height - face_h) / 2) as i32;
-
-    // Identity has absolute priority. If even the compact name cannot fit the
-    // enforced minimum width, fail closed rather than clip or shrink it.
-    let avail = outer.width.saturating_sub(input.side_pad * 2);
-    let button_w = input.button_width.max(MIN_TARGET);
-    if avail < button_w {
-        return ChromeOutcome::FailClosed(FailClosedReason::IdentityDoesNotFit);
-    }
-
-    // Security-capability state never yields into the menu; it composes into
-    // one slot and grows the band instead. It is dropped only when the window
-    // is too narrow to host it beside identity at all.
-    let status_w = if input.status_width > 0 {
-        if avail >= button_w + input.status_width + 8 {
-            input.status_width
-        } else {
-            reflow.dropped_status = true;
-            0
-        }
+    // Rows are sized first; the band was derived from them, so a row always
+    // fits inside it.
+    let face_h = row_height(input);
+    // Centre the row block vertically in whatever height the floor imposed.
+    let rows_total = if status_second_row {
+        face_h * 2 + input.vertical_pad
     } else {
-        0
+        face_h
     };
+    let slack = band_height
+        .saturating_sub(rows_total)
+        .saturating_sub(input.accent_rule);
+    let face_y = band_y + (slack / 2) as i32;
 
     let button = Rect::new(input.side_pad as i32, face_y, button_w, face_h);
-    let status = (status_w > 0).then(|| {
-        Rect::new(
-            (outer.width - input.side_pad - status_w) as i32,
-            face_y,
-            status_w,
-            face_h,
-        )
+
+    let status = (input.status_width > 0).then(|| {
+        if status_second_row {
+            Rect::new(
+                input.side_pad as i32,
+                face_y + face_h as i32 + input.vertical_pad as i32,
+                input.status_width,
+                face_h,
+            )
+        } else {
+            Rect::new(
+                (outer.width - input.side_pad - input.status_width) as i32,
+                face_y,
+                input.status_width,
+                face_h,
+            )
+        }
     });
 
+    // The drag region is whatever the first row does not claim.
     let drag_x = button.right();
-    let drag_end = status.map_or((outer.width - input.side_pad) as i32, |b| b.x);
+    let drag_end = match status {
+        Some(s) if !status_second_row => s.x,
+        _ => (outer.width - input.side_pad) as i32,
+    };
     let drag = (drag_end > drag_x)
-        .then(|| Rect::new(drag_x, band_y, (drag_end - drag_x) as u32, band_height));
+        .then(|| Rect::new(drag_x, band_y, (drag_end - drag_x) as u32, face_h));
 
     ChromeOutcome::Decorate(ChromeLayout {
         content: input.content,
@@ -300,18 +335,43 @@ pub fn resolve(input: LayoutInput) -> ChromeOutcome {
 impl ChromeLayout {
     /// The pointer input region the wrapper surface claims.
     ///
-    /// Always at least MIN_TARGET on both axes: the visible face may be shorter
-    /// than the touch target, so the region is inflated vertically within the
-    /// band rather than the face being grown to match.
+    /// Always at least `MIN_TARGET` on both axes, and always clamped inside the
+    /// reserved band. The clamp is the point: the shipping rail's region spills
+    /// across the window edge, which is why edge interaction is swallowed
+    /// today. This region can never reach guest content or a window edge.
     pub fn input_region(&self) -> Rect {
         let mut r = self.button;
+
         if r.height < MIN_TARGET {
             let grow = MIN_TARGET - r.height;
-            let up = grow / 2;
-            r = Rect::new(r.x, r.y - up as i32, r.width, MIN_TARGET);
+            r = Rect::new(r.x, r.y - (grow / 2) as i32, r.width, MIN_TARGET);
         }
         if r.width < MIN_TARGET {
             r = Rect::new(r.x, r.y, MIN_TARGET, r.height);
+        }
+
+        // Clamp vertically into the band.
+        if r.y < self.band.y {
+            r = Rect::new(r.x, self.band.y, r.width, r.height);
+        }
+        if r.bottom() > self.band.bottom() {
+            let overflow = (r.bottom() - self.band.bottom()) as u32;
+            let shifted = r.y - overflow as i32;
+            r = if shifted >= self.band.y {
+                Rect::new(r.x, shifted, r.width, r.height)
+            } else {
+                // The band itself is the limit; take all of it and no more.
+                Rect::new(r.x, self.band.y, r.width, self.band.height)
+            };
+        }
+
+        // Clamp horizontally inside the window.
+        if r.right() > self.outer.width as i32 {
+            let overflow = (r.right() - self.outer.width as i32) as u32;
+            r = Rect::new(r.x - overflow as i32, r.y, r.width, r.height);
+        }
+        if r.x < 0 {
+            r = Rect::new(0, r.y, r.width, r.height);
         }
         r
     }
@@ -426,19 +486,15 @@ mod tests {
     fn band_grows_for_a_wrapped_two_line_label() {
         // Two 14px lines at 1.3 line-height plus padding and rule exceeds 32.
         let two_lines = 36;
-        let l = resolve(LayoutInput {
+        let input = LayoutInput {
             label_block_height: two_lines,
             label_wrapped: true,
             ..Default::default()
-        })
-        .layout()
-        .unwrap();
-        assert!(
-            l.band.height > MIN_BAND_HEIGHT,
-            "band was {}",
-            l.band.height
-        );
-        assert_eq!(l.band.height, two_lines + 5 * 2 + 4);
+        };
+        let l = resolve(input).layout().unwrap();
+        assert!(l.band.height > MIN_BAND_HEIGHT, "band was {}", l.band.height);
+        assert_eq!(l.band.height, required_band_height(input));
+        assert!(l.band.height >= two_lines, "the label block must fit");
         assert!(l.reflow.grew_band);
         assert!(l.reflow.wrapped_label);
         // Content is pushed down by exactly the band height: nothing is clipped.
@@ -473,10 +529,20 @@ mod tests {
         }
     }
 
-    // ---- reflow order: identity wins, status yields first ----
+    // ---- reflow: identity wins, capability state never disappears ----
 
+    /// Security-capability state must never be hidden. When it cannot sit
+    /// beside identity it moves to a second row and the band grows.
     #[test]
-    fn narrow_window_drops_status_before_shrinking_the_target() {
+    fn narrow_window_moves_status_to_a_second_row_rather_than_dropping_it() {
+        let wide = resolve(LayoutInput {
+            status_width: 60,
+            ..Default::default()
+        })
+        .layout()
+        .unwrap();
+        assert!(!wide.reflow.status_second_row, "a wide band keeps one row");
+
         let narrow = resolve(LayoutInput {
             content: Size::new(140, 400),
             button_width: 96,
@@ -485,10 +551,39 @@ mod tests {
         })
         .layout()
         .unwrap();
-        assert!(narrow.status.is_none(), "status yields first");
-        assert!(narrow.reflow.dropped_status);
-        assert!(narrow.input_region().width >= MIN_TARGET);
+        let status = narrow
+            .status
+            .expect("capability state must never be dropped");
+        assert!(narrow.reflow.status_second_row);
+        assert!(narrow.reflow.grew_band, "a second row must grow the band");
+        assert!(narrow.band.height > wide.band.height);
+        assert!(!status.intersects(narrow.button));
+        assert!(!status.intersects(narrow.content_rect()));
+        assert!(
+            status.y > narrow.button.y,
+            "the second row sits below identity"
+        );
         assert_eq!(narrow.button.width, 96, "identity keeps its width");
+    }
+
+    #[test]
+    fn status_is_never_silently_hidden_at_any_width() {
+        for width in [120_u32, 140, 200, 400, 800] {
+            let outcome = resolve(LayoutInput {
+                content: Size::new(width, 400),
+                button_width: 96,
+                status_width: 60,
+                ..Default::default()
+            });
+            match outcome {
+                ChromeOutcome::Decorate(l) => assert!(
+                    l.status.is_some(),
+                    "width {width} decorated but dropped capability state"
+                ),
+                // Refusing is acceptable; hiding is not.
+                ChromeOutcome::FailClosed(_) => {}
+            }
+        }
     }
 
     /// Failing closed must block the guest, never yield a bare window.
@@ -587,7 +682,7 @@ mod tests {
         assert_eq!(s.right(), (800 - 8) as i32);
         assert!(!s.intersects(l.button));
         assert!(!s.intersects(l.content_rect()));
-        assert!(!l.reflow.dropped_status);
+        assert!(!l.reflow.status_second_row);
     }
 
     #[test]
