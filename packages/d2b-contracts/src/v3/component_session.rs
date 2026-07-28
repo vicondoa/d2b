@@ -1172,7 +1172,8 @@ closed_enum!(SessionErrorCode {
     InternalInvariant = 50 => "internal-invariant",
     PolicyDenied = 51 => "policy-denied",
     SubjectMismatch = 52 => "subject-mismatch",
-    TransportMismatch = 53 => "transport-mismatch"
+    TransportMismatch = 53 => "transport-mismatch",
+    SubjectConfigurationMismatch = 54 => "subject-configuration-mismatch"
 });
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

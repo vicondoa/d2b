@@ -611,6 +611,55 @@ impl Drop for PendingCancelDeliveryLease {
     }
 }
 
+/// Completion state for a cancellation request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CancellationOutcome {
+    /// Local operation state is terminal, but remote notification is unconfirmed.
+    LocalTerminal,
+    /// The destination confirmed processing the cancellation notification.
+    RemoteConfirmed,
+}
+
+/// Correlated cancellation completion without retaining active operation quota.
+pub struct CancellationReceipt {
+    remote: Option<oneshot::Receiver<CancellationOutcome>>,
+}
+
+impl CancellationReceipt {
+    fn local() -> Self {
+        Self { remote: None }
+    }
+
+    fn pending(remote: oneshot::Receiver<CancellationOutcome>) -> Self {
+        Self {
+            remote: Some(remote),
+        }
+    }
+
+    /// Return the state guaranteed when the receipt was issued.
+    pub const fn local_outcome(&self) -> CancellationOutcome {
+        CancellationOutcome::LocalTerminal
+    }
+
+    /// Wait for the correlated remote notification result.
+    pub async fn remote_outcome(self) -> CancellationOutcome {
+        match self.remote {
+            Some(remote) => remote.await.unwrap_or(CancellationOutcome::LocalTerminal),
+            None => CancellationOutcome::LocalTerminal,
+        }
+    }
+}
+
+impl core::fmt::Debug for CancellationReceipt {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("CancellationReceipt")
+            .field("local_outcome", &CancellationOutcome::LocalTerminal)
+            .field("remote_pending", &self.remote.is_some())
+            .finish()
+    }
+}
+
 impl BusCore {
     fn begin_cleanup_session(
         self: &Arc<Self>,
@@ -633,62 +682,78 @@ impl BusCore {
 
     fn dispatch_cancel_targets(self: &Arc<Self>, targets: Vec<CancelDispatch>) {
         for dispatch in targets {
-            let delivery = dispatch
-                .target
-                .endpoint
-                .terminalize_cancel(&dispatch.operation, &dispatch.target.cancellation);
-            if dispatch.target.route.generations().session() != dispatch.target.generation {
-                self.observe_error(BusEvent::Cancel, &BusError::SessionMismatch);
-                continue;
+            drop(self.dispatch_cancel_target(dispatch));
+        }
+    }
+
+    fn dispatch_cancel_target(
+        self: &Arc<Self>,
+        dispatch: CancelDispatch,
+    ) -> oneshot::Receiver<CancellationOutcome> {
+        let delivery = dispatch
+            .target
+            .endpoint
+            .terminalize_cancel(&dispatch.operation, &dispatch.target.cancellation);
+        let (completion, completed) = oneshot::channel();
+        if dispatch.target.route.generations().session() != dispatch.target.generation {
+            self.observe_error(BusEvent::Cancel, &BusError::SessionMismatch);
+            let _ = completion.send(CancellationOutcome::LocalTerminal);
+            return completed;
+        }
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            drop(delivery);
+            self.observer
+                .record(BusEvent::Cancel, BusFailureReason::Abandoned);
+            let _ = completion.send(CancellationOutcome::LocalTerminal);
+            return completed;
+        };
+        let operation = dispatch.operation.clone();
+        let source = dispatch.source;
+        let cancellation = dispatch.target.cancellation.clone();
+        let pending = Arc::clone(&self.cancel_deliveries);
+        let pending_weak = Arc::downgrade(&pending);
+        let observer = Arc::clone(&self.observer);
+        let (start, started) = oneshot::channel();
+        let task = runtime.spawn(async move {
+            if started.await.is_err() {
+                return;
             }
-            if let Ok(runtime) = tokio::runtime::Handle::try_current() {
-                let operation = dispatch.operation.clone();
-                let source = dispatch.source;
-                let cancellation = dispatch.target.cancellation.clone();
-                let pending = Arc::clone(&self.cancel_deliveries);
-                let pending_weak = Arc::downgrade(&pending);
-                let observer = Arc::clone(&self.observer);
-                let (start, started) = oneshot::channel();
-                let task = runtime.spawn(async move {
-                    if started.await.is_err() {
-                        return;
-                    }
-                    let _pending = PendingCancelDeliveryLease {
-                        pending: pending_weak,
-                        operation: operation.clone(),
-                        source,
-                        cancellation,
-                    };
-                    match tokio::time::timeout(CANCEL_DELIVERY_TIMEOUT, delivery).await {
-                        Ok(Ok(())) => {}
-                        Ok(Err(error)) => observer.record(
-                            BusEvent::Cancel,
-                            BusFailureReason::from_error(&BusError::Endpoint(error)),
-                        ),
-                        Err(_) => {
-                            observer.record(BusEvent::Cancel, BusFailureReason::Abandoned);
-                        }
-                    }
-                });
-                match pending.admit(&dispatch, task.abort_handle()) {
-                    CancelDeliveryAdmission::Admitted => {
-                        let _ = start.send(());
-                    }
-                    CancelDeliveryAdmission::Duplicate => {
-                        task.abort();
-                    }
-                    CancelDeliveryAdmission::Full => {
-                        task.abort();
-                        self.observer
-                            .record(BusEvent::Cancel, BusFailureReason::Abandoned);
-                    }
+            let _pending = PendingCancelDeliveryLease {
+                pending: pending_weak,
+                operation: operation.clone(),
+                source,
+                cancellation,
+            };
+            let outcome = match tokio::time::timeout(CANCEL_DELIVERY_TIMEOUT, delivery).await {
+                Ok(Ok(())) => CancellationOutcome::RemoteConfirmed,
+                Ok(Err(error)) => {
+                    observer.record(
+                        BusEvent::Cancel,
+                        BusFailureReason::from_error(&BusError::Endpoint(error)),
+                    );
+                    CancellationOutcome::LocalTerminal
                 }
-            } else {
-                drop(delivery);
+                Err(_) => {
+                    observer.record(BusEvent::Cancel, BusFailureReason::Abandoned);
+                    CancellationOutcome::LocalTerminal
+                }
+            };
+            let _ = completion.send(outcome);
+        });
+        match pending.admit(&dispatch, task.abort_handle()) {
+            CancelDeliveryAdmission::Admitted => {
+                let _ = start.send(());
+            }
+            CancelDeliveryAdmission::Duplicate => {
+                task.abort();
+            }
+            CancelDeliveryAdmission::Full => {
+                task.abort();
                 self.observer
                     .record(BusEvent::Cancel, BusFailureReason::Abandoned);
             }
         }
+        completed
     }
 
     fn observe_error(&self, event: BusEvent, error: &BusError) {
@@ -1097,7 +1162,7 @@ impl AuthoritativeUnixSubjectResolver {
     #[cfg(not(test))]
     fn resolve(&self, _peer: PeerCredentials) -> d2b_session::Result<AuthenticatedSubjectContext> {
         Err(d2b_session::SessionError::new(
-            d2b_session::contract::SessionErrorCode::SubjectMismatch,
+            d2b_session::contract::SessionErrorCode::SubjectConfigurationMismatch,
         ))
     }
 
@@ -1112,7 +1177,7 @@ impl AuthoritativeUnixSubjectResolver {
             .position(|subject| subject.expected_peer == peer)
             .ok_or_else(|| {
                 d2b_session::SessionError::new(
-                    d2b_session::contract::SessionErrorCode::SubjectMismatch,
+                    d2b_session::contract::SessionErrorCode::SubjectConfigurationMismatch,
                 )
             })?;
         Ok(subjects.swap_remove(index))
@@ -1122,7 +1187,7 @@ impl AuthoritativeUnixSubjectResolver {
     fn install(&self, subject: UnixSubjectRecord, zone: &ZoneId) -> d2b_session::Result<()> {
         if subject.zone_ref.name().as_str() != zone.as_str() {
             return Err(d2b_session::SessionError::new(
-                d2b_session::contract::SessionErrorCode::SubjectMismatch,
+                d2b_session::contract::SessionErrorCode::SubjectConfigurationMismatch,
             ));
         }
         let mut subjects = self
@@ -1131,7 +1196,7 @@ impl AuthoritativeUnixSubjectResolver {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         if subjects.len() >= self.max_subjects {
             return Err(d2b_session::SessionError::new(
-                d2b_session::contract::SessionErrorCode::SubjectMismatch,
+                d2b_session::contract::SessionErrorCode::SubjectConfigurationMismatch,
             ));
         }
         subjects.push(subject);
@@ -2295,7 +2360,7 @@ impl BusIngress {
     }
 
     /// Cancel one operation owned by this exact ingress.
-    pub async fn cancel(&self, operation: &OperationId) -> Result<(), BusError> {
+    pub async fn cancel(&self, operation: &OperationId) -> Result<CancellationReceipt, BusError> {
         let result = self.cancel_inner(operation).await;
         if let Err(error) = &result {
             self.core.observe_error(BusEvent::Cancel, error);
@@ -2303,14 +2368,14 @@ impl BusIngress {
         result
     }
 
-    async fn cancel_inner(&self, operation: &OperationId) -> Result<(), BusError> {
+    async fn cancel_inner(&self, operation: &OperationId) -> Result<CancellationReceipt, BusError> {
         self.ensure_open()?;
         let Some(admission) = self
             .core
             .lock_operations()
             .cancel_admission(operation, self.session)?
         else {
-            return Ok(());
+            return Ok(CancellationReceipt::local());
         };
         let source = self.core.lock_registry().source(self.session)?;
         if let Some(context) = source.context.as_ref() {
@@ -2337,11 +2402,11 @@ impl BusIngress {
                 .lock_operations()
                 .cancel_admitted(operation, self.session, &admission)?
         else {
-            return Ok(());
+            return Ok(CancellationReceipt::local());
         };
         debug_assert!(dispatch.target.cancellation.is_cancelled());
-        self.core.dispatch_cancel_targets(vec![dispatch]);
-        Ok(())
+        let completion = self.core.dispatch_cancel_target(dispatch);
+        Ok(CancellationReceipt::pending(completion))
     }
 
     fn ensure_open(&self) -> Result<(), BusError> {
@@ -4063,7 +4128,12 @@ mod tests {
         };
         let (invoke_result, cancel_result) = tokio::join!(invoke, cancel);
         assert_eq!(invoke_result, Err(BusError::Cancelled));
-        assert_eq!(cancel_result, Ok(()));
+        let receipt = cancel_result.unwrap();
+        assert_eq!(receipt.local_outcome(), CancellationOutcome::LocalTerminal);
+        assert_eq!(
+            receipt.remote_outcome().await,
+            CancellationOutcome::RemoteConfirmed
+        );
         assert_eq!(endpoint.cancel_count.load(Ordering::Acquire), 1);
     }
 
@@ -4128,10 +4198,10 @@ mod tests {
         }
 
         hook.release.notify_one();
-        assert_eq!(
+        assert!(matches!(
             cancel.await,
             Err(BusError::Operation(OperationError::OperationNotFound))
-        );
+        ));
         assert_eq!(endpoint.cancellation_count(), 0);
         endpoint.release.notify_one();
         assert!(replacement.await.is_ok());
@@ -4178,7 +4248,12 @@ mod tests {
             };
             let (invoke_result, cancel_result) = tokio::join!(invoke, cancel);
             assert_eq!(invoke_result, Err(BusError::Cancelled));
-            assert_eq!(cancel_result, Ok(()));
+            let receipt = cancel_result.unwrap();
+            assert_eq!(receipt.local_outcome(), CancellationOutcome::LocalTerminal);
+            assert_eq!(
+                receipt.remote_outcome().await,
+                CancellationOutcome::LocalTerminal
+            );
             assert!(!endpoint.has_active_request(&id));
             assert!(!endpoint.has_response_waiter(&id));
             while endpoint.cancellation_count() <= index {
@@ -4230,7 +4305,10 @@ mod tests {
             };
             let (invoke_result, cancel_result) = tokio::join!(invoke, cancel);
             assert_eq!(invoke_result, Err(BusError::Cancelled));
-            assert_eq!(cancel_result, Ok(()));
+            assert_eq!(
+                cancel_result.unwrap().local_outcome(),
+                CancellationOutcome::LocalTerminal
+            );
             assert!(!endpoint.has_active_request(&id));
             assert!(!endpoint.has_response_waiter(&id));
             assert_eq!(harness.caller.core.cancel_deliveries.len(), 1);
@@ -4278,7 +4356,10 @@ mod tests {
         };
         let (invoke_result, cancel_result) = tokio::join!(invoke, cancel);
         assert_eq!(invoke_result, Err(BusError::Cancelled));
-        assert_eq!(cancel_result, Ok(()));
+        assert_eq!(
+            cancel_result.unwrap().local_outcome(),
+            CancellationOutcome::LocalTerminal
+        );
         assert_eq!(harness.caller.core.cancel_deliveries.len(), 1);
 
         tokio::time::advance(CANCEL_DELIVERY_TIMEOUT + Duration::from_millis(1)).await;
@@ -4471,7 +4552,7 @@ mod tests {
                     Vec::new(),
                 )
                 .await,
-            Err(BusError::Operation(OperationError::DuplicateOperation))
+            Err(BusError::Operation(OperationError::RetainedOperationId))
         );
         assert!(
             harness

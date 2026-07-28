@@ -351,10 +351,11 @@ impl OperationTable {
         };
         route_lease
             .with_active(|| {
-                if self.records.contains_key(&key)
-                    || self.tombstones.iter().any(|tombstone| tombstone.key == key)
-                {
+                if self.records.contains_key(&key) {
                     return Err(OperationError::DuplicateOperation);
+                }
+                if self.tombstones.iter().any(|tombstone| tombstone.key == key) {
+                    return Err(OperationError::RetainedOperationId);
                 }
                 if self.records.len() >= self.max_operations {
                     return Err(OperationError::CapacityExceeded);
@@ -630,6 +631,7 @@ pub enum OperationError {
     InvalidDeadline,
     InvalidLimit,
     DuplicateOperation,
+    RetainedOperationId,
     CapacityExceeded,
     SessionCapacityExceeded,
     RouteRevoked,
@@ -646,6 +648,9 @@ impl core::fmt::Display for OperationError {
             Self::InvalidDeadline => "operation deadline must be nonzero",
             Self::InvalidLimit => "operation table limit must be nonzero",
             Self::DuplicateOperation => "operation identifier is already active",
+            Self::RetainedOperationId => {
+                "operation identifier is retained after cancellation; retry cancellation or start new work with a new operation identifier"
+            }
             Self::CapacityExceeded => "operation table capacity is exhausted",
             Self::SessionCapacityExceeded => "source session operation quota is exhausted",
             Self::RouteRevoked => "operation route was revoked",
@@ -940,7 +945,7 @@ mod tests {
         );
         assert!(matches!(
             table.begin(&retained, SessionId(2), lease(SessionId(9)), route(), 1,),
-            Err(OperationError::DuplicateOperation)
+            Err(OperationError::RetainedOperationId)
         ));
         assert!(
             cancel_now(&mut table, retained.id(), SessionId(2))
@@ -980,9 +985,13 @@ mod tests {
                     route(),
                     1
                 ),
-                Err(OperationError::DuplicateOperation)
+                Err(OperationError::RetainedOperationId)
             ),
             "same-id reuse must remain blocked while cancellation retry state exists"
+        );
+        assert_eq!(
+            OperationError::RetainedOperationId.to_string(),
+            "operation identifier is retained after cancellation; retry cancellation or start new work with a new operation identifier"
         );
         assert!(
             cancel_now(&mut table, reused_operation.id(), SessionId(1))

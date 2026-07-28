@@ -398,7 +398,11 @@ async fn verified_peer_evidence_cannot_author_a_subject_without_registrar_state(
     };
     assert_eq!(
         error.code(),
-        d2b_session::contract::SessionErrorCode::SubjectMismatch
+        d2b_session::contract::SessionErrorCode::SubjectConfigurationMismatch
+    );
+    assert_eq!(
+        error.remediation(),
+        d2b_session::contract::Remediation::RepairConfiguration
     );
 }
 
