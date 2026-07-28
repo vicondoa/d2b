@@ -105,6 +105,7 @@ pub trait ComponentSessionDriver: Send + Sync {
 #[derive(Clone)]
 pub struct SessionDriverHandle {
     commands: mpsc::Sender<DriverCommand>,
+    mandatory_commands: mpsc::UnboundedSender<DriverCommand>,
     generation: Arc<AtomicU64>,
     writer_fence: Cancellation,
 }
@@ -148,6 +149,22 @@ impl SessionDriverHandle {
             reply,
         })
         .await
+    }
+
+    pub(crate) fn queue_cancellation(
+        &self,
+        generation: u64,
+        request_id: RequestId,
+    ) -> Result<oneshot::Receiver<Result<()>>> {
+        let (reply, receive) = oneshot::channel();
+        self.mandatory_commands
+            .send(DriverCommand::Cancel {
+                generation,
+                request_id,
+                reply,
+            })
+            .map_err(|_| disconnected())?;
+        Ok(receive)
     }
 }
 
@@ -302,6 +319,7 @@ impl<T: OwnedTransport + 'static> SessionEngine<T> {
         let generation = Arc::new(AtomicU64::new(self.generation()));
         let writer_fence = Cancellation::new();
         let (commands, receiver) = mpsc::channel(DRIVER_COMMAND_CAPACITY);
+        let (mandatory_commands, mandatory_receiver) = mpsc::unbounded_channel();
         let descriptor = self.transport_descriptor();
         let timeout = Duration::from_millis(u64::from(self.keepalive_timeout_ms()));
         let (write_sender, write_receiver) = mpsc::channel(DRIVER_WRITE_CAPACITY);
@@ -328,6 +346,7 @@ impl<T: OwnedTransport + 'static> SessionEngine<T> {
         tokio::spawn(run_driver(
             self,
             receiver,
+            mandatory_receiver,
             writer_failure_receiver,
             write_sender,
             priority_sender,
@@ -335,6 +354,7 @@ impl<T: OwnedTransport + 'static> SessionEngine<T> {
         ));
         SessionDriverHandle {
             commands,
+            mandatory_commands,
             generation,
             writer_fence,
         }
@@ -947,6 +967,7 @@ impl<T: EventBytes> EventQueue<T> {
 async fn run_driver<T: OwnedTransport>(
     mut engine: SessionEngine<T>,
     mut commands: mpsc::Receiver<DriverCommand>,
+    mut mandatory_commands: mpsc::UnboundedReceiver<DriverCommand>,
     mut writer_failures: mpsc::Receiver<SessionError>,
     write_commands: mpsc::Sender<WriterCommand>,
     priority_writes: mpsc::UnboundedSender<WriterCommand>,
@@ -957,6 +978,7 @@ async fn run_driver<T: OwnedTransport>(
     let result = loop {
         enum Work {
             Command(Option<DriverCommand>),
+            MandatoryCommand(Option<DriverCommand>),
             Inbound(Result<SessionEvent>),
             NamedStream,
             WriterFailure(Option<SessionError>),
@@ -970,6 +992,7 @@ async fn run_driver<T: OwnedTransport>(
         let work = match fairness_turn {
             0 => tokio::select! {
                 biased;
+                command = mandatory_commands.recv() => Work::MandatoryCommand(command),
                 error = writer_failures.recv() => Work::WriterFailure(error),
                 command = commands.recv() => Work::Command(command),
                 event = engine.receive() => Work::Inbound(event),
@@ -977,6 +1000,7 @@ async fn run_driver<T: OwnedTransport>(
             },
             1 => tokio::select! {
                 biased;
+                command = mandatory_commands.recv() => Work::MandatoryCommand(command),
                 error = writer_failures.recv() => Work::WriterFailure(error),
                 event = engine.receive() => Work::Inbound(event),
                 () = named_work => Work::NamedStream,
@@ -984,6 +1008,7 @@ async fn run_driver<T: OwnedTransport>(
             },
             _ => tokio::select! {
                 biased;
+                command = mandatory_commands.recv() => Work::MandatoryCommand(command),
                 error = writer_failures.recv() => Work::WriterFailure(error),
                 () = named_work => Work::NamedStream,
                 command = commands.recv() => Work::Command(command),
@@ -992,7 +1017,7 @@ async fn run_driver<T: OwnedTransport>(
         };
         fairness_turn = (fairness_turn + 1) % 3;
         match work {
-            Work::Command(command) => {
+            Work::Command(command) | Work::MandatoryCommand(command) => {
                 let Some(command) = command else {
                     break Err(disconnected());
                 };
@@ -1046,13 +1071,46 @@ async fn run_driver<T: OwnedTransport>(
                 }
             }
             Work::WriterFailure(error) => {
-                break Err(error.unwrap_or_else(disconnected));
+                let error = error.unwrap_or_else(disconnected);
+                record_writer_failure(&engine, error);
+                break Err(error);
             }
         }
     };
 
     let error = result.err().unwrap_or_else(disconnected);
     queues.fail(error);
+}
+
+trait WriterFailureRecorder {
+    fn record_writer_failure(
+        &self,
+        event: MetricEvent,
+        channel_class: ChannelClass,
+        operation_class: OperationClass,
+        error: SessionError,
+    );
+}
+
+impl<T: OwnedTransport> WriterFailureRecorder for SessionEngine<T> {
+    fn record_writer_failure(
+        &self,
+        event: MetricEvent,
+        channel_class: ChannelClass,
+        operation_class: OperationClass,
+        error: SessionError,
+    ) {
+        self.record_failure(event, channel_class, operation_class, error);
+    }
+}
+
+fn record_writer_failure(recorder: &impl WriterFailureRecorder, error: SessionError) {
+    recorder.record_writer_failure(
+        MetricEvent::RejectedRecord,
+        ChannelClass::SessionControl,
+        OperationClass::Cancel,
+        error,
+    );
 }
 
 enum DriverAction {
@@ -1101,6 +1159,7 @@ async fn handle_command<T: OwnedTransport>(
             request_id,
             reply,
         } => {
+            engine.cancel_and_complete_call(&request_id);
             let batch = match reserve_cancellation_write(write_commands, priority_writes) {
                 Ok(batch) => batch,
                 Err(error) => {
@@ -1614,6 +1673,35 @@ mod tests {
 
     struct PreparedWriteFixture(Option<PreparedWriteBatch>);
 
+    #[derive(Default)]
+    struct CapturingWriterFailure(
+        Mutex<
+            Vec<(
+                MetricEvent,
+                ChannelClass,
+                OperationClass,
+                d2b_contracts::v3::component_session::MetricReason,
+            )>,
+        >,
+    );
+
+    impl WriterFailureRecorder for CapturingWriterFailure {
+        fn record_writer_failure(
+            &self,
+            event: MetricEvent,
+            channel_class: ChannelClass,
+            operation_class: OperationClass,
+            error: SessionError,
+        ) {
+            self.0.lock().unwrap().push((
+                event,
+                channel_class,
+                operation_class,
+                crate::metrics::reason_for_error(error.code()),
+            ));
+        }
+    }
+
     impl PreparedWriteSource for PreparedWriteFixture {
         fn take_prepared_write(&mut self) -> Option<PreparedWriteBatch> {
             self.0.take()
@@ -1758,8 +1846,22 @@ mod tests {
         release.notify_one();
         assert!(revocation.await);
         assert_eq!(
-            failure_receiver.recv().await.unwrap().code(),
-            SessionErrorCode::Cancelled
+            {
+                let error = failure_receiver.recv().await.unwrap();
+                let metrics = CapturingWriterFailure::default();
+                record_writer_failure(&metrics, error);
+                assert_eq!(
+                    *metrics.0.lock().unwrap(),
+                    vec![(
+                        MetricEvent::RejectedRecord,
+                        ChannelClass::SessionControl,
+                        OperationClass::Cancel,
+                        d2b_contracts::v3::component_session::MetricReason::Cancellation,
+                    )]
+                );
+                error.code()
+            },
+            SessionErrorCode::Cancelled,
         );
         task.await.unwrap();
         assert_eq!(

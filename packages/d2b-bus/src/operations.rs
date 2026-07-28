@@ -105,7 +105,7 @@ impl Cancellation {
         self.0.cancelled.load(Ordering::Acquire)
     }
 
-    fn cancel(&self) {
+    pub(crate) fn cancel(&self) {
         if !self.0.cancelled.swap(true, Ordering::AcqRel) {
             self.0.notify.notify_waiters();
         }
@@ -351,10 +351,11 @@ impl OperationTable {
         };
         route_lease
             .with_active(|| {
-                if self.records.contains_key(&key)
-                    || self.tombstones.iter().any(|tombstone| tombstone.key == key)
-                {
+                if self.records.contains_key(&key) {
                     return Err(OperationError::DuplicateOperation);
+                }
+                if self.tombstones.iter().any(|tombstone| tombstone.key == key) {
+                    return Err(OperationError::RetainedOperationId);
                 }
                 if self.records.len() >= self.max_operations {
                     return Err(OperationError::CapacityExceeded);
@@ -591,6 +592,19 @@ impl OperationTable {
     }
 
     fn push_tombstone(&mut self, key: OperationKey, cancellation: Cancellation) {
+        let source_tombstones = self
+            .tombstones
+            .iter()
+            .filter(|tombstone| tombstone.key.source == key.source)
+            .count();
+        if source_tombstones >= self.max_operations_per_session
+            && let Some(oldest) = self
+                .tombstones
+                .iter()
+                .position(|tombstone| tombstone.key.source == key.source)
+        {
+            self.tombstones.remove(oldest);
+        }
         while self.tombstones.len() >= self.max_operations {
             self.tombstones.pop_front();
         }
@@ -617,6 +631,7 @@ pub enum OperationError {
     InvalidDeadline,
     InvalidLimit,
     DuplicateOperation,
+    RetainedOperationId,
     CapacityExceeded,
     SessionCapacityExceeded,
     RouteRevoked,
@@ -633,6 +648,9 @@ impl core::fmt::Display for OperationError {
             Self::InvalidDeadline => "operation deadline must be nonzero",
             Self::InvalidLimit => "operation table limit must be nonzero",
             Self::DuplicateOperation => "operation identifier is already active",
+            Self::RetainedOperationId => {
+                "operation identifier is retained after cancellation; retry cancellation or start new work with a new operation identifier"
+            }
             Self::CapacityExceeded => "operation table capacity is exhausted",
             Self::SessionCapacityExceeded => "source session operation quota is exhausted",
             Self::RouteRevoked => "operation route was revoked",
@@ -900,6 +918,43 @@ mod tests {
     }
 
     #[test]
+    fn one_source_tombstone_churn_cannot_evict_another_sources_retry_state() {
+        let mut table = OperationTable::new(3, 2).unwrap();
+        let retained = operation("retained-by-source-two", 10);
+        table
+            .begin(&retained, SessionId(2), lease(SessionId(9)), route(), 1)
+            .unwrap();
+        cancel_now(&mut table, retained.id(), SessionId(2))
+            .unwrap()
+            .unwrap();
+
+        for id in ["attacker-first", "attacker-second", "attacker-third"] {
+            let operation = operation(id, 10);
+            table
+                .begin(&operation, SessionId(1), lease(SessionId(9)), route(), 1)
+                .unwrap();
+            cancel_now(&mut table, operation.id(), SessionId(1))
+                .unwrap()
+                .unwrap();
+        }
+
+        assert!(
+            table
+                .cancellation_complete(retained.id(), SessionId(2))
+                .unwrap()
+        );
+        assert!(matches!(
+            table.begin(&retained, SessionId(2), lease(SessionId(9)), route(), 1,),
+            Err(OperationError::RetainedOperationId)
+        ));
+        assert!(
+            cancel_now(&mut table, retained.id(), SessionId(2))
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
     fn cancel_retry_cannot_reach_a_same_id_replacement_while_tombstone_is_retained() {
         let mut table = OperationTable::new(1, 1).unwrap();
         let reused_operation = operation("reused", 10);
@@ -930,9 +985,13 @@ mod tests {
                     route(),
                     1
                 ),
-                Err(OperationError::DuplicateOperation)
+                Err(OperationError::RetainedOperationId)
             ),
             "same-id reuse must remain blocked while cancellation retry state exists"
+        );
+        assert_eq!(
+            OperationError::RetainedOperationId.to_string(),
+            "operation identifier is retained after cancellation; retry cancellation or start new work with a new operation identifier"
         );
         assert!(
             cancel_now(&mut table, reused_operation.id(), SessionId(1))

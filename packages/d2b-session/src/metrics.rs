@@ -77,6 +77,7 @@ pub(crate) const fn reason_for_error(code: SessionErrorCode) -> MetricReason {
         SessionErrorCode::SessionDisconnected => MetricReason::Transport,
         SessionErrorCode::BootstrapOperationMismatch => MetricReason::PolicyDenied,
         SessionErrorCode::SubjectMismatch => MetricReason::Authentication,
+        SessionErrorCode::SubjectConfigurationMismatch => MetricReason::PolicyDenied,
         SessionErrorCode::TransportMismatch => MetricReason::TransportMismatch,
         SessionErrorCode::NonceExhausted
         | SessionErrorCode::SchedulerStalled

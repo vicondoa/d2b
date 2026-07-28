@@ -1447,7 +1447,7 @@ async fn driver_handle_is_clonable_object_safe_and_leaves_ttrpc_correlation_to_a
     ));
     assert!(inbound_cancellation.is_cancelled());
     assert!(
-        initiator
+        !initiator
             .complete_ttrpc(RequestId::new(vec![0x42; 16]).unwrap())
             .await
             .unwrap()

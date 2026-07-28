@@ -65,7 +65,8 @@ impl SessionError {
             | SessionErrorCode::ServiceMismatch
             | SessionErrorCode::SchemaMismatch
             | SessionErrorCode::ChannelBindingMismatch
-            | SessionErrorCode::BootstrapOperationMismatch => SessionErrorClass::Authorization,
+            | SessionErrorCode::BootstrapOperationMismatch
+            | SessionErrorCode::SubjectConfigurationMismatch => SessionErrorClass::Authorization,
             SessionErrorCode::GenerationMismatch | SessionErrorCode::NonceExhausted => {
                 SessionErrorClass::Generation
             }
@@ -167,6 +168,7 @@ impl SessionError {
             | SessionErrorCode::BootstrapReplayed
             | SessionErrorCode::BootstrapOperationMismatch
             | SessionErrorCode::PolicyDenied
+            | SessionErrorCode::SubjectConfigurationMismatch
             | SessionErrorCode::TransportMismatch => Remediation::RepairConfiguration,
         }
     }
@@ -325,5 +327,16 @@ mod tests {
         let cancelled = SessionError::new(SessionErrorCode::Cancelled);
         assert_eq!(cancelled.class(), SessionErrorClass::Cancellation);
         assert_eq!(cancelled.remediation(), Remediation::None);
+
+        let subject_configuration =
+            SessionError::new(SessionErrorCode::SubjectConfigurationMismatch);
+        assert_eq!(
+            subject_configuration.class(),
+            SessionErrorClass::Authorization
+        );
+        assert_eq!(
+            subject_configuration.remediation(),
+            Remediation::RepairConfiguration
+        );
     }
 }
