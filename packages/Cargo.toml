@@ -90,6 +90,5 @@ rtnetlink = "0.14"
 # verified by the broker's hash readback).
 sha2 = "0.10"
 unicode-normalization = "0.1"
-redb = { version = "=4.1.0", default-features = false }
 tokio = { version = "1", default-features = false }
 ttrpc = { version = "0.9.0", default-features = false }

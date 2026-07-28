@@ -19,10 +19,11 @@ deprecations ship one minor release before removal.
   physical schema, bounded fair async writer and group commits, revision-backed
   watches and controller hints, crash-boundary recovery fixtures, scale/RSS
   fixtures, and commit-to-handler latency measurements. Functional, watch,
-  conflict, crash-recovery, and latency thresholds passed, but whole-process
-  median maximum RSS was 25,068 KiB against a 24,576 KiB gate. That failure
-  blocks the production backend and watch dispatcher; subtracting a process
-  baseline is not permitted.
+  conflict, crash-recovery, group commit at 48/50, 96%, and latency thresholds
+  passed, but whole-process RSS was 25,216 KiB (24.625 MiB), 640 KiB or about
+  2.6% above 24,576 KiB. That failure blocks the production backend and watch
+  dispatcher; subtracting a process baseline is not permitted. The redb
+  dependency remains isolated to the disposable proof workspace.
 
 - Added the self-contained, test-only per-Zone `d2b-bus` exact-address router with native
   Role/RoleBinding authorization, relay and diagnostic verb enforcement,

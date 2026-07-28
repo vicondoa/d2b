@@ -48,8 +48,7 @@ export CARGO_BUILD_RUSTC_WRAPPER=
 
 Oracle hardening did not turn a previously passing threshold into a failure.
 The whole-process RSS threshold remains the one measured failure. The latency
-methodology correction removed the earlier unexplained 110.640 us versus
-12.640 us inversion.
+methodology correction removed the earlier unexplained inverted profile.
 
 ## Functional scale and watch oracle
 
@@ -184,7 +183,7 @@ The release binary is built explicitly so a fresh checkout does not depend on
 an already-existing `target/release/rss-fixture`:
 
 ```text
-cargo build --release --manifest-path proofs/redb-resource-store-spike/Cargo.toml --bin rss-fixture
+cargo build --release --locked --manifest-path proofs/redb-resource-store-spike/Cargo.toml --bin rss-fixture
 for args in \
   '--resources 0 --watches 0' \
   '--resources 10000 --watches 0' \
@@ -268,12 +267,12 @@ configured rate. The observed 494.7 and 1,792.2 writes/s are respectively
 declared tolerance. The minimum per-writer counts prove all 10 and all 100
 writers were active.
 
-The earlier 110.640 us unloaded p95 versus 12.640 us at 2,000 writes/s was a
-measurement artifact. The sampling future waited for its write receipt before
-it started polling the hint receiver. Under high load, other Tokio tasks kept
-runtime workers awake and the already-queued hint was consumed immediately;
-under no load, parking and waking the same runtime made that delay much larger.
-The profiles therefore measured different consumer scheduling states.
+The earlier unloaded-versus-loaded p95 inversion was a measurement artifact.
+The sampling future waited for its write receipt before it started polling the
+hint receiver. Under high load, other Tokio tasks kept runtime workers awake
+and the already-queued hint was consumed immediately; under no load, parking
+and waking the same runtime made that delay much larger. The profiles therefore
+measured different consumer scheduling states.
 
 The corrected harness has a dedicated OS handler thread continuously blocked
 on the hint receiver. That thread timestamps the hint before handing the
