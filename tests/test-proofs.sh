@@ -67,6 +67,11 @@ rc=0
 proofs=()
 for manifest in "$ROOT"/proofs/*/Cargo.toml; do
   [ -f "$manifest" ] || continue
+  lockfile="$(dirname "$manifest")/Cargo.lock"
+  if [ ! -f "$lockfile" ]; then
+    fail "proof manifest has no sibling Cargo.lock: ${manifest#"$ROOT/"}"
+    exit 1
+  fi
   proofs+=("$(basename "$(dirname "$manifest")")")
 done
 
@@ -79,13 +84,29 @@ log "discovered ${#proofs[@]} proof crate(s): ${proofs[*]}"
 for proof in "${proofs[@]}"; do
   manifest="$ROOT/proofs/$proof/Cargo.toml"
   log "--> proofs/$proof: clippy + test"
-  if cargo clippy --manifest-path "$manifest" --all-targets -- -D warnings \
-    && cargo test --manifest-path "$manifest"; then
-    ok "proofs/$proof"
-  else
+  if ! cargo clippy --locked --manifest-path "$manifest" --all-targets -- -D warnings \
+    || ! cargo test --locked --manifest-path "$manifest"; then
     fail "proofs/$proof"
     rc=1
+    continue
   fi
+
+  # This proof's four scale fixtures are intentionally #[ignore]d so normal
+  # developer cargo tests remain fast. The enforcing proof gate must execute
+  # them explicitly: correctness, watches, conflict grouping, and owner fan-in
+  # are the proof's principal oracles. Release mode keeps this roughly
+  # five-minute lane inside the existing 15-minute CI job timeout.
+  if [ "$proof" = "redb-resource-store-spike" ]; then
+    log "    running required ignored full-scale suite (expected <=5 minutes)"
+    if ! cargo test --release --locked --manifest-path "$manifest" \
+      --test full_scale -- --ignored --test-threads=1 --nocapture; then
+      fail "proofs/$proof full-scale suite"
+      rc=1
+      continue
+    fi
+  fi
+
+  ok "proofs/$proof"
 done
 
 [ "$rc" -eq 0 ] || exit 1

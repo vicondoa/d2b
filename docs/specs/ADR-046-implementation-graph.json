@@ -21608,7 +21608,7 @@
       "destinations" : [
         "`packages/d2b-resource-store-redb/src/revision_log.rs`, `packages/d2b-resource-api/src/watch.rs`"
       ],
-      "detailedDesign" : "replay/live no-gap watch, cursors, owner hints, compaction floor, expired relist",
+      "detailedDesign" : "Implement replay/live no-gap watch, cursors, owner hints, compaction floor, and expired relist around one global bounded watch-admission budget. Registrations retain only small cursor/filter/accounting state. Budget exhaustion returns typed backpressure before registration; deterministic slow-watcher eviction releases its budget and resumes from the last acknowledged cursor. Export current registrations, budget used/capacity, admission rejections, slow-watcher evictions, and replay work with closed non-sensitive labels. Range-seek replay, streaming decode, and shared immutable ChangeBatch fan-out are supplied by `ADR046-store-004`.",
       "entryContracts" : [
         "ADR-046-resource-store-redb"
       ],
@@ -21624,7 +21624,7 @@
       ],
       "specId" : "ADR-046-resource-store-redb",
       "topologicalRank" : 6,
-      "validation" : "SPIKE-01 correctness and SPIKE-02 latency evidence before implementation; deterministic watch/compaction/disconnect/fan-in tests afterward",
+      "validation" : "SPIKE-02 latency evidence and a corrected SPIKE-01 rerun passing the unchanged whole-process <=24 MiB gate with no baseline subtraction; deterministic watch/compaction/disconnect/fan-in tests; global-budget exhaustion and typed-admission-backpressure tests; deterministic slow-watcher eviction/resume tests; saturation-signal tests for current registrations, budget used/capacity, admission rejections, slow-watcher evictions, and replay work",
       "wave" : "W1"
     },
     {
@@ -21655,7 +21655,7 @@
       "destinations" : [
         "`packages/d2b-resource-store-redb/src/lib.rs`, `actor.rs`, `transaction.rs`"
       ],
-      "detailedDesign" : "After successful SPIKE-01 evidence, adopt the already-pinned redb API in the production engine. Implement the redb engine, owned-fd database open, store identity, fair actor, MVCC reads, atomic indexes/revisions/operations/conflicts, crash recovery, and the contract constants: write queue 256, group-commit batch 16, read pool 4, concurrent reads 16, read lifetime 250 ms, and watch-dispatch queue 1024. Use full crash-safe durability with one fsync per write transaction; no reduced-durability mode. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt.",
+      "detailedDesign" : "Adopt the already-pinned redb API only behind the failed-spike correction and rerun gate. Implement the redb engine, owned-fd database open, store identity, fair actor, MVCC reads, atomic indexes/revisions/operations/conflicts, crash recovery, and the contract constants: write queue 256, group-commit batch 16, read pool 4, concurrent reads 16, and read lifetime 250 ms. Revision replay range-seeks the big-endian revision key, streams only rows after `afterRevision`, and never decodes older complete envelopes. Live delivery shares one immutable decoded ChangeBatch across matching watchers instead of cloning each envelope. The global admission budget and slow-watcher policy belong to `ADR046-store-002`, not this backend. Use full crash-safe durability with one fsync per write transaction; no reduced-durability mode. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt.",
       "entryContracts" : [
         "ADR-046-resource-store-redb"
       ],
@@ -21671,7 +21671,7 @@
       ],
       "specId" : "ADR-046-resource-store-redb",
       "topologicalRank" : 5,
-      "validation" : "Successful SPIKE-01 evidence; conformance tests proving verified-only mutation, no independent write path, and the required structural and atomic checks; security review of each registered backend; unit/property/fault tests and the hard benchmark including the 10,000-resource/100-watch RSS result; owned-fd and `FD_CLOEXEC` checks for direct and `SCM_RIGHTS` receipt plus fork/exec inheritance probes; exact dependency/feature-policy lint; queue/pool constant assertions; paused-clock read-expiry tests; no reduced-durability call-site lint",
+      "validation" : "Corrected SPIKE-01 evidence passing the unchanged whole-process <=24 MiB gate with no baseline subtraction; range-seek tests proving older revisions and envelopes are neither scanned nor decoded; shared immutable ChangeBatch fan-out tests; integration tests for the exported watch-budget saturation snapshot (current registrations, budget used/capacity, admission rejections, slow-watcher evictions, replay work); conformance tests proving verified-only mutation, no independent write path, and the required structural and atomic checks; security review of each registered backend; unit/property/fault tests and the hard 10,000-resource/100-watch benchmark; owned-fd and `FD_CLOEXEC` checks for direct and `SCM_RIGHTS` receipt plus fork/exec inheritance probes; exact dependency/feature-policy lint; queue/pool constant assertions; paused-clock read-expiry tests; no reduced-durability call-site lint",
       "wave" : "W1"
     },
     {
@@ -21696,7 +21696,7 @@
       ],
       "specId" : "ADR-046-resource-store-redb",
       "topologicalRank" : 6,
-      "validation" : "Successful SPIKE-01 evidence; marker replacement, crash publication, backup/restore/upgrade, and store-identity mismatch tests; broker wire codec/unknown-op tests; opaque-id/path-injection and signed-row mismatch rejection; provision/open idempotency; exactly-one-fd `SCM_RIGHTS` transfer with `MSG_CMSG_CLOEXEC`, `F_GETFD` verification, and fork/exec non-inheritance; audit record contains the operation/result but no host path",
+      "validation" : "Corrected SPIKE-01 evidence passing the unchanged whole-process RSS gate; marker replacement, crash publication, backup/restore/upgrade, and store-identity mismatch tests; broker wire codec/unknown-op tests; opaque-id/path-injection and signed-row mismatch rejection; provision/open idempotency; exactly-one-fd `SCM_RIGHTS` transfer with `MSG_CMSG_CLOEXEC`, `F_GETFD` verification, and fork/exec non-inheritance; audit record contains the operation/result but no host path",
       "wave" : "W5"
     },
     {

@@ -211,9 +211,10 @@ scan_dashes() {
 #
 # Path classification is the allow-list. Historical/process-bearing paths
 # (AGENTS.md, docs/adr/**, docs/specs/**, changelog.d/**) never enter the
-# governed set. Shipped prose and CLI goldens are scanned in full. Source trees
-# use comment context plus the CLI crate's string context; workflow and
-# CHANGELOG files use workflow/job/step-name and released-section contexts. A
+# governed set. Shipped prose, proof Markdown, CLI goldens, and every CHANGELOG
+# section are scanned in full. Production and proof source trees use comment
+# context plus the CLI crate's string context; workflow files use
+# workflow/job/step-name contexts. A
 # new path exemption therefore requires changing this code, not adding magic
 # prose that the scanner silently accepts.
 #
@@ -286,6 +287,14 @@ scan_process_markers() {
         ;;
       tests/fixtures/gen-w3-cli-goldens.py)
         full_files+=("$f")
+        filename_files+=("$f")
+        ;;
+      proofs/*.md|proofs/*.MD)
+        full_files+=("$f")
+        filename_files+=("$f")
+        ;;
+      proofs/*)
+        source_files+=("$f")
         filename_files+=("$f")
         ;;
       nixos-modules/*|pkgs/*|packages/*)
@@ -406,9 +415,7 @@ scan_process_markers() {
     set +e
     context_hits=$(
       cd "$root" && awk -v path="$f" -v marker="$PROCESS_MARKER_RE" '
-        /^## \[Unreleased\]/ { released = 0; next }
-        /^## \[[^]]+\]/ { released = 1; next }
-        released && $0 ~ marker {
+        $0 ~ marker {
           printf "%s:%d:%s\n", path, NR, $0
         }
       ' "$f"

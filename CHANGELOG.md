@@ -12,23 +12,27 @@ deprecations ship one minor release before removal.
 
 ### Added
 
-- Skeleton crates for `d2b-bus`, `d2b-session`, and `d2b-session-unix`,
-  registered as workspace members, establishing the Zone message bus and
-  ComponentSession destinations.
+- Added test-only, production-unwired workspace destinations for `d2b-bus`,
+  `d2b-session`, and `d2b-session-unix`.
 
 - Added a standalone redb resource-store feasibility spike covering the ten-table
   physical schema, bounded fair async writer and group commits, revision-backed
   watches and controller hints, crash-boundary recovery fixtures, scale/RSS
-  fixtures, and commit-to-handler latency measurements.
+  fixtures, and commit-to-handler latency measurements. Functional, watch,
+  conflict, crash-recovery, and latency thresholds passed, but whole-process
+  median maximum RSS was 25,068 KiB against a 24,576 KiB gate. That failure
+  blocks the production backend and watch dispatcher; subtracting a process
+  baseline is not permitted.
 
-- Added the self-contained per-Zone `d2b-bus` exact-address router with native
+- Added the self-contained, test-only per-Zone `d2b-bus` exact-address router with native
   Role/RoleBinding authorization, relay and diagnostic verb enforcement,
   single-owner authenticated registration, revision-bound revocation,
   pinned cancellation routes, reconnect replacement, and credit-bounded fair
   named streams. It remains disconnected from production adapters until the
   authenticated ComponentSession integration lands.
 
-- Added the transport-neutral ComponentSession v3 contract and runtime with
+- Added the test-only, production-unwired transport-neutral ComponentSession v3
+  contract and runtime with
   strict Noise NN/KK/IKpsk2 authentication, replay-safe records, native
   authorization leases, fair named streams, cancellation, deadlines, and
   reconnect handling. Added Unix seqpacket, stream, socketpair, and vsock
@@ -36,11 +40,17 @@ deprecations ship one minor release before removal.
   multi-scope attachment credits, and fail-closed cleanup; bus registration
   remains an explicit unconnected interface.
 
-- Added the async controller toolkit and core reconciliation engine with
+- Added the test-only, production-unwired async controller toolkit and core
+  reconciliation engine with
   store-watch relisting, bounded per-resource single-flight dispatch,
   cross-resource concurrency, commit-gated expedited effects, serialized
   upgrades, owner/dependency propagation, suppression, leases, and fair hint
   admission.
+
+- This work exposes no operator-facing capability yet. Production use remains
+  blocked on authenticated ComponentSession-to-bus registration, Zone
+  registration, store/watch integration, and a corrected whole-process RSS
+  rerun.
 
 ### Changed
 
@@ -48,7 +58,11 @@ deprecations ship one minor release before removal.
   `proofs/*/Cargo.toml` instead of iterating a hardcoded list. The previous
   shape paired that list with a silent skip when a directory was absent, so a
   renamed or never-created proof crate reported success while executing
-  nothing. An empty `proofs/` tree now fails closed.
+  nothing. An empty `proofs/` tree now fails closed. Every discovered crate
+  must have a sibling lockfile and runs clippy and tests with `--locked`. The
+  redb proof also executes its four ignored full-scale correctness fixtures in
+  release mode; this adds about five minutes but ensures the proof gate runs
+  its principal oracle, watch, conflict, and owner-fan-in experiments.
 
 - Added the shared `cargo xtask delivery wave` dispatch skeleton for the
   ADR 0046 delivery contract: the `snapshot`, `validate-import`,
@@ -96,7 +110,7 @@ deprecations ship one minor release before removal.
   slice base/target, the direct-push prohibition, and the auto-release
   version-header trigger. References to main-branch ADR 0045 provenance are
   unchanged.
-- Added a terminal `ADR046-W8` friction-closure wave to the ADR 0046 delivery
+- Added a terminal friction-closure wave to the ADR 0046 delivery
   contract for the tooling and process friction (signoff, build, test, merge,
   codegen, disk) accumulated across the earlier waves. It has no spec members
   and is therefore excluded from the topological wave-derivation rule, but it

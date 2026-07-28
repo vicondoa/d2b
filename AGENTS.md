@@ -893,10 +893,10 @@ organised **by version**, never by development phase.
 ### Changelog lifecycle
 
 - **While a version is in development**, entries accumulate under the
-  top `## [Unreleased]` block. Because `[Unreleased]` is a
-  pre-release staging area, it MAY carry fine-grained process detail
-  (wave/phase/follow-up/finding notes) if that helps the people
-  cutting the release reason about what landed.
+  top `## [Unreleased]` block. It remains consumer-facing and follows
+  the same process-marker ban as released sections; wave, phase,
+  follow-up, round, panel, and finding bookkeeping stays in plans,
+  commits, and PR descriptions.
 - **When a version is cut**, the `[Unreleased]` block is renamed to
   `## [X.Y.Z] - YYYY-MM-DD` and its contents are **summarised by
   version**:
@@ -922,9 +922,9 @@ decision codes (`D5/P2.3`), follow-up/round/finding refs
 (`fu3`, `H20`, `(rust-1)`) - is for organising work, not for
 shipping. Do **not** introduce these markers into:
 
-- source comments in `nixos-modules/`, `pkgs/`, or `packages/`;
+- source comments in `nixos-modules/`, `pkgs/`, `packages/`, or `proofs/`;
 - shipped docs prose under `docs/{reference,how-to,explanation}/`,
-  `README.md`, `SECURITY.md`, or example READMEs;
+  `proofs/**/*.md`, `README.md`, `SECURITY.md`, or example READMEs;
 - any user-facing CLI surface (`clap` `about`/`help`/`long_help`
   text, error/observed-state messages, JSON envelope fields);
 - CI workflow names, job names, step names, and test output that a
@@ -932,13 +932,13 @@ shipping. Do **not** introduce these markers into:
   the behavior being validated (for example, "ADR index coverage
   guard" or "host validate dry-run"), not historical phase/process
   codes;
-- released CHANGELOG sections.
+- every CHANGELOG section, including `[Unreleased]`.
 
 These markers are still expected and welcome in the contexts where
 they are load-bearing:
 
 - planning artifacts (a session `plan.md`, the wave/parallelization
-  graph) and pre-release CHANGELOG `[Unreleased]`;
+  graph);
 - this file and the other process docs (Panel review, Commit
   conventions, `## Daemon-only end-state (P6 onward)`) that
   *document* the methodology;
@@ -1020,7 +1020,7 @@ fields that request panel, agent, or model metadata.
 > The trailing wave-tag scheme below applies to in-development
 > commits on feature branches / worktrees, where wave/phase tags are
 > load-bearing planning context. It does not license process markers
-> in shipped code, docs, or released CHANGELOG sections - see
+> in shipped code, docs, or any CHANGELOG section - see
 > [Versioning & changelog](#versioning--changelog).
 
 - **Subject.** Short, imperative, prefixed with the touched
@@ -1228,6 +1228,9 @@ Touch these only with a clear plan and a corresponding test run.
 | GPU sidecar (graphics VMs)          | `nixos-modules/components/graphics.nix` + broker `SpawnRunner` for cloud-hypervisor on graphics VMs; pidfd handed back via `OpenPidfd` and supervised by `d2bd` | Graphics VMs run cloud-hypervisor with the GPU device attached. Restarting `d2bd` no longer terminates CH - pidfd handoff means the child outlives a daemon reconnect - but the broker spawn path is the only audited place CH is launched. Bypassing it breaks the audit trail. Validate the evaluated graphics shape with `tests/unit/nix/cases/video-contract.nix`. |
 | Video sidecar (graphics VMs)        | `nixos-modules/components/video/guest.nix`, `nixos-modules/processes-json.nix`, `pkgs/vhost-user-video/`, `packages/d2b-host/src/video_argv.rs`, broker `SpawnRunner{role: Video}` | `graphics.videoSidecar = true` is an explicit opt-in H264 decode path: guest `virtio_media` + patched Cloud Hypervisor `--vhost-user-media` + patched crosvm `device video-decoder --backend vaapi`. There is no per-VM video systemd unit, no stock crosvm/CH fallback, and no free-form video extra args. The video runner MUST use the dedicated `d2b-<vm>-video` principal, not `d2b-<vm>-gpu`, so broker/activation ACLs can deny host Wayland/PipeWire/Pulse sockets to video without breaking GPU cross-domain. The broker masks `/dev` for the video runner and exposes only the declared device allowlist: default `/dev/dri/renderD128`, plus `/dev/nvidiactl`, `/dev/nvidia0`, and `/dev/nvidia-uvm` only when `graphics.videoNvidiaDecode = true`. `virtio_media` is a guest module, not a host `/proc/modules` preflight requirement. Firefox/VA-API uses the separate experimental `graphics.virglVideo` GPU path; it is default-off and must not be treated as stable video-sidecar coverage. Validate evaluated shape with `tests/unit/nix/cases/video-contract.nix`; rendered argv and sandbox coverage lives in `packages/d2b-contract-tests/tests/minijail_swtpm_video.rs` and is advisory until the fixture lane is enabled. |
 | UI color contract / niri backend    | `nixos-modules/ui-colors.nix`, `nixos-modules/niri-vm-borders.nix`, `docs/reference/ui-colors.{md,json}`, `tests/unit/nix/cases/niri-vm-borders.nix`, and sibling consumers such as `vicondoa/d2b-wlcontrol` | The compositor-agnostic `d2b.site.ui` / `d2b.envs.<env>.ui` / `d2b.vms.<vm>.ui` color model is the source of truth for host/env/VM/state colors. Generated `/etc/d2b/ui-colors.json` and `/etc/d2b/ui-colors.css` are public presentation metadata, not authz or policy inputs. Niri-specific settings belong only under `d2b.site.ui.compositors.niri`; do not add compositor-specific color source options. Keep the JSON schema, reference docs, GTK CSS `@define-color` names, and nix-unit artifact-shape tests in sync. Downstream tools must fail visibly but remain usable when the artifact is missing or malformed, without reading root-owned d2b state directly. |
+| ComponentSession capability boundary | `packages/d2b-contracts/src/v3/component_session.rs`, `packages/d2b-session/`, `packages/d2b-session-unix/` | Authenticated transport evidence and attachment credits are consumed into a private single session owner; do not add a clone/accessor that lets callers reuse admission evidence. Prove exact Zone equality before every capability mint, and never expose a store path, socket, or handle through the session. These crates are tested but deliberately unwired from production listeners until the full authenticated registration path lands. |
+| Zone message bus boundary | `packages/d2b-bus/src/{router,registry,authorization,streams,operations}.rs`, `packages/d2b-resource-api/src/adapter.rs` | Registration consumes the single-owner capability admission; comparing a clonable token is insufficient. Every route is exact, subject-bound, revision-bound, and Zone-checked before minting authority. There is no wildcard pub/sub and no direct store handle. `UnregisteredBusAdapter` is a deliberate unreachable seam and must remain unregistered until authenticated ComponentSession, the Zone bus, and Zone registration land together. |
+| Resource controller effects boundary | `packages/d2b-controller-toolkit/src/{runner,queue,context,result,owner_hints}.rs`, `packages/d2b-core-controller/src/{hints,dependencies,owner_reconcile}.rs` | Controller and core-reconciliation engines are test-only and unwired from the absent production store/watch dispatcher. An EffectPort call is permitted only after durable resource commit and consumption of the matching `CommittedRevisionProof`; abort, conflict, stale proof, or restart ambiguity cannot release an effect. Preserve per-resource single flight, bounded fair admission, deterministic owner/dependency propagation, and restart-safe idempotency when wiring the production path. |
 | Unsafe-local provider, launcher, and persistent-shell helper | `nixos-modules/options-realms-workloads.nix`, `nixos-modules/unsafe-local-workloads-json.nix`, `packages/d2b-core/src/unsafe_local_workloads.rs`, `packages/d2b-contracts/src/unsafe_local_wire.rs`, `packages/d2b-unsafe-local-helper/src/{shell_runtime,shell_supervisor,shell_socket,output_ring,tty_exec}.rs`, and `docs/reference/unsafe-local-provider.md` | `unsafe-local` is explicit and default-denied. It runs only as the exact authenticated requesting uid and provides no isolation boundary. Public metadata never carries configured argv or shell policy; those come only from the integrity-pinned private bundle. A persistent-shell supervisor in a verified transient USER scope - not the reconnectable helper or d2bd - owns the login-shell PTY, bounded merged-output ring, attachment, and private same-UID listener. Ledger adoption preserves ambiguous sessions as degraded; teardown closes the PTY and signals only the exact re-verified scope. The helper-wide ring reservation is bounded, terminal responses transfer exactly one CLOEXEC stream fd, and shell names, supervisor ids, paths, environment, process/unit identity, and bytes stay out of Debug/errors/audit. Do not add cross-uid execution, a direct compositor fallback, VM state/network/device semantics, a root service, per-VM unit, broker op, free-form shell command, or broad same-UID cleanup. |
 | Manifest contract                   | `docs/reference/manifest-schema.{md,json}` + `nixos-modules/manifest.nix`               | Version-pinned via `manifestVersion`. Adding, removing, or renaming a per-VM field requires bumping the version, updating the schema, and noting it in the CHANGELOG. The `static.sh` md↔json drift gate catches partial updates. |
 | Manifest bundle - private artifacts | `docs/reference/manifest-bundle.md` + `docs/reference/schemas/v2/*.json` + `packages/d2b-core/src/{bundle,host,processes,privileges,closures,minijail_profile}.rs` + `nixos-modules/{bundle,bundle-artifacts,host-json,processes-json,privileges-json,closures-json,minijail-profiles}.nix` + `packages/xtask/src/main.rs` (`gen-schemas`) | Sensitive bundle artifacts install at `root:d2bd` 0640 and ground every broker/sandbox/runner behaviour. `d2b-core` DTOs are canonical; `d2b._bundle` is the typed internal artifact table that owns JSON data, install names, classifications, and `/etc/d2b` materialization for every bundle artifact. Add new bundle artifacts through `nixos-modules/bundle-artifacts.nix` instead of hand-writing parallel install logic in each emitter. Committed schemas under `docs/reference/schemas/v2/` ARE the contract and the `tests/unit/gates/drift-check.sh` gate enforces `xtask gen-schemas` + `git diff --exit-code` through `make test-drift`. Breaking the schema without an intentional `bundleVersion`/`schemaVersion` bump silently breaks every downstream consumer. |
@@ -1284,8 +1287,8 @@ Touch these only with a clear plan and a corresponding test run.
   `D5/P2.3`, `( W1fu3 H20 )`) belong in planning artifacts,
   pre-release `[Unreleased]`, ADRs, this file's process sections,
   and feature-branch commits - never in shipped source comments,
-  shipped docs prose, CLI help/error text, or released CHANGELOG
-  sections. See [Versioning & changelog](#versioning--changelog).
+  shipped docs prose, CLI help/error text, or any CHANGELOG section.
+  See [Versioning & changelog](#versioning--changelog).
   The functional `d2b.defaultSwitchReadiness.<wave>` option
   surface is the one deliberate exception.
 - **Don't spell a dash with anything but the ASCII hyphen `-`.** Not in

@@ -124,8 +124,8 @@ contract position:
 | Work item | Assigned wave | Delivery determination |
 | --- | --- | --- |
 | `ADR046-store-001` | `ADR046-W0` | The engine-neutral trait, closed errors, schema/codecs, and golden vectors are present; this is the complete W0 store contract. |
-| `ADR046-feasibility-001` | `ADR046-W1` | The disposable proof crate and both spike results are absent; it runs as the backend prep barrier. |
-| `ADR046-store-004` | `ADR046-W1` | Only contract modules exist in the crate; the actor and transaction engine destinations are absent and remain spike-gated. |
+| `ADR046-feasibility-001` | `ADR046-W1` | The disposable proof crate and both spike results are present. Functional, watch, conflict, crash-recovery, and latency thresholds passed, but whole-process RSS failed at 25,068 KiB against 24,576 KiB; the failed outcome is the backend prep barrier evidence. |
+| `ADR046-store-004` | `ADR046-W1` | Only contract modules exist in the crate; the actor and transaction engine destinations are absent and remain blocked on the corrected design and unchanged whole-process RSS rerun. |
 | `ADR046-store-002` | `ADR046-W1` | Replay/live watch and API watch destinations are absent and belong with production reconciliation integration. |
 | `ADR046-store-003` | `ADR046-W5` | This is a generated storage-row integration contract, not an engine backend item; all Nix/schema/parity destinations are absent and belong with Nix and broker storage wiring. |
 | `ADR046-store-005` | `ADR046-W5` | Backup/migration and broker provisioning/fd-handoff destinations are absent; it follows the storage-row contract and production engine. |
