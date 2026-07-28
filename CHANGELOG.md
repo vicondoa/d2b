@@ -12,6 +12,10 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added a standalone redb resource-store feasibility spike covering the ten-table
+  physical schema, bounded fair async writer and group commits, revision-backed
+  watches and controller hints, crash-boundary recovery fixtures, scale/RSS
+  fixtures, and commit-to-handler latency measurements.
 - Added the shared `cargo xtask delivery wave` dispatch skeleton for the
   ADR 0046 delivery contract: the `snapshot`, `validate-import`,
   `panel-request`, `panel-attest`, `seal`, `merge-eligibility`, and `help`
