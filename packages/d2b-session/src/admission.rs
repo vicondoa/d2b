@@ -4,15 +4,15 @@ use async_trait::async_trait;
 use d2b_contracts::v3::{
     AuthenticatedSubjectContext, BindingDigest, ControllerGeneration, EvidenceClass, Locality,
     ReconnectGeneration, ResourceGeneration, ResourceRef, ResourceUid, SchemaFingerprint,
-    ServiceName, SessionBinding, SessionPurpose, TranscriptHash,
-    TransportBinding as IdentityTransportBinding, ZoneId,
+    ServiceName, SessionPurpose, TranscriptHash, TransportBinding as IdentityTransportBinding,
+    ZoneId,
     component_session::{
         AuthorizationLease, BootstrapIdentityBinding, ChannelClass, EndpointPolicy, HandshakeOffer,
         HealthState, MetricLabels, MetricReason, MetricResult, NoiseProfile, OperationClass,
         RequestId, SessionErrorCode, TransportClass,
     },
 };
-use d2b_resource_api::authz::{AuthorizationState, NativeAuthorizer, SessionVerb};
+use d2b_resource_api::authz::SessionVerb;
 
 use crate::{
     ComponentSessionDriver, MetricEvent, MetricsSink, NoopMetrics, OwnedTransport, Result,
@@ -289,7 +289,7 @@ mod authority_seal {
 /// object and stores it beside the authenticated subject. Neither value can be
 /// recovered or shared independently.
 #[async_trait]
-pub trait SessionAuthority: authority_seal::Sealed + Send {
+trait SessionAuthority: authority_seal::Sealed + Send {
     /// Authenticate evidence, map one subject, and authorize session connect.
     async fn authenticate_connect(
         &mut self,
@@ -309,123 +309,31 @@ pub trait SessionAuthority: authority_seal::Sealed + Send {
     ) -> Result<AuthorizationLease>;
 }
 
-/// Native Role/RoleBinding-backed authority for one authenticated subject.
-pub struct NativeSessionAuthority {
-    subject: NativeSessionSubject,
+type AuthenticateSession = dyn FnOnce(
+        TransportEvidence,
+        &SessionAuthenticationBinding,
+        &ZoneId,
+        u64,
+    ) -> Result<(AuthenticatedSubjectContext, AuthorizationLease)>
+    + Send;
+type AuthorizeSession = dyn FnMut(
+        &AuthenticatedSubjectContext,
+        &SessionAuthorizationRequest,
+        AuthorizationLease,
+        u64,
+    ) -> Result<AuthorizationLease>
+    + Send;
+
+struct VerifiedAdapterAuthority {
+    authenticate: Option<Box<AuthenticateSession>>,
+    authorize: Box<AuthorizeSession>,
     authenticated_subject: Option<AuthenticatedSubjectContext>,
-    authorizer: NativeAuthorizer,
-    state: AuthorizationState,
-    lease_ticks: u64,
 }
 
-/// Identity claims consumed by the native session authority.
-pub struct NativeSessionSubject {
-    subject_ref: ResourceRef,
-    subject_uid: ResourceUid,
-    zone: ZoneId,
-    zone_ref: ResourceRef,
-    provider_ref: Option<ResourceRef>,
-    provider_generation: Option<ResourceGeneration>,
-    controller_generation: Option<ControllerGeneration>,
-}
-
-impl NativeSessionSubject {
-    pub fn new(subject_ref: ResourceRef, subject_uid: ResourceUid, zone: ZoneId) -> Result<Self> {
-        let zone_ref = ResourceRef::parse(&format!("Zone/{}", zone.as_str()))
-            .map_err(|_| SessionError::new(SessionErrorCode::SubjectMismatch))?;
-        Ok(Self {
-            subject_ref,
-            subject_uid,
-            zone,
-            zone_ref,
-            provider_ref: None,
-            provider_generation: None,
-            controller_generation: None,
-        })
-    }
-
-    pub fn with_provider(
-        mut self,
-        provider_ref: ResourceRef,
-        provider_generation: ResourceGeneration,
-    ) -> Self {
-        self.provider_ref = Some(provider_ref);
-        self.provider_generation = Some(provider_generation);
-        self
-    }
-
-    pub fn with_controller_generation(mut self, generation: ControllerGeneration) -> Self {
-        self.controller_generation = Some(generation);
-        self
-    }
-
-    fn bind(&self, binding: &SessionAuthenticationBinding) -> AuthenticatedSubjectContext {
-        let mut context = AuthenticatedSubjectContext::new(
-            self.subject_ref.clone(),
-            self.subject_uid.clone(),
-            self.zone_ref.clone(),
-            binding.evidence_class(),
-            binding.purpose().clone(),
-            binding.service().clone(),
-            SessionBinding::new(
-                binding.schema_fingerprint().clone(),
-                binding.transport_binding().clone(),
-                binding.reconnect_generation(),
-                binding.transcript_hash().clone(),
-            ),
-        );
-        if let Some(provider_ref) = &self.provider_ref {
-            context = context.with_provider_ref(provider_ref.clone());
-        }
-        if let Some(provider_generation) = self.provider_generation {
-            context = context.with_provider_generation(provider_generation);
-        }
-        if let Some(controller_generation) = self.controller_generation {
-            context = context.with_controller_generation(controller_generation);
-        }
-        context
-    }
-}
-
-impl fmt::Debug for NativeSessionSubject {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("NativeSessionSubject(<redacted>)")
-    }
-}
-
-impl NativeSessionAuthority {
-    /// Consume one subject identity and its native policy evaluator.
-    pub fn new(
-        subject: NativeSessionSubject,
-        authorizer: NativeAuthorizer,
-        state: AuthorizationState,
-        lease_ticks: u64,
-    ) -> Result<Self> {
-        if lease_ticks == 0 {
-            return Err(SessionError::new(SessionErrorCode::LimitMismatch));
-        }
-        Ok(Self {
-            subject,
-            authenticated_subject: None,
-            authorizer,
-            state,
-            lease_ticks,
-        })
-    }
-
-    fn lease(&self, now_tick: u64) -> Result<AuthorizationLease> {
-        AuthorizationLease::new(
-            self.state.snapshot.policy_revision,
-            now_tick.saturating_add(self.lease_ticks),
-        )
-        .map_err(SessionError::from)
-    }
-}
-
-impl authority_seal::Sealed for NativeSessionAuthority {}
+impl authority_seal::Sealed for VerifiedAdapterAuthority {}
 
 #[async_trait]
-impl SessionAuthority for NativeSessionAuthority {
+impl SessionAuthority for VerifiedAdapterAuthority {
     async fn authenticate_connect(
         &mut self,
         evidence: TransportEvidence,
@@ -433,23 +341,13 @@ impl SessionAuthority for NativeSessionAuthority {
         expected_zone: &ZoneId,
         now_tick: u64,
     ) -> Result<(AuthenticatedSubjectContext, AuthorizationLease)> {
-        if evidence.class() != binding.evidence_class() {
-            return Err(SessionError::new(
-                SessionErrorCode::IdentityEvidenceMismatch,
-            ));
-        }
-        let subject = self.subject.bind(binding);
-        validate_subject(&subject, expected_zone, binding)?;
-        self.state.now_tick = now_tick;
-        let capabilities = self
-            .authorizer
-            .positive_capabilities(&subject, expected_zone, &self.state)
-            .map_err(|_| SessionError::new(SessionErrorCode::PolicyDenied))?;
-        if !capabilities.session_verbs.contains(&SessionVerb::Connect) {
-            return Err(SessionError::new(SessionErrorCode::PolicyDenied));
-        }
+        let authenticate = self
+            .authenticate
+            .take()
+            .ok_or_else(|| SessionError::new(SessionErrorCode::PolicyDenied))?;
+        let (subject, lease) = authenticate(evidence, binding, expected_zone, now_tick)?;
         self.authenticated_subject = Some(subject.clone());
-        Ok((subject, self.lease(now_tick)?))
+        Ok((subject, lease))
     }
 
     async fn authorize(
@@ -459,26 +357,16 @@ impl SessionAuthority for NativeSessionAuthority {
         previous_lease: AuthorizationLease,
         now_tick: u64,
     ) -> Result<AuthorizationLease> {
-        if self.authenticated_subject.as_ref() != Some(subject)
-            || previous_lease.policy_revision() != self.state.snapshot.policy_revision
-        {
+        if self.authenticated_subject.as_ref() != Some(subject) {
             return Err(SessionError::new(SessionErrorCode::PolicyDenied));
         }
-        self.state.now_tick = now_tick;
-        let capabilities = self
-            .authorizer
-            .positive_capabilities(subject, &self.subject.zone, &self.state)
-            .map_err(|_| SessionError::new(SessionErrorCode::PolicyDenied))?;
-        if !capabilities.session_verbs.contains(&request.verb()) {
-            return Err(SessionError::new(SessionErrorCode::PolicyDenied));
-        }
-        self.lease(now_tick)
+        (self.authorize)(subject, request, previous_lease, now_tick)
     }
 }
 
-impl fmt::Debug for NativeSessionAuthority {
+impl fmt::Debug for VerifiedAdapterAuthority {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("NativeSessionAuthority(<redacted>)")
+        formatter.write_str("VerifiedAdapterAuthority(<redacted>)")
     }
 }
 
@@ -492,21 +380,44 @@ pub struct SessionAcceptor<C> {
 }
 
 impl<C> SessionAcceptor<C> {
-    /// Consume the endpoint policy, its sole authority owner, and the
-    /// registration capability supplied by the routing authority.
-    pub fn new(
+    /// Consume adapter-verified identity binding, registrar-owned policy
+    /// callbacks, and the instance-bound registration capability.
+    pub fn from_verified_adapter<A, Z>(
         policy: EndpointPolicy,
         expected_zone: ZoneId,
-        authority: Box<dyn SessionAuthority>,
+        authenticate: A,
+        authorize: Z,
         registration_capability: C,
-    ) -> Result<Self> {
+    ) -> Result<Self>
+    where
+        A: FnOnce(
+                TransportEvidence,
+                &SessionAuthenticationBinding,
+                &ZoneId,
+                u64,
+            ) -> Result<(AuthenticatedSubjectContext, AuthorizationLease)>
+            + Send
+            + 'static,
+        Z: FnMut(
+                &AuthenticatedSubjectContext,
+                &SessionAuthorizationRequest,
+                AuthorizationLease,
+                u64,
+            ) -> Result<AuthorizationLease>
+            + Send
+            + 'static,
+    {
         HandshakeOffer::from(policy.clone())
             .validate()
             .map_err(SessionError::from)?;
         Ok(Self {
             policy,
             expected_zone,
-            authority,
+            authority: Box::new(VerifiedAdapterAuthority {
+                authenticate: Some(Box::new(authenticate)),
+                authorize: Box::new(authorize),
+                authenticated_subject: None,
+            }),
             metrics: Arc::new(NoopMetrics),
             registration_capability,
         })

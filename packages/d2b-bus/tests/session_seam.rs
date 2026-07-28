@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, time::Instant};
+use std::time::Instant;
 
 use async_trait::async_trait;
 use d2b_bus::{
@@ -22,11 +22,11 @@ use d2b_resource_api::authz::{
 };
 use d2b_resource_store::PolicySnapshot;
 use d2b_session::{
-    AuthenticatedComponentSession, ComponentSessionDriver, HandshakeCredentials,
-    NativeSessionAuthority, NativeSessionSubject, OwnedTransport, SessionDriverHandle,
-    SessionEngine, TransportDescriptor, TransportError, TransportEvidence, TransportPacket,
-    ttrpc_request_id, ttrpc_stream_id,
+    AuthenticatedComponentSession, ComponentSessionDriver, HandshakeCredentials, OwnedTransport,
+    SessionDriverHandle, SessionEngine, TransportDescriptor, TransportError, TransportEvidence,
+    TransportPacket, ttrpc_request_id, ttrpc_stream_id,
 };
+use d2b_session_unix::{SeqpacketSocket, UnixSubjectIdentity, prearmed_seqpacket_pair};
 use tokio::sync::{mpsc, oneshot};
 
 const PROVIDER_GENERATION: u64 = 2;
@@ -156,7 +156,7 @@ async fn admit(
     subject: &str,
     uid: &str,
     provider: &str,
-    allowed: impl IntoIterator<Item = SessionVerb>,
+    _allowed: impl IntoIterator<Item = SessionVerb>,
 ) -> (
     AuthenticatedComponentSession<ComponentSessionAdmission>,
     SessionDriverHandle,
@@ -205,63 +205,35 @@ async fn admit(
     });
     let subject_ref = ResourceRef::parse(subject).unwrap();
     let subject_uid = ResourceUid::parse(uid).unwrap();
-    let mut allowed = allowed.into_iter().collect::<BTreeSet<_>>();
-    allowed.insert(SessionVerb::Connect);
-    let catalog = ApiCatalog::standard();
-    let rule = PolicyRule::new(
-        &catalog,
-        [],
-        [],
-        allowed,
-        [],
-        [],
-        [ZoneId::parse("dev").unwrap()],
-        [],
-    )
-    .unwrap();
-    let role = CompiledRole::new(
-        ResourceRef::parse("Role/session-authority").unwrap(),
-        vec![rule],
-    )
-    .unwrap();
-    let binding = CompiledRoleBinding::new(
-        role.role_ref.clone(),
-        [BoundSubject {
-            subject_ref: subject_ref.clone(),
-            subject_uid: subject_uid.clone(),
-        }],
-        BindingScope::default(),
-        RelayGrantAuthority::None,
-    )
-    .unwrap();
-    let policy_set = PolicySet::new(&catalog, 1, vec![role], vec![binding]).unwrap();
-    let native = NativeAuthorizer::new(catalog, Some(policy_set)).unwrap();
-    let state = AuthorizationState {
-        snapshot: PolicySnapshot {
-            policy_revision: 1,
-            api_catalog_revision: 1,
-            active_configuration_revision: ConfigurationGeneration::new(1).unwrap(),
-            controller_generation: Some(ControllerGeneration::new(CONTROLLER_GENERATION).unwrap()),
-        },
-        zone_policy_revision: ZoneRevision::new(1),
-        bootstrap_phase: BootstrapPhase::Disabled,
-        now_tick: 1,
-    };
-    let authority = NativeSessionAuthority::new(
-        NativeSessionSubject::new(subject_ref, subject_uid, ZoneId::parse("dev").unwrap())
-            .unwrap()
-            .with_provider(
-                ResourceRef::parse(provider).unwrap(),
-                ResourceGeneration::new(PROVIDER_GENERATION).unwrap(),
-            )
-            .with_controller_generation(ControllerGeneration::new(CONTROLLER_GENERATION).unwrap()),
-        native,
-        state,
-        10_000,
-    )
-    .unwrap();
+    let provider_ref = ResourceRef::parse(provider).unwrap();
+    let provider_generation = ResourceGeneration::new(PROVIDER_GENERATION).unwrap();
+    let (proof_fd, _peer_fd) = prearmed_seqpacket_pair().unwrap();
+    let proof_socket = SeqpacketSocket::from_parent_prearmed(proof_fd).unwrap();
+    let expected_peer = proof_socket.acceptor_peer_credentials().unwrap();
+    let identity = if subject_ref.resource_type().as_str() == "Provider" {
+        UnixSubjectIdentity::provider(
+            subject_ref,
+            subject_uid,
+            ResourceRef::parse("Zone/dev").unwrap(),
+            expected_peer,
+            provider_generation,
+        )
+        .unwrap()
+    } else {
+        UnixSubjectIdentity::host(
+            subject_ref,
+            subject_uid,
+            ResourceRef::parse("Zone/dev").unwrap(),
+            expected_peer,
+        )
+        .unwrap()
+        .with_provider(provider_ref, provider_generation)
+        .unwrap()
+    }
+    .with_controller_generation(ControllerGeneration::new(CONTROLLER_GENERATION).unwrap());
+    let verified_identity = identity.verify_seqpacket(&proof_socket).unwrap();
     let session = registrar
-        .component_session_acceptor(policy, Box::new(authority))
+        .component_session_acceptor(policy, verified_identity)
         .unwrap()
         .admit(
             initiator.unwrap(),
@@ -350,9 +322,9 @@ async fn registrar_rejects_a_session_minted_for_another_bus_instance() {
             EndpointPurpose::ResourceService,
             1,
         ),
-        "Provider/resource",
+        "Provider/system-core",
         "11111111-1111-4111-8111-111111111111",
-        "Provider/resource",
+        "Provider/system-core",
         [SessionVerb::Connect],
     )
     .await;

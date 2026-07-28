@@ -1,8 +1,8 @@
 use std::fmt;
 
 use d2b_contracts::v3::{
-    AuthenticatedSubjectContext, EvidenceClass, Locality, ResourceRef, ResourceUid, SessionBinding,
-    ZoneId,
+    AuthenticatedSubjectContext, ControllerGeneration, EvidenceClass, Locality, ResourceGeneration,
+    ResourceRef, ResourceUid, SessionBinding, ZoneId,
 };
 use d2b_session::{
     SessionAuthenticationBinding, SessionError, TransportEvidence,
@@ -14,6 +14,7 @@ use crate::{PeerCredentials, SeqpacketSocket, StreamSocket, UnixSessionError};
 enum UnixSubjectKind {
     Host,
     Guest,
+    Provider,
 }
 
 /// Config-generated Host or Guest subject consumed by one Unix session owner.
@@ -23,6 +24,9 @@ pub struct UnixSubjectIdentity {
     subject_uid: ResourceUid,
     zone_ref: ResourceRef,
     expected_peer: PeerCredentials,
+    provider_ref: Option<ResourceRef>,
+    provider_generation: Option<ResourceGeneration>,
+    controller_generation: Option<ControllerGeneration>,
 }
 
 impl UnixSubjectIdentity {
@@ -68,6 +72,7 @@ impl UnixSubjectIdentity {
         let expected_type = match kind {
             UnixSubjectKind::Host => "Host",
             UnixSubjectKind::Guest => "Guest",
+            UnixSubjectKind::Provider => "Provider",
         };
         if subject_ref.resource_type().as_str() != expected_type
             || zone_ref.resource_type().as_str() != "Zone"
@@ -80,7 +85,50 @@ impl UnixSubjectIdentity {
             subject_uid,
             zone_ref,
             expected_peer,
+            provider_ref: None,
+            provider_generation: None,
+            controller_generation: None,
         })
+    }
+
+    /// Construct a Provider subject mapping.
+    pub fn provider(
+        subject_ref: ResourceRef,
+        subject_uid: ResourceUid,
+        zone_ref: ResourceRef,
+        expected_peer: PeerCredentials,
+        provider_generation: ResourceGeneration,
+    ) -> d2b_session::Result<Self> {
+        let mut identity = Self::new(
+            UnixSubjectKind::Provider,
+            subject_ref,
+            subject_uid,
+            zone_ref,
+            expected_peer,
+        )?;
+        identity.provider_ref = Some(identity.subject_ref.clone());
+        identity.provider_generation = Some(provider_generation);
+        Ok(identity)
+    }
+
+    /// Bind a Provider selected by trusted adapter configuration.
+    pub fn with_provider(
+        mut self,
+        provider_ref: ResourceRef,
+        generation: ResourceGeneration,
+    ) -> d2b_session::Result<Self> {
+        if provider_ref.resource_type().as_str() != "Provider" {
+            return Err(SessionError::new(SessionErrorCode::SubjectMismatch));
+        }
+        self.provider_ref = Some(provider_ref);
+        self.provider_generation = Some(generation);
+        Ok(self)
+    }
+
+    /// Bind a controller generation supplied by trusted adapter configuration.
+    pub fn with_controller_generation(mut self, generation: ControllerGeneration) -> Self {
+        self.controller_generation = Some(generation);
+        self
     }
 
     /// Consume this identity while verifying one seqpacket endpoint.
@@ -159,6 +207,7 @@ impl VerifiedUnixSubject {
         let expected_type = match self.identity.kind {
             UnixSubjectKind::Host => "Host",
             UnixSubjectKind::Guest => "Guest",
+            UnixSubjectKind::Provider => "Provider",
         };
         self.validate_transport(binding.transport_class())?;
         if evidence.class() != EvidenceClass::UnixPeer
@@ -170,8 +219,9 @@ impl VerifiedUnixSubject {
         {
             return Err(SessionError::new(SessionErrorCode::SubjectMismatch));
         }
-        Ok(AuthenticatedSubjectContext::new(
-            self.identity.subject_ref,
+        let subject_ref = self.identity.subject_ref;
+        let mut context = AuthenticatedSubjectContext::new(
+            subject_ref.clone(),
             self.identity.subject_uid,
             self.identity.zone_ref,
             EvidenceClass::UnixPeer,
@@ -183,7 +233,19 @@ impl VerifiedUnixSubject {
                 binding.reconnect_generation(),
                 binding.transcript_hash().clone(),
             ),
-        ))
+        );
+        if let (Some(provider_ref), Some(provider_generation)) = (
+            self.identity.provider_ref,
+            self.identity.provider_generation,
+        ) {
+            context = context
+                .with_provider_ref(provider_ref)
+                .with_provider_generation(provider_generation);
+        }
+        if let Some(controller_generation) = self.identity.controller_generation {
+            context = context.with_controller_generation(controller_generation);
+        }
+        Ok(context)
     }
 }
 

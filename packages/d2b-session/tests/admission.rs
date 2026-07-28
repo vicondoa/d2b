@@ -1,26 +1,22 @@
-use std::{collections::BTreeSet, time::Instant};
+use std::{collections::BTreeSet, sync::Arc, time::Instant};
 
 use async_trait::async_trait;
 use d2b_contracts::v3::{
-    BindingDigest, ConfigurationGeneration, EvidenceClass, ResourceRef, ResourceUid, ZoneId,
-    ZoneRevision,
+    AuthenticatedSubjectContext, BindingDigest, EvidenceClass, ResourceRef, ResourceUid,
+    SessionBinding, ZoneId,
     component_session::{
-        AttachmentPolicy, BootstrapIdentityBinding, BootstrapPskBinding, EndpointPolicy,
-        EndpointPurpose, EndpointRole, IdentityEvidenceRequirement, LimitProfile,
+        AttachmentPolicy, AuthorizationLease, BootstrapIdentityBinding, BootstrapPskBinding,
+        EndpointPolicy, EndpointPurpose, EndpointRole, IdentityEvidenceRequirement, LimitProfile,
         Locality as SessionLocality, NoiseProfile, OperationId, ServicePackage, SessionErrorCode,
         TransportBinding, TransportClass,
     },
 };
-use d2b_resource_api::authz::{
-    ApiCatalog, AuthorizationState, BindingScope, BootstrapPhase, BoundSubject, CompiledRole,
-    CompiledRoleBinding, NativeAuthorizer, PolicyRule, PolicySet, RelayGrantAuthority, SessionVerb,
-};
-use d2b_resource_store::PolicySnapshot;
+use d2b_resource_api::authz::SessionVerb;
 use d2b_session::{
-    BootstrapAdmission, BootstrapPsk, ComponentSessionDriver, HandshakeCredentials,
-    NativeSessionAuthority, NativeSessionSubject, OwnedTransport, Secret32, SessionAcceptor,
-    SessionAuthorizationRequest, SessionEngine, TransportDescriptor, TransportError,
-    TransportEvidence, TransportPacket, x25519_public_key,
+    BootstrapAdmission, BootstrapPsk, ComponentSessionDriver, HandshakeCredentials, OwnedTransport,
+    Secret32, SessionAcceptor, SessionAuthenticationBinding, SessionAuthorizationRequest,
+    SessionEngine, SessionError, TransportDescriptor, TransportError, TransportEvidence,
+    TransportPacket, x25519_public_key,
 };
 use tokio::sync::mpsc;
 
@@ -291,59 +287,66 @@ fn bootstrap_evidence() -> TransportEvidence {
     )
 }
 
-fn native_authority(
+fn session_acceptor(
+    policy: EndpointPolicy,
     subject_zone: ZoneId,
     allowed: impl IntoIterator<Item = SessionVerb>,
-) -> NativeSessionAuthority {
-    let allowed = allowed.into_iter().collect::<BTreeSet<_>>();
+) -> SessionAcceptor<()> {
+    session_acceptor_for_subject(policy, subject_zone.clone(), subject_zone, allowed)
+}
+
+fn session_acceptor_for_subject(
+    policy: EndpointPolicy,
+    expected_zone: ZoneId,
+    subject_zone: ZoneId,
+    allowed: impl IntoIterator<Item = SessionVerb>,
+) -> SessionAcceptor<()> {
+    let allowed = Arc::new(allowed.into_iter().collect::<BTreeSet<_>>());
     let subject_ref = ResourceRef::parse("Host/alice-host").unwrap();
     let subject_uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
-    let catalog = ApiCatalog::standard();
-    let rule = PolicyRule::new(
-        &catalog,
-        [],
-        [],
-        allowed.iter().copied(),
-        [],
-        [],
-        [subject_zone.clone()],
-        [],
-    )
-    .unwrap();
-    let role =
-        CompiledRole::new(ResourceRef::parse("Role/session-user").unwrap(), vec![rule]).unwrap();
-    let binding = CompiledRoleBinding::new(
-        role.role_ref.clone(),
-        [BoundSubject {
-            subject_ref: subject_ref.clone(),
-            subject_uid: subject_uid.clone(),
-        }],
-        BindingScope::default(),
-        if allowed.contains(&SessionVerb::Relay) {
-            RelayGrantAuthority::DurableLocalAdmin
-        } else {
-            RelayGrantAuthority::None
+    let zone_ref = ResourceRef::parse(&format!("Zone/{}", subject_zone.as_str())).unwrap();
+    let connect_verbs = Arc::clone(&allowed);
+    let authorize_verbs = Arc::clone(&allowed);
+    SessionAcceptor::from_verified_adapter(
+        policy,
+        expected_zone,
+        move |evidence: TransportEvidence,
+              binding: &SessionAuthenticationBinding,
+              _expected_zone: &ZoneId,
+              now_tick| {
+            if evidence.class() != binding.evidence_class()
+                || !connect_verbs.contains(&SessionVerb::Connect)
+            {
+                return Err(SessionError::new(SessionErrorCode::PolicyDenied));
+            }
+            let subject = AuthenticatedSubjectContext::new(
+                subject_ref,
+                subject_uid,
+                zone_ref,
+                binding.evidence_class(),
+                binding.purpose().clone(),
+                binding.service().clone(),
+                SessionBinding::new(
+                    binding.schema_fingerprint().clone(),
+                    binding.transport_binding().clone(),
+                    binding.reconnect_generation(),
+                    binding.transcript_hash().clone(),
+                ),
+            );
+            let lease = AuthorizationLease::new(POLICY_REVISION, now_tick.saturating_add(10))
+                .map_err(SessionError::from)?;
+            Ok((subject, lease))
         },
-    )
-    .unwrap();
-    let policy = PolicySet::new(&catalog, POLICY_REVISION, vec![role], vec![binding]).unwrap();
-    let authorizer = NativeAuthorizer::new(catalog, Some(policy)).unwrap();
-    let state = AuthorizationState {
-        snapshot: PolicySnapshot {
-            policy_revision: POLICY_REVISION,
-            api_catalog_revision: 1,
-            active_configuration_revision: ConfigurationGeneration::new(1).unwrap(),
-            controller_generation: None,
+        move |_subject, request, previous_lease, now_tick| {
+            if previous_lease.policy_revision() != POLICY_REVISION
+                || !authorize_verbs.contains(&request.verb())
+            {
+                return Err(SessionError::new(SessionErrorCode::PolicyDenied));
+            }
+            AuthorizationLease::new(POLICY_REVISION, now_tick.saturating_add(10))
+                .map_err(SessionError::from)
         },
-        zone_policy_revision: ZoneRevision::new(POLICY_REVISION),
-        bootstrap_phase: BootstrapPhase::Disabled,
-        now_tick: 1,
-    };
-    NativeSessionAuthority::new(
-        NativeSessionSubject::new(subject_ref, subject_uid, subject_zone).unwrap(),
-        authorizer,
-        state,
-        10,
+        (),
     )
     .unwrap()
 }
@@ -351,10 +354,12 @@ fn native_authority(
 #[tokio::test]
 async fn native_rbac_connect_and_invoke_are_executed() {
     let zone = ZoneId::parse("work").unwrap();
-    let authority = native_authority(zone.clone(), [SessionVerb::Connect, SessionVerb::Invoke]);
     let policy = endpoint_policy();
-    let acceptor =
-        SessionAcceptor::new(policy.clone(), zone.clone(), Box::new(authority), ()).unwrap();
+    let acceptor = session_acceptor(
+        policy.clone(),
+        zone.clone(),
+        [SessionVerb::Connect, SessionVerb::Invoke],
+    );
     let mut session = acceptor
         .admit(engine(&policy).await, evidence(), 1)
         .await
@@ -375,21 +380,20 @@ async fn native_rbac_connect_and_invoke_are_executed() {
 #[tokio::test]
 async fn admitted_session_retains_transport_and_consumes_send_permits() {
     let zone = ZoneId::parse("work").unwrap();
-    let authority = native_authority(
+    let policy = endpoint_policy();
+    let (initiator, responder) = engine_pair(&policy).await;
+    let mut session = session_acceptor(
+        policy,
         zone.clone(),
         [
             SessionVerb::Connect,
             SessionVerb::Invoke,
             SessionVerb::Observe,
         ],
-    );
-    let policy = endpoint_policy();
-    let (initiator, responder) = engine_pair(&policy).await;
-    let mut session = SessionAcceptor::new(policy, zone.clone(), Box::new(authority), ())
-        .unwrap()
-        .admit(initiator, evidence(), 1)
-        .await
-        .unwrap();
+    )
+    .admit(initiator, evidence(), 1)
+    .await
+    .unwrap();
     let responder = responder.into_driver();
     let observe = session
         .authorize(
@@ -470,13 +474,16 @@ async fn admitted_session_retains_transport_and_consumes_send_permits() {
 #[tokio::test]
 async fn cross_zone_subject_fails_before_connect_mint() {
     let expected_zone = ZoneId::parse("work").unwrap();
-    let authority = native_authority(ZoneId::parse("personal").unwrap(), [SessionVerb::Connect]);
     let policy = endpoint_policy();
-    let error = SessionAcceptor::new(policy.clone(), expected_zone, Box::new(authority), ())
-        .unwrap()
-        .admit(engine(&policy).await, evidence(), 1)
-        .await
-        .unwrap_err();
+    let error = session_acceptor_for_subject(
+        policy.clone(),
+        expected_zone,
+        ZoneId::parse("personal").unwrap(),
+        [SessionVerb::Connect],
+    )
+    .admit(engine(&policy).await, evidence(), 1)
+    .await
+    .unwrap_err();
     assert_eq!(error.code(), SessionErrorCode::SubjectMismatch);
 }
 
@@ -484,9 +491,7 @@ async fn cross_zone_subject_fails_before_connect_mint() {
 async fn bootstrap_identity_is_consumed_through_handshake_and_session_admission() {
     let zone = ZoneId::parse("work").unwrap();
     let policy = bootstrap_policy();
-    let authority = native_authority(zone.clone(), [SessionVerb::Connect]);
-    SessionAcceptor::new(policy.clone(), zone.clone(), Box::new(authority), ())
-        .unwrap()
+    session_acceptor(policy.clone(), zone.clone(), [SessionVerb::Connect])
         .admit(
             bootstrap_engine(&policy, "Host/alice-host", "work").await,
             bootstrap_evidence(),
@@ -495,10 +500,8 @@ async fn bootstrap_identity_is_consumed_through_handshake_and_session_admission(
         .await
         .unwrap();
 
-    let authority = native_authority(zone.clone(), [SessionVerb::Connect]);
     assert_eq!(
-        SessionAcceptor::new(policy.clone(), zone.clone(), Box::new(authority), ())
-            .unwrap()
+        session_acceptor(policy.clone(), zone.clone(), [SessionVerb::Connect])
             .admit(
                 bootstrap_engine(&policy, "Guest/corp-vm", "work").await,
                 bootstrap_evidence(),
@@ -510,10 +513,8 @@ async fn bootstrap_identity_is_consumed_through_handshake_and_session_admission(
         SessionErrorCode::SubjectMismatch
     );
 
-    let authority = native_authority(zone.clone(), [SessionVerb::Connect]);
     assert_eq!(
-        SessionAcceptor::new(policy.clone(), zone, Box::new(authority), ())
-            .unwrap()
+        session_acceptor(policy.clone(), zone, [SessionVerb::Connect])
             .admit(
                 bootstrap_engine(&policy, "Host/alice-host", "personal").await,
                 bootstrap_evidence(),
@@ -529,10 +530,8 @@ async fn bootstrap_identity_is_consumed_through_handshake_and_session_admission(
 #[tokio::test]
 async fn policy_revision_change_revokes_new_work() {
     let zone = ZoneId::parse("work").unwrap();
-    let authority = native_authority(zone.clone(), [SessionVerb::Connect]);
     let policy = endpoint_policy();
-    let mut session = SessionAcceptor::new(policy.clone(), zone.clone(), Box::new(authority), ())
-        .unwrap()
+    let mut session = session_acceptor(policy.clone(), zone.clone(), [SessionVerb::Connect])
         .admit(engine(&policy).await, evidence(), 1)
         .await
         .unwrap();
@@ -553,13 +552,15 @@ async fn policy_revision_change_revokes_new_work() {
 #[tokio::test]
 async fn native_rbac_relay_mints_only_for_a_distinct_next_zone() {
     let zone = ZoneId::parse("work").unwrap();
-    let authority = native_authority(zone.clone(), [SessionVerb::Connect, SessionVerb::Relay]);
     let policy = endpoint_policy();
-    let mut session = SessionAcceptor::new(policy.clone(), zone.clone(), Box::new(authority), ())
-        .unwrap()
-        .admit(engine(&policy).await, evidence(), 1)
-        .await
-        .unwrap();
+    let mut session = session_acceptor(
+        policy.clone(),
+        zone.clone(),
+        [SessionVerb::Connect, SessionVerb::Relay],
+    )
+    .admit(engine(&policy).await, evidence(), 1)
+    .await
+    .unwrap();
     let invalid = SessionAuthorizationRequest::relay(
         d2b_contracts::v3::ServiceName::parse("d2b.resource.v3").unwrap(),
         "ResourceService/Get",
@@ -592,14 +593,12 @@ async fn native_rbac_relay_mints_only_for_a_distinct_next_zone() {
 #[tokio::test]
 async fn forged_evidence_class_is_rejected_before_authority() {
     let zone = ZoneId::parse("work").unwrap();
-    let authority = native_authority(zone.clone(), [SessionVerb::Connect]);
     let policy = endpoint_policy();
     let forged = TransportEvidence::new(
         EvidenceClass::EnrolledKk,
         BindingDigest::parse(format!("sha256:{}", "22".repeat(32))).unwrap(),
     );
-    let error = SessionAcceptor::new(policy.clone(), zone, Box::new(authority), ())
-        .unwrap()
+    let error = session_acceptor(policy.clone(), zone, [SessionVerb::Connect])
         .admit(engine(&policy).await, forged, 1)
         .await
         .unwrap_err();

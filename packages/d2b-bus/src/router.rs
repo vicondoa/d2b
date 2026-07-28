@@ -16,11 +16,12 @@ use d2b_resource_api::authz::{
 };
 use d2b_session::{
     AuthenticatedComponentSession, AuthenticatedSessionRouteBinding, AuthenticatedTtrpcHandle,
-    GENERATED_OPERATION_CATALOG, OperationKind, SessionAcceptor, SessionAuthority,
-    SessionAuthorizationRequest, SessionCancellationHandle, SessionOperation,
-    SessionRegistrationCapability, contract::EndpointPolicy, resource_operation,
-    rewrite_ttrpc_stream_id, ttrpc_request_id, ttrpc_stream_id,
+    GENERATED_OPERATION_CATALOG, OperationKind, SessionAcceptor, SessionAuthorizationRequest,
+    SessionCancellationHandle, SessionOperation, SessionRegistrationCapability,
+    contract::EndpointPolicy, resource_operation, rewrite_ttrpc_stream_id, ttrpc_request_id,
+    ttrpc_stream_id,
 };
+use d2b_session_unix::VerifiedUnixSubject;
 use tokio::sync::{Mutex as AsyncMutex, oneshot};
 
 use crate::{
@@ -561,7 +562,7 @@ impl core::fmt::Debug for DeliveredStream {
 struct BusCore {
     zone: ZoneId,
     registry: Mutex<Registry>,
-    authorizer: BusAuthorizer,
+    authorizer: Arc<BusAuthorizer>,
     operations: Mutex<OperationTable>,
     streams: Arc<StreamBridge>,
     clock: Arc<dyn BusClock>,
@@ -784,7 +785,7 @@ impl ZoneBus {
                 config.max_total_routes,
             )),
             zone,
-            authorizer,
+            authorizer: Arc::new(authorizer),
             operations: Mutex::new(operations),
             streams,
             clock,
@@ -1430,12 +1431,22 @@ impl ZoneRegistrar {
     pub fn component_session_acceptor(
         &self,
         policy: EndpointPolicy,
-        authority: Box<dyn SessionAuthority>,
+        verified_identity: VerifiedUnixSubject,
     ) -> d2b_session::Result<SessionAcceptor<ComponentSessionAdmission>> {
-        SessionAcceptor::new(
+        let connect_authorizer = Arc::clone(&self.core.authorizer);
+        let request_authorizer = Arc::clone(&self.core.authorizer);
+        SessionAcceptor::from_verified_adapter(
             policy,
             self.core.zone.clone(),
-            authority,
+            move |evidence, binding, expected_zone, now_tick| {
+                let subject = verified_identity.bind(&evidence, binding, expected_zone)?;
+                let lease =
+                    connect_authorizer.authenticate_session(&subject, expected_zone, now_tick)?;
+                Ok((subject, lease))
+            },
+            move |subject, request, previous_lease, now_tick| {
+                request_authorizer.authorize_session(subject, request, previous_lease, now_tick)
+            },
             ComponentSessionAdmission {
                 identity: Arc::clone(&self.component_admission.identity),
             },

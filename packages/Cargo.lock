@@ -925,6 +925,7 @@ dependencies = [
  "d2b-resource-api",
  "d2b-resource-store",
  "d2b-session",
+ "d2b-session-unix",
  "getrandom 0.3.4",
  "serde",
  "serde_json",
