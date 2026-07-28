@@ -591,6 +591,19 @@ impl OperationTable {
     }
 
     fn push_tombstone(&mut self, key: OperationKey, cancellation: Cancellation) {
+        let source_tombstones = self
+            .tombstones
+            .iter()
+            .filter(|tombstone| tombstone.key.source == key.source)
+            .count();
+        if source_tombstones >= self.max_operations_per_session
+            && let Some(oldest) = self
+                .tombstones
+                .iter()
+                .position(|tombstone| tombstone.key.source == key.source)
+        {
+            self.tombstones.remove(oldest);
+        }
         while self.tombstones.len() >= self.max_operations {
             self.tombstones.pop_front();
         }
@@ -896,6 +909,43 @@ mod tests {
             table
                 .cancellation_complete(second.id(), SessionId(1))
                 .unwrap()
+        );
+    }
+
+    #[test]
+    fn one_source_tombstone_churn_cannot_evict_another_sources_retry_state() {
+        let mut table = OperationTable::new(3, 2).unwrap();
+        let retained = operation("retained-by-source-two", 10);
+        table
+            .begin(&retained, SessionId(2), lease(SessionId(9)), route(), 1)
+            .unwrap();
+        cancel_now(&mut table, retained.id(), SessionId(2))
+            .unwrap()
+            .unwrap();
+
+        for id in ["attacker-first", "attacker-second", "attacker-third"] {
+            let operation = operation(id, 10);
+            table
+                .begin(&operation, SessionId(1), lease(SessionId(9)), route(), 1)
+                .unwrap();
+            cancel_now(&mut table, operation.id(), SessionId(1))
+                .unwrap()
+                .unwrap();
+        }
+
+        assert!(
+            table
+                .cancellation_complete(retained.id(), SessionId(2))
+                .unwrap()
+        );
+        assert!(matches!(
+            table.begin(&retained, SessionId(2), lease(SessionId(9)), route(), 1,),
+            Err(OperationError::DuplicateOperation)
+        ));
+        assert!(
+            cancel_now(&mut table, retained.id(), SessionId(2))
+                .unwrap()
+                .is_none()
         );
     }
 
