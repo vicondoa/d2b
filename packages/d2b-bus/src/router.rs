@@ -1595,15 +1595,15 @@ fn publish_component_request_with_hook(
     responses: &Mutex<ComponentResponseState>,
     operation: OperationId,
     request: ActiveComponentRequest,
-    after_activity_lock: impl FnOnce(),
+    after_publication_locks: impl FnOnce(),
 ) -> Result<oneshot::Receiver<ComponentResponse>, EndpointError> {
     let mut activity = activity
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    after_activity_lock();
     let mut responses = responses
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
+    after_publication_locks();
     if request.attempt.is_cancelled() || activity.revoked {
         return Err(cancelled_endpoint());
     }
@@ -3045,11 +3045,17 @@ mod tests {
             let cancel_operation = operation.clone();
             let cancel_attempt = attempt.clone();
             let canceller = scope.spawn(move || {
-                assert!(matches!(
+                let activity_locked = matches!(
                     cancel_activity.try_lock(),
                     Err(std::sync::TryLockError::WouldBlock)
-                ));
-                cancel_contending.send(()).unwrap();
+                );
+                let responses_locked = matches!(
+                    cancel_responses.try_lock(),
+                    Err(std::sync::TryLockError::WouldBlock)
+                );
+                cancel_contending
+                    .send((activity_locked, responses_locked))
+                    .unwrap();
                 terminalize_component_request(
                     &cancel_activity,
                     &cancel_responses,
@@ -3058,10 +3064,15 @@ mod tests {
                 )
             });
 
-            cancellation_reached.recv().unwrap();
+            let publication_locks = cancellation_reached.recv().unwrap();
             release_publication.send(()).unwrap();
             let mut receiver = publisher.join().unwrap().unwrap();
             let cancelled = canceller.join().unwrap().unwrap();
+            assert_eq!(
+                publication_locks,
+                (true, true),
+                "activity and response locks must both cover correlated publication"
+            );
             assert!(cancelled.attempt.is_same_attempt(&attempt));
             assert!(matches!(
                 receiver.try_recv(),

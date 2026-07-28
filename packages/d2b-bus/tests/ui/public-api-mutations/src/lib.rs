@@ -1,7 +1,12 @@
 use std::ops::Deref;
 
+use d2b_bus::router::ComponentSessionAdmission;
 use d2b_session::{AuthenticatedComponentSession, SessionAcceptor};
 use opaque_claims::{PrincipalClaim, SerialClaim};
+
+pub fn rogue_admission() -> Option<ComponentSessionAdmission> {
+    None
+}
 
 pub struct Rogue(RogueTarget);
 
