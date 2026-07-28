@@ -21,6 +21,13 @@ deprecations ship one minor release before removal.
   watches and controller hints, crash-boundary recovery fixtures, scale/RSS
   fixtures, and commit-to-handler latency measurements.
 
+- Added the self-contained per-Zone `d2b-bus` exact-address router with native
+  Role/RoleBinding authorization, relay and diagnostic verb enforcement,
+  single-owner authenticated registration, revision-bound revocation,
+  pinned cancellation routes, reconnect replacement, and credit-bounded fair
+  named streams. It remains disconnected from production adapters until the
+  authenticated ComponentSession integration lands.
+
 ### Changed
 
 - `tests/test-proofs.sh` now discovers proof crates by scanning
@@ -28,6 +35,7 @@ deprecations ship one minor release before removal.
   shape paired that list with a silent skip when a directory was absent, so a
   renamed or never-created proof crate reported success while executing
   nothing. An empty `proofs/` tree now fails closed.
+
 - Added the shared `cargo xtask delivery wave` dispatch skeleton for the
   ADR 0046 delivery contract: the `snapshot`, `validate-import`,
   `panel-request`, `panel-attest`, `seal`, `merge-eligibility`, and `help`

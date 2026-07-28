@@ -9,8 +9,13 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+async-trait = "0.1"
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
+d2b-resource-api = { path = "../d2b-resource-api", version = "0.0.0-bootstrap" }
 serde.workspace = true
+tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
+d2b-resource-store = { path = "../d2b-resource-store", version = "0.0.0-bootstrap" }
 serde_json.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "sync", "test-util"] }
