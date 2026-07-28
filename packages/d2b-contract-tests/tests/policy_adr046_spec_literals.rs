@@ -1384,7 +1384,7 @@ fn spike_measurement_specs() -> Vec<MeasurementSpec> {
                 MeasurementInventoryPattern {
                     description: "25,216 KiB whole-process RSS",
                     regex: r"(?i)\b25,?216\s+KiB\b",
-                    copies: 10,
+                    copies: 11,
                 },
                 MeasurementInventoryPattern {
                     description: "24.625 MiB whole-process RSS",
