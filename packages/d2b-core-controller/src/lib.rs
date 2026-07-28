@@ -4,6 +4,7 @@ pub mod dependencies;
 pub mod hints;
 pub mod owner_reconcile;
 pub mod rbac;
+pub mod runtime;
 
 pub use dependencies::{DependencyError, DependencyIndex, DependencyTrigger, UpgradeOrder};
 pub use hints::{
@@ -14,4 +15,7 @@ pub use hints::{
 pub use owner_reconcile::{
     DesiredChild, ObservedChild, OwnerGraph, OwnerGraphError, OwnerIndex, OwnerLimits,
     OwnerMutation, OwnerReconcileError, OwnerReconcilePlan, OwnerTrigger,
+};
+pub use runtime::{
+    CoreControllerSource, CoreReconcileError, CoreResourceReconciler, CoreSourceError,
 };

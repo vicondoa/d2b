@@ -2,119 +2,29 @@
 
 use std::{
     future::Future,
-    panic::{AssertUnwindSafe, catch_unwind},
-    sync::{Arc, Condvar, Mutex, mpsc},
-    task::{Context, Poll, Wake, Waker},
-    thread,
+    pin::Pin,
+    sync::Arc,
+    task::{Context, Poll},
+    time::{Duration, Instant},
 };
 
 use d2b_contracts::v3::{
-    ConfigurationGeneration, ResourceGeneration, ResourcePhase, ResourceTypeName, ZoneRevision,
+    ConfigurationGeneration, ResourceGeneration, ResourcePhase, ZoneId, ZoneRevision,
 };
 
 use crate::{
-    Cancellation, CommittedRevisionProof, ContextError, ControllerHealth, ControllerIdentity,
-    DependencySnapshot, DrainResult, FinalizeResult, ObservationResult, OperationContext,
-    PendingQueue, PriorityLane, ProjectionDisposition, QueueError, QueueHint, QueuedWork,
-    ReconcileContext, ReconcileDisposition, ReconcilePlan, ReconcileProjection, ReconcileResult,
-    ResourceKey, ResourceSnapshot, StatusPersistence, TriggerReason, TriggerSet, UpdateAssessment,
-    UpdateAssessmentState, UpgradePlan, ValidationResult,
+    Cancellation, CommittedRevisionProof, ContextError, ControllerDescriptor, ControllerHealth,
+    ControllerIdentity, DependencySnapshot, DrainResult, FinalizeResult, ObservationResult,
+    OperationContext, PendingQueue, PriorityLane, ProjectionDisposition, QueueError, QueueHint,
+    QueuedWork, ReconcileContext, ReconcileDisposition, ReconcilePlan, ReconcileProjection,
+    ReconcileReason, ReconcileResult, ResourceKey, ResourceSnapshot, StatusPersistence,
+    TriggerReason, TriggerSet, UpdateAssessment, UpdateAssessmentState, UpgradePlan,
+    ValidationResult,
 };
-
-/// Signed controller shape accepted by Core registration.
-#[derive(Clone, PartialEq, Eq)]
-pub struct ControllerDescriptor {
-    identity: ControllerIdentity,
-    resource_types: Vec<ResourceTypeName>,
-    reconcile_concurrency: usize,
-    max_pending_resources: usize,
-    max_expedited_per_resource: usize,
-    initial_watch_credits: u32,
-}
-
-impl ControllerDescriptor {
-    /// Construct a bounded descriptor.
-    pub fn new(
-        identity: ControllerIdentity,
-        mut resource_types: Vec<ResourceTypeName>,
-        reconcile_concurrency: usize,
-        max_pending_resources: usize,
-        max_expedited_per_resource: usize,
-        initial_watch_credits: u32,
-    ) -> Result<Self, RunnerError> {
-        resource_types.sort();
-        let resource_type_count = resource_types.len();
-        resource_types.dedup();
-        if resource_types.is_empty()
-            || resource_types.len() != resource_type_count
-            || reconcile_concurrency == 0
-            || max_pending_resources == 0
-            || max_expedited_per_resource == 0
-            || initial_watch_credits == 0
-            || reconcile_concurrency > max_pending_resources
-        {
-            return Err(RunnerError::InvalidDescriptor);
-        }
-        Ok(Self {
-            identity,
-            resource_types,
-            reconcile_concurrency,
-            max_pending_resources,
-            max_expedited_per_resource,
-            initial_watch_credits,
-        })
-    }
-
-    /// Borrow the registered identity.
-    pub const fn identity(&self) -> &ControllerIdentity {
-        &self.identity
-    }
-
-    /// Borrow owned ResourceTypes.
-    pub fn resource_types(&self) -> &[ResourceTypeName] {
-        &self.resource_types
-    }
-
-    /// Return the global handler semaphore bound.
-    pub const fn reconcile_concurrency(&self) -> usize {
-        self.reconcile_concurrency
-    }
-
-    /// Return the pending-resource bound.
-    pub const fn max_pending_resources(&self) -> usize {
-        self.max_pending_resources
-    }
-
-    /// Return the expedited per-resource bound.
-    pub const fn max_expedited_per_resource(&self) -> usize {
-        self.max_expedited_per_resource
-    }
-
-    /// Return initial watch credit.
-    pub const fn initial_watch_credits(&self) -> u32 {
-        self.initial_watch_credits
-    }
-
-    fn event_channel_capacity(&self) -> usize {
-        self.reconcile_concurrency.saturating_add(1)
-    }
-}
-
-impl core::fmt::Debug for ControllerDescriptor {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("ControllerDescriptor")
-            .field("identity", &self.identity)
-            .field("resource_type_count", &self.resource_types.len())
-            .field("reconcile_concurrency", &self.reconcile_concurrency)
-            .field("max_pending_resources", &self.max_pending_resources)
-            .field(
-                "max_expedited_per_resource",
-                &self.max_expedited_per_resource,
-            )
-            .field("initial_watch_credits", &self.initial_watch_credits)
-            .finish()
-    }
-}
+use tokio::{
+    sync::{OwnedSemaphorePermit, Semaphore},
+    task::JoinSet,
+};
 
 /// Initial list entry.
 #[derive(Clone, PartialEq, Eq)]
@@ -252,15 +162,53 @@ impl core::fmt::Debug for FreshSnapshot {
 }
 
 /// Expedited admission decision.
-#[derive(Debug)]
 pub enum CommitDecision {
     Committed {
+        zone: ZoneId,
         resource_uid: d2b_contracts::v3::ResourceUid,
         generation: ResourceGeneration,
         revision: ZoneRevision,
         operation_id: String,
     },
     Abort,
+}
+
+impl CommitDecision {
+    /// Borrow the committed Zone when durable evidence is present.
+    pub const fn zone(&self) -> Option<&ZoneId> {
+        match self {
+            Self::Committed { zone, .. } => Some(zone),
+            Self::Abort => None,
+        }
+    }
+
+    /// Borrow the operation ID for protocol correlation.
+    pub fn operation_id(&self) -> Option<&str> {
+        match self {
+            Self::Committed { operation_id, .. } => Some(operation_id),
+            Self::Abort => None,
+        }
+    }
+}
+
+impl core::fmt::Debug for CommitDecision {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Committed {
+                generation,
+                revision,
+                ..
+            } => f
+                .debug_struct("CommitDecision::Committed")
+                .field("has_zone", &true)
+                .field("has_resource_uid", &true)
+                .field("generation", generation)
+                .field("revision", revision)
+                .field("has_operation_id", &true)
+                .finish(),
+            Self::Abort => f.write_str("CommitDecision::Abort"),
+        }
+    }
 }
 
 /// Durable commit outcome.
@@ -348,6 +296,11 @@ pub trait ControllerSource: Send + Sync + 'static {
         status_persistence: StatusPersistence,
     ) -> impl Future<Output = Result<(), SourceError>> + Send;
 
+    fn persist_outcome(
+        &self,
+        projection: &ReconcileProjection,
+    ) -> impl Future<Output = Result<(), SourceError>> + Send;
+
     fn checkpoint(
         &self,
         context: &ReconcileContext,
@@ -361,9 +314,56 @@ pub trait ControllerSource: Send + Sync + 'static {
     ) -> impl Future<Output = Result<(), SourceError>> + Send;
 }
 
+/// Closed retry class for redacted controller failures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandlerErrorClass {
+    Retryable,
+    Terminal,
+}
+
+/// Redacted handler failure propagated through worker completion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HandlerFailure {
+    class: HandlerErrorClass,
+    reason: ReconcileReason,
+}
+
+impl HandlerFailure {
+    /// Construct a retryable handler failure.
+    pub const fn retryable() -> Self {
+        Self {
+            class: HandlerErrorClass::Retryable,
+            reason: ReconcileReason::HandlerRetryable,
+        }
+    }
+
+    /// Construct a terminal handler failure.
+    pub const fn terminal() -> Self {
+        Self {
+            class: HandlerErrorClass::Terminal,
+            reason: ReconcileReason::HandlerTerminal,
+        }
+    }
+
+    /// Return the closed retry class.
+    pub const fn class(self) -> HandlerErrorClass {
+        self.class
+    }
+
+    /// Return the closed redacted reason.
+    pub const fn reason(self) -> ReconcileReason {
+        self.reason
+    }
+}
+
 /// Official asynchronous controller handler surface.
 pub trait ResourceReconciler: Send + Sync + 'static {
     type Error: std::error::Error + Send + Sync + 'static;
+
+    /// Map implementation errors into the closed redacted retry contract.
+    fn classify_error(&self, _error: &Self::Error) -> HandlerFailure {
+        HandlerFailure::retryable()
+    }
 
     fn describe(&self) -> impl Future<Output = Result<ControllerDescriptor, Self::Error>> + Send;
 
@@ -452,6 +452,97 @@ pub struct RunnerReport {
     pub committed_status_pending: usize,
 }
 
+/// Closed runner counter labels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunnerCounter {
+    QueueAdmitted,
+    QueueCoalesced,
+    QueueRejected,
+    Relist,
+    Retry,
+    Exhaustion,
+    WatchFailure,
+}
+
+/// Closed observation outcome labels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunnerOutcome {
+    Accepted,
+    Coalesced,
+    Rejected,
+    Retrying,
+    Exhausted,
+    Failed,
+    Succeeded,
+}
+
+/// Closed observation reason labels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunnerObservationReason {
+    None,
+    Backpressure,
+    WatchDisconnected,
+    RevisionExpired,
+    WatchFatal,
+    Handler,
+    Conflict,
+    Deadline,
+    Cancellation,
+}
+
+/// One cardinality-safe runner observation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RunnerObservation {
+    pub counter: Option<RunnerCounter>,
+    pub lane: Option<PriorityLane>,
+    pub outcome: RunnerOutcome,
+    pub reason: RunnerObservationReason,
+    pub queue_depth: usize,
+    pub active_workers: usize,
+}
+
+/// Continuous cardinality-safe runner observer.
+pub trait RunnerObserver: Send + Sync + 'static {
+    fn observe(&self, observation: RunnerObservation);
+}
+
+#[derive(Debug, Default)]
+struct NoopObserver;
+
+impl RunnerObserver for NoopObserver {
+    fn observe(&self, _observation: RunnerObservation) {}
+}
+
+/// Injectable monotonic clock used for pass deadlines.
+pub trait MonotonicClock: Send + Sync + 'static {
+    fn now_tick(&self) -> u64;
+    fn sleep_until(&self, deadline_tick: u64) -> Pin<Box<dyn Future<Output = ()> + Send + '_>>;
+}
+
+#[derive(Debug)]
+struct TokioClock {
+    epoch: Instant,
+}
+
+impl Default for TokioClock {
+    fn default() -> Self {
+        Self {
+            epoch: Instant::now(),
+        }
+    }
+}
+
+impl MonotonicClock for TokioClock {
+    fn now_tick(&self) -> u64 {
+        u64::try_from(self.epoch.elapsed().as_millis()).unwrap_or(u64::MAX)
+    }
+
+    fn sleep_until(&self, deadline_tick: u64) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+        let delay = deadline_tick.saturating_sub(self.now_tick());
+        Box::pin(tokio::time::sleep(Duration::from_millis(delay)))
+    }
+}
+
 /// Controller-loop failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunnerError {
@@ -460,7 +551,8 @@ pub enum RunnerError {
     Source(SourceError),
     Queue(QueueError),
     Context(ContextError),
-    ReceiverPanicked,
+    Cancelled,
+    TaskFailed,
 }
 
 impl core::fmt::Display for RunnerError {
@@ -471,7 +563,8 @@ impl core::fmt::Display for RunnerError {
             Self::Source(_) => "controller source failed",
             Self::Queue(_) => "controller queue failed",
             Self::Context(_) => "reconcile context failed",
-            Self::ReceiverPanicked => "watch receiver panicked",
+            Self::Cancelled => "controller runner cancelled",
+            Self::TaskFailed => "controller task failed",
         })
     }
 }
@@ -501,6 +594,8 @@ pub struct Runner<R, S> {
     reconciler: Arc<R>,
     source: Arc<S>,
     config: RunnerConfig,
+    clock: Arc<dyn MonotonicClock>,
+    observer: Arc<dyn RunnerObserver>,
 }
 
 impl<R, S> Runner<R, S>
@@ -514,205 +609,411 @@ where
             reconciler,
             source,
             config,
+            clock: Arc::new(TokioClock::default()),
+            observer: Arc::new(NoopObserver),
         }
     }
 
+    /// Replace the default monotonic clock.
+    pub fn with_clock(mut self, clock: Arc<dyn MonotonicClock>) -> Self {
+        self.clock = clock;
+        self
+    }
+
+    /// Attach a continuous cardinality-safe observer.
+    pub fn with_observer(mut self, observer: Arc<dyn RunnerObserver>) -> Self {
+        self.observer = observer;
+        self
+    }
+
     /// Register, list, watch, and reconcile until the watch closes and work drains.
-    ///
-    /// Blocking store adapters and the internal coordination channel run on a
-    /// dedicated orchestration thread. Polling this future never blocks the
-    /// caller's async executor.
     pub fn run(&self) -> RunnerFuture {
         let runner = Self {
             reconciler: Arc::clone(&self.reconciler),
             source: Arc::clone(&self.source),
             config: self.config,
+            clock: Arc::clone(&self.clock),
+            observer: Arc::clone(&self.observer),
         };
-        RunnerFuture::spawn(move || block_on(runner.run_inner()))
+        let shutdown = Cancellation::default();
+        let run_shutdown = shutdown.clone();
+        let observer = Arc::clone(&self.observer);
+        RunnerFuture {
+            shutdown,
+            inner: Box::pin(async move {
+                let result = runner.run_inner(run_shutdown).await;
+                observer.observe(RunnerObservation {
+                    counter: None,
+                    lane: None,
+                    outcome: if result.is_ok() {
+                        RunnerOutcome::Succeeded
+                    } else {
+                        RunnerOutcome::Failed
+                    },
+                    reason: match result {
+                        Err(RunnerError::Cancelled) => RunnerObservationReason::Cancellation,
+                        Err(RunnerError::Source(SourceError::Timeout)) => {
+                            RunnerObservationReason::Deadline
+                        }
+                        _ => RunnerObservationReason::None,
+                    },
+                    queue_depth: 0,
+                    active_workers: 0,
+                });
+                result
+            }),
+        }
     }
 
-    async fn run_inner(&self) -> Result<RunnerReport, RunnerError> {
-        let descriptor = self
-            .reconciler
-            .describe()
-            .await
-            .map_err(|_| RunnerError::Controller)?;
+    async fn run_inner(&self, shutdown: Cancellation) -> Result<RunnerReport, RunnerError> {
+        let startup_deadline = phase_deadline(self.clock.as_ref(), self.config.deadline_tick);
+        let descriptor = bounded_phase(
+            self.clock.as_ref(),
+            startup_deadline,
+            &shutdown,
+            self.reconciler.describe(),
+        )
+        .await
+        .map_err(phase_runner_error)?
+        .map_err(|_| RunnerError::Controller)?;
         if self.config.max_attempts == 0 {
             return Err(RunnerError::InvalidDescriptor);
         }
-        self.source.register(&descriptor).await?;
-        let initial = self.source.list_initial(&descriptor).await?;
-        self.source
-            .open_watch(&descriptor, initial.snapshot_revision)
-            .await?;
+        bounded_source(
+            self.clock.as_ref(),
+            startup_deadline,
+            &shutdown,
+            self.source.register(&descriptor),
+        )
+        .await?;
+        let initial = bounded_source(
+            self.clock.as_ref(),
+            startup_deadline,
+            &shutdown,
+            self.source.list_initial(&descriptor),
+        )
+        .await?;
+        bounded_source(
+            self.clock.as_ref(),
+            startup_deadline,
+            &shutdown,
+            self.source
+                .open_watch(&descriptor, initial.snapshot_revision),
+        )
+        .await?;
 
         let queue = Arc::new(PendingQueue::new(
-            descriptor.max_pending_resources,
-            descriptor.max_expedited_per_resource,
+            descriptor.max_pending_resources(),
+            descriptor.max_expedited_per_resource(),
         ));
         queue.rebuild(initial_hints(&descriptor, initial.resources)?)?;
 
-        let (sender, receiver) = mpsc::sync_channel(descriptor.event_channel_capacity());
-        spawn_receiver(Arc::clone(&self.source), sender.clone());
+        let semaphore = Arc::new(Semaphore::new(descriptor.reconcile_concurrency()));
+        let mut workers = OwnedWorkers::default();
+        let mut watchers = JoinSet::new();
+        spawn_watch(
+            &mut watchers,
+            Arc::clone(&self.source),
+            Arc::clone(&self.clock),
+            descriptor.execution().resync().resync_interval_ticks(),
+            shutdown.clone(),
+        );
         let mut report = RunnerReport::default();
-        let mut active = 0_usize;
         let mut watch_closed = false;
 
         loop {
-            while active < descriptor.reconcile_concurrency {
+            while let Ok(permit) = Arc::clone(&semaphore).try_acquire_owned() {
                 let Some(work) = queue.pop_ready() else {
                     break;
                 };
-                active += 1;
                 report.dispatched += 1;
-                spawn_worker(
-                    Arc::clone(&self.reconciler),
-                    Arc::clone(&self.source),
-                    descriptor.identity.clone(),
-                    self.config,
+                let resource_policy = descriptor
+                    .resources()
+                    .iter()
+                    .find(|policy| {
+                        policy.resource_type() == work.key().resource_ref().resource_type()
+                    })
+                    .ok_or(RunnerError::InvalidDescriptor)?;
+                workers.spawn(
+                    WorkerRuntime {
+                        reconciler: Arc::clone(&self.reconciler),
+                        source: Arc::clone(&self.source),
+                        clock: Arc::clone(&self.clock),
+                        identity: descriptor.identity().clone(),
+                        config: RunnerConfig {
+                            deadline_tick: self
+                                .config
+                                .deadline_tick
+                                .min(resource_policy.deadline_ticks()),
+                            max_attempts: self
+                                .config
+                                .max_attempts
+                                .min(resource_policy.max_attempts()),
+                            ..self.config
+                        },
+                    },
                     work,
-                    sender.clone(),
+                    permit,
+                );
+                observe_gauge(
+                    self.observer.as_ref(),
+                    queue.resource_count(),
+                    workers.len(),
                 );
             }
 
-            if watch_closed && active == 0 && queue.is_empty() {
+            if watch_closed && workers.is_empty() && queue.is_empty() {
                 return Ok(report);
             }
 
-            match receiver.recv().map_err(|_| RunnerError::ReceiverPanicked)? {
-                RunnerEvent::Watch(Ok(WatchEvent::Hint(hint))) => {
-                    if !descriptor_owns_key(&descriptor, &hint.key) {
-                        return Err(RunnerError::Source(SourceError::Integrity));
-                    }
-                    queue.push((*hint).into_queue_hint()?)?;
+            tokio::select! {
+                biased;
+                _ = shutdown.cancelled() => {
+                    workers.shutdown().await;
+                    watchers.shutdown().await;
+                    return Err(RunnerError::Cancelled);
                 }
-                RunnerEvent::Watch(Ok(WatchEvent::Closed)) => {
-                    watch_closed = true;
-                }
-                RunnerEvent::Watch(Err(
-                    WatchFailure::Disconnected | WatchFailure::RevisionExpired,
-                )) => {
-                    let relist = self.source.list_initial(&descriptor).await?;
-                    self.source
-                        .open_watch(&descriptor, relist.snapshot_revision)
-                        .await?;
-                    queue.rebuild(initial_hints(&descriptor, relist.resources)?)?;
-                    report.relists += 1;
-                    watch_closed = false;
-                    spawn_receiver(Arc::clone(&self.source), sender.clone());
-                }
-                RunnerEvent::Watch(Err(WatchFailure::Fatal)) => {
-                    return Err(RunnerError::Source(SourceError::Integrity));
-                }
-                RunnerEvent::Worker(completion) => {
-                    let completion = *completion;
-                    active = active.saturating_sub(1);
+                completion = workers.join_next(), if !workers.is_empty() => {
+                    let completion = completion.ok_or(RunnerError::TaskFailed)??;
                     let key = completion.work.key().clone();
                     match completion.outcome {
-                        WorkerOutcome::Done {
-                            checkpointed,
-                            status_pending,
-                        } => {
+                        WorkerOutcome::Done { checkpointed, status_pending } => {
                             queue.finish(&key)?;
                             report.checkpointed += usize::from(checkpointed);
                             report.committed_status_pending += usize::from(status_pending);
                         }
-                        WorkerOutcome::Retry(revision) => {
-                            if completion.work.attempt() >= self.config.max_attempts {
+                        WorkerOutcome::Retry { revision, reason } => {
+                            if completion.work.attempt()
+                                >= descriptor_attempt_bound(
+                                    &descriptor,
+                                    completion.work.key(),
+                                    self.config.max_attempts,
+                                )?
+                            {
+                                let persisted_reason =
+                                    if reason == ReconcileReason::HandlerRetryable {
+                                        ReconcileReason::HandlerExhausted
+                                    } else {
+                                        reason
+                                    };
+                                persist_exhaustion(
+                                    self.source.as_ref(),
+                                    self.clock.as_ref(),
+                                    phase_deadline(self.clock.as_ref(), self.config.deadline_tick),
+                                    &shutdown,
+                                    completion.work.key(),
+                                    revision.max(completion.work.high_water_revision()),
+                                    persisted_reason,
+                                ).await?;
                                 queue.finish(&key)?;
                                 report.handler_failures += 1;
+                                observe_counter(
+                                    self.observer.as_ref(),
+                                    RunnerCounter::Exhaustion,
+                                    Some(completion.work.lane()),
+                                    RunnerOutcome::Exhausted,
+                                    if reason == ReconcileReason::ConflictExhausted {
+                                        RunnerObservationReason::Conflict
+                                    } else {
+                                        RunnerObservationReason::Handler
+                                    },
+                                    queue.resource_count(),
+                                    workers.len(),
+                                );
                             } else {
+                                let lane = completion.work.lane();
                                 queue.retry(completion.work, revision)?;
-                                report.conflicts_retried += 1;
+                                if reason == ReconcileReason::ConflictExhausted {
+                                    report.conflicts_retried += 1;
+                                } else {
+                                    report.handler_retries += 1;
+                                }
+                                observe_counter(
+                                    self.observer.as_ref(),
+                                    RunnerCounter::Retry,
+                                    Some(lane),
+                                    RunnerOutcome::Retrying,
+                                    if reason == ReconcileReason::ConflictExhausted {
+                                        RunnerObservationReason::Conflict
+                                    } else {
+                                        RunnerObservationReason::Handler
+                                    },
+                                    queue.resource_count(),
+                                    workers.len(),
+                                );
                             }
                         }
-
-                        WorkerOutcome::HandlerFailed => {
-                            if completion.work.attempt() >= self.config.max_attempts {
-                                queue.finish(&key)?;
-                                report.handler_failures += 1;
-                            } else {
-                                let revision = completion.work.high_water_revision();
-                                queue.retry(completion.work, revision)?;
-                                report.handler_retries += 1;
-                            }
+                        WorkerOutcome::Terminal { projection } => {
+                            bounded_source(
+                                self.clock.as_ref(),
+                                phase_deadline(self.clock.as_ref(), self.config.deadline_tick),
+                                &shutdown,
+                                self.source.persist_outcome(&projection),
+                            ).await?;
+                            queue.finish(&key)?;
+                            report.handler_failures += 1;
+                            observe_counter(
+                                self.observer.as_ref(),
+                                RunnerCounter::Exhaustion,
+                                Some(completion.work.lane()),
+                                RunnerOutcome::Exhausted,
+                                RunnerObservationReason::Handler,
+                                queue.resource_count(),
+                                workers.len(),
+                            );
                         }
                         WorkerOutcome::SourceFailed(error) => {
                             queue.finish(&key)?;
                             return Err(RunnerError::Source(error));
                         }
                     }
+                    observe_gauge(
+                        self.observer.as_ref(),
+                        queue.resource_count(),
+                        workers.len(),
+                    );
+                }
+                watched = watchers.join_next(), if !watchers.is_empty() => {
+                    let watched = watched
+                        .ok_or(RunnerError::TaskFailed)?
+                        .map_err(|_| RunnerError::TaskFailed)?;
+                    match watched {
+                Ok(WatchEvent::Hint(hint)) => {
+                    if !descriptor_owns_key(&descriptor, &hint.key) {
+                        return Err(RunnerError::Source(SourceError::Integrity));
+                    }
+                    let lane = hint.lane;
+                    match queue.push((*hint).into_queue_hint()?) {
+                        Ok(outcome) => {
+                            observe_counter(
+                                self.observer.as_ref(),
+                                match outcome {
+                                    crate::QueuePushOutcome::Admitted => RunnerCounter::QueueAdmitted,
+                                    crate::QueuePushOutcome::Coalesced => RunnerCounter::QueueCoalesced,
+                                },
+                                Some(lane),
+                                match outcome {
+                                    crate::QueuePushOutcome::Admitted => RunnerOutcome::Accepted,
+                                    crate::QueuePushOutcome::Coalesced => RunnerOutcome::Coalesced,
+                                },
+                                RunnerObservationReason::None,
+                                queue.resource_count(),
+                                workers.len(),
+                            );
+                        }
+                        Err(error) => {
+                            observe_counter(
+                                self.observer.as_ref(),
+                                RunnerCounter::QueueRejected,
+                                Some(lane),
+                                RunnerOutcome::Rejected,
+                                RunnerObservationReason::Backpressure,
+                                queue.resource_count(),
+                                workers.len(),
+                            );
+                            return Err(error.into());
+                        }
+                    }
+                    spawn_watch(
+                        &mut watchers,
+                        Arc::clone(&self.source),
+                        Arc::clone(&self.clock),
+                        descriptor.execution().resync().resync_interval_ticks(),
+                        shutdown.clone(),
+                    );
+                }
+                Ok(WatchEvent::Closed) => {
+                    watch_closed = true;
+                }
+                Err(failure @ (WatchFailure::Disconnected | WatchFailure::RevisionExpired)) => {
+                    observe_counter(
+                        self.observer.as_ref(),
+                        RunnerCounter::WatchFailure,
+                        None,
+                        RunnerOutcome::Failed,
+                        match failure {
+                            WatchFailure::Disconnected => RunnerObservationReason::WatchDisconnected,
+                            WatchFailure::RevisionExpired => RunnerObservationReason::RevisionExpired,
+                            WatchFailure::Fatal => RunnerObservationReason::WatchFatal,
+                        },
+                        queue.resource_count(),
+                        workers.len(),
+                    );
+                    let relist = bounded_source(
+                        self.clock.as_ref(),
+                        phase_deadline(self.clock.as_ref(), self.config.deadline_tick),
+                        &shutdown,
+                        self.source.list_initial(&descriptor),
+                    ).await?;
+                    bounded_source(
+                        self.clock.as_ref(),
+                        phase_deadline(self.clock.as_ref(), self.config.deadline_tick),
+                        &shutdown,
+                        self.source.open_watch(&descriptor, relist.snapshot_revision),
+                    ).await?;
+                    queue.rebuild(initial_hints(&descriptor, relist.resources)?)?;
+                    report.relists += 1;
+                    watch_closed = false;
+                    observe_counter(
+                        self.observer.as_ref(),
+                        RunnerCounter::Relist,
+                        None,
+                        RunnerOutcome::Accepted,
+                        RunnerObservationReason::None,
+                        queue.resource_count(),
+                        workers.len(),
+                    );
+                    spawn_watch(
+                        &mut watchers,
+                        Arc::clone(&self.source),
+                        Arc::clone(&self.clock),
+                        descriptor.execution().resync().resync_interval_ticks(),
+                        shutdown.clone(),
+                    );
+                }
+                Err(WatchFailure::Fatal) => {
+                    observe_counter(
+                        self.observer.as_ref(),
+                        RunnerCounter::WatchFailure,
+                        None,
+                        RunnerOutcome::Failed,
+                        RunnerObservationReason::WatchFatal,
+                        queue.resource_count(),
+                        workers.len(),
+                    );
+                    return Err(RunnerError::Source(SourceError::Integrity));
+                }
+                    }
                 }
             }
         }
     }
 }
 
-struct RunnerFutureState {
-    result: Mutex<Option<Result<RunnerReport, RunnerError>>>,
-    waker: Mutex<Option<Waker>>,
-}
-
-/// Nonblocking future returned by [`Runner::run`].
+/// Executor-native future returned by [`Runner::run`].
 pub struct RunnerFuture {
-    state: Arc<RunnerFutureState>,
+    shutdown: Cancellation,
+    inner: Pin<Box<dyn Future<Output = Result<RunnerReport, RunnerError>> + Send>>,
 }
 
 impl RunnerFuture {
-    fn spawn(run: impl FnOnce() -> Result<RunnerReport, RunnerError> + Send + 'static) -> Self {
-        let state = Arc::new(RunnerFutureState {
-            result: Mutex::new(None),
-            waker: Mutex::new(None),
-        });
-        let worker_state = Arc::clone(&state);
-        thread::spawn(move || {
-            let result = run();
-            *worker_state
-                .result
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(result);
-            if let Some(waker) = worker_state
-                .waker
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .take()
-            {
-                waker.wake();
-            }
-        });
-        Self { state }
+    /// Request cancellation and retain the future for a joined shutdown.
+    pub fn cancel(&self) {
+        self.shutdown.cancel();
     }
 }
 
 impl Future for RunnerFuture {
     type Output = Result<RunnerReport, RunnerError>;
 
-    fn poll(self: std::pin::Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
-        if let Some(result) = self
-            .state
-            .result
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .take()
-        {
-            return Poll::Ready(result);
-        }
-        *self
-            .state
-            .waker
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(context.waker().clone());
-        if let Some(result) = self
-            .state
-            .result
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .take()
-        {
-            Poll::Ready(result)
-        } else {
-            Poll::Pending
-        }
+    fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+        self.inner.as_mut().poll(context)
+    }
+}
+
+impl Drop for RunnerFuture {
+    fn drop(&mut self) {
+        self.shutdown.cancel();
     }
 }
 
@@ -726,7 +1027,20 @@ fn descriptor_owns_key(descriptor: &ControllerDescriptor, key: &ResourceKey) -> 
     key.zone() == descriptor.identity().zone()
         && descriptor
             .resource_types()
-            .contains(key.resource_ref().resource_type())
+            .any(|resource_type| resource_type == key.resource_ref().resource_type())
+}
+
+fn descriptor_attempt_bound(
+    descriptor: &ControllerDescriptor,
+    key: &ResourceKey,
+    configured_bound: u32,
+) -> Result<u32, RunnerError> {
+    descriptor
+        .resources()
+        .iter()
+        .find(|policy| policy.resource_type() == key.resource_ref().resource_type())
+        .map(|policy| configured_bound.min(policy.max_attempts()))
+        .ok_or(RunnerError::InvalidDescriptor)
 }
 
 fn initial_hints(
@@ -757,14 +1071,18 @@ fn initial_hints(
         .collect()
 }
 
-enum RunnerEvent {
-    Watch(Result<WatchEvent, WatchFailure>),
-    Worker(Box<WorkerCompletion>),
-}
-
 struct WorkerCompletion {
     work: QueuedWork,
     outcome: WorkerOutcome,
+    cancellation: Cancellation,
+}
+
+struct WorkerRuntime<R, S> {
+    reconciler: Arc<R>,
+    source: Arc<S>,
+    clock: Arc<dyn MonotonicClock>,
+    identity: ControllerIdentity,
+    config: RunnerConfig,
 }
 
 enum WorkerOutcome {
@@ -772,56 +1090,298 @@ enum WorkerOutcome {
         checkpointed: bool,
         status_pending: bool,
     },
-    Retry(ZoneRevision),
-    HandlerFailed,
+    Retry {
+        revision: ZoneRevision,
+        reason: ReconcileReason,
+    },
+    Terminal {
+        projection: ReconcileProjection,
+    },
     SourceFailed(SourceError),
 }
 
-fn spawn_receiver<S>(source: Arc<S>, sender: mpsc::SyncSender<RunnerEvent>)
-where
+#[derive(Default)]
+struct OwnedWorkers {
+    tasks: JoinSet<WorkerCompletion>,
+    cancellations: Vec<Cancellation>,
+}
+
+impl OwnedWorkers {
+    fn spawn<R, S>(
+        &mut self,
+        runtime: WorkerRuntime<R, S>,
+        work: QueuedWork,
+        permit: OwnedSemaphorePermit,
+    ) where
+        R: ResourceReconciler,
+        S: ControllerSource,
+    {
+        let cancellation = Cancellation::default();
+        self.cancellations.push(cancellation.clone());
+        self.tasks.spawn(async move {
+            let _permit = permit;
+            let deadline_tick =
+                phase_deadline(runtime.clock.as_ref(), runtime.config.deadline_tick);
+            let work_config = RunnerConfig {
+                deadline_tick,
+                ..runtime.config
+            };
+            let outcome = match bounded_phase(
+                runtime.clock.as_ref(),
+                deadline_tick,
+                &cancellation,
+                execute_work_inner(
+                    runtime.reconciler,
+                    runtime.source,
+                    runtime.identity,
+                    work_config,
+                    &work,
+                    cancellation.clone(),
+                ),
+            )
+            .await
+            {
+                Ok(outcome) => outcome,
+                Err(PhaseStop::Deadline) => {
+                    cancellation.cancel();
+                    WorkerOutcome::Retry {
+                        revision: work.high_water_revision(),
+                        reason: ReconcileReason::DeadlineExceeded,
+                    }
+                }
+                Err(PhaseStop::Cancelled) => {
+                    cancellation.cancel();
+                    WorkerOutcome::Terminal {
+                        projection: failure_projection(
+                            work.key().clone(),
+                            work.high_water_revision(),
+                            ReconcileReason::Cancelled,
+                        ),
+                    }
+                }
+            };
+            WorkerCompletion {
+                work,
+                outcome,
+                cancellation,
+            }
+        });
+    }
+
+    fn len(&self) -> usize {
+        self.tasks.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.tasks.is_empty()
+    }
+
+    async fn join_next(&mut self) -> Option<Result<WorkerCompletion, RunnerError>> {
+        let completion = self
+            .tasks
+            .join_next()
+            .await
+            .map(|result| result.map_err(|_| RunnerError::TaskFailed));
+        if let Some(Ok(completion)) = completion.as_ref()
+            && let Some(index) = self
+                .cancellations
+                .iter()
+                .position(|candidate| candidate.shares_state(&completion.cancellation))
+        {
+            self.cancellations.swap_remove(index);
+        }
+        completion
+    }
+
+    fn cancel_all(&self) {
+        for cancellation in &self.cancellations {
+            cancellation.cancel();
+        }
+    }
+
+    async fn shutdown(&mut self) {
+        self.cancel_all();
+        self.tasks.shutdown().await;
+        self.cancellations.clear();
+    }
+}
+
+impl Drop for OwnedWorkers {
+    fn drop(&mut self) {
+        self.cancel_all();
+        self.tasks.abort_all();
+    }
+}
+
+fn spawn_watch<S>(
+    watchers: &mut JoinSet<Result<WatchEvent, WatchFailure>>,
+    source: Arc<S>,
+    clock: Arc<dyn MonotonicClock>,
+    resync_interval_ticks: u64,
+    shutdown: Cancellation,
+) where
     S: ControllerSource,
 {
-    thread::spawn(move || {
-        loop {
-            let event = catch_unwind(AssertUnwindSafe(|| block_on(source.receive_watch())))
-                .unwrap_or(Err(WatchFailure::Fatal));
-            let should_continue = matches!(event, Ok(WatchEvent::Hint(_)));
-            if sender.send(RunnerEvent::Watch(event)).is_err() || !should_continue {
-                break;
-            }
+    watchers.spawn(async move {
+        let deadline = clock.now_tick().saturating_add(resync_interval_ticks);
+        match bounded_phase(clock.as_ref(), deadline, &shutdown, source.receive_watch()).await {
+            Ok(event) => event,
+            Err(PhaseStop::Deadline) => Err(WatchFailure::RevisionExpired),
+            Err(PhaseStop::Cancelled) => Err(WatchFailure::Fatal),
         }
     });
 }
 
-fn spawn_worker<R, S>(
-    reconciler: Arc<R>,
-    source: Arc<S>,
-    identity: ControllerIdentity,
-    config: RunnerConfig,
-    work: QueuedWork,
-    sender: mpsc::SyncSender<RunnerEvent>,
-) where
-    R: ResourceReconciler,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PhaseStop {
+    Deadline,
+    Cancelled,
+}
+
+fn phase_deadline(clock: &dyn MonotonicClock, budget_ticks: u64) -> u64 {
+    clock.now_tick().saturating_add(budget_ticks.max(1))
+}
+
+async fn bounded_phase<F>(
+    clock: &dyn MonotonicClock,
+    deadline_tick: u64,
+    cancellation: &Cancellation,
+    future: F,
+) -> Result<F::Output, PhaseStop>
+where
+    F: Future + Send,
+{
+    if cancellation.is_cancelled() {
+        return Err(PhaseStop::Cancelled);
+    }
+    if clock.now_tick() >= deadline_tick {
+        return Err(PhaseStop::Deadline);
+    }
+    tokio::select! {
+        value = future => Ok(value),
+        _ = cancellation.cancelled() => Err(PhaseStop::Cancelled),
+        _ = clock.sleep_until(deadline_tick) => Err(PhaseStop::Deadline),
+    }
+}
+
+async fn bounded_source<F, T>(
+    clock: &dyn MonotonicClock,
+    deadline_tick: u64,
+    cancellation: &Cancellation,
+    future: F,
+) -> Result<T, RunnerError>
+where
+    F: Future<Output = Result<T, SourceError>> + Send,
+{
+    match bounded_phase(clock, deadline_tick, cancellation, future).await {
+        Ok(result) => result.map_err(RunnerError::Source),
+        Err(PhaseStop::Deadline) => Err(RunnerError::Source(SourceError::Timeout)),
+        Err(PhaseStop::Cancelled) => Err(RunnerError::Cancelled),
+    }
+}
+
+fn phase_runner_error(stop: PhaseStop) -> RunnerError {
+    match stop {
+        PhaseStop::Deadline => RunnerError::Source(SourceError::Timeout),
+        PhaseStop::Cancelled => RunnerError::Cancelled,
+    }
+}
+
+fn failure_projection(
+    key: ResourceKey,
+    revision: ZoneRevision,
+    reason: ReconcileReason,
+) -> ReconcileProjection {
+    ReconcileProjection::new(
+        key,
+        revision,
+        ResourcePhase::Failed,
+        ProjectionDisposition::Failed,
+        reason,
+        false,
+    )
+}
+
+async fn persist_exhaustion<S>(
+    source: &S,
+    clock: &dyn MonotonicClock,
+    deadline_tick: u64,
+    cancellation: &Cancellation,
+    key: &ResourceKey,
+    revision: ZoneRevision,
+    reason: ReconcileReason,
+) -> Result<(), RunnerError>
+where
     S: ControllerSource,
 {
-    thread::spawn(move || {
-        let outcome = catch_unwind(AssertUnwindSafe(|| {
-            block_on(execute_work(reconciler, source, identity, config, &work))
-        }))
-        .unwrap_or(WorkerOutcome::HandlerFailed);
-        let _ = sender.send(RunnerEvent::Worker(Box::new(WorkerCompletion {
-            work,
-            outcome,
-        })));
+    let projection = failure_projection(key.clone(), revision, reason);
+    bounded_source(
+        clock,
+        deadline_tick,
+        cancellation,
+        source.persist_outcome(&projection),
+    )
+    .await
+}
+
+fn observe_counter(
+    observer: &dyn RunnerObserver,
+    counter: RunnerCounter,
+    lane: Option<PriorityLane>,
+    outcome: RunnerOutcome,
+    reason: RunnerObservationReason,
+    queue_depth: usize,
+    active_workers: usize,
+) {
+    observer.observe(RunnerObservation {
+        counter: Some(counter),
+        lane,
+        outcome,
+        reason,
+        queue_depth,
+        active_workers,
     });
 }
 
-async fn execute_work<R, S>(
+fn observe_gauge(observer: &dyn RunnerObserver, queue_depth: usize, active_workers: usize) {
+    observer.observe(RunnerObservation {
+        counter: None,
+        lane: None,
+        outcome: RunnerOutcome::Accepted,
+        reason: RunnerObservationReason::None,
+        queue_depth,
+        active_workers,
+    });
+}
+
+fn handler_outcome<R>(
+    reconciler: &R,
+    error: &R::Error,
+    key: &ResourceKey,
+    revision: ZoneRevision,
+) -> WorkerOutcome
+where
+    R: ResourceReconciler,
+{
+    let failure = reconciler.classify_error(error);
+    match failure.class() {
+        HandlerErrorClass::Retryable => WorkerOutcome::Retry {
+            revision,
+            reason: failure.reason(),
+        },
+        HandlerErrorClass::Terminal => WorkerOutcome::Terminal {
+            projection: failure_projection(key.clone(), revision, failure.reason()),
+        },
+    }
+}
+
+async fn execute_work_inner<R, S>(
     reconciler: Arc<R>,
     source: Arc<S>,
     identity: ControllerIdentity,
     config: RunnerConfig,
     work: &QueuedWork,
+    cancellation: Cancellation,
 ) -> WorkerOutcome
 where
     R: ResourceReconciler,
@@ -829,7 +1389,12 @@ where
 {
     let fresh = match source.read_fresh(work.key()).await {
         Ok(fresh) => fresh,
-        Err(SourceError::Conflict(revision)) => return WorkerOutcome::Retry(revision),
+        Err(SourceError::Conflict(revision)) => {
+            return WorkerOutcome::Retry {
+                revision,
+                reason: ReconcileReason::ConflictExhausted,
+            };
+        }
         Err(error) => return WorkerOutcome::SourceFailed(error),
     };
     let (target, dependencies, event_only) = match fresh {
@@ -868,7 +1433,7 @@ where
             work.operation().clone(),
             work.attempt(),
             config.deadline_tick,
-            Cancellation::default(),
+            cancellation.clone(),
             config.policy_revision,
             config.api_revision,
             config.configuration_revision,
@@ -883,7 +1448,7 @@ where
             work.operation().clone(),
             work.attempt(),
             config.deadline_tick,
-            Cancellation::default(),
+            cancellation,
             config.policy_revision,
             config.api_revision,
             config.configuration_revision,
@@ -891,7 +1456,15 @@ where
     };
     let mut context = match context_result {
         Ok(context) => context,
-        Err(_) => return WorkerOutcome::HandlerFailed,
+        Err(_) => {
+            return WorkerOutcome::Terminal {
+                projection: failure_projection(
+                    target.key().clone(),
+                    target.revision(),
+                    ReconcileReason::HandlerTerminal,
+                ),
+            };
+        }
     };
 
     let deleting = target.deleting()
@@ -902,7 +1475,14 @@ where
     } else {
         match reconciler.validate_spec(&context, &target).await {
             Ok(validation) => validation,
-            Err(_) => return WorkerOutcome::HandlerFailed,
+            Err(error) => {
+                return handler_outcome(
+                    reconciler.as_ref(),
+                    &error,
+                    target.key(),
+                    target.revision(),
+                );
+            }
         }
     };
     let expedited_plan = if work.lane() == PriorityLane::Expedited
@@ -911,7 +1491,14 @@ where
     {
         match reconciler.plan(&context, &target, &dependencies).await {
             Ok(plan) => Some(plan),
-            Err(_) => return WorkerOutcome::HandlerFailed,
+            Err(error) => {
+                return handler_outcome(
+                    reconciler.as_ref(),
+                    &error,
+                    target.key(),
+                    target.revision(),
+                );
+            }
         }
     } else {
         None
@@ -920,16 +1507,30 @@ where
     if work.lane() == PriorityLane::Expedited {
         match source.await_expedited_commit(&context).await {
             Ok(CommitDecision::Committed {
+                zone,
                 resource_uid,
                 generation,
                 revision,
                 operation_id,
             }) => {
-                let proof =
-                    CommittedRevisionProof::issue(resource_uid, generation, revision, operation_id);
+                let proof = CommittedRevisionProof::issue(
+                    zone,
+                    resource_uid,
+                    generation,
+                    revision,
+                    operation_id,
+                );
                 context = match context.bind_committed_proof(proof) {
                     Ok(context) => context,
-                    Err(_) => return WorkerOutcome::HandlerFailed,
+                    Err(_) => {
+                        return WorkerOutcome::Terminal {
+                            projection: failure_projection(
+                                target.key().clone(),
+                                target.revision(),
+                                ReconcileReason::HandlerTerminal,
+                            ),
+                        };
+                    }
                 };
             }
             Ok(CommitDecision::Abort) => {
@@ -942,22 +1543,12 @@ where
         }
     }
 
-    if let ValidationResult::Invalid { reason_code } = validation {
-        let projection = if work.lane() == PriorityLane::Expedited {
-            match ReconcileProjection::new(
-                target.key().clone(),
-                target.revision(),
-                ResourcePhase::Failed,
-                ProjectionDisposition::Failed,
-                reason_code,
-                false,
-            ) {
-                Ok(projection) => Some(projection),
-                Err(_) => return WorkerOutcome::HandlerFailed,
-            }
-        } else {
-            None
-        };
+    if let ValidationResult::Invalid { reason } = validation {
+        let projection = Some(failure_projection(
+            target.key().clone(),
+            target.revision(),
+            reason,
+        ));
         return persist_result(
             source.as_ref(),
             &context,
@@ -969,7 +1560,12 @@ where
     if !event_only {
         match source.write_starting(&context).await {
             Ok(()) => {}
-            Err(SourceError::Conflict(revision)) => return WorkerOutcome::Retry(revision),
+            Err(SourceError::Conflict(revision)) => {
+                return WorkerOutcome::Retry {
+                    revision,
+                    reason: ReconcileReason::ConflictExhausted,
+                };
+            }
             Err(error) => return WorkerOutcome::SourceFailed(error),
         }
     }
@@ -977,7 +1573,14 @@ where
     if deleting {
         let result = match reconciler.finalize(&context, &target).await {
             Ok(result) => result.into_result(),
-            Err(_) => return WorkerOutcome::HandlerFailed,
+            Err(error) => {
+                return handler_outcome(
+                    reconciler.as_ref(),
+                    &error,
+                    target.key(),
+                    target.revision(),
+                );
+            }
         };
         return persist_result(source.as_ref(), &context, result).await;
     }
@@ -988,14 +1591,28 @@ where
             .await
         {
             Ok(plan) => plan,
-            Err(_) => return WorkerOutcome::HandlerFailed,
+            Err(error) => {
+                return handler_outcome(
+                    reconciler.as_ref(),
+                    &error,
+                    target.key(),
+                    target.revision(),
+                );
+            }
         };
         let result = match reconciler
             .execute_upgrade(&context, &target, &dependencies, &plan)
             .await
         {
             Ok(result) => result,
-            Err(_) => return WorkerOutcome::HandlerFailed,
+            Err(error) => {
+                return handler_outcome(
+                    reconciler.as_ref(),
+                    &error,
+                    target.key(),
+                    target.revision(),
+                );
+            }
         };
         return persist_result(source.as_ref(), &context, result).await;
     }
@@ -1003,7 +1620,14 @@ where
     if work.reasons().contains(TriggerReason::ScheduledObserve) {
         let result = match reconciler.observe(&context, &target).await {
             Ok(result) => result.into_result(),
-            Err(_) => return WorkerOutcome::HandlerFailed,
+            Err(error) => {
+                return handler_outcome(
+                    reconciler.as_ref(),
+                    &error,
+                    target.key(),
+                    target.revision(),
+                );
+            }
         };
         return persist_result(source.as_ref(), &context, result).await;
     }
@@ -1014,19 +1638,25 @@ where
             .await
         {
             Ok(assessment) => assessment,
-            Err(_) => return WorkerOutcome::HandlerFailed,
+            Err(error) => {
+                return handler_outcome(
+                    reconciler.as_ref(),
+                    &error,
+                    target.key(),
+                    target.revision(),
+                );
+            }
         };
         if assessment.state() == UpdateAssessmentState::UpgradeRequired {
             let projection = if work.lane() == PriorityLane::Expedited {
-                ReconcileProjection::new(
+                Some(ReconcileProjection::new(
                     target.key().clone(),
                     target.revision(),
                     ResourcePhase::Pending,
                     ProjectionDisposition::UpgradeRequired,
-                    "upgrade-required",
+                    ReconcileReason::UpgradeRequired,
                     false,
-                )
-                .ok()
+                ))
             } else {
                 None
             };
@@ -1048,7 +1678,14 @@ where
     } else {
         match reconciler.plan(&context, &target, &dependencies).await {
             Ok(plan) => plan,
-            Err(_) => return WorkerOutcome::HandlerFailed,
+            Err(error) => {
+                return handler_outcome(
+                    reconciler.as_ref(),
+                    &error,
+                    target.key(),
+                    target.revision(),
+                );
+            }
         }
     };
 
@@ -1066,7 +1703,9 @@ where
         .await
     {
         Ok(result) => result,
-        Err(_) => return WorkerOutcome::HandlerFailed,
+        Err(error) => {
+            return handler_outcome(reconciler.as_ref(), &error, target.key(), target.revision());
+        }
     };
     persist_result(source.as_ref(), &context, result).await
 }
@@ -1085,9 +1724,21 @@ where
             projection.target() != context.target() || projection.revision() != context.revision()
         })
     {
-        return WorkerOutcome::HandlerFailed;
+        return WorkerOutcome::Terminal {
+            projection: failure_projection(
+                context.target().clone(),
+                context.revision(),
+                ReconcileReason::HandlerTerminal,
+            ),
+        };
     }
-    if context.is_expedited() && result.projection().is_none() {
+    if result.projection().is_none()
+        && (context.is_expedited()
+            || matches!(
+                result.disposition(),
+                ReconcileDisposition::FailedRetryable | ReconcileDisposition::FailedTerminal
+            ))
+    {
         let (phase, disposition) = match result.disposition() {
             ReconcileDisposition::Converged => {
                 (ResourcePhase::Ready, ProjectionDisposition::Converged)
@@ -1105,19 +1756,27 @@ where
                 (ResourcePhase::Deleted, ProjectionDisposition::Converged)
             }
         };
-        let projection = match ReconcileProjection::new(
+        let reason = match result.disposition() {
+            ReconcileDisposition::FailedRetryable => ReconcileReason::HandlerRetryable,
+            ReconcileDisposition::FailedTerminal => ReconcileReason::HandlerTerminal,
+            _ => ReconcileReason::ReconcilePass,
+        };
+        let projection = ReconcileProjection::new(
             context.target().clone(),
             context.revision(),
             phase,
             disposition,
-            "reconcile-pass",
+            reason,
             false,
-        ) {
-            Ok(projection) => projection,
-            Err(_) => return WorkerOutcome::HandlerFailed,
-        };
+        );
         if result.attach_projection(projection).is_err() {
-            return WorkerOutcome::HandlerFailed;
+            return WorkerOutcome::Terminal {
+                projection: failure_projection(
+                    context.target().clone(),
+                    context.revision(),
+                    ReconcileReason::HandlerTerminal,
+                ),
+            };
         }
     }
 
@@ -1127,7 +1786,7 @@ where
                 if revision < context.revision() {
                     return WorkerOutcome::SourceFailed(SourceError::Integrity);
                 }
-                if let Err(error) = complete_expedited(source, context, &result, None).await {
+                if let Err(error) = persist_projection(source, context, &result, None).await {
                     return WorkerOutcome::SourceFailed(error);
                 }
                 if let Err(error) = source.checkpoint(context, revision).await {
@@ -1143,7 +1802,7 @@ where
                     return WorkerOutcome::SourceFailed(SourceError::Integrity);
                 }
                 if let Err(error) =
-                    complete_expedited(source, context, &result, Some(StatusPersistence::Pending))
+                    persist_projection(source, context, &result, Some(StatusPersistence::Pending))
                         .await
                 {
                     return WorkerOutcome::SourceFailed(error);
@@ -1157,13 +1816,16 @@ where
                 };
             }
             Ok(CommitOutcome::Conflict(revision)) | Err(SourceError::Conflict(revision)) => {
-                return WorkerOutcome::Retry(revision);
+                return WorkerOutcome::Retry {
+                    revision,
+                    reason: ReconcileReason::ConflictExhausted,
+                };
             }
             Err(error) => return WorkerOutcome::SourceFailed(error),
         }
     }
 
-    if let Err(error) = complete_expedited(source, context, &result, None).await {
+    if let Err(error) = persist_projection(source, context, &result, None).await {
         return WorkerOutcome::SourceFailed(error);
     }
     if let Some(next_tick) = result.next_tick()
@@ -1187,7 +1849,10 @@ where
         };
     }
     if result.disposition() == ReconcileDisposition::FailedRetryable {
-        return WorkerOutcome::Retry(result.processed_revision());
+        return WorkerOutcome::Retry {
+            revision: result.processed_revision(),
+            reason: ReconcileReason::HandlerRetryable,
+        };
     }
     WorkerOutcome::Done {
         checkpointed: false,
@@ -1195,7 +1860,7 @@ where
     }
 }
 
-async fn complete_expedited<S>(
+async fn persist_projection<S>(
     source: &S,
     context: &ReconcileContext,
     result: &ReconcileResult,
@@ -1204,64 +1869,22 @@ async fn complete_expedited<S>(
 where
     S: ControllerSource,
 {
-    if !context.is_expedited() {
-        return Ok(());
-    }
-    let projection = result.projection().ok_or(SourceError::Integrity)?;
-    source
-        .complete_expedited(
-            context,
-            projection,
-            status_override.unwrap_or(result.status_persistence()),
-        )
-        .await
-}
-
-struct ThreadNotify {
-    ready: Mutex<bool>,
-    signal: Condvar,
-}
-
-impl Wake for ThreadNotify {
-    fn wake(self: Arc<Self>) {
-        self.wake_by_ref();
-    }
-
-    fn wake_by_ref(self: &Arc<Self>) {
-        let mut ready = self
-            .ready
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        *ready = true;
-        self.signal.notify_one();
-    }
-}
-
-fn block_on<F: Future>(future: F) -> F::Output {
-    let notify = Arc::new(ThreadNotify {
-        ready: Mutex::new(false),
-        signal: Condvar::new(),
-    });
-    let waker = Waker::from(Arc::clone(&notify));
-    let mut context = Context::from_waker(&waker);
-    let mut future = std::pin::pin!(future);
-    loop {
-        match future.as_mut().poll(&mut context) {
-            Poll::Ready(output) => return output,
-            Poll::Pending => {
-                let mut ready = notify
-                    .ready
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                while !*ready {
-                    ready = notify
-                        .signal
-                        .wait(ready)
-                        .unwrap_or_else(|poisoned| poisoned.into_inner());
-                }
-                *ready = false;
-            }
+    if let Some(projection) = result.projection() {
+        if context.is_expedited() {
+            source
+                .complete_expedited(
+                    context,
+                    projection,
+                    status_override.unwrap_or(result.status_persistence()),
+                )
+                .await
+        } else {
+            source.persist_outcome(projection).await
         }
+    } else if context.is_expedited() {
+        Err(SourceError::Integrity)
+    } else {
+        Ok(())
     }
 }
 
@@ -1269,30 +1892,54 @@ fn block_on<F: Future>(future: F) -> F::Output {
 mod tests {
     use std::{
         collections::{BTreeMap, VecDeque},
-        convert::Infallible,
-        sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        sync::{
+            Mutex,
+            atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+            mpsc,
+        },
+        thread,
         time::Duration,
     };
 
-    use d2b_contracts::v3::{ControllerGeneration, ResourceRef, ResourceUid, ZoneId};
+    use d2b_contracts::v3::{
+        ControllerGeneration, ResourceRef, ResourceTypeName, ResourceUid, ZoneId,
+    };
 
     use super::*;
-    use crate::{DisruptionClass, StatusPersistence, UpgradeStage};
+    use crate::{
+        ControllerExecutionPolicy, ControllerSelector, ControllerVerb, DescriptorError,
+        DisruptionClass, ResourceRegistration, ResyncPolicy, SelectorField, StatusPersistence,
+        UpgradeStage,
+    };
 
     type FreshMap = BTreeMap<ResourceKey, FreshSnapshot>;
-    type CommitGate = (Mutex<bool>, Condvar);
     type Harness = (
         Arc<FakeReconciler>,
         mpsc::Receiver<(ResourceKey, &'static str)>,
         Arc<FakeSource>,
-        mpsc::Sender<Result<WatchEvent, WatchFailure>>,
+        tokio::sync::mpsc::UnboundedSender<Result<WatchEvent, WatchFailure>>,
     );
+
+    fn block_on<F: Future>(future: F) -> F::Output {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(8)
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(future)
+    }
 
     struct FakeSource {
         initial: Mutex<VecDeque<InitialList>>,
         fresh: Mutex<FreshMap>,
-        watch_rx: Mutex<mpsc::Receiver<Result<WatchEvent, WatchFailure>>>,
-        commit_gate: CommitGate,
+        watch_rx: tokio::sync::Mutex<
+            tokio::sync::mpsc::UnboundedReceiver<Result<WatchEvent, WatchFailure>>,
+        >,
+        commit_released: AtomicBool,
+        commit_notify: tokio::sync::Notify,
+        block_reads: AtomicBool,
+        reads_started: AtomicUsize,
+        read_notify: tokio::sync::Notify,
         abort_expedited: AtomicBool,
         expedited_gate_error: AtomicBool,
         conflicts_remaining: AtomicUsize,
@@ -1301,6 +1948,7 @@ mod tests {
         commits: AtomicUsize,
         expedited_completions: AtomicUsize,
         pending_completions: AtomicUsize,
+        persisted_outcomes: Mutex<Vec<ReconcileProjection>>,
         checkpoints: AtomicUsize,
         starting: AtomicUsize,
         requeues: AtomicUsize,
@@ -1311,14 +1959,21 @@ mod tests {
         fn new(
             initial: Vec<InitialList>,
             fresh: FreshMap,
-        ) -> (Arc<Self>, mpsc::Sender<Result<WatchEvent, WatchFailure>>) {
-            let (watch_tx, watch_rx) = mpsc::channel();
+        ) -> (
+            Arc<Self>,
+            tokio::sync::mpsc::UnboundedSender<Result<WatchEvent, WatchFailure>>,
+        ) {
+            let (watch_tx, watch_rx) = tokio::sync::mpsc::unbounded_channel();
             (
                 Arc::new(Self {
                     initial: Mutex::new(initial.into()),
                     fresh: Mutex::new(fresh),
-                    watch_rx: Mutex::new(watch_rx),
-                    commit_gate: (Mutex::new(false), Condvar::new()),
+                    watch_rx: tokio::sync::Mutex::new(watch_rx),
+                    commit_released: AtomicBool::new(false),
+                    commit_notify: tokio::sync::Notify::new(),
+                    block_reads: AtomicBool::new(false),
+                    reads_started: AtomicUsize::new(0),
+                    read_notify: tokio::sync::Notify::new(),
                     abort_expedited: AtomicBool::new(false),
                     expedited_gate_error: AtomicBool::new(false),
                     conflicts_remaining: AtomicUsize::new(0),
@@ -1327,6 +1982,7 @@ mod tests {
                     commits: AtomicUsize::new(0),
                     expedited_completions: AtomicUsize::new(0),
                     pending_completions: AtomicUsize::new(0),
+                    persisted_outcomes: Mutex::new(Vec::new()),
                     checkpoints: AtomicUsize::new(0),
                     starting: AtomicUsize::new(0),
                     requeues: AtomicUsize::new(0),
@@ -1337,12 +1993,8 @@ mod tests {
         }
 
         fn release_commit_gate(&self) {
-            *self
-                .commit_gate
-                .0
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
-            self.commit_gate.1.notify_all();
+            self.commit_released.store(true, Ordering::Release);
+            self.commit_notify.notify_waiters();
         }
     }
 
@@ -1376,28 +2028,30 @@ mod tests {
             std::future::ready(Ok(()))
         }
 
-        fn receive_watch(&self) -> impl Future<Output = Result<WatchEvent, WatchFailure>> + Send {
-            std::future::ready(
-                self.watch_rx
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .recv()
-                    .unwrap_or(Ok(WatchEvent::Closed)),
-            )
+        async fn receive_watch(&self) -> Result<WatchEvent, WatchFailure> {
+            self.watch_rx
+                .lock()
+                .await
+                .recv()
+                .await
+                .unwrap_or(Ok(WatchEvent::Closed))
         }
 
-        fn read_fresh(
-            &self,
-            key: &ResourceKey,
-        ) -> impl Future<Output = Result<FreshSnapshot, SourceError>> + Send {
-            std::future::ready(
-                self.fresh
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .get(key)
-                    .cloned()
-                    .ok_or(SourceError::Unavailable),
-            )
+        async fn read_fresh(&self, key: &ResourceKey) -> Result<FreshSnapshot, SourceError> {
+            self.reads_started.fetch_add(1, Ordering::SeqCst);
+            while self.block_reads.load(Ordering::Acquire) {
+                let notified = self.read_notify.notified();
+                if !self.block_reads.load(Ordering::Acquire) {
+                    break;
+                }
+                notified.await;
+            }
+            self.fresh
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .get(key)
+                .cloned()
+                .ok_or(SourceError::Unavailable)
         }
 
         fn write_starting(
@@ -1408,36 +2062,31 @@ mod tests {
             std::future::ready(Ok(()))
         }
 
-        fn await_expedited_commit(
+        async fn await_expedited_commit(
             &self,
             context: &ReconcileContext,
-        ) -> impl Future<Output = Result<CommitDecision, SourceError>> + Send {
-            let mut released = self
-                .commit_gate
-                .0
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            while !*released {
-                released = self
-                    .commit_gate
-                    .1
-                    .wait(released)
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+        ) -> Result<CommitDecision, SourceError> {
+            while !self.commit_released.load(Ordering::Acquire) {
+                let notified = self.commit_notify.notified();
+                if self.commit_released.load(Ordering::Acquire) {
+                    break;
+                }
+                notified.await;
             }
             if self.expedited_gate_error.load(Ordering::SeqCst) {
-                return std::future::ready(Err(SourceError::Unavailable));
+                return Err(SourceError::Unavailable);
             }
-            let decision = if self.abort_expedited.load(Ordering::SeqCst) {
+            Ok(if self.abort_expedited.load(Ordering::SeqCst) {
                 CommitDecision::Abort
             } else {
                 CommitDecision::Committed {
+                    zone: context.target().zone().clone(),
                     resource_uid: context.target().uid().clone(),
                     generation: context.generation(),
                     revision: context.revision(),
                     operation_id: context.operation().operation_id().to_owned(),
                 }
-            };
-            std::future::ready(Ok(decision))
+            })
         }
 
         fn commit_result(
@@ -1486,6 +2135,17 @@ mod tests {
             std::future::ready(Ok(()))
         }
 
+        fn persist_outcome(
+            &self,
+            projection: &ReconcileProjection,
+        ) -> impl Future<Output = Result<(), SourceError>> + Send {
+            self.persisted_outcomes
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(projection.clone());
+            std::future::ready(Ok(()))
+        }
+
         fn schedule_requeue(
             &self,
             _key: &ResourceKey,
@@ -1510,7 +2170,7 @@ mod tests {
     struct FakeReconciler {
         descriptor: ControllerDescriptor,
         entered_tx: mpsc::Sender<(ResourceKey, &'static str)>,
-        release: Arc<(Mutex<usize>, Condvar)>,
+        release: Arc<Semaphore>,
         active: AtomicUsize,
         max_active: AtomicUsize,
         plan_count: AtomicUsize,
@@ -1521,47 +2181,59 @@ mod tests {
         finalizer_count: AtomicUsize,
         validation_valid: AtomicBool,
         handler_failures_remaining: AtomicUsize,
+        handler_failure_terminal: AtomicBool,
         block_handlers: AtomicBool,
         no_op_after_first: AtomicBool,
         assessment_state: Mutex<UpdateAssessmentState>,
         requeue_at: Mutex<Option<u64>>,
     }
 
+    #[derive(Default)]
+    struct RecordingObserver(Mutex<Vec<RunnerObservation>>);
+
+    impl RunnerObserver for RecordingObserver {
+        fn observe(&self, observation: RunnerObservation) {
+            self.0
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(observation);
+        }
+    }
+
+    struct ActiveGuard<'a>(&'a AtomicUsize);
+
+    impl Drop for ActiveGuard<'_> {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
     impl FakeReconciler {
-        fn enter(&self, key: &ResourceKey, action: &'static str) {
+        async fn enter(&self, key: &ResourceKey, action: &'static str) {
             let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+            let _active = ActiveGuard(&self.active);
             self.max_active.fetch_max(active, Ordering::SeqCst);
             self.entered_tx.send((key.clone(), action)).unwrap();
             if self.block_handlers.load(Ordering::SeqCst) {
-                let mut permits = self
-                    .release
-                    .0
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                while *permits == 0 {
-                    permits = self
-                        .release
-                        .1
-                        .wait(permits)
-                        .unwrap_or_else(|poisoned| poisoned.into_inner());
-                }
-                *permits -= 1;
+                self.release.acquire().await.unwrap().forget();
             }
-            self.active.fetch_sub(1, Ordering::SeqCst);
         }
 
         fn release(&self, count: usize) {
-            *self
-                .release
-                .0
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner()) += count;
-            self.release.1.notify_all();
+            self.release.add_permits(count);
         }
     }
 
     impl ResourceReconciler for FakeReconciler {
         type Error = FakeError;
+
+        fn classify_error(&self, _error: &Self::Error) -> HandlerFailure {
+            if self.handler_failure_terminal.load(Ordering::SeqCst) {
+                HandlerFailure::terminal()
+            } else {
+                HandlerFailure::retryable()
+            }
+        }
 
         fn describe(
             &self,
@@ -1578,7 +2250,7 @@ mod tests {
                 ValidationResult::Valid
             } else {
                 ValidationResult::Invalid {
-                    reason_code: "invalid-spec",
+                    reason: ReconcileReason::InvalidSpec,
                 }
             }))
         }
@@ -1609,63 +2281,58 @@ mod tests {
             )
         }
 
-        fn reconcile(
+        async fn reconcile(
             &self,
             context: &ReconcileContext,
             resource: &ResourceSnapshot,
             _dependencies: &[DependencySnapshot],
             _plan: &ReconcilePlan,
-        ) -> impl Future<Output = Result<ReconcileResult, Self::Error>> + Send {
-            let permit = context.authorize_effect().map_err(|_| FakeError);
-            if permit.is_ok() {
-                self.enter(resource.key(), "reconcile");
-            }
+        ) -> Result<ReconcileResult, Self::Error> {
+            context.authorize_effect().map_err(|_| FakeError)?;
+            self.enter(resource.key(), "reconcile").await;
             self.reconcile_count.fetch_add(1, Ordering::SeqCst);
             let requeue_at = *self
                 .requeue_at
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            std::future::ready(permit.and_then(|_| {
-                if let Some(next_tick) = requeue_at {
-                    ReconcileResult::new(
-                        resource.revision(),
-                        resource.generation(),
-                        None,
-                        None,
-                        ReconcileDisposition::RequeueAt,
-                        Some(next_tick),
-                        None,
-                        StatusPersistence::NotRequested,
-                    )
-                } else {
-                    ReconcileResult::new(
-                        resource.revision(),
-                        resource.generation(),
-                        None,
-                        Some(b"{}".to_vec()),
-                        ReconcileDisposition::Pending,
-                        None,
-                        None,
-                        StatusPersistence::Pending,
-                    )
-                }
-                .map_err(|_| FakeError)
-            }))
+            if let Some(next_tick) = requeue_at {
+                ReconcileResult::new(
+                    resource.revision(),
+                    resource.generation(),
+                    None,
+                    None,
+                    ReconcileDisposition::RequeueAt,
+                    Some(next_tick),
+                    None,
+                    StatusPersistence::NotRequested,
+                )
+            } else {
+                ReconcileResult::new(
+                    resource.revision(),
+                    resource.generation(),
+                    None,
+                    Some(b"{}".to_vec()),
+                    ReconcileDisposition::Pending,
+                    None,
+                    None,
+                    StatusPersistence::Pending,
+                )
+            }
+            .map_err(|_| FakeError)
         }
 
-        fn observe(
+        async fn observe(
             &self,
             context: &ReconcileContext,
             resource: &ResourceSnapshot,
-        ) -> impl Future<Output = Result<ObservationResult, Self::Error>> + Send {
+        ) -> Result<ObservationResult, Self::Error> {
+            context.authorize_effect().map_err(|_| FakeError)?;
             self.observe_count.fetch_add(1, Ordering::SeqCst);
-            self.enter(resource.key(), "observe");
-            std::future::ready(context.authorize_effect().map_err(|_| FakeError).map(|_| {
-                ObservationResult::new(ReconcileResult::converged(
-                    resource.revision(),
-                    resource.generation(),
-                ))
-            }))
+            self.enter(resource.key(), "observe").await;
+            Ok(ObservationResult::new(ReconcileResult::converged(
+                resource.revision(),
+                resource.generation(),
+            )))
         }
 
         fn finalize(
@@ -1682,11 +2349,10 @@ mod tests {
                 resource.revision(),
                 ResourcePhase::Deleted,
                 ProjectionDisposition::Converged,
-                "deleted",
+                ReconcileReason::Deleted,
                 resource.canonical_json().is_empty(),
-            )
-            .map_err(|_| FakeError)
-            .and_then(|projection| {
+            );
+            let projection = {
                 ReconcileResult::new(
                     resource.revision(),
                     resource.generation(),
@@ -1698,7 +2364,7 @@ mod tests {
                     StatusPersistence::NotRequested,
                 )
                 .map_err(|_| FakeError)
-            })
+            }
             .map(FinalizeResult::new);
             std::future::ready(projection)
         }
@@ -1750,23 +2416,20 @@ mod tests {
             )
         }
 
-        fn execute_upgrade(
+        async fn execute_upgrade(
             &self,
             context: &ReconcileContext,
             resource: &ResourceSnapshot,
             _dependencies: &[DependencySnapshot],
             _plan: &UpgradePlan,
-        ) -> impl Future<Output = Result<ReconcileResult, Self::Error>> + Send {
-            let permitted = context.authorize_effect().map_err(|_| FakeError);
-            if permitted.is_ok() {
-                self.enter(resource.key(), "upgrade");
-            }
+        ) -> Result<ReconcileResult, Self::Error> {
+            context.authorize_effect().map_err(|_| FakeError)?;
+            self.enter(resource.key(), "upgrade").await;
             self.upgrade_count.fetch_add(1, Ordering::SeqCst);
-            std::future::ready(
-                permitted.map(|_| {
-                    ReconcileResult::converged(resource.revision(), resource.generation())
-                }),
-            )
+            Ok(ReconcileResult::converged(
+                resource.revision(),
+                resource.generation(),
+            ))
         }
     }
 
@@ -1790,6 +2453,53 @@ mod tests {
             None,
         )
         .unwrap()
+    }
+
+    fn descriptor(
+        identity: ControllerIdentity,
+        resource_types: Vec<ResourceTypeName>,
+        concurrency: usize,
+        max_pending: usize,
+        max_expedited: usize,
+        watch_credits: u32,
+    ) -> Result<ControllerDescriptor, DescriptorError> {
+        let resources = resource_types
+            .iter()
+            .cloned()
+            .map(|resource_type| ResourceRegistration::new(resource_type, vec![1], 30_000, 3))
+            .collect::<Result<Vec<_>, _>>()?;
+        let selectors = resource_types
+            .into_iter()
+            .map(|resource_type| ControllerSelector::new(resource_type, SelectorField::Spec, None))
+            .collect::<Result<Vec<_>, _>>()?;
+        ControllerDescriptor::new(
+            identity,
+            resources,
+            vec!["resource-api".to_owned()],
+            vec!["host".to_owned()],
+            vec![ControllerVerb::ReadSpec, ControllerVerb::WriteStatus],
+            selectors,
+            vec![
+                ControllerSelector::new(
+                    ResourceTypeName::parse("Host").unwrap(),
+                    SelectorField::Status,
+                    None,
+                )
+                .unwrap(),
+            ],
+            true,
+            vec!["d2b.io/controller".to_owned()],
+            vec!["service.v1".to_owned()],
+            vec!["schema.v1".to_owned()],
+            ControllerExecutionPolicy::new(
+                concurrency,
+                concurrency,
+                max_pending,
+                max_expedited,
+                watch_credits,
+                ResyncPolicy::new(Some(10_000), 30_000)?,
+            )?,
+        )
     }
 
     fn resource(key: ResourceKey, revision: u64) -> FreshSnapshot {
@@ -1825,7 +2535,7 @@ mod tests {
         let (source, watch_tx) = FakeSource::new(vec![initial(&keys)], fresh);
         let (entered_tx, entered_rx) = mpsc::channel();
         let reconciler = Arc::new(FakeReconciler {
-            descriptor: ControllerDescriptor::new(
+            descriptor: descriptor(
                 identity(),
                 vec![ResourceTypeName::parse("Process").unwrap()],
                 concurrency,
@@ -1835,7 +2545,7 @@ mod tests {
             )
             .unwrap(),
             entered_tx,
-            release: Arc::new((Mutex::new(0), Condvar::new())),
+            release: Arc::new(Semaphore::new(0)),
             active: AtomicUsize::new(0),
             max_active: AtomicUsize::new(0),
             plan_count: AtomicUsize::new(0),
@@ -1846,6 +2556,7 @@ mod tests {
             finalizer_count: AtomicUsize::new(0),
             validation_valid: AtomicBool::new(true),
             handler_failures_remaining: AtomicUsize::new(0),
+            handler_failure_terminal: AtomicBool::new(false),
             block_handlers: AtomicBool::new(true),
             no_op_after_first: AtomicBool::new(false),
             assessment_state: Mutex::new(UpdateAssessmentState::Current),
@@ -1859,7 +2570,7 @@ mod tests {
             policy_revision: 1,
             api_revision: 2,
             configuration_revision: ConfigurationGeneration::new(3).unwrap(),
-            deadline_tick: 100,
+            deadline_tick: 30_000,
             max_attempts: 3,
         }
     }
@@ -1868,7 +2579,15 @@ mod tests {
         reconciler: Arc<FakeReconciler>,
         source: Arc<FakeSource>,
     ) -> thread::JoinHandle<Result<RunnerReport, RunnerError>> {
-        thread::spawn(move || block_on(Runner::new(reconciler, source, config()).run()))
+        run_with_config_in_thread(reconciler, source, config())
+    }
+
+    fn run_with_config_in_thread(
+        reconciler: Arc<FakeReconciler>,
+        source: Arc<FakeSource>,
+        config: RunnerConfig,
+    ) -> thread::JoinHandle<Result<RunnerReport, RunnerError>> {
+        thread::spawn(move || block_on(Runner::new(reconciler, source, config).run()))
     }
 
     fn wait_for(counter: &AtomicUsize, expected: usize) {
@@ -1881,19 +2600,203 @@ mod tests {
         panic!("counter did not reach {expected}");
     }
 
-    #[test]
-    fn runner_future_does_not_block_the_calling_executor() {
-        let (reconciler, entered, source, watch_tx) = harness(vec![key("app", 1)], 1);
-        let mut future =
-            std::pin::pin!(Runner::new(Arc::clone(&reconciler), source, config()).run());
+    fn wait_for_outcomes(source: &FakeSource, expected: usize) {
+        for _ in 0..400 {
+            if source
+                .persisted_outcomes
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .len()
+                >= expected
+            {
+                return;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        panic!("persisted outcomes did not reach {expected}");
+    }
 
-        entered.recv_timeout(Duration::from_secs(2)).unwrap();
-        let mut context = Context::from_waker(Waker::noop());
-        assert_eq!(future.as_mut().poll(&mut context), Poll::Pending);
+    fn wait_for_counter(observer: &RecordingObserver, counter: RunnerCounter) {
+        for _ in 0..400 {
+            if observer
+                .0
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .iter()
+                .any(|observation| observation.counter == Some(counter))
+            {
+                return;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        panic!("observer did not receive {counter:?}");
+    }
+
+    #[test]
+    fn runtime_dependent_pending_futures_run_on_the_callers_executor() {
+        let (reconciler, entered, source, watch_tx) = harness(vec![key("app", 1)], 1);
+        block_on(async {
+            let runner = tokio::spawn(Runner::new(Arc::clone(&reconciler), source, config()).run());
+            tokio::task::spawn_blocking(move || entered.recv_timeout(Duration::from_secs(2)))
+                .await
+                .unwrap()
+                .unwrap();
+            reconciler.release(1);
+            watch_tx.send(Ok(WatchEvent::Closed)).unwrap();
+            assert_eq!(runner.await.unwrap().unwrap().checkpointed, 1);
+        });
+    }
+
+    #[test]
+    fn dropping_runner_future_cancels_owned_pending_tasks() {
+        let (reconciler, entered, source, _watch_tx) = harness(vec![key("app", 1)], 1);
+        block_on(async {
+            let runner = tokio::spawn(Runner::new(Arc::clone(&reconciler), source, config()).run());
+            tokio::task::spawn_blocking(move || entered.recv_timeout(Duration::from_secs(2)))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(reconciler.active.load(Ordering::SeqCst), 1);
+            runner.abort();
+            assert!(runner.await.unwrap_err().is_cancelled());
+            for _ in 0..100 {
+                if reconciler.active.load(Ordering::SeqCst) == 0 {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            panic!("worker task survived RunnerFuture drop");
+        });
+    }
+
+    #[test]
+    fn runner_cancellation_joins_owned_pending_tasks() {
+        let (reconciler, entered, source, _watch_tx) = harness(vec![key("app", 1)], 1);
+        block_on(async {
+            let future = Runner::new(Arc::clone(&reconciler), source, config()).run();
+            let shutdown = future.shutdown.clone();
+            let runner = tokio::spawn(future);
+            tokio::task::spawn_blocking(move || entered.recv_timeout(Duration::from_secs(2)))
+                .await
+                .unwrap()
+                .unwrap();
+            shutdown.cancel();
+            assert_eq!(runner.await.unwrap().unwrap_err(), RunnerError::Cancelled);
+            assert_eq!(reconciler.active.load(Ordering::SeqCst), 0);
+        });
+    }
+
+    #[test]
+    fn runner_shutdown_cancels_a_pending_source_phase() {
+        let (reconciler, _entered, source, _watch_tx) = harness(vec![key("app", 1)], 1);
+        source.block_reads.store(true, Ordering::Release);
+        block_on(async {
+            let future = Runner::new(reconciler, Arc::clone(&source), config()).run();
+            let shutdown = future.shutdown.clone();
+            let runner = tokio::spawn(future);
+            for _ in 0..100 {
+                if source.reads_started.load(Ordering::SeqCst) > 0 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            assert_eq!(source.reads_started.load(Ordering::SeqCst), 1);
+            shutdown.cancel();
+            assert_eq!(runner.await.unwrap().unwrap_err(), RunnerError::Cancelled);
+        });
+    }
+
+    #[test]
+    fn observer_reports_queue_coalescing_depth_and_active_workers() {
+        let target = key("app", 1);
+        let (reconciler, entered, source, watch_tx) = harness(Vec::new(), 1);
+        source
+            .fresh
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(target.clone(), resource(target.clone(), 2));
+        let observer = Arc::new(RecordingObserver::default());
+        let run_observer: Arc<dyn RunnerObserver> = observer.clone();
+        let run_reconciler = Arc::clone(&reconciler);
+        let runner = thread::spawn(move || {
+            block_on(
+                Runner::new(run_reconciler, source, config())
+                    .with_observer(run_observer)
+                    .run(),
+            )
+        });
+        for operation in ["first", "second", "third"] {
+            watch_tx
+                .send(Ok(WatchEvent::Hint(Box::new(WatchHint::new(
+                    target.clone(),
+                    ZoneRevision::new(2),
+                    TriggerSet::new([TriggerReason::DependencyChanged]),
+                    PriorityLane::Ordinary,
+                    OperationContext::new(operation, operation, operation, None).unwrap(),
+                )))))
+                .unwrap();
+            if operation == "first" {
+                entered.recv_timeout(Duration::from_secs(2)).unwrap();
+            }
+        }
+
+        wait_for_counter(observer.as_ref(), RunnerCounter::QueueCoalesced);
+        let observations = observer
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert!(observations.iter().any(|observation| {
+            observation.counter == Some(RunnerCounter::QueueAdmitted)
+                && observation.lane == Some(PriorityLane::Ordinary)
+        }));
+        assert!(
+            observations
+                .iter()
+                .any(|observation| observation.active_workers == 1)
+        );
+        assert!(
+            observations
+                .iter()
+                .any(|observation| observation.queue_depth >= 1)
+        );
+        drop(observations);
 
         reconciler.release(1);
+        entered.recv_timeout(Duration::from_secs(2)).unwrap();
+        reconciler.release(1);
         watch_tx.send(Ok(WatchEvent::Closed)).unwrap();
-        assert_eq!(block_on(future).unwrap().checkpointed, 1);
+        runner.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn observer_retains_watch_failure_signal_when_runner_returns_error() {
+        let (reconciler, _entered, source, watch_tx) = harness(Vec::new(), 1);
+        let observer = Arc::new(RecordingObserver::default());
+        let run_observer: Arc<dyn RunnerObserver> = observer.clone();
+        let runner = thread::spawn(move || {
+            block_on(
+                Runner::new(reconciler, source, config())
+                    .with_observer(run_observer)
+                    .run(),
+            )
+        });
+        watch_tx.send(Err(WatchFailure::Fatal)).unwrap();
+
+        assert_eq!(
+            runner.join().unwrap().unwrap_err(),
+            RunnerError::Source(SourceError::Integrity)
+        );
+        let observations = observer
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert!(observations.iter().any(|observation| {
+            observation.counter == Some(RunnerCounter::WatchFailure)
+                && observation.reason == RunnerObservationReason::WatchFatal
+        }));
+        assert!(observations.iter().any(|observation| {
+            observation.counter.is_none() && observation.outcome == RunnerOutcome::Failed
+        }));
     }
 
     #[test]
@@ -2142,6 +3045,15 @@ mod tests {
         assert_eq!(reconciler.reconcile_count.load(Ordering::SeqCst), 0);
         assert_eq!(source.commits.load(Ordering::SeqCst), 0);
         assert_eq!(source.starting.load(Ordering::SeqCst), 0);
+        let outcomes = source
+            .persisted_outcomes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert_eq!(outcomes[0].reason_code(), "invalid-spec");
+        assert_eq!(
+            outcomes[0].remediation(),
+            "correct the declared specification and retry reconciliation"
+        );
     }
 
     #[test]
@@ -2276,6 +3188,104 @@ mod tests {
         assert_eq!(report.handler_failures, 1);
         assert_eq!(source.commits.load(Ordering::SeqCst), 3);
         assert_eq!(source.checkpoints.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn exhausted_conflicts_persist_failure_before_open_watch_releases_single_flight() {
+        let target = key("app", 1);
+        let (reconciler, _entered, source, watch_tx) = harness(vec![target], 1);
+        reconciler.block_handlers.store(false, Ordering::SeqCst);
+        source.conflicts_remaining.store(8, Ordering::SeqCst);
+        let runner = run_in_thread(reconciler, Arc::clone(&source));
+
+        wait_for_outcomes(&source, 1);
+        assert!(
+            !runner.is_finished(),
+            "open watch was lost after exhaustion"
+        );
+        let outcomes = source
+            .persisted_outcomes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert_eq!(outcomes[0].reason(), ReconcileReason::ConflictExhausted);
+        drop(outcomes);
+        watch_tx.send(Ok(WatchEvent::Closed)).unwrap();
+        assert_eq!(runner.join().unwrap().unwrap().handler_failures, 1);
+    }
+
+    #[test]
+    fn exhausted_handler_retries_persist_failure_while_watch_remains_open() {
+        let (reconciler, _entered, source, watch_tx) = harness(vec![key("app", 1)], 1);
+        reconciler.block_handlers.store(false, Ordering::SeqCst);
+        reconciler
+            .handler_failures_remaining
+            .store(8, Ordering::SeqCst);
+        let runner = run_in_thread(reconciler, Arc::clone(&source));
+
+        wait_for_outcomes(&source, 1);
+        assert!(
+            !runner.is_finished(),
+            "open watch was lost after exhaustion"
+        );
+        let outcomes = source
+            .persisted_outcomes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert_eq!(outcomes[0].reason(), ReconcileReason::HandlerExhausted);
+        drop(outcomes);
+        watch_tx.send(Ok(WatchEvent::Closed)).unwrap();
+        assert_eq!(runner.join().unwrap().unwrap().handler_failures, 1);
+    }
+
+    #[test]
+    fn terminal_handler_failure_persists_without_retrying() {
+        let (reconciler, _entered, source, watch_tx) = harness(vec![key("app", 1)], 1);
+        reconciler.block_handlers.store(false, Ordering::SeqCst);
+        reconciler
+            .handler_failures_remaining
+            .store(1, Ordering::SeqCst);
+        reconciler
+            .handler_failure_terminal
+            .store(true, Ordering::SeqCst);
+        let runner = run_in_thread(reconciler, Arc::clone(&source));
+
+        wait_for_outcomes(&source, 1);
+        let outcomes = source
+            .persisted_outcomes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert_eq!(outcomes[0].reason(), ReconcileReason::HandlerTerminal);
+        drop(outcomes);
+        watch_tx.send(Ok(WatchEvent::Closed)).unwrap();
+        let report = runner.join().unwrap().unwrap();
+        assert_eq!(report.dispatched, 1);
+        assert_eq!(report.handler_retries, 0);
+        assert_eq!(report.handler_failures, 1);
+    }
+
+    #[test]
+    fn blocked_handler_is_cancelled_at_deadline_and_persists_failure() {
+        let (reconciler, entered, source, watch_tx) = harness(vec![key("app", 1)], 1);
+        let mut deadline_config = config();
+        deadline_config.deadline_tick = 25;
+        let runner = run_with_config_in_thread(
+            Arc::clone(&reconciler),
+            Arc::clone(&source),
+            deadline_config,
+        );
+
+        entered.recv_timeout(Duration::from_secs(2)).unwrap();
+        wait_for_outcomes(&source, 1);
+        assert_eq!(reconciler.active.load(Ordering::SeqCst), 0);
+        assert!(!runner.is_finished(), "deadline closed the watch");
+        let outcomes = source
+            .persisted_outcomes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert_eq!(outcomes[0].reason(), ReconcileReason::DeadlineExceeded);
+        drop(outcomes);
+        watch_tx.send(Ok(WatchEvent::Closed)).unwrap();
+        assert_eq!(runner.join().unwrap().unwrap().handler_failures, 1);
     }
 
     #[test]
@@ -2626,7 +3636,7 @@ mod tests {
         );
         let (entered_tx, entered) = mpsc::channel();
         let reconciler = Arc::new(FakeReconciler {
-            descriptor: ControllerDescriptor::new(
+            descriptor: descriptor(
                 identity(),
                 vec![ResourceTypeName::parse("Process").unwrap()],
                 1,
@@ -2636,7 +3646,7 @@ mod tests {
             )
             .unwrap(),
             entered_tx,
-            release: Arc::new((Mutex::new(1), Condvar::new())),
+            release: Arc::new(Semaphore::new(1)),
             active: AtomicUsize::new(0),
             max_active: AtomicUsize::new(0),
             plan_count: AtomicUsize::new(0),
@@ -2647,6 +3657,7 @@ mod tests {
             finalizer_count: AtomicUsize::new(0),
             validation_valid: AtomicBool::new(true),
             handler_failures_remaining: AtomicUsize::new(0),
+            handler_failure_terminal: AtomicBool::new(false),
             block_handlers: AtomicBool::new(false),
             no_op_after_first: AtomicBool::new(false),
             assessment_state: Mutex::new(UpdateAssessmentState::Current),
@@ -2702,7 +3713,6 @@ mod tests {
         }
 
         assert_eq!(block_on(WakeOnce { polled: false }), 1);
-        let _: Result<(), Infallible> = Ok(());
     }
 
     #[test]
@@ -2721,11 +3731,11 @@ mod tests {
     #[test]
     fn descriptor_rejects_unbounded_or_empty_execution_shapes() {
         assert_eq!(
-            ControllerDescriptor::new(identity(), Vec::new(), 1, 1, 1, 1,).unwrap_err(),
-            RunnerError::InvalidDescriptor
+            descriptor(identity(), Vec::new(), 1, 1, 1, 1).unwrap_err(),
+            DescriptorError::InvalidRegistration
         );
         assert_eq!(
-            ControllerDescriptor::new(
+            descriptor(
                 identity(),
                 vec![ResourceTypeName::parse("Process").unwrap()],
                 2,
@@ -2734,19 +3744,18 @@ mod tests {
                 1,
             )
             .unwrap_err(),
-            RunnerError::InvalidDescriptor
+            DescriptorError::InvalidExecution
         );
         let duplicate = ResourceTypeName::parse("Process").unwrap();
         assert_eq!(
-            ControllerDescriptor::new(identity(), vec![duplicate.clone(), duplicate], 1, 2, 1, 1,)
-                .unwrap_err(),
-            RunnerError::InvalidDescriptor
+            descriptor(identity(), vec![duplicate.clone(), duplicate], 1, 2, 1, 1).unwrap_err(),
+            DescriptorError::InvalidRegistration
         );
     }
 
     #[test]
-    fn internal_event_budget_tracks_workers_not_pending_resources() {
-        let descriptor = ControllerDescriptor::new(
+    fn complete_descriptor_carries_execution_and_registration_shape() {
+        let descriptor = descriptor(
             identity(),
             vec![ResourceTypeName::parse("Process").unwrap()],
             4,
@@ -2756,6 +3765,48 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(descriptor.event_channel_capacity(), 5);
+        assert_eq!(descriptor.reconcile_concurrency(), 4);
+        assert_eq!(descriptor.execution().observe_concurrency(), 4);
+        assert_eq!(descriptor.watch_selectors().len(), 1);
+        assert_eq!(descriptor.dependency_selectors().len(), 1);
+        assert_eq!(descriptor.provider_capabilities(), &["resource-api"]);
+        assert_eq!(descriptor.process_domains(), &["host"]);
+        assert_eq!(
+            descriptor.verbs(),
+            &[ControllerVerb::ReadSpec, ControllerVerb::WriteStatus]
+        );
+        assert!(descriptor.consumes_owner_triggers());
+        assert_eq!(descriptor.finalizers(), &["d2b.io/controller"]);
+        assert_eq!(descriptor.resources()[0].versions(), &[1]);
+        assert_eq!(descriptor.resources()[0].deadline_ticks(), 30_000);
+        assert_eq!(descriptor.resources()[0].max_attempts(), 3);
+        assert_eq!(
+            descriptor.execution().resync().observe_interval_ticks(),
+            Some(10_000)
+        );
+        assert_eq!(descriptor.service_fingerprints(), &["service.v1"]);
+        assert_eq!(descriptor.schema_fingerprints(), &["schema.v1"]);
+    }
+
+    #[test]
+    fn commit_decision_debug_redacts_accessor_visible_operation_identity() {
+        const OPERATION: &str = "commit-operation-debug-sentinel";
+        const ZONE: &str = "commit-zone-debug-sentinel";
+        const UID: &str = "deadbeef-dead-4bad-8bad-deadbeef0009";
+        let decision = CommitDecision::Committed {
+            zone: ZoneId::parse(ZONE).unwrap(),
+            resource_uid: ResourceUid::parse(UID).unwrap(),
+            generation: ResourceGeneration::new(2).unwrap(),
+            revision: ZoneRevision::new(3),
+            operation_id: OPERATION.to_owned(),
+        };
+        assert_eq!(decision.operation_id(), Some(OPERATION));
+        assert_eq!(decision.zone().unwrap().as_str(), ZONE);
+
+        let debug = format!("{decision:?}");
+        for sentinel in [OPERATION, ZONE, UID] {
+            assert!(!debug.contains(sentinel), "{debug}");
+        }
+        assert!(debug.contains("has_operation_id: true"), "{debug}");
     }
 }

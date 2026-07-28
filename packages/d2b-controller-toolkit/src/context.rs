@@ -1,172 +1,15 @@
 //! Identity-bound context supplied to one reconcile pass.
 
-use std::{
-    collections::BTreeSet,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
 };
 
 use d2b_contracts::v3::{
-    ConfigurationGeneration, ControllerGeneration, ResourceGeneration, ResourceRef, ResourceUid,
-    ZoneId, ZoneRevision,
+    ConfigurationGeneration, ResourceGeneration, ResourceUid, ZoneId, ZoneRevision,
 };
 
-/// Closed reason set used for queue coalescing and dispatch selection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum TriggerReason {
-    SpecGenerationChanged,
-    OwnedResourceChanged,
-    DependencyChanged,
-    DependencyReady,
-    DeletionRequested,
-    FinalizerRequired,
-    ControllerGenerationChanged,
-    ProviderGenerationChanged,
-    PolicyChanged,
-    SecurityPolicyChanged,
-    ArtifactOrImageChanged,
-    ExecutionStatusChanged,
-    ScheduledObserve,
-    AssessUpdateDue,
-    UpgradeRequested,
-    ExpeditedMutation,
-    RetryDue,
-    ManualReconcile,
-    StartupRelist,
-}
-
-impl TriggerReason {
-    /// Whether this reason must survive coalescing and convergence suppression.
-    pub const fn is_non_droppable(self) -> bool {
-        matches!(
-            self,
-            Self::SpecGenerationChanged
-                | Self::OwnedResourceChanged
-                | Self::DeletionRequested
-                | Self::FinalizerRequired
-                | Self::ControllerGenerationChanged
-                | Self::ProviderGenerationChanged
-                | Self::PolicyChanged
-                | Self::SecurityPolicyChanged
-                | Self::DependencyChanged
-                | Self::DependencyReady
-                | Self::ScheduledObserve
-                | Self::AssessUpdateDue
-                | Self::UpgradeRequested
-                | Self::ExpeditedMutation
-                | Self::RetryDue
-                | Self::ManualReconcile
-        )
-    }
-
-    /// Whether this reason requires the update-currency assessment path.
-    pub const fn requires_update_assessment(self) -> bool {
-        matches!(
-            self,
-            Self::SpecGenerationChanged
-                | Self::ControllerGenerationChanged
-                | Self::ProviderGenerationChanged
-                | Self::SecurityPolicyChanged
-                | Self::ArtifactOrImageChanged
-                | Self::DependencyChanged
-                | Self::AssessUpdateDue
-        )
-    }
-}
-
-/// Deterministic, duplicate-free trigger collection.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct TriggerSet(BTreeSet<TriggerReason>);
-
-impl TriggerSet {
-    /// Construct a reason set from an iterator.
-    pub fn new(reasons: impl IntoIterator<Item = TriggerReason>) -> Self {
-        Self(reasons.into_iter().collect())
-    }
-
-    /// Add one reason.
-    pub fn insert(&mut self, reason: TriggerReason) {
-        self.0.insert(reason);
-    }
-
-    /// Merge all reasons from another admitted hint.
-    pub fn union_with(&mut self, other: &Self) {
-        self.0.extend(other.0.iter().copied());
-    }
-
-    /// Test whether a reason is present.
-    pub fn contains(&self, reason: TriggerReason) -> bool {
-        self.0.contains(&reason)
-    }
-
-    /// Return the number of distinct reasons.
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    /// Whether no reason is present.
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    /// Iterate in stable enum order.
-    pub fn iter(&self) -> impl Iterator<Item = TriggerReason> + '_ {
-        self.0.iter().copied()
-    }
-
-    /// Whether any reason requires update assessment.
-    pub fn requires_update_assessment(&self) -> bool {
-        self.0
-            .iter()
-            .any(|reason| reason.requires_update_assessment())
-    }
-}
-
-/// Immutable identity for one resource incarnation.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ResourceKey {
-    zone: ZoneId,
-    resource_ref: ResourceRef,
-    uid: ResourceUid,
-}
-
-impl ResourceKey {
-    /// Construct a Zone-local resource key.
-    pub fn new(zone: ZoneId, resource_ref: ResourceRef, uid: ResourceUid) -> Self {
-        Self {
-            zone,
-            resource_ref,
-            uid,
-        }
-    }
-
-    /// Borrow the Zone identity.
-    pub const fn zone(&self) -> &ZoneId {
-        &self.zone
-    }
-
-    /// Borrow the canonical resource reference.
-    pub const fn resource_ref(&self) -> &ResourceRef {
-        &self.resource_ref
-    }
-
-    /// Borrow the immutable resource UID.
-    pub const fn uid(&self) -> &ResourceUid {
-        &self.uid
-    }
-}
-
-impl core::fmt::Debug for ResourceKey {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("ResourceKey")
-            .field("resource_type", self.resource_ref.resource_type())
-            .field("has_zone", &true)
-            .field("has_uid", &true)
-            .finish()
-    }
-}
+use crate::{ControllerIdentity, ResourceKey, TriggerSet};
 
 /// Fresh target body read immediately before a handler starts.
 #[derive(Clone, PartialEq, Eq)]
@@ -263,88 +106,6 @@ impl core::fmt::Debug for DependencySnapshot {
     }
 }
 
-/// Authenticated controller and execution identity fixed at registration.
-#[derive(Clone, PartialEq, Eq)]
-pub struct ControllerIdentity {
-    zone: ZoneId,
-    controller_ref: ResourceRef,
-    controller_generation: ControllerGeneration,
-    provider_ref: ResourceRef,
-    provider_generation: ResourceGeneration,
-    process_ref: ResourceRef,
-    host_ref: ResourceRef,
-    guest_ref: Option<ResourceRef>,
-}
-
-impl ControllerIdentity {
-    /// Construct an identity whose Zone is fixed by the registered session.
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        zone: ZoneId,
-        controller_ref: ResourceRef,
-        controller_generation: ControllerGeneration,
-        provider_ref: ResourceRef,
-        provider_generation: ResourceGeneration,
-        process_ref: ResourceRef,
-        host_ref: ResourceRef,
-        guest_ref: Option<ResourceRef>,
-    ) -> Result<Self, ContextError> {
-        if controller_ref.resource_type().as_str() != "Process"
-            || provider_ref.resource_type().as_str() != "Provider"
-            || process_ref.resource_type().as_str() != "Process"
-            || host_ref.resource_type().as_str() != "Host"
-            || guest_ref
-                .as_ref()
-                .is_some_and(|guest| guest.resource_type().as_str() != "Guest")
-        {
-            return Err(ContextError::InvalidControllerIdentity);
-        }
-        Ok(Self {
-            zone,
-            controller_ref,
-            controller_generation,
-            provider_ref,
-            provider_generation,
-            process_ref,
-            host_ref,
-            guest_ref,
-        })
-    }
-
-    /// Borrow the authenticated Zone.
-    pub const fn zone(&self) -> &ZoneId {
-        &self.zone
-    }
-
-    /// Return the controller generation.
-    pub const fn controller_generation(&self) -> ControllerGeneration {
-        self.controller_generation
-    }
-
-    /// Return the Provider generation.
-    pub const fn provider_generation(&self) -> ResourceGeneration {
-        self.provider_generation
-    }
-}
-
-impl core::fmt::Debug for ControllerIdentity {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("ControllerIdentity")
-            .field("controller_type", self.controller_ref.resource_type())
-            .field("controller_generation", &self.controller_generation)
-            .field("provider_type", self.provider_ref.resource_type())
-            .field("provider_generation", &self.provider_generation)
-            .field("process_type", self.process_ref.resource_type())
-            .field("host_type", self.host_ref.resource_type())
-            .field(
-                "guest_type",
-                &self.guest_ref.as_ref().map(ResourceRef::resource_type),
-            )
-            .field("has_zone", &true)
-            .finish()
-    }
-}
-
 /// Correlation identifiers fixed for one pass.
 #[derive(Clone, PartialEq, Eq)]
 pub struct OperationContext {
@@ -403,18 +164,41 @@ impl core::fmt::Debug for OperationContext {
 }
 
 /// Cloneable cancellation signal carrying no authority.
+#[derive(Default)]
+struct CancellationState {
+    cancelled: AtomicBool,
+    notify: tokio::sync::Notify,
+}
+
 #[derive(Clone, Default)]
-pub struct Cancellation(Arc<AtomicBool>);
+pub struct Cancellation(Arc<CancellationState>);
 
 impl Cancellation {
     /// Mark the pass cancelled.
     pub fn cancel(&self) {
-        self.0.store(true, Ordering::Release);
+        if !self.0.cancelled.swap(true, Ordering::AcqRel) {
+            self.0.notify.notify_waiters();
+        }
     }
 
     /// Observe cancellation.
     pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::Acquire)
+        self.0.cancelled.load(Ordering::Acquire)
+    }
+
+    /// Wait until cancellation is requested.
+    pub async fn cancelled(&self) {
+        loop {
+            let notified = self.0.notify.notified();
+            if self.is_cancelled() {
+                return;
+            }
+            notified.await;
+        }
+    }
+
+    pub(crate) fn shares_state(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
     }
 }
 
@@ -431,6 +215,7 @@ impl core::fmt::Debug for Cancellation {
 /// Production issuance remains inside the registered transport adapter. The
 /// toolkit exposes no public constructor or field accessors.
 pub struct CommittedRevisionProof {
+    zone: ZoneId,
     resource_uid: ResourceUid,
     generation: ResourceGeneration,
     revision: ZoneRevision,
@@ -439,12 +224,14 @@ pub struct CommittedRevisionProof {
 
 impl CommittedRevisionProof {
     pub(crate) fn issue(
+        zone: ZoneId,
         resource_uid: ResourceUid,
         generation: ResourceGeneration,
         revision: ZoneRevision,
         operation_id: String,
     ) -> Self {
         Self {
+            zone,
             resource_uid,
             generation,
             revision,
@@ -456,6 +243,7 @@ impl CommittedRevisionProof {
 impl core::fmt::Debug for CommittedRevisionProof {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("CommittedRevisionProof")
+            .field("has_zone", &true)
             .field("has_resource_uid", &true)
             .field("generation", &self.generation)
             .field("revision", &self.revision)
@@ -581,7 +369,7 @@ impl ReconcileContext {
         configuration_revision: ConfigurationGeneration,
         effect_gate: EffectGate,
     ) -> Result<Self, ContextError> {
-        if identity.zone != *target.key.zone()
+        if identity.zone() != target.key.zone()
             || dependencies
                 .iter()
                 .any(|dependency| dependency.resource.key.zone() != target.key.zone())
@@ -615,6 +403,9 @@ impl ReconcileContext {
     ) -> Result<Self, ContextError> {
         if self.effect_gate != EffectGate::ExpeditedPending {
             return Err(ContextError::UnexpectedCommitProof);
+        }
+        if proof.zone != *self.target.zone() {
+            return Err(ContextError::ZoneMismatch);
         }
         if proof.resource_uid != *self.target.uid()
             || proof.generation != self.generation
@@ -759,6 +550,8 @@ impl std::error::Error for ContextError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::TriggerReason;
+    use d2b_contracts::v3::{ControllerGeneration, ResourceRef};
 
     fn key(zone: &str, name: &str, uid: &str) -> ResourceKey {
         ResourceKey::new(
@@ -890,6 +683,7 @@ mod tests {
         );
 
         let proof = CommittedRevisionProof::issue(
+            ZoneId::parse("work").unwrap(),
             ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
             ResourceGeneration::new(2).unwrap(),
             ZoneRevision::new(4),
@@ -902,6 +696,7 @@ mod tests {
     #[test]
     fn mismatched_proof_never_mints_effect_permission() {
         let proof = CommittedRevisionProof::issue(
+            ZoneId::parse("work").unwrap(),
             ResourceUid::parse("123e4567-e89b-42d3-a456-426614174009").unwrap(),
             ResourceGeneration::new(2).unwrap(),
             ZoneRevision::new(4),
@@ -910,6 +705,22 @@ mod tests {
         assert_eq!(
             pending_context().bind_committed_proof(proof).unwrap_err(),
             ContextError::CommitProofMismatch
+        );
+    }
+
+    #[test]
+    fn foreign_zone_proof_never_mints_effect_permission() {
+        let proof = CommittedRevisionProof::issue(
+            ZoneId::parse("personal").unwrap(),
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+            ResourceGeneration::new(2).unwrap(),
+            ZoneRevision::new(4),
+            "op-1".to_owned(),
+        );
+
+        assert_eq!(
+            pending_context().bind_committed_proof(proof).unwrap_err(),
+            ContextError::ZoneMismatch
         );
     }
 

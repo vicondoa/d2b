@@ -54,6 +54,12 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- Unified Core and toolkit controller identity, selector, trigger, registration,
+  retry, and resync contracts. Core changes now drive the executor-native
+  reconciliation runner through a concrete source/reconciler adapter with
+  bounded cancellation, deadlines, typed failure persistence, remediation
+  reasons, and cardinality-safe queue and worker observations.
+
 - `tests/test-proofs.sh` now discovers proof crates by scanning
   `proofs/*/Cargo.toml` instead of iterating a hardcoded list. The previous
   shape paired that list with a silent skip when a directory was absent, so a
@@ -127,6 +133,12 @@ deprecations ship one minor release before removal.
   are corrected with it.
 - Enabled the required Layer-1, eval-shell, and Entra example PR gates for
   changes targeting the `v3` branch as well as `main`.
+
+### Security
+
+- Bound expedited commit evidence to the target Zone before effect permits are
+  minted, preventing matching evidence from another Zone from authorizing a
+  reconcile effect.
 
 ## [1.4.1] - 2026-07-12
 

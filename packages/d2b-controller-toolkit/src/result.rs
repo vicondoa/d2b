@@ -173,6 +173,56 @@ pub enum ProjectionDisposition {
     Failed,
 }
 
+/// Closed, redacted pass outcome reason.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReconcileReason {
+    Deleted,
+    InvalidSpec,
+    UpgradeRequired,
+    ReconcilePass,
+    HandlerRetryable,
+    HandlerExhausted,
+    HandlerTerminal,
+    DeadlineExceeded,
+    Cancelled,
+    ConflictExhausted,
+}
+
+impl ReconcileReason {
+    /// Return the bounded stable reason code.
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Deleted => "deleted",
+            Self::InvalidSpec => "invalid-spec",
+            Self::UpgradeRequired => "upgrade-required",
+            Self::ReconcilePass => "reconcile-pass",
+            Self::HandlerRetryable => "handler-retryable",
+            Self::HandlerExhausted => "handler-exhausted",
+            Self::HandlerTerminal => "handler-terminal",
+            Self::DeadlineExceeded => "deadline-exceeded",
+            Self::Cancelled => "cancelled",
+            Self::ConflictExhausted => "conflict-exhausted",
+        }
+    }
+
+    /// Return generic operator remediation with no resource identity.
+    pub const fn remediation(self) -> &'static str {
+        match self {
+            Self::Deleted | Self::ReconcilePass => "no remediation required",
+            Self::InvalidSpec => "correct the declared specification and retry reconciliation",
+            Self::UpgradeRequired => "schedule the required upgrade operation",
+            Self::HandlerRetryable => "check controller health and retry reconciliation",
+            Self::HandlerExhausted => {
+                "check controller health before explicitly retrying reconciliation"
+            }
+            Self::HandlerTerminal => "check controller configuration before retrying",
+            Self::DeadlineExceeded => "check controller dependencies and retry reconciliation",
+            Self::Cancelled => "retry reconciliation after shutdown completes",
+            Self::ConflictExhausted => "inspect concurrent updates and retry reconciliation",
+        }
+    }
+}
+
 /// Bounded response returned by an expedited pass.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ReconcileProjection {
@@ -180,7 +230,7 @@ pub struct ReconcileProjection {
     revision: ZoneRevision,
     phase: ResourcePhase,
     disposition: ProjectionDisposition,
-    reason_code: &'static str,
+    reason: ReconcileReason,
     event_only: bool,
 }
 
@@ -191,25 +241,17 @@ impl ReconcileProjection {
         revision: ZoneRevision,
         phase: ResourcePhase,
         disposition: ProjectionDisposition,
-        reason_code: &'static str,
+        reason: ReconcileReason,
         event_only: bool,
-    ) -> Result<Self, ResultError> {
-        let mut reason_bytes = reason_code.bytes();
-        if reason_code.len() > 64
-            || !matches!(reason_bytes.next(), Some(b'a'..=b'z'))
-            || !reason_bytes
-                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
-        {
-            return Err(ResultError::InvalidReasonCode);
-        }
-        Ok(Self {
+    ) -> Self {
+        Self {
             target,
             revision,
             phase,
             disposition,
-            reason_code,
+            reason,
             event_only,
-        })
+        }
     }
 
     /// Borrow the target.
@@ -232,6 +274,21 @@ impl ReconcileProjection {
         self.disposition
     }
 
+    /// Return the closed failure or progress reason.
+    pub const fn reason(&self) -> ReconcileReason {
+        self.reason
+    }
+
+    /// Return the bounded stable reason code.
+    pub const fn reason_code(&self) -> &'static str {
+        self.reason.code()
+    }
+
+    /// Return generic remediation guidance.
+    pub const fn remediation(&self) -> &'static str {
+        self.reason.remediation()
+    }
+
     /// Whether this projection came from a deletion event without an object body.
     pub const fn event_only(&self) -> bool {
         self.event_only
@@ -245,7 +302,7 @@ impl core::fmt::Debug for ReconcileProjection {
             .field("revision", &self.revision)
             .field("phase", &self.phase)
             .field("disposition", &self.disposition)
-            .field("reason_code", &self.reason_code)
+            .field("reason_code", &self.reason.code())
             .field("event_only", &self.event_only)
             .finish()
     }
@@ -439,7 +496,7 @@ impl core::fmt::Debug for ReconcileResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ValidationResult {
     Valid,
-    Invalid { reason_code: &'static str },
+    Invalid { reason: ReconcileReason },
 }
 
 /// Effect-free plan produced before ordinary or expedited reconcile.
@@ -835,10 +892,9 @@ mod tests {
             ZoneRevision::new(7),
             ResourcePhase::Deleted,
             ProjectionDisposition::Converged,
-            "deleted",
+            ReconcileReason::Deleted,
             true,
-        )
-        .unwrap();
+        );
 
         assert!(projection.event_only());
         assert_eq!(projection.phase(), ResourcePhase::Deleted);
@@ -897,6 +953,11 @@ mod tests {
         )
         .unwrap();
 
+        assert_eq!(
+            result.mutation_batch().unwrap().mutations()[0].canonical_resource(),
+            Some(PAYLOAD.as_bytes())
+        );
+        assert_eq!(result.status_candidate(), Some(PAYLOAD.as_bytes()));
         let debug = format!("{result:?}");
         assert!(!debug.contains(PAYLOAD), "{debug}");
         assert!(debug.contains("<29 bytes>"), "{debug}");
