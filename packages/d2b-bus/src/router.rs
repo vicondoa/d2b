@@ -1050,25 +1050,36 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
                 .remove(request.operation().id());
             return Err(EndpointError::from(error));
         }
-        if self.revoked.load(Ordering::Acquire) || !valid.load(Ordering::Acquire) {
-            let _ = session.complete_ttrpc(request_id).await;
-            return Err(cancelled_endpoint());
-        }
-        let response = loop {
-            let mut response = session.receive_ttrpc().await.map_err(EndpointError::from)?;
-            let response_id = ttrpc_request_id(self.generation, &response)
-                .map_err(|_| EndpointError::Rejected)?;
-            if response_id == request_id {
-                rewrite_ttrpc_stream_id(&mut response, caller_stream_id)
-                    .map_err(|_| EndpointError::Rejected)?;
-                break response;
+        let response = async {
+            if self.revoked.load(Ordering::Acquire) || !valid.load(Ordering::Acquire) {
+                return Err(cancelled_endpoint());
             }
-        };
-        let _ = session.complete_ttrpc(request_id).await;
+            loop {
+                let mut response = session.receive_ttrpc().await.map_err(EndpointError::from)?;
+                let response_id = ttrpc_request_id(self.generation, &response)
+                    .map_err(|_| EndpointError::Rejected)?;
+                if response_id == request_id {
+                    rewrite_ttrpc_stream_id(&mut response, caller_stream_id)
+                        .map_err(|_| EndpointError::Rejected)?;
+                    break Ok(response);
+                }
+            }
+        }
+        .await;
         self.active
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .remove(request.operation().id());
+        match session.complete_ttrpc(request_id).await {
+            Err(cleanup_error)
+                if cleanup_error.code()
+                    != d2b_contracts::v3::component_session::SessionErrorCode::SessionDisconnected =>
+            {
+                return Err(EndpointError::from(cleanup_error));
+            }
+            _ => {}
+        }
+        let response = response?;
         if self.revoked.load(Ordering::Acquire) || !valid.load(Ordering::Acquire) {
             return Err(cancelled_endpoint());
         }

@@ -10,9 +10,10 @@ use d2b_contracts::v3::{
     EvidenceClass, ResourceGeneration, ResourceRef, ResourceUid, SchemaFingerprint, ServiceName,
     SessionBinding, ZoneId, ZoneRevision,
     component_session::{
-        AttachmentPolicy, AuthorizationLease, EndpointPolicy, EndpointPurpose, EndpointRole,
-        IdentityEvidenceRequirement, LimitProfile, Locality, NoiseProfile, PurposeClass,
-        ServicePackage, SessionErrorCode, TransportBinding, TransportClass,
+        AttachmentPolicy, AuthorizationLease, CloseReason, EndpointPolicy, EndpointPurpose,
+        EndpointRole, IdentityEvidenceRequirement, LimitProfile, Locality, NoiseProfile,
+        PurposeClass, Remediation, ServicePackage, SessionErrorCode, TransportBinding,
+        TransportClass,
     },
 };
 use d2b_resource_api::authz::{
@@ -679,6 +680,167 @@ async fn cancelled_stream_id_reuse_rejects_the_late_response() {
     let second = second.unwrap();
     assert_eq!(ttrpc_stream_id(second.as_bytes()).unwrap(), 7);
     assert!(second.as_bytes().ends_with(b"second-response"));
+
+    registrar
+        .disconnect_component_session(endpoint)
+        .await
+        .unwrap();
+    caller_echo.abort();
+}
+
+#[tokio::test]
+async fn malformed_responses_release_every_correlation_slot() {
+    const MALFORMED_RESPONSES: usize = 300;
+
+    let (_bus, mut registrar) = bus();
+    let (endpoint, remote, endpoint_echo) = admit(
+        &registrar,
+        policy(
+            ServicePackage::ResourceV3,
+            EndpointPurpose::ResourceService,
+            1,
+        ),
+        "Provider/system-core",
+        "11111111-1111-4111-8111-111111111111",
+        "Provider/system-core",
+        [SessionVerb::Invoke],
+    )
+    .await;
+    endpoint_echo.abort();
+    let endpoint = registrar
+        .register_component_session(endpoint)
+        .await
+        .unwrap();
+    let (caller, _, caller_echo) = admit(
+        &registrar,
+        policy(
+            ServicePackage::ResourceV3,
+            EndpointPurpose::ResourceService,
+            1,
+        ),
+        "Host/alice",
+        "22222222-2222-4222-8222-222222222222",
+        "Provider/system-core",
+        [SessionVerb::Invoke],
+    )
+    .await;
+    let caller = registrar.register_component_session(caller).await.unwrap();
+    let route = route(
+        "d2b.resource.v3",
+        "ResourceService/Get",
+        1,
+        "Provider/system-core",
+    );
+    let remote_task = tokio::spawn(async move {
+        for _ in 0..MALFORMED_RESPONSES {
+            let _ = remote.receive_ttrpc().await.unwrap();
+            remote.send_ttrpc(vec![0x01]).await.unwrap();
+        }
+        let request = remote.receive_ttrpc().await.unwrap();
+        let stream_id = ttrpc_stream_id(&request).unwrap();
+        remote
+            .send_ttrpc(ttrpc_frame(stream_id, b"healthy"))
+            .await
+            .unwrap();
+    });
+
+    for index in 0..MALFORMED_RESPONSES {
+        let result = caller
+            .invoke_resource(
+                route.clone(),
+                OperationSpec::new(
+                    OperationId::parse(format!("malformed-{index}")).unwrap(),
+                    10_000,
+                )
+                .unwrap(),
+                ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
+                ttrpc_frame(9, b"request"),
+            )
+            .await;
+        assert_eq!(
+            result,
+            Err(BusError::Endpoint(d2b_bus::EndpointError::Rejected))
+        );
+    }
+    let response = caller
+        .invoke_resource(
+            route,
+            OperationSpec::new(OperationId::parse("after-malformed").unwrap(), 10_000).unwrap(),
+            ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
+            ttrpc_frame(9, b"request"),
+        )
+        .await
+        .unwrap();
+    assert!(response.as_bytes().ends_with(b"healthy"));
+    remote_task.await.unwrap();
+
+    registrar
+        .disconnect_component_session(endpoint)
+        .await
+        .unwrap();
+    caller_echo.abort();
+}
+
+#[tokio::test]
+async fn receive_failure_terminates_without_retaining_the_operation() {
+    let (_bus, mut registrar) = bus();
+    let (endpoint, remote, endpoint_echo) = admit(
+        &registrar,
+        policy(
+            ServicePackage::ResourceV3,
+            EndpointPurpose::ResourceService,
+            1,
+        ),
+        "Provider/system-core",
+        "11111111-1111-4111-8111-111111111111",
+        "Provider/system-core",
+        [SessionVerb::Invoke],
+    )
+    .await;
+    endpoint_echo.abort();
+    let endpoint = registrar
+        .register_component_session(endpoint)
+        .await
+        .unwrap();
+    let (caller, _, caller_echo) = admit(
+        &registrar,
+        policy(
+            ServicePackage::ResourceV3,
+            EndpointPurpose::ResourceService,
+            1,
+        ),
+        "Host/alice",
+        "22222222-2222-4222-8222-222222222222",
+        "Provider/system-core",
+        [SessionVerb::Invoke, SessionVerb::Cancel],
+    )
+    .await;
+    let caller = registrar.register_component_session(caller).await.unwrap();
+    let operation_id = OperationId::parse("receive-failure").unwrap();
+    let invoke = caller.invoke_resource(
+        route(
+            "d2b.resource.v3",
+            "ResourceService/Get",
+            1,
+            "Provider/system-core",
+        ),
+        OperationSpec::new(operation_id.clone(), 10_000).unwrap(),
+        ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
+        ttrpc_frame(10, b"request"),
+    );
+    let disconnect = async {
+        let _ = remote.receive_ttrpc().await.unwrap();
+        remote
+            .close(CloseReason::Normal, Remediation::None)
+            .await
+            .unwrap();
+    };
+    let (result, ()) = tokio::join!(invoke, disconnect);
+    assert!(matches!(result, Err(BusError::Endpoint(_))));
+    assert!(matches!(
+        caller.cancel(&operation_id).await,
+        Err(BusError::Operation(_))
+    ));
 
     registrar
         .disconnect_component_session(endpoint)
