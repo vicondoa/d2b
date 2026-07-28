@@ -25,7 +25,7 @@ use d2b_session::{
     AuthenticatedComponentSession, ComponentSessionDriver, HandshakeCredentials, OwnedTransport,
     SessionAuthenticationBinding, SessionAuthority, SessionAuthorizationRequest,
     SessionDriverHandle, SessionEngine, TransportDescriptor, TransportError, TransportEvidence,
-    TransportPacket, ttrpc_request_id,
+    TransportPacket, ttrpc_request_id, ttrpc_stream_id,
 };
 use tokio::sync::mpsc;
 
@@ -44,6 +44,23 @@ impl OwnedTransport for TestTransport {
         self.descriptor
     }
 
+    fn into_split(
+        self: Box<Self>,
+    ) -> (
+        Box<dyn d2b_session::TransportReader>,
+        Box<dyn d2b_session::TransportWriter>,
+    ) {
+        let Self {
+            sender,
+            receiver,
+            descriptor: _,
+        } = *self;
+        (
+            Box::new(TestTransportReader { receiver }),
+            Box::new(TestTransportWriter { sender }),
+        )
+    }
+
     async fn receive(&mut self, protected_limit: usize) -> Result<TransportPacket, TransportError> {
         let packet = self
             .receiver
@@ -56,6 +73,43 @@ impl OwnedTransport for TestTransport {
         Ok(packet)
     }
 
+    async fn send(&mut self, packet: TransportPacket) -> Result<(), TransportError> {
+        self.sender
+            .send(packet)
+            .await
+            .map_err(|_| TransportError::Disconnected)
+    }
+
+    async fn close(&mut self) -> Result<(), TransportError> {
+        Ok(())
+    }
+}
+
+struct TestTransportReader {
+    receiver: mpsc::Receiver<TransportPacket>,
+}
+
+#[async_trait]
+impl d2b_session::TransportReader for TestTransportReader {
+    async fn receive(&mut self, protected_limit: usize) -> Result<TransportPacket, TransportError> {
+        let packet = self
+            .receiver
+            .recv()
+            .await
+            .ok_or(TransportError::Disconnected)?;
+        if packet.as_bytes().len() > protected_limit {
+            return Err(TransportError::LimitExceeded);
+        }
+        Ok(packet)
+    }
+}
+
+struct TestTransportWriter {
+    sender: mpsc::Sender<TransportPacket>,
+}
+
+#[async_trait]
+impl d2b_session::TransportWriter for TestTransportWriter {
     async fn send(&mut self, packet: TransportPacket) -> Result<(), TransportError> {
         self.sender
             .send(packet)
@@ -543,6 +597,94 @@ async fn admitted_sessions_route_resource_and_diagnostic_calls_and_revoke_lifecy
     ] {
         task.abort();
     }
+}
+
+#[tokio::test]
+async fn cancelled_stream_id_reuse_rejects_the_late_response() {
+    let (_bus, mut registrar) = bus();
+    let (endpoint, remote, endpoint_echo) = admit(
+        &registrar,
+        policy(
+            ServicePackage::ResourceV3,
+            EndpointPurpose::ResourceService,
+            1,
+        ),
+        "Provider/system-core",
+        "11111111-1111-4111-8111-111111111111",
+        "Provider/system-core",
+        [SessionVerb::Invoke],
+    )
+    .await;
+    endpoint_echo.abort();
+    let endpoint = registrar
+        .register_component_session(endpoint)
+        .await
+        .unwrap();
+    let (caller, _, caller_echo) = admit(
+        &registrar,
+        policy(
+            ServicePackage::ResourceV3,
+            EndpointPurpose::ResourceService,
+            1,
+        ),
+        "Host/alice",
+        "22222222-2222-4222-8222-222222222222",
+        "Provider/system-core",
+        [SessionVerb::Invoke, SessionVerb::Cancel],
+    )
+    .await;
+    let caller = registrar.register_component_session(caller).await.unwrap();
+    let route = route(
+        "d2b.resource.v3",
+        "ResourceService/Get",
+        1,
+        "Provider/system-core",
+    );
+    let first_id = OperationId::parse("reuse-first").unwrap();
+    let second_id = OperationId::parse("reuse-second").unwrap();
+    let first = caller.invoke_resource(
+        route.clone(),
+        OperationSpec::new(first_id.clone(), 10_000).unwrap(),
+        ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
+        ttrpc_frame(7, b"first"),
+    );
+    let sequence = async {
+        let first_frame = remote.receive_ttrpc().await.unwrap();
+        let first_internal_id = ttrpc_stream_id(&first_frame).unwrap();
+        caller.cancel(&first_id).await.unwrap();
+        let second = caller.invoke_resource(
+            route,
+            OperationSpec::new(second_id, 10_000).unwrap(),
+            ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
+            ttrpc_frame(7, b"second"),
+        );
+        let responses = async {
+            let second_frame = remote.receive_ttrpc().await.unwrap();
+            let second_internal_id = ttrpc_stream_id(&second_frame).unwrap();
+            assert_ne!(first_internal_id, second_internal_id);
+            remote
+                .send_ttrpc(ttrpc_frame(first_internal_id, b"late-first"))
+                .await
+                .unwrap();
+            remote
+                .send_ttrpc(ttrpc_frame(second_internal_id, b"second-response"))
+                .await
+                .unwrap();
+        };
+        let (second, ()) = tokio::join!(second, responses);
+        second
+    };
+    let (first, second) = tokio::join!(first, sequence);
+    assert_eq!(first, Err(BusError::Cancelled));
+    let second = second.unwrap();
+    assert_eq!(ttrpc_stream_id(second.as_bytes()).unwrap(), 7);
+    assert!(second.as_bytes().ends_with(b"second-response"));
+
+    registrar
+        .disconnect_component_session(endpoint)
+        .await
+        .unwrap();
+    caller_echo.abort();
 }
 
 #[tokio::test]

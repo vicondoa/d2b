@@ -2,7 +2,10 @@ use std::fmt;
 
 use async_trait::async_trait;
 use d2b_contracts::v3::component_session::{Locality, TransportClass};
-use d2b_session::{OwnedTransport, TransportDescriptor, TransportError, TransportPacket};
+use d2b_session::{
+    OwnedTransport, TransportDescriptor, TransportError, TransportPacket, TransportReader,
+    TransportWriter,
+};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio_vsock::{VMADDR_CID_ANY, VsockAddr, VsockListener, VsockStream};
 
@@ -40,7 +43,7 @@ impl<S> fmt::Debug for FramedVsockTransport<S> {
 #[async_trait]
 impl<S> OwnedTransport for FramedVsockTransport<S>
 where
-    S: AsyncRead + AsyncWrite + Unpin + Send,
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     fn descriptor(&self) -> TransportDescriptor {
         TransportDescriptor {
@@ -49,6 +52,32 @@ where
             packet_atomic: false,
             supports_attachments: false,
         }
+    }
+
+    fn into_split(self: Box<Self>) -> (Box<dyn TransportReader>, Box<dyn TransportWriter>) {
+        let Self {
+            stream,
+            receive_header,
+            receive_body,
+            receive_declared,
+            outbound,
+            closed,
+        } = *self;
+        let (reader, writer) = tokio::io::split(stream);
+        (
+            Box::new(VsockReader {
+                stream: reader,
+                receive_header,
+                receive_body,
+                receive_declared,
+                closed,
+            }),
+            Box::new(VsockWriter {
+                stream: writer,
+                outbound,
+                closed,
+            }),
+        )
     }
 
     async fn receive(&mut self, protected_limit: usize) -> Result<TransportPacket, TransportError> {
@@ -86,6 +115,120 @@ where
         Ok(TransportPacket::new(bytes))
     }
 
+    async fn send(&mut self, packet: TransportPacket) -> Result<(), TransportError> {
+        if self.closed {
+            return Err(TransportError::Disconnected);
+        }
+        let (bytes, attachments) = packet.into_parts();
+        if !attachments.is_empty() {
+            return Err(TransportError::InvalidAttachment);
+        }
+        if bytes.is_empty() {
+            return Err(TransportError::LimitExceeded);
+        }
+        if self.outbound.is_none() {
+            let length = u32::try_from(bytes.len()).map_err(|_| TransportError::LimitExceeded)?;
+            let mut framed = Vec::with_capacity(4 + bytes.len());
+            framed.extend_from_slice(&length.to_be_bytes());
+            framed.extend_from_slice(&bytes);
+            self.outbound = Some((framed, 0));
+        } else if self
+            .outbound
+            .as_ref()
+            .is_none_or(|(pending, _)| pending[4..] != bytes)
+        {
+            return Err(TransportError::Other);
+        }
+        let result = async {
+            let (pending, offset) = self.outbound.as_mut().expect("outbound was initialized");
+            while *offset < pending.len() {
+                match self.stream.write(&pending[*offset..]).await {
+                    Ok(0) => return Err(TransportError::Disconnected),
+                    Ok(written) => *offset += written,
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(error) => return Err(map_io(error)),
+                }
+            }
+            self.stream.flush().await.map_err(map_io)
+        }
+        .await;
+        if result.is_err() {
+            self.closed = true;
+        } else {
+            self.outbound = None;
+        }
+        result
+    }
+
+    async fn close(&mut self) -> Result<(), TransportError> {
+        if !self.closed {
+            self.closed = true;
+            self.stream.shutdown().await.map_err(map_io)?;
+        }
+        Ok(())
+    }
+}
+
+struct VsockReader<R> {
+    stream: R,
+    receive_header: Vec<u8>,
+    receive_body: Vec<u8>,
+    receive_declared: Option<usize>,
+    closed: bool,
+}
+
+#[async_trait]
+impl<R> TransportReader for VsockReader<R>
+where
+    R: AsyncRead + Unpin + Send,
+{
+    async fn receive(&mut self, protected_limit: usize) -> Result<TransportPacket, TransportError> {
+        if self.closed {
+            return Err(TransportError::Disconnected);
+        }
+        read_exact_persistent(&mut self.stream, &mut self.receive_header, 4, false).await?;
+        let length = match self.receive_declared {
+            Some(length) => length,
+            None => {
+                let length = usize::try_from(u32::from_be_bytes([
+                    self.receive_header[0],
+                    self.receive_header[1],
+                    self.receive_header[2],
+                    self.receive_header[3],
+                ]))
+                .map_err(|_| TransportError::LimitExceeded)?;
+                self.receive_declared = Some(length);
+                length
+            }
+        };
+        if length == 0 || length > protected_limit {
+            self.closed = true;
+            return Err(TransportError::LimitExceeded);
+        }
+        if self.receive_body.capacity() < length {
+            self.receive_body
+                .try_reserve_exact(length - self.receive_body.len())
+                .map_err(|_| TransportError::LimitExceeded)?;
+        }
+        read_exact_persistent(&mut self.stream, &mut self.receive_body, length, true).await?;
+        let bytes = std::mem::take(&mut self.receive_body);
+        self.receive_header.clear();
+        self.receive_declared = None;
+        Ok(TransportPacket::new(bytes))
+    }
+}
+
+struct VsockWriter<W> {
+    stream: W,
+    outbound: Option<(Vec<u8>, usize)>,
+    closed: bool,
+}
+
+#[async_trait]
+impl<W> TransportWriter for VsockWriter<W>
+where
+    W: AsyncWrite + Unpin + Send,
+{
     async fn send(&mut self, packet: TransportPacket) -> Result<(), TransportError> {
         if self.closed {
             return Err(TransportError::Disconnected);

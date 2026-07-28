@@ -82,7 +82,8 @@ impl fmt::Debug for SessionEvent {
 }
 
 pub struct SessionEngine<T: OwnedTransport> {
-    transport: T,
+    transport: Box<dyn OwnedTransport>,
+    transport_type: std::marker::PhantomData<fn() -> T>,
     offer: HandshakeOffer,
     authentication: Option<crate::handshake::EstablishedAuthentication>,
     protector: RecordProtector,
@@ -389,7 +390,8 @@ impl<T: OwnedTransport> SessionEngine<T> {
         let generation = offer.reconnect_generation;
         let authentication = established.take_authentication();
         Ok(Self {
-            transport,
+            transport: Box::new(transport),
+            transport_type: std::marker::PhantomData,
             offer: offer.clone(),
             authentication: Some(authentication),
             protector: RecordProtector::from_handshake(established),
@@ -429,6 +431,32 @@ impl<T: OwnedTransport> SessionEngine<T> {
 
     pub(crate) fn set_metrics(&mut self, metrics: Arc<dyn MetricsSink>) {
         self.metrics = metrics;
+    }
+
+    pub(crate) fn transport_descriptor(&self) -> TransportDescriptor {
+        self.transport.descriptor()
+    }
+
+    pub(crate) const fn keepalive_timeout_ms(&self) -> u32 {
+        self.offer.limits.keepalive_timeout_ms
+    }
+
+    pub(crate) fn install_driver_transport(&mut self, transport: Box<dyn OwnedTransport>) {
+        self.transport = transport;
+    }
+
+    pub(crate) fn set_write_cancellation(&mut self, cancellation: Option<crate::Cancellation>) {
+        self.transport.set_write_cancellation(cancellation);
+    }
+
+    pub(crate) fn split_transport(
+        &mut self,
+        replacement: Box<dyn OwnedTransport>,
+    ) -> (
+        Box<dyn crate::TransportReader>,
+        Box<dyn crate::TransportWriter>,
+    ) {
+        std::mem::replace(&mut self.transport, replacement).into_split()
     }
 
     pub(crate) fn record_metric(

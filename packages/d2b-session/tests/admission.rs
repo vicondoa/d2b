@@ -114,6 +114,23 @@ impl OwnedTransport for TestTransport {
         self.descriptor
     }
 
+    fn into_split(
+        self: Box<Self>,
+    ) -> (
+        Box<dyn d2b_session::TransportReader>,
+        Box<dyn d2b_session::TransportWriter>,
+    ) {
+        let Self {
+            sender,
+            receiver,
+            descriptor: _,
+        } = *self;
+        (
+            Box::new(TestTransportReader { receiver }),
+            Box::new(TestTransportWriter { sender }),
+        )
+    }
+
     async fn receive(&mut self, protected_limit: usize) -> Result<TransportPacket, TransportError> {
         let packet = self
             .receiver
@@ -126,6 +143,43 @@ impl OwnedTransport for TestTransport {
         Ok(packet)
     }
 
+    async fn send(&mut self, packet: TransportPacket) -> Result<(), TransportError> {
+        self.sender
+            .send(packet)
+            .await
+            .map_err(|_| TransportError::Disconnected)
+    }
+
+    async fn close(&mut self) -> Result<(), TransportError> {
+        Ok(())
+    }
+}
+
+struct TestTransportReader {
+    receiver: mpsc::Receiver<TransportPacket>,
+}
+
+#[async_trait]
+impl d2b_session::TransportReader for TestTransportReader {
+    async fn receive(&mut self, protected_limit: usize) -> Result<TransportPacket, TransportError> {
+        let packet = self
+            .receiver
+            .recv()
+            .await
+            .ok_or(TransportError::Disconnected)?;
+        if packet.as_bytes().len() > protected_limit {
+            return Err(TransportError::LimitExceeded);
+        }
+        Ok(packet)
+    }
+}
+
+struct TestTransportWriter {
+    sender: mpsc::Sender<TransportPacket>,
+}
+
+#[async_trait]
+impl d2b_session::TransportWriter for TestTransportWriter {
     async fn send(&mut self, packet: TransportPacket) -> Result<(), TransportError> {
         self.sender
             .send(packet)

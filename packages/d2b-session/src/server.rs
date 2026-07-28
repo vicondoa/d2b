@@ -118,6 +118,19 @@ trait TtrpcServerDriver: Send + Sync {
     fn generation(&self) -> u64;
     async fn receive_ttrpc(&self) -> SessionResult<Vec<u8>>;
     async fn send_ttrpc(&self, frame: Vec<u8>) -> SessionResult<()>;
+    async fn send_ttrpc_cancellable(
+        &self,
+        frame: Vec<u8>,
+        cancellation: Cancellation,
+    ) -> SessionResult<()> {
+        if cancellation.is_cancelled() {
+            Err(crate::SessionError::new(
+                d2b_contracts::v3::component_session::SessionErrorCode::Cancelled,
+            ))
+        } else {
+            self.send_ttrpc(frame).await
+        }
+    }
     async fn register_inbound_call(&self, request_id: RequestId) -> SessionResult<Cancellation>;
     async fn mark_inbound_dispatched(&self, request_id: RequestId) -> SessionResult<()>;
     async fn complete_inbound_call(&self, request_id: RequestId) -> SessionResult<bool>;
@@ -138,6 +151,14 @@ impl TtrpcServerDriver for ComponentDriverAdapter {
 
     async fn send_ttrpc(&self, frame: Vec<u8>) -> SessionResult<()> {
         self.0.send_ttrpc(frame).await
+    }
+
+    async fn send_ttrpc_cancellable(
+        &self,
+        frame: Vec<u8>,
+        cancellation: Cancellation,
+    ) -> SessionResult<()> {
+        self.0.send_ttrpc_cancellable(frame, cancellation).await
     }
 
     async fn register_inbound_call(&self, request_id: RequestId) -> SessionResult<Cancellation> {
@@ -285,7 +306,9 @@ async fn serve_ttrpc_services_inner(
             let send_result = if active_call.cancellation.is_cancelled() {
                 Ok(())
             } else {
-                send_driver.send_ttrpc(frame).await
+                send_driver
+                    .send_ttrpc_cancellable(frame, active_call.cancellation.clone())
+                    .await
             };
             let _ = send_driver
                 .complete_inbound_call(active_call.request_id)

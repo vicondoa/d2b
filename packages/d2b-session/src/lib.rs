@@ -51,7 +51,10 @@ pub use server::{
     serve_ttrpc_services, ttrpc_request_id, ttrpc_stream_id,
 };
 pub use streams::{NamedStreamMux, StreamEvent, StreamId, StreamPhase};
-pub use transport::{OwnedTransport, TransportDescriptor, TransportError, TransportPacket};
+pub use transport::{
+    OwnedTransport, TransportDescriptor, TransportError, TransportPacket, TransportReader,
+    TransportWriter, serialized_transport_split,
+};
 
 pub use admission::{
     AuthenticatedComponentSession, AuthenticatedSessionRouteBinding, AuthorizedSessionOperation,

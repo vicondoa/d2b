@@ -1921,6 +1921,10 @@ mod tests {
         fn call_count(&self) -> usize {
             self.calls.lock().unwrap().len()
         }
+
+        fn cancellation_count(&self) -> usize {
+            self.cancel_count.load(Ordering::Acquire)
+        }
     }
 
     #[async_trait]
@@ -2055,6 +2059,42 @@ mod tests {
             subjects,
             clock,
         }
+    }
+
+    fn replacement_endpoint_registration(harness: &Harness) -> SessionRegistration {
+        let generations = RouteGenerations::new(
+            harness.route.generations().provider(),
+            harness.route.generations().controller(),
+            ReconnectGeneration::new(2).unwrap(),
+        );
+        let route = RouteKey::new(
+            harness.route.zone().clone(),
+            harness.route.service().clone(),
+            harness.route.member().clone(),
+            harness.route.target().clone(),
+            harness.route.schema().clone(),
+            generations,
+        );
+        let endpoint = context(
+            "Provider/system-core",
+            ENDPOINT_UID,
+            "d2b.resource.v3",
+            harness.route.schema().clone(),
+            generations,
+            Locality::Local,
+            EvidenceClass::EnrolledKk,
+        );
+        SessionRegistration::new(endpoint, vec![route], harness.endpoint.clone())
+    }
+
+    async fn wait_for_endpoint_cancellation(endpoint: &RecordingEndpoint) {
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while endpoint.cancellation_count() == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("endpoint cancellation was not dispatched");
     }
 
     #[derive(Default)]
@@ -2952,6 +2992,97 @@ mod tests {
         let (result, ()) = tokio::join!(invoke, revoke);
         assert_eq!(result, Err(BusError::Cancelled));
         assert_eq!(harness.endpoint.call_count(), 0);
+        wait_for_endpoint_cancellation(&harness.endpoint).await;
+    }
+
+    #[tokio::test]
+    async fn revoke_cancels_an_in_progress_endpoint_invocation() {
+        let endpoint = RecordingEndpoint::blocking();
+        let harness = harness(HarnessSpec {
+            service: "d2b.resource.v3",
+            member: RouteMember::method("ResourceService/Get").unwrap(),
+            caller_ref: "User/alice",
+            locality: Locality::Local,
+            evidence: EvidenceClass::UnixPeer,
+            session_verbs: vec![SessionVerb::Connect, SessionVerb::Invoke],
+            resource_verbs: vec![ResourceVerb::Get],
+            endpoint: endpoint.clone(),
+        });
+        let mut registrar = harness.registrar;
+        let invoke = harness.caller.invoke_resource(
+            harness.route,
+            operation("revoke-in-progress"),
+            ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
+            Vec::new(),
+        );
+        let revoke = async {
+            endpoint.started.notified().await;
+            registrar.revoke(harness.endpoint_ingress).unwrap();
+        };
+        let (result, ()) = tokio::join!(invoke, revoke);
+        assert_eq!(result, Err(BusError::Cancelled));
+        assert_eq!(endpoint.cancellation_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn reconnect_cancels_queued_and_in_progress_invocations() {
+        for queued in [true, false] {
+            let endpoint = RecordingEndpoint::blocking();
+            let harness = harness(HarnessSpec {
+                service: "d2b.resource.v3",
+                member: RouteMember::method("ResourceService/Get").unwrap(),
+                caller_ref: "User/alice",
+                locality: Locality::Local,
+                evidence: EvidenceClass::UnixPeer,
+                session_verbs: vec![SessionVerb::Connect, SessionVerb::Invoke],
+                resource_verbs: vec![ResourceVerb::Get],
+                endpoint: endpoint.clone(),
+            });
+            let replacement = replacement_endpoint_registration(&harness);
+            let hook = queued.then(|| {
+                Arc::new(InvocationHook {
+                    reached: Notify::new(),
+                    release: Notify::new(),
+                })
+            });
+            if let Some(hook) = &hook {
+                harness
+                    .caller
+                    .core
+                    .invocation_hooks
+                    .lock()
+                    .unwrap()
+                    .before_invoke = Some(Arc::clone(hook));
+            }
+            let mut registrar = harness.registrar;
+            let invoke = harness.caller.invoke_resource(
+                harness.route,
+                operation(if queued {
+                    "reconnect-queued"
+                } else {
+                    "reconnect-in-progress"
+                }),
+                ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
+                Vec::new(),
+            );
+            let reconnect = async {
+                if let Some(hook) = &hook {
+                    hook.reached.notified().await;
+                } else {
+                    endpoint.started.notified().await;
+                }
+                registrar
+                    .reconnect(harness.endpoint_ingress, replacement)
+                    .unwrap();
+                if let Some(hook) = &hook {
+                    hook.release.notify_one();
+                }
+            };
+            let (result, ()) = tokio::join!(invoke, reconnect);
+            assert_eq!(result, Err(BusError::Cancelled));
+            wait_for_endpoint_cancellation(&endpoint).await;
+            assert_eq!(endpoint.call_count(), usize::from(!queued));
+        }
     }
 
     #[tokio::test]
