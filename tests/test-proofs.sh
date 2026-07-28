@@ -59,10 +59,10 @@ if command -v rustup >/dev/null 2>&1; then
   rustup component add --toolchain "$RUSTUP_TOOLCHAIN" clippy
 fi
 
-// discovery is by directory, not by a hardcoded list: a hardcoded list paired
-// with a silent "absent" skip lets a renamed or never-created proof crate pass
-// the gate while executing nothing. Every proofs/*/Cargo.toml runs, and an
-// empty proofs/ tree fails closed rather than reporting success over zero work.
+# discovery is by directory, not by a hardcoded list: a hardcoded list paired
+# with a silent "absent" skip lets a renamed or never-created proof crate pass
+# the gate while executing nothing. Every proofs/*/Cargo.toml runs, and an
+# empty proofs/ tree fails closed rather than reporting success over zero work.
 rc=0
 proofs=()
 for manifest in "$ROOT"/proofs/*/Cargo.toml; do
