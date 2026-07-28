@@ -78,6 +78,10 @@ deprecations ship one minor release before removal.
   replies before transport delivery or fails the session closed if protection
   has already committed their record sequence.
 
+- Reclaimed cancelled receive waiters before applying the per-session waiter
+  bound, preventing normal repeated cancellation from exhausting and
+  disconnecting a component session.
+
 - Unified Core and toolkit controller identity, selector, trigger, registration,
   retry, and resync contracts. Core changes now drive the executor-native
   reconciliation runner through a bounded, coalescing registered-resource

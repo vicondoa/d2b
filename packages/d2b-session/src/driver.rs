@@ -717,6 +717,7 @@ impl<T: EventBytes> EventQueue<T> {
                 }
             }
         } else {
+            self.waiters.retain(|waiter| !waiter.is_closed());
             if self.waiters.len() >= DRIVER_COMMAND_CAPACITY {
                 return Err(backpressure());
             }
@@ -1152,5 +1153,20 @@ mod tests {
         queue.receive(waiter).unwrap();
         assert_eq!(receiver.try_recv().unwrap().unwrap(), vec![1_u8; 4]);
         queue.deliver(vec![2_u8]).unwrap();
+    }
+
+    #[test]
+    fn cancelled_receives_do_not_consume_waiter_capacity() {
+        let mut queue = EventQueue::new(1);
+        for _ in 0..(DRIVER_COMMAND_CAPACITY * 2) {
+            let (waiter, receiver) = oneshot::channel();
+            queue.receive(waiter).unwrap();
+            drop(receiver);
+        }
+
+        let (waiter, mut receiver) = oneshot::channel();
+        queue.receive(waiter).unwrap();
+        queue.deliver(7_u8).unwrap();
+        assert_eq!(receiver.try_recv().unwrap().unwrap(), 7);
     }
 }
