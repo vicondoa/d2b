@@ -53,7 +53,7 @@ pub use transport::{OwnedTransport, TransportDescriptor, TransportError, Transpo
 pub use admission::{
     AuthenticatedComponentSession, AuthenticatedSessionRouteBinding, AuthorizedSessionOperation,
     SessionAcceptor, SessionAuthenticationBinding, SessionAuthority, SessionAuthorizationRequest,
-    SessionCancellationHandle, TransportEvidence,
+    SessionCancellationHandle, SessionRegistrationCapability, TransportEvidence,
 };
 pub use attachment::{AttachmentPayload, AttachmentValidationError, OwnedAttachment};
 pub use d2b_contracts::v3::component_session as contract;

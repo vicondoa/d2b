@@ -19,13 +19,16 @@ fn dependent_cannot_forge_registration_or_mint_admitted_session() {
         (
             "clone_admitted",
             [
-                "no method named `clone` found for struct `AuthenticatedComponentSession`",
+                "no method named `clone` found for struct `AuthenticatedComponentSession<C>`",
                 "error[E0599]",
             ],
         ),
         (
             "forge_admission",
-            ["no `AdmittedComponentSession` in the root", "error[E0432]"],
+            [
+                "expected `ComponentSessionAdmission`, found `ForeignAdmission`",
+                "error[E0308]",
+            ],
         ),
     ] {
         let output = Command::new(env!("CARGO"))

@@ -16,8 +16,9 @@ use d2b_resource_api::authz::{
 };
 use d2b_session::{
     AuthenticatedComponentSession, AuthenticatedSessionRouteBinding, GENERATED_OPERATION_CATALOG,
-    OperationKind, SessionAuthorizationRequest, SessionCancellationHandle, SessionOperation,
-    resource_operation, ttrpc_request_id,
+    OperationKind, SessionAcceptor, SessionAuthority, SessionAuthorizationRequest,
+    SessionCancellationHandle, SessionOperation, SessionRegistrationCapability,
+    contract::EndpointPolicy, resource_operation, ttrpc_request_id,
 };
 use tokio::sync::Mutex as AsyncMutex;
 
@@ -749,7 +750,12 @@ impl ZoneBus {
             Self {
                 core: Arc::clone(&core),
             },
-            ZoneRegistrar { core },
+            ZoneRegistrar {
+                core,
+                component_admission: ComponentSessionRegistrar {
+                    identity: Arc::new(ComponentSessionAdmissionIdentity),
+                },
+            },
         ))
     }
 
@@ -778,6 +784,37 @@ impl core::fmt::Debug for ZoneBus {
 /// Single, non-cloneable authority that consumes authenticated registrations.
 pub struct ZoneRegistrar {
     core: Arc<BusCore>,
+    component_admission: ComponentSessionRegistrar,
+}
+
+struct ComponentSessionAdmissionIdentity;
+
+struct ComponentSessionRegistrar {
+    identity: Arc<ComponentSessionAdmissionIdentity>,
+}
+
+/// Single-use proof that a ComponentSession candidate was minted by one
+/// concrete Zone registrar.
+pub struct ComponentSessionAdmission {
+    identity: Arc<ComponentSessionAdmissionIdentity>,
+}
+
+impl core::fmt::Debug for ComponentSessionAdmission {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("ComponentSessionAdmission(<redacted>)")
+    }
+}
+
+impl SessionRegistrationCapability<ComponentSessionRegistrar> for ComponentSessionAdmission {
+    type Error = BusError;
+
+    fn consume(self, registrar: &ComponentSessionRegistrar) -> Result<(), Self::Error> {
+        if Arc::ptr_eq(&self.identity, &registrar.identity) {
+            Ok(())
+        } else {
+            Err(BusError::SessionMismatch)
+        }
+    }
 }
 
 impl ZoneRegistrar {
@@ -828,7 +865,7 @@ impl ZoneRegistrar {
 }
 
 struct ComponentEndpoint {
-    session: AsyncMutex<AuthenticatedComponentSession>,
+    session: AsyncMutex<AuthenticatedComponentSession<()>>,
     clock: Arc<dyn BusClock>,
     locality: d2b_contracts::v3::Locality,
     generation: u64,
@@ -968,12 +1005,29 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
 }
 
 impl ZoneRegistrar {
+    /// Mint a single-use acceptor bound to this registrar instance.
+    pub fn component_session_acceptor(
+        &self,
+        policy: EndpointPolicy,
+        authority: Box<dyn SessionAuthority>,
+    ) -> d2b_session::Result<SessionAcceptor<ComponentSessionAdmission>> {
+        SessionAcceptor::new(
+            policy,
+            self.core.zone.clone(),
+            authority,
+            ComponentSessionAdmission {
+                identity: Arc::clone(&self.component_admission.identity),
+            },
+        )
+    }
+
     /// Consume an authenticated candidate and install it only after native
     /// connect authorization succeeds.
     pub async fn register_component_session(
         &mut self,
-        session: AuthenticatedComponentSession,
+        session: AuthenticatedComponentSession<ComponentSessionAdmission>,
     ) -> Result<BusIngress, BusError> {
+        let session = session.consume_registration(&self.component_admission)?;
         let binding = session.route_binding();
         if binding.zone() != &self.core.zone {
             return Err(BusError::SessionMismatch);
@@ -1003,11 +1057,12 @@ impl ZoneRegistrar {
     pub async fn reconnect_component_session(
         &mut self,
         mut previous: BusIngress,
-        session: AuthenticatedComponentSession,
+        session: AuthenticatedComponentSession<ComponentSessionAdmission>,
     ) -> Result<BusIngress, BusError> {
         if !Arc::ptr_eq(&self.core, &previous.core) || previous.closed {
             return Err(BusError::SessionMismatch);
         }
+        let session = session.consume_registration(&self.component_admission)?;
         let binding = session.route_binding();
         if binding.zone() != &self.core.zone {
             return Err(BusError::SessionMismatch);

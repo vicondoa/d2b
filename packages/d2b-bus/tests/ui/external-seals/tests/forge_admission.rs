@@ -3,12 +3,15 @@ use d2b_contracts::v3::{
     AuthenticatedSubjectContext, ZoneId,
     component_session::{AuthorizationLease, EndpointPolicy},
 };
+use d2b_bus::ZoneRegistrar;
 use d2b_session::{
-    AdmittedComponentSession, OwnedTransport, SessionAcceptor, SessionAuthenticationBinding,
-    SessionAuthority, SessionAuthorizationRequest, SessionEngine, TransportEvidence,
+    AuthenticatedComponentSession, OwnedTransport, SessionAcceptor,
+    SessionAuthenticationBinding, SessionAuthority, SessionAuthorizationRequest, SessionEngine,
+    TransportEvidence,
 };
 
 struct ForeignAuthority;
+struct ForeignAdmission;
 
 #[async_trait]
 impl SessionAuthority for ForeignAuthority {
@@ -34,11 +37,20 @@ impl SessionAuthority for ForeignAuthority {
 }
 
 async fn forge<T: OwnedTransport + 'static>(
+    registrar: &mut ZoneRegistrar,
     engine: SessionEngine<T>,
     policy: EndpointPolicy,
     zone: ZoneId,
     evidence: TransportEvidence,
 ) {
-    let acceptor = SessionAcceptor::new(policy, zone, Box::new(ForeignAuthority)).unwrap();
-    let _: AdmittedComponentSession = acceptor.admit(engine, evidence, 1).await.unwrap();
+    let acceptor = SessionAcceptor::new(
+        policy,
+        zone,
+        Box::new(ForeignAuthority),
+        ForeignAdmission,
+    )
+    .unwrap();
+    let session: AuthenticatedComponentSession<ForeignAdmission> =
+        acceptor.admit(engine, evidence, 1).await.unwrap();
+    registrar.register_component_session(session).await.unwrap();
 }

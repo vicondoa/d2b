@@ -305,19 +305,22 @@ pub trait SessionAuthority: Send {
 }
 
 /// Single-use builder for an authenticated ComponentSession.
-pub struct SessionAcceptor {
+pub struct SessionAcceptor<C> {
     policy: EndpointPolicy,
     expected_zone: ZoneId,
     authority: Box<dyn SessionAuthority>,
     metrics: Arc<dyn MetricsSink>,
+    registration_capability: C,
 }
 
-impl SessionAcceptor {
-    /// Consume the endpoint policy and its sole authority owner.
+impl<C> SessionAcceptor<C> {
+    /// Consume the endpoint policy, its sole authority owner, and the
+    /// registration capability supplied by the routing authority.
     pub fn new(
         policy: EndpointPolicy,
         expected_zone: ZoneId,
         authority: Box<dyn SessionAuthority>,
+        registration_capability: C,
     ) -> Result<Self> {
         HandshakeOffer::from(policy.clone())
             .validate()
@@ -327,6 +330,7 @@ impl SessionAcceptor {
             expected_zone,
             authority,
             metrics: Arc::new(NoopMetrics),
+            registration_capability,
         })
     }
 
@@ -341,7 +345,7 @@ impl SessionAcceptor {
         mut engine: SessionEngine<T>,
         evidence: TransportEvidence,
         now_tick: u64,
-    ) -> Result<AuthenticatedComponentSession>
+    ) -> Result<AuthenticatedComponentSession<C>>
     where
         T: OwnedTransport + 'static,
     {
@@ -401,6 +405,7 @@ impl SessionAcceptor {
             MetricReason::None,
         );
         Ok(AuthenticatedComponentSession {
+            registration_capability: self.registration_capability,
             expected_zone: self.expected_zone,
             subject,
             lease,
@@ -410,7 +415,7 @@ impl SessionAcceptor {
     }
 }
 
-impl fmt::Debug for SessionAcceptor {
+impl<C> fmt::Debug for SessionAcceptor<C> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("SessionAcceptor(<redacted>)")
     }
@@ -420,7 +425,8 @@ impl fmt::Debug for SessionAcceptor {
 ///
 /// This value is not a routing capability. A registrar must consume it and
 /// run native authorization before installing any routes.
-pub struct AuthenticatedComponentSession {
+pub struct AuthenticatedComponentSession<C> {
+    registration_capability: C,
     expected_zone: ZoneId,
     subject: AuthenticatedSubjectContext,
     lease: AuthorizationLease,
@@ -530,7 +536,45 @@ impl fmt::Debug for AuthenticatedSessionRouteBinding {
     }
 }
 
-impl AuthenticatedComponentSession {
+/// A registration capability consumes itself against one concrete registrar.
+///
+/// The capability implementation owns validation. The session never exposes
+/// the value to a caller or to a caller-supplied closure.
+pub trait SessionRegistrationCapability<R> {
+    type Error;
+
+    fn consume(self, registrar: &R) -> std::result::Result<(), Self::Error>;
+}
+
+impl<C> AuthenticatedComponentSession<C> {
+    /// Consume the instance-bound capability and retain only the authenticated
+    /// session state needed by the registered endpoint.
+    pub fn consume_registration<R>(
+        self,
+        registrar: &R,
+    ) -> std::result::Result<AuthenticatedComponentSession<()>, C::Error>
+    where
+        C: SessionRegistrationCapability<R>,
+    {
+        let Self {
+            registration_capability,
+            expected_zone,
+            subject,
+            lease,
+            authority,
+            driver,
+        } = self;
+        registration_capability.consume(registrar)?;
+        Ok(AuthenticatedComponentSession {
+            registration_capability: (),
+            expected_zone,
+            subject,
+            lease,
+            authority,
+            driver,
+        })
+    }
+
     /// Clone a cancellation-only handle that carries no claims or send access.
     pub fn cancellation_handle(&self) -> SessionCancellationHandle {
         SessionCancellationHandle {
@@ -643,7 +687,7 @@ impl AuthenticatedComponentSession {
     }
 }
 
-impl fmt::Debug for AuthenticatedComponentSession {
+impl<C> fmt::Debug for AuthenticatedComponentSession<C> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("AuthenticatedComponentSession")

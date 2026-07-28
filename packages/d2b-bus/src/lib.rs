@@ -21,7 +21,7 @@ pub use registry::{
 };
 pub use router::{
     BusClock, BusConfig, BusError, BusEvent, BusFailureReason, BusIngress, BusObserver, BusStream,
-    DeliveredInvocation, DeliveredStream, ManualClock, NoopBusObserver, ResourceCall,
-    ResourceFilter, ResourceQuery, ZoneBus, ZoneRegistrar,
+    ComponentSessionAdmission, DeliveredInvocation, DeliveredStream, ManualClock, NoopBusObserver,
+    ResourceCall, ResourceFilter, ResourceQuery, ZoneBus, ZoneRegistrar,
 };
 pub use streams::{IncomingStream, ReceivedFrame, StreamError, StreamLimits, StreamName};

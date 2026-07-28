@@ -56,6 +56,10 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- Bound ComponentSession minting and bus registration to an instance-specific,
+  registrar-issued single-use capability, with a compile-fail seal covering
+  foreign session authorities.
+
 - Unified Core and toolkit controller identity, selector, trigger, registration,
   retry, and resync contracts. Core changes now drive the executor-native
   reconciliation runner through a bounded, coalescing registered-resource

@@ -2,8 +2,8 @@ use std::{collections::BTreeSet, time::Instant};
 
 use async_trait::async_trait;
 use d2b_bus::{
-    BusAuthorizer, BusConfig, OperationId, OperationSpec, ResourceCall, RouteGenerations, RouteKey,
-    RouteMember, RouteTarget, ZoneBus,
+    BusAuthorizer, BusConfig, BusError, ComponentSessionAdmission, OperationId, OperationSpec,
+    ResourceCall, RouteGenerations, RouteKey, RouteMember, RouteTarget, ZoneBus, ZoneRegistrar,
 };
 use d2b_contracts::v3::{
     AuthenticatedSubjectContext, BindingDigest, ConfigurationGeneration, ControllerGeneration,
@@ -23,7 +23,7 @@ use d2b_resource_api::authz::{
 use d2b_resource_store::PolicySnapshot;
 use d2b_session::{
     AuthenticatedComponentSession, ComponentSessionDriver, HandshakeCredentials, OwnedTransport,
-    SessionAcceptor, SessionAuthenticationBinding, SessionAuthority, SessionAuthorizationRequest,
+    SessionAuthenticationBinding, SessionAuthority, SessionAuthorizationRequest,
     SessionDriverHandle, SessionEngine, TransportDescriptor, TransportError, TransportEvidence,
     TransportPacket, ttrpc_request_id,
 };
@@ -157,13 +157,14 @@ fn policy(service: ServicePackage, purpose: EndpointPurpose, generation: u64) ->
 }
 
 async fn admit(
+    registrar: &ZoneRegistrar,
     policy: EndpointPolicy,
     subject: &str,
     uid: &str,
     provider: &str,
     allowed: impl IntoIterator<Item = SessionVerb>,
 ) -> (
-    AuthenticatedComponentSession,
+    AuthenticatedComponentSession<ComponentSessionAdmission>,
     SessionDriverHandle,
     tokio::task::JoinHandle<()>,
 ) {
@@ -214,8 +215,8 @@ async fn admit(
         provider: ResourceRef::parse(provider).unwrap(),
         allowed: allowed.into_iter().collect(),
     };
-    let zone = ZoneId::parse("dev").unwrap();
-    let session = SessionAcceptor::new(policy, zone, Box::new(authority))
+    let session = registrar
+        .component_session_acceptor(policy, Box::new(authority))
         .unwrap()
         .admit(
             initiator.unwrap(),
@@ -294,6 +295,32 @@ fn bus() -> (ZoneBus, d2b_bus::ZoneRegistrar) {
     .unwrap()
 }
 
+#[tokio::test]
+async fn registrar_rejects_a_session_minted_for_another_bus_instance() {
+    let (_first_bus, first_registrar) = bus();
+    let (_second_bus, mut second_registrar) = bus();
+    let (candidate, _remote, echo) = admit(
+        &first_registrar,
+        policy(
+            ServicePackage::ResourceV3,
+            EndpointPurpose::ResourceService,
+            1,
+        ),
+        "Provider/resource",
+        "11111111-1111-4111-8111-111111111111",
+        "Provider/resource",
+        [SessionVerb::Connect],
+    )
+    .await;
+
+    let error = second_registrar
+        .register_component_session(candidate)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, BusError::SessionMismatch));
+    echo.abort();
+}
+
 fn route(service: &str, member: &str, generation: u64, provider: &str) -> RouteKey {
     RouteKey::new(
         ZoneId::parse("dev").unwrap(),
@@ -322,6 +349,7 @@ fn ttrpc_frame(stream_id: u32, payload: &[u8]) -> Vec<u8> {
 async fn admitted_sessions_route_resource_and_diagnostic_calls_and_revoke_lifecycle() {
     let (bus, mut registrar) = bus();
     let (resource_endpoint, _, resource_echo) = admit(
+        &registrar,
         policy(
             ServicePackage::ResourceV3,
             EndpointPurpose::ResourceService,
@@ -338,6 +366,7 @@ async fn admitted_sessions_route_resource_and_diagnostic_calls_and_revoke_lifecy
         .await
         .unwrap();
     let (resource_caller, _, caller_echo) = admit(
+        &registrar,
         policy(
             ServicePackage::ResourceV3,
             EndpointPurpose::ResourceService,
@@ -370,6 +399,7 @@ async fn admitted_sessions_route_resource_and_diagnostic_calls_and_revoke_lifecy
         .unwrap();
     assert!(response.as_bytes().ends_with(b"resource"));
     let (reconnected_endpoint, _, reconnected_echo) = admit(
+        &registrar,
         policy(
             ServicePackage::ResourceV3,
             EndpointPurpose::ResourceService,
@@ -386,6 +416,7 @@ async fn admitted_sessions_route_resource_and_diagnostic_calls_and_revoke_lifecy
         .await
         .unwrap();
     let (reconnected_caller, _, reconnected_caller_echo) = admit(
+        &registrar,
         policy(
             ServicePackage::ResourceV3,
             EndpointPurpose::ResourceService,
@@ -423,6 +454,7 @@ async fn admitted_sessions_route_resource_and_diagnostic_calls_and_revoke_lifecy
     assert!(response.as_bytes().ends_with(b"reconnected"));
 
     let (audit_endpoint, _, audit_echo) = admit(
+        &registrar,
         policy(ServicePackage::AuditV3, EndpointPurpose::AuditExport, 1),
         "Provider/audit",
         "33333333-3333-4333-8333-333333333333",
@@ -435,6 +467,7 @@ async fn admitted_sessions_route_resource_and_diagnostic_calls_and_revoke_lifecy
         .await
         .unwrap();
     let (audit_caller, _, audit_caller_echo) = admit(
+        &registrar,
         policy(ServicePackage::AuditV3, EndpointPurpose::AuditExport, 1),
         "Host/bob",
         "44444444-4444-4444-8444-444444444444",
@@ -516,6 +549,7 @@ async fn admitted_sessions_route_resource_and_diagnostic_calls_and_revoke_lifecy
 async fn deadline_signals_the_correlated_remote_request() {
     let (_bus, mut registrar) = bus();
     let (endpoint, remote, echo) = admit(
+        &registrar,
         policy(
             ServicePackage::ResourceV3,
             EndpointPurpose::ResourceService,
@@ -533,6 +567,7 @@ async fn deadline_signals_the_correlated_remote_request() {
         .await
         .unwrap();
     let (caller, _, caller_echo) = admit(
+        &registrar,
         policy(
             ServicePackage::ResourceV3,
             EndpointPurpose::ResourceService,
@@ -603,6 +638,7 @@ async fn deadline_signals_the_correlated_remote_request() {
 async fn explicit_cancel_signals_the_correlated_remote_request() {
     let (_bus, mut registrar) = bus();
     let (endpoint, remote, echo) = admit(
+        &registrar,
         policy(
             ServicePackage::ResourceV3,
             EndpointPurpose::ResourceService,
@@ -620,6 +656,7 @@ async fn explicit_cancel_signals_the_correlated_remote_request() {
         .await
         .unwrap();
     let (caller, _, caller_echo) = admit(
+        &registrar,
         policy(
             ServicePackage::ResourceV3,
             EndpointPurpose::ResourceService,
@@ -689,6 +726,7 @@ async fn explicit_cancel_signals_the_correlated_remote_request() {
 async fn dropped_invoke_signals_the_correlated_remote_request() {
     let (_bus, mut registrar) = bus();
     let (endpoint, remote, echo) = admit(
+        &registrar,
         policy(
             ServicePackage::ResourceV3,
             EndpointPurpose::ResourceService,
@@ -706,6 +744,7 @@ async fn dropped_invoke_signals_the_correlated_remote_request() {
         .await
         .unwrap();
     let (caller, _, caller_echo) = admit(
+        &registrar,
         policy(
             ServicePackage::ResourceV3,
             EndpointPurpose::ResourceService,
