@@ -11,6 +11,7 @@ pub struct FramedVsockTransport<S> {
     receive_header: Vec<u8>,
     receive_body: Vec<u8>,
     receive_declared: Option<usize>,
+    outbound: Option<(Vec<u8>, usize)>,
     closed: bool,
 }
 
@@ -21,6 +22,7 @@ impl<S> FramedVsockTransport<S> {
             receive_header: Vec::with_capacity(4),
             receive_body: Vec::new(),
             receive_declared: None,
+            outbound: None,
             closed: false,
         }
     }
@@ -53,7 +55,7 @@ where
         if self.closed {
             return Err(TransportError::Disconnected);
         }
-        read_exact_persistent(&mut self.stream, &mut self.receive_header, 4).await?;
+        read_exact_persistent(&mut self.stream, &mut self.receive_header, 4, false).await?;
         let length = match self.receive_declared {
             Some(length) => length,
             None => {
@@ -77,7 +79,7 @@ where
                 .try_reserve_exact(length - self.receive_body.len())
                 .map_err(|_| TransportError::LimitExceeded)?;
         }
-        read_exact_persistent(&mut self.stream, &mut self.receive_body, length).await?;
+        read_exact_persistent(&mut self.stream, &mut self.receive_body, length, true).await?;
         let bytes = std::mem::take(&mut self.receive_body);
         self.receive_header.clear();
         self.receive_declared = None;
@@ -95,18 +97,36 @@ where
         if bytes.is_empty() {
             return Err(TransportError::LimitExceeded);
         }
-        let length = u32::try_from(bytes.len()).map_err(|_| TransportError::LimitExceeded)?;
+        if self.outbound.is_none() {
+            let length = u32::try_from(bytes.len()).map_err(|_| TransportError::LimitExceeded)?;
+            let mut framed = Vec::with_capacity(4 + bytes.len());
+            framed.extend_from_slice(&length.to_be_bytes());
+            framed.extend_from_slice(&bytes);
+            self.outbound = Some((framed, 0));
+        } else if self
+            .outbound
+            .as_ref()
+            .is_none_or(|(pending, _)| pending[4..] != bytes)
+        {
+            return Err(TransportError::Other);
+        }
         let result = async {
-            self.stream
-                .write_all(&length.to_be_bytes())
-                .await
-                .map_err(map_io)?;
-            self.stream.write_all(&bytes).await.map_err(map_io)?;
+            let (pending, offset) = self.outbound.as_mut().expect("outbound was initialized");
+            while *offset < pending.len() {
+                match self.stream.write(&pending[*offset..]).await {
+                    Ok(0) => return Err(TransportError::Disconnected),
+                    Ok(written) => *offset += written,
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(error) => return Err(map_io(error)),
+                }
+            }
             self.stream.flush().await.map_err(map_io)
         }
         .await;
         if result.is_err() {
             self.closed = true;
+        } else {
+            self.outbound = None;
         }
         result
     }
@@ -124,6 +144,7 @@ async fn read_exact_persistent<S: AsyncRead + Unpin>(
     stream: &mut S,
     output: &mut Vec<u8>,
     target: usize,
+    frame_started: bool,
 ) -> Result<(), TransportError> {
     while output.len() < target {
         let remaining = target
@@ -131,7 +152,9 @@ async fn read_exact_persistent<S: AsyncRead + Unpin>(
             .ok_or(TransportError::LimitExceeded)?;
         let mut chunk = vec![0_u8; remaining];
         match stream.read(&mut chunk).await {
-            Ok(0) if output.is_empty() => return Err(TransportError::Disconnected),
+            Ok(0) if output.is_empty() && !frame_started => {
+                return Err(TransportError::Disconnected);
+            }
             Ok(0) => return Err(TransportError::Truncated),
             Ok(count) => output.extend_from_slice(&chunk[..count]),
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
@@ -309,6 +332,40 @@ mod tests {
         );
         writer.write_all(b"cd").await.unwrap();
         assert_eq!(receiver.receive(64).await.unwrap().as_bytes(), b"abcd");
+    }
+
+    #[tokio::test]
+    async fn full_header_zero_body_eof_is_truncated() {
+        let (mut writer, reader) = tokio::io::duplex(16);
+        writer.write_all(&3_u32.to_be_bytes()).await.unwrap();
+        writer.shutdown().await.unwrap();
+        let mut transport = FramedVsockTransport::new(reader);
+        assert!(matches!(
+            transport.receive(8).await,
+            Err(TransportError::Truncated)
+        ));
+    }
+
+    #[tokio::test]
+    async fn cancelled_partial_send_resumes_the_same_frame() {
+        let (left, right) = tokio::io::duplex(5);
+        let mut sender = FramedVsockTransport::new(left);
+        let mut receiver = FramedVsockTransport::new(right);
+        let payload = b"partial-body".to_vec();
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(5),
+                sender.send(TransportPacket::new(payload.clone())),
+            )
+            .await
+            .is_err()
+        );
+        let (sent, received) = tokio::join!(
+            sender.send(TransportPacket::new(payload.clone())),
+            receiver.receive(payload.len()),
+        );
+        sent.unwrap();
+        assert_eq!(received.unwrap().as_bytes(), payload);
     }
 
     struct TrackedStream(Arc<AtomicUsize>);

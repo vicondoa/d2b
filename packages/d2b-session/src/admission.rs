@@ -8,7 +8,8 @@ use d2b_contracts::v3::{
     ZoneId,
     component_session::{
         AuthorizationLease, BootstrapIdentityBinding, ChannelClass, EndpointPolicy, HandshakeOffer,
-        MetricReason, MetricResult, NoiseProfile, OperationClass, SessionErrorCode, TransportClass,
+        MetricReason, MetricResult, NoiseProfile, OperationClass, RequestId, SessionErrorCode,
+        TransportClass,
     },
 };
 use d2b_resource_api::authz::SessionVerb;
@@ -427,6 +428,29 @@ pub struct AuthenticatedComponentSession {
     driver: SessionDriverHandle,
 }
 
+/// Restricted concurrent cancellation surface for one authenticated session.
+#[derive(Clone)]
+pub struct SessionCancellationHandle {
+    driver: SessionDriverHandle,
+}
+
+impl SessionCancellationHandle {
+    /// Signal cancellation for one exact request in the current generation.
+    pub async fn cancel(&self, request_id: RequestId) -> Result<()> {
+        self.driver
+            .cancel(self.driver.generation(), request_id.clone())
+            .await?;
+        let _ = self.driver.complete_ttrpc(request_id).await?;
+        Ok(())
+    }
+}
+
+impl fmt::Debug for SessionCancellationHandle {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("SessionCancellationHandle(<redacted>)")
+    }
+}
+
 /// Redacted routing metadata derived only from an authenticated candidate.
 ///
 /// This value carries no driver, authority, lease, transport binding, or
@@ -505,6 +529,13 @@ impl fmt::Debug for AuthenticatedSessionRouteBinding {
 }
 
 impl AuthenticatedComponentSession {
+    /// Clone a cancellation-only handle that carries no claims or send access.
+    pub fn cancellation_handle(&self) -> SessionCancellationHandle {
+        SessionCancellationHandle {
+            driver: self.driver.clone(),
+        }
+    }
+
     /// Return the active authorization revision.
     pub const fn authorization_revision(&self) -> u64 {
         self.lease.policy_revision()
@@ -583,6 +614,30 @@ impl AuthenticatedComponentSession {
             return Err(SessionError::new(SessionErrorCode::PolicyDenied));
         }
         self.driver.send_ttrpc(frame).await
+    }
+
+    /// Start one correlated ttrpc request under a consumed operation permit.
+    pub async fn start_authorized_ttrpc(
+        &mut self,
+        permit: AuthorizedSessionOperation,
+        request_id: RequestId,
+        frame: Vec<u8>,
+        now_tick: u64,
+    ) -> Result<()> {
+        if !permit.lease.is_valid_at(now_tick)
+            || !matches!(
+                permit.request.verb,
+                SessionVerb::Invoke | SessionVerb::AuditExport | SessionVerb::SupportBundle
+            )
+        {
+            return Err(SessionError::new(SessionErrorCode::PolicyDenied));
+        }
+        self.driver.start_ttrpc(request_id, frame).await
+    }
+
+    /// Remove one terminal correlated request.
+    pub async fn complete_ttrpc(&mut self, request_id: RequestId) -> Result<bool> {
+        self.driver.complete_ttrpc(request_id).await
     }
 }
 

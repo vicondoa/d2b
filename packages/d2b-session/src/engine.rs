@@ -9,20 +9,21 @@ use d2b_contracts::v3::component_session::{
     AttachmentAccess, AttachmentCreditClass, AttachmentDescriptor, AttachmentKind,
     AttachmentPacket, AttachmentPolicyKind, BoundedVec, CancelAck, CancelRequest, CancelResult,
     ChannelClass, ChannelId, CloseReason, CloseRecord, EndpointPolicy, EndpointPolicyIdentity,
-    FRAGMENT_HEADER_LEN, FragmentHeader, HandshakeOffer, HealthState, KeepaliveRecord,
-    KernelObjectType, LimitProfile, MAX_PACKET_ATTACHMENTS, MetricLabels, MetricReason,
-    MetricResult, OperationClass, OperationId, PREFACE_LEN, RecordHeader, RecordKind, Remediation,
-    RequestId, ServicePackage, SessionErrorCode,
+    EndpointPurpose, FRAGMENT_HEADER_LEN, FragmentHeader, HandshakeOffer, HealthState,
+    KeepaliveRecord, KernelObjectType, LimitProfile, MAX_PACKET_ATTACHMENTS, MetricLabels,
+    MetricReason, MetricResult, NoiseProfile, OperationClass, OperationId, PREFACE_LEN,
+    RecordHeader, RecordKind, Remediation, RequestId, ServicePackage, SessionErrorCode,
 };
 
 use crate::{
     Cancellation, FairScheduler, Fragment, Fragmenter, HandshakeCredentials, HandshakeRole,
     KeepaliveAction, MetricEvent, MetricsSink, NamedStreamMux, NoiseHandshake, NoopMetrics,
     OutboundFrame, OwnedAttachment, OwnedTransport, QueueClass, Reassembler, RecordProtector,
-    Result, SessionError, SessionLifecycle, StreamEvent, StreamId, StreamPhase, TransportPacket,
-    accept_generation_discovery_request, decode_generation_discovery_response,
-    encode_generation_discovery_request, encode_generation_discovery_response, encode_offer,
-    is_generation_discovery_request, negotiate_offer,
+    Result, SessionError, SessionLifecycle, StreamEvent, StreamId, StreamPhase,
+    TransportDescriptor, TransportPacket, accept_generation_discovery_request,
+    decode_generation_discovery_response, encode_generation_discovery_request,
+    encode_generation_discovery_response, encode_offer, is_generation_discovery_request,
+    negotiate_offer,
 };
 
 const ATTACHMENT_BATCH: u8 = 1;
@@ -105,6 +106,45 @@ struct WithheldStreamCredit {
     transport_bytes: u32,
 }
 
+fn record_establishment<T>(
+    metrics: &dyn MetricsSink,
+    descriptor: TransportDescriptor,
+    purpose: EndpointPurpose,
+    service: ServicePackage,
+    noise: NoiseProfile,
+    result: &Result<T>,
+) {
+    let (result_label, reason, health_state) = match result {
+        Ok(_) => (
+            MetricResult::Accepted,
+            MetricReason::None,
+            HealthState::Healthy,
+        ),
+        Err(error) => (
+            MetricResult::Rejected,
+            crate::metrics::reason_for_error(error.code()),
+            HealthState::Degraded,
+        ),
+    };
+    metrics.record(
+        MetricEvent::Handshake,
+        MetricLabels {
+            transport: descriptor.class,
+            purpose,
+            service,
+            channel_class: ChannelClass::SessionControl,
+            noise,
+            locality: descriptor.locality,
+            operation_class: OperationClass::Connect,
+            attachment_class: None,
+            health_state,
+            result: result_label,
+            reason,
+        },
+        1,
+    );
+}
+
 impl<T: OwnedTransport> SessionEngine<T> {
     pub async fn establish_initiator_with_generation_discovery(
         transport: T,
@@ -112,21 +152,52 @@ impl<T: OwnedTransport> SessionEngine<T> {
         credentials: HandshakeCredentials,
         now: Instant,
     ) -> Result<Self> {
-        identity
-            .validate_local_generation_discovery()
-            .map_err(SessionError::from)?;
+        Self::establish_initiator_with_generation_discovery_and_metrics(
+            transport,
+            identity,
+            credentials,
+            now,
+            Arc::new(NoopMetrics),
+        )
+        .await
+    }
+
+    pub async fn establish_initiator_with_generation_discovery_and_metrics(
+        transport: T,
+        identity: EndpointPolicyIdentity,
+        credentials: HandshakeCredentials,
+        now: Instant,
+        metrics: Arc<dyn MetricsSink>,
+    ) -> Result<Self> {
+        let descriptor = transport.descriptor();
+        let metric_identity = identity.clone();
         let timeout = Duration::from_millis(u64::from(identity.limits.handshake_deadline_ms));
-        tokio::time::timeout(
-            timeout,
+        let result = match tokio::time::timeout(timeout, async move {
+            identity
+                .validate_local_generation_discovery()
+                .map_err(SessionError::from)?;
             Self::establish_initiator_with_generation_discovery_inner(
                 transport,
                 identity,
                 credentials,
                 now,
-            ),
-        )
+            )
+            .await
+        })
         .await
-        .map_err(|_| SessionError::new(SessionErrorCode::HandshakeTimeout))?
+        {
+            Ok(result) => result,
+            Err(_) => Err(SessionError::new(SessionErrorCode::HandshakeTimeout)),
+        };
+        record_establishment(
+            metrics.as_ref(),
+            descriptor,
+            metric_identity.purpose,
+            metric_identity.service,
+            metric_identity.noise_profile,
+            &result,
+        );
+        result.map(|engine| engine.with_metrics(metrics))
     }
 
     async fn establish_initiator_with_generation_discovery_inner(
@@ -158,13 +229,44 @@ impl<T: OwnedTransport> SessionEngine<T> {
         credentials: HandshakeCredentials,
         now: Instant,
     ) -> Result<Self> {
+        Self::establish_initiator_with_metrics(
+            transport,
+            policy,
+            credentials,
+            now,
+            Arc::new(NoopMetrics),
+        )
+        .await
+    }
+
+    pub async fn establish_initiator_with_metrics(
+        transport: T,
+        policy: EndpointPolicy,
+        credentials: HandshakeCredentials,
+        now: Instant,
+        metrics: Arc<dyn MetricsSink>,
+    ) -> Result<Self> {
+        let descriptor = transport.descriptor();
+        let metric_policy = policy.clone();
         let timeout = Duration::from_millis(u64::from(policy.limits.handshake_deadline_ms));
-        tokio::time::timeout(
+        let result = match tokio::time::timeout(
             timeout,
             Self::establish_initiator_inner(transport, policy, credentials, now),
         )
         .await
-        .map_err(|_| SessionError::new(SessionErrorCode::HandshakeTimeout))?
+        {
+            Ok(result) => result,
+            Err(_) => Err(SessionError::new(SessionErrorCode::HandshakeTimeout)),
+        };
+        record_establishment(
+            metrics.as_ref(),
+            descriptor,
+            metric_policy.purpose,
+            metric_policy.service,
+            metric_policy.noise_profile,
+            &result,
+        );
+        result.map(|engine| engine.with_metrics(metrics))
     }
 
     async fn establish_initiator_inner(
@@ -198,13 +300,44 @@ impl<T: OwnedTransport> SessionEngine<T> {
         credentials: HandshakeCredentials,
         now: Instant,
     ) -> Result<Self> {
+        Self::establish_responder_with_metrics(
+            transport,
+            policy,
+            credentials,
+            now,
+            Arc::new(NoopMetrics),
+        )
+        .await
+    }
+
+    pub async fn establish_responder_with_metrics(
+        transport: T,
+        policy: EndpointPolicy,
+        credentials: HandshakeCredentials,
+        now: Instant,
+        metrics: Arc<dyn MetricsSink>,
+    ) -> Result<Self> {
+        let descriptor = transport.descriptor();
+        let metric_policy = policy.clone();
         let timeout = Duration::from_millis(u64::from(policy.limits.handshake_deadline_ms));
-        tokio::time::timeout(
+        let result = match tokio::time::timeout(
             timeout,
             Self::establish_responder_inner(transport, policy, credentials, now),
         )
         .await
-        .map_err(|_| SessionError::new(SessionErrorCode::HandshakeTimeout))?
+        {
+            Ok(result) => result,
+            Err(_) => Err(SessionError::new(SessionErrorCode::HandshakeTimeout)),
+        };
+        record_establishment(
+            metrics.as_ref(),
+            descriptor,
+            metric_policy.purpose,
+            metric_policy.service,
+            metric_policy.noise_profile,
+            &result,
+        );
+        result.map(|engine| engine.with_metrics(metrics))
     }
 
     async fn establish_responder_inner(
@@ -422,6 +555,10 @@ impl<T: OwnedTransport> SessionEngine<T> {
 
     pub fn register_inbound_call(&mut self, request_id: RequestId) -> Result<Cancellation> {
         self.inbound_requests.register(request_id)
+    }
+
+    pub fn mark_inbound_dispatched(&mut self, request_id: &RequestId) -> Result<()> {
+        self.inbound_requests.mark_dispatched(request_id)
     }
 
     pub fn complete_inbound_call(&mut self, request_id: &RequestId) -> bool {

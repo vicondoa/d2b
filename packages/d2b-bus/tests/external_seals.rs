@@ -25,10 +25,7 @@ fn dependent_cannot_forge_registration_or_mint_admitted_session() {
         ),
         (
             "forge_admission",
-            [
-                "no `AdmittedComponentSession` in the root",
-                "error[E0432]",
-            ],
+            ["no `AdmittedComponentSession` in the root", "error[E0432]"],
         ),
     ] {
         let output = Command::new(env!("CARGO"))

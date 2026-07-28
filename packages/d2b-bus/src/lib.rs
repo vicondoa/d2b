@@ -16,7 +16,8 @@ pub use authorization::{
 pub use d2b_resource_api::authz::SessionVerb;
 pub use operations::{Cancellation, OperationId, OperationSpec};
 pub use registry::{
-    BusEndpoint, BusResponse, EndpointError, RouteGenerations, RouteKey, RouteMember, RouteTarget,
+    BusEndpoint, BusResponse, EndpointError, EndpointFailureClass, RouteGenerations, RouteKey,
+    RouteMember, RouteTarget,
 };
 pub use router::{
     BusClock, BusConfig, BusError, BusEvent, BusFailureReason, BusIngress, BusObserver, BusStream,

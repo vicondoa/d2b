@@ -20,6 +20,11 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+struct PendingOutbound {
+    bytes: Vec<u8>,
+    offset: usize,
+}
+
 pub type DescriptorPolicyResolver =
     Arc<dyn Fn(&AttachmentDescriptor) -> Result<DescriptorPolicy, UnixSessionError> + Send + Sync>;
 
@@ -51,6 +56,15 @@ pub enum UnixTransportFailure {
 
 pub trait UnixTransportObserver: Send + Sync {
     fn record(&self, event: UnixTransportEvent, reason: UnixTransportFailure);
+
+    fn record_errno(
+        &self,
+        event: UnixTransportEvent,
+        reason: UnixTransportFailure,
+        _errno: Option<i32>,
+    ) {
+        self.record(event, reason);
+    }
 }
 
 #[derive(Debug, Default)]
@@ -602,6 +616,7 @@ pub struct UnixStreamTransport {
     receive_header: Vec<u8>,
     receive_body: Vec<u8>,
     receive_declared: Option<usize>,
+    outbound: Option<PendingOutbound>,
     closed: bool,
     observer: Arc<dyn UnixTransportObserver>,
 }
@@ -629,6 +644,7 @@ impl UnixStreamTransport {
             receive_header: Vec::with_capacity(4),
             receive_body: Vec::new(),
             receive_declared: None,
+            outbound: None,
             closed: false,
             observer: Arc::new(NoopUnixTransportObserver),
         }
@@ -650,17 +666,26 @@ impl UnixStreamTransport {
         socket: &StreamSocket,
         output: &mut Vec<u8>,
         target_len: usize,
+        frame_started: bool,
+        observer: &dyn UnixTransportObserver,
     ) -> Result<(), TransportError> {
         while output.len() < target_len {
             let remaining = target_len
                 .checked_sub(output.len())
                 .ok_or(TransportError::LimitExceeded)?;
-            let received = socket
-                .read_available(output, remaining, 1)
-                .await
-                .map_err(map_transport_error)?;
+            let received = match socket.read_available(output, remaining, 1).await {
+                Ok(received) => received,
+                Err(error) => {
+                    observer.record_errno(
+                        UnixTransportEvent::Receive,
+                        unix_failure_reason(error),
+                        error.errno(),
+                    );
+                    return Err(map_transport_error(error));
+                }
+            };
             if received.eof {
-                return if output.is_empty() {
+                return if output.is_empty() && !frame_started {
                     Err(TransportError::Disconnected)
                 } else {
                     Err(TransportError::Truncated)
@@ -681,7 +706,14 @@ impl UnixStreamTransport {
         if protected_limit == 0 || protected_limit > configured_wire_limit {
             return Err(TransportError::LimitExceeded);
         }
-        Self::read_exact_record_bytes(&self.socket, &mut self.receive_header, 4).await?;
+        Self::read_exact_record_bytes(
+            &self.socket,
+            &mut self.receive_header,
+            4,
+            false,
+            self.observer.as_ref(),
+        )
+        .await?;
         let declared = match self.receive_declared {
             Some(declared) => declared,
             None => {
@@ -705,7 +737,14 @@ impl UnixStreamTransport {
                 .try_reserve_exact(declared - self.receive_body.len())
                 .map_err(|_| TransportError::LimitExceeded)?;
         }
-        Self::read_exact_record_bytes(&self.socket, &mut self.receive_body, declared).await?;
+        Self::read_exact_record_bytes(
+            &self.socket,
+            &mut self.receive_body,
+            declared,
+            true,
+            self.observer.as_ref(),
+        )
+        .await?;
         let bytes = std::mem::take(&mut self.receive_body);
         self.receive_header.clear();
         self.receive_declared = None;
@@ -745,25 +784,40 @@ impl OwnedTransport for UnixStreamTransport {
         if bytes.is_empty() || bytes.len() > configured_wire_limit {
             return Err(TransportError::LimitExceeded);
         }
-        let declared = u32::try_from(bytes.len()).map_err(|_| TransportError::LimitExceeded)?;
-        let result = async {
-            self.socket
-                .write_all(&declared.to_be_bytes())
-                .await
-                .map_err(map_transport_error)?;
-            self.socket
-                .write_all(&bytes)
-                .await
-                .map_err(map_transport_error)
+        if self.outbound.is_none() {
+            let declared = u32::try_from(bytes.len()).map_err(|_| TransportError::LimitExceeded)?;
+            let mut framed = Vec::with_capacity(4 + bytes.len());
+            framed.extend_from_slice(&declared.to_be_bytes());
+            framed.extend_from_slice(&bytes);
+            self.outbound = Some(PendingOutbound {
+                bytes: framed,
+                offset: 0,
+            });
+        } else if self
+            .outbound
+            .as_ref()
+            .is_none_or(|pending| pending.bytes[4..] != bytes)
+        {
+            return Err(TransportError::Other);
         }
-        .await;
+        let result = {
+            let pending = self.outbound.as_mut().expect("outbound was initialized");
+            self.socket
+                .write_all_from(&pending.bytes, &mut pending.offset)
+                .await
+        };
         if let Err(error) = &result {
-            self.observer
-                .record(UnixTransportEvent::Send, transport_failure_reason(error));
+            self.observer.record_errno(
+                UnixTransportEvent::Send,
+                unix_failure_reason(*error),
+                error.errno(),
+            );
             self.closed = true;
             let _ = self.socket.close();
+        } else {
+            self.outbound = None;
         }
-        result
+        result.map_err(map_transport_error)
     }
 
     async fn close(&mut self) -> Result<(), TransportError> {

@@ -48,6 +48,9 @@ pub trait ComponentSessionDriver: Send + Sync {
     /// Registers an authenticated inbound request before handler dispatch.
     async fn register_inbound_call(&self, request_id: RequestId) -> Result<Cancellation>;
 
+    /// Mark an inbound request as dispatched to its generated handler.
+    async fn mark_inbound_dispatched(&self, request_id: RequestId) -> Result<()>;
+
     /// Removes a normally completed inbound request.
     async fn complete_inbound_call(&self, request_id: RequestId) -> Result<bool>;
 
@@ -154,6 +157,11 @@ impl ComponentSessionDriver for SessionDriverHandle {
 
     async fn register_inbound_call(&self, request_id: RequestId) -> Result<Cancellation> {
         self.request(|reply| DriverCommand::RegisterInboundCall { request_id, reply })
+            .await
+    }
+
+    async fn mark_inbound_dispatched(&self, request_id: RequestId) -> Result<()> {
+        self.request(|reply| DriverCommand::MarkInboundDispatched { request_id, reply })
             .await
     }
 
@@ -277,6 +285,10 @@ enum DriverCommand {
     RegisterInboundCall {
         request_id: RequestId,
         reply: Reply<Cancellation>,
+    },
+    MarkInboundDispatched {
+        request_id: RequestId,
+        reply: Reply<()>,
     },
     CompleteInboundCall {
         request_id: RequestId,
@@ -541,7 +553,7 @@ async fn run_driver<T: OwnedTransport>(
     mut commands: mpsc::Receiver<DriverCommand>,
 ) {
     let mut queues = DriverQueues::new(&engine);
-    let mut named_stream_turn = false;
+    let mut fairness_turn = 0_u8;
     let result = loop {
         enum Work {
             Command(Option<DriverCommand>),
@@ -554,22 +566,27 @@ async fn run_driver<T: OwnedTransport>(
                 std::future::pending::<()>().await;
             }
         };
-        let work = if named_stream_turn {
-            tokio::select! {
-                biased;
-                () = named_work => Work::NamedStream,
-                command = commands.recv() => Work::Command(command),
-                event = engine.receive() => Work::Inbound(event),
-            }
-        } else {
-            tokio::select! {
+        let work = match fairness_turn {
+            0 => tokio::select! {
                 biased;
                 command = commands.recv() => Work::Command(command),
                 event = engine.receive() => Work::Inbound(event),
                 () = named_work => Work::NamedStream,
-            }
+            },
+            1 => tokio::select! {
+                biased;
+                event = engine.receive() => Work::Inbound(event),
+                () = named_work => Work::NamedStream,
+                command = commands.recv() => Work::Command(command),
+            },
+            _ => tokio::select! {
+                biased;
+                () = named_work => Work::NamedStream,
+                command = commands.recv() => Work::Command(command),
+                event = engine.receive() => Work::Inbound(event),
+            },
         };
-        named_stream_turn = !named_stream_turn;
+        fairness_turn = (fairness_turn + 1) % 3;
         match work {
             Work::Command(command) => {
                 let Some(command) = command else {
@@ -628,6 +645,9 @@ async fn handle_command<T: OwnedTransport>(
             frame,
             reply,
         } => {
+            if reply.is_closed() {
+                return Ok(DriverAction::Continue);
+            }
             let result = engine.call(request_id, frame).await.map(|_| ());
             let _ = reply.send(result);
         }
@@ -647,12 +667,19 @@ async fn handle_command<T: OwnedTransport>(
             let _ = reply.send(result);
         }
         DriverCommand::SendTtrpc { frame, reply } => {
-            let result = engine.send_ttrpc(frame).await;
+            let result = if reply.is_closed() {
+                Err(SessionError::new(SessionErrorCode::Cancelled))
+            } else {
+                engine.send_ttrpc(frame).await
+            };
             let _ = reply.send(result);
         }
         DriverCommand::ReceiveTtrpc(reply) => queues.ttrpc.receive(reply)?,
         DriverCommand::RegisterInboundCall { request_id, reply } => {
             let _ = reply.send(engine.register_inbound_call(request_id));
+        }
+        DriverCommand::MarkInboundDispatched { request_id, reply } => {
+            let _ = reply.send(engine.mark_inbound_dispatched(&request_id));
         }
         DriverCommand::CompleteInboundCall { request_id, reply } => {
             let _ = reply.send(Ok(engine.complete_inbound_call(&request_id)));

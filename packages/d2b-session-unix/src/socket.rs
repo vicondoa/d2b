@@ -528,15 +528,23 @@ impl StreamSocket {
     }
 
     pub async fn write_all(&self, bytes: &[u8]) -> Result<(), UnixSessionError> {
-        let mut written = 0;
-        while written < bytes.len() {
+        let mut offset = 0;
+        self.write_all_from(bytes, &mut offset).await
+    }
+
+    pub async fn write_all_from(
+        &self,
+        bytes: &[u8],
+        offset: &mut usize,
+    ) -> Result<(), UnixSessionError> {
+        while *offset < bytes.len() {
             let mut ready = self.io.writable().await.map_err(io_error)?;
             loop {
                 match ready.try_io(|inner| {
                     loop {
                         match send(
                             inner.get_ref(),
-                            &bytes[written..],
+                            &bytes[*offset..],
                             SendFlags::DONTWAIT | SendFlags::NOSIGNAL,
                         ) {
                             Err(rustix::io::Errno::INTR) => continue,
@@ -546,8 +554,8 @@ impl StreamSocket {
                 }) {
                     Ok(Ok(0)) => return Err(UnixSessionError::Closed),
                     Ok(Ok(count)) => {
-                        written += count;
-                        if written == bytes.len() {
+                        *offset += count;
+                        if *offset == bytes.len() {
                             return Ok(());
                         }
                     }

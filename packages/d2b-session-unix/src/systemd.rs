@@ -58,18 +58,9 @@ impl std::fmt::Debug for ActivatedSeqpacketListeners {
 impl ActivatedSeqpacketListeners {
     pub fn from_systemd(expected_names: &[&str]) -> Result<Self, SystemdActivationError> {
         claim_activation()?;
-        let (names, mut source) = consume_environment(expected_names)?;
+        let (names, owned) = consume_environment(expected_names)?;
         let mut listeners = BTreeMap::new();
-        for (index, name) in names.into_iter().enumerate() {
-            let owned = source
-                .take_custom::<OwnedFd>(
-                    index,
-                    libc::AF_UNIX,
-                    libc::SOCK_SEQPACKET,
-                    "Unix seqpacket listener",
-                )
-                .map_err(|_| SystemdActivationError::InvalidDescriptor)?
-                .ok_or(SystemdActivationError::InvalidDescriptor)?;
+        for (name, owned) in names.into_iter().zip(owned) {
             prepare_listener(&owned)?;
             let io = AsyncFd::new(owned).map_err(|_| SystemdActivationError::InvalidDescriptor)?;
             listeners.insert(name, io);
@@ -95,15 +86,9 @@ impl std::fmt::Debug for ActivatedSeqpacketListener {
 impl ActivatedSeqpacketListener {
     pub fn from_systemd(expected_name: &str) -> Result<Self, SystemdActivationError> {
         claim_activation()?;
-        let (_, mut source) = consume_environment(&[expected_name])?;
-        let owned = source
-            .take_custom::<OwnedFd>(
-                0,
-                libc::AF_UNIX,
-                libc::SOCK_SEQPACKET,
-                "Unix seqpacket listener",
-            )
-            .map_err(|_| SystemdActivationError::InvalidDescriptor)?
+        let (_, mut owned) = consume_environment(&[expected_name])?;
+        let owned = owned
+            .pop()
             .ok_or(SystemdActivationError::InvalidDescriptor)?;
         prepare_listener(&owned)?;
         Ok(Self {
@@ -156,25 +141,55 @@ fn claim_once(consumed: &AtomicBool) -> Result<(), SystemdActivationError> {
 
 fn consume_environment(
     expected_names: &[&str],
-) -> Result<(Vec<String>, ListenFd), SystemdActivationError> {
+) -> Result<(Vec<String>, Vec<OwnedFd>), SystemdActivationError> {
     let listen_pid = env::var("LISTEN_PID").ok();
     let listen_fds = env::var("LISTEN_FDS").ok();
     let listen_fdnames = env::var("LISTEN_FDNAMES").ok();
-    let source = ListenFd::from_env();
+    let mut source = ListenFd::from_env();
     envmnt::remove("LISTEN_PID");
     envmnt::remove("LISTEN_FDS");
     envmnt::remove("LISTEN_FDNAMES");
-    let names = validate_environment_values(
+    let names = match validate_environment_values(
         expected_names,
         listen_pid.as_deref(),
         listen_fds.as_deref(),
         listen_fdnames.as_deref(),
         std::process::id(),
-    )?;
+    ) {
+        Ok(names) => names,
+        Err(error) => {
+            drain_activation_descriptors(&mut source);
+            return Err(error);
+        }
+    };
     if source.len() != names.len() {
+        drain_activation_descriptors(&mut source);
         return Err(SystemdActivationError::InvalidEnvironment);
     }
-    Ok((names, source))
+    let mut owned = Vec::with_capacity(names.len());
+    for index in 0..names.len() {
+        match source.take_custom::<OwnedFd>(
+            index,
+            libc::AF_UNIX,
+            libc::SOCK_SEQPACKET,
+            "Unix seqpacket listener",
+        ) {
+            Ok(Some(fd)) => owned.push(fd),
+            Ok(None) | Err(_) => {
+                drain_activation_descriptors(&mut source);
+                return Err(SystemdActivationError::InvalidDescriptor);
+            }
+        }
+    }
+    Ok((names, owned))
+}
+
+fn drain_activation_descriptors(source: &mut ListenFd) {
+    for index in 0..source.len() {
+        if let Ok(Some(fd)) = source.take_raw_fd(index) {
+            let _ = nix::unistd::close(fd);
+        }
+    }
 }
 
 fn validate_environment_values(

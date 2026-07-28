@@ -24,7 +24,8 @@ use d2b_resource_store::PolicySnapshot;
 use d2b_session::{
     AuthenticatedComponentSession, ComponentSessionDriver, HandshakeCredentials, OwnedTransport,
     SessionAcceptor, SessionAuthenticationBinding, SessionAuthority, SessionAuthorizationRequest,
-    SessionEngine, TransportDescriptor, TransportError, TransportEvidence, TransportPacket,
+    SessionDriverHandle, SessionEngine, TransportDescriptor, TransportError, TransportEvidence,
+    TransportPacket, ttrpc_request_id,
 };
 use tokio::sync::mpsc;
 
@@ -161,7 +162,11 @@ async fn admit(
     uid: &str,
     provider: &str,
     allowed: impl IntoIterator<Item = SessionVerb>,
-) -> (AuthenticatedComponentSession, tokio::task::JoinHandle<()>) {
+) -> (
+    AuthenticatedComponentSession,
+    SessionDriverHandle,
+    tokio::task::JoinHandle<()>,
+) {
     let descriptor = TransportDescriptor {
         class: policy.transport_binding.transport,
         locality: policy.transport_binding.locality,
@@ -195,9 +200,10 @@ async fn admit(
         ),
     );
     let remote = responder.unwrap().into_driver();
+    let echo_remote = remote.clone();
     let echo = tokio::spawn(async move {
-        while let Ok(frame) = remote.receive_ttrpc().await {
-            if remote.send_ttrpc(frame).await.is_err() {
+        while let Ok(frame) = echo_remote.receive_ttrpc().await {
+            if echo_remote.send_ttrpc(frame).await.is_err() {
                 break;
             }
         }
@@ -221,7 +227,7 @@ async fn admit(
         )
         .await
         .unwrap();
-    (session, echo)
+    (session, remote, echo)
 }
 
 fn bus() -> (ZoneBus, d2b_bus::ZoneRegistrar) {
@@ -234,6 +240,7 @@ fn bus() -> (ZoneBus, d2b_bus::ZoneRegistrar) {
         [
             SessionVerb::Connect,
             SessionVerb::Invoke,
+            SessionVerb::Cancel,
             SessionVerb::AuditExport,
             SessionVerb::SupportBundle,
         ],
@@ -243,11 +250,8 @@ fn bus() -> (ZoneBus, d2b_bus::ZoneRegistrar) {
         [],
     )
     .unwrap();
-    let role = CompiledRole::new(
-        ResourceRef::parse("Role/session-seam").unwrap(),
-        vec![rule],
-    )
-    .unwrap();
+    let role =
+        CompiledRole::new(ResourceRef::parse("Role/session-seam").unwrap(), vec![rule]).unwrap();
     let subjects = [
         (
             "Provider/system-core",
@@ -305,10 +309,19 @@ fn route(service: &str, member: &str, generation: u64, provider: &str) -> RouteK
     )
 }
 
+fn ttrpc_frame(stream_id: u32, payload: &[u8]) -> Vec<u8> {
+    let mut frame = Vec::with_capacity(10 + payload.len());
+    frame.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    frame.extend_from_slice(&stream_id.to_be_bytes());
+    frame.extend_from_slice(&[0, 0]);
+    frame.extend_from_slice(payload);
+    frame
+}
+
 #[tokio::test]
 async fn admitted_sessions_route_resource_and_diagnostic_calls_and_revoke_lifecycle() {
     let (bus, mut registrar) = bus();
-    let (resource_endpoint, resource_echo) = admit(
+    let (resource_endpoint, _, resource_echo) = admit(
         policy(
             ServicePackage::ResourceV3,
             EndpointPurpose::ResourceService,
@@ -324,7 +337,7 @@ async fn admitted_sessions_route_resource_and_diagnostic_calls_and_revoke_lifecy
         .register_component_session(resource_endpoint)
         .await
         .unwrap();
-    let (resource_caller, caller_echo) = admit(
+    let (resource_caller, _, caller_echo) = admit(
         policy(
             ServicePackage::ResourceV3,
             EndpointPurpose::ResourceService,
@@ -351,12 +364,12 @@ async fn admitted_sessions_route_resource_and_diagnostic_calls_and_revoke_lifecy
             resource_route,
             OperationSpec::new(OperationId::parse("resource-get").unwrap(), 10_000).unwrap(),
             ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
-            b"resource".to_vec(),
+            ttrpc_frame(1, b"resource"),
         )
         .await
         .unwrap();
-    assert_eq!(response.as_bytes(), b"resource");
-    let (reconnected_endpoint, reconnected_echo) = admit(
+    assert!(response.as_bytes().ends_with(b"resource"));
+    let (reconnected_endpoint, _, reconnected_echo) = admit(
         policy(
             ServicePackage::ResourceV3,
             EndpointPurpose::ResourceService,
@@ -372,7 +385,7 @@ async fn admitted_sessions_route_resource_and_diagnostic_calls_and_revoke_lifecy
         .reconnect_component_session(resource_endpoint, reconnected_endpoint)
         .await
         .unwrap();
-    let (reconnected_caller, reconnected_caller_echo) = admit(
+    let (reconnected_caller, _, reconnected_caller_echo) = admit(
         policy(
             ServicePackage::ResourceV3,
             EndpointPurpose::ResourceService,
@@ -403,13 +416,13 @@ async fn admitted_sessions_route_resource_and_diagnostic_calls_and_revoke_lifecy
             )
             .unwrap(),
             ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
-            b"reconnected".to_vec(),
+            ttrpc_frame(2, b"reconnected"),
         )
         .await
         .unwrap();
-    assert_eq!(response.as_bytes(), b"reconnected");
+    assert!(response.as_bytes().ends_with(b"reconnected"));
 
-    let (audit_endpoint, audit_echo) = admit(
+    let (audit_endpoint, _, audit_echo) = admit(
         policy(ServicePackage::AuditV3, EndpointPurpose::AuditExport, 1),
         "Provider/audit",
         "33333333-3333-4333-8333-333333333333",
@@ -421,7 +434,7 @@ async fn admitted_sessions_route_resource_and_diagnostic_calls_and_revoke_lifecy
         .register_component_session(audit_endpoint)
         .await
         .unwrap();
-    let (audit_caller, audit_caller_echo) = admit(
+    let (audit_caller, _, audit_caller_echo) = admit(
         policy(ServicePackage::AuditV3, EndpointPurpose::AuditExport, 1),
         "Host/bob",
         "44444444-4444-4444-8444-444444444444",
@@ -438,11 +451,11 @@ async fn admitted_sessions_route_resource_and_diagnostic_calls_and_revoke_lifecy
         .invoke(
             audit_route.clone(),
             OperationSpec::new(OperationId::parse("audit-export").unwrap(), 10_000).unwrap(),
-            b"diagnostic".to_vec(),
+            ttrpc_frame(3, b"diagnostic"),
         )
         .await
         .unwrap();
-    assert_eq!(response.as_bytes(), b"diagnostic");
+    assert!(response.as_bytes().ends_with(b"diagnostic"));
 
     registrar
         .disconnect_component_session(audit_endpoint)
@@ -497,4 +510,257 @@ async fn admitted_sessions_route_resource_and_diagnostic_calls_and_revoke_lifecy
     ] {
         task.abort();
     }
+}
+
+#[tokio::test]
+async fn deadline_signals_the_correlated_remote_request() {
+    let (_bus, mut registrar) = bus();
+    let (endpoint, remote, echo) = admit(
+        policy(
+            ServicePackage::ResourceV3,
+            EndpointPurpose::ResourceService,
+            1,
+        ),
+        "Provider/system-core",
+        "11111111-1111-4111-8111-111111111111",
+        "Provider/system-core",
+        [SessionVerb::Invoke],
+    )
+    .await;
+    echo.abort();
+    let endpoint = registrar
+        .register_component_session(endpoint)
+        .await
+        .unwrap();
+    let (caller, _, caller_echo) = admit(
+        policy(
+            ServicePackage::ResourceV3,
+            EndpointPurpose::ResourceService,
+            1,
+        ),
+        "Host/alice",
+        "22222222-2222-4222-8222-222222222222",
+        "Provider/system-core",
+        [SessionVerb::Invoke],
+    )
+    .await;
+    let caller = registrar.register_component_session(caller).await.unwrap();
+    let (dispatched, dispatched_wait) = tokio::sync::oneshot::channel();
+    let (cancelled, cancelled_wait) = tokio::sync::oneshot::channel();
+    let remote_task = tokio::spawn(async move {
+        let frame = remote.receive_ttrpc().await.unwrap();
+        let request_id = ttrpc_request_id(remote.generation(), &frame).unwrap();
+        let token = remote
+            .register_inbound_call(request_id.clone())
+            .await
+            .unwrap();
+        remote.mark_inbound_dispatched(request_id).await.unwrap();
+        dispatched.send(()).unwrap();
+        token.cancelled().await;
+        cancelled.send(()).unwrap();
+    });
+    let mut invoke = tokio::spawn(async move {
+        caller
+            .invoke_resource(
+                route(
+                    "d2b.resource.v3",
+                    "ResourceService/Get",
+                    1,
+                    "Provider/system-core",
+                ),
+                OperationSpec::new(OperationId::parse("deadline-cancel").unwrap(), 500).unwrap(),
+                ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
+                ttrpc_frame(41, b"wait"),
+            )
+            .await
+    });
+    tokio::select! {
+        dispatched = dispatched_wait => dispatched.unwrap(),
+        result = &mut invoke => panic!("invoke completed before remote dispatch: {result:?}"),
+        () = tokio::time::sleep(std::time::Duration::from_secs(1)) => {
+            panic!("invoke did not reach the remote request")
+        }
+    }
+    assert!(matches!(
+        invoke.await.unwrap(),
+        Err(d2b_bus::BusError::Operation(
+            d2b_bus::operations::OperationError::DeadlineExceeded
+        ))
+    ));
+    tokio::time::timeout(std::time::Duration::from_secs(1), cancelled_wait)
+        .await
+        .expect("remote cancellation must be signalled")
+        .unwrap();
+    registrar
+        .disconnect_component_session(endpoint)
+        .await
+        .unwrap();
+    caller_echo.abort();
+    remote_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn explicit_cancel_signals_the_correlated_remote_request() {
+    let (_bus, mut registrar) = bus();
+    let (endpoint, remote, echo) = admit(
+        policy(
+            ServicePackage::ResourceV3,
+            EndpointPurpose::ResourceService,
+            1,
+        ),
+        "Provider/system-core",
+        "11111111-1111-4111-8111-111111111111",
+        "Provider/system-core",
+        [SessionVerb::Invoke],
+    )
+    .await;
+    echo.abort();
+    let endpoint = registrar
+        .register_component_session(endpoint)
+        .await
+        .unwrap();
+    let (caller, _, caller_echo) = admit(
+        policy(
+            ServicePackage::ResourceV3,
+            EndpointPurpose::ResourceService,
+            1,
+        ),
+        "Host/alice",
+        "22222222-2222-4222-8222-222222222222",
+        "Provider/system-core",
+        [SessionVerb::Invoke, SessionVerb::Cancel],
+    )
+    .await;
+    let caller = std::sync::Arc::new(registrar.register_component_session(caller).await.unwrap());
+    let (dispatched, dispatched_wait) = tokio::sync::oneshot::channel();
+    let (cancelled, cancelled_wait) = tokio::sync::oneshot::channel();
+    let remote_task = tokio::spawn(async move {
+        let frame = remote.receive_ttrpc().await.unwrap();
+        let request_id = ttrpc_request_id(remote.generation(), &frame).unwrap();
+        let token = remote
+            .register_inbound_call(request_id.clone())
+            .await
+            .unwrap();
+        remote.mark_inbound_dispatched(request_id).await.unwrap();
+        dispatched.send(()).unwrap();
+        token.cancelled().await;
+        cancelled.send(()).unwrap();
+    });
+    let operation_id = OperationId::parse("explicit-cancel").unwrap();
+    let invoking = std::sync::Arc::clone(&caller);
+    let invoked_operation_id = operation_id.clone();
+    let invoke = tokio::spawn(async move {
+        invoking
+            .invoke_resource(
+                route(
+                    "d2b.resource.v3",
+                    "ResourceService/Get",
+                    1,
+                    "Provider/system-core",
+                ),
+                OperationSpec::new(invoked_operation_id, 10_000).unwrap(),
+                ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
+                ttrpc_frame(42, b"wait"),
+            )
+            .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(1), dispatched_wait)
+        .await
+        .expect("invoke must reach the remote request")
+        .unwrap();
+    caller.cancel(&operation_id).await.unwrap();
+    assert!(matches!(
+        invoke.await.unwrap(),
+        Err(d2b_bus::BusError::Cancelled)
+    ));
+    tokio::time::timeout(std::time::Duration::from_secs(1), cancelled_wait)
+        .await
+        .expect("remote cancellation must be signalled")
+        .unwrap();
+    registrar
+        .disconnect_component_session(endpoint)
+        .await
+        .unwrap();
+    caller_echo.abort();
+    remote_task.await.unwrap();
+}
+
+#[tokio::test]
+async fn dropped_invoke_signals_the_correlated_remote_request() {
+    let (_bus, mut registrar) = bus();
+    let (endpoint, remote, echo) = admit(
+        policy(
+            ServicePackage::ResourceV3,
+            EndpointPurpose::ResourceService,
+            1,
+        ),
+        "Provider/system-core",
+        "11111111-1111-4111-8111-111111111111",
+        "Provider/system-core",
+        [SessionVerb::Invoke],
+    )
+    .await;
+    echo.abort();
+    let endpoint = registrar
+        .register_component_session(endpoint)
+        .await
+        .unwrap();
+    let (caller, _, caller_echo) = admit(
+        policy(
+            ServicePackage::ResourceV3,
+            EndpointPurpose::ResourceService,
+            1,
+        ),
+        "Host/alice",
+        "22222222-2222-4222-8222-222222222222",
+        "Provider/system-core",
+        [SessionVerb::Invoke],
+    )
+    .await;
+    let caller = registrar.register_component_session(caller).await.unwrap();
+    let (dispatched, dispatched_wait) = tokio::sync::oneshot::channel();
+    let (cancelled, cancelled_wait) = tokio::sync::oneshot::channel();
+    let remote_task = tokio::spawn(async move {
+        let frame = remote.receive_ttrpc().await.unwrap();
+        let request_id = ttrpc_request_id(remote.generation(), &frame).unwrap();
+        let token = remote
+            .register_inbound_call(request_id.clone())
+            .await
+            .unwrap();
+        remote.mark_inbound_dispatched(request_id).await.unwrap();
+        dispatched.send(()).unwrap();
+        token.cancelled().await;
+        cancelled.send(()).unwrap();
+    });
+    let invoke = tokio::spawn(async move {
+        caller
+            .invoke_resource(
+                route(
+                    "d2b.resource.v3",
+                    "ResourceService/Get",
+                    1,
+                    "Provider/system-core",
+                ),
+                OperationSpec::new(OperationId::parse("dropped-invoke").unwrap(), 10_000).unwrap(),
+                ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
+                ttrpc_frame(43, b"wait"),
+            )
+            .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(1), dispatched_wait)
+        .await
+        .expect("invoke must reach the remote request")
+        .unwrap();
+    invoke.abort();
+    assert!(invoke.await.unwrap_err().is_cancelled());
+    tokio::time::timeout(std::time::Duration::from_secs(1), cancelled_wait)
+        .await
+        .expect("dropping an invoke must signal remote cancellation")
+        .unwrap();
+    registrar
+        .disconnect_component_session(endpoint)
+        .await
+        .unwrap();
+    caller_echo.abort();
+    remote_task.await.unwrap();
 }

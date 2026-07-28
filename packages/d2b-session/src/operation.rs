@@ -1,7 +1,7 @@
 use core::fmt;
 
 use d2b_contracts::v3::ServiceName;
-use d2b_resource_api::authz::SessionVerb;
+use d2b_resource_api::authz::{ApiMethod, SessionVerb};
 
 use crate::{Result, SessionError, contract::SessionErrorCode};
 
@@ -10,6 +10,134 @@ use crate::{Result, SessionError, contract::SessionErrorCode};
 pub enum OperationKind {
     Method,
     Stream,
+}
+
+/// One generated service/member/kind binding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OperationCatalogEntry {
+    pub service: &'static str,
+    pub member: &'static str,
+    pub kind: OperationKind,
+    pub resource_method: Option<ApiMethod>,
+    pub verb: SessionVerb,
+}
+
+pub const GENERATED_OPERATION_CATALOG: &[OperationCatalogEntry] = &[
+    resource("ResourceService/Get", OperationKind::Method, ApiMethod::Get),
+    resource(
+        "ResourceService/List",
+        OperationKind::Method,
+        ApiMethod::List,
+    ),
+    resource(
+        "ResourceService/Watch",
+        OperationKind::Method,
+        ApiMethod::Watch,
+    ),
+    resource(
+        "ResourceService/Watch",
+        OperationKind::Stream,
+        ApiMethod::Watch,
+    ),
+    resource(
+        "ResourceService/Create",
+        OperationKind::Method,
+        ApiMethod::Create,
+    ),
+    resource(
+        "ResourceService/UpdateSpec",
+        OperationKind::Method,
+        ApiMethod::UpdateSpec,
+    ),
+    resource(
+        "ResourceService/UpdateStatus",
+        OperationKind::Method,
+        ApiMethod::UpdateStatus,
+    ),
+    resource(
+        "ResourceService/UpdateMetadata",
+        OperationKind::Method,
+        ApiMethod::UpdateMetadata,
+    ),
+    resource(
+        "ResourceService/UpdateFinalizers",
+        OperationKind::Method,
+        ApiMethod::UpdateFinalizers,
+    ),
+    resource(
+        "ResourceService/Delete",
+        OperationKind::Method,
+        ApiMethod::Delete,
+    ),
+    resource(
+        "ResourceService/CommitBatch",
+        OperationKind::Method,
+        ApiMethod::CommitBatch,
+    ),
+    resource(
+        "ResourceService/ResolveRef",
+        OperationKind::Method,
+        ApiMethod::ResolveRef,
+    ),
+    resource(
+        "ResourceService/InspectSchema",
+        OperationKind::Method,
+        ApiMethod::InspectSchema,
+    ),
+    resource(
+        "ResourceService/Upgrade",
+        OperationKind::Method,
+        ApiMethod::Upgrade,
+    ),
+    OperationCatalogEntry {
+        service: "d2b.audit.v3",
+        member: "AuditService/Export",
+        kind: OperationKind::Method,
+        resource_method: None,
+        verb: SessionVerb::AuditExport,
+    },
+    OperationCatalogEntry {
+        service: "d2b.support.v3",
+        member: "SupportService/GenerateBundle",
+        kind: OperationKind::Method,
+        resource_method: None,
+        verb: SessionVerb::SupportBundle,
+    },
+];
+
+const fn resource(
+    member: &'static str,
+    kind: OperationKind,
+    method: ApiMethod,
+) -> OperationCatalogEntry {
+    OperationCatalogEntry {
+        service: "d2b.resource.v3",
+        member,
+        kind,
+        resource_method: Some(method),
+        verb: if matches!(kind, OperationKind::Stream) {
+            SessionVerb::OpenStream
+        } else {
+            SessionVerb::Invoke
+        },
+    }
+}
+
+pub fn operation_catalog_entry(
+    service: &str,
+    member: &str,
+    kind: OperationKind,
+) -> Option<&'static OperationCatalogEntry> {
+    GENERATED_OPERATION_CATALOG
+        .iter()
+        .find(|entry| entry.service == service && entry.member == member && entry.kind == kind)
+}
+
+pub fn resource_operation(method: ApiMethod) -> &'static OperationCatalogEntry {
+    GENERATED_OPERATION_CATALOG
+        .iter()
+        .find(|entry| entry.resource_method == Some(method) && entry.kind == OperationKind::Method)
+        .expect("every ApiMethod has one unary ResourceService member")
 }
 
 /// Canonically spelled generated service member.
@@ -80,14 +208,17 @@ pub struct SessionOperation {
 impl SessionOperation {
     /// Bind a service to a canonical generated member.
     pub fn new(service: ServiceName, member: OperationMember) -> Result<Self> {
-        let diagnostic_valid = match service.as_str() {
-            "d2b.audit.v3" => member.is_method() && member.as_str() == "AuditService/Export",
-            "d2b.support.v3" => {
-                member.is_method() && member.as_str() == "SupportService/GenerateBundle"
-            }
-            _ => true,
+        let known_service = GENERATED_OPERATION_CATALOG
+            .iter()
+            .any(|entry| entry.service == service.as_str());
+        let kind = if member.is_method() {
+            OperationKind::Method
+        } else {
+            OperationKind::Stream
         };
-        if !diagnostic_valid {
+        if known_service
+            && operation_catalog_entry(service.as_str(), member.as_str(), kind).is_none()
+        {
             return Err(SessionError::new(SessionErrorCode::PolicyDenied));
         }
         Ok(Self { service, member })
@@ -120,11 +251,14 @@ impl SessionOperation {
 
     /// Return the closed diagnostic verb, when this is a diagnostic operation.
     pub fn diagnostic_verb(&self) -> Option<SessionVerb> {
-        match self.service.as_str() {
-            "d2b.audit.v3" => Some(SessionVerb::AuditExport),
-            "d2b.support.v3" => Some(SessionVerb::SupportBundle),
-            _ => None,
-        }
+        let kind = if self.member.is_method() {
+            OperationKind::Method
+        } else {
+            OperationKind::Stream
+        };
+        operation_catalog_entry(self.service.as_str(), self.member.as_str(), kind)
+            .map(|entry| entry.verb)
+            .filter(|verb| matches!(verb, SessionVerb::AuditExport | SessionVerb::SupportBundle))
     }
 }
 
