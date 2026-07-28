@@ -31,6 +31,35 @@ pub enum PeerIdentityPolicy {
     InheritedSocketpair { expected_peer: PeerCredentials },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnixTransportEvent {
+    Receive,
+    Send,
+    Close,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnixTransportFailure {
+    Disconnected,
+    Truncated,
+    Limit,
+    Attachment,
+    Identity,
+    Protocol,
+    Io,
+}
+
+pub trait UnixTransportObserver: Send + Sync {
+    fn record(&self, event: UnixTransportEvent, reason: UnixTransportFailure);
+}
+
+#[derive(Debug, Default)]
+pub struct NoopUnixTransportObserver;
+
+impl UnixTransportObserver for NoopUnixTransportObserver {
+    fn record(&self, _event: UnixTransportEvent, _reason: UnixTransportFailure) {}
+}
+
 impl fmt::Debug for PeerIdentityPolicy {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("PeerIdentityPolicy(REDACTED)")
@@ -284,6 +313,7 @@ pub struct UnixSeqpacketTransport {
     peer_identity: ActivePeerIdentityPolicy,
     received: VecDeque<ReceivedPacket>,
     closed: bool,
+    observer: Arc<dyn UnixTransportObserver>,
 }
 
 impl fmt::Debug for UnixSeqpacketTransport {
@@ -348,7 +378,13 @@ impl UnixSeqpacketTransport {
             peer_identity,
             received: VecDeque::new(),
             closed: false,
+            observer: Arc::new(NoopUnixTransportObserver),
         })
+    }
+
+    pub fn with_observer(mut self, observer: Arc<dyn UnixTransportObserver>) -> Self {
+        self.observer = observer;
+        self
     }
 
     async fn receive_raw(
@@ -518,12 +554,19 @@ impl OwnedTransport for UnixSeqpacketTransport {
     }
 
     async fn receive(&mut self, protected_limit: usize) -> Result<TransportPacket, TransportError> {
-        let packet = self
-            .receive_raw(protected_limit)
-            .await
-            .map_err(map_transport_error)?;
-        self.received_transport_packet(packet)
-            .map_err(map_transport_error)
+        let packet = match self.receive_raw(protected_limit).await {
+            Ok(packet) => packet,
+            Err(error) => {
+                self.observer
+                    .record(UnixTransportEvent::Receive, unix_failure_reason(error));
+                return Err(map_transport_error(error));
+            }
+        };
+        self.received_transport_packet(packet).map_err(|error| {
+            self.observer
+                .record(UnixTransportEvent::Receive, unix_failure_reason(error));
+            map_transport_error(error)
+        })
     }
 
     async fn send(&mut self, packet: TransportPacket) -> Result<(), TransportError> {
@@ -531,14 +574,20 @@ impl OwnedTransport for UnixSeqpacketTransport {
             return Err(TransportError::Disconnected);
         }
         let (bytes, attachments) = packet.into_parts();
-        self.send_packet(bytes, attachments)
-            .await
-            .map_err(map_transport_error)
+        self.send_packet(bytes, attachments).await.map_err(|error| {
+            self.observer
+                .record(UnixTransportEvent::Send, unix_failure_reason(error));
+            map_transport_error(error)
+        })
     }
 
     async fn close(&mut self) -> Result<(), TransportError> {
         if !self.closed {
-            self.socket.close().map_err(map_transport_error)?;
+            self.socket.close().map_err(|error| {
+                self.observer
+                    .record(UnixTransportEvent::Close, unix_failure_reason(error));
+                map_transport_error(error)
+            })?;
             self.closed = true;
         }
         self.received.clear();
@@ -550,7 +599,11 @@ pub struct UnixStreamTransport {
     socket: StreamSocket,
     locality: Locality,
     limits: LimitProfile,
+    receive_header: Vec<u8>,
+    receive_body: Vec<u8>,
+    receive_declared: Option<usize>,
     closed: bool,
+    observer: Arc<dyn UnixTransportObserver>,
 }
 
 impl fmt::Debug for UnixStreamTransport {
@@ -573,8 +626,17 @@ impl UnixStreamTransport {
             socket,
             locality,
             limits,
+            receive_header: Vec::with_capacity(4),
+            receive_body: Vec::new(),
+            receive_declared: None,
             closed: false,
+            observer: Arc::new(NoopUnixTransportObserver),
         }
+    }
+
+    pub fn with_observer(mut self, observer: Arc<dyn UnixTransportObserver>) -> Self {
+        self.observer = observer;
+        self
     }
 
     fn configured_wire_limit(&self) -> Result<usize, TransportError> {
@@ -585,7 +647,7 @@ impl UnixStreamTransport {
     }
 
     async fn read_exact_record_bytes(
-        &self,
+        socket: &StreamSocket,
         output: &mut Vec<u8>,
         target_len: usize,
     ) -> Result<(), TransportError> {
@@ -593,8 +655,7 @@ impl UnixStreamTransport {
             let remaining = target_len
                 .checked_sub(output.len())
                 .ok_or(TransportError::LimitExceeded)?;
-            let received = self
-                .socket
+            let received = socket
                 .read_available(output, remaining, 1)
                 .await
                 .map_err(map_transport_error)?;
@@ -607,6 +668,48 @@ impl UnixStreamTransport {
             }
         }
         Ok(())
+    }
+
+    async fn receive_packet(
+        &mut self,
+        protected_limit: usize,
+    ) -> Result<TransportPacket, TransportError> {
+        if self.closed {
+            return Err(TransportError::Disconnected);
+        }
+        let configured_wire_limit = self.configured_wire_limit()?;
+        if protected_limit == 0 || protected_limit > configured_wire_limit {
+            return Err(TransportError::LimitExceeded);
+        }
+        Self::read_exact_record_bytes(&self.socket, &mut self.receive_header, 4).await?;
+        let declared = match self.receive_declared {
+            Some(declared) => declared,
+            None => {
+                let declared = usize::try_from(u32::from_be_bytes([
+                    self.receive_header[0],
+                    self.receive_header[1],
+                    self.receive_header[2],
+                    self.receive_header[3],
+                ]))
+                .map_err(|_| TransportError::LimitExceeded)?;
+                self.receive_declared = Some(declared);
+                declared
+            }
+        };
+        if declared == 0 || declared > protected_limit || declared > configured_wire_limit {
+            self.closed = true;
+            return Err(TransportError::LimitExceeded);
+        }
+        if self.receive_body.capacity() < declared {
+            self.receive_body
+                .try_reserve_exact(declared - self.receive_body.len())
+                .map_err(|_| TransportError::LimitExceeded)?;
+        }
+        Self::read_exact_record_bytes(&self.socket, &mut self.receive_body, declared).await?;
+        let bytes = std::mem::take(&mut self.receive_body);
+        self.receive_header.clear();
+        self.receive_declared = None;
+        Ok(TransportPacket::new(bytes))
     }
 }
 
@@ -622,28 +725,12 @@ impl OwnedTransport for UnixStreamTransport {
     }
 
     async fn receive(&mut self, protected_limit: usize) -> Result<TransportPacket, TransportError> {
-        if self.closed {
-            return Err(TransportError::Disconnected);
+        let result = self.receive_packet(protected_limit).await;
+        if let Err(error) = &result {
+            self.observer
+                .record(UnixTransportEvent::Receive, transport_failure_reason(error));
         }
-        let configured_wire_limit = self.configured_wire_limit()?;
-        if protected_limit == 0 || protected_limit > configured_wire_limit {
-            return Err(TransportError::LimitExceeded);
-        }
-        let mut header = Vec::with_capacity(4);
-        self.read_exact_record_bytes(&mut header, 4).await?;
-        let declared = usize::try_from(u32::from_be_bytes([
-            header[0], header[1], header[2], header[3],
-        ]))
-        .map_err(|_| TransportError::LimitExceeded)?;
-        if declared == 0 || declared > protected_limit || declared > configured_wire_limit {
-            return Err(TransportError::LimitExceeded);
-        }
-        let mut bytes = Vec::new();
-        bytes
-            .try_reserve_exact(declared)
-            .map_err(|_| TransportError::LimitExceeded)?;
-        self.read_exact_record_bytes(&mut bytes, declared).await?;
-        Ok(TransportPacket::new(bytes))
+        result
     }
 
     async fn send(&mut self, packet: TransportPacket) -> Result<(), TransportError> {
@@ -659,19 +746,33 @@ impl OwnedTransport for UnixStreamTransport {
             return Err(TransportError::LimitExceeded);
         }
         let declared = u32::try_from(bytes.len()).map_err(|_| TransportError::LimitExceeded)?;
-        self.socket
-            .write_all(&declared.to_be_bytes())
-            .await
-            .map_err(map_transport_error)?;
-        self.socket
-            .write_all(&bytes)
-            .await
-            .map_err(map_transport_error)
+        let result = async {
+            self.socket
+                .write_all(&declared.to_be_bytes())
+                .await
+                .map_err(map_transport_error)?;
+            self.socket
+                .write_all(&bytes)
+                .await
+                .map_err(map_transport_error)
+        }
+        .await;
+        if let Err(error) = &result {
+            self.observer
+                .record(UnixTransportEvent::Send, transport_failure_reason(error));
+            self.closed = true;
+            let _ = self.socket.close();
+        }
+        result
     }
 
     async fn close(&mut self) -> Result<(), TransportError> {
         if !self.closed {
-            self.socket.close().map_err(map_transport_error)?;
+            self.socket.close().map_err(|error| {
+                self.observer
+                    .record(UnixTransportEvent::Close, unix_failure_reason(error));
+                map_transport_error(error)
+            })?;
             self.closed = true;
         }
         Ok(())
@@ -770,6 +871,7 @@ fn map_transport_error(error: UnixSessionError) -> TransportError {
         UnixSessionError::MessageTruncated | UnixSessionError::ControlTruncated => {
             TransportError::Truncated
         }
+
         UnixSessionError::PayloadLimit
         | UnixSessionError::AncillaryCapacity
         | UnixSessionError::CreditExceeded => TransportError::LimitExceeded,
@@ -781,6 +883,9 @@ fn map_transport_error(error: UnixSessionError) -> TransportError {
         | UnixSessionError::MissingCloexec
         | UnixSessionError::PidfdEvidenceUnavailable
         | UnixSessionError::PidfdIdentityMismatch => TransportError::InvalidAttachment,
+        UnixSessionError::Io {
+            errno: Some(libc::EPIPE | libc::ECONNRESET | libc::ENOTCONN),
+        } => TransportError::Disconnected,
         UnixSessionError::Io { .. }
         | UnixSessionError::InvalidSocket
         | UnixSessionError::BlockingSocket
@@ -791,13 +896,54 @@ fn map_transport_error(error: UnixSessionError) -> TransportError {
     }
 }
 
+fn unix_failure_reason(error: UnixSessionError) -> UnixTransportFailure {
+    match error {
+        UnixSessionError::Closed => UnixTransportFailure::Disconnected,
+        UnixSessionError::MessageTruncated | UnixSessionError::ControlTruncated => {
+            UnixTransportFailure::Truncated
+        }
+        UnixSessionError::PayloadLimit
+        | UnixSessionError::AncillaryCapacity
+        | UnixSessionError::CreditExceeded
+        | UnixSessionError::FairnessBudget => UnixTransportFailure::Limit,
+        UnixSessionError::DescriptorMismatch
+        | UnixSessionError::DuplicateObject
+        | UnixSessionError::MissingCloexec
+        | UnixSessionError::PidfdEvidenceUnavailable
+        | UnixSessionError::PidfdIdentityMismatch => UnixTransportFailure::Attachment,
+        UnixSessionError::CredentialMismatch
+        | UnixSessionError::PasscredNotPrearmed
+        | UnixSessionError::ControlMismatch => UnixTransportFailure::Identity,
+        UnixSessionError::UnknownControl
+        | UnixSessionError::InvalidSocket
+        | UnixSessionError::BlockingSocket
+        | UnixSessionError::EmptyPacket
+        | UnixSessionError::PacketNotAtomic => UnixTransportFailure::Protocol,
+        UnixSessionError::Io {
+            errno: Some(libc::EPIPE | libc::ECONNRESET | libc::ENOTCONN),
+        } => UnixTransportFailure::Disconnected,
+        UnixSessionError::Io { .. } => UnixTransportFailure::Io,
+    }
+}
+
+fn transport_failure_reason(error: &TransportError) -> UnixTransportFailure {
+    match error {
+        TransportError::Disconnected => UnixTransportFailure::Disconnected,
+        TransportError::Truncated => UnixTransportFailure::Truncated,
+        TransportError::LimitExceeded | TransportError::WouldBlock => UnixTransportFailure::Limit,
+        TransportError::InvalidAttachment => UnixTransportFailure::Attachment,
+        TransportError::Other => UnixTransportFailure::Io,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use rustix::{
-        net::UCred,
+        net::{AddressFamily, SocketFlags, SocketType, UCred, socketpair},
         process::{getgid, getpid, getppid, getuid},
     };
+    use std::time::Duration;
 
     fn current_credentials() -> PeerCredentials {
         PeerCredentials::from_ucred(UCred {
@@ -805,6 +951,82 @@ mod tests {
             uid: getuid(),
             gid: getgid(),
         })
+    }
+
+    #[tokio::test]
+    async fn unix_stream_cancelled_receive_retains_partial_framing() {
+        let (left, right) = socketpair(
+            AddressFamily::UNIX,
+            SocketType::STREAM,
+            SocketFlags::NONBLOCK | SocketFlags::CLOEXEC,
+            None,
+        )
+        .unwrap();
+        let writer = StreamSocket::from_owned(left).unwrap();
+        let mut receiver = UnixStreamTransport::new(
+            StreamSocket::from_owned(right).unwrap(),
+            Locality::HostLocal,
+            LimitProfile::local_default(),
+        );
+        writer.write_all(&[0, 0]).await.unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(5), receiver.receive(64))
+                .await
+                .is_err()
+        );
+        writer.write_all(&[0, 4, b'a', b'b']).await.unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(5), receiver.receive(64))
+                .await
+                .is_err()
+        );
+        writer.write_all(b"cd").await.unwrap();
+        assert_eq!(receiver.receive(64).await.unwrap().as_bytes(), b"abcd");
+    }
+
+    #[test]
+    fn disconnect_errnos_have_a_closed_transport_class() {
+        for errno in [libc::EPIPE, libc::ECONNRESET, libc::ENOTCONN] {
+            assert_eq!(
+                map_transport_error(UnixSessionError::Io { errno: Some(errno) }),
+                TransportError::Disconnected
+            );
+        }
+    }
+
+    #[derive(Default)]
+    struct CaptureObserver(Mutex<Vec<(UnixTransportEvent, UnixTransportFailure)>>);
+
+    impl UnixTransportObserver for CaptureObserver {
+        fn record(&self, event: UnixTransportEvent, reason: UnixTransportFailure) {
+            self.0.lock().unwrap().push((event, reason));
+        }
+    }
+
+    #[tokio::test]
+    async fn transport_observer_records_closed_labels_before_returning_failure() {
+        let (left, _right) = socketpair(
+            AddressFamily::UNIX,
+            SocketType::STREAM,
+            SocketFlags::NONBLOCK | SocketFlags::CLOEXEC,
+            None,
+        )
+        .unwrap();
+        let observer = Arc::new(CaptureObserver::default());
+        let mut transport = UnixStreamTransport::new(
+            StreamSocket::from_owned(left).unwrap(),
+            Locality::HostLocal,
+            LimitProfile::local_default(),
+        )
+        .with_observer(observer.clone());
+        assert_eq!(
+            transport.receive(0).await.unwrap_err(),
+            TransportError::LimitExceeded
+        );
+        assert_eq!(
+            observer.0.lock().unwrap().as_slice(),
+            &[(UnixTransportEvent::Receive, UnixTransportFailure::Limit)]
+        );
     }
 
     #[test]

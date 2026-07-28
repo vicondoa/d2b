@@ -1,4 +1,3 @@
-#![deny(unsafe_code)]
 //! Audited Unix transport substrate for ComponentSession.
 //!
 //! The default feature set exercises both Linux host sockets and native vsock.
@@ -29,8 +28,9 @@ mod vsock;
 
 #[cfg(feature = "host-socket")]
 pub use adapter::{
-    DescriptorPolicyResolver, OwnedUnixAttachment, PathnamePeerVerifier, PeerIdentityPolicy,
-    UnixAttachmentPayload, UnixSeqpacketTransport, UnixStreamTransport,
+    DescriptorPolicyResolver, NoopUnixTransportObserver, OwnedUnixAttachment, PathnamePeerVerifier,
+    PeerIdentityPolicy, UnixAttachmentPayload, UnixSeqpacketTransport, UnixStreamTransport,
+    UnixTransportEvent, UnixTransportFailure, UnixTransportObserver,
 };
 #[cfg(feature = "host-socket")]
 pub use credit::{

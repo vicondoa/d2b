@@ -2,14 +2,17 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 
 use async_trait::async_trait;
 use d2b_contracts::v3::{
     AuthenticatedSubjectContext, ControllerGeneration, EvidenceClass, Locality,
-    ReconnectGeneration, ResourceGeneration, ResourceRef, SchemaFingerprint, ServiceName, ZoneId,
+    ReconnectGeneration, ResourceGeneration, ResourceRef, ResourceUid, SchemaFingerprint,
+    ServiceName, ZoneId,
 };
+use d2b_resource_api::authz::SessionVerb;
+use d2b_session::{AdmittedSessionRouteBinding, OperationMember};
 
 use crate::{
     operations::SessionId,
@@ -19,25 +22,29 @@ use crate::{
 /// A method or named-stream member in an exact route.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum RouteMember {
-    Method(String),
-    Stream(String),
+    Method(OperationMember),
+    Stream(OperationMember),
 }
 
 impl RouteMember {
     /// Construct an exact method member.
     pub fn method(value: impl Into<String>) -> Result<Self, RegistryError> {
-        validate_member(value.into()).map(Self::Method)
+        OperationMember::method(value)
+            .map(Self::Method)
+            .map_err(|_| RegistryError::InvalidMember)
     }
 
     /// Construct an exact named-stream member.
     pub fn stream(value: impl Into<String>) -> Result<Self, RegistryError> {
-        validate_member(value.into()).map(Self::Stream)
+        OperationMember::stream(value)
+            .map(Self::Stream)
+            .map_err(|_| RegistryError::InvalidMember)
     }
 
     /// Borrow the exact generated member name.
     pub fn as_str(&self) -> &str {
         match self {
-            Self::Method(value) | Self::Stream(value) => value,
+            Self::Method(value) | Self::Stream(value) => value.as_str(),
         }
     }
 
@@ -50,22 +57,6 @@ impl RouteMember {
     pub const fn is_stream(&self) -> bool {
         matches!(self, Self::Stream(_))
     }
-}
-
-fn validate_member(value: String) -> Result<String, RegistryError> {
-    if value.is_empty()
-        || value.len() > 128
-        || value.contains('*')
-        || value.contains('?')
-        || value.starts_with('/')
-        || value.ends_with('/')
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'.' | b'-' | b'_'))
-    {
-        return Err(RegistryError::InvalidMember);
-    }
-    Ok(value)
 }
 
 impl core::fmt::Debug for RouteMember {
@@ -276,6 +267,17 @@ impl core::fmt::Debug for BusResponse {
 /// An exact generated service endpoint.
 #[async_trait]
 pub trait BusEndpoint: Send + Sync + 'static {
+    /// Revalidate the source session's exact operation before dispatch.
+    async fn authorize(
+        &self,
+        _route: &RouteKey,
+        _verb: SessionVerb,
+        _target: Option<&ResourceRef>,
+        _now_tick: u64,
+    ) -> Result<(), EndpointError> {
+        Err(EndpointError::Unavailable)
+    }
+
     /// Deliver one already-authorized method invocation.
     async fn invoke(&self, request: DeliveredInvocation) -> Result<BusResponse, EndpointError>;
 
@@ -287,28 +289,44 @@ pub trait BusEndpoint: Send + Sync + 'static {
 }
 
 /// Registration input consumed by the Zone's single registration authority.
-pub struct SessionRegistration {
-    context: AuthenticatedSubjectContext,
+pub(crate) struct SessionRegistration {
+    identity: SessionIdentity,
+    context: Option<AuthenticatedSubjectContext>,
     routes: Vec<RouteKey>,
     endpoint: Arc<dyn BusEndpoint>,
 }
 
 impl SessionRegistration {
-    /// Bind authenticated session claims, exact routes, and one endpoint.
-    pub fn new(
+    #[cfg(test)]
+    pub(crate) fn new(
         context: AuthenticatedSubjectContext,
         routes: Vec<RouteKey>,
         endpoint: Arc<dyn BusEndpoint>,
     ) -> Self {
         Self {
-            context,
+            identity: SessionIdentity::from_context(&context),
+            context: Some(context),
             routes,
             endpoint,
         }
     }
 
-    pub(crate) const fn context(&self) -> &AuthenticatedSubjectContext {
-        &self.context
+    pub(crate) fn admitted(
+        binding: AdmittedSessionRouteBinding,
+        routes: Vec<RouteKey>,
+        endpoint: Arc<dyn BusEndpoint>,
+    ) -> Self {
+        Self {
+            identity: SessionIdentity::from_admitted(&binding),
+            context: None,
+            routes,
+            endpoint,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn context(&self) -> Option<&AuthenticatedSubjectContext> {
+        self.context.as_ref()
     }
 }
 
@@ -322,27 +340,159 @@ impl core::fmt::Debug for SessionRegistration {
 }
 
 struct RegisteredSession {
-    context: AuthenticatedSubjectContext,
+    identity: SessionIdentity,
+    context: Option<AuthenticatedSubjectContext>,
     routes: BTreeSet<RouteKey>,
     endpoint: Arc<dyn BusEndpoint>,
+    route_lease: Arc<RouteLeaseState>,
 }
 
-pub(crate) struct ResolvedEndpoint {
-    pub(crate) session: SessionId,
+#[derive(Clone, PartialEq, Eq)]
+struct SessionIdentity {
+    zone: ZoneId,
+    subject_ref: ResourceRef,
+    subject_uid: ResourceUid,
+    evidence_class: EvidenceClass,
+    locality: Locality,
+    service: ServiceName,
+    schema: SchemaFingerprint,
+    reconnect_generation: ReconnectGeneration,
+    provider_ref: Option<ResourceRef>,
+    provider_generation: Option<ResourceGeneration>,
+    controller_generation: Option<ControllerGeneration>,
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct PrincipalId(ResourceUid);
+
+impl PrincipalId {
+    #[cfg(test)]
+    pub(crate) fn test(uid: ResourceUid) -> Self {
+        Self(uid)
+    }
+}
+
+impl SessionIdentity {
+    #[cfg(test)]
+    fn from_context(context: &AuthenticatedSubjectContext) -> Self {
+        Self {
+            zone: ZoneId::parse(context.zone_ref().name().as_str())
+                .expect("authenticated Zone reference has a valid name"),
+            subject_ref: context.subject_ref().clone(),
+            subject_uid: context.subject_uid().clone(),
+            evidence_class: context.evidence_class(),
+            locality: context.transport_binding().locality(),
+            service: context.service().clone(),
+            schema: context.schema_fingerprint().clone(),
+            reconnect_generation: context.reconnect_generation(),
+            provider_ref: context.provider_ref().cloned(),
+            provider_generation: context.provider_generation(),
+            controller_generation: context.controller_generation(),
+        }
+    }
+
+    fn from_admitted(binding: &AdmittedSessionRouteBinding) -> Self {
+        Self {
+            zone: binding.zone().clone(),
+            subject_ref: binding.subject_ref().clone(),
+            subject_uid: binding.subject_uid().clone(),
+            evidence_class: binding.evidence_class(),
+            locality: binding.locality(),
+            service: binding.service().clone(),
+            schema: binding.schema().clone(),
+            reconnect_generation: binding.reconnect_generation(),
+            provider_ref: binding.provider_ref().cloned(),
+            provider_generation: binding.provider_generation(),
+            controller_generation: binding.controller_generation(),
+        }
+    }
+}
+
+struct RouteLeaseState {
+    revoked: Mutex<bool>,
+}
+
+pub(crate) struct RevocableRouteLease {
+    destination: SessionId,
+    destination_principal: PrincipalId,
+    generation: ReconnectGeneration,
+    endpoint: Arc<dyn BusEndpoint>,
+    state: Arc<RouteLeaseState>,
+}
+
+impl RevocableRouteLease {
+    #[cfg(test)]
+    pub(crate) fn test(
+        destination: SessionId,
+        generation: ReconnectGeneration,
+        endpoint: Arc<dyn BusEndpoint>,
+    ) -> Self {
+        Self {
+            destination,
+            destination_principal: PrincipalId(
+                ResourceUid::parse("00000000-0000-4000-8000-000000000001").unwrap(),
+            ),
+            generation,
+            endpoint,
+            state: Arc::new(RouteLeaseState {
+                revoked: Mutex::new(false),
+            }),
+        }
+    }
+
+    pub(crate) const fn destination(&self) -> SessionId {
+        self.destination
+    }
+
+    pub(crate) fn destination_principal(&self) -> PrincipalId {
+        self.destination_principal.clone()
+    }
+
+    pub(crate) const fn generation(&self) -> ReconnectGeneration {
+        self.generation
+    }
+
+    pub(crate) fn endpoint(&self) -> Arc<dyn BusEndpoint> {
+        Arc::clone(&self.endpoint)
+    }
+
+    pub(crate) fn with_active<T>(&self, action: impl FnOnce() -> T) -> Result<T, RegistryError> {
+        let revoked = self
+            .state
+            .revoked
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if *revoked {
+            return Err(RegistryError::RouteRevoked);
+        }
+        Ok(action())
+    }
+}
+
+pub(crate) struct ResolvedSource {
+    pub(crate) context: Option<AuthenticatedSubjectContext>,
     pub(crate) endpoint: Arc<dyn BusEndpoint>,
 }
 
 pub(crate) struct Registry {
     zone: ZoneId,
+    max_routes_per_session: usize,
+    max_total_routes: usize,
     next_session: u64,
     sessions: BTreeMap<SessionId, RegisteredSession>,
     routes: BTreeMap<RouteKey, SessionId>,
 }
 
 impl Registry {
-    pub(crate) fn new(zone: ZoneId) -> Self {
+    pub(crate) fn new(
+        zone: ZoneId,
+        max_routes_per_session: usize,
+        max_total_routes: usize,
+    ) -> Self {
         Self {
             zone,
+            max_routes_per_session,
+            max_total_routes,
             next_session: 1,
             sessions: BTreeMap::new(),
             routes: BTreeMap::new(),
@@ -372,13 +522,13 @@ impl Registry {
             .sessions
             .get(&previous)
             .ok_or(RegistryError::SessionNotFound)?;
-        if prior.context.subject_ref() != registration.context.subject_ref()
-            || prior.context.subject_uid() != registration.context.subject_uid()
-            || prior.context.zone_ref() != registration.context.zone_ref()
-            || registration.context.reconnect_generation().get()
+        if prior.identity.subject_ref != registration.identity.subject_ref
+            || prior.identity.subject_uid != registration.identity.subject_uid
+            || prior.identity.zone != registration.identity.zone
+            || registration.identity.reconnect_generation.get()
                 != prior
-                    .context
-                    .reconnect_generation()
+                    .identity
+                    .reconnect_generation
                     .get()
                     .checked_add(1)
                     .ok_or(RegistryError::ReconnectGeneration)?
@@ -403,12 +553,25 @@ impl Registry {
         registration: &SessionRegistration,
         replacing: Option<SessionId>,
     ) -> Result<(), RegistryError> {
-        ensure_context_zone(&registration.context, &self.zone)?;
-        ensure_transport_evidence(&registration.context)?;
+        let replacing_routes = replacing
+            .and_then(|session| self.sessions.get(&session))
+            .map_or(0, |registered| registered.routes.len());
+        if registration.routes.len() > self.max_routes_per_session
+            || self
+                .routes
+                .len()
+                .saturating_sub(replacing_routes)
+                .saturating_add(registration.routes.len())
+                > self.max_total_routes
+        {
+            return Err(RegistryError::RouteCapacity);
+        }
+        ensure_context_zone(&registration.identity, &self.zone)?;
+        ensure_transport_evidence(&registration.identity)?;
         if self.sessions.iter().any(|(session, registered)| {
             Some(*session) != replacing
-                && registered.context.subject_ref() == registration.context.subject_ref()
-                && registered.context.subject_uid() == registration.context.subject_uid()
+                && registered.identity.subject_ref == registration.identity.subject_ref
+                && registered.identity.subject_uid == registration.identity.subject_uid
         }) {
             return Err(RegistryError::DuplicateSessionIdentity);
         }
@@ -418,7 +581,7 @@ impl Registry {
             return Err(RegistryError::DuplicateRoute);
         }
         for route in &registration.routes {
-            validate_route_binding(&self.zone, &registration.context, route)?;
+            validate_route_binding(&self.zone, &registration.identity, route)?;
             if self
                 .routes
                 .get(route)
@@ -438,9 +601,13 @@ impl Registry {
         self.sessions.insert(
             session,
             RegisteredSession {
+                identity: registration.identity,
                 context: registration.context,
                 routes,
                 endpoint: registration.endpoint,
+                route_lease: Arc::new(RouteLeaseState {
+                    revoked: Mutex::new(false),
+                }),
             },
         );
     }
@@ -449,58 +616,68 @@ impl Registry {
         let Some(registered) = self.sessions.remove(&session) else {
             return false;
         };
+        *registered
+            .route_lease
+            .revoked
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = true;
         for route in registered.routes {
             self.routes.remove(&route);
         }
         true
     }
 
-    pub(crate) fn with_context<T>(
-        &self,
-        session: SessionId,
-        apply: impl FnOnce(&AuthenticatedSubjectContext) -> T,
-    ) -> Result<T, RegistryError> {
+    pub(crate) fn source(&self, session: SessionId) -> Result<ResolvedSource, RegistryError> {
+        let registered = self
+            .sessions
+            .get(&session)
+            .ok_or(RegistryError::SessionNotFound)?;
+        Ok(ResolvedSource {
+            context: registered.context.clone(),
+            endpoint: Arc::clone(&registered.endpoint),
+        })
+    }
+
+    pub(crate) fn principal(&self, session: SessionId) -> Result<PrincipalId, RegistryError> {
         self.sessions
             .get(&session)
-            .map(|registered| apply(&registered.context))
+            .map(|registered| PrincipalId(registered.identity.subject_uid.clone()))
             .ok_or(RegistryError::SessionNotFound)
     }
 
-    pub(crate) fn resolve(&self, route: &RouteKey) -> Result<ResolvedEndpoint, RegistryError> {
+    pub(crate) fn resolve(&self, route: &RouteKey) -> Result<RevocableRouteLease, RegistryError> {
         if route.zone != self.zone {
             return Err(RegistryError::ZoneMismatch);
         }
         let session = *self.routes.get(route).ok_or(RegistryError::RouteNotFound)?;
-        let endpoint = Arc::clone(
-            &self
-                .sessions
-                .get(&session)
-                .ok_or(RegistryError::InternalInvariant)?
-                .endpoint,
-        );
-        Ok(ResolvedEndpoint { session, endpoint })
+        let registered = self
+            .sessions
+            .get(&session)
+            .ok_or(RegistryError::InternalInvariant)?;
+        Ok(RevocableRouteLease {
+            destination: session,
+            destination_principal: PrincipalId(registered.identity.subject_uid.clone()),
+            generation: route.generations().session(),
+            endpoint: Arc::clone(&registered.endpoint),
+            state: Arc::clone(&registered.route_lease),
+        })
     }
 }
 
-fn ensure_context_zone(
-    context: &AuthenticatedSubjectContext,
-    zone: &ZoneId,
-) -> Result<(), RegistryError> {
-    if context.zone_ref().resource_type().as_str() != "Zone"
-        || context.zone_ref().name().as_str() != zone.as_str()
-    {
+fn ensure_context_zone(identity: &SessionIdentity, zone: &ZoneId) -> Result<(), RegistryError> {
+    if &identity.zone != zone {
         return Err(RegistryError::ZoneMismatch);
     }
     Ok(())
 }
 
-fn ensure_transport_evidence(context: &AuthenticatedSubjectContext) -> Result<(), RegistryError> {
-    match context.transport_binding().locality() {
+fn ensure_transport_evidence(identity: &SessionIdentity) -> Result<(), RegistryError> {
+    match identity.locality {
         Locality::Local => Ok(()),
         Locality::AdjacentZone
-            if context.evidence_class() == EvidenceClass::EnrolledKk
+            if identity.evidence_class == EvidenceClass::EnrolledKk
                 && matches!(
-                    context.subject_ref().resource_type().as_str(),
+                    identity.subject_ref.resource_type().as_str(),
                     "Zone" | "ZoneLink"
                 ) =>
         {
@@ -512,29 +689,29 @@ fn ensure_transport_evidence(context: &AuthenticatedSubjectContext) -> Result<()
 
 fn validate_route_binding(
     zone: &ZoneId,
-    context: &AuthenticatedSubjectContext,
+    identity: &SessionIdentity,
     route: &RouteKey,
 ) -> Result<(), RegistryError> {
     if route.zone() != zone {
         return Err(RegistryError::ZoneMismatch);
     }
-    if context.service() != route.service()
-        || context.schema_fingerprint() != route.schema()
-        || context.reconnect_generation() != route.generations().session()
-        || context.provider_generation() != route.generations().provider()
-        || context.controller_generation() != route.generations().controller()
+    if &identity.service != route.service()
+        || &identity.schema != route.schema()
+        || identity.reconnect_generation != route.generations().session()
+        || identity.provider_generation != route.generations().provider()
+        || identity.controller_generation != route.generations().controller()
     {
         return Err(RegistryError::SessionBindingMismatch);
     }
 
-    if context.transport_binding().locality() == Locality::Local {
-        if context.subject_ref().resource_type().as_str() == "Provider"
-            && context.provider_ref() != Some(context.subject_ref())
+    if identity.locality == Locality::Local {
+        if identity.subject_ref.resource_type().as_str() == "Provider"
+            && identity.provider_ref.as_ref() != Some(&identity.subject_ref)
         {
             return Err(RegistryError::ProviderAssertion);
         }
         if let RouteTarget::Provider(provider) = route.target()
-            && context.provider_ref() != Some(provider)
+            && identity.provider_ref.as_ref() != Some(provider)
         {
             return Err(RegistryError::ProviderAssertion);
         }
@@ -572,7 +749,9 @@ pub enum RegistryError {
     ProviderAssertion,
     DuplicateSessionIdentity,
     DuplicateRoute,
+    RouteCapacity,
     RouteNotFound,
+    RouteRevoked,
     SessionNotFound,
     ReconnectGeneration,
     SessionIdExhausted,
@@ -594,7 +773,9 @@ impl core::fmt::Display for RegistryError {
                 "authenticated session identity is already registered"
             }
             Self::DuplicateRoute => "exact route is already registered",
+            Self::RouteCapacity => "route registration capacity is exhausted",
             Self::RouteNotFound => "exact route is not registered",
+            Self::RouteRevoked => "exact route registration was revoked",
             Self::SessionNotFound => "bus session is not registered",
             Self::ReconnectGeneration => "reconnect is not the exact next session generation",
             Self::SessionIdExhausted => "bus session identity space is exhausted",

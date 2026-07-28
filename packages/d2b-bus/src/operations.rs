@@ -7,11 +7,14 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
 };
+use tokio::sync::Notify;
 
-use crate::registry::RouteKey;
+use crate::registry::{BusEndpoint, RevocableRouteLease, RouteKey};
 
 /// Maximum concurrent operations retained by the default bus.
 pub const DEFAULT_MAX_OPERATIONS: usize = 4096;
+/// Default concurrent operations admitted for one source session.
+pub const DEFAULT_MAX_OPERATIONS_PER_SESSION: usize = 256;
 
 /// An opaque operation identifier.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -81,21 +84,41 @@ impl core::fmt::Debug for OperationSpec {
 }
 
 /// Cancellation state delivered to a handler without exposing the operation table.
+struct CancellationState {
+    cancelled: AtomicBool,
+    notify: Notify,
+}
+
 #[derive(Clone)]
-pub struct Cancellation(Arc<AtomicBool>);
+pub struct Cancellation(Arc<CancellationState>);
 
 impl Cancellation {
     fn new() -> Self {
-        Self(Arc::new(AtomicBool::new(false)))
+        Self(Arc::new(CancellationState {
+            cancelled: AtomicBool::new(false),
+            notify: Notify::new(),
+        }))
     }
 
     /// Whether cancellation has been requested.
     pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::Acquire)
+        self.0.cancelled.load(Ordering::Acquire)
     }
 
     fn cancel(&self) {
-        self.0.store(true, Ordering::Release);
+        if !self.0.cancelled.swap(true, Ordering::AcqRel) {
+            self.0.notify.notify_waiters();
+        }
+    }
+
+    pub(crate) async fn cancelled(&self) {
+        loop {
+            let notified = self.0.notify.notified();
+            if self.is_cancelled() {
+                return;
+            }
+            notified.await;
+        }
     }
 }
 
@@ -112,34 +135,52 @@ impl core::fmt::Debug for Cancellation {
 pub(crate) struct SessionId(pub(crate) u64);
 
 struct OperationRecord {
-    source: SessionId,
     destination: SessionId,
     reverse_route: RouteKey,
+    endpoint: Arc<dyn BusEndpoint>,
+    generation: d2b_contracts::v3::ReconnectGeneration,
     deadline_tick: u64,
     cancellation: Cancellation,
 }
 
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct OperationKey {
+    source: SessionId,
+    id: OperationId,
+}
+
 /// Exact destination retained for a cancellation dispatch.
 pub(crate) struct CancelTarget {
-    pub(crate) destination: SessionId,
     pub(crate) route: RouteKey,
+    pub(crate) endpoint: Arc<dyn BusEndpoint>,
+    pub(crate) generation: d2b_contracts::v3::ReconnectGeneration,
     pub(crate) cancellation: Cancellation,
 }
 
 /// In-memory table for bounded in-flight work.
 pub(crate) struct OperationTable {
     max_operations: usize,
-    records: BTreeMap<OperationId, OperationRecord>,
+    max_operations_per_session: usize,
+    records: BTreeMap<OperationKey, OperationRecord>,
+    per_session: BTreeMap<SessionId, usize>,
 }
 
 impl OperationTable {
-    pub(crate) fn new(max_operations: usize) -> Result<Self, OperationError> {
-        if max_operations == 0 {
+    pub(crate) fn new(
+        max_operations: usize,
+        max_operations_per_session: usize,
+    ) -> Result<Self, OperationError> {
+        if max_operations == 0
+            || max_operations_per_session == 0
+            || max_operations_per_session > max_operations
+        {
             return Err(OperationError::InvalidLimit);
         }
         Ok(Self {
             max_operations,
+            max_operations_per_session,
             records: BTreeMap::new(),
+            per_session: BTreeMap::new(),
         })
     }
 
@@ -147,31 +188,46 @@ impl OperationTable {
         &mut self,
         operation: &OperationSpec,
         source: SessionId,
-        destination: SessionId,
+        route_lease: RevocableRouteLease,
         reverse_route: RouteKey,
         now_tick: u64,
     ) -> Result<Cancellation, OperationError> {
         if now_tick >= operation.deadline_tick {
             return Err(OperationError::DeadlineExceeded);
         }
-        if self.records.contains_key(&operation.id) {
-            return Err(OperationError::DuplicateOperation);
-        }
-        if self.records.len() >= self.max_operations {
-            return Err(OperationError::CapacityExceeded);
-        }
-        let cancellation = Cancellation::new();
-        self.records.insert(
-            operation.id.clone(),
-            OperationRecord {
-                source,
-                destination,
-                reverse_route,
-                deadline_tick: operation.deadline_tick,
-                cancellation: cancellation.clone(),
-            },
-        );
-        Ok(cancellation)
+        let key = OperationKey {
+            source,
+            id: operation.id.clone(),
+        };
+        route_lease
+            .with_active(|| {
+                if self.records.contains_key(&key) {
+                    return Err(OperationError::DuplicateOperation);
+                }
+                if self.records.len() >= self.max_operations {
+                    return Err(OperationError::CapacityExceeded);
+                }
+                if self.per_session.get(&source).copied().unwrap_or(0)
+                    >= self.max_operations_per_session
+                {
+                    return Err(OperationError::SessionCapacityExceeded);
+                }
+                let cancellation = Cancellation::new();
+                self.records.insert(
+                    key,
+                    OperationRecord {
+                        destination: route_lease.destination(),
+                        reverse_route,
+                        endpoint: route_lease.endpoint(),
+                        generation: route_lease.generation(),
+                        deadline_tick: operation.deadline_tick,
+                        cancellation: cancellation.clone(),
+                    },
+                );
+                *self.per_session.entry(source).or_default() += 1;
+                Ok(cancellation)
+            })
+            .map_err(|_| OperationError::RouteRevoked)?
     }
 
     pub(crate) fn finish(
@@ -180,24 +236,32 @@ impl OperationTable {
         source: SessionId,
         now_tick: u64,
     ) -> Result<(), OperationError> {
+        let key = OperationKey {
+            source,
+            id: operation.clone(),
+        };
         let record = self
             .records
-            .get(operation)
+            .get(&key)
             .ok_or(OperationError::OperationNotFound)?;
-        if record.source != source {
-            return Err(OperationError::OperationOwnerMismatch);
-        }
         if record.cancellation.is_cancelled() {
-            self.records.remove(operation);
+            self.remove(&key);
             return Err(OperationError::Cancelled);
         }
         if now_tick >= record.deadline_tick {
             record.cancellation.cancel();
-            self.records.remove(operation);
+            self.remove(&key);
             return Err(OperationError::DeadlineExceeded);
         }
-        self.records.remove(operation);
+        self.remove(&key);
         Ok(())
+    }
+
+    pub(crate) fn abort(&mut self, operation: &OperationId, source: SessionId) {
+        self.remove(&OperationKey {
+            source,
+            id: operation.clone(),
+        });
     }
 
     pub(crate) fn route_for_cancel(
@@ -207,11 +271,11 @@ impl OperationTable {
     ) -> Result<RouteKey, OperationError> {
         let record = self
             .records
-            .get(operation)
+            .get(&OperationKey {
+                source,
+                id: operation.clone(),
+            })
             .ok_or(OperationError::OperationNotFound)?;
-        if record.source != source {
-            return Err(OperationError::OperationOwnerMismatch);
-        }
         Ok(record.reverse_route.clone())
     }
 
@@ -220,18 +284,16 @@ impl OperationTable {
         operation: &OperationId,
         source: SessionId,
     ) -> Result<CancelTarget, OperationError> {
-        let record = self
-            .records
-            .remove(operation)
-            .ok_or(OperationError::OperationNotFound)?;
-        if record.source != source {
-            self.records.insert(operation.clone(), record);
-            return Err(OperationError::OperationOwnerMismatch);
-        }
+        let key = OperationKey {
+            source,
+            id: operation.clone(),
+        };
+        let record = self.remove(&key).ok_or(OperationError::OperationNotFound)?;
         record.cancellation.cancel();
         Ok(CancelTarget {
-            destination: record.destination,
             route: record.reverse_route,
+            endpoint: record.endpoint,
+            generation: record.generation,
             cancellation: record.cancellation,
         })
     }
@@ -240,15 +302,26 @@ impl OperationTable {
         let cancelled = self
             .records
             .iter()
-            .filter(|(_, record)| record.source == session || record.destination == session)
-            .map(|(id, _)| id.clone())
+            .filter(|(key, record)| key.source == session || record.destination == session)
+            .map(|(key, _)| key.clone())
             .collect::<Vec<_>>();
-        for id in &cancelled {
-            if let Some(record) = self.records.remove(id) {
+        for key in &cancelled {
+            if let Some(record) = self.remove(key) {
                 record.cancellation.cancel();
             }
         }
-        cancelled
+        cancelled.into_iter().map(|key| key.id).collect()
+    }
+
+    fn remove(&mut self, key: &OperationKey) -> Option<OperationRecord> {
+        let record = self.records.remove(key)?;
+        if let Some(count) = self.per_session.get_mut(&key.source) {
+            *count -= 1;
+            if *count == 0 {
+                self.per_session.remove(&key.source);
+            }
+        }
+        Some(record)
     }
 }
 
@@ -260,6 +333,8 @@ pub enum OperationError {
     InvalidLimit,
     DuplicateOperation,
     CapacityExceeded,
+    SessionCapacityExceeded,
+    RouteRevoked,
     DeadlineExceeded,
     OperationNotFound,
     OperationOwnerMismatch,
@@ -274,6 +349,8 @@ impl core::fmt::Display for OperationError {
             Self::InvalidLimit => "operation table limit must be nonzero",
             Self::DuplicateOperation => "operation identifier is already active",
             Self::CapacityExceeded => "operation table capacity is exhausted",
+            Self::SessionCapacityExceeded => "source session operation quota is exhausted",
+            Self::RouteRevoked => "operation route was revoked",
             Self::DeadlineExceeded => "operation deadline has elapsed",
             Self::OperationNotFound => "operation is not active",
             Self::OperationOwnerMismatch => "operation is owned by another session",
@@ -287,11 +364,34 @@ impl std::error::Error for OperationError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::registry::{RouteGenerations, RouteKey, RouteMember, RouteTarget};
+    use crate::{
+        registry::{
+            BusEndpoint, BusResponse, EndpointError, RevocableRouteLease, RouteGenerations,
+            RouteKey, RouteMember, RouteTarget,
+        },
+        router::{DeliveredInvocation, DeliveredStream},
+    };
+    use async_trait::async_trait;
     use d2b_contracts::v3::{
         ControllerGeneration, ReconnectGeneration, ResourceGeneration, ResourceRef,
         SchemaFingerprint, ServiceName, ZoneId,
     };
+
+    struct TestEndpoint;
+
+    #[async_trait]
+    impl BusEndpoint for TestEndpoint {
+        async fn invoke(
+            &self,
+            _request: DeliveredInvocation,
+        ) -> Result<BusResponse, EndpointError> {
+            Err(EndpointError::Unavailable)
+        }
+
+        async fn open_stream(&self, _request: DeliveredStream) -> Result<(), EndpointError> {
+            Err(EndpointError::Unavailable)
+        }
+    }
 
     fn route() -> RouteKey {
         RouteKey::new(
@@ -312,6 +412,14 @@ mod tests {
         OperationSpec::new(OperationId::parse(value).unwrap(), deadline).unwrap()
     }
 
+    fn lease(destination: SessionId) -> RevocableRouteLease {
+        RevocableRouteLease::test(
+            destination,
+            ReconnectGeneration::new(4).unwrap(),
+            Arc::new(TestEndpoint),
+        )
+    }
+
     #[test]
     fn operation_ids_and_deadlines_are_closed() {
         for invalid in ["", "bad id", "x/y", &"x".repeat(129)] {
@@ -328,14 +436,14 @@ mod tests {
 
     #[test]
     fn duplicate_capacity_and_deadline_fail_closed() {
-        let mut table = OperationTable::new(1).unwrap();
+        let mut table = OperationTable::new(1, 1).unwrap();
         let first = operation("first", 10);
         table
-            .begin(&first, SessionId(1), SessionId(2), route(), 1)
+            .begin(&first, SessionId(1), lease(SessionId(2)), route(), 1)
             .unwrap();
         assert_eq!(
             table
-                .begin(&first, SessionId(1), SessionId(2), route(), 1)
+                .begin(&first, SessionId(1), lease(SessionId(2)), route(), 1)
                 .unwrap_err(),
             OperationError::DuplicateOperation
         );
@@ -344,20 +452,20 @@ mod tests {
                 .begin(
                     &operation("second", 10),
                     SessionId(1),
-                    SessionId(2),
+                    lease(SessionId(2)),
                     route(),
                     1,
                 )
                 .unwrap_err(),
             OperationError::CapacityExceeded
         );
-        let mut empty = OperationTable::new(1).unwrap();
+        let mut empty = OperationTable::new(1, 1).unwrap();
         assert_eq!(
             empty
                 .begin(
                     &operation("expired", 2),
                     SessionId(1),
-                    SessionId(2),
+                    lease(SessionId(2)),
                     route(),
                     2,
                 )
@@ -368,21 +476,21 @@ mod tests {
 
     #[test]
     fn cancellation_is_owner_checked_and_pins_the_reverse_route() {
-        let mut table = OperationTable::new(2).unwrap();
+        let mut table = OperationTable::new(2, 2).unwrap();
         let operation = operation("cancel-me", 10);
         let expected_route = route();
         let cancellation = table
             .begin(
                 &operation,
                 SessionId(1),
-                SessionId(2),
+                lease(SessionId(2)),
                 expected_route.clone(),
                 1,
             )
             .unwrap();
         assert_eq!(
             table.route_for_cancel(operation.id(), SessionId(9)),
-            Err(OperationError::OperationOwnerMismatch)
+            Err(OperationError::OperationNotFound)
         );
         assert_eq!(
             table
@@ -391,22 +499,22 @@ mod tests {
             expected_route
         );
         let target = table.cancel(operation.id(), SessionId(1)).unwrap();
-        assert_eq!(target.destination, SessionId(2));
         assert_eq!(target.route, expected_route);
+        assert_eq!(target.generation, ReconnectGeneration::new(4).unwrap());
         assert!(target.cancellation.is_cancelled());
         assert!(cancellation.is_cancelled());
     }
 
     #[test]
     fn session_loss_cancels_both_directions() {
-        let mut table = OperationTable::new(3).unwrap();
+        let mut table = OperationTable::new(3, 2).unwrap();
         let first = operation("first", 10);
         let second = operation("second", 10);
         let first_cancel = table
-            .begin(&first, SessionId(1), SessionId(2), route(), 1)
+            .begin(&first, SessionId(1), lease(SessionId(2)), route(), 1)
             .unwrap();
         let second_cancel = table
-            .begin(&second, SessionId(3), SessionId(1), route(), 1)
+            .begin(&second, SessionId(3), lease(SessionId(1)), route(), 1)
             .unwrap();
         assert_eq!(table.cancel_session(SessionId(1)).len(), 2);
         assert!(first_cancel.is_cancelled());
@@ -415,19 +523,19 @@ mod tests {
 
     #[test]
     fn finish_and_cancel_errors_do_not_release_another_sessions_operation() {
-        let mut table = OperationTable::new(1).unwrap();
+        let mut table = OperationTable::new(1, 1).unwrap();
         let operation = operation("owned", 5);
         table
-            .begin(&operation, SessionId(1), SessionId(2), route(), 1)
+            .begin(&operation, SessionId(1), lease(SessionId(2)), route(), 1)
             .unwrap();
 
         assert_eq!(
             table.finish(operation.id(), SessionId(9), 2).unwrap_err(),
-            OperationError::OperationOwnerMismatch
+            OperationError::OperationNotFound
         );
         assert!(matches!(
             table.cancel(operation.id(), SessionId(9)),
-            Err(OperationError::OperationOwnerMismatch)
+            Err(OperationError::OperationNotFound)
         ));
         assert!(table.route_for_cancel(operation.id(), SessionId(1)).is_ok());
         assert_eq!(

@@ -18,9 +18,9 @@ use d2b_contracts::v3::{
         EndpointPolicyIdentity, EndpointPurpose, EndpointRole, HandshakeOffer,
         IdentityEvidenceRequirement, KernelObjectType, LimitProfile, Locality,
         MAX_LOGICAL_MESSAGE_BYTES, MAX_REQUEST_LIFETIME_MS, MetricLabels, MetricReason,
-        MetricResult, NoiseProfile, OperationClass, OperationId, PurposeClass, RecordKind,
-        Remediation, RequestEnvelope, RequestId, ServicePackage, SessionErrorCode,
-        TransportBinding, TransportClass,
+        MetricResult, NoiseProfile, OperationId, PurposeClass, RecordKind, Remediation,
+        RequestEnvelope, RequestId, ServicePackage, SessionErrorCode, TransportBinding,
+        TransportClass,
     },
 };
 use d2b_session::{
@@ -723,8 +723,11 @@ fn bootstrap_is_operation_bound_expiring_single_use_and_redacted() {
             99,
         )
         .unwrap();
-    assert!(format!("{key:?}").contains("<redacted>"));
-    assert!(format!("{admission:?}").contains("<redacted>"));
+    assert_eq!(format!("{key:?}"), "AdmittedBootstrapPsk(<redacted>)");
+    assert_eq!(
+        format!("{admission:?}"),
+        "BootstrapAdmission { consumed: true, psk: \"<redacted>\" }"
+    );
     assert_eq!(
         admission
             .consume(
@@ -807,7 +810,11 @@ async fn owned_transport_is_portable_and_payload_debug_is_redacted() {
         .await
         .unwrap();
     let packet = transport.receive(64).await.unwrap();
-    assert!(!format!("{packet:?}").contains("secret endpoint payload"));
+    assert_eq!(packet.as_bytes(), b"secret endpoint payload");
+    assert_eq!(
+        format!("{packet:?}"),
+        "TransportPacket { bytes: \"<redacted>\", len: 23, attachments: 0 }"
+    );
     transport.close().await.unwrap();
     assert!(transport.closed);
 }
@@ -821,27 +828,25 @@ impl MetricsSink for CapturingMetrics {
     }
 }
 
-#[test]
-fn metrics_accept_only_closed_low_cardinality_labels() {
+#[tokio::test]
+async fn metrics_are_emitted_by_a_real_driver_failure_path() {
     let sink = Arc::new(CapturingMetrics::default());
-    sink.record(
-        MetricEvent::Handshake,
-        MetricLabels {
-            transport: TransportClass::ProviderStream,
-            purpose: EndpointPurpose::ZoneLink,
-            service: ServicePackage::ControllerV3,
-            channel_class: d2b_session::contract::ChannelClass::TtrpcControl,
-            noise: NoiseProfile::Kk25519ChaChaPolySha256,
-            locality: Locality::Remote,
-            operation_class: OperationClass::OpenStream,
-            attachment_class: None,
-            health_state: d2b_session::contract::HealthState::Healthy,
-            result: MetricResult::Accepted,
-            reason: MetricReason::None,
-        },
-        1,
+    let (initiator, _responder, _) = engine_pair().await;
+    let driver = initiator.with_metrics(sink.clone()).into_driver();
+    let unopened = StreamId::new(0x0100).unwrap();
+    assert_eq!(
+        driver
+            .send_named_stream(unopened, b"not-open".to_vec())
+            .await
+            .unwrap_err()
+            .code(),
+        SessionErrorCode::InvalidChannel
     );
-    assert_eq!(sink.0.lock().unwrap().len(), 1);
+    let events = sink.0.lock().unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].0, MetricEvent::RejectedRecord);
+    assert_eq!(events[0].1.result, MetricResult::Rejected);
+    assert_eq!(events[0].1.reason, MetricReason::InternalInvariant);
 }
 
 struct FakeTransport {
@@ -851,6 +856,7 @@ struct FakeTransport {
     attachment_mode: Arc<AtomicU8>,
     attachment_sends: Arc<AtomicUsize>,
     closed: Arc<AtomicBool>,
+    block_sends: Arc<AtomicBool>,
 }
 
 #[async_trait]
@@ -880,6 +886,9 @@ impl OwnedTransport for FakeTransport {
     }
 
     async fn send(&mut self, packet: TransportPacket) -> std::result::Result<(), TransportError> {
+        if self.block_sends.load(Ordering::Acquire) {
+            std::future::pending::<()>().await;
+        }
         let (mut bytes, attachments) = packet.into_parts();
         if !attachments.is_empty() {
             self.attachment_sends.fetch_add(1, Ordering::AcqRel);
@@ -931,6 +940,7 @@ struct FakeHandles {
     attachment_sends_a: Arc<AtomicUsize>,
     closed_a: Arc<AtomicBool>,
     closed_b: Arc<AtomicBool>,
+    block_sends_a: Arc<AtomicBool>,
 }
 
 fn fake_transport_pair() -> (FakeTransport, FakeTransport, FakeHandles) {
@@ -941,6 +951,7 @@ fn fake_transport_pair() -> (FakeTransport, FakeTransport, FakeHandles) {
     let attachment_sends_a = Arc::new(AtomicUsize::new(0));
     let closed_a = Arc::new(AtomicBool::new(false));
     let closed_b = Arc::new(AtomicBool::new(false));
+    let block_sends_a = Arc::new(AtomicBool::new(false));
     (
         FakeTransport {
             sender: a_to_b_tx,
@@ -949,6 +960,7 @@ fn fake_transport_pair() -> (FakeTransport, FakeTransport, FakeHandles) {
             attachment_mode: Arc::clone(&attachment_mode_a),
             attachment_sends: Arc::clone(&attachment_sends_a),
             closed: Arc::clone(&closed_a),
+            block_sends: Arc::clone(&block_sends_a),
         },
         FakeTransport {
             sender: b_to_a_tx,
@@ -957,6 +969,7 @@ fn fake_transport_pair() -> (FakeTransport, FakeTransport, FakeHandles) {
             attachment_mode: Arc::new(AtomicU8::new(0)),
             attachment_sends: Arc::new(AtomicUsize::new(0)),
             closed: Arc::clone(&closed_b),
+            block_sends: Arc::new(AtomicBool::new(false)),
         },
         FakeHandles {
             corrupt_a,
@@ -964,8 +977,45 @@ fn fake_transport_pair() -> (FakeTransport, FakeTransport, FakeHandles) {
             attachment_sends_a,
             closed_a,
             closed_b,
+            block_sends_a,
         },
     )
+}
+
+#[tokio::test]
+async fn established_write_deadline_fails_closed() {
+    let (initiator_transport, responder_transport, handles) = fake_transport_pair();
+    let mut session_offer = offer(NoiseProfile::Nn25519ChaChaPolySha256);
+    session_offer.limits.keepalive_timeout_ms = 10;
+    let initiator_policy = policy(&session_offer);
+    let responder_policy = policy(&session_offer);
+    let now = Instant::now();
+    let (initiator, responder) = tokio::join!(
+        SessionEngine::establish_initiator(
+            initiator_transport,
+            initiator_policy,
+            HandshakeCredentials::Nn,
+            now
+        ),
+        SessionEngine::establish_responder(
+            responder_transport,
+            responder_policy,
+            HandshakeCredentials::Nn,
+            now
+        )
+    );
+    let mut initiator = initiator.unwrap();
+    let _responder = responder.unwrap();
+    handles.block_sends_a.store(true, Ordering::Release);
+    assert_eq!(
+        initiator
+            .send_ttrpc(b"blocked".to_vec())
+            .await
+            .unwrap_err()
+            .code(),
+        SessionErrorCode::KeepaliveTimeout
+    );
+    assert!(handles.closed_a.load(Ordering::Acquire));
 }
 
 async fn engine_pair() -> (
@@ -1382,7 +1432,7 @@ async fn driver_handle_is_clonable_object_safe_and_leaves_ttrpc_correlation_to_a
 }
 
 #[tokio::test]
-async fn driver_fragments_one_mib_logical_stream_under_256_kib_credit() {
+async fn driver_rejects_a_message_larger_than_retained_receive_credit() {
     let (initiator, responder, _) = engine_pair().await;
     let initiator: Arc<dyn ComponentSessionDriver> = Arc::new(initiator.into_driver());
     let responder: Arc<dyn ComponentSessionDriver> = Arc::new(responder.into_driver());
@@ -1406,18 +1456,14 @@ async fn driver_fragments_one_mib_logical_stream_under_256_kib_credit() {
         .unwrap();
 
     let payload = vec![0xa5; limits.logical_named_stream_bytes as usize];
-    let expected = payload.clone();
-    let sender = Arc::clone(&initiator);
-    let send = tokio::spawn(async move { sender.send_named_stream(stream, payload).await });
-    match responder.receive_named_stream().await.unwrap() {
-        StreamEvent::Data { bytes, .. } => assert_eq!(bytes, expected),
-        event => panic!("unexpected event {event:?}"),
-    }
-    send.await.unwrap().unwrap();
-    responder
-        .grant_named_stream_credit(stream, limits.logical_named_stream_bytes)
-        .await
-        .unwrap();
+    assert_eq!(
+        initiator
+            .send_named_stream(stream, payload)
+            .await
+            .unwrap_err()
+            .code(),
+        SessionErrorCode::QueueBackpressure
+    );
 }
 
 #[tokio::test]
@@ -1463,6 +1509,60 @@ async fn driver_withholds_logical_delivery_credit_until_grant() {
         StreamEvent::Data { bytes, .. } => assert_eq!(bytes, b"more"),
         event => panic!("unexpected event {event:?}"),
     }
+}
+
+#[tokio::test]
+async fn driver_progresses_bidirectional_credit_control_under_backpressure() {
+    let (initiator, responder, _) = engine_pair().await;
+    let initiator: Arc<dyn ComponentSessionDriver> = Arc::new(initiator.into_driver());
+    let responder: Arc<dyn ComponentSessionDriver> = Arc::new(responder.into_driver());
+    let stream = StreamId::new(0x100).unwrap();
+    initiator.open_named_stream(stream, 4, 4).await.unwrap();
+    responder.open_named_stream(stream, 4, 4).await.unwrap();
+
+    let (left, right) = tokio::join!(
+        initiator.send_named_stream(stream, b"left".to_vec()),
+        responder.send_named_stream(stream, b"rght".to_vec())
+    );
+    left.unwrap();
+    right.unwrap();
+    let (left, right) = tokio::join!(
+        initiator.receive_named_stream(),
+        responder.receive_named_stream()
+    );
+    assert!(matches!(left.unwrap(), StreamEvent::Data { bytes, .. } if bytes == b"rght"));
+    assert!(matches!(right.unwrap(), StreamEvent::Data { bytes, .. } if bytes == b"left"));
+
+    let left_sender = Arc::clone(&initiator);
+    let right_sender = Arc::clone(&responder);
+    let mut left = tokio::spawn(async move {
+        left_sender
+            .send_named_stream(stream, b"next".to_vec())
+            .await
+    });
+    let mut right = tokio::spawn(async move {
+        right_sender
+            .send_named_stream(stream, b"more".to_vec())
+            .await
+    });
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), &mut left)
+            .await
+            .is_err()
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), &mut right)
+            .await
+            .is_err()
+    );
+    let (left_credit, right_credit) = tokio::join!(
+        initiator.grant_named_stream_credit(stream, 4),
+        responder.grant_named_stream_credit(stream, 4)
+    );
+    left_credit.unwrap();
+    right_credit.unwrap();
+    left.await.unwrap().unwrap();
+    right.await.unwrap().unwrap();
 }
 
 #[tokio::test]

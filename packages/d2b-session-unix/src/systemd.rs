@@ -1,11 +1,14 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     env,
-    os::fd::{FromRawFd, OwnedFd, RawFd},
+    os::fd::OwnedFd,
+    sync::atomic::{AtomicBool, Ordering},
 };
 
+use listenfd::ListenFd;
 use rustix::{
-    io::{FdFlags, fcntl_getfd},
+    fs::{OFlags, fcntl_getfl, fcntl_setfl},
+    io::{FdFlags, fcntl_getfd, fcntl_setfd},
     net::{
         AddressFamily, SocketFlags, SocketType, accept_with,
         sockopt::{get_socket_acceptconn, get_socket_domain, get_socket_type},
@@ -15,13 +18,14 @@ use tokio::io::unix::AsyncFd;
 
 use crate::SeqpacketSocket;
 
-const SD_LISTEN_FD_START: RawFd = 3;
+static ACTIVATION_CONSUMED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SystemdActivationError {
     InvalidEnvironment,
     InvalidDescriptor,
     Accept,
+    AlreadyConsumed,
 }
 
 impl std::fmt::Display for SystemdActivationError {
@@ -30,6 +34,7 @@ impl std::fmt::Display for SystemdActivationError {
             Self::InvalidEnvironment => "socket-activation-environment-invalid",
             Self::InvalidDescriptor => "socket-activation-descriptor-invalid",
             Self::Accept => "socket-activation-accept-failed",
+            Self::AlreadyConsumed => "socket-activation-already-consumed",
         })
     }
 }
@@ -52,12 +57,20 @@ impl std::fmt::Debug for ActivatedSeqpacketListeners {
 
 impl ActivatedSeqpacketListeners {
     pub fn from_systemd(expected_names: &[&str]) -> Result<Self, SystemdActivationError> {
-        let names = validate_environments(expected_names)?;
+        claim_activation()?;
+        let (names, mut source) = consume_environment(expected_names)?;
         let mut listeners = BTreeMap::new();
         for (index, name) in names.into_iter().enumerate() {
-            let fd = SD_LISTEN_FD_START + index as RawFd;
-            validate_listener(fd)?;
-            let owned = adopt_raw_fd(fd);
+            let owned = source
+                .take_custom::<OwnedFd>(
+                    index,
+                    libc::AF_UNIX,
+                    libc::SOCK_SEQPACKET,
+                    "Unix seqpacket listener",
+                )
+                .map_err(|_| SystemdActivationError::InvalidDescriptor)?
+                .ok_or(SystemdActivationError::InvalidDescriptor)?;
+            prepare_listener(&owned)?;
             let io = AsyncFd::new(owned).map_err(|_| SystemdActivationError::InvalidDescriptor)?;
             listeners.insert(name, io);
         }
@@ -81,9 +94,18 @@ impl std::fmt::Debug for ActivatedSeqpacketListener {
 
 impl ActivatedSeqpacketListener {
     pub fn from_systemd(expected_name: &str) -> Result<Self, SystemdActivationError> {
-        validate_environments(&[expected_name])?;
-        validate_listener(SD_LISTEN_FD_START)?;
-        let owned = adopt_raw_fd(SD_LISTEN_FD_START);
+        claim_activation()?;
+        let (_, mut source) = consume_environment(&[expected_name])?;
+        let owned = source
+            .take_custom::<OwnedFd>(
+                0,
+                libc::AF_UNIX,
+                libc::SOCK_SEQPACKET,
+                "Unix seqpacket listener",
+            )
+            .map_err(|_| SystemdActivationError::InvalidDescriptor)?
+            .ok_or(SystemdActivationError::InvalidDescriptor)?;
+        prepare_listener(&owned)?;
         Ok(Self {
             io: AsyncFd::new(owned).map_err(|_| SystemdActivationError::InvalidDescriptor)?,
         })
@@ -101,11 +123,15 @@ async fn accept(listener: &AsyncFd<OwnedFd>) -> Result<SeqpacketSocket, SystemdA
             .await
             .map_err(|_| SystemdActivationError::Accept)?;
         match ready.try_io(|inner| {
-            accept_with(
-                inner.get_ref(),
-                SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
-            )
-            .map_err(std::io::Error::from)
+            loop {
+                match accept_with(
+                    inner.get_ref(),
+                    SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
+                ) {
+                    Err(rustix::io::Errno::INTR) => continue,
+                    result => break result.map_err(std::io::Error::from),
+                }
+            }
         }) {
             Ok(Ok(fd)) => {
                 return SeqpacketSocket::from_owned(fd)
@@ -117,17 +143,38 @@ async fn accept(listener: &AsyncFd<OwnedFd>) -> Result<SeqpacketSocket, SystemdA
     }
 }
 
-fn validate_environments(expected_names: &[&str]) -> Result<Vec<String>, SystemdActivationError> {
+fn claim_activation() -> Result<(), SystemdActivationError> {
+    claim_once(&ACTIVATION_CONSUMED)
+}
+
+fn claim_once(consumed: &AtomicBool) -> Result<(), SystemdActivationError> {
+    consumed
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .map(|_| ())
+        .map_err(|_| SystemdActivationError::AlreadyConsumed)
+}
+
+fn consume_environment(
+    expected_names: &[&str],
+) -> Result<(Vec<String>, ListenFd), SystemdActivationError> {
     let listen_pid = env::var("LISTEN_PID").ok();
     let listen_fds = env::var("LISTEN_FDS").ok();
     let listen_fdnames = env::var("LISTEN_FDNAMES").ok();
-    validate_environment_values(
+    let source = ListenFd::from_env();
+    envmnt::remove("LISTEN_PID");
+    envmnt::remove("LISTEN_FDS");
+    envmnt::remove("LISTEN_FDNAMES");
+    let names = validate_environment_values(
         expected_names,
         listen_pid.as_deref(),
         listen_fds.as_deref(),
         listen_fdnames.as_deref(),
         std::process::id(),
-    )
+    )?;
+    if source.len() != names.len() {
+        return Err(SystemdActivationError::InvalidEnvironment);
+    }
+    Ok((names, source))
 }
 
 fn validate_environment_values(
@@ -154,46 +201,33 @@ fn validate_environment_values(
     Ok(names)
 }
 
-fn validate_listener(fd: RawFd) -> Result<(), SystemdActivationError> {
-    with_borrowed_fd(fd, |borrowed| {
-        if get_socket_domain(borrowed).ok() != Some(AddressFamily::UNIX)
-            || get_socket_type(borrowed).ok() != Some(SocketType::SEQPACKET)
-            || get_socket_acceptconn(borrowed).ok() != Some(true)
-            || !fcntl_getfd(borrowed)
-                .map(|flags| flags.contains(FdFlags::CLOEXEC))
-                .unwrap_or(false)
-        {
-            return Err(SystemdActivationError::InvalidDescriptor);
-        }
-        Ok(())
-    })
-}
-
-#[allow(unsafe_code)]
-fn with_borrowed_fd<T>(
-    fd: RawFd,
-    inspect: impl for<'fd> FnOnce(std::os::fd::BorrowedFd<'fd>) -> T,
-) -> T {
-    // The descriptor remains owned by systemd activation until `adopt_raw_fd`.
-    // The higher-ranked closure prevents the temporary borrow from escaping.
-    unsafe { inspect(std::os::fd::BorrowedFd::borrow_raw(fd)) }
-}
-
-#[allow(unsafe_code)]
-fn adopt_raw_fd(fd: RawFd) -> OwnedFd {
-    // `validate_environment` proves there is exactly one systemd descriptor and
-    // `validate_listener` proves fd 3 is the expected listener before ownership
-    // is transferred exactly once.
-    unsafe { OwnedFd::from_raw_fd(fd) }
+fn prepare_listener(fd: &OwnedFd) -> Result<(), SystemdActivationError> {
+    let descriptor_flags =
+        fcntl_getfd(fd).map_err(|_| SystemdActivationError::InvalidDescriptor)?;
+    fcntl_setfd(fd, descriptor_flags | FdFlags::CLOEXEC)
+        .map_err(|_| SystemdActivationError::InvalidDescriptor)?;
+    let flags = fcntl_getfl(fd).map_err(|_| SystemdActivationError::InvalidDescriptor)?;
+    fcntl_setfl(fd, flags | OFlags::NONBLOCK)
+        .map_err(|_| SystemdActivationError::InvalidDescriptor)?;
+    if get_socket_domain(fd).ok() != Some(AddressFamily::UNIX)
+        || get_socket_type(fd).ok() != Some(SocketType::SEQPACKET)
+        || get_socket_acceptconn(fd).ok() != Some(true)
+        || !fcntl_getfd(fd)
+            .map(|flags| flags.contains(FdFlags::CLOEXEC))
+            .unwrap_or(false)
+        || !fcntl_getfl(fd)
+            .map(|flags| flags.contains(OFlags::NONBLOCK))
+            .unwrap_or(false)
+    {
+        return Err(SystemdActivationError::InvalidDescriptor);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{
-        os::fd::AsRawFd,
-        sync::atomic::{AtomicU64, Ordering},
-    };
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     use rustix::{
         io::fcntl_setfd,
@@ -242,9 +276,14 @@ mod tests {
     }
 
     #[test]
-    fn validate_listener_accepts_only_unix_seqpacket_listener_with_cloexec() {
+    fn prepare_listener_sets_real_inherited_flags() {
         let listener = unix_listener(SocketType::SEQPACKET);
-        assert_eq!(validate_listener(listener.as_raw_fd()), Ok(()));
+        fcntl_setfd(&listener, FdFlags::empty()).expect("clear close-on-exec");
+        let flags = fcntl_getfl(&listener).unwrap();
+        fcntl_setfl(&listener, flags & !OFlags::NONBLOCK).expect("make listener blocking");
+        assert_eq!(prepare_listener(&listener), Ok(()));
+        assert!(fcntl_getfd(&listener).unwrap().contains(FdFlags::CLOEXEC));
+        assert!(fcntl_getfl(&listener).unwrap().contains(OFlags::NONBLOCK));
     }
 
     #[test]
@@ -254,8 +293,9 @@ mod tests {
             get_socket_domain(&listener).expect("read socket domain"),
             AddressFamily::UNIX
         );
+        let listener: OwnedFd = listener.into();
         assert_eq!(
-            validate_listener(listener.as_raw_fd()),
+            prepare_listener(&listener),
             Err(SystemdActivationError::InvalidDescriptor)
         );
     }
@@ -264,7 +304,7 @@ mod tests {
     fn validate_listener_rejects_non_seqpacket_type() {
         let listener = unix_listener(SocketType::STREAM);
         assert_eq!(
-            validate_listener(listener.as_raw_fd()),
+            prepare_listener(&listener),
             Err(SystemdActivationError::InvalidDescriptor)
         );
     }
@@ -279,18 +319,18 @@ mod tests {
         )
         .expect("create Unix seqpacket socket");
         assert_eq!(
-            validate_listener(socket.as_raw_fd()),
+            prepare_listener(&socket),
             Err(SystemdActivationError::InvalidDescriptor)
         );
     }
 
     #[test]
-    fn validate_listener_rejects_descriptor_without_cloexec() {
-        let listener = unix_listener(SocketType::SEQPACKET);
-        fcntl_setfd(&listener, FdFlags::empty()).expect("clear close-on-exec");
+    fn activation_can_only_be_claimed_once() {
+        let consumed = AtomicBool::new(false);
+        assert_eq!(claim_once(&consumed), Ok(()));
         assert_eq!(
-            validate_listener(listener.as_raw_fd()),
-            Err(SystemdActivationError::InvalidDescriptor)
+            claim_once(&consumed),
+            Err(SystemdActivationError::AlreadyConsumed)
         );
     }
 }

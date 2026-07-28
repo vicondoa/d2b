@@ -17,6 +17,7 @@ mod fragmentation;
 mod handshake;
 mod lifecycle;
 mod metrics;
+mod operation;
 mod record;
 mod scheduler;
 mod server;
@@ -28,7 +29,7 @@ pub use cancellation::{Cancellation, RequestRegistry};
 pub use deadline::DeadlineBudget;
 pub use driver::{ComponentSessionDriver, SessionDriverHandle};
 pub use engine::{SessionEngine, SessionEvent};
-pub use error::{Result, SessionError};
+pub use error::{Result, SessionError, SessionErrorClass};
 pub use fragmentation::{Fragment, Fragmenter, Reassembler};
 pub use handshake::{
     EstablishedHandshake, GENERATION_DISCOVERY_REQUEST_LEN, GENERATION_DISCOVERY_RESPONSE_LEN,
@@ -39,6 +40,7 @@ pub use handshake::{
 };
 pub use lifecycle::{KeepaliveAction, SessionLifecycle, SessionPhase};
 pub use metrics::{MetricEvent, MetricsSink, NoopMetrics};
+pub use operation::{OperationKind, OperationMember, SessionOperation};
 pub use record::{ProtectedRecord, RecordProtector};
 pub use scheduler::{FairScheduler, OutboundFrame, QueueClass};
 pub use server::{SessionServerError, serve_ttrpc_services};
@@ -46,9 +48,9 @@ pub use streams::{NamedStreamMux, StreamEvent, StreamId, StreamPhase};
 pub use transport::{OwnedTransport, TransportDescriptor, TransportError, TransportPacket};
 
 pub use admission::{
-    AdmittedComponentSession, AuthorizedSessionOperation, ComponentSessionRegistrar,
-    SessionAcceptor, SessionAuthenticationBinding, SessionAuthority, SessionAuthorizationRequest,
-    TransportEvidence,
+    AdmittedComponentSession, AdmittedSessionRouteBinding, AuthorizedSessionOperation,
+    ComponentSessionRegistrar, SessionAcceptor, SessionAuthenticationBinding, SessionAuthority,
+    SessionAuthorizationRequest, TransportEvidence,
 };
 pub use attachment::{AttachmentPayload, AttachmentValidationError, OwnedAttachment};
 pub use d2b_contracts::v3::component_session as contract;

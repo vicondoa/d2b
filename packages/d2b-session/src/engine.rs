@@ -1,23 +1,25 @@
 use std::{
     collections::{BTreeMap, VecDeque},
     fmt,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
 use d2b_contracts::v3::component_session::{
     AttachmentAccess, AttachmentCreditClass, AttachmentDescriptor, AttachmentKind,
     AttachmentPacket, AttachmentPolicyKind, BoundedVec, CancelAck, CancelRequest, CancelResult,
-    ChannelId, CloseReason, CloseRecord, EndpointPolicy, EndpointPolicyIdentity,
-    FRAGMENT_HEADER_LEN, FragmentHeader, HandshakeOffer, KeepaliveRecord, KernelObjectType,
-    LimitProfile, MAX_PACKET_ATTACHMENTS, OperationId, PREFACE_LEN, RecordHeader, RecordKind,
-    Remediation, RequestId, ServicePackage, SessionErrorCode,
+    ChannelClass, ChannelId, CloseReason, CloseRecord, EndpointPolicy, EndpointPolicyIdentity,
+    FRAGMENT_HEADER_LEN, FragmentHeader, HandshakeOffer, HealthState, KeepaliveRecord,
+    KernelObjectType, LimitProfile, MAX_PACKET_ATTACHMENTS, MetricLabels, MetricReason,
+    MetricResult, OperationClass, OperationId, PREFACE_LEN, RecordHeader, RecordKind, Remediation,
+    RequestId, ServicePackage, SessionErrorCode,
 };
 
 use crate::{
     Cancellation, FairScheduler, Fragment, Fragmenter, HandshakeCredentials, HandshakeRole,
-    KeepaliveAction, NamedStreamMux, NoiseHandshake, OutboundFrame, OwnedAttachment,
-    OwnedTransport, QueueClass, Reassembler, RecordProtector, Result, SessionError,
-    SessionLifecycle, StreamEvent, StreamId, StreamPhase, TransportPacket,
+    KeepaliveAction, MetricEvent, MetricsSink, NamedStreamMux, NoiseHandshake, NoopMetrics,
+    OutboundFrame, OwnedAttachment, OwnedTransport, QueueClass, Reassembler, RecordProtector,
+    Result, SessionError, SessionLifecycle, StreamEvent, StreamId, StreamPhase, TransportPacket,
     accept_generation_discovery_request, decode_generation_discovery_response,
     encode_generation_discovery_request, encode_generation_discovery_response, encode_offer,
     is_generation_discovery_request, negotiate_offer,
@@ -29,6 +31,8 @@ const STREAM_CLOSE: u8 = 1;
 const STREAM_CREDIT: u8 = 2;
 const STREAM_RESET: u8 = 3;
 const ATTACHMENT_DESCRIPTOR_BYTES: usize = 62;
+const ACTIVE_REQUEST_RESERVATION_BYTES: usize = 4 * 1024;
+const MAX_ACTIVE_REQUESTS_PER_SESSION: usize = 256;
 
 pub enum SessionEvent {
     Ttrpc(Vec<u8>),
@@ -92,6 +96,8 @@ pub struct SessionEngine<T: OwnedTransport> {
     pending_attachment_credits: BTreeMap<u64, u16>,
     outstanding_attachment_credits: u16,
     withheld_stream_credits: BTreeMap<StreamId, VecDeque<WithheldStreamCredit>>,
+    pending_stream_transport: BTreeMap<StreamId, u32>,
+    metrics: Arc<dyn MetricsSink>,
 }
 
 struct WithheldStreamCredit {
@@ -257,15 +263,87 @@ impl<T: OwnedTransport> SessionEngine<T> {
             lifecycle: SessionLifecycle::new(generation, offer.limits, now)?,
             scheduler: FairScheduler::new(offer.limits)?,
             streams: NamedStreamMux::new(offer.limits)?,
-            outbound_requests: crate::RequestRegistry::new(generation)?,
-            inbound_requests: crate::RequestRegistry::new(generation)?,
+            outbound_requests: crate::RequestRegistry::with_limit(
+                generation,
+                Self::negotiated_active_request_limit(offer.limits),
+            )?,
+            inbound_requests: crate::RequestRegistry::with_limit(
+                generation,
+                Self::negotiated_active_request_limit(offer.limits),
+            )?,
             reassemblers: BTreeMap::new(),
             next_message_id: 1,
             next_record_sequence: 0,
             pending_attachment_credits: BTreeMap::new(),
             outstanding_attachment_credits: 0,
             withheld_stream_credits: BTreeMap::new(),
+            pending_stream_transport: BTreeMap::new(),
+            metrics: Arc::new(NoopMetrics),
         })
+    }
+
+    fn negotiated_active_request_limit(limits: LimitProfile) -> usize {
+        usize::try_from(limits.ttrpc_control_queue_bytes)
+            .unwrap_or(usize::MAX)
+            .div_ceil(ACTIVE_REQUEST_RESERVATION_BYTES)
+            .clamp(1, MAX_ACTIVE_REQUESTS_PER_SESSION)
+    }
+
+    pub fn with_metrics(mut self, metrics: Arc<dyn MetricsSink>) -> Self {
+        self.metrics = metrics;
+        self
+    }
+
+    pub(crate) fn set_metrics(&mut self, metrics: Arc<dyn MetricsSink>) {
+        self.metrics = metrics;
+    }
+
+    pub(crate) fn record_metric(
+        &self,
+        event: MetricEvent,
+        channel_class: ChannelClass,
+        operation_class: OperationClass,
+        result: MetricResult,
+        reason: MetricReason,
+    ) {
+        let descriptor = self.transport.descriptor();
+        self.metrics.record(
+            event,
+            MetricLabels {
+                transport: descriptor.class,
+                purpose: self.offer.purpose,
+                service: self.offer.service,
+                channel_class,
+                noise: self.offer.noise_profile,
+                locality: descriptor.locality,
+                operation_class,
+                attachment_class: None,
+                health_state: if matches!(result, MetricResult::Accepted) {
+                    HealthState::Healthy
+                } else {
+                    HealthState::Degraded
+                },
+                result,
+                reason,
+            },
+            1,
+        );
+    }
+
+    pub(crate) fn record_failure(
+        &self,
+        event: MetricEvent,
+        channel_class: ChannelClass,
+        operation_class: OperationClass,
+        error: SessionError,
+    ) {
+        self.record_metric(
+            event,
+            channel_class,
+            operation_class,
+            MetricResult::Rejected,
+            crate::metrics::reason_for_error(error.code()),
+        );
     }
 
     pub fn generation(&self) -> u64 {
@@ -394,6 +472,9 @@ impl<T: OwnedTransport> SessionEngine<T> {
         if bytes.is_empty() {
             return Err(SessionError::new(SessionErrorCode::InvalidChannel));
         }
+        if bytes.len() > self.offer.limits.named_stream_queue_bytes as usize {
+            return Err(SessionError::new(SessionErrorCode::QueueBackpressure));
+        }
         self.streams.ensure_send_open(stream)?;
         let message_id = self.next_message_id;
         self.next_message_id = self
@@ -414,6 +495,18 @@ impl<T: OwnedTransport> SessionEngine<T> {
 
     pub(crate) fn aggregate_named_stream_limit(&self) -> usize {
         self.offer.limits.aggregate_named_stream_queue_bytes as usize
+    }
+
+    pub(crate) fn ttrpc_event_queue_limit(&self) -> usize {
+        self.offer.limits.ttrpc_control_queue_bytes as usize
+    }
+
+    pub(crate) fn stream_event_queue_limit(&self) -> usize {
+        self.offer.limits.aggregate_named_stream_queue_bytes as usize
+    }
+
+    pub(crate) fn control_event_queue_limit(&self) -> usize {
+        self.offer.limits.session_control_queue_bytes as usize
     }
 
     pub(crate) async fn send_named_stream_fragment(
@@ -437,12 +530,10 @@ impl<T: OwnedTransport> SessionEngine<T> {
             .checked_add(1)
             .ok_or_else(|| SessionError::new(SessionErrorCode::NonceExhausted))?;
         if let Err(error) = self
-            .transport
-            .send(TransportPacket::new(protected.into_bytes()))
+            .send_packet_with_deadline(TransportPacket::new(protected.into_bytes()))
             .await
         {
             self.streams.refund_send_credit(stream, len)?;
-            let error = SessionError::from(error);
             self.fail_closed().await;
             return Err(error);
         }
@@ -803,41 +894,47 @@ impl<T: OwnedTransport> SessionEngine<T> {
         let stream = StreamId::new(header.channel.value())?;
         let fragment_len = u32::try_from(protected_payload.len() - FRAGMENT_HEADER_LEN)
             .map_err(|_| SessionError::new(SessionErrorCode::ArithmeticOverflow))?;
+        let pending = self
+            .pending_stream_transport
+            .get(&stream)
+            .copied()
+            .unwrap_or(0);
+        let withheld = self
+            .withheld_stream_credits
+            .get(&stream)
+            .into_iter()
+            .flatten()
+            .try_fold(0_u32, |total, entry| {
+                total
+                    .checked_add(entry.transport_bytes)
+                    .ok_or_else(|| SessionError::new(SessionErrorCode::ArithmeticOverflow))
+            })?;
+        let next_pending = pending
+            .checked_add(fragment_len)
+            .ok_or_else(|| SessionError::new(SessionErrorCode::ArithmeticOverflow))?;
+        if withheld.saturating_add(next_pending) > self.offer.limits.named_stream_queue_bytes {
+            return Err(SessionError::new(SessionErrorCode::QueueBackpressure));
+        }
         self.streams
             .reserve_receive_fragment(stream, fragment_len)?;
+        self.pending_stream_transport.insert(stream, next_pending);
         let complete = self.reassemble(header, protected_payload)?;
         if let Some(bytes) = complete {
             let logical_bytes = u32::try_from(bytes.len())
                 .map_err(|_| SessionError::new(SessionErrorCode::ArithmeticOverflow))?;
             let withheld = self.withheld_stream_credits.entry(stream).or_default();
-            let total_transport = withheld.iter().try_fold(fragment_len, |total, entry| {
-                total
-                    .checked_add(entry.transport_bytes)
-                    .ok_or_else(|| SessionError::new(SessionErrorCode::ArithmeticOverflow))
-            })?;
-            if total_transport > self.offer.limits.named_stream_queue_bytes {
-                return Err(SessionError::new(SessionErrorCode::QueueBackpressure));
-            }
+            let transport_bytes = self
+                .pending_stream_transport
+                .remove(&stream)
+                .ok_or_else(|| SessionError::new(SessionErrorCode::InternalInvariant))?;
             withheld.push_back(WithheldStreamCredit {
                 logical_remaining: logical_bytes,
-                transport_bytes: fragment_len,
+                transport_bytes,
             });
             return Ok(SessionEvent::NamedStream(
                 self.streams.complete_receive(stream, bytes),
             ));
         }
-
-        // Reassembly owns incomplete fragments, so replenish only their
-        // transport window. Final-fragment credit remains withheld until the
-        // application reports logical-message consumption.
-        self.streams.release_receive_credit(stream, fragment_len)?;
-        self.send_logical(
-            RecordKind::SessionControl,
-            ChannelId::SESSION_CONTROL,
-            encode_stream_control(STREAM_CREDIT, stream, fragment_len),
-            Vec::new(),
-        )
-        .await?;
         Ok(SessionEvent::ControlProcessed)
     }
 
@@ -856,6 +953,7 @@ impl<T: OwnedTransport> SessionEngine<T> {
             STREAM_RESET => {
                 self.scheduler.remove_stream(stream);
                 self.withheld_stream_credits.remove(&stream);
+                self.pending_stream_transport.remove(&stream);
                 let event = self.streams.reset(stream)?;
                 self.remove_terminal_stream(stream);
                 Ok(SessionEvent::NamedStream(event))
@@ -868,6 +966,7 @@ impl<T: OwnedTransport> SessionEngine<T> {
         if self.streams.remove_terminal(stream) {
             self.scheduler.remove_stream(stream);
             self.withheld_stream_credits.remove(&stream);
+            self.pending_stream_transport.remove(&stream);
             self.reassemblers
                 .remove(&(RecordKind::NamedStream, stream.channel()));
         }
@@ -947,19 +1046,25 @@ impl<T: OwnedTransport> SessionEngine<T> {
                 .checked_add(1)
                 .ok_or_else(|| SessionError::new(SessionErrorCode::NonceExhausted))?;
             if let Err(error) = self
-                .transport
-                .send(TransportPacket::with_attachments(
+                .send_packet_with_deadline(TransportPacket::with_attachments(
                     protected.into_bytes(),
                     packet_attachments,
                 ))
                 .await
             {
-                let error = SessionError::from(error);
                 self.fail_closed().await;
                 return Err(error);
             }
         }
         Ok(())
+    }
+
+    async fn send_packet_with_deadline(&mut self, packet: TransportPacket) -> Result<()> {
+        let timeout = Duration::from_millis(u64::from(self.offer.limits.keepalive_timeout_ms));
+        match tokio::time::timeout(timeout, self.transport.send(packet)).await {
+            Ok(result) => result.map_err(SessionError::from),
+            Err(_) => Err(SessionError::new(SessionErrorCode::KeepaliveTimeout)),
+        }
     }
 
     async fn send_attachment_ack(&mut self, sequence: u64, count: u16) -> Result<()> {

@@ -7,6 +7,7 @@ use d2b_resource_api::authz::{
     AuthorizationDenial, AuthorizationPolicyError, AuthorizationState, NativeAuthorizer, PolicySet,
     SessionVerb,
 };
+use d2b_session::{OperationMember, SessionOperation};
 
 use crate::{
     registry::{RouteKey, RouteTarget},
@@ -54,6 +55,7 @@ impl BusAuthorizer {
         self.lock().native.mark_policy_unavailable();
     }
 
+    #[cfg(test)]
     pub(crate) fn authorize_connect(
         &self,
         context: &AuthenticatedSubjectContext,
@@ -193,17 +195,19 @@ fn relay_origin(context: &AuthenticatedSubjectContext) -> Result<bool, Authoriza
 }
 
 fn diagnostic_verb(route: &RouteKey) -> Result<Option<SessionVerb>, AuthorizationError> {
-    let service = route.service().as_str();
-    let member = route.member().as_str();
-    match (service, member) {
-        ("d2b.audit.v3", "AuditService/Export") if route.member().is_method() => {
-            Ok(Some(SessionVerb::AuditExport))
-        }
-        ("d2b.support.v3", "SupportService/GenerateBundle") if route.member().is_method() => {
-            Ok(Some(SessionVerb::SupportBundle))
-        }
-        ("d2b.audit.v3" | "d2b.support.v3", _) => Err(AuthorizationError::DiagnosticBinding),
-        _ => Ok(None),
+    let member = if route.member().is_method() {
+        OperationMember::method(route.member().as_str())
+    } else {
+        OperationMember::stream(route.member().as_str())
+    }
+    .map_err(|_| AuthorizationError::DiagnosticBinding)?;
+    let operation = SessionOperation::new(route.service().clone(), member)
+        .map_err(|_| AuthorizationError::DiagnosticBinding)?;
+    let verb = operation.required_verb(SessionVerb::Invoke);
+    if matches!(verb, SessionVerb::AuditExport | SessionVerb::SupportBundle) {
+        Ok(Some(verb))
+    } else {
+        Ok(None)
     }
 }
 
@@ -233,20 +237,127 @@ pub enum AuthorizationError {
     InvalidResourceCall,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthorizationErrorClass {
+    MissingGrant,
+    PolicyUnavailable,
+    PolicyRevisionChanged,
+    SessionBinding,
+    RelayDenied,
+    BootstrapDenied,
+    UnknownResource,
+    InvalidPolicy,
+    InvalidRequest,
+}
+
+impl AuthorizationErrorClass {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::MissingGrant => "missing-grant",
+            Self::PolicyUnavailable => "policy-unavailable",
+            Self::PolicyRevisionChanged => "policy-revision-changed",
+            Self::SessionBinding => "session-binding",
+            Self::RelayDenied => "relay-denied",
+            Self::BootstrapDenied => "bootstrap-denied",
+            Self::UnknownResource => "unknown-resource",
+            Self::InvalidPolicy => "invalid-policy",
+            Self::InvalidRequest => "invalid-request",
+        }
+    }
+}
+
+pub const fn session_verb_name(verb: SessionVerb) -> &'static str {
+    match verb {
+        SessionVerb::Connect => "connect",
+        SessionVerb::Invoke => "invoke",
+        SessionVerb::OpenStream => "open-stream",
+        SessionVerb::Relay => "relay",
+        SessionVerb::Attach => "attach",
+        SessionVerb::Cancel => "cancel",
+        SessionVerb::Observe => "observe",
+        SessionVerb::AuditExport => "audit-export",
+        SessionVerb::SupportBundle => "support-bundle",
+    }
+}
+
+impl AuthorizationError {
+    pub const fn class(self) -> AuthorizationErrorClass {
+        match self {
+            Self::SessionVerbMissing(_) => AuthorizationErrorClass::MissingGrant,
+            Self::Native(AuthorizationDenial::PolicyUnavailable) => {
+                AuthorizationErrorClass::PolicyUnavailable
+            }
+            Self::Native(AuthorizationDenial::PolicyRevisionChanged) => {
+                AuthorizationErrorClass::PolicyRevisionChanged
+            }
+            Self::ZoneMismatch
+            | Self::SessionBindingMismatch
+            | Self::DiagnosticBinding
+            | Self::Native(AuthorizationDenial::ZoneMismatch) => {
+                AuthorizationErrorClass::SessionBinding
+            }
+            Self::RelayOriginInvalid
+            | Self::RelayGrantMissing
+            | Self::Native(AuthorizationDenial::RelayOriginInvalid)
+            | Self::Native(AuthorizationDenial::RelayGrantMissing)
+            | Self::Native(AuthorizationDenial::RelayTargetGrantMissing) => {
+                AuthorizationErrorClass::RelayDenied
+            }
+            Self::Native(AuthorizationDenial::BootstrapDenied) => {
+                AuthorizationErrorClass::BootstrapDenied
+            }
+            Self::Native(AuthorizationDenial::UnknownResourceType) => {
+                AuthorizationErrorClass::UnknownResource
+            }
+            Self::PolicyRevisionZero | Self::Policy(_) => AuthorizationErrorClass::InvalidPolicy,
+            Self::InvalidResourceCall => AuthorizationErrorClass::InvalidRequest,
+            Self::Native(AuthorizationDenial::NoMatchingGrant) => {
+                AuthorizationErrorClass::MissingGrant
+            }
+        }
+    }
+
+    pub const fn required_verb(self) -> Option<SessionVerb> {
+        match self {
+            Self::SessionVerbMissing(verb) => Some(verb),
+            _ => None,
+        }
+    }
+
+    pub const fn native_denial(self) -> Option<AuthorizationDenial> {
+        match self {
+            Self::Native(denial) => Some(denial),
+            _ => None,
+        }
+    }
+
+    pub const fn remediation(self) -> &'static str {
+        match self.class() {
+            AuthorizationErrorClass::MissingGrant => "inspect-role-binding",
+            AuthorizationErrorClass::PolicyUnavailable => "retry-policy-load",
+            AuthorizationErrorClass::PolicyRevisionChanged => "retry-current-generation",
+            AuthorizationErrorClass::SessionBinding => "reconnect-current-generation",
+            AuthorizationErrorClass::RelayDenied => "inspect-relay-grant",
+            AuthorizationErrorClass::BootstrapDenied => "complete-enrollment",
+            AuthorizationErrorClass::UnknownResource => "repair-configuration",
+            AuthorizationErrorClass::InvalidPolicy => "repair-policy",
+            AuthorizationErrorClass::InvalidRequest => "repair-request",
+        }
+    }
+}
+
 impl core::fmt::Display for AuthorizationError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str(match self {
-            Self::PolicyRevisionZero => "bus authorization requires durable policy",
-            Self::ZoneMismatch => "authenticated subject and route Zone differ",
-            Self::SessionBindingMismatch => "route differs from the authenticated session binding",
-            Self::RelayOriginInvalid => "relay origin is not an enrolled adjacent Zone",
-            Self::RelayGrantMissing => "relay authorization is missing",
-            Self::DiagnosticBinding => "diagnostic verb is not bound to its exact service method",
-            Self::SessionVerbMissing(_) => "required session verb is missing",
-            Self::Native(_) => "native authorization denied the request",
-            Self::Policy(_) => "native authorization policy is invalid",
-            Self::InvalidResourceCall => "resource authorization input is invalid",
-        })
+        write!(
+            f,
+            "authorization-denied class={} remediation={}",
+            self.class().as_str(),
+            self.remediation()
+        )?;
+        if let Some(verb) = self.required_verb() {
+            write!(f, " required-verb={}", session_verb_name(verb))?;
+        }
+        Ok(())
     }
 }
 
@@ -294,6 +405,29 @@ mod tests {
         registry::{RouteGenerations, RouteMember, RouteTarget},
         router::{ResourceCall, ResourceQuery},
     };
+
+    #[test]
+    fn denials_expose_only_closed_class_verb_and_remediation() {
+        let missing = AuthorizationError::SessionVerbMissing(SessionVerb::AuditExport);
+        assert_eq!(missing.class(), AuthorizationErrorClass::MissingGrant);
+        assert_eq!(missing.required_verb(), Some(SessionVerb::AuditExport));
+        assert_eq!(missing.remediation(), "inspect-role-binding");
+        assert_eq!(
+            missing.to_string(),
+            "authorization-denied class=missing-grant remediation=inspect-role-binding required-verb=audit-export"
+        );
+
+        let unavailable = AuthorizationError::Native(AuthorizationDenial::PolicyUnavailable);
+        assert_eq!(
+            unavailable.class(),
+            AuthorizationErrorClass::PolicyUnavailable
+        );
+        assert_eq!(
+            unavailable.native_denial(),
+            Some(AuthorizationDenial::PolicyUnavailable)
+        );
+        assert_eq!(unavailable.remediation(), "retry-policy-load");
+    }
 
     const SUBJECT_UID: &str = "11111111-1111-4111-8111-111111111111";
 

@@ -5,14 +5,19 @@ use std::{
         Arc, Mutex, MutexGuard,
         atomic::{AtomicU64, Ordering},
     },
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use d2b_contracts::v3::{ResourceName, ResourceRef, ResourceTypeName, ZoneId};
 use d2b_resource_api::authz::{
     ApiMethod, AuthorizationRequest, AuthorizationState, AuthorizationTarget, PolicySet,
-    ResourceVerb,
+    ResourceVerb, SessionVerb,
 };
+use d2b_session::{
+    AdmittedComponentSession, AdmittedSessionRouteBinding, ComponentSessionRegistrar,
+    SessionAuthorizationRequest, SessionOperation,
+};
+use tokio::sync::Mutex as AsyncMutex;
 
 use crate::{
     authorization::{AuthorizationError, BusAuthorizer},
@@ -30,6 +35,8 @@ use crate::{
 
 /// Default maximum bytes in one method payload.
 pub const DEFAULT_MAX_PAYLOAD_BYTES: usize = 1024 * 1024;
+pub const DEFAULT_MAX_ROUTES_PER_SESSION: usize = 128;
+pub const DEFAULT_MAX_TOTAL_ROUTES: usize = 4096;
 
 /// Monotonic clock used for operation deadlines.
 pub trait BusClock: Send + Sync + 'static {
@@ -83,6 +90,9 @@ impl core::fmt::Debug for ManualClock {
 pub struct BusConfig {
     pub max_payload_bytes: usize,
     pub max_operations: usize,
+    pub max_operations_per_session: usize,
+    pub max_routes_per_session: usize,
+    pub max_total_routes: usize,
     pub stream_limits: StreamLimits,
 }
 
@@ -91,6 +101,9 @@ impl Default for BusConfig {
         Self {
             max_payload_bytes: DEFAULT_MAX_PAYLOAD_BYTES,
             max_operations: crate::operations::DEFAULT_MAX_OPERATIONS,
+            max_operations_per_session: crate::operations::DEFAULT_MAX_OPERATIONS_PER_SESSION,
+            max_routes_per_session: DEFAULT_MAX_ROUTES_PER_SESSION,
+            max_total_routes: DEFAULT_MAX_TOTAL_ROUTES,
             stream_limits: StreamLimits::default(),
         }
     }
@@ -339,6 +352,21 @@ impl ResourceCall {
         }
     }
 
+    fn session_target(&self) -> Option<&ResourceRef> {
+        match self {
+            Self::Get(target)
+            | Self::Create(target)
+            | Self::UpdateSpec(target)
+            | Self::UpdateStatus(target)
+            | Self::UpdateMetadata(target)
+            | Self::UpdateFinalizers(target)
+            | Self::Delete(target)
+            | Self::ResolveRef(target)
+            | Self::Upgrade(target) => Some(target),
+            Self::List(_) | Self::Watch(_) | Self::CommitBatch(_) | Self::InspectSchema(_) => None,
+        }
+    }
+
     fn matches_route_target(&self, route_target: &RouteTarget) -> bool {
         let RouteTarget::Resource(route_target) = route_target else {
             return true;
@@ -525,13 +553,36 @@ struct BusCore {
     streams: Arc<StreamBridge>,
     clock: Arc<dyn BusClock>,
     max_payload_bytes: usize,
+    observer: Arc<dyn BusObserver>,
+    #[cfg(test)]
+    invocation_hooks: Mutex<InvocationHooks>,
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct InvocationHooks {
+    after_resolve: Option<Arc<InvocationHook>>,
+    before_invoke: Option<Arc<InvocationHook>>,
+}
+
+#[cfg(test)]
+struct InvocationHook {
+    reached: tokio::sync::Notify,
+    release: tokio::sync::Notify,
 }
 
 impl BusCore {
     fn cleanup_session(&self, session: SessionId) {
+        // Revoke first so no new operation can acquire a lease after the
+        // cancellation sweep has started.
+        self.lock_registry().remove(session);
         self.lock_operations().cancel_session(session);
         self.streams.cancel_session(session);
-        self.lock_registry().remove(session);
+    }
+
+    fn observe_error(&self, event: BusEvent, error: &BusError) {
+        self.observer
+            .record(event, BusFailureReason::from_error(error));
     }
 
     fn lock_registry(&self) -> MutexGuard<'_, Registry> {
@@ -552,6 +603,58 @@ pub struct ZoneBus {
     core: Arc<BusCore>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BusEvent {
+    Invoke,
+    OpenStream,
+    Cancel,
+    Cleanup,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BusFailureReason {
+    Authorization,
+    Route,
+    Session,
+    Capacity,
+    Backpressure,
+    Deadline,
+    Cancelled,
+    Endpoint,
+    Abandoned,
+}
+
+impl BusFailureReason {
+    const fn from_error(error: &BusError) -> Self {
+        match error {
+            BusError::Authorization(_) => Self::Authorization,
+            BusError::InvalidResourceCall | BusError::RouteShape | BusError::Registry(_) => {
+                Self::Route
+            }
+            BusError::SessionMismatch | BusError::SessionClosed => Self::Session,
+            BusError::Cancelled => Self::Cancelled,
+            BusError::Operation(OperationError::DeadlineExceeded) => Self::Deadline,
+            BusError::Operation(OperationError::CapacityExceeded)
+            | BusError::Operation(OperationError::SessionCapacityExceeded)
+            | BusError::Stream(StreamError::StreamCapacityExceeded)
+            | BusError::Stream(StreamError::PrincipalCapacityExceeded) => Self::Capacity,
+            BusError::Operation(_) | BusError::Stream(_) => Self::Backpressure,
+            BusError::Endpoint(_) | BusError::InvalidConfig => Self::Endpoint,
+        }
+    }
+}
+
+pub trait BusObserver: Send + Sync {
+    fn record(&self, event: BusEvent, reason: BusFailureReason);
+}
+
+#[derive(Debug, Default)]
+pub struct NoopBusObserver;
+
+impl BusObserver for NoopBusObserver {
+    fn record(&self, _event: BusEvent, _reason: BusFailureReason) {}
+}
+
 impl ZoneBus {
     /// Construct a bus with a process-monotonic clock.
     pub fn new(
@@ -562,6 +665,21 @@ impl ZoneBus {
         Self::with_clock(zone, authorizer, config, Arc::new(SystemClock::new()))
     }
 
+    pub fn with_observer(
+        zone: ZoneId,
+        authorizer: BusAuthorizer,
+        config: BusConfig,
+        observer: Arc<dyn BusObserver>,
+    ) -> Result<(Self, ZoneRegistrar), BusError> {
+        Self::with_clock_and_observer(
+            zone,
+            authorizer,
+            config,
+            Arc::new(SystemClock::new()),
+            observer,
+        )
+    }
+
     /// Construct a bus with an injected monotonic clock.
     pub fn with_clock(
         zone: ZoneId,
@@ -569,19 +687,41 @@ impl ZoneBus {
         config: BusConfig,
         clock: Arc<dyn BusClock>,
     ) -> Result<(Self, ZoneRegistrar), BusError> {
-        if config.max_payload_bytes == 0 {
+        Self::with_clock_and_observer(zone, authorizer, config, clock, Arc::new(NoopBusObserver))
+    }
+
+    pub fn with_clock_and_observer(
+        zone: ZoneId,
+        authorizer: BusAuthorizer,
+        config: BusConfig,
+        clock: Arc<dyn BusClock>,
+        observer: Arc<dyn BusObserver>,
+    ) -> Result<(Self, ZoneRegistrar), BusError> {
+        if config.max_payload_bytes == 0
+            || config.max_routes_per_session == 0
+            || config.max_total_routes == 0
+            || config.max_routes_per_session > config.max_total_routes
+        {
             return Err(BusError::InvalidConfig);
         }
-        let operations = OperationTable::new(config.max_operations)?;
+        let operations =
+            OperationTable::new(config.max_operations, config.max_operations_per_session)?;
         let streams = StreamBridge::new(config.stream_limits)?;
         let core = Arc::new(BusCore {
-            registry: Mutex::new(Registry::new(zone.clone())),
+            registry: Mutex::new(Registry::new(
+                zone.clone(),
+                config.max_routes_per_session,
+                config.max_total_routes,
+            )),
             zone,
             authorizer,
             operations: Mutex::new(operations),
             streams,
             clock,
             max_payload_bytes: config.max_payload_bytes,
+            observer,
+            #[cfg(test)]
+            invocation_hooks: Mutex::new(InvocationHooks::default()),
         });
         Ok((
             Self {
@@ -619,11 +759,15 @@ pub struct ZoneRegistrar {
 }
 
 impl ZoneRegistrar {
-    /// Register one authenticated session and its exact endpoint routes.
-    pub fn register(&mut self, registration: SessionRegistration) -> Result<BusIngress, BusError> {
+    #[cfg(test)]
+    pub(crate) fn register(
+        &mut self,
+        registration: SessionRegistration,
+    ) -> Result<BusIngress, BusError> {
+        let context = registration.context().ok_or(BusError::SessionMismatch)?;
         self.core
             .authorizer
-            .authorize_connect(registration.context(), &self.core.zone)?;
+            .authorize_connect(context, &self.core.zone)?;
         let session = self.core.lock_registry().register(registration)?;
         Ok(BusIngress {
             core: Arc::clone(&self.core),
@@ -633,7 +777,8 @@ impl ZoneRegistrar {
     }
 
     /// Replace a session with the exact next reconnect generation.
-    pub fn reconnect(
+    #[cfg(test)]
+    pub(crate) fn reconnect(
         &mut self,
         mut previous: BusIngress,
         registration: SessionRegistration,
@@ -641,9 +786,142 @@ impl ZoneRegistrar {
         if !Arc::ptr_eq(&self.core, &previous.core) || previous.closed {
             return Err(BusError::SessionMismatch);
         }
+        let context = registration.context().ok_or(BusError::SessionMismatch)?;
         self.core
             .authorizer
-            .authorize_connect(registration.context(), &self.core.zone)?;
+            .authorize_connect(context, &self.core.zone)?;
+        let session = self
+            .core
+            .lock_registry()
+            .reconnect(previous.session, registration)?;
+        self.core.lock_operations().cancel_session(previous.session);
+        self.core.streams.cancel_session(previous.session);
+        previous.closed = true;
+        Ok(BusIngress {
+            core: Arc::clone(&self.core),
+            session,
+            closed: false,
+        })
+    }
+}
+
+struct ComponentEndpoint {
+    session: AsyncMutex<AdmittedComponentSession>,
+    clock: Arc<dyn BusClock>,
+}
+
+#[async_trait::async_trait]
+impl crate::registry::BusEndpoint for ComponentEndpoint {
+    async fn authorize(
+        &self,
+        route: &RouteKey,
+        verb: d2b_resource_api::authz::SessionVerb,
+        target: Option<&ResourceRef>,
+        now_tick: u64,
+    ) -> Result<(), EndpointError> {
+        let request = SessionAuthorizationRequest::new(
+            verb,
+            route.service().clone(),
+            route.member().as_str(),
+            route.zone().clone(),
+            target.cloned(),
+        )
+        .map_err(|_| EndpointError::Rejected)?;
+        self.session
+            .lock()
+            .await
+            .authorize(request, now_tick)
+            .await
+            .map(|_| ())
+            .map_err(|_| EndpointError::Rejected)
+    }
+
+    async fn invoke(&self, request: DeliveredInvocation) -> Result<BusResponse, EndpointError> {
+        let ordinary = d2b_resource_api::authz::SessionVerb::Invoke;
+        let operation = SessionOperation::method(
+            request.route().service().clone(),
+            request.route().member().as_str(),
+        )
+        .map_err(|_| EndpointError::Rejected)?;
+        let verb = operation.required_verb(ordinary);
+        let now_tick = self.clock.now_tick();
+        let authorization = SessionAuthorizationRequest::new(
+            verb,
+            request.route().service().clone(),
+            request.route().member().as_str(),
+            request.route().zone().clone(),
+            request
+                .resource_call()
+                .and_then(ResourceCall::session_target)
+                .cloned(),
+        )
+        .map_err(|_| EndpointError::Rejected)?;
+        let mut session = self.session.lock().await;
+        let permit = session
+            .authorize(authorization, now_tick)
+            .await
+            .map_err(|_| EndpointError::Rejected)?;
+        session
+            .send_authorized_ttrpc(permit, request.payload().to_vec(), now_tick)
+            .await
+            .map_err(|_| EndpointError::Unavailable)?;
+        session
+            .receive_ttrpc()
+            .await
+            .map(BusResponse::new)
+            .map_err(|_| EndpointError::Unavailable)
+    }
+
+    async fn open_stream(&self, _request: DeliveredStream) -> Result<(), EndpointError> {
+        Err(EndpointError::Unavailable)
+    }
+}
+
+#[async_trait::async_trait]
+impl ComponentSessionRegistrar for ZoneRegistrar {
+    type Registration = BusIngress;
+    type Error = BusError;
+
+    async fn register_component_session(
+        &mut self,
+        session: AdmittedComponentSession,
+    ) -> Result<Self::Registration, Self::Error> {
+        let binding = session.route_binding();
+        if binding.zone() != &self.core.zone {
+            return Err(BusError::SessionMismatch);
+        }
+        let routes = routes_for_admitted_session(&binding)?;
+        let endpoint: Arc<dyn crate::registry::BusEndpoint> = Arc::new(ComponentEndpoint {
+            session: AsyncMutex::new(session),
+            clock: Arc::clone(&self.core.clock),
+        });
+        let registration = SessionRegistration::admitted(binding, routes, endpoint);
+        let session = self.core.lock_registry().register(registration)?;
+        Ok(BusIngress {
+            core: Arc::clone(&self.core),
+            session,
+            closed: false,
+        })
+    }
+
+    async fn reconnect_component_session(
+        &mut self,
+        mut previous: Self::Registration,
+        session: AdmittedComponentSession,
+    ) -> Result<Self::Registration, Self::Error> {
+        if !Arc::ptr_eq(&self.core, &previous.core) || previous.closed {
+            return Err(BusError::SessionMismatch);
+        }
+        let binding = session.route_binding();
+        if binding.zone() != &self.core.zone {
+            return Err(BusError::SessionMismatch);
+        }
+        let routes = routes_for_admitted_session(&binding)?;
+        let endpoint: Arc<dyn crate::registry::BusEndpoint> = Arc::new(ComponentEndpoint {
+            session: AsyncMutex::new(session),
+            clock: Arc::clone(&self.core.clock),
+        });
+        let registration = SessionRegistration::admitted(binding, routes, endpoint);
         let session = self
             .core
             .lock_registry()
@@ -658,6 +936,75 @@ impl ZoneRegistrar {
         })
     }
 
+    async fn disconnect_component_session(
+        &mut self,
+        registration: Self::Registration,
+    ) -> Result<(), Self::Error> {
+        self.revoke(registration)
+    }
+}
+
+fn routes_for_admitted_session(
+    binding: &AdmittedSessionRouteBinding,
+) -> Result<Vec<RouteKey>, BusError> {
+    if binding.subject_ref().resource_type().as_str() != "Provider" {
+        return Ok(Vec::new());
+    }
+    let target_ref = binding
+        .provider_ref()
+        .unwrap_or_else(|| binding.subject_ref())
+        .clone();
+    let target = if target_ref.resource_type().as_str() == "Provider" {
+        RouteTarget::provider(target_ref)?
+    } else {
+        RouteTarget::resource(target_ref)?
+    };
+    let generations = crate::registry::RouteGenerations::new(
+        binding.provider_generation(),
+        binding.controller_generation(),
+        binding.reconnect_generation(),
+    );
+    let members: &[(&str, bool)] = match binding.service().as_str() {
+        "d2b.resource.v3" => &[
+            ("ResourceService/Get", false),
+            ("ResourceService/List", false),
+            ("ResourceService/Watch", true),
+            ("ResourceService/Create", false),
+            ("ResourceService/UpdateSpec", false),
+            ("ResourceService/UpdateStatus", false),
+            ("ResourceService/UpdateMetadata", false),
+            ("ResourceService/UpdateFinalizers", false),
+            ("ResourceService/Delete", false),
+            ("ResourceService/CommitBatch", false),
+            ("ResourceService/ResolveRef", false),
+            ("ResourceService/InspectSchema", false),
+            ("ResourceService/Upgrade", false),
+        ],
+        "d2b.audit.v3" => &[("AuditService/Export", false)],
+        "d2b.support.v3" => &[("SupportService/GenerateBundle", false)],
+        _ => &[],
+    };
+    members
+        .iter()
+        .map(|(member, stream)| {
+            let member = if *stream {
+                crate::registry::RouteMember::stream(*member)?
+            } else {
+                crate::registry::RouteMember::method(*member)?
+            };
+            Ok(RouteKey::new(
+                binding.zone().clone(),
+                binding.service().clone(),
+                member,
+                target.clone(),
+                binding.schema().clone(),
+                generations,
+            ))
+        })
+        .collect()
+}
+
+impl ZoneRegistrar {
     /// Revoke a session, its routes, operations, and streams.
     pub fn revoke(&mut self, mut ingress: BusIngress) -> Result<(), BusError> {
         if !Arc::ptr_eq(&self.core, &ingress.core) || ingress.closed {
@@ -682,7 +1029,76 @@ pub struct BusIngress {
     closed: bool,
 }
 
+struct OperationLease {
+    core: Arc<BusCore>,
+    source: SessionId,
+    operation: OperationId,
+    armed: bool,
+}
+
+impl OperationLease {
+    fn new(core: Arc<BusCore>, source: SessionId, operation: OperationId) -> Self {
+        Self {
+            core,
+            source,
+            operation,
+            armed: true,
+        }
+    }
+
+    fn finish(&mut self) -> Result<(), BusError> {
+        if !self.armed {
+            return Ok(());
+        }
+        self.armed = false;
+        self.core.lock_operations().finish(
+            &self.operation,
+            self.source,
+            self.core.clock.now_tick(),
+        )?;
+        Ok(())
+    }
+}
+
+impl Drop for OperationLease {
+    fn drop(&mut self) {
+        if self.armed {
+            self.core
+                .lock_operations()
+                .abort(&self.operation, self.source);
+            self.armed = false;
+        }
+    }
+}
+
 impl BusIngress {
+    async fn authorize_route(
+        &self,
+        route: &RouteKey,
+        resource_call: Option<&ResourceCall>,
+        verb: SessionVerb,
+        stream: bool,
+    ) -> Result<(), BusError> {
+        let source = self.core.lock_registry().source(self.session)?;
+        if let Some(context) = source.context {
+            self.core
+                .authorizer
+                .authorize_dispatch(&context, route, resource_call, stream)?;
+            Ok(())
+        } else {
+            source
+                .endpoint
+                .authorize(
+                    route,
+                    verb,
+                    resource_call.and_then(ResourceCall::session_target),
+                    self.core.clock.now_tick(),
+                )
+                .await
+                .map_err(BusError::Endpoint)
+        }
+    }
+
     /// Invoke a non-resource exact service method.
     pub async fn invoke(
         &self,
@@ -690,7 +1106,11 @@ impl BusIngress {
         operation: OperationSpec,
         payload: Vec<u8>,
     ) -> Result<BusResponse, BusError> {
-        self.invoke_inner(route, operation, None, payload).await
+        let result = self.invoke_inner(route, operation, None, payload).await;
+        if let Err(error) = &result {
+            self.core.observe_error(BusEvent::Invoke, error);
+        }
+        result
     }
 
     /// Invoke an exact ResourceService method.
@@ -701,8 +1121,13 @@ impl BusIngress {
         call: ResourceCall,
         payload: Vec<u8>,
     ) -> Result<BusResponse, BusError> {
-        self.invoke_inner(route, operation, Some(call), payload)
-            .await
+        let result = self
+            .invoke_inner(route, operation, Some(call), payload)
+            .await;
+        if let Err(error) = &result {
+            self.core.observe_error(BusEvent::Invoke, error);
+        }
+        result
     }
 
     async fn invoke_inner(
@@ -718,26 +1143,31 @@ impl BusIngress {
         }
         validate_resource_route(&route, resource_call.as_ref())?;
 
-        {
-            let registry = self.core.lock_registry();
-            registry.with_context(self.session, |context| {
-                self.core.authorizer.authorize_dispatch(
-                    context,
-                    &route,
-                    resource_call.as_ref(),
-                    false,
-                )
-            })??
-        };
+        let ordinary = SessionVerb::Invoke;
+        let session_operation =
+            SessionOperation::method(route.service().clone(), route.member().as_str())
+                .map_err(|_| BusError::RouteShape)?;
+        self.authorize_route(
+            &route,
+            resource_call.as_ref(),
+            session_operation.required_verb(ordinary),
+            false,
+        )
+        .await?;
         let destination = self.core.lock_registry().resolve(&route)?;
+        #[cfg(test)]
+        self.wait_for_invocation_hook(true).await;
+        let endpoint = destination.endpoint();
         let now = self.core.clock.now_tick();
         let cancellation = self.core.lock_operations().begin(
             &operation,
             self.session,
-            destination.session,
+            destination,
             route.clone(),
             now,
         )?;
+        let mut lease =
+            OperationLease::new(Arc::clone(&self.core), self.session, operation.id().clone());
         let delivered = DeliveredInvocation {
             route,
             operation: operation.clone(),
@@ -745,15 +1175,18 @@ impl BusIngress {
             payload,
             cancellation: cancellation.clone(),
         };
-        let response = destination.endpoint.invoke(delivered).await;
-        if cancellation.is_cancelled() {
-            return Err(BusError::Cancelled);
-        }
-        self.core.lock_operations().finish(
-            operation.id(),
-            self.session,
-            self.core.clock.now_tick(),
-        )?;
+        #[cfg(test)]
+        self.wait_for_invocation_hook(false).await;
+        let remaining = operation.deadline_tick().saturating_sub(now);
+        let response = tokio::select! {
+            biased;
+            () = cancellation.cancelled() => return Err(BusError::Cancelled),
+            () = tokio::time::sleep(Duration::from_millis(remaining)) => {
+                return Err(BusError::Operation(OperationError::DeadlineExceeded));
+            }
+            response = endpoint.invoke(delivered) => response,
+        };
+        lease.finish()?;
         let response = response.map_err(BusError::Endpoint)?;
         if response.as_bytes().len() > self.core.max_payload_bytes {
             return Err(BusError::RouteShape);
@@ -769,8 +1202,13 @@ impl BusIngress {
         stream: StreamName,
         initial_credit: usize,
     ) -> Result<BusStream, BusError> {
-        self.open_stream_inner(route, operation, None, stream, initial_credit)
-            .await
+        let result = self
+            .open_stream_inner(route, operation, None, stream, initial_credit)
+            .await;
+        if let Err(error) = &result {
+            self.core.observe_error(BusEvent::OpenStream, error);
+        }
+        result
     }
 
     /// Open a resource-backed named stream while preserving its selector.
@@ -782,8 +1220,13 @@ impl BusIngress {
         stream: StreamName,
         initial_credit: usize,
     ) -> Result<BusStream, BusError> {
-        self.open_stream_inner(route, operation, Some(call), stream, initial_credit)
-            .await
+        let result = self
+            .open_stream_inner(route, operation, Some(call), stream, initial_credit)
+            .await;
+        if let Err(error) = &result {
+            self.core.observe_error(BusEvent::OpenStream, error);
+        }
+        result
     }
 
     async fn open_stream_inner(
@@ -799,29 +1242,36 @@ impl BusIngress {
             return Err(BusError::RouteShape);
         }
         validate_resource_route(&route, resource_call.as_ref())?;
-        {
-            let registry = self.core.lock_registry();
-            registry.with_context(self.session, |context| {
-                self.core.authorizer.authorize_dispatch(
-                    context,
-                    &route,
-                    resource_call.as_ref(),
-                    true,
-                )
-            })??
-        };
+        self.authorize_route(
+            &route,
+            resource_call.as_ref(),
+            SessionVerb::OpenStream,
+            true,
+        )
+        .await?;
         let destination = self.core.lock_registry().resolve(&route)?;
+        let source_principal = self.core.lock_registry().principal(self.session)?;
+        let destination_session = destination.destination();
+        let destination_principal = destination.destination_principal();
+        let endpoint = destination.endpoint();
+        let (outgoing, incoming) = self.core.streams.open(
+            stream,
+            self.session,
+            source_principal,
+            destination_session,
+            destination_principal,
+            initial_credit,
+        )?;
+        let now = self.core.clock.now_tick();
         let cancellation = self.core.lock_operations().begin(
             &operation,
             self.session,
-            destination.session,
+            destination,
             route.clone(),
-            self.core.clock.now_tick(),
+            now,
         )?;
-        let (outgoing, incoming) =
-            self.core
-                .streams
-                .open(stream, self.session, destination.session, initial_credit)?;
+        let lease =
+            OperationLease::new(Arc::clone(&self.core), self.session, operation.id().clone());
         let dispatch = DeliveredStream {
             route,
             operation: operation.clone(),
@@ -829,21 +1279,17 @@ impl BusIngress {
             incoming,
             cancellation: cancellation.clone(),
         };
-        if let Err(error) = destination.endpoint.open_stream(dispatch).await {
-            let _ = self.core.lock_operations().finish(
-                operation.id(),
-                self.session,
-                self.core.clock.now_tick(),
-            );
-            return Err(BusError::Endpoint(error));
-        }
-        if cancellation.is_cancelled() {
-            return Err(BusError::Cancelled);
+        let remaining = operation.deadline_tick().saturating_sub(now);
+        tokio::select! {
+            biased;
+            () = cancellation.cancelled() => return Err(BusError::Cancelled),
+            () = tokio::time::sleep(Duration::from_millis(remaining)) => {
+                return Err(BusError::Operation(OperationError::DeadlineExceeded));
+            }
+            result = endpoint.open_stream(dispatch) => result.map_err(BusError::Endpoint)?,
         }
         Ok(BusStream {
-            core: Arc::clone(&self.core),
-            source: self.session,
-            operation: operation.id().clone(),
+            lease: Some(lease),
             cancellation,
             outgoing: Some(outgoing),
         })
@@ -856,23 +1302,30 @@ impl BusIngress {
             .core
             .lock_operations()
             .route_for_cancel(operation, self.session)?;
-        {
-            let registry = self.core.lock_registry();
-            registry.with_context(self.session, |context| {
-                self.core.authorizer.authorize_cancel(context, &route)
-            })??
-        };
+        let source = self.core.lock_registry().source(self.session)?;
+        if let Some(context) = source.context {
+            self.core.authorizer.authorize_cancel(&context, &route)?;
+        } else {
+            source
+                .endpoint
+                .authorize(
+                    &route,
+                    SessionVerb::Cancel,
+                    None,
+                    self.core.clock.now_tick(),
+                )
+                .await
+                .map_err(BusError::Endpoint)?;
+        }
         let target = self
             .core
             .lock_operations()
             .cancel(operation, self.session)?;
         debug_assert!(target.cancellation.is_cancelled());
-        let resolved = self.core.lock_registry().resolve(&target.route)?;
-        if resolved.session != target.destination {
+        if target.route.generations().session() != target.generation {
             return Err(BusError::SessionMismatch);
         }
-        let endpoint = resolved.endpoint;
-        endpoint.cancel(operation).await;
+        target.endpoint.cancel(operation).await;
         Ok(())
     }
 
@@ -881,6 +1334,26 @@ impl BusIngress {
             Err(BusError::SessionClosed)
         } else {
             Ok(())
+        }
+    }
+
+    #[cfg(test)]
+    async fn wait_for_invocation_hook(&self, after_resolve: bool) {
+        let hook = {
+            let hooks = self
+                .core
+                .invocation_hooks
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if after_resolve {
+                hooks.after_resolve.clone()
+            } else {
+                hooks.before_invoke.clone()
+            }
+        };
+        if let Some(hook) = hook {
+            hook.reached.notify_one();
+            hook.release.notified().await;
         }
     }
 }
@@ -894,6 +1367,9 @@ impl core::fmt::Debug for BusIngress {
 impl Drop for BusIngress {
     fn drop(&mut self) {
         if !self.closed {
+            self.core
+                .observer
+                .record(BusEvent::Cleanup, BusFailureReason::Abandoned);
             self.core.cleanup_session(self.session);
             self.closed = true;
         }
@@ -902,9 +1378,7 @@ impl Drop for BusIngress {
 
 /// Source-side named stream that retains its operation lease.
 pub struct BusStream {
-    core: Arc<BusCore>,
-    source: SessionId,
-    operation: OperationId,
+    lease: Option<OperationLease>,
     cancellation: Cancellation,
     outgoing: Option<OutgoingStream>,
 }
@@ -941,11 +1415,9 @@ impl BusStream {
             if self.cancellation.is_cancelled() {
                 return Err(BusError::Cancelled);
             }
-            self.core.lock_operations().finish(
-                &self.operation,
-                self.source,
-                self.core.clock.now_tick(),
-            )?;
+            if let Some(mut lease) = self.lease.take() {
+                lease.finish()?;
+            }
         }
         Ok(())
     }
@@ -1047,12 +1519,9 @@ impl From<StreamError> for BusError {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::BTreeSet,
-        sync::{
-            Mutex,
-            atomic::{AtomicUsize, Ordering},
-        },
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
     };
 
     use async_trait::async_trait;
@@ -1187,6 +1656,14 @@ mod tests {
     }
 
     fn harness_with_config(spec: HarnessSpec<'_>, config: BusConfig) -> Harness {
+        harness_with_config_and_observer(spec, config, Arc::new(NoopBusObserver))
+    }
+
+    fn harness_with_config_and_observer(
+        spec: HarnessSpec<'_>,
+        config: BusConfig,
+        observer: Arc<dyn BusObserver>,
+    ) -> Harness {
         let zone = ZoneId::parse("dev").unwrap();
         let schema = fingerprint('1');
         let generations = RouteGenerations::new(
@@ -1226,7 +1703,8 @@ mod tests {
         let authorizer = BusAuthorizer::new(native, state(1)).unwrap();
         let clock = Arc::new(ManualClock::new(1));
         let (bus, mut registrar) =
-            ZoneBus::with_clock(zone, authorizer, config, clock.clone()).unwrap();
+            ZoneBus::with_clock_and_observer(zone, authorizer, config, clock.clone(), observer)
+                .unwrap();
         let endpoint_ingress = registrar
             .register(SessionRegistration::new(
                 endpoint_context,
@@ -1250,6 +1728,15 @@ mod tests {
             route,
             subjects,
             clock,
+        }
+    }
+
+    #[derive(Default)]
+    struct CaptureObserver(Mutex<Vec<(BusEvent, BusFailureReason)>>);
+
+    impl BusObserver for CaptureObserver {
+        fn record(&self, event: BusEvent, reason: BusFailureReason) {
+            self.0.lock().unwrap().push((event, reason));
         }
     }
 
@@ -1370,25 +1857,6 @@ mod tests {
             resource_verbs,
             endpoint: RecordingEndpoint::new(),
         })
-    }
-
-    #[test]
-    fn session_verb_set_is_closed_and_contains_diagnostic_and_relay_verbs() {
-        let verbs = BTreeSet::from([
-            SessionVerb::Connect,
-            SessionVerb::Invoke,
-            SessionVerb::OpenStream,
-            SessionVerb::Relay,
-            SessionVerb::Attach,
-            SessionVerb::Cancel,
-            SessionVerb::Observe,
-            SessionVerb::AuditExport,
-            SessionVerb::SupportBundle,
-        ]);
-        assert_eq!(verbs.len(), 9);
-        assert!(verbs.contains(&SessionVerb::Relay));
-        assert!(verbs.contains(&SessionVerb::AuditExport));
-        assert!(verbs.contains(&SessionVerb::SupportBundle));
     }
 
     #[test]
@@ -1662,9 +2130,7 @@ mod tests {
                     Vec::new(),
                 )
                 .await,
-            Err(BusError::Authorization(
-                AuthorizationError::DiagnosticBinding
-            ))
+            Err(BusError::RouteShape)
         );
         assert_eq!(near_miss.endpoint.call_count(), 0);
 
@@ -2084,6 +2550,85 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn revoke_between_resolution_and_begin_rejects_the_route_lease() {
+        let harness = resource_harness(
+            RouteMember::method("ResourceService/Get").unwrap(),
+            vec![SessionVerb::Connect, SessionVerb::Invoke],
+            vec![ResourceVerb::Get],
+            "User/alice",
+            Locality::Local,
+            EvidenceClass::UnixPeer,
+        );
+        let hook = Arc::new(InvocationHook {
+            reached: Notify::new(),
+            release: Notify::new(),
+        });
+        harness
+            .caller
+            .core
+            .invocation_hooks
+            .lock()
+            .unwrap()
+            .after_resolve = Some(Arc::clone(&hook));
+        let mut registrar = harness.registrar;
+        let invoke = harness.caller.invoke_resource(
+            harness.route,
+            operation("revoke-before-begin"),
+            ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
+            Vec::new(),
+        );
+        let revoke = async {
+            hook.reached.notified().await;
+            registrar.revoke(harness.endpoint_ingress).unwrap();
+            hook.release.notify_one();
+        };
+        let (result, ()) = tokio::join!(invoke, revoke);
+        assert_eq!(
+            result,
+            Err(BusError::Operation(OperationError::RouteRevoked))
+        );
+        assert_eq!(harness.endpoint.call_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn revoke_after_begin_cancels_before_endpoint_invocation() {
+        let harness = resource_harness(
+            RouteMember::method("ResourceService/Get").unwrap(),
+            vec![SessionVerb::Connect, SessionVerb::Invoke],
+            vec![ResourceVerb::Get],
+            "User/alice",
+            Locality::Local,
+            EvidenceClass::UnixPeer,
+        );
+        let hook = Arc::new(InvocationHook {
+            reached: Notify::new(),
+            release: Notify::new(),
+        });
+        harness
+            .caller
+            .core
+            .invocation_hooks
+            .lock()
+            .unwrap()
+            .before_invoke = Some(Arc::clone(&hook));
+        let mut registrar = harness.registrar;
+        let invoke = harness.caller.invoke_resource(
+            harness.route,
+            operation("revoke-before-invoke"),
+            ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
+            Vec::new(),
+        );
+        let revoke = async {
+            hook.reached.notified().await;
+            registrar.revoke(harness.endpoint_ingress).unwrap();
+            hook.release.notify_one();
+        };
+        let (result, ()) = tokio::join!(invoke, revoke);
+        assert_eq!(result, Err(BusError::Cancelled));
+        assert_eq!(harness.endpoint.call_count(), 0);
+    }
+
+    #[tokio::test]
     async fn cancellation_uses_the_pinned_reverse_route() {
         let endpoint = RecordingEndpoint::blocking();
         let harness = harness(HarnessSpec {
@@ -2133,6 +2678,7 @@ mod tests {
             },
             BusConfig {
                 max_operations: 1,
+                max_operations_per_session: 1,
                 ..BusConfig::default()
             },
         );
@@ -2191,6 +2737,110 @@ mod tests {
         assert_eq!(harness.endpoint.call_count(), 0);
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn active_deadline_cancels_a_hung_endpoint_and_reclaims_the_slot() {
+        let endpoint = RecordingEndpoint::blocking();
+        let harness = harness_with_config(
+            HarnessSpec {
+                service: "d2b.resource.v3",
+                member: RouteMember::method("ResourceService/Get").unwrap(),
+                caller_ref: "User/alice",
+                locality: Locality::Local,
+                evidence: EvidenceClass::UnixPeer,
+                session_verbs: vec![SessionVerb::Connect, SessionVerb::Invoke],
+                resource_verbs: vec![ResourceVerb::Get],
+                endpoint: endpoint.clone(),
+            },
+            BusConfig {
+                max_operations: 1,
+                max_operations_per_session: 1,
+                ..BusConfig::default()
+            },
+        );
+        let result = harness
+            .caller
+            .invoke_resource(
+                harness.route.clone(),
+                OperationSpec::new(OperationId::parse("hung").unwrap(), 2).unwrap(),
+                ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
+                Vec::new(),
+            )
+            .await;
+        assert_eq!(
+            result,
+            Err(BusError::Operation(OperationError::DeadlineExceeded))
+        );
+
+        let second = harness.caller.invoke_resource(
+            harness.route.clone(),
+            OperationSpec::new(OperationId::parse("hung").unwrap(), 100).unwrap(),
+            ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
+            Vec::new(),
+        );
+        let release = async {
+            while endpoint.call_count() < 2 {
+                tokio::task::yield_now().await;
+            }
+            endpoint.release.notify_one();
+        };
+        let (second, ()) = tokio::join!(second, release);
+        assert!(second.is_ok());
+    }
+
+    #[tokio::test]
+    async fn dropping_invoke_future_reclaims_operation_id_and_capacity() {
+        let harness = resource_harness(
+            RouteMember::method("ResourceService/Get").unwrap(),
+            vec![SessionVerb::Connect, SessionVerb::Invoke],
+            vec![ResourceVerb::Get],
+            "User/alice",
+            Locality::Local,
+            EvidenceClass::UnixPeer,
+        );
+        let hook = Arc::new(InvocationHook {
+            reached: Notify::new(),
+            release: Notify::new(),
+        });
+        harness
+            .caller
+            .core
+            .invocation_hooks
+            .lock()
+            .unwrap()
+            .before_invoke = Some(Arc::clone(&hook));
+        let operation = operation("dropped-future");
+        let mut invoke = Box::pin(harness.caller.invoke_resource(
+            harness.route.clone(),
+            operation.clone(),
+            ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
+            Vec::new(),
+        ));
+        tokio::select! {
+            result = &mut invoke => panic!("invoke unexpectedly completed: {result:?}"),
+            () = hook.reached.notified() => {}
+        }
+        drop(invoke);
+        harness
+            .caller
+            .core
+            .invocation_hooks
+            .lock()
+            .unwrap()
+            .before_invoke = None;
+        assert!(
+            harness
+                .caller
+                .invoke_resource(
+                    harness.route.clone(),
+                    operation,
+                    ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
+                    Vec::new(),
+                )
+                .await
+                .is_ok()
+        );
+    }
+
     #[tokio::test]
     async fn oversized_endpoint_response_is_rejected_after_lease_cleanup() {
         let endpoint = RecordingEndpoint::oversized();
@@ -2229,6 +2879,40 @@ mod tests {
             Err(BusError::RouteShape)
         );
         assert_eq!(harness.endpoint.call_count(), 2);
+    }
+
+    #[tokio::test]
+    async fn bus_observer_receives_only_closed_failure_labels() {
+        let observer = Arc::new(CaptureObserver::default());
+        let harness = harness_with_config_and_observer(
+            HarnessSpec {
+                service: "d2b.resource.v3",
+                member: RouteMember::method("ResourceService/Get").unwrap(),
+                caller_ref: "User/alice",
+                locality: Locality::Local,
+                evidence: EvidenceClass::UnixPeer,
+                session_verbs: vec![SessionVerb::Connect, SessionVerb::Invoke],
+                resource_verbs: vec![ResourceVerb::Get],
+                endpoint: RecordingEndpoint::new(),
+            },
+            BusConfig::default(),
+            observer.clone(),
+        );
+        assert_eq!(
+            harness
+                .caller
+                .invoke(
+                    harness.route.clone(),
+                    operation("observed-invalid-call"),
+                    Vec::new(),
+                )
+                .await,
+            Err(BusError::InvalidResourceCall)
+        );
+        assert_eq!(
+            observer.0.lock().unwrap().as_slice(),
+            &[(BusEvent::Invoke, BusFailureReason::Route)]
+        );
     }
 
     #[tokio::test]

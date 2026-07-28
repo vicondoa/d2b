@@ -9,12 +9,14 @@ use std::{
 };
 
 use async_trait::async_trait;
-use d2b_contracts::v3::component_session::{CloseReason, Remediation, RequestId, SessionErrorCode};
+use d2b_contracts::v3::component_session::{
+    ChannelClass, CloseReason, OperationClass, Remediation, RequestId, SessionErrorCode,
+};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::{
-    Cancellation, Fragment, OwnedAttachment, OwnedTransport, Result, SessionEngine, SessionError,
-    SessionEvent, StreamEvent, StreamId,
+    Cancellation, Fragment, MetricEvent, OwnedAttachment, OwnedTransport, Result, SessionEngine,
+    SessionError, SessionEvent, StreamEvent, StreamId,
 };
 
 const DRIVER_COMMAND_CAPACITY: usize = 128;
@@ -345,14 +347,14 @@ struct DriverQueues {
 }
 
 impl DriverQueues {
-    fn new() -> Self {
+    fn new<T: OwnedTransport>(engine: &SessionEngine<T>) -> Self {
         Self {
             named_sends: VecDeque::new(),
             named_send_bytes: 0,
-            ttrpc: EventQueue::new(),
-            attachments: EventQueue::new(),
-            streams: EventQueue::new(),
-            control: EventQueue::new(),
+            ttrpc: EventQueue::new(engine.ttrpc_event_queue_limit()),
+            attachments: EventQueue::new(engine.control_event_queue_limit()),
+            streams: EventQueue::new(engine.stream_event_queue_limit()),
+            control: EventQueue::new(engine.control_event_queue_limit()),
         }
     }
 
@@ -383,6 +385,18 @@ impl DriverQueues {
         self.named_sends.push_back(pending);
     }
 
+    fn has_sendable_named<T: OwnedTransport>(&self, engine: &SessionEngine<T>) -> bool {
+        self.named_sends.iter().any(|pending| {
+            pending.fragments.front().is_some_and(|fragment| {
+                u32::try_from(fragment.as_bytes().len()).is_ok_and(|fragment_credit| {
+                    engine
+                        .named_stream_send_credit(pending.stream)
+                        .is_some_and(|credit| credit >= fragment_credit)
+                })
+            })
+        })
+    }
+
     fn cancel_named_send(&mut self, stream: StreamId, error: SessionError) {
         let mut retained = VecDeque::with_capacity(self.named_sends.len());
         while let Some(pending) = self.named_sends.pop_front() {
@@ -407,24 +421,79 @@ impl DriverQueues {
     }
 }
 
+trait EventBytes {
+    fn event_bytes(&self) -> usize;
+}
+
+impl EventBytes for Vec<u8> {
+    fn event_bytes(&self) -> usize {
+        self.len().max(1)
+    }
+}
+
+impl EventBytes for Vec<OwnedAttachment> {
+    fn event_bytes(&self) -> usize {
+        self.len().max(1)
+    }
+}
+
+impl EventBytes for StreamEvent {
+    fn event_bytes(&self) -> usize {
+        match self {
+            StreamEvent::Data { bytes, .. } => bytes.len().max(1),
+            StreamEvent::RemoteClosed { .. } | StreamEvent::Reset { .. } => 1,
+        }
+    }
+}
+
+impl EventBytes for SessionEvent {
+    fn event_bytes(&self) -> usize {
+        match self {
+            SessionEvent::Ttrpc(bytes) => bytes.len().max(1),
+            SessionEvent::NamedStream(event) => event.event_bytes(),
+            SessionEvent::Attachments(attachments) => attachments.len().max(1),
+            SessionEvent::CancelRequest(_)
+            | SessionEvent::CancelAck(_)
+            | SessionEvent::AttachmentAcknowledged { .. }
+            | SessionEvent::Close(_)
+            | SessionEvent::ControlProcessed => 1,
+        }
+    }
+}
+
+#[cfg(test)]
+impl EventBytes for u8 {
+    fn event_bytes(&self) -> usize {
+        1
+    }
+}
+
 struct EventQueue<T> {
     events: VecDeque<T>,
     waiters: VecDeque<Reply<T>>,
+    queued_bytes: usize,
+    max_bytes: usize,
 }
 
-impl<T> EventQueue<T> {
-    fn new() -> Self {
+impl<T: EventBytes> EventQueue<T> {
+    fn new(max_bytes: usize) -> Self {
         Self {
             events: VecDeque::new(),
             waiters: VecDeque::new(),
+            queued_bytes: 0,
+            max_bytes,
         }
     }
 
     fn receive(&mut self, waiter: Reply<T>) -> Result<()> {
         if let Some(event) = self.events.pop_front() {
+            self.queued_bytes = self.queued_bytes.saturating_sub(event.event_bytes());
             match waiter.send(Ok(event)) {
                 Ok(()) => {}
-                Err(Ok(returned)) => self.events.push_front(returned),
+                Err(Ok(returned)) => {
+                    self.queued_bytes += returned.event_bytes();
+                    self.events.push_front(returned);
+                }
                 Err(Err(_)) => {
                     return Err(SessionError::new(SessionErrorCode::InternalInvariant));
                 }
@@ -448,9 +517,14 @@ impl<T> EventQueue<T> {
                 }
             }
         }
-        if self.events.len() >= DRIVER_EVENT_CAPACITY {
+        let event_bytes = event.event_bytes();
+        if event_bytes > self.max_bytes
+            || self.queued_bytes.saturating_add(event_bytes) > self.max_bytes
+            || self.events.len() >= DRIVER_EVENT_CAPACITY
+        {
             return Err(backpressure());
         }
+        self.queued_bytes += event_bytes;
         self.events.push_back(event);
         Ok(())
     }
@@ -466,19 +540,38 @@ async fn run_driver<T: OwnedTransport>(
     mut engine: SessionEngine<T>,
     mut commands: mpsc::Receiver<DriverCommand>,
 ) {
-    let mut queues = DriverQueues::new();
+    let mut queues = DriverQueues::new(&engine);
+    let mut named_stream_turn = false;
     let result = loop {
-        match pump_named_stream(&mut engine, &mut queues).await {
-            Ok(true) => {
-                tokio::task::yield_now().await;
-                continue;
-            }
-            Ok(false) => {}
-            Err(error) => break Err(error),
+        enum Work {
+            Command(Option<DriverCommand>),
+            Inbound(Result<SessionEvent>),
+            NamedStream,
         }
-        tokio::select! {
-            biased;
-            command = commands.recv() => {
+        let named_ready = queues.has_sendable_named(&engine);
+        let named_work = async {
+            if !named_ready {
+                std::future::pending::<()>().await;
+            }
+        };
+        let work = if named_stream_turn {
+            tokio::select! {
+                biased;
+                () = named_work => Work::NamedStream,
+                command = commands.recv() => Work::Command(command),
+                event = engine.receive() => Work::Inbound(event),
+            }
+        } else {
+            tokio::select! {
+                biased;
+                command = commands.recv() => Work::Command(command),
+                event = engine.receive() => Work::Inbound(event),
+                () = named_work => Work::NamedStream,
+            }
+        };
+        named_stream_turn = !named_stream_turn;
+        match work {
+            Work::Command(command) => {
                 let Some(command) = command else {
                     break Err(disconnected());
                 };
@@ -488,12 +581,30 @@ async fn run_driver<T: OwnedTransport>(
                     Err(error) => break Err(error),
                 }
             }
-            event = engine.receive() => {
-                match event.and_then(|event| route_event(&mut queues, event)) {
-                    Ok(()) => {}
-                    Err(error) => break Err(error),
+            Work::Inbound(event) => match event.and_then(|event| route_event(&mut queues, event)) {
+                Ok(()) => {}
+                Err(error) => {
+                    engine.record_failure(
+                        MetricEvent::QueueDepth,
+                        ChannelClass::SessionControl,
+                        OperationClass::Observe,
+                        error,
+                    );
+                    break Err(error);
                 }
-            }
+            },
+            Work::NamedStream => match pump_named_stream(&mut engine, &mut queues).await {
+                Ok(_) => {}
+                Err(error) => {
+                    engine.record_failure(
+                        MetricEvent::RejectedRecord,
+                        ChannelClass::NamedStream,
+                        OperationClass::OpenStream,
+                        error,
+                    );
+                    break Err(error);
+                }
+            },
         }
     };
 
@@ -571,6 +682,12 @@ async fn handle_command<T: OwnedTransport>(
             if let Err(error) =
                 queues.can_enqueue_named_send(stream, len, engine.aggregate_named_stream_limit())
             {
+                engine.record_failure(
+                    MetricEvent::QueueDepth,
+                    ChannelClass::NamedStream,
+                    OperationClass::OpenStream,
+                    error,
+                );
                 let _ = reply.send(Err(error));
             } else {
                 match engine.fragment_named_stream(stream, bytes) {
@@ -581,6 +698,12 @@ async fn handle_command<T: OwnedTransport>(
                         reply,
                     }),
                     Err(error) => {
+                        engine.record_failure(
+                            MetricEvent::RejectedRecord,
+                            ChannelClass::NamedStream,
+                            OperationClass::OpenStream,
+                            error,
+                        );
                         let _ = reply.send(Err(error));
                     }
                 }
@@ -706,7 +829,7 @@ mod tests {
 
     #[test]
     fn cancelled_immediate_receiver_restores_queued_event() {
-        let mut queue = EventQueue::new();
+        let mut queue = EventQueue::new(1);
         queue.deliver(7_u8).unwrap();
         let (waiter, receiver) = oneshot::channel();
         drop(receiver);
@@ -715,5 +838,19 @@ mod tests {
         let (waiter, mut receiver) = oneshot::channel();
         queue.receive(waiter).unwrap();
         assert_eq!(receiver.try_recv().unwrap().unwrap(), 7);
+    }
+
+    #[test]
+    fn event_queue_capacity_is_measured_in_bytes() {
+        let mut queue = EventQueue::new(4);
+        queue.deliver(vec![1_u8; 4]).unwrap();
+        assert_eq!(
+            queue.deliver(vec![2_u8]).unwrap_err().code(),
+            SessionErrorCode::QueueBackpressure
+        );
+        let (waiter, mut receiver) = oneshot::channel();
+        queue.receive(waiter).unwrap();
+        assert_eq!(receiver.try_recv().unwrap().unwrap(), vec![1_u8; 4]);
+        queue.deliver(vec![2_u8]).unwrap();
     }
 }
