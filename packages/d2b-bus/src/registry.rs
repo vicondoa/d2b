@@ -238,6 +238,7 @@ pub enum EndpointFailureClass {
     Generation,
     Backpressure,
     Deadline,
+    Cancellation,
     Transport,
     Protocol,
     Internal,
@@ -274,6 +275,7 @@ impl From<d2b_session::SessionError> for EndpointError {
             Source::Generation => EndpointFailureClass::Generation,
             Source::Backpressure => EndpointFailureClass::Backpressure,
             Source::Deadline => EndpointFailureClass::Deadline,
+            Source::Cancellation => EndpointFailureClass::Cancellation,
             Source::Transport => EndpointFailureClass::Transport,
             Source::Protocol => EndpointFailureClass::Protocol,
             Source::Internal => EndpointFailureClass::Internal,
@@ -313,6 +315,7 @@ impl EndpointFailureClass {
             Self::Generation => "generation",
             Self::Backpressure => "backpressure",
             Self::Deadline => "deadline",
+            Self::Cancellation => "cancellation",
             Self::Transport => "transport",
             Self::Protocol => "protocol",
             Self::Internal => "internal",
@@ -373,6 +376,7 @@ pub trait BusEndpoint: Send + Sync + 'static {
     async fn cancel(
         &self,
         _operation: &crate::operations::OperationId,
+        _attempt: &crate::operations::Cancellation,
     ) -> Result<(), EndpointError> {
         Err(EndpointError::Unavailable)
     }

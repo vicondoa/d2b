@@ -13,6 +13,7 @@ async-trait = "0.1"
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 d2b-resource-api = { path = "../d2b-resource-api", version = "0.0.0-bootstrap" }
 d2b-session = { path = "../d2b-session", version = "0.0.0-bootstrap" }
+getrandom = "0.3"
 serde.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 

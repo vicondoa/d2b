@@ -135,6 +135,19 @@ pub struct VerifiedUnixSubject {
 }
 
 impl VerifiedUnixSubject {
+    /// Borrow the config-generated subject reference retained by this proof.
+    pub fn subject_ref(&self) -> &ResourceRef {
+        &self.identity.subject_ref
+    }
+
+    /// Verify that the proof is consumed only by its originating transport.
+    pub fn validate_transport(&self, transport_class: TransportClass) -> d2b_session::Result<()> {
+        if self.transport_class != transport_class {
+            return Err(SessionError::new(SessionErrorCode::SubjectMismatch));
+        }
+        Ok(())
+    }
+
     /// Consume verified peer evidence and mint one immutable subject context.
     pub fn bind(
         self,
@@ -147,10 +160,10 @@ impl VerifiedUnixSubject {
             UnixSubjectKind::Host => "Host",
             UnixSubjectKind::Guest => "Guest",
         };
+        self.validate_transport(binding.transport_class())?;
         if evidence.class() != EvidenceClass::UnixPeer
             || binding.evidence_class() != EvidenceClass::UnixPeer
             || binding.transport_binding().locality() != Locality::Local
-            || binding.transport_class() != self.transport_class
             || self.identity.subject_ref.resource_type().as_str() != expected_type
             || self.identity.zone_ref.name().as_str() != expected_zone.as_str()
             || evidence.binding_digest() != binding.transport_binding().binding_digest()

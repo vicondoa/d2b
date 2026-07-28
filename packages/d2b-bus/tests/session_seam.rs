@@ -6,14 +6,13 @@ use d2b_bus::{
     ResourceCall, RouteGenerations, RouteKey, RouteMember, RouteTarget, ZoneBus, ZoneRegistrar,
 };
 use d2b_contracts::v3::{
-    AuthenticatedSubjectContext, BindingDigest, ConfigurationGeneration, ControllerGeneration,
-    EvidenceClass, ResourceGeneration, ResourceRef, ResourceUid, SchemaFingerprint, ServiceName,
-    SessionBinding, ZoneId, ZoneRevision,
+    BindingDigest, ConfigurationGeneration, ControllerGeneration, EvidenceClass,
+    ResourceGeneration, ResourceRef, ResourceUid, SchemaFingerprint, ServiceName, ZoneId,
+    ZoneRevision,
     component_session::{
-        AttachmentPolicy, AuthorizationLease, CloseReason, EndpointPolicy, EndpointPurpose,
-        EndpointRole, IdentityEvidenceRequirement, LimitProfile, Locality, NoiseProfile,
-        PurposeClass, Remediation, ServicePackage, SessionErrorCode, TransportBinding,
-        TransportClass,
+        AttachmentPolicy, CloseReason, EndpointPolicy, EndpointPurpose, EndpointRole,
+        IdentityEvidenceRequirement, LimitProfile, Locality, NoiseProfile, PurposeClass,
+        Remediation, ServicePackage, TransportBinding, TransportClass,
     },
 };
 use d2b_resource_api::authz::{
@@ -23,12 +22,12 @@ use d2b_resource_api::authz::{
 };
 use d2b_resource_store::PolicySnapshot;
 use d2b_session::{
-    AuthenticatedComponentSession, ComponentSessionDriver, HandshakeCredentials, OwnedTransport,
-    SessionAuthenticationBinding, SessionAuthority, SessionAuthorizationRequest,
-    SessionDriverHandle, SessionEngine, TransportDescriptor, TransportError, TransportEvidence,
-    TransportPacket, ttrpc_request_id, ttrpc_stream_id,
+    AuthenticatedComponentSession, ComponentSessionDriver, HandshakeCredentials,
+    NativeSessionAuthority, NativeSessionSubject, OwnedTransport, SessionDriverHandle,
+    SessionEngine, TransportDescriptor, TransportError, TransportEvidence, TransportPacket,
+    ttrpc_request_id, ttrpc_stream_id,
 };
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 const PROVIDER_GENERATION: u64 = 2;
 const CONTROLLER_GENERATION: u64 = 3;
@@ -123,66 +122,6 @@ impl d2b_session::TransportWriter for TestTransportWriter {
     }
 }
 
-struct AllowAuthority {
-    subject: ResourceRef,
-    uid: ResourceUid,
-    provider: ResourceRef,
-    allowed: BTreeSet<SessionVerb>,
-}
-
-#[async_trait]
-impl SessionAuthority for AllowAuthority {
-    async fn authenticate_connect(
-        &mut self,
-        evidence: TransportEvidence,
-        binding: &SessionAuthenticationBinding,
-        expected_zone: &ZoneId,
-        now_tick: u64,
-    ) -> d2b_session::Result<(AuthenticatedSubjectContext, AuthorizationLease)> {
-        if evidence.class() != binding.evidence_class() {
-            return Err(d2b_session::SessionError::new(
-                SessionErrorCode::IdentityEvidenceMismatch,
-            ));
-        }
-        let context = AuthenticatedSubjectContext::new(
-            self.subject.clone(),
-            self.uid.clone(),
-            ResourceRef::parse(&format!("Zone/{}", expected_zone.as_str())).unwrap(),
-            binding.evidence_class(),
-            binding.purpose().clone(),
-            binding.service().clone(),
-            SessionBinding::new(
-                binding.schema_fingerprint().clone(),
-                binding.transport_binding().clone(),
-                binding.reconnect_generation(),
-                binding.transcript_hash().clone(),
-            ),
-        )
-        .with_provider_ref(self.provider.clone())
-        .with_provider_generation(ResourceGeneration::new(PROVIDER_GENERATION).unwrap())
-        .with_controller_generation(ControllerGeneration::new(CONTROLLER_GENERATION).unwrap());
-        Ok((
-            context,
-            AuthorizationLease::new(1, now_tick + 10_000).unwrap(),
-        ))
-    }
-
-    async fn authorize(
-        &mut self,
-        _subject: &AuthenticatedSubjectContext,
-        request: &SessionAuthorizationRequest,
-        _previous_lease: AuthorizationLease,
-        now_tick: u64,
-    ) -> d2b_session::Result<AuthorizationLease> {
-        if !self.allowed.contains(&request.verb()) {
-            return Err(d2b_session::SessionError::new(
-                SessionErrorCode::PolicyDenied,
-            ));
-        }
-        AuthorizationLease::new(1, now_tick + 10_000).map_err(d2b_session::SessionError::from)
-    }
-}
-
 fn policy(service: ServicePackage, purpose: EndpointPurpose, generation: u64) -> EndpointPolicy {
     EndpointPolicy {
         purpose,
@@ -264,12 +203,63 @@ async fn admit(
             }
         }
     });
-    let authority = AllowAuthority {
-        subject: ResourceRef::parse(subject).unwrap(),
-        uid: ResourceUid::parse(uid).unwrap(),
-        provider: ResourceRef::parse(provider).unwrap(),
-        allowed: allowed.into_iter().collect(),
+    let subject_ref = ResourceRef::parse(subject).unwrap();
+    let subject_uid = ResourceUid::parse(uid).unwrap();
+    let mut allowed = allowed.into_iter().collect::<BTreeSet<_>>();
+    allowed.insert(SessionVerb::Connect);
+    let catalog = ApiCatalog::standard();
+    let rule = PolicyRule::new(
+        &catalog,
+        [],
+        [],
+        allowed,
+        [],
+        [],
+        [ZoneId::parse("dev").unwrap()],
+        [],
+    )
+    .unwrap();
+    let role = CompiledRole::new(
+        ResourceRef::parse("Role/session-authority").unwrap(),
+        vec![rule],
+    )
+    .unwrap();
+    let binding = CompiledRoleBinding::new(
+        role.role_ref.clone(),
+        [BoundSubject {
+            subject_ref: subject_ref.clone(),
+            subject_uid: subject_uid.clone(),
+        }],
+        BindingScope::default(),
+        RelayGrantAuthority::None,
+    )
+    .unwrap();
+    let policy_set = PolicySet::new(&catalog, 1, vec![role], vec![binding]).unwrap();
+    let native = NativeAuthorizer::new(catalog, Some(policy_set)).unwrap();
+    let state = AuthorizationState {
+        snapshot: PolicySnapshot {
+            policy_revision: 1,
+            api_catalog_revision: 1,
+            active_configuration_revision: ConfigurationGeneration::new(1).unwrap(),
+            controller_generation: Some(ControllerGeneration::new(CONTROLLER_GENERATION).unwrap()),
+        },
+        zone_policy_revision: ZoneRevision::new(1),
+        bootstrap_phase: BootstrapPhase::Disabled,
+        now_tick: 1,
     };
+    let authority = NativeSessionAuthority::new(
+        NativeSessionSubject::new(subject_ref, subject_uid, ZoneId::parse("dev").unwrap())
+            .unwrap()
+            .with_provider(
+                ResourceRef::parse(provider).unwrap(),
+                ResourceGeneration::new(PROVIDER_GENERATION).unwrap(),
+            )
+            .with_controller_generation(ControllerGeneration::new(CONTROLLER_GENERATION).unwrap()),
+        native,
+        state,
+        10_000,
+    )
+    .unwrap();
     let session = registrar
         .component_session_acceptor(policy, Box::new(authority))
         .unwrap()
@@ -689,6 +679,81 @@ async fn cancelled_stream_id_reuse_rejects_the_late_response() {
 }
 
 #[tokio::test]
+async fn preseeded_counter_response_is_not_accepted_by_a_later_invocation() {
+    let (_bus, mut registrar) = bus();
+    let (endpoint, remote, endpoint_echo) = admit(
+        &registrar,
+        policy(
+            ServicePackage::ResourceV3,
+            EndpointPurpose::ResourceService,
+            1,
+        ),
+        "Provider/system-core",
+        "11111111-1111-4111-8111-111111111111",
+        "Provider/system-core",
+        [SessionVerb::Invoke],
+    )
+    .await;
+    endpoint_echo.abort();
+    let endpoint = registrar
+        .register_component_session(endpoint)
+        .await
+        .unwrap();
+    let (caller, _, caller_echo) = admit(
+        &registrar,
+        policy(
+            ServicePackage::ResourceV3,
+            EndpointPurpose::ResourceService,
+            1,
+        ),
+        "Host/alice",
+        "22222222-2222-4222-8222-222222222222",
+        "Provider/system-core",
+        [SessionVerb::Invoke],
+    )
+    .await;
+    let caller = registrar.register_component_session(caller).await.unwrap();
+    remote
+        .send_ttrpc(ttrpc_frame(1, b"preseeded-counter-response"))
+        .await
+        .unwrap();
+
+    let invocation = caller.invoke_resource(
+        route(
+            "d2b.resource.v3",
+            "ResourceService/Get",
+            1,
+            "Provider/system-core",
+        ),
+        OperationSpec::new(
+            OperationId::parse("unpredictable-correlation").unwrap(),
+            10_000,
+        )
+        .unwrap(),
+        ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
+        ttrpc_frame(7, b"request"),
+    );
+    let response = async {
+        let request = remote.receive_ttrpc().await.unwrap();
+        let internal_id = ttrpc_stream_id(&request).unwrap();
+        assert_ne!(internal_id, 1);
+        remote
+            .send_ttrpc(ttrpc_frame(internal_id, b"genuine-response"))
+            .await
+            .unwrap();
+    };
+    let (result, ()) = tokio::join!(invocation, response);
+    let result = result.unwrap();
+    assert!(result.as_bytes().ends_with(b"genuine-response"));
+
+    registrar
+        .disconnect_component_session(endpoint)
+        .await
+        .unwrap();
+    caller_echo.abort();
+}
+
+#[tokio::test]
 async fn malformed_responses_release_every_correlation_slot() {
     const MALFORMED_RESPONSES: usize = 300;
 
@@ -731,6 +796,7 @@ async fn malformed_responses_release_every_correlation_slot() {
         1,
         "Provider/system-core",
     );
+    let (release_remote, hold_remote) = oneshot::channel();
     let remote_task = tokio::spawn(async move {
         for _ in 0..MALFORMED_RESPONSES {
             let _ = remote.receive_ttrpc().await.unwrap();
@@ -742,6 +808,7 @@ async fn malformed_responses_release_every_correlation_slot() {
             .send_ttrpc(ttrpc_frame(stream_id, b"healthy"))
             .await
             .unwrap();
+        let _ = hold_remote.await;
     });
 
     for index in 0..MALFORMED_RESPONSES {
@@ -772,6 +839,7 @@ async fn malformed_responses_release_every_correlation_slot() {
         .await
         .unwrap();
     assert!(response.as_bytes().ends_with(b"healthy"));
+    let _ = release_remote.send(());
     remote_task.await.unwrap();
 
     registrar

@@ -21,6 +21,7 @@ pub enum SessionErrorClass {
     Generation,
     Backpressure,
     Deadline,
+    Cancellation,
     Transport,
     Protocol,
     Internal,
@@ -34,6 +35,7 @@ impl SessionErrorClass {
             Self::Generation => "generation",
             Self::Backpressure => "backpressure",
             Self::Deadline => "deadline",
+            Self::Cancellation => "cancellation",
             Self::Transport => "transport",
             Self::Protocol => "protocol",
             Self::Internal => "internal",
@@ -71,6 +73,7 @@ impl SessionError {
             | SessionErrorCode::DeadlineInvalid
             | SessionErrorCode::DeadlineExpired
             | SessionErrorCode::KeepaliveTimeout => SessionErrorClass::Deadline,
+            SessionErrorCode::Cancelled => SessionErrorClass::Cancellation,
             SessionErrorCode::SessionDisconnected => SessionErrorClass::Transport,
             SessionErrorCode::ArithmeticOverflow | SessionErrorCode::InternalInvariant => {
                 SessionErrorClass::Internal
@@ -86,6 +89,7 @@ impl SessionError {
             SessionErrorClass::Generation => Remediation::ReplaceGeneration,
             SessionErrorClass::Backpressure => Remediation::ReduceLoad,
             SessionErrorClass::Deadline => Remediation::RetryBounded,
+            SessionErrorClass::Cancellation => Remediation::None,
             SessionErrorClass::Transport => Remediation::RestartAgent,
             SessionErrorClass::Protocol => Remediation::RepairConfiguration,
             SessionErrorClass::Internal => Remediation::RestartAgent,
@@ -235,5 +239,9 @@ mod tests {
         let generation = SessionError::new(SessionErrorCode::GenerationMismatch);
         assert_eq!(generation.class(), SessionErrorClass::Generation);
         assert_eq!(generation.remediation(), Remediation::ReplaceGeneration);
+
+        let cancelled = SessionError::new(SessionErrorCode::Cancelled);
+        assert_eq!(cancelled.class(), SessionErrorClass::Cancellation);
+        assert_eq!(cancelled.remediation(), Remediation::None);
     }
 }

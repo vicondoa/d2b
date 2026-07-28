@@ -445,8 +445,18 @@ impl<T: OwnedTransport> SessionEngine<T> {
         self.transport = transport;
     }
 
-    pub(crate) fn set_write_cancellation(&mut self, cancellation: Option<crate::Cancellation>) {
-        self.transport.set_write_cancellation(cancellation);
+    pub(crate) fn begin_write_batch(&mut self, cancellation: Option<crate::Cancellation>) {
+        self.transport.begin_write_batch(cancellation);
+    }
+
+    pub(crate) fn take_write_batch(
+        &mut self,
+    ) -> Option<(
+        Vec<crate::TransportPacket>,
+        Option<crate::Cancellation>,
+        bool,
+    )> {
+        self.transport.take_write_batch()
     }
 
     pub(crate) fn split_transport(
@@ -569,10 +579,14 @@ impl<T: OwnedTransport> SessionEngine<T> {
 
     pub async fn call(&mut self, request_id: RequestId, frame: Vec<u8>) -> Result<Cancellation> {
         let cancellation = self.outbound_requests.register(request_id.clone())?;
+        self.transport
+            .set_write_cancellation(Some(cancellation.clone()));
         if let Err(error) = self.send_ttrpc(frame).await {
+            self.transport.set_write_cancellation(None);
             self.outbound_requests.complete(&request_id);
             return Err(error);
         }
+        self.transport.set_write_cancellation(None);
         self.outbound_requests.mark_dispatched(&request_id)?;
         Ok(cancellation)
     }
@@ -598,6 +612,7 @@ impl<T: OwnedTransport> SessionEngine<T> {
     }
 
     pub async fn cancel_call(&mut self, request_id: &RequestId) -> Result<()> {
+        self.outbound_requests.signal(request_id);
         let request = CancelRequest {
             reconnect_generation: self.generation(),
             request_id: request_id.clone(),
