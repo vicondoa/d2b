@@ -60,6 +60,9 @@ deprecations ship one minor release before removal.
   registrar-issued single-use capability, with a compile-fail seal covering
   foreign session authorities.
 
+- Preserved stable ComponentSession error codes and prescribed remediation
+  through bus endpoint failures while retaining class-only observer labels.
+
 - Unified Core and toolkit controller identity, selector, trigger, registration,
   retry, and resync contracts. Core changes now drive the executor-native
   reconciliation runner through a bounded, coalescing registered-resource

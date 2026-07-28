@@ -652,7 +652,7 @@ impl BusFailureReason {
             | BusError::Stream(StreamError::StreamCapacityExceeded)
             | BusError::Stream(StreamError::PrincipalCapacityExceeded) => Self::Capacity,
             BusError::Operation(_) | BusError::Stream(_) => Self::Backpressure,
-            BusError::Endpoint(EndpointError::Session(class)) => match class {
+            BusError::Endpoint(EndpointError::Session(failure)) => match failure.class() {
                 crate::registry::EndpointFailureClass::Authentication => Self::Authentication,
                 crate::registry::EndpointFailureClass::Authorization => Self::Authorization,
                 crate::registry::EndpointFailureClass::Generation => Self::Generation,
@@ -3139,36 +3139,75 @@ mod tests {
     }
 
     #[test]
-    fn endpoint_session_failures_preserve_closed_classes() {
+    fn endpoint_session_failures_preserve_actionable_details_and_closed_labels() {
         use crate::registry::EndpointFailureClass;
+        use d2b_contracts::v3::component_session::{Remediation, SessionErrorCode};
 
         let cases = [
             (
+                SessionErrorCode::AuthenticationFailed,
                 EndpointFailureClass::Authentication,
                 BusFailureReason::Authentication,
+                Remediation::ReEnrollPeer,
             ),
             (
+                SessionErrorCode::PolicyDenied,
                 EndpointFailureClass::Authorization,
                 BusFailureReason::Authorization,
+                Remediation::RepairConfiguration,
             ),
             (
+                SessionErrorCode::GenerationMismatch,
                 EndpointFailureClass::Generation,
                 BusFailureReason::Generation,
+                Remediation::ReplaceGeneration,
             ),
             (
+                SessionErrorCode::QueueBackpressure,
                 EndpointFailureClass::Backpressure,
                 BusFailureReason::Backpressure,
+                Remediation::ReduceLoad,
             ),
-            (EndpointFailureClass::Deadline, BusFailureReason::Deadline),
-            (EndpointFailureClass::Transport, BusFailureReason::Transport),
-            (EndpointFailureClass::Protocol, BusFailureReason::Protocol),
-            (EndpointFailureClass::Internal, BusFailureReason::Endpoint),
+            (
+                SessionErrorCode::DeadlineExpired,
+                EndpointFailureClass::Deadline,
+                BusFailureReason::Deadline,
+                Remediation::RetryBounded,
+            ),
+            (
+                SessionErrorCode::SessionDisconnected,
+                EndpointFailureClass::Transport,
+                BusFailureReason::Transport,
+                Remediation::RestartAgent,
+            ),
+            (
+                SessionErrorCode::RecordMalformed,
+                EndpointFailureClass::Protocol,
+                BusFailureReason::Protocol,
+                Remediation::RepairConfiguration,
+            ),
+            (
+                SessionErrorCode::InternalInvariant,
+                EndpointFailureClass::Internal,
+                BusFailureReason::Endpoint,
+                Remediation::RestartAgent,
+            ),
         ];
-        for (class, expected) in cases {
+        for (code, class, expected_label, remediation) in cases {
+            let endpoint_error = EndpointError::from(d2b_session::SessionError::new(code));
+            let EndpointError::Session(failure) = endpoint_error else {
+                panic!("session errors preserve their endpoint failure");
+            };
+            assert_eq!(failure.class(), class);
+            assert_eq!(failure.code(), code);
+            assert_eq!(failure.remediation(), remediation);
             assert_eq!(
-                BusFailureReason::from_error(&BusError::Endpoint(EndpointError::Session(class))),
-                expected
+                BusFailureReason::from_error(&BusError::Endpoint(EndpointError::Session(failure))),
+                expected_label
             );
+            let display = EndpointError::Session(failure).to_string();
+            assert!(display.contains(code.as_str()));
+            assert!(display.contains(remediation.as_str()));
         }
         assert_eq!(
             BusFailureReason::from_error(&BusError::Operation(OperationError::RouteRevoked)),
