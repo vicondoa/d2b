@@ -409,6 +409,29 @@ mod tests {
         }
     }
 
+    struct BlockingStreamHandler {
+        started: Arc<Notify>,
+        observed: Arc<Notify>,
+        release: Arc<Notify>,
+    }
+
+    #[async_trait]
+    impl StreamHandler for BlockingStreamHandler {
+        async fn handler(
+            &self,
+            _context: TtrpcContext,
+            _stream: StreamInner,
+        ) -> ttrpc::Result<Option<Response>> {
+            let cancellation =
+                current_handler_cancellation().expect("stream handler cancellation context");
+            self.started.notify_one();
+            cancellation.cancelled().await;
+            self.observed.notify_one();
+            self.release.notified().await;
+            Ok(Some(Response::default()))
+        }
+    }
+
     struct BlockingDriver {
         frame: StdMutex<Option<Vec<u8>>>,
         registry: StdMutex<RequestRegistry>,
@@ -435,6 +458,10 @@ mod tests {
                 .as_ref()
                 .expect("inbound call registered")
                 .cancel();
+        }
+
+        fn active_requests(&self) -> usize {
+            self.registry.lock().unwrap().active()
         }
     }
 
@@ -480,10 +507,10 @@ mod tests {
         }
     }
 
-    fn request_frame(stream_id: u32) -> Vec<u8> {
+    fn request_frame_for(stream_id: u32, method: &str) -> Vec<u8> {
         let request = Request {
             service: "test.Service".to_owned(),
-            method: "Block".to_owned(),
+            method: method.to_owned(),
             ..Request::default()
         };
         let payload = request.write_to_bytes().unwrap();
@@ -491,6 +518,10 @@ mod tests {
         let mut frame = Vec::from(MessageHeader::new_request(stream_id, length));
         frame.extend_from_slice(&payload);
         frame
+    }
+
+    fn request_frame(stream_id: u32) -> Vec<u8> {
+        request_frame_for(stream_id, "Block")
     }
 
     #[test]
@@ -564,6 +595,51 @@ mod tests {
         .await
         .expect("cancelled response is completed locally");
         assert_eq!(driver.sends.load(Ordering::Acquire), 0);
+
+        serving.abort();
+        let error = serving.await.unwrap_err();
+        assert!(error.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn stream_cancellation_reaches_handler_suppresses_response_and_cleans_up() {
+        let started = Arc::new(Notify::new());
+        let observed = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let driver = Arc::new(BlockingDriver::new(request_frame_for(29, "Watch")));
+        let service = Service {
+            methods: HashMap::new(),
+            streams: HashMap::from([(
+                "Watch".to_owned(),
+                Arc::new(BlockingStreamHandler {
+                    started: Arc::clone(&started),
+                    observed: Arc::clone(&observed),
+                    release: Arc::clone(&release),
+                }) as Arc<dyn StreamHandler + Send + Sync>,
+            )]),
+        };
+        let serving_driver: Arc<dyn TtrpcServerDriver> = driver.clone();
+        let serving = tokio::spawn(serve_ttrpc_services_inner(
+            serving_driver,
+            HashMap::from([("test.Service".to_owned(), service)]),
+        ));
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), started.notified())
+            .await
+            .expect("stream handler starts");
+        driver.cancel_handler();
+        tokio::time::timeout(std::time::Duration::from_secs(1), observed.notified())
+            .await
+            .expect("stream handler observes cancellation");
+        release.notify_one();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            driver.completed.notified(),
+        )
+        .await
+        .expect("cancelled stream response is completed locally");
+        assert_eq!(driver.sends.load(Ordering::Acquire), 0);
+        assert_eq!(driver.active_requests(), 0);
 
         serving.abort();
         let error = serving.await.unwrap_err();
