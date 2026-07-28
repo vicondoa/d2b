@@ -1,0 +1,18 @@
+[package]
+name = "d2b-chrome-engine"
+version = "0.0.0-prototype"
+edition = "2021"
+publish = false
+description = "Prototype rendering engine for d2b window identity chrome"
+
+# Deliberately NOT a member of the packages/ workspace. This is prototype-only
+# code for ADR 0047 exploration; keeping it out of the workspace keeps the
+# top-level Rust, deny, and audit gates unaffected by prototype dependencies.
+[workspace]
+
+[dependencies]
+fontdue = "0.9"
+png = "0.17"
+
+[lints.rust]
+unsafe_code = "forbid"
