@@ -655,8 +655,7 @@ pub struct SessionCancellationHandle {
 }
 
 impl SessionCancellationHandle {
-    /// Revoke every queued or future batch for this session generation and
-    /// wait for batches already admitted by the writer.
+    #[doc(hidden)]
     pub fn revoke_generation_writes(&self) -> impl Future<Output = ()> + Send + 'static {
         let fence = self.writer_fence.cancel_and_wait();
         async move {
