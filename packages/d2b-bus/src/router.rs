@@ -700,6 +700,7 @@ impl BusFailureReason {
                 crate::registry::EndpointFailureClass::Generation => Self::Generation,
                 crate::registry::EndpointFailureClass::Backpressure => Self::Backpressure,
                 crate::registry::EndpointFailureClass::Deadline => Self::Deadline,
+                crate::registry::EndpointFailureClass::Cancellation => Self::Cancelled,
                 crate::registry::EndpointFailureClass::Transport => Self::Transport,
                 crate::registry::EndpointFailureClass::Protocol => Self::Protocol,
                 crate::registry::EndpointFailureClass::Internal => Self::Endpoint,
@@ -3418,6 +3419,12 @@ mod tests {
                 EndpointFailureClass::Deadline,
                 BusFailureReason::Deadline,
                 Remediation::RetryBounded,
+            ),
+            (
+                SessionErrorCode::Cancelled,
+                EndpointFailureClass::Cancellation,
+                BusFailureReason::Cancelled,
+                Remediation::None,
             ),
             (
                 SessionErrorCode::SessionDisconnected,
