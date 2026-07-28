@@ -616,8 +616,11 @@ impl Drop for PendingCancelDeliveryLease {
 pub enum CancellationOutcome {
     /// Local operation state is terminal, but remote notification is unconfirmed.
     LocalTerminal,
-    /// The destination confirmed processing the cancellation notification.
-    RemoteConfirmed,
+    /// The local session transport finished writing the cancellation request.
+    ///
+    /// This does not imply that the destination processed it or returned a
+    /// `CancelAck`.
+    LocallyTransmitted,
 }
 
 /// Correlated cancellation completion without retaining active operation quota.
@@ -641,8 +644,8 @@ impl CancellationReceipt {
         CancellationOutcome::LocalTerminal
     }
 
-    /// Wait for the correlated remote notification result.
-    pub async fn remote_outcome(self) -> CancellationOutcome {
+    /// Wait for the correlated cancellation transmission result.
+    pub async fn delivery_outcome(self) -> CancellationOutcome {
         match self.remote {
             Some(remote) => remote.await.unwrap_or(CancellationOutcome::LocalTerminal),
             None => CancellationOutcome::LocalTerminal,
@@ -728,7 +731,7 @@ impl BusCore {
                 cancellation,
             };
             let outcome = match tokio::time::timeout(CANCEL_DELIVERY_TIMEOUT, delivery).await {
-                Ok(Ok(())) => CancellationOutcome::RemoteConfirmed,
+                Ok(Ok(())) => CancellationOutcome::LocallyTransmitted,
                 Ok(Err(error)) => {
                     observer.record(
                         BusEvent::Cancel,
@@ -4149,8 +4152,8 @@ mod tests {
         let receipt = cancel_result.unwrap();
         assert_eq!(receipt.local_outcome(), CancellationOutcome::LocalTerminal);
         assert_eq!(
-            receipt.remote_outcome().await,
-            CancellationOutcome::RemoteConfirmed
+            receipt.delivery_outcome().await,
+            CancellationOutcome::LocallyTransmitted
         );
         assert_eq!(endpoint.cancel_count.load(Ordering::Acquire), 1);
     }
@@ -4271,7 +4274,7 @@ mod tests {
             let receipt = cancel_result.unwrap();
             assert_eq!(receipt.local_outcome(), CancellationOutcome::LocalTerminal);
             assert_eq!(
-                receipt.remote_outcome().await,
+                receipt.delivery_outcome().await,
                 CancellationOutcome::LocalTerminal
             );
             assert!(!endpoint.has_active_request(&id));
