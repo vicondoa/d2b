@@ -77,7 +77,6 @@ fn public_api_has_only_the_approved_capability_mint_surface() {
          but were not rendered, so the comparison below would report their whole \
          API as removed. This is a doc-build problem, not an API change."
     );
-
     let actual = snapshot_public_api(&snapshot_docs, &approved);
 
     // A crate that renders but yields no public item means rustdoc produced no
@@ -99,11 +98,14 @@ fn public_api_has_only_the_approved_capability_mint_surface() {
          API as removed. This is a doc-build problem, not an API change."
     );
     let (_, capability_surface) = workspace_public_api(&workspace_docs, &BTreeSet::new(), true);
+    let optional_capabilities = approved_entries(include_str!("approved-capability-optional.txt"));
     if std::env::var_os("D2B_UPDATE_BUS_PUBLIC_API").is_some() {
         write_snapshot(&crate_root.join("tests/approved-public-api.txt"), &actual);
+        let mut reviewed_capabilities = capability_surface.clone();
+        reviewed_capabilities.extend(optional_capabilities.iter().cloned());
         write_snapshot(
             &crate_root.join("tests/approved-capability-api.txt"),
-            &capability_surface,
+            &reviewed_capabilities,
         );
         return;
     }
@@ -121,46 +123,11 @@ fn public_api_has_only_the_approved_capability_mint_surface() {
         );
     }
     let approved_capabilities = approved_entries(include_str!("approved-capability-api.txt"));
-
-    // Same protection as the API snapshot: a crate listed in the approved
-    // capability set that yields nothing means rustdoc produced no usable
-    // output for it, and comparing anyway blames its whole capability surface
-    // as withdrawn.
-    let capability_crates = approved_capabilities
-        .iter()
-        .filter_map(|symbol| symbol.split_once("::").map(|(crate_name, _)| crate_name))
-        .collect::<BTreeSet<_>>();
-    let _ = &capability_crates;
-
-    // An allowlist for a capability surface must fail on ADDITIONS: a public
-    // signature newly exposing a capability or claim type is the widening this
-    // gate exists to catch. Removals cannot widen the boundary, and treating
-    // them as failures makes the gate hostage to rustdoc rendering, which has
-    // proven non-deterministic across cold runs and compiler versions. Report
-    // stale approved entries rather than failing on them.
-    let added = capability_surface
-        .difference(&approved_capabilities)
-        .cloned()
-        .collect::<Vec<_>>();
-    assert!(
-        added.is_empty(),
-        "a public signature now exposes a capability or claim type outside the \
-         explicitly approved capability API: {added:?}. Review whether this \
-         widens the capability mint surface before adding it to \
-         approved-capability-api.txt."
+    assert_capability_inventory(
+        &capability_surface,
+        &approved_capabilities,
+        &optional_capabilities,
     );
-    let stale = approved_capabilities
-        .difference(&capability_surface)
-        .cloned()
-        .collect::<Vec<_>>();
-    if !stale.is_empty() {
-        eprintln!(
-            "note: {} approved capability entries were not observed this run; \
-             this cannot widen the boundary, but prune them once the render is \
-             stable: {stale:?}",
-            stale.len()
-        );
-    }
 
     let router = fs::read_to_string(crate_root.join("src/router.rs")).expect("read router source");
     assert_eq!(
@@ -173,10 +140,10 @@ fn public_api_has_only_the_approved_capability_mint_surface() {
         1,
         "SessionAcceptor construction widened beyond the approved registrar mint point"
     );
+    assert_mutation_fixture();
 }
 
-#[test]
-fn mutation_fixture_detects_trait_constructor_and_capability_accessor() {
+fn assert_mutation_fixture() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repository_root = crate_root.parent().unwrap().parent().unwrap();
     let fixture = crate_root.join("tests/ui/public-api-mutations");
@@ -204,6 +171,24 @@ fn mutation_fixture_detects_trait_constructor_and_capability_accessor() {
         rogue_html.contains("id=\"deref-methods-"),
         "mutation fixture did not execute the Deref-region parser branch"
     );
+    for wrapper in ["PrincipalClaim", "SerialClaim"] {
+        let item = documented_items(&docs)
+            .into_iter()
+            .find(|item| item.symbol.ends_with(&format!("opaque_claims::{wrapper}")))
+            .unwrap_or_else(|| panic!("opaque wrapper {wrapper} was not documented"));
+        let constructor = item
+            .html
+            .split("<section id=\"method.from_raw\"")
+            .nth(1)
+            .and_then(code_header)
+            .unwrap_or_else(|| panic!("opaque wrapper {wrapper} has no raw-string constructor"));
+        assert!(
+            constructor.contains(">str</a>")
+                && !constructor.contains("ResourceRef")
+                && !constructor.contains("ResourceUid"),
+            "opaque wrapper {wrapper} publicly exposes its private claim type: {constructor}"
+        );
+    }
     let (_, capabilities) = workspace_public_api(&docs, &BTreeSet::new(), false);
     assert!(
         capabilities
@@ -230,7 +215,7 @@ fn mutation_fixture_detects_trait_constructor_and_capability_accessor() {
             && capabilities
                 .iter()
                 .any(|symbol| symbol.ends_with("opaque_claims::SerialClaim")),
-        "opaque claim wrappers were not classified by linked type identity"
+        "opaque claim wrappers were not classified from their private field types"
     );
     assert!(
         capabilities
@@ -285,6 +270,39 @@ fn assert_snapshot(actual: &BTreeSet<String>, approved: &BTreeSet<String>, messa
     );
 }
 
+fn assert_capability_inventory(
+    actual: &BTreeSet<String>,
+    approved: &BTreeSet<String>,
+    optional: &BTreeSet<String>,
+) {
+    assert!(
+        optional.is_subset(approved),
+        "optional capability entries must also be approved"
+    );
+    let unapproved = actual.difference(approved).take(40).collect::<Vec<_>>();
+    let required = approved
+        .difference(optional)
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let missing = required
+        .iter()
+        .filter(|entry| !actual.contains(*entry))
+        .take(40)
+        .collect::<Vec<_>>();
+    if unapproved.is_empty() && missing.is_empty() {
+        return;
+    }
+    panic!(
+        "capability inventory changed; unapproved {} (first 40: {unapproved:?}), \
+         missing required {} (first 40: {missing:?})",
+        actual.difference(approved).count(),
+        required
+            .iter()
+            .filter(|entry| !actual.contains(*entry))
+            .count()
+    );
+}
+
 fn approved_entries(snapshot: &str) -> BTreeSet<String> {
     snapshot
         .lines()
@@ -306,6 +324,7 @@ struct DocumentedItem {
     symbol: String,
     path: PathBuf,
     html: String,
+    rendered_html: String,
 }
 
 fn render_workspace_docs(
@@ -374,7 +393,13 @@ fn render_workspace_docs(
     let temp = scratch.join("tmp");
     fs::create_dir_all(&temp).expect("create rustdoc temporary directory");
     let mut command = Command::new(env!("CARGO"));
-    command.args(["doc", "--quiet", "--locked", "--no-deps"]);
+    command.args([
+        "doc",
+        "--quiet",
+        "--locked",
+        "--no-deps",
+        "--document-private-items",
+    ]);
     command.arg("--manifest-path").arg(manifest);
     for package in packages {
         command.arg("-p").arg(package);
@@ -441,7 +466,7 @@ fn workspace_public_api(
         if snapshot {
             public.insert(item.symbol.clone());
         }
-        if capability_types.contains(&canonical_path(&item.path))
+        if capability_types.contains(&type_identity(&item.path))
             || item_declaration(&item.html).is_some_and(|signature| {
                 signature_links_to(signature, &item.path, &capability_types)
             })
@@ -464,7 +489,7 @@ fn snapshot_public_api(docs: &[DocumentedCrate], approved: &BTreeSet<String>) ->
     let mut public = BTreeSet::new();
     for item in documented_items(docs) {
         public.insert(item.symbol.clone());
-        let html = without_deref_methods(&item.html);
+        let html = without_deref_methods(&item.rendered_html);
         for section in html.split("<section id=\"").skip(1) {
             let Some((id, rest)) = section.split_once('"') else {
                 continue;
@@ -501,6 +526,7 @@ fn snapshot_public_api(docs: &[DocumentedCrate], approved: &BTreeSet<String>) ->
 fn documented_items(docs: &[DocumentedCrate]) -> Vec<DocumentedItem> {
     let mut items = Vec::new();
     for docs in docs {
+        let restricted_modules = restricted_module_directories(&docs.root);
         let all =
             fs::read_to_string(docs.root.join("all.html")).expect("read rustdoc all-items page");
         for entry in all.split("<li><a href=\"").skip(1) {
@@ -516,32 +542,94 @@ fn documented_items(docs: &[DocumentedCrate]) -> Vec<DocumentedItem> {
             let Some((name, _)) = text.split_once("</a>") else {
                 continue;
             };
-            let path = docs.root.join(href);
-            if !path.is_file() {
+            let rendered_path = docs.root.join(href);
+            if !rendered_path.is_file() {
+                continue;
+            }
+            let rendered_path =
+                fs::canonicalize(&rendered_path).expect("canonicalize rendered rustdoc item page");
+            if restricted_modules
+                .iter()
+                .any(|module| rendered_path.starts_with(module))
+            {
+                continue;
+            }
+            let path = canonical_path(&rendered_path);
+            let rendered_html =
+                fs::read_to_string(&rendered_path).expect("read rendered rustdoc item page");
+            let html = if path == rendered_path {
+                rendered_html.clone()
+            } else {
+                fs::read_to_string(&path).expect("read canonical rustdoc item page")
+            };
+            if !item_declaration(&html).is_some_and(is_public_declaration) {
                 continue;
             }
             items.push(DocumentedItem {
                 crate_name: docs.crate_name.clone(),
                 symbol: format!("{}::{name}", docs.crate_name),
-                html: fs::read_to_string(&path).expect("read rustdoc item page"),
                 path,
+                html,
+                rendered_html,
             });
         }
     }
     items
 }
 
+fn restricted_module_directories(root: &Path) -> BTreeSet<PathBuf> {
+    let mut pending = vec![root.to_path_buf()];
+    let mut restricted = BTreeSet::new();
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(&directory).expect("walk rustdoc module directories") {
+            let path = entry.expect("read rustdoc module entry").path();
+            if path.is_dir() {
+                pending.push(path);
+            }
+        }
+        let index = directory.join("index.html");
+        if !index.is_file() {
+            continue;
+        }
+        let html = fs::read_to_string(index).expect("read rustdoc module index");
+        for item in html.split("<dt>").skip(1) {
+            let item = item.split_once("</dt>").map_or(item, |(item, _)| item);
+            if !item.contains("title=\"Restricted Visibility\"") {
+                continue;
+            }
+            let Some(href) = item
+                .split_once("<a class=\"mod\" href=\"")
+                .and_then(|(_, rest)| rest.split_once('"').map(|(href, _)| href))
+            else {
+                continue;
+            };
+            let module_index = directory.join(href);
+            if module_index.is_file() {
+                restricted.insert(
+                    fs::canonicalize(
+                        module_index
+                            .parent()
+                            .expect("restricted rustdoc module parent"),
+                    )
+                    .expect("canonicalize restricted rustdoc module"),
+                );
+            }
+        }
+    }
+    restricted
+}
+
 fn capability_type_identities(
     items: &[DocumentedItem],
     require_all_roots: bool,
 ) -> (BTreeSet<PathBuf>, BTreeSet<PathBuf>) {
-    let mut by_type_name = BTreeMap::<&str, Vec<PathBuf>>::new();
+    let mut by_type_name = BTreeMap::<&str, BTreeSet<PathBuf>>::new();
     for item in items.iter().filter(|item| is_type_page(&item.path)) {
         let type_name = item.symbol.rsplit("::").next().expect("rustdoc type name");
         by_type_name
             .entry(type_name)
             .or_default()
-            .push(canonical_path(&item.path));
+            .insert(type_identity(&item.path));
     }
     let capability_roots = CAPABILITY_TYPE_IDENTITIES
         .iter()
@@ -550,7 +638,7 @@ fn capability_type_identities(
             let matches = by_type_name.get(identity).cloned().unwrap_or_default();
             assert!(
                 matches.len() <= 1,
-                "capability type identity {identity:?} is ambiguous"
+                "capability type identity {identity:?} is ambiguous: {matches:?}"
             );
             if require_all_roots {
                 assert!(
@@ -566,11 +654,11 @@ fn capability_type_identities(
     loop {
         let mut added = false;
         for item in items {
-            if capability_types.contains(&canonical_path(&item.path)) || !is_type_page(&item.path) {
+            if capability_types.contains(&type_identity(&item.path)) || !is_type_page(&item.path) {
                 continue;
             }
             if public_signature_links_to(&item.html, &item.path, &capability_types) {
-                added |= capability_types.insert(canonical_path(&item.path));
+                added |= capability_types.insert(type_identity(&item.path));
             }
         }
         if !added {
@@ -587,7 +675,8 @@ fn collect_members(
     public: &mut BTreeSet<String>,
     capability_surface: &mut BTreeSet<String>,
 ) {
-    let item_is_capability = capability_types.contains(&canonical_path(&item.path));
+    let item_identity = type_identity(&item.path);
+    let item_is_capability = capability_types.contains(&item_identity);
     let html = without_deref_methods(&item.html);
     for section in html.split("<section id=\"").skip(1) {
         let Some((id, rest)) = section.split_once('"') else {
@@ -615,7 +704,7 @@ fn collect_members(
             if capability {
                 capability_surface.insert(symbol.clone());
             }
-            if snapshot && capability_roots.contains(&canonical_path(&item.path)) {
+            if snapshot && capability_roots.contains(&item_identity) {
                 public.insert(symbol);
             }
             continue;
@@ -640,10 +729,11 @@ fn without_deref_methods(html: &str) -> std::borrow::Cow<'_, str> {
     };
     // Resume at whichever section rustdoc emits after the deref block. The
     // anchor set differs between compiler versions, and if none matches we keep
-    // the page whole rather than dropping the remainder: an unexcised deref
-    // method shows up as an *added* symbol, which is a loud and correct signal,
-    // whereas silently discarding every trait implementation after this point
-    // hides exactly the capability accessors this guard exists to find.
+    // the page whole rather than dropping the remainder: an unexcised inherited
+    // method surfaces as an addition, which is loud and correct, whereas
+    // silently discarding every trait implementation after this point hides
+    // exactly the capability accessors this guard exists to find. That is what
+    // made CI report 625 symbols removed on the pinned toolchain.
     let Some(rest) = [
         "id=\"trait-implementations",
         "id=\"synthetic-implementations",
@@ -699,7 +789,7 @@ fn signature_links_to(signature: &str, item_path: &Path, identities: &BTreeSet<P
             continue;
         }
         let linked = item_path.parent().expect("rustdoc item parent").join(href);
-        if linked.is_file() && identities.contains(&canonical_path(&linked)) {
+        if linked.is_file() && identities.contains(&type_identity(&linked)) {
             return true;
         }
     }
@@ -739,7 +829,42 @@ fn canonical_path(path: &Path) -> PathBuf {
         )
         .expect("resolve rustdoc type identity redirect");
     }
+
     panic!("rustdoc type identity redirect depth exceeded")
+}
+
+fn type_identity(path: &Path) -> PathBuf {
+    let page = canonical_path(path);
+    let html = fs::read_to_string(&page).expect("read rustdoc type identity page");
+    let Some(source_href) = html
+        .split_once("<a class=\"src\" href=\"")
+        .and_then(|(_, rest)| rest.split_once('"').map(|(href, _)| href))
+    else {
+        return page;
+    };
+    let (source_path, fragment) = source_href
+        .split_once('#')
+        .map_or((source_href, ""), |(source, fragment)| (source, fragment));
+    let source = normalize_path(
+        page.parent()
+            .expect("rustdoc type page parent")
+            .join(source_path),
+    );
+    PathBuf::from(format!("{}#{fragment}", source.display()))
+}
+
+fn normalize_path(path: PathBuf) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::ParentDir => {
+                normalized.pop();
+            }
+            std::path::Component::CurDir => {}
+            component => normalized.push(component.as_os_str()),
+        }
+    }
+    normalized
 }
 
 fn item_declaration(html: &str) -> Option<&str> {
@@ -747,6 +872,10 @@ fn item_declaration(html: &str) -> Option<&str> {
         .1
         .split_once("</code></pre>")
         .map(|(declaration, _)| declaration)
+}
+
+fn is_public_declaration(declaration: &str) -> bool {
+    declaration.starts_with("pub ")
 }
 
 fn code_header(section: &str) -> Option<&str> {

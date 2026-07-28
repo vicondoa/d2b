@@ -35,7 +35,7 @@ use crate::{
     authorization::{AuthorizationError, BusAuthorizer},
     operations::{
         CancelDeliveryAdmission, CancelDispatch, Cancellation, OperationError, OperationId,
-        OperationSpec, OperationTable, PendingCancelDeliveries, SessionId,
+        OperationSpec, OperationTable, PendingCancelDeliveries, SessionId, TombstoneEviction,
     },
     registry::{
         BusResponse, EndpointError, Registry, RegistryError, RouteKey, RouteTarget,
@@ -616,8 +616,11 @@ impl Drop for PendingCancelDeliveryLease {
 pub enum CancellationOutcome {
     /// Local operation state is terminal, but remote notification is unconfirmed.
     LocalTerminal,
-    /// The destination confirmed processing the cancellation notification.
-    RemoteConfirmed,
+    /// The local session transport finished writing the cancellation request.
+    ///
+    /// This does not imply that the destination processed it or returned a
+    /// `CancelAck`.
+    LocallyTransmitted,
 }
 
 /// Correlated cancellation completion without retaining active operation quota.
@@ -641,8 +644,8 @@ impl CancellationReceipt {
         CancellationOutcome::LocalTerminal
     }
 
-    /// Wait for the correlated remote notification result.
-    pub async fn remote_outcome(self) -> CancellationOutcome {
+    /// Wait for the correlated cancellation transmission result.
+    pub async fn delivery_outcome(self) -> CancellationOutcome {
         match self.remote {
             Some(remote) => remote.await.unwrap_or(CancellationOutcome::LocalTerminal),
             None => CancellationOutcome::LocalTerminal,
@@ -690,6 +693,9 @@ impl BusCore {
         self: &Arc<Self>,
         dispatch: CancelDispatch,
     ) -> oneshot::Receiver<CancellationOutcome> {
+        if let Some(eviction) = dispatch.tombstone_eviction {
+            self.observe_tombstone_eviction(eviction);
+        }
         let delivery = dispatch
             .target
             .endpoint
@@ -725,7 +731,7 @@ impl BusCore {
                 cancellation,
             };
             let outcome = match tokio::time::timeout(CANCEL_DELIVERY_TIMEOUT, delivery).await {
-                Ok(Ok(())) => CancellationOutcome::RemoteConfirmed,
+                Ok(Ok(())) => CancellationOutcome::LocallyTransmitted,
                 Ok(Err(error)) => {
                     observer.record(
                         BusEvent::Cancel,
@@ -761,6 +767,14 @@ impl BusCore {
             .record(event, BusFailureReason::from_error(error));
     }
 
+    fn observe_tombstone_eviction(&self, eviction: TombstoneEviction) {
+        let reason = match eviction {
+            TombstoneEviction::PerSource => BusFailureReason::PerSourceRetention,
+            TombstoneEviction::Global => BusFailureReason::GlobalRetention,
+        };
+        self.observer.record(BusEvent::TombstoneEviction, reason);
+    }
+
     fn lock_registry(&self) -> MutexGuard<'_, Registry> {
         self.registry
             .lock()
@@ -785,6 +799,7 @@ pub enum BusEvent {
     OpenStream,
     Cancel,
     Cleanup,
+    TombstoneEviction,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -804,6 +819,8 @@ pub enum BusFailureReason {
     Endpoint,
     Abandoned,
     StreamShed,
+    PerSourceRetention,
+    GlobalRetention,
 }
 
 impl BusFailureReason {
@@ -1570,9 +1587,20 @@ fn publish_component_request(
     operation: OperationId,
     request: ActiveComponentRequest,
 ) -> Result<oneshot::Receiver<ComponentResponse>, EndpointError> {
+    publish_component_request_with_hook(activity, responses, operation, request, || {})
+}
+
+fn publish_component_request_with_hook(
+    activity: &Mutex<ComponentActivity>,
+    responses: &Mutex<ComponentResponseState>,
+    operation: OperationId,
+    request: ActiveComponentRequest,
+    after_activity_lock: impl FnOnce(),
+) -> Result<oneshot::Receiver<ComponentResponse>, EndpointError> {
     let mut activity = activity
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
+    after_activity_lock();
     let mut responses = responses
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -2359,8 +2387,8 @@ impl BusIngress {
         })
     }
 
-    /// Cancel one operation owned by this exact ingress.
-    pub async fn cancel(&self, operation: &OperationId) -> Result<CancellationReceipt, BusError> {
+    /// Cancel one exact operation attempt owned by this ingress.
+    pub async fn cancel(&self, operation: &OperationSpec) -> Result<CancellationReceipt, BusError> {
         let result = self.cancel_inner(operation).await;
         if let Err(error) = &result {
             self.core.observe_error(BusEvent::Cancel, error);
@@ -2368,7 +2396,10 @@ impl BusIngress {
         result
     }
 
-    async fn cancel_inner(&self, operation: &OperationId) -> Result<CancellationReceipt, BusError> {
+    async fn cancel_inner(
+        &self,
+        operation: &OperationSpec,
+    ) -> Result<CancellationReceipt, BusError> {
         self.ensure_open()?;
         let Some(admission) = self
             .core
@@ -2967,6 +2998,77 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error, cancelled_endpoint());
+        assert!(!activity.lock().unwrap().requests.contains_key(&operation));
+        assert!(!responses.lock().unwrap().waiters.contains_key(&request_id));
+    }
+
+    #[test]
+    fn component_cancellation_contending_during_publication_removes_all_state() {
+        let operation = OperationId::parse("component-contended-cancel").unwrap();
+        let attempt = Cancellation::new();
+        let request_id = d2b_session::contract::RequestId::new(vec![10; 16]).unwrap();
+        let mut requests = d2b_session::RequestRegistry::new(1).unwrap();
+        let write_guard = requests.register(request_id.clone()).unwrap();
+        let activity = Arc::new(Mutex::new(ComponentActivity::default()));
+        let responses = Arc::new(Mutex::new(ComponentResponseState::default()));
+        let (publication_locked, publication_reached) = std::sync::mpsc::sync_channel(0);
+        let (release_publication, publication_release) = std::sync::mpsc::sync_channel(0);
+        let (cancel_contending, cancellation_reached) = std::sync::mpsc::sync_channel(0);
+
+        std::thread::scope(|scope| {
+            let publish_activity = Arc::clone(&activity);
+            let publish_responses = Arc::clone(&responses);
+            let publish_operation = operation.clone();
+            let publish_attempt = attempt.clone();
+            let publish_request_id = request_id.clone();
+            let publisher = scope.spawn(move || {
+                publish_component_request_with_hook(
+                    &publish_activity,
+                    &publish_responses,
+                    publish_operation,
+                    ActiveComponentRequest {
+                        request_id: publish_request_id,
+                        valid: Arc::new(AtomicBool::new(true)),
+                        attempt: publish_attempt,
+                        write_guard,
+                    },
+                    || {
+                        publication_locked.send(()).unwrap();
+                        publication_release.recv().unwrap();
+                    },
+                )
+            });
+
+            publication_reached.recv().unwrap();
+            let cancel_activity = Arc::clone(&activity);
+            let cancel_responses = Arc::clone(&responses);
+            let cancel_operation = operation.clone();
+            let cancel_attempt = attempt.clone();
+            let canceller = scope.spawn(move || {
+                assert!(matches!(
+                    cancel_activity.try_lock(),
+                    Err(std::sync::TryLockError::WouldBlock)
+                ));
+                cancel_contending.send(()).unwrap();
+                terminalize_component_request(
+                    &cancel_activity,
+                    &cancel_responses,
+                    &cancel_operation,
+                    &cancel_attempt,
+                )
+            });
+
+            cancellation_reached.recv().unwrap();
+            release_publication.send(()).unwrap();
+            let mut receiver = publisher.join().unwrap().unwrap();
+            let cancelled = canceller.join().unwrap().unwrap();
+            assert!(cancelled.attempt.is_same_attempt(&attempt));
+            assert!(matches!(
+                receiver.try_recv(),
+                Err(tokio::sync::oneshot::error::TryRecvError::Closed)
+            ));
+        });
+
         assert!(!activity.lock().unwrap().requests.contains_key(&operation));
         assert!(!responses.lock().unwrap().waiters.contains_key(&request_id));
     }
@@ -4116,23 +4218,24 @@ mod tests {
             endpoint: endpoint.clone(),
         });
         let id = OperationId::parse("cancel-operation").unwrap();
+        let operation = OperationSpec::new(id, 100).unwrap();
         let invoke = harness.caller.invoke_resource(
             harness.route.clone(),
-            OperationSpec::new(id.clone(), 100).unwrap(),
+            operation.clone(),
             ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
             Vec::new(),
         );
         let cancel = async {
             endpoint.started.notified().await;
-            harness.caller.cancel(&id).await
+            harness.caller.cancel(&operation).await
         };
         let (invoke_result, cancel_result) = tokio::join!(invoke, cancel);
         assert_eq!(invoke_result, Err(BusError::Cancelled));
         let receipt = cancel_result.unwrap();
         assert_eq!(receipt.local_outcome(), CancellationOutcome::LocalTerminal);
         assert_eq!(
-            receipt.remote_outcome().await,
-            CancellationOutcome::RemoteConfirmed
+            receipt.delivery_outcome().await,
+            CancellationOutcome::LocallyTransmitted
         );
         assert_eq!(endpoint.cancel_count.load(Ordering::Acquire), 1);
     }
@@ -4166,9 +4269,10 @@ mod tests {
             .unwrap()
             .before_cancel_transition = Some(Arc::clone(&hook));
         let id = OperationId::parse("cancel-admission-race").unwrap();
+        let first_operation = OperationSpec::new(id.clone(), 100).unwrap();
         let mut first = Box::pin(harness.caller.invoke_resource(
             harness.route.clone(),
-            OperationSpec::new(id.clone(), 100).unwrap(),
+            first_operation.clone(),
             ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
             Vec::new(),
         ));
@@ -4176,7 +4280,7 @@ mod tests {
             result = &mut first => panic!("first attempt unexpectedly completed: {result:?}"),
             () = endpoint.started.notified() => {}
         }
-        let mut cancel = Box::pin(harness.caller.cancel(&id));
+        let mut cancel = Box::pin(harness.caller.cancel(&first_operation));
         tokio::select! {
             result = &mut cancel => panic!("cancel unexpectedly completed: {result:?}"),
             () = hook.reached.notified() => {}
@@ -4234,9 +4338,10 @@ mod tests {
 
         for index in 0..3 {
             let id = OperationId::parse(format!("failed-cancel-{index}")).unwrap();
+            let operation = OperationSpec::new(id.clone(), 100).unwrap();
             let invoke = harness.caller.invoke_resource(
                 harness.route.clone(),
-                OperationSpec::new(id.clone(), 100).unwrap(),
+                operation.clone(),
                 ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
                 Vec::new(),
             );
@@ -4244,14 +4349,14 @@ mod tests {
                 while endpoint.call_count() <= index {
                     tokio::task::yield_now().await;
                 }
-                harness.caller.cancel(&id).await
+                harness.caller.cancel(&operation).await
             };
             let (invoke_result, cancel_result) = tokio::join!(invoke, cancel);
             assert_eq!(invoke_result, Err(BusError::Cancelled));
             let receipt = cancel_result.unwrap();
             assert_eq!(receipt.local_outcome(), CancellationOutcome::LocalTerminal);
             assert_eq!(
-                receipt.remote_outcome().await,
+                receipt.delivery_outcome().await,
                 CancellationOutcome::LocalTerminal
             );
             assert!(!endpoint.has_active_request(&id));
@@ -4291,9 +4396,10 @@ mod tests {
 
         for index in 0..2 {
             let id = OperationId::parse(format!("pending-cancel-{index}")).unwrap();
+            let operation = OperationSpec::new(id.clone(), 100).unwrap();
             let invoke = harness.caller.invoke_resource(
                 harness.route.clone(),
-                OperationSpec::new(id.clone(), 100).unwrap(),
+                operation.clone(),
                 ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
                 Vec::new(),
             );
@@ -4301,7 +4407,7 @@ mod tests {
                 while endpoint.call_count() <= index {
                     tokio::task::yield_now().await;
                 }
-                harness.caller.cancel(&id).await
+                harness.caller.cancel(&operation).await
             };
             let (invoke_result, cancel_result) = tokio::join!(invoke, cancel);
             assert_eq!(invoke_result, Err(BusError::Cancelled));
@@ -4344,15 +4450,16 @@ mod tests {
             },
         );
         let id = OperationId::parse("timed-cancel").unwrap();
+        let operation = OperationSpec::new(id, 100).unwrap();
         let invoke = harness.caller.invoke_resource(
             harness.route.clone(),
-            OperationSpec::new(id.clone(), 100).unwrap(),
+            operation.clone(),
             ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
             Vec::new(),
         );
         let cancel = async {
             endpoint.started.notified().await;
-            harness.caller.cancel(&id).await
+            harness.caller.cancel(&operation).await
         };
         let (invoke_result, cancel_result) = tokio::join!(invoke, cancel);
         assert_eq!(invoke_result, Err(BusError::Cancelled));
@@ -4537,7 +4644,7 @@ mod tests {
             .caller
             .core
             .lock_operations()
-            .cancel_admission(dropped_operation.id(), harness.caller.session)
+            .cancel_admission(&dropped_operation, harness.caller.session)
             .is_ok_and(|admission| admission.is_some())
         {
             tokio::task::yield_now().await;
@@ -4636,9 +4743,27 @@ mod tests {
                 .await,
             Err(BusError::InvalidResourceCall)
         );
+        harness
+            .caller
+            .core
+            .observe_tombstone_eviction(TombstoneEviction::PerSource);
+        harness
+            .caller
+            .core
+            .observe_tombstone_eviction(TombstoneEviction::Global);
         assert_eq!(
             observer.0.lock().unwrap().as_slice(),
-            &[(BusEvent::Invoke, BusFailureReason::Route)]
+            &[
+                (BusEvent::Invoke, BusFailureReason::Route),
+                (
+                    BusEvent::TombstoneEviction,
+                    BusFailureReason::PerSourceRetention,
+                ),
+                (
+                    BusEvent::TombstoneEviction,
+                    BusFailureReason::GlobalRetention,
+                ),
+            ]
         );
     }
 

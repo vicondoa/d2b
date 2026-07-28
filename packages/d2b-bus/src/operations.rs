@@ -52,7 +52,35 @@ impl core::fmt::Debug for OperationId {
 pub struct OperationSpec {
     id: OperationId,
     deadline_tick: u64,
+    attempt: OperationAttempt,
 }
+
+#[derive(Clone)]
+struct OperationAttempt(Arc<AtomicBool>);
+
+impl OperationAttempt {
+    fn new() -> Self {
+        Self(Arc::new(AtomicBool::new(false)))
+    }
+
+    fn is_same_attempt(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+
+    fn admit_once(&self) -> bool {
+        self.0
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+}
+
+impl PartialEq for OperationAttempt {
+    fn eq(&self, other: &Self) -> bool {
+        self.is_same_attempt(other)
+    }
+}
+
+impl Eq for OperationAttempt {}
 
 impl OperationSpec {
     /// Construct an operation with a nonzero monotonic deadline.
@@ -60,7 +88,11 @@ impl OperationSpec {
         if deadline_tick == 0 {
             return Err(OperationError::InvalidDeadline);
         }
-        Ok(Self { id, deadline_tick })
+        Ok(Self {
+            id,
+            deadline_tick,
+            attempt: OperationAttempt::new(),
+        })
     }
 
     /// Borrow the operation identifier.
@@ -144,6 +176,7 @@ struct OperationRecord {
     endpoint: Arc<dyn BusEndpoint>,
     generation: d2b_contracts::v3::ReconnectGeneration,
     deadline_tick: u64,
+    attempt: OperationAttempt,
     cancellation: Cancellation,
     retain_terminal: bool,
 }
@@ -175,6 +208,13 @@ pub(crate) struct CancelDispatch {
     pub(crate) operation: OperationId,
     pub(crate) source: SessionId,
     pub(crate) target: CancelTarget,
+    pub(crate) tombstone_eviction: Option<TombstoneEviction>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TombstoneEviction {
+    PerSource,
+    Global,
 }
 
 struct PendingCancelDelivery {
@@ -302,6 +342,7 @@ impl Drop for PendingCancelDeliveries {
 
 struct OperationTombstone {
     key: OperationKey,
+    attempt: OperationAttempt,
     cancellation: Cancellation,
 }
 
@@ -365,6 +406,9 @@ impl OperationTable {
                 {
                     return Err(OperationError::SessionCapacityExceeded);
                 }
+                if !operation.attempt.admit_once() {
+                    return Err(OperationError::RetainedOperationId);
+                }
                 let cancellation = Cancellation::new();
                 self.records.insert(
                     key,
@@ -374,6 +418,7 @@ impl OperationTable {
                         endpoint: route_lease.endpoint(),
                         generation: route_lease.generation(),
                         deadline_tick: operation.deadline_tick,
+                        attempt: operation.attempt.clone(),
                         cancellation: cancellation.clone(),
                         retain_terminal: true,
                     },
@@ -443,37 +488,41 @@ impl OperationTable {
             generation: record.generation,
             cancellation: record.cancellation.clone(),
         };
-        if record.retain_terminal {
-            self.push_tombstone(key, record.cancellation);
-        }
+        let tombstone_eviction = record
+            .retain_terminal
+            .then(|| self.push_tombstone(key, record.attempt, record.cancellation))
+            .flatten();
         Some(CancelDispatch {
             operation: operation.clone(),
             source,
             target,
+            tombstone_eviction,
         })
     }
 
     pub(crate) fn cancel_admission(
         &self,
-        operation: &OperationId,
+        operation: &OperationSpec,
         source: SessionId,
     ) -> Result<Option<CancelAdmission>, OperationError> {
         let key = OperationKey {
             source,
-            id: operation.clone(),
+            id: operation.id.clone(),
         };
         if let Some(record) = self.records.get(&key) {
+            if !record.attempt.is_same_attempt(&operation.attempt) {
+                return if self.has_attempt_tombstone(&key, &operation.attempt) {
+                    Ok(None)
+                } else {
+                    Err(OperationError::OperationNotFound)
+                };
+            }
             return Ok(Some(CancelAdmission {
                 route: record.reverse_route.clone(),
                 cancellation: record.cancellation.clone(),
             }));
         }
-        if self
-            .tombstones
-            .iter()
-            .rev()
-            .any(|tombstone| tombstone.key == key)
-        {
+        if self.has_attempt_tombstone(&key, &operation.attempt) {
             Ok(None)
         } else {
             Err(OperationError::OperationNotFound)
@@ -483,22 +532,21 @@ impl OperationTable {
     #[cfg(test)]
     pub(crate) fn cancellation_complete(
         &self,
-        operation: &OperationId,
+        operation: &OperationSpec,
         source: SessionId,
     ) -> Result<bool, OperationError> {
         let key = OperationKey {
             source,
-            id: operation.clone(),
+            id: operation.id.clone(),
         };
-        if self.records.contains_key(&key) {
+        if self
+            .records
+            .get(&key)
+            .is_some_and(|record| record.attempt.is_same_attempt(&operation.attempt))
+        {
             return Ok(false);
         }
-        if self
-            .tombstones
-            .iter()
-            .rev()
-            .any(|tombstone| tombstone.key == key)
-        {
+        if self.has_attempt_tombstone(&key, &operation.attempt) {
             return Ok(true);
         }
         Err(OperationError::OperationNotFound)
@@ -506,13 +554,13 @@ impl OperationTable {
 
     pub(crate) fn cancel_admitted(
         &mut self,
-        operation: &OperationId,
+        operation: &OperationSpec,
         source: SessionId,
         admission: &CancelAdmission,
     ) -> Result<Option<CancelDispatch>, OperationError> {
         let key = OperationKey {
             source,
-            id: operation.clone(),
+            id: operation.id.clone(),
         };
         let Some(record) = self.records.get(&key) else {
             return if self.has_tombstone(&key, &admission.cancellation) {
@@ -539,13 +587,15 @@ impl OperationTable {
             generation: record.generation,
             cancellation: record.cancellation.clone(),
         };
-        if record.retain_terminal {
-            self.push_tombstone(key, record.cancellation);
-        }
+        let tombstone_eviction = record
+            .retain_terminal
+            .then(|| self.push_tombstone(key, record.attempt, record.cancellation))
+            .flatten();
         Ok(Some(CancelDispatch {
-            operation: operation.clone(),
+            operation: operation.id.clone(),
             source,
             target,
+            tombstone_eviction,
         }))
     }
 
@@ -573,13 +623,14 @@ impl OperationTable {
                     generation: record.generation,
                     cancellation: record.cancellation.clone(),
                 };
-                if retain_terminal && record.retain_terminal {
-                    self.push_tombstone(key.clone(), record.cancellation);
-                }
+                let tombstone_eviction = (retain_terminal && record.retain_terminal)
+                    .then(|| self.push_tombstone(key.clone(), record.attempt, record.cancellation))
+                    .flatten();
                 CancelDispatch {
                     operation: key.id,
                     source: key.source,
                     target,
+                    tombstone_eviction,
                 }
             })
             .collect()
@@ -591,25 +642,43 @@ impl OperationTable {
         })
     }
 
-    fn push_tombstone(&mut self, key: OperationKey, cancellation: Cancellation) {
+    fn has_attempt_tombstone(&self, key: &OperationKey, attempt: &OperationAttempt) -> bool {
+        self.tombstones
+            .iter()
+            .any(|tombstone| tombstone.key == *key && tombstone.attempt.is_same_attempt(attempt))
+    }
+
+    fn push_tombstone(
+        &mut self,
+        key: OperationKey,
+        attempt: OperationAttempt,
+        cancellation: Cancellation,
+    ) -> Option<TombstoneEviction> {
         let source_tombstones = self
             .tombstones
             .iter()
             .filter(|tombstone| tombstone.key.source == key.source)
             .count();
-        if source_tombstones >= self.max_operations_per_session
+        let eviction = if source_tombstones >= self.max_operations_per_session
             && let Some(oldest) = self
                 .tombstones
                 .iter()
                 .position(|tombstone| tombstone.key.source == key.source)
         {
             self.tombstones.remove(oldest);
-        }
-        while self.tombstones.len() >= self.max_operations {
+            Some(TombstoneEviction::PerSource)
+        } else if self.tombstones.len() >= self.max_operations {
             self.tombstones.pop_front();
-        }
-        self.tombstones
-            .push_back(OperationTombstone { key, cancellation });
+            Some(TombstoneEviction::Global)
+        } else {
+            None
+        };
+        self.tombstones.push_back(OperationTombstone {
+            key,
+            attempt,
+            cancellation,
+        });
+        eviction
     }
 
     fn remove(&mut self, key: &OperationKey) -> Option<OperationRecord> {
@@ -725,7 +794,7 @@ mod tests {
 
     fn cancel_now(
         table: &mut OperationTable,
-        operation: &OperationId,
+        operation: &OperationSpec,
         source: SessionId,
     ) -> Result<Option<CancelDispatch>, OperationError> {
         let Some(admission) = table.cancel_admission(operation, source)? else {
@@ -803,16 +872,16 @@ mod tests {
             )
             .unwrap();
         assert!(matches!(
-            table.cancel_admission(operation.id(), SessionId(9)),
+            table.cancel_admission(&operation, SessionId(9)),
             Err(OperationError::OperationNotFound)
         ));
         let admission = table
-            .cancel_admission(operation.id(), SessionId(1))
+            .cancel_admission(&operation, SessionId(1))
             .unwrap()
             .unwrap();
         assert_eq!(admission.route, expected_route);
         let dispatch = table
-            .cancel_admitted(operation.id(), SessionId(1), &admission)
+            .cancel_admitted(&operation, SessionId(1), &admission)
             .unwrap()
             .unwrap();
         assert_eq!(dispatch.target.route, expected_route);
@@ -823,7 +892,7 @@ mod tests {
         assert!(dispatch.target.cancellation.is_cancelled());
         assert!(cancellation.is_cancelled());
         assert!(
-            cancel_now(&mut table, operation.id(), SessionId(1))
+            cancel_now(&mut table, &operation, SessionId(1))
                 .unwrap()
                 .is_none()
         );
@@ -860,10 +929,10 @@ mod tests {
             OperationError::OperationNotFound
         );
         assert!(matches!(
-            cancel_now(&mut table, operation.id(), SessionId(9)),
+            cancel_now(&mut table, &operation, SessionId(9)),
             Err(OperationError::OperationNotFound)
         ));
-        assert!(table.cancel_admission(operation.id(), SessionId(1)).is_ok());
+        assert!(table.cancel_admission(&operation, SessionId(1)).is_ok());
         assert_eq!(
             table
                 .finish(operation.id(), SessionId(1), &cancellation, 5)
@@ -871,7 +940,7 @@ mod tests {
             OperationError::DeadlineExceeded
         );
         assert!(matches!(
-            cancel_now(&mut table, operation.id(), SessionId(1)),
+            cancel_now(&mut table, &operation, SessionId(1)),
             Err(OperationError::OperationNotFound)
         ));
         assert_eq!(
@@ -889,32 +958,24 @@ mod tests {
         table
             .begin(&first, SessionId(1), lease(SessionId(2)), route(), 1)
             .unwrap();
-        cancel_now(&mut table, first.id(), SessionId(1))
+        cancel_now(&mut table, &first, SessionId(1))
             .unwrap()
             .unwrap();
-        assert!(
-            table
-                .cancellation_complete(first.id(), SessionId(1))
-                .unwrap()
-        );
+        assert!(table.cancellation_complete(&first, SessionId(1)).unwrap());
 
         let second = operation("second", 10);
         table
             .begin(&second, SessionId(1), lease(SessionId(2)), route(), 1)
             .unwrap();
-        cancel_now(&mut table, second.id(), SessionId(1))
+        cancel_now(&mut table, &second, SessionId(1))
             .unwrap()
             .unwrap();
 
         assert_eq!(
-            table.cancellation_complete(first.id(), SessionId(1)),
+            table.cancellation_complete(&first, SessionId(1)),
             Err(OperationError::OperationNotFound)
         );
-        assert!(
-            table
-                .cancellation_complete(second.id(), SessionId(1))
-                .unwrap()
-        );
+        assert!(table.cancellation_complete(&second, SessionId(1)).unwrap());
     }
 
     #[test]
@@ -924,7 +985,7 @@ mod tests {
         table
             .begin(&retained, SessionId(2), lease(SessionId(9)), route(), 1)
             .unwrap();
-        cancel_now(&mut table, retained.id(), SessionId(2))
+        cancel_now(&mut table, &retained, SessionId(2))
             .unwrap()
             .unwrap();
 
@@ -933,14 +994,14 @@ mod tests {
             table
                 .begin(&operation, SessionId(1), lease(SessionId(9)), route(), 1)
                 .unwrap();
-            cancel_now(&mut table, operation.id(), SessionId(1))
+            cancel_now(&mut table, &operation, SessionId(1))
                 .unwrap()
                 .unwrap();
         }
 
         assert!(
             table
-                .cancellation_complete(retained.id(), SessionId(2))
+                .cancellation_complete(&retained, SessionId(2))
                 .unwrap()
         );
         assert!(matches!(
@@ -948,7 +1009,7 @@ mod tests {
             Err(OperationError::RetainedOperationId)
         ));
         assert!(
-            cancel_now(&mut table, retained.id(), SessionId(2))
+            cancel_now(&mut table, &retained, SessionId(2))
                 .unwrap()
                 .is_none()
         );
@@ -968,11 +1029,11 @@ mod tests {
             )
             .unwrap();
         let first_admission = table
-            .cancel_admission(reused_operation.id(), SessionId(1))
+            .cancel_admission(&reused_operation, SessionId(1))
             .unwrap();
         let first_admission = first_admission.unwrap();
         table
-            .cancel_admitted(reused_operation.id(), SessionId(1), &first_admission)
+            .cancel_admitted(&reused_operation, SessionId(1), &first_admission)
             .unwrap()
             .unwrap();
 
@@ -994,13 +1055,13 @@ mod tests {
             "operation identifier is retained after cancellation; retry cancellation or start new work with a new operation identifier"
         );
         assert!(
-            cancel_now(&mut table, reused_operation.id(), SessionId(1))
+            cancel_now(&mut table, &reused_operation, SessionId(1))
                 .unwrap()
                 .is_none()
         );
         assert!(
             table
-                .cancellation_complete(reused_operation.id(), SessionId(1))
+                .cancellation_complete(&reused_operation, SessionId(1))
                 .unwrap()
         );
         assert_eq!(
@@ -1014,19 +1075,100 @@ mod tests {
         table
             .begin(&replacement, SessionId(1), lease(SessionId(2)), route(), 1)
             .unwrap();
-        cancel_now(&mut table, replacement.id(), SessionId(1))
+        cancel_now(&mut table, &replacement, SessionId(1))
             .unwrap()
             .unwrap();
+        let fresh_reuse = operation("reused", 10);
         let reused = table
-            .begin(
-                &reused_operation,
-                SessionId(1),
-                lease(SessionId(2)),
-                route(),
-                1,
-            )
+            .begin(&fresh_reuse, SessionId(1), lease(SessionId(2)), route(), 1)
             .unwrap();
         assert!(!reused.is_cancelled());
+    }
+
+    #[test]
+    fn delayed_cancel_cannot_reach_replacement_after_same_source_eviction() {
+        let mut table = OperationTable::new(2, 1).unwrap();
+        let original = operation("reused", 10);
+        let original_cancellation = table
+            .begin(&original, SessionId(1), lease(SessionId(2)), route(), 1)
+            .unwrap();
+        let original_dispatch = cancel_now(&mut table, &original, SessionId(1))
+            .unwrap()
+            .unwrap();
+        assert_eq!(original_dispatch.tombstone_eviction, None);
+
+        let evictor = operation("evictor", 10);
+        table
+            .begin(&evictor, SessionId(1), lease(SessionId(2)), route(), 1)
+            .unwrap();
+        let evictor_dispatch = cancel_now(&mut table, &evictor, SessionId(1))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            evictor_dispatch.tombstone_eviction,
+            Some(TombstoneEviction::PerSource)
+        );
+
+        let replacement = operation("reused", 10);
+        let replacement_cancellation = table
+            .begin(&replacement, SessionId(1), lease(SessionId(2)), route(), 1)
+            .unwrap();
+        assert!(matches!(
+            cancel_now(&mut table, &original, SessionId(1)),
+            Err(OperationError::OperationNotFound)
+        ));
+        assert!(original_cancellation.is_cancelled());
+        assert!(!replacement_cancellation.is_cancelled());
+        cancel_now(&mut table, &replacement, SessionId(1))
+            .unwrap()
+            .unwrap();
+        assert!(replacement_cancellation.is_cancelled());
+    }
+
+    #[test]
+    fn delayed_cancel_cannot_reach_global_pool_newcomer_replacement() {
+        let mut table = OperationTable::new(3, 2).unwrap();
+        let original = operation("globally-reused", 10);
+        table
+            .begin(&original, SessionId(1), lease(SessionId(9)), route(), 1)
+            .unwrap();
+        cancel_now(&mut table, &original, SessionId(1))
+            .unwrap()
+            .unwrap();
+
+        for (source, id) in [(SessionId(2), "source-two"), (SessionId(1), "source-one")] {
+            let retained = operation(id, 10);
+            table
+                .begin(&retained, source, lease(SessionId(9)), route(), 1)
+                .unwrap();
+            cancel_now(&mut table, &retained, source).unwrap().unwrap();
+        }
+
+        let newcomer = operation("newcomer", 10);
+        table
+            .begin(&newcomer, SessionId(3), lease(SessionId(9)), route(), 1)
+            .unwrap();
+        let newcomer_dispatch = cancel_now(&mut table, &newcomer, SessionId(3))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            newcomer_dispatch.tombstone_eviction,
+            Some(TombstoneEviction::Global)
+        );
+
+        let replacement = operation("globally-reused", 10);
+        let replacement_cancellation = table
+            .begin(&replacement, SessionId(1), lease(SessionId(9)), route(), 1)
+            .unwrap();
+        assert!(matches!(
+            cancel_now(&mut table, &original, SessionId(1)),
+            Err(OperationError::OperationNotFound)
+        ));
+        assert!(!replacement_cancellation.is_cancelled());
+        cancel_now(&mut table, &replacement, SessionId(1))
+            .unwrap()
+            .unwrap();
+        assert!(replacement_cancellation.is_cancelled());
     }
 
     #[test]
@@ -1036,13 +1178,13 @@ mod tests {
         table
             .begin(&operation, SessionId(1), lease(SessionId(2)), route(), 1)
             .unwrap();
-        cancel_now(&mut table, operation.id(), SessionId(1))
+        cancel_now(&mut table, &operation, SessionId(1))
             .unwrap()
             .unwrap();
         let teardown = table.cancel_session(SessionId(2));
         assert!(teardown.is_empty());
         assert!(
-            cancel_now(&mut table, operation.id(), SessionId(1))
+            cancel_now(&mut table, &operation, SessionId(1))
                 .unwrap()
                 .is_none()
         );
@@ -1059,10 +1201,10 @@ mod tests {
         table
             .begin(&second, SessionId(1), lease(SessionId(2)), route(), 1)
             .unwrap();
-        let first_dispatch = cancel_now(&mut table, first.id(), SessionId(1))
+        let first_dispatch = cancel_now(&mut table, &first, SessionId(1))
             .unwrap()
             .unwrap();
-        let second_dispatch = cancel_now(&mut table, second.id(), SessionId(1))
+        let second_dispatch = cancel_now(&mut table, &second, SessionId(1))
             .unwrap()
             .unwrap();
         let pending = PendingCancelDeliveries::new(1, 1);
@@ -1108,13 +1250,13 @@ mod tests {
         table
             .begin(&third, SessionId(2), lease(SessionId(9)), route(), 1)
             .unwrap();
-        let first = cancel_now(&mut table, first.id(), SessionId(1))
+        let first = cancel_now(&mut table, &first, SessionId(1))
             .unwrap()
             .unwrap();
-        let second = cancel_now(&mut table, second.id(), SessionId(1))
+        let second = cancel_now(&mut table, &second, SessionId(1))
             .unwrap()
             .unwrap();
-        let third = cancel_now(&mut table, third.id(), SessionId(2))
+        let third = cancel_now(&mut table, &third, SessionId(2))
             .unwrap()
             .unwrap();
         let pending = PendingCancelDeliveries::new(3, 1);

@@ -80,8 +80,8 @@ d2b_bus::router::BusStream::method:name
 d2b_bus::router::BusStream::method:send
 d2b_bus::router::CancellationOutcome
 d2b_bus::router::CancellationReceipt
+d2b_bus::router::CancellationReceipt::method:delivery_outcome
 d2b_bus::router::CancellationReceipt::method:local_outcome
-d2b_bus::router::CancellationReceipt::method:remote_outcome
 d2b_bus::router::ComponentSessionAdmission
 d2b_bus::router::ComponentSessionAdmission::associatedtype:Error
 d2b_bus::router::ComponentSessionAdmission::associatedtype:Error-1
