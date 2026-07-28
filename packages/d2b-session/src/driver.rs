@@ -106,6 +106,7 @@ pub trait ComponentSessionDriver: Send + Sync {
 pub struct SessionDriverHandle {
     commands: mpsc::Sender<DriverCommand>,
     generation: Arc<AtomicU64>,
+    writer_fence: Cancellation,
 }
 
 impl fmt::Debug for SessionDriverHandle {
@@ -118,6 +119,10 @@ impl fmt::Debug for SessionDriverHandle {
 }
 
 impl SessionDriverHandle {
+    pub(crate) fn writer_fence(&self) -> Cancellation {
+        self.writer_fence.clone()
+    }
+
     async fn request<R>(
         &self,
         make_command: impl FnOnce(oneshot::Sender<Result<R>>) -> DriverCommand,
@@ -295,6 +300,7 @@ impl ComponentSessionDriver for SessionDriverHandle {
 impl<T: OwnedTransport + 'static> SessionEngine<T> {
     pub fn into_driver(mut self) -> SessionDriverHandle {
         let generation = Arc::new(AtomicU64::new(self.generation()));
+        let writer_fence = Cancellation::new();
         let (commands, receiver) = mpsc::channel(DRIVER_COMMAND_CAPACITY);
         let descriptor = self.transport_descriptor();
         let timeout = Duration::from_millis(u64::from(self.keepalive_timeout_ms()));
@@ -308,6 +314,7 @@ impl<T: OwnedTransport + 'static> SessionEngine<T> {
             writes: write_sender.clone(),
             priority: priority_sender.clone(),
             write_cancellation: None,
+            writer_fence: writer_fence.clone(),
             batch: None,
         }));
         let (writer_failures, writer_failure_receiver) = mpsc::channel(1);
@@ -324,10 +331,12 @@ impl<T: OwnedTransport + 'static> SessionEngine<T> {
             writer_failure_receiver,
             write_sender,
             priority_sender,
+            writer_fence.clone(),
         ));
         SessionDriverHandle {
             commands,
             generation,
+            writer_fence,
         }
     }
 }
@@ -336,6 +345,7 @@ enum WriterCommand {
     Batch {
         packets: Vec<TransportPacket>,
         cancellation: Option<Cancellation>,
+        writer_fence: Cancellation,
         completion: Option<Reply<()>>,
         close_after: bool,
     },
@@ -370,6 +380,7 @@ struct DriverTransport {
     writes: mpsc::Sender<WriterCommand>,
     priority: mpsc::UnboundedSender<WriterCommand>,
     write_cancellation: Option<Cancellation>,
+    writer_fence: Cancellation,
     batch: Option<PendingWriteBatch>,
 }
 
@@ -382,6 +393,7 @@ impl DriverTransport {
             writes,
             priority: mpsc::unbounded_channel().0,
             write_cancellation: None,
+            writer_fence: Cancellation::new(),
             batch: None,
         }
     }
@@ -452,6 +464,7 @@ impl OwnedTransport for DriverTransport {
             .try_send(WriterCommand::Batch {
                 packets: vec![packet],
                 cancellation: self.write_cancellation.clone(),
+                writer_fence: self.writer_fence.clone(),
                 completion: None,
                 close_after: false,
             })
@@ -514,9 +527,23 @@ async fn run_writer(
             WriterCommand::Batch {
                 packets,
                 cancellation,
+                writer_fence,
                 completion,
                 close_after,
             } => {
+                let writer_admission = match writer_fence.admit_write() {
+                    Some(admission) => admission,
+                    None => {
+                        if let Some(completion) = completion {
+                            let _ = completion
+                                .send(Err(SessionError::new(SessionErrorCode::Cancelled)));
+                        }
+                        let error = SessionError::new(SessionErrorCode::Cancelled);
+                        let _ = writer.close().await;
+                        let _ = failures.try_send(error);
+                        return;
+                    }
+                };
                 let admission = match cancellation.as_ref() {
                     Some(cancellation) => match cancellation.admit_write() {
                         Some(admission) => Some(admission),
@@ -546,19 +573,31 @@ async fn run_writer(
                     let result = {
                         let send = tokio::time::timeout(timeout, writer.send(packet));
                         tokio::pin!(send);
-                        let outcome = if let Some(cancellation) = cancellation.as_ref() {
-                            tokio::select! {
-                                result = send.as_mut() => SendOutcome::Completed(result),
-                                () = cancellation.cancelled() => {
-                                    if cancellation.preserves_admitted_write() {
-                                        SendOutcome::Completed(send.as_mut().await)
-                                    } else {
-                                        SendOutcome::Cancelled
-                                    }
+                        let outcome = tokio::select! {
+                            result = send.as_mut() => SendOutcome::Completed(result),
+                            () = writer_fence.cancelled() => {
+                                if writer_fence.preserves_admitted_write() {
+                                    SendOutcome::Completed(send.as_mut().await)
+                                } else {
+                                    SendOutcome::Cancelled
                                 }
                             }
-                        } else {
-                            SendOutcome::Completed(send.as_mut().await)
+                            () = async {
+                                if let Some(cancellation) = cancellation.as_ref() {
+                                    cancellation.cancelled().await;
+                                } else {
+                                    std::future::pending::<()>().await;
+                                }
+                            } => {
+                                if cancellation
+                                    .as_ref()
+                                    .is_some_and(Cancellation::preserves_admitted_write)
+                                {
+                                    SendOutcome::Completed(send.as_mut().await)
+                                } else {
+                                    SendOutcome::Cancelled
+                                }
+                            }
                         };
                         match outcome {
                             SendOutcome::Completed(Ok(result)) => {
@@ -582,6 +621,7 @@ async fn run_writer(
                     }
                 }
                 drop(admission);
+                drop(writer_admission);
                 if close_after {
                     let result = writer.close().await.map_err(SessionError::from);
                     if let Some(completion) = completion {
@@ -910,6 +950,7 @@ async fn run_driver<T: OwnedTransport>(
     mut writer_failures: mpsc::Receiver<SessionError>,
     write_commands: mpsc::Sender<WriterCommand>,
     priority_writes: mpsc::UnboundedSender<WriterCommand>,
+    writer_fence: Cancellation,
 ) {
     let mut queues = DriverQueues::new(&engine);
     let mut fairness_turn = 0_u8;
@@ -960,6 +1001,7 @@ async fn run_driver<T: OwnedTransport>(
                     &mut queues,
                     &write_commands,
                     &priority_writes,
+                    &writer_fence,
                     command,
                 )
                 .await
@@ -982,8 +1024,14 @@ async fn run_driver<T: OwnedTransport>(
                 }
             },
             Work::NamedStream => {
-                match pump_named_stream(&mut engine, &mut queues, &write_commands, &priority_writes)
-                    .await
+                match pump_named_stream(
+                    &mut engine,
+                    &mut queues,
+                    &write_commands,
+                    &priority_writes,
+                    &writer_fence,
+                )
+                .await
                 {
                     Ok(_) => {}
                     Err(error) => {
@@ -1017,6 +1065,7 @@ async fn handle_command<T: OwnedTransport>(
     queues: &mut DriverQueues,
     write_commands: &mpsc::Sender<WriterCommand>,
     priority_writes: &mpsc::UnboundedSender<WriterCommand>,
+    writer_fence: &Cancellation,
     command: DriverCommand,
 ) -> Result<DriverAction> {
     match command {
@@ -1042,7 +1091,7 @@ async fn handle_command<T: OwnedTransport>(
                 .call_guarded(request_id, frame, cancellation)
                 .await
                 .map(|_| ());
-            complete_after_write(engine, batch, priority_writes, reply, result).await;
+            complete_after_write(engine, batch, priority_writes, writer_fence, reply, result).await;
         }
         DriverCommand::CompleteTtrpc { request_id, reply } => {
             let _ = reply.send(Ok(engine.complete_call(&request_id)));
@@ -1065,7 +1114,7 @@ async fn handle_command<T: OwnedTransport>(
             } else {
                 Err(SessionError::new(SessionErrorCode::GenerationMismatch))
             };
-            complete_after_write(engine, batch, priority_writes, reply, result).await;
+            complete_after_write(engine, batch, priority_writes, writer_fence, reply, result).await;
         }
         DriverCommand::SendTtrpc {
             frame,
@@ -1089,7 +1138,7 @@ async fn handle_command<T: OwnedTransport>(
                 engine.begin_write_batch(cancellation);
                 engine.send_ttrpc(frame).await
             };
-            complete_after_write(engine, batch, priority_writes, reply, result).await;
+            complete_after_write(engine, batch, priority_writes, writer_fence, reply, result).await;
         }
         DriverCommand::ReceiveTtrpc(reply) => queues.ttrpc.receive(reply)?,
         DriverCommand::RegisterInboundCall { request_id, reply } => {
@@ -1114,7 +1163,7 @@ async fn handle_command<T: OwnedTransport>(
             };
             engine.begin_write_batch(None);
             let result = engine.send_attachments(attachments).await;
-            complete_after_write(engine, batch, priority_writes, reply, result).await;
+            complete_after_write(engine, batch, priority_writes, writer_fence, reply, result).await;
         }
         DriverCommand::ReceiveAttachments(reply) => queues.attachments.receive(reply)?,
         DriverCommand::OpenNamedStream {
@@ -1176,7 +1225,7 @@ async fn handle_command<T: OwnedTransport>(
             };
             engine.begin_write_batch(None);
             let result = engine.grant_named_stream_credit(stream, bytes).await;
-            complete_after_write(engine, batch, priority_writes, reply, result).await;
+            complete_after_write(engine, batch, priority_writes, writer_fence, reply, result).await;
         }
         DriverCommand::CloseNamedStream { stream, reply } => {
             queues.cancel_named_send(stream, SessionError::new(SessionErrorCode::Cancelled));
@@ -1189,7 +1238,7 @@ async fn handle_command<T: OwnedTransport>(
             };
             engine.begin_write_batch(None);
             let result = engine.close_named_stream(stream).await;
-            complete_after_write(engine, batch, priority_writes, reply, result).await;
+            complete_after_write(engine, batch, priority_writes, writer_fence, reply, result).await;
         }
         DriverCommand::ResetNamedStream { stream, reply } => {
             queues.cancel_named_send(stream, SessionError::new(SessionErrorCode::Cancelled));
@@ -1202,7 +1251,7 @@ async fn handle_command<T: OwnedTransport>(
             };
             engine.begin_write_batch(None);
             let result = engine.reset_named_stream(stream).await;
-            complete_after_write(engine, batch, priority_writes, reply, result).await;
+            complete_after_write(engine, batch, priority_writes, writer_fence, reply, result).await;
         }
         DriverCommand::DriveKeepalive { now, reply } => {
             let batch = match reserve_write_batch(write_commands, priority_writes) {
@@ -1214,7 +1263,7 @@ async fn handle_command<T: OwnedTransport>(
             };
             engine.begin_write_batch(None);
             let result = engine.drive_keepalive(now).await;
-            complete_after_write(engine, batch, priority_writes, reply, result).await;
+            complete_after_write(engine, batch, priority_writes, writer_fence, reply, result).await;
         }
         DriverCommand::ReceiveControl(reply) => queues.control.receive(reply)?,
         DriverCommand::Close {
@@ -1232,7 +1281,7 @@ async fn handle_command<T: OwnedTransport>(
             engine.begin_write_batch(None);
             let result = engine.close(reason, remediation).await;
             let closed = result.is_ok();
-            complete_after_write(engine, batch, priority_writes, reply, result).await;
+            complete_after_write(engine, batch, priority_writes, writer_fence, reply, result).await;
             if closed {
                 return Ok(DriverAction::Close);
             }
@@ -1272,6 +1321,7 @@ async fn complete_after_write(
     engine: &mut impl PreparedWriteSource,
     batch: mpsc::Permit<'_, WriterCommand>,
     priority_writes: &mpsc::UnboundedSender<WriterCommand>,
+    writer_fence: &Cancellation,
     reply: Reply<()>,
     result: Result<()>,
 ) {
@@ -1293,6 +1343,7 @@ async fn complete_after_write(
     batch.send(WriterCommand::Batch {
         packets,
         cancellation,
+        writer_fence: writer_fence.clone(),
         completion: Some(reply),
         close_after,
     });
@@ -1345,6 +1396,7 @@ async fn complete_unobserved_write(
     engine: &mut SessionEngine<impl OwnedTransport>,
     batch: mpsc::Permit<'_, WriterCommand>,
     priority_writes: &mpsc::UnboundedSender<WriterCommand>,
+    writer_fence: &Cancellation,
     result: Result<()>,
 ) -> Result<()> {
     let prepared = engine.take_write_batch();
@@ -1363,6 +1415,7 @@ async fn complete_unobserved_write(
     batch.send(WriterCommand::Batch {
         packets,
         cancellation,
+        writer_fence: writer_fence.clone(),
         completion: None,
         close_after,
     });
@@ -1374,6 +1427,7 @@ async fn pump_named_stream<T: OwnedTransport>(
     queues: &mut DriverQueues,
     write_commands: &mpsc::Sender<WriterCommand>,
     priority_writes: &mpsc::UnboundedSender<WriterCommand>,
+    writer_fence: &Cancellation,
 ) -> Result<bool> {
     let attempts = queues.named_sends.len();
     for _ in 0..attempts {
@@ -1404,7 +1458,7 @@ async fn pump_named_stream<T: OwnedTransport>(
         let result = engine
             .send_named_stream_fragment(pending.stream, fragment)
             .await;
-        complete_unobserved_write(engine, batch, priority_writes, result).await?;
+        complete_unobserved_write(engine, batch, priority_writes, writer_fence, result).await?;
         pending.remaining = pending
             .remaining
             .checked_sub(fragment_len)
@@ -1450,7 +1504,7 @@ fn backpressure() -> SessionError {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::AtomicBool;
+    use std::sync::{Mutex, atomic::AtomicBool};
 
     use tokio::sync::Notify;
 
@@ -1480,6 +1534,41 @@ mod tests {
         release: Arc<Notify>,
         sent: Arc<AtomicBool>,
         closed: Arc<AtomicBool>,
+    }
+
+    struct RecordingPausedWriter {
+        entered: Arc<Notify>,
+        release: Arc<Notify>,
+        packets: Arc<Mutex<Vec<Vec<u8>>>>,
+        closed: Arc<AtomicBool>,
+    }
+
+    #[async_trait]
+    impl TransportWriter for RecordingPausedWriter {
+        async fn send(
+            &mut self,
+            packet: TransportPacket,
+        ) -> std::result::Result<(), TransportError> {
+            if self
+                .packets
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .is_empty()
+            {
+                self.entered.notify_one();
+                self.release.notified().await;
+            }
+            self.packets
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .push(packet.as_bytes().to_vec());
+            Ok(())
+        }
+
+        async fn close(&mut self) -> std::result::Result<(), TransportError> {
+            self.closed.store(true, Ordering::Release);
+            Ok(())
+        }
     }
 
     #[async_trait]
@@ -1527,6 +1616,7 @@ mod tests {
             .send(WriterCommand::Batch {
                 packets: vec![TransportPacket::new(vec![1])],
                 cancellation: None,
+                writer_fence: Cancellation::new(),
                 completion: None,
                 close_after: false,
             })
@@ -1561,10 +1651,12 @@ mod tests {
             Duration::from_secs(1),
         ));
         let cancellation = Cancellation::new();
+        let writer_fence = Cancellation::new();
         writes
             .send(WriterCommand::Batch {
                 packets: vec![TransportPacket::new(vec![1])],
                 cancellation: Some(cancellation.clone()),
+                writer_fence,
                 completion: None,
                 close_after: false,
             })
@@ -1590,6 +1682,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn generation_revocation_rejects_queued_control_after_admitted_request() {
+        let entered = Arc::new(Notify::new());
+        let release = Arc::new(Notify::new());
+        let packets = Arc::new(Mutex::new(Vec::new()));
+        let closed = Arc::new(AtomicBool::new(false));
+        let (writes, receiver) = mpsc::channel(2);
+        let (priority, priority_receiver) = mpsc::unbounded_channel();
+        let (failures, mut failure_receiver) = mpsc::channel(1);
+        let task = tokio::spawn(run_writer(
+            Box::new(RecordingPausedWriter {
+                entered: Arc::clone(&entered),
+                release: Arc::clone(&release),
+                packets: Arc::clone(&packets),
+                closed: Arc::clone(&closed),
+            }),
+            receiver,
+            priority_receiver,
+            failures,
+            Duration::from_secs(1),
+        ));
+        let writer_fence = Cancellation::new();
+        writes
+            .send(WriterCommand::Batch {
+                packets: vec![TransportPacket::new(vec![1])],
+                cancellation: Some(Cancellation::new()),
+                writer_fence: writer_fence.clone(),
+                completion: None,
+                close_after: false,
+            })
+            .await
+            .unwrap();
+        writes
+            .send(WriterCommand::Batch {
+                packets: vec![TransportPacket::new(vec![2])],
+                cancellation: None,
+                writer_fence: writer_fence.clone(),
+                completion: None,
+                close_after: false,
+            })
+            .await
+            .unwrap();
+        entered.notified().await;
+
+        let mut revocation = Box::pin(writer_fence.cancel_and_wait());
+        tokio::select! {
+            result = &mut revocation => {
+                panic!("revocation returned before the admitted request completed: {result}")
+            }
+            () = tokio::task::yield_now() => {}
+        }
+        release.notify_one();
+        assert!(revocation.await);
+        assert_eq!(
+            failure_receiver.recv().await.unwrap().code(),
+            SessionErrorCode::Cancelled
+        );
+        task.await.unwrap();
+        assert_eq!(
+            *packets
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            vec![vec![1]]
+        );
+        assert!(closed.load(Ordering::Acquire));
+        drop(writes);
+        drop(priority);
+    }
+
+    #[tokio::test]
     async fn post_protection_error_closes_writer_before_reply() {
         let closed = Arc::new(AtomicBool::new(false));
         let (writes, receiver) = mpsc::channel(1);
@@ -1611,10 +1772,12 @@ mod tests {
         let mut prepared =
             PreparedWriteFixture(Some((vec![TransportPacket::new(vec![1])], None, false)));
         let (reply, result) = oneshot::channel();
+        let writer_fence = Cancellation::new();
         complete_after_write(
             &mut prepared,
             permit,
             &priority,
+            &writer_fence,
             reply,
             Err(SessionError::new(SessionErrorCode::Cancelled)),
         )
@@ -1646,6 +1809,7 @@ mod tests {
             writes: writes.clone(),
             priority: priority.clone(),
             write_cancellation: None,
+            writer_fence: Cancellation::new(),
             batch: None,
         };
         transport.send(TransportPacket::new(vec![1])).await.unwrap();
@@ -1662,6 +1826,7 @@ mod tests {
             .send(WriterCommand::Batch {
                 packets: vec![TransportPacket::new(vec![2])],
                 cancellation: None,
+                writer_fence: Cancellation::new(),
                 completion: None,
                 close_after: false,
             });
@@ -1691,6 +1856,7 @@ mod tests {
             writes: writes.clone(),
             priority,
             write_cancellation: None,
+            writer_fence: Cancellation::new(),
             batch: None,
         };
         transport.begin_write_batch(None);
@@ -1706,6 +1872,7 @@ mod tests {
             .try_send(WriterCommand::Batch {
                 packets,
                 cancellation,
+                writer_fence: transport.writer_fence.clone(),
                 completion: None,
                 close_after,
             })

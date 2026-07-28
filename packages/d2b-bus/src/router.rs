@@ -1569,12 +1569,14 @@ fn terminalize_component_request(
 #[async_trait::async_trait]
 impl crate::registry::BusEndpoint for ComponentEndpoint {
     fn invalidate_session(&self) -> crate::registry::SessionInvalidation {
+        let writer_fence = self.cancellation.revoke_generation_writes();
         let revocations = self
             .activity
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .revoke();
         Box::pin(async move {
+            writer_fence.await;
             for revocation in revocations {
                 revocation.await;
             }
