@@ -3088,10 +3088,22 @@ mod tests {
         use crate::registry::EndpointFailureClass;
 
         let cases = [
-            (EndpointFailureClass::Authentication, BusFailureReason::Authentication),
-            (EndpointFailureClass::Authorization, BusFailureReason::Authorization),
-            (EndpointFailureClass::Generation, BusFailureReason::Generation),
-            (EndpointFailureClass::Backpressure, BusFailureReason::Backpressure),
+            (
+                EndpointFailureClass::Authentication,
+                BusFailureReason::Authentication,
+            ),
+            (
+                EndpointFailureClass::Authorization,
+                BusFailureReason::Authorization,
+            ),
+            (
+                EndpointFailureClass::Generation,
+                BusFailureReason::Generation,
+            ),
+            (
+                EndpointFailureClass::Backpressure,
+                BusFailureReason::Backpressure,
+            ),
             (EndpointFailureClass::Deadline, BusFailureReason::Deadline),
             (EndpointFailureClass::Transport, BusFailureReason::Transport),
             (EndpointFailureClass::Protocol, BusFailureReason::Protocol),
