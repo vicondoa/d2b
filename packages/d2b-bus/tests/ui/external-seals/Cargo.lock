@@ -307,6 +307,7 @@ dependencies = [
  "d2b-contracts",
  "d2b-resource-api",
  "d2b-session",
+ "getrandom 0.3.4",
  "serde",
  "tokio",
 ]

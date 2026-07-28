@@ -1,7 +1,7 @@
 //! Exact Zone router and the single-owner registration surface.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     sync::{
         Arc, Mutex, MutexGuard,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -915,8 +915,54 @@ struct ComponentEndpoint {
     generation: u64,
     cancellation: SessionCancellationHandle,
     active: Mutex<BTreeMap<OperationId, ActiveComponentRequest>>,
-    next_stream_id: AtomicU64,
+    correlations: Mutex<CorrelationIds>,
     revoked: AtomicBool,
+}
+
+const RESERVED_CORRELATION_MAX: u32 = 1024;
+const RANDOM_CORRELATION_ATTEMPTS: usize = 32;
+
+struct CorrelationIds {
+    used: BTreeSet<u32>,
+    remaining: u64,
+}
+
+impl CorrelationIds {
+    fn new() -> Self {
+        Self {
+            used: BTreeSet::new(),
+            remaining: u64::from(u32::MAX - RESERVED_CORRELATION_MAX),
+        }
+    }
+
+    fn allocate(&mut self) -> Result<u32, EndpointError> {
+        if self.remaining == 0 {
+            return Err(EndpointError::Internal);
+        }
+        let mut last = RESERVED_CORRELATION_MAX + 1;
+        for _ in 0..RANDOM_CORRELATION_ATTEMPTS {
+            let mut bytes = [0_u8; 4];
+            getrandom::fill(&mut bytes).map_err(|_| EndpointError::Internal)?;
+            let candidate = u32::from_ne_bytes(bytes);
+            last = candidate;
+            if candidate > RESERVED_CORRELATION_MAX && self.used.insert(candidate) {
+                self.remaining -= 1;
+                return Ok(candidate);
+            }
+        }
+        let mut candidate = last.max(RESERVED_CORRELATION_MAX + 1);
+        loop {
+            if self.used.insert(candidate) {
+                self.remaining -= 1;
+                return Ok(candidate);
+            }
+            candidate = if candidate == u32::MAX {
+                RESERVED_CORRELATION_MAX + 1
+            } else {
+                candidate + 1
+            };
+        }
+    }
 }
 
 struct ActiveComponentRequest {
@@ -988,12 +1034,10 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
         let caller_stream_id =
             ttrpc_stream_id(request.payload()).map_err(|_| EndpointError::Rejected)?;
         let internal_stream_id = self
-            .next_stream_id
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
-                (current <= u64::from(u32::MAX)).then_some(current + 1)
-            })
-            .map_err(|_| EndpointError::Rejected)
-            .and_then(|stream_id| u32::try_from(stream_id).map_err(|_| EndpointError::Rejected))?;
+            .correlations
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .allocate()?;
         let mut outbound_frame = request.payload().to_vec();
         rewrite_ttrpc_stream_id(&mut outbound_frame, internal_stream_id)
             .map_err(|_| EndpointError::Rejected)?;
@@ -1154,7 +1198,7 @@ impl ZoneRegistrar {
             generation: binding.reconnect_generation().get(),
             cancellation,
             active: Mutex::new(BTreeMap::new()),
-            next_stream_id: AtomicU64::new(1),
+            correlations: Mutex::new(CorrelationIds::new()),
             revoked: AtomicBool::new(false),
         });
         let registration = SessionRegistration::admitted(binding, routes, endpoint);
@@ -1191,7 +1235,7 @@ impl ZoneRegistrar {
             generation: binding.reconnect_generation().get(),
             cancellation,
             active: Mutex::new(BTreeMap::new()),
-            next_stream_id: AtomicU64::new(1),
+            correlations: Mutex::new(CorrelationIds::new()),
             revoked: AtomicBool::new(false),
         });
         let registration = SessionRegistration::admitted(binding, routes, endpoint);

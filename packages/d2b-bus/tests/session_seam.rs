@@ -679,6 +679,81 @@ async fn cancelled_stream_id_reuse_rejects_the_late_response() {
 }
 
 #[tokio::test]
+async fn preseeded_counter_response_is_not_accepted_by_a_later_invocation() {
+    let (_bus, mut registrar) = bus();
+    let (endpoint, remote, endpoint_echo) = admit(
+        &registrar,
+        policy(
+            ServicePackage::ResourceV3,
+            EndpointPurpose::ResourceService,
+            1,
+        ),
+        "Provider/system-core",
+        "11111111-1111-4111-8111-111111111111",
+        "Provider/system-core",
+        [SessionVerb::Invoke],
+    )
+    .await;
+    endpoint_echo.abort();
+    let endpoint = registrar
+        .register_component_session(endpoint)
+        .await
+        .unwrap();
+    let (caller, _, caller_echo) = admit(
+        &registrar,
+        policy(
+            ServicePackage::ResourceV3,
+            EndpointPurpose::ResourceService,
+            1,
+        ),
+        "Host/alice",
+        "22222222-2222-4222-8222-222222222222",
+        "Provider/system-core",
+        [SessionVerb::Invoke],
+    )
+    .await;
+    let caller = registrar.register_component_session(caller).await.unwrap();
+    remote
+        .send_ttrpc(ttrpc_frame(1, b"preseeded-counter-response"))
+        .await
+        .unwrap();
+
+    let invocation = caller.invoke_resource(
+        route(
+            "d2b.resource.v3",
+            "ResourceService/Get",
+            1,
+            "Provider/system-core",
+        ),
+        OperationSpec::new(
+            OperationId::parse("unpredictable-correlation").unwrap(),
+            10_000,
+        )
+        .unwrap(),
+        ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
+        ttrpc_frame(7, b"request"),
+    );
+    let response = async {
+        let request = remote.receive_ttrpc().await.unwrap();
+        let internal_id = ttrpc_stream_id(&request).unwrap();
+        assert_ne!(internal_id, 1);
+        remote
+            .send_ttrpc(ttrpc_frame(internal_id, b"genuine-response"))
+            .await
+            .unwrap();
+    };
+    let (result, ()) = tokio::join!(invocation, response);
+    let result = result.unwrap();
+    assert!(result.as_bytes().ends_with(b"genuine-response"));
+
+    registrar
+        .disconnect_component_session(endpoint)
+        .await
+        .unwrap();
+    caller_echo.abort();
+}
+
+#[tokio::test]
 async fn malformed_responses_release_every_correlation_slot() {
     const MALFORMED_RESPONSES: usize = 300;
 
