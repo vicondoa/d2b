@@ -1752,7 +1752,7 @@ pub struct CloseRecord {
 
 macro_rules! bounded_bytes {
     ($name:ident, $min:expr, $max:expr) => {
-        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, JsonSchema)]
+        #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, JsonSchema)]
         #[serde(transparent)]
         pub struct $name(BoundedVec<u8, $min, $max>);
 
@@ -1777,6 +1777,12 @@ macro_rules! bounded_bytes {
                 Ok(Self(value))
             }
         }
+
+        impl fmt::Debug for $name {
+            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str(concat!(stringify!($name), "(<redacted>)"))
+            }
+        }
     };
 }
 
@@ -1785,6 +1791,36 @@ bounded_bytes!(CorrelationId, 1, 64);
 bounded_bytes!(TraceId, 16, 16);
 bounded_bytes!(IdempotencyKey, 1, 64);
 bounded_bytes!(OperationId, 16, 16);
+
+#[cfg(test)]
+mod bounded_identifier_tests {
+    use super::*;
+
+    #[test]
+    fn identifier_debug_shapes_are_exact_and_redacted() {
+        let sentinel = b"0123456789secret".to_vec();
+        let request = RequestId::new(sentinel.clone()).unwrap();
+        let correlation = CorrelationId::new(sentinel.clone()).unwrap();
+        let trace = TraceId::new(sentinel.clone()).unwrap();
+        let idempotency = IdempotencyKey::new(sentinel.clone()).unwrap();
+        let operation = OperationId::new(sentinel.clone()).unwrap();
+
+        for retained in [
+            request.as_bytes(),
+            correlation.as_bytes(),
+            trace.as_bytes(),
+            idempotency.as_bytes(),
+            operation.as_bytes(),
+        ] {
+            assert_eq!(retained, sentinel);
+        }
+        assert_eq!(format!("{request:?}"), "RequestId(<redacted>)");
+        assert_eq!(format!("{correlation:?}"), "CorrelationId(<redacted>)");
+        assert_eq!(format!("{trace:?}"), "TraceId(<redacted>)");
+        assert_eq!(format!("{idempotency:?}"), "IdempotencyKey(<redacted>)");
+        assert_eq!(format!("{operation:?}"), "OperationId(<redacted>)");
+    }
+}
 
 #[derive(PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]

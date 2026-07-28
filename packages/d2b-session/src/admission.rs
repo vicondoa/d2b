@@ -1,20 +1,22 @@
-use std::fmt;
+use std::{fmt, sync::Arc};
 
 use async_trait::async_trait;
 use d2b_contracts::v3::{
-    AuthenticatedSubjectContext, BindingDigest, EvidenceClass, Locality, ReconnectGeneration,
-    ResourceRef, SchemaFingerprint, ServiceName, SessionPurpose, TranscriptHash,
-    TransportBinding as IdentityTransportBinding, ZoneId,
+    AuthenticatedSubjectContext, BindingDigest, ControllerGeneration, EvidenceClass, Locality,
+    ReconnectGeneration, ResourceGeneration, ResourceRef, ResourceUid, SchemaFingerprint,
+    ServiceName, SessionPurpose, TranscriptHash, TransportBinding as IdentityTransportBinding,
+    ZoneId,
     component_session::{
-        AuthorizationLease, BootstrapIdentityBinding, EndpointPolicy, HandshakeOffer, NoiseProfile,
-        SessionErrorCode, TransportClass,
+        AuthorizationLease, BootstrapIdentityBinding, ChannelClass, EndpointPolicy, HandshakeOffer,
+        MetricReason, MetricResult, NoiseProfile, OperationClass, SessionErrorCode, TransportClass,
     },
 };
 use d2b_resource_api::authz::SessionVerb;
 
 use crate::{
-    ComponentSessionDriver, OwnedTransport, Result, SessionDriverHandle, SessionEngine,
-    SessionError, handshake::EstablishedAuthentication,
+    ComponentSessionDriver, MetricEvent, MetricsSink, NoopMetrics, OwnedTransport, Result,
+    SessionDriverHandle, SessionEngine, SessionError, SessionOperation,
+    handshake::EstablishedAuthentication,
 };
 
 /// Redacted transport evidence presented to the trusted session authority.
@@ -128,8 +130,7 @@ impl fmt::Debug for SessionAuthenticationBinding {
 #[derive(Clone, PartialEq, Eq)]
 pub struct SessionAuthorizationRequest {
     verb: SessionVerb,
-    service: ServiceName,
-    operation: String,
+    operation: SessionOperation,
     target_zone: ZoneId,
     target: Option<ResourceRef>,
     forwarded_target_verb: Option<SessionVerb>,
@@ -178,11 +179,19 @@ impl SessionAuthorizationRequest {
         next_hop_zone: Option<ZoneId>,
     ) -> Result<Self> {
         let operation = operation.into();
-        let operation_valid = !operation.is_empty()
-            && operation.len() <= 128
-            && operation
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'));
+        let stream = matches!(
+            if verb == SessionVerb::Relay {
+                forwarded_target_verb.unwrap_or(verb)
+            } else {
+                verb
+            },
+            SessionVerb::OpenStream | SessionVerb::Observe
+        );
+        let operation = if stream {
+            SessionOperation::stream(service, operation)?
+        } else {
+            SessionOperation::method(service, operation)?
+        };
         let relay_fields_valid = matches!(verb, SessionVerb::Relay)
             == (forwarded_target_verb.is_some() && next_hop_zone.is_some());
         let relay_target_valid = forwarded_target_verb.is_none_or(|target_verb| {
@@ -196,23 +205,18 @@ impl SessionAuthorizationRequest {
         });
         let diagnostic_binding_valid = match verb {
             SessionVerb::AuditExport => {
-                service.as_str() == "d2b.audit.v3" && operation == "AuditService.Export"
+                operation.diagnostic_verb() == Some(SessionVerb::AuditExport)
             }
             SessionVerb::SupportBundle => {
-                service.as_str() == "d2b.support.v3" && operation == "SupportService.GenerateBundle"
+                operation.diagnostic_verb() == Some(SessionVerb::SupportBundle)
             }
-            _ => true,
+            _ => operation.diagnostic_verb().is_none(),
         };
-        if !operation_valid
-            || !relay_fields_valid
-            || !relay_target_valid
-            || !diagnostic_binding_valid
-        {
+        if !relay_fields_valid || !relay_target_valid || !diagnostic_binding_valid {
             return Err(SessionError::new(SessionErrorCode::PolicyDenied));
         }
         Ok(Self {
             verb,
-            service,
             operation,
             target_zone,
             target,
@@ -228,11 +232,16 @@ impl SessionAuthorizationRequest {
 
     /// Borrow the exact service.
     pub fn service(&self) -> &ServiceName {
-        &self.service
+        self.operation.service()
     }
 
     /// Borrow the exact method or named-stream operation.
     pub fn operation(&self) -> &str {
+        self.operation.member().as_str()
+    }
+
+    /// Borrow the typed exact service operation.
+    pub const fn operation_contract(&self) -> &SessionOperation {
         &self.operation
     }
 
@@ -299,6 +308,7 @@ pub struct SessionAcceptor {
     policy: EndpointPolicy,
     expected_zone: ZoneId,
     authority: Box<dyn SessionAuthority>,
+    metrics: Arc<dyn MetricsSink>,
 }
 
 impl SessionAcceptor {
@@ -315,7 +325,13 @@ impl SessionAcceptor {
             policy,
             expected_zone,
             authority,
+            metrics: Arc::new(NoopMetrics),
         })
+    }
+
+    pub fn with_metrics(mut self, metrics: Arc<dyn MetricsSink>) -> Self {
+        self.metrics = metrics;
+        self
     }
 
     /// Consume a completed session engine and mint one admitted session.
@@ -328,18 +344,61 @@ impl SessionAcceptor {
     where
         T: OwnedTransport + 'static,
     {
-        let authentication = engine.take_authentication(&self.policy)?;
-        let binding = authentication_binding(&self.policy, authentication)?;
-        validate_transport_evidence(&self.policy, &binding, &evidence)?;
-        validate_bootstrap_zone(&binding, &self.expected_zone)?;
+        engine.set_metrics(Arc::clone(&self.metrics));
+        macro_rules! admit_try {
+            ($expression:expr) => {
+                match $expression {
+                    Ok(value) => value,
+                    Err(error) => {
+                        engine.record_failure(
+                            MetricEvent::ConnectAttempt,
+                            ChannelClass::SessionControl,
+                            OperationClass::Connect,
+                            error,
+                        );
+                        return Err(error);
+                    }
+                }
+            };
+        }
+        let authentication = admit_try!(engine.take_authentication(&self.policy));
+        let binding = admit_try!(authentication_binding(&self.policy, authentication));
+        admit_try!(validate_transport_evidence(
+            &self.policy,
+            &binding,
+            &evidence
+        ));
+        admit_try!(validate_bootstrap_zone(&binding, &self.expected_zone));
         let (subject, lease) = self
             .authority
             .authenticate_connect(evidence, &binding, &self.expected_zone, now_tick)
-            .await?;
-        validate_subject(&subject, &self.expected_zone, &binding)?;
+            .await
+            .inspect_err(|error| {
+                engine.record_failure(
+                    MetricEvent::ConnectAttempt,
+                    ChannelClass::SessionControl,
+                    OperationClass::Connect,
+                    *error,
+                );
+            })?;
+        admit_try!(validate_subject(&subject, &self.expected_zone, &binding));
         if !lease.is_valid_at(now_tick) {
-            return Err(SessionError::new(SessionErrorCode::PolicyDenied));
+            let error = SessionError::new(SessionErrorCode::PolicyDenied);
+            engine.record_failure(
+                MetricEvent::ConnectAttempt,
+                ChannelClass::SessionControl,
+                OperationClass::Connect,
+                error,
+            );
+            return Err(error);
         }
+        engine.record_metric(
+            MetricEvent::ConnectAttempt,
+            ChannelClass::SessionControl,
+            OperationClass::Connect,
+            MetricResult::Accepted,
+            MetricReason::None,
+        );
         Ok(AdmittedComponentSession {
             expected_zone: self.expected_zone,
             subject,
@@ -365,10 +424,98 @@ pub struct AdmittedComponentSession {
     driver: SessionDriverHandle,
 }
 
+/// Redacted routing metadata derived only from an admitted session.
+///
+/// This value carries no driver, authority, lease, transport binding, or
+/// transcript and cannot be converted back into an admitted session.
+#[derive(Clone, PartialEq, Eq)]
+pub struct AdmittedSessionRouteBinding {
+    zone: ZoneId,
+    subject_ref: ResourceRef,
+    subject_uid: ResourceUid,
+    evidence_class: EvidenceClass,
+    locality: Locality,
+    service: ServiceName,
+    schema: SchemaFingerprint,
+    reconnect_generation: ReconnectGeneration,
+    provider_ref: Option<ResourceRef>,
+    provider_generation: Option<ResourceGeneration>,
+    controller_generation: Option<ControllerGeneration>,
+}
+
+impl AdmittedSessionRouteBinding {
+    pub fn zone(&self) -> &ZoneId {
+        &self.zone
+    }
+
+    pub fn subject_ref(&self) -> &ResourceRef {
+        &self.subject_ref
+    }
+
+    pub fn subject_uid(&self) -> &ResourceUid {
+        &self.subject_uid
+    }
+
+    pub const fn evidence_class(&self) -> EvidenceClass {
+        self.evidence_class
+    }
+
+    pub const fn locality(&self) -> Locality {
+        self.locality
+    }
+
+    pub fn service(&self) -> &ServiceName {
+        &self.service
+    }
+
+    pub fn schema(&self) -> &SchemaFingerprint {
+        &self.schema
+    }
+
+    pub const fn reconnect_generation(&self) -> ReconnectGeneration {
+        self.reconnect_generation
+    }
+
+    pub fn provider_ref(&self) -> Option<&ResourceRef> {
+        self.provider_ref.as_ref()
+    }
+
+    pub const fn provider_generation(&self) -> Option<ResourceGeneration> {
+        self.provider_generation
+    }
+
+    pub const fn controller_generation(&self) -> Option<ControllerGeneration> {
+        self.controller_generation
+    }
+}
+
+impl fmt::Debug for AdmittedSessionRouteBinding {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("AdmittedSessionRouteBinding(<redacted>)")
+    }
+}
+
 impl AdmittedComponentSession {
     /// Return the active authorization revision.
     pub const fn authorization_revision(&self) -> u64 {
         self.lease.policy_revision()
+    }
+
+    /// Snapshot non-authority routing metadata without exposing session claims.
+    pub fn route_binding(&self) -> AdmittedSessionRouteBinding {
+        AdmittedSessionRouteBinding {
+            zone: self.expected_zone.clone(),
+            subject_ref: self.subject.subject_ref().clone(),
+            subject_uid: self.subject.subject_uid().clone(),
+            evidence_class: self.subject.evidence_class(),
+            locality: self.subject.transport_binding().locality(),
+            service: self.subject.service().clone(),
+            schema: self.subject.schema_fingerprint().clone(),
+            reconnect_generation: self.subject.reconnect_generation(),
+            provider_ref: self.subject.provider_ref().cloned(),
+            provider_generation: self.subject.provider_generation(),
+            controller_generation: self.subject.controller_generation(),
+        }
     }
 
     /// Authorize one exact operation and mint a non-cloneable permit.
@@ -390,6 +537,7 @@ impl AdmittedComponentSession {
         if !zone_scope_valid || !self.lease.is_valid_at(now_tick) {
             return Err(SessionError::new(SessionErrorCode::PolicyDenied));
         }
+
         let lease = self
             .authority
             .authorize(&self.subject, &request, self.lease, now_tick)
@@ -403,18 +551,23 @@ impl AdmittedComponentSession {
     }
 
     /// Receive one authenticated ttrpc frame for authorization and dispatch.
-    pub async fn receive_ttrpc(&self) -> Result<Vec<u8>> {
+    pub async fn receive_ttrpc(&mut self) -> Result<Vec<u8>> {
         self.driver.receive_ttrpc().await
     }
 
     /// Send one ttrpc frame under a consumed exact-operation permit.
     pub async fn send_authorized_ttrpc(
-        &self,
+        &mut self,
         permit: AuthorizedSessionOperation,
         frame: Vec<u8>,
         now_tick: u64,
     ) -> Result<()> {
-        if !permit.lease.is_valid_at(now_tick) || permit.request.verb != SessionVerb::Invoke {
+        if !permit.lease.is_valid_at(now_tick)
+            || !matches!(
+                permit.request.verb,
+                SessionVerb::Invoke | SessionVerb::AuditExport | SessionVerb::SupportBundle
+            )
+        {
             return Err(SessionError::new(SessionErrorCode::PolicyDenied));
         }
         self.driver.send_ttrpc(frame).await
@@ -468,9 +621,27 @@ impl fmt::Debug for AuthorizedSessionOperation {
 /// Interface the exact-addressed bus must implement to take sole session ownership.
 #[async_trait]
 pub trait ComponentSessionRegistrar: Send {
+    type Registration: Send;
+    type Error: std::error::Error + Send + Sync + 'static;
+
     /// Register one authenticated session capability.
-    async fn register_component_session(&mut self, session: AdmittedComponentSession)
-    -> Result<()>;
+    async fn register_component_session(
+        &mut self,
+        session: AdmittedComponentSession,
+    ) -> std::result::Result<Self::Registration, Self::Error>;
+
+    /// Atomically replace one registration with the next reconnect generation.
+    async fn reconnect_component_session(
+        &mut self,
+        previous: Self::Registration,
+        session: AdmittedComponentSession,
+    ) -> std::result::Result<Self::Registration, Self::Error>;
+
+    /// Disconnect one registration and revoke all work bound to it.
+    async fn disconnect_component_session(
+        &mut self,
+        registration: Self::Registration,
+    ) -> std::result::Result<(), Self::Error>;
 }
 
 fn authentication_binding(

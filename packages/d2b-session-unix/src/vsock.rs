@@ -8,6 +8,9 @@ use tokio_vsock::{VMADDR_CID_ANY, VsockAddr, VsockListener, VsockStream};
 
 pub struct FramedVsockTransport<S> {
     stream: S,
+    receive_header: Vec<u8>,
+    receive_body: Vec<u8>,
+    receive_declared: Option<usize>,
     closed: bool,
 }
 
@@ -15,6 +18,9 @@ impl<S> FramedVsockTransport<S> {
     pub fn new(stream: S) -> Self {
         Self {
             stream,
+            receive_header: Vec::with_capacity(4),
+            receive_body: Vec::new(),
+            receive_declared: None,
             closed: false,
         }
     }
@@ -47,15 +53,34 @@ where
         if self.closed {
             return Err(TransportError::Disconnected);
         }
-        let mut length = [0_u8; 4];
-        self.stream.read_exact(&mut length).await.map_err(map_io)?;
-        let length = usize::try_from(u32::from_be_bytes(length))
-            .map_err(|_| TransportError::LimitExceeded)?;
+        read_exact_persistent(&mut self.stream, &mut self.receive_header, 4).await?;
+        let length = match self.receive_declared {
+            Some(length) => length,
+            None => {
+                let length = usize::try_from(u32::from_be_bytes([
+                    self.receive_header[0],
+                    self.receive_header[1],
+                    self.receive_header[2],
+                    self.receive_header[3],
+                ]))
+                .map_err(|_| TransportError::LimitExceeded)?;
+                self.receive_declared = Some(length);
+                length
+            }
+        };
         if length == 0 || length > protected_limit {
+            self.closed = true;
             return Err(TransportError::LimitExceeded);
         }
-        let mut bytes = vec![0_u8; length];
-        self.stream.read_exact(&mut bytes).await.map_err(map_io)?;
+        if self.receive_body.capacity() < length {
+            self.receive_body
+                .try_reserve_exact(length - self.receive_body.len())
+                .map_err(|_| TransportError::LimitExceeded)?;
+        }
+        read_exact_persistent(&mut self.stream, &mut self.receive_body, length).await?;
+        let bytes = std::mem::take(&mut self.receive_body);
+        self.receive_header.clear();
+        self.receive_declared = None;
         Ok(TransportPacket::new(bytes))
     }
 
@@ -71,12 +96,19 @@ where
             return Err(TransportError::LimitExceeded);
         }
         let length = u32::try_from(bytes.len()).map_err(|_| TransportError::LimitExceeded)?;
-        self.stream
-            .write_all(&length.to_be_bytes())
-            .await
-            .map_err(map_io)?;
-        self.stream.write_all(&bytes).await.map_err(map_io)?;
-        self.stream.flush().await.map_err(map_io)
+        let result = async {
+            self.stream
+                .write_all(&length.to_be_bytes())
+                .await
+                .map_err(map_io)?;
+            self.stream.write_all(&bytes).await.map_err(map_io)?;
+            self.stream.flush().await.map_err(map_io)
+        }
+        .await;
+        if result.is_err() {
+            self.closed = true;
+        }
+        result
     }
 
     async fn close(&mut self) -> Result<(), TransportError> {
@@ -86,6 +118,27 @@ where
         }
         Ok(())
     }
+}
+
+async fn read_exact_persistent<S: AsyncRead + Unpin>(
+    stream: &mut S,
+    output: &mut Vec<u8>,
+    target: usize,
+) -> Result<(), TransportError> {
+    while output.len() < target {
+        let remaining = target
+            .checked_sub(output.len())
+            .ok_or(TransportError::LimitExceeded)?;
+        let mut chunk = vec![0_u8; remaining];
+        match stream.read(&mut chunk).await {
+            Ok(0) if output.is_empty() => return Err(TransportError::Disconnected),
+            Ok(0) => return Err(TransportError::Truncated),
+            Ok(count) => output.extend_from_slice(&chunk[..count]),
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(map_io(error)),
+        }
+    }
+    Ok(())
 }
 
 pub type NativeVsockTransport = FramedVsockTransport<VsockStream>;
@@ -236,6 +289,26 @@ mod tests {
                 .unwrap_err(),
             TransportError::Disconnected
         );
+    }
+
+    #[tokio::test]
+    async fn cancelled_receive_retains_partial_header_and_body() {
+        let (mut writer, right) = tokio::io::duplex(512);
+        let mut receiver = FramedVsockTransport::new(right);
+        writer.write_all(&[0, 0]).await.unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(5), receiver.receive(64))
+                .await
+                .is_err()
+        );
+        writer.write_all(&[0, 4, b'a', b'b']).await.unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(5), receiver.receive(64))
+                .await
+                .is_err()
+        );
+        writer.write_all(b"cd").await.unwrap();
+        assert_eq!(receiver.receive(64).await.unwrap().as_bytes(), b"abcd");
     }
 
     struct TrackedStream(Arc<AtomicUsize>);

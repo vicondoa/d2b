@@ -73,16 +73,25 @@ struct RequestState {
 
 pub struct RequestRegistry {
     generation: u64,
+    max_active: usize,
     requests: BTreeMap<RequestId, RequestState>,
 }
 
 impl RequestRegistry {
     pub fn new(generation: u64) -> Result<Self> {
+        Self::with_limit(generation, 256)
+    }
+
+    pub fn with_limit(generation: u64, max_active: usize) -> Result<Self> {
         if generation == 0 {
             return Err(SessionError::new(SessionErrorCode::GenerationMismatch));
         }
+        if max_active == 0 {
+            return Err(SessionError::new(SessionErrorCode::QueueBackpressure));
+        }
         Ok(Self {
             generation,
+            max_active,
             requests: BTreeMap::new(),
         })
     }
@@ -90,6 +99,9 @@ impl RequestRegistry {
     pub fn register(&mut self, request_id: RequestId) -> Result<Cancellation> {
         if self.requests.contains_key(&request_id) {
             return Err(SessionError::new(SessionErrorCode::RequestIdDuplicate));
+        }
+        if self.requests.len() >= self.max_active {
+            return Err(SessionError::new(SessionErrorCode::QueueBackpressure));
         }
         let cancellation = Cancellation::new();
         self.requests.insert(
@@ -171,5 +183,30 @@ impl fmt::Debug for RequestRegistry {
             .field("active", &self.requests.len())
             .field("request_ids", &"<redacted>")
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn request(value: u8) -> RequestId {
+        RequestId::new(vec![value; 16]).unwrap()
+    }
+
+    #[test]
+    fn active_request_limit_backpressures_and_terminal_removal_releases_capacity() {
+        let mut registry = RequestRegistry::with_limit(1, 2).unwrap();
+        registry.register(request(1)).unwrap();
+        registry.register(request(2)).unwrap();
+        assert_eq!(
+            registry.register(request(3)).unwrap_err().code(),
+            SessionErrorCode::QueueBackpressure
+        );
+        assert!(registry.complete(&request(1)));
+        registry.register(request(3)).unwrap();
+        registry.cancel_all();
+        assert_eq!(registry.active(), 0);
+        registry.register(request(4)).unwrap();
     }
 }

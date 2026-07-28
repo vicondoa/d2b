@@ -25,16 +25,15 @@ deprecations ship one minor release before removal.
   Role/RoleBinding authorization, relay and diagnostic verb enforcement,
   single-owner authenticated registration, revision-bound revocation,
   pinned cancellation routes, reconnect replacement, and credit-bounded fair
-  named streams. It remains disconnected from production adapters until the
-  authenticated ComponentSession integration lands.
+  named streams, now connected to authenticated ComponentSession capabilities
+  through consuming registration and reconnect/disconnect lifecycle handling.
 
 - Added the transport-neutral ComponentSession v3 contract and runtime with
   strict Noise NN/KK/IKpsk2 authentication, replay-safe records, native
   authorization leases, fair named streams, cancellation, deadlines, and
   reconnect handling. Added Unix seqpacket, stream, socketpair, and vsock
   adapters with consumed peer-to-subject mapping, exact descriptor identity,
-  multi-scope attachment credits, and fail-closed cleanup; bus registration
-  remains an explicit unconnected interface.
+  multi-scope attachment credits, and fail-closed cleanup.
 
 - Added the async controller toolkit and core reconciliation engine with
   store-watch relisting, bounded per-resource single-flight dispatch,
@@ -113,6 +112,19 @@ deprecations ship one minor release before removal.
   are corrected with it.
 - Enabled the required Layer-1, eval-shell, and Entra example PR gates for
   changes targeting the `v3` branch as well as `main`.
+
+### Fixed
+
+- Unified ComponentSession and Zone bus operation names on typed canonical
+  `Service/Member` spelling and made bus registration consume the admitted
+  session capability instead of accepting cloneable claims.
+- Bounded and fairly scoped bus operations, routes, streams, credits, session
+  requests, reassembly, and event queues; pinned revocable destinations across
+  reconnects; and made dispatch deadlines, dropped futures, stream waiters, and
+  cancellation cleanup actively release capacity.
+- Made Unix stream and vsock framing cancellation-safe, hardened systemd
+  descriptor adoption and socket I/O semantics, redacted identifier debug
+  output, and added closed-class observability and operator remediation.
 
 ## [1.4.1] - 2026-07-12
 

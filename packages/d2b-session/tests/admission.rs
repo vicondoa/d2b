@@ -406,7 +406,7 @@ async fn native_rbac_connect_and_invoke_are_executed() {
     let request = SessionAuthorizationRequest::new(
         SessionVerb::Invoke,
         d2b_contracts::v3::ServiceName::parse("d2b.resource.v3").unwrap(),
-        "ResourceService.Get",
+        "ResourceService/Get",
         zone,
         Some(ResourceRef::parse("Process/app").unwrap()),
     )
@@ -441,7 +441,7 @@ async fn admitted_session_retains_transport_and_consumes_send_permits() {
             SessionAuthorizationRequest::new(
                 SessionVerb::Observe,
                 d2b_contracts::v3::ServiceName::parse("d2b.resource.v3").unwrap(),
-                "ResourceService.Watch",
+                "ResourceService/Watch",
                 zone.clone(),
                 None,
             )
@@ -464,7 +464,7 @@ async fn admitted_session_retains_transport_and_consumes_send_permits() {
             SessionAuthorizationRequest::new(
                 SessionVerb::Invoke,
                 d2b_contracts::v3::ServiceName::parse("d2b.resource.v3").unwrap(),
-                "ResourceService.Get",
+                "ResourceService/Get",
                 zone.clone(),
                 None,
             )
@@ -488,7 +488,7 @@ async fn admitted_session_retains_transport_and_consumes_send_permits() {
             SessionAuthorizationRequest::new(
                 SessionVerb::Invoke,
                 d2b_contracts::v3::ServiceName::parse("d2b.resource.v3").unwrap(),
-                "ResourceService.Get",
+                "ResourceService/Get",
                 zone,
                 None,
             )
@@ -592,7 +592,7 @@ async fn policy_revision_change_revokes_new_work() {
     let request = SessionAuthorizationRequest::new(
         SessionVerb::Invoke,
         d2b_contracts::v3::ServiceName::parse("d2b.resource.v3").unwrap(),
-        "ResourceService.Get",
+        "ResourceService/Get",
         zone,
         None,
     )
@@ -619,7 +619,7 @@ async fn native_rbac_relay_mints_only_for_a_distinct_next_zone() {
         .unwrap();
     let invalid = SessionAuthorizationRequest::relay(
         d2b_contracts::v3::ServiceName::parse("d2b.resource.v3").unwrap(),
-        "ResourceService.Get",
+        "ResourceService/Get",
         ZoneId::parse("personal").unwrap(),
         None,
         SessionVerb::Invoke,
@@ -633,7 +633,7 @@ async fn native_rbac_relay_mints_only_for_a_distinct_next_zone() {
 
     let valid = SessionAuthorizationRequest::relay(
         d2b_contracts::v3::ServiceName::parse("d2b.resource.v3").unwrap(),
-        "ResourceService.Get",
+        "ResourceService/Get",
         ZoneId::parse("personal").unwrap(),
         None,
         SessionVerb::Invoke,
@@ -671,7 +671,7 @@ fn authorization_request_enforces_relay_and_diagnostic_bindings() {
     let service = d2b_contracts::v3::ServiceName::parse("d2b.resource.v3").unwrap();
     let relay = SessionAuthorizationRequest::relay(
         service.clone(),
-        "ResourceService.Get",
+        "ResourceService/Get",
         remote.clone(),
         None,
         SessionVerb::Invoke,
@@ -685,7 +685,7 @@ fn authorization_request_enforces_relay_and_diagnostic_bindings() {
     assert_eq!(
         SessionAuthorizationRequest::relay(
             service,
-            "ResourceService.Get",
+            "ResourceService/Get",
             remote,
             None,
             SessionVerb::Relay,
@@ -699,7 +699,7 @@ fn authorization_request_enforces_relay_and_diagnostic_bindings() {
         SessionAuthorizationRequest::new(
             SessionVerb::AuditExport,
             d2b_contracts::v3::ServiceName::parse("d2b.resource.v3").unwrap(),
-            "AuditService.Export",
+            "AuditService/Export",
             local.clone(),
             None,
         )
@@ -710,7 +710,7 @@ fn authorization_request_enforces_relay_and_diagnostic_bindings() {
     SessionAuthorizationRequest::new(
         SessionVerb::AuditExport,
         d2b_contracts::v3::ServiceName::parse("d2b.audit.v3").unwrap(),
-        "AuditService.Export",
+        "AuditService/Export",
         local.clone(),
         None,
     )
@@ -718,7 +718,7 @@ fn authorization_request_enforces_relay_and_diagnostic_bindings() {
     SessionAuthorizationRequest::new(
         SessionVerb::SupportBundle,
         d2b_contracts::v3::ServiceName::parse("d2b.support.v3").unwrap(),
-        "SupportService.GenerateBundle",
+        "SupportService/GenerateBundle",
         local,
         None,
     )

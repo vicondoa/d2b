@@ -10,15 +10,17 @@ pub mod registry;
 pub mod router;
 pub mod streams;
 
-pub use authorization::{AuthorizationError, BusAuthorizer};
+pub use authorization::{
+    AuthorizationError, AuthorizationErrorClass, BusAuthorizer, session_verb_name,
+};
 pub use d2b_resource_api::authz::SessionVerb;
 pub use operations::{Cancellation, OperationId, OperationSpec};
 pub use registry::{
     BusEndpoint, BusResponse, EndpointError, RouteGenerations, RouteKey, RouteMember, RouteTarget,
-    SessionRegistration,
 };
 pub use router::{
-    BusClock, BusConfig, BusError, BusIngress, BusStream, DeliveredInvocation, DeliveredStream,
-    ManualClock, ResourceCall, ResourceFilter, ResourceQuery, ZoneBus, ZoneRegistrar,
+    BusClock, BusConfig, BusError, BusEvent, BusFailureReason, BusIngress, BusObserver, BusStream,
+    DeliveredInvocation, DeliveredStream, ManualClock, NoopBusObserver, ResourceCall,
+    ResourceFilter, ResourceQuery, ZoneBus, ZoneRegistrar,
 };
 pub use streams::{IncomingStream, ReceivedFrame, StreamError, StreamLimits, StreamName};

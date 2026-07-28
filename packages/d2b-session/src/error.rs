@@ -1,8 +1,8 @@
 use std::{error::Error, fmt};
 
 use d2b_contracts::v3::component_session::{
-    BinaryError, ContractError, FragmentSequenceError, HandshakeRejectReason, SequenceError,
-    SessionErrorCode,
+    BinaryError, ContractError, FragmentSequenceError, HandshakeRejectReason, Remediation,
+    SequenceError, SessionErrorCode,
 };
 
 use crate::TransportError;
@@ -14,6 +14,33 @@ pub struct SessionError {
     code: SessionErrorCode,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionErrorClass {
+    Authentication,
+    Authorization,
+    Generation,
+    Backpressure,
+    Deadline,
+    Transport,
+    Protocol,
+    Internal,
+}
+
+impl SessionErrorClass {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Authentication => "authentication",
+            Self::Authorization => "authorization",
+            Self::Generation => "generation",
+            Self::Backpressure => "backpressure",
+            Self::Deadline => "deadline",
+            Self::Transport => "transport",
+            Self::Protocol => "protocol",
+            Self::Internal => "internal",
+        }
+    }
+}
+
 impl SessionError {
     pub const fn new(code: SessionErrorCode) -> Self {
         Self { code }
@@ -21,6 +48,48 @@ impl SessionError {
 
     pub const fn code(self) -> SessionErrorCode {
         self.code
+    }
+
+    pub const fn class(self) -> SessionErrorClass {
+        match self.code {
+            SessionErrorCode::AuthenticationFailed
+            | SessionErrorCode::TranscriptMismatch
+            | SessionErrorCode::IdentityEvidenceMismatch => SessionErrorClass::Authentication,
+            SessionErrorCode::PolicyDenied
+            | SessionErrorCode::PurposeMismatch
+            | SessionErrorCode::PurposeClassMismatch
+            | SessionErrorCode::RoleMismatch
+            | SessionErrorCode::ServiceMismatch
+            | SessionErrorCode::SchemaMismatch
+            | SessionErrorCode::ChannelBindingMismatch => SessionErrorClass::Authorization,
+            SessionErrorCode::GenerationMismatch => SessionErrorClass::Generation,
+            SessionErrorCode::QueueBackpressure
+            | SessionErrorCode::ControlResourceExhausted
+            | SessionErrorCode::AttachmentCreditExceeded
+            | SessionErrorCode::ReassemblyLimitExceeded => SessionErrorClass::Backpressure,
+            SessionErrorCode::HandshakeTimeout
+            | SessionErrorCode::DeadlineInvalid
+            | SessionErrorCode::DeadlineExpired
+            | SessionErrorCode::KeepaliveTimeout => SessionErrorClass::Deadline,
+            SessionErrorCode::SessionDisconnected => SessionErrorClass::Transport,
+            SessionErrorCode::ArithmeticOverflow | SessionErrorCode::InternalInvariant => {
+                SessionErrorClass::Internal
+            }
+            _ => SessionErrorClass::Protocol,
+        }
+    }
+
+    pub const fn remediation(self) -> Remediation {
+        match self.class() {
+            SessionErrorClass::Authentication => Remediation::ReEnrollPeer,
+            SessionErrorClass::Authorization => Remediation::RepairConfiguration,
+            SessionErrorClass::Generation => Remediation::ReplaceGeneration,
+            SessionErrorClass::Backpressure => Remediation::ReduceLoad,
+            SessionErrorClass::Deadline => Remediation::RetryBounded,
+            SessionErrorClass::Transport => Remediation::RestartAgent,
+            SessionErrorClass::Protocol => Remediation::RepairConfiguration,
+            SessionErrorClass::Internal => Remediation::RestartAgent,
+        }
     }
 }
 
@@ -35,7 +104,13 @@ impl fmt::Debug for SessionError {
 
 impl fmt::Display for SessionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.code.as_str())
+        write!(
+            formatter,
+            "session-error class={} code={} remediation={}",
+            self.class().as_str(),
+            self.code.as_str(),
+            self.remediation().as_str()
+        )
     }
 }
 
@@ -139,5 +214,25 @@ impl From<TransportError> for SessionError {
             T::InvalidAttachment => S::AttachmentDescriptorMismatch,
             T::Other => S::InternalInvariant,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_exposes_closed_class_and_generic_remediation() {
+        let policy = SessionError::new(SessionErrorCode::PolicyDenied);
+        assert_eq!(policy.class(), SessionErrorClass::Authorization);
+        assert_eq!(policy.remediation(), Remediation::RepairConfiguration);
+        assert_eq!(
+            policy.to_string(),
+            "session-error class=authorization code=policy-denied remediation=repair-configuration"
+        );
+
+        let generation = SessionError::new(SessionErrorCode::GenerationMismatch);
+        assert_eq!(generation.class(), SessionErrorClass::Generation);
+        assert_eq!(generation.remediation(), Remediation::ReplaceGeneration);
     }
 }

@@ -17,7 +17,9 @@ native-vsock = [
 async-trait = "0.1"
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 d2b-session = { path = "../d2b-session", version = "0.0.0-bootstrap" }
+envmnt = "0.10"
 libc = "0.2"
+listenfd = "1"
 rustix.workspace = true
 tokio = { workspace = true, optional = true, features = ["io-util", "net"] }
 tokio-vsock = { version = "0.7.2", optional = true }
@@ -25,12 +27,8 @@ tokio-vsock = { version = "0.7.2", optional = true }
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "net", "rt", "sync", "time"] }
 
-[lints.rust]
-unsafe_code = "deny"
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(test_root)"] }
-
-[lints.clippy]
-all = "warn"
+[lints]
+workspace = true
 
 [[test]]
 name = "unix_session"

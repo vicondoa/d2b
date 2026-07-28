@@ -59,11 +59,13 @@ struct StreamState {
     phase: StreamPhase,
     send_credit: u32,
     receive_credit: u32,
+    receive_reserved: u32,
 }
 
 pub struct NamedStreamMux {
     limits: LimitProfile,
     streams: BTreeMap<StreamId, StreamState>,
+    aggregate_receive_reserved: u32,
 }
 
 impl NamedStreamMux {
@@ -72,6 +74,7 @@ impl NamedStreamMux {
         Ok(Self {
             limits,
             streams: BTreeMap::new(),
+            aggregate_receive_reserved: 0,
         })
     }
 
@@ -89,6 +92,7 @@ impl NamedStreamMux {
                 phase: StreamPhase::Open,
                 send_credit,
                 receive_credit,
+                receive_reserved: 0,
             },
         );
         Ok(())
@@ -153,6 +157,13 @@ impl NamedStreamMux {
     }
 
     pub(crate) fn reserve_receive_fragment(&mut self, stream: StreamId, bytes: u32) -> Result<()> {
+        let aggregate = self
+            .aggregate_receive_reserved
+            .checked_add(bytes)
+            .ok_or_else(|| SessionError::new(SessionErrorCode::ArithmeticOverflow))?;
+        if aggregate > self.limits.aggregate_named_stream_queue_bytes {
+            return Err(SessionError::new(SessionErrorCode::QueueBackpressure));
+        }
         let state = self.stream_mut(stream)?;
         if !matches!(
             state.phase,
@@ -162,6 +173,11 @@ impl NamedStreamMux {
             return Err(SessionError::new(SessionErrorCode::QueueBackpressure));
         }
         state.receive_credit -= bytes;
+        state.receive_reserved = state
+            .receive_reserved
+            .checked_add(bytes)
+            .ok_or_else(|| SessionError::new(SessionErrorCode::ArithmeticOverflow))?;
+        self.aggregate_receive_reserved = aggregate;
         Ok(())
     }
 
@@ -179,7 +195,15 @@ impl NamedStreamMux {
         if next > limit {
             return Err(SessionError::new(SessionErrorCode::QueueBackpressure));
         }
+        if state.receive_reserved < bytes {
+            return Err(SessionError::new(SessionErrorCode::InternalInvariant));
+        }
         state.receive_credit = next;
+        state.receive_reserved -= bytes;
+        self.aggregate_receive_reserved = self
+            .aggregate_receive_reserved
+            .checked_sub(bytes)
+            .ok_or_else(|| SessionError::new(SessionErrorCode::InternalInvariant))?;
         Ok(bytes)
     }
 
@@ -218,7 +242,11 @@ impl NamedStreamMux {
             .get(&stream)
             .is_some_and(|state| matches!(state.phase, StreamPhase::Closed | StreamPhase::Reset))
         {
-            self.streams.remove(&stream);
+            if let Some(state) = self.streams.remove(&stream) {
+                self.aggregate_receive_reserved = self
+                    .aggregate_receive_reserved
+                    .saturating_sub(state.receive_reserved);
+            }
             true
         } else {
             false
@@ -252,5 +280,35 @@ impl fmt::Debug for NamedStreamMux {
             .field("active", &self.streams.len())
             .field("stream_ids", &"<redacted>")
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fragments_and_streams_share_one_retained_receive_budget() {
+        let limits = LimitProfile::local_default();
+        let mut mux = NamedStreamMux::new(limits).unwrap();
+        let per_stream = limits.named_stream_queue_bytes;
+        let full_streams = limits.aggregate_named_stream_queue_bytes / per_stream;
+        for index in 0..=full_streams {
+            let stream = StreamId::new(u16::try_from(0x100 + index).unwrap()).unwrap();
+            mux.open(stream, per_stream, per_stream).unwrap();
+            let result = mux.reserve_receive_fragment(stream, per_stream);
+            if index < full_streams {
+                result.unwrap();
+            } else {
+                assert_eq!(
+                    result.unwrap_err().code(),
+                    SessionErrorCode::QueueBackpressure
+                );
+            }
+        }
+        let first = StreamId::new(0x100).unwrap();
+        mux.release_receive_credit(first, per_stream).unwrap();
+        let last = StreamId::new(u16::try_from(0x100 + full_streams).unwrap()).unwrap();
+        mux.reserve_receive_fragment(last, per_stream).unwrap();
     }
 }

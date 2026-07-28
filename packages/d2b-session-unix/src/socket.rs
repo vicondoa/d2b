@@ -9,10 +9,10 @@ use d2b_contracts::v3::component_session::{
 use rustix::{
     fd::{AsFd, BorrowedFd, OwnedFd},
     fs::{OFlags, fcntl_getfl},
-    io::{FdFlags, IoSlice, IoSliceMut, fcntl_getfd, read, write},
+    io::{FdFlags, IoSlice, IoSliceMut, fcntl_getfd, read},
     net::{
         AddressFamily, RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, SendAncillaryBuffer,
-        SendAncillaryMessage, SendFlags, Shutdown, SocketFlags, SocketType, UCred, recvmsg,
+        SendAncillaryMessage, SendFlags, Shutdown, SocketFlags, SocketType, UCred, recvmsg, send,
         sendmsg, shutdown, socketpair,
         sockopt::{
             get_socket_domain, get_socket_passcred, get_socket_peercred, get_socket_type,
@@ -359,13 +359,17 @@ fn recv_one(
     let mut control = RecvAncillaryBuffer::new(&mut control_bytes);
     let result = {
         let mut iov = [IoSliceMut::new(&mut payload)];
-        recvmsg(
-            fd,
-            &mut iov,
-            &mut control,
-            RecvFlags::DONTWAIT | RecvFlags::CMSG_CLOEXEC,
-        )
-        .map_err(errno_to_io)?
+        loop {
+            match recvmsg(
+                fd,
+                &mut iov,
+                &mut control,
+                RecvFlags::DONTWAIT | RecvFlags::CMSG_CLOEXEC,
+            ) {
+                Err(rustix::io::Errno::INTR) => continue,
+                result => break result.map_err(errno_to_io)?,
+            }
+        }
     };
 
     let mut controls = Vec::new();
@@ -429,13 +433,17 @@ fn send_one(fd: &OwnedFd, packet: &OutboundPacket, control_capacity: usize) -> i
     {
         return Err(semantic_io(UnixSessionError::AncillaryCapacity));
     }
-    sendmsg(
-        fd,
-        &[IoSlice::new(&packet.payload)],
-        &mut control,
-        SendFlags::DONTWAIT | SendFlags::NOSIGNAL,
-    )
-    .map_err(errno_to_io)
+    loop {
+        match sendmsg(
+            fd,
+            &[IoSlice::new(&packet.payload)],
+            &mut control,
+            SendFlags::DONTWAIT | SendFlags::NOSIGNAL,
+        ) {
+            Err(rustix::io::Errno::INTR) => continue,
+            result => break result.map_err(errno_to_io),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -486,7 +494,14 @@ impl StreamSocket {
         let mut ready = self.io.readable().await.map_err(io_error)?;
         for _ in 0..fairness_budget {
             let mut chunk = vec![0_u8; chunk_bytes];
-            match ready.try_io(|inner| read(inner.get_ref(), &mut chunk).map_err(errno_to_io)) {
+            match ready.try_io(|inner| {
+                loop {
+                    match read(inner.get_ref(), &mut chunk) {
+                        Err(rustix::io::Errno::INTR) => continue,
+                        result => break result.map_err(errno_to_io),
+                    }
+                }
+            }) {
                 Ok(Ok(0)) => {
                     return Ok(StreamRead {
                         bytes: output.len() - initial,
@@ -517,9 +532,18 @@ impl StreamSocket {
         while written < bytes.len() {
             let mut ready = self.io.writable().await.map_err(io_error)?;
             loop {
-                match ready
-                    .try_io(|inner| write(inner.get_ref(), &bytes[written..]).map_err(errno_to_io))
-                {
+                match ready.try_io(|inner| {
+                    loop {
+                        match send(
+                            inner.get_ref(),
+                            &bytes[written..],
+                            SendFlags::DONTWAIT | SendFlags::NOSIGNAL,
+                        ) {
+                            Err(rustix::io::Errno::INTR) => continue,
+                            result => break result.map_err(errno_to_io),
+                        }
+                    }
+                }) {
                     Ok(Ok(0)) => return Err(UnixSessionError::Closed),
                     Ok(Ok(count)) => {
                         written += count;
@@ -573,6 +597,11 @@ fn classify_io(error: io::Error) -> UnixSessionError {
         .copied()
     {
         semantic
+    } else if matches!(
+        error.raw_os_error(),
+        Some(libc::EPIPE) | Some(libc::ECONNRESET) | Some(libc::ENOTCONN)
+    ) {
+        UnixSessionError::Closed
     } else {
         UnixSessionError::Io {
             errno: error.raw_os_error(),
