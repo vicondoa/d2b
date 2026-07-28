@@ -50,12 +50,53 @@ fn public_api_has_only_the_approved_capability_mint_surface() {
         .iter()
         .filter_map(|symbol| symbol.split_once("::").map(|(crate_name, _)| crate_name))
         .collect::<BTreeSet<_>>();
-    let snapshot_docs = render_workspace_docs(
-        &crate_root.parent().unwrap().join("Cargo.toml"),
-        &scratch.path().join("snapshot"),
-        Some(&snapshot_crates),
+    // Reuse the workspace render rather than rendering a second time. Two full
+    // rustdoc passes doubled both the wall-clock cost and the number of ways a
+    // cold or contended build can yield partial output - which is how this gate
+    // produced two spurious "API removed" failures.
+    let snapshot_docs = workspace_docs
+        .iter()
+        .filter(|documented| snapshot_crates.contains(documented.crate_name.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    // Fail loudly when rustdoc did not render a crate the snapshot expects.
+    // Without this, an incomplete or racing doc build shows up as that crate's
+    // entire API having been "removed", which reads like a capability change
+    // and sends the reader looking for a defect that is not there.
+    let rendered = snapshot_docs
+        .iter()
+        .map(|documented| documented.crate_name.as_str())
+        .collect::<BTreeSet<_>>();
+    let missing = snapshot_crates
+        .iter()
+        .filter(|crate_name| !rendered.contains(**crate_name))
+        .collect::<Vec<_>>();
+    assert!(
+        missing.is_empty(),
+        "rustdoc output is incomplete: {missing:?} appear in approved-public-api.txt \
+         but were not rendered, so the comparison below would report their whole \
+         API as removed. This is a doc-build problem, not an API change."
     );
     let actual = snapshot_public_api(&snapshot_docs, &approved);
+
+    // A crate that renders but yields no public item means rustdoc produced no
+    // usable output for it, not that its API was withdrawn. Checking only that
+    // the crate was listed is not enough: a failed or partial render still
+    // reports the crate, and the comparison then blames every one of its
+    // symbols as removed. Fail on the real cause instead.
+    let empty = snapshot_crates
+        .iter()
+        .filter(|crate_name| {
+            let prefix = format!("{crate_name}::");
+            !actual.iter().any(|symbol| symbol.starts_with(&prefix))
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        empty.is_empty(),
+        "rustdoc produced no public items for {empty:?}, which appear in \
+         approved-public-api.txt. The comparison below would report their whole \
+         API as removed. This is a doc-build problem, not an API change."
+    );
     let (_, capability_surface) = workspace_public_api(&workspace_docs, &BTreeSet::new(), true);
     let optional_capabilities = approved_entries(include_str!("approved-capability-optional.txt"));
     if std::env::var_os("D2B_UPDATE_BUS_PUBLIC_API").is_some() {
@@ -253,7 +294,7 @@ fn approved_entries(snapshot: &str) -> BTreeSet<String> {
         .collect()
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct DocumentedCrate {
     crate_name: String,
     root: PathBuf,
