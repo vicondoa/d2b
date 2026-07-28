@@ -1090,6 +1090,100 @@ async fn revocation_waits_for_an_admitted_batch_before_returning() {
 }
 
 #[tokio::test]
+async fn reconnect_rejects_a_control_batch_queued_behind_an_admitted_write() {
+    let (_bus, mut registrar) = bus();
+    let pause = Arc::new(WriterPause::default());
+    let (endpoint, _remote, endpoint_echo) = admit_with_writer_pause(
+        &registrar,
+        policy(
+            ServicePackage::ResourceV3,
+            EndpointPurpose::ResourceService,
+            1,
+        ),
+        "Provider/system-core",
+        "11111111-1111-4111-8111-111111111111",
+        "Provider/system-core",
+        [SessionVerb::Invoke],
+        Some(Arc::clone(&pause)),
+    )
+    .await;
+    let endpoint_cancellation = endpoint.cancellation_handle();
+    let endpoint = registrar
+        .register_component_session(endpoint)
+        .await
+        .unwrap();
+    let (replacement, _, replacement_echo) = admit(
+        &registrar,
+        policy(
+            ServicePackage::ResourceV3,
+            EndpointPurpose::ResourceService,
+            2,
+        ),
+        "Provider/system-core",
+        "11111111-1111-4111-8111-111111111111",
+        "Provider/system-core",
+        [SessionVerb::Invoke],
+    )
+    .await;
+    let (caller, _, caller_echo) = admit(
+        &registrar,
+        policy(
+            ServicePackage::ResourceV3,
+            EndpointPurpose::ResourceService,
+            1,
+        ),
+        "Host/alice",
+        "22222222-2222-4222-8222-222222222222",
+        "Provider/system-core",
+        [SessionVerb::Invoke, SessionVerb::Cancel],
+    )
+    .await;
+    let caller = registrar.register_component_session(caller).await.unwrap();
+    let operation_id = OperationId::parse("reconnect-fenced-control").unwrap();
+    let invoke = caller.invoke_resource(
+        route(
+            "d2b.resource.v3",
+            "ResourceService/Get",
+            1,
+            "Provider/system-core",
+        ),
+        OperationSpec::new(operation_id.clone(), 10_000).unwrap(),
+        ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
+        ttrpc_frame(13, b"admitted"),
+    );
+    let reconnect = async {
+        pause.wait_until_entered().await;
+        let queued_control = endpoint_cancellation
+            .cancel(d2b_session::contract::RequestId::new(vec![0x44; 16]).unwrap());
+        tokio::task::yield_now().await;
+        let mut reconnect = Box::pin(registrar.reconnect_component_session(endpoint, replacement));
+        tokio::select! {
+            result = &mut reconnect => {
+                panic!("reconnect returned before the admitted write drained: {result:?}")
+            }
+            () = tokio::task::yield_now() => {}
+        }
+        pause.release.notify_one();
+        let replacement = reconnect.await.unwrap();
+        assert_eq!(
+            queued_control.await.unwrap_err().code(),
+            d2b_session::contract::SessionErrorCode::Cancelled
+        );
+        replacement
+    };
+
+    let (result, replacement) = tokio::join!(invoke, reconnect);
+    assert_eq!(result, Err(BusError::Cancelled));
+    registrar
+        .disconnect_component_session(replacement)
+        .await
+        .unwrap();
+    endpoint_echo.abort();
+    replacement_echo.abort();
+    caller_echo.abort();
+}
+
+#[tokio::test]
 async fn receive_failure_terminates_without_retaining_the_operation() {
     let (_bus, mut registrar) = bus();
     let (endpoint, remote, endpoint_echo) = admit(

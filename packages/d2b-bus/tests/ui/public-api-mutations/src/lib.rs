@@ -1,7 +1,23 @@
+use std::ops::Deref;
+
 use d2b_contracts::v3::{ResourceRef, ResourceUid};
 use d2b_session::{AuthenticatedComponentSession, SessionAcceptor};
 
-pub struct Rogue;
+pub struct Rogue(RogueTarget);
+
+pub struct RogueTarget;
+
+impl RogueTarget {
+    pub fn inherited_method(&self) {}
+}
+
+impl Deref for Rogue {
+    type Target = RogueTarget;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
 
 pub trait ConstructingTrait {
     fn construct(&self) -> Option<SessionAcceptor<()>>;

@@ -165,12 +165,16 @@ fn mutation_fixture_detects_trait_constructor_and_capability_accessor() {
         "mutation fixture rustdoc failed:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let (_, capabilities) = public_api(
-        "d2b_bus_public_api_mutations",
-        &scratch
-            .path()
-            .join("target/doc/d2b_bus_public_api_mutations"),
+    let doc_root = scratch
+        .path()
+        .join("target/doc/d2b_bus_public_api_mutations");
+    let rogue_html =
+        fs::read_to_string(doc_root.join("struct.Rogue.html")).expect("read Deref mutation page");
+    assert!(
+        rogue_html.contains("id=\"deref-methods-"),
+        "mutation fixture did not execute the Deref-region parser branch"
     );
+    let (_, capabilities) = public_api("d2b_bus_public_api_mutations", &doc_root);
     assert!(
         capabilities
             .iter()
