@@ -238,9 +238,7 @@ fn collect_members(
         let trait_implementation = class_prefix.contains("trait-impl");
         if trait_implementation {
             let symbol = format!("{item}::{kind}:{member}");
-            if is_capability_item(item)
-                || code_header(body).is_some_and(is_capability_signature)
-            {
+            if is_capability_item(item) || code_header(body).is_some_and(is_capability_signature) {
                 capability_surface.insert(symbol.clone());
                 public.insert(symbol);
             }
