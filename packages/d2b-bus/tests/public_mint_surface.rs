@@ -132,15 +132,6 @@ fn public_api_has_only_the_approved_capability_mint_surface() {
         1,
         "SessionAcceptor construction widened beyond the approved registrar mint point"
     );
-    let unix_subject =
-        fs::read_to_string(repository_root.join("packages/d2b-session-unix/src/subject.rs"))
-            .expect("read Unix peer evidence source");
-    for forbidden_claim in ["ResourceRef", "ResourceUid", "AuthenticatedSubjectContext"] {
-        assert!(
-            !unix_subject.contains(forbidden_claim),
-            "Unix peer evidence regained caller-authored subject claim {forbidden_claim}"
-        );
-    }
 }
 
 #[test]
@@ -191,6 +182,18 @@ fn mutation_fixture_detects_trait_constructor_and_capability_accessor() {
             .iter()
             .any(|symbol| symbol.ends_with("Rogue::method:capability")),
         "public capability accessor escaped the capability inventory"
+    );
+    assert!(
+        capabilities
+            .iter()
+            .any(|symbol| symbol.ends_with("::RogueSubjectClaims")),
+        "a public type storing subject claims escaped the capability inventory"
+    );
+    assert!(
+        capabilities
+            .iter()
+            .any(|symbol| symbol.ends_with("RogueSubjectClaims::method:inject")),
+        "a public subject-claim injection method escaped the capability inventory"
     );
 }
 
@@ -351,6 +354,9 @@ fn is_capability_signature(signature: &str) -> bool {
     ]
     .iter()
     .any(|marker| signature.contains(marker))
+        || signature.contains("AuthenticatedSubjectContext")
+        || (signature.contains("subject_ref") && signature.contains("ResourceRef"))
+        || (signature.contains("subject_uid") && signature.contains("ResourceUid"))
 }
 
 fn is_capability_item(item: &str) -> bool {

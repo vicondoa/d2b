@@ -33,6 +33,10 @@ fn dependent_cannot_forge_registration_or_mint_admitted_session() {
             "forge_native_authority",
             ["no `NativeSessionAuthority` in the root", "error[E0432]"],
         ),
+        (
+            "inject_unix_subject",
+            ["no `UnixSubjectConfig` in the root", "error[E0432]"],
+        ),
     ] {
         let output = Command::new(env!("CARGO"))
             .args([

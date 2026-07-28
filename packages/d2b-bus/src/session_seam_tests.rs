@@ -9,8 +9,7 @@ use std::{
 use async_trait::async_trait;
 use d2b_bus::{
     BusAuthorizer, BusConfig, BusError, ComponentSessionAdmission, OperationId, OperationSpec,
-    ResourceCall, RouteGenerations, RouteKey, RouteMember, RouteTarget, UnixSubjectConfig, ZoneBus,
-    ZoneRegistrar,
+    ResourceCall, RouteGenerations, RouteKey, RouteMember, RouteTarget, ZoneBus, ZoneRegistrar,
 };
 use d2b_contracts::v3::{
     BindingDigest, ConfigurationGeneration, ControllerGeneration, EvidenceClass,
@@ -35,6 +34,8 @@ use d2b_session::{
 };
 use d2b_session_unix::{SeqpacketSocket, VerifiedUnixPeer, prearmed_seqpacket_pair};
 use tokio::sync::{Notify, mpsc};
+
+use crate::router::UnixSubjectRecord;
 
 const PROVIDER_GENERATION: u64 = 2;
 const CONTROLLER_GENERATION: u64 = 3;
@@ -268,17 +269,16 @@ async fn admit_with_writer_pause(
     let (proof_fd, _peer_fd) = prearmed_seqpacket_pair().unwrap();
     let proof_socket = SeqpacketSocket::from_parent_prearmed(proof_fd).unwrap();
     let expected_peer = proof_socket.acceptor_peer_credentials().unwrap();
-    let subject_config = if subject_ref.resource_type().as_str() == "Provider" {
-        UnixSubjectConfig::provider(
+    let subject_config = match subject_ref.resource_type().as_str() {
+        "Provider" => UnixSubjectRecord::provider(
             subject_ref,
             subject_uid,
             ResourceRef::parse("Zone/dev").unwrap(),
             expected_peer,
             provider_generation,
         )
-        .unwrap()
-    } else {
-        UnixSubjectConfig::host(
+        .unwrap(),
+        "Guest" => UnixSubjectRecord::guest(
             subject_ref,
             subject_uid,
             ResourceRef::parse("Zone/dev").unwrap(),
@@ -286,10 +286,19 @@ async fn admit_with_writer_pause(
         )
         .unwrap()
         .with_provider(provider_ref, provider_generation)
+        .unwrap(),
+        _ => UnixSubjectRecord::host(
+            subject_ref,
+            subject_uid,
+            ResourceRef::parse("Zone/dev").unwrap(),
+            expected_peer,
+        )
         .unwrap()
+        .with_provider(provider_ref, provider_generation)
+        .unwrap(),
     }
     .with_controller_generation(ControllerGeneration::new(CONTROLLER_GENERATION).unwrap());
-    registrar.register_unix_subject(subject_config).unwrap();
+    registrar.install_test_unix_subject(subject_config).unwrap();
     let verified_peer = VerifiedUnixPeer::verify_seqpacket(&proof_socket).unwrap();
     let session = registrar
         .component_session_acceptor(policy, verified_peer)
@@ -340,7 +349,7 @@ fn bus_with_config(config: BusConfig) -> (ZoneBus, d2b_bus::ZoneRegistrar) {
         ),
         ("Host/alice", "22222222-2222-4222-8222-222222222222"),
         ("Provider/audit", "33333333-3333-4333-8333-333333333333"),
-        ("Host/bob", "44444444-4444-4444-8444-444444444444"),
+        ("Guest/bob", "44444444-4444-4444-8444-444444444444"),
     ]
     .into_iter()
     .map(|(subject, uid)| BoundSubject {
@@ -567,7 +576,7 @@ async fn admitted_sessions_route_resource_and_diagnostic_calls_and_revoke_lifecy
     let (audit_caller, _, audit_caller_echo) = admit(
         &registrar,
         policy(ServicePackage::AuditV3, EndpointPurpose::AuditExport, 1),
-        "Host/bob",
+        "Guest/bob",
         "44444444-4444-4444-8444-444444444444",
         "Provider/audit",
         [SessionVerb::AuditExport],

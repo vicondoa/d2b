@@ -119,12 +119,6 @@ d2b_bus::router::ResourceQuery::method:filters
 d2b_bus::router::ResourceQuery::method:new
 d2b_bus::router::ResourceQuery::method:resource_names
 d2b_bus::router::ResourceQuery::method:resource_types
-d2b_bus::router::UnixSubjectConfig
-d2b_bus::router::UnixSubjectConfig::method:guest
-d2b_bus::router::UnixSubjectConfig::method:host
-d2b_bus::router::UnixSubjectConfig::method:provider
-d2b_bus::router::UnixSubjectConfig::method:with_controller_generation
-d2b_bus::router::UnixSubjectConfig::method:with_provider
 d2b_bus::router::ZoneBus
 d2b_bus::router::ZoneBus::method:mark_policy_unavailable
 d2b_bus::router::ZoneBus::method:new
@@ -137,7 +131,6 @@ d2b_bus::router::ZoneRegistrar::method:component_session_acceptor
 d2b_bus::router::ZoneRegistrar::method:disconnect_component_session
 d2b_bus::router::ZoneRegistrar::method:reconnect_component_session
 d2b_bus::router::ZoneRegistrar::method:register_component_session
-d2b_bus::router::ZoneRegistrar::method:register_unix_subject
 d2b_bus::router::ZoneRegistrar::method:revoke
 d2b_bus::streams::DEFAULT_MAX_AGGREGATE_BYTES
 d2b_bus::streams::DEFAULT_MAX_FRAME_BYTES

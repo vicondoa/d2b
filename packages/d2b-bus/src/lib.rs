@@ -4,6 +4,9 @@
 //! A Zone runtime must own the single registration authority and provide
 //! authenticated session claims before any route becomes reachable.
 
+#[cfg(test)]
+extern crate self as d2b_bus;
+
 pub mod authorization;
 pub mod operations;
 pub mod registry;
@@ -22,6 +25,9 @@ pub use registry::{
 pub use router::{
     BusClock, BusConfig, BusError, BusEvent, BusFailureReason, BusIngress, BusObserver, BusStream,
     ComponentSessionAdmission, DeliveredInvocation, DeliveredStream, ManualClock, NoopBusObserver,
-    ResourceCall, ResourceFilter, ResourceQuery, UnixSubjectConfig, ZoneBus, ZoneRegistrar,
+    ResourceCall, ResourceFilter, ResourceQuery, ZoneBus, ZoneRegistrar,
 };
 pub use streams::{IncomingStream, ReceivedFrame, StreamError, StreamLimits, StreamName};
+
+#[cfg(test)]
+mod session_seam_tests;
