@@ -484,14 +484,14 @@ core Operation ledger, and independent external observation.
 
 | Field | Value |
 | --- | --- |
-| Dependency/owner | Process Providers + benchmark owner |
+| Dependency/owner | ADR046-store-002; Process Providers + benchmark owner |
 | Current source | `d2bd/src/supervisor/dag.rs`, `pidfd.rs`, unsafe-local blocked supervisor, guest exec runner |
 | Reuse action | adapt |
 | Destination | `packages/d2b-controller-toolkit/benches/reaction.rs`, Process Provider integration tests |
 | Detailed design | Commit-to-handler/launch fast path, nonblocking watch, parallel ready resources |
 | Integration | Resource store → bus/session → controller → Process effect/status |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
-| Validation | Hard <=5 ms/<=20 ms p95 gates and 1/10/100 Process concurrency |
+| Validation | Hard <=5 ms/<=20 ms p95 gates and 1/10/100 Process concurrency against the accepted production backend and watch dispatcher |
 | Removal proof | Not applicable |
 | Implementation state | Planned |
 | Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |

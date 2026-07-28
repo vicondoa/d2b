@@ -84,7 +84,7 @@
     {
       "dependsOn" : [],
       "path" : "docs/specs/ADR-046-decision-register.md",
-      "sha256" : "7b07e1cf75f058b4f04ca93cc3bccd9fae1b52f99ffb12375836b872d78bec71",
+      "sha256" : "9d2fd322b3a557116458350d6d337d50970ae97dda2d6439acfc05e4e9ccc18c",
       "specId" : "ADR-046-decision-register",
       "status" : "Accepted",
       "supersedes" : null,
@@ -112,7 +112,7 @@
         "ADR-046-zone-routing"
       ],
       "path" : "docs/specs/ADR-046-feasibility-and-spikes.md",
-      "sha256" : "39cc4866fc39b973caa8a244c5fa51a7bf83abe0ddc53c4504f9d665a293c2a5",
+      "sha256" : "76c514283128f42925a6bd6d0105aa0b6f7ce11440b19227292c80418ae8cf72",
       "specId" : "ADR-046-feasibility-and-spikes",
       "status" : "Accepted",
       "supersedes" : null,
@@ -879,7 +879,7 @@
         "ADR-046-resource-store-redb"
       ],
       "path" : "docs/specs/ADR-046-resource-reconciliation.md",
-      "sha256" : "868fa2391cd69a0404d39221919e5774fc38f82b6e716ac51b0bdfd2ba895c93",
+      "sha256" : "453ee823ebdfe5ef61d73486f512777c3f9f58842d1ae701d48a6c2c6e8f53d5",
       "specId" : "ADR-046-resource-reconciliation",
       "status" : "Accepted",
       "supersedes" : null,
@@ -894,7 +894,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-resource-store-redb.md",
-      "sha256" : "4ebdb572f981e6ce6eda6f16e8389fded87168e8fe2a9a01156b85c8fd916032",
+      "sha256" : "6d4e50a8106d59c716533364e89373a0d2a0698f4e0f8f75d0e3ccfb81c57e5a",
       "specId" : "ADR-046-resource-store-redb",
       "status" : "Accepted",
       "supersedes" : null,
@@ -1207,7 +1207,7 @@
         "ADR-046-zone-routing"
       ],
       "path" : "docs/specs/ADR-046-validation-and-delivery.md",
-      "sha256" : "4d70a0f1ab3959910385eb3da9816c373830d72192d9efe7cc5868992cf3eeee",
+      "sha256" : "54cef1f5fd4673f036e7efaa534112da2a8ea529bde859ffa0c55037e8c3cb07",
       "specId" : "ADR-046-validation-and-delivery",
       "status" : "Accepted",
       "supersedes" : "This repository's current `AGENTS.md` \"Panel review\" phase-gate as the *sole* review mechanism for ADR 0046 work (extended, not replaced, per §12); ad hoc per-agent validation ordering for ADR 0046 implementation",

@@ -2,7 +2,7 @@
   "adr" : "0046",
   "artifactKind" : "d2b-adr-implementation-graph",
   "counts" : {
-    "edges" : 1948,
+    "edges" : 1949,
     "maxTopologicalRank" : 22,
     "nodes" : 600,
     "specNodes" : 55,
@@ -7650,6 +7650,11 @@
     {
       "from" : "ADR046-reconcile-002",
       "to" : "ADR046-reconcile-001",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-reconcile-003",
+      "to" : "ADR046-store-002",
       "type" : "work-item-depends-on"
     },
     {
@@ -15492,7 +15497,7 @@
       "id" : "ADR046-feasibility-001",
       "kind" : "work-item",
       "owner" : "W0 shared contract root; store/reconciliation integrator",
-      "parallelGroup" : "wi:resource-store-backend:w1",
+      "parallelGroup" : "wi:resource-store-feasibility:w1",
       "prerequisites" : [
         "ADR-046-resource-store-redb"
       ],
@@ -19049,18 +19054,19 @@
       "entryContracts" : [
         "ADR-046-resource-reconciliation"
       ],
-      "exitGate" : "ADR046-W1 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
+      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-reconcile-003",
       "kind" : "work-item",
-      "owner" : "Process Providers + benchmark owner",
-      "parallelGroup" : "wi:ADR-046-resource-reconciliation",
+      "owner" : "ADR046-store-002; Process Providers + benchmark owner",
+      "parallelGroup" : "wi:reconciliation-real-backend:w5",
       "prerequisites" : [
-        "ADR-046-resource-reconciliation"
+        "ADR-046-resource-reconciliation",
+        "ADR046-store-002"
       ],
       "specId" : "ADR-046-resource-reconciliation",
-      "topologicalRank" : 6,
-      "validation" : "Hard <=5 ms/<=20 ms p95 gates and 1/10/100 Process concurrency",
-      "wave" : "W1"
+      "topologicalRank" : 7,
+      "validation" : "Hard <=5 ms/<=20 ms p95 gates and 1/10/100 Process concurrency against the accepted production backend and watch dispatcher",
+      "wave" : "W5"
     },
     {
       "blockers" : [],
@@ -21612,11 +21618,11 @@
       "entryContracts" : [
         "ADR-046-resource-store-redb"
       ],
-      "exitGate" : "ADR046-W1 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
+      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-store-002",
       "kind" : "work-item",
       "owner" : "ADR046-store-004; ADR046-feasibility-001; watch/reconciliation integrator",
-      "parallelGroup" : "wi:resource-store-backend:w1",
+      "parallelGroup" : "wi:resource-store-watch:w5",
       "prerequisites" : [
         "ADR-046-resource-store-redb",
         "ADR046-feasibility-001",
@@ -21625,7 +21631,7 @@
       "specId" : "ADR-046-resource-store-redb",
       "topologicalRank" : 6,
       "validation" : "SPIKE-02 latency evidence and a corrected SPIKE-01 rerun passing the unchanged whole-process <=24 MiB gate with no baseline subtraction; deterministic watch/compaction/disconnect/fan-in tests; global-budget exhaustion and typed-admission-backpressure tests; deterministic slow-watcher eviction/resume tests; saturation-signal tests for current registrations, budget used/capacity, admission rejections, slow-watcher evictions, and replay work",
-      "wave" : "W1"
+      "wave" : "W5"
     },
     {
       "blockers" : [],
@@ -21659,11 +21665,11 @@
       "entryContracts" : [
         "ADR-046-resource-store-redb"
       ],
-      "exitGate" : "ADR046-W1 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
+      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-store-004",
       "kind" : "work-item",
       "owner" : "ADR046-store-001; ADR046-feasibility-001; store backend integrator",
-      "parallelGroup" : "wi:resource-store-backend:w1",
+      "parallelGroup" : "wi:resource-store-backend:w5",
       "prerequisites" : [
         "ADR-046-resource-store-redb",
         "ADR046-feasibility-001",
@@ -21671,8 +21677,8 @@
       ],
       "specId" : "ADR-046-resource-store-redb",
       "topologicalRank" : 5,
-      "validation" : "Corrected SPIKE-01 evidence passing the unchanged whole-process <=24 MiB gate with no baseline subtraction; range-seek tests proving older revisions and envelopes are neither scanned nor decoded; shared immutable ChangeBatch fan-out tests; integration tests for the exported watch-budget saturation snapshot (current registrations, budget used/capacity, admission rejections, slow-watcher evictions, replay work); conformance tests proving verified-only mutation, no independent write path, and the required structural and atomic checks; security review of each registered backend; unit/property/fault tests and the hard 10,000-resource/100-watch benchmark; owned-fd and `FD_CLOEXEC` checks for direct and `SCM_RIGHTS` receipt plus fork/exec inheritance probes; exact dependency/feature-policy lint; queue/pool constant assertions; paused-clock read-expiry tests; no reduced-durability call-site lint",
-      "wave" : "W1"
+      "validation" : "Corrected SPIKE-01 evidence passing the unchanged whole-process <=24 MiB gate with no baseline subtraction; range-seek tests proving older revisions and envelopes are neither scanned nor decoded; shared immutable ChangeBatch fan-out tests; backend-signal tests for revision range seeks, replay rows scanned and decoded, shared immutable batches, fan-out references, and writer queue depth/capacity; conformance tests proving verified-only mutation, no independent write path, and the required structural and atomic checks; security review of each registered backend; unit/property/fault tests and the hard 10,000-resource/100-watch benchmark; owned-fd and `FD_CLOEXEC` checks for direct and `SCM_RIGHTS` receipt plus fork/exec inheritance probes; exact dependency/feature-policy lint; queue/pool constant assertions; paused-clock read-expiry tests; no reduced-durability call-site lint",
+      "wave" : "W5"
     },
     {
       "blockers" : [],
@@ -24686,11 +24692,11 @@
         "W1-reconcile-and-bus",
         "wi:ADR-046-componentsession-and-bus",
         "wi:ADR-046-resource-reconciliation",
-        "wi:resource-store-backend:w1"
+        "wi:resource-store-feasibility:w1"
       ],
       "specCount" : 2,
       "wave" : "W1",
-      "workItemCount" : 9
+      "workItemCount" : 6
     },
     {
       "parallelGroups" : [
@@ -24736,11 +24742,14 @@
         "wi:ADR-046-resources-zone-control",
         "wi:ADR-046-telemetry-audit-and-support",
         "wi:core-config-hub:w5",
-        "wi:resource-store-integration:w5"
+        "wi:reconciliation-real-backend:w5",
+        "wi:resource-store-backend:w5",
+        "wi:resource-store-integration:w5",
+        "wi:resource-store-watch:w5"
       ],
       "specCount" : 7,
       "wave" : "W5",
-      "workItemCount" : 143
+      "workItemCount" : 146
     },
     {
       "parallelGroups" : [

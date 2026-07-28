@@ -5258,7 +5258,7 @@
     {
       "currentSource" : "`d2bd/src/supervisor/dag.rs`, `pidfd.rs`, unsafe-local blocked supervisor, guest exec runner",
       "dataMigration" : "None - full d2b 3.0 reset; no prior state to migrate",
-      "dependencyOwner" : "Process Providers + benchmark owner",
+      "dependencyOwner" : "ADR046-store-002; Process Providers + benchmark owner",
       "destination" : "`packages/d2b-controller-toolkit/benches/reaction.rs`, Process Provider integration tests",
       "detailedDesign" : "Commit-to-handler/launch fast path, nonblocking watch, parallel ready resources",
       "evidence" : "The complete Destination and Validation obligations above have not both been verified in the indexed tree.",
@@ -5269,7 +5269,7 @@
       "reuseSource" : null,
       "specId" : "ADR-046-resource-reconciliation",
       "specPath" : "docs/specs/ADR-046-resource-reconciliation.md",
-      "validation" : "Hard <=5 ms/<=20 ms p95 gates and 1/10/100 Process concurrency",
+      "validation" : "Hard <=5 ms/<=20 ms p95 gates and 1/10/100 Process concurrency against the accepted production backend and watch dispatcher",
       "workItemId" : "ADR046-reconcile-003"
     },
     {
@@ -7122,7 +7122,7 @@
       "reuseSource" : null,
       "specId" : "ADR-046-resource-store-redb",
       "specPath" : "docs/specs/ADR-046-resource-store-redb.md",
-      "validation" : "Corrected SPIKE-01 evidence passing the unchanged whole-process <=24 MiB gate with no baseline subtraction; range-seek tests proving older revisions and envelopes are neither scanned nor decoded; shared immutable ChangeBatch fan-out tests; integration tests for the exported watch-budget saturation snapshot (current registrations, budget used/capacity, admission rejections, slow-watcher evictions, replay work); conformance tests proving verified-only mutation, no independent write path, and the required structural and atomic checks; security review of each registered backend; unit/property/fault tests and the hard 10,000-resource/100-watch benchmark; owned-fd and `FD_CLOEXEC` checks for direct and `SCM_RIGHTS` receipt plus fork/exec inheritance probes; exact dependency/feature-policy lint; queue/pool constant assertions; paused-clock read-expiry tests; no reduced-durability call-site lint",
+      "validation" : "Corrected SPIKE-01 evidence passing the unchanged whole-process <=24 MiB gate with no baseline subtraction; range-seek tests proving older revisions and envelopes are neither scanned nor decoded; shared immutable ChangeBatch fan-out tests; backend-signal tests for revision range seeks, replay rows scanned and decoded, shared immutable batches, fan-out references, and writer queue depth/capacity; conformance tests proving verified-only mutation, no independent write path, and the required structural and atomic checks; security review of each registered backend; unit/property/fault tests and the hard 10,000-resource/100-watch benchmark; owned-fd and `FD_CLOEXEC` checks for direct and `SCM_RIGHTS` receipt plus fork/exec inheritance probes; exact dependency/feature-policy lint; queue/pool constant assertions; paused-clock read-expiry tests; no reduced-durability call-site lint",
       "workItemId" : "ADR046-store-004"
     },
     {
