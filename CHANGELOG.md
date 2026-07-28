@@ -39,7 +39,7 @@ deprecations ship one minor release before removal.
   reconnect handling with redacted handshake and record diagnostics. Added Unix
   seqpacket, stream, socketpair, and vsock adapters with consumed
   peer-to-subject mapping, exact descriptor identity, multi-scope attachment
-  credits, and fail-closed cleanup.
+  credits, and fail-closed transport and socket-activation descriptor cleanup.
 
 - Added the test-only, production-unwired async controller toolkit and core
   reconciliation engine with

@@ -145,15 +145,21 @@ fn consume_environment(
     let listen_pid = env::var("LISTEN_PID").ok();
     let listen_fds = env::var("LISTEN_FDS").ok();
     let listen_fdnames = env::var("LISTEN_FDNAMES").ok();
+    let listen_fds_first_fd = env::var("LISTEN_FDS_FIRST_FD").ok();
+    // Adopt the advertised descriptors before validating the captured PID so
+    // malformed activation state cannot strand unowned descriptors.
+    envmnt::set("LISTEN_PID", std::process::id().to_string());
     let mut source = ListenFd::from_env();
     envmnt::remove("LISTEN_PID");
     envmnt::remove("LISTEN_FDS");
     envmnt::remove("LISTEN_FDNAMES");
+    envmnt::remove("LISTEN_FDS_FIRST_FD");
     let names = match validate_environment_values(
         expected_names,
         listen_pid.as_deref(),
         listen_fds.as_deref(),
         listen_fdnames.as_deref(),
+        listen_fds_first_fd.as_deref(),
         std::process::id(),
     ) {
         Ok(names) => names,
@@ -197,6 +203,7 @@ fn validate_environment_values(
     listen_pid: Option<&str>,
     listen_fds: Option<&str>,
     listen_fdnames: Option<&str>,
+    listen_fds_first_fd: Option<&str>,
     current_pid: u32,
 ) -> Result<Vec<String>, SystemdActivationError> {
     let expected = expected_names.iter().copied().collect::<BTreeSet<_>>();
@@ -210,6 +217,7 @@ fn validate_environment_values(
         || names.iter().map(String::as_str).collect::<BTreeSet<_>>() != expected
         || listen_pid != Some(current_pid.as_str())
         || listen_fds.and_then(|value| value.parse::<usize>().ok()) != Some(names.len())
+        || listen_fds_first_fd.is_some_and(|value| value != "3")
     {
         return Err(SystemdActivationError::InvalidEnvironment);
     }
@@ -242,7 +250,11 @@ fn prepare_listener(fd: &OwnedFd) -> Result<(), SystemdActivationError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::{
+        os::fd::AsRawFd,
+        process::Command,
+        sync::atomic::{AtomicU64, Ordering},
+    };
 
     use rustix::{
         io::fcntl_setfd,
@@ -271,11 +283,25 @@ mod tests {
         let expected = "component-session";
         let pid = 42;
         assert_eq!(
-            validate_environment_values(&[expected], Some("42"), Some("1"), Some(expected), pid),
+            validate_environment_values(
+                &[expected],
+                Some("42"),
+                Some("1"),
+                Some(expected),
+                None,
+                pid,
+            ),
             Ok(vec![expected.to_owned()])
         );
         assert_eq!(
-            validate_environment_values(&[expected], Some("42"), Some("2"), Some(expected), pid),
+            validate_environment_values(
+                &[expected],
+                Some("42"),
+                Some("2"),
+                Some(expected),
+                None,
+                pid,
+            ),
             Err(SystemdActivationError::InvalidEnvironment)
         );
         assert_eq!(
@@ -284,6 +310,18 @@ mod tests {
                 Some("42"),
                 Some("2"),
                 Some("component-session:component-session"),
+                None,
+                pid,
+            ),
+            Err(SystemdActivationError::InvalidEnvironment)
+        );
+        assert_eq!(
+            validate_environment_values(
+                &[expected],
+                Some("42"),
+                Some("1"),
+                Some(expected),
+                Some("9"),
                 pid,
             ),
             Err(SystemdActivationError::InvalidEnvironment)
@@ -346,6 +384,50 @@ mod tests {
         assert_eq!(
             claim_once(&consumed),
             Err(SystemdActivationError::AlreadyConsumed)
+        );
+    }
+
+    #[test]
+    fn invalid_environment_closes_advertised_descriptors() {
+        const HELPER: &str = "D2B_ACTIVATION_CLOSE_HELPER";
+        if env::var_os(HELPER).is_some() {
+            let inherited_fd = env::var("D2B_ACTIVATION_CLOSE_FD")
+                .unwrap()
+                .parse()
+                .unwrap();
+            assert!(matches!(
+                consume_environment(&["component-session"]),
+                Err(SystemdActivationError::InvalidEnvironment)
+            ));
+            assert_eq!(
+                nix::unistd::close(inherited_fd),
+                Err(nix::errno::Errno::EBADF)
+            );
+            return;
+        }
+
+        let listener = unix_listener(SocketType::SEQPACKET);
+        fcntl_setfd(&listener, FdFlags::empty()).expect("inherit listener in helper");
+        let inherited_fd = listener.as_raw_fd();
+        let output = Command::new(env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "systemd::tests::invalid_environment_closes_advertised_descriptors",
+                "--nocapture",
+            ])
+            .env(HELPER, "1")
+            .env("D2B_ACTIVATION_CLOSE_FD", inherited_fd.to_string())
+            .env("LISTEN_PID", u32::MAX.to_string())
+            .env("LISTEN_FDS", "1")
+            .env("LISTEN_FDNAMES", "component-session")
+            .env("LISTEN_FDS_FIRST_FD", inherited_fd.to_string())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
         );
     }
 }
