@@ -56,6 +56,13 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
+- Made the capability mint-surface policy gate render each package serially in
+  isolation, prove every rustdoc all-items entry has a parseable page, and
+  fail closed on missing required signatures or partial documentation.
+
+- Strengthened cancellation publication race coverage to prove both activity
+  and response state remain locked until their correlated entries are visible.
+
 - Made the canonical spike-measurement policy guard cover all seven result
   rows, registered qualitative evidence summaries, and a global inventory of
   measurement-shaped fragments under `docs/**` and `CHANGELOG.md`. Per-class

@@ -8,5 +8,6 @@ publish = false
 members = ["opaque-claims"]
 
 [dependencies]
+d2b-bus = { path = "../../.." }
 d2b-session = { path = "../../../../d2b-session" }
 opaque-claims = { path = "opaque-claims" }
