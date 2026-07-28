@@ -27,7 +27,7 @@ use d2b_session::{
     SessionEngine, TransportDescriptor, TransportError, TransportEvidence, TransportPacket,
     ttrpc_request_id, ttrpc_stream_id,
 };
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 const PROVIDER_GENERATION: u64 = 2;
 const CONTROLLER_GENERATION: u64 = 3;
@@ -796,6 +796,7 @@ async fn malformed_responses_release_every_correlation_slot() {
         1,
         "Provider/system-core",
     );
+    let (release_remote, hold_remote) = oneshot::channel();
     let remote_task = tokio::spawn(async move {
         for _ in 0..MALFORMED_RESPONSES {
             let _ = remote.receive_ttrpc().await.unwrap();
@@ -807,6 +808,7 @@ async fn malformed_responses_release_every_correlation_slot() {
             .send_ttrpc(ttrpc_frame(stream_id, b"healthy"))
             .await
             .unwrap();
+        let _ = hold_remote.await;
     });
 
     for index in 0..MALFORMED_RESPONSES {
@@ -837,6 +839,7 @@ async fn malformed_responses_release_every_correlation_slot() {
         .await
         .unwrap();
     assert!(response.as_bytes().ends_with(b"healthy"));
+    let _ = release_remote.send(());
     remote_task.await.unwrap();
 
     registrar

@@ -450,15 +450,36 @@ async fn run_writer(
     failures: mpsc::Sender<SessionError>,
     timeout: Duration,
 ) {
+    let mut normal_open = true;
+    let mut priority_open = true;
     loop {
-        let command = tokio::select! {
-            biased;
-            command = priority.recv() => command,
-            command = writes.recv() => command,
+        enum WriterInput {
+            Normal(Option<WriterCommand>),
+            Priority(Option<WriterCommand>),
+        }
+        let input = match (normal_open, priority_open) {
+            (true, true) => tokio::select! {
+                biased;
+                command = priority.recv() => WriterInput::Priority(command),
+                command = writes.recv() => WriterInput::Normal(command),
+            },
+            (true, false) => WriterInput::Normal(writes.recv().await),
+            (false, true) => WriterInput::Priority(priority.recv().await),
+            (false, false) => {
+                let _ = writer.close().await;
+                return;
+            }
         };
-        let Some(command) = command else {
-            let _ = writer.close().await;
-            return;
+        let command = match input {
+            WriterInput::Normal(Some(command)) | WriterInput::Priority(Some(command)) => command,
+            WriterInput::Normal(None) => {
+                normal_open = false;
+                continue;
+            }
+            WriterInput::Priority(None) => {
+                priority_open = false;
+                continue;
+            }
         };
         match command {
             WriterCommand::Batch {
