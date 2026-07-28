@@ -1,0 +1,1 @@
+  *) echo "clean|clean|worktrees|teardown <slice>|assert <n>|report}" >&2; exit 2 ;;

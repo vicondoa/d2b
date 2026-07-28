@@ -1,0 +1,16 @@
+[package]
+name = "d2b-bus"
+version = "0.0.0-bootstrap"
+edition = "2024"
+publish = false
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

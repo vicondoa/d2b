@@ -2,8 +2,7 @@
 # tests/test-proofs.sh - `make test-proofs`: clippy + test the standalone proof
 # crates under proofs/ (separate Cargo workspaces, not members of packages/).
 #
-#   * proofs/chunked-stdio-conformance
-#   * proofs/w0-ch-connect-proof
+#   Discovery is automatic over proofs/*/Cargo.toml; an empty tree fails closed.
 #
 # These were previously only exercised by the hand-rolled pr-cargo-workspace CI
 # job; they now live behind a make target so CI and local runs share one path.
@@ -60,13 +59,25 @@ if command -v rustup >/dev/null 2>&1; then
   rustup component add --toolchain "$RUSTUP_TOOLCHAIN" clippy
 fi
 
+// discovery is by directory, not by a hardcoded list: a hardcoded list paired
+// with a silent "absent" skip lets a renamed or never-created proof crate pass
+// the gate while executing nothing. Every proofs/*/Cargo.toml runs, and an
+// empty proofs/ tree fails closed rather than reporting success over zero work.
 rc=0
-for proof in chunked-stdio-conformance w0-ch-connect-proof; do
+proofs=()
+for manifest in "$ROOT"/proofs/*/Cargo.toml; do
+  [ -f "$manifest" ] || continue
+  proofs+=("$(basename "$(dirname "$manifest")")")
+done
+
+if [ "${#proofs[@]}" -eq 0 ]; then
+  fail "no proof crates discovered under proofs/*/Cargo.toml"
+  exit 1
+fi
+
+log "discovered ${#proofs[@]} proof crate(s): ${proofs[*]}"
+for proof in "${proofs[@]}"; do
   manifest="$ROOT/proofs/$proof/Cargo.toml"
-  if [ ! -f "$manifest" ]; then
-    log "  SKIP: proofs/$proof (absent)"
-    continue
-  fi
   log "--> proofs/$proof: clippy + test"
   if cargo clippy --manifest-path "$manifest" --all-targets -- -D warnings \
     && cargo test --manifest-path "$manifest"; then

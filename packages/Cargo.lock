@@ -849,6 +849,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-bus"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "d2b-clipd"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -1190,6 +1199,24 @@ dependencies = [
  "d2b-contracts",
  "d2b-controller-toolkit",
  "redb",
+]
+
+[[package]]
+name = "d2b-session"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "d2b-session-unix"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "d2b-session",
+ "serde_json",
 ]
 
 [[package]]
