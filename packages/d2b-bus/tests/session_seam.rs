@@ -127,7 +127,7 @@ impl d2b_session::TransportWriter for TestTransportWriter {
         if let Some(pause) = &self.writer_pause {
             if !pause.entered.swap(true, Ordering::AcqRel) {
                 pause.notify.notify_waiters();
-                std::future::pending::<()>().await;
+                pause.release.notified().await;
             }
             pause.sent.fetch_add(1, Ordering::AcqRel);
         }
@@ -147,6 +147,7 @@ struct WriterPause {
     entered: AtomicBool,
     sent: AtomicUsize,
     notify: Notify,
+    release: Notify,
 }
 
 impl WriterPause {
@@ -1002,7 +1003,7 @@ async fn uncorrelatable_response_terminates_every_waiter() {
 }
 
 #[tokio::test]
-async fn revocation_fences_an_admitted_batch_before_transport_send() {
+async fn revocation_waits_for_an_admitted_batch_before_returning() {
     let (_bus, mut registrar) = bus();
     let pause = Arc::new(WriterPause::default());
     let (endpoint, _remote, endpoint_echo) = admit_with_writer_pause(
@@ -1059,13 +1060,18 @@ async fn revocation_fences_an_admitted_batch_before_transport_send() {
     )
     .await
     .expect("request batch must reach the paused writer");
-    registrar
-        .disconnect_component_session(endpoint)
-        .await
-        .unwrap();
+    let mut revocation = Box::pin(registrar.disconnect_component_session(endpoint));
+    tokio::select! {
+        result = &mut revocation => {
+            panic!("revocation returned before admitted transport send: {result:?}")
+        }
+        () = tokio::task::yield_now() => {}
+    }
+    pause.release.notify_one();
+    revocation.await.unwrap();
 
     assert!(invocation.await.unwrap().is_err());
-    assert_eq!(pause.sent.load(Ordering::Acquire), 0);
+    assert_eq!(pause.sent.load(Ordering::Acquire), 1);
     endpoint_echo.abort();
     caller_echo.abort();
 }

@@ -215,6 +215,7 @@ d2b_session::BootstrapPsk
 d2b_session::BootstrapPsk::method:new
 d2b_session::Cancellation
 d2b_session::Cancellation::method:cancel
+d2b_session::Cancellation::method:cancel_and_wait
 d2b_session::Cancellation::method:cancelled
 d2b_session::Cancellation::method:is_cancelled
 d2b_session::ComponentSessionDriver

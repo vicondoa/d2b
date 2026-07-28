@@ -1,8 +1,9 @@
 use std::{
     collections::BTreeMap,
     fmt,
+    future::Future,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -17,6 +18,15 @@ use crate::{Result, SessionError};
 struct CancellationInner {
     cancelled: AtomicBool,
     notify: Notify,
+    admission: Mutex<AdmissionState>,
+    drained: Notify,
+}
+
+#[derive(Default)]
+struct AdmissionState {
+    revoked: bool,
+    ordered_revocation: bool,
+    active: usize,
 }
 
 #[derive(Clone)]
@@ -30,16 +40,59 @@ impl Cancellation {
             inner: Arc::new(CancellationInner {
                 cancelled: AtomicBool::new(false),
                 notify: Notify::new(),
+                admission: Mutex::new(AdmissionState::default()),
+                drained: Notify::new(),
             }),
         }
     }
 
     pub fn cancel(&self) -> bool {
-        let first = !self.inner.cancelled.swap(true, Ordering::AcqRel);
+        self.cancel_with_order(false)
+    }
+
+    fn cancel_with_order(&self, ordered_revocation: bool) -> bool {
+        let first = {
+            let mut admission = self
+                .inner
+                .admission
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            admission.revoked = true;
+            let first = !self.inner.cancelled.swap(true, Ordering::AcqRel);
+            if first {
+                admission.ordered_revocation = ordered_revocation;
+            }
+            first
+        };
         if first {
             self.inner.notify.notify_waiters();
         }
         first
+    }
+
+    /// Revoke future write admissions and wait for the writer to acknowledge
+    /// every admission that preceded revocation.
+    pub fn cancel_and_wait(&self) -> impl Future<Output = bool> + Send + 'static {
+        let first = self.cancel_with_order(true);
+        let cancellation = self.clone();
+        async move {
+            loop {
+                let drained = cancellation.inner.drained.notified();
+                tokio::pin!(drained);
+                drained.as_mut().enable();
+                if cancellation
+                    .inner
+                    .admission
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .active
+                    == 0
+                {
+                    return first;
+                }
+                drained.as_mut().await;
+            }
+        }
     }
 
     pub fn is_cancelled(&self) -> bool {
@@ -53,6 +106,53 @@ impl Cancellation {
                 return;
             }
             notified.await;
+        }
+    }
+
+    pub(crate) fn admit_write(&self) -> Option<WriteAdmission> {
+        let mut admission = self
+            .inner
+            .admission
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if admission.revoked {
+            return None;
+        }
+        admission.active = admission
+            .active
+            .checked_add(1)
+            .expect("bounded writer admission count cannot overflow");
+        Some(WriteAdmission {
+            inner: Arc::clone(&self.inner),
+        })
+    }
+
+    pub(crate) fn preserves_admitted_write(&self) -> bool {
+        self.inner
+            .admission
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .ordered_revocation
+    }
+}
+
+pub(crate) struct WriteAdmission {
+    inner: Arc<CancellationInner>,
+}
+
+impl Drop for WriteAdmission {
+    fn drop(&mut self) {
+        let drained = {
+            let mut admission = self
+                .inner
+                .admission
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            admission.active -= 1;
+            admission.active == 0 && admission.revoked
+        };
+        if drained {
+            self.inner.drained.notify_waiters();
         }
     }
 }

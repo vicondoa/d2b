@@ -2,6 +2,8 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
+    future::Future,
+    pin::Pin,
     sync::{Arc, Mutex},
 };
 
@@ -349,11 +351,15 @@ impl core::fmt::Debug for BusResponse {
     }
 }
 
+pub(crate) type SessionInvalidation = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
+
 /// An exact generated service endpoint.
 #[async_trait]
 pub trait BusEndpoint: Send + Sync + 'static {
-    /// Invalidate correlated sends synchronously before route revocation.
-    fn invalidate_session(&self) {}
+    /// Revoke new sends synchronously and return a writer-acknowledged fence.
+    fn invalidate_session(&self) -> SessionInvalidation {
+        Box::pin(async {})
+    }
 
     /// Revalidate the source session's exact operation before dispatch.
     async fn authorize(
@@ -617,6 +623,22 @@ impl Registry {
         previous: SessionId,
         registration: SessionRegistration,
     ) -> Result<SessionId, RegistryError> {
+        self.validate_reconnect(previous, &registration)?;
+        let session = SessionId(self.next_session);
+        self.next_session = self
+            .next_session
+            .checked_add(1)
+            .ok_or(RegistryError::SessionIdExhausted)?;
+        self.remove(previous);
+        self.install(session, registration);
+        Ok(session)
+    }
+
+    pub(crate) fn validate_reconnect(
+        &self,
+        previous: SessionId,
+        registration: &SessionRegistration,
+    ) -> Result<(), RegistryError> {
         let prior = self
             .sessions
             .get(&previous)
@@ -635,17 +657,7 @@ impl Registry {
         {
             return Err(RegistryError::ReconnectGeneration);
         }
-        self.validate_registration(&registration, Some(previous))?;
-
-        let session = SessionId(self.next_session);
-        self.next_session = self
-            .next_session
-            .checked_add(1)
-            .ok_or(RegistryError::SessionIdExhausted)?;
-        prior.endpoint.invalidate_session();
-        self.remove(previous);
-        self.install(session, registration);
-        Ok(session)
+        self.validate_registration(registration, Some(previous))
     }
 
     fn validate_registration(
@@ -728,12 +740,10 @@ impl Registry {
         true
     }
 
-    pub(crate) fn invalidate(&self, session: SessionId) -> bool {
-        let Some(registered) = self.sessions.get(&session) else {
-            return false;
-        };
-        registered.endpoint.invalidate_session();
-        true
+    pub(crate) fn invalidate(&self, session: SessionId) -> Option<SessionInvalidation> {
+        self.sessions
+            .get(&session)
+            .map(|registered| registered.endpoint.invalidate_session())
     }
 
     pub(crate) fn source(&self, session: SessionId) -> Result<ResolvedSource, RegistryError> {

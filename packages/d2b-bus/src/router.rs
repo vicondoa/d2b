@@ -609,12 +609,22 @@ impl Drop for PendingCancelDeliveryLease {
 }
 
 impl BusCore {
-    fn cleanup_session(self: &Arc<Self>, session: SessionId) {
-        self.lock_registry().invalidate(session);
+    fn begin_cleanup_session(
+        self: &Arc<Self>,
+        session: SessionId,
+    ) -> Option<crate::registry::SessionInvalidation> {
+        let invalidation = self.lock_registry().invalidate(session);
         self.lock_registry().remove(session);
         let targets = self.lock_operations().cancel_session(session);
         self.streams.cancel_session(session);
         self.dispatch_cancel_targets(targets);
+        invalidation
+    }
+
+    async fn cleanup_session(self: &Arc<Self>, session: SessionId) {
+        if let Some(invalidation) = self.begin_cleanup_session(session) {
+            invalidation.await;
+        }
     }
 
     fn dispatch_cancel_targets(self: &Arc<Self>, targets: Vec<CancelDispatch>) {
@@ -1153,7 +1163,7 @@ impl ZoneRegistrar {
 
     /// Replace a session with the exact next reconnect generation.
     #[cfg(test)]
-    pub(crate) fn reconnect(
+    pub(crate) async fn reconnect(
         &mut self,
         mut previous: BusIngress,
         registration: SessionRegistration,
@@ -1165,6 +1175,13 @@ impl ZoneRegistrar {
         self.core
             .authorizer
             .authorize_connect(context, &self.core.zone)?;
+        self.core
+            .lock_registry()
+            .validate_reconnect(previous.session, &registration)?;
+        let invalidation = self.core.lock_registry().invalidate(previous.session);
+        if let Some(invalidation) = invalidation {
+            invalidation.await;
+        }
         let session = self
             .core
             .lock_registry()
@@ -1434,14 +1451,19 @@ impl ComponentActivity {
             .cloned()
     }
 
-    fn revoke(&mut self) {
+    fn revoke(&mut self) -> Vec<crate::registry::SessionInvalidation> {
         self.revoked = true;
-        for requests in self.requests.values() {
-            for request in requests {
+        self.requests
+            .values()
+            .flat_map(|requests| requests.iter())
+            .map(|request| {
                 request.valid.store(false, Ordering::Release);
-                request.write_guard.cancel();
-            }
-        }
+                let revocation = request.write_guard.cancel_and_wait();
+                Box::pin(async move {
+                    revocation.await;
+                }) as crate::registry::SessionInvalidation
+            })
+            .collect()
     }
 }
 
@@ -1494,12 +1516,17 @@ impl ComponentEndpoint {
 
 #[async_trait::async_trait]
 impl crate::registry::BusEndpoint for ComponentEndpoint {
-    fn invalidate_session(&self) {
-        let mut activity = self
+    fn invalidate_session(&self) -> crate::registry::SessionInvalidation {
+        let revocations = self
             .activity
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        activity.revoke();
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .revoke();
+        Box::pin(async move {
+            for revocation in revocations {
+                revocation.await;
+            }
+        })
     }
 
     async fn authorize(
@@ -1793,6 +1820,13 @@ impl ZoneRegistrar {
             )),
         });
         let registration = SessionRegistration::admitted(binding, routes, endpoint);
+        self.core
+            .lock_registry()
+            .validate_reconnect(previous.session, &registration)?;
+        let invalidation = self.core.lock_registry().invalidate(previous.session);
+        if let Some(invalidation) = invalidation {
+            invalidation.await;
+        }
         let session = self
             .core
             .lock_registry()
@@ -1812,7 +1846,7 @@ impl ZoneRegistrar {
         &mut self,
         registration: BusIngress,
     ) -> Result<(), BusError> {
-        self.revoke(registration)
+        self.revoke(registration).await
     }
 }
 
@@ -1859,11 +1893,11 @@ fn routes_for_admitted_session(
 
 impl ZoneRegistrar {
     /// Revoke a session, its routes, operations, and streams.
-    pub fn revoke(&mut self, mut ingress: BusIngress) -> Result<(), BusError> {
+    pub async fn revoke(&mut self, mut ingress: BusIngress) -> Result<(), BusError> {
         if !Arc::ptr_eq(&self.core, &ingress.core) || ingress.closed {
             return Err(BusError::SessionMismatch);
         }
-        self.core.cleanup_session(ingress.session);
+        self.core.cleanup_session(ingress.session).await;
         ingress.closed = true;
         Ok(())
     }
@@ -2307,7 +2341,11 @@ impl Drop for BusIngress {
             self.core
                 .observer
                 .record(BusEvent::Cleanup, BusFailureReason::Abandoned);
-            self.core.cleanup_session(self.session);
+            if let Some(invalidation) = self.core.begin_cleanup_session(self.session)
+                && let Ok(runtime) = tokio::runtime::Handle::try_current()
+            {
+                runtime.spawn(invalidation);
+            }
             self.closed = true;
         }
     }
@@ -2672,7 +2710,7 @@ mod tests {
                 .is_same_attempt(&second_attempt)
         );
 
-        activity.revoke();
+        let _ = activity.revoke();
         assert!(!second_valid.load(Ordering::Acquire));
         assert!(second_write_guard.is_cancelled());
         assert!(!activity.insert(
@@ -3124,7 +3162,7 @@ mod tests {
             Err(BusError::InvalidResourceCall)
         );
         assert_eq!(harness.endpoint.call_count(), 1);
-        harness.registrar.revoke(resource_ingress).unwrap();
+        harness.registrar.revoke(resource_ingress).await.unwrap();
 
         let unregistered = RouteKey::new(
             harness.route.zone().clone(),
@@ -3460,7 +3498,7 @@ mod tests {
             Locality::Local,
             EvidenceClass::EnrolledKk,
         );
-        list.registrar.revoke(list.endpoint_ingress).unwrap();
+        list.registrar.revoke(list.endpoint_ingress).await.unwrap();
         list.endpoint_ingress = list
             .registrar
             .register(SessionRegistration::new(
@@ -3596,6 +3634,7 @@ mod tests {
                 endpoint_ingress,
                 SessionRegistration::new(new_endpoint, vec![new_route.clone()], endpoint.clone()),
             )
+            .await
             .unwrap();
         let new_caller = context(
             "User/alice",
@@ -3611,6 +3650,7 @@ mod tests {
                 caller,
                 SessionRegistration::new(new_caller, Vec::new(), endpoint.clone()),
             )
+            .await
             .unwrap();
         assert_eq!(
             caller
@@ -3670,7 +3710,7 @@ mod tests {
         );
         let revoke = async {
             hook.reached.notified().await;
-            registrar.revoke(harness.endpoint_ingress).unwrap();
+            registrar.revoke(harness.endpoint_ingress).await.unwrap();
             hook.release.notify_one();
         };
         let (result, ()) = tokio::join!(invoke, revoke);
@@ -3711,7 +3751,7 @@ mod tests {
         );
         let revoke = async {
             hook.reached.notified().await;
-            registrar.revoke(harness.endpoint_ingress).unwrap();
+            registrar.revoke(harness.endpoint_ingress).await.unwrap();
             hook.release.notify_one();
         };
         let (result, ()) = tokio::join!(invoke, revoke);
@@ -3742,7 +3782,7 @@ mod tests {
         );
         let revoke = async {
             endpoint.started.notified().await;
-            registrar.revoke(harness.endpoint_ingress).unwrap();
+            registrar.revoke(harness.endpoint_ingress).await.unwrap();
         };
         let (result, ()) = tokio::join!(invoke, revoke);
         assert_eq!(result, Err(BusError::Cancelled));
@@ -3798,6 +3838,7 @@ mod tests {
                 }
                 registrar
                     .reconnect(harness.endpoint_ingress, replacement)
+                    .await
                     .unwrap();
                 if let Some(hook) = &hook {
                     hook.release.notify_one();
