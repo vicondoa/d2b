@@ -36,6 +36,12 @@ deprecations ship one minor release before removal.
   multi-scope attachment credits, and fail-closed cleanup; bus registration
   remains an explicit unconnected interface.
 
+- Added the async controller toolkit and core reconciliation engine with
+  store-watch relisting, bounded per-resource single-flight dispatch,
+  cross-resource concurrency, commit-gated expedited effects, serialized
+  upgrades, owner/dependency propagation, suppression, leases, and fair hint
+  admission.
+
 ### Changed
 
 - `tests/test-proofs.sh` now discovers proof crates by scanning
