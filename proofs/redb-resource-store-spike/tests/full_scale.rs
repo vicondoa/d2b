@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use redb_resource_store_spike::{
-    HintKind, Mutation, Resource, Store, StoreError, fixture_path, put_with_backpressure_retry,
-    synthetic_resource,
+    HintKind, Mutation, OracleCheckpoint, Resource, Store, StoreError, fixture_path,
+    put_with_backpressure_retry, synthetic_resource,
 };
 use tokio::sync::Barrier;
 
@@ -33,17 +33,42 @@ async fn correctness_10k_five_runs_zero_divergence() {
         let path = fixture_path(&format!("correctness-run-{run}"));
         let store = Store::open(&path).await.unwrap();
         let mut oracle = BTreeMap::new();
-        for start in (0..10_000).step_by(16) {
-            let receipts = insert_group(
+        for index in 0..10_000 {
+            let receipt = put_with_backpressure_retry(
                 &store,
-                (start..(start + 16).min(10_000)).map(synthetic_resource),
+                &format!("oracle-{index}"),
+                Mutation::create(synthetic_resource(index)),
             )
-            .await;
-            for receipt in receipts {
-                oracle.insert(receipt.resource.key.clone(), receipt.resource);
-            }
-            store.verify(&oracle).await.unwrap();
+            .await
+            .unwrap();
+            oracle.insert(receipt.resource.key.clone(), receipt.resource.clone());
+            let owner_count = u64::try_from(
+                oracle
+                    .values()
+                    .filter(|item| item.owner_uid.is_some())
+                    .count(),
+            )
+            .unwrap();
+            let producer_count = u64::try_from(
+                oracle
+                    .values()
+                    .filter(|item| item.producer_uid.is_some())
+                    .count(),
+            )
+            .unwrap();
+            store
+                .verify_transition(OracleCheckpoint {
+                    changed_resource: receipt.resource,
+                    resource_count: u64::try_from(oracle.len()).unwrap(),
+                    owner_count,
+                    producer_count,
+                    operation_count: u64::try_from(index + 1).unwrap(),
+                    revision: receipt.revision,
+                })
+                .await
+                .unwrap();
         }
+        store.verify(&oracle).await.unwrap();
         assert_eq!(oracle.len(), 10_000);
         println!(
             "correctness_run={} resources={} mutations={} divergences=0",

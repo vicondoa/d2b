@@ -12,8 +12,8 @@ pub use disk::{
     verify_crash_database,
 };
 pub use model::{
-    ChangeBatch, ChangeEntry, Mutation, Resource, ResourceKey, StoreError, StoreResult,
-    WriteReceipt, synthetic_resource,
+    ChangeBatch, ChangeEntry, Mutation, OracleCheckpoint, Resource, ResourceKey, StoreError,
+    StoreResult, WriteReceipt, synthetic_resource,
 };
 
 use std::path::{Path, PathBuf};

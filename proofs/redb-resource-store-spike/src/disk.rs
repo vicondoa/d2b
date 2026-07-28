@@ -5,12 +5,16 @@ use std::path::{Path, PathBuf};
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 use redb::backends::FileBackend;
-use redb::{Database, Durability, ReadableDatabase, ReadableTable, TableDefinition, TableHandle};
+use redb::{
+    Database, Durability, ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition,
+    TableHandle,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::codec::{KeyPart, decode, key, value};
 use crate::model::{
-    ChangeBatch, ChangeEntry, Mutation, Resource, ResourceKey, StoreError, StoreResult,
+    ChangeBatch, ChangeEntry, Mutation, OracleCheckpoint, Resource, ResourceKey, StoreError,
+    StoreResult,
 };
 use crate::schema::{
     API_SCHEMAS, CONTROLLER_INDEX, OPERATIONS, OWNER_INDEX, PRODUCER_INDEX, RESOURCES,
@@ -460,6 +464,117 @@ impl DiskStore {
         }
         Ok(())
     }
+
+    pub(crate) fn verify_transition(&self, checkpoint: &OracleCheckpoint) -> StoreResult<()> {
+        let read = self.database.begin_read().map_err(integrity)?;
+        let expected_counts = [
+            (RESOURCES, checkpoint.resource_count),
+            (TYPE_INDEX, checkpoint.resource_count),
+            (OWNER_INDEX, checkpoint.owner_count),
+            (PRODUCER_INDEX, checkpoint.producer_count),
+            (CONTROLLER_INDEX, checkpoint.resource_count),
+            (OPERATIONS, checkpoint.operation_count),
+            (REVISION_LOG, checkpoint.revision),
+            (API_SCHEMAS, 6),
+            (ZONE_LINK_CURSORS, 1),
+            (STORE_META, 1),
+        ];
+        for (definition, expected) in expected_counts {
+            let actual = read
+                .open_table(definition)
+                .map_err(integrity)?
+                .len()
+                .map_err(integrity)?;
+            if actual != expected {
+                return Err(StoreError::Integrity(format!(
+                    "{}-count-divergence:actual={actual} expected={expected}",
+                    definition.name()
+                )));
+            }
+        }
+
+        let resource = &checkpoint.changed_resource;
+        verify_point_value(
+            &read,
+            RESOURCES,
+            &resource_key_bytes(&resource.key),
+            0x0003,
+            resource,
+        )?;
+        verify_point_value(
+            &read,
+            TYPE_INDEX,
+            &type_index_key_bytes(&resource.key),
+            0x0004,
+            &resource.uid,
+        )?;
+        verify_point_value(
+            &read,
+            CONTROLLER_INDEX,
+            &key(
+                0x07,
+                &[
+                    KeyPart::Text(&resource.controller),
+                    KeyPart::Text(&resource.key.resource_type),
+                    KeyPart::Text(&resource.key.name),
+                ],
+            ),
+            0x0007,
+            &resource.uid,
+        )?;
+        if let Some(owner_uid) = &resource.owner_uid {
+            verify_point_value(
+                &read,
+                OWNER_INDEX,
+                &key(
+                    0x05,
+                    &[KeyPart::Text(owner_uid), KeyPart::Text(&resource.uid)],
+                ),
+                0x0005,
+                &OwnerIndexRecord {
+                    resource_type: resource.key.resource_type.clone(),
+                    name: resource.key.name.clone(),
+                    latest_revision: resource.revision,
+                },
+            )?;
+        }
+        if let Some(producer_uid) = &resource.producer_uid {
+            verify_point_value(
+                &read,
+                PRODUCER_INDEX,
+                &key(
+                    0x06,
+                    &[KeyPart::Text(producer_uid), KeyPart::Text(&resource.uid)],
+                ),
+                0x0006,
+                &ProducerIndexRecord {
+                    endpoint_type: resource.key.resource_type.clone(),
+                    endpoint_name: resource.key.name.clone(),
+                },
+            )?;
+        }
+        let revision_key = key(0x08, &[KeyPart::Revision(checkpoint.revision)]);
+        let log = read.open_table(REVISION_LOG).map_err(integrity)?;
+        let bytes = log
+            .get(revision_key.as_slice())
+            .map_err(integrity)?
+            .ok_or_else(|| StoreError::Integrity("missing-current-revision".to_owned()))?;
+        let batch: ChangeBatch = decode(0x0008, bytes.value())?;
+        if batch.revision != checkpoint.revision
+            || batch.entries.len() != 1
+            || batch.entries[0].resource != *resource
+        {
+            return Err(StoreError::Integrity(
+                "current-revision-batch-divergence".to_owned(),
+            ));
+        }
+        if self.meta()?.current_revision != checkpoint.revision {
+            return Err(StoreError::Integrity(
+                "store-meta-revision-divergence".to_owned(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 fn resource_key_bytes(resource_key: &ResourceKey) -> Vec<u8> {
@@ -607,6 +722,31 @@ fn verify_raw_table(
             definition.name(),
             actual.len(),
             expected.len()
+        )));
+    }
+    Ok(())
+}
+
+fn verify_point_value<T>(
+    read: &redb::ReadTransaction,
+    definition: TableDefinition<'static, &[u8], &[u8]>,
+    encoded_key: &[u8],
+    value_kind: u16,
+    expected: &T,
+) -> StoreResult<()>
+where
+    T: serde::de::DeserializeOwned + PartialEq,
+{
+    let table = read.open_table(definition).map_err(integrity)?;
+    let bytes = table
+        .get(encoded_key)
+        .map_err(integrity)?
+        .ok_or_else(|| StoreError::Integrity(format!("missing-{}", definition.name())))?;
+    let actual: T = decode(value_kind, bytes.value())?;
+    if actual != *expected {
+        return Err(StoreError::Integrity(format!(
+            "{}-point-divergence",
+            definition.name()
         )));
     }
     Ok(())

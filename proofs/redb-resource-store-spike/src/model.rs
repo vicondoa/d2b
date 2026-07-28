@@ -77,6 +77,16 @@ pub struct WriteReceipt {
     pub committed_at: Instant,
 }
 
+#[derive(Debug, Clone)]
+pub struct OracleCheckpoint {
+    pub changed_resource: Resource,
+    pub resource_count: u64,
+    pub owner_count: u64,
+    pub producer_count: u64,
+    pub operation_count: u64,
+    pub revision: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StoreError {
     Backpressure,

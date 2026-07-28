@@ -12,11 +12,11 @@ Commands set `TMPDIR=$PWD/.scratch/tmp`, `RUSTUP_TOOLCHAIN=1.94.1`,
 | --- | --- | --- |
 | 10,000 resources, 5 runs, zero oracle divergence | MEASURED-PASS | 5/5 runs, 10,000 resources and 0 divergences per run |
 | 100 watches, no misses, duplicates, or gaps | MEASURED-PASS | 21,866 ChangeBatch deliveries, 3,686 matching entries, 0 misses, 0 duplicates, 0 gaps |
-| More than half of non-conflicting storm writes use a batch larger than 1 | MEASURED-PASS | 49/50, 98% |
+| More than half of non-conflicting storm writes use a batch larger than 1 | MEASURED-PASS | 47/50, 94% |
 | All 13 crash boundaries recover atomically or refuse to open | MEASURED-PASS | 13/13; boundaries 1-11 reopened at revision 1, boundaries 12-13 reopened at revision 2 |
 | Median maximum RSS at or below 24 MiB | NOT-MEASURED | `/usr/bin/time` was absent; the fixture itself completed with 10,000 resources and 100 watches |
-| Commit-to-handler p95 at or below 5,000 us in all profiles | MEASURED-PASS | 114.536 us / 14.767 us / 114.733 us |
-| Commit-to-handler p99 reported; document any value above 20 ms | MEASURED-PASS | 134.615 us / 30.841 us / 141.162 us; none exceeded 20 ms |
+| Commit-to-handler p95 at or below 5,000 us in all profiles | MEASURED-PASS | 110.640 us / 109.250 us / 12.640 us |
+| Commit-to-handler p99 reported; document any value above 20 ms | MEASURED-PASS | 125.597 us / 123.210 us / 36.546 us; none exceeded 20 ms |
 
 No measured result requires an admission-fairness or post-commit dispatcher
 change. RSS remains unresolved and must be measured on a host providing GNU
@@ -34,12 +34,11 @@ cargo test --release --manifest-path proofs/redb-resource-store-spike/Cargo.toml
 Raw output:
 
 ```text
-Compiling redb-resource-store-spike v0.1.0 (/home/paydro/projects/d2b-w1-spike/proofs/redb-resource-store-spike)
-Finished `release` profile [optimized] target(s) in 4.55s
+Finished `release` profile [optimized] target(s) in 0.34s
 Running tests/full_scale.rs (proofs/redb-resource-store-spike/target/release/deps/full_scale-b2360e35c86d37e9)
 
 running 4 tests
-test conflict_storm_groups_at_least_half_of_non_conflicting_writes ... writers=500 targets=50 successful_non_conflicting=50 conflicts=450 grouped_batch_gt_1=49 grouped_percent=98
+test conflict_storm_groups_at_least_half_of_non_conflicting_writes ... writers=500 targets=50 successful_non_conflicting=50 conflicts=450 grouped_batch_gt_1=47 grouped_percent=94
 ok
 test correctness_10k_five_runs_zero_divergence ... correctness_run=1 resources=10000 mutations=10000 divergences=0
 correctness_run=2 resources=10000 mutations=10000 divergences=0
@@ -52,17 +51,18 @@ ok
 test watches_100_have_no_misses_duplicates_or_gaps ... watchers=100 final_revision=224 batches=21866 entries=3686 missed=0 duplicated=0 gaps=0
 ok
 
-test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 288.54s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 100.11s
 ```
 
 The correctness case compares all resources plus type, owner, producer, and
 controller indexes and the contiguous revision log against a `BTreeMap` oracle
-after each group of at most 16 independently validated mutations. The watch
-case registers 100 mixed-filter watchers while writes proceed; actor
-serialization closes the replay/live gap and empty filtered ChangeBatches
-preserve Zone revision continuity. The conflict test starts all 500 writers
-behind one barrier, gets exactly one success for each of 50 resources, and
-computes the batch percentage only over those 50 non-conflicting writes.
+after every mutation, using point values and table cardinality to establish the
+inductive transition and a complete scan at the end of each run. The watch case
+registers 100 mixed-filter watchers while writes proceed; actor serialization
+closes the replay/live gap and empty filtered ChangeBatches preserve Zone
+revision continuity. The conflict test starts all 500 writers behind one
+barrier, gets exactly one success for each of 50 resources, and computes the
+batch percentage only over those 50 non-conflicting writes.
 
 ## Crash recovery
 
@@ -128,9 +128,9 @@ cargo bench --manifest-path proofs/redb-resource-store-spike/Cargo.toml -- commi
 Raw measured percentile lines:
 
 ```text
-commit_to_handler profile=none samples=1000 p50_us=32.237 p95_us=114.536 p99_us=134.615
-commit_to_handler profile=10-writers-500-wps samples=1000 p50_us=5.444 p95_us=14.767 p99_us=30.841
-commit_to_handler profile=100-writers-2000-wps samples=1000 p50_us=82.758 p95_us=114.733 p99_us=141.162
+commit_to_handler profile=none samples=1000 p50_us=74.514 p95_us=110.640 p99_us=125.597
+commit_to_handler profile=10-writers-500-wps samples=1000 p50_us=75.370 p95_us=109.250 p99_us=123.210
+commit_to_handler profile=100-writers-2000-wps samples=1000 p50_us=5.389 p95_us=12.640 p99_us=36.546
 ```
 
 Criterion also exercised the real write, durable redb commit, actor dispatch,
@@ -139,9 +139,9 @@ configuration. Its wall-time estimates include the full write rather than only
 the requested post-commit interval:
 
 ```text
-commit_to_handler/none time: [7.6741 ms 8.6486 ms 9.6937 ms]
-commit_to_handler/10-writers-500-wps time: [2.7519 ms 2.8462 ms 2.9426 ms]
-commit_to_handler/100-writers-2000-wps time: [5.7079 ms 6.2047 ms 6.7333 ms]
+commit_to_handler/none time: [2.8120 ms 2.8586 ms 2.9060 ms]
+commit_to_handler/10-writers-500-wps time: [849.87 us 913.64 us 980.39 us]
+commit_to_handler/100-writers-2000-wps time: [523.10 us 541.30 us 560.22 us]
 ```
 
 The explicit p50/p95/p99 values use the complete 1,000 post-commit-to-receive
@@ -165,7 +165,7 @@ cargo test --manifest-path proofs/redb-resource-store-spike/Cargo.toml
 Raw summaries:
 
 ```text
-Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.06s
+Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.19s
 ```
 
 ```text

@@ -4,6 +4,7 @@ use std::time::Instant;
 
 use tokio::sync::{mpsc, oneshot};
 
+use crate::OracleCheckpoint;
 use crate::disk::{AppliedGroup, DiskReceipt, DiskStore};
 use crate::model::{ChangeBatch, Mutation, ResourceKey, StoreError, StoreResult, WriteReceipt};
 
@@ -73,6 +74,10 @@ enum Command {
     },
     Verify {
         oracle: BTreeMap<ResourceKey, crate::model::Resource>,
+        response: oneshot::Sender<StoreResult<()>>,
+    },
+    VerifyTransition {
+        checkpoint: Box<OracleCheckpoint>,
         response: oneshot::Sender<StoreResult<()>>,
     },
     CurrentRevision {
@@ -296,6 +301,18 @@ impl Store {
         receiver.await.map_err(|_| StoreError::Closed)?
     }
 
+    pub async fn verify_transition(&self, checkpoint: OracleCheckpoint) -> StoreResult<()> {
+        let (response, receiver) = oneshot::channel();
+        self.sender
+            .send(Command::VerifyTransition {
+                checkpoint: Box::new(checkpoint),
+                response,
+            })
+            .await
+            .map_err(|_| StoreError::Closed)?;
+        receiver.await.map_err(|_| StoreError::Closed)?
+    }
+
     pub async fn stats(&self) -> StoreResult<ActorStats> {
         let (response, receiver) = oneshot::channel();
         self.sender
@@ -499,6 +516,12 @@ impl Actor {
             }
             Command::Verify { oracle, response } => {
                 let _ = response.send(self.disk.verify(&oracle));
+            }
+            Command::VerifyTransition {
+                checkpoint,
+                response,
+            } => {
+                let _ = response.send(self.disk.verify_transition(&checkpoint));
             }
             Command::CurrentRevision { response } => {
                 let _ = response.send(self.disk.current_revision());
