@@ -46,7 +46,10 @@ pub use operation::{
 };
 pub use record::{ProtectedRecord, RecordProtector};
 pub use scheduler::{FairScheduler, OutboundFrame, QueueClass};
-pub use server::{SessionServerError, serve_ttrpc_services, ttrpc_request_id};
+pub use server::{
+    SessionServerError, current_handler_cancellation, rewrite_ttrpc_stream_id,
+    serve_ttrpc_services, ttrpc_request_id, ttrpc_stream_id,
+};
 pub use streams::{NamedStreamMux, StreamEvent, StreamId, StreamPhase};
 pub use transport::{OwnedTransport, TransportDescriptor, TransportError, TransportPacket};
 

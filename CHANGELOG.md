@@ -67,6 +67,11 @@ deprecations ship one minor release before removal.
   stream shedding, classified expected handshake failures without internal-bug
   labels, and redacted channel identifiers from debug output.
 
+- Propagated inbound cancellation into generated service handlers, suppressed
+  cancelled replies, dispatched pinned endpoint cancellation during revocation
+  and reconnect, and made ttrpc response correlation independent of
+  caller-selected stream identifiers.
+
 - Unified Core and toolkit controller identity, selector, trigger, registration,
   retry, and resync contracts. Core changes now drive the executor-native
   reconciliation runner through a bounded, coalescing registered-resource

@@ -349,6 +349,9 @@ impl core::fmt::Debug for BusResponse {
 /// An exact generated service endpoint.
 #[async_trait]
 pub trait BusEndpoint: Send + Sync + 'static {
+    /// Invalidate correlated sends synchronously before route revocation.
+    fn invalidate_session(&self) {}
+
     /// Revalidate the source session's exact operation before dispatch.
     async fn authorize(
         &self,
@@ -635,6 +638,7 @@ impl Registry {
             .next_session
             .checked_add(1)
             .ok_or(RegistryError::SessionIdExhausted)?;
+        prior.endpoint.invalidate_session();
         self.remove(previous);
         self.install(session, registration);
         Ok(session)
@@ -717,6 +721,14 @@ impl Registry {
         for route in registered.routes {
             self.routes.remove(&route);
         }
+        true
+    }
+
+    pub(crate) fn invalidate(&self, session: SessionId) -> bool {
+        let Some(registered) = self.sessions.get(&session) else {
+            return false;
+        };
+        registered.endpoint.invalidate_session();
         true
     }
 

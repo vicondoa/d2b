@@ -4,7 +4,7 @@ use std::{
     collections::BTreeMap,
     sync::{
         Arc, Mutex, MutexGuard,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -18,7 +18,8 @@ use d2b_session::{
     AuthenticatedComponentSession, AuthenticatedSessionRouteBinding, GENERATED_OPERATION_CATALOG,
     OperationKind, SessionAcceptor, SessionAuthority, SessionAuthorizationRequest,
     SessionCancellationHandle, SessionOperation, SessionRegistrationCapability,
-    contract::EndpointPolicy, resource_operation, ttrpc_request_id,
+    contract::EndpointPolicy, resource_operation, rewrite_ttrpc_stream_id, ttrpc_request_id,
+    ttrpc_stream_id,
 };
 use tokio::sync::Mutex as AsyncMutex;
 
@@ -580,11 +581,34 @@ struct InvocationHook {
 
 impl BusCore {
     fn cleanup_session(&self, session: SessionId) {
-        // Revoke first so no new operation can acquire a lease after the
-        // cancellation sweep has started.
+        self.lock_registry().invalidate(session);
         self.lock_registry().remove(session);
-        self.lock_operations().cancel_session(session);
+        let targets = self.lock_operations().cancel_session(session);
         self.streams.cancel_session(session);
+        self.dispatch_cancel_targets(targets);
+    }
+
+    fn dispatch_cancel_targets(
+        &self,
+        targets: Vec<(OperationId, crate::operations::CancelTarget)>,
+    ) {
+        for (operation, target) in targets {
+            if target.route.generations().session() != target.generation {
+                self.observe_error(BusEvent::Cancel, &BusError::SessionMismatch);
+                continue;
+            }
+            if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+                let core = Arc::new(self.clone_for_dispatch());
+                runtime.spawn(async move {
+                    if let Err(error) = target.endpoint.cancel(&operation).await {
+                        core.observe_error(BusEvent::Cancel, &BusError::Endpoint(error));
+                    }
+                });
+            } else {
+                self.observer
+                    .record(BusEvent::Cancel, BusFailureReason::Abandoned);
+            }
+        }
     }
 
     fn observe_error(&self, event: BusEvent, error: &BusError) {
@@ -602,6 +626,23 @@ impl BusCore {
         self.operations
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn clone_for_dispatch(&self) -> BusDispatchObserver {
+        BusDispatchObserver {
+            observer: Arc::clone(&self.observer),
+        }
+    }
+}
+
+struct BusDispatchObserver {
+    observer: Arc<dyn BusObserver>,
+}
+
+impl BusDispatchObserver {
+    fn observe_error(&self, event: BusEvent, error: &BusError) {
+        self.observer
+            .record(event, BusFailureReason::from_error(error));
     }
 }
 
@@ -854,8 +895,9 @@ impl ZoneRegistrar {
             .core
             .lock_registry()
             .reconnect(previous.session, registration)?;
-        self.core.lock_operations().cancel_session(previous.session);
+        let targets = self.core.lock_operations().cancel_session(previous.session);
         self.core.streams.cancel_session(previous.session);
+        self.core.dispatch_cancel_targets(targets);
         previous.closed = true;
         Ok(BusIngress {
             core: Arc::clone(&self.core),
@@ -871,11 +913,30 @@ struct ComponentEndpoint {
     locality: d2b_contracts::v3::Locality,
     generation: u64,
     cancellation: SessionCancellationHandle,
-    active: Mutex<BTreeMap<OperationId, d2b_session::contract::RequestId>>,
+    active: Mutex<BTreeMap<OperationId, ActiveComponentRequest>>,
+    next_stream_id: AtomicU64,
+    revoked: AtomicBool,
+}
+
+struct ActiveComponentRequest {
+    request_id: d2b_session::contract::RequestId,
+    valid: Arc<AtomicBool>,
 }
 
 #[async_trait::async_trait]
 impl crate::registry::BusEndpoint for ComponentEndpoint {
+    fn invalidate_session(&self) {
+        self.revoked.store(true, Ordering::Release);
+        for active in self
+            .active
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .values()
+        {
+            active.valid.store(false, Ordering::Release);
+        }
+    }
+
     async fn authorize(
         &self,
         route: &RouteKey,
@@ -912,6 +973,9 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
     }
 
     async fn invoke(&self, request: DeliveredInvocation) -> Result<BusResponse, EndpointError> {
+        if self.revoked.load(Ordering::Acquire) {
+            return Err(cancelled_endpoint());
+        }
         let ordinary = d2b_resource_api::authz::SessionVerb::Invoke;
         let operation = SessionOperation::method(
             request.route().service().clone(),
@@ -920,7 +984,19 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
         .map_err(|_| EndpointError::Rejected)?;
         let verb = operation.required_verb(ordinary);
         let now_tick = self.clock.now_tick();
-        let request_id = ttrpc_request_id(self.generation, request.payload())
+        let caller_stream_id =
+            ttrpc_stream_id(request.payload()).map_err(|_| EndpointError::Rejected)?;
+        let internal_stream_id = self
+            .next_stream_id
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                (current <= u64::from(u32::MAX)).then_some(current + 1)
+            })
+            .map_err(|_| EndpointError::Rejected)
+            .and_then(|stream_id| u32::try_from(stream_id).map_err(|_| EndpointError::Rejected))?;
+        let mut outbound_frame = request.payload().to_vec();
+        rewrite_ttrpc_stream_id(&mut outbound_frame, internal_stream_id)
+            .map_err(|_| EndpointError::Rejected)?;
+        let request_id = ttrpc_request_id(self.generation, &outbound_frame)
             .map_err(|_| EndpointError::Rejected)?;
         let target = request
             .resource_call()
@@ -950,17 +1026,22 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
             .authorize(authorization, now_tick)
             .await
             .map_err(EndpointError::from)?;
+        if self.revoked.load(Ordering::Acquire) {
+            return Err(cancelled_endpoint());
+        }
+        let valid = Arc::new(AtomicBool::new(true));
         self.active
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(request.operation().id().clone(), request_id.clone());
+            .insert(
+                request.operation().id().clone(),
+                ActiveComponentRequest {
+                    request_id: request_id.clone(),
+                    valid: Arc::clone(&valid),
+                },
+            );
         if let Err(error) = session
-            .start_authorized_ttrpc(
-                permit,
-                request_id.clone(),
-                request.payload().to_vec(),
-                now_tick,
-            )
+            .start_authorized_ttrpc(permit, request_id.clone(), outbound_frame, now_tick)
             .await
         {
             self.active
@@ -969,11 +1050,17 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
                 .remove(request.operation().id());
             return Err(EndpointError::from(error));
         }
+        if self.revoked.load(Ordering::Acquire) || !valid.load(Ordering::Acquire) {
+            let _ = session.complete_ttrpc(request_id).await;
+            return Err(cancelled_endpoint());
+        }
         let response = loop {
-            let response = session.receive_ttrpc().await.map_err(EndpointError::from)?;
+            let mut response = session.receive_ttrpc().await.map_err(EndpointError::from)?;
             let response_id = ttrpc_request_id(self.generation, &response)
                 .map_err(|_| EndpointError::Rejected)?;
             if response_id == request_id {
+                rewrite_ttrpc_stream_id(&mut response, caller_stream_id)
+                    .map_err(|_| EndpointError::Rejected)?;
                 break response;
             }
         };
@@ -982,6 +1069,9 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .remove(request.operation().id());
+        if self.revoked.load(Ordering::Acquire) || !valid.load(Ordering::Acquire) {
+            return Err(cancelled_endpoint());
+        }
         Ok(BusResponse::new(response))
     }
 
@@ -990,19 +1080,26 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
     }
 
     async fn cancel(&self, operation: &OperationId) -> Result<(), EndpointError> {
-        let request_id = self
+        let active = self
             .active
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .remove(operation);
-        if let Some(request_id) = request_id {
+        if let Some(active) = active {
+            active.valid.store(false, Ordering::Release);
             self.cancellation
-                .cancel(request_id)
+                .cancel(active.request_id)
                 .await
                 .map_err(EndpointError::from)?;
         }
         Ok(())
     }
+}
+
+fn cancelled_endpoint() -> EndpointError {
+    EndpointError::from(d2b_session::SessionError::new(
+        d2b_session::contract::SessionErrorCode::Cancelled,
+    ))
 }
 
 impl ZoneRegistrar {
@@ -1045,6 +1142,8 @@ impl ZoneRegistrar {
             generation: binding.reconnect_generation().get(),
             cancellation,
             active: Mutex::new(BTreeMap::new()),
+            next_stream_id: AtomicU64::new(1),
+            revoked: AtomicBool::new(false),
         });
         let registration = SessionRegistration::admitted(binding, routes, endpoint);
         let session = self.core.lock_registry().register(registration)?;
@@ -1080,14 +1179,17 @@ impl ZoneRegistrar {
             generation: binding.reconnect_generation().get(),
             cancellation,
             active: Mutex::new(BTreeMap::new()),
+            next_stream_id: AtomicU64::new(1),
+            revoked: AtomicBool::new(false),
         });
         let registration = SessionRegistration::admitted(binding, routes, endpoint);
         let session = self
             .core
             .lock_registry()
             .reconnect(previous.session, registration)?;
-        self.core.lock_operations().cancel_session(previous.session);
+        let targets = self.core.lock_operations().cancel_session(previous.session);
         self.core.streams.cancel_session(previous.session);
+        self.core.dispatch_cancel_targets(targets);
         previous.closed = true;
         Ok(BusIngress {
             core: Arc::clone(&self.core),

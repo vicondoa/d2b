@@ -315,19 +315,32 @@ impl OperationTable {
         })
     }
 
-    pub(crate) fn cancel_session(&mut self, session: SessionId) -> Vec<OperationId> {
+    pub(crate) fn cancel_session(
+        &mut self,
+        session: SessionId,
+    ) -> Vec<(OperationId, CancelTarget)> {
         let cancelled = self
             .records
             .iter()
             .filter(|(key, record)| key.source == session || record.destination == session)
             .map(|(key, _)| key.clone())
             .collect::<Vec<_>>();
-        for key in &cancelled {
-            if let Some(record) = self.remove(key) {
+        cancelled
+            .into_iter()
+            .filter_map(|key| {
+                let record = self.remove(&key)?;
                 record.cancellation.cancel();
-            }
-        }
-        cancelled.into_iter().map(|key| key.id).collect()
+                Some((
+                    key.id,
+                    CancelTarget {
+                        route: record.reverse_route,
+                        endpoint: record.endpoint,
+                        generation: record.generation,
+                        cancellation: record.cancellation,
+                    },
+                ))
+            })
+            .collect()
     }
 
     fn remove(&mut self, key: &OperationKey) -> Option<OperationRecord> {

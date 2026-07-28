@@ -1285,6 +1285,7 @@ dependencies = [
  "d2b-resource-api",
  "d2b-resource-store",
  "futures-util",
+ "protobuf",
  "sha2",
  "snow",
  "tokio",
