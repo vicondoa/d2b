@@ -754,6 +754,94 @@ async fn preseeded_counter_response_is_not_accepted_by_a_later_invocation() {
 }
 
 #[tokio::test]
+async fn concurrent_invocations_dispatch_out_of_order_responses() {
+    let (_bus, mut registrar) = bus();
+    let (endpoint, remote, endpoint_echo) = admit(
+        &registrar,
+        policy(
+            ServicePackage::ResourceV3,
+            EndpointPurpose::ResourceService,
+            1,
+        ),
+        "Provider/system-core",
+        "11111111-1111-4111-8111-111111111111",
+        "Provider/system-core",
+        [SessionVerb::Invoke],
+    )
+    .await;
+    endpoint_echo.abort();
+    let endpoint = registrar
+        .register_component_session(endpoint)
+        .await
+        .unwrap();
+    let (caller, _, caller_echo) = admit(
+        &registrar,
+        policy(
+            ServicePackage::ResourceV3,
+            EndpointPurpose::ResourceService,
+            1,
+        ),
+        "Host/alice",
+        "22222222-2222-4222-8222-222222222222",
+        "Provider/system-core",
+        [SessionVerb::Invoke],
+    )
+    .await;
+    let caller = registrar.register_component_session(caller).await.unwrap();
+    let invoke = |id: &str, stream_id, payload: &'static [u8]| {
+        caller.invoke_resource(
+            route(
+                "d2b.resource.v3",
+                "ResourceService/Get",
+                1,
+                "Provider/system-core",
+            ),
+            OperationSpec::new(OperationId::parse(id).unwrap(), 10_000).unwrap(),
+            ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
+            ttrpc_frame(stream_id, payload),
+        )
+    };
+    let first = invoke("concurrent-first", 7, b"first-request");
+    let second = invoke("concurrent-second", 8, b"second-request");
+    let respond = async {
+        let one = remote.receive_ttrpc().await.unwrap();
+        let two = remote.receive_ttrpc().await.unwrap();
+        let (first_id, second_id) = if one.ends_with(b"first-request") {
+            (
+                ttrpc_stream_id(&one).unwrap(),
+                ttrpc_stream_id(&two).unwrap(),
+            )
+        } else {
+            (
+                ttrpc_stream_id(&two).unwrap(),
+                ttrpc_stream_id(&one).unwrap(),
+            )
+        };
+        remote
+            .send_ttrpc(ttrpc_frame(second_id, b"second-response"))
+            .await
+            .unwrap();
+        remote
+            .send_ttrpc(ttrpc_frame(first_id, b"first-response"))
+            .await
+            .unwrap();
+    };
+    let (first, second, ()) = tokio::join!(first, second, respond);
+    let first = first.unwrap();
+    let second = second.unwrap();
+    assert_eq!(ttrpc_stream_id(first.as_bytes()).unwrap(), 7);
+    assert_eq!(ttrpc_stream_id(second.as_bytes()).unwrap(), 8);
+    assert!(first.as_bytes().ends_with(b"first-response"));
+    assert!(second.as_bytes().ends_with(b"second-response"));
+
+    registrar
+        .disconnect_component_session(endpoint)
+        .await
+        .unwrap();
+    caller_echo.abort();
+}
+
+#[tokio::test]
 async fn malformed_responses_release_every_correlation_slot() {
     const MALFORMED_RESPONSES: usize = 300;
 
