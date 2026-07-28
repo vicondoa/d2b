@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
     process::Command,
@@ -17,6 +17,16 @@ const APPROVED_CAPABILITY_MINT_POINTS: &[(&str, &str)] = &[
     ("d2b_session_unix", "VerifiedUnixPeer::method:verify_stream"),
 ];
 
+const CAPABILITY_TYPE_IDENTITIES: &[&str] = &[
+    "ComponentSessionAdmission",
+    "AuthenticatedComponentSession",
+    "SessionAcceptor",
+    "SessionRegistrationCapability",
+    "VerifiedUnixPeer",
+];
+
+const CLAIM_TYPE_IDENTITIES: &[&str] = &["ResourceRef", "ResourceUid"];
+
 #[test]
 fn public_api_has_only_the_approved_capability_mint_surface() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -29,51 +39,24 @@ fn public_api_has_only_the_approved_capability_mint_surface() {
     let temp = scratch.path().join("tmp");
     fs::create_dir_all(&temp).expect("create repository-local rustdoc scratch");
 
-    let output = Command::new(env!("CARGO"))
-        .args([
-            "doc",
-            "--quiet",
-            "--locked",
-            "--no-deps",
-            "--manifest-path",
-            crate_root
-                .parent()
-                .unwrap()
-                .join("Cargo.toml")
-                .to_str()
-                .unwrap(),
-            "-p",
-            "d2b-bus",
-            "-p",
-            "d2b-session",
-            "-p",
-            "d2b-session-unix",
-            "--target-dir",
-            scratch.path().join("target").to_str().unwrap(),
-        ])
-        .env("TMPDIR", &temp)
-        .output()
-        .expect("render the compiler-owned public API");
-    assert!(
-        output.status.success(),
-        "rustdoc failed:\n{}",
-        String::from_utf8_lossy(&output.stderr)
+    let workspace_docs = render_workspace_docs(
+        &crate_root.parent().unwrap().join("Cargo.toml"),
+        scratch.path(),
+        None,
     );
 
-    let (mut actual, mut capability_surface) =
-        public_api("d2b_bus", &scratch.path().join("target/doc/d2b_bus"));
-    let (session_api, session_capabilities) = public_api(
-        "d2b_session",
-        &scratch.path().join("target/doc/d2b_session"),
+    let approved = approved_entries(include_str!("approved-public-api.txt"));
+    let snapshot_crates = approved
+        .iter()
+        .filter_map(|symbol| symbol.split_once("::").map(|(crate_name, _)| crate_name))
+        .collect::<BTreeSet<_>>();
+    let snapshot_docs = render_workspace_docs(
+        &crate_root.parent().unwrap().join("Cargo.toml"),
+        &scratch.path().join("snapshot"),
+        Some(&snapshot_crates),
     );
-    actual.extend(session_api);
-    capability_surface.extend(session_capabilities);
-    let (unix_api, unix_capabilities) = public_api(
-        "d2b_session_unix",
-        &scratch.path().join("target/doc/d2b_session_unix"),
-    );
-    actual.extend(unix_api);
-    capability_surface.extend(unix_capabilities);
+    let actual = snapshot_public_api(&snapshot_docs, &approved);
+    let (_, capability_surface) = workspace_public_api(&workspace_docs, &BTreeSet::new(), true);
     if std::env::var_os("D2B_UPDATE_BUS_PUBLIC_API").is_some() {
         write_snapshot(&crate_root.join("tests/approved-public-api.txt"), &actual);
         write_snapshot(
@@ -82,25 +65,11 @@ fn public_api_has_only_the_approved_capability_mint_surface() {
         );
         return;
     }
-    let approved = include_str!("approved-public-api.txt")
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .map(str::to_owned)
-        .collect::<BTreeSet<_>>();
-    assert_eq!(
-        actual, approved,
-        "d2b-bus public API changed. The only approved capability mint point is \
-         {APPROVED_CAPABILITY_MINT_POINTS:?}. Review every API delta across d2b-bus \
-         d2b-session, and d2b-session-unix for a new \
-         constructor, factory, capability accessor, or externally implementable \
-         producer before updating tests/approved-public-api.txt.\n\
-         \n\
-         If the delta is only inherent methods on container types such as \
-         BoundedVec, regenerate this list under the toolchain pinned in \
-         rust-toolchain.toml rather than whatever rustc is on your PATH: the \
-         snapshot includes std-derived inherent methods, so a newer local \
-         compiler adds entries that the pinned CI toolchain does not render."
+    assert_snapshot(
+        &actual,
+        &approved,
+        "d2b-bus public API changed; review capability minting before updating \
+         approved-public-api.txt with the pinned toolchain",
     );
     for (crate_name, mint) in APPROVED_CAPABILITY_MINT_POINTS {
         let mint = format!("{crate_name}::{mint}");
@@ -109,16 +78,12 @@ fn public_api_has_only_the_approved_capability_mint_surface() {
             "approved capability mint point {mint:?} is absent from the actual public API"
         );
     }
-    let approved_capabilities = include_str!("approved-capability-api.txt")
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .map(str::to_owned)
-        .collect::<BTreeSet<_>>();
-    assert_eq!(
-        capability_surface, approved_capabilities,
-        "a public signature now exposes a sealed capability outside the explicitly \
-         approved capability API"
+    let approved_capabilities = approved_entries(include_str!("approved-capability-api.txt"));
+    assert_snapshot(
+        &capability_surface,
+        &approved_capabilities,
+        "a public signature now exposes a capability or claim type outside the \
+         explicitly approved capability API",
     );
 
     let router = fs::read_to_string(crate_root.join("src/router.rs")).expect("read router source");
@@ -146,35 +111,24 @@ fn mutation_fixture_detects_trait_constructor_and_capability_accessor() {
     );
     let temp = scratch.path().join("tmp");
     fs::create_dir_all(&temp).expect("create repository-local mutation scratch");
-    let output = Command::new(env!("CARGO"))
-        .args([
-            "doc",
-            "--quiet",
-            "--locked",
-            "--no-deps",
-            "--manifest-path",
-            fixture.join("Cargo.toml").to_str().unwrap(),
-            "--target-dir",
-            scratch.path().join("target").to_str().unwrap(),
-        ])
-        .env("TMPDIR", &temp)
-        .output()
-        .expect("render mutation fixture public API");
-    assert!(
-        output.status.success(),
-        "mutation fixture rustdoc failed:\n{}",
-        String::from_utf8_lossy(&output.stderr)
+    render_fixture_type_roots(
+        &crate_root.parent().unwrap().join("Cargo.toml"),
+        scratch.path(),
     );
-    let doc_root = scratch
-        .path()
-        .join("target/doc/d2b_bus_public_api_mutations");
+    let docs = render_workspace_docs(&fixture.join("Cargo.toml"), scratch.path(), None);
+    let doc_root = docs
+        .iter()
+        .find(|docs| docs.crate_name == "d2b_bus_public_api_mutations")
+        .expect("mutation fixture documentation was rendered")
+        .root
+        .clone();
     let rogue_html =
         fs::read_to_string(doc_root.join("struct.Rogue.html")).expect("read Deref mutation page");
     assert!(
         rogue_html.contains("id=\"deref-methods-"),
         "mutation fixture did not execute the Deref-region parser branch"
     );
-    let (_, capabilities) = public_api("d2b_bus_public_api_mutations", &doc_root);
+    let (_, capabilities) = workspace_public_api(&docs, &BTreeSet::new(), false);
     assert!(
         capabilities
             .iter()
@@ -191,7 +145,16 @@ fn mutation_fixture_detects_trait_constructor_and_capability_accessor() {
         capabilities
             .iter()
             .any(|symbol| symbol.ends_with("::RogueSubjectClaims")),
-        "a public type storing subject claims escaped the capability inventory"
+        "renamed opaque subject claims from another crate escaped the capability inventory"
+    );
+    assert!(
+        capabilities
+            .iter()
+            .any(|symbol| symbol.ends_with("opaque_claims::PrincipalClaim"))
+            && capabilities
+                .iter()
+                .any(|symbol| symbol.ends_with("opaque_claims::SerialClaim")),
+        "opaque claim wrappers were not classified by linked type identity"
     );
     assert!(
         capabilities
@@ -233,66 +196,323 @@ fn write_snapshot(path: &Path, entries: &BTreeSet<String>) {
     fs::write(path, rendered).expect("write reviewed public API snapshot");
 }
 
-fn public_api(crate_name: &str, doc_root: &Path) -> (BTreeSet<String>, BTreeSet<String>) {
-    let all = fs::read_to_string(doc_root.join("all.html")).expect("read rustdoc all-items page");
+fn assert_snapshot(actual: &BTreeSet<String>, approved: &BTreeSet<String>, message: &str) {
+    if actual == approved {
+        return;
+    }
+    let added = actual.difference(approved).take(40).collect::<Vec<_>>();
+    let removed = approved.difference(actual).take(40).collect::<Vec<_>>();
+    panic!(
+        "{message}; added {} (first 40: {added:?}), removed {} (first 40: {removed:?})",
+        actual.difference(approved).count(),
+        approved.difference(actual).count()
+    );
+}
+
+fn approved_entries(snapshot: &str) -> BTreeSet<String> {
+    snapshot
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(str::to_owned)
+        .collect()
+}
+
+#[derive(Debug)]
+struct DocumentedCrate {
+    crate_name: String,
+    root: PathBuf,
+}
+
+#[derive(Debug)]
+struct DocumentedItem {
+    crate_name: String,
+    symbol: String,
+    path: PathBuf,
+    html: String,
+}
+
+fn render_workspace_docs(
+    manifest: &Path,
+    scratch: &Path,
+    selected_crates: Option<&BTreeSet<&str>>,
+) -> Vec<DocumentedCrate> {
+    let metadata = Command::new(env!("CARGO"))
+        .args([
+            "metadata",
+            "--quiet",
+            "--locked",
+            "--format-version",
+            "1",
+            "--no-deps",
+            "--manifest-path",
+        ])
+        .arg(manifest)
+        .output()
+        .expect("discover workspace library crates");
+    assert!(
+        metadata.status.success(),
+        "cargo metadata failed:\n{}",
+        String::from_utf8_lossy(&metadata.stderr)
+    );
+    let metadata: serde_json::Value =
+        serde_json::from_slice(&metadata.stdout).expect("parse cargo metadata");
+    let workspace_members = metadata["workspace_members"]
+        .as_array()
+        .expect("workspace_members array")
+        .iter()
+        .map(|member| member.as_str().expect("workspace member id"))
+        .collect::<BTreeSet<_>>();
+    let mut packages = BTreeSet::new();
+    for package in metadata["packages"].as_array().expect("packages array") {
+        if !workspace_members.contains(package["id"].as_str().expect("package id")) {
+            continue;
+        }
+        let library = package["targets"]
+            .as_array()
+            .expect("package targets")
+            .iter()
+            .find(|target| {
+                target["kind"]
+                    .as_array()
+                    .expect("target kind")
+                    .iter()
+                    .any(|kind| kind == "lib" || kind == "rlib")
+            });
+        if let Some(library) = library {
+            let crate_name = library["name"].as_str().expect("library target name");
+            if selected_crates.is_some_and(|selected| !selected.contains(crate_name)) {
+                continue;
+            }
+            packages.insert(
+                package["name"]
+                    .as_str()
+                    .expect("workspace package name")
+                    .to_owned(),
+            );
+        }
+    }
+    assert!(!packages.is_empty(), "workspace has no library crates");
+
+    let target = scratch.join("target");
+    let temp = scratch.join("tmp");
+    fs::create_dir_all(&temp).expect("create rustdoc temporary directory");
+    let mut command = Command::new(env!("CARGO"));
+    command.args(["doc", "--quiet", "--locked", "--no-deps"]);
+    command.arg("--manifest-path").arg(manifest);
+    for package in packages {
+        command.arg("-p").arg(package);
+    }
+    let output = command
+        .arg("--target-dir")
+        .arg(&target)
+        .env("TMPDIR", &temp)
+        .output()
+        .expect("render workspace public APIs");
+    assert!(
+        output.status.success(),
+        "rustdoc failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let doc_root = target.join("doc");
+    let mut docs = fs::read_dir(&doc_root)
+        .expect("read rustdoc output")
+        .filter_map(|entry| {
+            let root = entry.ok()?.path();
+            if !root.join("all.html").is_file() {
+                return None;
+            }
+            let crate_name = root.file_name()?.to_str()?.to_owned();
+            Some(DocumentedCrate { crate_name, root })
+        })
+        .collect::<Vec<_>>();
+    docs.sort_by(|left, right| left.crate_name.cmp(&right.crate_name));
+    assert!(!docs.is_empty(), "rustdoc rendered no library crates");
+    docs
+}
+
+fn render_fixture_type_roots(manifest: &Path, scratch: &Path) {
+    let temp = scratch.join("tmp");
+    fs::create_dir_all(&temp).expect("create fixture rustdoc temporary directory");
+    let output = Command::new(env!("CARGO"))
+        .args(["doc", "--quiet", "--locked", "--no-deps", "--manifest-path"])
+        .arg(manifest)
+        .args(["-p", "d2b-contracts", "-p", "d2b-session", "--target-dir"])
+        .arg(scratch.join("target"))
+        .env("TMPDIR", temp)
+        .output()
+        .expect("render mutation fixture type roots");
+    assert!(
+        output.status.success(),
+        "fixture type rustdoc failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn workspace_public_api(
+    docs: &[DocumentedCrate],
+    snapshot_crates: &BTreeSet<&str>,
+    require_all_roots: bool,
+) -> (BTreeSet<String>, BTreeSet<String>) {
+    let items = documented_items(docs);
+    let (capability_roots, capability_types) =
+        capability_type_identities(&items, require_all_roots);
     let mut public = BTreeSet::new();
     let mut capability_surface = BTreeSet::new();
-    for entry in all.split("<li><a href=\"").skip(1) {
-        let Some((href, rest)) = entry.split_once('"') else {
-            continue;
-        };
-        if href.starts_with('#') || !href.ends_with(".html") {
-            continue;
+    for item in &items {
+        let snapshot = snapshot_crates.contains(item.crate_name.as_str());
+        if snapshot {
+            public.insert(item.symbol.clone());
         }
-        let Some((_, text)) = rest.split_once('>') else {
-            continue;
-        };
-        let Some((name, _)) = text.split_once("</a>") else {
-            continue;
-        };
-        let name = format!("{crate_name}::{name}");
-        public.insert(name.clone());
-
-        let item = doc_root.join(href);
-        if item.is_file() {
-            let html = fs::read_to_string(item).expect("read rustdoc item page");
-            if item_declaration(&html).is_some_and(is_capability_signature) {
-                capability_surface.insert(name.to_owned());
-            }
-            collect_members(&name, &html, &mut public, &mut capability_surface);
+        if capability_types.contains(&canonical_path(&item.path))
+            || item_declaration(&item.html).is_some_and(|signature| {
+                signature_links_to(signature, &item.path, &capability_types)
+            })
+        {
+            capability_surface.insert(item.symbol.clone());
         }
+        collect_members(
+            item,
+            snapshot,
+            &capability_roots,
+            &capability_types,
+            &mut public,
+            &mut capability_surface,
+        );
     }
     (public, capability_surface)
 }
 
+fn snapshot_public_api(docs: &[DocumentedCrate], approved: &BTreeSet<String>) -> BTreeSet<String> {
+    let mut public = BTreeSet::new();
+    for item in documented_items(docs) {
+        public.insert(item.symbol.clone());
+        let html = without_deref_methods(&item.html);
+        for section in html.split("<section id=\"").skip(1) {
+            let Some((id, rest)) = section.split_once('"') else {
+                continue;
+            };
+            let Some((kind, member)) = id.split_once('.') else {
+                continue;
+            };
+            if !matches!(
+                kind,
+                "method" | "tymethod" | "structfield" | "associatedtype" | "associatedconstant"
+            ) {
+                continue;
+            }
+            let Some((class_prefix, body)) = rest.split_once('>') else {
+                continue;
+            };
+            let body = body.split_once("</section>").map_or(body, |(body, _)| body);
+            let trait_implementation = class_prefix.contains("trait-impl");
+            let symbol = format!("{}::{kind}:{member}", item.symbol);
+            if trait_implementation {
+                if approved.contains(&symbol) {
+                    public.insert(symbol);
+                }
+                continue;
+            }
+            if kind != "method" || body.contains("<h4 class=\"code-header\">pub ") {
+                public.insert(symbol);
+            }
+        }
+    }
+    public
+}
+
+fn documented_items(docs: &[DocumentedCrate]) -> Vec<DocumentedItem> {
+    let mut items = Vec::new();
+    for docs in docs {
+        let all =
+            fs::read_to_string(docs.root.join("all.html")).expect("read rustdoc all-items page");
+        for entry in all.split("<li><a href=\"").skip(1) {
+            let Some((href, rest)) = entry.split_once('"') else {
+                continue;
+            };
+            if href.starts_with('#') || !href.ends_with(".html") {
+                continue;
+            }
+            let Some((_, text)) = rest.split_once('>') else {
+                continue;
+            };
+            let Some((name, _)) = text.split_once("</a>") else {
+                continue;
+            };
+            let path = docs.root.join(href);
+            if !path.is_file() {
+                continue;
+            }
+            items.push(DocumentedItem {
+                crate_name: docs.crate_name.clone(),
+                symbol: format!("{}::{name}", docs.crate_name),
+                html: fs::read_to_string(&path).expect("read rustdoc item page"),
+                path,
+            });
+        }
+    }
+    items
+}
+
+fn capability_type_identities(
+    items: &[DocumentedItem],
+    require_all_roots: bool,
+) -> (BTreeSet<PathBuf>, BTreeSet<PathBuf>) {
+    let mut by_type_name = BTreeMap::<&str, Vec<PathBuf>>::new();
+    for item in items.iter().filter(|item| is_type_page(&item.path)) {
+        let type_name = item.symbol.rsplit("::").next().expect("rustdoc type name");
+        by_type_name
+            .entry(type_name)
+            .or_default()
+            .push(canonical_path(&item.path));
+    }
+    let capability_roots = CAPABILITY_TYPE_IDENTITIES
+        .iter()
+        .chain(CLAIM_TYPE_IDENTITIES)
+        .filter_map(|identity| {
+            let matches = by_type_name.get(identity).cloned().unwrap_or_default();
+            assert!(
+                matches.len() <= 1,
+                "capability type identity {identity:?} is ambiguous"
+            );
+            if require_all_roots {
+                assert!(
+                    matches.len() == 1,
+                    "capability type identity {identity:?} is undocumented"
+                );
+            }
+            matches.into_iter().next()
+        })
+        .collect::<BTreeSet<_>>();
+    let mut capability_types = capability_roots.clone();
+
+    loop {
+        let mut added = false;
+        for item in items {
+            if capability_types.contains(&canonical_path(&item.path)) || !is_type_page(&item.path) {
+                continue;
+            }
+            if public_signature_links_to(&item.html, &item.path, &capability_types) {
+                added |= capability_types.insert(canonical_path(&item.path));
+            }
+        }
+        if !added {
+            return (capability_roots, capability_types);
+        }
+    }
+}
+
 fn collect_members(
-    item: &str,
-    html: &str,
+    item: &DocumentedItem,
+    snapshot: bool,
+    capability_roots: &BTreeSet<PathBuf>,
+    capability_types: &BTreeSet<PathBuf>,
     public: &mut BTreeSet<String>,
     capability_surface: &mut BTreeSet<String>,
 ) {
-    // Methods surfaced through `Deref` come from the standard library, not from
-    // these crates, so they cannot widen the capability surface - and they
-    // change with the compiler version, which would make the snapshot fail on a
-    // toolchain bump for a reason unrelated to the invariant.
-    //
-    // Excise only that region. rustdoc emits the deref block between
-    // `id="implementations"` and `id="trait-implementations"`, so truncating at
-    // the deref block would also discard every trait implementation - and a
-    // trait method declared by these crates on a `Deref` type is exactly the
-    // kind of capability accessor this guard exists to catch.
-    let owned;
-    let html = match html.split_once("id=\"deref-methods-") {
-        Some((before, after)) => {
-            let rest = after
-                .split_once("id=\"trait-implementations")
-                .map_or("", |(_, rest)| rest);
-            owned = format!("{before}{rest}");
-            owned.as_str()
-        }
-        None => html,
-    };
-
+    let item_is_capability = capability_types.contains(&canonical_path(&item.path));
+    let html = without_deref_methods(&item.html);
     for section in html.split("<section id=\"").skip(1) {
         let Some((id, rest)) = section.split_once('"') else {
             continue;
@@ -311,10 +531,15 @@ fn collect_members(
         };
         let body = body.split_once("</section>").map_or(body, |(body, _)| body);
         let trait_implementation = class_prefix.contains("trait-impl");
+        let signature_is_capability = code_header(body)
+            .is_some_and(|signature| signature_links_to(signature, &item.path, capability_types));
+        let capability = signature_is_capability || (item_is_capability && !trait_implementation);
+        let symbol = format!("{}::{kind}:{member}", item.symbol);
         if trait_implementation {
-            let symbol = format!("{item}::{kind}:{member}");
-            if is_capability_item(item) || code_header(body).is_some_and(is_capability_signature) {
+            if capability {
                 capability_surface.insert(symbol.clone());
+            }
+            if snapshot && capability_roots.contains(&canonical_path(&item.path)) {
                 public.insert(symbol);
             }
             continue;
@@ -322,12 +547,111 @@ fn collect_members(
         if kind == "method" && !body.contains("<h4 class=\"code-header\">pub ") {
             continue;
         }
-        let symbol = format!("{item}::{kind}:{member}");
-        if is_capability_item(item) || code_header(body).is_some_and(is_capability_signature) {
+        if capability {
             capability_surface.insert(symbol.clone());
         }
-        public.insert(symbol);
+        if snapshot {
+            public.insert(symbol);
+        }
     }
+}
+
+fn without_deref_methods(html: &str) -> std::borrow::Cow<'_, str> {
+    // Preserve trait implementations emitted after rustdoc's inherited Deref
+    // methods; only the inherited compiler-version-dependent region is omitted.
+    let Some((before, after)) = html.split_once("id=\"deref-methods-") else {
+        return std::borrow::Cow::Borrowed(html);
+    };
+    let rest = after
+        .split_once("id=\"trait-implementations")
+        .map_or("", |(_, rest)| rest);
+    std::borrow::Cow::Owned(format!("{before}{rest}"))
+}
+
+fn public_signature_links_to(html: &str, item_path: &Path, identities: &BTreeSet<PathBuf>) -> bool {
+    if item_declaration(html)
+        .is_some_and(|signature| signature_links_to(signature, item_path, identities))
+    {
+        return true;
+    }
+    let html = without_deref_methods(html);
+    for section in html.split("<section id=\"").skip(1) {
+        let Some((id, rest)) = section.split_once('"') else {
+            continue;
+        };
+        let Some((kind, _)) = id.split_once('.') else {
+            continue;
+        };
+        if !matches!(
+            kind,
+            "method" | "tymethod" | "structfield" | "associatedtype" | "associatedconstant"
+        ) {
+            continue;
+        }
+        let body = rest
+            .split_once('>')
+            .map(|(_, body)| body)
+            .unwrap_or_default();
+        if code_header(body)
+            .is_some_and(|signature| signature_links_to(signature, item_path, identities))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn signature_links_to(signature: &str, item_path: &Path, identities: &BTreeSet<PathBuf>) -> bool {
+    for link in signature.split("href=\"").skip(1) {
+        let Some((href, _)) = link.split_once('"') else {
+            continue;
+        };
+        let href = href.split_once('#').map_or(href, |(path, _)| path);
+        if href.is_empty() || href.contains("://") {
+            continue;
+        }
+        let linked = item_path.parent().expect("rustdoc item parent").join(href);
+        if linked.is_file() && identities.contains(&canonical_path(&linked)) {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_type_page(path: &Path) -> bool {
+    let file = path
+        .file_name()
+        .and_then(|file| file.to_str())
+        .unwrap_or_default();
+    ["struct.", "enum.", "trait.", "type.", "union."]
+        .iter()
+        .any(|prefix| file.starts_with(prefix))
+}
+
+fn canonical_path(path: &Path) -> PathBuf {
+    let mut identity = fs::canonicalize(path).unwrap_or_else(|error| {
+        panic!(
+            "canonicalize rustdoc type identity {}: {error}",
+            path.display()
+        )
+    });
+    for _ in 0..4 {
+        let html = fs::read_to_string(&identity).expect("read rustdoc identity page");
+        let Some(url) = html
+            .split_once("<meta http-equiv=\"refresh\" content=\"0;URL=")
+            .and_then(|(_, rest)| rest.split_once('"').map(|(url, _)| url))
+        else {
+            return identity;
+        };
+        identity = fs::canonicalize(
+            identity
+                .parent()
+                .expect("rustdoc redirect parent")
+                .join(url),
+        )
+        .expect("resolve rustdoc type identity redirect");
+    }
+    panic!("rustdoc type identity redirect depth exceeded")
 }
 
 fn item_declaration(html: &str) -> Option<&str> {
@@ -343,36 +667,4 @@ fn code_header(section: &str) -> Option<&str> {
         .1
         .split_once("</h4>")
         .map(|(header, _)| header)
-}
-
-fn is_capability_signature(signature: &str) -> bool {
-    [
-        "AuthenticatedComponentSession",
-        "ComponentSessionAdmission",
-        "SessionAcceptor",
-        "SessionAuthority",
-        "SessionRegistration",
-        "SessionRegistrationCapability",
-        "VerifiedUnixPeer",
-        "VerifiedUnixSubject",
-    ]
-    .iter()
-    .any(|marker| signature.contains(marker))
-        || signature.contains("AuthenticatedSubjectContext")
-        || (signature.contains("subject_ref") && signature.contains("ResourceRef"))
-        || (signature.contains("subject_uid") && signature.contains("ResourceUid"))
-}
-
-fn is_capability_item(item: &str) -> bool {
-    [
-        "AuthenticatedComponentSession",
-        "ComponentSessionAdmission",
-        "SessionAcceptor",
-        "SessionRegistration",
-        "SessionRegistrationCapability",
-        "VerifiedUnixPeer",
-        "VerifiedUnixSubject",
-    ]
-    .iter()
-    .any(|marker| item.ends_with(&format!("::{marker}")))
 }

@@ -5,7 +5,8 @@ edition = "2024"
 publish = false
 
 [workspace]
+members = ["opaque-claims"]
 
 [dependencies]
-d2b-contracts = { path = "../../../../d2b-contracts" }
 d2b-session = { path = "../../../../d2b-session" }
+opaque-claims = { path = "opaque-claims" }
