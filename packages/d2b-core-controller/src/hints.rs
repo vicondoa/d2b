@@ -536,12 +536,15 @@ impl FairAdmission {
     }
 
     /// Admit or coalesce without cross-resource eviction.
-    pub fn push(&mut self, hint: ControllerHint) -> Result<(), HintAdmissionError> {
+    pub fn push(
+        &mut self,
+        hint: ControllerHint,
+    ) -> Result<HintAdmissionOutcome, HintAdmissionError> {
         let controller = hint.controller.clone();
         let queue = self.queues.entry(controller.clone()).or_default();
         if let Some(existing) = queue.hints.get_mut(&hint.target) {
             existing.coalesce(hint);
-            return Ok(());
+            return Ok(HintAdmissionOutcome::Coalesced);
         }
         if self.total >= self.max_total || queue.hints.len() >= self.max_per_controller {
             return Err(HintAdmissionError::Backpressure);
@@ -553,7 +556,7 @@ impl FairAdmission {
             queue.scheduled = true;
             self.controllers.push_back(controller);
         }
-        Ok(())
+        Ok(HintAdmissionOutcome::Admitted)
     }
 
     /// Pop one controller turn, rotating nonempty queues.
@@ -641,6 +644,13 @@ impl FairAdmission {
     pub const fn is_empty(&self) -> bool {
         self.total == 0
     }
+}
+
+/// Closed successful hint-admission outcome.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HintAdmissionOutcome {
+    Admitted,
+    Coalesced,
 }
 
 /// Hint admission failure.
@@ -890,18 +900,24 @@ mod tests {
     fn same_resource_coalesces_without_losing_reasons() {
         let mut admission = FairAdmission::new(4, 4);
         let target = target("app", 1);
-        admission.push(hint("one", target.clone(), 2)).unwrap();
-        admission
-            .push(
-                ControllerHint::new(
-                    controller_key("one"),
-                    target,
-                    ZoneRevision::new(7),
-                    BTreeSet::from([CoreTriggerReason::DeletionRequested]),
+        assert_eq!(
+            admission.push(hint("one", target.clone(), 2)).unwrap(),
+            HintAdmissionOutcome::Admitted
+        );
+        assert_eq!(
+            admission
+                .push(
+                    ControllerHint::new(
+                        controller_key("one"),
+                        target,
+                        ZoneRevision::new(7),
+                        BTreeSet::from([CoreTriggerReason::DeletionRequested]),
+                    )
+                    .unwrap(),
                 )
                 .unwrap(),
-            )
-            .unwrap();
+            HintAdmissionOutcome::Coalesced
+        );
 
         assert_eq!(admission.len(), 1);
         let hint = admission.pop().unwrap();

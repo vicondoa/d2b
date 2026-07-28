@@ -228,6 +228,11 @@ impl ControllerIdentity {
         &self.zone
     }
 
+    /// Borrow the registered controller resource reference.
+    pub const fn controller_ref(&self) -> &ResourceRef {
+        &self.controller_ref
+    }
+
     /// Return the controller generation.
     pub const fn controller_generation(&self) -> ControllerGeneration {
         self.controller_generation

@@ -9,7 +9,7 @@ use std::{
     },
 };
 
-use d2b_contracts::v3::ZoneRevision;
+use d2b_contracts::v3::{ResourceGeneration, ResourceUid, ZoneId, ZoneRevision};
 use d2b_controller_toolkit::{
     CommitDecision, CommitOutcome, ControllerDescriptor, ControllerHealth, ControllerSource,
     DependencySnapshot, DisruptionClass, DrainResult, FinalizeResult, FreshSnapshot,
@@ -20,7 +20,8 @@ use d2b_controller_toolkit::{
 };
 
 use crate::{
-    ChangeRecord, ControllerHint, ControllerLeaseKey, HintAdmissionError, SuppressionDecision,
+    ChangeRecord, ControllerHint, ControllerLeaseKey, FairAdmission, HintAdmissionError,
+    HintAdmissionOutcome, SuppressionDecision,
 };
 
 /// Core adapter construction or hint dispatch failure.
@@ -41,205 +42,411 @@ impl core::fmt::Display for CoreSourceError {
 
 impl std::error::Error for CoreSourceError {}
 
-/// In-process Core source that converts durable changes into toolkit hints.
-pub struct CoreControllerSource {
-    descriptor: ControllerDescriptor,
-    initial: InitialList,
-    snapshots: Mutex<BTreeMap<ResourceKey, FreshSnapshot>>,
-    watch_tx: tokio::sync::mpsc::UnboundedSender<Result<WatchEvent, WatchFailure>>,
-    watch_rx:
-        tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<Result<WatchEvent, WatchFailure>>>,
-    outcomes: Mutex<Vec<ReconcileReason>>,
-    checkpoints: AtomicUsize,
-    checkpoint_notify: tokio::sync::Notify,
+/// Closed result of dispatching a store-watch change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoreDispatchOutcome {
+    Suppressed(SuppressionDecision),
+    Admitted,
+    Coalesced,
 }
 
-impl CoreControllerSource {
-    /// Construct a source bound to one complete registered descriptor.
-    pub fn new(
-        descriptor: ControllerDescriptor,
-        initial: InitialList,
-        snapshots: BTreeMap<ResourceKey, FreshSnapshot>,
-    ) -> Arc<Self> {
-        let (watch_tx, watch_rx) = tokio::sync::mpsc::unbounded_channel();
+/// Cardinality-safe Core admission counters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CoreAdmissionCounts {
+    pub admitted: usize,
+    pub coalesced: usize,
+    pub backpressure: usize,
+}
+
+/// Durable commit evidence consumed from the registered resource plane.
+///
+/// There is intentionally no public constructor. The production resource
+/// backend is not registered yet, so no production implementation can mint
+/// this authority until that integration lands.
+pub struct DurableCommitEvidence {
+    zone: ZoneId,
+    resource_uid: ResourceUid,
+    generation: ResourceGeneration,
+    revision: ZoneRevision,
+    operation_id: String,
+}
+
+impl DurableCommitEvidence {
+    fn into_decision(self) -> CommitDecision {
+        CommitDecision::Committed {
+            zone: self.zone,
+            resource_uid: self.resource_uid,
+            generation: self.generation,
+            revision: self.revision,
+            operation_id: self.operation_id,
+        }
+    }
+
+    #[cfg(test)]
+    fn for_test(
+        zone: ZoneId,
+        resource_uid: ResourceUid,
+        generation: ResourceGeneration,
+        revision: ZoneRevision,
+        operation_id: String,
+    ) -> Self {
+        Self {
+            zone,
+            resource_uid,
+            generation,
+            revision,
+            operation_id,
+        }
+    }
+}
+
+impl core::fmt::Debug for DurableCommitEvidence {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("DurableCommitEvidence")
+            .field("has_zone", &true)
+            .field("has_resource_uid", &true)
+            .field("generation", &self.generation)
+            .field("revision", &self.revision)
+            .field("has_operation_id", &true)
+            .finish()
+    }
+}
+
+mod registered_api {
+    pub trait Sealed {}
+}
+
+/// Registered resource/store-watch operations available to one controller.
+///
+/// Implementations are sealed until the production store backend exists.
+/// Outcome and checkpoint writes must be durable and revision-idempotent.
+pub trait RegisteredControllerApi: registered_api::Sealed + Send + Sync + 'static {
+    fn register(
+        &self,
+        descriptor: &ControllerDescriptor,
+    ) -> impl Future<Output = Result<(), SourceError>> + Send;
+
+    fn list_initial(
+        &self,
+        descriptor: &ControllerDescriptor,
+    ) -> impl Future<Output = Result<InitialList, SourceError>> + Send;
+
+    fn open_watch(
+        &self,
+        descriptor: &ControllerDescriptor,
+        after_revision: ZoneRevision,
+    ) -> impl Future<Output = Result<(), SourceError>> + Send;
+
+    fn read_fresh(
+        &self,
+        key: &ResourceKey,
+    ) -> impl Future<Output = Result<FreshSnapshot, SourceError>> + Send;
+
+    fn write_starting(
+        &self,
+        context: &ReconcileContext,
+    ) -> impl Future<Output = Result<(), SourceError>> + Send;
+
+    fn consume_expedited_commit(
+        &self,
+        context: &ReconcileContext,
+    ) -> impl Future<Output = Result<Option<DurableCommitEvidence>, SourceError>> + Send;
+
+    fn commit_result(
+        &self,
+        context: &ReconcileContext,
+        result: &ReconcileResult,
+    ) -> impl Future<Output = Result<CommitOutcome, SourceError>> + Send;
+
+    fn complete_expedited(
+        &self,
+        context: &ReconcileContext,
+        projection: &ReconcileProjection,
+        status_persistence: StatusPersistence,
+    ) -> impl Future<Output = Result<(), SourceError>> + Send;
+
+    fn persist_outcome(
+        &self,
+        projection: &ReconcileProjection,
+    ) -> impl Future<Output = Result<(), SourceError>> + Send;
+
+    fn checkpoint(
+        &self,
+        context: &ReconcileContext,
+        revision: ZoneRevision,
+    ) -> impl Future<Output = Result<(), SourceError>> + Send;
+
+    fn schedule_requeue(
+        &self,
+        key: &ResourceKey,
+        at_tick: u64,
+    ) -> impl Future<Output = Result<(), SourceError>> + Send;
+}
+
+struct WatchState {
+    admission: FairAdmission,
+    operations: BTreeMap<(ControllerLeaseKey, ResourceKey), (ZoneRevision, OperationContext)>,
+    closed: bool,
+}
+
+/// Core adapter over a registered resource API and bounded store-watch queue.
+pub struct CoreControllerSource<A> {
+    descriptor: ControllerDescriptor,
+    controller: ControllerLeaseKey,
+    api: Arc<A>,
+    watch: Mutex<WatchState>,
+    watch_signal_tx: tokio::sync::mpsc::Sender<()>,
+    watch_signal_rx: tokio::sync::Mutex<tokio::sync::mpsc::Receiver<()>>,
+    admitted: AtomicUsize,
+    coalesced: AtomicUsize,
+    backpressure: AtomicUsize,
+}
+
+impl<A> CoreControllerSource<A>
+where
+    A: RegisteredControllerApi,
+{
+    /// Bind one complete descriptor to its registered resource API.
+    pub fn new(descriptor: ControllerDescriptor, api: Arc<A>) -> Arc<Self> {
+        let controller = ControllerLeaseKey::new(
+            descriptor.identity().zone().clone(),
+            descriptor.identity().controller_ref().clone(),
+        )
+        .expect("validated descriptor has a valid controller lease key");
+        let pending_bound = descriptor.max_pending_resources();
+        let (watch_signal_tx, watch_signal_rx) = tokio::sync::mpsc::channel(1);
         Arc::new(Self {
             descriptor,
-            initial,
-            snapshots: Mutex::new(snapshots),
-            watch_tx,
-            watch_rx: tokio::sync::Mutex::new(watch_rx),
-            outcomes: Mutex::new(Vec::new()),
-            checkpoints: AtomicUsize::new(0),
-            checkpoint_notify: tokio::sync::Notify::new(),
+            controller,
+            api,
+            watch: Mutex::new(WatchState {
+                admission: FairAdmission::new(pending_bound, pending_bound),
+                operations: BTreeMap::new(),
+                closed: false,
+            }),
+            watch_signal_tx,
+            watch_signal_rx: tokio::sync::Mutex::new(watch_signal_rx),
+            admitted: AtomicUsize::new(0),
+            coalesced: AtomicUsize::new(0),
+            backpressure: AtomicUsize::new(0),
         })
     }
 
-    /// Apply Core suppression and dispatch one canonical toolkit hint.
+    /// Apply suppression and admit one canonical toolkit hint.
     pub fn dispatch_change(
         &self,
         controller: ControllerLeaseKey,
         change: ChangeRecord,
         operation: OperationContext,
-    ) -> Result<SuppressionDecision, CoreSourceError> {
+    ) -> Result<CoreDispatchOutcome, CoreSourceError> {
         let decision = change.suppression();
         if decision != SuppressionDecision::Dispatch {
-            return Ok(decision);
+            return Ok(CoreDispatchOutcome::Suppressed(decision));
         }
+        if controller != self.controller {
+            return Err(CoreSourceError::Hint(HintAdmissionError::InvalidHint));
+        }
+        let target = change.target.clone();
+        let revision = change.revision;
         let hint = ControllerHint::new(controller, change.target, change.revision, change.reasons)
-            .map_err(CoreSourceError::Hint)?
-            .into_watch_hint(operation);
-        self.watch_tx
-            .send(Ok(WatchEvent::Hint(Box::new(hint))))
-            .map_err(|_| CoreSourceError::WatchClosed)?;
-        Ok(decision)
-    }
-
-    /// Close the watch after all admitted changes.
-    pub fn close_watch(&self) -> Result<(), CoreSourceError> {
-        self.watch_tx
-            .send(Ok(WatchEvent::Closed))
-            .map_err(|_| CoreSourceError::WatchClosed)
-    }
-
-    /// Return the number of durable checkpoints.
-    pub fn checkpoint_count(&self) -> usize {
-        self.checkpoints.load(Ordering::Acquire)
-    }
-
-    /// Wait for at least one durable checkpoint.
-    pub async fn wait_for_checkpoint(&self) {
-        loop {
-            let notified = self.checkpoint_notify.notified();
-            if self.checkpoint_count() > 0 {
-                return;
+            .map_err(CoreSourceError::Hint)?;
+        let key = (self.controller.clone(), target);
+        let outcome = {
+            let mut watch = self
+                .watch
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if watch.closed {
+                return Err(CoreSourceError::WatchClosed);
             }
-            notified.await;
+            match watch.admission.push(hint) {
+                Ok(HintAdmissionOutcome::Admitted) => {
+                    watch.operations.insert(key, (revision, operation));
+                    HintAdmissionOutcome::Admitted
+                }
+                Ok(HintAdmissionOutcome::Coalesced) => {
+                    let entry = watch
+                        .operations
+                        .get_mut(&key)
+                        .expect("coalesced hint has matching operation state");
+                    if revision >= entry.0 {
+                        *entry = (revision, operation);
+                    }
+                    HintAdmissionOutcome::Coalesced
+                }
+                Err(error) => {
+                    if error == HintAdmissionError::Backpressure {
+                        self.backpressure.fetch_add(1, Ordering::Relaxed);
+                    }
+                    return Err(CoreSourceError::Hint(error));
+                }
+            }
+        };
+        let dispatch = match outcome {
+            HintAdmissionOutcome::Admitted => {
+                self.admitted.fetch_add(1, Ordering::Relaxed);
+                CoreDispatchOutcome::Admitted
+            }
+            HintAdmissionOutcome::Coalesced => {
+                self.coalesced.fetch_add(1, Ordering::Relaxed);
+                CoreDispatchOutcome::Coalesced
+            }
+        };
+        match self.watch_signal_tx.try_send(()) {
+            Ok(()) | Err(tokio::sync::mpsc::error::TrySendError::Full(())) => Ok(dispatch),
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(())) => {
+                Err(CoreSourceError::WatchClosed)
+            }
         }
     }
 
-    /// Return persisted closed outcome reasons.
-    pub fn persisted_outcomes(&self) -> Vec<ReconcileReason> {
-        self.outcomes
+    /// Close the watch after all bounded admitted changes drain.
+    pub fn close_watch(&self) -> Result<(), CoreSourceError> {
+        self.watch
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
+            .closed = true;
+        match self.watch_signal_tx.try_send(()) {
+            Ok(()) | Err(tokio::sync::mpsc::error::TrySendError::Full(())) => Ok(()),
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(())) => {
+                Err(CoreSourceError::WatchClosed)
+            }
+        }
+    }
+
+    /// Snapshot admission, coalescing, and backpressure counters.
+    pub fn admission_counts(&self) -> CoreAdmissionCounts {
+        CoreAdmissionCounts {
+            admitted: self.admitted.load(Ordering::Relaxed),
+            coalesced: self.coalesced.load(Ordering::Relaxed),
+            backpressure: self.backpressure.load(Ordering::Relaxed),
+        }
     }
 }
 
-impl ControllerSource for CoreControllerSource {
+impl<A> ControllerSource for CoreControllerSource<A>
+where
+    A: RegisteredControllerApi,
+{
     fn register(
         &self,
         descriptor: &ControllerDescriptor,
     ) -> impl Future<Output = Result<(), SourceError>> + Send {
-        std::future::ready(
-            (descriptor == &self.descriptor)
-                .then_some(())
-                .ok_or(SourceError::Integrity),
-        )
+        let valid = descriptor == &self.descriptor;
+        async move {
+            if !valid {
+                return Err(SourceError::Integrity);
+            }
+            self.api.register(descriptor).await
+        }
     }
 
     fn list_initial(
         &self,
-        _descriptor: &ControllerDescriptor,
+        descriptor: &ControllerDescriptor,
     ) -> impl Future<Output = Result<InitialList, SourceError>> + Send {
-        std::future::ready(Ok(self.initial.clone()))
+        self.api.list_initial(descriptor)
     }
 
     fn open_watch(
         &self,
-        _descriptor: &ControllerDescriptor,
-        _after_revision: ZoneRevision,
+        descriptor: &ControllerDescriptor,
+        after_revision: ZoneRevision,
     ) -> impl Future<Output = Result<(), SourceError>> + Send {
-        std::future::ready(Ok(()))
+        self.api.open_watch(descriptor, after_revision)
     }
 
     async fn receive_watch(&self) -> Result<WatchEvent, WatchFailure> {
-        self.watch_rx
-            .lock()
-            .await
-            .recv()
-            .await
-            .unwrap_or(Ok(WatchEvent::Closed))
+        loop {
+            let event = {
+                let mut watch = self
+                    .watch
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if let Some(hint) = watch.admission.pop() {
+                    let key = (hint.controller().clone(), hint.target().clone());
+                    let Some((_, operation)) = watch.operations.remove(&key) else {
+                        return Err(WatchFailure::Fatal);
+                    };
+                    Some(WatchEvent::Hint(Box::new(hint.into_watch_hint(operation))))
+                } else if watch.closed {
+                    Some(WatchEvent::Closed)
+                } else {
+                    None
+                }
+            };
+            if let Some(event) = event {
+                return Ok(event);
+            }
+            if self.watch_signal_rx.lock().await.recv().await.is_none() {
+                return Ok(WatchEvent::Closed);
+            }
+        }
     }
 
     fn read_fresh(
         &self,
         key: &ResourceKey,
     ) -> impl Future<Output = Result<FreshSnapshot, SourceError>> + Send {
-        std::future::ready(
-            self.snapshots
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .get(key)
-                .cloned()
-                .ok_or(SourceError::Unavailable),
-        )
+        self.api.read_fresh(key)
     }
 
     fn write_starting(
         &self,
-        _context: &ReconcileContext,
+        context: &ReconcileContext,
     ) -> impl Future<Output = Result<(), SourceError>> + Send {
-        std::future::ready(Ok(()))
+        self.api.write_starting(context)
     }
 
-    fn await_expedited_commit(
+    async fn await_expedited_commit(
         &self,
         context: &ReconcileContext,
-    ) -> impl Future<Output = Result<CommitDecision, SourceError>> + Send {
-        std::future::ready(Ok(CommitDecision::Committed {
-            zone: context.target().zone().clone(),
-            resource_uid: context.target().uid().clone(),
-            generation: context.generation(),
-            revision: context.revision(),
-            operation_id: context.operation().operation_id().to_owned(),
-        }))
+    ) -> Result<CommitDecision, SourceError> {
+        Ok(match self.api.consume_expedited_commit(context).await? {
+            Some(evidence) => evidence.into_decision(),
+            None => CommitDecision::Abort,
+        })
     }
 
     fn commit_result(
         &self,
         context: &ReconcileContext,
-        _result: &ReconcileResult,
+        result: &ReconcileResult,
     ) -> impl Future<Output = Result<CommitOutcome, SourceError>> + Send {
-        std::future::ready(Ok(CommitOutcome::Committed(context.revision())))
+        self.api.commit_result(context, result)
     }
 
     fn complete_expedited(
         &self,
-        _context: &ReconcileContext,
+        context: &ReconcileContext,
         projection: &ReconcileProjection,
-        _status_persistence: StatusPersistence,
+        status_persistence: StatusPersistence,
     ) -> impl Future<Output = Result<(), SourceError>> + Send {
-        self.persist_outcome(projection)
+        self.api
+            .complete_expedited(context, projection, status_persistence)
     }
 
     fn persist_outcome(
         &self,
         projection: &ReconcileProjection,
     ) -> impl Future<Output = Result<(), SourceError>> + Send {
-        self.outcomes
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .push(projection.reason());
-        std::future::ready(Ok(()))
+        self.api.persist_outcome(projection)
     }
 
     fn checkpoint(
         &self,
-        _context: &ReconcileContext,
-        _revision: ZoneRevision,
+        context: &ReconcileContext,
+        revision: ZoneRevision,
     ) -> impl Future<Output = Result<(), SourceError>> + Send {
-        self.checkpoints.fetch_add(1, Ordering::Release);
-        self.checkpoint_notify.notify_waiters();
-        std::future::ready(Ok(()))
+        self.api.checkpoint(context, revision)
     }
 
     fn schedule_requeue(
         &self,
-        _key: &ResourceKey,
-        _at_tick: u64,
+        key: &ResourceKey,
+        at_tick: u64,
     ) -> impl Future<Output = Result<(), SourceError>> + Send {
-        std::future::ready(Ok(()))
+        self.api.schedule_requeue(key, at_tick)
     }
 }
 
@@ -398,29 +605,242 @@ impl ResourceReconciler for CoreResourceReconciler {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, BTreeSet};
+    use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
     use d2b_contracts::v3::{
         ConfigurationGeneration, ControllerGeneration, ObservedGeneration, ResourceGeneration,
-        ResourceRef, ResourceTypeName, ResourceUid, ZoneId,
+        ResourcePhase, ResourceRef, ResourceTypeName, ResourceUid, ZoneId,
     };
     use d2b_controller_toolkit::{
         ControllerExecutionPolicy, ControllerIdentity, ControllerSelector, ControllerVerb,
-        ResourceRegistration, ResyncPolicy, Runner, RunnerConfig, SelectorField, TriggerReason,
+        ProjectionDisposition, ResourceRegistration, ResyncPolicy, Runner, RunnerConfig,
+        SelectorField, TriggerReason,
     };
 
     use super::*;
-    use crate::ChangeField;
+    use crate::{ChangeField, CoreTriggerReason};
 
-    fn key() -> ResourceKey {
+    const OUTCOME_RETENTION: usize = 2;
+
+    struct TestRegisteredApi {
+        initial: InitialList,
+        snapshots: Mutex<BTreeMap<ResourceKey, FreshSnapshot>>,
+        commit_evidence: Mutex<Option<DurableCommitEvidence>>,
+        commit_consumptions: AtomicUsize,
+        starting: Mutex<BTreeSet<(ResourceKey, ZoneRevision)>>,
+        commits: Mutex<BTreeSet<(ResourceKey, ZoneRevision)>>,
+        checkpoints: Mutex<BTreeSet<(ResourceKey, ZoneRevision)>>,
+        checkpoint_calls: AtomicUsize,
+        checkpoint_notify: tokio::sync::Notify,
+        outcomes: Mutex<VecDeque<(ResourceKey, ZoneRevision, ReconcileReason)>>,
+    }
+
+    impl TestRegisteredApi {
+        fn new(initial: InitialList, snapshots: BTreeMap<ResourceKey, FreshSnapshot>) -> Arc<Self> {
+            Arc::new(Self {
+                initial,
+                snapshots: Mutex::new(snapshots),
+                commit_evidence: Mutex::new(None),
+                commit_consumptions: AtomicUsize::new(0),
+                starting: Mutex::new(BTreeSet::new()),
+                commits: Mutex::new(BTreeSet::new()),
+                checkpoints: Mutex::new(BTreeSet::new()),
+                checkpoint_calls: AtomicUsize::new(0),
+                checkpoint_notify: tokio::sync::Notify::new(),
+                outcomes: Mutex::new(VecDeque::new()),
+            })
+        }
+
+        fn install_commit_evidence(&self, evidence: DurableCommitEvidence) {
+            *self
+                .commit_evidence
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(evidence);
+        }
+
+        fn starting_count(&self) -> usize {
+            self.starting
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .len()
+        }
+
+        fn commit_count(&self) -> usize {
+            self.commits
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .len()
+        }
+
+        fn checkpoint_count(&self) -> usize {
+            self.checkpoints
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .len()
+        }
+
+        async fn wait_for_checkpoint_calls(&self, expected: usize) {
+            loop {
+                let notified = self.checkpoint_notify.notified();
+                if self.checkpoint_calls.load(Ordering::Acquire) >= expected {
+                    return;
+                }
+                notified.await;
+            }
+        }
+
+        fn record_outcome(&self, projection: &ReconcileProjection) {
+            let mut outcomes = self
+                .outcomes
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let key = (projection.target().clone(), projection.revision());
+            if outcomes
+                .iter()
+                .any(|(target, revision, _)| (target, *revision) == (&key.0, key.1))
+            {
+                return;
+            }
+            if outcomes.len() == OUTCOME_RETENTION {
+                outcomes.pop_front();
+            }
+            outcomes.push_back((key.0, key.1, projection.reason()));
+        }
+    }
+
+    impl registered_api::Sealed for TestRegisteredApi {}
+
+    impl RegisteredControllerApi for TestRegisteredApi {
+        fn register(
+            &self,
+            _descriptor: &ControllerDescriptor,
+        ) -> impl Future<Output = Result<(), SourceError>> + Send {
+            std::future::ready(Ok(()))
+        }
+
+        fn list_initial(
+            &self,
+            _descriptor: &ControllerDescriptor,
+        ) -> impl Future<Output = Result<InitialList, SourceError>> + Send {
+            std::future::ready(Ok(self.initial.clone()))
+        }
+
+        fn open_watch(
+            &self,
+            _descriptor: &ControllerDescriptor,
+            _after_revision: ZoneRevision,
+        ) -> impl Future<Output = Result<(), SourceError>> + Send {
+            std::future::ready(Ok(()))
+        }
+
+        fn read_fresh(
+            &self,
+            key: &ResourceKey,
+        ) -> impl Future<Output = Result<FreshSnapshot, SourceError>> + Send {
+            std::future::ready(
+                self.snapshots
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .get(key)
+                    .cloned()
+                    .ok_or(SourceError::Unavailable),
+            )
+        }
+
+        fn write_starting(
+            &self,
+            context: &ReconcileContext,
+        ) -> impl Future<Output = Result<(), SourceError>> + Send {
+            self.starting
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .insert((context.target().clone(), context.revision()));
+            std::future::ready(Ok(()))
+        }
+
+        fn consume_expedited_commit(
+            &self,
+            _context: &ReconcileContext,
+        ) -> impl Future<Output = Result<Option<DurableCommitEvidence>, SourceError>> + Send
+        {
+            self.commit_consumptions.fetch_add(1, Ordering::Release);
+            std::future::ready(Ok(self
+                .commit_evidence
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .take()))
+        }
+
+        fn commit_result(
+            &self,
+            context: &ReconcileContext,
+            _result: &ReconcileResult,
+        ) -> impl Future<Output = Result<CommitOutcome, SourceError>> + Send {
+            self.commits
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .insert((context.target().clone(), context.revision()));
+            std::future::ready(Ok(CommitOutcome::Committed(context.revision())))
+        }
+
+        fn complete_expedited(
+            &self,
+            _context: &ReconcileContext,
+            projection: &ReconcileProjection,
+            _status_persistence: StatusPersistence,
+        ) -> impl Future<Output = Result<(), SourceError>> + Send {
+            self.record_outcome(projection);
+            std::future::ready(Ok(()))
+        }
+
+        fn persist_outcome(
+            &self,
+            projection: &ReconcileProjection,
+        ) -> impl Future<Output = Result<(), SourceError>> + Send {
+            self.record_outcome(projection);
+            std::future::ready(Ok(()))
+        }
+
+        fn checkpoint(
+            &self,
+            context: &ReconcileContext,
+            revision: ZoneRevision,
+        ) -> impl Future<Output = Result<(), SourceError>> + Send {
+            self.checkpoints
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .insert((context.target().clone(), revision));
+            self.checkpoint_calls.fetch_add(1, Ordering::Release);
+            self.checkpoint_notify.notify_waiters();
+            std::future::ready(Ok(()))
+        }
+
+        fn schedule_requeue(
+            &self,
+            _key: &ResourceKey,
+            _at_tick: u64,
+        ) -> impl Future<Output = Result<(), SourceError>> + Send {
+            std::future::ready(Ok(()))
+        }
+    }
+
+    fn key(name: &str, suffix: u16) -> ResourceKey {
         ResourceKey::new(
             ZoneId::parse("work").unwrap(),
-            ResourceRef::parse("Process/app").unwrap(),
-            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174001").unwrap(),
+            ResourceRef::parse(&format!("Process/{name}")).unwrap(),
+            ResourceUid::parse(format!("123e4567-e89b-42d3-a456-{suffix:012}")).unwrap(),
         )
     }
 
-    fn descriptor() -> ControllerDescriptor {
+    fn controller_key() -> ControllerLeaseKey {
+        ControllerLeaseKey::new(
+            ZoneId::parse("work").unwrap(),
+            ResourceRef::parse("Process/controller").unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn descriptor(max_pending: usize) -> ControllerDescriptor {
         let resource_type = ResourceTypeName::parse("Process").unwrap();
         ControllerDescriptor::new(
             ControllerIdentity::new(
@@ -447,7 +867,7 @@ mod tests {
             ControllerExecutionPolicy::new(
                 1,
                 1,
-                8,
+                max_pending,
                 1,
                 4,
                 ResyncPolicy::new(Some(100), 5_000).unwrap(),
@@ -457,19 +877,53 @@ mod tests {
         .unwrap()
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn durable_core_change_wakes_toolkit_queue_and_reconciles() {
-        let target = key();
-        let snapshot = ResourceSnapshot::new(
-            target.clone(),
-            ZoneRevision::new(2),
-            ResourceGeneration::new(2).unwrap(),
+    fn snapshot(target: ResourceKey, revision: u64) -> ResourceSnapshot {
+        ResourceSnapshot::new(
+            target,
+            ZoneRevision::new(revision),
+            ResourceGeneration::new(revision).unwrap(),
             b"{}".to_vec(),
             false,
-        );
-        let descriptor = descriptor();
-        let source = CoreControllerSource::new(
-            descriptor.clone(),
+        )
+    }
+
+    fn change(
+        target: ResourceKey,
+        revision: u64,
+        reasons: BTreeSet<CoreTriggerReason>,
+    ) -> ChangeRecord {
+        ChangeRecord {
+            target,
+            revision: ZoneRevision::new(revision),
+            generation: ResourceGeneration::new(revision).unwrap(),
+            observed_generation: ObservedGeneration::new(revision.saturating_sub(1)),
+            fields: BTreeSet::from([ChangeField::Spec]),
+            reasons,
+            type_is_bound: true,
+            relevant_field_changed: true,
+            own_status_only: false,
+            owner_consumer_exists: false,
+            dependency_consumer_exists: false,
+            controller_generation_current: true,
+            conditions_require_work: false,
+            unknown_requires_observation: false,
+        }
+    }
+
+    fn operation(id: &str) -> OperationContext {
+        OperationContext::new(id, format!("idem-{id}"), format!("corr-{id}"), None).unwrap()
+    }
+
+    fn source_with_snapshot(
+        descriptor: &ControllerDescriptor,
+        target: &ResourceKey,
+        revision: u64,
+    ) -> (
+        Arc<TestRegisteredApi>,
+        Arc<CoreControllerSource<TestRegisteredApi>>,
+    ) {
+        let target_snapshot = snapshot(target.clone(), revision);
+        let api = TestRegisteredApi::new(
             InitialList {
                 resources: Vec::new(),
                 snapshot_revision: ZoneRevision::new(1),
@@ -477,11 +931,20 @@ mod tests {
             BTreeMap::from([(
                 target.clone(),
                 FreshSnapshot::Present {
-                    target: snapshot,
+                    target: target_snapshot,
                     dependencies: Vec::new(),
                 },
             )]),
         );
+        let source = CoreControllerSource::new(descriptor.clone(), Arc::clone(&api));
+        (api, source)
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn durable_core_change_wakes_toolkit_queue_and_reconciles() {
+        let target = key("app", 1);
+        let descriptor = descriptor(8);
+        let (api, source) = source_with_snapshot(&descriptor, &target, 2);
         let reconciler = CoreResourceReconciler::new(descriptor);
         let runner = tokio::spawn(
             Runner::new(
@@ -502,37 +965,223 @@ mod tests {
         assert_eq!(
             source
                 .dispatch_change(
-                    ControllerLeaseKey::new(
-                        ZoneId::parse("work").unwrap(),
-                        ResourceRef::parse("Process/controller").unwrap(),
-                    )
-                    .unwrap(),
-                    ChangeRecord {
+                    controller_key(),
+                    change(
                         target,
-                        revision: ZoneRevision::new(2),
-                        generation: ResourceGeneration::new(2).unwrap(),
-                        observed_generation: ObservedGeneration::new(1),
-                        fields: BTreeSet::from([ChangeField::Spec]),
-                        reasons: BTreeSet::from([TriggerReason::SpecGenerationChanged]),
-                        type_is_bound: true,
-                        relevant_field_changed: true,
-                        own_status_only: false,
-                        owner_consumer_exists: false,
-                        dependency_consumer_exists: false,
-                        controller_generation_current: true,
-                        conditions_require_work: false,
-                        unknown_requires_observation: false,
-                    },
-                    OperationContext::new("op", "idem", "corr", None).unwrap(),
+                        2,
+                        BTreeSet::from([CoreTriggerReason::SpecGenerationChanged]),
+                    ),
+                    operation("op"),
                 )
                 .unwrap(),
-            SuppressionDecision::Dispatch
+            CoreDispatchOutcome::Admitted
         );
-        source.wait_for_checkpoint().await;
-        assert_eq!(source.checkpoint_count(), 1);
+        api.wait_for_checkpoint_calls(1).await;
+        assert_eq!(api.checkpoint_count(), 1);
         source.close_watch().unwrap();
         let report = runner.await.unwrap().unwrap();
         assert_eq!(report.dispatched, 1);
         assert_eq!(report.checkpointed, 1);
+        assert_eq!(
+            source.admission_counts(),
+            CoreAdmissionCounts {
+                admitted: 1,
+                coalesced: 0,
+                backpressure: 0,
+            }
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn absent_durable_commit_evidence_cannot_authorize_expedited_effects() {
+        let target = key("expedited", 2);
+        let descriptor = descriptor(8);
+        let (api, source) = source_with_snapshot(&descriptor, &target, 2);
+        let runner = Runner::new(
+            CoreResourceReconciler::new(descriptor),
+            Arc::clone(&source),
+            RunnerConfig {
+                policy_revision: 1,
+                api_revision: 1,
+                configuration_revision: ConfigurationGeneration::new(1).unwrap(),
+                deadline_tick: 5_000,
+                max_attempts: 3,
+            },
+        )
+        .run();
+
+        assert_eq!(
+            source
+                .dispatch_change(
+                    controller_key(),
+                    change(
+                        target,
+                        2,
+                        BTreeSet::from([CoreTriggerReason::ExpeditedMutation]),
+                    ),
+                    operation("expedited"),
+                )
+                .unwrap(),
+            CoreDispatchOutcome::Admitted
+        );
+        source.close_watch().unwrap();
+
+        let report = runner.await.unwrap();
+        assert_eq!(report.dispatched, 1);
+        assert_eq!(report.checkpointed, 0);
+        assert_eq!(api.starting_count(), 0);
+        assert_eq!(api.commit_count(), 0);
+        assert_eq!(api.commit_consumptions.load(Ordering::Acquire), 1);
+    }
+
+    #[tokio::test]
+    async fn consumed_commit_evidence_is_not_reconstructed_from_the_context() {
+        let target = key("mismatch", 3);
+        let descriptor = descriptor(8);
+        let (api, source) = source_with_snapshot(&descriptor, &target, 2);
+        api.install_commit_evidence(DurableCommitEvidence::for_test(
+            target.zone().clone(),
+            target.uid().clone(),
+            ResourceGeneration::new(3).unwrap(),
+            ZoneRevision::new(3),
+            "independent-commit".to_owned(),
+        ));
+        let runner = Runner::new(
+            CoreResourceReconciler::new(descriptor),
+            Arc::clone(&source),
+            RunnerConfig {
+                policy_revision: 1,
+                api_revision: 1,
+                configuration_revision: ConfigurationGeneration::new(1).unwrap(),
+                deadline_tick: 5_000,
+                max_attempts: 3,
+            },
+        )
+        .run();
+
+        source
+            .dispatch_change(
+                controller_key(),
+                change(
+                    target,
+                    2,
+                    BTreeSet::from([CoreTriggerReason::ExpeditedMutation]),
+                ),
+                operation("context"),
+            )
+            .unwrap();
+        source.close_watch().unwrap();
+
+        let report = runner.await.unwrap();
+        assert_eq!(report.dispatched, 1);
+        assert_eq!(api.starting_count(), 0);
+        assert_eq!(api.commit_count(), 0);
+        assert_eq!(api.commit_consumptions.load(Ordering::Acquire), 1);
+    }
+
+    #[tokio::test]
+    async fn core_watch_admission_is_bounded_coalesced_and_counted() {
+        let descriptor = descriptor(1);
+        let first = key("first", 4);
+        let api = TestRegisteredApi::new(
+            InitialList {
+                resources: Vec::new(),
+                snapshot_revision: ZoneRevision::new(1),
+            },
+            BTreeMap::new(),
+        );
+        let source = CoreControllerSource::new(descriptor, api);
+
+        assert_eq!(
+            source
+                .dispatch_change(
+                    controller_key(),
+                    change(
+                        first.clone(),
+                        2,
+                        BTreeSet::from([CoreTriggerReason::SpecGenerationChanged]),
+                    ),
+                    operation("first"),
+                )
+                .unwrap(),
+            CoreDispatchOutcome::Admitted
+        );
+        assert_eq!(
+            source
+                .dispatch_change(
+                    controller_key(),
+                    change(
+                        first,
+                        3,
+                        BTreeSet::from([CoreTriggerReason::DeletionRequested]),
+                    ),
+                    operation("coalesced"),
+                )
+                .unwrap(),
+            CoreDispatchOutcome::Coalesced
+        );
+        assert_eq!(
+            source
+                .dispatch_change(
+                    controller_key(),
+                    change(
+                        key("second", 5),
+                        2,
+                        BTreeSet::from([CoreTriggerReason::SpecGenerationChanged]),
+                    ),
+                    operation("rejected"),
+                )
+                .unwrap_err(),
+            CoreSourceError::Hint(HintAdmissionError::Backpressure)
+        );
+        assert_eq!(
+            source.admission_counts(),
+            CoreAdmissionCounts {
+                admitted: 1,
+                coalesced: 1,
+                backpressure: 1,
+            }
+        );
+
+        let WatchEvent::Hint(hint) = source.receive_watch().await.unwrap() else {
+            panic!("bounded watch returned an unexpected event");
+        };
+        assert_eq!(hint.revision(), ZoneRevision::new(3));
+        assert!(
+            hint.reasons()
+                .contains(TriggerReason::SpecGenerationChanged)
+        );
+        assert!(hint.reasons().contains(TriggerReason::DeletionRequested));
+    }
+
+    #[tokio::test]
+    async fn test_persistence_is_revision_idempotent_and_retention_bounded() {
+        let api = TestRegisteredApi::new(
+            InitialList {
+                resources: Vec::new(),
+                snapshot_revision: ZoneRevision::new(1),
+            },
+            BTreeMap::new(),
+        );
+        let target = key("outcome", 6);
+        for revision in [2, 2, 3, 4] {
+            api.persist_outcome(&ReconcileProjection::new(
+                target.clone(),
+                ZoneRevision::new(revision),
+                ResourcePhase::Failed,
+                ProjectionDisposition::Failed,
+                ReconcileReason::HandlerTerminal,
+                false,
+            ))
+            .await
+            .unwrap();
+        }
+        let outcomes = api
+            .outcomes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert_eq!(outcomes.len(), OUTCOME_RETENTION);
+        assert_eq!(outcomes[0].1, ZoneRevision::new(3));
+        assert_eq!(outcomes[1].1, ZoneRevision::new(4));
     }
 }

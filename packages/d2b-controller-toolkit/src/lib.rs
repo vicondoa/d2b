@@ -31,7 +31,7 @@ pub use result::{
 pub use runner::{
     CommitDecision, CommitOutcome, ControllerSource, FreshSnapshot, HandlerErrorClass,
     HandlerFailure, InitialList, InitialResource, MonotonicClock, ResourceReconciler, Runner,
-    RunnerConfig, RunnerCounter, RunnerError, RunnerFuture, RunnerObservation,
+    RunnerConfig, RunnerCounter, RunnerError, RunnerFailure, RunnerFuture, RunnerObservation,
     RunnerObservationReason, RunnerObserver, RunnerOutcome, RunnerReport, SourceError, WatchEvent,
     WatchFailure, WatchHint,
 };

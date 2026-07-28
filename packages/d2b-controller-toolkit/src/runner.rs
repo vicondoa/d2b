@@ -84,6 +84,26 @@ impl WatchHint {
         }
     }
 
+    /// Borrow the watched resource identity.
+    pub const fn key(&self) -> &ResourceKey {
+        &self.key
+    }
+
+    /// Return the watched high-water revision.
+    pub const fn revision(&self) -> ZoneRevision {
+        self.revision
+    }
+
+    /// Borrow the coalesced trigger reasons.
+    pub const fn reasons(&self) -> &TriggerSet {
+        &self.reasons
+    }
+
+    /// Return the selected priority lane.
+    pub const fn lane(&self) -> PriorityLane {
+        self.lane
+    }
+
     fn into_queue_hint(self) -> Result<QueueHint, QueueError> {
         QueueHint::new(
             self.key,
@@ -589,6 +609,37 @@ impl From<ContextError> for RunnerError {
     }
 }
 
+/// Terminal runner failure with the complete report accumulated before exit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RunnerFailure {
+    error: RunnerError,
+    report: RunnerReport,
+}
+
+impl RunnerFailure {
+    /// Return the terminal failure class.
+    pub const fn error(&self) -> RunnerError {
+        self.error
+    }
+
+    /// Return the final report snapshot.
+    pub const fn report(&self) -> RunnerReport {
+        self.report
+    }
+}
+
+impl core::fmt::Display for RunnerFailure {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        self.error.fmt(f)
+    }
+}
+
+impl std::error::Error for RunnerFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.error)
+    }
+}
+
 /// Async orchestration loop.
 pub struct Runner<R, S> {
     reconciler: Arc<R>,
@@ -650,9 +701,13 @@ where
                     } else {
                         RunnerOutcome::Failed
                     },
-                    reason: match result {
-                        Err(RunnerError::Cancelled) => RunnerObservationReason::Cancellation,
-                        Err(RunnerError::Source(SourceError::Timeout)) => {
+                    reason: match &result {
+                        Err(failure) if failure.error() == RunnerError::Cancelled => {
+                            RunnerObservationReason::Cancellation
+                        }
+                        Err(failure)
+                            if failure.error() == RunnerError::Source(SourceError::Timeout) =>
+                        {
                             RunnerObservationReason::Deadline
                         }
                         _ => RunnerObservationReason::None,
@@ -665,7 +720,19 @@ where
         }
     }
 
-    async fn run_inner(&self, shutdown: Cancellation) -> Result<RunnerReport, RunnerError> {
+    async fn run_inner(&self, shutdown: Cancellation) -> Result<RunnerReport, RunnerFailure> {
+        let mut report = RunnerReport::default();
+        match self.run_loop(shutdown, &mut report).await {
+            Ok(()) => Ok(report),
+            Err(error) => Err(RunnerFailure { error, report }),
+        }
+    }
+
+    async fn run_loop(
+        &self,
+        shutdown: Cancellation,
+        report: &mut RunnerReport,
+    ) -> Result<(), RunnerError> {
         let startup_deadline = phase_deadline(self.clock.as_ref(), self.config.deadline_tick);
         let descriptor = bounded_phase(
             self.clock.as_ref(),
@@ -718,7 +785,6 @@ where
             descriptor.execution().resync().resync_interval_ticks(),
             shutdown.clone(),
         );
-        let mut report = RunnerReport::default();
         let mut watch_closed = false;
 
         loop {
@@ -763,7 +829,7 @@ where
             }
 
             if watch_closed && workers.is_empty() && queue.is_empty() {
-                return Ok(report);
+                return Ok(());
             }
 
             tokio::select! {
@@ -993,7 +1059,7 @@ where
 /// Executor-native future returned by [`Runner::run`].
 pub struct RunnerFuture {
     shutdown: Cancellation,
-    inner: Pin<Box<dyn Future<Output = Result<RunnerReport, RunnerError>> + Send>>,
+    inner: Pin<Box<dyn Future<Output = Result<RunnerReport, RunnerFailure>> + Send>>,
 }
 
 impl RunnerFuture {
@@ -1004,7 +1070,7 @@ impl RunnerFuture {
 }
 
 impl Future for RunnerFuture {
-    type Output = Result<RunnerReport, RunnerError>;
+    type Output = Result<RunnerReport, RunnerFailure>;
 
     fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
         self.inner.as_mut().poll(context)
@@ -2578,7 +2644,7 @@ mod tests {
     fn run_in_thread(
         reconciler: Arc<FakeReconciler>,
         source: Arc<FakeSource>,
-    ) -> thread::JoinHandle<Result<RunnerReport, RunnerError>> {
+    ) -> thread::JoinHandle<Result<RunnerReport, RunnerFailure>> {
         run_with_config_in_thread(reconciler, source, config())
     }
 
@@ -2586,7 +2652,7 @@ mod tests {
         reconciler: Arc<FakeReconciler>,
         source: Arc<FakeSource>,
         config: RunnerConfig,
-    ) -> thread::JoinHandle<Result<RunnerReport, RunnerError>> {
+    ) -> thread::JoinHandle<Result<RunnerReport, RunnerFailure>> {
         thread::spawn(move || block_on(Runner::new(reconciler, source, config).run()))
     }
 
@@ -2681,7 +2747,10 @@ mod tests {
                 .unwrap()
                 .unwrap();
             shutdown.cancel();
-            assert_eq!(runner.await.unwrap().unwrap_err(), RunnerError::Cancelled);
+            assert_eq!(
+                runner.await.unwrap().unwrap_err().error(),
+                RunnerError::Cancelled
+            );
             assert_eq!(reconciler.active.load(Ordering::SeqCst), 0);
         });
     }
@@ -2702,7 +2771,10 @@ mod tests {
             }
             assert_eq!(source.reads_started.load(Ordering::SeqCst), 1);
             shutdown.cancel();
-            assert_eq!(runner.await.unwrap().unwrap_err(), RunnerError::Cancelled);
+            assert_eq!(
+                runner.await.unwrap().unwrap_err().error(),
+                RunnerError::Cancelled
+            );
         });
     }
 
@@ -2783,7 +2855,7 @@ mod tests {
         watch_tx.send(Err(WatchFailure::Fatal)).unwrap();
 
         assert_eq!(
-            runner.join().unwrap().unwrap_err(),
+            runner.join().unwrap().unwrap_err().error(),
             RunnerError::Source(SourceError::Integrity)
         );
         let observations = observer
@@ -2837,7 +2909,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            block_on(runner).unwrap_err(),
+            block_on(runner).unwrap_err().error(),
             RunnerError::Source(SourceError::Integrity)
         );
     }
@@ -2855,7 +2927,7 @@ mod tests {
         watch_tx.send(Ok(WatchEvent::Closed)).unwrap();
 
         assert_eq!(
-            block_on(runner).unwrap_err(),
+            block_on(runner).unwrap_err().error(),
             RunnerError::Source(SourceError::Integrity)
         );
     }
@@ -2871,7 +2943,7 @@ mod tests {
         watch_tx.send(Ok(WatchEvent::Closed)).unwrap();
 
         assert_eq!(
-            runner.join().unwrap().unwrap_err(),
+            runner.join().unwrap().unwrap_err().error(),
             RunnerError::Source(SourceError::Integrity)
         );
     }
@@ -3022,10 +3094,14 @@ mod tests {
         wait_for(&reconciler.plan_count, 1);
         source.release_commit_gate();
 
+        let failure = runner.join().unwrap().unwrap_err();
         assert_eq!(
-            runner.join().unwrap().unwrap_err(),
+            failure.error(),
             RunnerError::Source(SourceError::Unavailable)
         );
+        assert_eq!(failure.report().dispatched, 1);
+        assert_eq!(failure.report().checkpointed, 0);
+        assert_eq!(failure.report().committed_status_pending, 0);
         assert!(entered.try_recv().is_err());
         assert_eq!(reconciler.reconcile_count.load(Ordering::SeqCst), 0);
         assert_eq!(source.expedited_completions.load(Ordering::SeqCst), 0);
@@ -3054,6 +3130,23 @@ mod tests {
             outcomes[0].remediation(),
             "correct the declared specification and retry reconciliation"
         );
+    }
+
+    #[test]
+    fn terminal_failure_retains_the_full_accumulated_report() {
+        let target = key("report", 1);
+        let (reconciler, _entered, source, watch_tx) = harness(vec![target], 1);
+        reconciler.block_handlers.store(false, Ordering::SeqCst);
+        let runner = run_in_thread(reconciler, Arc::clone(&source));
+
+        wait_for(&source.checkpoints, 1);
+        watch_tx.send(Err(WatchFailure::Fatal)).unwrap();
+
+        let failure = runner.join().unwrap().unwrap_err();
+        assert_eq!(failure.error(), RunnerError::Source(SourceError::Integrity));
+        assert_eq!(failure.report().dispatched, 1);
+        assert_eq!(failure.report().checkpointed, 1);
+        assert_eq!(failure.report().committed_status_pending, 1);
     }
 
     #[test]
