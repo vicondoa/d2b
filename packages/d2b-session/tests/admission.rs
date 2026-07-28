@@ -1,4 +1,11 @@
-use std::{collections::BTreeSet, sync::Arc, time::Instant};
+use std::{
+    collections::BTreeSet,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Instant,
+};
 
 use async_trait::async_trait;
 use d2b_contracts::v3::{
@@ -13,14 +20,153 @@ use d2b_contracts::v3::{
 };
 use d2b_resource_api::authz::SessionVerb;
 use d2b_session::{
-    BootstrapAdmission, BootstrapPsk, ComponentSessionDriver, HandshakeCredentials, OwnedTransport,
-    Secret32, SessionAcceptor, SessionAuthenticationBinding, SessionAuthorizationRequest,
-    SessionEngine, SessionError, TransportDescriptor, TransportError, TransportEvidence,
+    AuthenticatedComponentSession, AuthorizedSessionOperation, BootstrapAdmission, BootstrapPsk,
+    ComponentSessionDriver, HandshakeCredentials, OwnedTransport, Secret32, SessionAcceptor,
+    SessionAuthenticationBinding, SessionAuthorizationRequest, SessionEngine, SessionError,
+    SessionRegistrationCapability, TransportDescriptor, TransportError, TransportEvidence,
     TransportPacket, x25519_public_key,
 };
-use tokio::sync::mpsc;
+use tokio::sync::{Notify, mpsc};
 
 const POLICY_REVISION: u64 = 4;
+
+struct TestRegistrationCapability;
+
+impl SessionRegistrationCapability<()> for TestRegistrationCapability {
+    type Error = std::convert::Infallible;
+
+    fn consume(self, _registrar: &()) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn unpolled_cancellation_on_real_driver_reclaims_request_for_reuse() {
+    let zone = ZoneId::parse("work").unwrap();
+    let policy = single_request_policy();
+    let (initiator, responder) = engine_pair(&policy).await;
+    let admitted = session_acceptor(
+        policy,
+        zone.clone(),
+        [SessionVerb::Connect, SessionVerb::Invoke],
+    )
+    .admit(initiator, evidence(), 1)
+    .await
+    .unwrap();
+    let (mut session, ttrpc) = admitted.consume_registration(&()).unwrap();
+    let _responder = responder.into_driver();
+    let request_id = d2b_session::contract::RequestId::new(vec![0x41; 16]).unwrap();
+    let replacement_id = d2b_session::contract::RequestId::new(vec![0x43; 16]).unwrap();
+
+    ttrpc
+        .start(
+            invoke_permit(&mut session, &zone).await,
+            request_id.clone(),
+            b"first".to_vec(),
+            ttrpc.attempt_guard(),
+            2,
+        )
+        .await
+        .unwrap();
+    drop(session.cancellation_handle().cancel(request_id.clone()));
+
+    let mut reused = false;
+    for _ in 0..64 {
+        match ttrpc
+            .start(
+                invoke_permit(&mut session, &zone).await,
+                replacement_id.clone(),
+                b"replacement".to_vec(),
+                ttrpc.attempt_guard(),
+                2,
+            )
+            .await
+        {
+            Ok(()) => {
+                reused = true;
+                break;
+            }
+            Err(error) if error.code() == SessionErrorCode::QueueBackpressure => {
+                tokio::task::yield_now().await;
+            }
+            Err(error) => panic!("replacement request failed unexpectedly: {error}"),
+        }
+    }
+    assert!(reused, "unpolled cancellation did not reclaim the request");
+    assert!(ttrpc.complete(replacement_id).await.unwrap());
+}
+
+#[tokio::test]
+async fn failed_cancellation_delivery_on_real_driver_reclaims_request_for_reuse() {
+    let zone = ZoneId::parse("work").unwrap();
+    let policy = single_request_policy();
+    let (initiator, responder, send_failure) = engine_pair_with_failure(&policy).await;
+    let admitted = session_acceptor(
+        policy,
+        zone.clone(),
+        [SessionVerb::Connect, SessionVerb::Invoke],
+    )
+    .admit(initiator, evidence(), 1)
+    .await
+    .unwrap();
+    let (mut session, ttrpc) = admitted.consume_registration(&()).unwrap();
+    let _responder = responder.into_driver();
+    let request_id = d2b_session::contract::RequestId::new(vec![0x42; 16]).unwrap();
+    let replacement_id = d2b_session::contract::RequestId::new(vec![0x44; 16]).unwrap();
+
+    ttrpc
+        .start(
+            invoke_permit(&mut session, &zone).await,
+            request_id.clone(),
+            b"first".to_vec(),
+            ttrpc.attempt_guard(),
+            2,
+        )
+        .await
+        .unwrap();
+
+    send_failure.enabled.store(true, Ordering::Release);
+    let entered = send_failure.entered.notified();
+    let cancellation = session.cancellation_handle();
+    let cancelled_request = request_id.clone();
+    let cancel = tokio::spawn(async move { cancellation.cancel(cancelled_request).await });
+    tokio::time::timeout(std::time::Duration::from_secs(1), entered)
+        .await
+        .expect("cancellation delivery did not reach the failing writer");
+
+    let replacement = {
+        let ttrpc = ttrpc.clone();
+        let permit = invoke_permit(&mut session, &zone).await;
+        let request_id = replacement_id.clone();
+        tokio::spawn(async move {
+            ttrpc
+                .start(
+                    permit,
+                    request_id,
+                    b"replacement".to_vec(),
+                    ttrpc.attempt_guard(),
+                    2,
+                )
+                .await
+        })
+    };
+    let mut reclaimed = false;
+    for _ in 0..64 {
+        if ttrpc.complete(replacement_id.clone()).await.unwrap() {
+            reclaimed = true;
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        reclaimed,
+        "request was not reusable while cancellation delivery was failing"
+    );
+
+    send_failure.release.notify_one();
+    assert!(cancel.await.unwrap().is_err());
+    assert!(replacement.await.unwrap().is_err());
+}
 
 fn endpoint_policy() -> EndpointPolicy {
     EndpointPolicy {
@@ -48,6 +194,12 @@ fn endpoint_policy() -> EndpointPolicy {
             credentials_allowed: false,
         },
     }
+}
+
+fn single_request_policy() -> EndpointPolicy {
+    let mut policy = endpoint_policy();
+    policy.limits.ttrpc_control_queue_bytes = 4 * 1024;
+    policy
 }
 
 fn bootstrap_policy() -> EndpointPolicy {
@@ -102,6 +254,25 @@ struct TestTransport {
     sender: mpsc::Sender<TransportPacket>,
     receiver: mpsc::Receiver<TransportPacket>,
     descriptor: TransportDescriptor,
+    send_failure: Arc<SendFailure>,
+}
+
+#[derive(Default)]
+struct SendFailure {
+    enabled: AtomicBool,
+    entered: Notify,
+    release: Notify,
+}
+
+impl SendFailure {
+    async fn before_send(&self) -> Result<(), TransportError> {
+        if !self.enabled.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        self.entered.notify_one();
+        self.release.notified().await;
+        Err(TransportError::WouldBlock)
+    }
 }
 
 #[async_trait]
@@ -120,10 +291,14 @@ impl OwnedTransport for TestTransport {
             sender,
             receiver,
             descriptor: _,
+            send_failure,
         } = *self;
         (
             Box::new(TestTransportReader { receiver }),
-            Box::new(TestTransportWriter { sender }),
+            Box::new(TestTransportWriter {
+                sender,
+                send_failure,
+            }),
         )
     }
 
@@ -140,6 +315,7 @@ impl OwnedTransport for TestTransport {
     }
 
     async fn send(&mut self, packet: TransportPacket) -> Result<(), TransportError> {
+        self.send_failure.before_send().await?;
         self.sender
             .send(packet)
             .await
@@ -172,11 +348,13 @@ impl d2b_session::TransportReader for TestTransportReader {
 
 struct TestTransportWriter {
     sender: mpsc::Sender<TransportPacket>,
+    send_failure: Arc<SendFailure>,
 }
 
 #[async_trait]
 impl d2b_session::TransportWriter for TestTransportWriter {
     async fn send(&mut self, packet: TransportPacket) -> Result<(), TransportError> {
+        self.send_failure.before_send().await?;
         self.sender
             .send(packet)
             .await
@@ -189,8 +367,16 @@ impl d2b_session::TransportWriter for TestTransportWriter {
 }
 
 fn test_transport_pair(policy: &EndpointPolicy) -> (TestTransport, TestTransport) {
+    test_transport_pair_with_failure(policy).0
+}
+
+fn test_transport_pair_with_failure(
+    policy: &EndpointPolicy,
+) -> ((TestTransport, TestTransport), Arc<SendFailure>) {
     let (left_sender, left_receiver) = mpsc::channel(16);
     let (right_sender, right_receiver) = mpsc::channel(16);
+    let initiator_send_failure = Arc::new(SendFailure::default());
+    let responder_send_failure = Arc::new(SendFailure::default());
     let descriptor = TransportDescriptor {
         class: policy.transport_binding.transport,
         locality: policy.transport_binding.locality,
@@ -201,16 +387,21 @@ fn test_transport_pair(policy: &EndpointPolicy) -> (TestTransport, TestTransport
         supports_attachments: policy.attachment_policy != AttachmentPolicy::disabled(),
     };
     (
-        TestTransport {
-            sender: left_sender,
-            receiver: right_receiver,
-            descriptor,
-        },
-        TestTransport {
-            sender: right_sender,
-            receiver: left_receiver,
-            descriptor,
-        },
+        (
+            TestTransport {
+                sender: left_sender,
+                receiver: right_receiver,
+                descriptor,
+                send_failure: Arc::clone(&initiator_send_failure),
+            },
+            TestTransport {
+                sender: right_sender,
+                receiver: left_receiver,
+                descriptor,
+                send_failure: responder_send_failure,
+            },
+        ),
+        initiator_send_failure,
     )
 }
 
@@ -273,11 +464,57 @@ async fn engine_pair(
     (initiator.unwrap(), responder.unwrap())
 }
 
+async fn engine_pair_with_failure(
+    policy: &EndpointPolicy,
+) -> (
+    SessionEngine<TestTransport>,
+    SessionEngine<TestTransport>,
+    Arc<SendFailure>,
+) {
+    let ((initiator_transport, responder_transport), send_failure) =
+        test_transport_pair_with_failure(policy);
+    let (initiator, responder) = tokio::join!(
+        SessionEngine::establish_initiator(
+            initiator_transport,
+            policy.clone(),
+            HandshakeCredentials::Nn,
+            Instant::now(),
+        ),
+        SessionEngine::establish_responder(
+            responder_transport,
+            policy.clone(),
+            HandshakeCredentials::Nn,
+            Instant::now(),
+        ),
+    );
+    (initiator.unwrap(), responder.unwrap(), send_failure)
+}
+
 fn evidence() -> TransportEvidence {
     TransportEvidence::new(
         EvidenceClass::UnixPeer,
         BindingDigest::parse(format!("sha256:{}", "22".repeat(32))).unwrap(),
     )
+}
+
+async fn invoke_permit<C>(
+    session: &mut AuthenticatedComponentSession<C>,
+    zone: &ZoneId,
+) -> AuthorizedSessionOperation {
+    session
+        .authorize(
+            SessionAuthorizationRequest::new(
+                SessionVerb::Invoke,
+                d2b_contracts::v3::ServiceName::parse("d2b.resource.v3").unwrap(),
+                "ResourceService/Get",
+                zone.clone(),
+                None,
+            )
+            .unwrap(),
+            2,
+        )
+        .await
+        .unwrap()
 }
 
 fn bootstrap_evidence() -> TransportEvidence {
@@ -291,7 +528,7 @@ fn session_acceptor(
     policy: EndpointPolicy,
     subject_zone: ZoneId,
     allowed: impl IntoIterator<Item = SessionVerb>,
-) -> SessionAcceptor<()> {
+) -> SessionAcceptor<TestRegistrationCapability> {
     session_acceptor_for_subject(policy, subject_zone.clone(), subject_zone, allowed)
 }
 
@@ -300,7 +537,7 @@ fn session_acceptor_for_subject(
     expected_zone: ZoneId,
     subject_zone: ZoneId,
     allowed: impl IntoIterator<Item = SessionVerb>,
-) -> SessionAcceptor<()> {
+) -> SessionAcceptor<TestRegistrationCapability> {
     let allowed = Arc::new(allowed.into_iter().collect::<BTreeSet<_>>());
     let subject_ref = ResourceRef::parse("Host/alice-host").unwrap();
     let subject_uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
@@ -346,7 +583,7 @@ fn session_acceptor_for_subject(
             AuthorizationLease::new(POLICY_REVISION, now_tick.saturating_add(10))
                 .map_err(SessionError::from)
         },
-        (),
+        TestRegistrationCapability,
     )
     .unwrap()
 }

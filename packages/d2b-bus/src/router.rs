@@ -1587,9 +1587,20 @@ fn publish_component_request(
     operation: OperationId,
     request: ActiveComponentRequest,
 ) -> Result<oneshot::Receiver<ComponentResponse>, EndpointError> {
+    publish_component_request_with_hook(activity, responses, operation, request, || {})
+}
+
+fn publish_component_request_with_hook(
+    activity: &Mutex<ComponentActivity>,
+    responses: &Mutex<ComponentResponseState>,
+    operation: OperationId,
+    request: ActiveComponentRequest,
+    after_activity_lock: impl FnOnce(),
+) -> Result<oneshot::Receiver<ComponentResponse>, EndpointError> {
     let mut activity = activity
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
+    after_activity_lock();
     let mut responses = responses
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -2987,6 +2998,77 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error, cancelled_endpoint());
+        assert!(!activity.lock().unwrap().requests.contains_key(&operation));
+        assert!(!responses.lock().unwrap().waiters.contains_key(&request_id));
+    }
+
+    #[test]
+    fn component_cancellation_contending_during_publication_removes_all_state() {
+        let operation = OperationId::parse("component-contended-cancel").unwrap();
+        let attempt = Cancellation::new();
+        let request_id = d2b_session::contract::RequestId::new(vec![10; 16]).unwrap();
+        let mut requests = d2b_session::RequestRegistry::new(1).unwrap();
+        let write_guard = requests.register(request_id.clone()).unwrap();
+        let activity = Arc::new(Mutex::new(ComponentActivity::default()));
+        let responses = Arc::new(Mutex::new(ComponentResponseState::default()));
+        let (publication_locked, publication_reached) = std::sync::mpsc::sync_channel(0);
+        let (release_publication, publication_release) = std::sync::mpsc::sync_channel(0);
+        let (cancel_contending, cancellation_reached) = std::sync::mpsc::sync_channel(0);
+
+        std::thread::scope(|scope| {
+            let publish_activity = Arc::clone(&activity);
+            let publish_responses = Arc::clone(&responses);
+            let publish_operation = operation.clone();
+            let publish_attempt = attempt.clone();
+            let publish_request_id = request_id.clone();
+            let publisher = scope.spawn(move || {
+                publish_component_request_with_hook(
+                    &publish_activity,
+                    &publish_responses,
+                    publish_operation,
+                    ActiveComponentRequest {
+                        request_id: publish_request_id,
+                        valid: Arc::new(AtomicBool::new(true)),
+                        attempt: publish_attempt,
+                        write_guard,
+                    },
+                    || {
+                        publication_locked.send(()).unwrap();
+                        publication_release.recv().unwrap();
+                    },
+                )
+            });
+
+            publication_reached.recv().unwrap();
+            let cancel_activity = Arc::clone(&activity);
+            let cancel_responses = Arc::clone(&responses);
+            let cancel_operation = operation.clone();
+            let cancel_attempt = attempt.clone();
+            let canceller = scope.spawn(move || {
+                assert!(matches!(
+                    cancel_activity.try_lock(),
+                    Err(std::sync::TryLockError::WouldBlock)
+                ));
+                cancel_contending.send(()).unwrap();
+                terminalize_component_request(
+                    &cancel_activity,
+                    &cancel_responses,
+                    &cancel_operation,
+                    &cancel_attempt,
+                )
+            });
+
+            cancellation_reached.recv().unwrap();
+            release_publication.send(()).unwrap();
+            let mut receiver = publisher.join().unwrap().unwrap();
+            let cancelled = canceller.join().unwrap().unwrap();
+            assert!(cancelled.attempt.is_same_attempt(&attempt));
+            assert!(matches!(
+                receiver.try_recv(),
+                Err(tokio::sync::oneshot::error::TryRecvError::Closed)
+            ));
+        });
+
         assert!(!activity.lock().unwrap().requests.contains_key(&operation));
         assert!(!responses.lock().unwrap().waiters.contains_key(&request_id));
     }

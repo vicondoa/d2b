@@ -1116,10 +1116,7 @@ fn hex(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Mutex,
-        atomic::{AtomicUsize, Ordering},
-    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
 
@@ -1177,69 +1174,5 @@ mod tests {
         let error = handle.cancel(request_id()).await.unwrap_err();
         assert_eq!(error.code(), SessionErrorCode::SessionDisconnected);
         assert_eq!(driver.local_complete_calls.load(Ordering::Acquire), 1);
-    }
-
-    struct SaturatedCancellationDriver {
-        registry: Mutex<crate::RequestRegistry>,
-    }
-
-    impl SessionCancellationDriver for SaturatedCancellationDriver {
-        fn generation(&self) -> u64 {
-            7
-        }
-
-        fn cancel(
-            &self,
-            _generation: u64,
-            request_id: RequestId,
-        ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'static>> {
-            self.registry.lock().unwrap().complete(&request_id);
-            Box::pin(async { Err(SessionError::new(SessionErrorCode::QueueBackpressure)) })
-        }
-    }
-
-    #[tokio::test]
-    async fn cancellation_backpressure_releases_capacity_for_reuse() {
-        let active = request_id();
-        let mut registry = crate::RequestRegistry::with_limit(7, 1).unwrap();
-        registry.register(active.clone()).unwrap();
-        let driver = Arc::new(SaturatedCancellationDriver {
-            registry: Mutex::new(registry),
-        });
-        let handle = SessionCancellationHandle {
-            driver: driver.clone(),
-            writer_fence: crate::Cancellation::new(),
-        };
-
-        let error = handle.cancel(active).await.unwrap_err();
-        assert_eq!(error.code(), SessionErrorCode::QueueBackpressure);
-        driver
-            .registry
-            .lock()
-            .unwrap()
-            .register(RequestId::new(vec![8; 16]).unwrap())
-            .unwrap();
-    }
-
-    #[test]
-    fn dropping_remote_delivery_still_releases_local_request_capacity() {
-        let active = request_id();
-        let mut registry = crate::RequestRegistry::with_limit(7, 1).unwrap();
-        registry.register(active.clone()).unwrap();
-        let driver = Arc::new(SaturatedCancellationDriver {
-            registry: Mutex::new(registry),
-        });
-        let handle = SessionCancellationHandle {
-            driver: driver.clone(),
-            writer_fence: crate::Cancellation::new(),
-        };
-
-        drop(handle.cancel(active));
-        driver
-            .registry
-            .lock()
-            .unwrap()
-            .register(RequestId::new(vec![8; 16]).unwrap())
-            .unwrap();
     }
 }
