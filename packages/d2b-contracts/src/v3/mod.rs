@@ -1,5 +1,6 @@
 //! Canonical d2b v3 resource-plane contracts.
 
+pub mod component_session;
 pub mod error;
 pub mod identity;
 pub mod limits;
