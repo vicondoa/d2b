@@ -141,6 +141,8 @@ pub struct LayoutInput {
     pub vertical_pad: u32,
     /// Thickness of the accent rule under the identity button.
     pub accent_rule: u32,
+    /// Whether host-verified identity is available for this window.
+    pub identity_verified: bool,
 }
 
 impl Default for LayoutInput {
@@ -155,7 +157,47 @@ impl Default for LayoutInput {
             side_pad: 8,
             vertical_pad: 5,
             accent_rule: 4,
+            identity_verified: true,
         }
+    }
+}
+
+/// The outcome of resolving chrome for a window.
+///
+/// There is deliberately no "undecorated" outcome. Guest content is never
+/// mapped without persistent trusted identity: when chrome cannot be drawn
+/// compliantly, the proxy blocks rather than degrading to a bare window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChromeOutcome {
+    /// Chrome resolved; decorate normally.
+    Decorate(ChromeLayout),
+    /// Chrome cannot be drawn compliantly. Obscure the guest and block input
+    /// behind the accessible host interstitial; never show bare guest content.
+    FailClosed(FailClosedReason),
+}
+
+/// Why chrome could not be drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FailClosedReason {
+    /// The window has no drawable content area.
+    EmptyContent,
+    /// Even the compact display name cannot fit the enforced minimum width.
+    IdentityDoesNotFit,
+    /// Host-verified identity was unavailable.
+    UnverifiedIdentity,
+}
+
+impl ChromeOutcome {
+    pub fn layout(self) -> Option<ChromeLayout> {
+        match self {
+            Self::Decorate(l) => Some(l),
+            Self::FailClosed(_) => None,
+        }
+    }
+
+    /// True when guest content must be obscured and input blocked.
+    pub fn blocks_guest(self) -> bool {
+        matches!(self, Self::FailClosed(_))
     }
 }
 
@@ -169,12 +211,17 @@ pub fn required_band_height(input: LayoutInput) -> u32 {
     measured.max(MIN_BAND_HEIGHT)
 }
 
-/// Resolve chrome layout, or `None` when the window is too small to decorate
-/// honestly. Refusing is deliberate: a chrome band that cannot host a compliant
-/// target must not be drawn at all.
-pub fn resolve(input: LayoutInput) -> Option<ChromeLayout> {
+/// Resolve chrome layout, or fail closed.
+///
+/// Failing closed is the deliberate terminal case of the reflow order: short
+/// name, wrap, grow the band, and finally refuse. Refusal blocks the guest; it
+/// never yields an undecorated window.
+pub fn resolve(input: LayoutInput) -> ChromeOutcome {
     if input.content.is_empty() {
-        return None;
+        return ChromeOutcome::FailClosed(FailClosedReason::EmptyContent);
+    }
+    if !input.identity_verified {
+        return ChromeOutcome::FailClosed(FailClosedReason::UnverifiedIdentity);
     }
     let band_height = required_band_height(input);
     let mut reflow = Reflow {
@@ -183,7 +230,9 @@ pub fn resolve(input: LayoutInput) -> Option<ChromeLayout> {
         grew_band: band_height > MIN_BAND_HEIGHT,
     };
 
-    let outer_h = input.content.height.checked_add(band_height)?;
+    let Some(outer_h) = input.content.height.checked_add(band_height) else {
+        return ChromeOutcome::FailClosed(FailClosedReason::EmptyContent);
+    };
     let outer = Size::new(input.content.width, outer_h);
 
     let (band_y, content_y) = match input.placement {
@@ -199,13 +248,17 @@ pub fn resolve(input: LayoutInput) -> Option<ChromeLayout> {
         .min(band_height);
     let face_y = band_y + ((band_height - face_h) / 2) as i32;
 
-    // A narrow window cannot host button + status + padding. Identity has
-    // priority: the status token yields before the target is ever shrunk.
+    // Identity has absolute priority. If even the compact name cannot fit the
+    // enforced minimum width, fail closed rather than clip or shrink it.
     let avail = outer.width.saturating_sub(input.side_pad * 2);
     let button_w = input.button_width.max(MIN_TARGET);
     if avail < button_w {
-        return None;
+        return ChromeOutcome::FailClosed(FailClosedReason::IdentityDoesNotFit);
     }
+
+    // Security-capability state never yields into the menu; it composes into
+    // one slot and grows the band instead. It is dropped only when the window
+    // is too narrow to host it beside identity at all.
     let status_w = if input.status_width > 0 {
         if avail >= button_w + input.status_width + 8 {
             input.status_width
@@ -232,7 +285,7 @@ pub fn resolve(input: LayoutInput) -> Option<ChromeLayout> {
     let drag = (drag_end > drag_x)
         .then(|| Rect::new(drag_x, band_y, (drag_end - drag_x) as u32, band_height));
 
-    Some(ChromeLayout {
+    ChromeOutcome::Decorate(ChromeLayout {
         content: input.content,
         outer,
         content_origin: (0, content_y),
@@ -285,7 +338,7 @@ mod tests {
 
     #[test]
     fn top_band_offsets_content_and_costs_its_height() {
-        let l = resolve(LayoutInput::default()).unwrap();
+        let l = resolve(LayoutInput::default()).layout().unwrap();
         assert_eq!(l.band, Rect::new(0, 0, 800, 32));
         assert_eq!(l.content_origin, (0, 32));
         assert_eq!(l.outer, Size::new(800, 632));
@@ -298,6 +351,7 @@ mod tests {
             placement: BandPlacement::Bottom,
             ..Default::default()
         })
+        .layout()
         .unwrap();
         assert_eq!(l.content_origin, (0, 0));
         assert_eq!(l.band.y, 600);
@@ -308,7 +362,7 @@ mod tests {
     /// exact defect in the shipping rail.
     #[test]
     fn input_region_never_covers_the_window_edges() {
-        let l = resolve(LayoutInput::default()).unwrap();
+        let l = resolve(LayoutInput::default()).layout().unwrap();
         let r = l.input_region();
         assert!(r.x > 0, "must not touch the left edge");
         assert!(
@@ -334,6 +388,7 @@ mod tests {
                     button_width,
                     ..Default::default()
                 })
+                .layout()
                 .unwrap();
                 let r = l.input_region();
                 assert!(r.width >= MIN_TARGET, "label {label_h}: width {}", r.width);
@@ -345,7 +400,7 @@ mod tests {
 
     #[test]
     fn visible_face_meets_its_own_floor() {
-        let l = resolve(LayoutInput::default()).unwrap();
+        let l = resolve(LayoutInput::default()).layout().unwrap();
         assert!(l.button.height >= MIN_VISIBLE_FACE);
         assert!(l.button.height <= l.band.height);
     }
@@ -361,6 +416,7 @@ mod tests {
             accent_rule: 0,
             ..Default::default()
         })
+        .layout()
         .unwrap();
         assert_eq!(l.band.height, MIN_BAND_HEIGHT);
         assert!(!l.reflow.grew_band);
@@ -375,6 +431,7 @@ mod tests {
             label_wrapped: true,
             ..Default::default()
         })
+        .layout()
         .unwrap();
         assert!(
             l.band.height > MIN_BAND_HEIGHT,
@@ -396,6 +453,7 @@ mod tests {
             label_block_height: 34,
             ..Default::default()
         })
+        .layout()
         .unwrap();
         assert!(l.band.height >= 34, "label must never be clipped");
         assert!(l.reflow.grew_band);
@@ -425,6 +483,7 @@ mod tests {
             status_width: 60,
             ..Default::default()
         })
+        .layout()
         .unwrap();
         assert!(narrow.status.is_none(), "status yields first");
         assert!(narrow.reflow.dropped_status);
@@ -432,23 +491,86 @@ mod tests {
         assert_eq!(narrow.button.width, 96, "identity keeps its width");
     }
 
+    /// Failing closed must block the guest, never yield a bare window.
+    /// This is the terminal case of the reflow order.
     #[test]
-    fn refuses_when_even_the_identity_button_cannot_fit() {
-        assert!(resolve(LayoutInput {
+    fn fails_closed_when_even_the_identity_button_cannot_fit() {
+        let outcome = resolve(LayoutInput {
             content: Size::new(40, 400),
             button_width: 96,
             ..Default::default()
-        })
-        .is_none());
+        });
+        assert_eq!(
+            outcome,
+            ChromeOutcome::FailClosed(FailClosedReason::IdentityDoesNotFit)
+        );
+        assert!(outcome.blocks_guest(), "guest must be blocked, not bare");
+        assert!(outcome.layout().is_none());
     }
 
     #[test]
-    fn refuses_empty_content() {
-        assert!(resolve(LayoutInput {
+    fn fails_closed_on_empty_content() {
+        let outcome = resolve(LayoutInput {
             content: Size::new(0, 600),
             ..Default::default()
-        })
-        .is_none());
+        });
+        assert_eq!(
+            outcome,
+            ChromeOutcome::FailClosed(FailClosedReason::EmptyContent)
+        );
+        assert!(outcome.blocks_guest());
+    }
+
+    #[test]
+    fn fails_closed_when_identity_is_unverified() {
+        let outcome = resolve(LayoutInput {
+            identity_verified: false,
+            ..Default::default()
+        });
+        assert_eq!(
+            outcome,
+            ChromeOutcome::FailClosed(FailClosedReason::UnverifiedIdentity)
+        );
+        assert!(
+            outcome.blocks_guest(),
+            "unverified identity must obscure the guest and block input"
+        );
+    }
+
+    /// There is no code path that produces an undecorated mapped window: every
+    /// outcome either carries chrome or blocks the guest.
+    #[test]
+    fn every_outcome_either_decorates_or_blocks() {
+        let cases = [
+            LayoutInput::default(),
+            LayoutInput {
+                content: Size::new(0, 0),
+                ..Default::default()
+            },
+            LayoutInput {
+                content: Size::new(40, 400),
+                ..Default::default()
+            },
+            LayoutInput {
+                identity_verified: false,
+                ..Default::default()
+            },
+            LayoutInput {
+                label_block_height: 96,
+                ..Default::default()
+            },
+        ];
+        for input in cases {
+            match resolve(input) {
+                ChromeOutcome::Decorate(l) => {
+                    assert!(l.band.height >= MIN_BAND_HEIGHT);
+                    assert!(!resolve(input).blocks_guest());
+                }
+                ChromeOutcome::FailClosed(_) => {
+                    assert!(resolve(input).blocks_guest());
+                }
+            }
+        }
     }
 
     #[test]
@@ -459,6 +581,7 @@ mod tests {
             status_width: 72,
             ..Default::default()
         })
+        .layout()
         .unwrap();
         let s = l.status.expect("wide window keeps the status token");
         assert_eq!(s.right(), (800 - 8) as i32);
@@ -473,6 +596,7 @@ mod tests {
             status_width: 72,
             ..Default::default()
         })
+        .layout()
         .unwrap();
         let d = l.drag.expect("wide band has a drag strip");
         assert!(!d.intersects(l.button));
@@ -488,6 +612,7 @@ mod tests {
             side_pad: 8,
             ..Default::default()
         })
+        .layout()
         .unwrap();
         assert!(l.drag.is_none());
     }
@@ -505,7 +630,7 @@ mod tests {
     /// The panel required this cost to be stated rather than hidden.
     #[test]
     fn stacked_column_cost_is_n_times_band_height() {
-        let single = resolve(LayoutInput::default()).unwrap();
+        let single = resolve(LayoutInput::default()).layout().unwrap();
         assert_eq!(single.geometry_cost() * 6, 192);
 
         // Under growth the cost rises with it, per window.
@@ -514,6 +639,7 @@ mod tests {
             label_wrapped: true,
             ..Default::default()
         })
+        .layout()
         .unwrap();
         assert!(grown.geometry_cost() * 6 > 192);
     }
