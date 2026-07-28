@@ -269,6 +269,19 @@ pinned to that one file. Everywhere else, including a rejection
 illustration, must be phrased so it does not embed the exact rejected
 literal; correct the example rather than trying to silence the lint.
 
+The same policy test checks the seven canonical feasibility measurements
+against every Markdown and JSON document under `docs/**` plus `CHANGELOG.md`.
+It inventories class-specific measurement signatures globally, including
+run and group-commit denominators, the ChangeBatch comparison count, the
+crash-boundary count phrase, RSS values with units, and each p95/p99 value
+with its unit. Registered sites additionally pin their exact measurement or
+qualitative outcome summary. The global scan deliberately does not match bare
+numbers such as `13`, `20`, or `48`, because those are common in unrelated
+prose. Consequently, a new copy that preserves a canonical number-and-unit,
+denominator, or class phrase is rejected even in an unregistered document; a
+free paraphrase that omits every inventoried signature remains a review
+concern rather than something this lint claims to detect.
+
 ### Envelope policy lint (D116) negative-example marker
 
 Unlike the spec-literal lints above - which honor no author-suppression
