@@ -1590,7 +1590,11 @@ async fn driver_reads_and_delivers_cancellation_while_its_writer_is_blocked() {
     let initiator: Arc<dyn ComponentSessionDriver> = Arc::new(initiator.into_driver());
     let responder: Arc<dyn ComponentSessionDriver> = Arc::new(responder.into_driver());
 
-    initiator.send_ttrpc(vec![0x11]).await.unwrap();
+    let blocked_send = {
+        let initiator = Arc::clone(&initiator);
+        tokio::spawn(async move { initiator.send_ttrpc(vec![0x11]).await })
+    };
+    tokio::task::yield_now().await;
     responder.send_ttrpc(vec![0x22]).await.unwrap();
     assert_eq!(
         tokio::time::timeout(Duration::from_secs(1), initiator.receive_ttrpc())
@@ -1618,6 +1622,9 @@ async fn driver_reads_and_delivers_cancellation_while_its_writer_is_blocked() {
         SessionEvent::CancelRequest(_)
     ));
     assert!(cancellation.is_cancelled());
+    handles.block_sends_a.store(false, Ordering::Release);
+    handles.send_release_a.notify_waiters();
+    blocked_send.await.unwrap().unwrap();
 }
 
 #[tokio::test]
@@ -1636,22 +1643,79 @@ async fn cancelled_reply_is_removed_from_the_blocked_writer_queue() {
         .await
         .unwrap();
 
-    initiator.send_ttrpc(vec![0x55]).await.unwrap();
-    initiator
-        .send_ttrpc_cancellable(vec![0x66], cancellation.clone())
-        .await
-        .unwrap();
+    let first_send = {
+        let initiator = Arc::clone(&initiator);
+        tokio::spawn(async move { initiator.send_ttrpc(vec![0x55]).await })
+    };
+    tokio::task::yield_now().await;
+    let cancelled_send = {
+        let initiator = Arc::clone(&initiator);
+        tokio::spawn(async move {
+            initiator
+                .send_ttrpc_cancellable(vec![0x66], cancellation)
+                .await
+        })
+    };
+    tokio::task::yield_now().await;
     responder.cancel(7, request_id).await.unwrap();
     let _ = initiator.receive_control().await.unwrap();
-    assert!(cancellation.is_cancelled());
 
     handles.block_sends_a.store(false, Ordering::Release);
     handles.send_release_a.notify_waiters();
-    assert_eq!(responder.receive_ttrpc().await.unwrap(), vec![0x55]);
-    if let Ok(Ok(frame)) =
+    first_send.await.unwrap().unwrap();
+    assert_eq!(
+        cancelled_send.await.unwrap().unwrap_err().code(),
+        SessionErrorCode::SessionDisconnected
+    );
+    for _ in 0..2 {
+        match tokio::time::timeout(Duration::from_millis(50), responder.receive_ttrpc()).await {
+            Ok(Ok(frame)) if frame == vec![0x66] => {
+                panic!("cancelled queued response reached the peer")
+            }
+            Ok(Ok(_)) => {}
+            Ok(Err(_)) | Err(_) => break,
+        }
+    }
+}
+
+#[tokio::test]
+async fn cancellation_aborts_an_in_progress_guarded_write() {
+    let (initiator, responder, handles) = engine_pair().await;
+    handles.block_sends_a.store(true, Ordering::Release);
+    let initiator: Arc<dyn ComponentSessionDriver> = Arc::new(initiator.into_driver());
+    let responder: Arc<dyn ComponentSessionDriver> = Arc::new(responder.into_driver());
+    let request_id = RequestId::new(vec![0x77; 16]).unwrap();
+    let cancellation = initiator
+        .register_inbound_call(request_id.clone())
+        .await
+        .unwrap();
+    initiator
+        .mark_inbound_dispatched(request_id.clone())
+        .await
+        .unwrap();
+    let guarded_send = {
+        let initiator = Arc::clone(&initiator);
+        tokio::spawn(async move {
+            initiator
+                .send_ttrpc_cancellable(vec![0x88], cancellation)
+                .await
+        })
+    };
+    tokio::task::yield_now().await;
+    responder.cancel(7, request_id).await.unwrap();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(1), guarded_send)
+            .await
+            .expect("guarded write did not observe cancellation")
+            .unwrap()
+            .unwrap_err()
+            .code(),
+        SessionErrorCode::SessionDisconnected
+    );
+    if let Ok(Ok(_)) =
         tokio::time::timeout(Duration::from_millis(50), responder.receive_ttrpc()).await
     {
-        panic!("cancelled queued response reached the peer: {frame:?}");
+        panic!("cancelled in-progress response reached the peer");
     }
 }
 
