@@ -1,4 +1,34 @@
-use std::{fs, path::PathBuf, process::Command};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
+
+/// Owns the repository-local compiler scratch so it is removed on every exit
+/// path. Removing it only on success leaves a uniquely-named target tree behind
+/// whenever cargo fails or an assertion panics, and a repeatedly failing gate
+/// then accumulates them until it fills the disk.
+struct Scratch(PathBuf);
+
+impl Scratch {
+    fn new(path: PathBuf) -> Self {
+        if path.exists() {
+            fs::remove_dir_all(&path).expect("remove stale repository-local scratch");
+        }
+        fs::create_dir_all(&path).expect("create repository-local scratch");
+        Self(path)
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
 
 #[test]
 fn foreign_source_cannot_mint_committed_decision() {
@@ -9,7 +39,8 @@ fn foreign_source_cannot_mint_committed_decision() {
         "controller-toolkit-external-seals-{}",
         std::process::id()
     ));
-    let temp = scratch.join("tmp");
+    let scratch = Scratch::new(scratch);
+    let temp = scratch.path().join("tmp");
     fs::create_dir_all(&temp).expect("create repository-local compiler scratch");
 
     let output = Command::new(env!("CARGO"))
@@ -22,7 +53,7 @@ fn foreign_source_cannot_mint_committed_decision() {
             "--test",
             "forge_committed_decision",
         ])
-        .env("CARGO_TARGET_DIR", scratch.join("target"))
+        .env("CARGO_TARGET_DIR", scratch.path().join("target"))
         .env("TMPDIR", &temp)
         .output()
         .expect("run dependent compile-fail crate");
@@ -42,6 +73,4 @@ fn foreign_source_cannot_mint_committed_decision() {
             "fixture did not produce the expected sealed-boundary diagnostic {diagnostic:?}:\n{stderr}"
         );
     }
-
-    fs::remove_dir_all(&scratch).expect("remove repository-local compiler scratch");
 }
