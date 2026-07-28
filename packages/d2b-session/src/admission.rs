@@ -615,6 +615,59 @@ pub struct AuthenticatedComponentSession<C> {
     cleanup_observer: SessionCleanupObserver,
 }
 
+/// Cloneable correlated ttrpc data plane separated from mutable authorization.
+#[derive(Clone)]
+pub struct AuthenticatedTtrpcHandle {
+    driver: SessionDriverHandle,
+    cleanup_observer: SessionCleanupObserver,
+}
+
+fn validate_ttrpc_permit(permit: &AuthorizedSessionOperation, now_tick: u64) -> Result<()> {
+    if !permit.lease.is_valid_at(now_tick)
+        || !matches!(
+            permit.request.verb,
+            SessionVerb::Invoke | SessionVerb::AuditExport | SessionVerb::SupportBundle
+        )
+    {
+        return Err(SessionError::new(SessionErrorCode::PolicyDenied));
+    }
+    Ok(())
+}
+
+impl AuthenticatedTtrpcHandle {
+    /// Start one request under a permit minted by the authenticated session.
+    pub async fn start(
+        &self,
+        permit: AuthorizedSessionOperation,
+        request_id: RequestId,
+        frame: Vec<u8>,
+        now_tick: u64,
+    ) -> Result<()> {
+        validate_ttrpc_permit(&permit, now_tick)?;
+        self.driver.start_ttrpc(request_id, frame).await
+    }
+
+    /// Receive the next authenticated ttrpc frame.
+    pub async fn receive(&self) -> Result<Vec<u8>> {
+        self.driver.receive_ttrpc().await
+    }
+
+    /// Remove one terminal correlated request.
+    pub async fn complete(&self, request_id: RequestId) -> Result<bool> {
+        let result = ComponentSessionDriver::complete_ttrpc(&self.driver, request_id).await;
+        if let Err(error) = result {
+            self.cleanup_observer.record(OperationClass::Invoke, error);
+        }
+        result
+    }
+}
+
+impl fmt::Debug for AuthenticatedTtrpcHandle {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("AuthenticatedTtrpcHandle(<redacted>)")
+    }
+}
+
 #[derive(Clone)]
 struct SessionCleanupObserver {
     metrics: Arc<dyn MetricsSink>,
@@ -794,12 +847,19 @@ pub trait SessionRegistrationCapability<R> {
 }
 
 impl<C> AuthenticatedComponentSession<C> {
-    /// Consume the instance-bound capability and retain only the authenticated
-    /// session state needed by the registered endpoint.
+    fn ttrpc_handle(&self) -> AuthenticatedTtrpcHandle {
+        AuthenticatedTtrpcHandle {
+            driver: self.driver.clone(),
+            cleanup_observer: self.cleanup_observer.clone(),
+        }
+    }
+
+    /// Consume the instance-bound capability and split out the correlated data
+    /// plane for the registrar-owned response dispatcher.
     pub fn consume_registration<R>(
         self,
         registrar: &R,
-    ) -> std::result::Result<AuthenticatedComponentSession<()>, C::Error>
+    ) -> std::result::Result<(AuthenticatedComponentSession<()>, AuthenticatedTtrpcHandle), C::Error>
     where
         C: SessionRegistrationCapability<R>,
     {
@@ -813,15 +873,22 @@ impl<C> AuthenticatedComponentSession<C> {
             cleanup_observer,
         } = self;
         registration_capability.consume(registrar)?;
-        Ok(AuthenticatedComponentSession {
-            registration_capability: (),
-            expected_zone,
-            subject,
-            lease,
-            authority,
-            driver,
-            cleanup_observer,
-        })
+        let ttrpc = AuthenticatedTtrpcHandle {
+            driver: driver.clone(),
+            cleanup_observer: cleanup_observer.clone(),
+        };
+        Ok((
+            AuthenticatedComponentSession {
+                registration_capability: (),
+                expected_zone,
+                subject,
+                lease,
+                authority,
+                driver,
+                cleanup_observer,
+            },
+            ttrpc,
+        ))
     }
 
     /// Clone a cancellation-only handle that carries no claims or send access.
@@ -920,15 +987,9 @@ impl<C> AuthenticatedComponentSession<C> {
         frame: Vec<u8>,
         now_tick: u64,
     ) -> Result<()> {
-        if !permit.lease.is_valid_at(now_tick)
-            || !matches!(
-                permit.request.verb,
-                SessionVerb::Invoke | SessionVerb::AuditExport | SessionVerb::SupportBundle
-            )
-        {
-            return Err(SessionError::new(SessionErrorCode::PolicyDenied));
-        }
-        self.driver.start_ttrpc(request_id, frame).await
+        self.ttrpc_handle()
+            .start(permit, request_id, frame, now_tick)
+            .await
     }
 
     /// Remove one terminal correlated request.

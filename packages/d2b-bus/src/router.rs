@@ -1,7 +1,7 @@
 //! Exact Zone router and the single-owner registration surface.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     sync::{
         Arc, Mutex, MutexGuard,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -15,13 +15,13 @@ use d2b_resource_api::authz::{
     ResourceVerb, SessionVerb,
 };
 use d2b_session::{
-    AuthenticatedComponentSession, AuthenticatedSessionRouteBinding, GENERATED_OPERATION_CATALOG,
-    OperationKind, SessionAcceptor, SessionAuthority, SessionAuthorizationRequest,
-    SessionCancellationHandle, SessionOperation, SessionRegistrationCapability,
-    contract::EndpointPolicy, resource_operation, rewrite_ttrpc_stream_id, ttrpc_request_id,
-    ttrpc_stream_id,
+    AuthenticatedComponentSession, AuthenticatedSessionRouteBinding, AuthenticatedTtrpcHandle,
+    GENERATED_OPERATION_CATALOG, OperationKind, SessionAcceptor, SessionAuthority,
+    SessionAuthorizationRequest, SessionCancellationHandle, SessionOperation,
+    SessionRegistrationCapability, contract::EndpointPolicy, resource_operation,
+    rewrite_ttrpc_stream_id, ttrpc_request_id, ttrpc_stream_id,
 };
-use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::{Mutex as AsyncMutex, oneshot};
 
 use crate::{
     authorization::{AuthorizationError, BusAuthorizer},
@@ -914,12 +914,143 @@ impl ZoneRegistrar {
 
 struct ComponentEndpoint {
     session: AsyncMutex<AuthenticatedComponentSession<()>>,
+    ttrpc: AuthenticatedTtrpcHandle,
+    responses: Arc<ComponentResponses>,
+    _response_task: ComponentResponseTask,
     clock: Arc<dyn BusClock>,
     locality: d2b_contracts::v3::Locality,
     generation: u64,
     cancellation: SessionCancellationHandle,
     activity: Mutex<ComponentActivity>,
     correlations: Mutex<CorrelationIds>,
+}
+
+type ComponentResponse = Result<Vec<u8>, EndpointError>;
+
+#[derive(Default)]
+struct ComponentResponseState {
+    terminal: Option<EndpointError>,
+    waiters: BTreeMap<d2b_session::contract::RequestId, oneshot::Sender<ComponentResponse>>,
+    order: VecDeque<d2b_session::contract::RequestId>,
+}
+
+struct ComponentResponses {
+    generation: u64,
+    ttrpc: AuthenticatedTtrpcHandle,
+    state: Mutex<ComponentResponseState>,
+}
+
+struct ComponentResponseTask(tokio::task::AbortHandle);
+
+impl Drop for ComponentResponseTask {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+impl ComponentResponses {
+    fn new(generation: u64, ttrpc: AuthenticatedTtrpcHandle) -> Arc<Self> {
+        Arc::new(Self {
+            generation,
+            ttrpc,
+            state: Mutex::new(ComponentResponseState::default()),
+        })
+    }
+
+    fn spawn(self: &Arc<Self>) -> ComponentResponseTask {
+        let dispatcher = Arc::clone(self);
+        let task = tokio::spawn(async move { dispatcher.run().await });
+        ComponentResponseTask(task.abort_handle())
+    }
+
+    fn register(
+        &self,
+        request_id: d2b_session::contract::RequestId,
+    ) -> Result<oneshot::Receiver<ComponentResponse>, EndpointError> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(error) = state.terminal {
+            return Err(error);
+        }
+        if state.waiters.contains_key(&request_id) {
+            return Err(EndpointError::Internal);
+        }
+        let (sender, receiver) = oneshot::channel();
+        state.order.push_back(request_id.clone());
+        state.waiters.insert(request_id, sender);
+        Ok(receiver)
+    }
+
+    fn remove(&self, request_id: &d2b_session::contract::RequestId) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.waiters.remove(request_id);
+        state.order.retain(|pending| pending != request_id);
+    }
+
+    async fn run(&self) {
+        loop {
+            match self.ttrpc.receive().await {
+                Ok(response) => match ttrpc_request_id(self.generation, &response) {
+                    Ok(request_id) => self.deliver(request_id, Ok(response)),
+                    Err(_) => self.fail_oldest(EndpointError::Rejected),
+                },
+                Err(error) => {
+                    self.terminate(EndpointError::from(error));
+                    return;
+                }
+            }
+        }
+    }
+
+    fn deliver(&self, request_id: d2b_session::contract::RequestId, response: ComponentResponse) {
+        let sender = {
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            state.order.retain(|pending| pending != &request_id);
+            state.waiters.remove(&request_id)
+        };
+        if let Some(sender) = sender {
+            let _ = sender.send(response);
+        }
+    }
+
+    fn fail_oldest(&self, error: EndpointError) {
+        let sender = {
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            state
+                .order
+                .pop_front()
+                .and_then(|request_id| state.waiters.remove(&request_id))
+        };
+        if let Some(sender) = sender {
+            let _ = sender.send(Err(error));
+        }
+    }
+
+    fn terminate(&self, error: EndpointError) {
+        let waiters = {
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            state.terminal = Some(error);
+            state.order.clear();
+            std::mem::take(&mut state.waiters)
+        };
+        for (_, sender) in waiters {
+            let _ = sender.send(Err(error));
+        }
+    }
 }
 
 const RESERVED_CORRELATION_MAX: u32 = 1024;
@@ -968,6 +1099,7 @@ impl CorrelationIds {
     }
 }
 
+#[derive(Clone)]
 struct ActiveComponentRequest {
     request_id: d2b_session::contract::RequestId,
     valid: Arc<AtomicBool>,
@@ -1003,6 +1135,18 @@ impl ComponentActivity {
             self.requests.remove(operation);
         }
         Some(request)
+    }
+
+    fn get(
+        &self,
+        operation: &OperationId,
+        attempt: &Cancellation,
+    ) -> Option<ActiveComponentRequest> {
+        self.requests
+            .get(operation)?
+            .iter()
+            .find(|request| request.attempt.is_same_attempt(attempt))
+            .cloned()
     }
 
     fn revoke(&mut self) {
@@ -1048,6 +1192,17 @@ impl ComponentEndpoint {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         activity.remove(operation, attempt)
+    }
+
+    fn active_request(
+        &self,
+        operation: &OperationId,
+        attempt: &Cancellation,
+    ) -> Option<ActiveComponentRequest> {
+        self.activity
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(operation, attempt)
     }
 }
 
@@ -1143,11 +1298,13 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
             )
         }
         .map_err(|_| EndpointError::Rejected)?;
-        let mut session = self.session.lock().await;
-        let permit = session
-            .authorize(authorization, now_tick)
-            .await
-            .map_err(EndpointError::from)?;
+        let permit = {
+            let mut session = self.session.lock().await;
+            session
+                .authorize(authorization, now_tick)
+                .await
+                .map_err(EndpointError::from)?
+        };
         let valid = Arc::new(AtomicBool::new(true));
         let attempt = request.cancellation().clone();
         self.insert_active(
@@ -1158,31 +1315,25 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
                 attempt: attempt.clone(),
             },
         )?;
-        if let Err(error) = session
-            .start_authorized_ttrpc(permit, request_id.clone(), outbound_frame, now_tick)
+        let response = match self.responses.register(request_id.clone()) {
+            Ok(response) => response,
+            Err(error) => {
+                self.remove_active(request.operation().id(), &attempt);
+                return Err(error);
+            }
+        };
+        if let Err(error) = self
+            .ttrpc
+            .start(permit, request_id.clone(), outbound_frame, now_tick)
             .await
         {
+            self.responses.remove(&request_id);
             self.remove_active(request.operation().id(), &attempt);
             return Err(EndpointError::from(error));
         }
-        let response = async {
-            if self.is_revoked() || !valid.load(Ordering::Acquire) {
-                return Err(cancelled_endpoint());
-            }
-            loop {
-                let mut response = session.receive_ttrpc().await.map_err(EndpointError::from)?;
-                let response_id = ttrpc_request_id(self.generation, &response)
-                    .map_err(|_| EndpointError::Rejected)?;
-                if response_id == request_id {
-                    rewrite_ttrpc_stream_id(&mut response, caller_stream_id)
-                        .map_err(|_| EndpointError::Rejected)?;
-                    break Ok(response);
-                }
-            }
-        }
-        .await;
+        let response = response.await.unwrap_or(Err(EndpointError::Internal));
         self.remove_active(request.operation().id(), &attempt);
-        match session.complete_ttrpc(request_id).await {
+        match self.ttrpc.complete(request_id).await {
             Err(cleanup_error)
                 if cleanup_error.code()
                     != d2b_contracts::v3::component_session::SessionErrorCode::SessionDisconnected =>
@@ -1191,7 +1342,9 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
             }
             _ => {}
         }
-        let response = response?;
+        let mut response = response?;
+        rewrite_ttrpc_stream_id(&mut response, caller_stream_id)
+            .map_err(|_| EndpointError::Rejected)?;
         if self.is_revoked() || !valid.load(Ordering::Acquire) {
             return Err(cancelled_endpoint());
         }
@@ -1207,13 +1360,15 @@ impl crate::registry::BusEndpoint for ComponentEndpoint {
         operation: &OperationId,
         attempt: &Cancellation,
     ) -> Result<(), EndpointError> {
-        let active = self.remove_active(operation, attempt);
+        let active = self.active_request(operation, attempt);
         if let Some(active) = active {
             active.valid.store(false, Ordering::Release);
             self.cancellation
-                .cancel(active.request_id)
+                .cancel(active.request_id.clone())
                 .await
                 .map_err(EndpointError::from)?;
+            self.responses.remove(&active.request_id);
+            self.remove_active(operation, attempt);
         }
         Ok(())
     }
@@ -1248,7 +1403,7 @@ impl ZoneRegistrar {
         &mut self,
         session: AuthenticatedComponentSession<ComponentSessionAdmission>,
     ) -> Result<BusIngress, BusError> {
-        let session = session.consume_registration(&self.component_admission)?;
+        let (session, ttrpc) = session.consume_registration(&self.component_admission)?;
         let binding = session.route_binding();
         if binding.zone() != &self.core.zone {
             return Err(BusError::SessionMismatch);
@@ -1258,8 +1413,14 @@ impl ZoneRegistrar {
             .authorize_connect(binding.context(), &self.core.zone)?;
         let routes = routes_for_admitted_session(&binding)?;
         let cancellation = session.cancellation_handle();
+        let responses =
+            ComponentResponses::new(binding.reconnect_generation().get(), ttrpc.clone());
+        let response_task = responses.spawn();
         let endpoint: Arc<dyn crate::registry::BusEndpoint> = Arc::new(ComponentEndpoint {
             session: AsyncMutex::new(session),
+            ttrpc,
+            responses,
+            _response_task: response_task,
             clock: Arc::clone(&self.core.clock),
             locality: binding.locality(),
             generation: binding.reconnect_generation().get(),
@@ -1284,7 +1445,7 @@ impl ZoneRegistrar {
         if !Arc::ptr_eq(&self.core, &previous.core) || previous.closed {
             return Err(BusError::SessionMismatch);
         }
-        let session = session.consume_registration(&self.component_admission)?;
+        let (session, ttrpc) = session.consume_registration(&self.component_admission)?;
         let binding = session.route_binding();
         if binding.zone() != &self.core.zone {
             return Err(BusError::SessionMismatch);
@@ -1294,8 +1455,14 @@ impl ZoneRegistrar {
             .authorize_connect(binding.context(), &self.core.zone)?;
         let routes = routes_for_admitted_session(&binding)?;
         let cancellation = session.cancellation_handle();
+        let responses =
+            ComponentResponses::new(binding.reconnect_generation().get(), ttrpc.clone());
+        let response_task = responses.spawn();
         let endpoint: Arc<dyn crate::registry::BusEndpoint> = Arc::new(ComponentEndpoint {
             session: AsyncMutex::new(session),
+            ttrpc,
+            responses,
+            _response_task: response_task,
             clock: Arc::clone(&self.core.clock),
             locality: binding.locality(),
             generation: binding.reconnect_generation().get(),
@@ -1447,13 +1614,21 @@ impl Drop for OperationLease {
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             let core = Arc::clone(&self.core);
             let operation = self.operation.clone();
+            let source = self.source;
             runtime.spawn(async move {
-                if let Err(error) = target
+                match target
                     .endpoint
                     .cancel(&operation, &target.cancellation)
                     .await
                 {
-                    core.observe_error(BusEvent::Cancel, &BusError::Endpoint(error));
+                    Ok(()) => core.lock_operations().complete_abort(
+                        &operation,
+                        source,
+                        &target.cancellation,
+                    ),
+                    Err(error) => {
+                        core.observe_error(BusEvent::Cancel, &BusError::Endpoint(error));
+                    }
                 }
             });
         } else {
@@ -1588,14 +1763,21 @@ impl BusIngress {
             InvokeOutcome::Response(response) => response,
             InvokeOutcome::Cancelled => return Err(BusError::Cancelled),
             InvokeOutcome::Deadline => {
-                if let Some(target) = lease.abort()
-                    && let Err(error) = target
+                if let Some(target) = lease.abort() {
+                    match target
                         .endpoint
                         .cancel(operation.id(), &target.cancellation)
                         .await
-                {
-                    self.core
-                        .observe_error(BusEvent::Cancel, &BusError::Endpoint(error));
+                    {
+                        Ok(()) => self.core.lock_operations().complete_abort(
+                            operation.id(),
+                            self.session,
+                            &target.cancellation,
+                        ),
+                        Err(error) => self
+                            .core
+                            .observe_error(BusEvent::Cancel, &BusError::Endpoint(error)),
+                    }
                 }
                 return Err(BusError::Operation(OperationError::DeadlineExceeded));
             }
@@ -1710,14 +1892,21 @@ impl BusIngress {
             StreamOutcome::Cancelled => return Err(BusError::Cancelled),
             StreamOutcome::Deadline => {
                 let mut lease = lease;
-                if let Some(target) = lease.abort()
-                    && let Err(error) = target
+                if let Some(target) = lease.abort() {
+                    match target
                         .endpoint
                         .cancel(operation.id(), &target.cancellation)
                         .await
-                {
-                    self.core
-                        .observe_error(BusEvent::Cancel, &BusError::Endpoint(error));
+                    {
+                        Ok(()) => self.core.lock_operations().complete_abort(
+                            operation.id(),
+                            self.session,
+                            &target.cancellation,
+                        ),
+                        Err(error) => self
+                            .core
+                            .observe_error(BusEvent::Cancel, &BusError::Endpoint(error)),
+                    }
                 }
                 return Err(BusError::Operation(OperationError::DeadlineExceeded));
             }
@@ -1740,6 +1929,13 @@ impl BusIngress {
 
     async fn cancel_inner(&self, operation: &OperationId) -> Result<(), BusError> {
         self.ensure_open()?;
+        if self
+            .core
+            .lock_operations()
+            .cancellation_complete(operation, self.session)?
+        {
+            return Ok(());
+        }
         let route = self
             .core
             .lock_operations()
@@ -1760,10 +1956,13 @@ impl BusIngress {
                 .await
                 .map_err(BusError::Endpoint)?;
         }
-        let target = self
+        let Some(target) = self
             .core
             .lock_operations()
-            .cancel(operation, self.session)?;
+            .cancel(operation, self.session)?
+        else {
+            return Ok(());
+        };
         debug_assert!(target.cancellation.is_cancelled());
         if target.route.generations().session() != target.generation {
             return Err(BusError::SessionMismatch);
@@ -1773,6 +1972,11 @@ impl BusIngress {
             .cancel(operation, &target.cancellation)
             .await
             .map_err(BusError::Endpoint)?;
+        self.core.lock_operations().complete_cancel(
+            operation,
+            self.session,
+            &target.cancellation,
+        )?;
         Ok(())
     }
 
@@ -2008,6 +2212,7 @@ mod tests {
         calls: Mutex<Vec<RecordedCall>>,
         incoming: Mutex<Vec<IncomingStream>>,
         cancel_count: AtomicUsize,
+        cancel_failures: AtomicUsize,
         blocking: bool,
         response: Vec<u8>,
         started: Notify,
@@ -2020,6 +2225,7 @@ mod tests {
                 calls: Mutex::new(Vec::new()),
                 incoming: Mutex::new(Vec::new()),
                 cancel_count: AtomicUsize::new(0),
+                cancel_failures: AtomicUsize::new(0),
                 blocking: false,
                 response: b"response".to_vec(),
                 started: Notify::new(),
@@ -2032,6 +2238,7 @@ mod tests {
                 calls: Mutex::new(Vec::new()),
                 incoming: Mutex::new(Vec::new()),
                 cancel_count: AtomicUsize::new(0),
+                cancel_failures: AtomicUsize::new(0),
                 blocking: true,
                 response: b"response".to_vec(),
                 started: Notify::new(),
@@ -2044,11 +2251,18 @@ mod tests {
                 calls: Mutex::new(Vec::new()),
                 incoming: Mutex::new(Vec::new()),
                 cancel_count: AtomicUsize::new(0),
+                cancel_failures: AtomicUsize::new(0),
                 blocking: false,
                 response: vec![0; DEFAULT_MAX_PAYLOAD_BYTES + 1],
                 started: Notify::new(),
                 release: Notify::new(),
             })
+        }
+
+        fn failing_first_cancel() -> Arc<Self> {
+            let endpoint = Self::blocking();
+            endpoint.cancel_failures.store(1, Ordering::Release);
+            endpoint
         }
 
         fn call_count(&self) -> usize {
@@ -2091,6 +2305,15 @@ mod tests {
             _attempt: &Cancellation,
         ) -> Result<(), EndpointError> {
             self.cancel_count.fetch_add(1, Ordering::AcqRel);
+            if self
+                .cancel_failures
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
+                    remaining.checked_sub(1)
+                })
+                .is_ok()
+            {
+                return Err(EndpointError::Unavailable);
+            }
             self.release.notify_one();
             Ok(())
         }
@@ -3302,6 +3525,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cancellation_retries_delivery_and_retains_terminal_success() {
+        let endpoint = RecordingEndpoint::failing_first_cancel();
+        let harness = harness(HarnessSpec {
+            service: "d2b.resource.v3",
+            member: RouteMember::method("ResourceService/Get").unwrap(),
+            caller_ref: "User/alice",
+            locality: Locality::Local,
+            evidence: EvidenceClass::UnixPeer,
+            session_verbs: vec![
+                SessionVerb::Connect,
+                SessionVerb::Invoke,
+                SessionVerb::Cancel,
+            ],
+            resource_verbs: vec![ResourceVerb::Get],
+            endpoint: endpoint.clone(),
+        });
+        let id = OperationId::parse("retry-cancel").unwrap();
+        let invoke = harness.caller.invoke_resource(
+            harness.route.clone(),
+            OperationSpec::new(id.clone(), 100).unwrap(),
+            ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
+            Vec::new(),
+        );
+        let first_cancel = async {
+            endpoint.started.notified().await;
+            harness.caller.cancel(&id).await
+        };
+        let (invoke_result, first_result) = tokio::join!(invoke, first_cancel);
+        assert_eq!(invoke_result, Err(BusError::Cancelled));
+        assert_eq!(
+            first_result,
+            Err(BusError::Endpoint(EndpointError::Unavailable))
+        );
+
+        assert_eq!(harness.caller.cancel(&id).await, Ok(()));
+        assert_eq!(endpoint.cancellation_count(), 2);
+        assert_eq!(harness.caller.cancel(&id).await, Ok(()));
+        assert_eq!(endpoint.cancellation_count(), 2);
+    }
+
+    #[tokio::test]
     async fn concurrent_invocations_saturate_the_operation_bound() {
         let endpoint = RecordingEndpoint::blocking();
         let harness = harness_with_config(
@@ -3466,6 +3730,15 @@ mod tests {
             .lock()
             .unwrap()
             .before_invoke = None;
+        while harness
+            .caller
+            .core
+            .lock_operations()
+            .route_for_cancel(operation.id(), harness.caller.session)
+            .is_ok()
+        {
+            tokio::task::yield_now().await;
+        }
         assert!(
             harness
                 .caller
