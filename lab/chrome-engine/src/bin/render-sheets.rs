@@ -66,6 +66,7 @@ fn main() {
         ("06-accent-fill-across-palette", accent_fill_stress(&fonts)),
         ("07-compound-reflow", compound_reflow(&fonts)),
         ("08-status-token-states", status_token_states(&fonts)),
+        ("09-tab", tab_states(&fonts)),
     ];
 
     let mut failed = false;
@@ -211,6 +212,82 @@ fn status_and_blocked(f: &TextRenderer) -> Vec<Cell> {
     cells.push(Cell {
         caption: "A / unverified - guest blocked".to_owned(),
         canvas: render(&blocked, f, DARK).canvas,
+    });
+    cells
+}
+
+/// The compact tab: collapsed, expanded with actions beside the name, and the
+/// interaction states. This is the candidate after the wlcontrol restyle.
+fn tab_states(f: &TextRenderer) -> Vec<Cell> {
+    let mut cells = Vec::new();
+    let tab = |label: &str, accent: &str| {
+        let mut s = spec(Candidate::Tab, label, accent);
+        s.content_width = 460;
+        s.content_height = 120;
+        s
+    };
+
+    cells.push(Cell {
+        caption: "tab / collapsed".to_owned(),
+        canvas: render(&tab("Work", PALETTE[0].1), f, DARK).canvas,
+    });
+
+    let mut expanded = tab("Work", PALETTE[0].1);
+    expanded.expanded = true;
+    cells.push(Cell {
+        caption: "tab / expanded - actions beside the name".to_owned(),
+        canvas: render(&expanded, f, DARK).canvas,
+    });
+
+    for (name, st) in [
+        (
+            "hover",
+            VisualState {
+                hover: true,
+                ..VisualState::focused()
+            },
+        ),
+        (
+            "keyboard focus",
+            VisualState {
+                keyboard_focus: true,
+                ..VisualState::focused()
+            },
+        ),
+        ("unfocused", VisualState::default()),
+    ] {
+        let mut s = tab("Work", PALETTE[0].1);
+        s.state = st;
+        cells.push(Cell {
+            caption: format!("tab / {name}"),
+            canvas: render(&s, f, DARK).canvas,
+        });
+    }
+
+    for (label, accent) in [PALETTE[1], PALETTE[3]] {
+        cells.push(Cell {
+            caption: format!("tab / {label}"),
+            canvas: render(&tab(label, accent), f, DARK).canvas,
+        });
+    }
+
+    let mut token = tab("Work", PALETTE[0].1);
+    token.status = Some("MIC MUTED".to_owned());
+    cells.push(Cell {
+        caption: "tab / with capability token".to_owned(),
+        canvas: render(&token, f, DARK).canvas,
+    });
+
+    cells.push(Cell {
+        caption: "tab / grayscale".to_owned(),
+        canvas: render(&tab("Work", PALETTE[0].1), f, DARK)
+            .canvas
+            .to_grayscale(),
+    });
+
+    cells.push(Cell {
+        caption: "tab / light guest content".to_owned(),
+        canvas: render(&tab("Media", PALETTE[2].1), f, LIGHT).canvas,
     });
     cells
 }

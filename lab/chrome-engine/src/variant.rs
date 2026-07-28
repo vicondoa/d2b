@@ -7,21 +7,26 @@
 use crate::{
     canvas::Canvas,
     color::{contrast_ratio, enforce_contrast, readable_on, Rgba, CONTRAST_TEXT_AA},
-    geom::{BandPlacement, ChromeLayout, ChromeOutcome, LayoutInput, Size},
+    geom::{BandPlacement, ChromeLayout, ChromeOutcome, LayoutInput, Rect, Size},
     text::{blend_glyph, TextRenderer},
 };
 
 /// What to render.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Candidate {
-    /// A — the candidate. Painted neutral band, identity button, accent rule.
+    /// The candidate. A compact tab styled like a `d2b-wlcontrol` realm card:
+    /// thick accent left edge, thin neutral outline elsewhere, and a fully
+    /// transparent surround so the reserved strip reads as empty space rather
+    /// than a second titlebar.
+    Tab,
+    /// Control. The earlier full-width painted band, kept for comparison.
     BandNeutral,
-    /// B — control. Same reserved geometry, band left transparent.
+    /// Control. Same reserved geometry, band left transparent.
     BandTransparent,
-    /// C — control. Accent-filled button with auto-contrast text, to show the
+    /// Control. Accent-filled button with auto-contrast text, to show the
     /// thin 4.58:1 worst case in practice.
     AccentFill,
-    /// D — control. Outside-geometry notch: no reservation, paints over niri's
+    /// Control. Outside-geometry notch: no reservation, paints over niri's
     /// border, and is erased entirely by `clip-to-geometry true`.
     OutsideNotch,
 }
@@ -29,12 +34,39 @@ pub enum Candidate {
 impl Candidate {
     pub fn id(self) -> &'static str {
         match self {
+            Self::Tab => "T",
             Self::BandNeutral => "A",
             Self::BandTransparent => "B",
             Self::AccentFill => "C",
             Self::OutsideNotch => "D",
         }
     }
+
+    /// Whether this arm paints the full-width band behind the tab.
+    fn paints_band(self) -> bool {
+        matches!(self, Self::BandNeutral | Self::AccentFill)
+    }
+}
+
+/// One action offered when the tab is expanded. Icons are procedural so they
+/// belong to the trusted renderer rather than a themeable icon set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Action {
+    Terminal,
+    Audio,
+    Usb,
+    Info,
+    Stop,
+}
+
+impl Action {
+    pub const DEFAULTS: [Action; 5] = [
+        Action::Terminal,
+        Action::Audio,
+        Action::Usb,
+        Action::Info,
+        Action::Stop,
+    ];
 }
 
 /// Interaction and focus state. Identity presence never varies with these;
@@ -81,7 +113,7 @@ impl Default for Theme {
     fn default() -> Self {
         Self {
             surface: Rgba::rgb(0x0e, 0x0e, 0x12),
-            plate: Rgba::rgb(0x2a, 0x2a, 0x33),
+            plate: Rgba::rgb(0x18, 0x18, 0x1f),
             foreground: Rgba::rgb(0xf2, 0xf2, 0xf7),
             foreground_dim: Rgba::rgb(0xc2, 0xc2, 0xd0),
             // Strong enough that the composited boundary clears 3:1 against the
@@ -89,9 +121,9 @@ impl Default for Theme {
             // plate fill can stay quiet.
             outline: Rgba::rgba(0xff, 0xff, 0xff, 0x70),
             focus: Rgba::rgb(0xff, 0xff, 0xff),
-            radius: 6.0,
+            radius: 5.0,
             accent_rule: 4,
-            side_pad: 10,
+            side_pad: 8,
             vertical_pad: 2,
         }
     }
@@ -125,6 +157,10 @@ pub struct ChromeSpec {
     /// Interaction state of the status token, which activates the same menu
     /// and therefore needs the same visible states as the identity button.
     pub status_state: VisualState,
+    /// Whether the tab is expanded to reveal its action icons.
+    pub expanded: bool,
+    /// Actions offered when expanded, in order.
+    pub actions: Vec<Action>,
     /// Logical to physical scale.
     pub scale: f32,
     /// Label size in logical px. 14 default, 12 floor.
@@ -147,8 +183,10 @@ impl ChromeSpec {
             theme: Theme::default(),
             state: VisualState::focused(),
             status_state: VisualState::default(),
+            expanded: false,
+            actions: Action::DEFAULTS.to_vec(),
             scale: 1.0,
-            font_px: 14.0,
+            font_px: 12.0,
             tracking_em: 0.0,
             content_width: 880,
             content_height: 480,
@@ -254,52 +292,43 @@ pub fn render(spec: &ChromeSpec, fonts: &TextRenderer, background: Rgba) -> Rend
         }
     };
 
-    if matches!(spec.candidate, Candidate::BandNeutral | Candidate::AccentFill) {
+    // Only the control arms paint the band. The candidate leaves the reserved
+    // strip fully transparent, so the compositor background shows through and
+    // the chrome reads as a small tab rather than a second titlebar.
+    if spec.candidate.paints_band() {
         canvas.fill_rect(band.x, band.y, band.width, band.height, surface);
         canvas.fill_rect(band.x, band.bottom() - 1, band.width, 1, spec.theme.outline);
     }
-    // Control B paints no band: only the button below.
 
-    canvas.fill_round_rect(
-        button.x,
-        button.y,
-        button.width,
-        button.height,
-        spec.theme.radius * f64::from(scale),
-        button_bg,
-    );
-    if spec.candidate != Candidate::AccentFill {
-        canvas.stroke_rect(
-            button.x,
-            button.y,
-            button.width,
-            button.height,
-            spec.theme.outline,
-        );
-    }
-    // Menu-open is a held, persistent state, not a transient highlight: an
-    // accent perimeter makes it unmistakable without touching identity colour.
-    if spec.state.menu_open {
-        let r = button;
-        canvas.stroke_rect(r.x - 1, r.y - 1, r.width + 2, r.height + 2, spec.accent);
-        canvas.stroke_rect(r.x - 2, r.y - 2, r.width + 4, r.height + 4, spec.accent);
-    }
-
-    // The identity colour is a rule under the button, not the text background.
-    // Control C omits it because its fill carries the accent instead.
-    let rule = px(spec.theme.accent_rule, scale).max(1);
-    if spec.candidate != Candidate::AccentFill {
-        canvas.fill_rect(
-            button.x,
-            button.bottom() - rule as i32,
-            button.width,
-            rule,
-            spec.accent,
-        );
-    }
-
+    let radius = spec.theme.radius * f64::from(scale);
     let font_px = spec.font_px * scale;
     let tracking = spec.font_px * spec.tracking_em * scale;
+
+    // When expanded, the tab grows to the RIGHT so action icons sit immediately
+    // beside the name and share its background, rather than at the far edge.
+    let actions: &[Action] = if spec.expanded { &spec.actions } else { &[] };
+    let icon_box = px(20, scale);
+    let icon_gap = px(3, scale);
+    let actions_w = if actions.is_empty() {
+        0
+    } else {
+        icon_gap + (icon_box + icon_gap) * actions.len() as u32
+    };
+    let tab = Rect::new(button.x, button.y, button.width + actions_w, button.height);
+
+    canvas.fill_round_rect(tab.x, tab.y, tab.width, tab.height, radius, button_bg);
+
+    // The wlcontrol realm-card treatment: a thick accent edge on the left, a
+    // thin neutral outline on the remaining sides.
+    if spec.candidate != Candidate::AccentFill {
+        canvas.stroke_rect(tab.x, tab.y, tab.width, tab.height, spec.theme.outline);
+        let edge = px(spec.theme.accent_rule, scale).max(2);
+        canvas.fill_round_rect(tab.x, tab.y, edge, tab.height, radius.min(2.0), spec.accent);
+    }
+    if spec.state.menu_open || spec.expanded {
+        canvas.stroke_rect(tab.x - 1, tab.y - 1, tab.width + 2, tab.height + 2, spec.accent);
+    }
+
     let desired = match spec.candidate {
         Candidate::AccentFill => readable_on(button_bg),
         _ => spec.theme.foreground,
@@ -308,19 +337,32 @@ pub fn render(spec: &ChromeSpec, fonts: &TextRenderer, background: Rgba) -> Rend
     let label_contrast = contrast_ratio(fg, button_bg);
 
     let m = fonts.measure(&spec.label, font_px, tracking);
-    let text_x = button.x + px(spec.theme.side_pad, scale) as i32;
-    let face_free = button.height.saturating_sub(rule);
-    let baseline = button.y + ((face_free + m.ascent) / 2) as i32;
+    let text_x = tab.x + px(spec.theme.side_pad, scale) as i32;
+    let baseline = tab.y + ((tab.height + m.ascent) / 2) as i32;
     for g in fonts.layout(&spec.label, font_px, tracking, text_x, baseline) {
         blend_glyph(&mut canvas.pixels, w, h, &g, fg);
     }
 
-    // Keyboard focus: light outer ring plus a dark inner ring reads on any fill.
+    for (i, action) in actions.iter().enumerate() {
+        if i == 0 {
+            // A hairline separating identity from its actions.
+            canvas.fill_rect(
+                button.right(),
+                tab.y + px(3, scale) as i32,
+                1,
+                tab.height.saturating_sub(px(6, scale)),
+                spec.theme.outline,
+            );
+        }
+        let ix = button.right() + icon_gap as i32 + i as i32 * (icon_box + icon_gap) as i32;
+        let iy = tab.y + ((tab.height - icon_box) / 2) as i32;
+        draw_action_icon(&mut canvas, *action, ix, iy, icon_box, fg, scale);
+    }
+
     if spec.state.keyboard_focus {
-        let r = button;
-        canvas.stroke_rect(r.x - 3, r.y - 3, r.width + 6, r.height + 6, spec.theme.focus);
-        canvas.stroke_rect(r.x - 2, r.y - 2, r.width + 4, r.height + 4, spec.theme.focus);
-        canvas.stroke_rect(r.x - 1, r.y - 1, r.width + 2, r.height + 2, Rgba::BLACK);
+        canvas.stroke_rect(tab.x - 3, tab.y - 3, tab.width + 6, tab.height + 6, spec.theme.focus);
+        canvas.stroke_rect(tab.x - 2, tab.y - 2, tab.width + 4, tab.height + 4, spec.theme.focus);
+        canvas.stroke_rect(tab.x - 1, tab.y - 1, tab.width + 2, tab.height + 2, Rgba::BLACK);
     }
 
     // Status token: unfilled text plus a fixed glyph per capability, at lower
@@ -405,6 +447,72 @@ pub fn render(spec: &ChromeSpec, fonts: &TextRenderer, background: Rgba) -> Rend
         layout: Some(layout),
         label_contrast,
         blocked: false,
+    }
+}
+
+/// Procedural action icons, drawn by the trusted renderer so the action set
+/// cannot be restyled into something it is not.
+fn draw_action_icon(
+    canvas: &mut Canvas,
+    action: Action,
+    x: i32,
+    y: i32,
+    box_size: u32,
+    color: Rgba,
+    scale: f32,
+) {
+    let u = |v: f32| ((v * scale).round() as u32).max(1);
+    let s = |v: f32| (v * scale).round() as i32;
+    let cx = x + box_size as i32 / 2;
+    let cy = y + box_size as i32 / 2;
+
+    match action {
+        Action::Terminal => {
+            // A rounded frame with a prompt chevron and a caret line.
+            canvas.stroke_rect(x + s(2.0), y + s(3.0), u(16.0), u(13.0), color);
+            for i in 0..s(4.0) {
+                canvas.fill_rect(x + s(5.0) + i, cy - s(3.0) + i, u(1.5), u(1.5), color);
+                canvas.fill_rect(x + s(5.0) + i, cy + s(3.0) - i, u(1.5), u(1.5), color);
+            }
+            canvas.fill_rect(cx + s(1.0), cy + s(2.0), u(5.0), u(1.5), color);
+        }
+        Action::Audio => {
+            // Speaker cone plus two arcs.
+            canvas.fill_rect(x + s(4.0), cy - s(2.0), u(3.0), u(4.0), color);
+            for i in 0..s(5.0) {
+                let hh = (i as f32 * 0.9) as i32;
+                canvas.fill_rect(x + s(7.0) + i, cy - hh, u(1.2), (hh * 2).max(1) as u32, color);
+            }
+            for r in [s(4.0), s(6.0)] {
+                for t in -r..=r {
+                    let dx = ((r * r - t * t) as f32).sqrt() as i32;
+                    canvas.blend(cx + s(2.0) + dx, cy + t, color);
+                }
+            }
+        }
+        Action::Usb => {
+            let top = y + s(3.0);
+            canvas.fill_rect(cx - s(0.5), top, u(1.5), u(13.0), color);
+            canvas.fill_round_rect(cx - s(2.0), top, u(4.0), u(4.0), 2.0, color);
+            canvas.fill_rect(cx - s(5.0), top + s(6.0), u(10.0), u(1.5), color);
+            canvas.fill_rect(cx - s(5.0), top + s(6.0), u(1.5), u(4.0), color);
+            canvas.fill_round_rect(cx + s(3.0), top + s(9.0), u(3.0), u(3.0), 1.5, color);
+        }
+        Action::Info => {
+            let r = s(7.0);
+            for t in -r..=r {
+                let dx = ((r * r - t * t) as f32).sqrt() as i32;
+                canvas.blend(cx + dx, cy + t, color);
+                canvas.blend(cx - dx, cy + t, color);
+                canvas.blend(cx + t, cy + dx, color);
+                canvas.blend(cx + t, cy - dx, color);
+            }
+            canvas.fill_rect(cx - s(0.5), cy - s(4.0), u(1.5), u(2.0), color);
+            canvas.fill_rect(cx - s(0.5), cy - s(1.0), u(1.5), u(5.0), color);
+        }
+        Action::Stop => {
+            canvas.fill_round_rect(cx - s(5.0), cy - s(5.0), u(10.0), u(10.0), 2.0, color);
+        }
     }
 }
 

@@ -69,6 +69,10 @@ animations {
 window-rule {
     geometry-corner-radius @@RADIUS@@
     clip-to-geometry @@CLIP@@
+    // The chrome band is deliberately transparent outside the tab. Without
+    // this, niri fills the window rect with the border colour as a background
+    // and that fill shows through the transparent strip.
+    draw-border-with-background false
 }
 
 binds {

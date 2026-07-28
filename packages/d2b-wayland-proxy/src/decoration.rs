@@ -506,7 +506,7 @@ fn draw_wrapper_rail(
 
     let fonts = TextRenderer::from_bytes(PROTOTYPE_FONT).ok()?;
     let mut spec = ChromeSpec::new(
-        Candidate::BandNeutral,
+        Candidate::Tab,
         label.map(SanitizedLabel::as_str).unwrap_or("workload"),
         Rgba::rgba(color.r, color.g, color.b, color.a),
     );
@@ -514,6 +514,7 @@ fn draw_wrapper_rail(
     // The engine renders band plus content; we only need the band, so ask for
     // the smallest legal content area and copy the band rows out.
     spec.content_height = 1;
+    spec.expanded = std::env::var("D2B_CHROME_EXPANDED").is_ok();
     if let Ok(status) = std::env::var("D2B_CHROME_STATUS")
         && !status.is_empty()
     {
