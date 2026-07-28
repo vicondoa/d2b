@@ -5,8 +5,17 @@ use std::{
     process::Command,
 };
 
-const APPROVED_CAPABILITY_MINT_POINTS: &[&str] =
-    &["router::ZoneRegistrar::method:component_session_acceptor"];
+const APPROVED_CAPABILITY_MINT_POINTS: &[(&str, &str)] = &[
+    (
+        "d2b_bus",
+        "router::ZoneRegistrar::method:component_session_acceptor",
+    ),
+    (
+        "d2b_session_unix",
+        "VerifiedUnixPeer::method:verify_seqpacket",
+    ),
+    ("d2b_session_unix", "VerifiedUnixPeer::method:verify_stream"),
+];
 
 #[test]
 fn public_api_has_only_the_approved_capability_mint_surface() {
@@ -37,6 +46,8 @@ fn public_api_has_only_the_approved_capability_mint_surface() {
             "d2b-bus",
             "-p",
             "d2b-session",
+            "-p",
+            "d2b-session-unix",
             "--target-dir",
             scratch.path().join("target").to_str().unwrap(),
         ])
@@ -57,6 +68,20 @@ fn public_api_has_only_the_approved_capability_mint_surface() {
     );
     actual.extend(session_api);
     capability_surface.extend(session_capabilities);
+    let (unix_api, unix_capabilities) = public_api(
+        "d2b_session_unix",
+        &scratch.path().join("target/doc/d2b_session_unix"),
+    );
+    actual.extend(unix_api);
+    capability_surface.extend(unix_capabilities);
+    if std::env::var_os("D2B_UPDATE_BUS_PUBLIC_API").is_some() {
+        write_snapshot(&crate_root.join("tests/approved-public-api.txt"), &actual);
+        write_snapshot(
+            &crate_root.join("tests/approved-capability-api.txt"),
+            &capability_surface,
+        );
+        return;
+    }
     let approved = include_str!("approved-public-api.txt")
         .lines()
         .map(str::trim)
@@ -67,7 +92,7 @@ fn public_api_has_only_the_approved_capability_mint_surface() {
         actual, approved,
         "d2b-bus public API changed. The only approved capability mint point is \
          {APPROVED_CAPABILITY_MINT_POINTS:?}. Review every API delta across d2b-bus \
-         and d2b-session for a new \
+         d2b-session, and d2b-session-unix for a new \
          constructor, factory, capability accessor, or externally implementable \
          producer before updating tests/approved-public-api.txt.\n\
          \n\
@@ -77,8 +102,8 @@ fn public_api_has_only_the_approved_capability_mint_surface() {
          snapshot includes std-derived inherent methods, so a newer local \
          compiler adds entries that the pinned CI toolchain does not render."
     );
-    for mint in APPROVED_CAPABILITY_MINT_POINTS {
-        let mint = format!("d2b_bus::{mint}");
+    for (crate_name, mint) in APPROVED_CAPABILITY_MINT_POINTS {
+        let mint = format!("{crate_name}::{mint}");
         assert!(
             actual.contains(&mint),
             "approved capability mint point {mint:?} is absent from the actual public API"
@@ -107,6 +132,15 @@ fn public_api_has_only_the_approved_capability_mint_surface() {
         1,
         "SessionAcceptor construction widened beyond the approved registrar mint point"
     );
+    let unix_subject =
+        fs::read_to_string(repository_root.join("packages/d2b-session-unix/src/subject.rs"))
+            .expect("read Unix peer evidence source");
+    for forbidden_claim in ["ResourceRef", "ResourceUid", "AuthenticatedSubjectContext"] {
+        assert!(
+            !unix_subject.contains(forbidden_claim),
+            "Unix peer evidence regained caller-authored subject claim {forbidden_claim}"
+        );
+    }
 }
 
 #[test]
@@ -184,6 +218,12 @@ impl Drop for Scratch {
 
 fn source_occurrences(source: &str, needle: &str) -> usize {
     source.match_indices(needle).count()
+}
+
+fn write_snapshot(path: &Path, entries: &BTreeSet<String>) {
+    let mut rendered = entries.iter().cloned().collect::<Vec<_>>().join("\n");
+    rendered.push('\n');
+    fs::write(path, rendered).expect("write reviewed public API snapshot");
 }
 
 fn public_api(crate_name: &str, doc_root: &Path) -> (BTreeSet<String>, BTreeSet<String>) {
@@ -293,6 +333,8 @@ fn is_capability_signature(signature: &str) -> bool {
         "SessionAuthority",
         "SessionRegistration",
         "SessionRegistrationCapability",
+        "VerifiedUnixPeer",
+        "VerifiedUnixSubject",
     ]
     .iter()
     .any(|marker| signature.contains(marker))
@@ -305,6 +347,8 @@ fn is_capability_item(item: &str) -> bool {
         "SessionAcceptor",
         "SessionRegistration",
         "SessionRegistrationCapability",
+        "VerifiedUnixPeer",
+        "VerifiedUnixSubject",
     ]
     .iter()
     .any(|marker| item.ends_with(&format!("::{marker}")))

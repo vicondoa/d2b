@@ -9,19 +9,22 @@ use std::{
     time::{Duration, Instant},
 };
 
-use d2b_contracts::v3::{ResourceName, ResourceRef, ResourceTypeName, ZoneId};
+use d2b_contracts::v3::{
+    AuthenticatedSubjectContext, ControllerGeneration, EvidenceClass, Locality, ResourceGeneration,
+    ResourceName, ResourceRef, ResourceTypeName, ResourceUid, SessionBinding, ZoneId,
+};
 use d2b_resource_api::authz::{
     ApiMethod, AuthorizationRequest, AuthorizationState, AuthorizationTarget, PolicySet,
     ResourceVerb, SessionVerb,
 };
 use d2b_session::{
     AuthenticatedComponentSession, AuthenticatedSessionRouteBinding, AuthenticatedTtrpcHandle,
-    GENERATED_OPERATION_CATALOG, OperationKind, SessionAcceptor, SessionAuthorizationRequest,
-    SessionCancellationHandle, SessionOperation, SessionRegistrationCapability,
-    contract::EndpointPolicy, resource_operation, rewrite_ttrpc_stream_id, ttrpc_request_id,
-    ttrpc_stream_id,
+    GENERATED_OPERATION_CATALOG, OperationKind, SessionAcceptor, SessionAuthenticationBinding,
+    SessionAuthorizationRequest, SessionCancellationHandle, SessionOperation,
+    SessionRegistrationCapability, TransportEvidence, contract::EndpointPolicy, resource_operation,
+    rewrite_ttrpc_stream_id, ttrpc_request_id, ttrpc_stream_id,
 };
-use d2b_session_unix::VerifiedUnixSubject;
+use d2b_session_unix::{PeerCredentials, VerifiedUnixPeer};
 use tokio::sync::{Mutex as AsyncMutex, oneshot};
 
 use crate::{
@@ -840,6 +843,8 @@ impl ZoneBus {
                 component_admission: ComponentSessionRegistrar {
                     identity: Arc::new(ComponentSessionAdmissionIdentity),
                 },
+                unix_subjects: Mutex::new(Vec::new()),
+                max_pending_unix_subjects: config.max_total_routes,
             },
         ))
     }
@@ -866,10 +871,196 @@ impl core::fmt::Debug for ZoneBus {
     }
 }
 
+enum UnixSubjectKind {
+    Host,
+    Guest,
+    Provider,
+}
+
+/// Configured Unix subject mapping consumed into one Zone registrar.
+pub struct UnixSubjectConfig {
+    kind: UnixSubjectKind,
+    subject_ref: ResourceRef,
+    subject_uid: ResourceUid,
+    zone_ref: ResourceRef,
+    expected_peer: PeerCredentials,
+    provider_ref: Option<ResourceRef>,
+    provider_generation: Option<ResourceGeneration>,
+    controller_generation: Option<ControllerGeneration>,
+}
+
+impl UnixSubjectConfig {
+    /// Configure a Host subject mapping.
+    pub fn host(
+        subject_ref: ResourceRef,
+        subject_uid: ResourceUid,
+        zone_ref: ResourceRef,
+        expected_peer: PeerCredentials,
+    ) -> d2b_session::Result<Self> {
+        Self::new(
+            UnixSubjectKind::Host,
+            subject_ref,
+            subject_uid,
+            zone_ref,
+            expected_peer,
+        )
+    }
+
+    /// Configure a Guest subject mapping.
+    pub fn guest(
+        subject_ref: ResourceRef,
+        subject_uid: ResourceUid,
+        zone_ref: ResourceRef,
+        expected_peer: PeerCredentials,
+    ) -> d2b_session::Result<Self> {
+        Self::new(
+            UnixSubjectKind::Guest,
+            subject_ref,
+            subject_uid,
+            zone_ref,
+            expected_peer,
+        )
+    }
+
+    /// Configure a Provider subject mapping.
+    pub fn provider(
+        subject_ref: ResourceRef,
+        subject_uid: ResourceUid,
+        zone_ref: ResourceRef,
+        expected_peer: PeerCredentials,
+        provider_generation: ResourceGeneration,
+    ) -> d2b_session::Result<Self> {
+        let mut config = Self::new(
+            UnixSubjectKind::Provider,
+            subject_ref,
+            subject_uid,
+            zone_ref,
+            expected_peer,
+        )?;
+        config.provider_ref = Some(config.subject_ref.clone());
+        config.provider_generation = Some(provider_generation);
+        Ok(config)
+    }
+
+    fn new(
+        kind: UnixSubjectKind,
+        subject_ref: ResourceRef,
+        subject_uid: ResourceUid,
+        zone_ref: ResourceRef,
+        expected_peer: PeerCredentials,
+    ) -> d2b_session::Result<Self> {
+        let expected_type = match kind {
+            UnixSubjectKind::Host => "Host",
+            UnixSubjectKind::Guest => "Guest",
+            UnixSubjectKind::Provider => "Provider",
+        };
+        if subject_ref.resource_type().as_str() != expected_type
+            || zone_ref.resource_type().as_str() != "Zone"
+        {
+            return Err(d2b_session::SessionError::new(
+                d2b_session::contract::SessionErrorCode::SubjectMismatch,
+            ));
+        }
+        Ok(Self {
+            kind,
+            subject_ref,
+            subject_uid,
+            zone_ref,
+            expected_peer,
+            provider_ref: None,
+            provider_generation: None,
+            controller_generation: None,
+        })
+    }
+
+    /// Bind a Provider selected by trusted registrar configuration.
+    pub fn with_provider(
+        mut self,
+        provider_ref: ResourceRef,
+        generation: ResourceGeneration,
+    ) -> d2b_session::Result<Self> {
+        if provider_ref.resource_type().as_str() != "Provider" {
+            return Err(d2b_session::SessionError::new(
+                d2b_session::contract::SessionErrorCode::SubjectMismatch,
+            ));
+        }
+        self.provider_ref = Some(provider_ref);
+        self.provider_generation = Some(generation);
+        Ok(self)
+    }
+
+    /// Bind a controller generation selected by trusted registrar configuration.
+    pub fn with_controller_generation(mut self, generation: ControllerGeneration) -> Self {
+        self.controller_generation = Some(generation);
+        self
+    }
+
+    fn bind(
+        self,
+        peer: VerifiedUnixPeer,
+        evidence: &TransportEvidence,
+        binding: &SessionAuthenticationBinding,
+        expected_zone: &ZoneId,
+    ) -> d2b_session::Result<AuthenticatedSubjectContext> {
+        let expected_type = match self.kind {
+            UnixSubjectKind::Host => "Host",
+            UnixSubjectKind::Guest => "Guest",
+            UnixSubjectKind::Provider => "Provider",
+        };
+        peer.validate_transport(binding.transport_class())?;
+        if peer.credentials() != self.expected_peer
+            || evidence.class() != EvidenceClass::UnixPeer
+            || binding.evidence_class() != EvidenceClass::UnixPeer
+            || binding.transport_binding().locality() != Locality::Local
+            || self.subject_ref.resource_type().as_str() != expected_type
+            || self.zone_ref.name().as_str() != expected_zone.as_str()
+            || evidence.binding_digest() != binding.transport_binding().binding_digest()
+        {
+            return Err(d2b_session::SessionError::new(
+                d2b_session::contract::SessionErrorCode::SubjectMismatch,
+            ));
+        }
+        let subject_ref = self.subject_ref;
+        let mut context = AuthenticatedSubjectContext::new(
+            subject_ref.clone(),
+            self.subject_uid,
+            self.zone_ref,
+            EvidenceClass::UnixPeer,
+            binding.purpose().clone(),
+            binding.service().clone(),
+            SessionBinding::new(
+                binding.schema_fingerprint().clone(),
+                binding.transport_binding().clone(),
+                binding.reconnect_generation(),
+                binding.transcript_hash().clone(),
+            ),
+        );
+        if let (Some(provider_ref), Some(provider_generation)) =
+            (self.provider_ref, self.provider_generation)
+        {
+            context = context
+                .with_provider_ref(provider_ref)
+                .with_provider_generation(provider_generation);
+        }
+        if let Some(controller_generation) = self.controller_generation {
+            context = context.with_controller_generation(controller_generation);
+        }
+        Ok(context)
+    }
+}
+
+impl core::fmt::Debug for UnixSubjectConfig {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("UnixSubjectConfig(<redacted>)")
+    }
+}
+
 /// Single, non-cloneable authority that consumes authenticated registrations.
 pub struct ZoneRegistrar {
     core: Arc<BusCore>,
     component_admission: ComponentSessionRegistrar,
+    unix_subjects: Mutex<Vec<UnixSubjectConfig>>,
+    max_pending_unix_subjects: usize,
 }
 
 struct ComponentSessionAdmissionIdentity;
@@ -903,6 +1094,46 @@ impl SessionRegistrationCapability<ComponentSessionRegistrar> for ComponentSessi
 }
 
 impl ZoneRegistrar {
+    /// Consume one configured mapping into this registrar's private admission state.
+    pub fn register_unix_subject(&self, subject: UnixSubjectConfig) -> d2b_session::Result<()> {
+        if subject.zone_ref.name().as_str() != self.core.zone.as_str() {
+            return Err(d2b_session::SessionError::new(
+                d2b_session::contract::SessionErrorCode::SubjectMismatch,
+            ));
+        }
+        let mut subjects = self
+            .unix_subjects
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if subjects.len() >= self.max_pending_unix_subjects
+            || subjects
+                .iter()
+                .any(|pending| pending.expected_peer == subject.expected_peer)
+        {
+            return Err(d2b_session::SessionError::new(
+                d2b_session::contract::SessionErrorCode::SubjectMismatch,
+            ));
+        }
+        subjects.push(subject);
+        Ok(())
+    }
+
+    fn take_unix_subject(&self, peer: PeerCredentials) -> d2b_session::Result<UnixSubjectConfig> {
+        let mut subjects = self
+            .unix_subjects
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let index = subjects
+            .iter()
+            .position(|subject| subject.expected_peer == peer)
+            .ok_or_else(|| {
+                d2b_session::SessionError::new(
+                    d2b_session::contract::SessionErrorCode::SubjectMismatch,
+                )
+            })?;
+        Ok(subjects.swap_remove(index))
+    }
+
     #[cfg(test)]
     pub(crate) fn register(
         &mut self,
@@ -1460,18 +1691,20 @@ impl ZoneRegistrar {
     pub fn component_session_acceptor(
         &self,
         policy: EndpointPolicy,
-        verified_identity: VerifiedUnixSubject,
+        verified_peer: VerifiedUnixPeer,
     ) -> d2b_session::Result<SessionAcceptor<ComponentSessionAdmission>> {
+        verified_peer.validate_transport(policy.transport_binding.transport)?;
+        let subject = self.take_unix_subject(verified_peer.credentials())?;
         let connect_authorizer = Arc::clone(&self.core.authorizer);
         let request_authorizer = Arc::clone(&self.core.authorizer);
         SessionAcceptor::from_verified_adapter(
             policy,
             self.core.zone.clone(),
             move |evidence, binding, expected_zone, now_tick| {
-                let subject = verified_identity.bind(&evidence, binding, expected_zone)?;
+                let context = subject.bind(verified_peer, &evidence, binding, expected_zone)?;
                 let lease =
-                    connect_authorizer.authenticate_session(&subject, expected_zone, now_tick)?;
-                Ok((subject, lease))
+                    connect_authorizer.authenticate_session(&context, expected_zone, now_tick)?;
+                Ok((context, lease))
             },
             move |subject, request, previous_lease, now_tick| {
                 request_authorizer.authorize_session(subject, request, previous_lease, now_tick)

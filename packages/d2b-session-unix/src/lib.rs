@@ -56,7 +56,7 @@ pub use socket::{
     StreamRead, StreamSocket, prearmed_seqpacket_pair,
 };
 #[cfg(feature = "host-socket")]
-pub use subject::{UnixSubjectIdentity, VerifiedUnixSubject};
+pub use subject::VerifiedUnixPeer;
 #[cfg(feature = "host-socket")]
 pub use systemd::{
     ActivatedSeqpacketListener, ActivatedSeqpacketListeners, SystemdActivationError,

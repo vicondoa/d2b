@@ -9,7 +9,8 @@ use std::{
 use async_trait::async_trait;
 use d2b_bus::{
     BusAuthorizer, BusConfig, BusError, ComponentSessionAdmission, OperationId, OperationSpec,
-    ResourceCall, RouteGenerations, RouteKey, RouteMember, RouteTarget, ZoneBus, ZoneRegistrar,
+    ResourceCall, RouteGenerations, RouteKey, RouteMember, RouteTarget, UnixSubjectConfig, ZoneBus,
+    ZoneRegistrar,
 };
 use d2b_contracts::v3::{
     BindingDigest, ConfigurationGeneration, ControllerGeneration, EvidenceClass,
@@ -32,7 +33,7 @@ use d2b_session::{
     SessionDriverHandle, SessionEngine, TransportDescriptor, TransportError, TransportEvidence,
     TransportPacket, ttrpc_request_id, ttrpc_stream_id,
 };
-use d2b_session_unix::{SeqpacketSocket, UnixSubjectIdentity, prearmed_seqpacket_pair};
+use d2b_session_unix::{SeqpacketSocket, VerifiedUnixPeer, prearmed_seqpacket_pair};
 use tokio::sync::{Notify, mpsc};
 
 const PROVIDER_GENERATION: u64 = 2;
@@ -266,8 +267,8 @@ async fn admit_with_writer_pause(
     let (proof_fd, _peer_fd) = prearmed_seqpacket_pair().unwrap();
     let proof_socket = SeqpacketSocket::from_parent_prearmed(proof_fd).unwrap();
     let expected_peer = proof_socket.acceptor_peer_credentials().unwrap();
-    let identity = if subject_ref.resource_type().as_str() == "Provider" {
-        UnixSubjectIdentity::provider(
+    let subject_config = if subject_ref.resource_type().as_str() == "Provider" {
+        UnixSubjectConfig::provider(
             subject_ref,
             subject_uid,
             ResourceRef::parse("Zone/dev").unwrap(),
@@ -276,7 +277,7 @@ async fn admit_with_writer_pause(
         )
         .unwrap()
     } else {
-        UnixSubjectIdentity::host(
+        UnixSubjectConfig::host(
             subject_ref,
             subject_uid,
             ResourceRef::parse("Zone/dev").unwrap(),
@@ -287,9 +288,10 @@ async fn admit_with_writer_pause(
         .unwrap()
     }
     .with_controller_generation(ControllerGeneration::new(CONTROLLER_GENERATION).unwrap());
-    let verified_identity = identity.verify_seqpacket(&proof_socket).unwrap();
+    registrar.register_unix_subject(subject_config).unwrap();
+    let verified_peer = VerifiedUnixPeer::verify_seqpacket(&proof_socket).unwrap();
     let session = registrar
-        .component_session_acceptor(policy, verified_identity)
+        .component_session_acceptor(policy, verified_peer)
         .unwrap()
         .admit(
             initiator.unwrap(),
@@ -365,6 +367,29 @@ fn bus_with_config(config: BusConfig) -> (ZoneBus, d2b_bus::ZoneRegistrar) {
         now_tick: 1,
     };
     ZoneBus::new(zone, BusAuthorizer::new(native, state).unwrap(), config).unwrap()
+}
+
+#[tokio::test]
+async fn verified_peer_evidence_cannot_author_a_subject_without_registrar_state() {
+    let (_bus, registrar) = bus();
+    let (proof_fd, _peer_fd) = prearmed_seqpacket_pair().unwrap();
+    let proof_socket = SeqpacketSocket::from_parent_prearmed(proof_fd).unwrap();
+    let verified_peer = VerifiedUnixPeer::verify_seqpacket(&proof_socket).unwrap();
+    let error = match registrar.component_session_acceptor(
+        policy(
+            ServicePackage::ResourceV3,
+            EndpointPurpose::ResourceService,
+            1,
+        ),
+        verified_peer,
+    ) {
+        Ok(_) => panic!("unmapped peer evidence minted a session acceptor"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        error.code(),
+        d2b_session::contract::SessionErrorCode::SubjectMismatch
+    );
 }
 
 #[tokio::test]
