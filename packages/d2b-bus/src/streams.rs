@@ -6,7 +6,13 @@ use std::{
 };
 use tokio::sync::Notify;
 
-use crate::{operations::SessionId, registry::PrincipalId};
+#[cfg(test)]
+use crate::router::NoopBusObserver;
+use crate::{
+    operations::SessionId,
+    registry::PrincipalId,
+    router::{BusEvent, BusFailureReason, BusObserver},
+};
 
 /// Default maximum bytes credited to one stream.
 pub const DEFAULT_MAX_STREAM_CREDIT: usize = 256 * 1024;
@@ -130,10 +136,19 @@ pub(crate) struct StreamBridge {
     limits: StreamLimits,
     state: Mutex<BridgeState>,
     notify: Notify,
+    observer: Arc<dyn BusObserver>,
 }
 
 impl StreamBridge {
+    #[cfg(test)]
     pub(crate) fn new(limits: StreamLimits) -> Result<Arc<Self>, StreamError> {
+        Self::with_observer(limits, Arc::new(NoopBusObserver))
+    }
+
+    pub(crate) fn with_observer(
+        limits: StreamLimits,
+        observer: Arc<dyn BusObserver>,
+    ) -> Result<Arc<Self>, StreamError> {
         Ok(Arc::new(Self {
             limits: limits.validate()?,
             state: Mutex::new(BridgeState {
@@ -145,6 +160,7 @@ impl StreamBridge {
                 ready_streams: BTreeMap::new(),
             }),
             notify: Notify::new(),
+            observer,
         }))
     }
 
@@ -394,8 +410,10 @@ impl StreamBridge {
 
     fn close(&self, key: &StreamKey) {
         let mut state = self.lock();
+        let mut shed = false;
         if let Some(stream) = state.streams.remove(key) {
             let queued = stream.frames.iter().map(Vec::len).sum::<usize>();
+            shed = queued != 0;
             state.aggregate_bytes = state.aggregate_bytes.saturating_sub(queued);
             state.aggregate_credit = state.aggregate_credit.saturating_sub(stream.credit);
             if let Some(usage) = state.usage.get_mut(&stream.source_principal) {
@@ -417,6 +435,10 @@ impl StreamBridge {
             }
         }
         drop(state);
+        if shed {
+            self.observer
+                .record(BusEvent::Cleanup, BusFailureReason::StreamShed);
+        }
         self.notify.notify_waiters();
     }
 
@@ -618,6 +640,15 @@ mod tests {
     use d2b_contracts::v3::ResourceUid;
     use tokio::sync::{Barrier, mpsc};
 
+    #[derive(Default)]
+    struct RecordingObserver(Mutex<Vec<(BusEvent, BusFailureReason)>>);
+
+    impl BusObserver for RecordingObserver {
+        fn record(&self, event: BusEvent, reason: BusFailureReason) {
+            self.0.lock().unwrap().push((event, reason));
+        }
+    }
+
     fn principal(value: u64) -> PrincipalId {
         PrincipalId::test(
             ResourceUid::parse(format!("00000000-0000-4000-8000-{value:012}")).unwrap(),
@@ -644,16 +675,75 @@ mod tests {
     }
 
     fn bridge(aggregate: usize) -> Arc<StreamBridge> {
-        StreamBridge::new(StreamLimits {
-            max_stream_credit: 16,
-            max_aggregate_bytes: aggregate,
-            max_streams: 4,
-            max_frame_bytes: 8,
-            max_streams_per_principal: 4,
-            max_credit_per_principal: aggregate,
-            max_queued_bytes_per_principal: aggregate,
-        })
+        bridge_with_observer(aggregate, Arc::new(NoopBusObserver))
+    }
+
+    fn bridge_with_observer(aggregate: usize, observer: Arc<dyn BusObserver>) -> Arc<StreamBridge> {
+        StreamBridge::with_observer(
+            StreamLimits {
+                max_stream_credit: 16,
+                max_aggregate_bytes: aggregate,
+                max_streams: 4,
+                max_frame_bytes: 8,
+                max_streams_per_principal: 4,
+                max_credit_per_principal: aggregate,
+                max_queued_bytes_per_principal: aggregate,
+            },
+            observer,
+        )
         .unwrap()
+    }
+
+    #[test]
+    fn queued_stream_shedding_is_observed_for_every_close_path() {
+        let observer = Arc::new(RecordingObserver::default());
+        let bridge = bridge_with_observer(32, observer.clone());
+
+        let (mut explicit, explicit_incoming) = bridge
+            .open_test(
+                StreamName::parse("watch:explicit").unwrap(),
+                SessionId(1),
+                SessionId(2),
+                8,
+            )
+            .unwrap();
+        explicit.send(vec![1, 2]).unwrap();
+        explicit.close();
+        drop(explicit_incoming);
+
+        let (dropped_outgoing, dropped_incoming) = bridge
+            .open_test(
+                StreamName::parse("watch:drop").unwrap(),
+                SessionId(3),
+                SessionId(4),
+                8,
+            )
+            .unwrap();
+        dropped_outgoing.send(vec![3, 4]).unwrap();
+        drop(dropped_incoming);
+        drop(dropped_outgoing);
+
+        let (session_outgoing, session_incoming) = bridge
+            .open_test(
+                StreamName::parse("watch:session").unwrap(),
+                SessionId(5),
+                SessionId(6),
+                8,
+            )
+            .unwrap();
+        session_outgoing.send(vec![5, 6]).unwrap();
+        bridge.cancel_session(SessionId(6));
+        drop(session_incoming);
+        drop(session_outgoing);
+
+        assert_eq!(
+            observer.0.lock().unwrap().as_slice(),
+            &[
+                (BusEvent::Cleanup, BusFailureReason::StreamShed),
+                (BusEvent::Cleanup, BusFailureReason::StreamShed),
+                (BusEvent::Cleanup, BusFailureReason::StreamShed),
+            ]
+        );
     }
 
     #[test]

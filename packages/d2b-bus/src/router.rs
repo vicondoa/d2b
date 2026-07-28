@@ -634,6 +634,7 @@ pub enum BusFailureReason {
     Protocol,
     Endpoint,
     Abandoned,
+    StreamShed,
 }
 
 impl BusFailureReason {
@@ -729,7 +730,7 @@ impl ZoneBus {
         }
         let operations =
             OperationTable::new(config.max_operations, config.max_operations_per_session)?;
-        let streams = StreamBridge::new(config.stream_limits)?;
+        let streams = StreamBridge::with_observer(config.stream_limits, Arc::clone(&observer))?;
         let core = Arc::new(BusCore {
             registry: Mutex::new(Registry::new(
                 zone.clone(),

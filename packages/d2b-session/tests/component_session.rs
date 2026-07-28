@@ -850,7 +850,7 @@ async fn metrics_are_emitted_by_a_real_driver_failure_path() {
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].0, MetricEvent::RejectedRecord);
     assert_eq!(events[0].1.result, MetricResult::Rejected);
-    assert_eq!(events[0].1.reason, MetricReason::InternalInvariant);
+    assert_eq!(events[0].1.reason, MetricReason::Malformed);
 }
 
 #[tokio::test]

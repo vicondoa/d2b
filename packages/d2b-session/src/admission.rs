@@ -8,8 +8,8 @@ use d2b_contracts::v3::{
     ZoneId,
     component_session::{
         AuthorizationLease, BootstrapIdentityBinding, ChannelClass, EndpointPolicy, HandshakeOffer,
-        MetricReason, MetricResult, NoiseProfile, OperationClass, RequestId, SessionErrorCode,
-        TransportClass,
+        HealthState, MetricLabels, MetricReason, MetricResult, NoiseProfile, OperationClass,
+        RequestId, SessionErrorCode, TransportClass,
     },
 };
 use d2b_resource_api::authz::SessionVerb;
@@ -17,7 +17,7 @@ use d2b_resource_api::authz::SessionVerb;
 use crate::{
     ComponentSessionDriver, MetricEvent, MetricsSink, NoopMetrics, OwnedTransport, Result,
     SessionDriverHandle, SessionEngine, SessionError, SessionOperation,
-    handshake::EstablishedAuthentication,
+    handshake::EstablishedAuthentication, metrics::reason_for_error,
 };
 
 /// Redacted transport evidence presented to the trusted session authority.
@@ -404,6 +404,7 @@ impl<C> SessionAcceptor<C> {
             MetricResult::Accepted,
             MetricReason::None,
         );
+        let cleanup_observer = SessionCleanupObserver::new(&self.policy, Arc::clone(&self.metrics));
         Ok(AuthenticatedComponentSession {
             registration_capability: self.registration_capability,
             expected_zone: self.expected_zone,
@@ -411,6 +412,7 @@ impl<C> SessionAcceptor<C> {
             lease,
             authority: self.authority,
             driver: engine.into_driver(),
+            cleanup_observer,
         })
     }
 }
@@ -432,12 +434,73 @@ pub struct AuthenticatedComponentSession<C> {
     lease: AuthorizationLease,
     authority: Box<dyn SessionAuthority>,
     driver: SessionDriverHandle,
+    cleanup_observer: SessionCleanupObserver,
+}
+
+#[derive(Clone)]
+struct SessionCleanupObserver {
+    metrics: Arc<dyn MetricsSink>,
+    labels: MetricLabels,
+}
+
+impl SessionCleanupObserver {
+    fn new(policy: &EndpointPolicy, metrics: Arc<dyn MetricsSink>) -> Self {
+        Self {
+            metrics,
+            labels: MetricLabels {
+                transport: policy.transport_binding.transport,
+                purpose: policy.purpose,
+                service: policy.service,
+                channel_class: ChannelClass::TtrpcControl,
+                noise: policy.noise_profile,
+                locality: policy.transport_binding.locality,
+                operation_class: OperationClass::Invoke,
+                attachment_class: None,
+                health_state: HealthState::Degraded,
+                result: MetricResult::Rejected,
+                reason: MetricReason::InternalInvariant,
+            },
+        }
+    }
+
+    fn record(&self, operation_class: OperationClass, error: SessionError) {
+        let mut labels = self.labels;
+        labels.operation_class = operation_class;
+        labels.reason = reason_for_error(error.code());
+        self.metrics.record(MetricEvent::CleanupFailure, labels, 1);
+    }
+}
+
+#[async_trait]
+trait SessionCancellationDriver: Send + Sync {
+    fn generation(&self) -> u64;
+    async fn cancel(&self, generation: u64, request_id: RequestId) -> Result<()>;
+    async fn complete_ttrpc(&self, request_id: RequestId) -> Result<bool>;
+}
+
+#[async_trait]
+impl<T> SessionCancellationDriver for T
+where
+    T: ComponentSessionDriver + Send + Sync + ?Sized,
+{
+    fn generation(&self) -> u64 {
+        ComponentSessionDriver::generation(self)
+    }
+
+    async fn cancel(&self, generation: u64, request_id: RequestId) -> Result<()> {
+        ComponentSessionDriver::cancel(self, generation, request_id).await
+    }
+
+    async fn complete_ttrpc(&self, request_id: RequestId) -> Result<bool> {
+        ComponentSessionDriver::complete_ttrpc(self, request_id).await
+    }
 }
 
 /// Restricted concurrent cancellation surface for one authenticated session.
 #[derive(Clone)]
 pub struct SessionCancellationHandle {
-    driver: SessionDriverHandle,
+    driver: Arc<dyn SessionCancellationDriver>,
+    cleanup_observer: SessionCleanupObserver,
 }
 
 impl SessionCancellationHandle {
@@ -448,7 +511,9 @@ impl SessionCancellationHandle {
             .await?;
         // A stopped driver has already dropped its request registry, so local
         // completion after successful cancellation delivery is best effort.
-        let _ = self.driver.complete_ttrpc(request_id).await;
+        if let Err(error) = self.driver.complete_ttrpc(request_id).await {
+            self.cleanup_observer.record(OperationClass::Cancel, error);
+        }
         Ok(())
     }
 }
@@ -563,6 +628,7 @@ impl<C> AuthenticatedComponentSession<C> {
             lease,
             authority,
             driver,
+            cleanup_observer,
         } = self;
         registration_capability.consume(registrar)?;
         Ok(AuthenticatedComponentSession {
@@ -572,13 +638,15 @@ impl<C> AuthenticatedComponentSession<C> {
             lease,
             authority,
             driver,
+            cleanup_observer,
         })
     }
 
     /// Clone a cancellation-only handle that carries no claims or send access.
     pub fn cancellation_handle(&self) -> SessionCancellationHandle {
         SessionCancellationHandle {
-            driver: self.driver.clone(),
+            driver: Arc::new(self.driver.clone()),
+            cleanup_observer: self.cleanup_observer.clone(),
         }
     }
 
@@ -683,7 +751,11 @@ impl<C> AuthenticatedComponentSession<C> {
 
     /// Remove one terminal correlated request.
     pub async fn complete_ttrpc(&mut self, request_id: RequestId) -> Result<bool> {
-        self.driver.complete_ttrpc(request_id).await
+        let result = ComponentSessionDriver::complete_ttrpc(&self.driver, request_id).await;
+        if let Err(error) = result {
+            self.cleanup_observer.record(OperationClass::Invoke, error);
+        }
+        result
     }
 }
 
@@ -874,4 +946,111 @@ fn hex(bytes: &[u8]) -> String {
         output.push(char::from(HEX[usize::from(byte & 0x0f)]));
     }
     output
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    use d2b_contracts::v3::component_session::{EndpointPurpose, Locality, ServicePackage};
+
+    use super::*;
+
+    #[derive(Default)]
+    struct CapturingMetrics(Mutex<Vec<(MetricEvent, MetricLabels, u64)>>);
+
+    impl MetricsSink for CapturingMetrics {
+        fn record(&self, event: MetricEvent, labels: MetricLabels, value: u64) {
+            self.0.lock().unwrap().push((event, labels, value));
+        }
+    }
+
+    struct MockCancellationDriver {
+        cancel_error: Option<SessionError>,
+        complete_error: Option<SessionError>,
+        complete_calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl SessionCancellationDriver for MockCancellationDriver {
+        fn generation(&self) -> u64 {
+            7
+        }
+
+        async fn cancel(&self, _generation: u64, _request_id: RequestId) -> Result<()> {
+            self.cancel_error.map_or(Ok(()), Err)
+        }
+
+        async fn complete_ttrpc(&self, _request_id: RequestId) -> Result<bool> {
+            self.complete_calls.fetch_add(1, Ordering::AcqRel);
+            self.complete_error.map_or(Ok(true), Err)
+        }
+    }
+
+    fn cleanup_observer(metrics: Arc<dyn MetricsSink>) -> SessionCleanupObserver {
+        SessionCleanupObserver {
+            metrics,
+            labels: MetricLabels {
+                transport: TransportClass::UnixSeqpacket,
+                purpose: EndpointPurpose::LocalLifecycle,
+                service: ServicePackage::ResourceV3,
+                channel_class: ChannelClass::TtrpcControl,
+                noise: NoiseProfile::Nn25519ChaChaPolySha256,
+                locality: Locality::HostLocal,
+                operation_class: OperationClass::Cancel,
+                attachment_class: None,
+                health_state: HealthState::Degraded,
+                result: MetricResult::Rejected,
+                reason: MetricReason::InternalInvariant,
+            },
+        }
+    }
+
+    fn request_id() -> RequestId {
+        RequestId::new(vec![9; 16]).unwrap()
+    }
+
+    #[tokio::test]
+    async fn cancellation_succeeds_when_terminal_cleanup_is_disconnected() {
+        let metrics = Arc::new(CapturingMetrics::default());
+        let driver = Arc::new(MockCancellationDriver {
+            cancel_error: None,
+            complete_error: Some(SessionError::new(SessionErrorCode::SessionDisconnected)),
+            complete_calls: AtomicUsize::new(0),
+        });
+        let handle = SessionCancellationHandle {
+            driver: driver.clone(),
+            cleanup_observer: cleanup_observer(metrics.clone()),
+        };
+
+        handle.cancel(request_id()).await.unwrap();
+        assert_eq!(driver.complete_calls.load(Ordering::Acquire), 1);
+        let events = metrics.0.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].0, MetricEvent::CleanupFailure);
+        assert_eq!(events[0].1.operation_class, OperationClass::Cancel);
+        assert_eq!(events[0].1.reason, MetricReason::Transport);
+    }
+
+    #[tokio::test]
+    async fn cancellation_propagates_delivery_failure_without_cleanup() {
+        let metrics = Arc::new(CapturingMetrics::default());
+        let driver = Arc::new(MockCancellationDriver {
+            cancel_error: Some(SessionError::new(SessionErrorCode::SessionDisconnected)),
+            complete_error: None,
+            complete_calls: AtomicUsize::new(0),
+        });
+        let handle = SessionCancellationHandle {
+            driver: driver.clone(),
+            cleanup_observer: cleanup_observer(metrics.clone()),
+        };
+
+        let error = handle.cancel(request_id()).await.unwrap_err();
+        assert_eq!(error.code(), SessionErrorCode::SessionDisconnected);
+        assert_eq!(driver.complete_calls.load(Ordering::Acquire), 0);
+        assert!(metrics.0.lock().unwrap().is_empty());
+    }
 }

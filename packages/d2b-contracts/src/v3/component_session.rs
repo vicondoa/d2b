@@ -1294,7 +1294,7 @@ closed_enum!(ChannelClass {
     NamedStream = 4 => "named-stream"
 });
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]
 pub struct ChannelId(u16);
 
@@ -1330,6 +1330,12 @@ impl ChannelId {
         } else {
             Ok(())
         }
+    }
+}
+
+impl fmt::Debug for ChannelId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ChannelId(<redacted>)")
     }
 }
 
@@ -1873,6 +1879,25 @@ mod bounded_identifier_tests {
         assert_eq!(format!("{trace:?}"), "TraceId(<redacted>)");
         assert_eq!(format!("{idempotency:?}"), "IdempotencyKey(<redacted>)");
         assert_eq!(format!("{operation:?}"), "OperationId(<redacted>)");
+    }
+
+    #[test]
+    fn channel_debug_redacts_named_stream_identifiers() {
+        let channel = ChannelId::named(43_981).unwrap();
+        assert_eq!(channel.value(), 43_981);
+        assert_eq!(format!("{channel:?}"), "ChannelId(<redacted>)");
+
+        let header = RecordHeader {
+            kind: RecordKind::NamedStream,
+            flags: 0,
+            channel,
+            sequence: 7,
+            reconnect_generation: 9,
+            payload_len: 11,
+        };
+        let rendered = format!("{header:?}");
+        assert!(!rendered.contains("43981"), "{rendered}");
+        assert!(rendered.contains("ChannelId(<redacted>)"), "{rendered}");
     }
 
     #[test]
@@ -2472,6 +2497,18 @@ pub enum MetricReason {
     #[serde(rename = "transport")]
     #[schemars(rename = "transport")]
     Transport,
+    #[serde(rename = "unsupported-version")]
+    #[schemars(rename = "unsupported-version")]
+    UnsupportedVersion,
+    #[serde(rename = "generation-mismatch")]
+    #[schemars(rename = "generation-mismatch")]
+    GenerationMismatch,
+    #[serde(rename = "identity-evidence-mismatch")]
+    #[schemars(rename = "identity-evidence-mismatch")]
+    IdentityEvidenceMismatch,
+    #[serde(rename = "transport-mismatch")]
+    #[schemars(rename = "transport-mismatch")]
+    TransportMismatch,
     #[serde(rename = "internal-invariant")]
     #[schemars(rename = "internal-invariant")]
     InternalInvariant,
@@ -2496,6 +2533,10 @@ wire_enum_values!(MetricReason {
     CreditExhausted => "credit-exhausted",
     KeepaliveTimeout => "keepalive-timeout",
     Transport => "transport",
+    UnsupportedVersion => "unsupported-version",
+    GenerationMismatch => "generation-mismatch",
+    IdentityEvidenceMismatch => "identity-evidence-mismatch",
+    TransportMismatch => "transport-mismatch",
     InternalInvariant => "internal-invariant"
 });
 

@@ -63,6 +63,10 @@ deprecations ship one minor release before removal.
 - Preserved stable ComponentSession error codes and prescribed remediation
   through bus endpoint failures while retaining class-only observer labels.
 
+- Added closed-label observations for failed correlation cleanup and queued
+  stream shedding, classified expected handshake failures without internal-bug
+  labels, and redacted channel identifiers from debug output.
+
 - Unified Core and toolkit controller identity, selector, trigger, registration,
   retry, and resync contracts. Core changes now drive the executor-native
   reconciliation runner through a bounded, coalescing registered-resource
