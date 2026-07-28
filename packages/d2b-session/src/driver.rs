@@ -1071,13 +1071,46 @@ async fn run_driver<T: OwnedTransport>(
                 }
             }
             Work::WriterFailure(error) => {
-                break Err(error.unwrap_or_else(disconnected));
+                let error = error.unwrap_or_else(disconnected);
+                record_writer_failure(&engine, error);
+                break Err(error);
             }
         }
     };
 
     let error = result.err().unwrap_or_else(disconnected);
     queues.fail(error);
+}
+
+trait WriterFailureRecorder {
+    fn record_writer_failure(
+        &self,
+        event: MetricEvent,
+        channel_class: ChannelClass,
+        operation_class: OperationClass,
+        error: SessionError,
+    );
+}
+
+impl<T: OwnedTransport> WriterFailureRecorder for SessionEngine<T> {
+    fn record_writer_failure(
+        &self,
+        event: MetricEvent,
+        channel_class: ChannelClass,
+        operation_class: OperationClass,
+        error: SessionError,
+    ) {
+        self.record_failure(event, channel_class, operation_class, error);
+    }
+}
+
+fn record_writer_failure(recorder: &impl WriterFailureRecorder, error: SessionError) {
+    recorder.record_writer_failure(
+        MetricEvent::RejectedRecord,
+        ChannelClass::SessionControl,
+        OperationClass::Cancel,
+        error,
+    );
 }
 
 enum DriverAction {
@@ -1640,6 +1673,35 @@ mod tests {
 
     struct PreparedWriteFixture(Option<PreparedWriteBatch>);
 
+    #[derive(Default)]
+    struct CapturingWriterFailure(
+        Mutex<
+            Vec<(
+                MetricEvent,
+                ChannelClass,
+                OperationClass,
+                d2b_contracts::v3::component_session::MetricReason,
+            )>,
+        >,
+    );
+
+    impl WriterFailureRecorder for CapturingWriterFailure {
+        fn record_writer_failure(
+            &self,
+            event: MetricEvent,
+            channel_class: ChannelClass,
+            operation_class: OperationClass,
+            error: SessionError,
+        ) {
+            self.0.lock().unwrap().push((
+                event,
+                channel_class,
+                operation_class,
+                crate::metrics::reason_for_error(error.code()),
+            ));
+        }
+    }
+
     impl PreparedWriteSource for PreparedWriteFixture {
         fn take_prepared_write(&mut self) -> Option<PreparedWriteBatch> {
             self.0.take()
@@ -1784,8 +1846,22 @@ mod tests {
         release.notify_one();
         assert!(revocation.await);
         assert_eq!(
-            failure_receiver.recv().await.unwrap().code(),
-            SessionErrorCode::Cancelled
+            {
+                let error = failure_receiver.recv().await.unwrap();
+                let metrics = CapturingWriterFailure::default();
+                record_writer_failure(&metrics, error);
+                assert_eq!(
+                    *metrics.0.lock().unwrap(),
+                    vec![(
+                        MetricEvent::RejectedRecord,
+                        ChannelClass::SessionControl,
+                        OperationClass::Cancel,
+                        d2b_contracts::v3::component_session::MetricReason::Cancellation,
+                    )]
+                );
+                error.code()
+            },
+            SessionErrorCode::Cancelled,
         );
         task.await.unwrap();
         assert_eq!(
