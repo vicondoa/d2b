@@ -27,7 +27,7 @@ use d2b_session::{
     TransportPacket, ttrpc_request_id, ttrpc_stream_id,
 };
 use d2b_session_unix::{SeqpacketSocket, UnixSubjectIdentity, prearmed_seqpacket_pair};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 
 const PROVIDER_GENERATION: u64 = 2;
 const CONTROLLER_GENERATION: u64 = 3;
@@ -831,9 +831,7 @@ async fn concurrent_invocations_dispatch_out_of_order_responses() {
 }
 
 #[tokio::test]
-async fn malformed_responses_release_every_correlation_slot() {
-    const MALFORMED_RESPONSES: usize = 300;
-
+async fn uncorrelatable_response_terminates_every_waiter() {
     let (_bus, mut registrar) = bus();
     let (endpoint, remote, endpoint_echo) = admit(
         &registrar,
@@ -873,51 +871,47 @@ async fn malformed_responses_release_every_correlation_slot() {
         1,
         "Provider/system-core",
     );
-    let (release_remote, hold_remote) = oneshot::channel();
     let remote_task = tokio::spawn(async move {
-        for _ in 0..MALFORMED_RESPONSES {
-            let _ = remote.receive_ttrpc().await.unwrap();
-            remote.send_ttrpc(vec![0x01]).await.unwrap();
-        }
-        let request = remote.receive_ttrpc().await.unwrap();
-        let stream_id = ttrpc_stream_id(&request).unwrap();
+        let first = remote.receive_ttrpc().await.unwrap();
+        let second = remote.receive_ttrpc().await.unwrap();
+        let later_valid = ttrpc_stream_id(&second).unwrap();
+        remote.send_ttrpc(vec![0x01]).await.unwrap();
         remote
-            .send_ttrpc(ttrpc_frame(stream_id, b"healthy"))
+            .send_ttrpc(ttrpc_frame(later_valid, b"must-not-deliver"))
             .await
             .unwrap();
-        let _ = hold_remote.await;
+        (first, second)
     });
-
-    for index in 0..MALFORMED_RESPONSES {
-        let result = caller
-            .invoke_resource(
-                route.clone(),
-                OperationSpec::new(
-                    OperationId::parse(format!("malformed-{index}")).unwrap(),
-                    10_000,
-                )
-                .unwrap(),
-                ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
-                ttrpc_frame(9, b"request"),
-            )
-            .await;
-        assert_eq!(
-            result,
-            Err(BusError::Endpoint(d2b_bus::EndpointError::Rejected))
-        );
-    }
-    let response = caller
-        .invoke_resource(
-            route,
-            OperationSpec::new(OperationId::parse("after-malformed").unwrap(), 10_000).unwrap(),
+    let invoke = |id: &str, stream_id| {
+        caller.invoke_resource(
+            route.clone(),
+            OperationSpec::new(OperationId::parse(id).unwrap(), 10_000).unwrap(),
             ResourceCall::Get(ResourceRef::parse("Host/system").unwrap()),
-            ttrpc_frame(9, b"request"),
+            ttrpc_frame(stream_id, b"request"),
         )
-        .await
-        .unwrap();
-    assert!(response.as_bytes().ends_with(b"healthy"));
-    let _ = release_remote.send(());
-    remote_task.await.unwrap();
+    };
+    let (first, second, frames) = tokio::join!(
+        invoke("malformed-first", 9),
+        invoke("malformed-second", 10),
+        remote_task
+    );
+    assert_eq!(
+        first,
+        Err(BusError::Endpoint(d2b_bus::EndpointError::Rejected))
+    );
+    assert_eq!(
+        second,
+        Err(BusError::Endpoint(d2b_bus::EndpointError::Rejected))
+    );
+    let (first_frame, second_frame) = frames.unwrap();
+    assert_ne!(
+        ttrpc_stream_id(&first_frame).unwrap(),
+        ttrpc_stream_id(&second_frame).unwrap()
+    );
+    assert_eq!(
+        invoke("after-malformed", 11).await,
+        Err(BusError::Endpoint(d2b_bus::EndpointError::Rejected))
+    );
 
     registrar
         .disconnect_component_session(endpoint)

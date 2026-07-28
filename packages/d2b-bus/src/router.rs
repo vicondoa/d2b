@@ -1,7 +1,7 @@
 //! Exact Zone router and the single-owner registration surface.
 
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::BTreeMap,
     sync::{
         Arc, Mutex, MutexGuard,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -933,7 +933,6 @@ type ComponentResponse = Result<Vec<u8>, EndpointError>;
 struct ComponentResponseState {
     terminal: Option<EndpointError>,
     waiters: BTreeMap<d2b_session::contract::RequestId, oneshot::Sender<ComponentResponse>>,
-    order: VecDeque<d2b_session::contract::RequestId>,
 }
 
 struct ComponentResponses {
@@ -980,7 +979,6 @@ impl ComponentResponses {
             return Err(EndpointError::Internal);
         }
         let (sender, receiver) = oneshot::channel();
-        state.order.push_back(request_id.clone());
         state.waiters.insert(request_id, sender);
         Ok(receiver)
     }
@@ -991,7 +989,6 @@ impl ComponentResponses {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         state.waiters.remove(request_id);
-        state.order.retain(|pending| pending != request_id);
     }
 
     async fn run(&self) {
@@ -999,7 +996,10 @@ impl ComponentResponses {
             match self.ttrpc.receive().await {
                 Ok(response) => match ttrpc_request_id(self.generation, &response) {
                     Ok(request_id) => self.deliver(request_id, Ok(response)),
-                    Err(_) => self.fail_oldest(EndpointError::Rejected),
+                    Err(_) => {
+                        self.terminate(EndpointError::Rejected);
+                        return;
+                    }
                 },
                 Err(error) => {
                     self.terminate(EndpointError::from(error));
@@ -1015,27 +1015,10 @@ impl ComponentResponses {
                 .state
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            state.order.retain(|pending| pending != &request_id);
             state.waiters.remove(&request_id)
         };
         if let Some(sender) = sender {
             let _ = sender.send(response);
-        }
-    }
-
-    fn fail_oldest(&self, error: EndpointError) {
-        let sender = {
-            let mut state = self
-                .state
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            state
-                .order
-                .pop_front()
-                .and_then(|request_id| state.waiters.remove(&request_id))
-        };
-        if let Some(sender) = sender {
-            let _ = sender.send(Err(error));
         }
     }
 
@@ -1046,7 +1029,6 @@ impl ComponentResponses {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             state.terminal = Some(error);
-            state.order.clear();
             std::mem::take(&mut state.waiters)
         };
         for (_, sender) in waiters {
