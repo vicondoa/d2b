@@ -191,6 +191,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-controller-toolkit"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "schemars",
+ "serde",
+ "tokio",
+]
+
+[[package]]
 name = "d2b-core"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -208,6 +218,8 @@ name = "d2b-core-controller"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
+ "d2b-controller-toolkit",
+ "tokio",
 ]
 
 [[package]]
