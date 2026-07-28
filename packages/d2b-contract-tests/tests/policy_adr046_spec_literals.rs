@@ -1001,6 +1001,24 @@ fn report(kind: &str, violations: &[Violation]) -> String {
     msg
 }
 
+fn normalized_whitespace(content: &str) -> String {
+    content.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn final_measurement(results: &str, threshold: &str) -> String {
+    let prefix = format!("| {threshold} |");
+    let row = results
+        .lines()
+        .find(|line| line.starts_with(&prefix))
+        .unwrap_or_else(|| panic!("missing canonical spike threshold row: {threshold}"));
+    row.split('|')
+        .nth(3)
+        .map(str::trim)
+        .filter(|measurement| !measurement.is_empty())
+        .unwrap_or_else(|| panic!("missing final measurement for threshold: {threshold}"))
+        .to_string()
+}
+
 // ---------------------------------------------------------------------------
 // Scanner fixtures - prove each scan fails on a planted violation and passes on
 // the accepted form. These never touch the real tree.
@@ -1595,4 +1613,127 @@ fn docs_specs_qualify_resource_types_under_d2bus_org() {
 fn docs_specs_use_the_frozen_retry_scalar() {
     let violations = scan_spec_tree(scan_d108);
     assert!(violations.is_empty(), "{}", report("D108", &violations));
+}
+
+#[test]
+fn derived_spike_measurements_match_the_canonical_results() {
+    let root = repo_root();
+    let results_path = root.join("proofs/redb-resource-store-spike/RESULTS.md");
+    let results = std::fs::read_to_string(&results_path)
+        .unwrap_or_else(|err| panic!("cannot read {}: {err}", rel_display(&results_path)));
+
+    let rss = final_measurement(
+        &results,
+        "Median whole-process maximum RSS at or below 24 MiB",
+    );
+    let p95 = final_measurement(
+        &results,
+        "Commit-to-handler p95 at or below 5,000 us in all profiles",
+    );
+    let p99 = final_measurement(
+        &results,
+        "Commit-to-handler p99 reported; document any value above 20 ms",
+    );
+    let group_commit = final_measurement(
+        &results,
+        "More than half of non-conflicting storm writes use a batch larger than 1",
+    );
+
+    for (relative, expected) in [
+        ("docs/specs/ADR-046-feasibility-and-spikes.md", 4),
+        ("docs/specs/ADR-046-resource-store-redb.md", 2),
+        ("docs/specs/ADR-046-decision-register.md", 1),
+        ("docs/specs/ADR-046-validation-and-delivery.md", 1),
+        ("docs/specs/ADR-046-work-items.json", 1),
+        ("CHANGELOG.md", 1),
+    ] {
+        let path = root.join(relative);
+        let content = std::fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("cannot read {relative}: {err}"));
+        assert_eq!(
+            normalized_whitespace(&content)
+                .matches(&normalized_whitespace(&rss))
+                .count(),
+            expected,
+            "{relative} must carry exactly {expected} canonical RSS measurement copy/copies"
+        );
+    }
+
+    for (measurement, copies) in [
+        (
+            p95,
+            [
+                ("docs/specs/ADR-046-feasibility-and-spikes.md", 2),
+                ("docs/specs/ADR-046-work-items.json", 1),
+            ],
+        ),
+        (
+            p99,
+            [
+                ("docs/specs/ADR-046-feasibility-and-spikes.md", 2),
+                ("docs/specs/ADR-046-work-items.json", 1),
+            ],
+        ),
+        (
+            group_commit,
+            [
+                ("docs/specs/ADR-046-feasibility-and-spikes.md", 2),
+                ("docs/specs/ADR-046-work-items.json", 1),
+            ],
+        ),
+    ] {
+        for (relative, expected) in copies {
+            let path = root.join(relative);
+            let content = std::fs::read_to_string(&path)
+                .unwrap_or_else(|err| panic!("cannot read {relative}: {err}"));
+            assert_eq!(
+                normalized_whitespace(&content)
+                    .matches(&normalized_whitespace(&measurement))
+                    .count(),
+                expected,
+                "{relative} must carry exactly {expected} canonical measurement copy/copies"
+            );
+        }
+    }
+
+    let feasibility =
+        std::fs::read_to_string(root.join("docs/specs/ADR-046-feasibility-and-spikes.md"))
+            .expect("read feasibility spec");
+    assert!(feasibility.contains(
+        "cargo build --release --locked --manifest-path \
+         proofs/redb-resource-store-spike/Cargo.toml --bin rss-fixture"
+    ));
+    assert!(feasibility.contains(
+        "time -v proofs/redb-resource-store-spike/target/release/rss-fixture \
+         --resources 10000 --watches 100"
+    ));
+}
+
+#[test]
+fn redb_dependency_is_isolated_to_the_proof_workspace() {
+    let root = repo_root();
+    let main_manifest =
+        std::fs::read_to_string(root.join("packages/Cargo.toml")).expect("read main manifest");
+    let main_lock =
+        std::fs::read_to_string(root.join("packages/Cargo.lock")).expect("read main lockfile");
+    let contract_manifest =
+        std::fs::read_to_string(root.join("packages/d2b-resource-store-redb/Cargo.toml"))
+            .expect("read contract manifest");
+    let schema =
+        std::fs::read_to_string(root.join("packages/d2b-resource-store-redb/src/schema.rs"))
+            .expect("read table schema");
+    let proof_manifest =
+        std::fs::read_to_string(root.join("proofs/redb-resource-store-spike/Cargo.toml"))
+            .expect("read proof manifest");
+    let proof_lock =
+        std::fs::read_to_string(root.join("proofs/redb-resource-store-spike/Cargo.lock"))
+            .expect("read proof lockfile");
+
+    assert!(!main_manifest.contains("\nredb ="));
+    assert!(!main_lock.contains("\nname = \"redb\"\n"));
+    assert!(!contract_manifest.contains("\nredb"));
+    assert!(!schema.contains("redb::"));
+    assert!(!schema.contains("TableDefinition"));
+    assert!(proof_manifest.contains("redb = { version = \"=4.1.0\""));
+    assert!(proof_lock.contains("\nname = \"redb\"\n"));
 }

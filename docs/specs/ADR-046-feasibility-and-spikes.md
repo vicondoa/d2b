@@ -156,20 +156,21 @@ This rationale is a completed **design** decision (D004-D006 are Resolved,
 not `decision-required`). The SPIKE-01 and SPIKE-02 workload proof is now
 committed under `proofs/redb-resource-store-spike/RESULTS.md`. The functional,
 watch, conflict, crash-recovery, and commit-to-handler thresholds passed, but
-the whole-process RSS threshold failed: median maximum RSS was 25,068 KiB
-(24.48 MiB), 492 KiB above the 24,576 KiB gate. The metric includes the entire
-measured process and permits no empty-process or runtime baseline subtraction.
+the whole-process RSS threshold failed: 25,216 KiB (24.625 MiB), 640 KiB or
+about 2.6% above 24,576 KiB. The metric includes the entire measured process
+and permits no empty-process or runtime baseline subtraction.
 The failed gate blocks production backend and watch-dispatcher adoption until
 the corrected design below passes the unchanged RSS threshold.
 
 D117's exact redb version and initial runtime capacities are therefore
-provisional. The dependency already present in `packages/Cargo.toml` is an
-input to the disposable proof and to engine-neutral contract compilation, not
-evidence that redb has been adopted. Engine-neutral contract work remains
-permitted. Production `ADR046-store-004` backend work may implement the
-required range-seek, streaming-decode, and shared-fan-out corrections, but the
-backend and `ADR046-store-005` backup/migration work cannot be accepted until
-the unchanged whole-process RSS gate passes. Production
+provisional. The exact dependency is isolated to the disposable proof
+workspace; the main workspace contains only engine-neutral contract
+descriptors and does not resolve redb. Engine-neutral contract work remains
+permitted. Production `ADR046-store-004` backend work may add the dependency
+while implementing the required range-seek, streaming-decode, and
+shared-fan-out corrections, but the backend and `ADR046-store-005`
+backup/migration work cannot be accepted until the unchanged whole-process RSS
+gate passes. Production
 `ADR046-store-002` watch/dispatcher work owns the corrected global admission
 budget and cannot be accepted until that same rerun passes.
 
@@ -266,7 +267,7 @@ in any of them and remain `ADR-only`.
 | --- | --- | --- |
 | kcp unsuitable at recursive Host/Guest/Zone scale | completed evidence (E1) | No - see anti-claim rule 4 |
 | redb is the right embedding shape (single-writer/MVCC/pure-Rust/fd-backed) | design rationale, `ADR-only` for workload fit (E2) | SPIKE-01 before production backend adoption or redb backup/migration; engine-neutral store contracts may precede it |
-| redb meets the 10k-resource functional/index/revision/watch/group-commit/crash-recovery/RSS targets | `measured-fail`: functional/index/revision/watch/group-commit/crash-recovery passed; whole-process RSS failed at 25,068 KiB against 24,576 KiB | Correct the split `ADR046-store-004`/`ADR046-store-002` design and rerun the unchanged whole-process SPIKE-01 gate before backend, watch-dispatcher, or backup/migration acceptance |
+| redb meets the 10k-resource functional/index/revision/watch/group-commit/crash-recovery/RSS targets | `measured-fail`: functional/index/revision/watch/group-commit/crash-recovery passed; whole-process RSS was 25,216 KiB (24.625 MiB), 640 KiB or about 2.6% above 24,576 KiB | Correct the split `ADR046-store-004`/`ADR046-store-002` design and rerun the unchanged whole-process SPIKE-01 gate before backend, watch-dispatcher, or backup/migration acceptance |
 | p95 durable commit → controller handler start ≤5 ms | `measured-pass`: all three SPIKE-02 profiles passed | Preserve the measured latency threshold in production `ADR046-store-002`; it does not gate codecs, errors, table definitions, or storage-row sources |
 | p95 ready-Process commit → launch-attempt start ≤20 ms under concurrent dispatch | `unknown-requires-spike` | Yes - SPIKE-03 |
 | Async EffectPort adapters never block the executor | `unknown-requires-spike` | Yes - SPIKE-04 |
@@ -310,14 +311,14 @@ their listed work items.
 | Hypothesis | An embedded redb 4.1.0 database, built against the `ADR-046-resource-store-redb` physical schema (`store_meta`, `api_schemas`, `resources`, `type_index`, `owner_index`, `producer_index`, `controller_index`, `revision_log`, `operations`, `zone_link_cursors`), sustains 10,000 resources with 100 live watches, correct revision/index maintenance, bounded group commit, and forced-crash recovery, inside the aggregate ≤64 MiB idle-RSS budget shared with the fixed system-core/system-minijail controllers. |
 | Minimal disposable artifact | `proofs/redb-resource-store-spike/` - a standalone crate implementing exactly the ten tables above over `redb::Database` with a `FileBackend::new(File)`-backed open, an async bounded fair write queue feeding one blocking store-actor thread (via `tokio::task::spawn_blocking`), and a minimal watch registrar replaying `revision_log`. No d2b-bus, no ComponentSession, no broker - a fake in-process caller drives the API directly. |
 | Inputs | (a) empty store; (b) 10,000 pre-seeded resources across 6 synthetic ResourceTypes with realistic key/value sizes (JSON spec/status ≤4 KiB each, matching `ADR-046-resource-object-model` bounded-message expectations); (c) 100 concurrently registered watches with mixed ResourceType filters; (d) an expected-revision conflict storm of 500 concurrent writers targeting 50 shared resources; (e) an owner-trigger fan-in tree 4 levels deep, 8 children per level; (f) `SIGKILL` injected at each of the 13 commit-transaction boundaries listed in the write-transaction algorithm. |
-| Command/harness | Fast lane: `cargo test --locked --manifest-path proofs/redb-resource-store-spike/Cargo.toml`. Full-scale correctness lane: `cargo test --release --locked --manifest-path proofs/redb-resource-store-spike/Cargo.toml --test full_scale -- --ignored --test-threads=1 --nocapture`; `--ignored` is mandatory because all four scale fixtures are ignored in the fast lane. Crash recovery: `cargo run --locked --manifest-path proofs/redb-resource-store-spike/Cargo.toml --bin crash-fixture -- --kill-at-txn <n>` (13 invocations, one per boundary, each in a fresh subprocess). RSS: `/usr/bin/time -v cargo run --locked --manifest-path proofs/redb-resource-store-spike/Cargo.toml --bin rss-fixture -- --resources 10000 --watches 100`, read three times and take the median whole-process "Maximum resident set size (kbytes)". |
+| Command/harness | Fast lane: `cargo test --locked --manifest-path proofs/redb-resource-store-spike/Cargo.toml`. Full-scale correctness lane: `cargo test --release --locked --manifest-path proofs/redb-resource-store-spike/Cargo.toml --test full_scale -- --ignored --test-threads=1 --nocapture`; `--ignored` is mandatory because all four scale fixtures are ignored in the fast lane. Crash recovery: `cargo run --locked --manifest-path proofs/redb-resource-store-spike/Cargo.toml --bin crash-fixture -- --kill-at-txn <n>` (13 invocations, one per boundary, each in a fresh subprocess). RSS: build once with `cargo build --release --locked --manifest-path proofs/redb-resource-store-spike/Cargo.toml --bin rss-fixture`, then run `time -v proofs/redb-resource-store-spike/target/release/rss-fixture --resources 10000 --watches 100` under GNU time three times and take the median whole-process "Maximum resident set size (kbytes)". |
 | Metrics | (1) resource/index/revision correctness - exact match of 10k resources against a parallel `BTreeMap` oracle after every mutation; (2) watch replay/live no-gap - every one of 100 watchers receives every committed ChangeBatch entry after its `afterRevision`, verified by a monotonic per-watcher received-revision set with no gap; (3) group-commit batch size distribution under the conflict storm; (4) crash-recovery: process re-open succeeds or fails closed (never silently creates an empty replacement) at all 13 boundaries; (5) median RSS in KiB. |
 | Pass/fail threshold | (1) zero divergence from oracle across 10k resources / 5 repeated runs; (2) zero missed/duplicated ChangeBatch deliveries across 100 watchers; (3) non-conflicting writes in the storm achieve group commit (batch size > 1) at least 50% of the time; (4) 13/13 boundaries either recover to the last fully-committed state or refuse to open (never a silent empty store); (5) median whole-process maximum RSS ≤24 MiB. The RSS value is the complete process maximum reported by GNU time, with no subtraction of an empty-process, allocator, runtime, or other baseline. This leaves ≥40 MiB of the 64 MiB aggregate budget in `ADR-046-resource-store-redb` for the fixed system-core/system-minijail controllers measured separately in SPIKE-11/SPIKE-15. |
 | Expected resource budget | Single-threaded build+run ≤5 minutes on a 4-vCPU/8 GiB CI runner; peak build RSS ≤1 GiB; on-disk database file ≤200 MiB for the 10k-resource fixture. |
 | Failure interpretation | The measured RSS miss requires two owned corrections. `ADR046-store-004` owns revision-key range-seek replay, streaming decode that never decodes older complete envelopes, and shared immutable ChangeBatch fan-out instead of a clone per watcher. `ADR046-store-002` owns one global bounded watch-admission budget, small per-watch cursor/filter state, typed admission backpressure, and deterministic slow-watcher eviction with cursor-based resume. Both items must export current registrations, budget used/capacity, admission rejections, slow-watcher evictions, and replay work. The unchanged whole-process RSS gate must pass before either backend/watch implementation is accepted. A correctness miss on watch/crash-recovery revises the async storage adapter or write-transaction algorithm, never the tolerance; a group-commit batch-size miss retunes the bounded group-commit admission window without weakening per-mutation validation. Already-landed engine-neutral codecs and vectors change only through the D099 schema-version and migration rule. |
 | Affected decisions/work items | D003, D004, D005, D006, D008, D053, D117, D128; `ADR046-store-004`, all production `ADR046-store-002`, and `ADR046-store-005`. |
 | Cleanup | `proofs/redb-resource-store-spike/` is deleted, and its entry removed from `tests/test-proofs.sh`, once `packages/d2b-resource-store-redb` (the real `ADR046-store-004` destination) has an in-tree benchmark reproducing metrics (1)-(5) at equal or stricter thresholds. |
-| Status | Executed. Functional scale, watch correctness, conflict grouping, and all 13 crash boundaries passed. The whole-process RSS gate failed at a 25,068 KiB median against the 24,576 KiB limit. This is a blocking result; no baseline subtraction is permitted. See `proofs/redb-resource-store-spike/RESULTS.md`. |
+| Status | Executed. Functional scale, watch correctness, all 13 crash boundaries, and group commit at 48/50, 96% passed. Whole-process RSS was 25,216 KiB (24.625 MiB), 640 KiB or about 2.6% above 24,576 KiB. This is a blocking result; no baseline subtraction is permitted. See `proofs/redb-resource-store-spike/RESULTS.md`. |
 
 ### SPIKE-02 - durable commit → controller handler start, p95 ≤5 ms
 
@@ -333,7 +334,7 @@ their listed work items.
 | Failure interpretation | A miss under profile (a) is a dispatcher-design failure - the post-commit swap/push path in `ADR-046-resource-store-redb` §"Async storage adapter" changes. A miss only under profiles (b)/(c) is an admission-fairness failure - the "per-principal/controller fair admission" rule in the same section is retuned (e.g., smaller max group-commit batch, dedicated hint-delivery task priority) before `ADR046-store-002` starts. |
 | Affected decisions/work items | D030, D117, D128; `ADR046-store-004`, production `ADR046-store-002`, and `ADR046-reconcile-002`. |
 | Cleanup | Deleted once `packages/d2b-controller-toolkit/benches/reaction.rs` (the real `ADR046-reconcile-003` destination named in `ADR-046-resource-reconciliation`) reproduces the same 3-profile p95/p99 gate against the real store. |
-| Status | Executed. Commit-to-handler p95 passed in all three profiles (110.640 µs, 109.250 µs, and 12.640 µs); no p99 exceeded 20 ms. Production watch/dispatcher integration remains blocked by SPIKE-01's whole-process RSS failure and the required watch-budget redesign; codec, physical-schema, error, and storage-row source work does not. See `proofs/redb-resource-store-spike/RESULTS.md`. |
+| Status | Executed. Commit-to-handler p95 passed in all three profiles at 115.043 us / 116.195 us / 128.902 us. The reported p99 values were 134.834 us / 140.928 us / 1,009.871 us; none exceeded 20 ms. Production watch/dispatcher integration remains blocked by SPIKE-01's whole-process RSS failure and the required watch-budget redesign; codec, physical-schema, error, and storage-row source work does not. See `proofs/redb-resource-store-spike/RESULTS.md`. |
 
 ### SPIKE-03 - ready Process commit → launch-attempt start, p95 ≤20 ms, concurrent reading and dispatch
 
@@ -722,7 +723,7 @@ decisions/work items" row.
 | Validation | SPIKE-01 metrics (1)-(5) and SPIKE-02 metrics (1) across all 3 concurrency profiles, per those entries' exact pass/fail thresholds |
 | Removal proof | Per SPIKE-01/SPIKE-02 Cleanup rows: deleted once `packages/d2b-resource-store-redb` and `packages/d2b-controller-toolkit/benches/reaction.rs` reproduce equal-or-stricter coverage |
 | Implementation state | Merged |
-| Evidence | `proofs/redb-resource-store-spike/` and its `RESULTS.md` are present. SPIKE-01 functional scale, watch correctness, conflict grouping, and 13/13 crash boundaries passed, but its whole-process RSS gate failed at 25,068 KiB against 24,576 KiB. SPIKE-02 p95 passed in all three load profiles and no p99 exceeded 20 ms. The failed RSS result remains an honest blocking outcome for the production backend and watch dispatcher. |
+| Evidence | `proofs/redb-resource-store-spike/` and its `RESULTS.md` are present. SPIKE-01 functional scale, watch correctness, group commit at 48/50, 96%, and 13/13 crash boundaries passed, but whole-process RSS was 25,216 KiB (24.625 MiB), 640 KiB or about 2.6% above 24,576 KiB. SPIKE-02 p95 passed at 115.043 us / 116.195 us / 128.902 us; p99 was 134.834 us / 140.928 us / 1,009.871 us; none exceeded 20 ms. The failed RSS result remains an honest blocking outcome for the production backend and watch dispatcher. |
 
 ### ADR046-feasibility-002
 

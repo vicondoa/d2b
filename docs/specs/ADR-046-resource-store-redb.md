@@ -178,11 +178,12 @@ redb is synchronous. The Zone runtime exposes only async resource APIs.
 Tokio nor redb, and its native async trait methods return `impl Future + Send`.
 The API holds one concrete store implementation and test fakes are generic
 parameters, so no trait object or `async-trait` dependency is used.
-`d2b-resource-store-redb` alone consumes the exact workspace pin
-`redb = { version = "=4.1.0", default-features = false }`. Tokio is
-workspace-pinned with default features disabled; this crate enables only
-`rt`, `sync`, and `time`, the resource API additionally enables `macros`, and
-only the Zone runtime binary enables `rt-multi-thread`.
+The main workspace keeps the ten-table names and codec discriminants
+engine-neutral and does not resolve redb. The exact redb 4.1.0 pin remains
+inside the disposable proof workspace until the unchanged feasibility gate
+passes. A future production backend adds redb and enables only the minimum
+Tokio features (`rt`, `sync`, and `time`); the resource API additionally
+enables `macros`, and only the Zone runtime binary enables `rt-multi-thread`.
 
 - one bounded fair async write queue of 256 requests feeds one dedicated
   blocking store actor;
@@ -400,10 +401,10 @@ On the pinned reference host/release profile:
 | p95 ready Process commit → launch-attempt start | <=20 ms |
 
 Evidence for the aggregate RSS row is staged. SPIKE-01 measured a
-whole-process median maximum RSS of 25,068 KiB at the
-10,000-resource/100-watch fixture, failing the 24,576 KiB gate by 492 KiB.
-This metric is the complete process maximum with no empty-process, runtime,
-allocator, or other baseline subtraction. After the range-seek,
+whole-process maximum of 25,216 KiB (24.625 MiB), 640 KiB or about 2.6% above
+24,576 KiB at the 10,000-resource/100-watch fixture. This metric is the
+complete process maximum with no empty-process, runtime, allocator, or other
+baseline subtraction. After the range-seek,
 streaming-decode, shared-fan-out, and global-budget corrections,
 `ADR046-store-004` records the same whole-process median against the unchanged
 <=24 MiB gate. That rerun gates backend and watch-dispatcher acceptance;
@@ -441,7 +442,7 @@ authorization, or audit cannot be weakened to pass.
 | Required delta | Dispatch the existing resource adapter from d2b-bus and wire a Zone runtime to the production backend; after the feasibility gate, implement the redb database, store actor, revisions, indexes, watches, conflicts, backup, and upgrade |
 | Reuse path | Extract exact storage/atomic/idempotency validators named below; redb only supplies ACID B-trees |
 | Replacement/deletion | No existing state file/ledger is removed until its owning resource/operation migration lands |
-| Feasibility proof | SPIKE-01 and SPIKE-02 executed. Functional, crash, watch, conflict, and commit-to-handler thresholds passed, but SPIKE-01 whole-process RSS failed at 25,068 KiB against 24,576 KiB. The redb pin and production backend remain provisional until the corrected design passes the unchanged whole-process gate. |
+| Feasibility proof | SPIKE-01 and SPIKE-02 executed. Functional, crash, watch, conflict, and commit-to-handler thresholds passed, but SPIKE-01 whole-process RSS was 25,216 KiB (24.625 MiB), 640 KiB or about 2.6% above 24,576 KiB. The redb pin remains proof-only and the production backend remains provisional until the corrected design passes the unchanged whole-process gate. |
 | Future owner | Work items below |
 
 ## Feasibility gate and implementable scope
@@ -490,13 +491,13 @@ or the storage-row source contract.
 | Current source | `packages/d2b-core/src/storage.rs`, `sync.rs`; `packages/d2bd/src/supervisor/state.rs`, `daemon_audit.rs`; `d2b-realm-router/src/lib.rs` |
 | Reuse action | adapt |
 | Destination | `packages/d2b-contracts/src/v3/error.rs`; `packages/d2b-resource-store/src/lib.rs`, `error.rs`; `packages/d2b-resource-store-redb/src/schema.rs`, `keys.rs`, `values.rs` |
-| Detailed design | Keep `d2b-resource-store` free of redb and Tokio; expose native async trait methods returning `impl Future + Send`; use generic test fakes without trait objects or `async-trait`; freeze the closed error set, store-neutral request/response/trait/transaction types, exact ten-table schema, `d2bkey/v1` and `d2bval/v1` codecs and discriminants, decode rejection rules, and literal golden vectors. The workspace pins `redb = { version = "=4.1.0", default-features = false }` here so the contract crate and future spike/backend consume one reviewed API. `ResourceService` consumes the evaluator's verifier and store-identity binding exactly once into a private checked store. A mutating call can reach `commit_verified` only after that store matches both authorities, consumes the admitted mutation, and prepares its final identity and digest. This prevents a caller from forging admission or replaying it against another store, but it does not constrain the backend after verification. The backend is trusted to mutate only from the supplied `VerifiedMutation`, recheck captured policy/API-catalog/active-configuration/controller revisions inside the same transaction, preserve structural and atomicity checks, expose no independent mutation path, never evaluate RBAC, and never auto-retry a failed recheck. Production registration therefore requires security review and backend conformance tests. This contract item makes no scale, latency, RSS, crash-recovery, or production-suitability claim and has no feasibility dependency. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
+| Detailed design | Keep `d2b-resource-store` free of redb and Tokio; expose native async trait methods returning `impl Future + Send`; use generic test fakes without trait objects or `async-trait`; freeze the closed error set, store-neutral request/response/trait/transaction types, engine-neutral ten-table names, `d2bkey/v1` and `d2bval/v1` codecs and discriminants, decode rejection rules, and literal golden vectors. The exact redb dependency remains isolated to the disposable proof workspace until the backend feasibility gate passes. `ResourceService` consumes the evaluator's verifier and store-identity binding exactly once into a private checked store. A mutating call can reach `commit_verified` only after that store matches both authorities, consumes the admitted mutation, and prepares its final identity and digest. This prevents a caller from forging admission or replaying it against another store, but it does not constrain the backend after verification. The backend is trusted to mutate only from the supplied `VerifiedMutation`, recheck captured policy/API-catalog/active-configuration/controller revisions inside the same transaction, preserve structural and atomicity checks, expose no independent mutation path, never evaluate RBAC, and never auto-retry a failed recheck. Production registration therefore requires security review and backend conformance tests. This contract item makes no scale, latency, RSS, crash-recovery, or production-suitability claim and has no feasibility dependency. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt. |
 | Integration | Resource API consumes the typed contract; production backend wiring belongs to ADR046-store-004 |
 | Data migration | None - contract only |
-| Validation | Literal codec golden vectors and decode-rejection cases; hermetic small-scale transaction semantics that make no scale claim; compile tests for `Send` futures and generic fake injection; proof-origin, single-owner binding, cross-store rejection, and in-transaction revision-recheck tests for sealed admission evidence; policy test forbidding resource-store dependency on API/RBAC symbols; exact redb pin/feature assertion |
+| Validation | Literal codec golden vectors and decode-rejection cases; hermetic small-scale transaction semantics that make no scale claim; compile tests for `Send` futures and generic fake injection; proof-origin, single-owner binding, cross-store rejection, and in-transaction revision-recheck tests for sealed admission evidence; policy test forbidding resource-store dependency on API/RBAC symbols; engine-neutral table-descriptor assertion |
 | Removal proof | Existing ledgers removed only by owning future work items |
 | Implementation state | Merged |
-| Evidence | Every destination is present: `packages/d2b-contracts/src/v3/error.rs`, `packages/d2b-resource-store/src/{lib,error}.rs`, and `packages/d2b-resource-store-redb/src/{schema,keys,values}.rs`, with literal vectors, rejection tests, generic fake tests, sealed admission tests, and the exact workspace redb pin. |
+| Evidence | Every destination is present: `packages/d2b-contracts/src/v3/error.rs`, `packages/d2b-resource-store/src/{lib,error}.rs`, and `packages/d2b-resource-store-redb/src/{schema,keys,values}.rs`, with literal vectors, rejection tests, generic fake tests, sealed admission tests, and engine-neutral table descriptors. The main workspace has no redb dependency. |
 
 ### ADR046-store-004
 
