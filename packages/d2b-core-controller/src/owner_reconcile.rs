@@ -57,6 +57,16 @@ impl DesiredChild {
     pub const fn target(&self) -> &ResourceRef {
         &self.target
     }
+
+    /// Borrow the canonical desired child body.
+    pub fn canonical_resource(&self) -> &[u8] {
+        &self.canonical_resource
+    }
+
+    /// Borrow the desired body digest.
+    pub fn payload_digest(&self) -> &str {
+        &self.payload_digest
+    }
 }
 
 impl core::fmt::Debug for DesiredChild {
@@ -104,6 +114,11 @@ impl ObservedChild {
     /// Borrow the indexed target.
     pub const fn target(&self) -> &HintTarget {
         &self.target
+    }
+
+    /// Borrow the observed body digest.
+    pub fn payload_digest(&self) -> &str {
+        &self.payload_digest
     }
 }
 
@@ -779,7 +794,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(desired.target().name().as_str(), NAME);
+        assert_eq!(desired.canonical_resource(), BODY.as_bytes());
+        assert_eq!(desired.payload_digest(), DIGEST);
         assert_eq!(observed.target().uid().as_str(), UID);
+        assert_eq!(observed.payload_digest(), DIGEST);
 
         for debug in [format!("{desired:?}"), format!("{observed:?}")] {
             for sentinel in [NAME, UID, BODY, DIGEST] {

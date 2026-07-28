@@ -988,6 +988,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -1012,6 +1013,8 @@ name = "d2b-core-controller"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
+ "d2b-controller-toolkit",
+ "tokio",
 ]
 
 [[package]]

@@ -4,62 +4,13 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use d2b_contracts::v3::{
     ControllerGeneration, ObservedGeneration, ResourceGeneration, ResourceRef, ResourceTypeName,
-    ResourceUid, ZoneId, ZoneRevision,
+    ZoneId, ZoneRevision,
 };
 
-/// Exact watched object surface.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum ChangeField {
-    Spec,
-    Status,
-    Metadata,
-    Finalizers,
-    Deletion,
-}
-
-/// One exact selector declared by a controller.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct WatchSelector {
-    resource_type: ResourceTypeName,
-    field: ChangeField,
-    exact_value: Option<String>,
-}
-
-impl WatchSelector {
-    /// Construct an exact or whole-field selector.
-    pub fn new(
-        resource_type: ResourceTypeName,
-        field: ChangeField,
-        exact_value: Option<String>,
-    ) -> Result<Self, WatchPlanError> {
-        if exact_value
-            .as_ref()
-            .is_some_and(|value| value.is_empty() || value.len() > 256)
-        {
-            return Err(WatchPlanError::InvalidSelector);
-        }
-        Ok(Self {
-            resource_type,
-            field,
-            exact_value,
-        })
-    }
-
-    /// Borrow the selected ResourceType.
-    pub const fn resource_type(&self) -> &ResourceTypeName {
-        &self.resource_type
-    }
-}
-
-impl core::fmt::Debug for WatchSelector {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("WatchSelector")
-            .field("resource_type", &self.resource_type)
-            .field("field", &self.field)
-            .field("has_exact_value", &self.exact_value.is_some())
-            .finish()
-    }
-}
+pub use d2b_controller_toolkit::{
+    ControllerSelector as WatchSelector, ResourceKey as HintTarget, SelectorField as ChangeField,
+    TriggerReason as CoreTriggerReason,
+};
 
 /// Validated watch intent for one controller.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,7 +40,7 @@ impl WatchPlan {
             || selectors.len() > 128
             || selectors
                 .iter()
-                .any(|selector| !owned_types.contains(&selector.resource_type))
+                .any(|selector| !owned_types.contains(selector.resource_type()))
         {
             return Err(WatchPlanError::InvalidPlan);
         }
@@ -379,84 +330,6 @@ impl core::fmt::Display for WatchPlanError {
 
 impl std::error::Error for WatchPlanError {}
 
-/// Closed reason set emitted by Core.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum CoreTriggerReason {
-    SpecGenerationChanged,
-    OwnedResourceChanged,
-    DependencyChanged,
-    DependencyReady,
-    DeletionRequested,
-    FinalizerRequired,
-    ControllerGenerationChanged,
-    ProviderGenerationChanged,
-    PolicyChanged,
-    SecurityPolicyChanged,
-    ArtifactOrImageChanged,
-    ExecutionStatusChanged,
-    ScheduledObserve,
-    AssessUpdateDue,
-    UpgradeRequested,
-    ExpeditedMutation,
-    RetryDue,
-    ManualReconcile,
-    StartupRelist,
-}
-
-impl CoreTriggerReason {
-    /// Whether suppression is forbidden for this reason.
-    pub const fn prevents_suppression(self) -> bool {
-        !matches!(
-            self,
-            Self::SpecGenerationChanged | Self::ExecutionStatusChanged
-        )
-    }
-}
-
-/// Immutable identity for hint coalescing.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct HintTarget {
-    zone: ZoneId,
-    resource_ref: ResourceRef,
-    uid: ResourceUid,
-}
-
-impl HintTarget {
-    /// Construct a target.
-    pub fn new(zone: ZoneId, resource_ref: ResourceRef, uid: ResourceUid) -> Self {
-        Self {
-            zone,
-            resource_ref,
-            uid,
-        }
-    }
-
-    /// Borrow the Zone.
-    pub const fn zone(&self) -> &ZoneId {
-        &self.zone
-    }
-
-    /// Borrow the resource reference.
-    pub const fn resource_ref(&self) -> &ResourceRef {
-        &self.resource_ref
-    }
-
-    /// Borrow the immutable UID.
-    pub const fn uid(&self) -> &ResourceUid {
-        &self.uid
-    }
-}
-
-impl core::fmt::Debug for HintTarget {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("HintTarget")
-            .field("resource_type", self.resource_ref.resource_type())
-            .field("has_zone", &true)
-            .field("has_uid", &true)
-            .finish()
-    }
-}
-
 /// One durable change evaluated for suppression.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ChangeRecord {
@@ -522,11 +395,7 @@ impl ChangeRecord {
         if !self.type_is_bound {
             return SuppressionDecision::SuppressUnbound;
         }
-        if self
-            .reasons
-            .iter()
-            .any(|reason| reason.prevents_suppression())
-        {
+        if self.reasons.iter().any(|reason| reason.is_non_droppable()) {
             return SuppressionDecision::Dispatch;
         }
         if !self.relevant_field_changed {
@@ -566,7 +435,7 @@ impl ControllerHint {
         revision: ZoneRevision,
         reasons: BTreeSet<CoreTriggerReason>,
     ) -> Result<Self, HintAdmissionError> {
-        if revision.get() == 0 || reasons.is_empty() || controller.zone != target.zone {
+        if revision.get() == 0 || reasons.is_empty() || &controller.zone != target.zone() {
             return Err(HintAdmissionError::InvalidHint);
         }
         Ok(Self {
@@ -600,6 +469,25 @@ impl ControllerHint {
     /// Borrow coalesced reasons.
     pub const fn reasons(&self) -> &BTreeSet<CoreTriggerReason> {
         &self.reasons
+    }
+
+    /// Convert Core routing output into the canonical toolkit watch hint.
+    pub fn into_watch_hint(
+        self,
+        operation: d2b_controller_toolkit::OperationContext,
+    ) -> d2b_controller_toolkit::WatchHint {
+        let lane = if self.reasons.contains(&CoreTriggerReason::ExpeditedMutation) {
+            d2b_controller_toolkit::PriorityLane::Expedited
+        } else {
+            d2b_controller_toolkit::PriorityLane::Ordinary
+        };
+        d2b_controller_toolkit::WatchHint::new(
+            self.target,
+            self.revision,
+            self.reasons.into(),
+            lane,
+            operation,
+        )
     }
 
     fn coalesce(&mut self, newer: Self) {
@@ -714,7 +602,9 @@ impl FairAdmission {
         let mut seen = BTreeSet::new();
         let mut replacement = Vec::with_capacity(resources.len());
         for (target, revision) in resources {
-            if target.zone != controller.zone || revision.get() == 0 || !seen.insert(target.clone())
+            if target.zone() != &controller.zone
+                || revision.get() == 0
+                || !seen.insert(target.clone())
             {
                 return Err(HintAdmissionError::InvalidHint);
             }
@@ -774,6 +664,7 @@ impl std::error::Error for HintAdmissionError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use d2b_contracts::v3::ResourceUid;
 
     fn controller(name: &str) -> ResourceRef {
         ResourceRef::parse(&format!("Process/{name}")).unwrap()

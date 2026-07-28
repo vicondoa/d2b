@@ -10,3 +10,8 @@ workspace = true
 
 [dependencies]
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
+d2b-controller-toolkit = { path = "../d2b-controller-toolkit", version = "0.0.0-bootstrap" }
+tokio = { workspace = true, features = ["rt", "sync"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
