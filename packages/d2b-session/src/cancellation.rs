@@ -97,13 +97,20 @@ impl RequestRegistry {
     }
 
     pub fn register(&mut self, request_id: RequestId) -> Result<Cancellation> {
+        self.register_with_cancellation(request_id, Cancellation::new())
+    }
+
+    pub(crate) fn register_with_cancellation(
+        &mut self,
+        request_id: RequestId,
+        cancellation: Cancellation,
+    ) -> Result<Cancellation> {
         if self.requests.contains_key(&request_id) {
             return Err(SessionError::new(SessionErrorCode::RequestIdDuplicate));
         }
         if self.requests.len() >= self.max_active {
             return Err(SessionError::new(SessionErrorCode::QueueBackpressure));
         }
-        let cancellation = Cancellation::new();
         self.requests.insert(
             request_id,
             RequestState {

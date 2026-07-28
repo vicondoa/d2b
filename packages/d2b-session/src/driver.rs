@@ -23,7 +23,6 @@ use crate::{
 const DRIVER_COMMAND_CAPACITY: usize = 128;
 const DRIVER_EVENT_CAPACITY: usize = 128;
 const DRIVER_WRITE_CAPACITY: usize = 128;
-const DRIVER_CANCELLATION_WRITE_CAPACITY: usize = 128;
 
 /// Object-safe, clonable control surface for one established ComponentSession.
 ///
@@ -300,8 +299,6 @@ impl<T: OwnedTransport + 'static> SessionEngine<T> {
         let descriptor = self.transport_descriptor();
         let timeout = Duration::from_millis(u64::from(self.keepalive_timeout_ms()));
         let (write_sender, write_receiver) = mpsc::channel(DRIVER_WRITE_CAPACITY);
-        let (cancellation_sender, cancellation_receiver) =
-            mpsc::channel(DRIVER_CANCELLATION_WRITE_CAPACITY);
         let (priority_sender, priority_receiver) = mpsc::unbounded_channel();
         let placeholder = Box::new(DriverTransport::placeholder(descriptor));
         let (reader, writer) = self.split_transport(placeholder);
@@ -317,7 +314,6 @@ impl<T: OwnedTransport + 'static> SessionEngine<T> {
         tokio::spawn(run_writer(
             writer,
             write_receiver,
-            cancellation_receiver,
             priority_receiver,
             writer_failures,
             timeout,
@@ -327,7 +323,6 @@ impl<T: OwnedTransport + 'static> SessionEngine<T> {
             receiver,
             writer_failure_receiver,
             write_sender,
-            cancellation_sender,
             priority_sender,
         ));
         SessionDriverHandle {
@@ -435,6 +430,9 @@ impl OwnedTransport for DriverTransport {
             batch.packets.push(packet);
             return Ok(());
         }
+        if self.writes.capacity() <= 1 {
+            return Err(TransportError::WouldBlock);
+        }
         self.writes
             .try_send(WriterCommand::Batch {
                 packets: vec![packet],
@@ -462,42 +460,34 @@ impl OwnedTransport for DriverTransport {
 async fn run_writer(
     mut writer: Box<dyn TransportWriter>,
     mut writes: mpsc::Receiver<WriterCommand>,
-    mut cancellations: mpsc::Receiver<WriterCommand>,
     mut priority: mpsc::UnboundedReceiver<WriterCommand>,
     failures: mpsc::Sender<SessionError>,
     timeout: Duration,
 ) {
     let mut normal_open = true;
-    let mut cancellation_open = true;
     let mut priority_open = true;
     loop {
         enum WriterInput {
             Normal(Option<WriterCommand>),
-            Cancellation(Option<WriterCommand>),
             Priority(Option<WriterCommand>),
         }
-        let input = tokio::select! {
-            biased;
-            command = priority.recv(), if priority_open => WriterInput::Priority(command),
-            command = cancellations.recv(), if cancellation_open => {
-                WriterInput::Cancellation(command)
-            }
-            command = writes.recv(), if normal_open => WriterInput::Normal(command),
-            else => {
+        let input = match (normal_open, priority_open) {
+            (true, true) => tokio::select! {
+                biased;
+                command = priority.recv() => WriterInput::Priority(command),
+                command = writes.recv() => WriterInput::Normal(command),
+            },
+            (true, false) => WriterInput::Normal(writes.recv().await),
+            (false, true) => WriterInput::Priority(priority.recv().await),
+            (false, false) => {
                 let _ = writer.close().await;
                 return;
             }
         };
         let command = match input {
-            WriterInput::Normal(Some(command))
-            | WriterInput::Cancellation(Some(command))
-            | WriterInput::Priority(Some(command)) => command,
+            WriterInput::Normal(Some(command)) | WriterInput::Priority(Some(command)) => command,
             WriterInput::Normal(None) => {
                 normal_open = false;
-                continue;
-            }
-            WriterInput::Cancellation(None) => {
-                cancellation_open = false;
                 continue;
             }
             WriterInput::Priority(None) => {
@@ -877,7 +867,6 @@ async fn run_driver<T: OwnedTransport>(
     mut commands: mpsc::Receiver<DriverCommand>,
     mut writer_failures: mpsc::Receiver<SessionError>,
     write_commands: mpsc::Sender<WriterCommand>,
-    cancellation_writes: mpsc::Sender<WriterCommand>,
     priority_writes: mpsc::UnboundedSender<WriterCommand>,
 ) {
     let mut queues = DriverQueues::new(&engine);
@@ -928,7 +917,6 @@ async fn run_driver<T: OwnedTransport>(
                     &mut engine,
                     &mut queues,
                     &write_commands,
-                    &cancellation_writes,
                     &priority_writes,
                     command,
                 )
@@ -986,7 +974,6 @@ async fn handle_command<T: OwnedTransport>(
     engine: &mut SessionEngine<T>,
     queues: &mut DriverQueues,
     write_commands: &mpsc::Sender<WriterCommand>,
-    cancellation_writes: &mpsc::Sender<WriterCommand>,
     priority_writes: &mpsc::UnboundedSender<WriterCommand>,
     command: DriverCommand,
 ) -> Result<DriverAction> {
@@ -1008,8 +995,11 @@ async fn handle_command<T: OwnedTransport>(
                     return Err(error);
                 }
             };
-            engine.begin_write_batch(Some(cancellation));
-            let result = engine.call(request_id, frame).await.map(|_| ());
+            engine.begin_write_batch(Some(cancellation.clone()));
+            let result = engine
+                .call_guarded(request_id, frame, cancellation)
+                .await
+                .map(|_| ());
             complete_after_write(engine, batch, reply, result);
         }
         DriverCommand::CompleteTtrpc { request_id, reply } => {
@@ -1020,19 +1010,20 @@ async fn handle_command<T: OwnedTransport>(
             request_id,
             reply,
         } => {
+            let batch = match reserve_cancellation_write(write_commands, priority_writes) {
+                Ok(batch) => batch,
+                Err(error) => {
+                    let _ = reply.send(Err(error));
+                    return Err(error);
+                }
+            };
             engine.begin_write_batch(None);
             let result = if generation == engine.generation() {
                 engine.cancel_call(&request_id).await
             } else {
                 Err(SessionError::new(SessionErrorCode::GenerationMismatch))
             };
-            complete_cancellation_write(
-                engine,
-                cancellation_writes,
-                priority_writes,
-                reply,
-                result,
-            )?;
+            complete_after_write(engine, batch, reply, result);
         }
         DriverCommand::SendTtrpc {
             frame,
@@ -1189,10 +1180,17 @@ async fn handle_command<T: OwnedTransport>(
             remediation,
             reply,
         } => {
+            let batch = match reserve_cancellation_write(write_commands, priority_writes) {
+                Ok(batch) => batch,
+                Err(error) => {
+                    let _ = reply.send(Err(error));
+                    return Err(error);
+                }
+            };
             engine.begin_write_batch(None);
             let result = engine.close(reason, remediation).await;
             let closed = result.is_ok();
-            complete_priority_write(engine, priority_writes, reply, result)?;
+            complete_after_write(engine, batch, reply, result);
             if closed {
                 return Ok(DriverAction::Close);
             }
@@ -1205,7 +1203,7 @@ fn reserve_write_batch<'a>(
     write_commands: &'a mpsc::Sender<WriterCommand>,
     priority_writes: &mpsc::UnboundedSender<WriterCommand>,
 ) -> Result<mpsc::Permit<'a, WriterCommand>> {
-    if write_commands.capacity() == 0 {
+    if write_commands.capacity() <= 1 {
         let error = SessionError::new(SessionErrorCode::QueueBackpressure);
         let _ = priority_writes.send(WriterCommand::Abort(error));
         return Err(error);
@@ -1245,65 +1243,25 @@ fn complete_after_write(
     });
 }
 
-fn complete_cancellation_write(
-    engine: &mut SessionEngine<impl OwnedTransport>,
-    cancellation_writes: &mpsc::Sender<WriterCommand>,
+fn reserve_cancellation_write<'a>(
+    write_commands: &'a mpsc::Sender<WriterCommand>,
     priority_writes: &mpsc::UnboundedSender<WriterCommand>,
-    reply: Reply<()>,
-    result: Result<()>,
-) -> Result<()> {
-    let prepared = engine.take_write_batch();
-    if let Err(error) = result {
-        let _ = reply.send(Err(error));
-        return Ok(());
-    }
-    let Some((packets, cancellation, close_after)) = prepared else {
-        let error = SessionError::new(SessionErrorCode::InternalInvariant);
-        let _ = reply.send(Err(error));
+) -> Result<mpsc::Permit<'a, WriterCommand>> {
+    if write_commands.capacity() == 0 {
+        let error = backpressure();
+        let _ = priority_writes.send(WriterCommand::Abort(error));
         return Err(error);
-    };
-    let command = WriterCommand::Batch {
-        packets,
-        cancellation,
-        completion: Some(reply),
-        close_after,
-    };
-    cancellation_writes.try_send(command).map_err(|error| {
+    }
+    write_commands.try_reserve().map_err(|error| {
         let error = match error {
-            mpsc::error::TrySendError::Full(_) => {
+            mpsc::error::TrySendError::Full(()) => {
                 SessionError::new(SessionErrorCode::QueueBackpressure)
             }
-            mpsc::error::TrySendError::Closed(_) => disconnected(),
+            mpsc::error::TrySendError::Closed(()) => disconnected(),
         };
         let _ = priority_writes.send(WriterCommand::Abort(error));
         error
     })
-}
-
-fn complete_priority_write(
-    engine: &mut SessionEngine<impl OwnedTransport>,
-    priority_writes: &mpsc::UnboundedSender<WriterCommand>,
-    reply: Reply<()>,
-    result: Result<()>,
-) -> Result<()> {
-    let prepared = engine.take_write_batch();
-    if let Err(error) = result {
-        let _ = reply.send(Err(error));
-        return Ok(());
-    }
-    let Some((packets, cancellation, close_after)) = prepared else {
-        let error = SessionError::new(SessionErrorCode::InternalInvariant);
-        let _ = reply.send(Err(error));
-        return Err(error);
-    };
-    priority_writes
-        .send(WriterCommand::Batch {
-            packets,
-            cancellation,
-            completion: Some(reply),
-            close_after,
-        })
-        .map_err(|_| disconnected())
 }
 
 fn complete_unobserved_write(
@@ -1406,34 +1364,12 @@ fn backpressure() -> SessionError {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Mutex, atomic::AtomicBool};
+    use std::sync::atomic::AtomicBool;
 
     use super::*;
 
     struct FailingWriter {
         closed: Arc<AtomicBool>,
-    }
-
-    struct RecordingWriter {
-        packets: Arc<Mutex<Vec<Vec<u8>>>>,
-    }
-
-    #[async_trait]
-    impl TransportWriter for RecordingWriter {
-        async fn send(
-            &mut self,
-            packet: TransportPacket,
-        ) -> std::result::Result<(), TransportError> {
-            self.packets
-                .lock()
-                .unwrap()
-                .push(packet.as_bytes().to_vec());
-            Ok(())
-        }
-
-        async fn close(&mut self) -> std::result::Result<(), TransportError> {
-            Ok(())
-        }
     }
 
     #[async_trait]
@@ -1455,7 +1391,6 @@ mod tests {
     async fn writer_closes_transport_before_reporting_packet_failure() {
         let closed = Arc::new(AtomicBool::new(false));
         let (writes, receiver) = mpsc::channel(1);
-        let (_cancellations, cancellation_receiver) = mpsc::channel(1);
         let (_priority, priority_receiver) = mpsc::unbounded_channel();
         let (failures, mut failure_receiver) = mpsc::channel(1);
         let task = tokio::spawn(run_writer(
@@ -1463,7 +1398,6 @@ mod tests {
                 closed: Arc::clone(&closed),
             }),
             receiver,
-            cancellation_receiver,
             priority_receiver,
             failures,
             Duration::from_secs(1),
@@ -1485,47 +1419,48 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cancellation_lane_remains_available_when_normal_writes_are_full() {
-        let recorded = Arc::new(Mutex::new(Vec::new()));
-        let (writes, write_receiver) = mpsc::channel(1);
-        let (cancellations, cancellation_receiver) = mpsc::channel(1);
-        let (priority, priority_receiver) = mpsc::unbounded_channel();
-        let (failures, _failure_receiver) = mpsc::channel(1);
-        writes
-            .try_send(WriterCommand::Batch {
-                packets: vec![TransportPacket::new(vec![1])],
-                cancellation: None,
-                completion: None,
-                close_after: false,
-            })
-            .unwrap();
-        assert!(matches!(
-            writes.try_send(WriterCommand::Close),
-            Err(mpsc::error::TrySendError::Full(_))
-        ));
-        cancellations
-            .try_send(WriterCommand::Batch {
+    async fn unbatched_writes_preserve_the_cancellation_slot() {
+        let descriptor = TransportDescriptor {
+            class: d2b_contracts::v3::component_session::TransportClass::UnixSeqpacket,
+            locality: d2b_contracts::v3::component_session::Locality::HostLocal,
+            packet_atomic: true,
+            supports_attachments: false,
+        };
+        let (writes, mut receiver) = mpsc::channel(2);
+        let (priority, _priority_receiver) = mpsc::unbounded_channel();
+        let mut transport = DriverTransport {
+            descriptor,
+            reader: Box::new(DisconnectedReader),
+            writes: writes.clone(),
+            priority: priority.clone(),
+            write_cancellation: None,
+            batch: None,
+        };
+        transport.send(TransportPacket::new(vec![1])).await.unwrap();
+        assert_eq!(
+            transport
+                .send(TransportPacket::new(vec![9]))
+                .await
+                .unwrap_err(),
+            TransportError::WouldBlock
+        );
+
+        reserve_cancellation_write(&writes, &priority)
+            .unwrap()
+            .send(WriterCommand::Batch {
                 packets: vec![TransportPacket::new(vec![2])],
                 cancellation: None,
                 completion: None,
                 close_after: false,
-            })
-            .unwrap();
-        drop((writes, cancellations, priority));
-
-        run_writer(
-            Box::new(RecordingWriter {
-                packets: Arc::clone(&recorded),
-            }),
-            write_receiver,
-            cancellation_receiver,
-            priority_receiver,
-            failures,
-            Duration::from_secs(1),
-        )
-        .await;
-
-        assert_eq!(*recorded.lock().unwrap(), vec![vec![2], vec![1]]);
+            });
+        let WriterCommand::Batch { packets, .. } = receiver.recv().await.unwrap() else {
+            panic!("ordinary write was not queued");
+        };
+        assert_eq!(packets[0].as_bytes(), &[1]);
+        let WriterCommand::Batch { packets, .. } = receiver.recv().await.unwrap() else {
+            panic!("cancellation write was not queued");
+        };
+        assert_eq!(packets[0].as_bytes(), &[2]);
     }
 
     #[tokio::test]

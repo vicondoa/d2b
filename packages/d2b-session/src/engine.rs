@@ -578,7 +578,19 @@ impl<T: OwnedTransport> SessionEngine<T> {
     }
 
     pub async fn call(&mut self, request_id: RequestId, frame: Vec<u8>) -> Result<Cancellation> {
-        let cancellation = self.outbound_requests.register(request_id.clone())?;
+        self.call_guarded(request_id, frame, Cancellation::new())
+            .await
+    }
+
+    pub(crate) async fn call_guarded(
+        &mut self,
+        request_id: RequestId,
+        frame: Vec<u8>,
+        cancellation: Cancellation,
+    ) -> Result<Cancellation> {
+        let cancellation = self
+            .outbound_requests
+            .register_with_cancellation(request_id.clone(), cancellation)?;
         self.transport
             .set_write_cancellation(Some(cancellation.clone()));
         if let Err(error) = self.send_ttrpc(frame).await {
