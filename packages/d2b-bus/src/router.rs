@@ -1246,6 +1246,58 @@ pub struct ComponentSessionAdmission {
     identity: Arc<ComponentSessionAdmissionIdentity>,
 }
 
+const _: fn() = || {
+    trait AmbiguousIfImpl<A> {
+        fn some_item() {}
+    }
+    impl<T: ?Sized> AmbiguousIfImpl<()> for T {}
+    impl<T: Clone> AmbiguousIfImpl<u8> for T {}
+    impl<T: Copy> AmbiguousIfImpl<u16> for T {}
+    impl<T: Default> AmbiguousIfImpl<u32> for T {}
+    impl<T: From<Arc<ComponentSessionAdmissionIdentity>>> AmbiguousIfImpl<u64> for T {}
+    let _ = <ComponentSessionAdmission as AmbiguousIfImpl<_>>::some_item;
+};
+
+const _: fn() = || {
+    trait AmbiguousIfImpl<A> {
+        fn some_item() {}
+    }
+    impl<T: ?Sized> AmbiguousIfImpl<()> for T {}
+    impl<T: Clone> AmbiguousIfImpl<u8> for T {}
+    impl<T: Copy> AmbiguousIfImpl<u16> for T {}
+    impl<T: Default> AmbiguousIfImpl<u32> for T {}
+    impl<T: From<ComponentSessionAdmission>> AmbiguousIfImpl<u64> for T {}
+    let _ = <SessionAcceptor<ComponentSessionAdmission> as AmbiguousIfImpl<_>>::some_item;
+    let _ =
+        <AuthenticatedComponentSession<ComponentSessionAdmission> as AmbiguousIfImpl<_>>::some_item;
+};
+
+#[cfg(any(
+    d2b_capability_trait_mutation = "component-session-admission-clone",
+    d2b_capability_trait_mutation = "component-session-admission-default"
+))]
+macro_rules! mutate_component_session_admission_trait {
+    (clone) => {
+        impl Clone for ComponentSessionAdmission {
+            fn clone(&self) -> Self {
+                unreachable!()
+            }
+        }
+    };
+    (default) => {
+        impl Default for ComponentSessionAdmission {
+            fn default() -> Self {
+                unreachable!()
+            }
+        }
+    };
+}
+
+#[cfg(d2b_capability_trait_mutation = "component-session-admission-clone")]
+mutate_component_session_admission_trait!(clone);
+#[cfg(d2b_capability_trait_mutation = "component-session-admission-default")]
+mutate_component_session_admission_trait!(default);
+
 impl core::fmt::Debug for ComponentSessionAdmission {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("ComponentSessionAdmission(<redacted>)")

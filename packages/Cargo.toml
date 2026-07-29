@@ -55,7 +55,10 @@ unsafe_code = "forbid"
 # check-cfg entry here silences the `unexpected_cfgs` warning
 # the v1.1.1 panel reviewer flagged without weakening the
 # safety guard for production callers.
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(test_root)"] }
+unexpected_cfgs = { level = "warn", check-cfg = [
+    "cfg(test_root)",
+    "cfg(d2b_capability_trait_mutation, values(\"authenticated-component-session-clone\", \"authenticated-component-session-default\", \"component-session-admission-clone\", \"component-session-admission-default\", \"session-acceptor-clone\", \"session-acceptor-default\", \"verified-unix-peer-clone\", \"verified-unix-peer-default\"))",
+] }
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }

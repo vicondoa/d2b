@@ -327,6 +327,7 @@ dependencies = [
  "d2b-bus",
  "d2b-contracts",
  "d2b-session",
+ "d2b-session-unix",
 ]
 
 [[package]]
@@ -432,6 +433,7 @@ dependencies = [
  "nix 0.29.0",
  "rustix 0.38.44",
  "tokio",
+ "tokio-vsock",
 ]
 
 [[package]]
