@@ -162,7 +162,10 @@ impl Ledger {
     }
 
     fn state_of(&self, r: &DownRef) -> Option<DownState> {
-        self.uses.get(&r.use_id).and_then(|u| u.down.get(r)).copied()
+        self.uses
+            .get(&r.use_id)
+            .and_then(|u| u.down.get(r))
+            .copied()
     }
 
     /// The application attached `app_buffer` to `surface` and committed.
@@ -277,7 +280,10 @@ impl Ledger {
         if current != expect {
             return Err(LedgerError::IllegalTransition);
         }
-        let u = self.uses.get_mut(&r.use_id).ok_or(LedgerError::UnknownUse)?;
+        let u = self
+            .uses
+            .get_mut(&r.use_id)
+            .ok_or(LedgerError::UnknownUse)?;
         match to {
             Some(next) => {
                 u.down.insert(r.clone(), next);
@@ -339,10 +345,7 @@ impl Ledger {
             self.active_epoch.remove(&app_buffer);
         }
         self.uses.remove(&use_id);
-        vec![Effect::ReleaseAppBuffer {
-            app_buffer,
-            use_id,
-        }]
+        vec![Effect::ReleaseAppBuffer { app_buffer, use_id }]
     }
 }
 
@@ -581,4 +584,3 @@ mod tests {
         );
     }
 }
-
