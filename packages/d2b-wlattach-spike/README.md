@@ -67,14 +67,19 @@ This is a Phase-0/1 milestone. Implemented and demonstrated:
 * the session host, the disposable frontend, and `attach`/`detach`/`ls`/`status`;
 * **SHM** content, copied at commit and the application.s buffer released
   immediately, so its pool keeps turning over while detached;
-* window reconstruction on a brand-new compositor connection.
+* window reconstruction on a brand-new compositor connection;
+* **keyboard and pointer input**, forwarded to the application and working again
+  after a re-attach;
+* the **frame clock** (frame callbacks), which is what lets an application keep
+  drawing at all -- and which is withheld while detached, so it idles like a
+  minimised window.
 
 **Not yet wired into the live path:** the buffer ledger and the
 `SOCK_SEQPACKET` transport are implemented and unit-tested, but the running
 system currently passes shadow state through a file in the mode-0700 session
 directory and uses the control socket for close forwarding. Both become
 load-bearing when DMA-BUF lands. Also absent: input forwarding,
-`xdg_toplevel.suspended` and frame pacing, DMA-BUF, subsurfaces and popups.
+`xdg_toplevel.suspended`, DMA-BUF, subsurfaces and popups.
 
 **On `unsafe`:** the crate is `unsafe_code = "deny"` with exactly one audited
 module, `src/serve/sys.rs`. Smithay exposes `wl_shm` contents only as a raw
@@ -129,3 +134,29 @@ cargo audit
 
 A phase does not close without them. If this prototype graduates to production,
 CI wiring is part of that graduation.
+
+## Trying it
+
+```bash
+nix-shell
+cargo build
+
+# Window/process persistence across detach + attach.
+bash demo/demo.sh foot
+bash demo/demo.sh gtk4-demo
+
+# Keyboard and pointer actually reaching the application.
+bash demo/input.sh
+
+# Descriptor and memory stability across many cycles.
+bash demo/soak.sh 25 foot
+```
+
+Or drive it by hand:
+
+```bash
+./target/debug/d2b-wlattach run -s work -- gtk4-demo
+./target/debug/d2b-wlattach detach -s work    # window goes, app lives on
+./target/debug/d2b-wlattach attach -s work    # window returns
+./target/debug/d2b-wlattach ls
+```
