@@ -63,12 +63,17 @@ pub struct Frontend {
     compositor: Option<WlCompositor>,
     shm: Option<WlShm>,
     wm_base: Option<XdgWmBase>,
-    windows: HashMap<u32, Window>,
+    windows: HashMap<u64, Window>,
     /// Set when the compositor asks a window to close. Advisory: forwarded to
     /// the session host, which forwards it to the application, which decides.
-    pub close_requested: Vec<u32>,
+    pub close_requested: Vec<u64>,
     /// Input observed from the host compositor, drained and forwarded upward.
     pub input: Vec<InputEvent>,
+    /// Last pointer position forwarded. Our own buffer commits make the
+    /// compositor re-emit motion at an unchanged position; forwarding those
+    /// floods the application with hundreds of no-op motions a second, which
+    /// keeps resetting hover and tooltip timers.
+    last_pointer: Option<(f64, f64)>,
     seat: Option<WlSeat>,
     /// `wl_seat.capabilities` may be sent more than once; only take the pointer
     /// and keyboard the first time, or we leak a seat object per event.
@@ -88,6 +93,7 @@ impl Default for Frontend {
             windows: HashMap::new(),
             close_requested: Vec::new(),
             input: Vec::new(),
+            last_pointer: None,
             seat: None,
             has_pointer: false,
             has_keyboard: false,
@@ -142,7 +148,7 @@ impl Frontend {
     /// serial from a previous generation.
     pub fn upsert(
         &mut self,
-        key: u32,
+        key: u64,
         shadow: &PublishedSurface,
         qh: &QueueHandle<Self>,
     ) -> Result<(), FrontendError> {
@@ -197,7 +203,7 @@ impl Frontend {
     /// The pool and buffer are reused whenever the geometry is unchanged. The
     /// session host writes new pixels into the same file in place, so a redraw
     /// is just damage plus commit — no allocation and no round-trip.
-    fn flush_pending(&mut self, key: u32, qh: &QueueHandle<Self>) -> Result<(), FrontendError> {
+    fn flush_pending(&mut self, key: u64, qh: &QueueHandle<Self>) -> Result<(), FrontendError> {
         let px_dir = self.px_dir.clone();
         let shm = self
             .shm
@@ -259,12 +265,18 @@ impl Frontend {
                 qh,
                 (),
             );
-            w.surface.attach(Some(&buffer), 0, 0);
             w.pool = Some(pool);
             w.buffer = Some(buffer);
             w.geometry = Some(geom);
         }
 
+        // Re-attach every frame, even when reusing the same buffer. The session
+        // host rewrites the pixels in place, and a compositor is entitled to
+        // keep its uploaded texture until a buffer is attached again — without
+        // this the window shows its first frame and never updates.
+        if let Some(b) = w.buffer.as_ref() {
+            w.surface.attach(Some(b), 0, 0);
+        }
         w.surface
             .damage_buffer(0, 0, meta.width.max(1), meta.height.max(1));
         w.surface.commit();
@@ -327,12 +339,12 @@ impl Dispatch<XdgWmBase, ()> for Frontend {
     }
 }
 
-impl Dispatch<XdgSurface, u32> for Frontend {
+impl Dispatch<XdgSurface, u64> for Frontend {
     fn event(
         state: &mut Self,
         surface: &XdgSurface,
         event: xdg_surface::Event,
-        key: &u32,
+        key: &u64,
         _: &Connection,
         qh: &QueueHandle<Self>,
     ) {
@@ -348,12 +360,12 @@ impl Dispatch<XdgSurface, u32> for Frontend {
     }
 }
 
-impl Dispatch<XdgToplevel, u32> for Frontend {
+impl Dispatch<XdgToplevel, u64> for Frontend {
     fn event(
         state: &mut Self,
         _: &XdgToplevel,
         event: xdg_toplevel::Event,
-        key: &u32,
+        key: &u64,
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
@@ -407,10 +419,13 @@ impl Dispatch<WlPointer, ()> for Frontend {
                 surface_x,
                 surface_y,
                 ..
-            } => state.input.push(InputEvent::PointerEnter {
-                x: surface_x,
-                y: surface_y,
-            }),
+            } => {
+                state.last_pointer = Some((surface_x, surface_y));
+                state.input.push(InputEvent::PointerEnter {
+                    x: surface_x,
+                    y: surface_y,
+                });
+            }
             wl_pointer::Event::Motion {
                 surface_x,
                 surface_y,
@@ -440,7 +455,10 @@ impl Dispatch<WlPointer, ()> for Frontend {
                     vertical: v,
                 });
             }
-            wl_pointer::Event::Leave { .. } => state.input.push(InputEvent::PointerLeave),
+            wl_pointer::Event::Leave { .. } => {
+                state.last_pointer = None;
+                state.input.push(InputEvent::PointerLeave);
+            }
             _ => {}
         }
     }
@@ -501,8 +519,8 @@ impl Frontend {
     ///
     /// Without this, an application that closes one window of several leaves a
     /// stale frame on screen forever.
-    pub fn reconcile(&mut self, live: &[u32]) {
-        let gone: Vec<u32> = self
+    pub fn reconcile(&mut self, live: &[u64]) {
+        let gone: Vec<u64> = self
             .windows
             .keys()
             .copied()

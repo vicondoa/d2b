@@ -399,7 +399,7 @@ fn serve(name: &str, argv: &[String]) -> Result<(), String> {
                     cleanup(&ctl_path, &wl_path, name);
                     return Ok(());
                 }
-                v if v.starts_with("close ") => match v[6..].trim().parse::<u32>() {
+                v if v.starts_with("close ") => match v[6..].trim().parse::<u64>() {
                     Ok(key) if state.request_close(key) => "close forwarded\n".to_owned(),
                     Ok(_) => "no such window\n".to_owned(),
                     Err(_) => "bad key\n".to_owned(),
@@ -479,12 +479,12 @@ fn shadow_path(name: &str) -> PathBuf {
     session_dir(name).join("shadow.bin")
 }
 
-fn write_shadow(name: &str, tops: &[(u32, ShadowSurface)]) -> Result<(), String> {
+fn write_shadow(name: &str, tops: &[(u64, ShadowSurface)]) -> Result<(), String> {
     use d2b_wlattach_spike::serve::host::{PublishedSurface, SnapshotMeta};
 
     let t0 = std::time::Instant::now();
     let dir = session_dir(name);
-    let mut published: Vec<(u32, PublishedSurface)> = Vec::with_capacity(tops.len());
+    let mut published: Vec<(u64, PublishedSurface)> = Vec::with_capacity(tops.len());
 
     for (key, s) in tops {
         let meta = match s.snapshot.as_ref() {
@@ -593,10 +593,10 @@ fn present(name: &str) -> Result<(), String> {
             && bytes != last
         {
             last.clone_from(&bytes);
-            match postcard::from_bytes::<Vec<(u32, PublishedSurface)>>(&bytes) {
+            match postcard::from_bytes::<Vec<(u64, PublishedSurface)>>(&bytes) {
                 Ok(tops) => {
                     log::debug!("shadow: {} toplevel(s), {} bytes", tops.len(), bytes.len());
-                    let live: Vec<u32> = tops.iter().map(|(k, _)| *k).collect();
+                    let live: Vec<u64> = tops.iter().map(|(k, _)| *k).collect();
                     fe.reconcile(&live);
                     for (key, shadow) in tops {
                         if let Err(e) = fe.upsert(key, &shadow, &qh) {
@@ -678,7 +678,12 @@ fn inject(name: &str, key: Option<u32>, click: Option<Vec<f64>>, bare: bool) -> 
         } else {
             vec![
                 InputEvent::PointerEnter { x, y },
-                InputEvent::PointerMotion { x, y },
+                // Move before clicking: a motion to the position we just
+                // entered at is legitimately coalesced away by the compositor.
+                InputEvent::PointerMotion {
+                    x: x + 5.0,
+                    y: y + 5.0,
+                },
                 InputEvent::PointerButton {
                     button: 0x110, // BTN_LEFT
                     pressed: true,

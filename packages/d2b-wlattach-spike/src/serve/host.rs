@@ -76,12 +76,17 @@ pub struct Shadow {
 }
 
 impl Shadow {
-    pub fn toplevels(&self) -> Vec<(u32, ShadowSurface)> {
+    /// Toplevels keyed by their **stable** [`SurfaceId`].
+    ///
+    /// Deliberately not the Wayland protocol id: those are only unique per
+    /// connection and are **reused** after an object is destroyed, so a rapid
+    /// destroy/recreate could alias a new surface onto an old frontend window.
+    pub fn toplevels(&self) -> Vec<(u64, ShadowSurface)> {
         let mut v: Vec<_> = self
             .surfaces
-            .iter()
-            .filter(|(_, s)| s.is_toplevel)
-            .map(|(k, s)| (*k, s.clone()))
+            .values()
+            .filter(|s| s.is_toplevel)
+            .filter_map(|s| s.id.map(|id| (id.get(), s.clone())))
             .collect();
         v.sort_by_key(|(k, _)| *k);
         v
@@ -370,9 +375,27 @@ impl SessionHost {
     /// This is advisory: the application may prompt to save, ignore it, or close
     /// only that window. It is emphatically not a detach, and it does not end
     /// the session by itself.
-    pub fn request_close(&self, key: u32) -> bool {
+    /// Forward a compositor close request to the application's toplevel.
+    ///
+    /// Keyed by the stable [`SurfaceId`], so a reused protocol id cannot route a
+    /// close to the wrong window.
+    ///
+    /// This is advisory: the application may prompt to save, ignore it, or close
+    /// only that window. It is emphatically not a detach, and it does not end
+    /// the session by itself.
+    pub fn request_close(&self, key: u64) -> bool {
+        let Ok(shadow) = self.shadow.lock() else {
+            return false;
+        };
         for t in &self.toplevels {
-            if Self::surface_key(t.wl_surface()) == key {
+            let protocol_key = Self::surface_key(t.wl_surface());
+            if shadow
+                .surfaces
+                .get(&protocol_key)
+                .and_then(|s| s.id)
+                .map(|id| id.get())
+                == Some(key)
+            {
                 t.send_close();
                 return true;
             }
