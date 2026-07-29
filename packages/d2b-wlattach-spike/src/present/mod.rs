@@ -179,8 +179,13 @@ impl Frontend {
             return Ok(());
         };
         let Some(snap) = shadow.snapshot.as_ref() else {
-            // Nothing retained yet: leave the window unmapped rather than show
-            // something wrong. It maps on the application's first real frame.
+            // The surface has no content: either nothing retained yet, or the
+            // application committed a null buffer. Unmap rather than leave a
+            // stale frame on screen. It remaps on the next real frame.
+            if w.attached.take().is_some() {
+                w.surface.attach(None, 0, 0);
+                w.surface.commit();
+            }
             return Ok(());
         };
 
@@ -316,12 +321,10 @@ impl Dispatch<XdgToplevel, u32> for Frontend {
         _: &QueueHandle<Self>,
     ) {
         if let xdg_toplevel::Event::Close = event {
-            // Advisory. Report it upward; the application decides. This is NOT
-            // a detach and does not end the session by itself.
+            // Purely advisory: report it upward and change nothing locally. The
+            // application may ignore it or show a save prompt, and if we marked
+            // the window closed here we would freeze its updates for good.
             state.close_requested.push(*key);
-            if let Some(w) = state.windows.get_mut(key) {
-                w.closed = true;
-            }
         }
     }
 }
@@ -347,5 +350,30 @@ impl Frontend {
             w.surface.destroy();
         }
         self.running = false;
+    }
+}
+
+impl Frontend {
+    /// Destroy any window that is no longer in the published surface set.
+    ///
+    /// Without this, an application that closes one window of several leaves a
+    /// stale frame on screen forever.
+    pub fn reconcile(&mut self, live: &[u32]) {
+        let gone: Vec<u32> = self
+            .windows
+            .keys()
+            .copied()
+            .filter(|k| !live.contains(k))
+            .collect();
+        for key in gone {
+            if let Some(w) = self.windows.remove(&key) {
+                if let Some(b) = w.attached {
+                    b.destroy();
+                }
+                w.toplevel.destroy();
+                w.xdg_surface.destroy();
+                w.surface.destroy();
+            }
+        }
     }
 }

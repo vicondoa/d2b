@@ -186,6 +186,13 @@ impl CompositorHandler for SessionHost {
             match attrs.current().buffer.take() {
                 Some(smithay::wayland::compositor::BufferAssignment::NewBuffer(buf)) => {
                     snapshot = crate::serve::sys::copy_shm(&buf);
+                    if snapshot.is_none() {
+                        // A new buffer arrived but we could not copy it (over the
+                        // size cap, or bad geometry). Retaining the previous frame
+                        // would later be presented as if it were current, so drop
+                        // it and let the surface remap on the next good frame.
+                        cleared = true;
+                    }
                     // We have our own copy, so the application may reuse the
                     // buffer immediately. Without this a single-buffered client
                     // stalls forever waiting for a release that never comes.
@@ -219,11 +226,10 @@ impl CompositorHandler for SessionHost {
             if !app_id.is_empty() {
                 entry.app_id = app_id;
             }
-            if let Some(s) = snapshot {
-                entry.snapshot = Some(s);
-            }
             if cleared {
                 entry.snapshot = None;
+            } else if let Some(s) = snapshot {
+                entry.snapshot = Some(s);
             }
             shadow.revision = shadow.revision.wrapping_add(1);
         }

@@ -17,7 +17,8 @@ full surface tree, able to materialise it onto a fresh connection on demand.
 **Session host** (persistent) — a Smithay `wayland-server`. Owns the
 application's connection, the shadow surface tree, the buffer ledger, a synthetic
 seat and outputs, and frame pacing. It **never renders**: no EGL, no Vulkan, no
-GBM, and no `unsafe`.
+GBM, and no GPU-side `unsafe`. (Reading `wl_shm` pixels needs one audited
+`unsafe` expression — see "Unsafe" below.)
 
 **Window frontend** (disposable) — a `wayland-client`. Rebuilt from scratch on
 every attach; holds no durable state.
@@ -142,3 +143,23 @@ Import uses async `create`, never `create_immed`, whose failure is fatal to the
 connection. On failure the surface enters degraded recovery: geometry is
 restored, `suspended` cleared, and the window maps on the app's first valid
 buffer rather than showing something wrong.
+
+## Unsafe
+
+The crate is `unsafe_code = "deny"` with exactly one audited module,
+`src/serve/sys.rs`. The data path needs no `unsafe`: DMA-BUF descriptors move by
+`SCM_RIGHTS` through `rustix`'s safe ancillary API.
+
+The single exception is reading `wl_shm` pixel content. Smithay 0.7 exposes
+mapped contents only as `FnOnce(*const u8, usize, BufferData)` with no safe
+accessor, and reimplementing pool mapping ourselves would need strictly *more*
+unsafe.
+
+That module deliberately **does not build a `&[u8]`** over the pool. The pool is
+client-writable shared memory, and a Rust reference promises no concurrent
+mutation — a promise the client is under no obligation to keep, which would be
+undefined behaviour. It copies byte-by-byte with `read_volatile` into owned
+storage, under checked arithmetic, a null check, an `end <= len` bound and a
+64 MiB cap. The accepted residual is that a racing client can produce a **torn**
+image: a visual artefact, not a memory-safety violation, and exactly what any
+compositor doing a software copy is exposed to.

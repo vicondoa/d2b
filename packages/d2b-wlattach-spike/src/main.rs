@@ -450,6 +450,8 @@ fn present(name: &str) -> Result<(), String> {
             match postcard::from_bytes::<Vec<(u32, ShadowSurface)>>(&bytes) {
                 Ok(tops) => {
                     log::info!("shadow: {} toplevel(s), {} bytes", tops.len(), bytes.len());
+                    let live: Vec<u32> = tops.iter().map(|(k, _)| *k).collect();
+                    fe.reconcile(&live);
                     for (key, shadow) in tops {
                         log::info!(
                             "upsert key={key} snapshot={} {}x{}",

@@ -1,6 +1,7 @@
 # Standalone spike crate: intentionally NOT a member of packages/Cargo.toml.
-# Precedent: packages/d2b-wlproxy-spike. Wired into tests/test-rust.sh via the
-# same excluded-manifest pattern used for d2b-priv-broker.
+# Precedent: packages/d2b-wlproxy-spike. Deliberately NOT wired into any repo CI
+# gate -- a spike should not consume a shipping gate. Validation is local
+# phase-gate evidence; see README.
 [workspace]
 
 [package]
