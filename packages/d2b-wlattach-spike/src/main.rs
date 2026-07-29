@@ -308,6 +308,16 @@ fn serve(name: &str, argv: &[String]) -> Result<(), String> {
         let _ = std::fs::remove_file(wl_path);
         let _ = std::fs::remove_file(shadow_path(name));
         let _ = std::fs::remove_file(session_dir(name).join("input.sock"));
+        // Retained frames are application pixel content. Do not leave them in
+        // the runtime directory once the session is over.
+        if let Ok(rd) = std::fs::read_dir(session_dir(name)) {
+            for e in rd.flatten() {
+                if e.file_name().to_string_lossy().starts_with("px-") {
+                    let _ = std::fs::remove_file(e.path());
+                }
+            }
+        }
+        let _ = std::fs::remove_dir(session_dir(name));
     };
 
     loop {
@@ -515,7 +525,7 @@ fn write_shadow(name: &str, tops: &[(u64, ShadowSurface)]) -> Result<(), String>
                     stride: snap.stride,
                     format: snap.format,
                     len: snap.pixels.len() as u64,
-                    seq: t0.elapsed().as_nanos() as u64 ^ snap.pixels.len() as u64,
+                    seq: s.seq,
                 })
             }
             None => None,

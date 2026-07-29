@@ -78,7 +78,7 @@ This is a Phase-0/1 milestone. Implemented and demonstrated:
 `SOCK_SEQPACKET` transport are implemented and unit-tested, but the running
 system currently passes shadow state through a file in the mode-0700 session
 directory and uses the control socket for close forwarding. Both become
-load-bearing when DMA-BUF lands. Also absent: input forwarding,
+load-bearing when DMA-BUF lands. Also absent:
 `xdg_toplevel.suspended`, DMA-BUF, subsurfaces and popups.
 
 **On `unsafe`:** the crate is `unsafe_code = "deny"` with exactly one audited
@@ -160,3 +160,21 @@ Or drive it by hand:
 ./target/debug/d2b-wlattach attach -s work    # window returns
 ./target/debug/d2b-wlattach ls
 ```
+
+## Known limitations
+
+Honest list, so nothing here is oversold:
+
+- **Buffer ownership on the SHM path.** The session host rewrites the pixel file
+  in place while the frontend keeps one `wl_buffer` mapped over it, without
+  waiting for `wl_buffer.release`. Wayland forbids modifying committed storage
+  before release, so a frame can tear. A released-tracked slot ring is the
+  correct fix; it is deliberately not attempted here because this whole
+  file-based transport is scaffolding that DMA-BUF descriptor passing replaces.
+- **`attach` reports success on spawn**, not after the window is actually mapped.
+- **The frontend ignores the compositor's configure size** and does no
+  `wp_viewporter` fit, so re-attaching into a differently sized tile can clip or
+  mis-scale until the application redraws.
+- A re-attached window is a **new** window to the compositor, so it is placed
+  fresh rather than returning to its previous position.
+- No clipboard, no drag-and-drop, no touch, no subsurfaces or popups.

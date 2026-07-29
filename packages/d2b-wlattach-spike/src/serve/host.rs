@@ -59,6 +59,8 @@ pub struct Snapshot {
 #[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ShadowSurface {
     pub id: Option<SurfaceId>,
+    /// Monotonic per-surface commit counter.
+    pub seq: u64,
     pub title: String,
     pub app_id: String,
     pub snapshot: Option<Snapshot>,
