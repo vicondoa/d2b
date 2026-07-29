@@ -147,10 +147,16 @@ fn assert_mutation_fixture(workspace_docs: &[DocumentedCrate]) {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repository_root = crate_root.parent().unwrap().parent().unwrap();
     let fixture = crate_root.join("tests/ui/public-api-mutations");
-    let scratch = Scratch::cache(
+    // Ephemeral, unlike the workspace render above. The fixture is a small
+    // separate workspace, so a persistent build directory saves little, and
+    // caching it was observed to change what rustdoc emitted for the fixture
+    // crate depending on the harness driving the test. Keeping this tree
+    // per-process preserves the original semantics exactly where the payoff
+    // does not justify the risk.
+    let scratch = Scratch::ephemeral(
         repository_root
             .join(".scratch")
-            .join("bus-public-api-mutations"),
+            .join(format!("bus-public-api-mutations-{}", std::process::id())),
     );
     let temp = scratch.path().join("tmp");
     fs::create_dir_all(&temp).expect("create repository-local mutation scratch");
@@ -1252,16 +1258,17 @@ struct Scratch {
 /// Whether a [`Scratch`] tree outlives the process that created it.
 enum ScratchKind {
     /// Survives between runs and is addressed by a stable, process-independent
-    /// path. Used for the rustdoc trees, where the whole point is to let Cargo
-    /// reuse compiled dependencies.
+    /// path. Used for the workspace rustdoc render, where reusing compiled
+    /// dependencies across runs is the entire win.
     ///
     /// A stable path is also what makes this leak-proof: an interrupted run
     /// leaves a directory the next run adopts, rather than stranding a
     /// multi-gigabyte per-process tree that nothing will ever collect.
     Cache,
-    /// Deleted on drop. Used for the small synthetic source trees the
-    /// fail-closed mutation fixtures plant, which must never be reused because
-    /// each case writes a differently-shaped module layout.
+    /// Deleted on drop, and addressed by a per-process path. Used for the small
+    /// synthetic source trees the fail-closed mutation fixtures plant, which
+    /// must never be reused because each case writes a differently-shaped
+    /// module layout, and for the mutation fixture's own render.
     Ephemeral,
 }
 
