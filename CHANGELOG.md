@@ -71,17 +71,20 @@ deprecations ship one minor release before removal.
 
 - Kept the source trait-implementation inventory as a best-effort breadth
   check for traits outside the compiler-enforced set. It now fails closed on
-  direct and `self as` module renames used as type prefixes, lexically scoped
-  capability aliases, `cfg_attr` on external module declarations, and one
-  source file reached through different logical module paths. Direct `#[path]`
-  declarations now follow Rust's containing-source-file rule while paths inside
-  inline modules follow the logical module directory, so a sibling decoy cannot
-  hide the compiler-selected source. Duplicate-module diagnostics retain both
-  logical names without exposing canonical host paths. The scan also retains
-  breadth over implementations disabled in the active compiler configuration.
-  Macro-generated and `include!`-generated arbitrary `From<X>`
-  implementations in a capability's defining crate remain outside this
-  syntax-level scan; Rust's orphan rules prevent another crate from adding
+  direct renames of local modules that contain capability declarations,
+  `self as` module renames used as type prefixes, lexically scoped capability
+  aliases, `cfg_attr` on external module declarations, and one source file
+  reached through different logical module paths. Direct `#[path]` declarations
+  now follow Rust's containing-source-file rule while paths inside inline
+  modules follow the logical module directory, so a sibling decoy cannot hide
+  the compiler-selected source. Duplicate-module diagnostics retain both
+  logical names without exposing canonical host paths. Direct external-module
+  renames remain ordinary type aliases because Rust's orphan rules prevent
+  their foreign types from gaining a foreign trait implementation here. The
+  scan also retains breadth over implementations disabled in the active
+  compiler configuration. Macro-generated and `include!`-generated arbitrary
+  `From<X>` implementations in a capability's defining crate remain outside
+  this syntax-level scan; Rust's orphan rules prevent another crate from adding
   those implementations. Private construction state, sealed traits, and
   consumed capabilities remain the primary boundary.
 

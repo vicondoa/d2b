@@ -1186,6 +1186,8 @@ struct SourceAlias {
 #[derive(Clone)]
 struct SourceModuleAlias {
     binding: SourceBinding,
+    target: SourcePath,
+    conservative: bool,
 }
 
 #[derive(Clone)]
@@ -1413,20 +1415,25 @@ fn collect_use_bindings(
                 module_path: module_path.to_vec(),
                 name: rename.rename.to_string(),
             };
+            let mut segments = prefix.clone();
+            if rename.ident != "self" {
+                segments.push(rename.ident.to_string());
+            }
+            let target = SourcePath {
+                leading_colon,
+                segments,
+            };
             facts.module_aliases.push(SourceModuleAlias {
                 binding: binding.clone(),
+                target: target.clone(),
+                conservative: rename.ident == "self",
             });
             if rename.ident == "self" {
                 return;
             }
-            let mut segments = prefix.clone();
-            segments.push(rename.ident.to_string());
             facts.aliases.push(SourceAlias {
                 binding,
-                target: SourceAliasTarget::Path(SourcePath {
-                    leading_colon,
-                    segments,
-                }),
+                target: SourceAliasTarget::Path(target),
                 generic: false,
                 conditional: context.conditional,
                 fail_if_conditional: true,
@@ -1500,11 +1507,6 @@ fn finish_source_capability_inventory(
 
     let alias_bindings = facts
         .aliases
-        .iter()
-        .map(|alias| alias.binding.clone())
-        .collect::<BTreeSet<_>>();
-    let module_alias_bindings = facts
-        .module_aliases
         .iter()
         .map(|alias| alias.binding.clone())
         .collect::<BTreeSet<_>>();
@@ -1585,6 +1587,20 @@ fn finish_source_capability_inventory(
             break;
         }
     }
+    let module_alias_bindings = facts
+        .module_aliases
+        .iter()
+        .filter(|alias| {
+            alias.conservative
+                || resolve_module_path(&alias.target, &alias.binding.module_path, crate_name)
+                    .is_some_and(|target_module| {
+                        resolved
+                            .keys()
+                            .any(|binding| binding.module_path == target_module)
+                    })
+        })
+        .map(|alias| alias.binding.clone())
+        .collect::<BTreeSet<_>>();
     let noncapability_aliases =
         resolve_noncapability_aliases(&facts.aliases, crate_name, &resolved, &alias_bindings);
     let fail_closed_alias_bindings = facts
