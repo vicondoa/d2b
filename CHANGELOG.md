@@ -59,8 +59,12 @@ deprecations ship one minor release before removal.
 - Made the capability mint-surface policy gate render each package serially in
   isolation, prove every rustdoc all-items entry has a parseable page, and
   fail closed on missing required signatures or partial documentation. The
-  gate also inventories exact public `doc(hidden)` signatures independently,
-  since the pinned stable rustdoc cannot render them.
+  gate also allowlists every source-visible explicit or derived trait
+  implementation on a capability type, so hidden `Default`, `From`, clone, or
+  conversion implementations fail by name. Its rustdoc and hidden-source
+  signature inventories remain best-effort syntax checks rather than
+  compiler-expanded inventories; private construction state, sealed traits,
+  and consumed capabilities remain the primary boundary.
 
 - Strengthened cancellation publication race coverage to prove both activity
   and response state remain locked until their correlated entries are visible.
