@@ -31,9 +31,11 @@ pub const SEP_GAP: f32 = 6.0;
 pub const BAR_WIDTH: f32 = 3.0;
 pub const HAIRLINE: f32 = 1.0;
 pub const RADIUS: f32 = 6.0;
+pub const LABEL_GAP: f32 = 5.0;
 
 /// Scale the logical constants into the physical metrics the parts model uses.
-fn metrics(spec: &ChromeSpec) -> Metrics {    let s = spec.scale;
+fn metrics(spec: &ChromeSpec, cfg: &PartsConfig) -> Metrics {
+    let s = spec.scale;
     Metrics {
         scale: s,
         font_px: spec.font_px * s,
@@ -46,6 +48,8 @@ fn metrics(spec: &ChromeSpec) -> Metrics {    let s = spec.scale;
         icon_gap: ICON_GAP * s,
         sep_gap: SEP_GAP * s,
         sep_width: HAIRLINE * s,
+        action_labels: !cfg.compact_actions,
+        label_gap: LABEL_GAP * s,
     }
 }
 
@@ -117,7 +121,7 @@ pub fn layout(
     font: &VectorFont<'_>,
     content_width: u32,
 ) -> Option<TabLayout> {
-    let m = metrics(spec);
+    let m = metrics(spec, cfg);
     let row = cfg.row(spec.expanded);
     let parts = Parts::layout(row, &m, font, &spec.label);
 
@@ -183,7 +187,7 @@ pub fn render_band(
 
     let fg = enforce_contrast(spec.theme.foreground, fill, CONTRAST_TEXT_AA)
         .unwrap_or(spec.theme.foreground);
-    let m = metrics(spec);
+    let m = metrics(spec, cfg);
 
     // Centre on cap height so the label sits optically centred, not centred on
     // the full ascender-to-descender box.
@@ -195,7 +199,10 @@ pub fn render_band(
         let x = l.tab_x + placed.x;
         match &placed.part {
             Part::Identity => {
-                font.draw(&mut pm, &spec.label, m.font_px, m.tracking, x, baseline, fg);
+                // Centre within the (possibly widened) box, so a very short
+                // workload name stays optically centred on its own target.
+                let cx = x + (placed.width - placed.text_advance) / 2.0;
+                font.draw(&mut pm, &spec.label, m.font_px, m.tracking, cx, baseline, fg);
             }
             Part::Status => {
                 if let Some(status) = &spec.status {
@@ -211,11 +218,14 @@ pub fn render_band(
                 }
             }
             Part::Chevron => {
+                // The part box was widened to the target-size floor, but the
+                // glyph must keep its designed size: growing the hit box is an
+                // accessibility fix, growing the mark is a drawing bug.
                 skia::draw_chevron(
                     &mut pm,
-                    x,
+                    x + (placed.width - m.chevron_width) / 2.0,
                     mid_y,
-                    placed.width,
+                    m.chevron_width,
                     spec.expanded,
                     fg.with_alpha(0xd0),
                 );
@@ -243,13 +253,25 @@ pub fn render_band(
             Part::Action(action) => {
                 let idx = spec.actions.iter().position(|a| a == action);
                 let active = idx.is_some_and(|i| spec.active_actions & (1 << i) != 0);
-                let iy = l.tab_y + (l.tab_height - placed.width) / 2.0;
+                let icon = m.icon_box;
+                let iy = l.tab_y + (l.tab_height - icon) / 2.0;
+                // The part box may be wider than its contents, because every
+                // interactive part is widened to the target-size floor. Centre
+                // the contents in the box so the icon does not drift left of
+                // the area that responds to it.
+                let content = if m.action_labels {
+                    icon + m.label_gap + placed.text_advance
+                } else {
+                    icon
+                };
+                let cx = x + (placed.width - content) / 2.0;
+
                 if active
                     && let Some(pill) = skia::rounded_rect_path(
-                        x - 3.0 * s,
-                        iy - 2.0 * s,
-                        placed.width + 6.0 * s,
-                        placed.width + 4.0 * s,
+                        x,
+                        l.tab_y + 2.0 * s,
+                        placed.width,
+                        l.tab_height - 4.0 * s,
                         4.0 * s,
                     )
                 {
@@ -265,7 +287,18 @@ pub fn render_band(
                     );
                 }
                 let icon_fg = if active { fill } else { fg };
-                skia::draw_action_icon(&mut pm, *action, x, iy, placed.width, icon_fg);
+                skia::draw_action_icon(&mut pm, *action, cx, iy, icon, icon_fg);
+                if m.action_labels {
+                    font.draw(
+                        &mut pm,
+                        action.label(),
+                        m.font_px,
+                        m.tracking,
+                        cx + icon + m.label_gap,
+                        baseline,
+                        icon_fg,
+                    );
+                }
             }
             Part::Spacer(_) => {}
         }
@@ -453,6 +486,7 @@ mod tests {
                 Part::Action(Action::Stop),
                 Part::Action(Action::Terminal),
             ],
+            compact_actions: false,
         };
         custom.validate().unwrap();
         let mut e = spec();
@@ -460,8 +494,8 @@ mod tests {
         let (_, l) = render_band(&e, &custom, &f, 1280).unwrap();
         let mid_y = f64::from(l.tab_y + l.tab_height / 2.0);
 
-        let stop = l.parts.find("stop").unwrap();
-        let term = l.parts.find("terminal").unwrap();
+        let stop = l.parts.find("stop-vm").unwrap();
+        let term = l.parts.find("open-terminal").unwrap();
         assert!(stop.x < term.x, "configured order must be preserved");
         assert_eq!(
             l.hit(f64::from(l.tab_x + stop.x + stop.width / 2.0), mid_y),

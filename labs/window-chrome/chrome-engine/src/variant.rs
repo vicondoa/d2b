@@ -70,14 +70,46 @@ impl Action {
     ];
 
     /// Stable identifier used in config, dispatch and logs.
+    ///
+    /// Names describe the outcome the operator gets, not the subsystem that
+    /// implements it: `audio-controls` opens controls, it does not toggle a
+    /// device, and `stop-vm` says what it stops. A config vocabulary that
+    /// reads as a list of outcomes is one the operator can predict without
+    /// consulting a table.
     pub fn name(&self) -> &'static str {
         match self {
-            Action::Terminal => "terminal",
-            Action::Audio => "audio",
-            Action::Usb => "usb",
-            Action::Info => "info",
-            Action::Stop => "stop",
+            Action::Terminal => "open-terminal",
+            Action::Audio => "audio-controls",
+            Action::Usb => "usb-devices",
+            Action::Info => "vm-details",
+            Action::Stop => "stop-vm",
         }
+    }
+
+    /// Short label drawn beside the icon.
+    ///
+    /// Five bare glyphs proved semantically ambiguous, so the icon is an
+    /// accelerator for a label rather than a replacement for one.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Action::Terminal => "Terminal",
+            Action::Audio => "Audio",
+            Action::Usb => "USB",
+            Action::Info => "Details",
+            Action::Stop => "Stop",
+        }
+    }
+
+    /// Whether activating this action is destructive and therefore needs an
+    /// explicit confirmation step rather than a single release.
+    pub fn is_destructive(&self) -> bool {
+        matches!(self, Action::Stop)
+    }
+
+    /// Whether this action opens further controls rather than doing something
+    /// immediately. These need a second disclosure tier, not a toggle.
+    pub fn opens_submenu(&self) -> bool {
+        matches!(self, Action::Audio | Action::Usb | Action::Info)
     }
 }
 

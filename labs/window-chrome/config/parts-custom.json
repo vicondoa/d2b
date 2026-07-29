@@ -1,4 +1,4 @@
 {
   "collapsed": ["identity", "chevron"],
-  "expanded": ["identity", "chevron", "separator", "audio", "usb", "terminal"]
+  "expanded": ["identity", "chevron", "separator", "audio-controls", "usb-devices", "open-terminal"]
 }

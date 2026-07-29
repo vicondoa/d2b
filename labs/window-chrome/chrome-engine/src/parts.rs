@@ -23,6 +23,21 @@ use serde::{Deserialize, Serialize};
 
 use crate::{variant::Action, vectext::VectorFont};
 
+/// WCAG 2.2 SC 2.5.8 target-size minimum, in logical px.
+///
+/// Every interactive part is widened to at least this, so a narrow glyph can
+/// never produce a target the user cannot reliably hit. The band already
+/// guarantees the vertical dimension.
+pub const MIN_TARGET_PX: f32 = 24.0;
+
+/// Upper bound on a configured spacer, so a config cannot push the tab across
+/// the window by accident.
+pub const MAX_SPACER_PX: u16 = 64;
+
+/// Upper bound on parts per row. A row longer than this is a configuration
+/// mistake, not a preference, and would push the tab past most windows.
+pub const MAX_PARTS_PER_ROW: usize = 16;
+
 /// One renderable element of the tab.
 ///
 /// Serialized as a flat string (`"identity"`, `"audio"`, `"spacer:8"`) rather
@@ -62,10 +77,15 @@ impl std::str::FromStr for Part {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if let Some(px) = s.strip_prefix("spacer:") {
-            return px
-                .parse::<u16>()
-                .map(Part::Spacer)
-                .map_err(|_| format!("`{s}`: spacer width must be a whole number of px"));
+            let px: u16 = px
+                .parse()
+                .map_err(|_| format!("`{s}`: spacer width must be a whole number of px"))?;
+            if px > MAX_SPACER_PX {
+                return Err(format!(
+                    "`{s}`: spacer width must be at most {MAX_SPACER_PX} px"
+                ));
+            }
+            return Ok(Part::Spacer(px));
         }
         Ok(match s {
             "identity" => Part::Identity,
@@ -73,15 +93,16 @@ impl std::str::FromStr for Part {
             "separator" => Part::Separator,
             "status" => Part::Status,
             "spacer" => Part::Spacer(4),
-            "terminal" => Part::Action(Action::Terminal),
-            "audio" => Part::Action(Action::Audio),
-            "usb" => Part::Action(Action::Usb),
-            "info" => Part::Action(Action::Info),
-            "stop" => Part::Action(Action::Stop),
+            "open-terminal" => Part::Action(Action::Terminal),
+            "audio-controls" => Part::Action(Action::Audio),
+            "usb-devices" => Part::Action(Action::Usb),
+            "vm-details" => Part::Action(Action::Info),
+            "stop-vm" => Part::Action(Action::Stop),
             other => {
                 return Err(format!(
                     "unknown part `{other}`; expected one of identity, chevron, separator, \
-                     status, spacer, spacer:<px>, terminal, audio, usb, info, stop"
+                     status, spacer, spacer:<px>, open-terminal, audio-controls, usb-devices, \
+                     vm-details, stop-vm"
                 ))
             }
         })
@@ -176,6 +197,21 @@ pub struct Metrics {
     pub icon_gap: f32,
     pub sep_gap: f32,
     pub sep_width: f32,
+    /// Draw a text label beside each action icon.
+    ///
+    /// On by default. Five bare glyphs are not self-describing, and the ones
+    /// that open further controls (audio, USB, details) cannot be guessed from
+    /// a glyph at all.
+    pub action_labels: bool,
+    /// Gap between an action's icon and its label.
+    pub label_gap: f32,
+}
+
+impl Metrics {
+    /// The target-size floor, in physical px.
+    pub fn min_target(&self) -> f32 {
+        MIN_TARGET_PX * self.scale
+    }
 }
 
 /// The measured tab: parts in order, with the box each one owns.
@@ -198,7 +234,7 @@ impl Parts {
         let mut first = true;
 
         for part in parts {
-            let (width, advance) = match part {
+            let (mut width, advance) = match part {
                 Part::Identity => {
                     let a = font.measure(label, m.font_px, m.tracking);
                     (a, a)
@@ -209,9 +245,23 @@ impl Parts {
                 }
                 Part::Chevron => (m.chevron_width, 0.0),
                 Part::Separator => (m.sep_width.max(1.0), 0.0),
-                Part::Action(_) => (m.icon_box, 0.0),
+                Part::Action(a) => {
+                    if m.action_labels {
+                        let text = font.measure(a.label(), m.font_px, m.tracking);
+                        (m.icon_box + m.label_gap + text, text)
+                    } else {
+                        (m.icon_box, 0.0)
+                    }
+                }
                 Part::Spacer(px) => (f32::from(*px) * m.scale, 0.0),
             };
+
+            // WCAG 2.2 SC 2.5.8: no interactive part may be narrower than the
+            // target floor. Widening here rather than at draw time keeps the
+            // hit box and the drawn box identical.
+            if part.hit_kind() != HitKind::Inert {
+                width = width.max(m.min_target());
+            }
 
             // Space before this part.
             let lead = if first {
@@ -311,9 +361,17 @@ impl Parts {
 pub struct PartsConfig {
     /// Shown at rest.
     pub collapsed: Vec<Part>,
-    /// Shown once expanded. Always a superset prefix of `collapsed` in the
-    /// default, so the tab grows rightwards instead of reflowing.
+    /// Shown once expanded. Must preserve `collapsed` as a prefix, so identity
+    /// never moves when the tab opens.
     pub expanded: Vec<Part>,
+    /// Draw action icons without their labels.
+    ///
+    /// Off by default: labels are what make the actions self-describing, and
+    /// three independent accessibility reviews rejected bare glyphs. This exists
+    /// for operators who have learned the icons and want the smaller footprint,
+    /// and is recorded as a deliberate accessibility trade-off.
+    #[serde(default)]
+    pub compact_actions: bool,
 }
 
 impl Default for PartsConfig {
@@ -330,6 +388,7 @@ impl Default for PartsConfig {
                 Part::Action(Action::Info),
                 Part::Action(Action::Stop),
             ],
+            compact_actions: false,
         }
     }
 }
@@ -342,12 +401,20 @@ pub enum ConfigError {
     /// produce an unlabelled window, which is the security failure this design
     /// is meant to prevent.
     MissingIdentity { row: &'static str },
+    /// Two identity parts make "which VM is this" ambiguous, which is worse
+    /// than none at all.
+    RepeatedIdentity { row: &'static str },
     /// An expanded row that cannot be reached is a trap.
     UnreachableExpansion,
+    /// Identity must not move when the tab opens. Requiring `expanded` to
+    /// extend `collapsed` makes that a property of the config rather than
+    /// something the renderer has to preserve by convention.
+    ExpansionReordersRestingParts { index: usize },
     /// Duplicates make hit-testing ambiguous to the user even though the code
     /// resolves them deterministically.
     DuplicatePart { name: String, row: &'static str },
     Empty { row: &'static str },
+    TooManyParts { row: &'static str, count: usize },
 }
 
 impl std::fmt::Display for ConfigError {
@@ -357,15 +424,29 @@ impl std::fmt::Display for ConfigError {
                 f,
                 "the `{row}` row must contain the `identity` part: identity is not optional"
             ),
+            ConfigError::RepeatedIdentity { row } => write!(
+                f,
+                "the `{row}` row lists `identity` more than once: a window has one identity"
+            ),
             ConfigError::UnreachableExpansion => write!(
                 f,
                 "the `collapsed` row must contain `chevron` when `expanded` differs from it, \
                  otherwise the expanded row can never be opened"
             ),
+            ConfigError::ExpansionReordersRestingParts { index } => write!(
+                f,
+                "the `expanded` row must begin with the whole `collapsed` row, in order; \
+                 position {index} differs. Expansion may only append, so identity does not \
+                 move when the tab opens"
+            ),
             ConfigError::DuplicatePart { name, row } => {
                 write!(f, "the `{row}` row lists `{name}` more than once")
             }
             ConfigError::Empty { row } => write!(f, "the `{row}` row is empty"),
+            ConfigError::TooManyParts { row, count } => write!(
+                f,
+                "the `{row}` row has {count} parts; at most {MAX_PARTS_PER_ROW} are allowed"
+            ),
         }
     }
 }
@@ -373,7 +454,8 @@ impl std::fmt::Display for ConfigError {
 impl std::error::Error for ConfigError {}
 
 impl PartsConfig {
-    /// Reject configurations that would produce an unusable or unlabelled tab.
+    /// Reject configurations that would produce an unusable, unlabelled, or
+    /// self-contradicting tab.
     ///
     /// This fails closed at config-load time. The alternative -- silently
     /// substituting a default -- would leave the operator believing their
@@ -383,13 +465,22 @@ impl PartsConfig {
             if parts.is_empty() {
                 return Err(ConfigError::Empty { row });
             }
-            if !parts.contains(&Part::Identity) {
-                return Err(ConfigError::MissingIdentity { row });
+            if parts.len() > MAX_PARTS_PER_ROW {
+                return Err(ConfigError::TooManyParts {
+                    row,
+                    count: parts.len(),
+                });
+            }
+            match parts.iter().filter(|p| **p == Part::Identity).count() {
+                0 => return Err(ConfigError::MissingIdentity { row }),
+                1 => {}
+                _ => return Err(ConfigError::RepeatedIdentity { row }),
             }
             let mut seen: Vec<&str> = Vec::new();
             for p in parts.iter() {
-                // Spacers are the one part that may legitimately repeat.
-                if matches!(p, Part::Spacer(_)) {
+                // Inert parts are pure spacing, so repeating them is a layout
+                // choice rather than an ambiguity.
+                if p.hit_kind() == HitKind::Inert {
                     continue;
                 }
                 if seen.contains(&p.name()) {
@@ -401,8 +492,15 @@ impl PartsConfig {
                 seen.push(p.name());
             }
         }
-        if self.expanded != self.collapsed && !self.collapsed.contains(&Part::Chevron) {
-            return Err(ConfigError::UnreachableExpansion);
+        if self.expanded != self.collapsed {
+            if !self.collapsed.contains(&Part::Chevron) {
+                return Err(ConfigError::UnreachableExpansion);
+            }
+            for (i, resting) in self.collapsed.iter().enumerate() {
+                if self.expanded.get(i) != Some(resting) {
+                    return Err(ConfigError::ExpansionReordersRestingParts { index: i });
+                }
+            }
         }
         Ok(())
     }
@@ -446,6 +544,8 @@ mod tests {
             icon_gap: 4.0,
             sep_gap: 6.0,
             sep_width: 1.0,
+            action_labels: true,
+            label_gap: 5.0,
         }
     }
 
@@ -555,6 +655,7 @@ mod tests {
         m2.icon_gap = 8.0;
         m2.sep_gap = 12.0;
         m2.sep_width = 2.0;
+        m2.label_gap = 10.0;
         let b = Parts::layout(&PartsConfig::default().expanded, &m2, &font, "Work");
 
         assert_eq!(a.placed.len(), b.placed.len());
@@ -576,6 +677,7 @@ mod tests {
         let cfg = PartsConfig {
             collapsed: vec![Part::Chevron],
             expanded: vec![Part::Chevron],
+            compact_actions: false,
         };
         assert_eq!(
             cfg.validate(),
@@ -588,6 +690,7 @@ mod tests {
         let cfg = PartsConfig {
             collapsed: vec![Part::Identity],
             expanded: vec![Part::Identity, Part::Action(Action::Stop)],
+            compact_actions: false,
         };
         assert_eq!(cfg.validate(), Err(ConfigError::UnreachableExpansion));
     }
@@ -597,6 +700,7 @@ mod tests {
         let dup = PartsConfig {
             collapsed: vec![Part::Identity, Part::Chevron, Part::Chevron],
             expanded: vec![Part::Identity, Part::Chevron],
+            compact_actions: false,
         };
         assert!(matches!(
             dup.validate(),
@@ -610,7 +714,13 @@ mod tests {
                 Part::Spacer(4),
                 Part::Chevron,
             ],
-            expanded: vec![Part::Identity, Part::Chevron],
+            expanded: vec![
+                Part::Identity,
+                Part::Spacer(4),
+                Part::Spacer(4),
+                Part::Chevron,
+            ],
+            compact_actions: false,
         };
         spacers.validate().unwrap();
     }
@@ -623,8 +733,11 @@ mod tests {
         // file an operator reads and diffs.
         assert!(json.contains("\"identity\""), "{json}");
         assert!(json.contains("\"chevron\""), "{json}");
-        assert!(json.contains("\"terminal\""), "{json}");
-        assert!(!json.contains("action"), "actions must not be tagged: {json}");
+        assert!(json.contains("\"open-terminal\""), "{json}");
+        assert!(
+            !json.contains("{\"action\""),
+            "actions must not be tagged: {json}"
+        );
         let back = PartsConfig::from_json(&json).unwrap();
         assert_eq!(cfg, back);
     }
@@ -633,7 +746,7 @@ mod tests {
     fn a_hand_written_config_reads_the_way_an_operator_would_write_it() {
         let json = r#"{
           "collapsed": ["identity", "chevron"],
-          "expanded": ["identity", "chevron", "separator", "audio", "usb", "terminal"]
+          "expanded": ["identity", "chevron", "separator", "audio-controls", "usb-devices", "open-terminal"]
         }"#;
         let cfg = PartsConfig::from_json(json).expect("flat part names must parse");
         assert_eq!(
@@ -653,7 +766,8 @@ mod tests {
     fn spacers_carry_their_width_through_the_wire_form() {
         let cfg = PartsConfig {
             collapsed: vec![Part::Identity, Part::Spacer(12), Part::Chevron],
-            expanded: vec![Part::Identity, Part::Chevron],
+            expanded: vec![Part::Identity, Part::Spacer(12), Part::Chevron],
+            compact_actions: false,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         assert!(json.contains("\"spacer:12\""), "{json}");
@@ -664,7 +778,7 @@ mod tests {
     fn an_unknown_part_names_the_valid_ones() {
         let err = "hologram".parse::<Part>().unwrap_err();
         assert!(err.contains("identity"), "{err}");
-        assert!(err.contains("audio"), "{err}");
+        assert!(err.contains("audio-controls"), "{err}");
     }
 
     #[test]
@@ -691,7 +805,7 @@ mod tests {
             Part::Chevron,
         ];
         let p = Parts::layout(&reordered, &m, &font, "Work");
-        let stop = p.find("stop").unwrap();
+        let stop = p.find("stop-vm").unwrap();
         let identity = p.find("identity").unwrap();
         assert!(stop.x < identity.x, "stop should now precede identity");
         let hit = p.hit(stop.x + stop.width / 2.0).unwrap();
@@ -723,5 +837,178 @@ mod tests {
         let names: Vec<_> = short.placed.iter().map(|p| p.part.name()).collect();
         let long_names: Vec<_> = long.placed.iter().map(|p| p.part.name()).collect();
         assert_eq!(names, long_names);
+    }
+}
+
+#[cfg(test)]
+mod a11y_tests {
+    use super::*;
+    use crate::PROTOTYPE_FONT;
+
+    fn font() -> VectorFont<'static> {
+        VectorFont::from_bytes(PROTOTYPE_FONT).unwrap()
+    }
+
+    fn metrics_at(scale: f32, labels: bool) -> Metrics {
+        Metrics {
+            scale,
+            font_px: 12.0 * scale,
+            tracking: 0.0,
+            left_furniture: 7.0 * scale,
+            side_pad: 8.0 * scale,
+            chevron_width: 9.0 * scale,
+            chevron_gap: 5.0 * scale,
+            icon_box: 18.0 * scale,
+            icon_gap: 4.0 * scale,
+            sep_gap: 6.0 * scale,
+            sep_width: 1.0 * scale,
+            action_labels: labels,
+            label_gap: 5.0 * scale,
+        }
+    }
+
+    #[test]
+    fn every_interactive_part_meets_the_target_size_floor_at_every_scale() {
+        // WCAG 2.2 SC 2.5.8. The band guarantees the vertical dimension; this
+        // is the horizontal one, which a narrow glyph would otherwise fail.
+        let font = font();
+        for scale in [1.0_f32, 1.25, 1.5, 2.0] {
+            for labels in [true, false] {
+                let m = metrics_at(scale, labels);
+                let cfg = PartsConfig::default();
+                for row in [&cfg.collapsed, &cfg.expanded] {
+                    let p = Parts::layout(row, &m, &font, "Work");
+                    for placed in &p.placed {
+                        if placed.part.hit_kind() == HitKind::Inert {
+                            continue;
+                        }
+                        let logical = placed.width / scale;
+                        assert!(
+                            logical >= MIN_TARGET_PX - 0.01,
+                            "{} is {logical:.2} logical px at scale {scale} (labels={labels})",
+                            placed.part.name()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn labels_are_on_by_default_and_widen_the_actions() {
+        let font = font();
+        let cfg = PartsConfig::default();
+        assert!(!cfg.compact_actions, "labels must be the default");
+
+        let labelled = Parts::layout(&cfg.expanded, &metrics_at(1.0, true), &font, "Work");
+        let compact = Parts::layout(&cfg.expanded, &metrics_at(1.0, false), &font, "Work");
+        assert!(
+            labelled.width > compact.width,
+            "labelled {} should exceed compact {}",
+            labelled.width,
+            compact.width
+        );
+
+        // And the labelled variant must still hit cleanly.
+        let stop = labelled.find("stop-vm").unwrap();
+        assert_eq!(
+            labelled.hit(stop.x + stop.width / 2.0).unwrap().part,
+            Part::Action(Action::Stop)
+        );
+    }
+
+    #[test]
+    fn identity_must_appear_exactly_once() {
+        let cfg = PartsConfig {
+            collapsed: vec![Part::Identity, Part::Identity, Part::Chevron],
+            expanded: vec![Part::Identity, Part::Chevron],
+            compact_actions: false,
+        };
+        assert_eq!(
+            cfg.validate(),
+            Err(ConfigError::RepeatedIdentity { row: "collapsed" })
+        );
+    }
+
+    #[test]
+    fn expansion_may_only_append_so_identity_never_moves() {
+        // Reordering on expansion would make the label jump under the pointer
+        // at the exact moment the user is aiming at it.
+        let cfg = PartsConfig {
+            collapsed: vec![Part::Identity, Part::Chevron],
+            expanded: vec![
+                Part::Chevron,
+                Part::Identity,
+                Part::Action(Action::Stop),
+            ],
+            compact_actions: false,
+        };
+        assert_eq!(
+            cfg.validate(),
+            Err(ConfigError::ExpansionReordersRestingParts { index: 0 })
+        );
+    }
+
+    #[test]
+    fn identity_keeps_its_position_when_the_tab_expands() {
+        let font = font();
+        let m = metrics_at(1.0, true);
+        let cfg = PartsConfig::default();
+        let collapsed = Parts::layout(&cfg.collapsed, &m, &font, "Work");
+        let expanded = Parts::layout(&cfg.expanded, &m, &font, "Work");
+        assert_eq!(
+            collapsed.find("identity").unwrap().x,
+            expanded.find("identity").unwrap().x,
+            "identity must not move when the tab opens"
+        );
+    }
+
+    #[test]
+    fn an_overlong_row_is_refused() {
+        let mut collapsed = vec![Part::Identity, Part::Chevron];
+        collapsed.extend(std::iter::repeat_n(Part::Spacer(1), MAX_PARTS_PER_ROW));
+        let cfg = PartsConfig {
+            expanded: collapsed.clone(),
+            collapsed,
+            compact_actions: false,
+        };
+        assert!(matches!(
+            cfg.validate(),
+            Err(ConfigError::TooManyParts { .. })
+        ));
+    }
+
+    #[test]
+    fn an_oversized_spacer_is_refused_with_its_bound() {
+        let err = format!("spacer:{}", MAX_SPACER_PX as u32 + 1)
+            .parse::<Part>()
+            .unwrap_err();
+        assert!(err.contains(&MAX_SPACER_PX.to_string()), "{err}");
+    }
+
+    #[test]
+    fn destructive_and_submenu_actions_are_declared() {
+        // The renderer and the dispatcher both need to know that `stop-vm`
+        // cannot be a one-release activation, and that audio/usb/details open
+        // further controls rather than toggling something.
+        assert!(Action::Stop.is_destructive());
+        assert!(!Action::Terminal.is_destructive());
+        for a in [Action::Audio, Action::Usb, Action::Info] {
+            assert!(a.opens_submenu(), "{} must open a submenu", a.name());
+        }
+        assert!(!Action::Terminal.opens_submenu());
+    }
+
+    #[test]
+    fn action_names_describe_outcomes() {
+        for a in Action::DEFAULTS {
+            let n = a.name();
+            assert!(!n.is_empty());
+            assert!(
+                n.contains('-'),
+                "`{n}` should read as an outcome, e.g. `open-terminal`"
+            );
+            assert!(!a.label().is_empty(), "{n} needs a visible label");
+        }
     }
 }
