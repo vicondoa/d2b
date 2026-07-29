@@ -10,6 +10,18 @@ deprecations ship one minor release before removal.
 
 ## [Unreleased]
 
+### Added
+
+- Added ADR 0047, replacing the Wayland proxy's fixed-width identity rail with
+  a reserved band containing a single accessible identity tab. The tab renders
+  horizontal text at a real target size, derives its layout and its pointer
+  handling from one measured list of parts, discloses labelled per-workload
+  actions in two tiers, selects label colour by WCAG contrast ratio rather than
+  a brightness threshold, sanitizes identity text against bidirectional
+  overrides, and reports a typed failure instead of ever leaving a proxied
+  window unlabelled. Adds the `proofs/window-identity-chrome/` proof for the
+  geometry, parts, contrast, and label logic.
+
 ## [1.4.1] - 2026-07-12
 
 ### Added
