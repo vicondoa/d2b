@@ -100,11 +100,11 @@ only prerequisite is `ADR046-W7`'s exit criteria (§4), and it runs that same
 | Wave | Specs (all must be `Accepted`; Gate 0 already covers this) | New/changed crates and modules (destination roots) |
 | --- | --- | --- |
 | `ADR046-W0` | `ADR-046-terminology-and-identities` → `ADR-046-resource-object-model` → `ADR046-store-001` → `ADR-046-resource-api-and-authorization` (serial contract sub-steps, one integrator branch) | `packages/d2b-contracts/src/v3/{identity,resource_ref,resource,resource_status,resource_schema,error}.rs`; `packages/d2b-resource-store/`; `packages/d2b-resource-store-redb/src/{schema,keys,values,ownership}.rs`; `packages/d2b-controller-toolkit/src/owner_hints.rs`; `packages/d2b-contracts/proto/d2b-resource-v3.proto`; `packages/d2b-resource-api/`; `nixos-modules/{options-zones,resources,index}.nix` |
-| `ADR046-W1` | `ADR046-feasibility-001` → `ADR046-store-004` → `ADR046-store-002` alongside `ADR-046-resource-reconciliation` ‖ `ADR-046-componentsession-and-bus`; the spike and backend chain is a prep barrier for production watch/reconciliation integration | `proofs/redb-resource-store-spike/`; `packages/d2b-resource-store-redb/src/{actor,transaction,revision_log}.rs`; `packages/d2b-resource-api/src/watch.rs`; `packages/d2b-controller-toolkit/`; `packages/d2b-core-controller/src/{hints,dependencies,owner_reconcile}.rs`; `packages/d2b-contracts/src/v3/component_session.rs`; `packages/d2b-session/`; `packages/d2b-session-unix/`; `packages/d2b-bus/` |
+| `ADR046-W1` | `ADR046-feasibility-001` alongside the engine-neutral `ADR046-reconcile-001`/`ADR046-reconcile-002` toolkit and the production-unwired `ADR046-session-001`/`ADR046-session-002`/`ADR046-bus-001` foundations. These are exactly the six merged work items; the failed RSS result defers the production backend, watch dispatcher, and real-backend reaction benchmark. | `proofs/redb-resource-store-spike/`; `packages/d2b-controller-toolkit/` except the real-backend reaction benchmark; `packages/d2b-core-controller/src/{hints,dependencies,owner_reconcile}.rs`; `packages/d2b-contracts/src/v3/component_session.rs`; `packages/d2b-session/`; `packages/d2b-session-unix/`; `packages/d2b-bus/` |
 | `ADR046-W2` | `ADR-046-primitive-resource-composition` ‖ `ADR-046-zone-routing` | `packages/d2b-contracts/src/v3/{host,guest,execution_policy,process,volume,user,network,device,credential}.rs`; `packages/d2b-process/`; `packages/d2b-provider-supervisor/`; `packages/d2b-zone-routing/` |
 | `ADR046-W3` | `ADR-046-provider-model-and-packaging` (single spec; strictly serial - every downstream Provider dossier depends on it) | `packages/d2b-provider/`; `packages/d2b-provider-toolkit/`; one `packages/d2b-provider-<base>-<implementation>/` skeleton generator |
 | `ADR046-W4` | `ADR-046-components-processes-and-sandbox` ‖ `ADR-046-core-controllers` ‖ `ADR-046-resources-network` ‖ `ADR-046-resources-credential` ‖ `ADR-046-provider-state` (five parallel specs) | `packages/d2b-process/`, `d2b-provider-supervisor/` (process effect ports); `packages/d2b-core-controller/`; `packages/d2b-provider-network-local/` schema half; `packages/d2b-provider-credential-*/` schema half; Volume `stateSchema`/`persistenceClass`/`sensitivityClass` extension |
-| `ADR046-W5` | `ADR046-store-003` → `ADR046-store-005` alongside `ADR-046-resources-zone-control` ‖ `ADR-046-resources-host-guest-process-user` ‖ `ADR-046-resources-volume` ‖ `ADR-046-resources-device` ‖ `ADR-046-telemetry-audit-and-support` ‖ `ADR-046-cli-and-operations` ‖ `ADR-046-nix-configuration` (storage integration plus seven parallel specs) | `packages/d2b-contracts/src/v3/storage.rs`; `nixos-modules/zone-storage-json.nix`; `docs/reference/schemas/v3/zone-storage.json`; `packages/d2b-resource-store-redb/src/{backup,migration}.rs`; broker Zone-store operation/wire/test destinations; `packages/d2b-provider-system-{core,systemd,minijail}/`; `packages/d2b-provider-volume-{local,virtiofs}/` schema half; `packages/d2b-provider-device-*/` schema half; `packages/d2b-telemetry/`, `d2b-audit/`; `packages/d2b/` CLI; `nixos-modules/resources-*.nix` |
+| `ADR046-W5` | `ADR046-store-004` → `ADR046-store-002` → `ADR046-reconcile-003`, with `ADR046-store-003` → `ADR046-store-005`, alongside `ADR-046-resources-zone-control` ‖ `ADR-046-resources-host-guest-process-user` ‖ `ADR-046-resources-volume` ‖ `ADR-046-resources-device` ‖ `ADR-046-telemetry-audit-and-support` ‖ `ADR-046-cli-and-operations` ‖ `ADR-046-nix-configuration` (production store/watch/reaction and storage integration plus seven parallel specs) | `packages/d2b-resource-store-redb/src/{actor,transaction,revision_log,backup,migration}.rs`; `packages/d2b-resource-api/src/watch.rs`; `packages/d2b-controller-toolkit/benches/reaction.rs`; Process Provider integration tests; `packages/d2b-contracts/src/v3/storage.rs`; `nixos-modules/zone-storage-json.nix`; `docs/reference/schemas/v3/zone-storage.json`; broker Zone-store operation/wire/test destinations; `packages/d2b-provider-system-{core,systemd,minijail}/`; `packages/d2b-provider-volume-{local,virtiofs}/` schema half; `packages/d2b-provider-device-*/` schema half; `packages/d2b-telemetry/`, `d2b-audit/`; `packages/d2b/` CLI; `nixos-modules/resources-*.nix` |
 | `ADR046-W6` | All 27 `ADR-046-provider-*` dossiers, grouped into five file-disjoint provider families (§3.3) | One `packages/d2b-provider-<base>-<implementation>/` per Provider (27 crates) |
 | `ADR046-W7` | `ADR-046-feasibility-and-spikes` (`ADR046-feasibility-002` through `ADR046-feasibility-011`) ‖ `ADR-046-reset-and-cutover` ‖ `ADR-046-security-and-threat-model` ‖ `ADR-046-streamline` ‖ `ADR-046-validation-and-delivery` | Cross-cutting spec-scoped friction fixes, reset/cutover mechanics, remaining feasibility closure, security closure, and the release-gate contract (§15, evaluated at `ADR046-W8` exit) |
 | `ADR046-W8` | None - no spec members (§3.1); the wave's contents are the tooling and process friction fixes accumulated across `ADR046-W0`-`ADR046-W7` (signoff, build, test, merge, codegen, disk), triaged at `ADR046-W7` close | `packages/xtask/`; `tests/tools/`; `packages/d2b-contract-tests/tests/`; `Makefile` |
@@ -118,20 +118,23 @@ in `AGENTS.md`. Commit subjects for ADR 0046 implementation work use
 consistent tag shape. `ADR046-W8` takes the same grammar with no exception:
 `( ADR046-W8 )`, `( ADR046-W8fu<m> )`, `( ADR046-W8fu<m> <S><n> )`.
 
-The store work-item split is intentionally finer than the owning spec's W0
-contract position:
+The cross-wave work-item split is intentionally finer than each owning spec's
+default position:
 
 | Work item | Assigned wave | Delivery determination |
 | --- | --- | --- |
 | `ADR046-store-001` | `ADR046-W0` | The engine-neutral trait, closed errors, schema/codecs, and golden vectors are present; this is the complete W0 store contract. |
-| `ADR046-feasibility-001` | `ADR046-W1` | The disposable proof crate and both spike results are absent; it runs as the backend prep barrier. |
-| `ADR046-store-004` | `ADR046-W1` | Only contract modules exist in the crate; the actor and transaction engine destinations are absent and remain spike-gated. |
-| `ADR046-store-002` | `ADR046-W1` | Replay/live watch and API watch destinations are absent and belong with production reconciliation integration. |
+| `ADR046-feasibility-001` | `ADR046-W1` | The disposable proof crate and both spike results are present. Functional, watch, conflict, crash-recovery, and latency thresholds passed, but whole-process RSS was 25,216 KiB (24.625 MiB), 640 KiB or about 2.6% above 24,576 KiB; the failed outcome is the backend prep barrier evidence. |
+| `ADR046-store-004` | `ADR046-W5` | Only contract modules exist in the crate. The failed RSS gate requires the range-seek, streaming-decode, shared-fan-out design corrections before this production backend item starts, so it moves atomically with its watch consumer. |
+| `ADR046-store-002` | `ADR046-W5` | Replay/live watch and API watch destinations are absent. It follows the corrected production backend and exclusively owns watch-budget saturation validation. |
 | `ADR046-store-003` | `ADR046-W5` | This is a generated storage-row integration contract, not an engine backend item; all Nix/schema/parity destinations are absent and belong with Nix and broker storage wiring. |
 | `ADR046-store-005` | `ADR046-W5` | Backup/migration and broker provisioning/fd-handoff destinations are absent; it follows the storage-row contract and production engine. |
+| `ADR046-reconcile-003` | `ADR046-W5` | The real-backend reaction benchmark and Process Provider integration tests are absent. It follows `ADR046-store-002`, keeping its latency and concurrency evidence on the accepted backend/watch path it measures. |
 
-These assignments move no dependency edge. In particular, the eight downstream
-consumers remain direct dependents of `ADR046-store-001`:
+These assignments preserve the existing store dependency edges and add the
+explicit `ADR046-store-002` prerequisite for `ADR046-reconcile-003`. In
+particular, the eight downstream consumers remain direct dependents of
+`ADR046-store-001`:
 `ADR046-audit-002`, `ADR046-telem-002`, `ADR046-telem-010`,
 `ADR046-telem-011`, `ADR046-zone-control-001`,
 `ADR046-zone-control-009`, `ADR046-zone-control-010`, and
@@ -604,10 +607,19 @@ Exact benchmark fixtures from `ADR-046-resource-store-redb`'s performance
 contract, run in `packages/d2b-resource-store-redb/benches/`:
 
 These rows are completion gates, not existing evidence. SPIKE-01 and SPIKE-02
-remain unexecuted, so no production redb backend, watch/dispatcher integration,
-or redb backup/migration work may claim these rows. D128 permits only the
-engine-neutral contract and hermetic small-scale scope it enumerates before
-that evidence exists.
+have both been executed. SPIKE-02 passed every profile; SPIKE-01 passed
+correctness, watch delivery, group commit and crash recovery but **failed its
+RSS gate** at a measured median of 25,216 KiB against a 24,576 KiB threshold.
+That failure is why `ADR046-store-004`, `ADR046-store-002` and
+`ADR046-reconcile-003` are scheduled in W5 rather than W1, and why the revised
+physical-schema plan in `ADR-046-resource-store-redb` is binding on them.
+
+Executing the spikes does not satisfy the rows below. They remain future
+completion gates for the production redb backend, watch and dispatcher
+integration, and backup/migration work, and the unchanged RSS gate must be
+re-run against the real backend before any of that is accepted. D128 continues
+to permit only the engine-neutral contract and the hermetic small-scale scope
+it enumerates.
 
 | Fixture | Hard target |
 | --- | --- |

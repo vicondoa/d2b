@@ -1,0 +1,905 @@
+use std::{
+    collections::BTreeSet,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Instant,
+};
+
+use async_trait::async_trait;
+use d2b_contracts::v3::{
+    AuthenticatedSubjectContext, BindingDigest, EvidenceClass, ResourceRef, ResourceUid,
+    SessionBinding, ZoneId,
+    component_session::{
+        AttachmentPolicy, AuthorizationLease, BootstrapIdentityBinding, BootstrapPskBinding,
+        EndpointPolicy, EndpointPurpose, EndpointRole, IdentityEvidenceRequirement, LimitProfile,
+        Locality as SessionLocality, NoiseProfile, OperationId, ServicePackage, SessionErrorCode,
+        TransportBinding, TransportClass,
+    },
+};
+use d2b_resource_api::authz::SessionVerb;
+use d2b_session::{
+    AuthenticatedComponentSession, AuthorizedSessionOperation, BootstrapAdmission, BootstrapPsk,
+    ComponentSessionDriver, HandshakeCredentials, OwnedTransport, Secret32, SessionAcceptor,
+    SessionAuthenticationBinding, SessionAuthorizationRequest, SessionEngine, SessionError,
+    SessionRegistrationCapability, TransportDescriptor, TransportError, TransportEvidence,
+    TransportPacket, x25519_public_key,
+};
+use tokio::sync::{Notify, mpsc};
+
+const POLICY_REVISION: u64 = 4;
+
+struct TestRegistrationCapability;
+
+impl SessionRegistrationCapability<()> for TestRegistrationCapability {
+    type Error = std::convert::Infallible;
+
+    fn consume(self, _registrar: &()) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn unpolled_cancellation_on_real_driver_reclaims_request_for_reuse() {
+    let zone = ZoneId::parse("work").unwrap();
+    let policy = single_request_policy();
+    let (initiator, responder) = engine_pair(&policy).await;
+    let admitted = session_acceptor(
+        policy,
+        zone.clone(),
+        [SessionVerb::Connect, SessionVerb::Invoke],
+    )
+    .admit(initiator, evidence(), 1)
+    .await
+    .unwrap();
+    let (mut session, ttrpc) = admitted.consume_registration(&()).unwrap();
+    let _responder = responder.into_driver();
+    let request_id = d2b_session::contract::RequestId::new(vec![0x41; 16]).unwrap();
+    let replacement_id = d2b_session::contract::RequestId::new(vec![0x43; 16]).unwrap();
+
+    ttrpc
+        .start(
+            invoke_permit(&mut session, &zone).await,
+            request_id.clone(),
+            b"first".to_vec(),
+            ttrpc.attempt_guard(),
+            2,
+        )
+        .await
+        .unwrap();
+    drop(session.cancellation_handle().cancel(request_id.clone()));
+
+    let mut reused = false;
+    for _ in 0..64 {
+        match ttrpc
+            .start(
+                invoke_permit(&mut session, &zone).await,
+                replacement_id.clone(),
+                b"replacement".to_vec(),
+                ttrpc.attempt_guard(),
+                2,
+            )
+            .await
+        {
+            Ok(()) => {
+                reused = true;
+                break;
+            }
+            Err(error) if error.code() == SessionErrorCode::QueueBackpressure => {
+                tokio::task::yield_now().await;
+            }
+            Err(error) => panic!("replacement request failed unexpectedly: {error}"),
+        }
+    }
+    assert!(reused, "unpolled cancellation did not reclaim the request");
+    assert!(ttrpc.complete(replacement_id).await.unwrap());
+}
+
+#[tokio::test]
+async fn failed_cancellation_delivery_on_real_driver_reclaims_request_for_reuse() {
+    let zone = ZoneId::parse("work").unwrap();
+    let policy = single_request_policy();
+    let (initiator, responder, send_failure) = engine_pair_with_failure(&policy).await;
+    let admitted = session_acceptor(
+        policy,
+        zone.clone(),
+        [SessionVerb::Connect, SessionVerb::Invoke],
+    )
+    .admit(initiator, evidence(), 1)
+    .await
+    .unwrap();
+    let (mut session, ttrpc) = admitted.consume_registration(&()).unwrap();
+    let _responder = responder.into_driver();
+    let request_id = d2b_session::contract::RequestId::new(vec![0x42; 16]).unwrap();
+    let replacement_id = d2b_session::contract::RequestId::new(vec![0x44; 16]).unwrap();
+
+    ttrpc
+        .start(
+            invoke_permit(&mut session, &zone).await,
+            request_id.clone(),
+            b"first".to_vec(),
+            ttrpc.attempt_guard(),
+            2,
+        )
+        .await
+        .unwrap();
+
+    send_failure.enabled.store(true, Ordering::Release);
+    let entered = send_failure.entered.notified();
+    let cancellation = session.cancellation_handle();
+    let cancelled_request = request_id.clone();
+    let cancel = tokio::spawn(async move { cancellation.cancel(cancelled_request).await });
+    tokio::time::timeout(std::time::Duration::from_secs(1), entered)
+        .await
+        .expect("cancellation delivery did not reach the failing writer");
+
+    let replacement = {
+        let ttrpc = ttrpc.clone();
+        let permit = invoke_permit(&mut session, &zone).await;
+        let request_id = replacement_id.clone();
+        tokio::spawn(async move {
+            ttrpc
+                .start(
+                    permit,
+                    request_id,
+                    b"replacement".to_vec(),
+                    ttrpc.attempt_guard(),
+                    2,
+                )
+                .await
+        })
+    };
+    let mut reclaimed = false;
+    for _ in 0..64 {
+        if ttrpc.complete(replacement_id.clone()).await.unwrap() {
+            reclaimed = true;
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        reclaimed,
+        "request was not reusable while cancellation delivery was failing"
+    );
+
+    send_failure.release.notify_one();
+    assert!(cancel.await.unwrap().is_err());
+    assert!(replacement.await.unwrap().is_err());
+}
+
+fn endpoint_policy() -> EndpointPolicy {
+    EndpointPolicy {
+        purpose: EndpointPurpose::LocalLifecycle,
+        purpose_class: d2b_session::contract::PurposeClass::Local,
+        initiator_role: EndpointRole::ZoneController,
+        responder_role: EndpointRole::Component,
+        service: ServicePackage::ResourceV3,
+        schema_fingerprint: [0x11; 32],
+        noise_profile: NoiseProfile::Nn25519ChaChaPolySha256,
+        limits: LimitProfile::local_default(),
+        transport_binding: TransportBinding {
+            transport: TransportClass::UnixSeqpacket,
+            locality: SessionLocality::HostLocal,
+            channel_binding: [0x22; 32],
+            identity_evidence: IdentityEvidenceRequirement::DirectionalUnix,
+        },
+        reconnect_generation: 7,
+        attachment_policy: AttachmentPolicy {
+            kind: d2b_session::contract::AttachmentPolicyKind::PacketAtomic,
+            max_per_packet: 1,
+            max_per_request: 1,
+            max_per_operation: 1,
+            max_per_session: 1,
+            credentials_allowed: false,
+        },
+    }
+}
+
+fn single_request_policy() -> EndpointPolicy {
+    let mut policy = endpoint_policy();
+    policy.limits.ttrpc_control_queue_bytes = 4 * 1024;
+    policy
+}
+
+fn bootstrap_policy() -> EndpointPolicy {
+    EndpointPolicy {
+        purpose: EndpointPurpose::Bootstrap,
+        purpose_class: d2b_session::contract::PurposeClass::Bootstrap,
+        initiator_role: EndpointRole::Bootstrapper,
+        responder_role: EndpointRole::GuestAgent,
+        service: ServicePackage::ControllerV3,
+        schema_fingerprint: [0x11; 32],
+        noise_profile: NoiseProfile::Ikpsk2_25519ChaChaPolySha256,
+        limits: LimitProfile::local_default(),
+        transport_binding: TransportBinding {
+            transport: TransportClass::NativeVsock,
+            locality: SessionLocality::GuestLocal,
+            channel_binding: [0x22; 32],
+            identity_evidence: IdentityEvidenceRequirement::ParentStaticAndSingleUsePsk,
+        },
+        reconnect_generation: 7,
+        attachment_policy: AttachmentPolicy::disabled(),
+    }
+}
+
+fn bootstrap_identity(subject: &str, zone: &str) -> BootstrapIdentityBinding {
+    BootstrapIdentityBinding {
+        subject_ref: ResourceRef::parse(subject).unwrap(),
+        subject_uid: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+        zone: ZoneId::parse(zone).unwrap(),
+        purpose: d2b_contracts::v3::SessionPurpose::parse("bootstrap").unwrap(),
+    }
+}
+
+fn admitted_bootstrap(subject: &str, zone: &str) -> d2b_session::AdmittedBootstrapPsk {
+    let operation = OperationId::new(vec![0x66; 16]).unwrap();
+    let nonce = [0x77; 32];
+    let mut admission = BootstrapAdmission::new(
+        BootstrapPskBinding {
+            operation_id: operation.clone(),
+            replay_nonce: nonce,
+            identity: bootstrap_identity(subject, zone),
+            expires_at_unix_ms: 10,
+        },
+        BootstrapPsk::new([0x55; 32]).unwrap(),
+    )
+    .unwrap();
+    admission
+        .consume(&operation, &nonce, bootstrap_identity(subject, zone), 1)
+        .unwrap()
+}
+
+struct TestTransport {
+    sender: mpsc::Sender<TransportPacket>,
+    receiver: mpsc::Receiver<TransportPacket>,
+    descriptor: TransportDescriptor,
+    send_failure: Arc<SendFailure>,
+}
+
+#[derive(Default)]
+struct SendFailure {
+    enabled: AtomicBool,
+    entered: Notify,
+    release: Notify,
+}
+
+impl SendFailure {
+    async fn before_send(&self) -> Result<(), TransportError> {
+        if !self.enabled.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        self.entered.notify_one();
+        self.release.notified().await;
+        Err(TransportError::WouldBlock)
+    }
+}
+
+#[async_trait]
+impl OwnedTransport for TestTransport {
+    fn descriptor(&self) -> TransportDescriptor {
+        self.descriptor
+    }
+
+    fn into_split(
+        self: Box<Self>,
+    ) -> (
+        Box<dyn d2b_session::TransportReader>,
+        Box<dyn d2b_session::TransportWriter>,
+    ) {
+        let Self {
+            sender,
+            receiver,
+            descriptor: _,
+            send_failure,
+        } = *self;
+        (
+            Box::new(TestTransportReader { receiver }),
+            Box::new(TestTransportWriter {
+                sender,
+                send_failure,
+            }),
+        )
+    }
+
+    async fn receive(&mut self, protected_limit: usize) -> Result<TransportPacket, TransportError> {
+        let packet = self
+            .receiver
+            .recv()
+            .await
+            .ok_or(TransportError::Disconnected)?;
+        if packet.as_bytes().len() > protected_limit {
+            return Err(TransportError::LimitExceeded);
+        }
+        Ok(packet)
+    }
+
+    async fn send(&mut self, packet: TransportPacket) -> Result<(), TransportError> {
+        self.send_failure.before_send().await?;
+        self.sender
+            .send(packet)
+            .await
+            .map_err(|_| TransportError::Disconnected)
+    }
+
+    async fn close(&mut self) -> Result<(), TransportError> {
+        Ok(())
+    }
+}
+
+struct TestTransportReader {
+    receiver: mpsc::Receiver<TransportPacket>,
+}
+
+#[async_trait]
+impl d2b_session::TransportReader for TestTransportReader {
+    async fn receive(&mut self, protected_limit: usize) -> Result<TransportPacket, TransportError> {
+        let packet = self
+            .receiver
+            .recv()
+            .await
+            .ok_or(TransportError::Disconnected)?;
+        if packet.as_bytes().len() > protected_limit {
+            return Err(TransportError::LimitExceeded);
+        }
+        Ok(packet)
+    }
+}
+
+struct TestTransportWriter {
+    sender: mpsc::Sender<TransportPacket>,
+    send_failure: Arc<SendFailure>,
+}
+
+#[async_trait]
+impl d2b_session::TransportWriter for TestTransportWriter {
+    async fn send(&mut self, packet: TransportPacket) -> Result<(), TransportError> {
+        self.send_failure.before_send().await?;
+        self.sender
+            .send(packet)
+            .await
+            .map_err(|_| TransportError::Disconnected)
+    }
+
+    async fn close(&mut self) -> Result<(), TransportError> {
+        Ok(())
+    }
+}
+
+fn test_transport_pair(policy: &EndpointPolicy) -> (TestTransport, TestTransport) {
+    test_transport_pair_with_failure(policy).0
+}
+
+fn test_transport_pair_with_failure(
+    policy: &EndpointPolicy,
+) -> ((TestTransport, TestTransport), Arc<SendFailure>) {
+    let (left_sender, left_receiver) = mpsc::channel(16);
+    let (right_sender, right_receiver) = mpsc::channel(16);
+    let initiator_send_failure = Arc::new(SendFailure::default());
+    let responder_send_failure = Arc::new(SendFailure::default());
+    let descriptor = TransportDescriptor {
+        class: policy.transport_binding.transport,
+        locality: policy.transport_binding.locality,
+        packet_atomic: matches!(
+            policy.transport_binding.transport,
+            TransportClass::UnixSeqpacket | TransportClass::InheritedSocketpair
+        ),
+        supports_attachments: policy.attachment_policy != AttachmentPolicy::disabled(),
+    };
+    (
+        (
+            TestTransport {
+                sender: left_sender,
+                receiver: right_receiver,
+                descriptor,
+                send_failure: Arc::clone(&initiator_send_failure),
+            },
+            TestTransport {
+                sender: right_sender,
+                receiver: left_receiver,
+                descriptor,
+                send_failure: responder_send_failure,
+            },
+        ),
+        initiator_send_failure,
+    )
+}
+
+async fn bootstrap_engine(
+    policy: &EndpointPolicy,
+    subject: &str,
+    zone: &str,
+) -> SessionEngine<TestTransport> {
+    let initiator_static = [0x11; 32];
+    let responder_static = [0x22; 32];
+    let responder_public = x25519_public_key(&responder_static).unwrap();
+    let (initiator_transport, responder_transport) = test_transport_pair(policy);
+    let (initiator, responder) = tokio::join!(
+        SessionEngine::establish_initiator(
+            initiator_transport,
+            policy.clone(),
+            HandshakeCredentials::IkPsk2Initiator {
+                local_private: Secret32::new(initiator_static).unwrap(),
+                remote_public: responder_public,
+                psk: admitted_bootstrap(subject, zone),
+            },
+            Instant::now(),
+        ),
+        SessionEngine::establish_responder(
+            responder_transport,
+            policy.clone(),
+            HandshakeCredentials::IkPsk2Responder {
+                local_private: Secret32::new(responder_static).unwrap(),
+                psk: admitted_bootstrap("Host/responder", zone),
+            },
+            Instant::now(),
+        ),
+    );
+    let _responder = responder.unwrap();
+    initiator.unwrap()
+}
+
+async fn engine(policy: &EndpointPolicy) -> SessionEngine<TestTransport> {
+    engine_pair(policy).await.0
+}
+
+async fn engine_pair(
+    policy: &EndpointPolicy,
+) -> (SessionEngine<TestTransport>, SessionEngine<TestTransport>) {
+    let (initiator_transport, responder_transport) = test_transport_pair(policy);
+    let (initiator, responder) = tokio::join!(
+        SessionEngine::establish_initiator(
+            initiator_transport,
+            policy.clone(),
+            HandshakeCredentials::Nn,
+            Instant::now(),
+        ),
+        SessionEngine::establish_responder(
+            responder_transport,
+            policy.clone(),
+            HandshakeCredentials::Nn,
+            Instant::now(),
+        ),
+    );
+    (initiator.unwrap(), responder.unwrap())
+}
+
+async fn engine_pair_with_failure(
+    policy: &EndpointPolicy,
+) -> (
+    SessionEngine<TestTransport>,
+    SessionEngine<TestTransport>,
+    Arc<SendFailure>,
+) {
+    let ((initiator_transport, responder_transport), send_failure) =
+        test_transport_pair_with_failure(policy);
+    let (initiator, responder) = tokio::join!(
+        SessionEngine::establish_initiator(
+            initiator_transport,
+            policy.clone(),
+            HandshakeCredentials::Nn,
+            Instant::now(),
+        ),
+        SessionEngine::establish_responder(
+            responder_transport,
+            policy.clone(),
+            HandshakeCredentials::Nn,
+            Instant::now(),
+        ),
+    );
+    (initiator.unwrap(), responder.unwrap(), send_failure)
+}
+
+fn evidence() -> TransportEvidence {
+    TransportEvidence::new(
+        EvidenceClass::UnixPeer,
+        BindingDigest::parse(format!("sha256:{}", "22".repeat(32))).unwrap(),
+    )
+}
+
+async fn invoke_permit<C>(
+    session: &mut AuthenticatedComponentSession<C>,
+    zone: &ZoneId,
+) -> AuthorizedSessionOperation {
+    session
+        .authorize(
+            SessionAuthorizationRequest::new(
+                SessionVerb::Invoke,
+                d2b_contracts::v3::ServiceName::parse("d2b.resource.v3").unwrap(),
+                "ResourceService/Get",
+                zone.clone(),
+                None,
+            )
+            .unwrap(),
+            2,
+        )
+        .await
+        .unwrap()
+}
+
+fn bootstrap_evidence() -> TransportEvidence {
+    TransportEvidence::new(
+        EvidenceClass::BootstrapIkpsk2,
+        BindingDigest::parse(format!("sha256:{}", "22".repeat(32))).unwrap(),
+    )
+}
+
+fn session_acceptor(
+    policy: EndpointPolicy,
+    subject_zone: ZoneId,
+    allowed: impl IntoIterator<Item = SessionVerb>,
+) -> SessionAcceptor<TestRegistrationCapability> {
+    session_acceptor_for_subject(policy, subject_zone.clone(), subject_zone, allowed)
+}
+
+fn session_acceptor_for_subject(
+    policy: EndpointPolicy,
+    expected_zone: ZoneId,
+    subject_zone: ZoneId,
+    allowed: impl IntoIterator<Item = SessionVerb>,
+) -> SessionAcceptor<TestRegistrationCapability> {
+    let allowed = Arc::new(allowed.into_iter().collect::<BTreeSet<_>>());
+    let subject_ref = ResourceRef::parse("Host/alice-host").unwrap();
+    let subject_uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+    let zone_ref = ResourceRef::parse(&format!("Zone/{}", subject_zone.as_str())).unwrap();
+    let connect_verbs = Arc::clone(&allowed);
+    let authorize_verbs = Arc::clone(&allowed);
+    SessionAcceptor::from_verified_adapter(
+        policy,
+        expected_zone,
+        move |evidence: TransportEvidence,
+              binding: &SessionAuthenticationBinding,
+              _expected_zone: &ZoneId,
+              now_tick| {
+            if evidence.class() != binding.evidence_class()
+                || !connect_verbs.contains(&SessionVerb::Connect)
+            {
+                return Err(SessionError::new(SessionErrorCode::PolicyDenied));
+            }
+            let subject = AuthenticatedSubjectContext::new(
+                subject_ref,
+                subject_uid,
+                zone_ref,
+                binding.evidence_class(),
+                binding.purpose().clone(),
+                binding.service().clone(),
+                SessionBinding::new(
+                    binding.schema_fingerprint().clone(),
+                    binding.transport_binding().clone(),
+                    binding.reconnect_generation(),
+                    binding.transcript_hash().clone(),
+                ),
+            );
+            let lease = AuthorizationLease::new(POLICY_REVISION, now_tick.saturating_add(10))
+                .map_err(SessionError::from)?;
+            Ok((subject, lease))
+        },
+        move |_subject, request, previous_lease, now_tick| {
+            if previous_lease.policy_revision() != POLICY_REVISION
+                || !authorize_verbs.contains(&request.verb())
+            {
+                return Err(SessionError::new(SessionErrorCode::PolicyDenied));
+            }
+            AuthorizationLease::new(POLICY_REVISION, now_tick.saturating_add(10))
+                .map_err(SessionError::from)
+        },
+        TestRegistrationCapability,
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn native_rbac_connect_and_invoke_are_executed() {
+    let zone = ZoneId::parse("work").unwrap();
+    let policy = endpoint_policy();
+    let acceptor = session_acceptor(
+        policy.clone(),
+        zone.clone(),
+        [SessionVerb::Connect, SessionVerb::Invoke],
+    );
+    let mut session = acceptor
+        .admit(engine(&policy).await, evidence(), 1)
+        .await
+        .unwrap();
+    let request = SessionAuthorizationRequest::new(
+        SessionVerb::Invoke,
+        d2b_contracts::v3::ServiceName::parse("d2b.resource.v3").unwrap(),
+        "ResourceService/Get",
+        zone,
+        Some(ResourceRef::parse("Process/app").unwrap()),
+    )
+    .unwrap();
+    let permit = session.authorize(request, 2).await.unwrap();
+    assert_eq!(permit.policy_revision(), POLICY_REVISION);
+    assert_eq!(permit.request().verb(), SessionVerb::Invoke);
+}
+
+#[tokio::test]
+async fn admitted_session_retains_transport_and_consumes_send_permits() {
+    let zone = ZoneId::parse("work").unwrap();
+    let policy = endpoint_policy();
+    let (initiator, responder) = engine_pair(&policy).await;
+    let mut session = session_acceptor(
+        policy,
+        zone.clone(),
+        [
+            SessionVerb::Connect,
+            SessionVerb::Invoke,
+            SessionVerb::Observe,
+        ],
+    )
+    .admit(initiator, evidence(), 1)
+    .await
+    .unwrap();
+    let responder = responder.into_driver();
+    let observe = session
+        .authorize(
+            SessionAuthorizationRequest::new(
+                SessionVerb::Observe,
+                d2b_contracts::v3::ServiceName::parse("d2b.resource.v3").unwrap(),
+                "ResourceService/Watch",
+                zone.clone(),
+                None,
+            )
+            .unwrap(),
+            2,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        session
+            .send_authorized_ttrpc(observe, b"not-an-invoke".to_vec(), 2)
+            .await
+            .unwrap_err()
+            .code(),
+        SessionErrorCode::PolicyDenied
+    );
+
+    let expired = session
+        .authorize(
+            SessionAuthorizationRequest::new(
+                SessionVerb::Invoke,
+                d2b_contracts::v3::ServiceName::parse("d2b.resource.v3").unwrap(),
+                "ResourceService/Get",
+                zone.clone(),
+                None,
+            )
+            .unwrap(),
+            3,
+        )
+        .await
+        .unwrap();
+    assert_eq!(expired.expires_at_tick(), 13);
+    assert_eq!(
+        session
+            .send_authorized_ttrpc(expired, b"expired-frame".to_vec(), 13)
+            .await
+            .unwrap_err()
+            .code(),
+        SessionErrorCode::PolicyDenied
+    );
+
+    let invoke = session
+        .authorize(
+            SessionAuthorizationRequest::new(
+                SessionVerb::Invoke,
+                d2b_contracts::v3::ServiceName::parse("d2b.resource.v3").unwrap(),
+                "ResourceService/Get",
+                zone,
+                None,
+            )
+            .unwrap(),
+            4,
+        )
+        .await
+        .unwrap();
+    session
+        .send_authorized_ttrpc(invoke, b"authorized-frame".to_vec(), 4)
+        .await
+        .unwrap();
+    assert_eq!(
+        responder.receive_ttrpc().await.unwrap(),
+        b"authorized-frame"
+    );
+    responder
+        .send_ttrpc(b"inbound-frame".to_vec())
+        .await
+        .unwrap();
+    assert_eq!(session.receive_ttrpc().await.unwrap(), b"inbound-frame");
+}
+
+#[tokio::test]
+async fn cross_zone_subject_fails_before_connect_mint() {
+    let expected_zone = ZoneId::parse("work").unwrap();
+    let policy = endpoint_policy();
+    let error = session_acceptor_for_subject(
+        policy.clone(),
+        expected_zone,
+        ZoneId::parse("personal").unwrap(),
+        [SessionVerb::Connect],
+    )
+    .admit(engine(&policy).await, evidence(), 1)
+    .await
+    .unwrap_err();
+    assert_eq!(error.code(), SessionErrorCode::SubjectMismatch);
+}
+
+#[tokio::test]
+async fn bootstrap_identity_is_consumed_through_handshake_and_session_admission() {
+    let zone = ZoneId::parse("work").unwrap();
+    let policy = bootstrap_policy();
+    session_acceptor(policy.clone(), zone.clone(), [SessionVerb::Connect])
+        .admit(
+            bootstrap_engine(&policy, "Host/alice-host", "work").await,
+            bootstrap_evidence(),
+            1,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        session_acceptor(policy.clone(), zone.clone(), [SessionVerb::Connect])
+            .admit(
+                bootstrap_engine(&policy, "Guest/corp-vm", "work").await,
+                bootstrap_evidence(),
+                1,
+            )
+            .await
+            .unwrap_err()
+            .code(),
+        SessionErrorCode::SubjectMismatch
+    );
+
+    assert_eq!(
+        session_acceptor(policy.clone(), zone, [SessionVerb::Connect])
+            .admit(
+                bootstrap_engine(&policy, "Host/alice-host", "personal").await,
+                bootstrap_evidence(),
+                1,
+            )
+            .await
+            .unwrap_err()
+            .code(),
+        SessionErrorCode::SubjectMismatch
+    );
+}
+
+#[tokio::test]
+async fn policy_revision_change_revokes_new_work() {
+    let zone = ZoneId::parse("work").unwrap();
+    let policy = endpoint_policy();
+    let mut session = session_acceptor(policy.clone(), zone.clone(), [SessionVerb::Connect])
+        .admit(engine(&policy).await, evidence(), 1)
+        .await
+        .unwrap();
+    let request = SessionAuthorizationRequest::new(
+        SessionVerb::Invoke,
+        d2b_contracts::v3::ServiceName::parse("d2b.resource.v3").unwrap(),
+        "ResourceService/Get",
+        zone,
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        session.authorize(request, 2).await.unwrap_err().code(),
+        SessionErrorCode::PolicyDenied
+    );
+}
+
+#[tokio::test]
+async fn native_rbac_relay_mints_only_for_a_distinct_next_zone() {
+    let zone = ZoneId::parse("work").unwrap();
+    let policy = endpoint_policy();
+    let mut session = session_acceptor(
+        policy.clone(),
+        zone.clone(),
+        [SessionVerb::Connect, SessionVerb::Relay],
+    )
+    .admit(engine(&policy).await, evidence(), 1)
+    .await
+    .unwrap();
+    let invalid = SessionAuthorizationRequest::relay(
+        d2b_contracts::v3::ServiceName::parse("d2b.resource.v3").unwrap(),
+        "ResourceService/Get",
+        ZoneId::parse("personal").unwrap(),
+        None,
+        SessionVerb::Invoke,
+        zone,
+    )
+    .unwrap();
+    assert_eq!(
+        session.authorize(invalid, 2).await.unwrap_err().code(),
+        SessionErrorCode::PolicyDenied
+    );
+
+    let valid = SessionAuthorizationRequest::relay(
+        d2b_contracts::v3::ServiceName::parse("d2b.resource.v3").unwrap(),
+        "ResourceService/Get",
+        ZoneId::parse("personal").unwrap(),
+        None,
+        SessionVerb::Invoke,
+        ZoneId::parse("gateway").unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        session.authorize(valid, 2).await.unwrap().request().verb(),
+        SessionVerb::Relay
+    );
+}
+
+#[tokio::test]
+async fn forged_evidence_class_is_rejected_before_authority() {
+    let zone = ZoneId::parse("work").unwrap();
+    let policy = endpoint_policy();
+    let forged = TransportEvidence::new(
+        EvidenceClass::EnrolledKk,
+        BindingDigest::parse(format!("sha256:{}", "22".repeat(32))).unwrap(),
+    );
+    let error = session_acceptor(policy.clone(), zone, [SessionVerb::Connect])
+        .admit(engine(&policy).await, forged, 1)
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), SessionErrorCode::IdentityEvidenceMismatch);
+}
+
+#[test]
+fn authorization_request_enforces_relay_and_diagnostic_bindings() {
+    let local = ZoneId::parse("work").unwrap();
+    let remote = ZoneId::parse("personal").unwrap();
+    let next_hop = ZoneId::parse("gateway").unwrap();
+    let service = d2b_contracts::v3::ServiceName::parse("d2b.resource.v3").unwrap();
+    let relay = SessionAuthorizationRequest::relay(
+        service.clone(),
+        "ResourceService/Get",
+        remote.clone(),
+        None,
+        SessionVerb::Invoke,
+        next_hop.clone(),
+    )
+    .unwrap();
+    assert_eq!(relay.target_zone(), &remote);
+    assert_eq!(relay.next_hop_zone(), Some(&next_hop));
+    assert_eq!(relay.forwarded_target_verb(), Some(SessionVerb::Invoke));
+
+    assert_eq!(
+        SessionAuthorizationRequest::relay(
+            service,
+            "ResourceService/Get",
+            remote,
+            None,
+            SessionVerb::Relay,
+            next_hop,
+        )
+        .unwrap_err()
+        .code(),
+        SessionErrorCode::PolicyDenied
+    );
+    assert_eq!(
+        SessionAuthorizationRequest::new(
+            SessionVerb::AuditExport,
+            d2b_contracts::v3::ServiceName::parse("d2b.resource.v3").unwrap(),
+            "AuditService/Export",
+            local.clone(),
+            None,
+        )
+        .unwrap_err()
+        .code(),
+        SessionErrorCode::PolicyDenied
+    );
+    SessionAuthorizationRequest::new(
+        SessionVerb::AuditExport,
+        d2b_contracts::v3::ServiceName::parse("d2b.audit.v3").unwrap(),
+        "AuditService/Export",
+        local.clone(),
+        None,
+    )
+    .unwrap();
+    SessionAuthorizationRequest::new(
+        SessionVerb::SupportBundle,
+        d2b_contracts::v3::ServiceName::parse("d2b.support.v3").unwrap(),
+        "SupportService/GenerateBundle",
+        local,
+        None,
+    )
+    .unwrap();
+}

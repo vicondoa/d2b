@@ -2,7 +2,7 @@
   "adr" : "0046",
   "artifactKind" : "d2b-adr-implementation-graph",
   "counts" : {
-    "edges" : 1948,
+    "edges" : 1949,
     "maxTopologicalRank" : 22,
     "nodes" : 600,
     "specNodes" : 55,
@@ -7650,6 +7650,11 @@
     {
       "from" : "ADR046-reconcile-002",
       "to" : "ADR046-reconcile-001",
+      "type" : "work-item-depends-on"
+    },
+    {
+      "from" : "ADR046-reconcile-003",
+      "to" : "ADR046-store-002",
       "type" : "work-item-depends-on"
     },
     {
@@ -15492,7 +15497,7 @@
       "id" : "ADR046-feasibility-001",
       "kind" : "work-item",
       "owner" : "W0 shared contract root; store/reconciliation integrator",
-      "parallelGroup" : "wi:resource-store-backend:w1",
+      "parallelGroup" : "wi:resource-store-feasibility:w1",
       "prerequisites" : [
         "ADR-046-resource-store-redb"
       ],
@@ -19049,18 +19054,19 @@
       "entryContracts" : [
         "ADR-046-resource-reconciliation"
       ],
-      "exitGate" : "ADR046-W1 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
+      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-reconcile-003",
       "kind" : "work-item",
-      "owner" : "Process Providers + benchmark owner",
-      "parallelGroup" : "wi:ADR-046-resource-reconciliation",
+      "owner" : "ADR046-store-002; Process Providers + benchmark owner",
+      "parallelGroup" : "wi:reconciliation-real-backend:w5",
       "prerequisites" : [
-        "ADR-046-resource-reconciliation"
+        "ADR-046-resource-reconciliation",
+        "ADR046-store-002"
       ],
       "specId" : "ADR-046-resource-reconciliation",
-      "topologicalRank" : 6,
-      "validation" : "Hard <=5 ms/<=20 ms p95 gates and 1/10/100 Process concurrency",
-      "wave" : "W1"
+      "topologicalRank" : 7,
+      "validation" : "Hard <=5 ms/<=20 ms p95 gates and 1/10/100 Process concurrency against the accepted production backend and watch dispatcher",
+      "wave" : "W5"
     },
     {
       "blockers" : [],
@@ -21586,7 +21592,7 @@
       "destinations" : [
         "`packages/d2b-contracts/src/v3/error.rs`; `packages/d2b-resource-store/src/lib.rs`, `error.rs`; `packages/d2b-resource-store-redb/src/schema.rs`, `keys.rs`, `values.rs`"
       ],
-      "detailedDesign" : "Keep `d2b-resource-store` free of redb and Tokio; expose native async trait methods returning `impl Future + Send`; use generic test fakes without trait objects or `async-trait`; freeze the closed error set, store-neutral request/response/trait/transaction types, exact ten-table schema, `d2bkey/v1` and `d2bval/v1` codecs and discriminants, decode rejection rules, and literal golden vectors. The workspace pins `redb = { version = \"=4.1.0\", default-features = false }` here so the contract crate and future spike/backend consume one reviewed API. `ResourceService` consumes the evaluator's verifier and store-identity binding exactly once into a private checked store. A mutating call can reach `commit_verified` only after that store matches both authorities, consumes the admitted mutation, and prepares its final identity and digest. This prevents a caller from forging admission or replaying it against another store, but it does not constrain the backend after verification. The backend is trusted to mutate only from the supplied `VerifiedMutation`, recheck captured policy/API-catalog/active-configuration/controller revisions inside the same transaction, preserve structural and atomicity checks, expose no independent mutation path, never evaluate RBAC, and never auto-retry a failed recheck. Production registration therefore requires security review and backend conformance tests. This contract item makes no scale, latency, RSS, crash-recovery, or production-suitability claim and has no feasibility dependency. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt.",
+      "detailedDesign" : "Keep `d2b-resource-store` free of redb and Tokio; expose native async trait methods returning `impl Future + Send`; use generic test fakes without trait objects or `async-trait`; freeze the closed error set, store-neutral request/response/trait/transaction types, engine-neutral ten-table names, `d2bkey/v1` and `d2bval/v1` codecs and discriminants, decode rejection rules, and literal golden vectors. The exact redb dependency remains isolated to the disposable proof workspace until the backend feasibility gate passes. `ResourceService` consumes the evaluator's verifier and store-identity binding exactly once into a private checked store. A mutating call can reach `commit_verified` only after that store matches both authorities, consumes the admitted mutation, and prepares its final identity and digest. This prevents a caller from forging admission or replaying it against another store, but it does not constrain the backend after verification. The backend is trusted to mutate only from the supplied `VerifiedMutation`, recheck captured policy/API-catalog/active-configuration/controller revisions inside the same transaction, preserve structural and atomicity checks, expose no independent mutation path, never evaluate RBAC, and never auto-retry a failed recheck. Production registration therefore requires security review and backend conformance tests. This contract item makes no scale, latency, RSS, crash-recovery, or production-suitability claim and has no feasibility dependency. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt.",
       "entryContracts" : [
         "ADR-046-resource-store-redb"
       ],
@@ -21600,7 +21606,7 @@
       ],
       "specId" : "ADR-046-resource-store-redb",
       "topologicalRank" : 4,
-      "validation" : "Literal codec golden vectors and decode-rejection cases; hermetic small-scale transaction semantics that make no scale claim; compile tests for `Send` futures and generic fake injection; proof-origin, single-owner binding, cross-store rejection, and in-transaction revision-recheck tests for sealed admission evidence; policy test forbidding resource-store dependency on API/RBAC symbols; exact redb pin/feature assertion",
+      "validation" : "Literal codec golden vectors and decode-rejection cases; hermetic small-scale transaction semantics that make no scale claim; compile tests for `Send` futures and generic fake injection; proof-origin, single-owner binding, cross-store rejection, and in-transaction revision-recheck tests for sealed admission evidence; policy test forbidding resource-store dependency on API/RBAC symbols; engine-neutral table-descriptor assertion",
       "wave" : "W0"
     },
     {
@@ -21608,15 +21614,15 @@
       "destinations" : [
         "`packages/d2b-resource-store-redb/src/revision_log.rs`, `packages/d2b-resource-api/src/watch.rs`"
       ],
-      "detailedDesign" : "replay/live no-gap watch, cursors, owner hints, compaction floor, expired relist",
+      "detailedDesign" : "Implement replay/live no-gap watch, cursors, owner hints, compaction floor, and expired relist around one global bounded watch-admission budget. Registrations retain only small cursor/filter/accounting state. Budget exhaustion returns typed backpressure before registration; deterministic slow-watcher eviction releases its budget and resumes from the last acknowledged cursor. Export current registrations, budget used/capacity, admission rejections, slow-watcher evictions, and replay work with closed non-sensitive labels. Range-seek replay, streaming decode, and shared immutable ChangeBatch fan-out are supplied by `ADR046-store-004`.",
       "entryContracts" : [
         "ADR-046-resource-store-redb"
       ],
-      "exitGate" : "ADR046-W1 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
+      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-store-002",
       "kind" : "work-item",
       "owner" : "ADR046-store-004; ADR046-feasibility-001; watch/reconciliation integrator",
-      "parallelGroup" : "wi:resource-store-backend:w1",
+      "parallelGroup" : "wi:resource-store-watch:w5",
       "prerequisites" : [
         "ADR-046-resource-store-redb",
         "ADR046-feasibility-001",
@@ -21624,8 +21630,8 @@
       ],
       "specId" : "ADR-046-resource-store-redb",
       "topologicalRank" : 6,
-      "validation" : "SPIKE-01 correctness and SPIKE-02 latency evidence before implementation; deterministic watch/compaction/disconnect/fan-in tests afterward",
-      "wave" : "W1"
+      "validation" : "SPIKE-02 latency evidence and a corrected SPIKE-01 rerun passing the unchanged whole-process <=24 MiB gate with no baseline subtraction; deterministic watch/compaction/disconnect/fan-in tests; global-budget exhaustion and typed-admission-backpressure tests; deterministic slow-watcher eviction/resume tests; saturation-signal tests for current registrations, budget used/capacity, admission rejections, slow-watcher evictions, and replay work",
+      "wave" : "W5"
     },
     {
       "blockers" : [],
@@ -21655,15 +21661,15 @@
       "destinations" : [
         "`packages/d2b-resource-store-redb/src/lib.rs`, `actor.rs`, `transaction.rs`"
       ],
-      "detailedDesign" : "After successful SPIKE-01 evidence, adopt the already-pinned redb API in the production engine. Implement the redb engine, owned-fd database open, store identity, fair actor, MVCC reads, atomic indexes/revisions/operations/conflicts, crash recovery, and the contract constants: write queue 256, group-commit batch 16, read pool 4, concurrent reads 16, read lifetime 250 ms, and watch-dispatch queue 1024. Use full crash-safe durability with one fsync per write transaction; no reduced-durability mode. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt.",
+      "detailedDesign" : "Adopt the already-pinned redb API only behind the failed-spike correction and rerun gate. Implement the redb engine, owned-fd database open, store identity, fair actor, MVCC reads, atomic indexes/revisions/operations/conflicts, crash recovery, and the contract constants: write queue 256, group-commit batch 16, read pool 4, concurrent reads 16, and read lifetime 250 ms. Revision replay range-seeks the big-endian revision key, streams only rows after `afterRevision`, and never decodes older complete envelopes. Live delivery shares one immutable decoded ChangeBatch across matching watchers instead of cloning each envelope. The global admission budget and slow-watcher policy belong to `ADR046-store-002`, not this backend. Use full crash-safe durability with one fsync per write transaction; no reduced-durability mode. Primary reuse disposition: `adapt`. Preserved source-plan detail: extract and adapt.",
       "entryContracts" : [
         "ADR-046-resource-store-redb"
       ],
-      "exitGate" : "ADR046-W1 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
+      "exitGate" : "ADR046-W5 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-store-004",
       "kind" : "work-item",
       "owner" : "ADR046-store-001; ADR046-feasibility-001; store backend integrator",
-      "parallelGroup" : "wi:resource-store-backend:w1",
+      "parallelGroup" : "wi:resource-store-backend:w5",
       "prerequisites" : [
         "ADR-046-resource-store-redb",
         "ADR046-feasibility-001",
@@ -21671,8 +21677,8 @@
       ],
       "specId" : "ADR-046-resource-store-redb",
       "topologicalRank" : 5,
-      "validation" : "Successful SPIKE-01 evidence; conformance tests proving verified-only mutation, no independent write path, and the required structural and atomic checks; security review of each registered backend; unit/property/fault tests and the hard benchmark including the 10,000-resource/100-watch RSS result; owned-fd and `FD_CLOEXEC` checks for direct and `SCM_RIGHTS` receipt plus fork/exec inheritance probes; exact dependency/feature-policy lint; queue/pool constant assertions; paused-clock read-expiry tests; no reduced-durability call-site lint",
-      "wave" : "W1"
+      "validation" : "Corrected SPIKE-01 evidence passing the unchanged whole-process <=24 MiB gate with no baseline subtraction; range-seek tests proving older revisions and envelopes are neither scanned nor decoded; shared immutable ChangeBatch fan-out tests; backend-signal tests for revision range seeks, replay rows scanned and decoded, shared immutable batches, fan-out references, and writer queue depth/capacity; conformance tests proving verified-only mutation, no independent write path, and the required structural and atomic checks; security review of each registered backend; unit/property/fault tests and the hard 10,000-resource/100-watch benchmark; owned-fd and `FD_CLOEXEC` checks for direct and `SCM_RIGHTS` receipt plus fork/exec inheritance probes; exact dependency/feature-policy lint; queue/pool constant assertions; paused-clock read-expiry tests; no reduced-durability call-site lint",
+      "wave" : "W5"
     },
     {
       "blockers" : [],
@@ -21696,7 +21702,7 @@
       ],
       "specId" : "ADR-046-resource-store-redb",
       "topologicalRank" : 6,
-      "validation" : "Successful SPIKE-01 evidence; marker replacement, crash publication, backup/restore/upgrade, and store-identity mismatch tests; broker wire codec/unknown-op tests; opaque-id/path-injection and signed-row mismatch rejection; provision/open idempotency; exactly-one-fd `SCM_RIGHTS` transfer with `MSG_CMSG_CLOEXEC`, `F_GETFD` verification, and fork/exec non-inheritance; audit record contains the operation/result but no host path",
+      "validation" : "Corrected SPIKE-01 evidence passing the unchanged whole-process RSS gate; marker replacement, crash publication, backup/restore/upgrade, and store-identity mismatch tests; broker wire codec/unknown-op tests; opaque-id/path-injection and signed-row mismatch rejection; provision/open idempotency; exactly-one-fd `SCM_RIGHTS` transfer with `MSG_CMSG_CLOEXEC`, `F_GETFD` verification, and fork/exec non-inheritance; audit record contains the operation/result but no host path",
       "wave" : "W5"
     },
     {
@@ -24686,11 +24692,11 @@
         "W1-reconcile-and-bus",
         "wi:ADR-046-componentsession-and-bus",
         "wi:ADR-046-resource-reconciliation",
-        "wi:resource-store-backend:w1"
+        "wi:resource-store-feasibility:w1"
       ],
       "specCount" : 2,
       "wave" : "W1",
-      "workItemCount" : 9
+      "workItemCount" : 6
     },
     {
       "parallelGroups" : [
@@ -24736,11 +24742,14 @@
         "wi:ADR-046-resources-zone-control",
         "wi:ADR-046-telemetry-audit-and-support",
         "wi:core-config-hub:w5",
-        "wi:resource-store-integration:w5"
+        "wi:reconciliation-real-backend:w5",
+        "wi:resource-store-backend:w5",
+        "wi:resource-store-integration:w5",
+        "wi:resource-store-watch:w5"
       ],
       "specCount" : 7,
       "wave" : "W5",
-      "workItemCount" : 143
+      "workItemCount" : 146
     },
     {
       "parallelGroups" : [

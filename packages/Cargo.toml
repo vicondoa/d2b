@@ -22,6 +22,9 @@ members = [
     "d2b-exec-runner",
     "d2b-sk-frontend",
     "d2b-contracts",
+    "d2b-bus",
+    "d2b-session",
+    "d2b-session-unix",
     "d2b-controller-toolkit",
     "d2b-core-controller",
     "d2b-resource-api",
@@ -52,7 +55,10 @@ unsafe_code = "forbid"
 # check-cfg entry here silences the `unexpected_cfgs` warning
 # the v1.1.1 panel reviewer flagged without weakening the
 # safety guard for production callers.
-unexpected_cfgs = { level = "warn", check-cfg = ["cfg(test_root)"] }
+unexpected_cfgs = { level = "warn", check-cfg = [
+    "cfg(test_root)",
+    "cfg(d2b_capability_trait_mutation, values(\"authenticated-component-session-clone\", \"authenticated-component-session-default\", \"component-session-admission-clone\", \"component-session-admission-default\", \"component-session-admission-from-unit\", \"session-acceptor-clone\", \"session-acceptor-default\", \"verified-unix-peer-clone\", \"verified-unix-peer-default\", \"verified-unix-peer-from-unit\"))",
+] }
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -87,6 +93,5 @@ rtnetlink = "0.14"
 # verified by the broker's hash readback).
 sha2 = "0.10"
 unicode-normalization = "0.1"
-redb = { version = "=4.1.0", default-features = false }
 tokio = { version = "1", default-features = false }
 ttrpc = { version = "0.9.0", default-features = false }

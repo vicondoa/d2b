@@ -269,6 +269,19 @@ pinned to that one file. Everywhere else, including a rejection
 illustration, must be phrased so it does not embed the exact rejected
 literal; correct the example rather than trying to silence the lint.
 
+The same policy test checks the seven canonical feasibility measurements
+against every Markdown and JSON document under `docs/**` plus `CHANGELOG.md`.
+It inventories class-specific measurement signatures globally, including
+run and group-commit denominators, the ChangeBatch comparison count, the
+crash-boundary count phrase, RSS values with units, and each p95/p99 value
+with its unit. Registered sites additionally pin their exact measurement or
+qualitative outcome summary. The global scan deliberately does not match bare
+numbers such as `13`, `20`, or `48`, because those are common in unrelated
+prose. Consequently, a new copy that preserves a canonical number-and-unit,
+denominator, or class phrase is rejected even in an unregistered document; a
+free paraphrase that omits every inventoried signature remains a review
+concern rather than something this lint claims to detect.
+
 ### Envelope policy lint (D116) negative-example marker
 
 Unlike the spec-literal lints above - which honor no author-suppression
@@ -707,8 +720,9 @@ the role coverage policy/contract tests under
 ### Phase gate
 
 Multi-phase plans MUST pass a panel sign-off gate at each phase
-boundary. The integrator MUST NOT begin the next phase until 8/8
-(or N/N for the plan's panel size) reviewers return `signoff: true`.
+boundary. The integrator MUST NOT begin the next phase until every
+reviewer on the selected roster returns `signoff: true` (N/N for the
+plan's panel size; the default roster below is 10).
 
 For plan-driven work, a "phase" is usually one wave from the plan's
 parallelization graph (`Wave 0`, `Wave 1`, ...). For tiny plans that
@@ -717,15 +731,14 @@ acceptable.
 
 For each phase:
 
-1. **Plan review** - panel reviews the plan; iterate until 8/8
-   sign-off (or N/N for the selected panel size). The integrator may
-   not dispatch implementation subagents until this gate passes.
+1. **Plan review** - panel reviews the plan; iterate until N/N
+   sign-off. The integrator may not dispatch implementation subagents
+   until this gate passes.
 2. **Implementation** - dispatch subagents in parallel per the
    dependency graph.
 3. **Integration** - integrator merges subagent output.
 4. **Work review** - panel reviews the integrated diff; iterate via
-   fix-subagents until 8/8 sign-off (or N/N for the selected panel
-   size).
+   fix-subagents until N/N sign-off.
 5. **Advance** - only now may the integrator begin the next phase's
    plan review.
 
@@ -759,6 +772,11 @@ only on unanimous sign-off.
 
 Escape hatches are narrow:
 
+- **Swarm-driven work** satisfies the per-round gate with swarm's
+  five-seat phase council instead of a ten-role panel round. See
+  [Running the panel under swarm](#running-the-panel-under-swarm). The
+  substitution covers only the per-round gate; the binding wave panel is
+  untouched.
 - **Trivial fixes** (typo, one-line, no semantic change) may skip the
   panel gate.
 - **Time-critical hotfixes** (production breakage) may skip the
@@ -802,6 +820,154 @@ Host-local roster files under `/etc/nixos/scripts/` are operator
 configuration and are out of scope for this repository; keep repo docs
 focused on the review contract rather than paydro-specific files.
 
+### Running the panel under swarm
+
+There are three review surfaces in this repository and they are strictly
+ranked. Read this ordering before wiring any harness.
+
+1. **The binding ten-role panel** - `cargo run --manifest-path
+   packages/Cargo.toml -p xtask -- delivery wave panel-request` /
+   `panel-attest` / `seal`. This is the authority for an ADR 0046 wave.
+   It runs **once, at wave close**, against the wave's one immutable
+   snapshot, and it is enforced in code by
+   `packages/xtask/src/delivery/panel.rs`: exactly one record per role
+   for all ten roles, `signoff` true iff `recommendations` is `[]`,
+   unanimous ten of ten, every record bound to the same
+   `candidate_id`/`content_id`/`snapshot_sha256`, and provider/model/
+   reasoning effort pinned to `github-copilot` / `gpt-5.6-sol` /
+   `xhigh`. There is no override, no force flag, and no partial pass.
+   See [`docs/specs/ADR-046-validation-and-delivery.md`](./docs/specs/ADR-046-validation-and-delivery.md)
+   section 12.3.
+2. **The per-round phase panel** - the [Phase gate](#phase-gate) rule
+   above. Where ADR 0046 restricts the *binding* panel to one per wave,
+   this rule allows a panel per implementation round. This is the loop
+   swarm automates.
+3. **Swarm's five-seat phase council** - the per-round gate whenever
+   swarm drives the work. It stands in for surface 2 and has no bearing
+   on surface 1.
+
+**Swarm runs surface 2, not surface 1.** Under swarm the five-seat
+council is the per-round gate: no ten-role panel round is required
+between implementation rounds, which is the whole point of running the
+harness. Surface 1 is unchanged, because ADR 0046 section 12.3 already
+restricts the binding panel to exactly one run at wave close and never
+per implementation round. A green phase council is therefore not a
+sealed wave, and `phase_complete` passing is not `delivery wave seal`
+passing.
+
+**The 10 roles at wave close.** The ten-role roster is no longer run
+every round. It runs once, at wave close, to produce the records
+surface 1 consumes: dispatch one read-only lane per roster role via
+`dispatch_lanes_async`, seeded with that role's focus cell from the
+table above plus the integrator's validation evidence. Lanes are
+read-only by contract, which keeps them off the shared Nix store, cargo
+target directory, and heavy gate semaphore. Lane ids are free-form, so
+all 10 roles vote independently and each lane's verdict maps one-to-one
+onto a `panel-attest` record.
+
+To keep those records attestable, the reviewing agents must run on the
+pinned panel binding. `agents.<name>.model` in
+`.opencode/opencode-swarm.json` pins them to
+`github-copilot/gpt-5.6-sol`; a lane on any other model produces a
+record `panel-attest` will reject, so do not let model fallback silently
+downgrade a panel lane.
+
+**The per-round council, and what it costs.**
+`submit_phase_council_verdicts` has a closed five-member roster
+(`critic`, `reviewer`, `sme`, `test_engineer`, `explorer`) and
+deduplicates by member, so ten distinct votes cannot be cast against it.
+Each seat carries the concerns of the roster roles nearest it:
+
+| Seat            | Covers                          |
+|-----------------|---------------------------------|
+| `reviewer`      | `software`, `rust`              |
+| `test_engineer` | `test`                          |
+| `sme`           | `nixos`, `networking`, `kernel` |
+| `critic`        | `security`, `product`           |
+| `explorer`      | `docs`, `observability`         |
+
+A seat MUST NOT return `APPROVE` while any concern it covers is open.
+Accept the tradeoff knowingly: five synthesizers can agree where ten
+independent reviewers would have dissented, and the observability
+precedent above is exactly that failure shape. That is why this council
+gates a round and not a wave, and why the ten-role panel still runs
+before the seal.
+
+**Verdict rule.** Swarm's default is more permissive than this file: a
+`CONCERNS` verdict carrying only MEDIUM/LOW findings still passes. The
+repository rule, and the rule `panel.rs` enforces, is `signoff: true`
+iff `recommendations` is `[]`. Set
+`council.phaseConcernsAllowComplete: false` so `CONCERNS` blocks like
+`REJECT`; that is a required part of the project config.
+
+**Gate wiring.** Enable the gates before the QA profile locks
+(`set_qa_gates` is ratchet-tighter and rejects all writes once critic
+approval or drift evidence locks it):
+
+```
+phase_council, final_council, drift_check,
+hallucination_guard, critic_pre_plan, sme_enabled
+```
+
+`phase_complete` then refuses to close a phase without
+`.swarm/evidence/<phase>/phase-council.json`.
+
+**Plan review.** Swarm has no gate that blocks dispatch on a
+phase-scoped plan panel; `critic_pre_plan` is a single critic, once,
+project-wide. Encode the plan gate as work instead: make task `N.1` of
+every phase the plan-review task, declare the plan itself as its
+acceptance criteria via `declare_council_criteria`, and give every
+implementation task in that phase a `depends` edge on it. Per-task
+council then enforces the plan gate before any coder is dispatched.
+
+**Waves and file ownership.** `epic_decide_phase` followed by
+`epic_plan_waves` is the direct implementation of the parallelization
+graph, and a `declare_scope` call per task is the file-ownership map
+described in [Integrator-prep-first pattern](#integrator-prep-first-pattern-w3-onwards).
+Record `epic_record_divergence` after each task completes; declared
+scope versus files actually touched is calibration data the manual
+process never captured.
+
+### Unattended multi-day runs
+
+Long plans are expected to run for days with the operator away. Two
+things make that work, and one thing makes "zero interaction"
+unachievable.
+
+**Removing the routine prompts.** Set `execution_profile.auto_proceed:
+true` on the plan to drop the phase-boundary confirmation, and enable
+Full-Auto (`full_auto.enabled: true`, `mode: "supervised"`) so safe
+in-scope operations stop asking. Writes to protected paths still route
+through the read-only `critic_oversight` agent rather than blocking.
+
+**Escalation is a pause, not a stop-the-world.** Keep
+`full_auto.escalation_mode: "pause"` and `full_auto.denials.on_limit:
+"pause"`. `terminate` kills a multi-day run outright; `pause` parks it
+recoverably, and `.swarm/` state survives process restarts.
+
+**Zero user interaction is not achievable, by design on both sides.**
+`full_auto.escalation_mode` admits only `pause` and `terminate`, there
+is no autonomous mode, and `council.escalateOnMaxRounds` is declared
+but not implemented - exhausting `council.maxRounds` without an
+`APPROVE` surfaces a message for the operator and refuses to
+auto-advance. Surface 1 is stricter still: a wave cannot seal without
+ten human-attested records, so the binding panel is a deliberate
+human-in-the-loop stop that no configuration removes. That matches this
+file's own rule that green tests never waive the gate. Plan for
+**batched escalation**: the run parks on unresolved disagreement,
+`/swarm status` reports why, and the operator services the queue when
+convenient. Raising `council.maxRounds` to 5 lets more disagreements
+self-resolve before parking; it does not remove the park.
+
+**Context.** A days-long session will cross the context budget's
+critical threshold. Treat phase boundaries as the handoff points rather
+than fighting the guard mid-phase.
+
+**Heavy lanes.** Advisory panel lanes are read-only and take no heavy
+gate slot. Any reviewer explicitly asked to run a validation is subject
+to the normal two-slot semaphore in [Heavy lanes](#heavy-lanes), and an
+unattended run must not exceed it.
+
 ### Commit-tag mapping
 
 The tag examples in [Commit conventions](#commit-conventions) use this
@@ -829,16 +995,22 @@ form (e.g. `... ( W2fu4 H10 )`).
 
 ### Tooling note
 
-One host-local implementation lives in
+The panel contract is implementation-neutral: any harness that
+preserves the roster, the unanimity rule, the no-rerun discipline, and
+the two gates per phase is acceptable.
+
+The in-repo reference implementation is the `opencode-swarm` wiring
+described above, configured by `.opencode/opencode-swarm.json` and
+`.opencode/opencode.json`. Those two files are the tracked, reviewable
+surface for panel behaviour; change them in the same commit as any
+change to this section.
+
+A second, host-local implementation lives in
 `/etc/nixos/scripts/panel-review.{md,sh}` and
 `/etc/nixos/scripts/panel-aggregate.sh`. That tooling is paydro's
-host-specific implementation, not an upstream d2b dependency;
-alternative implementations are welcome if they preserve the same
-review contract.
-
-In that implementation, the roster is selected per plan via
-`ENGINEERS_FILE`, and each engineer's focus file comes from
-`panel-roles/<engineer>.md`.
+host-specific implementation, not an upstream d2b dependency. In it the
+roster is selected per plan via `ENGINEERS_FILE` and each engineer's
+focus file comes from `panel-roles/<engineer>.md`.
 
 ## Test layout
 
@@ -893,10 +1065,10 @@ organised **by version**, never by development phase.
 ### Changelog lifecycle
 
 - **While a version is in development**, entries accumulate under the
-  top `## [Unreleased]` block. Because `[Unreleased]` is a
-  pre-release staging area, it MAY carry fine-grained process detail
-  (wave/phase/follow-up/finding notes) if that helps the people
-  cutting the release reason about what landed.
+  top `## [Unreleased]` block. It remains consumer-facing and follows
+  the same process-marker ban as released sections; wave, phase,
+  follow-up, round, panel, and finding bookkeeping stays in plans,
+  commits, and PR descriptions.
 - **When a version is cut**, the `[Unreleased]` block is renamed to
   `## [X.Y.Z] - YYYY-MM-DD` and its contents are **summarised by
   version**:
@@ -922,9 +1094,9 @@ decision codes (`D5/P2.3`), follow-up/round/finding refs
 (`fu3`, `H20`, `(rust-1)`) - is for organising work, not for
 shipping. Do **not** introduce these markers into:
 
-- source comments in `nixos-modules/`, `pkgs/`, or `packages/`;
+- source comments in `nixos-modules/`, `pkgs/`, `packages/`, or `proofs/`;
 - shipped docs prose under `docs/{reference,how-to,explanation}/`,
-  `README.md`, `SECURITY.md`, or example READMEs;
+  `proofs/**/*.md`, `README.md`, `SECURITY.md`, or example READMEs;
 - any user-facing CLI surface (`clap` `about`/`help`/`long_help`
   text, error/observed-state messages, JSON envelope fields);
 - CI workflow names, job names, step names, and test output that a
@@ -932,13 +1104,13 @@ shipping. Do **not** introduce these markers into:
   the behavior being validated (for example, "ADR index coverage
   guard" or "host validate dry-run"), not historical phase/process
   codes;
-- released CHANGELOG sections.
+- every CHANGELOG section, including `[Unreleased]`.
 
 These markers are still expected and welcome in the contexts where
 they are load-bearing:
 
 - planning artifacts (a session `plan.md`, the wave/parallelization
-  graph) and pre-release CHANGELOG `[Unreleased]`;
+  graph);
 - this file and the other process docs (Panel review, Commit
   conventions, `## Daemon-only end-state (P6 onward)`) that
   *document* the methodology;
@@ -1020,7 +1192,7 @@ fields that request panel, agent, or model metadata.
 > The trailing wave-tag scheme below applies to in-development
 > commits on feature branches / worktrees, where wave/phase tags are
 > load-bearing planning context. It does not license process markers
-> in shipped code, docs, or released CHANGELOG sections - see
+> in shipped code, docs, or any CHANGELOG section - see
 > [Versioning & changelog](#versioning--changelog).
 
 - **Subject.** Short, imperative, prefixed with the touched
@@ -1228,6 +1400,11 @@ Touch these only with a clear plan and a corresponding test run.
 | GPU sidecar (graphics VMs)          | `nixos-modules/components/graphics.nix` + broker `SpawnRunner` for cloud-hypervisor on graphics VMs; pidfd handed back via `OpenPidfd` and supervised by `d2bd` | Graphics VMs run cloud-hypervisor with the GPU device attached. Restarting `d2bd` no longer terminates CH - pidfd handoff means the child outlives a daemon reconnect - but the broker spawn path is the only audited place CH is launched. Bypassing it breaks the audit trail. Validate the evaluated graphics shape with `tests/unit/nix/cases/video-contract.nix`. |
 | Video sidecar (graphics VMs)        | `nixos-modules/components/video/guest.nix`, `nixos-modules/processes-json.nix`, `pkgs/vhost-user-video/`, `packages/d2b-host/src/video_argv.rs`, broker `SpawnRunner{role: Video}` | `graphics.videoSidecar = true` is an explicit opt-in H264 decode path: guest `virtio_media` + patched Cloud Hypervisor `--vhost-user-media` + patched crosvm `device video-decoder --backend vaapi`. There is no per-VM video systemd unit, no stock crosvm/CH fallback, and no free-form video extra args. The video runner MUST use the dedicated `d2b-<vm>-video` principal, not `d2b-<vm>-gpu`, so broker/activation ACLs can deny host Wayland/PipeWire/Pulse sockets to video without breaking GPU cross-domain. The broker masks `/dev` for the video runner and exposes only the declared device allowlist: default `/dev/dri/renderD128`, plus `/dev/nvidiactl`, `/dev/nvidia0`, and `/dev/nvidia-uvm` only when `graphics.videoNvidiaDecode = true`. `virtio_media` is a guest module, not a host `/proc/modules` preflight requirement. Firefox/VA-API uses the separate experimental `graphics.virglVideo` GPU path; it is default-off and must not be treated as stable video-sidecar coverage. Validate evaluated shape with `tests/unit/nix/cases/video-contract.nix`; rendered argv and sandbox coverage lives in `packages/d2b-contract-tests/tests/minijail_swtpm_video.rs` and is advisory until the fixture lane is enabled. |
 | UI color contract / niri backend    | `nixos-modules/ui-colors.nix`, `nixos-modules/niri-vm-borders.nix`, `docs/reference/ui-colors.{md,json}`, `tests/unit/nix/cases/niri-vm-borders.nix`, and sibling consumers such as `vicondoa/d2b-wlcontrol` | The compositor-agnostic `d2b.site.ui` / `d2b.envs.<env>.ui` / `d2b.vms.<vm>.ui` color model is the source of truth for host/env/VM/state colors. Generated `/etc/d2b/ui-colors.json` and `/etc/d2b/ui-colors.css` are public presentation metadata, not authz or policy inputs. Niri-specific settings belong only under `d2b.site.ui.compositors.niri`; do not add compositor-specific color source options. Keep the JSON schema, reference docs, GTK CSS `@define-color` names, and nix-unit artifact-shape tests in sync. Downstream tools must fail visibly but remain usable when the artifact is missing or malformed, without reading root-owned d2b state directly. |
+| ComponentSession capability boundary | `packages/d2b-contracts/src/v3/component_session.rs`, `packages/d2b-session/`, `packages/d2b-session-unix/` | Authenticated transport evidence and attachment credits are consumed into a private single session owner; do not add a clone/accessor that lets callers reuse admission evidence. **`SessionAuthority` is sealed** by a private supertrait in a private module (`admission.rs`), so no crate outside `d2b-session` can implement it - that seal is load-bearing, because a foreign authority implementation is a direct path to minting a genuine admission. Prove exact Zone equality before every capability mint, and never expose a store path, socket, or handle through the session. These crates are tested but deliberately unwired from production listeners until the full authenticated registration path lands. |
+| Zone message bus boundary | `packages/d2b-bus/src/{router,registry,authorization,streams,operations}.rs`, `packages/d2b-resource-api/src/adapter.rs` | Registration consumes the single-owner capability admission; comparing a clonable token is insufficient. Every route is exact, subject-bound, revision-bound, and Zone-checked before minting authority. There is no wildcard pub/sub and no direct store handle. `UnregisteredBusAdapter` is a deliberate unreachable seam and must remain unregistered until authenticated ComponentSession, the Zone bus, and Zone registration land together. |
+| Authoritative subject resolution | `packages/d2b-bus/src/router.rs` (`ZoneRegistrar`), `packages/d2b-session-unix/src/subject.rs` | `ZoneRegistrar` **exclusively owns and consumes** subject resolution: a peer is mapped to a subject from registrar-private state using verified peer evidence. There is no public subject-configuration type and no raw-claim registration path, and there must not be one - caller-supplied `subject_ref`/`subject_uid` are exactly how a component would name itself something it is not. Production currently fails closed because no authoritative resolver is wired, which is the intended state until the Zone runtime supplies one; do not "fix" that by accepting claims from the caller. This boundary moved several times before it closed, each time by reappearing as a public constructor or registrar mutator somewhere the guard was not looking, so it is enforced by the type-based mint-surface inventory and a compile-fail fixture rather than by convention. |
+| Capability mint surface allowlist | `packages/d2b-bus/tests/public_mint_surface.rs`, its four approved API snapshots, the mutations under `packages/d2b-bus/tests/ui/`, and the capability definitions in `packages/{d2b-bus,d2b-session,d2b-session-unix}/src/` | The **enforcing compiler leg** uses stable trait-solver ambiguity assertions in the defining crates. It rejects the enumerated `Clone`, `Copy`, `Default`, and `From` implementations for `ComponentSessionAdmission`, `VerifiedUnixPeer`, `SessionAcceptor<C>`, and `AuthenticatedComponentSession<C>` in every compiled configuration. Generic assertions catch unconditional blanket implementations; separate assertions cover `C = ()` and the workspace's `C = ComponentSessionAdmission` uses. They do not enumerate every bounded or downstream `From<X>` implementation, so private construction fields, sealed traits, instance identity, and consumed authority remain the primary boundary. The external-seals tests require `error[E0283]` plus `CapabilityMustNotImplementCloneCopyDefaultOrFrom`; fabrication fixtures require the construction diagnostic that proves private fields remain closed. The **best-effort source leg** inventories explicit workspace impl and derive forms and compares them with `approved-capability-trait-impls.txt`. Module aliases and module-level globs resolve monotonically over a finite universe: parsed alias names form the binding universe, declared local module paths form the only target universe, explicit bindings shadow glob imports, conflicting glob results are ambiguous, and separate target/visibility and taint budgets bound the two fixed points. Capability propagation resolves every glob target through the completed module-alias fixed point, including renamed targets; a multiple-target result is ambiguous and fails closed. A target can never acquire a path outside that finite module set, so glob cycles cannot grow indefinitely. Capability relevance propagates through resolved aliases to every descendant module containing a discovered capability binding. Unknown glob destinations taint their importing module; that taint propagates through later glob re-exports and makes otherwise unclassified impl self types fail closed. Roots matching Cargo-declared dependency names are classified as external and import no local capability binding, so ordinary dependency globs remain accepted. Unresolved alias bindings imported by a glob remain tainted bindings and fail closed when used as an impl prefix. Block-local globs and impls carry lexical scope identities. The scanner accepts a same-scope direct module alias only when its target is resolved and no capability or tainted descendant is reachable; capability-relevant, ambiguous, unresolved, or otherwise unmodelled block-local glob aliases fail closed. This is intentionally not a claim of complete Rust glob resolution. Regression fixtures pin the terminating `a`/`b` glob cycle with explicit shadowing, nested re-export through glob, rejecting direct and grouped renamed glob targets, unresolved and two-hop glob taint, rejecting direct and grouped block-local capability globs, and accepting non-capability block-local and renamed-target globs. Existing direct, renamed, chained, cfg, raw-identifier, path-loaded, symlink, attribute, and duplicate-logical-module fixtures remain covered. The source leg also fails closed on generic or cfg-gated declared type aliases, cfg-gated renamed imports, unsupported aliases, lexically scoped capability aliases, unresolvable external modules, missing selected module files, and unrecognised module attributes. It does not perform general Rust name resolution, macro expansion, or `include!` expansion, and implementations outside the scanned workspace remain outside its claim. Approved snapshots retain rendered signatures for exact comparison; failure output uses fixed operation or syntax labels, package or crate identity, exit status, and crate-relative logical locations. Raw Cargo or rustdoc stderr, signature tokens, source text, attribute tokens, absolute scratch paths, and attacker-authored path literals are not emitted. The separate capability API inventory still propagates from fixed capability and claim identities through private field types. Widening any compiler seal or approved snapshot is a deliberate trust-boundary change requiring a stated reason. |
+| Resource controller effects boundary | `packages/d2b-controller-toolkit/src/{runner,queue,context,result,owner_hints}.rs`, `packages/d2b-core-controller/src/{hints,dependencies,owner_reconcile}.rs` | Controller and core-reconciliation engines are test-only and unwired from the absent production store/watch dispatcher. An EffectPort call is permitted only after durable resource commit and consumption of the matching `CommittedRevisionProof`; abort, conflict, stale proof, or restart ambiguity cannot release an effect. Preserve per-resource single flight, bounded fair admission, deterministic owner/dependency propagation, and restart-safe idempotency when wiring the production path. |
 | Unsafe-local provider, launcher, and persistent-shell helper | `nixos-modules/options-realms-workloads.nix`, `nixos-modules/unsafe-local-workloads-json.nix`, `packages/d2b-core/src/unsafe_local_workloads.rs`, `packages/d2b-contracts/src/unsafe_local_wire.rs`, `packages/d2b-unsafe-local-helper/src/{shell_runtime,shell_supervisor,shell_socket,output_ring,tty_exec}.rs`, and `docs/reference/unsafe-local-provider.md` | `unsafe-local` is explicit and default-denied. It runs only as the exact authenticated requesting uid and provides no isolation boundary. Public metadata never carries configured argv or shell policy; those come only from the integrity-pinned private bundle. A persistent-shell supervisor in a verified transient USER scope - not the reconnectable helper or d2bd - owns the login-shell PTY, bounded merged-output ring, attachment, and private same-UID listener. Ledger adoption preserves ambiguous sessions as degraded; teardown closes the PTY and signals only the exact re-verified scope. The helper-wide ring reservation is bounded, terminal responses transfer exactly one CLOEXEC stream fd, and shell names, supervisor ids, paths, environment, process/unit identity, and bytes stay out of Debug/errors/audit. Do not add cross-uid execution, a direct compositor fallback, VM state/network/device semantics, a root service, per-VM unit, broker op, free-form shell command, or broad same-UID cleanup. |
 | Manifest contract                   | `docs/reference/manifest-schema.{md,json}` + `nixos-modules/manifest.nix`               | Version-pinned via `manifestVersion`. Adding, removing, or renaming a per-VM field requires bumping the version, updating the schema, and noting it in the CHANGELOG. The `static.sh` md↔json drift gate catches partial updates. |
 | Manifest bundle - private artifacts | `docs/reference/manifest-bundle.md` + `docs/reference/schemas/v2/*.json` + `packages/d2b-core/src/{bundle,host,processes,privileges,closures,minijail_profile}.rs` + `nixos-modules/{bundle,bundle-artifacts,host-json,processes-json,privileges-json,closures-json,minijail-profiles}.nix` + `packages/xtask/src/main.rs` (`gen-schemas`) | Sensitive bundle artifacts install at `root:d2bd` 0640 and ground every broker/sandbox/runner behaviour. `d2b-core` DTOs are canonical; `d2b._bundle` is the typed internal artifact table that owns JSON data, install names, classifications, and `/etc/d2b` materialization for every bundle artifact. Add new bundle artifacts through `nixos-modules/bundle-artifacts.nix` instead of hand-writing parallel install logic in each emitter. Committed schemas under `docs/reference/schemas/v2/` ARE the contract and the `tests/unit/gates/drift-check.sh` gate enforces `xtask gen-schemas` + `git diff --exit-code` through `make test-drift`. Breaking the schema without an intentional `bundleVersion`/`schemaVersion` bump silently breaks every downstream consumer. |
@@ -1284,8 +1461,8 @@ Touch these only with a clear plan and a corresponding test run.
   `D5/P2.3`, `( W1fu3 H20 )`) belong in planning artifacts,
   pre-release `[Unreleased]`, ADRs, this file's process sections,
   and feature-branch commits - never in shipped source comments,
-  shipped docs prose, CLI help/error text, or released CHANGELOG
-  sections. See [Versioning & changelog](#versioning--changelog).
+  shipped docs prose, CLI help/error text, or any CHANGELOG section.
+  See [Versioning & changelog](#versioning--changelog).
   The functional `d2b.defaultSwitchReadiness.<wave>` option
   surface is the one deliberate exception.
 - **Don't spell a dash with anything but the ASCII hyphen `-`.** Not in

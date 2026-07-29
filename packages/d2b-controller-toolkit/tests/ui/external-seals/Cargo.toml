@@ -1,0 +1,11 @@
+[package]
+name = "d2b-controller-toolkit-external-seals"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dev-dependencies]
+d2b-contracts = { path = "../../../../d2b-contracts" }
+d2b-controller-toolkit = { path = "../../.." }

@@ -1,0 +1,105 @@
+{
+  "agents": {
+    "reviewer": {
+      "model": "github-copilot/gpt-5.6-sol"
+    },
+    "critic": {
+      "model": "github-copilot/gpt-5.6-sol"
+    },
+    "sme": {
+      "model": "github-copilot/gpt-5.6-sol"
+    },
+    "test_engineer": {
+      "model": "github-copilot/gpt-5.6-sol"
+    },
+    "explorer": {
+      "model": "github-copilot/gpt-5.6-sol"
+    }
+  },
+  "council": {
+    "enabled": true,
+    "maxRounds": 5,
+    "minimumMembers": 5,
+    "requireAllMembers": true,
+    "vetoPriority": true,
+    "phaseConcernsAllowComplete": false
+  },
+  "architectural_supervision": {
+    "enabled": true,
+    "mode": "advisory",
+    "run_on": "phase_complete"
+  },
+  "epic": {
+    "mode": {
+      "enabled": true
+    }
+  },
+  "full_auto": {
+    "enabled": true,
+    "locked": false,
+    "mode": "supervised",
+    "fail_closed": true,
+    "escalation_mode": "pause",
+    "max_interactions_per_phase": 50,
+    "deadlock_threshold": 3,
+    "denials": {
+      "max_consecutive": 3,
+      "max_total": 20,
+      "on_limit": "pause"
+    },
+    "permission_policy": {
+      "enabled": true,
+      "allow_defaults": true,
+      "trusted_roots": [
+        "."
+      ],
+      "trusted_domains": [],
+      "protected_paths": [
+        ".git",
+        ".github/workflows",
+        ".opencode",
+        ".swarm",
+        "AGENTS.md",
+        "tests/AGENTS.md",
+        "CHANGELOG.md",
+        "flake.nix",
+        "flake.lock",
+        "tests/layer1-jobs.json",
+        "tests/runtime-ledger-census.json",
+        "tests/golden/pinned",
+        "docs/adr",
+        "docs/reference/schemas/v2",
+        "packages/Cargo.lock",
+        "packages/rust-toolchain.toml",
+        "packages/d2b-priv-broker"
+      ]
+    },
+    "oversight": {
+      "on_plan_change": true,
+      "on_task_completion": false,
+      "on_phase_boundary": true,
+      "on_high_risk_action": true,
+      "on_subagent_return_warning": true,
+      "every_tool_calls": 25,
+      "every_architect_turns": 5,
+      "every_minutes": 20,
+      "max_dispatch_retries": 2,
+      "max_consecutive_dispatch_failures": 3
+    }
+  },
+  "context_budget": {
+    "enabled": true,
+    "warn_threshold": 0.7,
+    "critical_threshold": 0.9,
+    "tracked_agents": [
+      "architect"
+    ]
+  },
+  "adversarial_testing": {
+    "enabled": true,
+    "scope": "all"
+  },
+  "max_iterations": 5,
+  "qa_retry_limit": 3,
+  "execution_mode": "balanced"
+}

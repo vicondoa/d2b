@@ -12,6 +12,184 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added test-only, production-unwired workspace destinations for `d2b-bus`,
+  `d2b-session`, and `d2b-session-unix`.
+
+- Added a standalone redb resource-store feasibility spike covering the ten-table
+  physical schema, bounded fair async writer and group commits, revision-backed
+  watches and controller hints, crash-boundary recovery fixtures, scale/RSS
+  fixtures, and commit-to-handler latency measurements. Functional, watch,
+  conflict, crash-recovery, group commit at 48/50, 96%, and latency thresholds
+  passed, but whole-process RSS was 25,216 KiB (24.625 MiB), 640 KiB or about
+  2.6% above 24,576 KiB. That failure blocks the production backend and watch
+  dispatcher; subtracting a process baseline is not permitted. The redb
+  dependency remains isolated to the disposable proof workspace.
+
+- Added the self-contained, test-only per-Zone `d2b-bus` exact-address router with native
+  Role/RoleBinding authorization, relay and diagnostic verb enforcement,
+  single-owner authenticated registration, revision-bound revocation,
+  pinned transport-correlated cancellation routes, reconnect replacement, and
+  credit-bounded fair named streams, now connected to authenticated
+  ComponentSession capabilities through consuming registration and
+  reconnect/disconnect lifecycle handling.
+
+- Added the test-only, production-unwired transport-neutral ComponentSession v3
+  contract and runtime with
+  strict Noise NN/KK/IKpsk2 authentication, replay-safe records, native
+  authorization leases, fair named streams, cancellation, deadlines, and
+  reconnect handling with redacted handshake and record diagnostics. Added Unix
+  seqpacket, stream, socketpair, and vsock adapters with consumed
+  peer-to-subject mapping, exact descriptor identity, multi-scope attachment
+  credits, and fail-closed transport and socket-activation descriptor cleanup.
+
+- Added the test-only, production-unwired async controller toolkit and core
+  reconciliation engine with
+  store-watch relisting, bounded per-resource single-flight dispatch,
+  cross-resource concurrency, commit-gated expedited effects, serialized
+  upgrades, owner/dependency propagation, suppression, leases, and fair hint
+  admission.
+
+- This work exposes no operator-facing capability yet. Production use remains
+  blocked on authenticated ComponentSession-to-bus registration, Zone
+  registration, store/watch integration, and a corrected whole-process RSS
+  rerun.
+
+### Changed
+
+- Added compiler-checked negative trait bounds for the authority-bearing
+  ComponentSession admission, verified Unix peer, session acceptor, and
+  authenticated session types. The defining crates now reject `Clone`, `Copy`,
+  `Default`, the named `From` mint paths, and zero-input `From<()>` construction
+  for the admission and verified-peer evidence types through the Rust trait
+  solver, regardless of aliases, selected module paths, or macro expansion in
+  each configuration that is actually compiled. Generic checks cover
+  unconditional blanket implementations, while separate checks cover the
+  concrete unit and ComponentSession admission parameterizations currently
+  used by the workspace. Future concrete parameterizations must add their own
+  assertion. The ambiguity diagnostic now names the forbidden trait set and
+  the compile-fail tests pin that wording.
+
+- Kept the source trait-implementation inventory as a best-effort breadth
+  check for explicit workspace source forms outside the compiler-enforced set.
+  Focused regressions cover direct and inline `#[path]`, ordinary children of
+  path-loaded modules, raw identifiers, lexical symlink paths, direct and
+  `self as` aliases plus plain named and `::{self}` imports of local modules
+  containing a discovered capability binding, alias-before-target ordering,
+  chained aliases, chained re-exports, harmless aliases in every covered
+  spelling, a harmless two-hop re-export that requires fixed-point convergence,
+  direct and nested-group glob imports, nested re-exports reached through a
+  glob, direct and grouped globs whose target is a renamed module alias,
+  unresolved and two-hop glob propagation, terminating glob cycles with
+  explicit-shadow precedence, direct and grouped block-local globs, and
+  non-capability acceptance cases for block-local and renamed-target globs.
+  Module aliases and module-level globs resolve monotonically over the finite
+  set of parsed bindings and declared module targets; capability propagation
+  resolves every glob target through that completed alias fixed point.
+  Explicit bindings shadow glob imports, conflicting glob bindings fail closed,
+  and hard iteration budgets independently guard target and taint convergence.
+  Capability relevance includes descendants of a resolved module alias.
+  Unknown glob destinations taint their importing module, and that taint
+  propagates through later glob re-exports. A glob rooted at a Cargo-declared
+  dependency name is classified as external and imports no local capability
+  binding, preserving ordinary workspace dependency globs.
+  Block-local globs carry lexical scope identities: proven same-scope
+  non-capability module aliases remain accepted, while capability-relevant,
+  ambiguous, or unresolved aliases fail closed. Other unmodelled glob shapes
+  fail closed when they can classify an impl self type; this syntax scanner
+  does not claim complete Rust glob or name resolution. Generic or cfg-gated
+  declared type aliases, cfg-gated renamed imports, unsupported aliases, and
+  lexically scoped capability aliases also fail closed during classification.
+  Every parsed module item, including one declared inside a function or block,
+  reaches the same attribute validation and external-source resolution.
+  Unresolvable
+  external modules, including missing `#[path]` targets, fail closed. Direct
+  `path` and recursive `cfg_attr` receive dedicated handling; the source-inert
+  allowlist accepts `cfg`, `doc`, `allow`, `warn`, `deny`, `forbid`, `expect`,
+  `deprecated`, and the exact `rustfmt::skip` tool path in their approved
+  shapes. Procedural, unknown tool, malformed, and every other unrecognised
+  direct or conditional attribute fail closed with remediation. Approved
+  snapshots retain rendered signatures for exact comparison, while scanner,
+  Cargo, and rustdoc failures emit fixed operation labels, package or crate
+  identities, exit status, and crate-relative locations without raw tool
+  stderr, signature token streams, absolute scratch paths, or attacker-authored path literals.
+  The source leg does not claim general Rust name or module resolution, macro
+  expansion, `include!` expansion, or coverage of downstream implementations.
+
+- Pinned the actual downstream `From<X>` boundary. A dependent crate that owns
+  `X` can implement `From<X>` for a capability and compile when it only returns
+  authority it already holds. A paired compile-fail fixture proves it cannot
+  construct the capability directly because private construction state remains
+  inaccessible. Private fields, instance identity, sealed traits, and consumed
+  capabilities remain the primary anti-fabrication boundary.
+
+- Strengthened cancellation publication race coverage to prove both activity
+  and response state remain locked until their correlated entries are visible.
+
+- Made the canonical spike-measurement policy guard cover all seven result
+  rows, registered qualitative evidence summaries, and a global inventory of
+  measurement-shaped fragments under `docs/**` and `CHANGELOG.md`. Per-class
+  mutations now plant differently phrased or partial copies in an unregistered
+  document and prove that the inventory rejects them; paraphrases that omit
+  every number-and-unit, denominator, or canonical class phrase remain outside
+  this mechanical check.
+
+- Deferred the production redb backend, watch dispatcher, and real-backend
+  reaction benchmark to the storage-integration wave after the feasibility
+  spike missed its RSS gate. Backend acceptance now owns only independently
+  satisfiable backend signals; watch-budget saturation evidence belongs solely
+  to the watch item.
+
+- Bound ComponentSession minting and bus registration to an instance-specific,
+  registrar-issued single-use capability, with a compile-fail seal covering
+  foreign session authorities.
+
+- Preserved stable ComponentSession error codes and prescribed remediation
+  through bus endpoint failures while retaining class-only observer labels.
+
+- Added closed-label observations for failed correlation cleanup and queued
+  stream shedding, classified expected handshake failures without internal-bug
+  labels, and redacted channel identifiers from debug output.
+
+- Propagated inbound cancellation into generated service handlers, suppressed
+  cancelled replies, dispatched pinned endpoint cancellation during revocation
+  and reconnect, and made ttrpc response correlation independent of
+  caller-selected stream identifiers.
+
+- Split established transport read and write ownership behind a bounded
+  record-budgeted writer queue so blocked writes no longer stall inbound
+  records, cancellation, or control work. Cancellation now removes queued
+  replies before transport delivery or fails the session closed if protection
+  has already committed their record sequence.
+
+
+
+- Reclaimed cancelled receive waiters before applying the per-session waiter
+  bound, preventing normal repeated cancellation from exhausting and
+  disconnecting a component session.
+
+- Released bus correlation and operation slots on every post-start response
+  path, including malformed responses and terminal receive failures, while
+  observing cleanup errors and propagating those not caused by driver teardown.
+
+
+- Unified Core and toolkit controller identity, selector, trigger, registration,
+  retry, and resync contracts. Core changes now drive the executor-native
+  reconciliation runner through a bounded, coalescing registered-resource
+  adapter with explicit admission and backpressure counters. Until a durable
+  store backend is registered, expedited commit authorization fails closed
+  rather than manufacturing evidence. Terminal runner failures retain the
+  complete accumulated report alongside typed failure details.
+
+- `tests/test-proofs.sh` now discovers proof crates by scanning
+  `proofs/*/Cargo.toml` instead of iterating a hardcoded list. The previous
+  shape paired that list with a silent skip when a directory was absent, so a
+  renamed or never-created proof crate reported success while executing
+  nothing. An empty `proofs/` tree now fails closed. Every discovered crate
+  must have a sibling lockfile and runs clippy and tests with `--locked`. The
+  redb proof also executes its four ignored full-scale correctness fixtures in
+  release mode; this adds about five minutes but ensures the proof gate runs
+  its principal oracle, watch, conflict, and owner-fan-in experiments.
+
 - Added the shared `cargo xtask delivery wave` dispatch skeleton for the
   ADR 0046 delivery contract: the `snapshot`, `validate-import`,
   `panel-request`, `panel-attest`, `seal`, `merge-eligibility`, and `help`
@@ -39,7 +217,6 @@ deprecations ship one minor release before removal.
   validation and delivery, and streamline contracts. No crates, services,
   controllers, or Providers are created.
 
-### Changed
 
 - Made ADR 0046 work-item delivery state machine-readable and fail-closed:
   every item now records a closed `Planned` or `Merged` state plus nonempty
@@ -59,7 +236,7 @@ deprecations ship one minor release before removal.
   slice base/target, the direct-push prohibition, and the auto-release
   version-header trigger. References to main-branch ADR 0045 provenance are
   unchanged.
-- Added a terminal `ADR046-W8` friction-closure wave to the ADR 0046 delivery
+- Added a terminal friction-closure wave to the ADR 0046 delivery
   contract for the tooling and process friction (signoff, build, test, merge,
   codegen, disk) accumulated across the earlier waves. It has no spec members
   and is therefore excluded from the topological wave-derivation rule, but it
@@ -76,6 +253,25 @@ deprecations ship one minor release before removal.
   are corrected with it.
 - Enabled the required Layer-1, eval-shell, and Entra example PR gates for
   changes targeting the `v3` branch as well as `main`.
+
+### Fixed
+
+- Unified ComponentSession and Zone bus operation names on typed canonical
+  `Service/Member` spelling and made bus registration consume the admitted
+  session capability instead of accepting cloneable claims.
+- Bounded and fairly scoped bus operations, routes, streams, credits, session
+  requests, reassembly, and event queues; pinned revocable destinations across
+  reconnects; and made dispatch deadlines, dropped futures, stream waiters, and
+  cancellation cleanup actively release capacity.
+- Made Unix stream and vsock framing cancellation-safe, hardened systemd
+  descriptor adoption and socket I/O semantics, redacted identifier debug
+  output, and added closed-class observability and operator remediation.
+
+### Security
+
+- Bound expedited commit evidence to the target Zone before effect permits are
+  minted, preventing matching evidence from another Zone from authorizing a
+  reconcile effect.
 
 ## [1.4.1] - 2026-07-12
 

@@ -1,0 +1,13 @@
+[package]
+name = "d2b-bus-public-api-mutations"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+members = ["opaque-claims"]
+
+[dependencies]
+d2b-bus = { path = "../../.." }
+d2b-session = { path = "../../../../d2b-session" }
+opaque-claims = { path = "opaque-claims" }

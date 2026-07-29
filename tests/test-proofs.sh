@@ -2,8 +2,7 @@
 # tests/test-proofs.sh - `make test-proofs`: clippy + test the standalone proof
 # crates under proofs/ (separate Cargo workspaces, not members of packages/).
 #
-#   * proofs/chunked-stdio-conformance
-#   * proofs/w0-ch-connect-proof
+#   Discovery is automatic over proofs/*/Cargo.toml; an empty tree fails closed.
 #
 # These were previously only exercised by the hand-rolled pr-cargo-workspace CI
 # job; they now live behind a make target so CI and local runs share one path.
@@ -60,21 +59,54 @@ if command -v rustup >/dev/null 2>&1; then
   rustup component add --toolchain "$RUSTUP_TOOLCHAIN" clippy
 fi
 
+# discovery is by directory, not by a hardcoded list: a hardcoded list paired
+# with a silent "absent" skip lets a renamed or never-created proof crate pass
+# the gate while executing nothing. Every proofs/*/Cargo.toml runs, and an
+# empty proofs/ tree fails closed rather than reporting success over zero work.
 rc=0
-for proof in chunked-stdio-conformance w0-ch-connect-proof; do
-  manifest="$ROOT/proofs/$proof/Cargo.toml"
-  if [ ! -f "$manifest" ]; then
-    log "  SKIP: proofs/$proof (absent)"
-    continue
+proofs=()
+for manifest in "$ROOT"/proofs/*/Cargo.toml; do
+  [ -f "$manifest" ] || continue
+  lockfile="$(dirname "$manifest")/Cargo.lock"
+  if [ ! -f "$lockfile" ]; then
+    fail "proof manifest has no sibling Cargo.lock: ${manifest#"$ROOT/"}"
+    exit 1
   fi
+  proofs+=("$(basename "$(dirname "$manifest")")")
+done
+
+if [ "${#proofs[@]}" -eq 0 ]; then
+  fail "no proof crates discovered under proofs/*/Cargo.toml"
+  exit 1
+fi
+
+log "discovered ${#proofs[@]} proof crate(s): ${proofs[*]}"
+for proof in "${proofs[@]}"; do
+  manifest="$ROOT/proofs/$proof/Cargo.toml"
   log "--> proofs/$proof: clippy + test"
-  if cargo clippy --manifest-path "$manifest" --all-targets -- -D warnings \
-    && cargo test --manifest-path "$manifest"; then
-    ok "proofs/$proof"
-  else
+  if ! cargo clippy --locked --manifest-path "$manifest" --all-targets -- -D warnings \
+    || ! cargo test --locked --manifest-path "$manifest"; then
     fail "proofs/$proof"
     rc=1
+    continue
   fi
+
+  # This proof's four scale fixtures are intentionally #[ignore]d so normal
+  # developer cargo tests remain fast. The enforcing proof gate must execute
+  # them explicitly: correctness, watches, conflict grouping, and owner fan-in
+  # are the proof's principal oracles. Release mode keeps this roughly
+  # five-minute lane inside the existing 15-minute CI job timeout.
+  if [ "$proof" = "redb-resource-store-spike" ]; then
+    log "    running required ignored full-scale suite (expected <=5 minutes)"
+    if ! cargo test --release --locked --manifest-path "$manifest" \
+      --test full_scale -- --ignored --test-threads=1 --nocapture; then
+      fail "proofs/$proof full-scale suite"
+      rc=1
+      continue
+    fi
+  fi
+
+  ok "proofs/$proof"
 done
 
 [ "$rc" -eq 0 ] || exit 1

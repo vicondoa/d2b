@@ -1,0 +1,1 @@
+attacker build stderr: /home/alice/private/source.rs SECRET_BUILD_OUTPUT

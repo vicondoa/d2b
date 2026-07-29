@@ -44,7 +44,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-componentsession-and-bus.md",
-      "sha256" : "b4732a828d87dcd71d2dfac14d18c6a5b57b016e4d23c7f9a30e6b4208c8480e",
+      "sha256" : "b7600cdccbf361980fdb06a28d5d1dd337b9ff8ea29772acf38dc063b0dfc61e",
       "specId" : "ADR-046-componentsession-and-bus",
       "status" : "Accepted",
       "supersedes" : "Current v3 Realm PeerSession and ad hoc guest/user/public IPC",
@@ -84,7 +84,7 @@
     {
       "dependsOn" : [],
       "path" : "docs/specs/ADR-046-decision-register.md",
-      "sha256" : "1eff61450d49c5065c9b28b640da80df97e1933845b414322ba6d50effe7546f",
+      "sha256" : "9d2fd322b3a557116458350d6d337d50970ae97dda2d6439acfc05e4e9ccc18c",
       "specId" : "ADR-046-decision-register",
       "status" : "Accepted",
       "supersedes" : null,
@@ -112,7 +112,7 @@
         "ADR-046-zone-routing"
       ],
       "path" : "docs/specs/ADR-046-feasibility-and-spikes.md",
-      "sha256" : "a9539b51b1b7a2ad76210507c4a1f356f3d7144bd194f8c1a67bebcf86e9c9c8",
+      "sha256" : "76c514283128f42925a6bd6d0105aa0b6f7ce11440b19227292c80418ae8cf72",
       "specId" : "ADR-046-feasibility-and-spikes",
       "status" : "Accepted",
       "supersedes" : null,
@@ -879,7 +879,7 @@
         "ADR-046-resource-store-redb"
       ],
       "path" : "docs/specs/ADR-046-resource-reconciliation.md",
-      "sha256" : "28f39c9f8dc4937b17e06c68250658e5b684d1a4f239b78707654e088859ecca",
+      "sha256" : "453ee823ebdfe5ef61d73486f512777c3f9f58842d1ae701d48a6c2c6e8f53d5",
       "specId" : "ADR-046-resource-reconciliation",
       "status" : "Accepted",
       "supersedes" : null,
@@ -894,7 +894,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-resource-store-redb.md",
-      "sha256" : "b44c6e5f5e19cc8a542bad20c707caf6bfcac832508a70308cf6d1605b76f380",
+      "sha256" : "6d4e50a8106d59c716533364e89373a0d2a0698f4e0f8f75d0e3ccfb81c57e5a",
       "specId" : "ADR-046-resource-store-redb",
       "status" : "Accepted",
       "supersedes" : null,
@@ -1207,7 +1207,7 @@
         "ADR-046-zone-routing"
       ],
       "path" : "docs/specs/ADR-046-validation-and-delivery.md",
-      "sha256" : "947cf1e1753b7994e1d3c83b439610acc7aa918f01753bfa64f8b12b846b458a",
+      "sha256" : "9b1e5d1460b177e01005558a394f8d6adb2e7cce9b3ca46b437120ebc789b411",
       "specId" : "ADR-046-validation-and-delivery",
       "status" : "Accepted",
       "supersedes" : "This repository's current `AGENTS.md` \"Panel review\" phase-gate as the *sole* review mechanism for ADR 0046 work (extended, not replaced, per §12); ad hoc per-agent validation ordering for ADR 0046 implementation",

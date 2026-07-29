@@ -1,37 +1,6 @@
 //! Frozen ten-table physical schema.
 
-use redb::TableDefinition;
-
 use crate::{KeySpace, ValueKind};
-
-pub const STORE_META: TableDefinition<'static, &[u8], &[u8]> = TableDefinition::new("store_meta");
-pub const API_SCHEMAS: TableDefinition<'static, &[u8], &[u8]> = TableDefinition::new("api_schemas");
-pub const RESOURCES: TableDefinition<'static, &[u8], &[u8]> = TableDefinition::new("resources");
-pub const TYPE_INDEX: TableDefinition<'static, &[u8], &[u8]> = TableDefinition::new("type_index");
-pub const OWNER_INDEX: TableDefinition<'static, &[u8], &[u8]> = TableDefinition::new("owner_index");
-pub const PRODUCER_INDEX: TableDefinition<'static, &[u8], &[u8]> =
-    TableDefinition::new("producer_index");
-pub const CONTROLLER_INDEX: TableDefinition<'static, &[u8], &[u8]> =
-    TableDefinition::new("controller_index");
-pub const REVISION_LOG: TableDefinition<'static, &[u8], &[u8]> =
-    TableDefinition::new("revision_log");
-pub const OPERATIONS: TableDefinition<'static, &[u8], &[u8]> = TableDefinition::new("operations");
-pub const ZONE_LINK_CURSORS: TableDefinition<'static, &[u8], &[u8]> =
-    TableDefinition::new("zone_link_cursors");
-
-/// Exact ten physical table definitions.
-pub const TABLE_DEFINITIONS: [TableDefinition<'static, &[u8], &[u8]>; 10] = [
-    STORE_META,
-    API_SCHEMAS,
-    RESOURCES,
-    TYPE_INDEX,
-    OWNER_INDEX,
-    PRODUCER_INDEX,
-    CONTROLLER_INDEX,
-    REVISION_LOG,
-    OPERATIONS,
-    ZONE_LINK_CURSORS,
-];
 
 /// One permanent table/discriminant assignment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,7 +67,6 @@ pub const TABLE_SCHEMAS: [TableSchema; 10] = [
 #[cfg(test)]
 mod tests {
     use super::*;
-    use redb::{Database, ReadableDatabase, TableHandle, backends::InMemoryBackend};
 
     #[test]
     fn ten_table_names_and_discriminants_are_contiguous_and_literal() {
@@ -122,33 +90,6 @@ mod tests {
             let discriminant = u8::try_from(index + 1).unwrap();
             assert_eq!(table.key_space.discriminant(), discriminant);
             assert_eq!(table.value_kind.discriminant(), u16::from(discriminant));
-        }
-        assert_eq!(STORE_META.name(), "store_meta");
-        assert_eq!(API_SCHEMAS.name(), "api_schemas");
-        assert_eq!(RESOURCES.name(), "resources");
-        assert_eq!(TYPE_INDEX.name(), "type_index");
-        assert_eq!(OWNER_INDEX.name(), "owner_index");
-        assert_eq!(PRODUCER_INDEX.name(), "producer_index");
-        assert_eq!(CONTROLLER_INDEX.name(), "controller_index");
-        assert_eq!(REVISION_LOG.name(), "revision_log");
-        assert_eq!(OPERATIONS.name(), "operations");
-        assert_eq!(ZONE_LINK_CURSORS.name(), "zone_link_cursors");
-    }
-
-    #[test]
-    fn all_ten_tables_open_in_one_hermetic_transaction() {
-        let database = Database::builder()
-            .create_with_backend(InMemoryBackend::new())
-            .unwrap();
-        let write = database.begin_write().unwrap();
-        for definition in TABLE_DEFINITIONS {
-            drop(write.open_table(definition).unwrap());
-        }
-        write.commit().unwrap();
-
-        let read = database.begin_read().unwrap();
-        for definition in TABLE_DEFINITIONS {
-            drop(read.open_table(definition).unwrap());
         }
     }
 }

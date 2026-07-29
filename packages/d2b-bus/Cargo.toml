@@ -1,0 +1,26 @@
+[package]
+name = "d2b-bus"
+version = "0.0.0-bootstrap"
+edition = "2024"
+publish = false
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait = "0.1"
+d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
+d2b-resource-api = { path = "../d2b-resource-api", version = "0.0.0-bootstrap" }
+d2b-session = { path = "../d2b-session", version = "0.0.0-bootstrap" }
+d2b-session-unix = { path = "../d2b-session-unix", version = "0.0.0-bootstrap", default-features = false, features = ["host-socket"] }
+getrandom = "0.3"
+serde.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+
+[dev-dependencies]
+d2b-resource-store = { path = "../d2b-resource-store", version = "0.0.0-bootstrap" }
+quote = "1"
+serde_json.workspace = true
+syn = { version = "2", features = ["full", "visit"] }
+tokio = { workspace = true, features = ["macros", "rt", "sync", "test-util"] }

@@ -375,13 +375,13 @@ transcript/session generation digest, route, and fixed outcome.
 
 | Item | Treatment |
 | --- | --- |
-| v3 current anchor | `d2b-realm-router` PeerSession/SecurePeerSession/MuxSession and `d2b-realm-transport`; guest ttrpc/vsock/HMAC |
-| v3 evidence class | Mostly implemented-but-unwired for Realm peer; guest control reachable; ComponentSession absent |
+| v3 current anchor | `packages/d2b-contracts/src/v3/component_session.rs`; `packages/d2b-session/`; `packages/d2b-session-unix/`; `packages/d2b-bus/`; the existing `d2b-realm-router` and guest transport paths |
+| v3 evidence class | ComponentSession, Unix transports, and the exact-address bus are implemented and tested but deliberately unwired. `UnregisteredBusAdapter` remains unreachable from production; existing guest control remains the only reachable guest path. |
 | Main reuse source | main `a1cc0b2d`, `d2b-session`, `d2b-session-unix`, v2 ComponentSession contracts/tests |
 | Behavior retained | Strict Noise profiles/transcript, encrypted replay-safe records, async owned transports, fair streams, cancellation/reconnect, exact attachments |
-| Required delta | v3 contract names/versions, shared AuthenticatedSubjectContext, Role/RoleBinding authorization, d2b-bus routing, Zone services |
+| Required delta | Production listeners must consume authenticated transports into ComponentSession, prove Zone equality before every capability mint, register exact d2b-bus routes, and connect Zone services without exposing a direct store handle. Until then the intentionally unregistered adapter seam remains closed. |
 | Excluded main assumptions | v2 EndpointRole/Realm/service inventory, Provider registry/process model, delivery/Nix ownership |
-| Feasibility proof | Copy main tests, add subject/RBAC/revocation/resource-watch/latency integration on v3 |
+| Feasibility proof | Exact Noise vectors, subject/RBAC/revocation, owned-transport, descriptor, credit, routing, cancellation, fairness, and reconnect tests are committed. Production resource-watch and Zone-service reachability remain future integration work. |
 | Future owner | Work items below |
 
 ## Implementation work items
@@ -400,8 +400,8 @@ transcript/session generation digest, route, and fixed outcome.
 | Data migration | No v2 session compatibility; reconnect on v3 |
 | Validation | Copied exact vectors/rejections plus subject/RBAC/revocation tests |
 | Removal proof | v3 old Realm PeerSession removed only after all v3 peer routes move |
-| Implementation state | Planned |
-| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
+| Implementation state | Merged |
+| Evidence | `packages/d2b-contracts/src/v3/component_session.rs` and the complete `packages/d2b-session/src/` runtime are present. `packages/d2b-session/tests/{component_session,noise_vectors,admission}.rs` exercise exact profiles/vectors, rejection, authenticated admission, authorization revision, and revocation. The runtime remains deliberately unwired from production listeners. |
 
 ### ADR046-session-002
 
@@ -417,8 +417,8 @@ transcript/session generation digest, route, and fixed outcome.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Copied fd/peer/credit tests plus Host/Guest subject mapping |
 | Removal proof | Ad hoc guest/public/helper transport removed only per service cutover |
-| Implementation state | Planned |
-| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
+| Implementation state | Merged |
+| Evidence | `packages/d2b-session-unix/src/{adapter,socket,descriptor,pidfd,vsock,systemd,credit,subject}.rs` and `tests/{unix_session,subject_mapping}.rs` are present with owned transport, fd/pidfd/object identity, attachment-credit, cleanup, and Host/Guest subject-mapping coverage. No production listener consumes these adapters yet. |
 
 ### ADR046-bus-001
 
@@ -434,5 +434,5 @@ transcript/session generation digest, route, and fixed outcome.
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Message isolation; closed session-verb enum including `relay`, `audit-export`, and `support-bundle`; exact diagnostic service/method binding with no implied resource grant; relay missing/target verb missing/provider self-assertion fail-closed vectors; named-target and nameless List/Watch selector/filter preservation at every hop; route/auth revocation; fairness; reconnect; no direct-store path |
 | Removal proof | Old direct dispatch branches removed only after route parity |
-| Implementation state | Planned |
-| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
+| Implementation state | Merged |
+| Evidence | `packages/d2b-bus/src/{router,registry,authorization,streams,operations}.rs` are present. Inline tests cover exact routing, consumed single-owner registration, Zone-bound authorization, relay/diagnostic denial, revocation, cancellation, reconnect replacement, bounded fair streams, selector/filter preservation, and the absence of a direct-store route. The bus is self-contained and remains unwired from `UnregisteredBusAdapter` and production ComponentSession listeners. |

@@ -12,6 +12,8 @@ workspace = true
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 schemars.workspace = true
 serde.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 
 [dev-dependencies]
 serde_json.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread"] }
