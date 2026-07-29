@@ -61,6 +61,61 @@ fn dependent_cannot_forge_registration_or_mint_admitted_session() {
             );
         }
     }
+
+    for (mutation, expected_type) in [
+        (
+            "component-session-admission-clone",
+            "ComponentSessionAdmission",
+        ),
+        (
+            "component-session-admission-default",
+            "ComponentSessionAdmission",
+        ),
+        ("verified-unix-peer-clone", "VerifiedUnixPeer"),
+        ("verified-unix-peer-default", "VerifiedUnixPeer"),
+        ("session-acceptor-clone", "SessionAcceptor<C>"),
+        ("session-acceptor-default", "SessionAcceptor<C>"),
+        (
+            "authenticated-component-session-clone",
+            "AuthenticatedComponentSession<C>",
+        ),
+        (
+            "authenticated-component-session-default",
+            "AuthenticatedComponentSession<C>",
+        ),
+    ] {
+        let output = Command::new(env!("CARGO"))
+            .args([
+                "check",
+                "--quiet",
+                "--locked",
+                "--manifest-path",
+                fixture.join("Cargo.toml").to_str().unwrap(),
+                "--test",
+                "capability_trait_mutations",
+            ])
+            .env(
+                "CARGO_ENCODED_RUSTFLAGS",
+                format!("--cfg\u{1f}d2b_capability_trait_mutation=\"{mutation}\""),
+            )
+            .env("CARGO_TARGET_DIR", scratch.path().join("target"))
+            .env("TMPDIR", &temp)
+            .output()
+            .expect("run capability trait compile-fail mutation");
+        let stderr = String::from_utf8(output.stderr).expect("compiler diagnostics are UTF-8");
+        assert!(!output.status.success(), "{mutation} unexpectedly compiled");
+        for diagnostic in [
+            "error[E0283]",
+            "multiple `impl`s satisfying",
+            expected_type,
+            "AmbiguousIfImpl",
+        ] {
+            assert!(
+                stderr.contains(diagnostic),
+                "{mutation} did not produce {diagnostic:?}:\n{stderr}"
+            );
+        }
+    }
 }
 
 struct Scratch(PathBuf);

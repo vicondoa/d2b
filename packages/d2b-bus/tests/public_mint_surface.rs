@@ -125,8 +125,13 @@ fn public_api_has_only_the_approved_capability_mint_surface() {
         "SessionAcceptor construction widened beyond the approved registrar mint point"
     );
     assert_mutation_fixture(&workspace_docs);
-    assert_trait_impl_mutations(&capability_trait_impls);
     assert_partial_render_fails_closed(&workspace_docs);
+}
+
+#[test]
+fn capability_trait_source_mutations_fail_closed() {
+    let approved = approved_entries(include_str!("approved-capability-trait-impls.txt"));
+    assert_trait_impl_mutations(&approved);
 }
 
 fn assert_mutation_fixture(workspace_docs: &[DocumentedCrate]) {
@@ -282,15 +287,31 @@ impl From<Arc<ComponentSessionAdmissionIdentity>> for ComponentSessionAdmission 
             .unwrap_or_else(|error| panic!("read {name} mutation fixture: {error}"));
         assert_trait_impl_source_fails(approved, &source, name, expected_trait);
     }
-    for (name, expected_diagnostic) in [
-        ("trait-impl-generic-alias.rs", "generic"),
-        ("trait-impl-cfg-alias.rs", "cfg-gated"),
-        ("trait-impl-unsupported-alias.rs", "unsupported"),
+    for (name, expected_diagnostic, expected_alias) in [
+        ("trait-impl-generic-alias.rs", "generic", "AdmissionAlias"),
+        ("trait-impl-cfg-alias.rs", "cfg-gated", "AdmissionAlias"),
+        (
+            "trait-impl-unsupported-alias.rs",
+            "unsupported",
+            "AdmissionAlias",
+        ),
+        ("trait-impl-renamed-module.rs", "module alias", "cap"),
+        (
+            "trait-impl-lexical-alias.rs",
+            "lexically scoped",
+            "AdmissionAlias",
+        ),
     ] {
         let source = fs::read_to_string(fixture.join(name))
             .unwrap_or_else(|error| panic!("read {name} mutation fixture: {error}"));
-        assert_trait_impl_source_scan_fails_closed(&source, name, expected_diagnostic);
+        assert_trait_impl_source_scan_fails_closed(
+            &source,
+            name,
+            expected_diagnostic,
+            expected_alias,
+        );
     }
+    assert_module_source_mutations_fail_closed(&crate_root);
 }
 
 fn assert_trait_impl_mutation_fails(
@@ -331,6 +352,7 @@ fn assert_trait_impl_source_scan_fails_closed(
     source: &str,
     source_name: &str,
     expected_diagnostic: &str,
+    expected_alias: &str,
 ) {
     let failure = match std::panic::catch_unwind(|| {
         source_capability_inventory_from_text("d2b_bus", source, source_name)
@@ -344,10 +366,72 @@ fn assert_trait_impl_source_scan_fails_closed(
         .or_else(|| failure.downcast_ref::<&str>().copied())
         .unwrap_or("<non-string panic>");
     assert!(
-        diagnostic.contains(expected_diagnostic) && diagnostic.contains(source_name),
+        diagnostic.contains(expected_diagnostic)
+            && diagnostic.contains(expected_alias)
+            && diagnostic.contains(source_name),
         "fail-closed alias diagnostic did not identify {source_name} as \
-         {expected_diagnostic}: {diagnostic}"
+         {expected_diagnostic} through {expected_alias}: {diagnostic}"
     );
+}
+
+fn assert_module_source_mutations_fail_closed(crate_root: &Path) {
+    let repository_root = crate_root.parent().unwrap().parent().unwrap();
+    let scratch = Scratch::new(repository_root.join(".scratch").join(format!(
+        "bus-source-module-mutations-{}",
+        std::process::id()
+    )));
+
+    let cfg_attr = scratch.path().join("cfg-attr-path");
+    fs::create_dir_all(&cfg_attr).expect("create cfg_attr module mutation");
+    fs::write(
+        cfg_attr.join("lib.rs"),
+        "#[cfg_attr(all(), path = \"rogue.rs\")]\nmod router;\n",
+    )
+    .expect("write cfg_attr module mutation root");
+    fs::write(cfg_attr.join("router.rs"), "struct Harmless;\n")
+        .expect("write default module source");
+    fs::write(
+        cfg_attr.join("rogue.rs"),
+        "struct ComponentSessionAdmission;\n",
+    )
+    .expect("write compiler-selected module source");
+    assert_source_file_scan_fails_closed(&cfg_attr.join("lib.rs"), &["cfg_attr", "router"]);
+
+    let duplicate = scratch.path().join("duplicate-logical-path");
+    fs::create_dir_all(&duplicate).expect("create duplicate module-path mutation");
+    fs::write(
+        duplicate.join("lib.rs"),
+        "#[path = \"shared.rs\"]\nmod first;\n#[path = \"shared.rs\"]\nmod second;\n",
+    )
+    .expect("write duplicate module-path mutation root");
+    fs::write(
+        duplicate.join("shared.rs"),
+        "struct ComponentSessionAdmission;\n",
+    )
+    .expect("write shared module source");
+    assert_source_file_scan_fails_closed(
+        &duplicate.join("lib.rs"),
+        &["d2b_bus::first", "d2b_bus::second", "shared.rs"],
+    );
+}
+
+fn assert_source_file_scan_fails_closed(source: &Path, expected: &[&str]) {
+    let failure = match std::panic::catch_unwind(|| source_capability_inventory("d2b_bus", source))
+    {
+        Ok(_) => panic!("ambiguous module source passed the capability inventory"),
+        Err(failure) => failure,
+    };
+    let diagnostic = failure
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| failure.downcast_ref::<&str>().copied())
+        .unwrap_or("<non-string panic>");
+    for expected in expected {
+        assert!(
+            diagnostic.contains(expected),
+            "module-source diagnostic did not contain {expected:?}: {diagnostic}"
+        );
+    }
 }
 
 fn assert_partial_render_fails_closed(docs: &[DocumentedCrate]) {
@@ -821,7 +905,7 @@ fn hidden_public_api(crate_name: &str, source: &Path) -> BTreeSet<String> {
         crate_name,
         source_root,
         entries: BTreeSet::new(),
-        visited: BTreeSet::new(),
+        visited: BTreeMap::new(),
     };
     let module_dir = source
         .parent()
@@ -830,18 +914,13 @@ fn hidden_public_api(crate_name: &str, source: &Path) -> BTreeSet<String> {
     scanner.entries
 }
 
-// This source inventory is deliberately not compiler-expanded. Within every
-// parseable library module it guarantees that each explicit trait impl and
-// direct or cfg_attr-nested derive on a named capability type is allowlisted,
-// regardless of visibility, doc(hidden), or cfg. Type aliases, imports, and
-// local glob imports are resolved to a fixed point before impl classification;
-// candidate aliases that are generic, conditional, ambiguous, or otherwise
-// unresolved fail closed. The rustdoc and hidden-signature inventories are
-// best-effort defense in depth: re-exports, associated items, and syntax
-// produced by item, attribute, or include macros can escape those scanners,
-// while non-derive macro-generated trait impls remain outside this inventory.
-// The primary boundary is enforced by construction through private types,
-// private fields, sealed traits, and consumed capabilities.
+// This syntax-level inventory supplies breadth beyond the compiler-checked
+// negative bounds on the enumerated minting traits. It resolves the source
+// forms it models and fails closed on aliases, module paths, or logical source
+// paths it cannot classify with confidence. Macro expansion and include
+// expansion remain compiler responsibilities and can escape this breadth scan.
+// The primary boundary remains construction through private types, private
+// fields, sealed traits, and consumed capabilities.
 #[derive(Default)]
 struct SourceCapabilityInventory {
     declarations: BTreeMap<String, BTreeSet<String>>,
@@ -857,7 +936,7 @@ fn source_capability_inventory(crate_name: &str, source: &Path) -> SourceCapabil
         crate_name,
         source_root,
         facts: SourceCapabilityFacts::default(),
-        visited: BTreeSet::new(),
+        visited: BTreeMap::new(),
     };
     let module_dir = source
         .parent()
@@ -877,6 +956,7 @@ fn source_capability_inventory_from_text(
     CapabilitySourceCollector {
         source: source.to_owned(),
         module_path: Vec::new(),
+        lexical_depth: 0,
         facts: &mut facts,
     }
     .visit_file(&file);
@@ -887,7 +967,7 @@ struct CapabilitySourceScanner<'a> {
     crate_name: &'a str,
     source_root: PathBuf,
     facts: SourceCapabilityFacts,
-    visited: BTreeSet<PathBuf>,
+    visited: BTreeMap<PathBuf, Vec<String>>,
 }
 
 impl CapabilitySourceScanner<'_> {
@@ -896,9 +976,19 @@ impl CapabilitySourceScanner<'_> {
             source_location(self.crate_name, &self.source_root, source, module_path);
         let source = fs::canonicalize(source)
             .unwrap_or_else(|error| panic!("canonicalize Rust source {logical_source}: {error}"));
-        if !self.visited.insert(source.clone()) {
+        if let Some(previous) = self.visited.get(&source) {
+            assert_eq!(
+                previous,
+                module_path,
+                "Rust source {} is reachable as both {} and {}; capability trait \
+                 inventory refuses an ambiguous logical module path",
+                source.display(),
+                display_module(self.crate_name, previous),
+                display_module(self.crate_name, module_path)
+            );
             return;
         }
+        self.visited.insert(source.clone(), module_path.to_vec());
         let text = fs::read_to_string(&source)
             .unwrap_or_else(|error| panic!("read Rust source {logical_source}: {error}"));
         let file = syn::parse_file(&text)
@@ -906,6 +996,7 @@ impl CapabilitySourceScanner<'_> {
         CapabilitySourceCollector {
             source: logical_source,
             module_path: module_path.to_vec(),
+            lexical_depth: 0,
             facts: &mut self.facts,
         }
         .visit_file(&file);
@@ -967,7 +1058,13 @@ struct SourceAlias {
     conditional: bool,
     fail_if_conditional: bool,
     fail_if_unresolved: bool,
+    lexical_scope: bool,
     source: String,
+}
+
+#[derive(Clone)]
+struct SourceModuleAlias {
+    binding: SourceBinding,
 }
 
 #[derive(Clone)]
@@ -1000,11 +1097,13 @@ struct SourceCapabilityFacts {
     declarations: Vec<SourceDeclaration>,
     globs: Vec<SourceGlob>,
     implementations: Vec<SourceImpl>,
+    module_aliases: Vec<SourceModuleAlias>,
 }
 
 struct CapabilitySourceCollector<'a> {
     source: String,
     module_path: Vec<String>,
+    lexical_depth: usize,
     facts: &'a mut SourceCapabilityFacts,
 }
 
@@ -1049,6 +1148,7 @@ impl CapabilitySourceCollector<'_> {
             conditional: conditional_attributes(&alias.attrs),
             fail_if_conditional: true,
             fail_if_unresolved: true,
+            lexical_scope: self.lexical_depth > 0,
             source: self.source.clone(),
         });
     }
@@ -1060,7 +1160,10 @@ impl CapabilitySourceCollector<'_> {
             item.leading_colon.is_some(),
             &mut prefix,
             &self.module_path,
-            conditional_attributes(&item.attrs),
+            SourceUseContext {
+                conditional: conditional_attributes(&item.attrs),
+                lexical_scope: self.lexical_depth > 0,
+            },
             &self.source,
             self.facts,
         );
@@ -1113,6 +1216,12 @@ impl<'ast> Visit<'ast> for CapabilitySourceCollector<'_> {
         }
         self.module_path.pop();
     }
+
+    fn visit_block(&mut self, block: &'ast syn::Block) {
+        self.lexical_depth += 1;
+        syn::visit::visit_block(self, block);
+        self.lexical_depth -= 1;
+    }
 }
 
 fn source_path(path: &syn::Path) -> SourcePath {
@@ -1126,12 +1235,18 @@ fn source_path(path: &syn::Path) -> SourcePath {
     }
 }
 
+#[derive(Clone, Copy)]
+struct SourceUseContext {
+    conditional: bool,
+    lexical_scope: bool,
+}
+
 fn collect_use_bindings(
     tree: &syn::UseTree,
     leading_colon: bool,
     prefix: &mut Vec<String>,
     module_path: &[String],
-    conditional: bool,
+    context: SourceUseContext,
     source: &str,
     facts: &mut SourceCapabilityFacts,
 ) {
@@ -1143,7 +1258,7 @@ fn collect_use_bindings(
                 leading_colon,
                 prefix,
                 module_path,
-                conditional,
+                context,
                 source,
                 facts,
             );
@@ -1165,13 +1280,23 @@ fn collect_use_bindings(
                     segments,
                 }),
                 generic: false,
-                conditional,
+                conditional: context.conditional,
                 fail_if_conditional: false,
                 fail_if_unresolved: false,
+                lexical_scope: context.lexical_scope,
                 source: source.to_owned(),
             });
         }
         syn::UseTree::Rename(rename) => {
+            if rename.ident == "self" {
+                facts.module_aliases.push(SourceModuleAlias {
+                    binding: SourceBinding {
+                        module_path: module_path.to_vec(),
+                        name: rename.rename.to_string(),
+                    },
+                });
+                return;
+            }
             let mut segments = prefix.clone();
             segments.push(rename.ident.to_string());
             facts.aliases.push(SourceAlias {
@@ -1184,9 +1309,10 @@ fn collect_use_bindings(
                     segments,
                 }),
                 generic: false,
-                conditional,
+                conditional: context.conditional,
                 fail_if_conditional: true,
                 fail_if_unresolved: true,
+                lexical_scope: context.lexical_scope,
                 source: source.to_owned(),
             });
         }
@@ -1196,7 +1322,7 @@ fn collect_use_bindings(
                 leading_colon,
                 segments: prefix.clone(),
             },
-            conditional,
+            conditional: context.conditional,
             source: source.to_owned(),
         }),
         syn::UseTree::Group(group) => {
@@ -1206,7 +1332,7 @@ fn collect_use_bindings(
                     leading_colon,
                     prefix,
                     module_path,
-                    conditional,
+                    context,
                     source,
                     facts,
                 );
@@ -1258,6 +1384,11 @@ fn finish_source_capability_inventory(
         .iter()
         .map(|alias| alias.binding.clone())
         .collect::<BTreeSet<_>>();
+    let module_alias_bindings = facts
+        .module_aliases
+        .iter()
+        .map(|alias| alias.binding.clone())
+        .collect::<BTreeSet<_>>();
     let mut unresolved_globs = BTreeSet::new();
     loop {
         let mut changed = false;
@@ -1271,6 +1402,15 @@ fn finish_source_capability_inventory(
             ) else {
                 continue;
             };
+            if alias.lexical_scope {
+                panic!(
+                    "lexically scoped capability alias {} in {} cannot be resolved \
+                     without modelling Rust block scopes; capability trait inventory \
+                     fails closed",
+                    display_binding(&alias.binding),
+                    alias.source
+                );
+            }
             if alias.generic || (alias.conditional && alias.fail_if_conditional) {
                 let reason = match (
                     alias.generic,
@@ -1370,7 +1510,10 @@ fn finish_source_capability_inventory(
             &implementation.module_path,
             crate_name,
             &resolved,
-            &fail_closed_alias_bindings,
+            SourceAliasBindings {
+                type_aliases: &fail_closed_alias_bindings,
+                module_aliases: &module_alias_bindings,
+            },
             unresolved_globs.contains(&implementation.module_path),
             &implementation.source,
         );
@@ -1661,12 +1804,18 @@ fn resolve_module_path(
     }
 }
 
+#[derive(Clone, Copy)]
+struct SourceAliasBindings<'a> {
+    type_aliases: &'a BTreeSet<SourceBinding>,
+    module_aliases: &'a BTreeSet<SourceBinding>,
+}
+
 fn resolve_impl_self_type(
     ty: &syn::Type,
     module_path: &[String],
     crate_name: &str,
     resolved: &BTreeMap<SourceBinding, String>,
-    alias_bindings: &BTreeSet<SourceBinding>,
+    aliases: SourceAliasBindings<'_>,
     unresolved_glob: bool,
     source: &str,
 ) -> Option<String> {
@@ -1676,7 +1825,7 @@ fn resolve_impl_self_type(
             module_path,
             crate_name,
             resolved,
-            alias_bindings,
+            aliases,
             unresolved_glob,
             source,
         ),
@@ -1685,14 +1834,30 @@ fn resolve_impl_self_type(
             module_path,
             crate_name,
             resolved,
-            alias_bindings,
+            aliases,
             unresolved_glob,
             source,
         ),
         syn::Type::Path(path) if path.qself.is_none() => {
             let path = source_path(&path.path);
-            let resolution =
-                resolve_source_path(&path, module_path, crate_name, resolved, alias_bindings);
+            if let Some(alias) =
+                module_alias_in_path(&path, module_path, crate_name, aliases.module_aliases)
+            {
+                panic!(
+                    "cannot resolve module alias {} in impl self type {} in {source}; \
+                     capability trait inventory fails closed instead of modelling \
+                     renamed module prefixes",
+                    display_binding(&alias),
+                    display_source_path(&path)
+                );
+            }
+            let resolution = resolve_source_path(
+                &path,
+                module_path,
+                crate_name,
+                resolved,
+                aliases.type_aliases,
+            );
             if let Some(identity) = resolution.identity {
                 return Some(identity);
             }
@@ -1727,6 +1892,30 @@ fn resolve_impl_self_type(
             None
         }
     }
+}
+
+fn module_alias_in_path(
+    path: &SourcePath,
+    module_path: &[String],
+    crate_name: &str,
+    module_alias_bindings: &BTreeSet<SourceBinding>,
+) -> Option<SourceBinding> {
+    if path.segments.len() < 2 {
+        return None;
+    }
+    for end in 1..path.segments.len() {
+        let prefix = SourcePath {
+            leading_colon: path.leading_colon,
+            segments: path.segments[..end].to_vec(),
+        };
+        if let Some(alias) = binding_candidates(&prefix, module_path, crate_name)
+            .into_iter()
+            .find(|binding| module_alias_bindings.contains(binding))
+        {
+            return Some(alias);
+        }
+    }
+    None
 }
 
 fn record_capability_derives(
@@ -1925,7 +2114,7 @@ struct HiddenPublicScanner<'a> {
     crate_name: &'a str,
     source_root: PathBuf,
     entries: BTreeSet<String>,
-    visited: BTreeSet<PathBuf>,
+    visited: BTreeMap<PathBuf, Vec<String>>,
 }
 
 impl HiddenPublicScanner<'_> {
@@ -1940,9 +2129,19 @@ impl HiddenPublicScanner<'_> {
             source_location(self.crate_name, &self.source_root, source, module_path);
         let source = fs::canonicalize(source)
             .unwrap_or_else(|error| panic!("canonicalize Rust source {logical_source}: {error}"));
-        if !self.visited.insert(source.clone()) {
+        if let Some(previous) = self.visited.get(&source) {
+            assert_eq!(
+                previous,
+                module_path,
+                "Rust source {} is reachable as both {} and {}; hidden public \
+                 inventory refuses an ambiguous logical module path",
+                source.display(),
+                display_module(self.crate_name, previous),
+                display_module(self.crate_name, module_path)
+            );
             return;
         }
+        self.visited.insert(source.clone(), module_path.to_vec());
         let text = fs::read_to_string(&source)
             .unwrap_or_else(|error| panic!("read Rust source {logical_source}: {error}"));
         let file = syn::parse_file(&text)
@@ -2053,6 +2252,18 @@ fn type_name(ty: &syn::Type) -> String {
 }
 
 fn module_source(module: &syn::ItemMod, module_dir: &Path, child_dir: &Path) -> Option<PathBuf> {
+    if module
+        .attrs
+        .iter()
+        .any(|attribute| attribute.path().is_ident("cfg_attr"))
+    {
+        panic!(
+            "cfg_attr on external Rust module {} may select a different source; \
+             source inventories fail closed instead of guessing which file the \
+             compiler reads",
+            module.ident
+        );
+    }
     if let Some(path) = module.attrs.iter().find_map(|attribute| {
         if !attribute.path().is_ident("path") {
             return None;

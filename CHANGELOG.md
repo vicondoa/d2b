@@ -56,20 +56,25 @@ deprecations ship one minor release before removal.
 
 ### Changed
 
-- Made the capability mint-surface policy gate render each package serially in
-  isolation, prove every rustdoc all-items entry has a parseable page, and
-  fail closed on missing required signatures or partial documentation. The
-  gate also allowlists every source-visible explicit or derived trait
-  implementation on a capability type, resolves named type aliases and import
-  renames across the crate to a fixed point, and records derives recursively
-  nested in `cfg_attr`, so hidden or target-conditional `Default`, `From`,
-  clone, or conversion implementations fail by name. Candidate generic,
-  conditional, ambiguous, cyclic, or unsupported aliases fail closed. Its
-  rustdoc and hidden-source signature inventories remain best-effort syntax
-  checks rather than compiler-expanded inventories, and non-derive
-  macro-generated or `include!`-generated implementations remain residual
-  source-inventory limits; private construction state, sealed traits, and
-  consumed capabilities remain the primary boundary.
+- Added compiler-checked negative trait bounds for the authority-bearing
+  ComponentSession admission, verified Unix peer, session acceptor, and
+  authenticated session types. The defining crates now reject `Clone`, `Copy`,
+  `Default`, and the named `From` mint paths through the Rust trait solver,
+  regardless of aliases, selected module paths, or macro expansion in each
+  configuration that is actually compiled. Generic checks cover unconditional
+  blanket implementations, while separate checks cover the concrete unit and
+  ComponentSession admission parameterizations currently used by the
+  workspace. Future concrete parameterizations must add their own assertion.
+
+- Kept the source trait-implementation inventory as a best-effort breadth
+  check for traits outside the compiler-enforced set. It now fails closed on
+  unresolved renamed module prefixes, lexically scoped capability aliases,
+  `cfg_attr` on external module declarations, and one source file reached
+  through different logical module paths. It also retains breadth over
+  implementations disabled in the active compiler configuration.
+  Macro-generated and `include!`-generated implementations remain outside this
+  syntax-level scan. Private construction state, sealed traits, and consumed
+  capabilities remain the primary boundary.
 
 - Strengthened cancellation publication race coverage to prove both activity
   and response state remain locked until their correlated entries are visible.

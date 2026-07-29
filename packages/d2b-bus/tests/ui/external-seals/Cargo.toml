@@ -11,3 +11,4 @@ async-trait = "0.1"
 d2b-bus = { path = "../../.." }
 d2b-contracts = { path = "../../../../d2b-contracts" }
 d2b-session = { path = "../../../../d2b-session" }
+d2b-session-unix = { path = "../../../../d2b-session-unix" }

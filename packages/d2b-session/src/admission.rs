@@ -379,6 +379,58 @@ pub struct SessionAcceptor<C> {
     registration_capability: C,
 }
 
+fn assert_session_acceptor_has_no_minting_traits<C>() {
+    trait AmbiguousIfImpl<A, B> {
+        fn some_item() {}
+    }
+    impl<T: ?Sized, B> AmbiguousIfImpl<(), B> for T {}
+    impl<T: Clone, B> AmbiguousIfImpl<u8, B> for T {}
+    impl<T: Copy, B> AmbiguousIfImpl<u16, B> for T {}
+    impl<T: Default, B> AmbiguousIfImpl<u32, B> for T {}
+    impl<T: From<B>, B> AmbiguousIfImpl<u64, B> for T {}
+    let _ = <SessionAcceptor<C> as AmbiguousIfImpl<_, C>>::some_item;
+}
+
+const _: fn() = assert_session_acceptor_has_no_minting_traits::<()>;
+
+const _: fn() = || {
+    trait AmbiguousIfImpl<A> {
+        fn some_item() {}
+    }
+    impl<T: ?Sized> AmbiguousIfImpl<()> for T {}
+    impl<T: Clone> AmbiguousIfImpl<u8> for T {}
+    impl<T: Copy> AmbiguousIfImpl<u16> for T {}
+    impl<T: Default> AmbiguousIfImpl<u32> for T {}
+    impl<T: From<()>> AmbiguousIfImpl<u64> for T {}
+    let _ = <SessionAcceptor<()> as AmbiguousIfImpl<_>>::some_item;
+};
+
+#[cfg(any(
+    d2b_capability_trait_mutation = "session-acceptor-clone",
+    d2b_capability_trait_mutation = "session-acceptor-default"
+))]
+macro_rules! mutate_session_acceptor_trait {
+    (clone) => {
+        impl<C> Clone for SessionAcceptor<C> {
+            fn clone(&self) -> Self {
+                unreachable!()
+            }
+        }
+    };
+    (default) => {
+        impl<C> Default for SessionAcceptor<C> {
+            fn default() -> Self {
+                unreachable!()
+            }
+        }
+    };
+}
+
+#[cfg(d2b_capability_trait_mutation = "session-acceptor-clone")]
+mutate_session_acceptor_trait!(clone);
+#[cfg(d2b_capability_trait_mutation = "session-acceptor-default")]
+mutate_session_acceptor_trait!(default);
+
 impl<C> SessionAcceptor<C> {
     /// Consume adapter-verified identity binding, registrar-owned policy
     /// callbacks, and the instance-bound registration capability.
@@ -525,6 +577,58 @@ pub struct AuthenticatedComponentSession<C> {
     driver: SessionDriverHandle,
     cleanup_observer: SessionCleanupObserver,
 }
+
+fn assert_authenticated_session_has_no_minting_traits<C>() {
+    trait AmbiguousIfImpl<A, B> {
+        fn some_item() {}
+    }
+    impl<T: ?Sized, B> AmbiguousIfImpl<(), B> for T {}
+    impl<T: Clone, B> AmbiguousIfImpl<u8, B> for T {}
+    impl<T: Copy, B> AmbiguousIfImpl<u16, B> for T {}
+    impl<T: Default, B> AmbiguousIfImpl<u32, B> for T {}
+    impl<T: From<B>, B> AmbiguousIfImpl<u64, B> for T {}
+    let _ = <AuthenticatedComponentSession<C> as AmbiguousIfImpl<_, C>>::some_item;
+}
+
+const _: fn() = assert_authenticated_session_has_no_minting_traits::<()>;
+
+const _: fn() = || {
+    trait AmbiguousIfImpl<A> {
+        fn some_item() {}
+    }
+    impl<T: ?Sized> AmbiguousIfImpl<()> for T {}
+    impl<T: Clone> AmbiguousIfImpl<u8> for T {}
+    impl<T: Copy> AmbiguousIfImpl<u16> for T {}
+    impl<T: Default> AmbiguousIfImpl<u32> for T {}
+    impl<T: From<()>> AmbiguousIfImpl<u64> for T {}
+    let _ = <AuthenticatedComponentSession<()> as AmbiguousIfImpl<_>>::some_item;
+};
+
+#[cfg(any(
+    d2b_capability_trait_mutation = "authenticated-component-session-clone",
+    d2b_capability_trait_mutation = "authenticated-component-session-default"
+))]
+macro_rules! mutate_authenticated_session_trait {
+    (clone) => {
+        impl<C> Clone for AuthenticatedComponentSession<C> {
+            fn clone(&self) -> Self {
+                unreachable!()
+            }
+        }
+    };
+    (default) => {
+        impl<C> Default for AuthenticatedComponentSession<C> {
+            fn default() -> Self {
+                unreachable!()
+            }
+        }
+    };
+}
+
+#[cfg(d2b_capability_trait_mutation = "authenticated-component-session-clone")]
+mutate_authenticated_session_trait!(clone);
+#[cfg(d2b_capability_trait_mutation = "authenticated-component-session-default")]
+mutate_authenticated_session_trait!(default);
 
 /// Cloneable correlated ttrpc data plane separated from mutable authorization.
 #[derive(Clone)]

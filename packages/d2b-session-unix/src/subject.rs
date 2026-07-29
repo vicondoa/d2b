@@ -13,6 +13,44 @@ pub struct VerifiedUnixPeer {
     transport_class: TransportClass,
 }
 
+const _: fn() = || {
+    trait AmbiguousIfImpl<A> {
+        fn some_item() {}
+    }
+    impl<T: ?Sized> AmbiguousIfImpl<()> for T {}
+    impl<T: Clone> AmbiguousIfImpl<u8> for T {}
+    impl<T: Copy> AmbiguousIfImpl<u16> for T {}
+    impl<T: Default> AmbiguousIfImpl<u32> for T {}
+    impl<T: From<PeerCredentials>> AmbiguousIfImpl<u64> for T {}
+    let _ = <VerifiedUnixPeer as AmbiguousIfImpl<_>>::some_item;
+};
+
+#[cfg(any(
+    d2b_capability_trait_mutation = "verified-unix-peer-clone",
+    d2b_capability_trait_mutation = "verified-unix-peer-default"
+))]
+macro_rules! mutate_verified_unix_peer_trait {
+    (clone) => {
+        impl Clone for VerifiedUnixPeer {
+            fn clone(&self) -> Self {
+                unreachable!()
+            }
+        }
+    };
+    (default) => {
+        impl Default for VerifiedUnixPeer {
+            fn default() -> Self {
+                unreachable!()
+            }
+        }
+    };
+}
+
+#[cfg(d2b_capability_trait_mutation = "verified-unix-peer-clone")]
+mutate_verified_unix_peer_trait!(clone);
+#[cfg(d2b_capability_trait_mutation = "verified-unix-peer-default")]
+mutate_verified_unix_peer_trait!(default);
+
 impl VerifiedUnixPeer {
     /// Read peer credentials from one seqpacket endpoint.
     pub fn verify_seqpacket(socket: &SeqpacketSocket) -> Result<Self, UnixSessionError> {
