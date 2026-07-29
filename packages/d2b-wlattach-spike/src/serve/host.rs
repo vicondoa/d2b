@@ -286,8 +286,12 @@ impl XdgShellHandler for SessionHost {
 
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
         let key = Self::surface_key(surface.wl_surface());
-        if let Ok(mut shadow) = self.shadow.lock() {
-            shadow.surfaces.remove(&key);
+        if let Ok(mut shadow) = self.shadow.lock()
+            && shadow.surfaces.remove(&key).is_some()
+        {
+            // Bump the revision, or publish() skips the write and the frontend
+            // never learns the window is gone -- leaving it on screen.
+            shadow.revision = shadow.revision.wrapping_add(1);
         }
         self.toplevels.retain(|t| t != &surface);
         // Destroying the last toplevel does NOT end the session. An application

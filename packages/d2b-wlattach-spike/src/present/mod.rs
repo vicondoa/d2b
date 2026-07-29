@@ -182,9 +182,12 @@ impl Frontend {
             // The surface has no content: either nothing retained yet, or the
             // application committed a null buffer. Unmap rather than leave a
             // stale frame on screen. It remaps on the next real frame.
-            if w.attached.take().is_some() {
+            if let Some(old) = w.attached.take() {
                 w.surface.attach(None, 0, 0);
                 w.surface.commit();
+                // Destroy explicitly: dropping the proxy leaves the buffer and
+                // its pool alive compositor-side until we disconnect.
+                old.destroy();
             }
             return Ok(());
         };

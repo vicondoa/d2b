@@ -1,4 +1,4 @@
-# `d2b-wlattach` — reconnectable Wayland application forwarding (prototype)
+XX# `d2b-wlattach` — reconnectable Wayland application forwarding (prototype)
 
 *tmux for GUI apps.*
 
@@ -44,8 +44,11 @@ application
     ▼
 session host  (persistent)     Smithay wayland-server. Shadow surface tree,
     │                          buffer ledger, synthetic seat/outputs, frame
-    │                          pacing. Never renders. No GPU code. No unsafe.
-    │  inherited SOCK_SEQPACKET socketpair + SCM_RIGHTS
+    │                          pacing. Never renders. No GPU code. One audited
+    │                          unsafe expression, for reading wl_shm (see DESIGN).
+    │  Phase 1: shadow state via a file in the mode-0700 session dir.
+    │  Planned: inherited SOCK_SEQPACKET socketpair + SCM_RIGHTS (built, tested,
+    │  not yet live -- it carries DMA-BUF descriptors when those land).
     ▼
 window frontend (disposable)   wayland-client. Rebuilt from scratch every
     │                          generation. Holds no durable state.
