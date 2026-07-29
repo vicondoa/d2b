@@ -10,6 +10,15 @@ deprecations ship one minor release before removal.
 
 ## [Unreleased]
 
+### Added
+
+- Added `labs/wlattach`, an experimental crate exploring reconnectable Wayland
+  application forwarding: a persistent session host keeps an application alive
+  while a disposable window frontend can be detached and re-attached, so a real
+  desktop application survives the death of the process showing its window and
+  gets that window back on a fresh compositor connection. It has its own Cargo
+  workspace under `labs/`, is outside CI, and changes no shipping component.
+
 ## [1.4.1] - 2026-07-12
 
 ### Added
