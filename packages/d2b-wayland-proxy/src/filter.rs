@@ -1534,6 +1534,7 @@ impl WlSeatHandler for FilterSeatHandler {
             target_surface: None,
             wrapper_surface: None,
             last_pointer: (0.0, 0.0),
+            armed: None,
             pending_forwarded_frame: false,
         });
         slf.send_get_pointer(id);
@@ -1645,6 +1646,8 @@ struct FilterPointerHandler {
     /// Last pointer position in wrapper-surface coordinates, so a press can be
     /// hit-tested against the tab that was drawn.
     last_pointer: (f64, f64),
+    /// The control a press armed, activated only if the release lands on it.
+    armed: Option<TabHit>,
     pending_forwarded_frame: bool,
 }
 
@@ -1750,6 +1753,14 @@ impl WlPointerHandler for FilterPointerHandler {
             self.pending_forwarded_frame = false;
             return;
         }
+        // Track the pointer over proxy-owned chrome so a press can be
+        // hit-tested where it actually happened. Recording only on enter meant
+        // every hit-test used the point where the pointer first crossed into
+        // the tab, which selected the wrong control and missed entirely when
+        // the pointer entered over a gap.
+        if self.wrapper_surface.is_some() {
+            self.last_pointer = (surface_x.to_f64(), surface_y.to_f64());
+        }
         if self.focus == PointerFocus::WrapperContent
             && wrapper_content_pointer_y(surface_y).is_none()
         {
@@ -1790,39 +1801,55 @@ impl WlPointerHandler for FilterPointerHandler {
             self.pending_forwarded_frame = false;
             return;
         }
-        // A press inside the identity tab is handled by the proxy. The tab is
+        // Presses inside the identity tab are handled by the proxy. The tab is
         // proxy-owned, so this never reaches the guest: the guest must not
         // learn about, or be able to synthesise, interaction with the chrome
         // that identifies it.
         if self.focus == PointerFocus::Rail {
             const BTN_LEFT: u32 = 0x110;
             const BTN_RIGHT: u32 = 0x111;
-            if state == WlPointerButtonState::PRESSED
-                && (button == BTN_LEFT || button == BTN_RIGHT)
-                && let Some(surface) = self.wrapper_surface.clone()
-            {
-                let (x, y) = self.last_pointer;
-                let hit = self.decoration.borrow().wrapper_hit_test(&surface, x, y);
-                match hit {
-                    Some(TabHit::Identity) => {
-                        self.decoration
-                            .borrow_mut()
-                            .wrapper_toggle_expanded(&surface);
-                    }
-                    Some(TabHit::Action(index)) => {
-                        // The prototype reports the action rather than
-                        // performing it: the dispatch boundary belongs to the
-                        // daemon, not to the surface that draws the icon.
-                        let name = chrome_action_name(index).unwrap_or("unknown");
-                        log::info!(
-                            "[d2b-wlproxy] event=chrome-action action={name} index={index}"
-                        );
-                        self.decoration
-                            .borrow_mut()
-                            .wrapper_toggle_action(&surface, index);
-                    }
-                    None => {}
+            if button != BTN_LEFT && button != BTN_RIGHT {
+                return;
+            }
+            let Some(surface) = self.wrapper_surface.clone() else {
+                self.armed = None;
+                return;
+            };
+            let (x, y) = self.last_pointer;
+            let hit = self.decoration.borrow().wrapper_hit_test(&surface, x, y);
+
+            if state == WlPointerButtonState::PRESSED {
+                // Arm only. Acting on press means a press that drifts onto a
+                // different control still activates the one it started on.
+                self.armed = hit;
+                return;
+            }
+
+            // Activate on release, and only when it lands on the same control
+            // the press armed.
+            let armed = self.armed.take();
+            if armed.is_none() || armed != hit {
+                return;
+            }
+            match hit {
+                Some(TabHit::Identity) => {
+                    self.decoration
+                        .borrow_mut()
+                        .wrapper_toggle_expanded(&surface);
                 }
+                Some(TabHit::Action(index)) => {
+                    // The prototype reports the action rather than performing
+                    // it: the dispatch boundary belongs to the daemon, not to
+                    // the surface that draws the icon.
+                    let name = chrome_action_name(index).unwrap_or("unknown");
+                    log::info!(
+                        "[d2b-wlproxy] event=chrome-action action={name} index={index}"
+                    );
+                    self.decoration
+                        .borrow_mut()
+                        .wrapper_toggle_action(&surface, index);
+                }
+                None => {}
             }
             return;
         }
