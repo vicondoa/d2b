@@ -9,7 +9,9 @@ use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use d2b_wlattach_spike::present::Frontend;
-use d2b_wlattach_spike::serve::host::{ClientState, SessionHost, Shadow, ShadowSurface};
+use d2b_wlattach_spike::serve::host::{
+    ClientState, PublishedSurface, SessionHost, Shadow, ShadowSurface,
+};
 use smithay::reexports::wayland_server::{Display, ListeningSocket};
 
 #[derive(Parser)]
@@ -430,7 +432,7 @@ fn serve(name: &str, argv: &[String]) -> Result<(), String> {
             return Ok(());
         }
 
-        std::thread::sleep(Duration::from_millis(16));
+        std::thread::sleep(Duration::from_millis(4));
     }
 }
 
@@ -471,10 +473,65 @@ fn shadow_path(name: &str) -> PathBuf {
 }
 
 fn write_shadow(name: &str, tops: &[(u32, ShadowSurface)]) -> Result<(), String> {
-    let bytes = postcard::to_allocvec(tops).map_err(|e| e.to_string())?;
+    use d2b_wlattach_spike::serve::host::{PublishedSurface, SnapshotMeta};
+
+    let t0 = std::time::Instant::now();
+    let dir = session_dir(name);
+    let mut published: Vec<(u32, PublishedSurface)> = Vec::with_capacity(tops.len());
+
+    for (key, s) in tops {
+        let meta = match s.snapshot.as_ref() {
+            Some(snap) => {
+                // Pixels go straight into a per-surface file that the frontend
+                // maps as a wl_shm pool. Serialising them into the metadata
+                // stream instead cost a full extra copy plus a rename per frame.
+                //
+                // Written in place and never truncated: the compositor may have
+                // this file mapped, and shrinking it under a live mapping would
+                // SIGBUS it.
+                let px = dir.join(format!("px-{key}.raw"));
+                let f = std::fs::OpenOptions::new()
+                    .create(true)
+                    .write(true)
+                    .truncate(false)
+                    .open(&px)
+                    .map_err(|e| e.to_string())?;
+                let want = snap.pixels.len() as u64;
+                if f.metadata().map(|m| m.len()).unwrap_or(0) < want {
+                    f.set_len(want).map_err(|e| e.to_string())?;
+                }
+                use std::os::unix::fs::FileExt;
+                f.write_all_at(&snap.pixels, 0).map_err(|e| e.to_string())?;
+                Some(SnapshotMeta {
+                    width: snap.width,
+                    height: snap.height,
+                    stride: snap.stride,
+                    format: snap.format,
+                    len: snap.pixels.len() as u64,
+                    seq: t0.elapsed().as_nanos() as u64 ^ snap.pixels.len() as u64,
+                })
+            }
+            None => None,
+        };
+        published.push((
+            *key,
+            PublishedSurface {
+                title: s.title.clone(),
+                app_id: s.app_id.clone(),
+                meta,
+            },
+        ));
+    }
+
+    let bytes = postcard::to_allocvec(&published).map_err(|e| e.to_string())?;
     let tmp = shadow_path(name).with_extension("tmp");
     std::fs::write(&tmp, &bytes).map_err(|e| e.to_string())?;
     std::fs::rename(&tmp, shadow_path(name)).map_err(|e| e.to_string())?;
+    log::debug!(
+        "publish {} metadata bytes in {:?}",
+        bytes.len(),
+        t0.elapsed()
+    );
     Ok(())
 }
 
@@ -513,7 +570,8 @@ fn set_mode(p: &Path, mode: u32) -> Result<(), String> {
 fn present(name: &str) -> Result<(), String> {
     let conn = wayland_client::Connection::connect_to_env()
         .map_err(|_| "cannot reach the host compositor".to_string())?;
-    let (mut fe, mut queue) = Frontend::bind(&conn).map_err(|e| e.to_string())?;
+    let (mut fe, mut queue) =
+        Frontend::bind(&conn, session_dir(name)).map_err(|e| e.to_string())?;
     let qh = queue.handle();
 
     // Input flows back to the session host over its own stream.
@@ -528,18 +586,12 @@ fn present(name: &str) -> Result<(), String> {
             && bytes != last
         {
             last.clone_from(&bytes);
-            match postcard::from_bytes::<Vec<(u32, ShadowSurface)>>(&bytes) {
+            match postcard::from_bytes::<Vec<(u32, PublishedSurface)>>(&bytes) {
                 Ok(tops) => {
-                    log::info!("shadow: {} toplevel(s), {} bytes", tops.len(), bytes.len());
+                    log::debug!("shadow: {} toplevel(s), {} bytes", tops.len(), bytes.len());
                     let live: Vec<u32> = tops.iter().map(|(k, _)| *k).collect();
                     fe.reconcile(&live);
                     for (key, shadow) in tops {
-                        log::info!(
-                            "upsert key={key} snapshot={} {}x{}",
-                            shadow.snapshot.is_some(),
-                            shadow.snapshot.as_ref().map_or(0, |s| s.width),
-                            shadow.snapshot.as_ref().map_or(0, |s| s.height)
-                        );
                         if let Err(e) = fe.upsert(key, &shadow, &qh) {
                             log::warn!("upsert failed: {e}");
                         }
@@ -583,7 +635,7 @@ fn present(name: &str) -> Result<(), String> {
         if !fe.running {
             break;
         }
-        std::thread::sleep(Duration::from_millis(16));
+        std::thread::sleep(Duration::from_millis(4));
     }
     Ok(())
 }

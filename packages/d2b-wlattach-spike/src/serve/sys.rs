@@ -55,18 +55,44 @@ pub fn copy_shm(buffer: &WlBuffer) -> Option<Snapshot> {
             return None;
         }
 
-        let mut pixels = Vec::with_capacity(needed);
-        for i in 0..needed {
+        let t0 = std::time::Instant::now();
+        let mut pixels = vec![0u8; needed];
+        // SAFETY: `offset <= end <= len`, so this stays inside the mapping.
+        let base = unsafe { ptr.add(offset) };
+
+        // Copy a machine word at a time where alignment allows. A byte-at-a-time
+        // volatile loop over a multi-megabyte frame costs tens of milliseconds —
+        // the difference between a usable window and a slideshow.
+        const W: usize = std::mem::size_of::<usize>();
+        let mut i = 0usize;
+
+        // Byte-wise until the source is word-aligned.
+        while i < needed && !(base as usize).wrapping_add(i).is_multiple_of(W) {
             // SAFETY: `ptr` is a live mapping of at least `len` bytes for the
             // duration of this callback (Smithay's contract, with SIGBUS from
             // client truncation trapped by its handler), and
             // `offset + i < end <= len` by the checks above. `read_volatile`
-            // performs a plain read without forming a reference, so concurrent
-            // client writes tear pixels rather than causing Rust UB.
-            let byte = unsafe { ptr.add(offset + i).read_volatile() };
-            pixels.push(byte);
+            // forms no reference, so a racing client tears pixels rather than
+            // causing Rust UB.
+            pixels[i] = unsafe { base.add(i).read_volatile() };
+            i += 1;
+        }
+        // Word-wise through the aligned bulk.
+        while i + W <= needed {
+            // SAFETY: as above, and `base + i` is word-aligned here, so the
+            // `usize` read is correctly aligned.
+            let word = unsafe { base.add(i).cast::<usize>().read_volatile() };
+            pixels[i..i + W].copy_from_slice(&word.to_ne_bytes());
+            i += W;
+        }
+        // Byte-wise remainder.
+        while i < needed {
+            // SAFETY: as above.
+            pixels[i] = unsafe { base.add(i).read_volatile() };
+            i += 1;
         }
 
+        log::debug!("copy_shm {needed} bytes in {:?}", t0.elapsed());
         Some(Snapshot {
             width: data.width,
             height: data.height,

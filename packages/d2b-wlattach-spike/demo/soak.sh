@@ -5,7 +5,8 @@ N="${1:-25}"
 APP=("${@:2}"); [ ${#APP[@]} -eq 0 ] && APP=(foot)
 SESSION="soak-$$"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BIN="$HERE/target/debug/d2b-wlattach"
+BIN="$HERE/target/release/d2b-wlattach"
+[ -x "$BIN" ] || BIN="$HERE/target/debug/d2b-wlattach"
 RT="${XDG_RUNTIME_DIR:-/tmp}/d2b-wlattach/$SESSION"
 
 cleanup() {

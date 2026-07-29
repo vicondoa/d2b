@@ -5,8 +5,8 @@
 //! scratch on every attach. Killing it must not disturb the application.
 
 use std::collections::HashMap;
-use std::io::Write;
-use std::os::fd::{AsFd, OwnedFd};
+
+use std::os::fd::AsFd;
 
 use wayland_client::protocol::{
     wl_buffer::WlBuffer,
@@ -28,7 +28,7 @@ use wayland_protocols::xdg::shell::client::{
     xdg_wm_base::{self, XdgWmBase},
 };
 
-use crate::serve::host::ShadowSurface;
+use crate::serve::host::PublishedSurface;
 
 #[derive(Debug, thiserror::Error)]
 pub enum FrontendError {
@@ -49,12 +49,14 @@ struct Window {
     toplevel: XdgToplevel,
     /// Set once the compositor has configured us and we may attach a buffer.
     configured: bool,
-    pending: Option<ShadowSurface>,
-    closed: bool,
-    /// The buffer currently attached. Destroyed when superseded, otherwise a
-    /// continuously-redrawing application leaks one wl_buffer and one pool per
-    /// frame for the frontend.s whole lifetime.
-    attached: Option<WlBuffer>,
+    pending: Option<PublishedSurface>,
+    /// The pool mapped over the session host's pixel file, plus the buffer over
+    /// it. Both are kept for as long as the geometry is unchanged: rebuilding
+    /// them every frame cost a pool creation, a buffer creation and two
+    /// compositor round-trips per frame.
+    pool: Option<WlShmPool>,
+    buffer: Option<WlBuffer>,
+    geometry: Option<(i32, i32, i32, u32, u64)>,
 }
 
 pub struct Frontend {
@@ -68,6 +70,8 @@ pub struct Frontend {
     /// Input observed from the host compositor, drained and forwarded upward.
     pub input: Vec<InputEvent>,
     seat: Option<WlSeat>,
+    /// Where the session host writes per-surface pixel files.
+    px_dir: std::path::PathBuf,
     pub running: bool,
 }
 
@@ -81,6 +85,7 @@ impl Default for Frontend {
             close_requested: Vec::new(),
             input: Vec::new(),
             seat: None,
+            px_dir: std::path::PathBuf::new(),
             running: true,
         }
     }
@@ -90,13 +95,17 @@ impl Frontend {
     /// Bind the globals we need. Fails closed if any is absent.
     pub fn bind(
         conn: &Connection,
+        px_dir: std::path::PathBuf,
     ) -> Result<(Self, wayland_client::EventQueue<Self>), FrontendError> {
         let display = conn.display();
         let mut queue = conn.new_event_queue();
         let qh = queue.handle();
         display.get_registry(&qh, ());
 
-        let mut state = Frontend::default();
+        let mut state = Frontend {
+            px_dir,
+            ..Frontend::default()
+        };
         queue
             .roundtrip(&mut state)
             .map_err(|_| FrontendError::Protocol)?;
@@ -119,10 +128,16 @@ impl Frontend {
     /// that has not yet been configured must not have one attached, and we must
     /// wait for the compositor's *fresh* configure rather than replaying any
     /// serial from a previous generation.
+    /// Create or update the window for one published surface.
+    ///
+    /// The initial commit deliberately carries **no** buffer: an `xdg_surface`
+    /// that has not yet been configured must not have one attached, and we must
+    /// wait for the compositor's *fresh* configure rather than replaying any
+    /// serial from a previous generation.
     pub fn upsert(
         &mut self,
         key: u32,
-        shadow: &ShadowSurface,
+        shadow: &PublishedSurface,
         qh: &QueueHandle<Self>,
     ) -> Result<(), FrontendError> {
         if !self.windows.contains_key(&key) {
@@ -147,7 +162,6 @@ impl Frontend {
                 // rules match on it.
                 toplevel.set_app_id(shadow.app_id.clone());
             }
-            // Commit with no buffer, then wait for the configure.
             surface.commit();
 
             self.windows.insert(
@@ -158,8 +172,9 @@ impl Frontend {
                     toplevel,
                     configured: false,
                     pending: Some(shadow.clone()),
-                    closed: false,
-                    attached: None,
+                    pool: None,
+                    buffer: None,
+                    geometry: None,
                 },
             );
             return Ok(());
@@ -171,8 +186,13 @@ impl Frontend {
         self.flush_pending(key, qh)
     }
 
-    /// Attach the retained content once the compositor has configured us.
+    /// Show the retained content once the compositor has configured us.
+    ///
+    /// The pool and buffer are reused whenever the geometry is unchanged. The
+    /// session host writes new pixels into the same file in place, so a redraw
+    /// is just damage plus commit — no allocation and no round-trip.
     fn flush_pending(&mut self, key: u32, qh: &QueueHandle<Self>) -> Result<(), FrontendError> {
+        let px_dir = self.px_dir.clone();
         let shm = self
             .shm
             .as_ref()
@@ -182,33 +202,65 @@ impl Frontend {
         let Some(w) = self.windows.get_mut(&key) else {
             return Ok(());
         };
-        if !w.configured || w.closed {
+        if !w.configured {
             return Ok(());
         }
         let Some(shadow) = w.pending.take() else {
             return Ok(());
         };
-        let Some(snap) = shadow.snapshot.as_ref() else {
-            // The surface has no content: either nothing retained yet, or the
-            // application committed a null buffer. Unmap rather than leave a
-            // stale frame on screen. It remaps on the next real frame.
-            if let Some(old) = w.attached.take() {
+        let Some(meta) = shadow.meta else {
+            // No content: either nothing retained yet, or the application
+            // committed a null buffer. Unmap rather than leave a stale frame.
+            if let Some(b) = w.buffer.take() {
                 w.surface.attach(None, 0, 0);
                 w.surface.commit();
-                // Destroy explicitly: dropping the proxy leaves the buffer and
-                // its pool alive compositor-side until we disconnect.
-                old.destroy();
+                b.destroy();
             }
+            if let Some(p) = w.pool.take() {
+                p.destroy();
+            }
+            w.geometry = None;
             return Ok(());
         };
 
-        let buffer = make_shm_buffer(&shm, snap, qh)?;
-        w.surface.attach(Some(&buffer), 0, 0);
-        if let Some(old) = w.attached.replace(buffer.clone()) {
-            old.destroy();
+        let geom = (meta.width, meta.height, meta.stride, meta.format, meta.len);
+        if w.geometry != Some(geom) {
+            // Geometry changed: rebuild the pool and buffer over the file.
+            if let Some(b) = w.buffer.take() {
+                b.destroy();
+            }
+            if let Some(p) = w.pool.take() {
+                p.destroy();
+            }
+            // Opened read-write: the compositor maps the pool MAP_SHARED and a
+            // read-only descriptor fails the mmap outright.
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(px_dir.join(format!("px-{key}.raw")))?;
+            let len = meta.len.max(1) as i32;
+            let pool = shm.create_pool(file.as_fd(), len, qh, ());
+            let format = match meta.format {
+                1 => wl_shm::Format::Xrgb8888,
+                other => wl_shm::Format::try_from(other).unwrap_or(wl_shm::Format::Argb8888),
+            };
+            let buffer = pool.create_buffer(
+                0,
+                meta.width.max(1),
+                meta.height.max(1),
+                meta.stride.max(1),
+                format,
+                qh,
+                (),
+            );
+            w.surface.attach(Some(&buffer), 0, 0);
+            w.pool = Some(pool);
+            w.buffer = Some(buffer);
+            w.geometry = Some(geom);
         }
+
         w.surface
-            .damage_buffer(0, 0, snap.width.max(1), snap.height.max(1));
+            .damage_buffer(0, 0, meta.width.max(1), meta.height.max(1));
         w.surface.commit();
         Ok(())
     }
@@ -216,43 +268,6 @@ impl Frontend {
     pub fn window_count(&self) -> usize {
         self.windows.len()
     }
-}
-
-/// Build a `wl_buffer` from a retained snapshot using an anonymous file.
-fn make_shm_buffer(
-    shm: &WlShm,
-    snap: &crate::serve::host::Snapshot,
-    qh: &QueueHandle<Frontend>,
-) -> Result<WlBuffer, FrontendError> {
-    let mut file = tempfile_anon()?;
-    file.write_all(&snap.pixels)?;
-    file.flush()?;
-
-    let len = snap.pixels.len() as i32;
-    let pool = shm.create_pool(file.as_fd(), len.max(1), qh, ());
-    let format = match snap.format {
-        0 => wl_shm::Format::Argb8888,
-        1 => wl_shm::Format::Xrgb8888,
-        other => wl_shm::Format::try_from(other).unwrap_or(wl_shm::Format::Argb8888),
-    };
-    let buffer = pool.create_buffer(
-        0,
-        snap.width.max(1),
-        snap.height.max(1),
-        snap.stride.max(1),
-        format,
-        qh,
-        (),
-    );
-    pool.destroy();
-    Ok(buffer)
-}
-
-/// An unlinked temporary file to back the shm pool.
-fn tempfile_anon() -> std::io::Result<std::fs::File> {
-    let fd: OwnedFd = rustix::fs::memfd_create("wlattach-shm", rustix::fs::MemfdFlags::CLOEXEC)
-        .map_err(std::io::Error::from)?;
-    Ok(std::fs::File::from(fd))
 }
 
 impl Dispatch<WlRegistry, ()> for Frontend {
@@ -462,7 +477,7 @@ impl Frontend {
     /// told, and simply stops receiving frame callbacks.
     pub fn teardown(&mut self) {
         for (_, w) in self.windows.drain() {
-            if let Some(b) = w.attached {
+            if let Some(b) = w.buffer {
                 b.destroy();
             }
             w.toplevel.destroy();
@@ -487,7 +502,7 @@ impl Frontend {
             .collect();
         for key in gone {
             if let Some(w) = self.windows.remove(&key) {
-                if let Some(b) = w.attached {
+                if let Some(b) = w.buffer {
                     b.destroy();
                 }
                 w.toplevel.destroy();

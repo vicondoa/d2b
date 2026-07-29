@@ -535,3 +535,26 @@ pub fn send_frame_callbacks(state: &SessionHost, time: u32) {
         );
     }
 }
+
+/// Snapshot geometry, without the pixels.
+///
+/// Pixels travel out of band in a per-surface file that both sides map, so a
+/// multi-megabyte frame is never serialised into the metadata stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SnapshotMeta {
+    pub width: i32,
+    pub height: i32,
+    pub stride: i32,
+    pub format: u32,
+    pub len: u64,
+    /// Bumped whenever the pixels change, so the frontend knows to redraw.
+    pub seq: u64,
+}
+
+/// What the session host publishes to the frontend.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct PublishedSurface {
+    pub title: String,
+    pub app_id: String,
+    pub meta: Option<SnapshotMeta>,
+}

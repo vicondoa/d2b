@@ -9,7 +9,8 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BIN="$HERE/target/debug/d2b-wlattach"
+BIN="$HERE/target/release/d2b-wlattach"
+[ -x "$BIN" ] || BIN="$HERE/target/debug/d2b-wlattach"
 SESSION="input-$$"
 RT="${XDG_RUNTIME_DIR:-/tmp}/d2b-wlattach/$SESSION"
 KEYOUT="/tmp/wlattach-key-$$"
