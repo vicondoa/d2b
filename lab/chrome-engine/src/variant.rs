@@ -112,16 +112,14 @@ pub struct Theme {
 impl Default for Theme {
     fn default() -> Self {
         Self {
-            surface: Rgba::rgb(0x0e, 0x0e, 0x12),
-            plate: Rgba::rgb(0x18, 0x18, 0x1f),
+            surface: Rgba::rgb(0x0f, 0x11, 0x17),
+            // The off-gray from d2b-wlcontrol's realm cards.
+            plate: Rgba::rgb(0x16, 0x18, 0x1d),
             foreground: Rgba::rgb(0xf2, 0xf2, 0xf7),
             foreground_dim: Rgba::rgb(0xc2, 0xc2, 0xd0),
-            // Strong enough that the composited boundary clears 3:1 against the
-            // band on its own: the target is delineated by its edge, so the
-            // plate fill can stay quiet.
             outline: Rgba::rgba(0xff, 0xff, 0xff, 0x70),
             focus: Rgba::rgb(0xff, 0xff, 0xff),
-            radius: 5.0,
+            radius: 6.0,
             accent_rule: 4,
             side_pad: 8,
             vertical_pad: 2,
@@ -306,27 +304,49 @@ pub fn render(spec: &ChromeSpec, fonts: &TextRenderer, background: Rgba) -> Rend
 
     // When expanded, the tab grows to the RIGHT so action icons sit immediately
     // beside the name and share its background, rather than at the far edge.
+    // The separator gets equal breathing room on both sides.
     let actions: &[Action] = if spec.expanded { &spec.actions } else { &[] };
-    let icon_box = px(20, scale);
-    let icon_gap = px(3, scale);
+    let icon_box = px(18, scale);
+    let icon_gap = px(4, scale);
+    let sep_gap = px(6, scale);
     let actions_w = if actions.is_empty() {
         0
     } else {
-        icon_gap + (icon_box + icon_gap) * actions.len() as u32
+        // sep_gap | sep_gap, then icons each followed by a gap, minus the
+        // trailing gap, plus the trailing padding.
+        sep_gap * 2 + 1 + icon_box * actions.len() as u32
+            + icon_gap * (actions.len() as u32 - 1)
+            + px(spec.theme.side_pad, scale)
     };
     let tab = Rect::new(button.x, button.y, button.width + actions_w, button.height);
 
-    canvas.fill_round_rect(tab.x, tab.y, tab.width, tab.height, radius, button_bg);
-
-    // The wlcontrol realm-card treatment: a thick accent edge on the left, a
-    // thin neutral outline on the remaining sides.
-    if spec.candidate != Candidate::AccentFill {
-        canvas.stroke_rect(tab.x, tab.y, tab.width, tab.height, spec.theme.outline);
+    // The wlcontrol realm-card treatment: draw the tab as an accent frame and
+    // inset the fill, so the accent is thick on the left and thin elsewhere
+    // while every edge follows the same rounded corners.
+    if spec.candidate == Candidate::AccentFill {
+        canvas.fill_round_rect(tab.x, tab.y, tab.width, tab.height, radius, button_bg);
+    } else {
         let edge = px(spec.theme.accent_rule, scale).max(2);
-        canvas.fill_round_rect(tab.x, tab.y, edge, tab.height, radius.min(2.0), spec.accent);
+        let thin = px(1, scale).max(1);
+        canvas.fill_round_rect(tab.x, tab.y, tab.width, tab.height, radius, spec.accent);
+        canvas.fill_round_rect(
+            tab.x + edge as i32,
+            tab.y + thin as i32,
+            tab.width.saturating_sub(edge + thin),
+            tab.height.saturating_sub(thin * 2),
+            (radius - f64::from(thin)).max(1.0),
+            button_bg,
+        );
     }
     if spec.state.menu_open || spec.expanded {
-        canvas.stroke_rect(tab.x - 1, tab.y - 1, tab.width + 2, tab.height + 2, spec.accent);
+        canvas.stroke_round_rect(
+            tab.x - 1,
+            tab.y - 1,
+            tab.width + 2,
+            tab.height + 2,
+            radius + 1.0,
+            spec.accent,
+        );
     }
 
     let desired = match spec.candidate {
@@ -345,16 +365,18 @@ pub fn render(spec: &ChromeSpec, fonts: &TextRenderer, background: Rgba) -> Rend
 
     for (i, action) in actions.iter().enumerate() {
         if i == 0 {
-            // A hairline separating identity from its actions.
+            // Separator with equal space on either side.
             canvas.fill_rect(
-                button.right(),
-                tab.y + px(3, scale) as i32,
+                button.right() + sep_gap as i32,
+                tab.y + px(4, scale) as i32,
                 1,
-                tab.height.saturating_sub(px(6, scale)),
+                tab.height.saturating_sub(px(8, scale)),
                 spec.theme.outline,
             );
         }
-        let ix = button.right() + icon_gap as i32 + i as i32 * (icon_box + icon_gap) as i32;
+        let ix = button.right()
+            + (sep_gap * 2 + 1) as i32
+            + i as i32 * (icon_box + icon_gap) as i32;
         let iy = tab.y + ((tab.height - icon_box) / 2) as i32;
         draw_action_icon(&mut canvas, *action, ix, iy, icon_box, fg, scale);
     }
@@ -452,6 +474,9 @@ pub fn render(spec: &ChromeSpec, fonts: &TextRenderer, background: Rgba) -> Rend
 
 /// Procedural action icons, drawn by the trusted renderer so the action set
 /// cannot be restyled into something it is not.
+///
+/// Every icon is composed on a 20x20 reference grid and scaled once, so shapes
+/// stay proportional instead of drifting as the box size changes.
 fn draw_action_icon(
     canvas: &mut Canvas,
     action: Action,
@@ -459,59 +484,61 @@ fn draw_action_icon(
     y: i32,
     box_size: u32,
     color: Rgba,
-    scale: f32,
+    _scale: f32,
 ) {
-    let u = |v: f32| ((v * scale).round() as u32).max(1);
-    let s = |v: f32| (v * scale).round() as i32;
-    let cx = x + box_size as i32 / 2;
-    let cy = y + box_size as i32 / 2;
+    const GRID: f32 = 20.0;
+    let k = box_size as f32 / GRID;
+    // Grid-space helpers: position and length in reference units.
+    let p = |v: f32| (v * k).round() as i32;
+    let l = |v: f32| ((v * k).round() as u32).max(1);
+    let ox = x;
+    let oy = y;
+    let rect = |c: &mut Canvas, gx: f32, gy: f32, gw: f32, gh: f32| {
+        c.fill_rect(ox + p(gx), oy + p(gy), l(gw), l(gh), color);
+    };
+    let stroke = |c: &mut Canvas, gx: f32, gy: f32, gw: f32, gh: f32, r: f32| {
+        c.stroke_round_rect(ox + p(gx), oy + p(gy), l(gw), l(gh), f64::from(r * k), color);
+    };
 
     match action {
         Action::Terminal => {
-            // A rounded frame with a prompt chevron and a caret line.
-            canvas.stroke_rect(x + s(2.0), y + s(3.0), u(16.0), u(13.0), color);
-            for i in 0..s(4.0) {
-                canvas.fill_rect(x + s(5.0) + i, cy - s(3.0) + i, u(1.5), u(1.5), color);
-                canvas.fill_rect(x + s(5.0) + i, cy + s(3.0) - i, u(1.5), u(1.5), color);
+            stroke(canvas, 2.0, 3.0, 16.0, 14.0, 2.0);
+            // A chevron built from two diagonals, then a caret rule.
+            for i in 0..4 {
+                let d = i as f32;
+                rect(canvas, 5.0 + d, 7.0 + d, 1.5, 1.5);
             }
-            canvas.fill_rect(cx + s(1.0), cy + s(2.0), u(5.0), u(1.5), color);
+            for i in 0..4 {
+                let d = i as f32;
+                rect(canvas, 8.0 - d, 11.0 + d, 1.5, 1.5);
+            }
+            rect(canvas, 10.5, 12.5, 5.0, 1.5);
         }
         Action::Audio => {
-            // Speaker cone plus two arcs.
-            canvas.fill_rect(x + s(4.0), cy - s(2.0), u(3.0), u(4.0), color);
-            for i in 0..s(5.0) {
-                let hh = (i as f32 * 0.9) as i32;
-                canvas.fill_rect(x + s(7.0) + i, cy - hh, u(1.2), (hh * 2).max(1) as u32, color);
+            // Cone: a stepped triangle, so it stays clean at any size.
+            rect(canvas, 4.0, 8.0, 3.0, 4.0);
+            for i in 0..4 {
+                let d = i as f32;
+                rect(canvas, 7.0 + d, 6.5 + d * 0.9, 1.2, 7.0 - d * 1.8);
             }
-            for r in [s(4.0), s(6.0)] {
-                for t in -r..=r {
-                    let dx = ((r * r - t * t) as f32).sqrt() as i32;
-                    canvas.blend(cx + s(2.0) + dx, cy + t, color);
-                }
-            }
+            // Two arcs as short vertical strokes, not a sampled circle.
+            rect(canvas, 13.0, 8.0, 1.2, 4.0);
+            rect(canvas, 15.2, 6.5, 1.2, 7.0);
         }
         Action::Usb => {
-            let top = y + s(3.0);
-            canvas.fill_rect(cx - s(0.5), top, u(1.5), u(13.0), color);
-            canvas.fill_round_rect(cx - s(2.0), top, u(4.0), u(4.0), 2.0, color);
-            canvas.fill_rect(cx - s(5.0), top + s(6.0), u(10.0), u(1.5), color);
-            canvas.fill_rect(cx - s(5.0), top + s(6.0), u(1.5), u(4.0), color);
-            canvas.fill_round_rect(cx + s(3.0), top + s(9.0), u(3.0), u(3.0), 1.5, color);
+            rect(canvas, 9.4, 4.0, 1.4, 12.0);
+            stroke(canvas, 8.2, 2.4, 3.8, 3.8, 1.9);
+            rect(canvas, 5.0, 9.0, 9.0, 1.4);
+            rect(canvas, 5.0, 9.0, 1.4, 3.0);
+            rect(canvas, 12.6, 11.0, 2.8, 2.8);
         }
         Action::Info => {
-            let r = s(7.0);
-            for t in -r..=r {
-                let dx = ((r * r - t * t) as f32).sqrt() as i32;
-                canvas.blend(cx + dx, cy + t, color);
-                canvas.blend(cx - dx, cy + t, color);
-                canvas.blend(cx + t, cy + dx, color);
-                canvas.blend(cx + t, cy - dx, color);
-            }
-            canvas.fill_rect(cx - s(0.5), cy - s(4.0), u(1.5), u(2.0), color);
-            canvas.fill_rect(cx - s(0.5), cy - s(1.0), u(1.5), u(5.0), color);
+            stroke(canvas, 2.5, 2.5, 15.0, 15.0, 7.5);
+            rect(canvas, 9.3, 6.0, 1.6, 1.8);
+            rect(canvas, 9.3, 9.0, 1.6, 5.0);
         }
         Action::Stop => {
-            canvas.fill_round_rect(cx - s(5.0), cy - s(5.0), u(10.0), u(10.0), 2.0, color);
+            rect(canvas, 5.5, 5.5, 9.0, 9.0);
         }
     }
 }
@@ -1038,8 +1065,11 @@ mod tests {
         let a = render(&hov, &f, DARK);
         let b = render(&prs, &f, DARK);
         let l = a.layout.unwrap();
-        let p1 = a.canvas.get((l.button.x + 4) as usize, (l.button.y + 4) as usize);
-        let p2 = b.canvas.get((l.button.x + 4) as usize, (l.button.y + 4) as usize);
+        // Sample inside the plate fill, past the accent edge and the outline.
+        let sx = (l.button.x + 10) as usize;
+        let sy = (l.button.y + l.button.height as i32 / 2) as usize;
+        let p1 = a.canvas.get(sx, sy);
+        let p2 = b.canvas.get(sx, sy);
         assert_ne!(p1, p2, "hover and pressed must not render identically");
         // And both must remain distinguishable without hue.
         assert_ne!(p1.to_grayscale(), p2.to_grayscale());

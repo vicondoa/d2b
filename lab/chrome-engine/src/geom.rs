@@ -20,6 +20,11 @@ pub const MIN_VISIBLE_FACE: u32 = 24;
 /// band grows from measured content and identity is never clipped to fit.
 pub const MIN_BAND_HEIGHT: u32 = 32;
 
+/// Breathing room above and below the visible tab, in logical px. Kept at one
+/// pixel so the tab sits close to guest content rather than floating in the
+/// reserved strip; the strip itself stays large enough for the pointer target.
+pub const TAB_INSET: u32 = 1;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Size {
     pub width: u32,
@@ -217,6 +222,10 @@ fn row_height(input: LayoutInput) -> u32 {
 }
 
 /// Band height, accounting for a status token that had to move to a second row.
+///
+/// The band is padding plus rows. It carries no extra allowance for the accent,
+/// which is drawn as an edge on the tab itself rather than a rule beneath it,
+/// so the gap between chrome and guest content stays as small as the padding.
 fn band_height_for(input: LayoutInput, status_second_row: bool) -> u32 {
     let row = row_height(input);
     let rows = if status_second_row {
@@ -225,8 +234,23 @@ fn band_height_for(input: LayoutInput, status_second_row: bool) -> u32 {
         row
     };
     rows.saturating_add(input.vertical_pad.saturating_mul(2))
-        .saturating_add(input.accent_rule)
         .max(MIN_BAND_HEIGHT)
+}
+
+/// The visible tab height for a resolved band.
+///
+/// The tab takes the whole band apart from one pixel of breathing room above
+/// and below, so the gap to guest content is as small as the design allows
+/// while the reserved strip still holds a compliant pointer target.
+fn face_height(band_height: u32, input: LayoutInput, status_second_row: bool) -> u32 {
+    if status_second_row {
+        row_height(input)
+    } else {
+        band_height
+            .saturating_sub(TAB_INSET * 2)
+            .max(MIN_VISIBLE_FACE)
+            .min(band_height)
+    }
 }
 
 /// Resolve chrome layout, or fail closed.
@@ -278,17 +302,14 @@ pub fn resolve(input: LayoutInput) -> ChromeOutcome {
     let band = Rect::new(0, band_y, outer.width, band_height);
 
     // Rows are sized first; the band was derived from them, so a row always
-    // fits inside it.
-    let face_h = row_height(input);
-    // Centre the row block vertically in whatever height the floor imposed.
+    // fits inside it. Padding above and below is equal by construction.
+    let face_h = face_height(band_height, input, status_second_row);
     let rows_total = if status_second_row {
         face_h * 2 + input.vertical_pad
     } else {
         face_h
     };
-    let slack = band_height
-        .saturating_sub(rows_total)
-        .saturating_sub(input.accent_rule);
+    let slack = band_height.saturating_sub(rows_total);
     let face_y = band_y + (slack / 2) as i32;
 
     let button = Rect::new(input.side_pad as i32, face_y, button_w, face_h);

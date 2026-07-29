@@ -70,6 +70,48 @@ impl Canvas {
         self.fill_rect(x + w as i32 - 1, y, 1, h, c);
     }
 
+    /// A 1px outline that follows a rounded rectangle, so a border traces the
+    /// same corners as the fill instead of cutting across them.
+    pub fn stroke_round_rect(&mut self, x: i32, y: i32, w: u32, h: u32, radius: f64, c: Rgba) {
+        if w == 0 || h == 0 {
+            return;
+        }
+        let r = radius.min(f64::from(w) / 2.0).min(f64::from(h) / 2.0).max(0.0);
+        if r <= 0.0 {
+            self.stroke_rect(x, y, w, h, c);
+            return;
+        }
+        // Coverage of the shape minus coverage of a shape inset by one pixel
+        // gives an antialiased one-pixel ring.
+        for dy in 0..h as i32 {
+            for dx in 0..w as i32 {
+                let outer = round_rect_coverage(
+                    f64::from(dx),
+                    f64::from(dy),
+                    f64::from(w),
+                    f64::from(h),
+                    r,
+                );
+                if outer <= 0.0 {
+                    continue;
+                }
+                let inner = round_rect_coverage(
+                    f64::from(dx) - 1.0,
+                    f64::from(dy) - 1.0,
+                    f64::from(w) - 2.0,
+                    f64::from(h) - 2.0,
+                    (r - 1.0).max(0.0),
+                );
+                let ring = (outer - inner).clamp(0.0, 1.0);
+                if ring <= 0.0 {
+                    continue;
+                }
+                let a = (f64::from(c.a) * ring).round().clamp(0.0, 255.0) as u8;
+                self.blend(x + dx, y + dy, c.with_alpha(a));
+            }
+        }
+    }
+
     /// Composite `other` at (x, y).
     pub fn draw(&mut self, other: &Canvas, x: i32, y: i32) {
         for oy in 0..other.height {
