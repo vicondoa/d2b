@@ -72,6 +72,18 @@ enum Cmd {
         #[arg(long)]
         session: String,
     },
+    /// Internal: inject a raw input event, for testing the delivery path.
+    #[command(hide = true)]
+    Inject {
+        #[arg(long)]
+        session: String,
+        /// Wayland keycode (the evdev code; xkb adds 8 on top). KEY_U is 22.
+        #[arg(long)]
+        key: Option<u32>,
+        /// Inject a pointer click at this position instead of a key.
+        #[arg(long, num_args = 2, value_names = ["X", "Y"])]
+        click: Option<Vec<f64>>,
+    },
 }
 
 fn base_dir() -> PathBuf {
@@ -186,6 +198,11 @@ fn real_main() -> Result<(), String> {
         }
         Cmd::Serve { session, argv } => serve(&session, &argv),
         Cmd::Present { session } => present(&session),
+        Cmd::Inject {
+            session,
+            key,
+            click,
+        } => inject(&session, key, click),
     }
 }
 
@@ -251,6 +268,14 @@ fn serve(name: &str, argv: &[String]) -> Result<(), String> {
     let _ = std::fs::remove_file(&wl_path);
     let listener = ListeningSocket::bind_absolute(wl_path.clone()).map_err(|e| e.to_string())?;
 
+    let input_path = dir.join("input.sock");
+    let _ = std::fs::remove_file(&input_path);
+    let input_listener = UnixListener::bind(&input_path).map_err(|e| e.to_string())?;
+    set_mode(&input_path, 0o600)?;
+    input_listener.set_nonblocking(true).ok();
+    // Several streams may be open at once: the frontend, plus test scaffolding.
+    let mut input_conns: Vec<(UnixStream, Vec<u8>)> = Vec::new();
+
     let ctl_path = dir.join("ctl.sock");
     let _ = std::fs::remove_file(&ctl_path);
     let ctl = UnixListener::bind(&ctl_path).map_err(|e| e.to_string())?;
@@ -275,6 +300,7 @@ fn serve(name: &str, argv: &[String]) -> Result<(), String> {
         let _ = std::fs::remove_file(ctl_path);
         let _ = std::fs::remove_file(wl_path);
         let _ = std::fs::remove_file(shadow_path(name));
+        let _ = std::fs::remove_file(session_dir(name).join("input.sock"));
     };
 
     loop {
@@ -284,6 +310,48 @@ fn serve(name: &str, argv: &[String]) -> Result<(), String> {
                 .is_err()
         {
             log::warn!("rejected a client");
+        }
+
+        // Accept input streams and drain whatever they have sent.
+        while let Ok((s, _)) = input_listener.accept() {
+            s.set_nonblocking(true).ok();
+            input_conns.push((s, Vec::new()));
+        }
+        let mut events: Vec<d2b_wlattach_spike::wire::dto::InputEvent> = Vec::new();
+        input_conns.retain_mut(|(c, buf)| {
+            let mut chunk = [0u8; 4096];
+            let mut alive = true;
+            loop {
+                match c.read(&mut chunk) {
+                    Ok(0) => {
+                        alive = false;
+                        break;
+                    }
+                    Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                    Err(_) => break,
+                }
+            }
+            while buf.len() >= 4 {
+                let len = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
+                if len > 4096 {
+                    // Malformed peer: drop the stream rather than trust it.
+                    alive = false;
+                    break;
+                }
+                if buf.len() < 4 + len {
+                    break;
+                }
+                let frame: Vec<u8> = buf.drain(..4 + len).skip(4).collect();
+                if let Ok(ev) =
+                    postcard::from_bytes::<d2b_wlattach_spike::wire::dto::InputEvent>(&frame)
+                {
+                    events.push(ev);
+                }
+            }
+            alive
+        });
+        for ev in events {
+            d2b_wlattach_spike::serve::host::apply_input(&mut state, ev);
         }
 
         display.dispatch_clients(&mut state).ok();
@@ -335,6 +403,13 @@ fn serve(name: &str, argv: &[String]) -> Result<(), String> {
         }
 
         if hosted.attached {
+            // Run the application.s render clock only while something is
+            // actually showing its output.
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u32)
+                .unwrap_or(0);
+            d2b_wlattach_spike::serve::host::send_frame_callbacks(&state, now);
             publish(name, &shadow, &mut last_rev, false);
         }
 
@@ -441,6 +516,12 @@ fn present(name: &str) -> Result<(), String> {
     let (mut fe, mut queue) = Frontend::bind(&conn).map_err(|e| e.to_string())?;
     let qh = queue.handle();
 
+    // Input flows back to the session host over its own stream.
+    let mut input = UnixStream::connect(session_dir(name).join("input.sock")).ok();
+    if let Some(s) = input.as_mut() {
+        s.set_write_timeout(Some(Duration::from_millis(200))).ok();
+    }
+
     let mut last: Vec<u8> = Vec::new();
     loop {
         if let Ok(bytes) = std::fs::read(shadow_path(name))
@@ -474,6 +555,25 @@ fn present(name: &str) -> Result<(), String> {
             break;
         }
 
+        // Forward captured input upward.
+        if let Some(s) = input.as_mut() {
+            let n = fe.input.len();
+            if n > 0 {
+                log::debug!("forwarding {n} input event(s)");
+            }
+            for ev in fe.input.drain(..) {
+                let Ok(body) = postcard::to_allocvec(&ev) else {
+                    continue;
+                };
+                let len = (body.len() as u32).to_le_bytes();
+                if s.write_all(&len).is_err() || s.write_all(&body).is_err() {
+                    break;
+                }
+            }
+        } else {
+            fe.input.clear();
+        }
+
         // Forward compositor close requests to the session host, which
         // forwards them to the application. The application decides.
         for key in fe.close_requested.drain(..).collect::<Vec<_>>() {
@@ -484,6 +584,55 @@ fn present(name: &str) -> Result<(), String> {
             break;
         }
         std::thread::sleep(Duration::from_millis(16));
+    }
+    Ok(())
+}
+
+/// Inject input straight into the session host's stream.
+///
+/// Test scaffolding. It exercises the host-to-application delivery path without
+/// a virtual-input tool, which installs its own keymap and so produces keycodes
+/// that mean nothing under ours.
+fn inject(name: &str, key: Option<u32>, click: Option<Vec<f64>>) -> Result<(), String> {
+    use d2b_wlattach_spike::wire::dto::InputEvent;
+    let mut s = UnixStream::connect(session_dir(name).join("input.sock"))
+        .map_err(|e| format!("no input socket: {e}"))?;
+
+    let events: Vec<InputEvent> = if let Some(xy) = click {
+        let (x, y) = (
+            xy.first().copied().unwrap_or(0.0),
+            xy.get(1).copied().unwrap_or(0.0),
+        );
+        vec![
+            InputEvent::PointerEnter { x, y },
+            InputEvent::PointerMotion { x, y },
+            InputEvent::PointerButton {
+                button: 0x110, // BTN_LEFT
+                pressed: true,
+            },
+            InputEvent::PointerButton {
+                button: 0x110,
+                pressed: false,
+            },
+        ]
+    } else {
+        let key = key.ok_or("pass --key or --click")?;
+        vec![
+            InputEvent::KeyboardEnter,
+            InputEvent::KeyboardKey { key, pressed: true },
+            InputEvent::KeyboardKey {
+                key,
+                pressed: false,
+            },
+        ]
+    };
+
+    for ev in events {
+        let body = postcard::to_allocvec(&ev).map_err(|e| e.to_string())?;
+        s.write_all(&(body.len() as u32).to_le_bytes())
+            .map_err(|e| e.to_string())?;
+        s.write_all(&body).map_err(|e| e.to_string())?;
+        std::thread::sleep(Duration::from_millis(60));
     }
     Ok(())
 }

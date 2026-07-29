@@ -276,3 +276,36 @@ mod tests {
         assert_eq!(b, back);
     }
 }
+
+/// Input travelling from the window frontend up to the session host.
+///
+/// Coordinates are in the frontend surface's local space. Serials are
+/// deliberately absent: they are scoped to a compositor connection and must
+/// never be replayed across generations, so the session host mints its own.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum InputEvent {
+    PointerEnter {
+        x: f64,
+        y: f64,
+    },
+    PointerMotion {
+        x: f64,
+        y: f64,
+    },
+    PointerButton {
+        button: u32,
+        pressed: bool,
+    },
+    PointerAxis {
+        horizontal: f64,
+        vertical: f64,
+    },
+    PointerLeave,
+    KeyboardEnter,
+    /// `key` is the Wayland keycode (the evdev code), exactly as received.
+    KeyboardKey {
+        key: u32,
+        pressed: bool,
+    },
+    KeyboardLeave,
+}

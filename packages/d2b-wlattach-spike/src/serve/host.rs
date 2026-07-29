@@ -95,6 +95,8 @@ pub struct SessionHost {
     pub data_device: DataDeviceState,
     pub seats: SeatState<Self>,
     pub seat: Seat<Self>,
+    pub keyboard: Option<smithay::input::keyboard::KeyboardHandle<Self>>,
+    pub pointer: Option<smithay::input::pointer::PointerHandle<Self>>,
     pub output: Output,
     pub shadow: Arc<Mutex<Shadow>>,
     pub ids: IdAllocator,
@@ -113,7 +115,23 @@ impl SessionHost {
         // or, for foot, startup -- entirely. Clipboard transfer stays unsupported.
         let data_device = DataDeviceState::new::<Self>(dh);
         let mut seats = SeatState::new();
-        let seat = seats.new_wl_seat(dh, "wlattach");
+        let mut seat = seats.new_wl_seat(dh, "wlattach");
+        // Without these the seat advertises no capabilities and toolkits will
+        // not deliver input at all.
+        let keyboard =
+            match seat.add_keyboard(smithay::input::keyboard::XkbConfig::default(), 200, 25) {
+                Ok(k) => Some(k),
+                Err(e) => {
+                    log::error!("no keyboard on the seat: {e}");
+                    None
+                }
+            };
+        let pointer = Some(seat.add_pointer());
+        log::info!(
+            "seat capabilities: keyboard={} pointer={}",
+            keyboard.is_some(),
+            pointer.is_some()
+        );
 
         // One synthetic output whose identity is stable across frontend
         // generations, so the application never sees an output disappear.
@@ -141,6 +159,8 @@ impl SessionHost {
             data_device,
             seats,
             seat,
+            keyboard,
+            pointer,
             output,
             shadow: Arc::new(Mutex::new(Shadow::default())),
             ids: IdAllocator::new(),
@@ -351,5 +371,167 @@ impl SessionHost {
             }
         }
         false
+    }
+}
+
+impl SessionHost {
+    /// The surface input should be delivered to.
+    ///
+    /// One toplevel is the common case for the prototype; the first is used.
+    pub fn focus_surface(&self) -> Option<WlSurface> {
+        self.toplevels.first().map(|t| t.wl_surface().clone())
+    }
+}
+
+/// Deliver one frontend input event to the application.
+///
+/// Serials are minted here, in the session host's own space. Serials from the
+/// frontend's compositor connection are never forwarded: they belong to a
+/// different connection and would be meaningless — or worse, misinterpreted —
+/// on this one.
+pub fn apply_input(state: &mut SessionHost, ev: crate::wire::dto::InputEvent) {
+    use crate::wire::dto::InputEvent as E;
+    use smithay::backend::input::{ButtonState, KeyState};
+    use smithay::input::keyboard::FilterResult;
+    use smithay::input::pointer::{AxisFrame, ButtonEvent, MotionEvent};
+    use smithay::utils::SERIAL_COUNTER;
+
+    log::debug!("input {ev:?}");
+    let Some(surface) = state.focus_surface() else {
+        log::debug!("input dropped: no focus surface");
+        return;
+    };
+    let time = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u32)
+        .unwrap_or(0);
+
+    match ev {
+        E::PointerEnter { x, y } | E::PointerMotion { x, y } => {
+            if let Some(p) = state.pointer.clone() {
+                let serial = SERIAL_COUNTER.next_serial();
+                p.motion(
+                    state,
+                    Some((surface, (0.0, 0.0).into())),
+                    &MotionEvent {
+                        location: (x, y).into(),
+                        serial,
+                        time,
+                    },
+                );
+                p.frame(state);
+            }
+        }
+        E::PointerLeave => {
+            if let Some(p) = state.pointer.clone() {
+                let serial = SERIAL_COUNTER.next_serial();
+                p.motion(
+                    state,
+                    None,
+                    &MotionEvent {
+                        location: (0.0, 0.0).into(),
+                        serial,
+                        time,
+                    },
+                );
+                p.frame(state);
+            }
+        }
+        E::PointerButton { button, pressed } => {
+            if let Some(p) = state.pointer.clone() {
+                let serial = SERIAL_COUNTER.next_serial();
+                p.button(
+                    state,
+                    &ButtonEvent {
+                        button,
+                        state: if pressed {
+                            ButtonState::Pressed
+                        } else {
+                            ButtonState::Released
+                        },
+                        serial,
+                        time,
+                    },
+                );
+                p.frame(state);
+            }
+        }
+        E::PointerAxis {
+            horizontal,
+            vertical,
+        } => {
+            if let Some(p) = state.pointer.clone() {
+                let mut frame =
+                    AxisFrame::new(time).source(smithay::backend::input::AxisSource::Wheel);
+                if horizontal != 0.0 {
+                    frame = frame.value(smithay::backend::input::Axis::Horizontal, horizontal);
+                }
+                if vertical != 0.0 {
+                    frame = frame.value(smithay::backend::input::Axis::Vertical, vertical);
+                }
+                p.axis(state, frame);
+                p.frame(state);
+            }
+        }
+        E::KeyboardEnter => {
+            if let Some(k) = state.keyboard.clone() {
+                let serial = SERIAL_COUNTER.next_serial();
+                k.set_focus(state, Some(surface), serial);
+            }
+        }
+        E::KeyboardLeave => {
+            if let Some(k) = state.keyboard.clone() {
+                let serial = SERIAL_COUNTER.next_serial();
+                k.set_focus(state, None, serial);
+            }
+        }
+        E::KeyboardKey { key, pressed } => {
+            if let Some(k) = state.keyboard.clone() {
+                let serial = SERIAL_COUNTER.next_serial();
+                // wl_keyboard reports evdev codes; xkb keycodes are evdev + 8.
+                k.input::<(), _>(
+                    state,
+                    (key + 8).into(),
+                    if pressed {
+                        KeyState::Pressed
+                    } else {
+                        KeyState::Released
+                    },
+                    serial,
+                    time,
+                    |_, _, _| FilterResult::Forward,
+                );
+            }
+        }
+    }
+}
+
+/// Release frame callbacks for every surface, letting the application draw.
+///
+/// Clients render on the frame-callback clock: draw once, request a callback,
+/// and wait. Nothing here ever ran that clock, so an application would render a
+/// single frame and then freeze — accepting input but never able to show the
+/// result.
+///
+/// This is also exactly the lever the design uses for detach: while no frontend
+/// is attached the caller simply stops running this, so the application idles
+/// like a minimised window instead of drawing frames nobody can see. Its timers,
+/// network and background work carry on untouched.
+pub fn send_frame_callbacks(state: &SessionHost, time: u32) {
+    use smithay::wayland::compositor::{TraversalAction, with_surface_tree_downward};
+
+    for toplevel in &state.toplevels {
+        with_surface_tree_downward(
+            toplevel.wl_surface(),
+            (),
+            |_, _, _| TraversalAction::DoChildren(()),
+            |_, states, _| {
+                let mut attrs = states.cached_state.get::<SurfaceAttributes>();
+                for callback in attrs.current().frame_callbacks.drain(..) {
+                    callback.done(time);
+                }
+            },
+            |_, _, _| true,
+        );
     }
 }

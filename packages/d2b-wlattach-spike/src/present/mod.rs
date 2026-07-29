@@ -11,11 +11,16 @@ use std::os::fd::{AsFd, OwnedFd};
 use wayland_client::protocol::{
     wl_buffer::WlBuffer,
     wl_compositor::WlCompositor,
+    wl_keyboard::{self, WlKeyboard},
+    wl_pointer::{self, WlPointer},
     wl_registry::{self, WlRegistry},
+    wl_seat::{self, WlSeat},
     wl_shm::{self, WlShm},
     wl_shm_pool::WlShmPool,
     wl_surface::WlSurface,
 };
+
+use crate::wire::dto::InputEvent;
 use wayland_client::{Connection, Dispatch, QueueHandle, delegate_noop};
 use wayland_protocols::xdg::shell::client::{
     xdg_surface::{self, XdgSurface},
@@ -60,6 +65,9 @@ pub struct Frontend {
     /// Set when the compositor asks a window to close. Advisory: forwarded to
     /// the session host, which forwards it to the application, which decides.
     pub close_requested: Vec<u32>,
+    /// Input observed from the host compositor, drained and forwarded upward.
+    pub input: Vec<InputEvent>,
+    seat: Option<WlSeat>,
     pub running: bool,
 }
 
@@ -71,6 +79,8 @@ impl Default for Frontend {
             wm_base: None,
             windows: HashMap::new(),
             close_requested: Vec::new(),
+            input: Vec::new(),
+            seat: None,
             running: true,
         }
     }
@@ -272,6 +282,9 @@ impl Dispatch<WlRegistry, ()> for Frontend {
                     state.wm_base =
                         Some(registry.bind::<XdgWmBase, _, _>(name, version.min(4), qh, ()));
                 }
+                "wl_seat" => {
+                    state.seat = Some(registry.bind::<WlSeat, _, _>(name, version.min(5), qh, ()));
+                }
                 _ => {}
             }
         }
@@ -328,6 +341,110 @@ impl Dispatch<XdgToplevel, u32> for Frontend {
             // application may ignore it or show a save prompt, and if we marked
             // the window closed here we would freeze its updates for good.
             state.close_requested.push(*key);
+        }
+    }
+}
+
+impl Dispatch<WlSeat, ()> for Frontend {
+    fn event(
+        _: &mut Self,
+        seat: &WlSeat,
+        event: wl_seat::Event,
+        _: &(),
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
+        if let wl_seat::Event::Capabilities {
+            capabilities: wayland_client::WEnum::Value(c),
+        } = event
+        {
+            if c.contains(wl_seat::Capability::Pointer) {
+                seat.get_pointer(qh, ());
+            }
+            if c.contains(wl_seat::Capability::Keyboard) {
+                seat.get_keyboard(qh, ());
+            }
+        }
+    }
+}
+
+impl Dispatch<WlPointer, ()> for Frontend {
+    fn event(
+        state: &mut Self,
+        _: &WlPointer,
+        event: wl_pointer::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        // Serials are deliberately dropped: they belong to this compositor
+        // connection and must never cross into the application.s.
+        match event {
+            wl_pointer::Event::Enter {
+                surface_x,
+                surface_y,
+                ..
+            } => state.input.push(InputEvent::PointerEnter {
+                x: surface_x,
+                y: surface_y,
+            }),
+            wl_pointer::Event::Motion {
+                surface_x,
+                surface_y,
+                ..
+            } => state.input.push(InputEvent::PointerMotion {
+                x: surface_x,
+                y: surface_y,
+            }),
+            wl_pointer::Event::Button {
+                button, state: st, ..
+            } => state.input.push(InputEvent::PointerButton {
+                button,
+                pressed: matches!(
+                    st,
+                    wayland_client::WEnum::Value(wl_pointer::ButtonState::Pressed)
+                ),
+            }),
+            wl_pointer::Event::Axis { axis, value, .. } => {
+                let (h, v) = match axis {
+                    wayland_client::WEnum::Value(wl_pointer::Axis::HorizontalScroll) => {
+                        (value, 0.0)
+                    }
+                    _ => (0.0, value),
+                };
+                state.input.push(InputEvent::PointerAxis {
+                    horizontal: h,
+                    vertical: v,
+                });
+            }
+            wl_pointer::Event::Leave { .. } => state.input.push(InputEvent::PointerLeave),
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<WlKeyboard, ()> for Frontend {
+    fn event(
+        state: &mut Self,
+        _: &WlKeyboard,
+        event: wl_keyboard::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match event {
+            wl_keyboard::Event::Enter { .. } => state.input.push(InputEvent::KeyboardEnter),
+            wl_keyboard::Event::Leave { .. } => state.input.push(InputEvent::KeyboardLeave),
+            wl_keyboard::Event::Key { key, state: st, .. } => {
+                state.input.push(InputEvent::KeyboardKey {
+                    key,
+                    pressed: matches!(
+                        st,
+                        wayland_client::WEnum::Value(wl_keyboard::KeyState::Pressed)
+                    ),
+                })
+            }
+            _ => {}
         }
     }
 }
