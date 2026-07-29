@@ -5,6 +5,9 @@ use std::{
     process::Command,
 };
 
+use quote::ToTokens;
+use syn::{Attribute, Item, Visibility};
+
 const APPROVED_CAPABILITY_MINT_POINTS: &[(&str, &str)] = &[
     (
         "d2b_bus",
@@ -71,11 +74,16 @@ fn public_api_has_only_the_approved_capability_mint_surface() {
     );
     let actual = snapshot_public_api(&snapshot_docs, &approved);
     let (_, capability_surface) = workspace_public_api(&workspace_docs, &BTreeSet::new(), true);
+    let hidden_public = workspace_hidden_public_api(&workspace_docs);
     if std::env::var_os("D2B_UPDATE_BUS_PUBLIC_API").is_some() {
         write_snapshot(&crate_root.join("tests/approved-public-api.txt"), &actual);
         write_snapshot(
             &crate_root.join("tests/approved-capability-api.txt"),
             &capability_surface,
+        );
+        write_snapshot(
+            &crate_root.join("tests/approved-hidden-public-api.txt"),
+            &hidden_public,
         );
         return;
     }
@@ -94,6 +102,8 @@ fn public_api_has_only_the_approved_capability_mint_surface() {
     }
     let approved_capabilities = approved_entries(include_str!("approved-capability-api.txt"));
     assert_capability_inventory(&capability_surface, &approved_capabilities);
+    let approved_hidden = approved_entries(include_str!("approved-hidden-public-api.txt"));
+    assert_hidden_public_inventory(&hidden_public, &approved_hidden);
 
     let router = fs::read_to_string(crate_root.join("src/router.rs")).expect("read router source");
     assert_eq!(
@@ -168,6 +178,22 @@ fn assert_mutation_fixture(workspace_docs: &[DocumentedCrate]) {
     assert!(
         error.contains(rogue_admission),
         "capability inventory did not name the rogue admission factory: {error}"
+    );
+    let hidden_public = workspace_hidden_public_api(&docs);
+    let hidden_rogue = hidden_public
+        .iter()
+        .find(|symbol| symbol.contains("hidden_rogue_admission"))
+        .unwrap_or_else(|| {
+            panic!("hidden rogue ComponentSessionAdmission factory escaped classification")
+        });
+    let hidden_rogue_name = hidden_rogue
+        .split_once('\t')
+        .map_or(hidden_rogue.as_str(), |(name, _)| name);
+    let error = hidden_public_inventory_error(&hidden_public, &BTreeSet::new())
+        .expect("hidden rogue ComponentSessionAdmission factory passed the inventory");
+    assert!(
+        error.contains(hidden_rogue_name),
+        "hidden public inventory did not name the rogue admission factory: {error}"
     );
     assert!(
         capabilities
@@ -324,6 +350,7 @@ struct DocumentedCrate {
     crate_name: String,
     root: PathBuf,
     advertised: Vec<AdvertisedItem>,
+    hidden_public: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -335,6 +362,7 @@ struct AdvertisedItem {
 #[derive(Debug)]
 struct RenderPackage {
     crate_name: String,
+    source: PathBuf,
     dependency_features: BTreeSet<String>,
     workspace_dependencies: BTreeSet<String>,
 }
@@ -453,6 +481,11 @@ fn render_workspace_docs(
                     .to_owned(),
                 RenderPackage {
                     crate_name: crate_name.to_owned(),
+                    source: PathBuf::from(
+                        library["src_path"]
+                            .as_str()
+                            .expect("library target source path"),
+                    ),
                     dependency_features,
                     workspace_dependencies,
                 },
@@ -467,6 +500,7 @@ fn render_workspace_docs(
     let mut docs = Vec::new();
     for (package_name, package) in dependency_order(packages) {
         let crate_name = package.crate_name;
+        let hidden_public = hidden_public_api(&crate_name, &package.source);
         let target = scratch.join("renders").join(&crate_name);
         let doc_root = target.join("doc");
         fs::create_dir_all(&doc_root).unwrap_or_else(|error| {
@@ -529,12 +563,224 @@ fn render_workspace_docs(
             crate_name,
             root,
             advertised,
+            hidden_public,
         });
     }
     docs.sort_by(|left, right| left.crate_name.cmp(&right.crate_name));
     docs
 }
 
+fn workspace_hidden_public_api(docs: &[DocumentedCrate]) -> BTreeSet<String> {
+    docs.iter()
+        .flat_map(|documented| documented.hidden_public.iter().cloned())
+        .collect()
+}
+
+fn assert_hidden_public_inventory(actual: &BTreeSet<String>, approved: &BTreeSet<String>) {
+    if let Some(error) = hidden_public_inventory_error(actual, approved) {
+        panic!("{error}");
+    }
+}
+
+fn hidden_public_inventory_error(
+    actual: &BTreeSet<String>,
+    approved: &BTreeSet<String>,
+) -> Option<String> {
+    let unapproved = actual.difference(approved).take(40).collect::<Vec<_>>();
+    let missing = approved
+        .iter()
+        .filter(|entry| !actual.contains(*entry))
+        .take(40)
+        .collect::<Vec<_>>();
+    if !unapproved.is_empty() {
+        return Some(format!(
+            "a public doc(hidden) signature is outside the reviewed hidden API; \
+                 unapproved {} (first 40: {unapproved:?}). This inventory is required \
+                 because the pinned stable rustdoc does not render hidden items.",
+            actual.difference(approved).count()
+        ));
+    }
+    if missing.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "{} reviewed public doc(hidden) signatures are absent (first 40: \
+                 {missing:?}); review whether the API was intentionally removed",
+            approved
+                .iter()
+                .filter(|entry| !actual.contains(*entry))
+                .count()
+        ))
+    }
+}
+
+fn hidden_public_api(crate_name: &str, source: &Path) -> BTreeSet<String> {
+    let mut scanner = HiddenPublicScanner {
+        crate_name,
+        entries: BTreeSet::new(),
+        visited: BTreeSet::new(),
+    };
+    let module_dir = source
+        .parent()
+        .expect("library target source has a parent directory");
+    scanner.scan_file(source, &[], module_dir, false);
+    scanner.entries
+}
+
+struct HiddenPublicScanner<'a> {
+    crate_name: &'a str,
+    entries: BTreeSet<String>,
+    visited: BTreeSet<PathBuf>,
+}
+
+impl HiddenPublicScanner<'_> {
+    fn scan_file(
+        &mut self,
+        source: &Path,
+        module_path: &[String],
+        module_dir: &Path,
+        inherited_hidden: bool,
+    ) {
+        let source = fs::canonicalize(source).unwrap_or_else(|error| {
+            panic!("canonicalize Rust source {}: {error}", source.display())
+        });
+        if !self.visited.insert(source.clone()) {
+            return;
+        }
+        let text = fs::read_to_string(&source)
+            .unwrap_or_else(|error| panic!("read Rust source {}: {error}", source.display()));
+        let file = syn::parse_file(&text)
+            .unwrap_or_else(|error| panic!("parse Rust source {}: {error}", source.display()));
+        self.scan_items(
+            &file.items,
+            module_path,
+            module_dir,
+            inherited_hidden || doc_hidden(&file.attrs),
+        );
+    }
+
+    fn scan_items(
+        &mut self,
+        items: &[Item],
+        module_path: &[String],
+        module_dir: &Path,
+        inherited_hidden: bool,
+    ) {
+        for item in items {
+            match item {
+                Item::Fn(function)
+                    if matches!(function.vis, Visibility::Public(_))
+                        && (inherited_hidden || doc_hidden(&function.attrs)) =>
+                {
+                    self.record(module_path, function.sig.ident.to_string(), &function.sig);
+                }
+                Item::Fn(_) => {}
+                Item::Impl(implementation) => {
+                    let hidden = inherited_hidden || doc_hidden(&implementation.attrs);
+                    let owner = type_name(&implementation.self_ty);
+                    for member in &implementation.items {
+                        if let syn::ImplItem::Fn(method) = member
+                            && (hidden || doc_hidden(&method.attrs))
+                            && matches!(method.vis, Visibility::Public(_))
+                        {
+                            let name = format!("{owner}::method:{}", method.sig.ident);
+                            self.record(module_path, name, &method.sig);
+                        }
+                    }
+                }
+                Item::Trait(trait_item) => {
+                    let hidden = inherited_hidden || doc_hidden(&trait_item.attrs);
+                    for member in &trait_item.items {
+                        if let syn::TraitItem::Fn(method) = member
+                            && (hidden || doc_hidden(&method.attrs))
+                        {
+                            let name =
+                                format!("{}::tymethod:{}", trait_item.ident, method.sig.ident);
+                            self.record(module_path, name, &method.sig);
+                        }
+                    }
+                }
+                Item::Mod(module) => {
+                    let hidden = inherited_hidden || doc_hidden(&module.attrs);
+                    let mut child_path = module_path.to_vec();
+                    child_path.push(module.ident.to_string());
+                    if hidden && matches!(module.vis, Visibility::Public(_)) {
+                        let signature = format!("pub mod {}", module.ident);
+                        self.record(module_path, module.ident.to_string(), &signature);
+                    }
+                    let child_dir = module_dir.join(module.ident.to_string());
+                    if let Some((_, items)) = &module.content {
+                        self.scan_items(items, &child_path, &child_dir, hidden);
+                    } else if let Some(source) = module_source(module, module_dir, &child_dir) {
+                        self.scan_file(&source, &child_path, &child_dir, hidden);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn record(&mut self, module_path: &[String], name: String, signature: &impl ToTokens) {
+        let mut symbol = self.crate_name.to_owned();
+        for module in module_path {
+            symbol.push_str("::");
+            symbol.push_str(module);
+        }
+        symbol.push_str("::");
+        symbol.push_str(&name);
+        self.entries
+            .insert(format!("{symbol}\t{}", signature.to_token_stream()));
+    }
+}
+
+fn doc_hidden(attributes: &[Attribute]) -> bool {
+    attributes.iter().any(|attribute| {
+        if !attribute.path().is_ident("doc") {
+            return false;
+        }
+        let mut hidden = false;
+        let _ = attribute.parse_nested_meta(|meta| {
+            hidden |= meta.path.is_ident("hidden");
+            Ok(())
+        });
+        hidden
+    })
+}
+
+fn type_name(ty: &syn::Type) -> String {
+    if let syn::Type::Path(path) = ty
+        && let Some(segment) = path.path.segments.last()
+    {
+        return segment.ident.to_string();
+    }
+    ty.to_token_stream().to_string()
+}
+
+fn module_source(module: &syn::ItemMod, module_dir: &Path, child_dir: &Path) -> Option<PathBuf> {
+    if let Some(path) = module.attrs.iter().find_map(|attribute| {
+        if !attribute.path().is_ident("path") {
+            return None;
+        }
+        let syn::Meta::NameValue(value) = &attribute.meta else {
+            return None;
+        };
+        let syn::Expr::Lit(value) = &value.value else {
+            return None;
+        };
+        let syn::Lit::Str(path) = &value.lit else {
+            return None;
+        };
+        Some(module_dir.join(path.value()))
+    }) {
+        return path.is_file().then_some(path);
+    }
+    let flat = module_dir.join(format!("{}.rs", module.ident));
+    if flat.is_file() {
+        return Some(flat);
+    }
+    let nested = child_dir.join("mod.rs");
+    nested.is_file().then_some(nested)
+}
 fn dependency_order(mut packages: BTreeMap<String, RenderPackage>) -> Vec<(String, RenderPackage)> {
     let mut ordered = Vec::with_capacity(packages.len());
     let mut rendered = BTreeSet::new();

@@ -927,8 +927,10 @@ dependencies = [
  "d2b-session",
  "d2b-session-unix",
  "getrandom 0.3.4",
+ "quote",
  "serde",
  "serde_json",
+ "syn 2.0.118",
  "tokio",
 ]
 
