@@ -313,6 +313,19 @@ impl From<Arc<ComponentSessionAdmissionIdentity>> for ComponentSessionAdmission 
             expected_alias,
         );
     }
+    for name in [
+        "trait-impl-noncapability-direct-renamed-module.rs",
+        "trait-impl-noncapability-self-renamed-module.rs",
+    ] {
+        let source = fs::read_to_string(fixture.join(name))
+            .unwrap_or_else(|error| panic!("read {name} compile-pass fixture: {error}"));
+        let inventory = source_capability_inventory_from_text("d2b_bus", &source, name);
+        assert!(
+            inventory.trait_impls.is_empty(),
+            "{name} incorrectly classified an ordinary impl as capability-relevant: {:?}",
+            inventory.trait_impls
+        );
+    }
     assert_module_source_mutations_fail_closed(&crate_root);
 }
 
@@ -397,7 +410,40 @@ fn assert_module_source_mutations_fail_closed(crate_root: &Path) {
         "struct ComponentSessionAdmission;\n",
     )
     .expect("write compiler-selected module source");
-    assert_source_file_scan_fails_closed(&cfg_attr.join("lib.rs"), &["cfg_attr", "router"]);
+    assert_source_file_scan_fails_closed(
+        &cfg_attr.join("lib.rs"),
+        &["cfg_attr", "path", "router", "rogue.rs"],
+    );
+
+    let inert_cfg_attr = scratch.path().join("inert-cfg-attr");
+    fs::create_dir_all(&inert_cfg_attr).expect("create inert cfg_attr module fixture");
+    fs::write(
+        inert_cfg_attr.join("lib.rs"),
+        r#"#[cfg_attr(all(), doc = "ordinary module")]
+#[cfg_attr(all(), cfg_attr(all(), allow(dead_code)))]
+mod ordinary;
+"#,
+    )
+    .expect("write inert cfg_attr module root");
+    fs::write(
+        inert_cfg_attr.join("ordinary.rs"),
+        r#"
+struct Request;
+
+impl Default for Request {
+    fn default() -> Self {
+        Self
+    }
+}
+"#,
+    )
+    .expect("write inert cfg_attr module source");
+    let inert_inventory = source_capability_inventory("d2b_bus", &inert_cfg_attr.join("lib.rs"));
+    assert!(
+        inert_inventory.trait_impls.is_empty(),
+        "inert module cfg_attr incorrectly made an ordinary impl capability-relevant: {:?}",
+        inert_inventory.trait_impls
+    );
 
     let direct_path = scratch.path().join("direct-path");
     fs::create_dir_all(direct_path.join("router")).expect("create direct path mutation");
@@ -1406,7 +1452,6 @@ struct SourceAlias {
 struct SourceModuleAlias {
     binding: SourceBinding,
     target: SourcePath,
-    conservative: bool,
 }
 
 #[derive(Clone)]
@@ -1646,7 +1691,6 @@ fn collect_use_bindings(
             facts.module_aliases.push(SourceModuleAlias {
                 binding: binding.clone(),
                 target: target.clone(),
-                conservative: ident_name(&rename.ident) == "self",
             });
             if ident_name(&rename.ident) == "self" {
                 return;
@@ -1811,13 +1855,13 @@ fn finish_source_capability_inventory(
         .module_aliases
         .iter()
         .filter(|alias| {
-            alias.conservative
-                || resolve_module_path(&alias.target, &alias.binding.module_path, crate_name)
-                    .is_some_and(|target_module| {
-                        resolved
-                            .keys()
-                            .any(|binding| binding.module_path == target_module)
-                    })
+            resolve_module_path(&alias.target, &alias.binding.module_path, crate_name).is_some_and(
+                |target_module| {
+                    resolved
+                        .keys()
+                        .any(|binding| binding.module_path == target_module)
+                },
+            )
         })
         .map(|alias| alias.binding.clone())
         .collect::<BTreeSet<_>>();
@@ -2667,17 +2711,12 @@ fn module_source(
 }
 
 fn module_path_override(module: &syn::ItemMod, path_base: &Path) -> Option<PathBuf> {
-    if module
+    for attribute in module
         .attrs
         .iter()
-        .any(|attribute| attribute.path().is_ident("cfg_attr"))
+        .filter(|attribute| attribute.path().is_ident("cfg_attr"))
     {
-        panic!(
-            "cfg_attr on Rust module {} may select a different source; \
-             source inventories fail closed instead of guessing which file the \
-             compiler reads",
-            module.ident
-        );
+        validate_module_cfg_attr(&attribute.meta, &module.ident);
     }
     let mut attributes = module
         .attrs
@@ -2715,6 +2754,44 @@ fn module_path_override(module: &syn::ItemMod, path_base: &Path) -> Option<PathB
     };
     Some(path_base.join(path.value()))
 }
+
+fn validate_module_cfg_attr(meta: &Meta, module: &syn::Ident) {
+    let Meta::List(list) = meta else {
+        panic!(
+            "cfg_attr on Rust module {module} is not list syntax; source inventories \
+             cannot determine whether it changes the compiler-selected module file"
+        );
+    };
+    let values = list
+        .parse_args_with(syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated)
+        .unwrap_or_else(|error| {
+            panic!(
+                "cannot parse cfg_attr on Rust module {module}: {error}; source inventories \
+                 cannot determine whether it changes the compiler-selected module file"
+            )
+        })
+        .into_iter()
+        .collect::<Vec<_>>();
+    assert!(
+        values.len() >= 2,
+        "cfg_attr on Rust module {module} must contain a condition and at least one \
+         attribute; source inventories cannot determine the compiler-selected module file"
+    );
+    for attribute in values.into_iter().skip(1) {
+        if attribute.path().is_ident("cfg_attr") {
+            validate_module_cfg_attr(&attribute, module);
+        } else if attribute.path().is_ident("path") {
+            panic!(
+                "cfg_attr on Rust module {module} conditionally applies {}; source inventories \
+                 cannot determine whether the compiler reads the default module file or the \
+                 configured path. Use one unconditional #[path = \"...\"] module source per \
+                 build so the compiler-selected file can be scanned",
+                compact_tokens(&attribute)
+            );
+        }
+    }
+}
+
 fn dependency_order(mut packages: BTreeMap<String, RenderPackage>) -> Vec<(String, RenderPackage)> {
     let mut ordered = Vec::with_capacity(packages.len());
     let mut rendered = BTreeSet::new();

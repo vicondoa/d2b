@@ -25,6 +25,7 @@ fn dependent_cannot_forge_registration_or_mint_admitted_session() {
         ])
         .env("CARGO_TARGET_DIR", scratch.path().join("target"))
         .env("TMPDIR", &temp)
+        .env("RUSTC_WRAPPER", "")
         .output()
         .expect("run downstream From compile-pass fixture");
     assert!(
@@ -77,6 +78,7 @@ fn dependent_cannot_forge_registration_or_mint_admitted_session() {
             ])
             .env("CARGO_TARGET_DIR", scratch.path().join("target"))
             .env("TMPDIR", &temp)
+            .env("RUSTC_WRAPPER", "")
             .output()
             .expect("run dependent compile-fail crate");
         let stderr = String::from_utf8(output.stderr).expect("compiler diagnostics are UTF-8");
@@ -132,6 +134,7 @@ fn dependent_cannot_forge_registration_or_mint_admitted_session() {
             )
             .env("CARGO_TARGET_DIR", scratch.path().join("target"))
             .env("TMPDIR", &temp)
+            .env("RUSTC_WRAPPER", "")
             .output()
             .expect("run capability trait compile-fail mutation");
         let stderr = String::from_utf8(output.stderr).expect("compiler diagnostics are UTF-8");

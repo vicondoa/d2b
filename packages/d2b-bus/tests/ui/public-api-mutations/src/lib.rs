@@ -4,6 +4,17 @@ use d2b_bus::router::ComponentSessionAdmission;
 use d2b_session::{AuthenticatedComponentSession, SessionAcceptor};
 use opaque_claims::{PrincipalClaim, SerialClaim};
 
+#[path = "../trait-impl-noncapability-direct-renamed-module.rs"]
+mod noncapability_direct_module_alias;
+
+#[path = "../trait-impl-noncapability-self-renamed-module.rs"]
+mod noncapability_self_module_alias;
+
+#[cfg_attr(all(), doc = "Ordinary module with inert conditional attributes.")]
+#[cfg_attr(all(), cfg_attr(all(), allow(dead_code)))]
+#[path = "../module-cfg-attr-inert.rs"]
+mod inert_module_cfg_attr;
+
 pub fn rogue_admission() -> Option<ComponentSessionAdmission> {
     None
 }

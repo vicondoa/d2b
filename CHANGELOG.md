@@ -72,12 +72,17 @@ deprecations ship one minor release before removal.
 - Kept the source trait-implementation inventory as a best-effort breadth
   check for explicit workspace source forms outside the compiler-enforced set.
   Focused regressions cover direct and inline `#[path]`, ordinary children of
-  path-loaded modules, raw identifiers, lexical symlink paths, local module
-  aliases, `cfg_attr` on external modules, and duplicate logical module paths.
-  Duplicate-module diagnostics retain both logical names without exposing
-  canonical host paths. This syntax scan does not claim general Rust name or
-  module resolution, macro expansion, `include!` expansion, or coverage of
-  downstream implementations.
+  path-loaded modules, raw identifiers, lexical symlink paths, direct and
+  `self as` aliases of local modules containing a discovered capability
+  binding, harmless aliases in both spellings, inert module `cfg_attr`,
+  conditional `cfg_attr` source selection, and duplicate logical module
+  paths. Duplicate-module diagnostics retain both logical names without
+  exposing canonical host paths. The scan skips module aliases without a
+  discovered capability target unless the impl self type names a seeded
+  capability identity, and treats only malformed module `cfg_attr` syntax or
+  conditional `path` selection as source-selection ambiguity. It does not
+  claim general Rust name or module resolution, macro expansion, `include!`
+  expansion, or coverage of downstream implementations.
 
 - Pinned the actual downstream `From<X>` boundary. A dependent crate that owns
   `X` can implement `From<X>` for a capability and compile when it only returns
