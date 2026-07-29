@@ -7,7 +7,7 @@ can be tested directly.
 cd proofs/window-identity-chrome && cargo test
 ```
 
-72 tests. Standalone crate with its own lockfile, deliberately outside the
+84 tests. Standalone crate with its own lockfile, deliberately outside the
 `packages/` workspace, matching the other proofs here.
 
 ## What it proves

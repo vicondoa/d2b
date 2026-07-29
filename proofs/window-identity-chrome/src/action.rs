@@ -41,11 +41,11 @@ impl Action {
     /// ambiguous, so the icon accelerates a label rather than replacing it.
     pub fn label(&self) -> &'static str {
         match self {
-            Action::Terminal => "Terminal",
-            Action::Audio => "Audio",
-            Action::Usb => "USB",
-            Action::Info => "Details",
-            Action::Stop => "Stop",
+            Action::Terminal => "Open terminal",
+            Action::Audio => "Audio…",
+            Action::Usb => "USB devices…",
+            Action::Info => "VM details…",
+            Action::Stop => "Stop VM…",
         }
     }
 
