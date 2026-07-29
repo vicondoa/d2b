@@ -262,8 +262,14 @@ impl CompositorHandler for SessionHost {
             }
             if cleared {
                 entry.snapshot = None;
+                entry.seq = entry.seq.wrapping_add(1);
             } else if let Some(s) = snapshot {
                 entry.snapshot = Some(s);
+                // Monotonic per-surface commit counter. The frontend compares
+                // published metadata to decide whether to re-attach, so without
+                // this a redraw at unchanged geometry is byte-identical to the
+                // previous frame and the window silently freezes.
+                entry.seq = entry.seq.wrapping_add(1);
             }
             shadow.revision = shadow.revision.wrapping_add(1);
         }

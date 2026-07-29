@@ -115,11 +115,10 @@ nix-shell            # provides the above
 cargo test --locked
 ```
 
-**This crate is intentionally outside CI.** It is not a member of
-`packages/Cargo.toml`, and it is not wired into `tests/test-rust.sh` or
-`tests/test-proofs.sh` — a spike should not consume a shipping gate before it
-has proven itself. The existing `packages/d2b-wlproxy-spike` is unwired for the
-same reason.
+**This crate is intentionally outside CI.** It lives under `labs/`, has its own
+Cargo workspace, and is not wired into `tests/test-rust.sh` or
+`tests/test-proofs.sh` — a lab should not consume a shipping gate before it has
+proven itself. `packages/d2b-wlproxy-spike` is unwired for the same reason.
 
 Instead, the following are **mandatory phase-gate evidence**, run locally and
 recorded in each phase's review:

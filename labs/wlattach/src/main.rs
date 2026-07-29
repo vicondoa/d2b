@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
-use d2b_wlattach_spike::present::Frontend;
-use d2b_wlattach_spike::serve::host::{
+use d2b_wlattach::present::Frontend;
+use d2b_wlattach::serve::host::{
     ClientState, PublishedSurface, SessionHost, Shadow, ShadowSurface,
 };
 use smithay::reexports::wayland_server::{Display, ListeningSocket};
@@ -334,7 +334,7 @@ fn serve(name: &str, argv: &[String]) -> Result<(), String> {
             s.set_nonblocking(true).ok();
             input_conns.push((s, Vec::new()));
         }
-        let mut events: Vec<d2b_wlattach_spike::wire::dto::InputEvent> = Vec::new();
+        let mut events: Vec<d2b_wlattach::wire::dto::InputEvent> = Vec::new();
         input_conns.retain_mut(|(c, buf)| {
             let mut chunk = [0u8; 4096];
             let mut alive = true;
@@ -359,8 +359,7 @@ fn serve(name: &str, argv: &[String]) -> Result<(), String> {
                     break;
                 }
                 let frame: Vec<u8> = buf.drain(..4 + len).skip(4).collect();
-                if let Ok(ev) =
-                    postcard::from_bytes::<d2b_wlattach_spike::wire::dto::InputEvent>(&frame)
+                if let Ok(ev) = postcard::from_bytes::<d2b_wlattach::wire::dto::InputEvent>(&frame)
                 {
                     events.push(ev);
                 }
@@ -368,7 +367,7 @@ fn serve(name: &str, argv: &[String]) -> Result<(), String> {
             alive
         });
         for ev in events {
-            d2b_wlattach_spike::serve::host::apply_input(&mut state, ev);
+            d2b_wlattach::serve::host::apply_input(&mut state, ev);
         }
 
         display.dispatch_clients(&mut state).ok();
@@ -428,7 +427,7 @@ fn serve(name: &str, argv: &[String]) -> Result<(), String> {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_millis() as u32)
                 .unwrap_or(0);
-            d2b_wlattach_spike::serve::host::send_frame_callbacks(&state, now);
+            d2b_wlattach::serve::host::send_frame_callbacks(&state, now);
             publish(name, &shadow, &mut last_rev, false);
         }
 
@@ -490,7 +489,7 @@ fn shadow_path(name: &str) -> PathBuf {
 }
 
 fn write_shadow(name: &str, tops: &[(u64, ShadowSurface)]) -> Result<(), String> {
-    use d2b_wlattach_spike::serve::host::{PublishedSurface, SnapshotMeta};
+    use d2b_wlattach::serve::host::{PublishedSurface, SnapshotMeta};
 
     let t0 = std::time::Instant::now();
     let dir = session_dir(name);
@@ -663,7 +662,7 @@ fn present(name: &str) -> Result<(), String> {
 /// a virtual-input tool, which installs its own keymap and so produces keycodes
 /// that mean nothing under ours.
 fn inject(name: &str, key: Option<u32>, click: Option<Vec<f64>>, bare: bool) -> Result<(), String> {
-    use d2b_wlattach_spike::wire::dto::InputEvent;
+    use d2b_wlattach::wire::dto::InputEvent;
     let mut s = UnixStream::connect(session_dir(name).join("input.sock"))
         .map_err(|e| format!("no input socket: {e}"))?;
 

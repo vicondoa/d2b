@@ -1,11 +1,10 @@
-# Standalone spike crate: intentionally NOT a member of packages/Cargo.toml.
-# Precedent: packages/d2b-wlproxy-spike. Deliberately NOT wired into any repo CI
-# gate -- a spike should not consume a shipping gate. Validation is local
-# phase-gate evidence; see README.
+# Experimental crate under labs/. Its own Cargo workspace, and deliberately not
+# wired into any repo CI gate -- a lab should not consume a shipping gate.
+# Validation is local, recorded per phase; see README.
 [workspace]
 
 [package]
-name = "d2b-wlattach-spike"
+name = "d2b-wlattach"
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
