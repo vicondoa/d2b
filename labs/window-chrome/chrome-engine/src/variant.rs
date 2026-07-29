@@ -89,14 +89,17 @@ impl Action {
     /// Short label drawn beside the icon.
     ///
     /// Five bare glyphs proved semantically ambiguous, so the icon is an
-    /// accelerator for a label rather than a replacement for one.
+    /// accelerator for a label rather than a replacement for one. Actions that
+    /// open further controls carry a trailing ellipsis, which is the
+    /// long-established convention for "this asks you something before it
+    /// does anything".
     pub fn label(&self) -> &'static str {
         match self {
-            Action::Terminal => "Terminal",
-            Action::Audio => "Audio",
-            Action::Usb => "USB",
-            Action::Info => "Details",
-            Action::Stop => "Stop",
+            Action::Terminal => "Open terminal",
+            Action::Audio => "Audio…",
+            Action::Usb => "USB devices…",
+            Action::Info => "VM details…",
+            Action::Stop => "Stop VM…",
         }
     }
 

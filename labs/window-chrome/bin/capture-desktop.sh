@@ -8,13 +8,11 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LAB_ROOT="$(dirname "$HERE")"
 cd "$LAB_ROOT" || exit 1
+source "$HERE/capture-lib.sh"
 
 RUN="${RUN_DIR:-out/live-$(date -u +%Y%m%d-%H%M%S)}"
 mkdir -p "$RUN"
 
-# Crop rect over the floating window's top-left corner. Tuned for the operator's
-# 3840x2160 output with the window placed by niri's floating default.
-CROP="${CROP:-1290,80 560x70}"
 WIN_W="${WIN_W:-900}"
 WIN_H="${WIN_H:-380}"
 
@@ -29,15 +27,15 @@ shoot() {
 
   env "${envs[@]}" setsid "$HERE/d2b-chrome-lab" --label "$label" --accent "$accent" \
     -- foot --title "chrome lab $name" >/dev/null 2>&1 &
-  sleep 7
 
-  niri msg action move-window-to-floating >/dev/null 2>&1
-  sleep 0.5
-  niri msg action set-window-width "$WIN_W" >/dev/null 2>&1
-  niri msg action set-window-height "$WIN_H" >/dev/null 2>&1
-  sleep 1.5
+  local id
+  id="$(wait_for_window "chrome lab $name")" || {
+    echo "FAILED $name: window never mapped" >&2
+    return 1
+  }
+  place_window "$id" "$WIN_W" "$WIN_H"
 
-  if grim -g "$CROP" "$RUN/$name.png"; then
+  if capture_window "$id" "$RUN/$name.png"; then
     echo "captured $name -> $RUN/$name.png"
   else
     echo "FAILED $name" >&2
@@ -54,6 +52,10 @@ shoot expanded-custom    1 parts-custom.json  Work                   '#ffb347'
 shoot long-label         0 parts-default.json corp-workstation.work  '#ffb347'
 shoot realm-personal     0 parts-default.json Personal               '#7fc8ff'
 shoot realm-untrusted    0 parts-default.json Untrusted              '#f2557f'
+
+# Narrow window: the labelled row cannot fit, so optional actions must yield
+# from the end rather than the tab clipping or overhanging.
+WIN_W=420 shoot narrow-overflow 1 parts-default.json Work '#ffb347'
 
 "$HERE/stop-lab.sh"
 echo "$RUN"

@@ -42,25 +42,32 @@ pub const MAX_PARTS_PER_ROW: usize = 16;
 ///
 /// Serialized as a flat string (`"identity"`, `"audio"`, `"spacer:8"`) rather
 /// than as a tagged enum. A generated config is something an operator reads and
-/// diffs, so `["identity", "chevron", "separator", "audio"]` is the right wire
+/// diffs, so `["identity", "disclosure", "separator", "audio"]` is the right wire
 /// form; serde's default for a newtype variant would produce
 /// `{"action": "audio"}` in the middle of that list, which is noise.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Part {
-    /// The workload name. Carries identity, so it is mandatory: see
-    /// [`PartsConfig::validate`].
+    /// The workload name. Carries identity, so it is mandatory, must appear
+    /// exactly once, and must come first: see [`PartsConfig::validate`].
     Identity,
     /// The expand/collapse affordance. Mandatory whenever an expanded row
     /// exists, otherwise the row is unreachable by pointer.
-    Chevron,
+    Disclosure,
     /// A hairline rule with symmetric spacing.
     Separator,
-    /// The security-capability token (`UNVERIFIED`, `MIC`, `USB`, ...).
-    Status,
-    /// An action icon button.
+    /// Active-state tokens: microphone in use, USB devices attached, and
+    /// similar. Activity, not capability -- a capability the workload merely
+    /// *has* belongs in `vm-details`, while something it is *doing right now*
+    /// belongs where the operator can see it without interacting.
+    ActivityStatus,
+    /// An action button.
     Action(Action),
     /// Fixed inert space, in logical px.
     Spacer(u16),
+    /// Marks actions that did not fit the available width. Never configured;
+    /// inserted by layout when a row overflows, so an operator can tell that
+    /// something is hidden rather than missing.
+    Overflow,
 }
 
 impl std::fmt::Display for Part {
@@ -89,9 +96,9 @@ impl std::str::FromStr for Part {
         }
         Ok(match s {
             "identity" => Part::Identity,
-            "chevron" => Part::Chevron,
+            "disclosure" => Part::Disclosure,
             "separator" => Part::Separator,
-            "status" => Part::Status,
+            "activity-status" => Part::ActivityStatus,
             "spacer" => Part::Spacer(4),
             "open-terminal" => Part::Action(Action::Terminal),
             "audio-controls" => Part::Action(Action::Audio),
@@ -100,8 +107,8 @@ impl std::str::FromStr for Part {
             "stop-vm" => Part::Action(Action::Stop),
             other => {
                 return Err(format!(
-                    "unknown part `{other}`; expected one of identity, chevron, separator, \
-                     status, spacer, spacer:<px>, open-terminal, audio-controls, usb-devices, \
+                    "unknown part `{other}`; expected one of identity, disclosure, separator, \
+                     activity-status, spacer, spacer:<px>, open-terminal, audio-controls, usb-devices, \
                      vm-details, stop-vm"
                 ))
             }
@@ -127,21 +134,38 @@ impl Part {
     /// they cannot swallow a click that was aimed past them.
     pub fn hit_kind(&self) -> HitKind {
         match self {
-            Part::Identity | Part::Chevron => HitKind::Toggle,
-            Part::Status => HitKind::Status,
+            Part::Identity | Part::Disclosure | Part::Overflow => HitKind::Toggle,
+            Part::ActivityStatus => HitKind::Status,
             Part::Action(a) => HitKind::Action(*a),
             Part::Separator | Part::Spacer(_) => HitKind::Inert,
         }
+    }
+
+    /// Whether this part may be dropped when the row does not fit.
+    ///
+    /// Identity and its disclosure never may: losing the label is the failure
+    /// this surface exists to prevent, and losing the disclosure would strand
+    /// the actions behind it.
+    pub fn is_droppable(&self) -> bool {
+        !matches!(self, Part::Identity | Part::Disclosure | Part::Overflow)
+    }
+
+    /// Whether activating this part is destructive. Presentation depends on
+    /// this as well as dispatch, so a customized row cannot accidentally make
+    /// a destructive action look ordinary.
+    pub fn is_destructive(&self) -> bool {
+        matches!(self, Part::Action(a) if a.is_destructive())
     }
 
     /// Stable name for config, logging and tests.
     pub fn name(&self) -> &'static str {
         match self {
             Part::Identity => "identity",
-            Part::Chevron => "chevron",
+            Part::Disclosure => "disclosure",
             Part::Separator => "separator",
-            Part::Status => "status",
+            Part::ActivityStatus => "activity-status",
             Part::Spacer(_) => "spacer",
+            Part::Overflow => "overflow",
             Part::Action(a) => a.name(),
         }
     }
@@ -167,7 +191,7 @@ pub struct Placed {
     pub x: f32,
     pub width: f32,
     /// Advance width of the drawn glyphs, for parts that draw text. Drawing
-    /// needs this to position the chevron directly after the label rather than
+    /// needs this to position the disclosure mark directly after the label rather than
     /// after the label's padded box.
     pub text_advance: f32,
 }
@@ -191,8 +215,8 @@ pub struct Metrics {
     /// Leading furniture: the accent bar plus its breathing room.
     pub left_furniture: f32,
     pub side_pad: f32,
-    pub chevron_width: f32,
-    pub chevron_gap: f32,
+    pub disclosure_width: f32,
+    pub disclosure_gap: f32,
     pub icon_box: f32,
     pub icon_gap: f32,
     pub sep_gap: f32,
@@ -239,11 +263,11 @@ impl Parts {
                     let a = font.measure(label, m.font_px, m.tracking);
                     (a, a)
                 }
-                Part::Status => {
+                Part::ActivityStatus => {
                     let a = font.measure("STATUS", m.font_px * 0.85, m.tracking);
                     (a, a)
                 }
-                Part::Chevron => (m.chevron_width, 0.0),
+                Part::Disclosure => (m.disclosure_width, 0.0),
                 Part::Separator => (m.sep_width.max(1.0), 0.0),
                 Part::Action(a) => {
                     if m.action_labels {
@@ -254,6 +278,10 @@ impl Parts {
                     }
                 }
                 Part::Spacer(px) => (f32::from(*px) * m.scale, 0.0),
+                Part::Overflow => {
+                    let a = font.measure("\u{2026}", m.font_px, m.tracking);
+                    (a, a)
+                }
             };
 
             // WCAG 2.2 SC 2.5.8: no interactive part may be narrower than the
@@ -268,7 +296,7 @@ impl Parts {
                 m.side_pad
             } else {
                 match part {
-                    Part::Chevron => m.chevron_gap,
+                    Part::Disclosure => m.disclosure_gap,
                     Part::Separator => m.sep_gap,
                     Part::Action(_) => match placed.last().map(|p| &p.part) {
                         Some(Part::Action(_)) => m.icon_gap,
@@ -348,6 +376,74 @@ impl Parts {
     pub fn find(&self, name: &str) -> Option<&Placed> {
         self.placed.iter().find(|p| p.part.name() == name)
     }
+
+    /// Whether any configured part was dropped to fit the available width.
+    pub fn overflowed(&self) -> bool {
+        self.placed.iter().any(|p| p.part == Part::Overflow)
+    }
+
+    /// Lay out `parts`, dropping optional parts from the end until the row
+    /// fits `available` physical px.
+    ///
+    /// A labelled row can be wider than a narrow window, and every way of
+    /// coping with that except this one is worse:
+    ///
+    /// - clipping would cut the identity label, which is the one thing that
+    ///   must always be legible;
+    /// - shrinking the parts would break the 24 px target floor;
+    /// - letting the tab run past the window would put controls under the
+    ///   resize edge, or off-screen entirely;
+    /// - refusing to decorate would remove identity because an *optional*
+    ///   action did not fit, which is a spectacularly bad trade.
+    ///
+    /// So identity and its disclosure are never dropped, and everything after
+    /// them yields from the end. An overflow mark replaces what was dropped,
+    /// so the operator can see that actions are hidden rather than absent. If
+    /// even identity plus disclosure cannot fit, this returns the unfitted
+    /// row and the caller's geometry pass fails closed with a reason.
+    pub fn layout_within(
+        parts: &[Part],
+        m: &Metrics,
+        font: &VectorFont<'_>,
+        label: &str,
+        available: f32,
+    ) -> Parts {
+        let full = Parts::layout(parts, m, font, label);
+        if full.width <= available {
+            return full;
+        }
+
+        let mut kept: Vec<Part> = parts.to_vec();
+        loop {
+            // Drop the last droppable part.
+            let Some(idx) = kept.iter().rposition(|p| p.is_droppable()) else {
+                // Nothing left to give: identity and disclosure alone are too
+                // wide. Return them and let geometry fail closed.
+                return Parts::layout(&kept, m, font, label);
+            };
+            kept.remove(idx);
+
+            // Trailing inert parts left behind by a drop are noise.
+            while kept
+                .last()
+                .is_some_and(|p| p.hit_kind() == HitKind::Inert)
+            {
+                kept.pop();
+            }
+
+            let mut candidate = kept.clone();
+            candidate.push(Part::Overflow);
+            let laid = Parts::layout(&candidate, m, font, label);
+            if laid.width <= available {
+                return laid;
+            }
+            if !kept.iter().any(|p| p.is_droppable()) {
+                // Even with everything droppable gone, the overflow mark does
+                // not fit; drop it too rather than exceed the width.
+                return Parts::layout(&kept, m, font, label);
+            }
+        }
+    }
 }
 
 /// The user-facing configuration: which parts appear, collapsed and expanded.
@@ -377,10 +473,10 @@ pub struct PartsConfig {
 impl Default for PartsConfig {
     fn default() -> Self {
         Self {
-            collapsed: vec![Part::Identity, Part::Chevron],
+            collapsed: vec![Part::Identity, Part::Disclosure],
             expanded: vec![
                 Part::Identity,
-                Part::Chevron,
+                Part::Disclosure,
                 Part::Separator,
                 Part::Action(Action::Terminal),
                 Part::Action(Action::Audio),
@@ -404,6 +500,13 @@ pub enum ConfigError {
     /// Two identity parts make "which VM is this" ambiguous, which is worse
     /// than none at all.
     RepeatedIdentity { row: &'static str },
+    /// Identity must be the first part. Its fixed position at the window's
+    /// top-left is what makes "the topmost label is the real one" a rule an
+    /// operator can actually apply against a guest-drawn forgery.
+    IdentityNotFirst { row: &'static str },
+    /// The disclosure mark must sit immediately after identity, so the
+    /// control that opens the row is always in the same place.
+    DisclosureNotAdjacentToIdentity { row: &'static str },
     /// An expanded row that cannot be reached is a trap.
     UnreachableExpansion,
     /// Identity must not move when the tab opens. Requiring `expanded` to
@@ -428,9 +531,18 @@ impl std::fmt::Display for ConfigError {
                 f,
                 "the `{row}` row lists `identity` more than once: a window has one identity"
             ),
+            ConfigError::IdentityNotFirst { row } => write!(
+                f,
+                "the `{row}` row must begin with `identity`: its fixed position is what \\
+                 distinguishes the real tab from one a guest has drawn"
+            ),
+            ConfigError::DisclosureNotAdjacentToIdentity { row } => write!(
+                f,
+                "in the `{row}` row, `disclosure` must come immediately after `identity`"
+            ),
             ConfigError::UnreachableExpansion => write!(
                 f,
-                "the `collapsed` row must contain `chevron` when `expanded` differs from it, \
+                "the `collapsed` row must contain `disclosure` when `expanded` differs from it, \
                  otherwise the expanded row can never be opened"
             ),
             ConfigError::ExpansionReordersRestingParts { index } => write!(
@@ -476,6 +588,18 @@ impl PartsConfig {
                 1 => {}
                 _ => return Err(ConfigError::RepeatedIdentity { row }),
             }
+            // Identity's position is what makes "the label at the top-left of
+            // the window is the real one" a rule an operator can apply. A
+            // configuration that moves it destroys that, so it is refused
+            // rather than honoured.
+            if parts.first() != Some(&Part::Identity) {
+                return Err(ConfigError::IdentityNotFirst { row });
+            }
+            if let Some(d) = parts.iter().position(|p| *p == Part::Disclosure)
+                && d != 1
+            {
+                return Err(ConfigError::DisclosureNotAdjacentToIdentity { row });
+            }
             let mut seen: Vec<&str> = Vec::new();
             for p in parts.iter() {
                 // Inert parts are pure spacing, so repeating them is a layout
@@ -493,7 +617,7 @@ impl PartsConfig {
             }
         }
         if self.expanded != self.collapsed {
-            if !self.collapsed.contains(&Part::Chevron) {
+            if !self.collapsed.contains(&Part::Disclosure) {
                 return Err(ConfigError::UnreachableExpansion);
             }
             for (i, resting) in self.collapsed.iter().enumerate() {
@@ -538,8 +662,8 @@ mod tests {
             tracking: 0.0,
             left_furniture: 4.0,
             side_pad: 8.0,
-            chevron_width: 9.0,
-            chevron_gap: 5.0,
+            disclosure_width: 9.0,
+            disclosure_gap: 5.0,
             icon_box: 18.0,
             icon_gap: 4.0,
             sep_gap: 6.0,
@@ -649,8 +773,8 @@ mod tests {
         m2.font_px = 24.0;
         m2.left_furniture = 8.0;
         m2.side_pad = 16.0;
-        m2.chevron_width = 18.0;
-        m2.chevron_gap = 10.0;
+        m2.disclosure_width = 18.0;
+        m2.disclosure_gap = 10.0;
         m2.icon_box = 36.0;
         m2.icon_gap = 8.0;
         m2.sep_gap = 12.0;
@@ -675,8 +799,8 @@ mod tests {
     #[test]
     fn config_without_identity_is_refused() {
         let cfg = PartsConfig {
-            collapsed: vec![Part::Chevron],
-            expanded: vec![Part::Chevron],
+            collapsed: vec![Part::Disclosure],
+            expanded: vec![Part::Disclosure],
             compact_actions: false,
         };
         assert_eq!(
@@ -686,7 +810,7 @@ mod tests {
     }
 
     #[test]
-    fn expansion_without_a_chevron_is_refused() {
+    fn expansion_without_a_disclosure_is_refused() {
         let cfg = PartsConfig {
             collapsed: vec![Part::Identity],
             expanded: vec![Part::Identity, Part::Action(Action::Stop)],
@@ -698,8 +822,8 @@ mod tests {
     #[test]
     fn duplicate_parts_are_refused_but_spacers_repeat() {
         let dup = PartsConfig {
-            collapsed: vec![Part::Identity, Part::Chevron, Part::Chevron],
-            expanded: vec![Part::Identity, Part::Chevron],
+            collapsed: vec![Part::Identity, Part::Disclosure, Part::Disclosure],
+            expanded: vec![Part::Identity, Part::Disclosure],
             compact_actions: false,
         };
         assert!(matches!(
@@ -710,15 +834,15 @@ mod tests {
         let spacers = PartsConfig {
             collapsed: vec![
                 Part::Identity,
+                Part::Disclosure,
                 Part::Spacer(4),
                 Part::Spacer(4),
-                Part::Chevron,
             ],
             expanded: vec![
                 Part::Identity,
+                Part::Disclosure,
                 Part::Spacer(4),
                 Part::Spacer(4),
-                Part::Chevron,
             ],
             compact_actions: false,
         };
@@ -732,7 +856,7 @@ mod tests {
         // Actions must appear as bare names, not as tagged objects: this is a
         // file an operator reads and diffs.
         assert!(json.contains("\"identity\""), "{json}");
-        assert!(json.contains("\"chevron\""), "{json}");
+        assert!(json.contains("\"disclosure\""), "{json}");
         assert!(json.contains("\"open-terminal\""), "{json}");
         assert!(
             !json.contains("{\"action\""),
@@ -745,15 +869,15 @@ mod tests {
     #[test]
     fn a_hand_written_config_reads_the_way_an_operator_would_write_it() {
         let json = r#"{
-          "collapsed": ["identity", "chevron"],
-          "expanded": ["identity", "chevron", "separator", "audio-controls", "usb-devices", "open-terminal"]
+          "collapsed": ["identity", "disclosure"],
+          "expanded": ["identity", "disclosure", "separator", "audio-controls", "usb-devices", "open-terminal"]
         }"#;
         let cfg = PartsConfig::from_json(json).expect("flat part names must parse");
         assert_eq!(
             cfg.expanded,
             vec![
                 Part::Identity,
-                Part::Chevron,
+                Part::Disclosure,
                 Part::Separator,
                 Part::Action(Action::Audio),
                 Part::Action(Action::Usb),
@@ -765,8 +889,8 @@ mod tests {
     #[test]
     fn spacers_carry_their_width_through_the_wire_form() {
         let cfg = PartsConfig {
-            collapsed: vec![Part::Identity, Part::Spacer(12), Part::Chevron],
-            expanded: vec![Part::Identity, Part::Spacer(12), Part::Chevron],
+            collapsed: vec![Part::Identity, Part::Disclosure, Part::Spacer(12)],
+            expanded: vec![Part::Identity, Part::Disclosure, Part::Spacer(12)],
             compact_actions: false,
         };
         let json = serde_json::to_string(&cfg).unwrap();
@@ -802,7 +926,7 @@ mod tests {
             Part::Action(Action::Stop),
             Part::Separator,
             Part::Identity,
-            Part::Chevron,
+            Part::Disclosure,
         ];
         let p = Parts::layout(&reordered, &m, &font, "Work");
         let stop = p.find("stop-vm").unwrap();
@@ -816,7 +940,7 @@ mod tests {
     fn inert_parts_never_claim_a_press() {
         let m = metrics();
         let p = Parts::layout(
-            &[Part::Identity, Part::Separator, Part::Chevron],
+            &[Part::Identity, Part::Separator, Part::Disclosure],
             &m,
             &font(),
             "Work",
@@ -856,8 +980,8 @@ mod a11y_tests {
             tracking: 0.0,
             left_furniture: 7.0 * scale,
             side_pad: 8.0 * scale,
-            chevron_width: 9.0 * scale,
-            chevron_gap: 5.0 * scale,
+            disclosure_width: 9.0 * scale,
+            disclosure_gap: 5.0 * scale,
             icon_box: 18.0 * scale,
             icon_gap: 4.0 * scale,
             sep_gap: 6.0 * scale,
@@ -920,8 +1044,8 @@ mod a11y_tests {
     #[test]
     fn identity_must_appear_exactly_once() {
         let cfg = PartsConfig {
-            collapsed: vec![Part::Identity, Part::Identity, Part::Chevron],
-            expanded: vec![Part::Identity, Part::Chevron],
+            collapsed: vec![Part::Identity, Part::Identity, Part::Disclosure],
+            expanded: vec![Part::Identity, Part::Disclosure],
             compact_actions: false,
         };
         assert_eq!(
@@ -935,17 +1059,18 @@ mod a11y_tests {
         // Reordering on expansion would make the label jump under the pointer
         // at the exact moment the user is aiming at it.
         let cfg = PartsConfig {
-            collapsed: vec![Part::Identity, Part::Chevron],
+            collapsed: vec![Part::Identity, Part::Disclosure],
             expanded: vec![
-                Part::Chevron,
                 Part::Identity,
+                Part::Action(Action::Stop),
+                Part::Disclosure,
                 Part::Action(Action::Stop),
             ],
             compact_actions: false,
         };
         assert_eq!(
             cfg.validate(),
-            Err(ConfigError::ExpansionReordersRestingParts { index: 0 })
+            Err(ConfigError::DisclosureNotAdjacentToIdentity { row: "expanded" })
         );
     }
 
@@ -965,7 +1090,7 @@ mod a11y_tests {
 
     #[test]
     fn an_overlong_row_is_refused() {
-        let mut collapsed = vec![Part::Identity, Part::Chevron];
+        let mut collapsed = vec![Part::Identity, Part::Disclosure];
         collapsed.extend(std::iter::repeat_n(Part::Spacer(1), MAX_PARTS_PER_ROW));
         let cfg = PartsConfig {
             expanded: collapsed.clone(),
@@ -1009,6 +1134,194 @@ mod a11y_tests {
                 "`{n}` should read as an outcome, e.g. `open-terminal`"
             );
             assert!(!a.label().is_empty(), "{n} needs a visible label");
+        }
+    }
+}
+
+#[cfg(test)]
+mod overflow_tests {
+    use super::*;
+    use crate::PROTOTYPE_FONT;
+
+    fn font() -> VectorFont<'static> {
+        VectorFont::from_bytes(PROTOTYPE_FONT).unwrap()
+    }
+
+    fn m() -> Metrics {
+        Metrics {
+            scale: 1.0,
+            font_px: 12.0,
+            tracking: 0.0,
+            left_furniture: 7.0,
+            side_pad: 8.0,
+            disclosure_width: 9.0,
+            disclosure_gap: 5.0,
+            icon_box: 18.0,
+            icon_gap: 4.0,
+            sep_gap: 6.0,
+            sep_width: 1.0,
+            action_labels: true,
+            label_gap: 5.0,
+        }
+    }
+
+    #[test]
+    fn a_row_that_fits_is_left_alone() {
+        let cfg = PartsConfig::default();
+        let full = Parts::layout(&cfg.expanded, &m(), &font(), "Work");
+        let fitted =
+            Parts::layout_within(&cfg.expanded, &m(), &font(), "Work", full.width + 100.0);
+        assert_eq!(full.placed, fitted.placed);
+        assert!(!fitted.overflowed());
+    }
+
+    #[test]
+    fn a_narrow_window_drops_optional_actions_from_the_end() {
+        let cfg = PartsConfig::default();
+        let font = font();
+        let full = Parts::layout(&cfg.expanded, &m(), &font, "Work");
+        let fitted = Parts::layout_within(&cfg.expanded, &m(), &font, "Work", full.width * 0.6);
+
+        assert!(fitted.width <= full.width * 0.6 + 0.5);
+        assert!(fitted.overflowed(), "a dropped row must say so");
+        // Earlier actions survive; later ones yield first.
+        assert!(fitted.find("open-terminal").is_some());
+        assert!(fitted.find("stop-vm").is_none());
+    }
+
+    #[test]
+    fn identity_and_disclosure_are_never_dropped() {
+        // The whole point: an optional action must never cost the label.
+        let cfg = PartsConfig::default();
+        let font = font();
+        for available in [400.0_f32, 200.0, 120.0, 80.0, 40.0, 10.0] {
+            let fitted = Parts::layout_within(&cfg.expanded, &m(), &font, "Work", available);
+            assert!(
+                fitted.find("identity").is_some(),
+                "identity dropped at width {available}"
+            );
+            assert!(
+                fitted.find("disclosure").is_some(),
+                "disclosure dropped at width {available}"
+            );
+        }
+    }
+
+    #[test]
+    fn overflow_never_shrinks_a_target_below_the_floor() {
+        let cfg = PartsConfig::default();
+        let font = font();
+        for available in [400.0_f32, 200.0, 120.0, 60.0] {
+            let fitted = Parts::layout_within(&cfg.expanded, &m(), &font, "Work", available);
+            for p in &fitted.placed {
+                if p.part.hit_kind() == HitKind::Inert {
+                    continue;
+                }
+                assert!(
+                    p.width >= MIN_TARGET_PX - 0.01,
+                    "{} shrank to {} at width {available}",
+                    p.part.name(),
+                    p.width
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_dropped_row_still_has_no_dead_zones() {
+        let cfg = PartsConfig::default();
+        let font = font();
+        let full = Parts::layout(&cfg.expanded, &m(), &font, "Work");
+        let fitted = Parts::layout_within(&cfg.expanded, &m(), &font, "Work", full.width * 0.5);
+        let mut x = 0.0_f32;
+        while x < fitted.width {
+            assert!(fitted.hit(x).is_some(), "dead zone at {x} after overflow");
+            x += 0.5;
+        }
+    }
+
+    #[test]
+    fn a_trailing_separator_is_not_left_behind() {
+        // Dropping every action after a separator would otherwise leave a rule
+        // pointing at nothing.
+        let cfg = PartsConfig::default();
+        let font = font();
+        let fitted = Parts::layout_within(&cfg.expanded, &m(), &font, "Work", 130.0);
+        if let Some(last) = fitted.placed.last() {
+            assert_ne!(last.part, Part::Separator);
+        }
+    }
+
+    #[test]
+    fn a_long_label_does_not_cost_the_identity_it_names() {
+        let cfg = PartsConfig::default();
+        let font = font();
+        let fitted = Parts::layout_within(
+            &cfg.expanded,
+            &m(),
+            &font,
+            "corp-workstation.work",
+            180.0,
+        );
+        assert!(fitted.find("identity").is_some());
+    }
+
+    #[test]
+    fn identity_must_come_first() {
+        let cfg = PartsConfig {
+            collapsed: vec![Part::Disclosure, Part::Identity],
+            expanded: vec![Part::Disclosure, Part::Identity],
+            compact_actions: false,
+        };
+        assert_eq!(
+            cfg.validate(),
+            Err(ConfigError::IdentityNotFirst { row: "collapsed" })
+        );
+    }
+
+    #[test]
+    fn disclosure_must_follow_identity_immediately() {
+        let cfg = PartsConfig {
+            collapsed: vec![Part::Identity, Part::Spacer(4), Part::Disclosure],
+            expanded: vec![Part::Identity, Part::Spacer(4), Part::Disclosure],
+            compact_actions: false,
+        };
+        assert_eq!(
+            cfg.validate(),
+            Err(ConfigError::DisclosureNotAdjacentToIdentity { row: "collapsed" })
+        );
+    }
+
+    #[test]
+    fn destructive_parts_are_identifiable_for_presentation() {
+        // is_destructive has to affect drawing, not only dispatch, or a
+        // customized row can make Stop VM look like an ordinary action.
+        assert!(Part::Action(Action::Stop).is_destructive());
+        assert!(!Part::Action(Action::Terminal).is_destructive());
+        assert!(!Part::Identity.is_destructive());
+    }
+
+    #[test]
+    fn identity_and_disclosure_are_not_droppable() {
+        assert!(!Part::Identity.is_droppable());
+        assert!(!Part::Disclosure.is_droppable());
+        assert!(Part::Action(Action::Stop).is_droppable());
+        assert!(Part::Separator.is_droppable());
+    }
+
+    #[test]
+    fn submenu_actions_are_labelled_with_an_ellipsis() {
+        for a in Action::DEFAULTS {
+            if a.opens_submenu() || a.is_destructive() {
+                assert!(
+                    a.label().ends_with('\u{2026}'),
+                    "{} opens further controls, so its label needs an ellipsis: {}",
+                    a.name(),
+                    a.label()
+                );
+            } else {
+                assert!(!a.label().ends_with('\u{2026}'), "{} acts immediately", a.name());
+            }
         }
     }
 }

@@ -42,8 +42,8 @@ fn metrics(spec: &ChromeSpec, cfg: &PartsConfig) -> Metrics {
         tracking: spec.font_px * spec.tracking_em * s,
         left_furniture: (LEFT_FURNITURE + BAR_WIDTH) * s,
         side_pad: SIDE_PAD * s,
-        chevron_width: CHEVRON_WIDTH * s,
-        chevron_gap: CHEVRON_GAP * s,
+        disclosure_width: CHEVRON_WIDTH * s,
+        disclosure_gap: CHEVRON_GAP * s,
         icon_box: ICON_BOX * s,
         icon_gap: ICON_GAP * s,
         sep_gap: SEP_GAP * s,
@@ -123,7 +123,10 @@ pub fn layout(
 ) -> Option<TabLayout> {
     let m = metrics(spec, cfg);
     let row = cfg.row(spec.expanded);
-    let parts = Parts::layout(row, &m, font, &spec.label);
+    // Keep the tab clear of both window edges, so it can never sit under an
+    // edge-resize grab even when the row is at its widest.
+    let available = (content_width as f32 - (TAB_INSET as f32 * spec.scale + 1.0) * 2.0).max(0.0);
+    let parts = Parts::layout_within(row, &m, font, &spec.label, available);
 
     // The band still comes from the shared geometry rules, so the accessibility
     // floors and the fail-closed contract continue to apply.
@@ -204,7 +207,7 @@ pub fn render_band(
                 let cx = x + (placed.width - placed.text_advance) / 2.0;
                 font.draw(&mut pm, &spec.label, m.font_px, m.tracking, cx, baseline, fg);
             }
-            Part::Status => {
+            Part::ActivityStatus => {
                 if let Some(status) = &spec.status {
                     font.draw(
                         &mut pm,
@@ -217,15 +220,15 @@ pub fn render_band(
                     );
                 }
             }
-            Part::Chevron => {
+            Part::Disclosure => {
                 // The part box was widened to the target-size floor, but the
                 // glyph must keep its designed size: growing the hit box is an
                 // accessibility fix, growing the mark is a drawing bug.
                 skia::draw_chevron(
                     &mut pm,
-                    x + (placed.width - m.chevron_width) / 2.0,
+                    x + (placed.width - m.disclosure_width) / 2.0,
                     mid_y,
-                    m.chevron_width,
+                    m.disclosure_width,
                     spec.expanded,
                     fg.with_alpha(0xd0),
                 );
@@ -301,6 +304,12 @@ pub fn render_band(
                 }
             }
             Part::Spacer(_) => {}
+            Part::Overflow => {
+                // An ellipsis, so hidden actions read as hidden rather than
+                // absent. Pressing it opens the full set in tier 2.
+                let cx = x + (placed.width - placed.text_advance) / 2.0;
+                font.draw(&mut pm, "\u{2026}", m.font_px, m.tracking, cx, baseline, fg);
+            }
         }
     }
 
@@ -385,12 +394,12 @@ mod tests {
     }
 
     #[test]
-    fn identity_and_chevron_both_toggle() {
+    fn identity_and_disclosure_both_toggle() {
         let f = font();
         let (_, l) = render_band(&spec(), &cfg(), &f, 1280).unwrap();
         let mid_y = f64::from(l.tab_y + l.tab_height / 2.0);
         let identity = l.parts.find("identity").unwrap();
-        let chevron = l.parts.find("chevron").unwrap();
+        let chevron = l.parts.find("disclosure").unwrap();
         for p in [identity, chevron] {
             let x = f64::from(l.tab_x + p.x + p.width / 2.0);
             assert_eq!(l.hit_kind(x, mid_y), Some(HitKind::Toggle));
@@ -478,10 +487,10 @@ mod tests {
         // layout unit test.
         let f = font();
         let custom = PartsConfig {
-            collapsed: vec![Part::Identity, Part::Chevron],
+            collapsed: vec![Part::Identity, Part::Disclosure],
             expanded: vec![
                 Part::Identity,
-                Part::Chevron,
+                Part::Disclosure,
                 Part::Separator,
                 Part::Action(Action::Stop),
                 Part::Action(Action::Terminal),
@@ -505,5 +514,79 @@ mod tests {
             l.hit(f64::from(l.tab_x + term.x + term.width / 2.0), mid_y),
             Some(Some(Action::Terminal))
         );
+    }
+}
+
+#[cfg(test)]
+mod narrow_tests {
+    use super::*;
+    use crate::{variant::Candidate, PROTOTYPE_FONT};
+
+    fn font() -> VectorFont<'static> {
+        VectorFont::from_bytes(PROTOTYPE_FONT).unwrap()
+    }
+
+    fn spec() -> ChromeSpec {
+        let mut s = ChromeSpec::new(Candidate::Tab, "Work", Rgba::rgb(0xff, 0xb3, 0x47));
+        s.expanded = true;
+        s
+    }
+
+    #[test]
+    fn the_tab_never_runs_past_a_narrow_window() {
+        // The labelled row is wider than a small window. It must yield rather
+        // than overhang, or its controls end up under the resize edge.
+        let f = font();
+        let cfg = PartsConfig::default();
+        for width in [1280_u32, 640, 480, 360, 280, 200, 160] {
+            let Some(l) = layout(&spec(), &cfg, &f, width) else {
+                continue;
+            };
+            let (x, _, w, _) = l.input_region();
+            assert!(x > 0, "region touches the left edge at width {width}");
+            assert!(
+                x + w < width as i32,
+                "tab overhangs a {width}px window: region ends at {}",
+                x + w
+            );
+        }
+    }
+
+    #[test]
+    fn identity_survives_every_width_that_decorates_at_all() {
+        let f = font();
+        let cfg = PartsConfig::default();
+        for width in [1280_u32, 640, 360, 200, 160] {
+            if let Some(l) = layout(&spec(), &cfg, &f, width) {
+                assert!(
+                    l.parts.find("identity").is_some(),
+                    "identity dropped at width {width}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_narrow_window_still_hits_cleanly_everywhere_on_the_tab() {
+        let f = font();
+        let cfg = PartsConfig::default();
+        let l = layout(&spec(), &cfg, &f, 360).expect("360px decorates");
+        let mid_y = f64::from(l.tab_y + l.tab_height / 2.0);
+        let mut x = f64::from(l.tab_x);
+        while x < f64::from(l.tab_x + l.tab_width) {
+            assert!(l.hit_kind(x, mid_y).is_some(), "dead press at {x}");
+            x += 0.5;
+        }
+    }
+
+    #[test]
+    fn a_narrow_window_renders_without_panicking() {
+        let f = font();
+        let cfg = PartsConfig::default();
+        for width in [1280_u32, 480, 300, 200, 160] {
+            if let Some((bytes, l)) = render_band(&spec(), &cfg, &f, width) {
+                assert_eq!(bytes.len(), width as usize * l.band_height as usize * 4);
+            }
+        }
     }
 }
