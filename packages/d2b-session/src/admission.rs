@@ -380,29 +380,34 @@ pub struct SessionAcceptor<C> {
 }
 
 fn assert_session_acceptor_has_no_minting_traits<C>() {
-    trait AmbiguousIfImpl<A, B> {
+    // Any guarded impl makes this assertion ambiguous. Remove the capability
+    // trait impl instead of weakening this construction boundary.
+    trait CapabilityMustNotImplementCloneCopyDefaultOrFrom<A, B> {
         fn some_item() {}
     }
-    impl<T: ?Sized, B> AmbiguousIfImpl<(), B> for T {}
-    impl<T: Clone, B> AmbiguousIfImpl<u8, B> for T {}
-    impl<T: Copy, B> AmbiguousIfImpl<u16, B> for T {}
-    impl<T: Default, B> AmbiguousIfImpl<u32, B> for T {}
-    impl<T: From<B>, B> AmbiguousIfImpl<u64, B> for T {}
-    let _ = <SessionAcceptor<C> as AmbiguousIfImpl<_, C>>::some_item;
+    impl<T: ?Sized, B> CapabilityMustNotImplementCloneCopyDefaultOrFrom<(), B> for T {}
+    impl<T: Clone, B> CapabilityMustNotImplementCloneCopyDefaultOrFrom<u8, B> for T {}
+    impl<T: Copy, B> CapabilityMustNotImplementCloneCopyDefaultOrFrom<u16, B> for T {}
+    impl<T: Default, B> CapabilityMustNotImplementCloneCopyDefaultOrFrom<u32, B> for T {}
+    impl<T: From<B>, B> CapabilityMustNotImplementCloneCopyDefaultOrFrom<u64, B> for T {}
+    let _ =
+        <SessionAcceptor<C> as CapabilityMustNotImplementCloneCopyDefaultOrFrom<_, C>>::some_item;
 }
 
 const _: fn() = assert_session_acceptor_has_no_minting_traits::<()>;
 
 const _: fn() = || {
-    trait AmbiguousIfImpl<A> {
+    // Any guarded impl makes this assertion ambiguous. Remove the capability
+    // trait impl instead of weakening this construction boundary.
+    trait CapabilityMustNotImplementCloneCopyDefaultOrFrom<A> {
         fn some_item() {}
     }
-    impl<T: ?Sized> AmbiguousIfImpl<()> for T {}
-    impl<T: Clone> AmbiguousIfImpl<u8> for T {}
-    impl<T: Copy> AmbiguousIfImpl<u16> for T {}
-    impl<T: Default> AmbiguousIfImpl<u32> for T {}
-    impl<T: From<()>> AmbiguousIfImpl<u64> for T {}
-    let _ = <SessionAcceptor<()> as AmbiguousIfImpl<_>>::some_item;
+    impl<T: ?Sized> CapabilityMustNotImplementCloneCopyDefaultOrFrom<()> for T {}
+    impl<T: Clone> CapabilityMustNotImplementCloneCopyDefaultOrFrom<u8> for T {}
+    impl<T: Copy> CapabilityMustNotImplementCloneCopyDefaultOrFrom<u16> for T {}
+    impl<T: Default> CapabilityMustNotImplementCloneCopyDefaultOrFrom<u32> for T {}
+    impl<T: From<()>> CapabilityMustNotImplementCloneCopyDefaultOrFrom<u64> for T {}
+    let _ = <SessionAcceptor<()> as CapabilityMustNotImplementCloneCopyDefaultOrFrom<_>>::some_item;
 };
 
 #[cfg(any(
@@ -579,29 +584,40 @@ pub struct AuthenticatedComponentSession<C> {
 }
 
 fn assert_authenticated_session_has_no_minting_traits<C>() {
-    trait AmbiguousIfImpl<A, B> {
+    // Any guarded impl makes this assertion ambiguous. Remove the capability
+    // trait impl instead of weakening this construction boundary.
+    trait CapabilityMustNotImplementCloneCopyDefaultOrFrom<A, B> {
         fn some_item() {}
     }
-    impl<T: ?Sized, B> AmbiguousIfImpl<(), B> for T {}
-    impl<T: Clone, B> AmbiguousIfImpl<u8, B> for T {}
-    impl<T: Copy, B> AmbiguousIfImpl<u16, B> for T {}
-    impl<T: Default, B> AmbiguousIfImpl<u32, B> for T {}
-    impl<T: From<B>, B> AmbiguousIfImpl<u64, B> for T {}
-    let _ = <AuthenticatedComponentSession<C> as AmbiguousIfImpl<_, C>>::some_item;
+    impl<T: ?Sized, B> CapabilityMustNotImplementCloneCopyDefaultOrFrom<(), B> for T {}
+    impl<T: Clone, B> CapabilityMustNotImplementCloneCopyDefaultOrFrom<u8, B> for T {}
+    impl<T: Copy, B> CapabilityMustNotImplementCloneCopyDefaultOrFrom<u16, B> for T {}
+    impl<T: Default, B> CapabilityMustNotImplementCloneCopyDefaultOrFrom<u32, B> for T {}
+    impl<T: From<B>, B> CapabilityMustNotImplementCloneCopyDefaultOrFrom<u64, B> for T {}
+    let _ =
+        <AuthenticatedComponentSession<C> as CapabilityMustNotImplementCloneCopyDefaultOrFrom<
+            _,
+            C,
+        >>::some_item;
 }
 
 const _: fn() = assert_authenticated_session_has_no_minting_traits::<()>;
 
 const _: fn() = || {
-    trait AmbiguousIfImpl<A> {
+    // Any guarded impl makes this assertion ambiguous. Remove the capability
+    // trait impl instead of weakening this construction boundary.
+    trait CapabilityMustNotImplementCloneCopyDefaultOrFrom<A> {
         fn some_item() {}
     }
-    impl<T: ?Sized> AmbiguousIfImpl<()> for T {}
-    impl<T: Clone> AmbiguousIfImpl<u8> for T {}
-    impl<T: Copy> AmbiguousIfImpl<u16> for T {}
-    impl<T: Default> AmbiguousIfImpl<u32> for T {}
-    impl<T: From<()>> AmbiguousIfImpl<u64> for T {}
-    let _ = <AuthenticatedComponentSession<()> as AmbiguousIfImpl<_>>::some_item;
+    impl<T: ?Sized> CapabilityMustNotImplementCloneCopyDefaultOrFrom<()> for T {}
+    impl<T: Clone> CapabilityMustNotImplementCloneCopyDefaultOrFrom<u8> for T {}
+    impl<T: Copy> CapabilityMustNotImplementCloneCopyDefaultOrFrom<u16> for T {}
+    impl<T: Default> CapabilityMustNotImplementCloneCopyDefaultOrFrom<u32> for T {}
+    impl<T: From<()>> CapabilityMustNotImplementCloneCopyDefaultOrFrom<u64> for T {}
+    let _ =
+        <AuthenticatedComponentSession<()> as CapabilityMustNotImplementCloneCopyDefaultOrFrom<
+            _,
+        >>::some_item;
 };
 
 #[cfg(any(

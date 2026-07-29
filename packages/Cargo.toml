@@ -57,7 +57,7 @@ unsafe_code = "forbid"
 # safety guard for production callers.
 unexpected_cfgs = { level = "warn", check-cfg = [
     "cfg(test_root)",
-    "cfg(d2b_capability_trait_mutation, values(\"authenticated-component-session-clone\", \"authenticated-component-session-default\", \"component-session-admission-clone\", \"component-session-admission-default\", \"session-acceptor-clone\", \"session-acceptor-default\", \"verified-unix-peer-clone\", \"verified-unix-peer-default\"))",
+    "cfg(d2b_capability_trait_mutation, values(\"authenticated-component-session-clone\", \"authenticated-component-session-default\", \"component-session-admission-clone\", \"component-session-admission-default\", \"component-session-admission-from-unit\", \"session-acceptor-clone\", \"session-acceptor-default\", \"verified-unix-peer-clone\", \"verified-unix-peer-default\", \"verified-unix-peer-from-unit\"))",
 ] }
 
 [workspace.dependencies]

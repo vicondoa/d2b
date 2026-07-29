@@ -71,8 +71,13 @@ fn dependent_cannot_forge_registration_or_mint_admitted_session() {
             "component-session-admission-default",
             "ComponentSessionAdmission",
         ),
+        (
+            "component-session-admission-from-unit",
+            "ComponentSessionAdmission",
+        ),
         ("verified-unix-peer-clone", "VerifiedUnixPeer"),
         ("verified-unix-peer-default", "VerifiedUnixPeer"),
+        ("verified-unix-peer-from-unit", "VerifiedUnixPeer"),
         ("session-acceptor-clone", "SessionAcceptor<C>"),
         ("session-acceptor-default", "SessionAcceptor<C>"),
         (
@@ -108,7 +113,7 @@ fn dependent_cannot_forge_registration_or_mint_admitted_session() {
             "error[E0283]",
             "multiple `impl`s satisfying",
             expected_type,
-            "AmbiguousIfImpl",
+            "CapabilityMustNotImplementCloneCopyDefaultOrFrom",
         ] {
             assert!(
                 stderr.contains(diagnostic),
