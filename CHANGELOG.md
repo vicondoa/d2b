@@ -60,11 +60,16 @@ deprecations ship one minor release before removal.
   isolation, prove every rustdoc all-items entry has a parseable page, and
   fail closed on missing required signatures or partial documentation. The
   gate also allowlists every source-visible explicit or derived trait
-  implementation on a capability type, so hidden `Default`, `From`, clone, or
-  conversion implementations fail by name. Its rustdoc and hidden-source
-  signature inventories remain best-effort syntax checks rather than
-  compiler-expanded inventories; private construction state, sealed traits,
-  and consumed capabilities remain the primary boundary.
+  implementation on a capability type, resolves named type aliases and import
+  renames across the crate to a fixed point, and records derives recursively
+  nested in `cfg_attr`, so hidden or target-conditional `Default`, `From`,
+  clone, or conversion implementations fail by name. Candidate generic,
+  conditional, ambiguous, cyclic, or unsupported aliases fail closed. Its
+  rustdoc and hidden-source signature inventories remain best-effort syntax
+  checks rather than compiler-expanded inventories, and non-derive
+  macro-generated or `include!`-generated implementations remain residual
+  source-inventory limits; private construction state, sealed traits, and
+  consumed capabilities remain the primary boundary.
 
 - Strengthened cancellation publication race coverage to prove both activity
   and response state remain locked until their correlated entries are visible.
