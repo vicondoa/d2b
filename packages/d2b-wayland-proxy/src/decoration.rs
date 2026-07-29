@@ -529,7 +529,9 @@ fn draw_wrapper_rail(
             if p.a == 0 {
                 continue;
             }
-            set_pixel(&mut pixels, layout.width, x, y, [p.b, p.g, p.r, p.a]);
+            // wl_shm's Argb8888 is premultiplied. Copying straight-alpha values
+            // makes every antialiased curve render as a bright fringe.
+            set_pixel(&mut pixels, layout.width, x, y, p.argb8888_premultiplied());
         }
     }
     Some(pixels)

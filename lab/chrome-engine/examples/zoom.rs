@@ -7,8 +7,8 @@ fn main(){
     s.content_width=200; s.content_height=40;
     let r=render(&s,&f,Rgba::rgb(0x10,0x10,0x14));
     let src=&r.canvas;
-    const Z:usize=8;
-    let (cw,chh)=(60usize,40usize);
+    const Z:usize=14;
+    let (cw,chh)=(34usize,34usize);
     let mut out=Canvas::new(cw*Z,chh*Z,Rgba::rgb(0x2e,0x2e,0x34));
     for y in 0..chh { for x in 0..cw {
         let p=src.get(x.min(src.width-1),y.min(src.height-1));

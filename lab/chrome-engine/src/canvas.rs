@@ -185,11 +185,13 @@ impl Canvas {
         out
     }
 
-    /// ARGB8888 little-endian, the wl_shm layout the proxy attaches.
+    /// ARGB8888 little-endian with premultiplied alpha, the layout `wl_shm`
+    /// actually requires. Straight alpha here produces white fringing on every
+    /// antialiased edge.
     pub fn to_argb8888(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(self.pixels.len() * 4);
         for p in &self.pixels {
-            out.extend_from_slice(&p.argb8888());
+            out.extend_from_slice(&p.argb8888_premultiplied());
         }
         out
     }

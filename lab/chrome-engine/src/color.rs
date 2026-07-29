@@ -54,8 +54,23 @@ impl Rgba {
     }
 
     /// ARGB8888 little-endian bytes, the wl_shm format the proxy uses.
+    ///
+    /// Straight (non-premultiplied) alpha. Correct for PNG output; NOT correct
+    /// for `wl_shm`, which expects premultiplied alpha — see
+    /// [`Self::argb8888_premultiplied`].
     pub fn argb8888(self) -> [u8; 4] {
         [self.b, self.g, self.r, self.a]
+    }
+
+    /// ARGB8888 little-endian bytes with colour channels premultiplied by
+    /// alpha, as `wl_shm`'s `Argb8888` format requires.
+    ///
+    /// Submitting straight-alpha values to a premultiplied format makes
+    /// partially transparent pixels render far too bright, which shows up as a
+    /// white fringe along every antialiased curve.
+    pub fn argb8888_premultiplied(self) -> [u8; 4] {
+        let mul = |c: u8| ((u16::from(c) * u16::from(self.a) + 127) / 255) as u8;
+        [mul(self.b), mul(self.g), mul(self.r), self.a]
     }
 
     pub fn with_alpha(self, a: u8) -> Self {
@@ -368,5 +383,29 @@ mod tests {
     #[test]
     fn argb8888_byte_order() {
         assert_eq!(Rgba::rgb(0x11, 0x22, 0x33).argb8888(), [0x33, 0x22, 0x11, 255]);
+    }
+
+    /// wl_shm's Argb8888 is premultiplied. Submitting straight alpha makes
+    /// antialiased edges render as bright fringes, which is exactly what a
+    /// white halo on a rounded corner looks like.
+    #[test]
+    fn premultiplied_conversion_scales_colour_by_alpha() {
+        // Opaque values are unchanged.
+        let opaque = Rgba::rgb(0x11, 0x22, 0x33);
+        assert_eq!(opaque.argb8888_premultiplied(), opaque.argb8888());
+
+        // Fully transparent collapses to zero, not to its colour.
+        assert_eq!(
+            Rgba::rgba(0xff, 0xff, 0xff, 0).argb8888_premultiplied(),
+            [0, 0, 0, 0]
+        );
+
+        // Half-transparent white must not stay full-brightness.
+        let half = Rgba::rgba(0xff, 0xff, 0xff, 0x80);
+        let straight = half.argb8888();
+        let pre = half.argb8888_premultiplied();
+        assert_eq!(straight[0], 0xff, "straight alpha keeps full brightness");
+        assert!(pre[0] < 0x82 && pre[0] > 0x7e, "premultiplied halves it: {pre:?}");
+        assert_eq!(pre[3], 0x80, "alpha itself is untouched");
     }
 }
