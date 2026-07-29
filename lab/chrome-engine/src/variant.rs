@@ -114,7 +114,7 @@ impl Default for Theme {
         Self {
             surface: Rgba::rgb(0x0f, 0x11, 0x17),
             // The off-gray from d2b-wlcontrol's realm cards.
-            plate: Rgba::rgb(0x16, 0x18, 0x1d),
+            plate: Rgba::rgb(0x25, 0x27, 0x2b),
             foreground: Rgba::rgb(0xf2, 0xf2, 0xf7),
             foreground_dim: Rgba::rgb(0xc2, 0xc2, 0xd0),
             outline: Rgba::rgba(0xff, 0xff, 0xff, 0x70),
@@ -326,9 +326,17 @@ pub fn render(spec: &ChromeSpec, fonts: &TextRenderer, background: Rgba) -> Rend
     if spec.candidate == Candidate::AccentFill {
         canvas.fill_round_rect(tab.x, tab.y, tab.width, tab.height, radius, button_bg);
     } else {
-        let edge = px(spec.theme.accent_rule, scale).max(2);
+        let edge = px(3, scale).max(2);
         let thin = px(1, scale).max(1);
-        canvas.fill_round_rect(tab.x, tab.y, tab.width, tab.height, radius, spec.accent);
+        // The top, right, and bottom border is the accent softened toward the
+        // fill, so it reads as a hairline tint rather than competing with the
+        // left bar. The left bar stays solid.
+        let hairline = spec.accent.mix(button_bg, 0.45);
+        canvas.fill_round_rect(tab.x, tab.y, tab.width, tab.height, radius, hairline);
+        // Drawn wider than the bar and then trimmed by the fill below, so the
+        // bar keeps the outer corner radius and tapers into the hairline
+        // instead of stepping from thick to thin.
+        canvas.fill_round_rect(tab.x, tab.y, edge * 2, tab.height, radius, spec.accent);
         canvas.fill_round_rect(
             tab.x + edge as i32,
             tab.y + thin as i32,
