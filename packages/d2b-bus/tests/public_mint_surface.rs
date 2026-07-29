@@ -299,6 +299,21 @@ impl From<Arc<ComponentSessionAdmissionIdentity>> for ComponentSessionAdmission 
         ("trait-impl-direct-renamed-module.rs", "module alias", "cap"),
         ("trait-impl-raw-renamed-module.rs", "module alias", "cap"),
         (
+            "trait-impl-alias-before-capability.rs",
+            "cannot resolve module alias cap in impl self type cap::Admission",
+            "cap",
+        ),
+        (
+            "trait-impl-chained-renamed-module.rs",
+            "cannot resolve module alias second in impl self type second::Admission",
+            "second",
+        ),
+        (
+            "trait-impl-chained-reexport-module.rs",
+            "cannot resolve module alias second in impl self type second::Admission",
+            "second",
+        ),
+        (
             "trait-impl-lexical-alias.rs",
             "lexically scoped",
             "AdmissionAlias",
@@ -400,7 +415,7 @@ fn assert_module_source_mutations_fail_closed(crate_root: &Path) {
     fs::create_dir_all(&cfg_attr).expect("create cfg_attr module mutation");
     fs::write(
         cfg_attr.join("lib.rs"),
-        "#[cfg_attr(all(), path = \"rogue.rs\")]\nmod router;\n",
+        "#[cfg_attr(all(), path = \"/home/alice/private/rogue.rs\")]\nmod router;\n",
     )
     .expect("write cfg_attr module mutation root");
     fs::write(cfg_attr.join("router.rs"), "struct Harmless;\n")
@@ -410,9 +425,68 @@ fn assert_module_source_mutations_fail_closed(crate_root: &Path) {
         "struct ComponentSessionAdmission;\n",
     )
     .expect("write compiler-selected module source");
-    assert_source_file_scan_fails_closed(
+    let conditional_path_diagnostic = assert_source_file_scan_fails_closed(
         &cfg_attr.join("lib.rs"),
-        &["cfg_attr", "path", "router", "rogue.rs"],
+        &["conditional path attribute", "router", "d2b_bus (lib.rs)"],
+    );
+    assert!(
+        !conditional_path_diagnostic.contains("/home/alice/private/rogue.rs")
+            && !conditional_path_diagnostic.contains("path ="),
+        "conditional-path diagnostic echoed untrusted attribute tokens: \
+         {conditional_path_diagnostic}"
+    );
+
+    let unrecognised_attribute_diagnostic = assert_source_file_scan_fails_closed(
+        &crate_root.join("tests/ui/module-cfg-attr-unrecognised/lib.rs"),
+        &[
+            "cfg_attr",
+            "unrecognised conditional module attribute",
+            "unrecognised_module_cfg_attr",
+            "d2b_bus (lib.rs)",
+            "allowlist",
+        ],
+    );
+    assert!(
+        !unrecognised_attribute_diagnostic.contains("rewrite_module")
+            && !unrecognised_attribute_diagnostic.contains("security_tool")
+            && !unrecognised_attribute_diagnostic.contains("ZoneRegistrar")
+            && !unrecognised_attribute_diagnostic.contains("ComponentSessionAdmission")
+            && !unrecognised_attribute_diagnostic.contains("/home/alice/private/attribute.rs")
+            && !unrecognised_attribute_diagnostic.contains("path ="),
+        "unrecognised-attribute diagnostic echoed untrusted attribute tokens: \
+         {unrecognised_attribute_diagnostic}"
+    );
+
+    let missing_module = scratch.path().join("missing-module");
+    fs::create_dir_all(&missing_module).expect("create missing module fixture");
+    fs::write(missing_module.join("lib.rs"), "mod absent;\n").expect("write missing module root");
+    assert_source_file_scan_fails_closed(
+        &missing_module.join("lib.rs"),
+        &[
+            "cannot resolve Rust module d2b_bus::absent",
+            "d2b_bus (lib.rs)",
+            "partial source scan",
+        ],
+    );
+
+    let missing_path = scratch.path().join("missing-path");
+    fs::create_dir_all(&missing_path).expect("create missing path fixture");
+    fs::write(
+        missing_path.join("lib.rs"),
+        "#[path = \"/home/alice/private/missing.rs\"]\nmod absent;\n",
+    )
+    .expect("write missing path root");
+    let missing_path_diagnostic = assert_source_file_scan_fails_closed(
+        &missing_path.join("lib.rs"),
+        &[
+            "cannot resolve Rust module d2b_bus::absent",
+            "d2b_bus (lib.rs)",
+            "partial source scan",
+        ],
+    );
+    assert!(
+        !missing_path_diagnostic.contains("/home/alice/private/missing.rs"),
+        "missing-path diagnostic echoed an untrusted path literal: {missing_path_diagnostic}"
     );
 
     let inert_cfg_attr = scratch.path().join("inert-cfg-attr");
@@ -1366,7 +1440,7 @@ impl CapabilitySourceScanner<'_> {
         let file = syn::parse_file(&text)
             .unwrap_or_else(|error| panic!("parse Rust source {logical_source}: {error}"));
         CapabilitySourceCollector {
-            source: logical_source,
+            source: logical_source.clone(),
             module_path: module_path.to_vec(),
             lexical_depth: 0,
             facts: &mut self.facts,
@@ -1376,7 +1450,13 @@ impl CapabilitySourceScanner<'_> {
         let path_base = source
             .parent()
             .expect("lexical Rust source has a parent directory");
-        self.scan_external_modules(&file.items, module_path, &module_dir, path_base);
+        self.scan_external_modules(
+            &file.items,
+            module_path,
+            &module_dir,
+            path_base,
+            &logical_source,
+        );
     }
 
     fn scan_external_modules(
@@ -1385,6 +1465,7 @@ impl CapabilitySourceScanner<'_> {
         module_path: &[String],
         module_dir: &Path,
         path_base: &Path,
+        logical_source: &str,
     ) {
         for item in items {
             let Item::Mod(module) = item else {
@@ -1395,19 +1476,26 @@ impl CapabilitySourceScanner<'_> {
             let mut child_path = module_path.to_vec();
             child_path.push(module_name);
             if let Some((_, items)) = &module.content {
-                let inline_dir =
-                    module_path_override(module, path_base).unwrap_or_else(|| child_dir.clone());
-                self.scan_external_modules(items, &child_path, &inline_dir, &inline_dir);
+                let inline_dir = module_path_override(module, path_base, logical_source)
+                    .unwrap_or_else(|| child_dir.clone());
+                self.scan_external_modules(
+                    items,
+                    &child_path,
+                    &inline_dir,
+                    &inline_dir,
+                    logical_source,
+                );
             } else {
-                let source = module_source(module, module_dir, path_base, &child_dir)
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "cannot resolve Rust module {}::{}; capability trait inventory \
-                             refuses a partial source scan",
-                            self.crate_name,
-                            child_path.join("::")
-                        )
-                    });
+                let source =
+                    module_source(module, module_dir, path_base, &child_dir, logical_source)
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "cannot resolve Rust module {}::{} in {logical_source}; \
+                                 capability trait inventory refuses a partial source scan",
+                                self.crate_name,
+                                child_path.join("::")
+                            )
+                        });
                 self.scan_file(&source.path, &child_path, source.kind);
             }
         }
@@ -1851,17 +1939,22 @@ fn finish_source_capability_inventory(
             break;
         }
     }
+    let resolved_module_aliases =
+        resolve_module_aliases_to_fixed_point(&facts.module_aliases, crate_name);
     let module_alias_bindings = facts
         .module_aliases
         .iter()
         .filter(|alias| {
-            resolve_module_path(&alias.target, &alias.binding.module_path, crate_name).is_some_and(
-                |target_module| {
-                    resolved
-                        .keys()
-                        .any(|binding| binding.module_path == target_module)
-                },
-            )
+            resolved_module_aliases
+                .get(&alias.binding)
+                .is_none_or(|target_modules| {
+                    target_modules.len() != 1
+                        || target_modules.iter().any(|target_module| {
+                            resolved
+                                .keys()
+                                .any(|binding| binding.module_path == *target_module)
+                        })
+                })
         })
         .map(|alias| alias.binding.clone())
         .collect::<BTreeSet<_>>();
@@ -2203,6 +2296,93 @@ fn resolve_module_path(
     }
 }
 
+fn resolve_module_aliases_to_fixed_point(
+    aliases: &[SourceModuleAlias],
+    crate_name: &str,
+) -> BTreeMap<SourceBinding, BTreeSet<Vec<String>>> {
+    let alias_bindings = aliases
+        .iter()
+        .map(|alias| alias.binding.clone())
+        .collect::<BTreeSet<_>>();
+    let mut resolved = BTreeMap::<SourceBinding, BTreeSet<Vec<String>>>::new();
+    loop {
+        let mut next = BTreeMap::<SourceBinding, BTreeSet<Vec<String>>>::new();
+        let mut unresolved = BTreeSet::new();
+        for alias in aliases {
+            let target = resolve_module_alias_target(
+                &alias.target,
+                &alias.binding.module_path,
+                crate_name,
+                &resolved,
+                &alias_bindings,
+            );
+            if target.unresolved {
+                unresolved.insert(alias.binding.clone());
+                continue;
+            }
+            next.entry(alias.binding.clone())
+                .or_default()
+                .extend(target.modules);
+        }
+        next.retain(|binding, modules| !unresolved.contains(binding) && !modules.is_empty());
+        if next == resolved {
+            return resolved;
+        }
+        resolved = next;
+    }
+}
+
+struct ModuleAliasTarget {
+    modules: BTreeSet<Vec<String>>,
+    unresolved: bool,
+}
+
+fn resolve_module_alias_target(
+    path: &SourcePath,
+    module_path: &[String],
+    crate_name: &str,
+    resolved_aliases: &BTreeMap<SourceBinding, BTreeSet<Vec<String>>>,
+    alias_bindings: &BTreeSet<SourceBinding>,
+) -> ModuleAliasTarget {
+    for end in 1..=path.segments.len() {
+        let prefix = SourcePath {
+            leading_colon: path.leading_colon,
+            segments: path.segments[..end].to_vec(),
+        };
+        let candidates = binding_candidates(&prefix, module_path, crate_name)
+            .into_iter()
+            .filter(|binding| alias_bindings.contains(binding))
+            .collect::<Vec<_>>();
+        if candidates.is_empty() {
+            continue;
+        }
+        let suffix = &path.segments[end..];
+        let mut modules = BTreeSet::new();
+        let mut unresolved = candidates.len() != 1;
+        for candidate in candidates {
+            let Some(targets) = resolved_aliases.get(&candidate) else {
+                unresolved = true;
+                continue;
+            };
+            for target in targets {
+                let mut expanded = target.clone();
+                expanded.extend_from_slice(suffix);
+                modules.insert(expanded);
+            }
+        }
+        return ModuleAliasTarget {
+            modules,
+            unresolved,
+        };
+    }
+    ModuleAliasTarget {
+        modules: resolve_module_path(path, module_path, crate_name)
+            .into_iter()
+            .collect(),
+        unresolved: false,
+    }
+}
+
 #[derive(Clone, Copy)]
 struct SourceAliasBindings<'a> {
     type_aliases: &'a BTreeSet<SourceBinding>,
@@ -2385,10 +2565,8 @@ fn record_cfg_attr_derives(
             record_cfg_attr_derives(crate_name, identity, &attribute, source, trait_impls);
         } else if !safe_inert_cfg_attr(&attribute) {
             panic!(
-                "unrecognised cfg_attr attribute {} on capability declaration \
-                 {crate_name}::{identity} in {source}; capability trait inventory \
-                 fails closed",
-                compact_tokens(&attribute)
+                "unrecognised conditional attribute on capability declaration \
+                 {crate_name}::{identity} in {source}; capability trait inventory fails closed"
             );
         }
     }
@@ -2414,10 +2592,8 @@ fn validate_impl_cfg_attr(crate_name: &str, identity: &str, meta: &Meta, source:
             validate_impl_cfg_attr(crate_name, identity, &attribute, source);
         } else if !safe_inert_cfg_attr(&attribute) {
             panic!(
-                "unrecognised cfg_attr attribute {} on capability impl \
-                 {crate_name}::{identity} in {source}; capability trait inventory \
-                 fails closed",
-                compact_tokens(&attribute)
+                "unrecognised conditional attribute on capability impl \
+                 {crate_name}::{identity} in {source}; capability trait inventory fails closed"
             );
         }
     }
@@ -2554,6 +2730,7 @@ impl HiddenPublicScanner<'_> {
             &module_dir,
             path_base,
             inherited_hidden || doc_hidden(&file.attrs),
+            &logical_source,
         );
     }
 
@@ -2564,6 +2741,7 @@ impl HiddenPublicScanner<'_> {
         module_dir: &Path,
         path_base: &Path,
         inherited_hidden: bool,
+        logical_source: &str,
     ) {
         for item in items {
             match item {
@@ -2613,11 +2791,18 @@ impl HiddenPublicScanner<'_> {
                     }
                     let child_dir = module_dir.join(module_name);
                     if let Some((_, items)) = &module.content {
-                        let inline_dir = module_path_override(module, path_base)
+                        let inline_dir = module_path_override(module, path_base, logical_source)
                             .unwrap_or_else(|| child_dir.clone());
-                        self.scan_items(items, &child_path, &inline_dir, &inline_dir, hidden);
+                        self.scan_items(
+                            items,
+                            &child_path,
+                            &inline_dir,
+                            &inline_dir,
+                            hidden,
+                            logical_source,
+                        );
                     } else if let Some(source) =
-                        module_source(module, module_dir, path_base, &child_dir)
+                        module_source(module, module_dir, path_base, &child_dir, logical_source)
                     {
                         self.scan_file(&source.path, &child_path, source.kind, hidden);
                     }
@@ -2689,8 +2874,9 @@ fn module_source(
     module_dir: &Path,
     path_base: &Path,
     child_dir: &Path,
+    logical_source: &str,
 ) -> Option<ResolvedModuleSource> {
-    if let Some(path) = module_path_override(module, path_base) {
+    if let Some(path) = module_path_override(module, path_base, logical_source) {
         return path.is_file().then_some(ResolvedModuleSource {
             path,
             kind: SourceFileKind::PathLoadedModule,
@@ -2710,13 +2896,17 @@ fn module_source(
     })
 }
 
-fn module_path_override(module: &syn::ItemMod, path_base: &Path) -> Option<PathBuf> {
+fn module_path_override(
+    module: &syn::ItemMod,
+    path_base: &Path,
+    logical_source: &str,
+) -> Option<PathBuf> {
     for attribute in module
         .attrs
         .iter()
         .filter(|attribute| attribute.path().is_ident("cfg_attr"))
     {
-        validate_module_cfg_attr(&attribute.meta, &module.ident);
+        validate_module_cfg_attr(&attribute.meta, &module.ident, logical_source);
     }
     let mut attributes = module
         .attrs
@@ -2725,21 +2915,22 @@ fn module_path_override(module: &syn::ItemMod, path_base: &Path) -> Option<PathB
     let attribute = attributes.next()?;
     assert!(
         attributes.next().is_none(),
-        "multiple path attributes on Rust module {}; source inventories fail closed",
-        module.ident
+        "multiple path attributes on Rust module {} in {logical_source}; source inventories \
+         fail closed",
+        module.ident,
     );
     let path = match &attribute.meta {
         syn::Meta::NameValue(value) => {
             let syn::Expr::Lit(value) = &value.value else {
                 panic!(
-                    "path attribute on Rust module {} is not a string literal; \
+                    "path attribute on Rust module {} in {logical_source} is not a string literal; \
                      source inventories fail closed",
                     module.ident
                 );
             };
             let syn::Lit::Str(path) = &value.lit else {
                 panic!(
-                    "path attribute on Rust module {} is not a string literal; \
+                    "path attribute on Rust module {} in {logical_source} is not a string literal; \
                      source inventories fail closed",
                     module.ident
                 );
@@ -2747,7 +2938,7 @@ fn module_path_override(module: &syn::ItemMod, path_base: &Path) -> Option<PathB
             path
         }
         _ => panic!(
-            "path attribute on Rust module {} is not name-value syntax; \
+            "path attribute on Rust module {} in {logical_source} is not name-value syntax; \
              source inventories fail closed",
             module.ident
         ),
@@ -2755,41 +2946,57 @@ fn module_path_override(module: &syn::ItemMod, path_base: &Path) -> Option<PathB
     Some(path_base.join(path.value()))
 }
 
-fn validate_module_cfg_attr(meta: &Meta, module: &syn::Ident) {
+fn validate_module_cfg_attr(meta: &Meta, module: &syn::Ident, logical_source: &str) {
     let Meta::List(list) = meta else {
         panic!(
-            "cfg_attr on Rust module {module} is not list syntax; source inventories \
-             cannot determine whether it changes the compiler-selected module file"
+            "cfg_attr on Rust module {module} in {logical_source} is not list syntax; source \
+             inventories cannot determine whether it changes the compiler-selected module file"
         );
     };
     let values = list
         .parse_args_with(syn::punctuated::Punctuated::<Meta, syn::Token![,]>::parse_terminated)
         .unwrap_or_else(|error| {
             panic!(
-                "cannot parse cfg_attr on Rust module {module}: {error}; source inventories \
-                 cannot determine whether it changes the compiler-selected module file"
+                "cannot parse cfg_attr on Rust module {module} in {logical_source}: {error}; \
+                 source inventories cannot determine whether it changes the compiler-selected \
+                 module file"
             )
         })
         .into_iter()
         .collect::<Vec<_>>();
     assert!(
         values.len() >= 2,
-        "cfg_attr on Rust module {module} must contain a condition and at least one \
-         attribute; source inventories cannot determine the compiler-selected module file"
+        "cfg_attr on Rust module {module} in {logical_source} must contain a condition and at \
+         least one attribute; source inventories cannot determine the compiler-selected module \
+         file"
     );
     for attribute in values.into_iter().skip(1) {
         if attribute.path().is_ident("cfg_attr") {
-            validate_module_cfg_attr(&attribute, module);
+            validate_module_cfg_attr(&attribute, module, logical_source);
         } else if attribute.path().is_ident("path") {
             panic!(
-                "cfg_attr on Rust module {module} conditionally applies {}; source inventories \
-                 cannot determine whether the compiler reads the default module file or the \
-                 configured path. Use one unconditional #[path = \"...\"] module source per \
-                 build so the compiler-selected file can be scanned",
-                compact_tokens(&attribute)
+                "conditional path attribute on Rust module {module} in {logical_source}; source \
+                 inventories fail closed because the compiler-selected module file is ambiguous"
+            );
+        } else if !safe_inert_module_cfg_attr(&attribute) {
+            panic!(
+                "cfg_attr on Rust module {module} in {logical_source} contains an unrecognised \
+                 conditional module attribute; source inventories fail closed because only the \
+                 explicit inert attribute allowlist is permitted"
             );
         }
     }
+}
+
+fn safe_inert_module_cfg_attr(meta: &Meta) -> bool {
+    let path = meta.path();
+    path.is_ident("doc")
+        || path.is_ident("allow")
+        || path.is_ident("warn")
+        || path.is_ident("deny")
+        || path.is_ident("forbid")
+        || path.is_ident("expect")
+        || path.is_ident("deprecated")
 }
 
 fn dependency_order(mut packages: BTreeMap<String, RenderPackage>) -> Vec<(String, RenderPackage)> {
