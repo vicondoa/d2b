@@ -16,12 +16,17 @@ name = "d2b-wlattach"
 path = "src/main.rs"
 
 [dependencies]
+smithay = { version = "0.7", default-features = false, features = ["wayland_frontend"] }
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+calloop = "0.14"
 clap = { version = "4", features = ["derive"] }
 libc = "0.2"
 log = "0.4"
 env_logger = "0.11"
 postcard = { version = "1", features = ["use-std"] }
 rustix = { version = "1", features = ["net", "fs", "process", "pipe", "mm"] }
+tempfile = "3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 smallvec = { version = "1", features = ["serde"] }
@@ -31,7 +36,9 @@ thiserror = "2"
 tempfile = "3"
 
 [lints.rust]
-unsafe_code = "forbid"
+# `deny`, not `forbid`, because exactly one module needs unsafe: see src/serve/sys.rs.
+# `forbid` cannot be locally overridden, so a quarantined module requires `deny`.
+unsafe_code = "deny"
 
 [lints.clippy]
 all = "warn"

@@ -15,4 +15,6 @@
 //!   `SOCK_SEQPACKET` + `SCM_RIGHTS` transport.
 
 pub mod model;
+pub mod present;
+pub mod serve;
 pub mod wire;
