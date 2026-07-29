@@ -772,6 +772,11 @@ only on unanimous sign-off.
 
 Escape hatches are narrow:
 
+- **Swarm-driven work** satisfies the per-round gate with swarm's
+  five-seat phase council instead of a ten-role panel round. See
+  [Running the panel under swarm](#running-the-panel-under-swarm). The
+  substitution covers only the per-round gate; the binding wave panel is
+  untouched.
 - **Trivial fixes** (typo, one-line, no semantic change) may skip the
   panel gate.
 - **Time-critical hotfixes** (production breakage) may skip the
@@ -837,23 +842,28 @@ ranked. Read this ordering before wiring any harness.
    above. Where ADR 0046 restricts the *binding* panel to one per wave,
    this rule allows a panel per implementation round. This is the loop
    swarm automates.
-3. **Swarm's five-seat phase council** - a mechanical in-flight
-   checkpoint inside a swarm run. It is subordinate to both of the
-   above and satisfies neither.
+3. **Swarm's five-seat phase council** - the per-round gate whenever
+   swarm drives the work. It stands in for surface 2 and has no bearing
+   on surface 1.
 
-**Swarm is the harness, not the authority.** Use it to run surface 2 and
-to produce the ten records that surface 1 consumes. A green swarm phase
-council is not a sealed wave, and `phase_complete` passing is not
-`delivery wave seal` passing.
+**Swarm runs surface 2, not surface 1.** Under swarm the five-seat
+council is the per-round gate: no ten-role panel round is required
+between implementation rounds, which is the whole point of running the
+harness. Surface 1 is unchanged, because ADR 0046 section 12.3 already
+restricts the binding panel to exactly one run at wave close and never
+per implementation round. A green phase council is therefore not a
+sealed wave, and `phase_complete` passing is not `delivery wave seal`
+passing.
 
-**Advisory tier - the 10 roles.** Dispatch one read-only lane per roster
-role via `dispatch_lanes_async`, seeded with that role's focus cell from
-the table above plus the integrator's validation evidence. Lanes are
-read-only by contract, which is what keeps panel review from stampeding
-the shared Nix store, cargo target directory, and the heavy gate
-semaphore while implementation agents are still running. Lane ids are
-free-form, so all 10 roles vote independently, and each lane's verdict
-maps one-to-one onto a `panel-attest` record.
+**The 10 roles at wave close.** The ten-role roster is no longer run
+every round. It runs once, at wave close, to produce the records
+surface 1 consumes: dispatch one read-only lane per roster role via
+`dispatch_lanes_async`, seeded with that role's focus cell from the
+table above plus the integrator's validation evidence. Lanes are
+read-only by contract, which keeps them off the shared Nix store, cargo
+target directory, and heavy gate semaphore. Lane ids are free-form, so
+all 10 roles vote independently and each lane's verdict maps one-to-one
+onto a `panel-attest` record.
 
 To keep those records attestable, the reviewing agents must run on the
 pinned panel binding. `agents.<name>.model` in
@@ -862,13 +872,13 @@ pinned panel binding. `agents.<name>.model` in
 record `panel-attest` will reject, so do not let model fallback silently
 downgrade a panel lane.
 
-**Swarm's own council, and what it costs.** `submit_phase_council_verdicts`
-has a closed five-member roster (`critic`, `reviewer`, `sme`,
-`test_engineer`, `explorer`) and deduplicates by member, so ten distinct
-votes cannot be cast against it. When you use it as an in-flight
-checkpoint, fold the advisory roles into the five seats:
+**The per-round council, and what it costs.**
+`submit_phase_council_verdicts` has a closed five-member roster
+(`critic`, `reviewer`, `sme`, `test_engineer`, `explorer`) and
+deduplicates by member, so ten distinct votes cannot be cast against it.
+Each seat carries the concerns of the roster roles nearest it:
 
-| Enforcing seat  | Absorbs advisory roles          |
+| Seat            | Covers                          |
 |-----------------|---------------------------------|
 | `reviewer`      | `software`, `rust`              |
 | `test_engineer` | `test`                          |
@@ -876,12 +886,12 @@ checkpoint, fold the advisory roles into the five seats:
 | `critic`        | `security`, `product`           |
 | `explorer`      | `docs`, `observability`         |
 
-A seat inherits the strictest verdict of the roles it absorbs, carries
-every absorbed finding into its `findings[]` verbatim, and MUST NOT
-return `APPROVE` while any role it absorbs has an open finding. Even so,
-five synthesizers can agree where ten independent reviewers would have
-dissented; the observability precedent above is exactly that failure
-shape. That collapse is the reason this council does not bind a wave.
+A seat MUST NOT return `APPROVE` while any concern it covers is open.
+Accept the tradeoff knowingly: five synthesizers can agree where ten
+independent reviewers would have dissented, and the observability
+precedent above is exactly that failure shape. That is why this council
+gates a round and not a wave, and why the ten-role panel still runs
+before the seal.
 
 **Verdict rule.** Swarm's default is more permissive than this file: a
 `CONCERNS` verdict carrying only MEDIUM/LOW findings still passes. The
