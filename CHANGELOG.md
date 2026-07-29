@@ -73,28 +73,35 @@ deprecations ship one minor release before removal.
   check for explicit workspace source forms outside the compiler-enforced set.
   Focused regressions cover direct and inline `#[path]`, ordinary children of
   path-loaded modules, raw identifiers, lexical symlink paths, direct and
-  `self as` aliases of local modules containing a discovered capability
-  binding, alias-before-target ordering, chained aliases, chained re-exports,
-  harmless aliases in both spellings, inert module `cfg_attr`, rejected
-  conditional `path` and unrecognised attribute selection, and duplicate
+  `self as` aliases plus plain named and `::{self}` imports of local modules
+  containing a discovered capability binding, alias-before-target ordering,
+  chained aliases, chained re-exports, harmless aliases in every covered
+  spelling, a harmless two-hop re-export that requires fixed-point convergence,
+  inert direct and conditional module attributes, rejected conditional `path`
+  and unrecognised direct or conditional attribute selection, and duplicate
   logical module paths. Duplicate-module diagnostics retain both logical names
   without exposing canonical host paths.
   Module aliases and re-exports resolve through lexical candidates to a fixed
   point. Only one unambiguous local target without a discovered capability is
   classified non-capability. An unresolved module alias is ignored only for an
   unrelated non-seeded impl self type; unresolved or ambiguous aliases used as
-  prefixes remain capability-relevant and fail closed. Generic, cfg-gated,
-  unsupported, and lexically scoped capability aliases fail closed during
-  classification; cyclic unresolved capability aliases fail closed when used
-  by an impl self type. Unresolvable external modules, including missing
-  `#[path]` targets, also fail closed. Module `cfg_attr` metadata is recursively
-  restricted to the inert `doc`, `allow`, `warn`, `deny`, `forbid`, `expect`,
-  and `deprecated` attributes; nested tool or procedural attributes and every
-  other unrecognised shape fail closed. Diagnostics use fixed labels and
-  crate-relative logical source locations without echoing path literals or
-  attribute token streams. It does not claim general Rust name or module
-  resolution, macro expansion, `include!` expansion, or coverage of downstream
-  implementations.
+  prefixes remain capability-relevant and fail closed, including plain named
+  and `::{self}` module imports. Generic or cfg-gated declared type aliases,
+  cfg-gated renamed imports, unsupported aliases, and lexically scoped
+  capability aliases fail closed during classification; resolvable unrenamed
+  cfg-gated type imports are classified normally rather than rejected. Cyclic
+  unresolved capability aliases fail closed when used by an impl self type.
+  Unresolvable external modules, including missing `#[path]` targets, also fail
+  closed. Every module attribute is validated. Direct `path` and recursive
+  `cfg_attr` receive dedicated handling; the source-inert allowlist accepts
+  `cfg`, `doc`, `allow`, `warn`, `deny`, `forbid`, `expect`, `deprecated`, and
+  the exact `rustfmt::skip` tool path in their approved shapes. Procedural,
+  unknown tool, malformed, and every other unrecognised direct or conditional
+  attribute fail closed with remediation. Diagnostics use fixed syntax-kind
+  labels and crate-relative logical source locations without echoing source
+  text, path literals, or token streams. It does not claim general Rust name or
+  module resolution, macro expansion, `include!` expansion, or coverage of
+  downstream implementations.
 
 - Pinned the actual downstream `From<X>` boundary. A dependent crate that owns
   `X` can implement `From<X>` for a capability and compile when it only returns

@@ -10,6 +10,15 @@ mod noncapability_direct_module_alias;
 #[path = "../trait-impl-noncapability-self-renamed-module.rs"]
 mod noncapability_self_module_alias;
 
+#[path = "../trait-impl-noncapability-plain-module.rs"]
+mod noncapability_plain_module_alias;
+
+#[path = "../trait-impl-noncapability-plain-self-module.rs"]
+mod noncapability_plain_self_module_alias;
+
+#[path = "../trait-impl-noncapability-chained-reexport-module.rs"]
+mod noncapability_chained_reexport_module_alias;
+
 #[cfg_attr(all(), doc = "Ordinary module with inert conditional attributes.")]
 #[cfg_attr(all(), cfg_attr(all(), allow(dead_code)))]
 #[path = "../module-cfg-attr-inert.rs"]

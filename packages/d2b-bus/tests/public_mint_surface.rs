@@ -279,6 +279,7 @@ impl From<Arc<ComponentSessionAdmissionIdentity>> for ComponentSessionAdmission 
     for (name, expected_trait) in [
         ("trait-impl-type-alias.rs", "Default"),
         ("trait-impl-renamed-import.rs", "Default"),
+        ("trait-impl-cfg-unrenamed-import.rs", "Default"),
         ("trait-impl-cfg-attr-derive.rs", "Clone"),
         ("trait-impl-nested-cfg-attr-derive.rs", "Copy"),
         ("trait-impl-cfg-attr-gated.rs", "Default"),
@@ -298,6 +299,16 @@ impl From<Arc<ComponentSessionAdmissionIdentity>> for ComponentSessionAdmission 
         ("trait-impl-renamed-module.rs", "module alias", "cap"),
         ("trait-impl-direct-renamed-module.rs", "module alias", "cap"),
         ("trait-impl-raw-renamed-module.rs", "module alias", "cap"),
+        (
+            "trait-impl-plain-module.rs",
+            "cannot resolve module alias aliases in impl self type aliases::Admission",
+            "aliases",
+        ),
+        (
+            "trait-impl-plain-self-module.rs",
+            "cannot resolve module alias aliases in impl self type aliases::Admission",
+            "aliases",
+        ),
         (
             "trait-impl-alias-before-capability.rs",
             "cannot resolve module alias cap in impl self type cap::Admission",
@@ -331,6 +342,9 @@ impl From<Arc<ComponentSessionAdmissionIdentity>> for ComponentSessionAdmission 
     for name in [
         "trait-impl-noncapability-direct-renamed-module.rs",
         "trait-impl-noncapability-self-renamed-module.rs",
+        "trait-impl-noncapability-plain-module.rs",
+        "trait-impl-noncapability-plain-self-module.rs",
+        "trait-impl-noncapability-chained-reexport-module.rs",
     ] {
         let source = fs::read_to_string(fixture.join(name))
             .unwrap_or_else(|error| panic!("read {name} compile-pass fixture: {error}"));
@@ -341,6 +355,7 @@ impl From<Arc<ComponentSessionAdmissionIdentity>> for ComponentSessionAdmission 
             inventory.trait_impls
         );
     }
+    assert_source_diagnostics_redact_attacker_content(&fixture);
     assert_module_source_mutations_fail_closed(&crate_root);
 }
 
@@ -383,7 +398,7 @@ fn assert_trait_impl_source_scan_fails_closed(
     source_name: &str,
     expected_diagnostic: &str,
     expected_alias: &str,
-) {
+) -> String {
     let failure = match std::panic::catch_unwind(|| {
         source_capability_inventory_from_text("d2b_bus", source, source_name)
     }) {
@@ -402,6 +417,70 @@ fn assert_trait_impl_source_scan_fails_closed(
         "fail-closed alias diagnostic did not identify {source_name} as \
          {expected_diagnostic} through {expected_alias}: {diagnostic}"
     );
+    diagnostic.to_owned()
+}
+
+fn assert_source_diagnostics_redact_attacker_content(fixture: &Path) {
+    let unsupported_alias_name = "trait-impl-unsupported-alias-redaction.rs";
+    let unsupported_alias = fs::read_to_string(fixture.join(unsupported_alias_name))
+        .expect("read unsupported alias redaction fixture");
+    let alias_diagnostic = assert_trait_impl_source_scan_fails_closed(
+        &unsupported_alias,
+        unsupported_alias_name,
+        "unsupported array type target for capability alias",
+        "AdmissionAlias",
+    );
+    assert!(
+        !alias_diagnostic.contains("/home/alice/private/alias.rs")
+            && !alias_diagnostic.contains("PRIVATE_ALIAS_PATH")
+            && !alias_diagnostic.contains("ComponentSessionAdmission;"),
+        "unsupported-alias diagnostic echoed attacker-authored source: {alias_diagnostic}"
+    );
+
+    let unsupported_self_name = "trait-impl-unsupported-self-type-redaction.rs";
+    let unsupported_self = fs::read_to_string(fixture.join(unsupported_self_name))
+        .expect("read unsupported self-type redaction fixture");
+    let failure = match std::panic::catch_unwind(|| {
+        source_capability_inventory_from_text("d2b_bus", &unsupported_self, unsupported_self_name)
+    }) {
+        Ok(_) => panic!("unsupported capability self type passed the source inventory"),
+        Err(failure) => failure,
+    };
+    let self_diagnostic = panic_message(&failure);
+    assert!(
+        self_diagnostic.contains("unsupported array type syntax")
+            && self_diagnostic.contains(unsupported_self_name)
+            && !self_diagnostic.contains("/home/alice/private/self-type.rs")
+            && !self_diagnostic.contains("PRIVATE_SELF_TYPE_PATH")
+            && !self_diagnostic.contains("ComponentSessionAdmission;"),
+        "unsupported-self-type diagnostic was not fixed-label and redacted: {self_diagnostic}"
+    );
+
+    let parse_name = "parse-error-redaction.rs";
+    let parse_source =
+        fs::read_to_string(fixture.join(parse_name)).expect("read parse-error redaction fixture");
+    let failure = match std::panic::catch_unwind(|| {
+        source_capability_inventory_from_text("d2b_bus", &parse_source, parse_name)
+    }) {
+        Ok(_) => panic!("invalid Rust mutation source parsed successfully"),
+        Err(failure) => failure,
+    };
+    let parse_diagnostic = panic_message(&failure);
+    assert!(
+        parse_diagnostic.contains(parse_name)
+            && !parse_diagnostic.contains("/home/alice/private/parse.rs")
+            && !parse_diagnostic.contains("PRIVATE_PARSE_PATH")
+            && !parse_diagnostic.contains(parse_source.trim()),
+        "parse diagnostic echoed attacker-authored source: {parse_diagnostic}"
+    );
+}
+
+fn panic_message(failure: &Box<dyn std::any::Any + Send>) -> &str {
+    failure
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| failure.downcast_ref::<&str>().copied())
+        .unwrap_or("<non-string panic>")
 }
 
 fn assert_module_source_mutations_fail_closed(crate_root: &Path) {
@@ -457,6 +536,25 @@ fn assert_module_source_mutations_fail_closed(crate_root: &Path) {
          {unrecognised_attribute_diagnostic}"
     );
 
+    let direct_attribute_diagnostic = assert_source_file_scan_fails_closed(
+        &crate_root.join("tests/ui/module-direct-attr-unrecognised/lib.rs"),
+        &[
+            "unsupported direct module attribute",
+            "unrecognised_direct_module_attribute",
+            "d2b_bus (lib.rs)",
+            "exact proven-inert path and shape",
+        ],
+    );
+    assert!(
+        !direct_attribute_diagnostic.contains("inject_hidden_capability_impl")
+            && !direct_attribute_diagnostic.contains("security_tool")
+            && !direct_attribute_diagnostic.contains("ZoneRegistrar")
+            && !direct_attribute_diagnostic.contains("ComponentSessionAdmission")
+            && !direct_attribute_diagnostic.contains("/home/alice/private/direct-attribute.rs"),
+        "direct-attribute diagnostic echoed untrusted attribute tokens: \
+         {direct_attribute_diagnostic}"
+    );
+
     let missing_module = scratch.path().join("missing-module");
     fs::create_dir_all(&missing_module).expect("create missing module fixture");
     fs::write(missing_module.join("lib.rs"), "mod absent;\n").expect("write missing module root");
@@ -493,7 +591,10 @@ fn assert_module_source_mutations_fail_closed(crate_root: &Path) {
     fs::create_dir_all(&inert_cfg_attr).expect("create inert cfg_attr module fixture");
     fs::write(
         inert_cfg_attr.join("lib.rs"),
-        r#"#[cfg_attr(all(), doc = "ordinary module")]
+        r#"#[cfg(all())]
+#[rustfmt::skip]
+#[cfg_attr(rustfmt, rustfmt::skip)]
+#[cfg_attr(all(), doc = "ordinary module")]
 #[cfg_attr(all(), cfg_attr(all(), allow(dead_code)))]
 mod ordinary;
 "#,
@@ -1383,13 +1484,13 @@ fn source_capability_inventory(crate_name: &str, source: &Path) -> SourceCapabil
 fn source_capability_inventory_from_text(
     crate_name: &str,
     text: &str,
-    source: &str,
+    source_name: &str,
 ) -> SourceCapabilityInventory {
     let file = syn::parse_file(text)
-        .unwrap_or_else(|error| panic!("parse Rust mutation source {source}: {error}"));
+        .unwrap_or_else(|error| panic!("parse Rust mutation source {source_name}: {error}"));
     let mut facts = SourceCapabilityFacts::default();
     CapabilitySourceCollector {
-        source: source.to_owned(),
+        source: source_name.to_owned(),
         module_path: Vec::new(),
         lexical_depth: 0,
         facts: &mut facts,
@@ -1521,7 +1622,10 @@ struct SourcePath {
 #[derive(Clone)]
 enum SourceAliasTarget {
     Path(SourcePath),
-    Unsupported(String),
+    Unsupported {
+        syntax_kind: &'static str,
+        identifiers: BTreeSet<String>,
+    },
 }
 
 #[derive(Clone)]
@@ -1611,7 +1715,10 @@ impl CapabilitySourceCollector<'_> {
             syn::Type::Path(path) if path.qself.is_none() => {
                 SourceAliasTarget::Path(source_path(&path.path))
             }
-            other => SourceAliasTarget::Unsupported(compact_tokens(other)),
+            other => SourceAliasTarget::Unsupported {
+                syntax_kind: source_type_syntax_kind(other),
+                identifiers: source_type_identifiers(other),
+            },
         };
         self.facts.aliases.push(SourceAlias {
             binding: SourceBinding {
@@ -1740,15 +1847,34 @@ fn collect_use_bindings(
             prefix.pop();
         }
         syn::UseTree::Name(name) => {
-            if ident_name(&name.ident) == "self" {
+            let mut segments = prefix.clone();
+            let imported_name = ident_name(&name.ident);
+            let binding_name = if imported_name == "self" {
+                let Some(binding_name) = segments.last().cloned() else {
+                    return;
+                };
+                binding_name
+            } else {
+                segments.push(imported_name.clone());
+                imported_name.clone()
+            };
+            facts.module_aliases.push(SourceModuleAlias {
+                binding: SourceBinding {
+                    module_path: module_path.to_vec(),
+                    name: binding_name,
+                },
+                target: SourcePath {
+                    leading_colon,
+                    segments: segments.clone(),
+                },
+            });
+            if imported_name == "self" {
                 return;
             }
-            let mut segments = prefix.clone();
-            segments.push(ident_name(&name.ident));
             facts.aliases.push(SourceAlias {
                 binding: SourceBinding {
                     module_path: module_path.to_vec(),
-                    name: ident_name(&name.ident),
+                    name: imported_name,
                 },
                 target: SourceAliasTarget::Path(SourcePath {
                     leading_colon,
@@ -1974,19 +2100,23 @@ fn finish_source_capability_inventory(
         if resolved.contains_key(&alias.binding) || noncapability_aliases.contains(&alias.binding) {
             continue;
         }
-        let SourceAliasTarget::Unsupported(tokens) = &alias.target else {
+        let SourceAliasTarget::Unsupported {
+            syntax_kind,
+            identifiers,
+        } = &alias.target
+        else {
             continue;
         };
         let mentions_capability = CAPABILITY_TYPE_IDENTITIES
             .iter()
-            .any(|identity| tokens.contains(identity))
+            .any(|identity| identifiers.contains(*identity))
             || resolved
                 .keys()
-                .any(|binding| tokens.contains(&binding.name));
+                .any(|binding| identifiers.contains(&binding.name));
         if mentions_capability {
             panic!(
-                "unsupported alias {} in {} may resolve to a capability through \
-                 {tokens}; capability trait inventory fails closed",
+                "unsupported {syntax_kind} target for capability alias {} in {}; capability \
+                 trait inventory fails closed without rendering attacker-authored syntax",
                 display_binding(&alias.binding),
                 alias.source
             );
@@ -2068,7 +2198,7 @@ fn resolve_noncapability_aliases(
             }
             if alias.generic
                 || (alias.conditional && alias.fail_if_conditional)
-                || matches!(alias.target, SourceAliasTarget::Unsupported(_))
+                || matches!(alias.target, SourceAliasTarget::Unsupported { .. })
             {
                 continue;
             }
@@ -2082,7 +2212,7 @@ fn resolve_noncapability_aliases(
                         !alias_bindings.contains(candidate) || noncapabilities.contains(candidate)
                     })
                 }
-                SourceAliasTarget::Unsupported(_) => unreachable!(),
+                SourceAliasTarget::Unsupported { .. } => unreachable!(),
             };
             if is_noncapability {
                 changed |= noncapabilities.insert(alias.binding.clone());
@@ -2425,7 +2555,7 @@ fn resolve_impl_self_type(
                 panic!(
                     "cannot resolve module alias {} in impl self type {} in {source}; \
                      capability trait inventory fails closed instead of modelling \
-                     renamed module prefixes",
+                     module-prefix imports",
                     display_binding(&alias),
                     display_source_path(&path)
                 );
@@ -2458,14 +2588,19 @@ fn resolve_impl_self_type(
             None
         }
         other => {
-            let tokens = compact_tokens(other);
+            let identifiers = source_type_identifiers(other);
             let mentions_capability = CAPABILITY_TYPE_IDENTITIES
                 .iter()
-                .any(|identity| tokens.contains(identity));
+                .any(|identity| identifiers.contains(*identity))
+                || resolved
+                    .keys()
+                    .any(|binding| identifiers.contains(&binding.name));
             if mentions_capability {
                 panic!(
-                    "cannot classify possible capability impl self type {tokens} in {source}; \
-                     unsupported self-type syntax fails closed"
+                    "cannot classify possible capability impl self type with unsupported {} \
+                     syntax in {source}; capability trait inventory fails closed without \
+                     rendering attacker-authored syntax",
+                    source_type_syntax_kind(other)
                 );
             }
             None
@@ -2685,6 +2820,44 @@ fn compact_tokens(tokens: &impl ToTokens) -> String {
         .collect()
 }
 
+#[derive(Default)]
+struct SourceTypeIdentifierCollector {
+    identifiers: BTreeSet<String>,
+}
+
+impl<'ast> Visit<'ast> for SourceTypeIdentifierCollector {
+    fn visit_ident(&mut self, ident: &'ast syn::Ident) {
+        self.identifiers.insert(ident_name(ident));
+    }
+}
+
+fn source_type_identifiers(ty: &syn::Type) -> BTreeSet<String> {
+    let mut collector = SourceTypeIdentifierCollector::default();
+    collector.visit_type(ty);
+    collector.identifiers
+}
+
+fn source_type_syntax_kind(ty: &syn::Type) -> &'static str {
+    match ty {
+        syn::Type::Array(_) => "array type",
+        syn::Type::BareFn(_) => "bare-function type",
+        syn::Type::Group(_) => "grouped type",
+        syn::Type::ImplTrait(_) => "impl-trait type",
+        syn::Type::Infer(_) => "inferred type",
+        syn::Type::Macro(_) => "macro type",
+        syn::Type::Never(_) => "never type",
+        syn::Type::Paren(_) => "parenthesized type",
+        syn::Type::Path(_) => "qualified-path type",
+        syn::Type::Ptr(_) => "raw-pointer type",
+        syn::Type::Reference(_) => "reference type",
+        syn::Type::Slice(_) => "slice type",
+        syn::Type::TraitObject(_) => "trait-object type",
+        syn::Type::Tuple(_) => "tuple type",
+        syn::Type::Verbatim(_) => "verbatim type",
+        _ => "unknown type",
+    }
+}
+
 struct HiddenPublicScanner<'a> {
     crate_name: &'a str,
     source_root: PathBuf,
@@ -2901,24 +3074,28 @@ fn module_path_override(
     path_base: &Path,
     logical_source: &str,
 ) -> Option<PathBuf> {
-    for attribute in module
-        .attrs
-        .iter()
-        .filter(|attribute| attribute.path().is_ident("cfg_attr"))
-    {
-        validate_module_cfg_attr(&attribute.meta, &module.ident, logical_source);
+    let mut path_attribute = None;
+    for attribute in &module.attrs {
+        if attribute.path().is_ident("path") {
+            assert!(
+                path_attribute.replace(attribute).is_none(),
+                "multiple path attributes on Rust module {} in {logical_source}; source \
+                 inventories fail closed",
+                module.ident,
+            );
+        } else if attribute.path().is_ident("cfg_attr") {
+            validate_module_cfg_attr(&attribute.meta, &module.ident, logical_source);
+        } else if !safe_inert_module_attribute(&attribute.meta) {
+            panic!(
+                "unsupported direct module attribute on Rust module {} in {logical_source}; \
+                 source inventories fail closed. Remove the attribute or add its exact \
+                 proven-inert path and shape to the module attribute allowlist with a regression \
+                 fixture",
+                module.ident
+            );
+        }
     }
-    let mut attributes = module
-        .attrs
-        .iter()
-        .filter(|attribute| attribute.path().is_ident("path"));
-    let attribute = attributes.next()?;
-    assert!(
-        attributes.next().is_none(),
-        "multiple path attributes on Rust module {} in {logical_source}; source inventories \
-         fail closed",
-        module.ident,
-    );
+    let attribute = path_attribute?;
     let path = match &attribute.meta {
         syn::Meta::NameValue(value) => {
             let syn::Expr::Lit(value) = &value.value else {
@@ -2982,21 +3159,52 @@ fn validate_module_cfg_attr(meta: &Meta, module: &syn::Ident, logical_source: &s
             panic!(
                 "cfg_attr on Rust module {module} in {logical_source} contains an unrecognised \
                  conditional module attribute; source inventories fail closed because only the \
-                 explicit inert attribute allowlist is permitted"
+                 explicit inert attribute allowlist is permitted. Remove the attribute or add its \
+                 exact proven-inert path and shape with a regression fixture"
             );
         }
     }
 }
 
 fn safe_inert_module_cfg_attr(meta: &Meta) -> bool {
-    let path = meta.path();
-    path.is_ident("doc")
-        || path.is_ident("allow")
-        || path.is_ident("warn")
-        || path.is_ident("deny")
-        || path.is_ident("forbid")
-        || path.is_ident("expect")
-        || path.is_ident("deprecated")
+    safe_inert_module_attribute(meta)
+}
+
+fn safe_inert_module_attribute(meta: &Meta) -> bool {
+    match meta {
+        Meta::List(list) if list.path.is_ident("cfg") => true,
+        Meta::List(list)
+            if list.path.is_ident("allow")
+                || list.path.is_ident("warn")
+                || list.path.is_ident("deny")
+                || list.path.is_ident("forbid")
+                || list.path.is_ident("expect") =>
+        {
+            true
+        }
+        Meta::List(list) if list.path.is_ident("doc") || list.path.is_ident("deprecated") => true,
+        Meta::NameValue(value)
+            if value.path.is_ident("doc") || value.path.is_ident("deprecated") =>
+        {
+            true
+        }
+        Meta::Path(path) if path.is_ident("deprecated") => true,
+        Meta::Path(path) if exact_meta_path(path, &["rustfmt", "skip"]) => true,
+        _ => false,
+    }
+}
+
+fn exact_meta_path(path: &syn::Path, expected: &[&str]) -> bool {
+    path.leading_colon.is_none()
+        && path.segments.len() == expected.len()
+        && path
+            .segments
+            .iter()
+            .zip(expected)
+            .all(|(segment, expected)| {
+                ident_name(&segment.ident) == *expected
+                    && matches!(segment.arguments, syn::PathArguments::None)
+            })
 }
 
 fn dependency_order(mut packages: BTreeMap<String, RenderPackage>) -> Vec<(String, RenderPackage)> {
