@@ -58,7 +58,9 @@ deprecations ship one minor release before removal.
 
 - Made the capability mint-surface policy gate render each package serially in
   isolation, prove every rustdoc all-items entry has a parseable page, and
-  fail closed on missing required signatures or partial documentation.
+  fail closed on missing required signatures or partial documentation. The
+  gate also inventories exact public `doc(hidden)` signatures independently,
+  since the pinned stable rustdoc cannot render them.
 
 - Strengthened cancellation publication race coverage to prove both activity
   and response state remain locked until their correlated entries are visible.

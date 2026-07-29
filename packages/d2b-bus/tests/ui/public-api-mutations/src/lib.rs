@@ -8,6 +8,11 @@ pub fn rogue_admission() -> Option<ComponentSessionAdmission> {
     None
 }
 
+#[doc(hidden)]
+pub fn hidden_rogue_admission() -> Option<ComponentSessionAdmission> {
+    None
+}
+
 pub struct Rogue(RogueTarget);
 
 pub struct RogueTarget;

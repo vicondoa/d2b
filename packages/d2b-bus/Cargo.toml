@@ -20,5 +20,7 @@ tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
 d2b-resource-store = { path = "../d2b-resource-store", version = "0.0.0-bootstrap" }
+quote = "1"
 serde_json.workspace = true
+syn = { version = "2", features = ["full"] }
 tokio = { workspace = true, features = ["macros", "rt", "sync", "test-util"] }

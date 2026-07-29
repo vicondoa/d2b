@@ -1,0 +1,4 @@
+d2b_core::bundle_resolver::BundleVerifyPolicy::method:for_tests	fn for_tests () -> Self
+d2b_session::admission::SessionCancellationHandle::method:revoke_generation_writes	fn revoke_generation_writes (& self) -> impl Future < Output = () > + Send + 'static
+d2b_session::transport::OwnedTransport::tymethod:begin_write_batch	fn begin_write_batch (& mut self , cancellation : Option < Cancellation >)
+d2b_session::transport::OwnedTransport::tymethod:take_write_batch	fn take_write_batch (& mut self) -> Option < (Vec < TransportPacket > , Option < Cancellation > , bool) >
