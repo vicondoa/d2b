@@ -159,6 +159,9 @@ pub struct ChromeSpec {
     pub expanded: bool,
     /// Actions offered when expanded, in order.
     pub actions: Vec<Action>,
+    /// Bitmask of actions currently in their active state, so a press has a
+    /// visible and persistent result rather than an untimed flash.
+    pub active_actions: u32,
     /// Logical to physical scale.
     pub scale: f32,
     /// Label size in logical px. 14 default, 12 floor.
@@ -183,6 +186,7 @@ impl ChromeSpec {
             status_state: VisualState::default(),
             expanded: false,
             actions: Action::DEFAULTS.to_vec(),
+            active_actions: 0,
             scale: 1.0,
             font_px: 12.0,
             tracking_em: 0.0,
@@ -428,7 +432,21 @@ pub fn render(spec: &ChromeSpec, fonts: &TextRenderer, background: Rgba) -> Rend
             + (sep_gap * 2 + 1) as i32
             + i as i32 * (icon_box + icon_gap) as i32;
         let iy = tab.y + ((tab.height - icon_box) / 2) as i32;
-        draw_action_icon(&mut canvas, *action, ix, iy, icon_box, fg, scale);
+        // An active action keeps a highlighted pill behind its icon, so a
+        // press has a visible result that survives the pointer leaving.
+        let active = spec.active_actions & (1 << i) != 0;
+        if active {
+            canvas.fill_round_rect(
+                ix - px(3, scale) as i32,
+                iy - px(2, scale) as i32,
+                icon_box + px(6, scale),
+                icon_box + px(4, scale),
+                f64::from(px(4, scale)),
+                spec.accent,
+            );
+        }
+        let icon_fg = if active { button_bg } else { fg };
+        draw_action_icon(&mut canvas, *action, ix, iy, icon_box, icon_fg, scale);
     }
 
     if spec.state.keyboard_focus {

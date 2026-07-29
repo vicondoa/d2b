@@ -85,7 +85,8 @@ use crate::{
         global_disposition,
     },
     decoration::{
-        SharedDecorationManager, WRAPPER_RAIL_WIDTH, WindowGeometry, tracking_shm_pool_handler,
+        SharedDecorationManager, TabHit, WRAPPER_RAIL_WIDTH, WindowGeometry, chrome_action_name,
+        tracking_shm_pool_handler,
     },
     diag::{DiagRateLimiter, DropReason, bounded_error_detail},
     dmabuf::DmabufHandler,
@@ -1532,6 +1533,7 @@ impl WlSeatHandler for FilterSeatHandler {
             focus: PointerFocus::None,
             target_surface: None,
             wrapper_surface: None,
+            last_pointer: (0.0, 0.0),
             pending_forwarded_frame: false,
         });
         slf.send_get_pointer(id);
@@ -1640,6 +1642,9 @@ struct FilterPointerHandler {
     /// The wrapper surface the pointer is currently over, so a press on the
     /// identity tab can be routed back to the decoration that owns it.
     wrapper_surface: Option<Rc<WlSurface>>,
+    /// Last pointer position in wrapper-surface coordinates, so a press can be
+    /// hit-tested against the tab that was drawn.
+    last_pointer: (f64, f64),
     pending_forwarded_frame: bool,
 }
 
@@ -1681,6 +1686,7 @@ impl WlPointerHandler for FilterPointerHandler {
         surface_y: Fixed,
     ) {
         if let Some(target) = self.decoration.borrow().wrapper_input_target(surface) {
+            self.last_pointer = (surface_x.to_f64(), surface_y.to_f64());
             if surface_belongs_to_receiver(&target, slf.client()) {
                 self.target_surface = Some(target.clone());
                 self.wrapper_surface = Some(surface.clone());
@@ -1784,8 +1790,8 @@ impl WlPointerHandler for FilterPointerHandler {
             self.pending_forwarded_frame = false;
             return;
         }
-        // A press inside the identity tab toggles its expanded state. The tab
-        // is proxy-owned, so this never reaches the guest: the guest must not
+        // A press inside the identity tab is handled by the proxy. The tab is
+        // proxy-owned, so this never reaches the guest: the guest must not
         // learn about, or be able to synthesise, interaction with the chrome
         // that identifies it.
         if self.focus == PointerFocus::Rail {
@@ -1795,9 +1801,28 @@ impl WlPointerHandler for FilterPointerHandler {
                 && (button == BTN_LEFT || button == BTN_RIGHT)
                 && let Some(surface) = self.wrapper_surface.clone()
             {
-                self.decoration
-                    .borrow_mut()
-                    .wrapper_toggle_expanded(&surface);
+                let (x, y) = self.last_pointer;
+                let hit = self.decoration.borrow().wrapper_hit_test(&surface, x, y);
+                match hit {
+                    Some(TabHit::Identity) => {
+                        self.decoration
+                            .borrow_mut()
+                            .wrapper_toggle_expanded(&surface);
+                    }
+                    Some(TabHit::Action(index)) => {
+                        // The prototype reports the action rather than
+                        // performing it: the dispatch boundary belongs to the
+                        // daemon, not to the surface that draws the icon.
+                        let name = chrome_action_name(index).unwrap_or("unknown");
+                        log::info!(
+                            "[d2b-wlproxy] event=chrome-action action={name} index={index}"
+                        );
+                        self.decoration
+                            .borrow_mut()
+                            .wrapper_toggle_action(&surface, index);
+                    }
+                    None => {}
+                }
             }
             return;
         }

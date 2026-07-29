@@ -487,6 +487,74 @@ pub fn draw_decoration(input: &DrawInput) -> Option<Vec<u8>> {
     Some(pixels)
 }
 
+/// Where inside the identity tab a pointer press landed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TabHit {
+    /// The identity name and its disclosure chevron: toggles expansion.
+    Identity,
+    /// One of the action icons revealed by expansion, by index.
+    Action(usize),
+}
+
+/// Hit-test a pointer position, in wrapper-surface coordinates, against the
+/// tab that was actually drawn.
+///
+/// Measured from the same spec the renderer uses, so the icons a user can see
+/// are exactly the icons they can press.
+pub fn chrome_hit_test(
+    width: u32,
+    label: Option<&SanitizedLabel>,
+    expanded: bool,
+    x: f64,
+    y: f64,
+) -> Option<TabHit> {
+    use d2b_chrome_engine::{text::TextRenderer, variant::resolve_for, PROTOTYPE_FONT};
+    let fonts = TextRenderer::from_bytes(PROTOTYPE_FONT).ok()?;
+    let spec = chrome_spec(width, label, Color::WHITE, expanded, 0);
+    let (outcome, _) = resolve_for(&spec, &fonts);
+    let layout = outcome.layout()?;
+    let button = layout.button;
+
+    let top = f64::from(button.y);
+    let bottom = f64::from(button.bottom());
+    if y < top || y >= bottom {
+        return None;
+    }
+    if x >= f64::from(button.x) && x < f64::from(button.right()) {
+        return Some(TabHit::Identity);
+    }
+    if !spec.expanded || spec.actions.is_empty() {
+        return None;
+    }
+
+    // Action strip geometry, mirroring the renderer.
+    let icon_box = 18.0_f64;
+    let icon_gap = 4.0_f64;
+    let sep_gap = 6.0_f64;
+    let first = f64::from(button.right()) + sep_gap * 2.0 + 1.0;
+    for i in 0..spec.actions.len() {
+        let ix = first + i as f64 * (icon_box + icon_gap);
+        // Half the gap on each side counts as part of the icon, so there are no
+        // dead pixels between adjacent controls.
+        if x >= ix - icon_gap / 2.0 && x < ix + icon_box + icon_gap / 2.0 {
+            return Some(TabHit::Action(i));
+        }
+    }
+    None
+}
+
+/// The action at `index`, as a stable identifier for dispatch and logging.
+pub fn chrome_action_name(index: usize) -> Option<&'static str> {
+    use d2b_chrome_engine::variant::Action;
+    Action::DEFAULTS.get(index).map(|a| match a {
+        Action::Terminal => "terminal",
+        Action::Audio => "audio",
+        Action::Usb => "usb",
+        Action::Info => "info",
+        Action::Stop => "stop",
+    })
+}
+
 /// Build the chrome spec the proxy draws, so drawing and hit-testing cannot
 /// disagree about where the tab is.
 fn chrome_spec(
@@ -494,6 +562,7 @@ fn chrome_spec(
     label: Option<&SanitizedLabel>,
     color: Color,
     expanded: bool,
+    active_actions: u32,
 ) -> d2b_chrome_engine::variant::ChromeSpec {
     use d2b_chrome_engine::{
         color::Rgba,
@@ -507,6 +576,7 @@ fn chrome_spec(
     spec.content_width = width;
     spec.content_height = 1;
     spec.expanded = expanded || std::env::var("D2B_CHROME_EXPANDED").is_ok();
+    spec.active_actions = active_actions;
     if let Ok(status) = std::env::var("D2B_CHROME_STATUS")
         && !status.is_empty()
     {
@@ -526,7 +596,7 @@ fn chrome_input_region(
 ) -> Option<(i32, i32, i32, i32)> {
     use d2b_chrome_engine::{text::TextRenderer, variant::resolve_for, PROTOTYPE_FONT};
     let fonts = TextRenderer::from_bytes(PROTOTYPE_FONT).ok()?;
-    let spec = chrome_spec(width, label, Color::WHITE, expanded);
+    let spec = chrome_spec(width, label, Color::WHITE, expanded, 0);
     let (outcome, _) = resolve_for(&spec, &fonts);
     let layout = outcome.layout()?;
     // Expansion widens the tab to the right; the region must follow it so the
@@ -570,6 +640,7 @@ fn draw_wrapper_rail(
     color: Color,
     label: Option<&SanitizedLabel>,
     expanded: bool,
+    active_actions: u32,
 ) -> Option<Vec<u8>> {
     use d2b_chrome_engine::{
         color::Rgba,
@@ -582,7 +653,7 @@ fn draw_wrapper_rail(
     let layout = decoration_buffer_layout(size)?;
 
     let fonts = TextRenderer::from_bytes(PROTOTYPE_FONT).ok()?;
-    let spec = chrome_spec(width, label, color, expanded);
+    let spec = chrome_spec(width, label, color, expanded, active_actions);
 
     let rendered = render(&spec, &fonts, Rgba::TRANSPARENT);
     let mut pixels = vec![0_u8; layout.len];
@@ -1216,6 +1287,8 @@ struct WrapperToplevel {
     wrapper_configured: bool,
     /// Whether the identity tab is expanded to show its actions.
     expanded: bool,
+    /// Bitmask of actions in their active state.
+    active_actions: u32,
 }
 
 impl WrapperToplevel {
@@ -1390,6 +1463,8 @@ struct FrameKey {
     label_position: LabelPosition,
     /// Part of the key so toggling expansion forces the buffer to be redrawn.
     expanded: bool,
+    /// Part of the key for the same reason: pressing an action must repaint.
+    active_actions: u32,
 }
 
 #[derive(Debug)]
@@ -1611,6 +1686,7 @@ impl DecorationManager {
             current_configure: ConfigureSize::new(0, 0),
             wrapper_configured: false,
             expanded: false,
+            active_actions: 0,
         });
         initial_wrapper_surface.send_commit();
         true
@@ -1768,7 +1844,51 @@ impl DecorationManager {
         true
     }
 
-    /// Toggle the identity tab's expanded state for the wrapper owning
+    /// Hit-test a pointer position against the tab owned by `surface`.
+    pub fn wrapper_hit_test(&self, surface: &Rc<WlSurface>, x: f64, y: f64) -> Option<TabHit> {
+        let wrapper_id = surface.unique_id();
+        let (width, expanded) = self.surfaces.values().find_map(|state| {
+            state
+                .wrapper
+                .as_ref()
+                .filter(|w| w.wrapper_surface.unique_id() == wrapper_id)
+                .and_then(|w| {
+                    w.applied_geometry
+                        .map(|g| (g.outer.width, w.expanded))
+                })
+        })?;
+        chrome_hit_test(width, self.config.label.as_ref(), expanded, x, y)
+    }
+
+    /// Toggle one action.s active state and redraw.
+    pub fn wrapper_toggle_action(&mut self, surface: &Rc<WlSurface>, index: usize) -> bool {
+        if index >= 32 {
+            return false;
+        }
+        let wrapper_id = surface.unique_id();
+        let Some(surface_id) = self.surfaces.iter().find_map(|(id, state)| {
+            state
+                .wrapper
+                .as_ref()
+                .filter(|w| w.wrapper_surface.unique_id() == wrapper_id)
+                .map(|_| *id)
+        }) else {
+            return false;
+        };
+        if let Some(wrapper) = self
+            .surfaces
+            .get_mut(&surface_id)
+            .and_then(|state| state.wrapper.as_mut())
+        {
+            wrapper.active_actions ^= 1 << index;
+        } else {
+            return false;
+        }
+        self.apply_wrapper(surface_id);
+        true
+    }
+
+    /// Toggle the identity tab.s expanded state for the wrapper owning
     /// `surface`, and redraw. Returns true when a tab was found and toggled.
     ///
     /// This is what makes the chevron a control rather than an ornament: the
@@ -2015,6 +2135,7 @@ impl DecorationManager {
                 },
                 label_position: self.config.label_position,
                 expanded: wrapper.expanded,
+                active_actions: wrapper.active_actions,
             };
             let needs_buffer = wrapper.key.as_ref() != Some(&key);
             if !needs_buffer && wrapper.applied_geometry == Some(wrapper_geometry) {
@@ -2029,6 +2150,7 @@ impl DecorationManager {
                 key.color,
                 key.label.as_ref(),
                 key.expanded,
+                key.active_actions,
             ) {
                 Ok(buffer) => Some(buffer),
                 Err(error) => {
@@ -2206,6 +2328,7 @@ impl DecorationManager {
             label: plan.label.clone(),
             label_position: plan.label_position,
             expanded: false,
+            active_actions: 0,
         };
         let needs_surface = self
             .surfaces
@@ -2345,6 +2468,7 @@ impl DecorationManager {
         color: Color,
         label: Option<&SanitizedLabel>,
         expanded: bool,
+        active_actions: u32,
     ) -> io::Result<ProxyDecorationBuffer> {
         let shm = self
             .shm
@@ -2353,7 +2477,7 @@ impl DecorationManager {
         let size = Size::new(width, height);
         let layout = decoration_buffer_layout(size)
             .ok_or_else(|| io::Error::other("wrapper rail buffer exceeds decoration limits"))?;
-        let pixels = draw_wrapper_rail(width, height, color, label, expanded)
+        let pixels = draw_wrapper_rail(width, height, color, label, expanded, active_actions)
             .ok_or_else(|| io::Error::other("wrapper rail buffer exceeds decoration limits"))?;
         let fd = create_memfd_with_contents(
             &pixels,
