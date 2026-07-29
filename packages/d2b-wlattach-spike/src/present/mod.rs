@@ -70,6 +70,10 @@ pub struct Frontend {
     /// Input observed from the host compositor, drained and forwarded upward.
     pub input: Vec<InputEvent>,
     seat: Option<WlSeat>,
+    /// `wl_seat.capabilities` may be sent more than once; only take the pointer
+    /// and keyboard the first time, or we leak a seat object per event.
+    has_pointer: bool,
+    has_keyboard: bool,
     /// Where the session host writes per-surface pixel files.
     px_dir: std::path::PathBuf,
     pub running: bool,
@@ -85,6 +89,8 @@ impl Default for Frontend {
             close_requested: Vec::new(),
             input: Vec::new(),
             seat: None,
+            has_pointer: false,
+            has_keyboard: false,
             px_dir: std::path::PathBuf::new(),
             running: true,
         }
@@ -362,7 +368,7 @@ impl Dispatch<XdgToplevel, u32> for Frontend {
 
 impl Dispatch<WlSeat, ()> for Frontend {
     fn event(
-        _: &mut Self,
+        state: &mut Self,
         seat: &WlSeat,
         event: wl_seat::Event,
         _: &(),
@@ -373,11 +379,13 @@ impl Dispatch<WlSeat, ()> for Frontend {
             capabilities: wayland_client::WEnum::Value(c),
         } = event
         {
-            if c.contains(wl_seat::Capability::Pointer) {
+            if c.contains(wl_seat::Capability::Pointer) && !state.has_pointer {
                 seat.get_pointer(qh, ());
+                state.has_pointer = true;
             }
-            if c.contains(wl_seat::Capability::Keyboard) {
+            if c.contains(wl_seat::Capability::Keyboard) && !state.has_keyboard {
                 seat.get_keyboard(qh, ());
+                state.has_keyboard = true;
             }
         }
     }

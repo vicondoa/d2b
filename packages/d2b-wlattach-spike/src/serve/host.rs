@@ -98,6 +98,11 @@ pub struct SessionHost {
     pub keyboard: Option<smithay::input::keyboard::KeyboardHandle<Self>>,
     pub pointer: Option<smithay::input::pointer::PointerHandle<Self>>,
     pub output: Output,
+    /// Whether the application.s pointer currently has focus, and where it was
+    /// last seen. A button that arrives with no focus is silently dropped, so we
+    /// establish focus first if we have to.
+    pub pointer_focused: bool,
+    pub last_pointer: (f64, f64),
     pub shadow: Arc<Mutex<Shadow>>,
     pub ids: IdAllocator,
     pub toplevels: Vec<ToplevelSurface>,
@@ -162,6 +167,8 @@ impl SessionHost {
             keyboard,
             pointer,
             output,
+            pointer_focused: false,
+            last_pointer: (0.0, 0.0),
             shadow: Arc::new(Mutex::new(Shadow::default())),
             ids: IdAllocator::new(),
             toplevels: Vec::new(),
@@ -420,6 +427,8 @@ pub fn apply_input(state: &mut SessionHost, ev: crate::wire::dto::InputEvent) {
                     },
                 );
                 p.frame(state);
+                state.pointer_focused = true;
+                state.last_pointer = (x, y);
             }
         }
         E::PointerLeave => {
@@ -435,10 +444,33 @@ pub fn apply_input(state: &mut SessionHost, ev: crate::wire::dto::InputEvent) {
                     },
                 );
                 p.frame(state);
+                state.pointer_focused = false;
             }
         }
         E::PointerButton { button, pressed } => {
             if let Some(p) = state.pointer.clone() {
+                // A button delivered while the pointer has no focus is dropped
+                // on the floor. That happens whenever the window maps under a
+                // stationary cursor: the compositor sends no enter until the
+                // pointer actually moves, so the first click would be lost and
+                // the window would feel dead until you jiggled the mouse.
+                // Establish focus first if we have not seen an enter yet.
+                if !state.pointer_focused {
+                    let (x, y) = state.last_pointer;
+                    let serial = SERIAL_COUNTER.next_serial();
+                    p.motion(
+                        state,
+                        Some((surface, (0.0, 0.0).into())),
+                        &MotionEvent {
+                            location: (x, y).into(),
+                            serial,
+                            time,
+                        },
+                    );
+                    p.frame(state);
+                    state.pointer_focused = true;
+                }
+
                 let serial = SERIAL_COUNTER.next_serial();
                 p.button(
                     state,

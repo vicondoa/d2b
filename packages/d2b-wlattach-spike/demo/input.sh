@@ -65,6 +65,18 @@ check "terminal emitted a mouse report" "yes" \
   "$(grep -q $'\033\[M' "$KEYOUT.mouse" 2>/dev/null && echo yes || echo no)"
 
 echo
+echo "== first click, without moving the mouse first =="
+# The window maps under a stationary cursor, so the compositor sends no enter.
+# A button arriving with no pointer focus used to be dropped, which made the
+# window feel dead until you jiggled the mouse or re-attached.
+before_btn=$(grep -c "wl_pointer@[0-9]*\\.button" "$LOG")
+"$BIN" inject --session "$SESSION" --click 50 50 --bare
+sleep 1.5
+after_btn=$(grep -c "wl_pointer@[0-9]*\\.button" "$LOG")
+check "bare click reaches the application" "yes" \
+  "$([ "$after_btn" -gt "$before_btn" ] && echo yes || echo no)"
+
+echo
 echo "== input still works after detach/attach =="
 "$BIN" detach -s "$SESSION" >/dev/null; sleep 1.5
 "$BIN" attach -s "$SESSION" >/dev/null; sleep 3

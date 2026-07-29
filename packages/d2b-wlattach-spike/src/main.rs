@@ -85,6 +85,10 @@ enum Cmd {
         /// Inject a pointer click at this position instead of a key.
         #[arg(long, num_args = 2, value_names = ["X", "Y"])]
         click: Option<Vec<f64>>,
+        /// Send only the button, with no preceding enter or motion -- the
+        /// "clicked without moving the mouse first" case.
+        #[arg(long)]
+        bare: bool,
     },
 }
 
@@ -204,7 +208,8 @@ fn real_main() -> Result<(), String> {
             session,
             key,
             click,
-        } => inject(&session, key, click),
+            bare,
+        } => inject(&session, key, click, bare),
     }
 }
 
@@ -375,6 +380,8 @@ fn serve(name: &str, argv: &[String]) -> Result<(), String> {
                             Ok(c) => {
                                 hosted.frontend = Some(c);
                                 hosted.attached = true;
+                                // Focus belongs to the old generation.
+                                state.pointer_focused = false;
                                 "attached\n".to_owned()
                             }
                             Err(e) => format!("attach failed: {e}\n"),
@@ -645,7 +652,7 @@ fn present(name: &str) -> Result<(), String> {
 /// Test scaffolding. It exercises the host-to-application delivery path without
 /// a virtual-input tool, which installs its own keymap and so produces keycodes
 /// that mean nothing under ours.
-fn inject(name: &str, key: Option<u32>, click: Option<Vec<f64>>) -> Result<(), String> {
+fn inject(name: &str, key: Option<u32>, click: Option<Vec<f64>>, bare: bool) -> Result<(), String> {
     use d2b_wlattach_spike::wire::dto::InputEvent;
     let mut s = UnixStream::connect(session_dir(name).join("input.sock"))
         .map_err(|e| format!("no input socket: {e}"))?;
@@ -655,18 +662,33 @@ fn inject(name: &str, key: Option<u32>, click: Option<Vec<f64>>) -> Result<(), S
             xy.first().copied().unwrap_or(0.0),
             xy.get(1).copied().unwrap_or(0.0),
         );
-        vec![
-            InputEvent::PointerEnter { x, y },
-            InputEvent::PointerMotion { x, y },
-            InputEvent::PointerButton {
-                button: 0x110, // BTN_LEFT
-                pressed: true,
-            },
-            InputEvent::PointerButton {
-                button: 0x110,
-                pressed: false,
-            },
-        ]
+        if bare {
+            // No enter, no motion: the "clicked without moving the mouse first"
+            // case, which used to be silently dropped.
+            vec![
+                InputEvent::PointerButton {
+                    button: 0x110,
+                    pressed: true,
+                },
+                InputEvent::PointerButton {
+                    button: 0x110,
+                    pressed: false,
+                },
+            ]
+        } else {
+            vec![
+                InputEvent::PointerEnter { x, y },
+                InputEvent::PointerMotion { x, y },
+                InputEvent::PointerButton {
+                    button: 0x110, // BTN_LEFT
+                    pressed: true,
+                },
+                InputEvent::PointerButton {
+                    button: 0x110,
+                    pressed: false,
+                },
+            ]
+        }
     } else {
         let key = key.ok_or("pass --key or --click")?;
         vec![
