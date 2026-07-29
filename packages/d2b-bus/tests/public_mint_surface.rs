@@ -6,7 +6,7 @@ use std::{
 };
 
 use quote::ToTokens;
-use syn::{Attribute, Item, Meta, Visibility, visit::Visit};
+use syn::{Attribute, Item, Meta, Visibility, ext::IdentExt, visit::Visit};
 
 const APPROVED_CAPABILITY_MINT_POINTS: &[(&str, &str)] = &[
     (
@@ -297,6 +297,7 @@ impl From<Arc<ComponentSessionAdmissionIdentity>> for ComponentSessionAdmission 
         ),
         ("trait-impl-renamed-module.rs", "module alias", "cap"),
         ("trait-impl-direct-renamed-module.rs", "module alias", "cap"),
+        ("trait-impl-raw-renamed-module.rs", "module alias", "cap"),
         (
             "trait-impl-lexical-alias.rs",
             "lexically scoped",
@@ -478,6 +479,111 @@ pub fn compiler_selected_source() {}
          {hidden_inventory:?}"
     );
 
+    let path_child = scratch.path().join("path-child");
+    fs::create_dir_all(path_child.join("chosen/outer"))
+        .expect("create path-loaded child decoy directory");
+    fs::write(
+        path_child.join("lib.rs"),
+        "#[path = \"chosen/outer.rs\"]\nmod outer;\n",
+    )
+    .expect("write path-loaded child root");
+    fs::write(path_child.join("chosen/outer.rs"), "mod child;\n")
+        .expect("write path-loaded parent source");
+    fs::write(
+        path_child.join("chosen/child.rs"),
+        r#"
+pub struct ComponentSessionAdmission;
+
+impl From<()> for ComponentSessionAdmission {
+    fn from(_value: ()) -> Self {
+        Self
+    }
+}
+
+#[doc(hidden)]
+pub fn compiler_selected_child() {}
+"#,
+    )
+    .expect("write compiler-selected path-loaded child");
+    fs::write(
+        path_child.join("chosen/outer/child.rs"),
+        "#[doc(hidden)]\npub fn path_child_decoy() {}\n",
+    )
+    .expect("write path-loaded child decoy");
+    assert_selected_module_sources(
+        &path_child.join("lib.rs"),
+        "compiler_selected_child",
+        &["path_child_decoy"],
+        true,
+    );
+
+    let raw_identifiers = scratch.path().join("raw-identifiers");
+    fs::create_dir_all(raw_identifiers.join("inline"))
+        .expect("create raw inline selected directory");
+    fs::create_dir_all(raw_identifiers.join("r#inline"))
+        .expect("create raw inline decoy directory");
+    fs::write(
+        raw_identifiers.join("lib.rs"),
+        "mod r#router;\nmod r#inline { mod r#nested; }\n",
+    )
+    .expect("write raw identifier root");
+    fs::write(
+        raw_identifiers.join("router.rs"),
+        r#"
+pub struct r#ComponentSessionAdmission;
+
+impl From<()> for r#ComponentSessionAdmission {
+    fn from(_value: ()) -> Self {
+        Self
+    }
+}
+
+#[doc(hidden)]
+pub fn raw_external_selected() {}
+"#,
+    )
+    .expect("write raw external selected source");
+    fs::write(
+        raw_identifiers.join("r#router.rs"),
+        "#[doc(hidden)]\npub fn raw_external_decoy() {}\n",
+    )
+    .expect("write raw external decoy");
+    fs::write(
+        raw_identifiers.join("inline/nested.rs"),
+        "#[doc(hidden)]\npub fn raw_inline_selected() {}\n",
+    )
+    .expect("write raw inline selected source");
+    fs::write(
+        raw_identifiers.join("r#inline/r#nested.rs"),
+        "#[doc(hidden)]\npub fn raw_inline_decoy() {}\n",
+    )
+    .expect("write raw inline decoy");
+    let raw_capabilities = source_capability_inventory("d2b_bus", &raw_identifiers.join("lib.rs"));
+    assert!(
+        raw_capabilities.trait_impls.iter().any(|implementation| {
+            implementation.contains("ComponentSessionAdmission")
+                && implementation.contains("From<()>")
+        }),
+        "raw capability path escaped the trait inventory: {:?}",
+        raw_capabilities.trait_impls
+    );
+    let raw_hidden = hidden_public_api("d2b_bus", &raw_identifiers.join("lib.rs"));
+    for selected in ["raw_external_selected", "raw_inline_selected"] {
+        assert!(
+            raw_hidden.iter().any(|symbol| symbol.contains(selected)),
+            "raw identifier scan missed {selected}: {raw_hidden:?}"
+        );
+    }
+    for decoy in ["raw_external_decoy", "raw_inline_decoy"] {
+        assert!(
+            raw_hidden.iter().all(|symbol| !symbol.contains(decoy)),
+            "raw identifier scan selected {decoy}: {raw_hidden:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    assert_symlink_module_sources(&scratch);
+
     let duplicate = scratch.path().join("duplicate-logical-path");
     fs::create_dir_all(&duplicate).expect("create duplicate module-path mutation");
     fs::write(
@@ -508,6 +614,107 @@ pub fn compiler_selected_source() {}
             "module-source diagnostic leaked its canonical workspace path: {diagnostic}"
         );
     }
+}
+
+fn assert_selected_module_sources(
+    source: &Path,
+    selected: &str,
+    decoys: &[&str],
+    expect_from_unit: bool,
+) {
+    let capability_inventory = source_capability_inventory("d2b_bus", source);
+    if expect_from_unit {
+        assert!(
+            capability_inventory
+                .trait_impls
+                .iter()
+                .any(|implementation| {
+                    implementation.contains("ComponentSessionAdmission")
+                        && implementation.contains("From<()>")
+                }),
+            "selected module source did not contribute its capability impl: {:?}",
+            capability_inventory.trait_impls
+        );
+    }
+    let hidden_inventory = hidden_public_api("d2b_bus", source);
+    assert!(
+        hidden_inventory
+            .iter()
+            .any(|symbol| symbol.contains(selected)),
+        "module scan missed compiler-selected source {selected}: {hidden_inventory:?}"
+    );
+    for decoy in decoys {
+        assert!(
+            hidden_inventory
+                .iter()
+                .all(|symbol| !symbol.contains(decoy)),
+            "module scan selected decoy {decoy}: {hidden_inventory:?}"
+        );
+    }
+}
+
+#[cfg(unix)]
+fn assert_symlink_module_sources(scratch: &Scratch) {
+    use std::os::unix::fs::symlink;
+
+    let symlink_file = scratch.path().join("symlink-file");
+    fs::create_dir_all(symlink_file.join("targets/actual"))
+        .expect("create symlink file target decoy directory");
+    fs::create_dir_all(symlink_file.join("linked"))
+        .expect("create symlink file lexical module directory");
+    fs::write(symlink_file.join("lib.rs"), "mod linked;\n").expect("write symlink file root");
+    fs::write(symlink_file.join("targets/actual.rs"), "mod child;\n")
+        .expect("write symlink file target");
+    symlink("targets/actual.rs", symlink_file.join("linked.rs"))
+        .expect("create symlinked Rust source file");
+    fs::write(
+        symlink_file.join("linked/child.rs"),
+        r#"
+pub struct ComponentSessionAdmission;
+
+impl From<()> for ComponentSessionAdmission {
+    fn from(_value: ()) -> Self {
+        Self
+    }
+}
+
+#[doc(hidden)]
+pub fn symlink_file_selected() {}
+"#,
+    )
+    .expect("write symlink file compiler-selected child");
+    fs::write(
+        symlink_file.join("targets/actual/child.rs"),
+        "#[doc(hidden)]\npub fn symlink_file_decoy() {}\n",
+    )
+    .expect("write symlink file target-relative decoy");
+    assert_selected_module_sources(
+        &symlink_file.join("lib.rs"),
+        "symlink_file_selected",
+        &["symlink_file_decoy"],
+        true,
+    );
+
+    let symlink_directory = scratch.path().join("symlink-directory");
+    fs::create_dir_all(symlink_directory.join("target-dir"))
+        .expect("create symlink directory target");
+    fs::write(symlink_directory.join("lib.rs"), "mod linked;\n")
+        .expect("write symlink directory root");
+    fs::write(symlink_directory.join("target-dir/mod.rs"), "mod child;\n")
+        .expect("write symlink directory module root");
+    fs::write(
+        symlink_directory.join("target-dir/child.rs"),
+        "#[doc(hidden)]\npub fn symlink_directory_selected() {}\n",
+    )
+    .expect("write symlink directory selected child");
+    symlink("target-dir", symlink_directory.join("linked"))
+        .expect("create symlinked Rust module directory");
+    assert_selected_module_sources(
+        &symlink_directory.join("lib.rs"),
+        "symlink_directory_selected",
+        &[],
+        false,
+    );
 }
 
 fn assert_source_file_scan_fails_closed(source: &Path, expected: &[&str]) -> String {
@@ -1022,16 +1229,15 @@ fn hidden_public_api(crate_name: &str, source: &Path) -> BTreeSet<String> {
         entries: BTreeSet::new(),
         visited: BTreeMap::new(),
     };
-    scanner.scan_file(source, &[], true, false);
+    scanner.scan_file(source, &[], SourceFileKind::CrateRoot, false);
     scanner.entries
 }
 
-// This syntax-level inventory supplies breadth beyond the compiler-checked
-// negative bounds on the enumerated minting traits. It resolves the source
-// forms it models and fails closed on aliases, module paths, or logical source
-// paths it cannot classify with confidence. Macro expansion and include
-// expansion remain compiler responsibilities and can escape this breadth scan.
-// The primary boundary remains construction through private types, private
+// This syntax-level inventory supplies best-effort breadth beyond the
+// compiler-checked negative bounds on the enumerated minting traits. It has
+// targeted coverage for the source forms below, but it is not a replacement
+// for rustc name or module resolution. Macro and include expansion can escape
+// it. The primary boundary remains construction through private types, private
 // fields, sealed traits, and consumed capabilities.
 #[derive(Default)]
 struct SourceCapabilityInventory {
@@ -1050,7 +1256,7 @@ fn source_capability_inventory(crate_name: &str, source: &Path) -> SourceCapabil
         facts: SourceCapabilityFacts::default(),
         visited: BTreeMap::new(),
     };
-    scanner.scan_file(source, &[], true);
+    scanner.scan_file(source, &[], SourceFileKind::CrateRoot);
     scanner.finish()
 }
 
@@ -1079,13 +1285,25 @@ struct CapabilitySourceScanner<'a> {
     visited: BTreeMap<PathBuf, Vec<String>>,
 }
 
+#[derive(Clone, Copy)]
+enum SourceFileKind {
+    CrateRoot,
+    OrdinaryModule,
+    PathLoadedModule,
+}
+
+struct ResolvedModuleSource {
+    path: PathBuf,
+    kind: SourceFileKind,
+}
+
 impl CapabilitySourceScanner<'_> {
-    fn scan_file(&mut self, source: &Path, module_path: &[String], crate_root: bool) {
+    fn scan_file(&mut self, source: &Path, module_path: &[String], kind: SourceFileKind) {
         let logical_source =
             source_location(self.crate_name, &self.source_root, source, module_path);
-        let source = fs::canonicalize(source)
+        let canonical_source = fs::canonicalize(source)
             .unwrap_or_else(|error| panic!("canonicalize Rust source {logical_source}: {error}"));
-        if let Some(previous) = self.visited.get(&source) {
+        if let Some(previous) = self.visited.get(&canonical_source) {
             assert_eq!(
                 previous,
                 module_path,
@@ -1096,8 +1314,8 @@ impl CapabilitySourceScanner<'_> {
             );
             return;
         }
-        self.visited.insert(source.clone(), module_path.to_vec());
-        let text = fs::read_to_string(&source)
+        self.visited.insert(canonical_source, module_path.to_vec());
+        let text = fs::read_to_string(source)
             .unwrap_or_else(|error| panic!("read Rust source {logical_source}: {error}"));
         let file = syn::parse_file(&text)
             .unwrap_or_else(|error| panic!("parse Rust source {logical_source}: {error}"));
@@ -1108,10 +1326,10 @@ impl CapabilitySourceScanner<'_> {
             facts: &mut self.facts,
         }
         .visit_file(&file);
-        let module_dir = source_module_dir(&source, crate_root);
+        let module_dir = source_module_dir(source, kind);
         let path_base = source
             .parent()
-            .expect("canonical Rust source has a parent directory");
+            .expect("lexical Rust source has a parent directory");
         self.scan_external_modules(&file.items, module_path, &module_dir, path_base);
     }
 
@@ -1126,9 +1344,10 @@ impl CapabilitySourceScanner<'_> {
             let Item::Mod(module) = item else {
                 continue;
             };
-            let child_dir = module_dir.join(module.ident.to_string());
+            let module_name = ident_name(&module.ident);
+            let child_dir = module_dir.join(&module_name);
             let mut child_path = module_path.to_vec();
-            child_path.push(module.ident.to_string());
+            child_path.push(module_name);
             if let Some((_, items)) = &module.content {
                 let inline_dir =
                     module_path_override(module, path_base).unwrap_or_else(|| child_dir.clone());
@@ -1143,7 +1362,7 @@ impl CapabilitySourceScanner<'_> {
                             child_path.join("::")
                         )
                     });
-                self.scan_file(&source, &child_path, false);
+                self.scan_file(&source.path, &child_path, source.kind);
             }
         }
     }
@@ -1264,7 +1483,7 @@ impl CapabilitySourceCollector<'_> {
         self.facts.aliases.push(SourceAlias {
             binding: SourceBinding {
                 module_path: self.module_path.clone(),
-                name: alias.ident.to_string(),
+                name: ident_name(&alias.ident),
             },
             target,
             generic: !alias.generics.params.is_empty() || alias.generics.where_clause.is_some(),
@@ -1333,7 +1552,7 @@ impl<'ast> Visit<'ast> for CapabilitySourceCollector<'_> {
         let Some((_, items)) = &item.content else {
             return;
         };
-        self.module_path.push(item.ident.to_string());
+        self.module_path.push(ident_name(&item.ident));
         for item in items {
             self.visit_item(item);
         }
@@ -1353,7 +1572,7 @@ fn source_path(path: &syn::Path) -> SourcePath {
         segments: path
             .segments
             .iter()
-            .map(|segment| segment.ident.to_string())
+            .map(|segment| ident_name(&segment.ident))
             .collect(),
     }
 }
@@ -1375,7 +1594,7 @@ fn collect_use_bindings(
 ) {
     match tree {
         syn::UseTree::Path(path) => {
-            prefix.push(path.ident.to_string());
+            prefix.push(ident_name(&path.ident));
             collect_use_bindings(
                 &path.tree,
                 leading_colon,
@@ -1388,15 +1607,15 @@ fn collect_use_bindings(
             prefix.pop();
         }
         syn::UseTree::Name(name) => {
-            if name.ident == "self" {
+            if ident_name(&name.ident) == "self" {
                 return;
             }
             let mut segments = prefix.clone();
-            segments.push(name.ident.to_string());
+            segments.push(ident_name(&name.ident));
             facts.aliases.push(SourceAlias {
                 binding: SourceBinding {
                     module_path: module_path.to_vec(),
-                    name: name.ident.to_string(),
+                    name: ident_name(&name.ident),
                 },
                 target: SourceAliasTarget::Path(SourcePath {
                     leading_colon,
@@ -1413,11 +1632,12 @@ fn collect_use_bindings(
         syn::UseTree::Rename(rename) => {
             let binding = SourceBinding {
                 module_path: module_path.to_vec(),
-                name: rename.rename.to_string(),
+                name: ident_name(&rename.rename),
             };
             let mut segments = prefix.clone();
-            if rename.ident != "self" {
-                segments.push(rename.ident.to_string());
+            let renamed_ident = ident_name(&rename.ident);
+            if renamed_ident != "self" {
+                segments.push(renamed_ident);
             }
             let target = SourcePath {
                 leading_colon,
@@ -1426,9 +1646,9 @@ fn collect_use_bindings(
             facts.module_aliases.push(SourceModuleAlias {
                 binding: binding.clone(),
                 target: target.clone(),
-                conservative: rename.ident == "self",
+                conservative: ident_name(&rename.ident) == "self",
             });
-            if rename.ident == "self" {
+            if ident_name(&rename.ident) == "self" {
                 return;
             }
             facts.aliases.push(SourceAlias {
@@ -1480,7 +1700,7 @@ fn finish_source_capability_inventory(
     let mut inventory = SourceCapabilityInventory::default();
     let mut resolved = BTreeMap::<SourceBinding, String>::new();
     for declaration in &facts.declarations {
-        let identity = declaration.identity.to_string();
+        let identity = ident_name(&declaration.identity);
         if !CAPABILITY_TYPE_IDENTITIES.contains(&identity.as_str()) {
             continue;
         }
@@ -2058,7 +2278,7 @@ fn record_capability_derives(
     declaration: &SourceDeclaration,
     trait_impls: &mut BTreeSet<String>,
 ) {
-    let identity = declaration.identity.to_string();
+    let identity = ident_name(&declaration.identity);
     for attribute in &declaration.attributes {
         if attribute.path().is_ident("derive") {
             record_derive_meta(
@@ -2257,14 +2477,14 @@ impl HiddenPublicScanner<'_> {
         &mut self,
         source: &Path,
         module_path: &[String],
-        crate_root: bool,
+        kind: SourceFileKind,
         inherited_hidden: bool,
     ) {
         let logical_source =
             source_location(self.crate_name, &self.source_root, source, module_path);
-        let source = fs::canonicalize(source)
+        let canonical_source = fs::canonicalize(source)
             .unwrap_or_else(|error| panic!("canonicalize Rust source {logical_source}: {error}"));
-        if let Some(previous) = self.visited.get(&source) {
+        if let Some(previous) = self.visited.get(&canonical_source) {
             assert_eq!(
                 previous,
                 module_path,
@@ -2275,15 +2495,15 @@ impl HiddenPublicScanner<'_> {
             );
             return;
         }
-        self.visited.insert(source.clone(), module_path.to_vec());
-        let text = fs::read_to_string(&source)
+        self.visited.insert(canonical_source, module_path.to_vec());
+        let text = fs::read_to_string(source)
             .unwrap_or_else(|error| panic!("read Rust source {logical_source}: {error}"));
         let file = syn::parse_file(&text)
             .unwrap_or_else(|error| panic!("parse Rust source {logical_source}: {error}"));
-        let module_dir = source_module_dir(&source, crate_root);
+        let module_dir = source_module_dir(source, kind);
         let path_base = source
             .parent()
-            .expect("canonical Rust source has a parent directory");
+            .expect("lexical Rust source has a parent directory");
         self.scan_items(
             &file.items,
             module_path,
@@ -2307,7 +2527,7 @@ impl HiddenPublicScanner<'_> {
                     if matches!(function.vis, Visibility::Public(_))
                         && (inherited_hidden || doc_hidden(&function.attrs)) =>
                 {
-                    self.record(module_path, function.sig.ident.to_string(), &function.sig);
+                    self.record(module_path, ident_name(&function.sig.ident), &function.sig);
                 }
                 Item::Fn(_) => {}
                 Item::Impl(implementation) => {
@@ -2318,7 +2538,7 @@ impl HiddenPublicScanner<'_> {
                             && (hidden || doc_hidden(&method.attrs))
                             && matches!(method.vis, Visibility::Public(_))
                         {
-                            let name = format!("{owner}::method:{}", method.sig.ident);
+                            let name = format!("{owner}::method:{}", ident_name(&method.sig.ident));
                             self.record(module_path, name, &method.sig);
                         }
                     }
@@ -2329,21 +2549,25 @@ impl HiddenPublicScanner<'_> {
                         if let syn::TraitItem::Fn(method) = member
                             && (hidden || doc_hidden(&method.attrs))
                         {
-                            let name =
-                                format!("{}::tymethod:{}", trait_item.ident, method.sig.ident);
+                            let name = format!(
+                                "{}::tymethod:{}",
+                                ident_name(&trait_item.ident),
+                                ident_name(&method.sig.ident)
+                            );
                             self.record(module_path, name, &method.sig);
                         }
                     }
                 }
                 Item::Mod(module) => {
                     let hidden = inherited_hidden || doc_hidden(&module.attrs);
+                    let module_name = ident_name(&module.ident);
                     let mut child_path = module_path.to_vec();
-                    child_path.push(module.ident.to_string());
+                    child_path.push(module_name.clone());
                     if hidden && matches!(module.vis, Visibility::Public(_)) {
                         let signature = format!("pub mod {}", module.ident);
-                        self.record(module_path, module.ident.to_string(), &signature);
+                        self.record(module_path, module_name.clone(), &signature);
                     }
-                    let child_dir = module_dir.join(module.ident.to_string());
+                    let child_dir = module_dir.join(module_name);
                     if let Some((_, items)) = &module.content {
                         let inline_dir = module_path_override(module, path_base)
                             .unwrap_or_else(|| child_dir.clone());
@@ -2351,7 +2575,7 @@ impl HiddenPublicScanner<'_> {
                     } else if let Some(source) =
                         module_source(module, module_dir, path_base, &child_dir)
                     {
-                        self.scan_file(&source, &child_path, false, hidden);
+                        self.scan_file(&source.path, &child_path, source.kind, hidden);
                     }
                 }
                 _ => {}
@@ -2390,16 +2614,24 @@ fn type_name(ty: &syn::Type) -> String {
     if let syn::Type::Path(path) = ty
         && let Some(segment) = path.path.segments.last()
     {
-        return segment.ident.to_string();
+        return ident_name(&segment.ident);
     }
     ty.to_token_stream().to_string()
 }
 
-fn source_module_dir(source: &Path, crate_root: bool) -> PathBuf {
+fn ident_name(ident: &syn::Ident) -> String {
+    ident.unraw().to_string()
+}
+
+fn source_module_dir(source: &Path, kind: SourceFileKind) -> PathBuf {
     let parent = source
         .parent()
-        .expect("canonical Rust source has a parent directory");
-    if crate_root || source.file_name().is_some_and(|name| name == "mod.rs") {
+        .expect("lexical Rust source has a parent directory");
+    if matches!(
+        kind,
+        SourceFileKind::CrateRoot | SourceFileKind::PathLoadedModule
+    ) || source.file_name().is_some_and(|name| name == "mod.rs")
+    {
         return parent.to_path_buf();
     }
     let stem = source
@@ -2413,16 +2645,25 @@ fn module_source(
     module_dir: &Path,
     path_base: &Path,
     child_dir: &Path,
-) -> Option<PathBuf> {
+) -> Option<ResolvedModuleSource> {
     if let Some(path) = module_path_override(module, path_base) {
-        return path.is_file().then_some(path);
+        return path.is_file().then_some(ResolvedModuleSource {
+            path,
+            kind: SourceFileKind::PathLoadedModule,
+        });
     }
-    let flat = module_dir.join(format!("{}.rs", module.ident));
+    let flat = module_dir.join(format!("{}.rs", ident_name(&module.ident)));
     if flat.is_file() {
-        return Some(flat);
+        return Some(ResolvedModuleSource {
+            path: flat,
+            kind: SourceFileKind::OrdinaryModule,
+        });
     }
     let nested = child_dir.join("mod.rs");
-    nested.is_file().then_some(nested)
+    nested.is_file().then_some(ResolvedModuleSource {
+        path: nested,
+        kind: SourceFileKind::OrdinaryModule,
+    })
 }
 
 fn module_path_override(module: &syn::ItemMod, path_base: &Path) -> Option<PathBuf> {

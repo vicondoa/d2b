@@ -70,23 +70,21 @@ deprecations ship one minor release before removal.
   the compile-fail tests pin that wording.
 
 - Kept the source trait-implementation inventory as a best-effort breadth
-  check for traits outside the compiler-enforced set. It now fails closed on
-  direct renames of local modules that contain capability declarations,
-  `self as` module renames used as type prefixes, lexically scoped capability
-  aliases, `cfg_attr` on external module declarations, and one source file
-  reached through different logical module paths. Direct `#[path]` declarations
-  now follow Rust's containing-source-file rule while paths inside inline
-  modules follow the logical module directory, so a sibling decoy cannot hide
-  the compiler-selected source. Duplicate-module diagnostics retain both
-  logical names without exposing canonical host paths. Direct external-module
-  renames remain ordinary type aliases because Rust's orphan rules prevent
-  their foreign types from gaining a foreign trait implementation here. The
-  scan also retains breadth over implementations disabled in the active
-  compiler configuration. Macro-generated and `include!`-generated arbitrary
-  `From<X>` implementations in a capability's defining crate remain outside
-  this syntax-level scan; Rust's orphan rules prevent another crate from adding
-  those implementations. Private construction state, sealed traits, and
-  consumed capabilities remain the primary boundary.
+  check for explicit workspace source forms outside the compiler-enforced set.
+  Focused regressions cover direct and inline `#[path]`, ordinary children of
+  path-loaded modules, raw identifiers, lexical symlink paths, local module
+  aliases, `cfg_attr` on external modules, and duplicate logical module paths.
+  Duplicate-module diagnostics retain both logical names without exposing
+  canonical host paths. This syntax scan does not claim general Rust name or
+  module resolution, macro expansion, `include!` expansion, or coverage of
+  downstream implementations.
+
+- Pinned the actual downstream `From<X>` boundary. A dependent crate that owns
+  `X` can implement `From<X>` for a capability and compile when it only returns
+  authority it already holds. A paired compile-fail fixture proves it cannot
+  construct the capability directly because private construction state remains
+  inaccessible. Private fields, instance identity, sealed traits, and consumed
+  capabilities remain the primary anti-fabrication boundary.
 
 - Strengthened cancellation publication race coverage to prove both activity
   and response state remain locked until their correlated entries are visible.

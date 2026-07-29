@@ -13,6 +13,26 @@ fn dependent_cannot_forge_registration_or_mint_admitted_session() {
     let temp = scratch.path().join("tmp");
     fs::create_dir_all(&temp).expect("create repository-local compiler scratch");
 
+    let output = Command::new(env!("CARGO"))
+        .args([
+            "check",
+            "--quiet",
+            "--locked",
+            "--manifest-path",
+            fixture.join("Cargo.toml").to_str().unwrap(),
+            "--test",
+            "downstream_from_existing_authority",
+        ])
+        .env("CARGO_TARGET_DIR", scratch.path().join("target"))
+        .env("TMPDIR", &temp)
+        .output()
+        .expect("run downstream From compile-pass fixture");
+    assert!(
+        output.status.success(),
+        "downstream local-input From impl did not compile:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
     for (test, expected) in [
         (
             "forge_registration",
@@ -36,6 +56,13 @@ fn dependent_cannot_forge_registration_or_mint_admitted_session() {
         (
             "inject_unix_subject",
             ["no `UnixSubjectConfig` in the root", "error[E0432]"],
+        ),
+        (
+            "downstream_from_fabrication",
+            [
+                "field `identity` of struct `ComponentSessionAdmission` is private",
+                "error[E0451]",
+            ],
         ),
     ] {
         let output = Command::new(env!("CARGO"))
