@@ -6,7 +6,7 @@ use std::{
 };
 
 use quote::ToTokens;
-use syn::{Attribute, Item, Visibility};
+use syn::{Attribute, Item, Visibility, visit::Visit};
 
 const APPROVED_CAPABILITY_MINT_POINTS: &[(&str, &str)] = &[
     (
@@ -75,6 +75,7 @@ fn public_api_has_only_the_approved_capability_mint_surface() {
     let actual = snapshot_public_api(&snapshot_docs, &approved);
     let (_, capability_surface) = workspace_public_api(&workspace_docs, &BTreeSet::new(), true);
     let hidden_public = workspace_hidden_public_api(&workspace_docs);
+    let capability_trait_impls = workspace_capability_trait_impls(&workspace_docs);
     if std::env::var_os("D2B_UPDATE_BUS_PUBLIC_API").is_some() {
         write_snapshot(&crate_root.join("tests/approved-public-api.txt"), &actual);
         write_snapshot(
@@ -84,6 +85,10 @@ fn public_api_has_only_the_approved_capability_mint_surface() {
         write_snapshot(
             &crate_root.join("tests/approved-hidden-public-api.txt"),
             &hidden_public,
+        );
+        write_snapshot(
+            &crate_root.join("tests/approved-capability-trait-impls.txt"),
+            &capability_trait_impls,
         );
         return;
     }
@@ -104,6 +109,9 @@ fn public_api_has_only_the_approved_capability_mint_surface() {
     assert_capability_inventory(&capability_surface, &approved_capabilities);
     let approved_hidden = approved_entries(include_str!("approved-hidden-public-api.txt"));
     assert_hidden_public_inventory(&hidden_public, &approved_hidden);
+    let approved_trait_impls =
+        approved_entries(include_str!("approved-capability-trait-impls.txt"));
+    assert_capability_trait_impl_inventory(&capability_trait_impls, &approved_trait_impls);
 
     let router = fs::read_to_string(crate_root.join("src/router.rs")).expect("read router source");
     assert_eq!(
@@ -117,6 +125,7 @@ fn public_api_has_only_the_approved_capability_mint_surface() {
         "SessionAcceptor construction widened beyond the approved registrar mint point"
     );
     assert_mutation_fixture(&workspace_docs);
+    assert_trait_impl_mutations(&capability_trait_impls);
     assert_partial_render_fails_closed(&workspace_docs);
 }
 
@@ -227,6 +236,65 @@ fn assert_mutation_fixture(workspace_docs: &[DocumentedCrate]) {
             .iter()
             .any(|symbol| symbol.ends_with("RogueSubjectClaims::method:inject")),
         "a public subject-claim injection method escaped the capability inventory"
+    );
+}
+
+fn assert_trait_impl_mutations(approved: &BTreeSet<String>) {
+    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let router = fs::read_to_string(crate_root.join("src/router.rs"))
+        .expect("read router source for trait-implementation mutations");
+    assert_trait_impl_mutation_fails(
+        approved,
+        &router,
+        r#"
+#[doc(hidden)]
+impl Default for ComponentSessionAdmission {
+    fn default() -> Self {
+        Self {
+            identity: Arc::new(ComponentSessionAdmissionIdentity),
+        }
+    }
+}
+"#,
+        "Default",
+    );
+    assert_trait_impl_mutation_fails(
+        approved,
+        &router,
+        r#"
+impl From<Arc<ComponentSessionAdmissionIdentity>> for ComponentSessionAdmission {
+    fn from(identity: Arc<ComponentSessionAdmissionIdentity>) -> Self {
+        Self { identity }
+    }
+}
+"#,
+        "From<Arc<ComponentSessionAdmissionIdentity>>",
+    );
+}
+
+fn assert_trait_impl_mutation_fails(
+    approved: &BTreeSet<String>,
+    source: &str,
+    mutation: &str,
+    expected_trait: &str,
+) {
+    let mut mutated_source = source.to_owned();
+    mutated_source.push_str(mutation);
+    let file = syn::parse_file(&mutated_source).expect("parse trait-implementation mutation");
+    let mut inventory = SourceCapabilityInventory::default();
+    CapabilitySourceVisitor {
+        crate_name: "d2b_bus",
+        inventory: &mut inventory,
+    }
+    .visit_file(&file);
+    let mut mutated = approved.clone();
+    mutated.extend(inventory.trait_impls);
+    let error = capability_trait_impl_inventory_error(&mutated, approved)
+        .unwrap_or_else(|| panic!("{expected_trait} capability trait implementation passed"));
+    assert!(
+        error.contains("ComponentSessionAdmission") && error.contains(expected_trait),
+        "trait-implementation inventory did not name the rogue {expected_trait} \
+         implementation: {error}"
     );
 }
 
@@ -351,6 +419,8 @@ struct DocumentedCrate {
     root: PathBuf,
     advertised: Vec<AdvertisedItem>,
     hidden_public: BTreeSet<String>,
+    capability_declarations: BTreeMap<String, BTreeSet<String>>,
+    capability_trait_impls: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -501,6 +571,7 @@ fn render_workspace_docs(
     for (package_name, package) in dependency_order(packages) {
         let crate_name = package.crate_name;
         let hidden_public = hidden_public_api(&crate_name, &package.source);
+        let source_capabilities = source_capability_inventory(&crate_name, &package.source);
         let target = scratch.join("renders").join(&crate_name);
         let doc_root = target.join("doc");
         fs::create_dir_all(&doc_root).unwrap_or_else(|error| {
@@ -564,6 +635,8 @@ fn render_workspace_docs(
             root,
             advertised,
             hidden_public,
+            capability_declarations: source_capabilities.declarations,
+            capability_trait_impls: source_capabilities.trait_impls,
         });
     }
     docs.sort_by(|left, right| left.crate_name.cmp(&right.crate_name));
@@ -574,6 +647,79 @@ fn workspace_hidden_public_api(docs: &[DocumentedCrate]) -> BTreeSet<String> {
     docs.iter()
         .flat_map(|documented| documented.hidden_public.iter().cloned())
         .collect()
+}
+
+fn workspace_capability_trait_impls(docs: &[DocumentedCrate]) -> BTreeSet<String> {
+    let mut declarations = BTreeMap::<String, BTreeSet<String>>::new();
+    let mut trait_impls = BTreeSet::new();
+    for documented in docs {
+        for (identity, locations) in &documented.capability_declarations {
+            declarations
+                .entry(identity.clone())
+                .or_default()
+                .extend(locations.iter().cloned());
+        }
+        trait_impls.extend(documented.capability_trait_impls.iter().cloned());
+    }
+    for identity in CAPABILITY_TYPE_IDENTITIES {
+        let locations = declarations.get(*identity).cloned().unwrap_or_default();
+        assert_eq!(
+            locations.len(),
+            1,
+            "capability source identity {identity:?} must have exactly one \
+             declaration across workspace library sources, found {locations:?}"
+        );
+    }
+    let unexpected = declarations
+        .keys()
+        .filter(|identity| !CAPABILITY_TYPE_IDENTITIES.contains(&identity.as_str()))
+        .collect::<Vec<_>>();
+    assert!(
+        unexpected.is_empty(),
+        "unexpected capability source identities: {unexpected:?}"
+    );
+    trait_impls
+}
+
+fn assert_capability_trait_impl_inventory(actual: &BTreeSet<String>, approved: &BTreeSet<String>) {
+    if let Some(error) = capability_trait_impl_inventory_error(actual, approved) {
+        panic!("{error}");
+    }
+}
+
+fn capability_trait_impl_inventory_error(
+    actual: &BTreeSet<String>,
+    approved: &BTreeSet<String>,
+) -> Option<String> {
+    let unapproved = actual.difference(approved).take(40).collect::<Vec<_>>();
+    let missing = approved
+        .iter()
+        .filter(|entry| !actual.contains(*entry))
+        .take(40)
+        .collect::<Vec<_>>();
+    if !unapproved.is_empty() {
+        return Some(format!(
+            "a trait implementation on a capability type is outside the \
+             explicitly approved inventory; unapproved {} (first 40: \
+             {unapproved:?}). Review whether this trait can mint, clone, or \
+             otherwise widen the capability before updating \
+             approved-capability-trait-impls.txt.",
+            actual.difference(approved).count()
+        ));
+    }
+    if missing.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "{} approved capability trait implementations are absent (first 40: \
+             {missing:?}); review whether each implementation was intentionally \
+             removed before updating approved-capability-trait-impls.txt",
+            approved
+                .iter()
+                .filter(|entry| !actual.contains(*entry))
+                .count()
+        ))
+    }
 }
 
 fn assert_hidden_public_inventory(actual: &BTreeSet<String>, approved: &BTreeSet<String>) {
@@ -625,6 +771,205 @@ fn hidden_public_api(crate_name: &str, source: &Path) -> BTreeSet<String> {
         .expect("library target source has a parent directory");
     scanner.scan_file(source, &[], module_dir, false);
     scanner.entries
+}
+
+// This source inventory is deliberately not compiler-expanded. Within every
+// parseable library module it guarantees that each explicit trait impl and
+// derive on a named capability type is allowlisted, regardless of visibility,
+// doc(hidden), cfg, or cfg_attr. The rustdoc and hidden-signature inventories
+// are best-effort defense in depth: re-exports, associated items, and syntax
+// produced by item, attribute, or include macros can escape those scanners,
+// while non-derive macro-generated trait impls remain outside this inventory.
+// The primary boundary is enforced by construction through private types,
+// private fields, sealed traits, and consumed capabilities.
+#[derive(Default)]
+struct SourceCapabilityInventory {
+    declarations: BTreeMap<String, BTreeSet<String>>,
+    trait_impls: BTreeSet<String>,
+}
+
+fn source_capability_inventory(crate_name: &str, source: &Path) -> SourceCapabilityInventory {
+    let mut scanner = CapabilitySourceScanner {
+        crate_name,
+        inventory: SourceCapabilityInventory::default(),
+        visited: BTreeSet::new(),
+    };
+    let module_dir = source
+        .parent()
+        .expect("library target source has a parent directory");
+    scanner.scan_file(source, module_dir);
+    scanner.inventory
+}
+
+struct CapabilitySourceScanner<'a> {
+    crate_name: &'a str,
+    inventory: SourceCapabilityInventory,
+    visited: BTreeSet<PathBuf>,
+}
+
+impl CapabilitySourceScanner<'_> {
+    fn scan_file(&mut self, source: &Path, module_dir: &Path) {
+        let source = fs::canonicalize(source).unwrap_or_else(|error| {
+            panic!("canonicalize Rust source {}: {error}", source.display())
+        });
+        if !self.visited.insert(source.clone()) {
+            return;
+        }
+        let text = fs::read_to_string(&source)
+            .unwrap_or_else(|error| panic!("read Rust source {}: {error}", source.display()));
+        let file = syn::parse_file(&text)
+            .unwrap_or_else(|error| panic!("parse Rust source {}: {error}", source.display()));
+        CapabilitySourceVisitor {
+            crate_name: self.crate_name,
+            inventory: &mut self.inventory,
+        }
+        .visit_file(&file);
+        self.scan_external_modules(&file.items, module_dir);
+    }
+
+    fn scan_external_modules(&mut self, items: &[Item], module_dir: &Path) {
+        for item in items {
+            let Item::Mod(module) = item else {
+                continue;
+            };
+            let child_dir = module_dir.join(module.ident.to_string());
+            if let Some((_, items)) = &module.content {
+                self.scan_external_modules(items, &child_dir);
+            } else {
+                let source = module_source(module, module_dir, &child_dir).unwrap_or_else(|| {
+                    panic!(
+                        "cannot resolve Rust module {} from {}; capability trait \
+                         inventory refuses a partial source scan",
+                        module.ident,
+                        module_dir.display()
+                    )
+                });
+                self.scan_file(&source, &child_dir);
+            }
+        }
+    }
+}
+
+struct CapabilitySourceVisitor<'a> {
+    crate_name: &'a str,
+    inventory: &'a mut SourceCapabilityInventory,
+}
+
+impl CapabilitySourceVisitor<'_> {
+    fn record_declaration(&mut self, identity: &syn::Ident, kind: &str, attributes: &[Attribute]) {
+        let identity = identity.to_string();
+        if !CAPABILITY_TYPE_IDENTITIES.contains(&identity.as_str()) {
+            return;
+        }
+        self.inventory
+            .declarations
+            .entry(identity.clone())
+            .or_default()
+            .insert(format!("{}::{identity} ({kind})", self.crate_name));
+        for attribute in attributes
+            .iter()
+            .filter(|attribute| attribute.path().is_ident("derive"))
+        {
+            let traits = attribute
+                .parse_args_with(
+                    syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated,
+                )
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "parse derive list for capability {}::{identity}: {error}",
+                        self.crate_name
+                    )
+                });
+            for trait_path in traits {
+                self.inventory.trait_impls.insert(format!(
+                    "{}::{identity}\tderive {} for {identity}",
+                    self.crate_name,
+                    compact_tokens(&trait_path)
+                ));
+            }
+        }
+    }
+
+    fn record_impl(&mut self, implementation: &syn::ItemImpl) {
+        let Some((polarity, trait_path, _)) = implementation.trait_.as_ref() else {
+            return;
+        };
+        let Some(identity) = capability_self_type(&implementation.self_ty) else {
+            return;
+        };
+        let generic_parameters = if implementation.generics.params.is_empty() {
+            String::new()
+        } else {
+            format!("<{}>", compact_tokens(&implementation.generics.params))
+        };
+        let where_clause = implementation
+            .generics
+            .where_clause
+            .as_ref()
+            .map_or_else(String::new, |clause| format!(" {}", compact_tokens(clause)));
+        let qualifier = match (
+            implementation.defaultness.is_some(),
+            implementation.unsafety.is_some(),
+        ) {
+            (true, true) => "default unsafe ",
+            (true, false) => "default ",
+            (false, true) => "unsafe ",
+            (false, false) => "",
+        };
+        let polarity = polarity.as_ref().map_or("", |_| "!");
+        self.inventory.trait_impls.insert(format!(
+            "{}::{identity}\t{qualifier}impl{generic_parameters} \
+             {polarity}{} for {}{where_clause}",
+            self.crate_name,
+            compact_tokens(trait_path),
+            compact_tokens(&implementation.self_ty),
+        ));
+    }
+}
+
+impl<'ast> Visit<'ast> for CapabilitySourceVisitor<'_> {
+    fn visit_item_struct(&mut self, item: &'ast syn::ItemStruct) {
+        self.record_declaration(&item.ident, "struct", &item.attrs);
+        syn::visit::visit_item_struct(self, item);
+    }
+
+    fn visit_item_enum(&mut self, item: &'ast syn::ItemEnum) {
+        self.record_declaration(&item.ident, "enum", &item.attrs);
+        syn::visit::visit_item_enum(self, item);
+    }
+
+    fn visit_item_union(&mut self, item: &'ast syn::ItemUnion) {
+        self.record_declaration(&item.ident, "union", &item.attrs);
+        syn::visit::visit_item_union(self, item);
+    }
+
+    fn visit_item_trait(&mut self, item: &'ast syn::ItemTrait) {
+        self.record_declaration(&item.ident, "trait", &item.attrs);
+        syn::visit::visit_item_trait(self, item);
+    }
+
+    fn visit_item_impl(&mut self, item: &'ast syn::ItemImpl) {
+        self.record_impl(item);
+        syn::visit::visit_item_impl(self, item);
+    }
+}
+
+fn capability_self_type(ty: &syn::Type) -> Option<String> {
+    let syn::Type::Path(path) = ty else {
+        return None;
+    };
+    let identity = path.path.segments.last()?.ident.to_string();
+    CAPABILITY_TYPE_IDENTITIES
+        .contains(&identity.as_str())
+        .then_some(identity)
+}
+
+fn compact_tokens(tokens: &impl ToTokens) -> String {
+    tokens
+        .to_token_stream()
+        .to_string()
+        .split_whitespace()
+        .collect()
 }
 
 struct HiddenPublicScanner<'a> {
