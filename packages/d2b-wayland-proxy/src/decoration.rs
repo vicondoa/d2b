@@ -32,6 +32,10 @@ use wl_proxy::{
             wl_subsurface::WlSubsurface,
             wl_surface::WlSurface,
         },
+        xdg_decoration_unstable_v1::{
+            zxdg_decoration_manager_v1::ZxdgDecorationManagerV1,
+            zxdg_toplevel_decoration_v1::{ZxdgToplevelDecorationV1, ZxdgToplevelDecorationV1Mode},
+        },
         xdg_shell::{
             xdg_surface::{XdgSurface, XdgSurfaceHandler},
             xdg_toplevel::{XdgToplevel, XdgToplevelHandler, XdgToplevelState},
@@ -483,6 +487,78 @@ pub fn draw_decoration(input: &DrawInput) -> Option<Vec<u8>> {
     Some(pixels)
 }
 
+/// Build the chrome spec the proxy draws, so drawing and hit-testing cannot
+/// disagree about where the tab is.
+fn chrome_spec(
+    width: u32,
+    label: Option<&SanitizedLabel>,
+    color: Color,
+    expanded: bool,
+) -> d2b_chrome_engine::variant::ChromeSpec {
+    use d2b_chrome_engine::{
+        color::Rgba,
+        variant::{Candidate, ChromeSpec},
+    };
+    let mut spec = ChromeSpec::new(
+        Candidate::Tab,
+        label.map(SanitizedLabel::as_str).unwrap_or("workload"),
+        Rgba::rgba(color.r, color.g, color.b, color.a),
+    );
+    spec.content_width = width;
+    spec.content_height = 1;
+    spec.expanded = expanded || std::env::var("D2B_CHROME_EXPANDED").is_ok();
+    if let Ok(status) = std::env::var("D2B_CHROME_STATUS")
+        && !status.is_empty()
+    {
+        spec.status = Some(status);
+    }
+    spec
+}
+
+/// The pointer region for the drawn tab, as `(x, y, width, height)`.
+///
+/// Measured from the same spec the renderer uses. It covers the tab and
+/// nothing else: never the window edges, and never guest content.
+fn chrome_input_region(
+    width: u32,
+    label: Option<&SanitizedLabel>,
+    expanded: bool,
+) -> Option<(i32, i32, i32, i32)> {
+    use d2b_chrome_engine::{text::TextRenderer, variant::resolve_for, PROTOTYPE_FONT};
+    let fonts = TextRenderer::from_bytes(PROTOTYPE_FONT).ok()?;
+    let spec = chrome_spec(width, label, Color::WHITE, expanded);
+    let (outcome, _) = resolve_for(&spec, &fonts);
+    let layout = outcome.layout()?;
+    // Expansion widens the tab to the right; the region must follow it so the
+    // action icons are clickable too.
+    let extra = if spec.expanded {
+        layout
+            .band
+            .width
+            .saturating_sub(layout.button.width)
+            .min(expanded_actions_width(&spec))
+    } else {
+        0
+    };
+    let r = layout.input_region();
+    Some((r.x, r.y, (r.width + extra) as i32, r.height as i32))
+}
+
+/// Width the action strip adds to the tab when expanded.
+fn expanded_actions_width(spec: &d2b_chrome_engine::variant::ChromeSpec) -> u32 {
+    if !spec.expanded || spec.actions.is_empty() {
+        return 0;
+    }
+    let icon_box = 18_u32;
+    let icon_gap = 4_u32;
+    let sep_gap = 6_u32;
+    sep_gap * 2
+        + 1
+        + icon_box * spec.actions.len() as u32
+        + icon_gap * (spec.actions.len() as u32 - 1)
+        + 8
+}
+
 /// Draw the reserved identity band using the prototype chrome engine, so the
 /// live proxy and the offline sheets render from one implementation.
 ///
@@ -493,6 +569,7 @@ fn draw_wrapper_rail(
     band_height: u32,
     color: Color,
     label: Option<&SanitizedLabel>,
+    expanded: bool,
 ) -> Option<Vec<u8>> {
     use d2b_chrome_engine::{
         color::Rgba,
@@ -505,21 +582,7 @@ fn draw_wrapper_rail(
     let layout = decoration_buffer_layout(size)?;
 
     let fonts = TextRenderer::from_bytes(PROTOTYPE_FONT).ok()?;
-    let mut spec = ChromeSpec::new(
-        Candidate::Tab,
-        label.map(SanitizedLabel::as_str).unwrap_or("workload"),
-        Rgba::rgba(color.r, color.g, color.b, color.a),
-    );
-    spec.content_width = width;
-    // The engine renders band plus content; we only need the band, so ask for
-    // the smallest legal content area and copy the band rows out.
-    spec.content_height = 1;
-    spec.expanded = std::env::var("D2B_CHROME_EXPANDED").is_ok();
-    if let Ok(status) = std::env::var("D2B_CHROME_STATUS")
-        && !status.is_empty()
-    {
-        spec.status = Some(status);
-    }
+    let spec = chrome_spec(width, label, color, expanded);
 
     let rendered = render(&spec, &fonts, Rgba::TRANSPARENT);
     let mut pixels = vec![0_u8; layout.len];
@@ -1151,6 +1214,8 @@ struct WrapperToplevel {
     current_window_geometry: Option<WindowGeometry>,
     current_configure: ConfigureSize,
     wrapper_configured: bool,
+    /// Whether the identity tab is expanded to show its actions.
+    expanded: bool,
 }
 
 impl WrapperToplevel {
@@ -1323,6 +1388,8 @@ struct FrameKey {
     color: Color,
     label: Option<SanitizedLabel>,
     label_position: LabelPosition,
+    /// Part of the key so toggling expansion forces the buffer to be redrawn.
+    expanded: bool,
 }
 
 #[derive(Debug)]
@@ -1333,6 +1400,10 @@ pub struct DecorationManager {
     subcompositor: Option<Rc<WlSubcompositor>>,
     shm: Option<Rc<wl_proxy::protocols::wayland::wl_shm::WlShm>>,
     wm_base: Option<Rc<XdgWmBase>>,
+    /// Host decoration manager, used to ask for ServerSide decoration on the
+    /// wrapper toplevel. Without it niri treats the wrapper as a CSD window and
+    /// paints the border colour as a background behind the transparent strip.
+    decoration_manager: Option<Rc<ZxdgDecorationManagerV1>>,
     buffers: HashMap<u64, BufferDimensions>,
     surfaces: HashMap<u64, SurfaceState>,
     subsurfaces_by_parent: HashMap<u64, Vec<Weak<WlSurface>>>,
@@ -1347,6 +1418,7 @@ impl DecorationManager {
             subcompositor: None,
             shm: None,
             wm_base: None,
+            decoration_manager: None,
             buffers: HashMap::new(),
             surfaces: HashMap::new(),
             subsurfaces_by_parent: HashMap::new(),
@@ -1421,6 +1493,15 @@ impl DecorationManager {
                 registry.send_bind(name, shm.clone());
                 self.shm = Some(shm);
             }
+            ObjectInterface::ZxdgDecorationManagerV1 if self.decoration_manager.is_none() => {
+                let manager = registry
+                    .state()
+                    .create_object::<ZxdgDecorationManagerV1>(
+                        version.min(ZxdgDecorationManagerV1::XML_VERSION),
+                    );
+                registry.send_bind(name, manager.clone());
+                self.decoration_manager = Some(manager);
+            }
             ObjectInterface::XdgWmBase if self.wm_base.is_none() => {
                 let wm_base = registry
                     .state()
@@ -1472,6 +1553,17 @@ impl DecorationManager {
         wrapper_xdg_surface.set_forward_to_client(false);
         let wrapper_toplevel = wrapper_xdg_surface.new_send_get_toplevel();
         wrapper_toplevel.set_forward_to_client(false);
+        // Ask the host for server-side decoration on the wrapper. The proxy
+        // draws identity chrome itself and leaves the rest of its reserved
+        // strip transparent; a compositor that thinks this is a CSD window
+        // paints its border colour as a background, which shows straight
+        // through that transparency.
+        if let Some(manager) = self.decoration_manager.as_ref() {
+            let decoration: Rc<ZxdgToplevelDecorationV1> =
+                manager.new_send_get_toplevel_decoration(&wrapper_toplevel);
+            decoration.set_forward_to_client(false);
+            decoration.send_set_mode(ZxdgToplevelDecorationV1Mode::SERVER_SIDE);
+        }
         let guest_subsurface = subcompositor.new_send_get_subsurface(surface, &wrapper_surface);
         guest_subsurface.set_forward_to_client(false);
         guest_subsurface.send_set_position(0, i32::try_from(WRAPPER_RAIL_WIDTH).unwrap_or(0));
@@ -1509,6 +1601,7 @@ impl DecorationManager {
             current_window_geometry: None,
             current_configure: ConfigureSize::new(0, 0),
             wrapper_configured: false,
+            expanded: false,
         });
         initial_wrapper_surface.send_commit();
         true
@@ -1663,6 +1756,35 @@ impl DecorationManager {
             height
         };
         wrapper.wrapper_toplevel.send_set_max_size(width, height);
+        true
+    }
+
+    /// Toggle the identity tab's expanded state for the wrapper owning
+    /// `surface`, and redraw. Returns true when a tab was found and toggled.
+    ///
+    /// This is what makes the chevron a control rather than an ornament: the
+    /// proxy owns the tab's pixels, so it also owns this state.
+    pub fn wrapper_toggle_expanded(&mut self, surface: &Rc<WlSurface>) -> bool {
+        let wrapper_id = surface.unique_id();
+        let Some(surface_id) = self.surfaces.iter().find_map(|(id, state)| {
+            state
+                .wrapper
+                .as_ref()
+                .filter(|w| w.wrapper_surface.unique_id() == wrapper_id)
+                .map(|_| *id)
+        }) else {
+            return false;
+        };
+        if let Some(wrapper) = self
+            .surfaces
+            .get_mut(&surface_id)
+            .and_then(|state| state.wrapper.as_mut())
+        {
+            wrapper.expanded = !wrapper.expanded;
+        } else {
+            return false;
+        }
+        self.apply_wrapper(surface_id);
         true
     }
 
@@ -1883,6 +2005,7 @@ impl DecorationManager {
                     self.config.label.clone()
                 },
                 label_position: self.config.label_position,
+                expanded: wrapper.expanded,
             };
             let needs_buffer = wrapper.key.as_ref() != Some(&key);
             if !needs_buffer && wrapper.applied_geometry == Some(wrapper_geometry) {
@@ -1896,6 +2019,7 @@ impl DecorationManager {
                 wrapper_geometry.rail_width,
                 key.color,
                 key.label.as_ref(),
+                key.expanded,
             ) {
                 Ok(buffer) => Some(buffer),
                 Err(error) => {
@@ -1931,20 +2055,16 @@ impl DecorationManager {
         if let Some(compositor) = &compositor {
             let region = compositor.new_send_create_region();
             if wrapper_geometry.rail_width > 0 {
-                // The input region covers the identity button alone, not the
-                // whole band and never a window edge. This is the fix for the
-                // rail swallowing every left-edge event.
-                use d2b_chrome_engine::geom::{resolve, LayoutInput, Size as ESize};
-                let input = LayoutInput {
-                    content: ESize::new(
-                        wrapper_geometry.content.width,
-                        wrapper_geometry.content.height,
-                    ),
-                    ..Default::default()
-                };
-                if let Some(l) = resolve(input).layout() {
-                    let r = l.input_region();
-                    region.send_add(r.x, r.y, r.width as i32, r.height as i32);
+                // The input region must match the tab that was actually drawn,
+                // so it is measured from the same label and expansion state.
+                // Deriving it from defaults instead put the region beside the
+                // visible tab, which is why clicking the chevron did nothing.
+                if let Some(r) = chrome_input_region(
+                    wrapper_geometry.outer.width,
+                    key.label.as_ref(),
+                    key.expanded,
+                ) {
+                    region.send_add(r.0, r.1, r.2, r.3);
                 }
             }
             wrapper.wrapper_surface.send_set_input_region(Some(&region));
@@ -2071,6 +2191,7 @@ impl DecorationManager {
             color: plan.color,
             label: plan.label.clone(),
             label_position: plan.label_position,
+            expanded: false,
         };
         let needs_surface = self
             .surfaces
@@ -2209,6 +2330,7 @@ impl DecorationManager {
         height: u32,
         color: Color,
         label: Option<&SanitizedLabel>,
+        expanded: bool,
     ) -> io::Result<ProxyDecorationBuffer> {
         let shm = self
             .shm
@@ -2217,7 +2339,7 @@ impl DecorationManager {
         let size = Size::new(width, height);
         let layout = decoration_buffer_layout(size)
             .ok_or_else(|| io::Error::other("wrapper rail buffer exceeds decoration limits"))?;
-        let pixels = draw_wrapper_rail(width, height, color, label)
+        let pixels = draw_wrapper_rail(width, height, color, label, expanded)
             .ok_or_else(|| io::Error::other("wrapper rail buffer exceeds decoration limits"))?;
         let fd = create_memfd_with_contents(
             &pixels,

@@ -733,6 +733,41 @@ mod tests {
         assert!(l.drag.is_none());
     }
 
+    /// The gap above and below the visible tab must be equal, and as small as
+    /// the inset allows, so the tab does not float in its reserved strip.
+    #[test]
+    fn tab_padding_is_equal_above_and_below() {
+        for label_h in [14_u32, 16, 20, 24] {
+            let input = LayoutInput {
+                label_block_height: label_h,
+                ..Default::default()
+            };
+            let l = resolve(input).layout().unwrap();
+            let above = l.button.y - l.band.y;
+            let below = l.band.bottom() - l.button.bottom();
+            assert_eq!(
+                above, below,
+                "label {label_h}: {above}px above, {below}px below"
+            );
+            assert!(
+                above <= TAB_INSET as i32,
+                "label {label_h}: {above}px of slack above the tab"
+            );
+            assert!(l.button.height >= MIN_VISIBLE_FACE);
+            assert!(l.button.bottom() <= l.band.bottom());
+        }
+    }
+
+    /// The band carries no allowance for an accent rule, because the accent is
+    /// drawn as an edge on the tab rather than a rule beneath it.
+    #[test]
+    fn band_is_inset_plus_face() {
+        let input = LayoutInput::default();
+        let l = resolve(input).layout().unwrap();
+        assert_eq!(l.band.height, MIN_BAND_HEIGHT);
+        assert_eq!(l.button.height, MIN_BAND_HEIGHT - TAB_INSET * 2);
+    }
+
     #[test]
     fn rect_contains_is_half_open() {
         let r = Rect::new(10, 10, 5, 5);

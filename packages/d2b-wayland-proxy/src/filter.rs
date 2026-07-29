@@ -1531,6 +1531,7 @@ impl WlSeatHandler for FilterSeatHandler {
             decoration: self.decoration.clone(),
             focus: PointerFocus::None,
             target_surface: None,
+            wrapper_surface: None,
             pending_forwarded_frame: false,
         });
         slf.send_get_pointer(id);
@@ -1636,6 +1637,9 @@ struct FilterPointerHandler {
     decoration: SharedDecorationManager,
     focus: PointerFocus,
     target_surface: Option<Rc<WlSurface>>,
+    /// The wrapper surface the pointer is currently over, so a press on the
+    /// identity tab can be routed back to the decoration that owns it.
+    wrapper_surface: Option<Rc<WlSurface>>,
     pending_forwarded_frame: bool,
 }
 
@@ -1679,6 +1683,7 @@ impl WlPointerHandler for FilterPointerHandler {
         if let Some(target) = self.decoration.borrow().wrapper_input_target(surface) {
             if surface_belongs_to_receiver(&target, slf.client()) {
                 self.target_surface = Some(target.clone());
+                self.wrapper_surface = Some(surface.clone());
                 if let Some(y) = wrapper_content_pointer_y(surface_y) {
                     self.focus = PointerFocus::WrapperContent;
                     self.pending_forwarded_frame = true;
@@ -1779,7 +1784,24 @@ impl WlPointerHandler for FilterPointerHandler {
             self.pending_forwarded_frame = false;
             return;
         }
-        if self.focus == PointerFocus::Rail || self.focus == PointerFocus::None {
+        // A press inside the identity tab toggles its expanded state. The tab
+        // is proxy-owned, so this never reaches the guest: the guest must not
+        // learn about, or be able to synthesise, interaction with the chrome
+        // that identifies it.
+        if self.focus == PointerFocus::Rail {
+            const BTN_LEFT: u32 = 0x110;
+            const BTN_RIGHT: u32 = 0x111;
+            if state == WlPointerButtonState::PRESSED
+                && (button == BTN_LEFT || button == BTN_RIGHT)
+                && let Some(surface) = self.wrapper_surface.clone()
+            {
+                self.decoration
+                    .borrow_mut()
+                    .wrapper_toggle_expanded(&surface);
+            }
+            return;
+        }
+        if self.focus == PointerFocus::None {
             return;
         }
         self.pending_forwarded_frame = true;
