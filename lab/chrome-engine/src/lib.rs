@@ -9,6 +9,9 @@
 //! that keeps the pointer input region off the window edges.
 
 pub mod canvas;
+pub mod skia;
+pub mod tab;
+pub mod vectext;
 pub mod color;
 pub mod geom;
 pub mod text;

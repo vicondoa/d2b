@@ -508,39 +508,14 @@ pub fn chrome_hit_test(
     x: f64,
     y: f64,
 ) -> Option<TabHit> {
-    use d2b_chrome_engine::{text::TextRenderer, variant::resolve_for, PROTOTYPE_FONT};
-    let fonts = TextRenderer::from_bytes(PROTOTYPE_FONT).ok()?;
+    use d2b_chrome_engine::{tab, vectext::VectorFont, PROTOTYPE_FONT};
+    let font = VectorFont::from_bytes(PROTOTYPE_FONT).ok()?;
     let spec = chrome_spec(width, label, Color::WHITE, expanded, 0);
-    let (outcome, _) = resolve_for(&spec, &fonts);
-    let layout = outcome.layout()?;
-    let button = layout.button;
-
-    let top = f64::from(button.y);
-    let bottom = f64::from(button.bottom());
-    if y < top || y >= bottom {
-        return None;
+    let layout = tab::layout(&spec, &font, width)?;
+    match layout.hit(x, y, spec.actions.len(), spec.expanded)? {
+        None => Some(TabHit::Identity),
+        Some(i) => Some(TabHit::Action(i)),
     }
-    if x >= f64::from(button.x) && x < f64::from(button.right()) {
-        return Some(TabHit::Identity);
-    }
-    if !spec.expanded || spec.actions.is_empty() {
-        return None;
-    }
-
-    // Action strip geometry, mirroring the renderer.
-    let icon_box = 18.0_f64;
-    let icon_gap = 4.0_f64;
-    let sep_gap = 6.0_f64;
-    let first = f64::from(button.right()) + sep_gap * 2.0 + 1.0;
-    for i in 0..spec.actions.len() {
-        let ix = first + i as f64 * (icon_box + icon_gap);
-        // Half the gap on each side counts as part of the icon, so there are no
-        // dead pixels between adjacent controls.
-        if x >= ix - icon_gap / 2.0 && x < ix + icon_box + icon_gap / 2.0 {
-            return Some(TabHit::Action(i));
-        }
-    }
-    None
 }
 
 /// The action at `index`, as a stable identifier for dispatch and logging.
@@ -594,24 +569,11 @@ fn chrome_input_region(
     label: Option<&SanitizedLabel>,
     expanded: bool,
 ) -> Option<(i32, i32, i32, i32)> {
-    use d2b_chrome_engine::{text::TextRenderer, variant::resolve_for, PROTOTYPE_FONT};
-    let fonts = TextRenderer::from_bytes(PROTOTYPE_FONT).ok()?;
+    use d2b_chrome_engine::{tab, vectext::VectorFont, PROTOTYPE_FONT};
+    let font = VectorFont::from_bytes(PROTOTYPE_FONT).ok()?;
     let spec = chrome_spec(width, label, Color::WHITE, expanded, 0);
-    let (outcome, _) = resolve_for(&spec, &fonts);
-    let layout = outcome.layout()?;
-    // Expansion widens the tab to the right; the region must follow it so the
-    // action icons are clickable too.
-    let extra = if spec.expanded {
-        layout
-            .band
-            .width
-            .saturating_sub(layout.button.width)
-            .min(expanded_actions_width(&spec))
-    } else {
-        0
-    };
-    let r = layout.input_region();
-    Some((r.x, r.y, (r.width + extra) as i32, r.height as i32))
+    let layout = tab::layout(&spec, &font, width)?;
+    Some(layout.input_region())
 }
 
 /// Width the action strip adds to the tab when expanded.
@@ -642,33 +604,14 @@ fn draw_wrapper_rail(
     expanded: bool,
     active_actions: u32,
 ) -> Option<Vec<u8>> {
-    use d2b_chrome_engine::{
-        color::Rgba,
-        text::TextRenderer,
-        variant::{render, Candidate, ChromeSpec},
-        PROTOTYPE_FONT,
-    };
+    use d2b_chrome_engine::{tab::render_band, vectext::VectorFont, PROTOTYPE_FONT};
 
-    let size = Size::new(width, band_height);
-    let layout = decoration_buffer_layout(size)?;
-
-    let fonts = TextRenderer::from_bytes(PROTOTYPE_FONT).ok()?;
+    // Validate the buffer bounds before allocating anything.
+    decoration_buffer_layout(Size::new(width, band_height))?;
+    let font = VectorFont::from_bytes(PROTOTYPE_FONT).ok()?;
     let spec = chrome_spec(width, label, color, expanded, active_actions);
-
-    let rendered = render(&spec, &fonts, Rgba::TRANSPARENT);
-    let mut pixels = vec![0_u8; layout.len];
-    for y in 0..layout.height.min(rendered.canvas.height) {
-        for x in 0..layout.width.min(rendered.canvas.width) {
-            let p = rendered.canvas.get(x, y);
-            if p.a == 0 {
-                continue;
-            }
-            // wl_shm's Argb8888 is premultiplied. Copying straight-alpha values
-            // makes every antialiased curve render as a bright fringe.
-            set_pixel(&mut pixels, layout.width, x, y, p.argb8888_premultiplied());
-        }
-    }
-    Some(pixels)
+    let (bytes, _) = render_band(&spec, &font, width)?;
+    Some(bytes)
 }
 
 fn fill_border(
