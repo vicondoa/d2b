@@ -85,7 +85,8 @@ use crate::{
         global_disposition,
     },
     decoration::{
-        SharedDecorationManager, WRAPPER_RAIL_WIDTH, WindowGeometry, tracking_shm_pool_handler,
+        SharedDecorationManager, TabHit, WRAPPER_RAIL_WIDTH, WindowGeometry, chrome_action_name,
+        tracking_shm_pool_handler,
     },
     diag::{DiagRateLimiter, DropReason, bounded_error_detail},
     dmabuf::DmabufHandler,
@@ -1531,6 +1532,9 @@ impl WlSeatHandler for FilterSeatHandler {
             decoration: self.decoration.clone(),
             focus: PointerFocus::None,
             target_surface: None,
+            wrapper_surface: None,
+            last_pointer: (0.0, 0.0),
+            armed: None,
             pending_forwarded_frame: false,
         });
         slf.send_get_pointer(id);
@@ -1636,6 +1640,14 @@ struct FilterPointerHandler {
     decoration: SharedDecorationManager,
     focus: PointerFocus,
     target_surface: Option<Rc<WlSurface>>,
+    /// The wrapper surface the pointer is currently over, so a press on the
+    /// identity tab can be routed back to the decoration that owns it.
+    wrapper_surface: Option<Rc<WlSurface>>,
+    /// Last pointer position in wrapper-surface coordinates, so a press can be
+    /// hit-tested against the tab that was drawn.
+    last_pointer: (f64, f64),
+    /// The control a press armed, activated only if the release lands on it.
+    armed: Option<TabHit>,
     pending_forwarded_frame: bool,
 }
 
@@ -1648,16 +1660,20 @@ enum PointerFocus {
     Rail,
 }
 
-fn wrapper_content_pointer_x(surface_x: Fixed) -> Option<Fixed> {
-    let rail_width = Fixed::from_i32_saturating(WRAPPER_RAIL_WIDTH as i32);
-    (surface_x >= rail_width).then_some(surface_x - rail_width)
+/// Map a wrapper-surface pointer position into guest-surface coordinates.
+///
+/// The band is reserved at the top, so the guest's origin is `band` pixels
+/// down. Positions inside the band belong to chrome, not the guest.
+fn wrapper_content_pointer_y(surface_y: Fixed) -> Option<Fixed> {
+    let band = Fixed::from_i32_saturating(WRAPPER_RAIL_WIDTH as i32);
+    (surface_y >= band).then_some(surface_y - band)
 }
 
-fn pointer_motion_x_for_focus(focus: PointerFocus, surface_x: Fixed) -> Option<Fixed> {
+fn pointer_motion_y_for_focus(focus: PointerFocus, surface_y: Fixed) -> Option<Fixed> {
     match focus {
-        PointerFocus::Direct => Some(surface_x),
+        PointerFocus::Direct => Some(surface_y),
         PointerFocus::WrapperContent => {
-            Some(surface_x - Fixed::from_i32_saturating(WRAPPER_RAIL_WIDTH as i32))
+            Some(surface_y - Fixed::from_i32_saturating(WRAPPER_RAIL_WIDTH as i32))
         }
         PointerFocus::None | PointerFocus::Rail => None,
     }
@@ -1673,12 +1689,14 @@ impl WlPointerHandler for FilterPointerHandler {
         surface_y: Fixed,
     ) {
         if let Some(target) = self.decoration.borrow().wrapper_input_target(surface) {
+            self.last_pointer = (surface_x.to_f64(), surface_y.to_f64());
             if surface_belongs_to_receiver(&target, slf.client()) {
                 self.target_surface = Some(target.clone());
-                if let Some(x) = wrapper_content_pointer_x(surface_x) {
+                self.wrapper_surface = Some(surface.clone());
+                if let Some(y) = wrapper_content_pointer_y(surface_y) {
                     self.focus = PointerFocus::WrapperContent;
                     self.pending_forwarded_frame = true;
-                    slf.send_enter(serial, &target, x, surface_y);
+                    slf.send_enter(serial, &target, surface_x, y);
                 } else {
                     self.focus = PointerFocus::Rail;
                 }
@@ -1735,8 +1753,16 @@ impl WlPointerHandler for FilterPointerHandler {
             self.pending_forwarded_frame = false;
             return;
         }
+        // Track the pointer over proxy-owned chrome so a press can be
+        // hit-tested where it actually happened. Recording only on enter meant
+        // every hit-test used the point where the pointer first crossed into
+        // the tab, which selected the wrong control and missed entirely when
+        // the pointer entered over a gap.
+        if self.wrapper_surface.is_some() {
+            self.last_pointer = (surface_x.to_f64(), surface_y.to_f64());
+        }
         if self.focus == PointerFocus::WrapperContent
-            && wrapper_content_pointer_x(surface_x).is_none()
+            && wrapper_content_pointer_y(surface_y).is_none()
         {
             self.focus = PointerFocus::Rail;
             self.pending_forwarded_frame = true;
@@ -1746,20 +1772,20 @@ impl WlPointerHandler for FilterPointerHandler {
             return;
         }
         if self.focus == PointerFocus::Rail {
-            if let Some(x) = wrapper_content_pointer_x(surface_x) {
+            if let Some(y) = wrapper_content_pointer_y(surface_y) {
                 self.focus = PointerFocus::WrapperContent;
                 self.pending_forwarded_frame = true;
                 if let Some(target) = &self.target_surface {
-                    slf.send_enter(0, target, x, surface_y);
+                    slf.send_enter(0, target, surface_x, y);
                 }
             }
             return;
         }
-        let Some(x) = pointer_motion_x_for_focus(self.focus, surface_x) else {
+        let Some(y) = pointer_motion_y_for_focus(self.focus, surface_y) else {
             return;
         };
         self.pending_forwarded_frame = true;
-        slf.send_motion(time, x, surface_y);
+        slf.send_motion(time, surface_x, y);
     }
 
     fn handle_button(
@@ -1775,7 +1801,59 @@ impl WlPointerHandler for FilterPointerHandler {
             self.pending_forwarded_frame = false;
             return;
         }
-        if self.focus == PointerFocus::Rail || self.focus == PointerFocus::None {
+        // Presses inside the identity tab are handled by the proxy. The tab is
+        // proxy-owned, so this never reaches the guest: the guest must not
+        // learn about, or be able to synthesise, interaction with the chrome
+        // that identifies it.
+        if self.focus == PointerFocus::Rail {
+            const BTN_LEFT: u32 = 0x110;
+            const BTN_RIGHT: u32 = 0x111;
+            if button != BTN_LEFT && button != BTN_RIGHT {
+                return;
+            }
+            let Some(surface) = self.wrapper_surface.clone() else {
+                self.armed = None;
+                return;
+            };
+            let (x, y) = self.last_pointer;
+            let hit = self.decoration.borrow().wrapper_hit_test(&surface, x, y);
+
+            if state == WlPointerButtonState::PRESSED {
+                // Arm only. Acting on press means a press that drifts onto a
+                // different control still activates the one it started on.
+                self.armed = hit;
+                return;
+            }
+
+            // Activate on release, and only when it lands on the same control
+            // the press armed.
+            let armed = self.armed.take();
+            if armed.is_none() || armed != hit {
+                return;
+            }
+            match hit {
+                Some(TabHit::Identity) => {
+                    self.decoration
+                        .borrow_mut()
+                        .wrapper_toggle_expanded(&surface);
+                }
+                Some(TabHit::Action(index)) => {
+                    // The prototype reports the action rather than performing
+                    // it: the dispatch boundary belongs to the daemon, not to
+                    // the surface that draws the icon.
+                    let name = chrome_action_name(index).unwrap_or("unknown");
+                    log::info!(
+                        "[d2b-wlproxy] event=chrome-action action={name} index={index}"
+                    );
+                    self.decoration
+                        .borrow_mut()
+                        .wrapper_toggle_action(&surface, index);
+                }
+                None => {}
+            }
+            return;
+        }
+        if self.focus == PointerFocus::None {
             return;
         }
         self.pending_forwarded_frame = true;
@@ -1907,11 +1985,11 @@ impl WlTouchHandler for FilterTouchHandler {
         }
         if let Some(target) = self.decoration.borrow().wrapper_input_target(surface) {
             if surface_belongs_to_receiver(&target, slf.client()) {
-                if let Some(adjusted_x) = wrapper_content_pointer_x(x) {
+                if let Some(adjusted_y) = wrapper_content_pointer_y(y) {
                     self.forwarded_ids.insert(id);
                     self.wrapper_forwarded_ids.insert(id);
                     self.pending_forwarded_frame = true;
-                    slf.send_down(serial, time, &target, id, adjusted_x, y);
+                    slf.send_down(serial, time, &target, id, x, adjusted_y);
                 } else {
                     self.suppressed_ids.insert(id);
                 }
@@ -1955,12 +2033,12 @@ impl WlTouchHandler for FilterTouchHandler {
             return;
         }
         self.pending_forwarded_frame = true;
-        let adjusted_x = if self.wrapper_forwarded_ids.contains(&id) {
-            wrapper_content_pointer_x(x).unwrap_or(Fixed::ZERO)
+        let adjusted_y = if self.wrapper_forwarded_ids.contains(&id) {
+            wrapper_content_pointer_y(y).unwrap_or(Fixed::ZERO)
         } else {
-            x
+            y
         };
-        slf.send_motion(time, id, adjusted_x, y);
+        slf.send_motion(time, id, x, adjusted_y);
     }
 
     fn handle_shape(&mut self, slf: &Rc<WlTouch>, id: i32, major: Fixed, minor: Fixed) {

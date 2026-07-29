@@ -13,7 +13,7 @@
 set -euo pipefail
 
 LAB_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PROXY="${PROXY_BIN:-$LAB_ROOT/../packages/target/release/d2b-wayland-proxy}"
+PROXY="${PROXY_BIN:-$LAB_ROOT/proxy/target/release/d2b-chrome-proxy}"
 
 LABEL="Work"
 ACCENT="#ffb347"

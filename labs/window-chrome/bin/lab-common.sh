@@ -12,7 +12,7 @@ set -uo pipefail
 LAB_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LAB_OUT="${LAB_OUT:-$LAB_ROOT/out}"
 LAB_CONFIG="$LAB_ROOT/config"
-PROXY_BIN="${PROXY_BIN:-$LAB_ROOT/../packages/target/debug/d2b-wayland-proxy}"
+PROXY_BIN="${PROXY_BIN:-$LAB_ROOT/proxy/target/release/d2b-chrome-proxy}"
 
 # Hard image budget. Copilot rejects oversized attachments, so this is a gate,
 # not a guideline: oversized files fail the capture instead of being sent.

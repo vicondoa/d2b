@@ -32,6 +32,10 @@ use wl_proxy::{
             wl_subsurface::WlSubsurface,
             wl_surface::WlSurface,
         },
+        xdg_decoration_unstable_v1::{
+            zxdg_decoration_manager_v1::ZxdgDecorationManagerV1,
+            zxdg_toplevel_decoration_v1::{ZxdgToplevelDecorationV1, ZxdgToplevelDecorationV1Mode},
+        },
         xdg_shell::{
             xdg_surface::{XdgSurface, XdgSurfaceHandler},
             xdg_toplevel::{XdgToplevel, XdgToplevelHandler, XdgToplevelState},
@@ -43,7 +47,10 @@ use wl_proxy::{
 use crate::diag::{DiagRateLimiter, bounded_error_detail};
 
 pub const DEFAULT_BORDER_THICKNESS: u32 = 4;
-pub const WRAPPER_RAIL_WIDTH: u32 = 9;
+/// Prototype: the reserved identity band replaces the 9px rail. The band is a
+/// minimum; the engine grows it from measured content. Horizontal offsets in
+/// the wrapper path become vertical ones throughout.
+pub const WRAPPER_RAIL_WIDTH: u32 = 32;
 const MAX_LABEL_CHARS: usize = 64;
 const BYTES_PER_PIXEL: u32 = 4;
 const MAX_DECORATION_DIMENSION: u32 = 16_384;
@@ -480,32 +487,131 @@ pub fn draw_decoration(input: &DrawInput) -> Option<Vec<u8>> {
     Some(pixels)
 }
 
+/// Where inside the identity tab a pointer press landed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TabHit {
+    /// The identity name and its disclosure chevron: toggles expansion.
+    Identity,
+    /// One of the action icons revealed by expansion, by index.
+    Action(usize),
+}
+
+/// Hit-test a pointer position, in wrapper-surface coordinates, against the
+/// tab that was actually drawn.
+///
+/// Measured from the same spec the renderer uses, so the icons a user can see
+/// are exactly the icons they can press.
+pub fn chrome_hit_test(
+    width: u32,
+    label: Option<&SanitizedLabel>,
+    expanded: bool,
+    x: f64,
+    y: f64,
+) -> Option<TabHit> {
+    use d2b_chrome_engine::{tab, vectext::VectorFont, PROTOTYPE_FONT};
+    let font = VectorFont::from_bytes(PROTOTYPE_FONT).ok()?;
+    let spec = chrome_spec(width, label, Color::WHITE, expanded, 0);
+    let layout = tab::layout(&spec, &font, width)?;
+    match layout.hit(x, y, spec.actions.len(), spec.expanded)? {
+        None => Some(TabHit::Identity),
+        Some(i) => Some(TabHit::Action(i)),
+    }
+}
+
+/// The action at `index`, as a stable identifier for dispatch and logging.
+pub fn chrome_action_name(index: usize) -> Option<&'static str> {
+    use d2b_chrome_engine::variant::Action;
+    Action::DEFAULTS.get(index).map(|a| match a {
+        Action::Terminal => "terminal",
+        Action::Audio => "audio",
+        Action::Usb => "usb",
+        Action::Info => "info",
+        Action::Stop => "stop",
+    })
+}
+
+/// Build the chrome spec the proxy draws, so drawing and hit-testing cannot
+/// disagree about where the tab is.
+fn chrome_spec(
+    width: u32,
+    label: Option<&SanitizedLabel>,
+    color: Color,
+    expanded: bool,
+    active_actions: u32,
+) -> d2b_chrome_engine::variant::ChromeSpec {
+    use d2b_chrome_engine::{
+        color::Rgba,
+        variant::{Candidate, ChromeSpec},
+    };
+    let mut spec = ChromeSpec::new(
+        Candidate::Tab,
+        label.map(SanitizedLabel::as_str).unwrap_or("workload"),
+        Rgba::rgba(color.r, color.g, color.b, color.a),
+    );
+    spec.content_width = width;
+    spec.content_height = 1;
+    spec.expanded = expanded || std::env::var("D2B_CHROME_EXPANDED").is_ok();
+    spec.active_actions = active_actions;
+    if let Ok(status) = std::env::var("D2B_CHROME_STATUS")
+        && !status.is_empty()
+    {
+        spec.status = Some(status);
+    }
+    spec
+}
+
+/// The pointer region for the drawn tab, as `(x, y, width, height)`.
+///
+/// Measured from the same spec the renderer uses. It covers the tab and
+/// nothing else: never the window edges, and never guest content.
+fn chrome_input_region(
+    width: u32,
+    label: Option<&SanitizedLabel>,
+    expanded: bool,
+) -> Option<(i32, i32, i32, i32)> {
+    use d2b_chrome_engine::{tab, vectext::VectorFont, PROTOTYPE_FONT};
+    let font = VectorFont::from_bytes(PROTOTYPE_FONT).ok()?;
+    let spec = chrome_spec(width, label, Color::WHITE, expanded, 0);
+    let layout = tab::layout(&spec, &font, width)?;
+    Some(layout.input_region())
+}
+
+/// Width the action strip adds to the tab when expanded.
+fn expanded_actions_width(spec: &d2b_chrome_engine::variant::ChromeSpec) -> u32 {
+    if !spec.expanded || spec.actions.is_empty() {
+        return 0;
+    }
+    let icon_box = 18_u32;
+    let icon_gap = 4_u32;
+    let sep_gap = 6_u32;
+    sep_gap * 2
+        + 1
+        + icon_box * spec.actions.len() as u32
+        + icon_gap * (spec.actions.len() as u32 - 1)
+        + 8
+}
+
+/// Draw the reserved identity band using the prototype chrome engine, so the
+/// live proxy and the offline sheets render from one implementation.
+///
+/// `band_height` is the band, not the window: the buffer is a full-width strip
+/// at the top of the wrapper, with the guest subsurface placed below it.
 fn draw_wrapper_rail(
     width: u32,
-    height: u32,
+    band_height: u32,
     color: Color,
     label: Option<&SanitizedLabel>,
+    expanded: bool,
+    active_actions: u32,
 ) -> Option<Vec<u8>> {
-    let size = Size::new(width, height);
-    let layout = decoration_buffer_layout(size)?;
-    let mut pixels = vec![0_u8; layout.len];
-    let color_bytes = color.argb8888_bytes();
-    for y in 0..layout.height {
-        for x in 0..layout.width.min(WRAPPER_RAIL_WIDTH as usize) {
-            set_pixel(&mut pixels, layout.width, x, y, color_bytes);
-        }
-    }
-    if let Some(label) = label {
-        draw_vertical_label(
-            &mut pixels,
-            layout.width,
-            layout.height,
-            WRAPPER_RAIL_WIDTH,
-            color,
-            label.as_str(),
-        );
-    }
-    Some(pixels)
+    use d2b_chrome_engine::{tab::render_band, vectext::VectorFont, PROTOTYPE_FONT};
+
+    // Validate the buffer bounds before allocating anything.
+    decoration_buffer_layout(Size::new(width, band_height))?;
+    let font = VectorFont::from_bytes(PROTOTYPE_FONT).ok()?;
+    let spec = chrome_spec(width, label, color, expanded, active_actions);
+    let (bytes, _) = render_band(&spec, &font, width)?;
+    Some(bytes)
 }
 
 fn fill_border(
@@ -1085,19 +1191,21 @@ impl WrapperGeometry {
             u32::try_from(geometry.width).ok()?,
             u32::try_from(geometry.height).ok()?,
         );
+        // The band is reserved at the TOP: width is untouched and the guest is
+        // pushed down, so niri lays out and borders the band-inclusive rect.
         let outer = Size::new(
-            content.width.checked_add(WRAPPER_RAIL_WIDTH)?,
-            content.height,
+            content.width,
+            content.height.checked_add(WRAPPER_RAIL_WIDTH)?,
         );
         Some(Self {
             rail_width: WRAPPER_RAIL_WIDTH,
             content,
             outer,
             guest_offset: Point {
-                x: i32::try_from(WRAPPER_RAIL_WIDTH)
+                x: geometry.x.checked_neg()?,
+                y: i32::try_from(WRAPPER_RAIL_WIDTH)
                     .ok()?
-                    .checked_sub(geometry.x)?,
-                y: geometry.y.checked_neg()?,
+                    .checked_sub(geometry.y)?,
             },
         })
     }
@@ -1120,6 +1228,10 @@ struct WrapperToplevel {
     current_window_geometry: Option<WindowGeometry>,
     current_configure: ConfigureSize,
     wrapper_configured: bool,
+    /// Whether the identity tab is expanded to show its actions.
+    expanded: bool,
+    /// Bitmask of actions in their active state.
+    active_actions: u32,
 }
 
 impl WrapperToplevel {
@@ -1292,6 +1404,10 @@ struct FrameKey {
     color: Color,
     label: Option<SanitizedLabel>,
     label_position: LabelPosition,
+    /// Part of the key so toggling expansion forces the buffer to be redrawn.
+    expanded: bool,
+    /// Part of the key for the same reason: pressing an action must repaint.
+    active_actions: u32,
 }
 
 #[derive(Debug)]
@@ -1302,6 +1418,10 @@ pub struct DecorationManager {
     subcompositor: Option<Rc<WlSubcompositor>>,
     shm: Option<Rc<wl_proxy::protocols::wayland::wl_shm::WlShm>>,
     wm_base: Option<Rc<XdgWmBase>>,
+    /// Host decoration manager, used to ask for ServerSide decoration on the
+    /// wrapper toplevel. Without it niri treats the wrapper as a CSD window and
+    /// paints the border colour as a background behind the transparent strip.
+    decoration_manager: Option<Rc<ZxdgDecorationManagerV1>>,
     buffers: HashMap<u64, BufferDimensions>,
     surfaces: HashMap<u64, SurfaceState>,
     subsurfaces_by_parent: HashMap<u64, Vec<Weak<WlSurface>>>,
@@ -1316,6 +1436,7 @@ impl DecorationManager {
             subcompositor: None,
             shm: None,
             wm_base: None,
+            decoration_manager: None,
             buffers: HashMap::new(),
             surfaces: HashMap::new(),
             subsurfaces_by_parent: HashMap::new(),
@@ -1390,6 +1511,15 @@ impl DecorationManager {
                 registry.send_bind(name, shm.clone());
                 self.shm = Some(shm);
             }
+            ObjectInterface::ZxdgDecorationManagerV1 if self.decoration_manager.is_none() => {
+                let manager = registry
+                    .state()
+                    .create_object::<ZxdgDecorationManagerV1>(
+                        version.min(ZxdgDecorationManagerV1::XML_VERSION),
+                    );
+                registry.send_bind(name, manager.clone());
+                self.decoration_manager = Some(manager);
+            }
             ObjectInterface::XdgWmBase if self.wm_base.is_none() => {
                 let wm_base = registry
                     .state()
@@ -1441,9 +1571,29 @@ impl DecorationManager {
         wrapper_xdg_surface.set_forward_to_client(false);
         let wrapper_toplevel = wrapper_xdg_surface.new_send_get_toplevel();
         wrapper_toplevel.set_forward_to_client(false);
+        // Ask the host for server-side decoration on the wrapper. The proxy
+        // draws identity chrome itself and leaves the rest of its reserved
+        // strip transparent; a compositor that thinks this is a CSD window
+        // paints its border colour as a background, which shows straight
+        // through that transparency.
+        if self.decoration_manager.is_none() {
+            // niri does not implement xdg-decoration at all, so this is the
+            // normal path there rather than an error. Without it the compositor
+            // may paint its border colour as a background behind the strip the
+            // tab leaves transparent; see docs for the window rule that fixes it.
+            log::info!(
+                "[d2b-wlproxy] event=wrapper-decoration reason=no-xdg-decoration-manager"
+            );
+        }
+        if let Some(manager) = self.decoration_manager.as_ref() {
+            let decoration: Rc<ZxdgToplevelDecorationV1> =
+                manager.new_send_get_toplevel_decoration(&wrapper_toplevel);
+            decoration.set_forward_to_client(false);
+            decoration.send_set_mode(ZxdgToplevelDecorationV1Mode::SERVER_SIDE);
+        }
         let guest_subsurface = subcompositor.new_send_get_subsurface(surface, &wrapper_surface);
         guest_subsurface.set_forward_to_client(false);
-        guest_subsurface.send_set_position(i32::try_from(WRAPPER_RAIL_WIDTH).unwrap_or(0), 0);
+        guest_subsurface.send_set_position(0, i32::try_from(WRAPPER_RAIL_WIDTH).unwrap_or(0));
         guest_subsurface.send_place_below(&wrapper_surface);
         guest_subsurface.send_set_desync();
 
@@ -1478,6 +1628,8 @@ impl DecorationManager {
             current_window_geometry: None,
             current_configure: ConfigureSize::new(0, 0),
             wrapper_configured: false,
+            expanded: false,
+            active_actions: 0,
         });
         initial_wrapper_surface.send_commit();
         true
@@ -1609,10 +1761,10 @@ impl DecorationManager {
         else {
             return false;
         };
-        let width = if width > 0 {
-            width.saturating_add(i32::try_from(WRAPPER_RAIL_WIDTH).unwrap_or(0))
+        let height = if height > 0 {
+            height.saturating_add(i32::try_from(WRAPPER_RAIL_WIDTH).unwrap_or(0))
         } else {
-            width
+            height
         };
         wrapper.wrapper_toplevel.send_set_min_size(width, height);
         true
@@ -1626,12 +1778,85 @@ impl DecorationManager {
         else {
             return false;
         };
-        let width = if width > 0 {
-            width.saturating_add(i32::try_from(WRAPPER_RAIL_WIDTH).unwrap_or(0))
+        let height = if height > 0 {
+            height.saturating_add(i32::try_from(WRAPPER_RAIL_WIDTH).unwrap_or(0))
         } else {
-            width
+            height
         };
         wrapper.wrapper_toplevel.send_set_max_size(width, height);
+        true
+    }
+
+    /// Hit-test a pointer position against the tab owned by `surface`.
+    pub fn wrapper_hit_test(&self, surface: &Rc<WlSurface>, x: f64, y: f64) -> Option<TabHit> {
+        let wrapper_id = surface.unique_id();
+        let (width, expanded) = self.surfaces.values().find_map(|state| {
+            state
+                .wrapper
+                .as_ref()
+                .filter(|w| w.wrapper_surface.unique_id() == wrapper_id)
+                .and_then(|w| {
+                    w.applied_geometry
+                        .map(|g| (g.outer.width, w.expanded))
+                })
+        })?;
+        chrome_hit_test(width, self.config.label.as_ref(), expanded, x, y)
+    }
+
+    /// Toggle one action.s active state and redraw.
+    pub fn wrapper_toggle_action(&mut self, surface: &Rc<WlSurface>, index: usize) -> bool {
+        if index >= 32 {
+            return false;
+        }
+        let wrapper_id = surface.unique_id();
+        let Some(surface_id) = self.surfaces.iter().find_map(|(id, state)| {
+            state
+                .wrapper
+                .as_ref()
+                .filter(|w| w.wrapper_surface.unique_id() == wrapper_id)
+                .map(|_| *id)
+        }) else {
+            return false;
+        };
+        if let Some(wrapper) = self
+            .surfaces
+            .get_mut(&surface_id)
+            .and_then(|state| state.wrapper.as_mut())
+        {
+            wrapper.active_actions ^= 1 << index;
+        } else {
+            return false;
+        }
+        self.apply_wrapper(surface_id);
+        true
+    }
+
+    /// Toggle the identity tab.s expanded state for the wrapper owning
+    /// `surface`, and redraw. Returns true when a tab was found and toggled.
+    ///
+    /// This is what makes the chevron a control rather than an ornament: the
+    /// proxy owns the tab's pixels, so it also owns this state.
+    pub fn wrapper_toggle_expanded(&mut self, surface: &Rc<WlSurface>) -> bool {
+        let wrapper_id = surface.unique_id();
+        let Some(surface_id) = self.surfaces.iter().find_map(|(id, state)| {
+            state
+                .wrapper
+                .as_ref()
+                .filter(|w| w.wrapper_surface.unique_id() == wrapper_id)
+                .map(|_| *id)
+        }) else {
+            return false;
+        };
+        if let Some(wrapper) = self
+            .surfaces
+            .get_mut(&surface_id)
+            .and_then(|state| state.wrapper.as_mut())
+        {
+            wrapper.expanded = !wrapper.expanded;
+        } else {
+            return false;
+        }
+        self.apply_wrapper(surface_id);
         true
     }
 
@@ -1672,13 +1897,11 @@ impl DecorationManager {
         };
         state.visual.fullscreen = xdg_state_contains(states, XdgToplevelState::FULLSCREEN.0);
         state.visual.active = xdg_state_contains(states, XdgToplevelState::ACTIVATED.0);
-        let rail = if state.visual.fullscreen {
-            0
-        } else {
-            i32::try_from(WRAPPER_RAIL_WIDTH).unwrap_or(0)
-        };
-        let content_width = if width > 0 {
-            width.saturating_sub(rail).max(1)
+        // The band is retained in fullscreen: that is exactly when a guest
+        // could otherwise impersonate a whole desktop.
+        let band = i32::try_from(WRAPPER_RAIL_WIDTH).unwrap_or(0);
+        let content_height = if height > 0 {
+            height.saturating_sub(band).max(1)
         } else {
             0
         };
@@ -1686,7 +1909,7 @@ impl DecorationManager {
             wrapper.current_configure = ConfigureSize::new(width, height);
             wrapper
                 .guest_toplevel
-                .send_configure(content_width, height, states);
+                .send_configure(width, content_height, states);
         }
     }
 
@@ -1854,6 +2077,8 @@ impl DecorationManager {
                     self.config.label.clone()
                 },
                 label_position: self.config.label_position,
+                expanded: wrapper.expanded,
+                active_actions: wrapper.active_actions,
             };
             let needs_buffer = wrapper.key.as_ref() != Some(&key);
             if !needs_buffer && wrapper.applied_geometry == Some(wrapper_geometry) {
@@ -1863,10 +2088,12 @@ impl DecorationManager {
         };
         let new_buffer = if needs_buffer && wrapper_geometry.rail_width > 0 {
             match self.create_wrapper_rail_buffer(
+                wrapper_geometry.outer.width,
                 wrapper_geometry.rail_width,
-                wrapper_geometry.outer.height,
                 key.color,
                 key.label.as_ref(),
+                key.expanded,
+                key.active_actions,
             ) {
                 Ok(buffer) => Some(buffer),
                 Err(error) => {
@@ -1902,12 +2129,17 @@ impl DecorationManager {
         if let Some(compositor) = &compositor {
             let region = compositor.new_send_create_region();
             if wrapper_geometry.rail_width > 0 {
-                region.send_add(
-                    0,
-                    0,
-                    i32::try_from(wrapper_geometry.rail_width).unwrap_or(i32::MAX),
-                    i32::try_from(wrapper_geometry.outer.height).unwrap_or(i32::MAX),
-                );
+                // The input region must match the tab that was actually drawn,
+                // so it is measured from the same label and expansion state.
+                // Deriving it from defaults instead put the region beside the
+                // visible tab, which is why clicking the chevron did nothing.
+                if let Some(r) = chrome_input_region(
+                    wrapper_geometry.outer.width,
+                    key.label.as_ref(),
+                    key.expanded,
+                ) {
+                    region.send_add(r.0, r.1, r.2, r.3);
+                }
             }
             wrapper.wrapper_surface.send_set_input_region(Some(&region));
             region.send_destroy();
@@ -1933,11 +2165,16 @@ impl DecorationManager {
             wrapper
                 .wrapper_surface
                 .send_attach(Some(buffer.wl_buffer()), 0, 0);
+            // Damage the whole band. These arguments carried over from the
+            // vertical rail, where the buffer was rail_width wide and as tall
+            // as the window; the band is the transpose of that. Damaging the
+            // old rect repainted only the leftmost column, so expanding the tab
+            // changed state without ever showing.
             wrapper.wrapper_surface.send_damage_buffer(
                 0,
                 0,
+                i32::try_from(wrapper_geometry.outer.width).unwrap_or(i32::MAX),
                 i32::try_from(wrapper_geometry.rail_width).unwrap_or(i32::MAX),
-                i32::try_from(wrapper_geometry.outer.height).unwrap_or(i32::MAX),
             );
             wrapper.wrapper_surface.send_commit();
             if let Some(old_buffer) = old_buffer {
@@ -2033,6 +2270,8 @@ impl DecorationManager {
             color: plan.color,
             label: plan.label.clone(),
             label_position: plan.label_position,
+            expanded: false,
+            active_actions: 0,
         };
         let needs_surface = self
             .surfaces
@@ -2171,6 +2410,8 @@ impl DecorationManager {
         height: u32,
         color: Color,
         label: Option<&SanitizedLabel>,
+        expanded: bool,
+        active_actions: u32,
     ) -> io::Result<ProxyDecorationBuffer> {
         let shm = self
             .shm
@@ -2179,7 +2420,7 @@ impl DecorationManager {
         let size = Size::new(width, height);
         let layout = decoration_buffer_layout(size)
             .ok_or_else(|| io::Error::other("wrapper rail buffer exceeds decoration limits"))?;
-        let pixels = draw_wrapper_rail(width, height, color, label)
+        let pixels = draw_wrapper_rail(width, height, color, label, expanded, active_actions)
             .ok_or_else(|| io::Error::other("wrapper rail buffer exceeds decoration limits"))?;
         let fd = create_memfd_with_contents(
             &pixels,
