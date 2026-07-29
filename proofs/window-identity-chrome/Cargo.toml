@@ -1,0 +1,15 @@
+[package]
+name = "window-identity-chrome-proof"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Proof for ADR 0047: load-bearing logic for d2b's window identity chrome"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[workspace]
+
+[lints.rust]
+unsafe_code = "forbid"

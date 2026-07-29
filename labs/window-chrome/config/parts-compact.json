@@ -1,0 +1,5 @@
+{
+  "collapsed": ["identity", "disclosure"],
+  "expanded": ["identity", "disclosure", "separator", "open-terminal", "audio-controls", "usb-devices", "vm-details", "stop-vm"],
+  "compact-actions": true
+}
