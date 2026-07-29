@@ -77,38 +77,43 @@ deprecations ship one minor release before removal.
   containing a discovered capability binding, alias-before-target ordering,
   chained aliases, chained re-exports, harmless aliases in every covered
   spelling, a harmless two-hop re-export that requires fixed-point convergence,
-  direct and nested-group glob imports of visible local modules, block-local
-  inline and path-loaded modules, inert direct and conditional module
-  attributes, rejected conditional `path` and unrecognised direct or
-  conditional attribute selection, and duplicate logical module paths.
-  Duplicate-module diagnostics retain both logical names without exposing
-  canonical host paths.
-  Module aliases, re-exports, and visible module bindings imported through
-  module-level globs resolve through lexical candidates to a fixed point. Only
-  one unambiguous local target without a discovered capability is classified
-  non-capability. An unresolved module alias is ignored only for an unrelated
-  non-seeded impl self type; unresolved or ambiguous aliases used as prefixes
-  remain capability-relevant and fail closed, including plain named,
-  `::{self}`, direct-glob, and nested-group-glob module imports. Generic or
-  cfg-gated declared type aliases, cfg-gated renamed imports, unsupported
-  aliases, and lexically scoped capability aliases fail closed during
-  classification; resolvable unrenamed cfg-gated type imports are classified
-  normally rather than rejected. Cyclic unresolved capability aliases fail
-  closed when used by an impl self type. Every parsed module item, including a
-  module declared inside a function or block, reaches the same attribute
-  validation and external-source resolution. Unresolvable external modules,
-  including missing `#[path]` targets, fail closed. Direct `path` and recursive
-  `cfg_attr` receive dedicated handling; the source-inert allowlist accepts
-  `cfg`, `doc`, `allow`, `warn`, `deny`, `forbid`, `expect`, `deprecated`, and
-  the exact `rustfmt::skip` tool path in their approved shapes. Procedural,
-  unknown tool, malformed, and every other unrecognised direct or conditional
-  attribute fail closed with remediation. Approved trait-implementation and
-  hidden-public snapshots retain rendered signatures for exact comparison,
-  while failure diagnostics use separate fixed syntax labels, identities, and
-  crate-relative logical source locations without echoing signature token
-  streams or path literals. It does not claim general Rust name or module
-  resolution, macro expansion, `include!` expansion, or coverage of downstream
-  implementations.
+  direct and nested-group glob imports, nested re-exports reached through a
+  glob, direct and grouped globs whose target is a renamed module alias,
+  unresolved and two-hop glob propagation, terminating glob cycles with
+  explicit-shadow precedence, direct and grouped block-local globs, and
+  non-capability acceptance cases for block-local and renamed-target globs.
+  Module aliases and module-level globs resolve monotonically over the finite
+  set of parsed bindings and declared module targets; capability propagation
+  resolves every glob target through that completed alias fixed point.
+  Explicit bindings shadow glob imports, conflicting glob bindings fail closed,
+  and hard iteration budgets independently guard target and taint convergence.
+  Capability relevance includes descendants of a resolved module alias.
+  Unknown glob destinations taint their importing module, and that taint
+  propagates through later glob re-exports. A glob rooted at a Cargo-declared
+  dependency name is classified as external and imports no local capability
+  binding, preserving ordinary workspace dependency globs.
+  Block-local globs carry lexical scope identities: proven same-scope
+  non-capability module aliases remain accepted, while capability-relevant,
+  ambiguous, or unresolved aliases fail closed. Other unmodelled glob shapes
+  fail closed when they can classify an impl self type; this syntax scanner
+  does not claim complete Rust glob or name resolution. Generic or cfg-gated
+  declared type aliases, cfg-gated renamed imports, unsupported aliases, and
+  lexically scoped capability aliases also fail closed during classification.
+  Every parsed module item, including one declared inside a function or block,
+  reaches the same attribute validation and external-source resolution.
+  Unresolvable
+  external modules, including missing `#[path]` targets, fail closed. Direct
+  `path` and recursive `cfg_attr` receive dedicated handling; the source-inert
+  allowlist accepts `cfg`, `doc`, `allow`, `warn`, `deny`, `forbid`, `expect`,
+  `deprecated`, and the exact `rustfmt::skip` tool path in their approved
+  shapes. Procedural, unknown tool, malformed, and every other unrecognised
+  direct or conditional attribute fail closed with remediation. Approved
+  snapshots retain rendered signatures for exact comparison, while scanner,
+  Cargo, and rustdoc failures emit fixed operation labels, package or crate
+  identities, exit status, and crate-relative locations without raw tool
+  stderr, signature token streams, absolute scratch paths, or attacker-authored path literals.
+  The source leg does not claim general Rust name or module resolution, macro
+  expansion, `include!` expansion, or coverage of downstream implementations.
 
 - Pinned the actual downstream `From<X>` boundary. A dependent crate that owns
   `X` can implement `From<X>` for a capability and compile when it only returns

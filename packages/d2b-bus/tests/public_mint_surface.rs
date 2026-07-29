@@ -2,7 +2,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Output},
 };
 
 use quote::ToTokens;
@@ -132,6 +132,19 @@ fn public_api_has_only_the_approved_capability_mint_surface() {
 fn capability_trait_source_mutations_fail_closed() {
     let approved = approved_entries(include_str!("approved-capability-trait-impls.txt"));
     assert_trait_impl_mutations(&approved);
+}
+
+#[test]
+fn workspace_capability_source_globs_are_classified() {
+    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let manifest = crate_root.parent().unwrap().join("Cargo.toml");
+    for package in workspace_render_packages(&manifest).into_values() {
+        source_capability_inventory_with_externals(
+            &package.crate_name,
+            &package.source,
+            &package.external_crates,
+        );
+    }
 }
 
 fn assert_mutation_fixture(workspace_docs: &[DocumentedCrate]) {
@@ -300,6 +313,11 @@ impl From<Arc<ComponentSessionAdmissionIdentity>> for ComponentSessionAdmission 
         ("trait-impl-cfg-attr-derive.rs", "Clone"),
         ("trait-impl-nested-cfg-attr-derive.rs", "Copy"),
         ("trait-impl-cfg-attr-gated.rs", "Default"),
+        ("trait-impl-renamed-glob-target.rs", "From<LocalInput>"),
+        (
+            "trait-impl-group-renamed-glob-target.rs",
+            "From<LocalInput>",
+        ),
     ] {
         let source = fs::read_to_string(fixture.join(name))
             .unwrap_or_else(|error| panic!("read {name} mutation fixture: {error}"));
@@ -352,6 +370,36 @@ impl From<Arc<ComponentSessionAdmissionIdentity>> for ComponentSessionAdmission 
             "aliases",
         ),
         (
+            "trait-impl-glob-nested-reexport.rs",
+            "cannot resolve module alias wrapper in impl self type wrapper::nested::Admission",
+            "wrapper",
+        ),
+        (
+            "trait-impl-glob-unresolved-target.rs",
+            "cannot resolve module alias aliases",
+            "aliases",
+        ),
+        (
+            "trait-impl-glob-unknown-destination.rs",
+            "external or unresolved glob import",
+            "aliases",
+        ),
+        (
+            "trait-impl-glob-unresolved-two-hop.rs",
+            "cannot resolve module alias aliases",
+            "aliases",
+        ),
+        (
+            "trait-impl-block-glob.rs",
+            "cannot resolve block-local glob module alias aliases",
+            "aliases",
+        ),
+        (
+            "trait-impl-block-group-glob.rs",
+            "cannot resolve block-local glob module alias aliases",
+            "aliases",
+        ),
+        (
             "trait-impl-lexical-alias.rs",
             "lexically scoped",
             "AdmissionAlias",
@@ -372,6 +420,9 @@ impl From<Arc<ComponentSessionAdmissionIdentity>> for ComponentSessionAdmission 
         "trait-impl-noncapability-plain-module.rs",
         "trait-impl-noncapability-plain-self-module.rs",
         "trait-impl-noncapability-chained-reexport-module.rs",
+        "trait-impl-glob-cycle-shadowed.rs",
+        "trait-impl-noncapability-block-glob.rs",
+        "trait-impl-noncapability-renamed-glob-target.rs",
     ] {
         let source = fs::read_to_string(fixture.join(name))
             .unwrap_or_else(|error| panic!("read {name} compile-pass fixture: {error}"));
@@ -383,6 +434,7 @@ impl From<Arc<ComponentSessionAdmissionIdentity>> for ComponentSessionAdmission 
         );
     }
     assert_source_diagnostics_redact_attacker_content(&fixture);
+    assert_tool_output_redaction(&fixture);
     assert_module_source_mutations_fail_closed(&crate_root);
 }
 
@@ -533,6 +585,29 @@ fn assert_source_diagnostics_redact_attacker_content(fixture: &Path) {
             && !parse_diagnostic.contains("PRIVATE_PARSE_PATH")
             && !parse_diagnostic.contains(parse_source.trim()),
         "parse diagnostic echoed attacker-authored source: {parse_diagnostic}"
+    );
+}
+
+fn assert_tool_output_redaction(fixture: &Path) {
+    use std::os::unix::process::ExitStatusExt;
+
+    let attacker_output = fs::read(fixture.join("tool-output-redaction.txt"))
+        .expect("read tool-output redaction fixture");
+    let output = Output {
+        status: std::process::ExitStatus::from_raw(23 << 8),
+        stdout: Vec::new(),
+        stderr: attacker_output.clone(),
+    };
+    let diagnostic = tool_failure("render rustdoc", "d2b_bus", &output);
+    let attacker_output = String::from_utf8(attacker_output).expect("fixture is UTF-8");
+    assert!(
+        diagnostic.contains("render rustdoc")
+            && diagnostic.contains("d2b_bus")
+            && diagnostic.contains("23")
+            && !diagnostic.contains(attacker_output.trim())
+            && !diagnostic.contains("/home/alice/private"),
+        "tool failure diagnostic exposed attacker-authored output or an absolute path: \
+         {diagnostic}"
     );
 }
 
@@ -1276,6 +1351,7 @@ struct RenderPackage {
     crate_name: String,
     source: PathBuf,
     dependency_features: BTreeSet<String>,
+    external_crates: BTreeSet<String>,
     workspace_dependencies: BTreeSet<String>,
 }
 
@@ -1293,6 +1369,89 @@ fn render_workspace_docs(
     scratch: &Path,
     external_docs: &[DocumentedCrate],
 ) -> Vec<DocumentedCrate> {
+    let packages = workspace_render_packages(manifest);
+    let temp = scratch.join("tmp");
+    fs::create_dir_all(&temp).expect("create rustdoc temporary directory");
+    let build = scratch.join("build");
+    let mut docs = Vec::new();
+    for (package_name, package) in dependency_order(packages) {
+        let crate_name = package.crate_name;
+        let hidden_public = hidden_public_api(&crate_name, &package.source);
+        let source_capabilities = source_capability_inventory_with_externals(
+            &crate_name,
+            &package.source,
+            &package.external_crates,
+        );
+        let target = scratch.join("renders").join(&crate_name);
+        let doc_root = target.join("doc");
+        fs::create_dir_all(&doc_root).unwrap_or_else(|_| {
+            panic!("create isolated rustdoc output for package {package_name}")
+        });
+        for documented in external_docs.iter().chain(docs.iter()) {
+            let link = doc_root.join(&documented.crate_name);
+            if link.exists() {
+                continue;
+            }
+            std::os::unix::fs::symlink(&documented.root, &link).unwrap_or_else(|_| {
+                panic!(
+                    "link rustdoc dependency {} while rendering package {package_name}",
+                    documented.crate_name
+                )
+            });
+        }
+        let mut command = Command::new(env!("CARGO"));
+        command
+            .args([
+                "doc",
+                "--quiet",
+                "--locked",
+                "--no-deps",
+                "--document-private-items",
+                "--manifest-path",
+            ])
+            .arg(manifest)
+            .arg("-p")
+            .arg(&package_name);
+        if !package.dependency_features.is_empty() {
+            command.arg("--features").arg(
+                package
+                    .dependency_features
+                    .into_iter()
+                    .collect::<Vec<_>>()
+                    .join(","),
+            );
+        }
+        let output = command
+            .arg("--target-dir")
+            .arg(&target)
+            .env("CARGO_BUILD_BUILD_DIR", &build)
+            .env("TMPDIR", &temp)
+            .env("RUSTC_WRAPPER", "")
+            .output()
+            .unwrap_or_else(|_| panic!("start rustdoc for package {package_name}"));
+        if !output.status.success() {
+            panic!("{}", tool_failure("render rustdoc", &package_name, &output));
+        }
+
+        let root = target.join("doc").join(&crate_name);
+        let advertised =
+            validate_documented_crate(&crate_name, &root).unwrap_or_else(|error| panic!("{error}"));
+        docs.push(DocumentedCrate {
+            crate_name,
+            root,
+            advertised,
+            hidden_public: hidden_public.entries,
+            hidden_public_diagnostics: hidden_public.diagnostics,
+            capability_declarations: source_capabilities.declarations,
+            capability_trait_impls: source_capabilities.trait_impls,
+            capability_trait_impl_diagnostics: source_capabilities.trait_impl_diagnostics,
+        });
+    }
+    docs.sort_by(|left, right| left.crate_name.cmp(&right.crate_name));
+    docs
+}
+
+fn workspace_render_packages(manifest: &Path) -> BTreeMap<String, RenderPackage> {
     let metadata = Command::new(env!("CARGO"))
         .args([
             "metadata",
@@ -1305,12 +1464,13 @@ fn render_workspace_docs(
         ])
         .arg(manifest)
         .output()
-        .expect("discover workspace library crates");
-    assert!(
-        metadata.status.success(),
-        "cargo metadata failed:\n{}",
-        String::from_utf8_lossy(&metadata.stderr)
-    );
+        .unwrap_or_else(|_| panic!("start Cargo metadata for workspace"));
+    if !metadata.status.success() {
+        panic!(
+            "{}",
+            tool_failure("run Cargo metadata", "workspace", &metadata)
+        );
+    }
     let metadata: serde_json::Value =
         serde_json::from_slice(&metadata.stdout).expect("parse cargo metadata");
     let workspace_members = metadata["workspace_members"]
@@ -1366,6 +1526,7 @@ fn render_workspace_docs(
         if let Some(library) = library {
             let crate_name = library["name"].as_str().expect("library target name");
             let mut dependency_features = BTreeSet::new();
+            let mut external_crates = BTreeSet::new();
             let mut workspace_dependencies = BTreeSet::new();
             for dependency in package["dependencies"]
                 .as_array()
@@ -1375,6 +1536,7 @@ fn render_workspace_docs(
             {
                 let dependency_name = dependency["name"].as_str().expect("dependency name");
                 let command_name = dependency["rename"].as_str().unwrap_or(dependency_name);
+                external_crates.insert(command_name.replace('-', "_"));
                 if let Some(features) = unified_dependency_features.get(dependency_name) {
                     dependency_features.extend(
                         features
@@ -1399,92 +1561,21 @@ fn render_workspace_docs(
                             .expect("library target source path"),
                     ),
                     dependency_features,
+                    external_crates,
                     workspace_dependencies,
                 },
             );
         }
     }
     assert!(!packages.is_empty(), "workspace has no library crates");
+    packages
+}
 
-    let temp = scratch.join("tmp");
-    fs::create_dir_all(&temp).expect("create rustdoc temporary directory");
-    let build = scratch.join("build");
-    let mut docs = Vec::new();
-    for (package_name, package) in dependency_order(packages) {
-        let crate_name = package.crate_name;
-        let hidden_public = hidden_public_api(&crate_name, &package.source);
-        let source_capabilities = source_capability_inventory(&crate_name, &package.source);
-        let target = scratch.join("renders").join(&crate_name);
-        let doc_root = target.join("doc");
-        fs::create_dir_all(&doc_root).unwrap_or_else(|error| {
-            panic!("create isolated rustdoc output for package {package_name}: {error}")
-        });
-        for documented in external_docs.iter().chain(docs.iter()) {
-            let link = doc_root.join(&documented.crate_name);
-            if link.exists() {
-                continue;
-            }
-            std::os::unix::fs::symlink(&documented.root, &link).unwrap_or_else(|error| {
-                panic!(
-                    "link dependency rustdoc root {} -> {}: {error}",
-                    link.display(),
-                    documented.root.display()
-                )
-            });
-        }
-        let mut command = Command::new(env!("CARGO"));
-        command
-            .args([
-                "doc",
-                "--quiet",
-                "--locked",
-                "--no-deps",
-                "--document-private-items",
-                "--manifest-path",
-            ])
-            .arg(manifest)
-            .arg("-p")
-            .arg(&package_name);
-        if !package.dependency_features.is_empty() {
-            command.arg("--features").arg(
-                package
-                    .dependency_features
-                    .into_iter()
-                    .collect::<Vec<_>>()
-                    .join(","),
-            );
-        }
-        let output = command
-            .arg("--target-dir")
-            .arg(&target)
-            .env("CARGO_BUILD_BUILD_DIR", &build)
-            .env("TMPDIR", &temp)
-            .output()
-            .unwrap_or_else(|error| {
-                panic!("render public API for package {package_name}: {error}")
-            });
-        assert!(
-            output.status.success(),
-            "rustdoc failed for package {package_name}:\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-
-        let root = target.join("doc").join(&crate_name);
-        let advertised =
-            validate_documented_crate(&crate_name, &root).unwrap_or_else(|error| panic!("{error}"));
-        docs.push(DocumentedCrate {
-            crate_name,
-            root,
-            advertised,
-            hidden_public: hidden_public.entries,
-            hidden_public_diagnostics: hidden_public.diagnostics,
-            capability_declarations: source_capabilities.declarations,
-            capability_trait_impls: source_capabilities.trait_impls,
-            capability_trait_impl_diagnostics: source_capabilities.trait_impl_diagnostics,
-        });
-    }
-    docs.sort_by(|left, right| left.crate_name.cmp(&right.crate_name));
-    docs
+fn tool_failure(operation: &str, identity: &str, output: &Output) -> String {
+    format!(
+        "{operation} failed for {identity} with status {}",
+        output.status
+    )
 }
 
 fn workspace_hidden_public_api(docs: &[DocumentedCrate]) -> InventorySnapshot {
@@ -1658,11 +1749,13 @@ impl HiddenPublicInventory {
 }
 
 // This syntax-level inventory supplies best-effort breadth beyond the
-// compiler-checked negative bounds on the enumerated minting traits. It has
-// targeted coverage for the source forms below, but it is not a replacement
-// for rustc name or module resolution. Macro and include expansion can escape
-// it. The primary boundary remains construction through private types, private
-// fields, sealed traits, and consumed capabilities.
+// compiler-checked negative bounds on the enumerated minting traits. Glob
+// resolution is bounded to parsed bindings and declared local modules; an impl
+// reached through an unresolved, ambiguous, or otherwise unmodelled glob fails
+// closed. This is not a replacement for rustc name or module resolution, and
+// macro or include expansion can escape it. The primary boundary remains
+// construction through private types, private fields, sealed traits, and
+// consumed capabilities.
 #[derive(Default)]
 struct SourceCapabilityInventory {
     declarations: BTreeMap<String, BTreeSet<String>>,
@@ -1671,6 +1764,14 @@ struct SourceCapabilityInventory {
 }
 
 fn source_capability_inventory(crate_name: &str, source: &Path) -> SourceCapabilityInventory {
+    source_capability_inventory_with_externals(crate_name, source, &BTreeSet::new())
+}
+
+fn source_capability_inventory_with_externals(
+    crate_name: &str,
+    source: &Path,
+    external_crates: &BTreeSet<String>,
+) -> SourceCapabilityInventory {
     let source_root = source
         .parent()
         .expect("library target source has a parent directory")
@@ -1678,6 +1779,7 @@ fn source_capability_inventory(crate_name: &str, source: &Path) -> SourceCapabil
     let mut scanner = CapabilitySourceScanner {
         crate_name,
         source_root,
+        external_crates,
         facts: SourceCapabilityFacts::default(),
         visited: BTreeMap::new(),
     };
@@ -1696,16 +1798,17 @@ fn source_capability_inventory_from_text(
     CapabilitySourceCollector {
         source: source_name.to_owned(),
         module_path: Vec::new(),
-        lexical_depth: 0,
+        lexical_scope: Vec::new(),
         facts: &mut facts,
     }
     .visit_file(&file);
-    finish_source_capability_inventory(crate_name, facts)
+    finish_source_capability_inventory(crate_name, facts, &BTreeSet::new())
 }
 
 struct CapabilitySourceScanner<'a> {
     crate_name: &'a str,
     source_root: PathBuf,
+    external_crates: &'a BTreeSet<String>,
     facts: SourceCapabilityFacts,
     visited: BTreeMap<PathBuf, Vec<String>>,
 }
@@ -1747,7 +1850,7 @@ impl CapabilitySourceScanner<'_> {
         CapabilitySourceCollector {
             source: logical_source.clone(),
             module_path: module_path.to_vec(),
-            lexical_depth: 0,
+            lexical_scope: Vec::new(),
             facts: &mut self.facts,
         }
         .visit_file(&file);
@@ -1768,7 +1871,7 @@ impl CapabilitySourceScanner<'_> {
     }
 
     fn finish(self) -> SourceCapabilityInventory {
-        finish_source_capability_inventory(self.crate_name, self.facts)
+        finish_source_capability_inventory(self.crate_name, self.facts, self.external_crates)
     }
 }
 
@@ -1852,6 +1955,7 @@ struct SourceAlias {
     fail_if_conditional: bool,
     fail_if_unresolved: bool,
     lexical_scope: bool,
+    visibility_scope: Vec<String>,
     source: String,
 }
 
@@ -1861,7 +1965,7 @@ struct SourceModuleAlias {
     target: SourcePath,
     declared_target: Option<Vec<String>>,
     visibility_scope: Vec<String>,
-    lexical_scope: bool,
+    lexical_scope: Vec<usize>,
 }
 
 #[derive(Clone)]
@@ -1870,7 +1974,7 @@ struct SourceGlob {
     target: SourcePath,
     conditional: bool,
     visibility_scope: Vec<String>,
-    lexical_scope: bool,
+    lexical_scope: Vec<usize>,
     source: String,
 }
 
@@ -1880,6 +1984,7 @@ struct SourceDeclaration {
     kind: &'static str,
     attributes: Vec<Attribute>,
     module_path: Vec<String>,
+    visibility_scope: Vec<String>,
     source: String,
 }
 
@@ -1887,6 +1992,7 @@ struct SourceDeclaration {
 struct SourceImpl {
     implementation: syn::ItemImpl,
     module_path: Vec<String>,
+    lexical_scope: Vec<usize>,
     source: String,
 }
 
@@ -1896,13 +2002,15 @@ struct SourceCapabilityFacts {
     declarations: Vec<SourceDeclaration>,
     globs: Vec<SourceGlob>,
     implementations: Vec<SourceImpl>,
+    module_paths: BTreeSet<Vec<String>>,
     module_aliases: Vec<SourceModuleAlias>,
+    next_lexical_scope: usize,
 }
 
 struct CapabilitySourceCollector<'a> {
     source: String,
     module_path: Vec<String>,
-    lexical_depth: usize,
+    lexical_scope: Vec<usize>,
     facts: &'a mut SourceCapabilityFacts,
 }
 
@@ -1912,12 +2020,14 @@ impl CapabilitySourceCollector<'_> {
         identity: &syn::Ident,
         kind: &'static str,
         attributes: &[Attribute],
+        visibility: &Visibility,
     ) {
         self.facts.declarations.push(SourceDeclaration {
             identity: identity.clone(),
             kind,
             attributes: attributes.to_vec(),
             module_path: self.module_path.clone(),
+            visibility_scope: visibility_scope(visibility, &self.module_path),
             source: self.source.clone(),
         });
     }
@@ -1926,6 +2036,7 @@ impl CapabilitySourceCollector<'_> {
         self.facts.implementations.push(SourceImpl {
             implementation: implementation.clone(),
             module_path: self.module_path.clone(),
+            lexical_scope: self.lexical_scope.clone(),
             source: self.source.clone(),
         });
     }
@@ -1950,7 +2061,8 @@ impl CapabilitySourceCollector<'_> {
             conditional: conditional_attributes(&alias.attrs),
             fail_if_conditional: true,
             fail_if_unresolved: true,
-            lexical_scope: self.lexical_depth > 0,
+            lexical_scope: !self.lexical_scope.is_empty(),
+            visibility_scope: visibility_scope(&alias.vis, &self.module_path),
             source: self.source.clone(),
         });
     }
@@ -1964,7 +2076,7 @@ impl CapabilitySourceCollector<'_> {
             &self.module_path,
             SourceUseContext {
                 conditional: conditional_attributes(&item.attrs),
-                lexical_scope: self.lexical_depth > 0,
+                lexical_scope: self.lexical_scope.clone(),
                 visibility_scope: visibility_scope(&item.vis, &self.module_path),
             },
             &self.source,
@@ -1975,22 +2087,22 @@ impl CapabilitySourceCollector<'_> {
 
 impl<'ast> Visit<'ast> for CapabilitySourceCollector<'_> {
     fn visit_item_struct(&mut self, item: &'ast syn::ItemStruct) {
-        self.record_declaration(&item.ident, "struct", &item.attrs);
+        self.record_declaration(&item.ident, "struct", &item.attrs, &item.vis);
         syn::visit::visit_item_struct(self, item);
     }
 
     fn visit_item_enum(&mut self, item: &'ast syn::ItemEnum) {
-        self.record_declaration(&item.ident, "enum", &item.attrs);
+        self.record_declaration(&item.ident, "enum", &item.attrs, &item.vis);
         syn::visit::visit_item_enum(self, item);
     }
 
     fn visit_item_union(&mut self, item: &'ast syn::ItemUnion) {
-        self.record_declaration(&item.ident, "union", &item.attrs);
+        self.record_declaration(&item.ident, "union", &item.attrs, &item.vis);
         syn::visit::visit_item_union(self, item);
     }
 
     fn visit_item_trait(&mut self, item: &'ast syn::ItemTrait) {
-        self.record_declaration(&item.ident, "trait", &item.attrs);
+        self.record_declaration(&item.ident, "trait", &item.attrs, &item.vis);
         syn::visit::visit_item_trait(self, item);
     }
 
@@ -2010,29 +2122,26 @@ impl<'ast> Visit<'ast> for CapabilitySourceCollector<'_> {
     }
 
     fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
-        if self.lexical_depth == 0 {
-            let module_name = ident_name(&item.ident);
-            let mut target = vec!["crate".to_owned()];
-            target.extend(self.module_path.iter().cloned());
-            target.push(module_name.clone());
-            self.facts.module_aliases.push(SourceModuleAlias {
-                binding: SourceBinding {
-                    module_path: self.module_path.clone(),
-                    name: module_name,
-                },
-                target: SourcePath {
-                    leading_colon: false,
-                    segments: target,
-                },
-                declared_target: Some({
-                    let mut path = self.module_path.clone();
-                    path.push(ident_name(&item.ident));
-                    path
-                }),
-                visibility_scope: visibility_scope(&item.vis, &self.module_path),
-                lexical_scope: false,
-            });
-        }
+        let module_name = ident_name(&item.ident);
+        let mut declared_path = self.module_path.clone();
+        declared_path.push(module_name.clone());
+        self.facts.module_paths.insert(declared_path.clone());
+        let mut target = vec!["crate".to_owned()];
+        target.extend(self.module_path.iter().cloned());
+        target.push(module_name.clone());
+        self.facts.module_aliases.push(SourceModuleAlias {
+            binding: SourceBinding {
+                module_path: self.module_path.clone(),
+                name: module_name,
+            },
+            target: SourcePath {
+                leading_colon: false,
+                segments: target,
+            },
+            declared_target: Some(declared_path),
+            visibility_scope: visibility_scope(&item.vis, &self.module_path),
+            lexical_scope: self.lexical_scope.clone(),
+        });
         let Some((_, items)) = &item.content else {
             return;
         };
@@ -2044,9 +2153,11 @@ impl<'ast> Visit<'ast> for CapabilitySourceCollector<'_> {
     }
 
     fn visit_block(&mut self, block: &'ast syn::Block) {
-        self.lexical_depth += 1;
+        let scope = self.facts.next_lexical_scope;
+        self.facts.next_lexical_scope += 1;
+        self.lexical_scope.push(scope);
         syn::visit::visit_block(self, block);
-        self.lexical_depth -= 1;
+        self.lexical_scope.pop();
     }
 }
 
@@ -2075,7 +2186,7 @@ fn visibility_scope(visibility: &Visibility, module_path: &[String]) -> Vec<Stri
 #[derive(Clone)]
 struct SourceUseContext {
     conditional: bool,
-    lexical_scope: bool,
+    lexical_scope: Vec<usize>,
     visibility_scope: Vec<String>,
 }
 
@@ -2125,7 +2236,7 @@ fn collect_use_bindings(
                 },
                 declared_target: None,
                 visibility_scope: context.visibility_scope.clone(),
-                lexical_scope: context.lexical_scope,
+                lexical_scope: context.lexical_scope.clone(),
             });
             if imported_name == "self" {
                 return;
@@ -2143,7 +2254,8 @@ fn collect_use_bindings(
                 conditional: context.conditional,
                 fail_if_conditional: false,
                 fail_if_unresolved: false,
-                lexical_scope: context.lexical_scope,
+                lexical_scope: !context.lexical_scope.is_empty(),
+                visibility_scope: context.visibility_scope.clone(),
                 source: source.to_owned(),
             });
         }
@@ -2166,7 +2278,7 @@ fn collect_use_bindings(
                 target: target.clone(),
                 declared_target: None,
                 visibility_scope: context.visibility_scope.clone(),
-                lexical_scope: context.lexical_scope,
+                lexical_scope: context.lexical_scope.clone(),
             });
             if ident_name(&rename.ident) == "self" {
                 return;
@@ -2178,7 +2290,8 @@ fn collect_use_bindings(
                 conditional: context.conditional,
                 fail_if_conditional: true,
                 fail_if_unresolved: true,
-                lexical_scope: context.lexical_scope,
+                lexical_scope: !context.lexical_scope.is_empty(),
+                visibility_scope: context.visibility_scope.clone(),
                 source: source.to_owned(),
             });
         }
@@ -2218,9 +2331,11 @@ fn conditional_attributes(attributes: &[Attribute]) -> bool {
 fn finish_source_capability_inventory(
     crate_name: &str,
     facts: SourceCapabilityFacts,
+    external_crates: &BTreeSet<String>,
 ) -> SourceCapabilityInventory {
     let mut inventory = SourceCapabilityInventory::default();
     let mut resolved = BTreeMap::<SourceBinding, String>::new();
+    let mut capability_visibility = BTreeMap::<SourceBinding, BTreeSet<Vec<String>>>::new();
     for declaration in &facts.declarations {
         let identity = ident_name(&declaration.identity);
         if !CAPABILITY_TYPE_IDENTITIES.contains(&identity.as_str()) {
@@ -2244,16 +2359,60 @@ fn finish_source_capability_inventory(
                 display_binding(&binding)
             );
         }
+        capability_visibility
+            .entry(binding)
+            .or_default()
+            .insert(declaration.visibility_scope.clone());
         record_capability_derives(crate_name, declaration, &mut inventory);
     }
 
+    let resolved_module_aliases = resolve_module_aliases_to_fixed_point(
+        &facts.module_aliases,
+        &facts.globs,
+        &facts.module_paths,
+        external_crates,
+        crate_name,
+    );
     let alias_bindings = facts
         .aliases
         .iter()
         .map(|alias| alias.binding.clone())
         .collect::<BTreeSet<_>>();
-    let mut unresolved_globs = BTreeSet::new();
-    loop {
+    let explicit_names = facts
+        .declarations
+        .iter()
+        .map(|declaration| SourceBinding {
+            module_path: declaration.module_path.clone(),
+            name: ident_name(&declaration.identity),
+        })
+        .chain(facts.aliases.iter().map(|alias| alias.binding.clone()))
+        .chain(
+            facts
+                .module_aliases
+                .iter()
+                .filter(|alias| alias.lexical_scope.is_empty())
+                .map(|alias| alias.binding.clone()),
+        )
+        .collect::<BTreeSet<_>>();
+    let capability_binding_universe = explicit_names.len()
+        + facts
+            .globs
+            .iter()
+            .filter(|glob| glob.lexical_scope.is_empty())
+            .count()
+            * explicit_names.len()
+        + 1;
+    let capability_visibility_universe = facts
+        .aliases
+        .iter()
+        .map(|alias| alias.visibility_scope.clone())
+        .chain(facts.globs.iter().map(|glob| glob.visibility_scope.clone()))
+        .collect::<BTreeSet<_>>()
+        .len()
+        .max(1);
+    let capability_binding_budget =
+        capability_binding_universe * (capability_visibility_universe + 1);
+    for iteration in 0..=capability_binding_budget {
         let mut changed = false;
         for alias in &facts.aliases {
             let Some(identity) = resolve_alias_target(
@@ -2293,19 +2452,52 @@ fn finish_source_capability_inventory(
             }
             changed |=
                 insert_resolved_binding(&mut resolved, &alias.binding, &identity, &alias.source);
+            changed |= capability_visibility
+                .entry(alias.binding.clone())
+                .or_default()
+                .insert(alias.visibility_scope.clone());
         }
-        for glob in &facts.globs {
-            let Some(target_module) =
-                resolve_module_path(&glob.target, &glob.module_path, crate_name)
-            else {
-                unresolved_globs.insert(glob.module_path.clone());
+        for glob in facts
+            .globs
+            .iter()
+            .filter(|glob| glob.lexical_scope.is_empty())
+        {
+            let target = resolve_module_alias_target(
+                &glob.target,
+                &glob.module_path,
+                crate_name,
+                &resolved_module_aliases.modules,
+                &resolved_module_aliases.binding_universe,
+                &resolved_module_aliases.known_modules,
+                &resolved_module_aliases.external_crates,
+                &resolved_module_aliases.tainted_bindings,
+            );
+            if target.unresolved
+                || target.tainted
+                || target.modules.len() != 1
+                || target
+                    .modules
+                    .iter()
+                    .any(|module| resolved_module_aliases.tainted_modules.contains(module))
+            {
                 continue;
-            };
-            let imported = resolved
-                .iter()
-                .filter(|(binding, _)| binding.module_path == target_module)
-                .map(|(binding, identity)| (binding.name.clone(), identity.clone()))
-                .collect::<Vec<_>>();
+            }
+            let mut imported = Vec::new();
+            for target_module in &target.modules {
+                for (binding, identity) in &resolved {
+                    if &binding.module_path != target_module {
+                        continue;
+                    }
+                    let visible = capability_visibility.get(binding).is_some_and(|scopes| {
+                        scopes
+                            .iter()
+                            .any(|scope| glob.module_path.starts_with(scope))
+                    });
+                    if visible {
+                        imported.push((binding.name.clone(), identity.clone()));
+                    }
+                }
+            }
             if imported.is_empty() {
                 continue;
             }
@@ -2321,47 +2513,77 @@ fn finish_source_capability_inventory(
                     module_path: glob.module_path.clone(),
                     name,
                 };
+                if explicit_names.contains(&binding) {
+                    continue;
+                }
                 changed |=
                     insert_resolved_binding(&mut resolved, &binding, &identity, &glob.source);
+                changed |= capability_visibility
+                    .entry(binding)
+                    .or_default()
+                    .insert(glob.visibility_scope.clone());
             }
         }
         if !changed {
             break;
         }
+        assert!(
+            iteration < capability_binding_budget,
+            "capability glob propagation exceeded its finite binding budget"
+        );
     }
-    let resolved_module_aliases =
-        resolve_module_aliases_to_fixed_point(&facts.module_aliases, &facts.globs, crate_name);
     let mut module_alias_bindings = facts
         .module_aliases
         .iter()
         .filter(|alias| {
-            if alias.lexical_scope {
+            if !alias.lexical_scope.is_empty() {
                 return true;
             }
+            if resolved_module_aliases
+                .external_bindings
+                .contains(&alias.binding)
+            {
+                return false;
+            }
             resolved_module_aliases
+                .modules
                 .get(&alias.binding)
                 .is_none_or(|target_modules| {
-                    target_modules.len() != 1
+                    resolved_module_aliases
+                        .tainted_bindings
+                        .contains(&alias.binding)
+                        || target_modules.len() != 1
                         || target_modules.iter().any(|target_module| {
                             resolved
                                 .keys()
-                                .any(|binding| binding.module_path == *target_module)
+                                .any(|binding| binding.module_path.starts_with(target_module))
+                                || resolved_module_aliases
+                                    .tainted_modules
+                                    .iter()
+                                    .any(|module| module.starts_with(target_module))
                         })
                 })
         })
         .map(|alias| alias.binding.clone())
         .collect::<BTreeSet<_>>();
-    module_alias_bindings.extend(resolved_module_aliases.iter().filter_map(
+    module_alias_bindings.extend(resolved_module_aliases.modules.iter().filter_map(
         |(binding, target_modules)| {
-            (target_modules.len() != 1
-                || target_modules.iter().any(|target_module| {
-                    resolved
-                        .keys()
-                        .any(|capability| capability.module_path == *target_module)
-                }))
+            (!resolved_module_aliases.external_bindings.contains(binding)
+                && (resolved_module_aliases.tainted_bindings.contains(binding)
+                    || target_modules.len() != 1
+                    || target_modules.iter().any(|target_module| {
+                        resolved
+                            .keys()
+                            .any(|capability| capability.module_path.starts_with(target_module))
+                            || resolved_module_aliases
+                                .tainted_modules
+                                .iter()
+                                .any(|module| module.starts_with(target_module))
+                    })))
             .then_some(binding.clone())
         },
     ));
+    module_alias_bindings.extend(resolved_module_aliases.tainted_bindings.iter().cloned());
     let noncapability_aliases =
         resolve_noncapability_aliases(&facts.aliases, crate_name, &resolved, &alias_bindings);
     let fail_closed_alias_bindings = facts
@@ -2414,7 +2636,14 @@ fn finish_source_capability_inventory(
                 type_aliases: &fail_closed_alias_bindings,
                 module_aliases: &module_alias_bindings,
             },
-            unresolved_globs.contains(&implementation.module_path),
+            &capability_visibility,
+            &resolved_module_aliases,
+            &facts.module_aliases,
+            &facts.globs,
+            &implementation.lexical_scope,
+            resolved_module_aliases
+                .tainted_modules
+                .contains(&implementation.module_path),
             &implementation.source,
         );
         let Some(identity) = identity else {
@@ -2713,27 +2942,65 @@ fn resolve_module_path(
     }
 }
 
+struct ResolvedModuleAliases {
+    modules: BTreeMap<SourceBinding, BTreeSet<Vec<String>>>,
+    visibility_scopes: BTreeMap<SourceBinding, BTreeSet<Vec<String>>>,
+    external_bindings: BTreeSet<SourceBinding>,
+    tainted_bindings: BTreeSet<SourceBinding>,
+    tainted_modules: BTreeSet<Vec<String>>,
+    binding_universe: BTreeSet<SourceBinding>,
+    known_modules: BTreeSet<Vec<String>>,
+    external_crates: BTreeSet<String>,
+}
+
 fn resolve_module_aliases_to_fixed_point(
     aliases: &[SourceModuleAlias],
     globs: &[SourceGlob],
+    declared_modules: &BTreeSet<Vec<String>>,
+    external_crates: &BTreeSet<String>,
     crate_name: &str,
-) -> BTreeMap<SourceBinding, BTreeSet<Vec<String>>> {
+) -> ResolvedModuleAliases {
+    let aliases = aliases
+        .iter()
+        .filter(|alias| alias.lexical_scope.is_empty())
+        .collect::<Vec<_>>();
+    let globs = globs
+        .iter()
+        .filter(|glob| glob.lexical_scope.is_empty())
+        .collect::<Vec<_>>();
     let declared_alias_bindings = aliases
         .iter()
         .map(|alias| alias.binding.clone())
         .collect::<BTreeSet<_>>();
+    let alias_names = declared_alias_bindings
+        .iter()
+        .map(|binding| binding.name.clone())
+        .collect::<BTreeSet<_>>();
+    let mut binding_universe = declared_alias_bindings.clone();
+    for glob in &globs {
+        for name in &alias_names {
+            binding_universe.insert(SourceBinding {
+                module_path: glob.module_path.clone(),
+                name: name.clone(),
+            });
+        }
+    }
+    let mut known_modules = declared_modules.clone();
+    known_modules.insert(Vec::new());
     let mut resolved = BTreeMap::<SourceBinding, BTreeSet<Vec<String>>>::new();
     let mut visibility_scopes = BTreeMap::<SourceBinding, BTreeSet<Vec<String>>>::new();
-    loop {
-        let mut next = BTreeMap::<SourceBinding, BTreeSet<Vec<String>>>::new();
-        let mut next_visibility_scopes = BTreeMap::<SourceBinding, BTreeSet<Vec<String>>>::new();
-        let mut unresolved = BTreeSet::new();
-        let alias_bindings = declared_alias_bindings
-            .iter()
-            .chain(resolved.keys())
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        for alias in aliases {
+    let visibility_universe = aliases
+        .iter()
+        .map(|alias| alias.visibility_scope.clone())
+        .chain(globs.iter().map(|glob| glob.visibility_scope.clone()))
+        .collect::<BTreeSet<_>>();
+    let target_budget = binding_universe.len() * known_modules.len().max(1);
+    let visibility_budget = binding_universe.len() * visibility_universe.len().max(1);
+    let convergence_budget = target_budget + visibility_budget + 1;
+    for iteration in 0..=convergence_budget {
+        let mut next = resolved.clone();
+        let mut next_visibility_scopes = visibility_scopes.clone();
+        for alias in &aliases {
             let target = alias.declared_target.as_ref().map_or_else(
                 || {
                     resolve_module_alias_target(
@@ -2741,18 +3008,23 @@ fn resolve_module_aliases_to_fixed_point(
                         &alias.binding.module_path,
                         crate_name,
                         &resolved,
-                        &alias_bindings,
+                        &binding_universe,
+                        &known_modules,
+                        external_crates,
+                        &BTreeSet::new(),
                     )
                 },
                 |target| ModuleAliasTarget {
-                    modules: [target.clone()].into_iter().collect(),
-                    unresolved: false,
+                    modules: known_modules
+                        .contains(target)
+                        .then(|| target.clone())
+                        .into_iter()
+                        .collect(),
+                    unresolved: !known_modules.contains(target),
+                    tainted: false,
+                    external: false,
                 },
             );
-            if target.unresolved {
-                unresolved.insert(alias.binding.clone());
-                continue;
-            }
             next.entry(alias.binding.clone())
                 .or_default()
                 .extend(target.modules);
@@ -2761,20 +3033,17 @@ fn resolve_module_aliases_to_fixed_point(
                 .or_default()
                 .insert(alias.visibility_scope.clone());
         }
-        next.retain(|binding, modules| !unresolved.contains(binding) && !modules.is_empty());
-        next_visibility_scopes.retain(|binding, _| next.contains_key(binding));
-
-        for glob in globs.iter().filter(|glob| !glob.lexical_scope) {
+        for glob in &globs {
             let target = resolve_module_alias_target(
                 &glob.target,
                 &glob.module_path,
                 crate_name,
                 &resolved,
-                &alias_bindings,
+                &binding_universe,
+                &known_modules,
+                external_crates,
+                &BTreeSet::new(),
             );
-            if target.unresolved {
-                continue;
-            }
             for target_module in target.modules {
                 for (source_binding, target_modules) in &resolved {
                     if source_binding.module_path != target_module {
@@ -2792,6 +3061,9 @@ fn resolve_module_aliases_to_fixed_point(
                         module_path: glob.module_path.clone(),
                         name: source_binding.name.clone(),
                     };
+                    if declared_alias_bindings.contains(&imported) {
+                        continue;
+                    }
                     next.entry(imported.clone())
                         .or_default()
                         .extend(target_modules.iter().cloned());
@@ -2802,26 +3074,164 @@ fn resolve_module_aliases_to_fixed_point(
                 }
             }
         }
-
         if next == resolved && next_visibility_scopes == visibility_scopes {
-            return resolved;
+            break;
         }
+        assert!(
+            iteration < convergence_budget,
+            "module alias resolution exceeded its finite binding and module target budget"
+        );
         resolved = next;
         visibility_scopes = next_visibility_scopes;
+    }
+
+    let taint_budget = binding_universe.len() + known_modules.len() + 1;
+    let mut external_bindings = BTreeSet::new();
+    for alias in &aliases {
+        if alias.declared_target.is_some() {
+            continue;
+        }
+        let target = resolve_module_alias_target(
+            &alias.target,
+            &alias.binding.module_path,
+            crate_name,
+            &resolved,
+            &binding_universe,
+            &known_modules,
+            external_crates,
+            &BTreeSet::new(),
+        );
+        if target.external {
+            external_bindings.insert(alias.binding.clone());
+        }
+    }
+    let mut tainted_bindings = BTreeSet::new();
+    let mut tainted_modules = BTreeSet::new();
+    for iteration in 0..=taint_budget {
+        let mut next_bindings = tainted_bindings.clone();
+        let mut next_modules = tainted_modules.clone();
+        for alias in &aliases {
+            let target = alias.declared_target.as_ref().map_or_else(
+                || {
+                    resolve_module_alias_target(
+                        &alias.target,
+                        &alias.binding.module_path,
+                        crate_name,
+                        &resolved,
+                        &binding_universe,
+                        &known_modules,
+                        external_crates,
+                        &tainted_bindings,
+                    )
+                },
+                |target| ModuleAliasTarget {
+                    modules: known_modules
+                        .contains(target)
+                        .then(|| target.clone())
+                        .into_iter()
+                        .collect(),
+                    unresolved: !known_modules.contains(target),
+                    tainted: false,
+                    external: false,
+                },
+            );
+            if !target.external
+                && (target.unresolved || target.tainted || target.modules.len() != 1)
+            {
+                next_bindings.insert(alias.binding.clone());
+            }
+        }
+        for glob in &globs {
+            let target = resolve_module_alias_target(
+                &glob.target,
+                &glob.module_path,
+                crate_name,
+                &resolved,
+                &binding_universe,
+                &known_modules,
+                external_crates,
+                &tainted_bindings,
+            );
+            let target_tainted = target
+                .modules
+                .iter()
+                .any(|module| tainted_modules.contains(module));
+            if !target.external
+                && (target.unresolved
+                    || target.tainted
+                    || target.modules.len() != 1
+                    || target_tainted)
+            {
+                next_modules.insert(glob.module_path.clone());
+            }
+            for target_module in &target.modules {
+                for source_binding in &binding_universe {
+                    if &source_binding.module_path != target_module {
+                        continue;
+                    }
+                    let visible = visibility_scopes.get(source_binding).is_some_and(|scopes| {
+                        scopes
+                            .iter()
+                            .any(|scope| glob.module_path.starts_with(scope))
+                    });
+                    if !visible {
+                        continue;
+                    }
+                    let imported = SourceBinding {
+                        module_path: glob.module_path.clone(),
+                        name: source_binding.name.clone(),
+                    };
+                    if declared_alias_bindings.contains(&imported) {
+                        continue;
+                    }
+                    if tainted_bindings.contains(source_binding)
+                        || tainted_modules.contains(target_module)
+                    {
+                        next_bindings.insert(imported);
+                    }
+                }
+            }
+        }
+        if next_bindings == tainted_bindings && next_modules == tainted_modules {
+            break;
+        }
+        assert!(
+            iteration < taint_budget,
+            "module alias taint propagation exceeded its finite binding and module budget"
+        );
+        tainted_bindings = next_bindings;
+        tainted_modules = next_modules;
+    }
+
+    ResolvedModuleAliases {
+        modules: resolved,
+        visibility_scopes,
+        external_bindings,
+        tainted_bindings,
+        tainted_modules,
+        binding_universe,
+        known_modules,
+        external_crates: external_crates.clone(),
     }
 }
 
 struct ModuleAliasTarget {
     modules: BTreeSet<Vec<String>>,
     unresolved: bool,
+    tainted: bool,
+    external: bool,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn resolve_module_alias_target(
     path: &SourcePath,
     module_path: &[String],
     crate_name: &str,
     resolved_aliases: &BTreeMap<SourceBinding, BTreeSet<Vec<String>>>,
     alias_bindings: &BTreeSet<SourceBinding>,
+    known_modules: &BTreeSet<Vec<String>>,
+    external_crates: &BTreeSet<String>,
+    tainted_bindings: &BTreeSet<SourceBinding>,
 ) -> ModuleAliasTarget {
     for end in (1..=path.segments.len()).rev() {
         let prefix = SourcePath {
@@ -2838,7 +3248,9 @@ fn resolve_module_alias_target(
         let suffix = &path.segments[end..];
         let mut modules = BTreeSet::new();
         let mut unresolved = candidates.len() != 1;
+        let mut tainted = false;
         for candidate in candidates {
+            tainted |= tainted_bindings.contains(&candidate);
             let Some(targets) = resolved_aliases.get(&candidate) else {
                 unresolved = true;
                 continue;
@@ -2846,19 +3258,43 @@ fn resolve_module_alias_target(
             for target in targets {
                 let mut expanded = target.clone();
                 expanded.extend_from_slice(suffix);
-                modules.insert(expanded);
+                if known_modules.contains(&expanded) {
+                    modules.insert(expanded);
+                } else {
+                    unresolved = true;
+                }
             }
         }
         return ModuleAliasTarget {
             modules,
             unresolved,
+            tainted,
+            external: false,
         };
     }
+    let external = path.segments.first().is_some_and(|root| {
+        !matches!(root.as_str(), "crate" | "self" | "super") && external_crates.contains(root)
+    });
+    if external {
+        return ModuleAliasTarget {
+            modules: BTreeSet::new(),
+            unresolved: false,
+            tainted: false,
+            external: true,
+        };
+    }
+    let direct = resolve_module_path(path, module_path, crate_name);
+    let unresolved = direct
+        .as_ref()
+        .is_none_or(|target| !known_modules.contains(target));
     ModuleAliasTarget {
-        modules: resolve_module_path(path, module_path, crate_name)
+        modules: direct
             .into_iter()
+            .filter(|target| known_modules.contains(target))
             .collect(),
-        unresolved: false,
+        unresolved,
+        tainted: false,
+        external: false,
     }
 }
 
@@ -2868,12 +3304,18 @@ struct SourceAliasBindings<'a> {
     module_aliases: &'a BTreeSet<SourceBinding>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn resolve_impl_self_type(
     ty: &syn::Type,
     module_path: &[String],
     crate_name: &str,
     resolved: &BTreeMap<SourceBinding, String>,
     aliases: SourceAliasBindings<'_>,
+    capability_visibility: &BTreeMap<SourceBinding, BTreeSet<Vec<String>>>,
+    module_aliases: &ResolvedModuleAliases,
+    source_module_aliases: &[SourceModuleAlias],
+    globs: &[SourceGlob],
+    lexical_scope: &[usize],
     unresolved_glob: bool,
     source: &str,
 ) -> Option<String> {
@@ -2884,6 +3326,11 @@ fn resolve_impl_self_type(
             crate_name,
             resolved,
             aliases,
+            capability_visibility,
+            module_aliases,
+            source_module_aliases,
+            globs,
+            lexical_scope,
             unresolved_glob,
             source,
         ),
@@ -2893,11 +3340,30 @@ fn resolve_impl_self_type(
             crate_name,
             resolved,
             aliases,
+            capability_visibility,
+            module_aliases,
+            source_module_aliases,
+            globs,
+            lexical_scope,
             unresolved_glob,
             source,
         ),
         syn::Type::Path(path) if path.qself.is_none() => {
             let path = source_path(&path.path);
+            if let Some(identity) = resolve_lexical_glob_self_type(
+                &path,
+                module_path,
+                crate_name,
+                resolved,
+                capability_visibility,
+                module_aliases,
+                source_module_aliases,
+                globs,
+                lexical_scope,
+                source,
+            ) {
+                return Some(identity);
+            }
             if let Some(alias) =
                 module_alias_in_path(&path, module_path, crate_name, aliases.module_aliases)
             {
@@ -2955,6 +3421,230 @@ fn resolve_impl_self_type(
             None
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn resolve_lexical_glob_self_type(
+    path: &SourcePath,
+    module_path: &[String],
+    crate_name: &str,
+    resolved: &BTreeMap<SourceBinding, String>,
+    capability_visibility: &BTreeMap<SourceBinding, BTreeSet<Vec<String>>>,
+    module_aliases: &ResolvedModuleAliases,
+    source_module_aliases: &[SourceModuleAlias],
+    globs: &[SourceGlob],
+    lexical_scope: &[usize],
+    source: &str,
+) -> Option<String> {
+    let visible_globs = globs
+        .iter()
+        .filter(|glob| {
+            !glob.lexical_scope.is_empty()
+                && glob.module_path == module_path
+                && lexical_scope.starts_with(&glob.lexical_scope)
+        })
+        .collect::<Vec<_>>();
+    if visible_globs.is_empty() {
+        return None;
+    }
+
+    let mut identities = BTreeSet::new();
+    let mut module_targets = BTreeSet::new();
+    let imported_name = path.segments.first();
+    for glob in visible_globs {
+        let target = resolve_lexical_module_alias_target(
+            &glob.target,
+            &glob.module_path,
+            crate_name,
+            lexical_scope,
+            source_module_aliases,
+            &module_aliases.known_modules,
+        )
+        .unwrap_or_else(|| {
+            resolve_module_alias_target(
+                &glob.target,
+                &glob.module_path,
+                crate_name,
+                &module_aliases.modules,
+                &module_aliases.binding_universe,
+                &module_aliases.known_modules,
+                &module_aliases.external_crates,
+                &module_aliases.tainted_bindings,
+            )
+        });
+        if target.unresolved
+            || target.tainted
+            || target.modules.len() != 1
+            || target
+                .modules
+                .iter()
+                .any(|module| module_aliases.tainted_modules.contains(module))
+        {
+            panic!(
+                "cannot classify impl self type {} in {source} because a block-local glob \
+                 target is unresolved or ambiguous; capability trait inventory fails closed",
+                display_source_path(path)
+            );
+        }
+        for target_module in &target.modules {
+            if path.segments.len() == 1 {
+                for (binding, identity) in resolved {
+                    if &binding.module_path != target_module || Some(&binding.name) != imported_name
+                    {
+                        continue;
+                    }
+                    let visible = capability_visibility.get(binding).is_some_and(|scopes| {
+                        scopes.iter().any(|scope| module_path.starts_with(scope))
+                    });
+                    if visible {
+                        identities.insert(identity.clone());
+                    }
+                }
+                continue;
+            }
+            let Some(imported_name) = imported_name else {
+                continue;
+            };
+            let source_binding = SourceBinding {
+                module_path: target_module.clone(),
+                name: imported_name.clone(),
+            };
+            let lexical_children = source_module_aliases
+                .iter()
+                .filter(|alias| {
+                    !alias.lexical_scope.is_empty()
+                        && lexical_scope.starts_with(&alias.lexical_scope)
+                        && alias.binding == source_binding
+                })
+                .collect::<Vec<_>>();
+            assert!(
+                lexical_children.len() <= 1,
+                "block-local glob module alias {} is ambiguous in impl self type {} in \
+                 {source}; capability trait inventory fails closed",
+                imported_name,
+                display_source_path(path)
+            );
+            let lexical_child = lexical_children.first().copied();
+            let target_modules = lexical_child
+                .and_then(|alias| alias.declared_target.clone())
+                .map(|child| [child].into_iter().collect())
+                .or_else(|| module_aliases.modules.get(&source_binding).cloned());
+            let Some(target_modules) = target_modules else {
+                if lexical_child.is_some() {
+                    panic!(
+                        "cannot resolve block-local glob module alias {} in impl self type {} in \
+                         {source}; capability trait inventory fails closed",
+                        imported_name,
+                        display_source_path(path)
+                    );
+                }
+                continue;
+            };
+            let visible = lexical_child.is_some()
+                || module_aliases
+                    .visibility_scopes
+                    .get(&source_binding)
+                    .is_some_and(|scopes| {
+                        scopes.iter().any(|scope| module_path.starts_with(scope))
+                    });
+            if !visible {
+                continue;
+            }
+            if module_aliases.tainted_bindings.contains(&source_binding)
+                || target_modules.len() != 1
+                || target_modules.iter().any(|target_module| {
+                    resolved
+                        .keys()
+                        .any(|capability| capability.module_path.starts_with(target_module))
+                        || module_aliases
+                            .tainted_modules
+                            .iter()
+                            .any(|module| module.starts_with(target_module))
+                })
+            {
+                panic!(
+                    "cannot resolve block-local glob module alias {} in impl self type {} in \
+                     {source}; capability trait inventory fails closed",
+                    imported_name,
+                    display_source_path(path)
+                );
+            }
+            module_targets.extend(target_modules.iter().cloned());
+        }
+    }
+    assert!(
+        identities.len() <= 1,
+        "block-local glob imports make impl self type {} ambiguous in {source}; capability \
+         trait inventory fails closed",
+        display_source_path(path)
+    );
+    if let Some(identity) = identities.into_iter().next() {
+        return Some(identity);
+    }
+    assert!(
+        module_targets.len() <= 1,
+        "block-local glob imports make module alias {} ambiguous in impl self type {} in \
+         {source}; capability trait inventory fails closed",
+        imported_name.map_or("<unknown>", String::as_str),
+        display_source_path(path)
+    );
+    None
+}
+
+fn resolve_lexical_module_alias_target(
+    path: &SourcePath,
+    module_path: &[String],
+    crate_name: &str,
+    lexical_scope: &[usize],
+    aliases: &[SourceModuleAlias],
+    known_modules: &BTreeSet<Vec<String>>,
+) -> Option<ModuleAliasTarget> {
+    for end in (1..=path.segments.len()).rev() {
+        let prefix = SourcePath {
+            leading_colon: path.leading_colon,
+            segments: path.segments[..end].to_vec(),
+        };
+        let candidates = binding_candidates(&prefix, module_path, crate_name)
+            .into_iter()
+            .flat_map(|binding| {
+                aliases.iter().filter(move |alias| {
+                    !alias.lexical_scope.is_empty()
+                        && lexical_scope.starts_with(&alias.lexical_scope)
+                        && alias.binding == binding
+                })
+            })
+            .collect::<Vec<_>>();
+        if candidates.is_empty() {
+            continue;
+        }
+        if candidates.len() != 1 {
+            return Some(ModuleAliasTarget {
+                modules: BTreeSet::new(),
+                unresolved: true,
+                tainted: true,
+                external: false,
+            });
+        }
+        let suffix = &path.segments[end..];
+        let Some(target) = candidates[0].declared_target.as_ref() else {
+            return Some(ModuleAliasTarget {
+                modules: BTreeSet::new(),
+                unresolved: true,
+                tainted: true,
+                external: false,
+            });
+        };
+        let mut expanded = target.clone();
+        expanded.extend_from_slice(suffix);
+        let known = known_modules.contains(&expanded);
+        return Some(ModuleAliasTarget {
+            modules: known.then_some(expanded).into_iter().collect(),
+            unresolved: !known,
+            tainted: false,
+            external: false,
+        });
+    }
+    None
 }
 
 fn module_alias_in_path(
@@ -3632,11 +4322,10 @@ fn dependency_order(mut packages: BTreeMap<String, RenderPackage>) -> Vec<(Strin
 
 fn validate_documented_crate(crate_name: &str, root: &Path) -> Result<Vec<AdvertisedItem>, String> {
     let all_path = root.join("all.html");
-    let all = fs::read_to_string(&all_path).map_err(|error| {
+    let all = fs::read_to_string(&all_path).map_err(|_| {
         format!(
-            "rustdoc output for {crate_name} is incomplete: cannot read {}: \
-             {error}. This is a doc-build problem.",
-            all_path.display()
+            "rustdoc output for {crate_name} is incomplete: cannot read the crate-relative \
+             all-items index. This is a doc-build problem."
         )
     })?;
     let marker = "<li><a href=\"";
@@ -3651,14 +4340,16 @@ fn validate_documented_crate(crate_name: &str, root: &Path) -> Result<Vec<Advert
         })?;
         let (_, rest) = rest.split_once('>').ok_or_else(|| {
             format!(
-                "rustdoc output for {crate_name} has malformed all-items link {href:?}. \
-                 This is a doc-build problem."
+                "rustdoc output for {crate_name} has a malformed all-items link at entry {}. \
+                 This is a doc-build problem.",
+                index + 1
             )
         })?;
         let (name, _) = rest.split_once("</a>").ok_or_else(|| {
             format!(
                 "rustdoc output for {crate_name} has malformed all-items label for \
-                 {href:?}. This is a doc-build problem."
+                 entry {}. This is a doc-build problem.",
+                index + 1
             )
         })?;
         if href.starts_with('#') {
@@ -3670,23 +4361,22 @@ fn validate_documented_crate(crate_name: &str, root: &Path) -> Result<Vec<Advert
         {
             return Err(format!(
                 "rustdoc output for {crate_name} advertises invalid item path \
-                 {href:?}. This is a doc-build problem."
+                 at entry {}. This is a doc-build problem.",
+                index + 1
             ));
         }
         let symbol = format!("{crate_name}::{name}");
         let path = root.join(href);
-        let html = fs::read_to_string(&path).map_err(|error| {
+        let html = fs::read_to_string(&path).map_err(|_| {
             format!(
                 "rustdoc output is incomplete: advertised item {symbol} has no \
-                 readable page at {}: {error}. This is a doc-build problem.",
-                path.display()
+                 readable crate-relative page. This is a doc-build problem."
             )
         })?;
         if item_declaration(&html).is_none() {
             return Err(format!(
                 "rustdoc output is incomplete: advertised item {symbol} could not \
-                 be parsed from {}. This is a doc-build problem.",
-                path.display()
+                 be parsed from its crate-relative page. This is a doc-build problem."
             ));
         }
         advertised.push(AdvertisedItem {
@@ -3696,9 +4386,8 @@ fn validate_documented_crate(crate_name: &str, root: &Path) -> Result<Vec<Advert
     }
     if advertised.is_empty() {
         return Err(format!(
-            "rustdoc output for {crate_name} advertises no items in {}. This is \
-             a doc-build problem.",
-            all_path.display()
+            "rustdoc output for {crate_name} advertises no items in its crate-relative \
+             all-items index. This is a doc-build problem."
         ));
     }
     Ok(advertised)
@@ -4043,12 +4732,8 @@ fn is_type_page(path: &Path) -> bool {
 }
 
 fn canonical_path(path: &Path) -> PathBuf {
-    let mut identity = fs::canonicalize(path).unwrap_or_else(|error| {
-        panic!(
-            "canonicalize rustdoc type identity {}: {error}",
-            path.display()
-        )
-    });
+    let mut identity =
+        fs::canonicalize(path).unwrap_or_else(|_| panic!("canonicalize rustdoc type identity"));
     for _ in 0..4 {
         let html = fs::read_to_string(&identity).expect("read rustdoc identity page");
         let Some(url) = html

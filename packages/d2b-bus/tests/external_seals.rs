@@ -30,8 +30,8 @@ fn dependent_cannot_forge_registration_or_mint_admitted_session() {
         .expect("run downstream From compile-pass fixture");
     assert!(
         output.status.success(),
-        "downstream local-input From impl did not compile:\n{}",
-        String::from_utf8_lossy(&output.stderr)
+        "downstream local-input From impl did not compile; Cargo status {}",
+        output.status
     );
 
     for (test, expected) in [
@@ -86,7 +86,8 @@ fn dependent_cannot_forge_registration_or_mint_admitted_session() {
         for diagnostic in expected {
             assert!(
                 stderr.contains(diagnostic),
-                "{test} did not produce {diagnostic:?}:\n{stderr}"
+                "{test} did not produce required compiler diagnostic {diagnostic:?}; \
+                 raw Cargo stderr is redacted"
             );
         }
     }
@@ -147,7 +148,8 @@ fn dependent_cannot_forge_registration_or_mint_admitted_session() {
         ] {
             assert!(
                 stderr.contains(diagnostic),
-                "{mutation} did not produce {diagnostic:?}:\n{stderr}"
+                "{mutation} did not produce required compiler diagnostic {diagnostic:?}; \
+                 raw Cargo stderr is redacted"
             );
         }
     }

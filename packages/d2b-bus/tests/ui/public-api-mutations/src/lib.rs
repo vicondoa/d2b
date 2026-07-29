@@ -19,6 +19,15 @@ mod noncapability_plain_self_module_alias;
 #[path = "../trait-impl-noncapability-chained-reexport-module.rs"]
 mod noncapability_chained_reexport_module_alias;
 
+#[path = "../trait-impl-glob-cycle-shadowed.rs"]
+mod glob_cycle_shadowed;
+
+#[path = "../trait-impl-noncapability-block-glob.rs"]
+mod noncapability_block_glob;
+
+#[path = "../trait-impl-noncapability-renamed-glob-target.rs"]
+mod noncapability_renamed_glob_target;
+
 #[cfg_attr(all(), doc = "Ordinary module with inert conditional attributes.")]
 #[cfg_attr(all(), cfg_attr(all(), allow(dead_code)))]
 #[path = "../module-cfg-attr-inert.rs"]
