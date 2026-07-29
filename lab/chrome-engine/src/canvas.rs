@@ -60,14 +60,15 @@ impl Canvas {
     }
 
     /// Rounded rectangle with independent horizontal radii for the left and
-    /// right corners and a shared vertical radius.
+    /// right corners and a shared vertical radius, optionally clipped to a
+    /// horizontal band.
     ///
-    /// This exists so an inset fill can share its arc centres with the shape it
-    /// sits inside. A border with different insets per side cannot be offset by
-    /// a circular arc; using an ellipse whose centre matches the outer arc's
-    /// centre keeps the two contours parallel and lets the thickness taper
-    /// smoothly instead of visibly diverging.
-    pub fn fill_round_rect_xy(
+    /// The clip lets a caller paint part of a rounded shape — an accent bar
+    /// inside a card, say — so that the painted region follows the shape's
+    /// curve on one side and is straight on the other, without introducing a
+    /// second, non-parallel curve.
+    #[allow(clippy::too_many_arguments)]
+    pub fn fill_round_rect_xy_clipped(
         &mut self,
         x: i32,
         y: i32,
@@ -77,6 +78,7 @@ impl Canvas {
         rx_right: f64,
         ry: f64,
         c: Rgba,
+        clip: Option<(i32, i32)>,
     ) {
         if w == 0 || h == 0 {
             return;
@@ -88,6 +90,11 @@ impl Canvas {
         let ry = ry.clamp(0.0, half_h);
         for dy in 0..h as i32 {
             for dx in 0..w as i32 {
+                if let Some((from, to)) = clip {
+                    if x + dx < from || x + dx >= to {
+                        continue;
+                    }
+                }
                 let cov = ellipse_rect_coverage(
                     f64::from(dx),
                     f64::from(dy),
@@ -104,6 +111,23 @@ impl Canvas {
                 self.blend(x + dx, y + dy, c.with_alpha(a));
             }
         }
+    }
+
+    /// Rounded rectangle with independent horizontal radii for the left and
+    /// right corners and a shared vertical radius.
+    #[allow(clippy::too_many_arguments)]
+    pub fn fill_round_rect_xy(
+        &mut self,
+        x: i32,
+        y: i32,
+        w: u32,
+        h: u32,
+        rx_left: f64,
+        rx_right: f64,
+        ry: f64,
+        c: Rgba,
+    ) {
+        self.fill_round_rect_xy_clipped(x, y, w, h, rx_left, rx_right, ry, c, None);
     }
 
     /// A 1px hairline rectangle outline.

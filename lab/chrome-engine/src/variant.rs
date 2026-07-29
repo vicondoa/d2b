@@ -329,27 +329,40 @@ pub fn render(spec: &ChromeSpec, fonts: &TextRenderer, background: Rgba) -> Rend
     if spec.candidate == Candidate::AccentFill {
         canvas.fill_round_rect(tab.x, tab.y, tab.width, tab.height, radius, button_bg);
     } else {
-        let edge = px(3, scale).max(2);
         let thin = px(1, scale).max(1);
-        // The top, right, and bottom border is the accent softened toward the
-        // fill, so it reads as a hairline tint rather than competing with the
-        // left bar. The left bar stays solid.
+        let bar = px(3, scale).max(2);
+        // Three concentric shapes, so every curve is parallel to the one
+        // outside it. An earlier attempt insetting the fill by different
+        // amounts per side could not be parallel by construction: offsetting a
+        // circular arc by unequal amounts does not yield a circular arc.
+        //
+        //   1. the outer shape, painted in the border colour
+        //   2. the card, inset uniformly by the border width, radius R - thin
+        //   3. the accent bar, the card's own left columns, clipped to the card
+        //      so it follows the card's curve on its left and is straight on
+        //      its right
         let hairline = spec.accent.mix(button_bg, 0.45);
+        let inner_r = (radius - f64::from(thin)).max(0.0);
         canvas.fill_round_rect(tab.x, tab.y, tab.width, tab.height, radius, hairline);
-        canvas.fill_round_rect(tab.x, tab.y, edge * 2, tab.height, radius, spec.accent);
-        // Elliptical inner corners centred on the outer arc's centre, so the
-        // inner contour stays parallel to the outer one. A circular inner arc
-        // cannot do this when the inset differs between the left edge and the
-        // top: the two curves visibly diverge.
-        canvas.fill_round_rect_xy(
-            tab.x + edge as i32,
+        canvas.fill_round_rect(
+            tab.x + thin as i32,
             tab.y + thin as i32,
-            tab.width.saturating_sub(edge + thin),
+            tab.width.saturating_sub(thin * 2),
             tab.height.saturating_sub(thin * 2),
-            radius - f64::from(edge),
-            radius - f64::from(thin),
-            radius - f64::from(thin),
+            inner_r,
             button_bg,
+        );
+        let bar_from = tab.x + thin as i32;
+        canvas.fill_round_rect_xy_clipped(
+            bar_from,
+            tab.y + thin as i32,
+            tab.width.saturating_sub(thin * 2),
+            tab.height.saturating_sub(thin * 2),
+            inner_r,
+            inner_r,
+            inner_r,
+            spec.accent,
+            Some((bar_from, bar_from + bar as i32)),
         );
     }
     if spec.state.menu_open || spec.expanded {
