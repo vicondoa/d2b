@@ -720,8 +720,9 @@ the role coverage policy/contract tests under
 ### Phase gate
 
 Multi-phase plans MUST pass a panel sign-off gate at each phase
-boundary. The integrator MUST NOT begin the next phase until 8/8
-(or N/N for the plan's panel size) reviewers return `signoff: true`.
+boundary. The integrator MUST NOT begin the next phase until every
+reviewer on the selected roster returns `signoff: true` (N/N for the
+plan's panel size; the default roster below is 10).
 
 For plan-driven work, a "phase" is usually one wave from the plan's
 parallelization graph (`Wave 0`, `Wave 1`, ...). For tiny plans that
@@ -730,15 +731,14 @@ acceptable.
 
 For each phase:
 
-1. **Plan review** - panel reviews the plan; iterate until 8/8
-   sign-off (or N/N for the selected panel size). The integrator may
-   not dispatch implementation subagents until this gate passes.
+1. **Plan review** - panel reviews the plan; iterate until N/N
+   sign-off. The integrator may not dispatch implementation subagents
+   until this gate passes.
 2. **Implementation** - dispatch subagents in parallel per the
    dependency graph.
 3. **Integration** - integrator merges subagent output.
 4. **Work review** - panel reviews the integrated diff; iterate via
-   fix-subagents until 8/8 sign-off (or N/N for the selected panel
-   size).
+   fix-subagents until N/N sign-off.
 5. **Advance** - only now may the integrator begin the next phase's
    plan review.
 
@@ -815,6 +815,149 @@ Host-local roster files under `/etc/nixos/scripts/` are operator
 configuration and are out of scope for this repository; keep repo docs
 focused on the review contract rather than paydro-specific files.
 
+### Running the panel under swarm
+
+There are three review surfaces in this repository and they are strictly
+ranked. Read this ordering before wiring any harness.
+
+1. **The binding ten-role panel** - `cargo run --manifest-path
+   packages/Cargo.toml -p xtask -- delivery wave panel-request` /
+   `panel-attest` / `seal`. This is the authority for an ADR 0046 wave.
+   It runs **once, at wave close**, against the wave's one immutable
+   snapshot, and it is enforced in code by
+   `packages/xtask/src/delivery/panel.rs`: exactly one record per role
+   for all ten roles, `signoff` true iff `recommendations` is `[]`,
+   unanimous ten of ten, every record bound to the same
+   `candidate_id`/`content_id`/`snapshot_sha256`, and provider/model/
+   reasoning effort pinned to `github-copilot` / `gpt-5.6-sol` /
+   `xhigh`. There is no override, no force flag, and no partial pass.
+   See [`docs/specs/ADR-046-validation-and-delivery.md`](./docs/specs/ADR-046-validation-and-delivery.md)
+   section 12.3.
+2. **The per-round phase panel** - the [Phase gate](#phase-gate) rule
+   above. Where ADR 0046 restricts the *binding* panel to one per wave,
+   this rule allows a panel per implementation round. This is the loop
+   swarm automates.
+3. **Swarm's five-seat phase council** - a mechanical in-flight
+   checkpoint inside a swarm run. It is subordinate to both of the
+   above and satisfies neither.
+
+**Swarm is the harness, not the authority.** Use it to run surface 2 and
+to produce the ten records that surface 1 consumes. A green swarm phase
+council is not a sealed wave, and `phase_complete` passing is not
+`delivery wave seal` passing.
+
+**Advisory tier - the 10 roles.** Dispatch one read-only lane per roster
+role via `dispatch_lanes_async`, seeded with that role's focus cell from
+the table above plus the integrator's validation evidence. Lanes are
+read-only by contract, which is what keeps panel review from stampeding
+the shared Nix store, cargo target directory, and the heavy gate
+semaphore while implementation agents are still running. Lane ids are
+free-form, so all 10 roles vote independently, and each lane's verdict
+maps one-to-one onto a `panel-attest` record.
+
+To keep those records attestable, the reviewing agents must run on the
+pinned panel binding. `agents.<name>.model` in
+`.opencode/opencode-swarm.json` pins them to
+`github-copilot/gpt-5.6-sol`; a lane on any other model produces a
+record `panel-attest` will reject, so do not let model fallback silently
+downgrade a panel lane.
+
+**Swarm's own council, and what it costs.** `submit_phase_council_verdicts`
+has a closed five-member roster (`critic`, `reviewer`, `sme`,
+`test_engineer`, `explorer`) and deduplicates by member, so ten distinct
+votes cannot be cast against it. When you use it as an in-flight
+checkpoint, fold the advisory roles into the five seats:
+
+| Enforcing seat  | Absorbs advisory roles          |
+|-----------------|---------------------------------|
+| `reviewer`      | `software`, `rust`              |
+| `test_engineer` | `test`                          |
+| `sme`           | `nixos`, `networking`, `kernel` |
+| `critic`        | `security`, `product`           |
+| `explorer`      | `docs`, `observability`         |
+
+A seat inherits the strictest verdict of the roles it absorbs, carries
+every absorbed finding into its `findings[]` verbatim, and MUST NOT
+return `APPROVE` while any role it absorbs has an open finding. Even so,
+five synthesizers can agree where ten independent reviewers would have
+dissented; the observability precedent above is exactly that failure
+shape. That collapse is the reason this council does not bind a wave.
+
+**Verdict rule.** Swarm's default is more permissive than this file: a
+`CONCERNS` verdict carrying only MEDIUM/LOW findings still passes. The
+repository rule, and the rule `panel.rs` enforces, is `signoff: true`
+iff `recommendations` is `[]`. Set
+`council.phaseConcernsAllowComplete: false` so `CONCERNS` blocks like
+`REJECT`; that is a required part of the project config.
+
+**Gate wiring.** Enable the gates before the QA profile locks
+(`set_qa_gates` is ratchet-tighter and rejects all writes once critic
+approval or drift evidence locks it):
+
+```
+phase_council, final_council, drift_check,
+hallucination_guard, critic_pre_plan, sme_enabled
+```
+
+`phase_complete` then refuses to close a phase without
+`.swarm/evidence/<phase>/phase-council.json`.
+
+**Plan review.** Swarm has no gate that blocks dispatch on a
+phase-scoped plan panel; `critic_pre_plan` is a single critic, once,
+project-wide. Encode the plan gate as work instead: make task `N.1` of
+every phase the plan-review task, declare the plan itself as its
+acceptance criteria via `declare_council_criteria`, and give every
+implementation task in that phase a `depends` edge on it. Per-task
+council then enforces the plan gate before any coder is dispatched.
+
+**Waves and file ownership.** `epic_decide_phase` followed by
+`epic_plan_waves` is the direct implementation of the parallelization
+graph, and a `declare_scope` call per task is the file-ownership map
+described in [Integrator-prep-first pattern](#integrator-prep-first-pattern-w3-onwards).
+Record `epic_record_divergence` after each task completes; declared
+scope versus files actually touched is calibration data the manual
+process never captured.
+
+### Unattended multi-day runs
+
+Long plans are expected to run for days with the operator away. Two
+things make that work, and one thing makes "zero interaction"
+unachievable.
+
+**Removing the routine prompts.** Set `execution_profile.auto_proceed:
+true` on the plan to drop the phase-boundary confirmation, and enable
+Full-Auto (`full_auto.enabled: true`, `mode: "supervised"`) so safe
+in-scope operations stop asking. Writes to protected paths still route
+through the read-only `critic_oversight` agent rather than blocking.
+
+**Escalation is a pause, not a stop-the-world.** Keep
+`full_auto.escalation_mode: "pause"` and `full_auto.denials.on_limit:
+"pause"`. `terminate` kills a multi-day run outright; `pause` parks it
+recoverably, and `.swarm/` state survives process restarts.
+
+**Zero user interaction is not achievable, by design on both sides.**
+`full_auto.escalation_mode` admits only `pause` and `terminate`, there
+is no autonomous mode, and `council.escalateOnMaxRounds` is declared
+but not implemented - exhausting `council.maxRounds` without an
+`APPROVE` surfaces a message for the operator and refuses to
+auto-advance. Surface 1 is stricter still: a wave cannot seal without
+ten human-attested records, so the binding panel is a deliberate
+human-in-the-loop stop that no configuration removes. That matches this
+file's own rule that green tests never waive the gate. Plan for
+**batched escalation**: the run parks on unresolved disagreement,
+`/swarm status` reports why, and the operator services the queue when
+convenient. Raising `council.maxRounds` to 5 lets more disagreements
+self-resolve before parking; it does not remove the park.
+
+**Context.** A days-long session will cross the context budget's
+critical threshold. Treat phase boundaries as the handoff points rather
+than fighting the guard mid-phase.
+
+**Heavy lanes.** Advisory panel lanes are read-only and take no heavy
+gate slot. Any reviewer explicitly asked to run a validation is subject
+to the normal two-slot semaphore in [Heavy lanes](#heavy-lanes), and an
+unattended run must not exceed it.
+
 ### Commit-tag mapping
 
 The tag examples in [Commit conventions](#commit-conventions) use this
@@ -842,16 +985,22 @@ form (e.g. `... ( W2fu4 H10 )`).
 
 ### Tooling note
 
-One host-local implementation lives in
+The panel contract is implementation-neutral: any harness that
+preserves the roster, the unanimity rule, the no-rerun discipline, and
+the two gates per phase is acceptable.
+
+The in-repo reference implementation is the `opencode-swarm` wiring
+described above, configured by `.opencode/opencode-swarm.json` and
+`.opencode/opencode.json`. Those two files are the tracked, reviewable
+surface for panel behaviour; change them in the same commit as any
+change to this section.
+
+A second, host-local implementation lives in
 `/etc/nixos/scripts/panel-review.{md,sh}` and
 `/etc/nixos/scripts/panel-aggregate.sh`. That tooling is paydro's
-host-specific implementation, not an upstream d2b dependency;
-alternative implementations are welcome if they preserve the same
-review contract.
-
-In that implementation, the roster is selected per plan via
-`ENGINEERS_FILE`, and each engineer's focus file comes from
-`panel-roles/<engineer>.md`.
+host-specific implementation, not an upstream d2b dependency. In it the
+roster is selected per plan via `ENGINEERS_FILE` and each engineer's
+focus file comes from `panel-roles/<engineer>.md`.
 
 ## Test layout
 
