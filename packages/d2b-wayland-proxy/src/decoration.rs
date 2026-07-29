@@ -1558,6 +1558,15 @@ impl DecorationManager {
         // strip transparent; a compositor that thinks this is a CSD window
         // paints its border colour as a background, which shows straight
         // through that transparency.
+        if self.decoration_manager.is_none() {
+            // niri does not implement xdg-decoration at all, so this is the
+            // normal path there rather than an error. Without it the compositor
+            // may paint its border colour as a background behind the strip the
+            // tab leaves transparent; see docs for the window rule that fixes it.
+            log::info!(
+                "[d2b-wlproxy] event=wrapper-decoration reason=no-xdg-decoration-manager"
+            );
+        }
         if let Some(manager) = self.decoration_manager.as_ref() {
             let decoration: Rc<ZxdgToplevelDecorationV1> =
                 manager.new_send_get_toplevel_decoration(&wrapper_toplevel);
@@ -2091,11 +2100,16 @@ impl DecorationManager {
             wrapper
                 .wrapper_surface
                 .send_attach(Some(buffer.wl_buffer()), 0, 0);
+            // Damage the whole band. These arguments carried over from the
+            // vertical rail, where the buffer was rail_width wide and as tall
+            // as the window; the band is the transpose of that. Damaging the
+            // old rect repainted only the leftmost column, so expanding the tab
+            // changed state without ever showing.
             wrapper.wrapper_surface.send_damage_buffer(
                 0,
                 0,
+                i32::try_from(wrapper_geometry.outer.width).unwrap_or(i32::MAX),
                 i32::try_from(wrapper_geometry.rail_width).unwrap_or(i32::MAX),
-                i32::try_from(wrapper_geometry.outer.height).unwrap_or(i32::MAX),
             );
             wrapper.wrapper_surface.send_commit();
             if let Some(old_buffer) = old_buffer {
