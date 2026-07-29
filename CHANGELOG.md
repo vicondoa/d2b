@@ -59,22 +59,31 @@ deprecations ship one minor release before removal.
 - Added compiler-checked negative trait bounds for the authority-bearing
   ComponentSession admission, verified Unix peer, session acceptor, and
   authenticated session types. The defining crates now reject `Clone`, `Copy`,
-  `Default`, and the named `From` mint paths through the Rust trait solver,
-  regardless of aliases, selected module paths, or macro expansion in each
-  configuration that is actually compiled. Generic checks cover unconditional
-  blanket implementations, while separate checks cover the concrete unit and
-  ComponentSession admission parameterizations currently used by the
-  workspace. Future concrete parameterizations must add their own assertion.
+  `Default`, the named `From` mint paths, and zero-input `From<()>` construction
+  for the admission and verified-peer evidence types through the Rust trait
+  solver, regardless of aliases, selected module paths, or macro expansion in
+  each configuration that is actually compiled. Generic checks cover
+  unconditional blanket implementations, while separate checks cover the
+  concrete unit and ComponentSession admission parameterizations currently
+  used by the workspace. Future concrete parameterizations must add their own
+  assertion. The ambiguity diagnostic now names the forbidden trait set and
+  the compile-fail tests pin that wording.
 
 - Kept the source trait-implementation inventory as a best-effort breadth
   check for traits outside the compiler-enforced set. It now fails closed on
-  unresolved renamed module prefixes, lexically scoped capability aliases,
-  `cfg_attr` on external module declarations, and one source file reached
-  through different logical module paths. It also retains breadth over
-  implementations disabled in the active compiler configuration.
-  Macro-generated and `include!`-generated implementations remain outside this
-  syntax-level scan. Private construction state, sealed traits, and consumed
-  capabilities remain the primary boundary.
+  direct and `self as` module renames used as type prefixes, lexically scoped
+  capability aliases, `cfg_attr` on external module declarations, and one
+  source file reached through different logical module paths. Direct `#[path]`
+  declarations now follow Rust's containing-source-file rule while paths inside
+  inline modules follow the logical module directory, so a sibling decoy cannot
+  hide the compiler-selected source. Duplicate-module diagnostics retain both
+  logical names without exposing canonical host paths. The scan also retains
+  breadth over implementations disabled in the active compiler configuration.
+  Macro-generated and `include!`-generated arbitrary `From<X>`
+  implementations in a capability's defining crate remain outside this
+  syntax-level scan; Rust's orphan rules prevent another crate from adding
+  those implementations. Private construction state, sealed traits, and
+  consumed capabilities remain the primary boundary.
 
 - Strengthened cancellation publication race coverage to prove both activity
   and response state remain locked until their correlated entries are visible.

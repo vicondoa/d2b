@@ -14,20 +14,24 @@ pub struct VerifiedUnixPeer {
 }
 
 const _: fn() = || {
-    trait AmbiguousIfImpl<A> {
+    // Any guarded impl makes this assertion ambiguous. Remove the capability
+    // trait impl instead of weakening this construction boundary.
+    trait CapabilityMustNotImplementCloneCopyDefaultOrFrom<A> {
         fn some_item() {}
     }
-    impl<T: ?Sized> AmbiguousIfImpl<()> for T {}
-    impl<T: Clone> AmbiguousIfImpl<u8> for T {}
-    impl<T: Copy> AmbiguousIfImpl<u16> for T {}
-    impl<T: Default> AmbiguousIfImpl<u32> for T {}
-    impl<T: From<PeerCredentials>> AmbiguousIfImpl<u64> for T {}
-    let _ = <VerifiedUnixPeer as AmbiguousIfImpl<_>>::some_item;
+    impl<T: ?Sized> CapabilityMustNotImplementCloneCopyDefaultOrFrom<()> for T {}
+    impl<T: Clone> CapabilityMustNotImplementCloneCopyDefaultOrFrom<u8> for T {}
+    impl<T: Copy> CapabilityMustNotImplementCloneCopyDefaultOrFrom<u16> for T {}
+    impl<T: Default> CapabilityMustNotImplementCloneCopyDefaultOrFrom<u32> for T {}
+    impl<T: From<PeerCredentials>> CapabilityMustNotImplementCloneCopyDefaultOrFrom<u64> for T {}
+    impl<T: From<()>> CapabilityMustNotImplementCloneCopyDefaultOrFrom<u128> for T {}
+    let _ = <VerifiedUnixPeer as CapabilityMustNotImplementCloneCopyDefaultOrFrom<_>>::some_item;
 };
 
 #[cfg(any(
     d2b_capability_trait_mutation = "verified-unix-peer-clone",
-    d2b_capability_trait_mutation = "verified-unix-peer-default"
+    d2b_capability_trait_mutation = "verified-unix-peer-default",
+    d2b_capability_trait_mutation = "verified-unix-peer-from-unit"
 ))]
 macro_rules! mutate_verified_unix_peer_trait {
     (clone) => {
@@ -44,12 +48,21 @@ macro_rules! mutate_verified_unix_peer_trait {
             }
         }
     };
+    (from_unit) => {
+        impl From<()> for VerifiedUnixPeer {
+            fn from(_value: ()) -> Self {
+                unreachable!()
+            }
+        }
+    };
 }
 
 #[cfg(d2b_capability_trait_mutation = "verified-unix-peer-clone")]
 mutate_verified_unix_peer_trait!(clone);
 #[cfg(d2b_capability_trait_mutation = "verified-unix-peer-default")]
 mutate_verified_unix_peer_trait!(default);
+#[cfg(d2b_capability_trait_mutation = "verified-unix-peer-from-unit")]
+mutate_verified_unix_peer_trait!(from_unit);
 
 impl VerifiedUnixPeer {
     /// Read peer credentials from one seqpacket endpoint.
