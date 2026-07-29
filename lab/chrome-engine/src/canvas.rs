@@ -59,6 +59,53 @@ impl Canvas {
         }
     }
 
+    /// Rounded rectangle with independent horizontal radii for the left and
+    /// right corners and a shared vertical radius.
+    ///
+    /// This exists so an inset fill can share its arc centres with the shape it
+    /// sits inside. A border with different insets per side cannot be offset by
+    /// a circular arc; using an ellipse whose centre matches the outer arc's
+    /// centre keeps the two contours parallel and lets the thickness taper
+    /// smoothly instead of visibly diverging.
+    pub fn fill_round_rect_xy(
+        &mut self,
+        x: i32,
+        y: i32,
+        w: u32,
+        h: u32,
+        rx_left: f64,
+        rx_right: f64,
+        ry: f64,
+        c: Rgba,
+    ) {
+        if w == 0 || h == 0 {
+            return;
+        }
+        let half_w = f64::from(w) / 2.0;
+        let half_h = f64::from(h) / 2.0;
+        let rxl = rx_left.clamp(0.0, half_w);
+        let rxr = rx_right.clamp(0.0, half_w);
+        let ry = ry.clamp(0.0, half_h);
+        for dy in 0..h as i32 {
+            for dx in 0..w as i32 {
+                let cov = ellipse_rect_coverage(
+                    f64::from(dx),
+                    f64::from(dy),
+                    f64::from(w),
+                    f64::from(h),
+                    rxl,
+                    rxr,
+                    ry,
+                );
+                if cov <= 0.0 {
+                    continue;
+                }
+                let a = (f64::from(c.a) * cov).round().clamp(0.0, 255.0) as u8;
+                self.blend(x + dx, y + dy, c.with_alpha(a));
+            }
+        }
+    }
+
     /// A 1px hairline rectangle outline.
     pub fn stroke_rect(&mut self, x: i32, y: i32, w: u32, h: u32, c: Rgba) {
         if w == 0 || h == 0 {
@@ -187,23 +234,66 @@ fn round_rect_coverage(px: f64, py: f64, w: f64, h: f64, r: f64) -> f64 {
 }
 
 fn inside_round_rect(x: f64, y: f64, w: f64, h: f64, r: f64) -> bool {
+    inside_ellipse_rect(x, y, w, h, r, r, r)
+}
+
+/// Coverage for a rectangle whose corners are elliptical, with independent
+/// horizontal radii on the left and right.
+fn ellipse_rect_coverage(
+    px: f64,
+    py: f64,
+    w: f64,
+    h: f64,
+    rx_left: f64,
+    rx_right: f64,
+    ry: f64,
+) -> f64 {
+    if rx_left <= 0.0 && rx_right <= 0.0 && ry <= 0.0 {
+        return if px >= 0.0 && py >= 0.0 && px < w && py < h {
+            1.0
+        } else {
+            0.0
+        };
+    }
+    const S: usize = 4;
+    let mut hits = 0.0;
+    for sy in 0..S {
+        for sx in 0..S {
+            let x = px + (sx as f64 + 0.5) / S as f64;
+            let y = py + (sy as f64 + 0.5) / S as f64;
+            if inside_ellipse_rect(x, y, w, h, rx_left, rx_right, ry) {
+                hits += 1.0;
+            }
+        }
+    }
+    hits / (S * S) as f64
+}
+
+fn inside_ellipse_rect(x: f64, y: f64, w: f64, h: f64, rx_left: f64, rx_right: f64, ry: f64) -> bool {
     if x < 0.0 || y < 0.0 || x > w || y > h {
         return false;
     }
-    // Corner centres.
-    let (cx, cy) = if x < r && y < r {
-        (r, r)
-    } else if x > w - r && y < r {
-        (w - r, r)
-    } else if x < r && y > h - r {
-        (r, h - r)
-    } else if x > w - r && y > h - r {
-        (w - r, h - r)
+    // Pick the corner this point belongs to, if any.
+    let (cx, rx) = if x < rx_left {
+        (rx_left, rx_left)
+    } else if x > w - rx_right {
+        (w - rx_right, rx_right)
+    } else {
+        return y >= 0.0 && y <= h;
+    };
+    let cy = if y < ry {
+        ry
+    } else if y > h - ry {
+        h - ry
     } else {
         return true;
     };
-    let (dx, dy) = (x - cx, y - cy);
-    dx * dx + dy * dy <= r * r
+    if rx <= 0.0 || ry <= 0.0 {
+        return true;
+    }
+    let nx = (x - cx) / rx;
+    let ny = (y - cy) / ry;
+    nx * nx + ny * ny <= 1.0
 }
 
 #[cfg(test)]

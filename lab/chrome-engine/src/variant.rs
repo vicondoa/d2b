@@ -214,7 +214,10 @@ pub fn resolve_for(spec: &ChromeSpec, fonts: &TextRenderer) -> (ChromeOutcome, u
     let tracking = spec.font_px * spec.tracking_em * spec.scale;
     let metrics = fonts.measure(&spec.label, font_px, tracking);
     let line_h = (font_px * 1.3).ceil() as u32;
-    let button_w = metrics.width + px(spec.theme.side_pad, spec.scale) * 2;
+    // Label, padding on both sides, plus room for the disclosure chevron.
+    let button_w = metrics.width
+        + px(spec.theme.side_pad, spec.scale) * 2
+        + px(CHEVRON_WIDTH + 5, spec.scale);
     let status_w = spec
         .status
         .as_deref()
@@ -333,16 +336,19 @@ pub fn render(spec: &ChromeSpec, fonts: &TextRenderer, background: Rgba) -> Rend
         // left bar. The left bar stays solid.
         let hairline = spec.accent.mix(button_bg, 0.45);
         canvas.fill_round_rect(tab.x, tab.y, tab.width, tab.height, radius, hairline);
-        // Drawn wider than the bar and then trimmed by the fill below, so the
-        // bar keeps the outer corner radius and tapers into the hairline
-        // instead of stepping from thick to thin.
         canvas.fill_round_rect(tab.x, tab.y, edge * 2, tab.height, radius, spec.accent);
-        canvas.fill_round_rect(
+        // Elliptical inner corners centred on the outer arc's centre, so the
+        // inner contour stays parallel to the outer one. A circular inner arc
+        // cannot do this when the inset differs between the left edge and the
+        // top: the two curves visibly diverge.
+        canvas.fill_round_rect_xy(
             tab.x + edge as i32,
             tab.y + thin as i32,
             tab.width.saturating_sub(edge + thin),
             tab.height.saturating_sub(thin * 2),
-            (radius - f64::from(thin)).max(1.0),
+            radius - f64::from(edge),
+            radius - f64::from(thin),
+            radius - f64::from(thin),
             button_bg,
         );
     }
@@ -370,6 +376,20 @@ pub fn render(spec: &ChromeSpec, fonts: &TextRenderer, background: Rgba) -> Rend
     for g in fonts.layout(&spec.label, font_px, tracking, text_x, baseline) {
         blend_glyph(&mut canvas.pixels, w, h, &g, fg);
     }
+
+    // Disclosure chevron: `>` when collapsed, `<` once expanded, so the tab
+    // says it can be opened and then how to close it again.
+    let chev_w = px(CHEVRON_WIDTH, scale);
+    let chev_x = text_x + m.width as i32 + px(5, scale) as i32;
+    draw_chevron(
+        &mut canvas,
+        chev_x,
+        tab.y + tab.height as i32 / 2,
+        chev_w,
+        spec.expanded,
+        fg.with_alpha(0xcc),
+        scale,
+    );
 
     for (i, action) in actions.iter().enumerate() {
         if i == 0 {
@@ -477,6 +497,29 @@ pub fn render(spec: &ChromeSpec, fonts: &TextRenderer, background: Rgba) -> Rend
         layout: Some(layout),
         label_contrast,
         blocked: false,
+    }
+}
+
+/// Width reserved for the disclosure chevron, in logical px.
+pub const CHEVRON_WIDTH: u32 = 9;
+
+/// A disclosure chevron: `>` when collapsed, `<` when expanded.
+fn draw_chevron(
+    canvas: &mut Canvas,
+    x: i32,
+    center_y: i32,
+    width: u32,
+    expanded: bool,
+    color: Rgba,
+    scale: f32,
+) {
+    let arm = ((width as f32) * 0.55).round() as i32;
+    let thick = ((1.4 * scale).round() as u32).max(1);
+    for i in 0..=arm {
+        // Collapsed points right, expanded points left.
+        let dx = if expanded { arm - i } else { i };
+        canvas.fill_rect(x + dx, center_y - arm + i, thick, thick, color);
+        canvas.fill_rect(x + dx, center_y + arm - i, thick, thick, color);
     }
 }
 
