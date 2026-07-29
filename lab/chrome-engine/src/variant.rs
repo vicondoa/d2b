@@ -214,10 +214,17 @@ pub fn resolve_for(spec: &ChromeSpec, fonts: &TextRenderer) -> (ChromeOutcome, u
     let tracking = spec.font_px * spec.tracking_em * spec.scale;
     let metrics = fonts.measure(&spec.label, font_px, tracking);
     let line_h = (font_px * 1.3).ceil() as u32;
-    // Label, padding on both sides, plus room for the disclosure chevron.
-    let button_w = metrics.width
-        + px(spec.theme.side_pad, spec.scale) * 2
-        + px(CHEVRON_WIDTH + 5, spec.scale);
+    // Left furniture, equal padding on both sides of the content, the label,
+    // and the chevron. Measuring it this way is what keeps the visible gap on
+    // the left — which starts after the accent bar — equal to the one on the
+    // right, which starts after the hairline.
+    let pad = px(spec.theme.side_pad, spec.scale);
+    let button_w = px(LEFT_FURNITURE, spec.scale)
+        + pad
+        + metrics.width
+        + px(CHEVRON_GAP + CHEVRON_WIDTH, spec.scale)
+        + pad
+        + px(1, spec.scale);
     let status_w = spec
         .status
         .as_deref()
@@ -384,7 +391,9 @@ pub fn render(spec: &ChromeSpec, fonts: &TextRenderer, background: Rgba) -> Rend
     let label_contrast = contrast_ratio(fg, button_bg);
 
     let m = fonts.measure(&spec.label, font_px, tracking);
-    let text_x = tab.x + px(spec.theme.side_pad, scale) as i32;
+    // Start past the accent bar, so the gap before the label matches the gap
+    // after the chevron.
+    let text_x = tab.x + px(LEFT_FURNITURE + spec.theme.side_pad, scale) as i32;
     let baseline = tab.y + ((tab.height + m.ascent) / 2) as i32;
     for g in fonts.layout(&spec.label, font_px, tracking, text_x, baseline) {
         blend_glyph(&mut canvas.pixels, w, h, &g, fg);
@@ -393,7 +402,7 @@ pub fn render(spec: &ChromeSpec, fonts: &TextRenderer, background: Rgba) -> Rend
     // Disclosure chevron: `>` when collapsed, `<` once expanded, so the tab
     // says it can be opened and then how to close it again.
     let chev_w = px(CHEVRON_WIDTH, scale);
-    let chev_x = text_x + m.width as i32 + px(5, scale) as i32;
+    let chev_x = text_x + m.width as i32 + px(CHEVRON_GAP, scale) as i32;
     draw_chevron(
         &mut canvas,
         chev_x,
@@ -515,6 +524,11 @@ pub fn render(spec: &ChromeSpec, fonts: &TextRenderer, background: Rgba) -> Rend
 
 /// Width reserved for the disclosure chevron, in logical px.
 pub const CHEVRON_WIDTH: u32 = 9;
+/// Gap between the label and the chevron, in logical px.
+pub const CHEVRON_GAP: u32 = 5;
+/// The accent bar plus the hairline border it sits inside, in logical px.
+/// Content is inset past this so the visible gap on the left matches the right.
+pub const LEFT_FURNITURE: u32 = 4;
 
 /// A disclosure chevron: `>` when collapsed, `<` when expanded.
 fn draw_chevron(
@@ -951,6 +965,31 @@ mod tests {
             assert!(r.height >= MIN_TARGET, "scale {scale}: height {}", r.height);
             assert!(!r.intersects(l.content_rect()));
             assert!(r.x > 0, "scale {scale}: must not touch the left edge");
+        }
+    }
+
+    /// The gap before the label and the gap after the chevron must match, which
+    /// means measuring past the accent bar rather than from the tab edge.
+    #[test]
+    fn label_padding_is_equal_on_both_sides() {
+        let f = fonts();
+        for label in ["Work", "Personal", "corp-workstation.work"] {
+            let mut s = spec(Candidate::Tab);
+            s.label = label.to_owned();
+            let (outcome, _) = resolve_for(&s, &f);
+            let l = outcome.layout().expect("decorates");
+
+            let font_px = s.font_px * s.scale;
+            let m = f.measure(&s.label, font_px, 0.0);
+            let text_x = l.button.x + (LEFT_FURNITURE + s.theme.side_pad) as i32;
+            let chev_end = text_x + m.width as i32 + (CHEVRON_GAP + CHEVRON_WIDTH) as i32;
+
+            let left_gap = text_x - (l.button.x + LEFT_FURNITURE as i32);
+            let right_gap = l.button.right() - 1 - chev_end;
+            assert_eq!(
+                left_gap, right_gap,
+                "{label}: {left_gap}px before the label, {right_gap}px after the chevron"
+            );
         }
     }
 

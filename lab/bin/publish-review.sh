@@ -19,7 +19,7 @@ mkdir -p "$DEST/sheets" "$DEST/live"
 
 shopt -s nullglob
 cp "$OUT"/sheets/*.png "$DEST/sheets/" 2>/dev/null || true
-for f in "$OUT"/live-*.png "$OUT"/tab-*.png "$OUT"/wall-*.png \
+for f in "$OUT"/live-*.png "$OUT"/tab-*.png "$OUT"/wall-*.png "$OUT"/ff-*.png \
          "$OUT"/detail-*.png "$OUT"/clip-*.png "$OUT"/zoom-*.png; do
   cp "$f" "$DEST/live/"
 done

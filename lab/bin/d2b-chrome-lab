@@ -1,0 +1,125 @@
+#!/usr/bin/env bash
+# d2b-chrome-lab — run an application on THIS desktop with the prototype
+# window identity tab, to try it in real use.
+#
+#   d2b-chrome-lab                          # a terminal, label "Work"
+#   d2b-chrome-lab --label Personal --accent '#7fc8ff'
+#   d2b-chrome-lab --expanded -- firefox
+#   d2b-chrome-lab --status 'MIC MUTED' -- foot
+#
+# The proxy connects to the real compositor socket. It deliberately refuses to
+# chain onto another d2b proxy: nesting proxies would decorate an already
+# decorated window and confuse the identity it is supposed to establish.
+set -euo pipefail
+
+LAB_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PROXY="${PROXY_BIN:-$LAB_ROOT/../packages/target/release/d2b-wayland-proxy}"
+
+LABEL="Work"
+ACCENT="#ffb347"
+STATUS=""
+EXPANDED=0
+NAME="chromelab"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --label)    LABEL="$2"; shift 2 ;;
+    --accent)   ACCENT="$2"; shift 2 ;;
+    --status)   STATUS="$2"; shift 2 ;;
+    --expanded) EXPANDED=1; shift ;;
+    --name)     NAME="$2"; shift 2 ;;
+    --)         shift; break ;;
+    -h|--help)  sed -n '2,12p' "$0"; exit 0 ;;
+    *)          echo "unknown option: $1" >&2; exit 2 ;;
+  esac
+done
+
+APP=("$@")
+[[ ${#APP[@]} -gt 0 ]] || APP=(foot)
+
+[[ -x "$PROXY" ]] || {
+  echo "proxy binary missing: $PROXY" >&2
+  echo "build it with: cargo build --release -p d2b-wayland-proxy" >&2
+  exit 1
+}
+
+: "${XDG_RUNTIME_DIR:?XDG_RUNTIME_DIR is not set}"
+
+# Resolve the compositor socket the tab should attach to.
+#
+# niri names its IPC socket after its Wayland display, so that is an
+# unambiguous way to find the real compositor even when WAYLAND_DISPLAY has
+# been pointed at a proxy.
+resolve_host_display() {
+  if [[ -n "${NIRI_SOCKET:-}" ]]; then
+    local base
+    base="$(basename "$NIRI_SOCKET")"        # niri.wayland-1.6449.sock
+    base="${base#niri.}"
+    base="${base%%.*}"                       # wayland-1
+    if [[ -S "$XDG_RUNTIME_DIR/$base" ]]; then
+      printf '%s\n' "$base"
+      return 0
+    fi
+  fi
+  for sock in "$XDG_RUNTIME_DIR"/niri.wayland-*.sock; do
+    [[ -S "$sock" ]] || continue
+    local base
+    base="$(basename "$sock")"
+    base="${base#niri.}"
+    base="${base%%.*}"
+    [[ -S "$XDG_RUNTIME_DIR/$base" ]] && { printf '%s\n' "$base"; return 0; }
+  done
+  # Last resort: whatever the session says, checked below.
+  printf '%s\n' "${WAYLAND_DISPLAY:-wayland-0}"
+}
+
+HOST_DISPLAY="$(resolve_host_display)"
+HOST_SOCK="$XDG_RUNTIME_DIR/$HOST_DISPLAY"
+[[ -S "$HOST_SOCK" ]] || { echo "no compositor socket at $HOST_SOCK" >&2; exit 1; }
+
+# Refuse to attach to another d2b proxy rather than silently double-decorating.
+if pgrep -af 'd2b-wayland-proxy' 2>/dev/null \
+   | grep -v "^$$ " | grep -q -- "--listen $HOST_SOCK"; then
+  echo "refusing to connect: $HOST_SOCK is served by a d2b proxy, not the compositor" >&2
+  exit 1
+fi
+
+SOCK="$XDG_RUNTIME_DIR/chromelab-$$"
+LOG="${TMPDIR:-/tmp}/chromelab-$$.log"
+rm -f "$SOCK"
+
+cleanup() {
+  [[ -n "${PROXY_PID:-}" ]] && kill "$PROXY_PID" 2>/dev/null || true
+  rm -f "$SOCK"
+}
+trap cleanup EXIT INT TERM
+
+echo "compositor : $HOST_DISPLAY  ($HOST_SOCK)"
+echo "proxy      : $SOCK"
+echo "identity   : $LABEL  $ACCENT"
+echo "log        : $LOG"
+
+"$PROXY" \
+  --listen "$SOCK" \
+  --connect "$HOST_DISPLAY" \
+  --vm-name "$NAME" \
+  --border-enable \
+  --border-label "$LABEL" \
+  --border-color-active "$ACCENT" \
+  --border-color-inactive "$ACCENT" \
+  >"$LOG" 2>&1 &
+PROXY_PID=$!
+
+for _ in $(seq 1 60); do
+  [[ -S "$SOCK" ]] && break
+  sleep 0.1
+done
+[[ -S "$SOCK" ]] || { echo "proxy failed to listen; see $LOG" >&2; tail -20 "$LOG" >&2; exit 1; }
+
+export WAYLAND_DISPLAY="$(basename "$SOCK")"
+export MOZ_ENABLE_WAYLAND=1
+[[ -n "$STATUS" ]] && export D2B_CHROME_STATUS="$STATUS"
+[[ "$EXPANDED" == 1 ]] && export D2B_CHROME_EXPANDED=1
+
+echo "running    : ${APP[*]}"
+"${APP[@]}"
