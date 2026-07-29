@@ -1,80 +1,70 @@
 //! The crate's **only** `unsafe` code.
 //!
 //! Quarantined here deliberately, following the `d2b-priv-broker` precedent of
-//! `unsafe_code = "deny"` plus one audited module, so that every unsafe
-//! expression in the prototype is reviewable in a single short file.
+//! `unsafe_code = "deny"` plus one audited module, so every unsafe expression in
+//! the prototype is reviewable in a single short file.
 //!
-//! The prototype's data path genuinely needs no `unsafe`: DMA-BUF descriptors
-//! move by `SCM_RIGHTS` through `rustix`'s safe ancillary API, which was proved
-//! out before implementation began. The one exception is reading `wl_shm` pixel
-//! content: Smithay 0.7 exposes mapped buffer contents only as
-//! `FnOnce(*const u8, usize, BufferData)`, with no safe slice accessor
-//! (`smithay-0.7.0/src/wayland/shm/mod.rs:241`). Rather than reimplement
-//! `wl_shm` pool mapping ourselves — which would need considerably *more*
-//! unsafe — we borrow Smithay's mapping for the duration of its own callback.
+//! The data path itself needs no `unsafe`: DMA-BUF descriptors move by
+//! `SCM_RIGHTS` through `rustix`'s safe ancillary API. The one exception is
+//! reading `wl_shm` pixel content, because Smithay 0.7 exposes mapped contents
+//! only as `FnOnce(*const u8, usize, BufferData)` with no safe accessor
+//! (`smithay-0.7.0/src/wayland/shm/mod.rs:241`). Reimplementing pool mapping
+//! ourselves would require strictly *more* unsafe.
 
 #![allow(unsafe_code)]
-
-/// Borrow a Smithay-mapped SHM buffer as a slice.
-///
-/// # Safety
-///
-/// Callers must only invoke this from inside a
-/// [`smithay::wayland::shm::with_buffer_contents`] callback, passing that
-/// callback's own `ptr` and `len` unmodified.
-///
-/// Within that callback Smithay guarantees:
-///
-/// * `ptr` is non-null and points to a live `mmap` of the client's pool,
-/// * the mapping is readable for at least `len` bytes,
-/// * the mapping outlives the callback (Smithay holds the pool alive), and
-/// * SIGBUS from a client truncating the pool is trapped by Smithay's handler,
-///   which turns the access into an error rather than a crash.
-///
-/// The returned slice must not outlive the callback. Callers immediately copy
-/// out of it and never store it.
-pub unsafe fn borrow_pool<'a>(ptr: *const u8, len: usize) -> &'a [u8] {
-    if ptr.is_null() || len == 0 {
-        return &[];
-    }
-    // SAFETY: guaranteed by the caller contract above, which is discharged by
-    // only ever calling this from within `with_buffer_contents`.
-    unsafe { std::slice::from_raw_parts(ptr, len) }
-}
 
 use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::wayland::shm::with_buffer_contents;
 
 use super::host::Snapshot;
 
-/// Copy a committed `wl_shm` buffer's pixels into an owned snapshot.
+/// Refuse to retain more than this per snapshot (~64 MiB), so a client cannot
+/// make us allocate unboundedly by declaring a huge pool.
+const MAX_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
+
+/// Copy a committed `wl_shm` buffer's pixels into owned storage.
 ///
-/// This is the *entire* reason the crate needs `unsafe` at all, so the whole
-/// operation lives here rather than only the pointer dereference — otherwise the
-/// call site would need its own `unsafe` block and the quarantine would leak.
+/// Returns `None` for a buffer that is not SHM-managed (DMA-BUF takes the
+/// descriptor pass-through path), whose declared geometry does not fit the real
+/// mapping, or which exceeds [`MAX_SNAPSHOT_BYTES`].
 ///
-/// Returns `None` for a buffer that is not SHM-managed (a DMA-BUF takes the
-/// descriptor pass-through path instead) or whose pool the client has
-/// truncated.
+/// # Why this does not build a slice
 ///
-/// Copying, rather than retaining the client's pool descriptor, is deliberate:
-/// it lets the application's buffer be released immediately so its pool keeps
-/// turning over while detached, and it removes any question of pool lifetime
-/// across a frontend restart. The zero-copy guarantee is scoped to DMA-BUF.
+/// The pool is **shared, client-writable memory**. Smithay documents that
+/// constructing a Rust reference or slice over it is undefined behaviour: a
+/// hostile or merely racy client may mutate the bytes concurrently, and Rust
+/// references carry a no-concurrent-mutation guarantee the client is under no
+/// obligation to honour. Bounds validation proves the address range is mapped;
+/// it says nothing about immutability. So we never materialise a reference — we
+/// copy with volatile reads straight into an owned `Vec`.
+///
+/// The residual, deliberately accepted: a client mutating the pool mid-copy can
+/// produce a **torn** image, a mix of two frames. That is a visual artefact, not
+/// a memory-safety violation, and it is what any compositor doing a software
+/// copy is exposed to.
 pub fn copy_shm(buffer: &WlBuffer) -> Option<Snapshot> {
     with_buffer_contents(buffer, |ptr, len, data| {
-        // SAFETY: we are inside `with_buffer_contents`, passing its own ptr and
-        // len unmodified, and we copy out before the callback returns.
-        let src = unsafe { borrow_pool(ptr, len) };
+        // Checked arithmetic throughout: a client controls every input here.
+        let stride: usize = usize::try_from(data.stride).ok()?;
+        let height: usize = usize::try_from(data.height).ok()?;
+        let offset: usize = usize::try_from(data.offset).ok()?;
+        let needed = stride.checked_mul(height)?;
+        let end = offset.checked_add(needed)?;
 
-        // Never trust the client's geometry against the real mapping.
-        let stride = data.stride.max(0) as usize;
-        let height = data.height.max(0) as usize;
-        let needed = stride.saturating_mul(height);
-        let offset = data.offset.max(0) as usize;
-        let end = offset.saturating_add(needed);
-        if needed == 0 || end > src.len() {
+        if needed == 0 || needed > MAX_SNAPSHOT_BYTES || end > len || ptr.is_null() {
             return None;
+        }
+
+        let mut pixels = Vec::with_capacity(needed);
+        for i in 0..needed {
+            // SAFETY: `ptr` is a live mapping of at least `len` bytes for the
+            // duration of this callback (Smithay's contract, with SIGBUS from
+            // client truncation trapped by its handler), and
+            // `offset + i < end <= len` by the checks above. `read_volatile`
+            // performs a plain read without forming a reference, so concurrent
+            // client writes tear pixels rather than causing Rust UB.
+            let byte = unsafe { ptr.add(offset + i).read_volatile() };
+            pixels.push(byte);
         }
 
         Some(Snapshot {
@@ -82,7 +72,7 @@ pub fn copy_shm(buffer: &WlBuffer) -> Option<Snapshot> {
             height: data.height,
             stride: data.stride,
             format: data.format as u32,
-            pixels: src[offset..end].to_vec(),
+            pixels,
         })
     })
     .ok()

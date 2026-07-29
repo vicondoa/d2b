@@ -22,10 +22,16 @@ GBM, and no `unsafe`.
 **Window frontend** (disposable) — a `wayland-client`. Rebuilt from scratch on
 every attach; holds no durable state.
 
-They are connected by an inherited `AF_UNIX` **`SOCK_SEQPACKET`** socketpair. One
-datagram carries exactly one frame and its descriptors, which designs out
-frame/ancillary desync rather than testing for it. It is not a filesystem
-socket, so no other process can connect and receive framebuffer descriptors.
+They are *designed* to be connected by an inherited `AF_UNIX`
+**`SOCK_SEQPACKET`** socketpair. One datagram carries exactly one frame and its
+descriptors, which designs out frame/ancillary desync rather than testing for it,
+and it is not a filesystem socket, so no other process can connect and receive
+framebuffer descriptors.
+
+> **Status:** the transport is implemented and unit-tested but **not yet the
+> live path**. Phase 1 passes shadow state through a file in the mode-0700
+> session directory and uses the control socket for close forwarding. The
+> seqpacket channel becomes load-bearing when DMA-BUF descriptors need to move.
 
 Because both halves share a machine, DMA-BUF descriptors move by `SCM_RIGHTS`
 instead of being serialised — **zero pixel copies on the steady-state path.**

@@ -53,10 +53,30 @@ window frontend (disposable)   wayland-client. Rebuilt from scratch every
 compositor (niri)
 ```
 
-Because both halves are on one machine, DMA-BUF descriptors move by
-`SCM_RIGHTS` rather than being serialised. The session host therefore never
-imports a buffer into a GPU context: **zero pixel copies, no EGL/Vulkan/GBM,
-and no `unsafe` on the data path.**
+Because both halves are on one machine, DMA-BUF descriptors are designed to move
+by `SCM_RIGHTS` rather than being serialised, so the session host never imports a
+buffer into a GPU context: **zero pixel copies, no EGL/Vulkan/GBM**.
+
+## What is actually implemented today
+
+This is a Phase-0/1 milestone. Implemented and demonstrated:
+
+* the session host, the disposable frontend, and `attach`/`detach`/`ls`/`status`;
+* **SHM** content, copied at commit and the application.s buffer released
+  immediately, so its pool keeps turning over while detached;
+* window reconstruction on a brand-new compositor connection.
+
+**Not yet wired into the live path:** the buffer ledger and the
+`SOCK_SEQPACKET` transport are implemented and unit-tested, but the running
+system currently passes shadow state through a file in the mode-0700 session
+directory and uses the control socket for close forwarding. Both become
+load-bearing when DMA-BUF lands. Also absent: input forwarding,
+`xdg_toplevel.suspended` and frame pacing, DMA-BUF, subsurfaces and popups.
+
+**On `unsafe`:** the crate is `unsafe_code = "deny"` with exactly one audited
+module, `src/serve/sys.rs`. Smithay exposes `wl_shm` contents only as a raw
+pointer, so reading them needs one `unsafe` expression. It copies with volatile
+reads and never forms a Rust reference over client-writable memory.
 
 ## What this prototype does not do
 

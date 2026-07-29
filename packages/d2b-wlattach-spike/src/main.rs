@@ -322,6 +322,11 @@ fn serve(name: &str, argv: &[String]) -> Result<(), String> {
                     cleanup(&ctl_path, &wl_path, name);
                     return Ok(());
                 }
+                v if v.starts_with("close ") => match v[6..].trim().parse::<u32>() {
+                    Ok(key) if state.request_close(key) => "close forwarded\n".to_owned(),
+                    Ok(_) => "no such window\n".to_owned(),
+                    Err(_) => "bad key\n".to_owned(),
+                },
                 "status" => status(&shadow, &hosted, false),
                 "status-json" => status(&shadow, &hosted, true),
                 other => format!("unknown verb: {other}\n"),
@@ -465,6 +470,12 @@ fn present(name: &str) -> Result<(), String> {
         // reply, which is what drives the configure -> attach -> commit dance.
         if queue.roundtrip(&mut fe).is_err() {
             break;
+        }
+
+        // Forward compositor close requests to the session host, which
+        // forwards them to the application. The application decides.
+        for key in fe.close_requested.drain(..).collect::<Vec<_>>() {
+            let _ = ctl_send(name, &format!("close {key}"));
         }
 
         if !fe.running {

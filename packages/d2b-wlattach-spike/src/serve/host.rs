@@ -175,16 +175,28 @@ impl CompositorHandler for SessionHost {
     fn commit(&mut self, surface: &WlSurface) {
         let key = Self::surface_key(surface);
         let mut snapshot = None;
+        let mut cleared = false;
         let mut title = String::new();
         let mut app_id = String::new();
 
         with_states(surface, |states| {
-            // Pull the newly committed buffer, if any.
+            // Take the committed assignment so we own the decision about when
+            // the client may reuse its memory.
             let mut attrs = states.cached_state.get::<SurfaceAttributes>();
-            if let Some(smithay::wayland::compositor::BufferAssignment::NewBuffer(buf)) =
-                attrs.current().buffer.as_ref()
-            {
-                snapshot = crate::serve::sys::copy_shm(buf);
+            match attrs.current().buffer.take() {
+                Some(smithay::wayland::compositor::BufferAssignment::NewBuffer(buf)) => {
+                    snapshot = crate::serve::sys::copy_shm(&buf);
+                    // We have our own copy, so the application may reuse the
+                    // buffer immediately. Without this a single-buffered client
+                    // stalls forever waiting for a release that never comes.
+                    buf.release();
+                }
+                Some(smithay::wayland::compositor::BufferAssignment::Removed) => {
+                    // A null commit unmaps the surface; the retained frame is no
+                    // longer what the application is showing.
+                    cleared = true;
+                }
+                None => {}
             }
 
             if let Some(data) = states.data_map.get::<XdgToplevelSurfaceData>()
@@ -209,6 +221,9 @@ impl CompositorHandler for SessionHost {
             }
             if let Some(s) = snapshot {
                 entry.snapshot = Some(s);
+            }
+            if cleared {
+                entry.snapshot = None;
             }
             shadow.revision = shadow.revision.wrapping_add(1);
         }
@@ -269,10 +284,9 @@ impl XdgShellHandler for SessionHost {
             shadow.surfaces.remove(&key);
         }
         self.toplevels.retain(|t| t != &surface);
-        if self.toplevels.is_empty() {
-            // The application closed its last window: the session is over.
-            self.running = false;
-        }
+        // Destroying the last toplevel does NOT end the session. An application
+        // may legitimately close a window and keep running; only the
+        // application process or its Wayland connection going away ends it.
     }
 }
 
@@ -312,3 +326,20 @@ smithay::delegate_data_device!(SessionHost);
 impl smithay::wayland::output::OutputHandler for SessionHost {}
 
 smithay::delegate_output!(SessionHost);
+
+impl SessionHost {
+    /// Forward a compositor close request to the application's toplevel.
+    ///
+    /// This is advisory: the application may prompt to save, ignore it, or close
+    /// only that window. It is emphatically not a detach, and it does not end
+    /// the session by itself.
+    pub fn request_close(&self, key: u32) -> bool {
+        for t in &self.toplevels {
+            if Self::surface_key(t.wl_surface()) == key {
+                t.send_close();
+                return true;
+            }
+        }
+        false
+    }
+}

@@ -36,7 +36,8 @@ thiserror = "2"
 tempfile = "3"
 
 [lints.rust]
-# `deny`, not `forbid`, because exactly one module needs unsafe: see src/serve/sys.rs.
+# `deny`, not `forbid`, because exactly one module needs unsafe: reading wl_shm
+# contents, which Smithay exposes only as a raw pointer. See src/serve/sys.rs.
 # `forbid` cannot be locally overridden, so a quarantined module requires `deny`.
 unsafe_code = "deny"
 

@@ -9,7 +9,11 @@
 //! process can connect to it and receive retained framebuffer descriptors.
 //!
 //! Everything here is safe Rust: `rustix` provides the `SCM_RIGHTS` ancillary
-//! APIs, so the crate holds `unsafe_code = "forbid"`.
+//! APIs. (The crate as a whole is `unsafe_code = "deny"` with one audited
+//! module, `serve::sys`, which this transport does not use.)
+//!
+//! **Status:** implemented and unit-tested, but not yet the live Phase-1 path.
+//! See `DESIGN.md`.
 
 use std::mem::MaybeUninit;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};

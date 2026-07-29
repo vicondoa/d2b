@@ -46,6 +46,10 @@ struct Window {
     configured: bool,
     pending: Option<ShadowSurface>,
     closed: bool,
+    /// The buffer currently attached. Destroyed when superseded, otherwise a
+    /// continuously-redrawing application leaks one wl_buffer and one pool per
+    /// frame for the frontend.s whole lifetime.
+    attached: Option<WlBuffer>,
 }
 
 pub struct Frontend {
@@ -145,6 +149,7 @@ impl Frontend {
                     configured: false,
                     pending: Some(shadow.clone()),
                     closed: false,
+                    attached: None,
                 },
             );
             return Ok(());
@@ -181,6 +186,9 @@ impl Frontend {
 
         let buffer = make_shm_buffer(&shm, snap, qh)?;
         w.surface.attach(Some(&buffer), 0, 0);
+        if let Some(old) = w.attached.replace(buffer.clone()) {
+            old.destroy();
+        }
         w.surface
             .damage_buffer(0, 0, snap.width.max(1), snap.height.max(1));
         w.surface.commit();
@@ -331,6 +339,9 @@ impl Frontend {
     /// told, and simply stops receiving frame callbacks.
     pub fn teardown(&mut self) {
         for (_, w) in self.windows.drain() {
+            if let Some(b) = w.attached {
+                b.destroy();
+            }
             w.toplevel.destroy();
             w.xdg_surface.destroy();
             w.surface.destroy();
