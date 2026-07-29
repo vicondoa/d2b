@@ -13,6 +13,8 @@ description = "Prototype rendering engine for d2b window identity chrome"
 [dependencies]
 fontdue = "0.9"
 png = "0.17"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
 tiny-skia = { version = "0.12.0", default-features = false, features = ["std", "simd"] }
 ttf-parser = { version = "0.25.1", default-features = false, features = ["std", "opentype-layout", "glyph-names"] }
 

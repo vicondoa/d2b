@@ -50,7 +50,8 @@ impl Candidate {
 
 /// One action offered when the tab is expanded. Icons are procedural so they
 /// belong to the trusted renderer rather than a themeable icon set.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum Action {
     Terminal,
     Audio,
@@ -67,6 +68,17 @@ impl Action {
         Action::Info,
         Action::Stop,
     ];
+
+    /// Stable identifier used in config, dispatch and logs.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Action::Terminal => "terminal",
+            Action::Audio => "audio",
+            Action::Usb => "usb",
+            Action::Info => "info",
+            Action::Stop => "stop",
+        }
+    }
 }
 
 /// Interaction and focus state. Identity presence never varies with these;

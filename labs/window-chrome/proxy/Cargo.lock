@@ -220,6 +220,8 @@ version = "0.0.0-prototype"
 dependencies = [
  "fontdue",
  "png",
+ "serde",
+ "serde_json",
  "tiny-skia",
  "ttf-parser 0.25.1",
 ]

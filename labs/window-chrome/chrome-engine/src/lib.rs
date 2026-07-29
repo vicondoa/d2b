@@ -14,6 +14,7 @@ pub mod tab;
 pub mod vectext;
 pub mod color;
 pub mod geom;
+pub mod parts;
 pub mod text;
 pub mod variant;
 

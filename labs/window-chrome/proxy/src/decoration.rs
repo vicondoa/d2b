@@ -508,26 +508,62 @@ pub fn chrome_hit_test(
     x: f64,
     y: f64,
 ) -> Option<TabHit> {
-    use d2b_chrome_engine::{tab, vectext::VectorFont, PROTOTYPE_FONT};
+    use d2b_chrome_engine::{parts::HitKind, tab, vectext::VectorFont, PROTOTYPE_FONT};
     let font = VectorFont::from_bytes(PROTOTYPE_FONT).ok()?;
     let spec = chrome_spec(width, label, Color::WHITE, expanded, 0);
-    let layout = tab::layout(&spec, &font, width)?;
-    match layout.hit(x, y, spec.actions.len(), spec.expanded)? {
-        None => Some(TabHit::Identity),
-        Some(i) => Some(TabHit::Action(i)),
+    let cfg = chrome_parts_config();
+    let layout = tab::layout(&spec, &cfg, &font, width)?;
+    match layout.hit_kind(x, y)? {
+        HitKind::Action(a) => Some(TabHit::Action(
+            d2b_chrome_engine::variant::Action::DEFAULTS
+                .iter()
+                .position(|d| *d == a)?,
+        )),
+        HitKind::Inert => None,
+        _ => Some(TabHit::Identity),
     }
 }
 
 /// The action at `index`, as a stable identifier for dispatch and logging.
 pub fn chrome_action_name(index: usize) -> Option<&'static str> {
     use d2b_chrome_engine::variant::Action;
-    Action::DEFAULTS.get(index).map(|a| match a {
-        Action::Terminal => "terminal",
-        Action::Audio => "audio",
-        Action::Usb => "usb",
-        Action::Info => "info",
-        Action::Stop => "stop",
+    Action::DEFAULTS.get(index).map(Action::name)
+}
+
+/// The parts configuration for the tab.
+///
+/// In the shipped design this is a Nix-generated bundle artifact. The prototype
+/// reads the same JSON from `D2B_CHROME_PARTS` so the customization model can
+/// be exercised on a live desktop without a host rebuild.
+///
+/// A malformed or invalid config is refused and logged rather than silently
+/// replaced, but the *default* row is still drawn: an unlabelled window is the
+/// security failure this surface exists to prevent, so falling back to a
+/// labelled default is strictly safer than rendering nothing.
+fn chrome_parts_config() -> d2b_chrome_engine::parts::PartsConfig {
+    use d2b_chrome_engine::parts::PartsConfig;
+    use std::sync::OnceLock;
+    static CFG: OnceLock<PartsConfig> = OnceLock::new();
+    CFG.get_or_init(|| {
+        let Ok(path) = std::env::var("D2B_CHROME_PARTS") else {
+            return PartsConfig::default();
+        };
+        match std::fs::read_to_string(&path).map_err(|e| e.to_string()).and_then(|s| {
+            PartsConfig::from_json(&s).map_err(|e| e.to_string())
+        }) {
+            Ok(cfg) => {
+                log::info!("[d2b-wlproxy] event=chrome-parts-loaded");
+                cfg
+            }
+            Err(err) => {
+                // The path is operator-supplied, so it is safe to name; the
+                // file's contents are not logged.
+                log::warn!("[d2b-wlproxy] event=chrome-parts-rejected reason={err}");
+                PartsConfig::default()
+            }
+        }
     })
+    .clone()
 }
 
 /// Build the chrome spec the proxy draws, so drawing and hit-testing cannot
@@ -572,23 +608,9 @@ fn chrome_input_region(
     use d2b_chrome_engine::{tab, vectext::VectorFont, PROTOTYPE_FONT};
     let font = VectorFont::from_bytes(PROTOTYPE_FONT).ok()?;
     let spec = chrome_spec(width, label, Color::WHITE, expanded, 0);
-    let layout = tab::layout(&spec, &font, width)?;
+    let cfg = chrome_parts_config();
+    let layout = tab::layout(&spec, &cfg, &font, width)?;
     Some(layout.input_region())
-}
-
-/// Width the action strip adds to the tab when expanded.
-fn expanded_actions_width(spec: &d2b_chrome_engine::variant::ChromeSpec) -> u32 {
-    if !spec.expanded || spec.actions.is_empty() {
-        return 0;
-    }
-    let icon_box = 18_u32;
-    let icon_gap = 4_u32;
-    let sep_gap = 6_u32;
-    sep_gap * 2
-        + 1
-        + icon_box * spec.actions.len() as u32
-        + icon_gap * (spec.actions.len() as u32 - 1)
-        + 8
 }
 
 /// Draw the reserved identity band using the prototype chrome engine, so the
@@ -610,7 +632,8 @@ fn draw_wrapper_rail(
     decoration_buffer_layout(Size::new(width, band_height))?;
     let font = VectorFont::from_bytes(PROTOTYPE_FONT).ok()?;
     let spec = chrome_spec(width, label, color, expanded, active_actions);
-    let (bytes, _) = render_band(&spec, &font, width)?;
+    let cfg = chrome_parts_config();
+    let (bytes, _) = render_band(&spec, &cfg, &font, width)?;
     Some(bytes)
 }
 
@@ -2750,35 +2773,86 @@ mod tests {
     }
 
     #[test]
-    fn wrapper_geometry_reserves_left_rail_without_moving_guest_content_vertically() {
+    fn wrapper_geometry_reserves_a_top_band_without_moving_guest_content_sideways() {
         let geometry = WrapperGeometry::from_window_geometry(WindowGeometry::new(0, 0, 800, 600))
             .expect("valid wrapper geometry");
 
         assert_eq!(geometry.rail_width, WRAPPER_RAIL_WIDTH);
         assert_eq!(geometry.content, Size::new(800, 600));
-        assert_eq!(geometry.outer, Size::new(809, 600));
-        assert_eq!(geometry.guest_offset, Point { x: 9, y: 0 });
+        // The band is reserved at the top: width is untouched, height grows,
+        // and the guest is pushed down rather than right.
+        assert_eq!(
+            geometry.outer,
+            Size::new(800, 600 + WRAPPER_RAIL_WIDTH)
+        );
+        assert_eq!(
+            geometry.guest_offset,
+            Point {
+                x: 0,
+                y: WRAPPER_RAIL_WIDTH as i32
+            }
+        );
     }
 
     #[test]
-    fn wrapper_rail_draws_only_proxy_owned_rail_pixels() {
+    fn wrapper_rail_draws_only_proxy_owned_band_pixels() {
         let label = sanitize_label("personal-dev");
+        let width = 400_u32;
         let pixels = draw_wrapper_rail(
+            width,
             WRAPPER_RAIL_WIDTH,
-            120,
             Color::rgb(0, 255, 0),
             label.as_ref(),
+            false,
+            0,
         )
-        .expect("valid wrapper rail");
-        let row_len = WRAPPER_RAIL_WIDTH as usize * BYTES_PER_PIXEL as usize;
-        let green = Color::rgb(0, 255, 0).argb8888_bytes();
+        .expect("valid wrapper band");
 
-        assert_eq!(pixels.len(), row_len * 120);
-        assert!(
-            pixels
-                .chunks_exact(row_len)
-                .all(|row| { row.chunks_exact(4).any(|px| px == green) })
+        // The buffer is exactly the band strip: full width, band height.
+        assert_eq!(
+            pixels.len(),
+            width as usize * WRAPPER_RAIL_WIDTH as usize * BYTES_PER_PIXEL as usize
         );
+        // Chrome pixels are proxy-owned and premultiplied; no channel may
+        // exceed alpha, which is what wl_shm ARGB8888 requires.
+        for px in pixels.chunks_exact(BYTES_PER_PIXEL as usize) {
+            let a = px[3];
+            assert!(
+                px[0] <= a && px[1] <= a && px[2] <= a,
+                "band pixel is not premultiplied: {px:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn band_hit_test_resolves_identity_and_actions_without_dead_zones() {
+        // Guards the defect class this prototype exists to fix: the drawn tab
+        // and the hit-test must be measured once, together.
+        let label = sanitize_label("work");
+        let width = 800_u32;
+        let region = chrome_input_region(width, label.as_ref(), true)
+            .expect("expanded tab has an input region");
+        let (rx, ry, rw, rh) = region;
+
+        let mid_y = f64::from(ry) + f64::from(rh) / 2.0;
+        let mut x = f64::from(rx);
+        let mut actions = Vec::new();
+        while x < f64::from(rx + rw) {
+            let hit = chrome_hit_test(width, label.as_ref(), true, x, mid_y);
+            assert!(hit.is_some(), "dead zone inside the tab at x={x}");
+            if let Some(TabHit::Action(i)) = hit
+                && actions.last() != Some(&i)
+            {
+                actions.push(i);
+            }
+            x += 0.5;
+        }
+        assert_eq!(actions, vec![0, 1, 2, 3, 4], "actions must resolve in order");
+
+        // And nothing outside it.
+        assert!(chrome_hit_test(width, label.as_ref(), true, f64::from(rx) - 8.0, mid_y).is_none());
+        assert!(chrome_hit_test(width, label.as_ref(), true, f64::from(rx + rw) + 8.0, mid_y)
+            .is_none());
     }
 
     #[test]

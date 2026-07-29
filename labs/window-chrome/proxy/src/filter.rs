@@ -3000,37 +3000,38 @@ mod tests {
     }
 
     #[test]
-    fn wrapper_pointer_enter_translates_content_but_suppresses_rail() {
-        let rail_edge = Fixed::from_i32_saturating(WRAPPER_RAIL_WIDTH as i32);
-        let content_x = Fixed::from_i32_saturating(WRAPPER_RAIL_WIDTH as i32 + 42);
+    fn wrapper_pointer_enter_translates_content_but_suppresses_the_band() {
+        // The band is at the top, so the translated axis is y, not x.
+        let band_edge = Fixed::from_i32_saturating(WRAPPER_RAIL_WIDTH as i32);
+        let content_y = Fixed::from_i32_saturating(WRAPPER_RAIL_WIDTH as i32 + 42);
 
-        assert_eq!(wrapper_content_pointer_x(Fixed::ZERO), None);
-        assert_eq!(wrapper_content_pointer_x(rail_edge), Some(Fixed::ZERO));
+        assert_eq!(wrapper_content_pointer_y(Fixed::ZERO), None);
+        assert_eq!(wrapper_content_pointer_y(band_edge), Some(Fixed::ZERO));
         assert_eq!(
-            wrapper_content_pointer_x(content_x),
+            wrapper_content_pointer_y(content_y),
             Some(Fixed::from_i32_saturating(42))
         );
     }
 
     #[test]
     fn pointer_motion_translation_matches_current_focus() {
-        let wrapper_x = Fixed::from_i32_saturating(WRAPPER_RAIL_WIDTH as i32 + 10);
-        let direct_x = Fixed::from_i32_saturating(10);
+        let wrapper_y = Fixed::from_i32_saturating(WRAPPER_RAIL_WIDTH as i32 + 10);
+        let direct_y = Fixed::from_i32_saturating(10);
 
         assert_eq!(
-            pointer_motion_x_for_focus(PointerFocus::WrapperContent, wrapper_x),
+            pointer_motion_y_for_focus(PointerFocus::WrapperContent, wrapper_y),
             Some(Fixed::from_i32_saturating(10))
         );
         assert_eq!(
-            pointer_motion_x_for_focus(PointerFocus::Direct, direct_x),
-            Some(direct_x)
+            pointer_motion_y_for_focus(PointerFocus::Direct, direct_y),
+            Some(direct_y)
         );
         assert_eq!(
-            pointer_motion_x_for_focus(PointerFocus::Rail, wrapper_x),
+            pointer_motion_y_for_focus(PointerFocus::Rail, wrapper_y),
             None
         );
         assert_eq!(
-            pointer_motion_x_for_focus(PointerFocus::None, wrapper_x),
+            pointer_motion_y_for_focus(PointerFocus::None, wrapper_y),
             None
         );
     }
