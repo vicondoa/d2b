@@ -34,11 +34,7 @@ const CLAIM_TYPE_IDENTITIES: &[&str] = &["ResourceRef", "ResourceUid"];
 fn public_api_has_only_the_approved_capability_mint_surface() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repository_root = crate_root.parent().unwrap().parent().unwrap();
-    let scratch = Scratch::new(
-        repository_root
-            .join(".scratch")
-            .join(format!("bus-public-api-{}", std::process::id())),
-    );
+    let scratch = Scratch::cache(repository_root.join(".scratch").join("bus-public-api"));
     let temp = scratch.path().join("tmp");
     fs::create_dir_all(&temp).expect("create repository-local rustdoc scratch");
 
@@ -151,10 +147,10 @@ fn assert_mutation_fixture(workspace_docs: &[DocumentedCrate]) {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repository_root = crate_root.parent().unwrap().parent().unwrap();
     let fixture = crate_root.join("tests/ui/public-api-mutations");
-    let scratch = Scratch::new(
+    let scratch = Scratch::cache(
         repository_root
             .join(".scratch")
-            .join(format!("bus-public-api-mutations-{}", std::process::id())),
+            .join("bus-public-api-mutations"),
     );
     let temp = scratch.path().join("tmp");
     fs::create_dir_all(&temp).expect("create repository-local mutation scratch");
@@ -621,7 +617,7 @@ fn panic_message(failure: &Box<dyn std::any::Any + Send>) -> &str {
 
 fn assert_module_source_mutations_fail_closed(crate_root: &Path) {
     let repository_root = crate_root.parent().unwrap().parent().unwrap();
-    let scratch = Scratch::new(repository_root.join(".scratch").join(format!(
+    let scratch = Scratch::ephemeral(repository_root.join(".scratch").join(format!(
         "bus-source-module-mutations-{}",
         std::process::id()
     )));
@@ -1215,26 +1211,126 @@ fn assert_partial_render_fails_closed(docs: &[DocumentedCrate]) {
     );
 }
 
-struct Scratch(PathBuf);
+/// A repository-local scratch tree that caches rustdoc's *compilation* work
+/// across runs while keeping its *rendered output* per-run.
+///
+/// Rendering the workspace costs one `cargo doc` per package, and the tree used
+/// to be per-process and deleted on drop, so every one of those invocations
+/// recompiled the whole dependency graph from cold on every run. That is the
+/// dominant cost of this test.
+///
+/// The split matters, and the two halves are not equally safe to reuse:
+///
+/// * `build/` (`CARGO_BUILD_BUILD_DIR`) holds compiled dependency artifacts and
+///   is reused between runs. Cargo owns staleness through its own fingerprints,
+///   so a surviving build directory cannot make a changed crate look unchanged.
+///
+/// * `renders/` holds rustdoc's HTML and is reset on every run by
+///   [`render_workspace_docs`]. It must NOT be reused, because a package with a
+///   `lib` and a `bin` of the same name (`d2b` is one) renders both targets into
+///   a single `doc/<crate>` directory. That is an output filename collision: on
+///   a clean directory both targets always render, but against a warm one Cargo
+///   re-runs only the target it considers dirty and overwrites the shared
+///   directory with just that target's pages. The lost pages are exactly the
+///   private items `--document-private-items` exists to surface, so a cached
+///   render can silently shrink the inventory this guard compares against.
+///   Resetting the output keeps the comparison fail-closed and reproduces the
+///   original per-run semantics exactly.
+///
+/// Concurrency is delegated to Cargo's target-directory lock, which serializes
+/// concurrent `cargo doc` invocations against the same directory. The only
+/// non-Cargo mutations are directory creation and dependency symlink planting,
+/// and both are idempotent (see `plant_dependency_doc_link`).
+///
+/// Set `D2B_BUS_PUBLIC_API_FRESH=1` to discard the compilation cache too and
+/// render fully cold.
+struct Scratch {
+    path: PathBuf,
+    kind: ScratchKind,
+}
+
+/// Whether a [`Scratch`] tree outlives the process that created it.
+enum ScratchKind {
+    /// Survives between runs and is addressed by a stable, process-independent
+    /// path. Used for the rustdoc trees, where the whole point is to let Cargo
+    /// reuse compiled dependencies.
+    ///
+    /// A stable path is also what makes this leak-proof: an interrupted run
+    /// leaves a directory the next run adopts, rather than stranding a
+    /// multi-gigabyte per-process tree that nothing will ever collect.
+    Cache,
+    /// Deleted on drop. Used for the small synthetic source trees the
+    /// fail-closed mutation fixtures plant, which must never be reused because
+    /// each case writes a differently-shaped module layout.
+    Ephemeral,
+}
 
 impl Scratch {
-    fn new(path: PathBuf) -> Self {
+    fn cache(path: PathBuf) -> Self {
+        if std::env::var_os("D2B_BUS_PUBLIC_API_FRESH").is_some() && path.exists() {
+            fs::remove_dir_all(&path).expect("discard repository-local rustdoc cache");
+        }
+        fs::create_dir_all(&path).expect("create repository-local scratch");
+        Self {
+            path,
+            kind: ScratchKind::Cache,
+        }
+    }
+
+    fn ephemeral(path: PathBuf) -> Self {
         if path.exists() {
             fs::remove_dir_all(&path).expect("remove stale repository-local scratch");
         }
         fs::create_dir_all(&path).expect("create repository-local scratch");
-        Self(path)
+        Self {
+            path,
+            kind: ScratchKind::Ephemeral,
+        }
     }
 
     fn path(&self) -> &Path {
-        &self.0
+        &self.path
     }
 }
 
 impl Drop for Scratch {
     fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
+        if matches!(self.kind, ScratchKind::Ephemeral) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
     }
+}
+
+/// Point `<doc_root>/<crate_name>` at an already-rendered dependency doc tree.
+///
+/// Rustdoc resolves cross-crate trait and Deref regions through sibling
+/// directories under its own output root, so each package render needs its
+/// dependencies' rendered trees visible there. The cache in [`Scratch`]
+/// survives between runs, so this has to converge rather than assume a clean
+/// tree: a link left by an earlier run may be correct, may point at a path that
+/// has since moved, or may dangle entirely. `Path::exists` follows symlinks and
+/// so reports `false` for a dangling one, which would make a naive
+/// create-if-absent call fail with `EEXIST`.
+///
+/// Replacing only what does not already match keeps the common warm path free
+/// of filesystem churn while still repairing a stale or dangling link.
+fn plant_dependency_doc_link(
+    doc_root: &Path,
+    crate_name: &str,
+    target: &Path,
+) -> std::io::Result<()> {
+    let link = doc_root.join(crate_name);
+    match fs::read_link(&link) {
+        // Already pointing where we want it.
+        Ok(existing) if existing == target => return Ok(()),
+        // A symlink to somewhere else, or a dangling one: replace it.
+        Ok(_) => fs::remove_file(&link)?,
+        // Not a symlink. A real directory here is a rendered crate Cargo owns,
+        // which is exactly what we would have linked to, so leave it alone.
+        Err(_) if link.exists() => return Ok(()),
+        Err(_) => {}
+    }
+    std::os::unix::fs::symlink(target, &link)
 }
 
 fn source_occurrences(source: &str, needle: &str) -> usize {
@@ -1372,7 +1468,14 @@ fn render_workspace_docs(
     let packages = workspace_render_packages(manifest);
     let temp = scratch.join("tmp");
     fs::create_dir_all(&temp).expect("create rustdoc temporary directory");
+    // Compiled artifacts persist across runs; rendered HTML does not. See the
+    // `Scratch` docs for why reusing a render is unsafe for packages whose lib
+    // and bin targets collide on one output directory.
     let build = scratch.join("build");
+    let renders = scratch.join("renders");
+    if renders.exists() {
+        fs::remove_dir_all(&renders).expect("reset rustdoc render output");
+    }
     let mut docs = Vec::new();
     for (package_name, package) in dependency_order(packages) {
         let crate_name = package.crate_name;
@@ -1382,22 +1485,19 @@ fn render_workspace_docs(
             &package.source,
             &package.external_crates,
         );
-        let target = scratch.join("renders").join(&crate_name);
+        let target = renders.join(&crate_name);
         let doc_root = target.join("doc");
         fs::create_dir_all(&doc_root).unwrap_or_else(|_| {
             panic!("create isolated rustdoc output for package {package_name}")
         });
         for documented in external_docs.iter().chain(docs.iter()) {
-            let link = doc_root.join(&documented.crate_name);
-            if link.exists() {
-                continue;
-            }
-            std::os::unix::fs::symlink(&documented.root, &link).unwrap_or_else(|_| {
-                panic!(
-                    "link rustdoc dependency {} while rendering package {package_name}",
-                    documented.crate_name
-                )
-            });
+            plant_dependency_doc_link(&doc_root, &documented.crate_name, &documented.root)
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "link rustdoc dependency {} while rendering package {package_name}: {error}",
+                        documented.crate_name
+                    )
+                });
         }
         let mut command = Command::new(env!("CARGO"));
         command
@@ -1426,7 +1526,6 @@ fn render_workspace_docs(
             .arg(&target)
             .env("CARGO_BUILD_BUILD_DIR", &build)
             .env("TMPDIR", &temp)
-            .env("RUSTC_WRAPPER", "")
             .output()
             .unwrap_or_else(|_| panic!("start rustdoc for package {package_name}"));
         if !output.status.success() {
