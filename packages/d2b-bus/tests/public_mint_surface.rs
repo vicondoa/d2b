@@ -84,11 +84,11 @@ fn public_api_has_only_the_approved_capability_mint_surface() {
         );
         write_snapshot(
             &crate_root.join("tests/approved-hidden-public-api.txt"),
-            &hidden_public,
+            &hidden_public.entries,
         );
         write_snapshot(
             &crate_root.join("tests/approved-capability-trait-impls.txt"),
-            &capability_trait_impls,
+            &capability_trait_impls.entries,
         );
         return;
     }
@@ -195,6 +195,7 @@ fn assert_mutation_fixture(workspace_docs: &[DocumentedCrate]) {
     );
     let hidden_public = workspace_hidden_public_api(&docs);
     let hidden_rogue = hidden_public
+        .entries
         .iter()
         .find(|symbol| symbol.contains("hidden_rogue_admission"))
         .unwrap_or_else(|| {
@@ -203,11 +204,27 @@ fn assert_mutation_fixture(workspace_docs: &[DocumentedCrate]) {
     let hidden_rogue_name = hidden_rogue
         .split_once('\t')
         .map_or(hidden_rogue.as_str(), |(name, _)| name);
+    let hidden_const_generic = hidden_public
+        .entries
+        .iter()
+        .find(|symbol| symbol.contains("hidden_const_generic_path"))
+        .expect("hidden const-generic mutation was inventoried");
+    assert!(
+        hidden_const_generic.contains("/home/alice/private/secret.rs"),
+        "hidden API snapshot did not retain its rendered signature: {hidden_const_generic}"
+    );
     let error = hidden_public_inventory_error(&hidden_public, &BTreeSet::new())
         .expect("hidden rogue ComponentSessionAdmission factory passed the inventory");
     assert!(
-        error.contains(hidden_rogue_name),
-        "hidden public inventory did not name the rogue admission factory: {error}"
+        error.contains(hidden_rogue_name)
+            && error.contains("hidden public function")
+            && error.contains("d2b_bus_public_api_mutations (lib.rs)"),
+        "hidden public inventory did not identify the rogue admission factory with fixed \
+         metadata: {error}"
+    );
+    assert!(
+        !error.contains("/home/alice/private/secret.rs"),
+        "hidden public inventory diagnostic echoed a const-generic path literal: {error}"
     );
     assert!(
         capabilities
@@ -325,6 +342,16 @@ impl From<Arc<ComponentSessionAdmissionIdentity>> for ComponentSessionAdmission 
             "second",
         ),
         (
+            "trait-impl-glob-module.rs",
+            "cannot resolve module alias aliases in impl self type aliases::Admission",
+            "aliases",
+        ),
+        (
+            "trait-impl-group-glob-module.rs",
+            "cannot resolve module alias aliases in impl self type aliases::Admission",
+            "aliases",
+        ),
+        (
             "trait-impl-lexical-alias.rs",
             "lexically scoped",
             "AdmissionAlias",
@@ -382,14 +409,19 @@ fn assert_trait_impl_source_fails(
     expected_trait: &str,
 ) {
     let inventory = source_capability_inventory_from_text("d2b_bus", source, source_name);
-    let mut mutated = approved.clone();
-    mutated.extend(inventory.trait_impls);
+    let mut mutated = InventorySnapshot {
+        entries: approved.clone(),
+        diagnostics: BTreeMap::new(),
+    };
+    mutated.entries.extend(inventory.trait_impls);
+    mutated.diagnostics.extend(inventory.trait_impl_diagnostics);
     let error = capability_trait_impl_inventory_error(&mutated, approved)
         .unwrap_or_else(|| panic!("{expected_trait} capability trait implementation passed"));
     assert!(
-        error.contains("ComponentSessionAdmission") && error.contains(expected_trait),
-        "trait-implementation inventory did not name the rogue {expected_trait} \
-         implementation: {error}"
+        error.contains("implementation d2b_bus::ComponentSessionAdmission")
+            && error.contains(source_name),
+        "trait-implementation inventory did not identify the rogue {expected_trait} \
+         implementation with fixed metadata: {error}"
     );
 }
 
@@ -402,7 +434,7 @@ fn assert_trait_impl_source_scan_fails_closed(
     let failure = match std::panic::catch_unwind(|| {
         source_capability_inventory_from_text("d2b_bus", source, source_name)
     }) {
-        Ok(_) => panic!("unresolvable capability alias passed the source inventory"),
+        Ok(_) => panic!("{source_name} unresolvable capability alias passed the source inventory"),
         Err(failure) => failure,
     };
     let diagnostic = failure
@@ -421,6 +453,35 @@ fn assert_trait_impl_source_scan_fails_closed(
 }
 
 fn assert_source_diagnostics_redact_attacker_content(fixture: &Path) {
+    let const_generic_name = "trait-impl-const-generic-redaction.rs";
+    let const_generic = fs::read_to_string(fixture.join(const_generic_name))
+        .expect("read const-generic redaction fixture");
+    let inventory =
+        source_capability_inventory_from_text("d2b_bus", &const_generic, const_generic_name);
+    let rendered = inventory
+        .trait_impls
+        .iter()
+        .find(|entry| entry.contains("ComponentSessionAdmission"))
+        .expect("const-generic capability impl was inventoried");
+    assert!(
+        rendered.contains("/home/alice/private/secret.rs"),
+        "trait snapshot did not retain the rendered signature needed by the allowlist: {rendered}"
+    );
+    let actual = InventorySnapshot {
+        entries: inventory.trait_impls,
+        diagnostics: inventory.trait_impl_diagnostics,
+    };
+    let diagnostic = capability_trait_impl_inventory_error(&actual, &BTreeSet::new())
+        .expect("const-generic capability impl passed the inventory");
+    assert!(
+        diagnostic.contains("explicit trait implementation")
+            && diagnostic.contains("d2b_bus::ComponentSessionAdmission")
+            && diagnostic.contains(const_generic_name)
+            && !diagnostic.contains("/home/alice/private/secret.rs"),
+        "trait inventory diagnostic did not separate fixed metadata from the rendered snapshot: \
+         {diagnostic}"
+    );
+
     let unsupported_alias_name = "trait-impl-unsupported-alias-redaction.rs";
     let unsupported_alias = fs::read_to_string(fixture.join(unsupported_alias_name))
         .expect("read unsupported alias redaction fixture");
@@ -585,6 +646,87 @@ fn assert_module_source_mutations_fail_closed(crate_root: &Path) {
     assert!(
         !missing_path_diagnostic.contains("/home/alice/private/missing.rs"),
         "missing-path diagnostic echoed an untrusted path literal: {missing_path_diagnostic}"
+    );
+
+    let block_local_selected = scratch.path().join("block-local-selected");
+    fs::create_dir_all(&block_local_selected).expect("create block-local selected fixture");
+    fs::write(
+        block_local_selected.join("lib.rs"),
+        r#"
+fn declare_local_module() {
+    #[path = "selected.rs"]
+    mod local;
+}
+"#,
+    )
+    .expect("write block-local selected root");
+    fs::write(
+        block_local_selected.join("selected.rs"),
+        r#"
+pub struct ComponentSessionAdmission;
+
+impl From<()> for ComponentSessionAdmission {
+    fn from(_: ()) -> Self {
+        Self
+    }
+}
+"#,
+    )
+    .expect("write block-local selected module");
+    let block_local_inventory =
+        source_capability_inventory("d2b_bus", &block_local_selected.join("lib.rs"));
+    assert!(
+        block_local_inventory
+            .trait_impls
+            .iter()
+            .any(|implementation| {
+                implementation.contains("ComponentSessionAdmission")
+                    && implementation.contains("From<()>")
+            }),
+        "block-local external module did not contribute its capability impl: {:?}",
+        block_local_inventory.trait_impls
+    );
+
+    let block_local_attribute = scratch.path().join("block-local-attribute");
+    fs::create_dir_all(&block_local_attribute).expect("create block-local attribute fixture");
+    fs::write(
+        block_local_attribute.join("lib.rs"),
+        r#"
+fn declare_local_module() {
+    #[security_tool::rewrite_module]
+    mod local {}
+}
+"#,
+    )
+    .expect("write block-local attribute root");
+    let block_attribute_diagnostic = assert_source_file_scan_fails_closed(
+        &block_local_attribute.join("lib.rs"),
+        &[
+            "unsupported direct module attribute",
+            "local",
+            "d2b_bus (lib.rs)",
+        ],
+    );
+    assert!(
+        !block_attribute_diagnostic.contains("security_tool")
+            && !block_attribute_diagnostic.contains("rewrite_module"),
+        "block-local attribute diagnostic echoed untrusted tokens: {block_attribute_diagnostic}"
+    );
+
+    let block_local_missing = scratch.path().join("block-local-missing");
+    fs::create_dir_all(&block_local_missing).expect("create block-local missing fixture");
+    fs::write(
+        block_local_missing.join("lib.rs"),
+        "fn declare_local_module() { mod absent; }\n",
+    )
+    .expect("write block-local missing root");
+    assert_source_file_scan_fails_closed(
+        &block_local_missing.join("lib.rs"),
+        &[
+            "cannot resolve Rust module d2b_bus::absent",
+            "d2b_bus (lib.rs)",
+            "partial source scan",
+        ],
     );
 
     let inert_cfg_attr = scratch.path().join("inert-cfg-attr");
@@ -1098,8 +1240,29 @@ struct DocumentedCrate {
     root: PathBuf,
     advertised: Vec<AdvertisedItem>,
     hidden_public: BTreeSet<String>,
+    hidden_public_diagnostics: BTreeMap<String, InventoryDiagnostic>,
     capability_declarations: BTreeMap<String, BTreeSet<String>>,
     capability_trait_impls: BTreeSet<String>,
+    capability_trait_impl_diagnostics: BTreeMap<String, InventoryDiagnostic>,
+}
+
+#[derive(Debug, Clone)]
+struct InventoryDiagnostic {
+    syntax_kind: &'static str,
+    identity: String,
+    source: String,
+}
+
+impl InventoryDiagnostic {
+    fn render(&self) -> String {
+        format!("{} {} at {}", self.syntax_kind, self.identity, self.source)
+    }
+}
+
+#[derive(Default)]
+struct InventorySnapshot {
+    entries: BTreeSet<String>,
+    diagnostics: BTreeMap<String, InventoryDiagnostic>,
 }
 
 #[derive(Debug, Clone)]
@@ -1313,24 +1476,33 @@ fn render_workspace_docs(
             crate_name,
             root,
             advertised,
-            hidden_public,
+            hidden_public: hidden_public.entries,
+            hidden_public_diagnostics: hidden_public.diagnostics,
             capability_declarations: source_capabilities.declarations,
             capability_trait_impls: source_capabilities.trait_impls,
+            capability_trait_impl_diagnostics: source_capabilities.trait_impl_diagnostics,
         });
     }
     docs.sort_by(|left, right| left.crate_name.cmp(&right.crate_name));
     docs
 }
 
-fn workspace_hidden_public_api(docs: &[DocumentedCrate]) -> BTreeSet<String> {
-    docs.iter()
-        .flat_map(|documented| documented.hidden_public.iter().cloned())
-        .collect()
+fn workspace_hidden_public_api(docs: &[DocumentedCrate]) -> InventorySnapshot {
+    let mut inventory = InventorySnapshot::default();
+    for documented in docs {
+        inventory
+            .entries
+            .extend(documented.hidden_public.iter().cloned());
+        inventory
+            .diagnostics
+            .extend(documented.hidden_public_diagnostics.clone());
+    }
+    inventory
 }
 
-fn workspace_capability_trait_impls(docs: &[DocumentedCrate]) -> BTreeSet<String> {
+fn workspace_capability_trait_impls(docs: &[DocumentedCrate]) -> InventorySnapshot {
     let mut declarations = BTreeMap::<String, BTreeSet<String>>::new();
-    let mut trait_impls = BTreeSet::new();
+    let mut inventory = InventorySnapshot::default();
     for documented in docs {
         for (identity, locations) in &documented.capability_declarations {
             declarations
@@ -1338,7 +1510,12 @@ fn workspace_capability_trait_impls(docs: &[DocumentedCrate]) -> BTreeSet<String
                 .or_default()
                 .extend(locations.iter().cloned());
         }
-        trait_impls.extend(documented.capability_trait_impls.iter().cloned());
+        inventory
+            .entries
+            .extend(documented.capability_trait_impls.iter().cloned());
+        inventory
+            .diagnostics
+            .extend(documented.capability_trait_impl_diagnostics.clone());
     }
     for identity in CAPABILITY_TYPE_IDENTITIES {
         let locations = declarations.get(*identity).cloned().unwrap_or_default();
@@ -1357,25 +1534,34 @@ fn workspace_capability_trait_impls(docs: &[DocumentedCrate]) -> BTreeSet<String
         unexpected.is_empty(),
         "unexpected capability source identities: {unexpected:?}"
     );
-    trait_impls
+    inventory
 }
 
-fn assert_capability_trait_impl_inventory(actual: &BTreeSet<String>, approved: &BTreeSet<String>) {
+fn assert_capability_trait_impl_inventory(actual: &InventorySnapshot, approved: &BTreeSet<String>) {
     if let Some(error) = capability_trait_impl_inventory_error(actual, approved) {
         panic!("{error}");
     }
 }
 
 fn capability_trait_impl_inventory_error(
-    actual: &BTreeSet<String>,
+    actual: &InventorySnapshot,
     approved: &BTreeSet<String>,
 ) -> Option<String> {
-    let unapproved = actual.difference(approved).take(40).collect::<Vec<_>>();
+    let unapproved = actual
+        .entries
+        .difference(approved)
+        .take(40)
+        .map(|entry| {
+            actual.diagnostics.get(entry).map_or_else(
+                || "unapproved trait implementation at unknown source".to_owned(),
+                InventoryDiagnostic::render,
+            )
+        })
+        .collect::<Vec<_>>();
     let missing = approved
         .iter()
-        .filter(|entry| !actual.contains(*entry))
-        .take(40)
-        .collect::<Vec<_>>();
+        .filter(|entry| !actual.entries.contains(*entry))
+        .count();
     if !unapproved.is_empty() {
         return Some(format!(
             "a trait implementation on a capability type is outside the \
@@ -1383,63 +1569,64 @@ fn capability_trait_impl_inventory_error(
              {unapproved:?}). Review whether this trait can mint, clone, or \
              otherwise widen the capability before updating \
              approved-capability-trait-impls.txt.",
-            actual.difference(approved).count()
+            actual.entries.difference(approved).count()
         ));
     }
-    if missing.is_empty() {
+    if missing == 0 {
         None
     } else {
         Some(format!(
-            "{} approved capability trait implementations are absent (first 40: \
-             {missing:?}); review whether each implementation was intentionally \
-             removed before updating approved-capability-trait-impls.txt",
-            approved
-                .iter()
-                .filter(|entry| !actual.contains(*entry))
-                .count()
+            "{missing} approved capability trait implementations are absent; review whether \
+             each implementation was intentionally removed before updating \
+             approved-capability-trait-impls.txt"
         ))
     }
 }
 
-fn assert_hidden_public_inventory(actual: &BTreeSet<String>, approved: &BTreeSet<String>) {
+fn assert_hidden_public_inventory(actual: &InventorySnapshot, approved: &BTreeSet<String>) {
     if let Some(error) = hidden_public_inventory_error(actual, approved) {
         panic!("{error}");
     }
 }
 
 fn hidden_public_inventory_error(
-    actual: &BTreeSet<String>,
+    actual: &InventorySnapshot,
     approved: &BTreeSet<String>,
 ) -> Option<String> {
-    let unapproved = actual.difference(approved).take(40).collect::<Vec<_>>();
+    let unapproved = actual
+        .entries
+        .difference(approved)
+        .take(40)
+        .map(|entry| {
+            actual.diagnostics.get(entry).map_or_else(
+                || "unapproved hidden public item at unknown source".to_owned(),
+                InventoryDiagnostic::render,
+            )
+        })
+        .collect::<Vec<_>>();
     let missing = approved
         .iter()
-        .filter(|entry| !actual.contains(*entry))
-        .take(40)
-        .collect::<Vec<_>>();
+        .filter(|entry| !actual.entries.contains(*entry))
+        .count();
     if !unapproved.is_empty() {
         return Some(format!(
             "a public doc(hidden) signature is outside the reviewed hidden API; \
                  unapproved {} (first 40: {unapproved:?}). This inventory is required \
                  because the pinned stable rustdoc does not render hidden items.",
-            actual.difference(approved).count()
+            actual.entries.difference(approved).count()
         ));
     }
-    if missing.is_empty() {
+    if missing == 0 {
         None
     } else {
         Some(format!(
-            "{} reviewed public doc(hidden) signatures are absent (first 40: \
-                 {missing:?}); review whether the API was intentionally removed",
-            approved
-                .iter()
-                .filter(|entry| !actual.contains(*entry))
-                .count()
+            "{missing} reviewed public doc(hidden) signatures are absent; review whether the \
+             API was intentionally removed"
         ))
     }
 }
 
-fn hidden_public_api(crate_name: &str, source: &Path) -> BTreeSet<String> {
+fn hidden_public_api(crate_name: &str, source: &Path) -> HiddenPublicInventory {
     let source_root = source
         .parent()
         .expect("library target source has a parent directory")
@@ -1448,10 +1635,26 @@ fn hidden_public_api(crate_name: &str, source: &Path) -> BTreeSet<String> {
         crate_name,
         source_root,
         entries: BTreeSet::new(),
+        diagnostics: BTreeMap::new(),
         visited: BTreeMap::new(),
     };
     scanner.scan_file(source, &[], SourceFileKind::CrateRoot, false);
-    scanner.entries
+    HiddenPublicInventory {
+        entries: scanner.entries,
+        diagnostics: scanner.diagnostics,
+    }
+}
+
+#[derive(Debug)]
+struct HiddenPublicInventory {
+    entries: BTreeSet<String>,
+    diagnostics: BTreeMap<String, InventoryDiagnostic>,
+}
+
+impl HiddenPublicInventory {
+    fn iter(&self) -> impl Iterator<Item = &String> {
+        self.entries.iter()
+    }
 }
 
 // This syntax-level inventory supplies best-effort breadth beyond the
@@ -1464,6 +1667,7 @@ fn hidden_public_api(crate_name: &str, source: &Path) -> BTreeSet<String> {
 struct SourceCapabilityInventory {
     declarations: BTreeMap<String, BTreeSet<String>>,
     trait_impls: BTreeSet<String>,
+    trait_impl_diagnostics: BTreeMap<String, InventoryDiagnostic>,
 }
 
 fn source_capability_inventory(crate_name: &str, source: &Path) -> SourceCapabilityInventory {
@@ -1551,59 +1755,70 @@ impl CapabilitySourceScanner<'_> {
         let path_base = source
             .parent()
             .expect("lexical Rust source has a parent directory");
-        self.scan_external_modules(
-            &file.items,
-            module_path,
-            &module_dir,
-            path_base,
-            &logical_source,
-        );
-    }
-
-    fn scan_external_modules(
-        &mut self,
-        items: &[Item],
-        module_path: &[String],
-        module_dir: &Path,
-        path_base: &Path,
-        logical_source: &str,
-    ) {
-        for item in items {
-            let Item::Mod(module) = item else {
-                continue;
-            };
-            let module_name = ident_name(&module.ident);
-            let child_dir = module_dir.join(&module_name);
-            let mut child_path = module_path.to_vec();
-            child_path.push(module_name);
-            if let Some((_, items)) = &module.content {
-                let inline_dir = module_path_override(module, path_base, logical_source)
-                    .unwrap_or_else(|| child_dir.clone());
-                self.scan_external_modules(
-                    items,
-                    &child_path,
-                    &inline_dir,
-                    &inline_dir,
-                    logical_source,
-                );
-            } else {
-                let source =
-                    module_source(module, module_dir, path_base, &child_dir, logical_source)
-                        .unwrap_or_else(|| {
-                            panic!(
-                                "cannot resolve Rust module {}::{} in {logical_source}; \
-                                 capability trait inventory refuses a partial source scan",
-                                self.crate_name,
-                                child_path.join("::")
-                            )
-                        });
-                self.scan_file(&source.path, &child_path, source.kind);
-            }
+        let mut module_scanner = CapabilityModuleScanner {
+            scanner: self,
+            module_path: module_path.to_vec(),
+            module_dir,
+            path_base: path_base.to_path_buf(),
+            logical_source,
+        };
+        for item in &file.items {
+            module_scanner.visit_item(item);
         }
     }
 
     fn finish(self) -> SourceCapabilityInventory {
         finish_source_capability_inventory(self.crate_name, self.facts)
+    }
+}
+
+struct CapabilityModuleScanner<'scanner, 'crate_name> {
+    scanner: &'scanner mut CapabilitySourceScanner<'crate_name>,
+    module_path: Vec<String>,
+    module_dir: PathBuf,
+    path_base: PathBuf,
+    logical_source: String,
+}
+
+impl<'ast> Visit<'ast> for CapabilityModuleScanner<'_, '_> {
+    fn visit_item_mod(&mut self, module: &'ast syn::ItemMod) {
+        let module_name = ident_name(&module.ident);
+        let child_dir = self.module_dir.join(&module_name);
+        let mut child_path = self.module_path.clone();
+        child_path.push(module_name);
+        if let Some((_, items)) = &module.content {
+            let inline_dir = module_path_override(module, &self.path_base, &self.logical_source)
+                .unwrap_or(child_dir);
+            let mut child_scanner = CapabilityModuleScanner {
+                scanner: &mut *self.scanner,
+                module_path: child_path,
+                module_dir: inline_dir.clone(),
+                path_base: inline_dir,
+                logical_source: self.logical_source.clone(),
+            };
+            for item in items {
+                child_scanner.visit_item(item);
+            }
+        } else {
+            let source = module_source(
+                module,
+                &self.module_dir,
+                &self.path_base,
+                &child_dir,
+                &self.logical_source,
+            )
+            .unwrap_or_else(|| {
+                panic!(
+                    "cannot resolve Rust module {}::{} in {}; capability trait inventory \
+                     refuses a partial source scan",
+                    self.scanner.crate_name,
+                    child_path.join("::"),
+                    self.logical_source
+                )
+            });
+            self.scanner
+                .scan_file(&source.path, &child_path, source.kind);
+        }
     }
 }
 
@@ -1644,6 +1859,9 @@ struct SourceAlias {
 struct SourceModuleAlias {
     binding: SourceBinding,
     target: SourcePath,
+    declared_target: Option<Vec<String>>,
+    visibility_scope: Vec<String>,
+    lexical_scope: bool,
 }
 
 #[derive(Clone)]
@@ -1651,6 +1869,8 @@ struct SourceGlob {
     module_path: Vec<String>,
     target: SourcePath,
     conditional: bool,
+    visibility_scope: Vec<String>,
+    lexical_scope: bool,
     source: String,
 }
 
@@ -1745,6 +1965,7 @@ impl CapabilitySourceCollector<'_> {
             SourceUseContext {
                 conditional: conditional_attributes(&item.attrs),
                 lexical_scope: self.lexical_depth > 0,
+                visibility_scope: visibility_scope(&item.vis, &self.module_path),
             },
             &self.source,
             self.facts,
@@ -1789,6 +2010,29 @@ impl<'ast> Visit<'ast> for CapabilitySourceCollector<'_> {
     }
 
     fn visit_item_mod(&mut self, item: &'ast syn::ItemMod) {
+        if self.lexical_depth == 0 {
+            let module_name = ident_name(&item.ident);
+            let mut target = vec!["crate".to_owned()];
+            target.extend(self.module_path.iter().cloned());
+            target.push(module_name.clone());
+            self.facts.module_aliases.push(SourceModuleAlias {
+                binding: SourceBinding {
+                    module_path: self.module_path.clone(),
+                    name: module_name,
+                },
+                target: SourcePath {
+                    leading_colon: false,
+                    segments: target,
+                },
+                declared_target: Some({
+                    let mut path = self.module_path.clone();
+                    path.push(ident_name(&item.ident));
+                    path
+                }),
+                visibility_scope: visibility_scope(&item.vis, &self.module_path),
+                lexical_scope: false,
+            });
+        }
         let Some((_, items)) = &item.content else {
             return;
         };
@@ -1817,10 +2061,22 @@ fn source_path(path: &syn::Path) -> SourcePath {
     }
 }
 
-#[derive(Clone, Copy)]
+fn visibility_scope(visibility: &Visibility, module_path: &[String]) -> Vec<String> {
+    match visibility {
+        Visibility::Public(_) => Vec::new(),
+        Visibility::Inherited => module_path.to_vec(),
+        Visibility::Restricted(restricted) => {
+            resolve_module_path(&source_path(&restricted.path), module_path, "crate")
+                .unwrap_or_else(|| module_path.to_vec())
+        }
+    }
+}
+
+#[derive(Clone)]
 struct SourceUseContext {
     conditional: bool,
     lexical_scope: bool,
+    visibility_scope: Vec<String>,
 }
 
 fn collect_use_bindings(
@@ -1840,7 +2096,7 @@ fn collect_use_bindings(
                 leading_colon,
                 prefix,
                 module_path,
-                context,
+                context.clone(),
                 source,
                 facts,
             );
@@ -1867,6 +2123,9 @@ fn collect_use_bindings(
                     leading_colon,
                     segments: segments.clone(),
                 },
+                declared_target: None,
+                visibility_scope: context.visibility_scope.clone(),
+                lexical_scope: context.lexical_scope,
             });
             if imported_name == "self" {
                 return;
@@ -1905,6 +2164,9 @@ fn collect_use_bindings(
             facts.module_aliases.push(SourceModuleAlias {
                 binding: binding.clone(),
                 target: target.clone(),
+                declared_target: None,
+                visibility_scope: context.visibility_scope.clone(),
+                lexical_scope: context.lexical_scope,
             });
             if ident_name(&rename.ident) == "self" {
                 return;
@@ -1927,6 +2189,8 @@ fn collect_use_bindings(
                 segments: prefix.clone(),
             },
             conditional: context.conditional,
+            visibility_scope: context.visibility_scope,
+            lexical_scope: context.lexical_scope,
             source: source.to_owned(),
         }),
         syn::UseTree::Group(group) => {
@@ -1936,7 +2200,7 @@ fn collect_use_bindings(
                     leading_colon,
                     prefix,
                     module_path,
-                    context,
+                    context.clone(),
                     source,
                     facts,
                 );
@@ -1980,7 +2244,7 @@ fn finish_source_capability_inventory(
                 display_binding(&binding)
             );
         }
-        record_capability_derives(crate_name, declaration, &mut inventory.trait_impls);
+        record_capability_derives(crate_name, declaration, &mut inventory);
     }
 
     let alias_bindings = facts
@@ -2066,11 +2330,14 @@ fn finish_source_capability_inventory(
         }
     }
     let resolved_module_aliases =
-        resolve_module_aliases_to_fixed_point(&facts.module_aliases, crate_name);
-    let module_alias_bindings = facts
+        resolve_module_aliases_to_fixed_point(&facts.module_aliases, &facts.globs, crate_name);
+    let mut module_alias_bindings = facts
         .module_aliases
         .iter()
         .filter(|alias| {
+            if alias.lexical_scope {
+                return true;
+            }
             resolved_module_aliases
                 .get(&alias.binding)
                 .is_none_or(|target_modules| {
@@ -2084,6 +2351,17 @@ fn finish_source_capability_inventory(
         })
         .map(|alias| alias.binding.clone())
         .collect::<BTreeSet<_>>();
+    module_alias_bindings.extend(resolved_module_aliases.iter().filter_map(
+        |(binding, target_modules)| {
+            (target_modules.len() != 1
+                || target_modules.iter().any(|target_module| {
+                    resolved
+                        .keys()
+                        .any(|capability| capability.module_path == *target_module)
+                }))
+            .then_some(binding.clone())
+        },
+    ));
     let noncapability_aliases =
         resolve_noncapability_aliases(&facts.aliases, crate_name, &resolved, &alias_bindings);
     let fail_closed_alias_bindings = facts
@@ -2172,12 +2450,21 @@ fn finish_source_capability_inventory(
             (false, false) => "",
         };
         let polarity = polarity.as_ref().map_or("", |_| "!");
-        inventory.trait_impls.insert(format!(
+        let entry = format!(
             "{crate_name}::{identity}\t{qualifier}impl{generic_parameters} \
              {polarity}{} for {}{where_clause}",
             compact_tokens(trait_path),
             compact_tokens(&implementation.implementation.self_ty),
-        ));
+        );
+        inventory.trait_impls.insert(entry.clone());
+        inventory.trait_impl_diagnostics.insert(
+            entry,
+            InventoryDiagnostic {
+                syntax_kind: "explicit trait implementation",
+                identity: format!("{crate_name}::{identity}"),
+                source: implementation.source.clone(),
+            },
+        );
     }
     inventory
 }
@@ -2428,23 +2715,39 @@ fn resolve_module_path(
 
 fn resolve_module_aliases_to_fixed_point(
     aliases: &[SourceModuleAlias],
+    globs: &[SourceGlob],
     crate_name: &str,
 ) -> BTreeMap<SourceBinding, BTreeSet<Vec<String>>> {
-    let alias_bindings = aliases
+    let declared_alias_bindings = aliases
         .iter()
         .map(|alias| alias.binding.clone())
         .collect::<BTreeSet<_>>();
     let mut resolved = BTreeMap::<SourceBinding, BTreeSet<Vec<String>>>::new();
+    let mut visibility_scopes = BTreeMap::<SourceBinding, BTreeSet<Vec<String>>>::new();
     loop {
         let mut next = BTreeMap::<SourceBinding, BTreeSet<Vec<String>>>::new();
+        let mut next_visibility_scopes = BTreeMap::<SourceBinding, BTreeSet<Vec<String>>>::new();
         let mut unresolved = BTreeSet::new();
+        let alias_bindings = declared_alias_bindings
+            .iter()
+            .chain(resolved.keys())
+            .cloned()
+            .collect::<BTreeSet<_>>();
         for alias in aliases {
-            let target = resolve_module_alias_target(
-                &alias.target,
-                &alias.binding.module_path,
-                crate_name,
-                &resolved,
-                &alias_bindings,
+            let target = alias.declared_target.as_ref().map_or_else(
+                || {
+                    resolve_module_alias_target(
+                        &alias.target,
+                        &alias.binding.module_path,
+                        crate_name,
+                        &resolved,
+                        &alias_bindings,
+                    )
+                },
+                |target| ModuleAliasTarget {
+                    modules: [target.clone()].into_iter().collect(),
+                    unresolved: false,
+                },
             );
             if target.unresolved {
                 unresolved.insert(alias.binding.clone());
@@ -2453,12 +2756,58 @@ fn resolve_module_aliases_to_fixed_point(
             next.entry(alias.binding.clone())
                 .or_default()
                 .extend(target.modules);
+            next_visibility_scopes
+                .entry(alias.binding.clone())
+                .or_default()
+                .insert(alias.visibility_scope.clone());
         }
         next.retain(|binding, modules| !unresolved.contains(binding) && !modules.is_empty());
-        if next == resolved {
+        next_visibility_scopes.retain(|binding, _| next.contains_key(binding));
+
+        for glob in globs.iter().filter(|glob| !glob.lexical_scope) {
+            let target = resolve_module_alias_target(
+                &glob.target,
+                &glob.module_path,
+                crate_name,
+                &resolved,
+                &alias_bindings,
+            );
+            if target.unresolved {
+                continue;
+            }
+            for target_module in target.modules {
+                for (source_binding, target_modules) in &resolved {
+                    if source_binding.module_path != target_module {
+                        continue;
+                    }
+                    let visible = visibility_scopes.get(source_binding).is_some_and(|scopes| {
+                        scopes
+                            .iter()
+                            .any(|scope| glob.module_path.starts_with(scope))
+                    });
+                    if !visible {
+                        continue;
+                    }
+                    let imported = SourceBinding {
+                        module_path: glob.module_path.clone(),
+                        name: source_binding.name.clone(),
+                    };
+                    next.entry(imported.clone())
+                        .or_default()
+                        .extend(target_modules.iter().cloned());
+                    next_visibility_scopes
+                        .entry(imported)
+                        .or_default()
+                        .insert(glob.visibility_scope.clone());
+                }
+            }
+        }
+
+        if next == resolved && next_visibility_scopes == visibility_scopes {
             return resolved;
         }
         resolved = next;
+        visibility_scopes = next_visibility_scopes;
     }
 }
 
@@ -2474,7 +2823,7 @@ fn resolve_module_alias_target(
     resolved_aliases: &BTreeMap<SourceBinding, BTreeSet<Vec<String>>>,
     alias_bindings: &BTreeSet<SourceBinding>,
 ) -> ModuleAliasTarget {
-    for end in 1..=path.segments.len() {
+    for end in (1..=path.segments.len()).rev() {
         let prefix = SourcePath {
             leading_colon: path.leading_colon,
             segments: path.segments[..end].to_vec(),
@@ -2635,7 +2984,7 @@ fn module_alias_in_path(
 fn record_capability_derives(
     crate_name: &str,
     declaration: &SourceDeclaration,
-    trait_impls: &mut BTreeSet<String>,
+    inventory: &mut SourceCapabilityInventory,
 ) {
     let identity = ident_name(&declaration.identity);
     for attribute in &declaration.attributes {
@@ -2645,7 +2994,7 @@ fn record_capability_derives(
                 &identity,
                 &attribute.meta,
                 &declaration.source,
-                trait_impls,
+                inventory,
             );
         } else if attribute.path().is_ident("cfg_attr") {
             record_cfg_attr_derives(
@@ -2653,7 +3002,7 @@ fn record_capability_derives(
                 &identity,
                 &attribute.meta,
                 &declaration.source,
-                trait_impls,
+                inventory,
             );
         }
     }
@@ -2664,7 +3013,7 @@ fn record_derive_meta(
     identity: &str,
     meta: &Meta,
     source: &str,
-    trait_impls: &mut BTreeSet<String>,
+    inventory: &mut SourceCapabilityInventory,
 ) {
     let Meta::List(list) = meta else {
         panic!("derive on capability {crate_name}::{identity} in {source} is not a list");
@@ -2678,10 +3027,19 @@ fn record_derive_meta(
             )
         });
     for trait_path in traits {
-        trait_impls.insert(format!(
+        let entry = format!(
             "{crate_name}::{identity}\tderive {} for {identity}",
             compact_tokens(&trait_path)
-        ));
+        );
+        inventory.trait_impls.insert(entry.clone());
+        inventory.trait_impl_diagnostics.insert(
+            entry,
+            InventoryDiagnostic {
+                syntax_kind: "derive implementation",
+                identity: format!("{crate_name}::{identity}"),
+                source: source.to_owned(),
+            },
+        );
     }
 }
 
@@ -2690,14 +3048,14 @@ fn record_cfg_attr_derives(
     identity: &str,
     meta: &Meta,
     source: &str,
-    trait_impls: &mut BTreeSet<String>,
+    inventory: &mut SourceCapabilityInventory,
 ) {
     let nested = parse_cfg_attr(meta, crate_name, identity, source);
     for attribute in nested {
         if attribute.path().is_ident("derive") {
-            record_derive_meta(crate_name, identity, &attribute, source, trait_impls);
+            record_derive_meta(crate_name, identity, &attribute, source, inventory);
         } else if attribute.path().is_ident("cfg_attr") {
-            record_cfg_attr_derives(crate_name, identity, &attribute, source, trait_impls);
+            record_cfg_attr_derives(crate_name, identity, &attribute, source, inventory);
         } else if !safe_inert_cfg_attr(&attribute) {
             panic!(
                 "unrecognised conditional attribute on capability declaration \
@@ -2862,6 +3220,7 @@ struct HiddenPublicScanner<'a> {
     crate_name: &'a str,
     source_root: PathBuf,
     entries: BTreeSet<String>,
+    diagnostics: BTreeMap<String, InventoryDiagnostic>,
     visited: BTreeMap<PathBuf, Vec<String>>,
 }
 
@@ -2922,7 +3281,13 @@ impl HiddenPublicScanner<'_> {
                     if matches!(function.vis, Visibility::Public(_))
                         && (inherited_hidden || doc_hidden(&function.attrs)) =>
                 {
-                    self.record(module_path, ident_name(&function.sig.ident), &function.sig);
+                    self.record(
+                        module_path,
+                        ident_name(&function.sig.ident),
+                        &function.sig,
+                        "hidden public function",
+                        logical_source,
+                    );
                 }
                 Item::Fn(_) => {}
                 Item::Impl(implementation) => {
@@ -2934,7 +3299,13 @@ impl HiddenPublicScanner<'_> {
                             && matches!(method.vis, Visibility::Public(_))
                         {
                             let name = format!("{owner}::method:{}", ident_name(&method.sig.ident));
-                            self.record(module_path, name, &method.sig);
+                            self.record(
+                                module_path,
+                                name,
+                                &method.sig,
+                                "hidden public method",
+                                logical_source,
+                            );
                         }
                     }
                 }
@@ -2949,7 +3320,13 @@ impl HiddenPublicScanner<'_> {
                                 ident_name(&trait_item.ident),
                                 ident_name(&method.sig.ident)
                             );
-                            self.record(module_path, name, &method.sig);
+                            self.record(
+                                module_path,
+                                name,
+                                &method.sig,
+                                "hidden trait method",
+                                logical_source,
+                            );
                         }
                     }
                 }
@@ -2960,7 +3337,13 @@ impl HiddenPublicScanner<'_> {
                     child_path.push(module_name.clone());
                     if hidden && matches!(module.vis, Visibility::Public(_)) {
                         let signature = format!("pub mod {}", module.ident);
-                        self.record(module_path, module_name.clone(), &signature);
+                        self.record(
+                            module_path,
+                            module_name.clone(),
+                            &signature,
+                            "hidden public module",
+                            logical_source,
+                        );
                     }
                     let child_dir = module_dir.join(module_name);
                     if let Some((_, items)) = &module.content {
@@ -2985,7 +3368,14 @@ impl HiddenPublicScanner<'_> {
         }
     }
 
-    fn record(&mut self, module_path: &[String], name: String, signature: &impl ToTokens) {
+    fn record(
+        &mut self,
+        module_path: &[String],
+        name: String,
+        signature: &impl ToTokens,
+        syntax_kind: &'static str,
+        source: &str,
+    ) {
         let mut symbol = self.crate_name.to_owned();
         for module in module_path {
             symbol.push_str("::");
@@ -2993,8 +3383,16 @@ impl HiddenPublicScanner<'_> {
         }
         symbol.push_str("::");
         symbol.push_str(&name);
-        self.entries
-            .insert(format!("{symbol}\t{}", signature.to_token_stream()));
+        let entry = format!("{symbol}\t{}", signature.to_token_stream());
+        self.entries.insert(entry.clone());
+        self.diagnostics.insert(
+            entry,
+            InventoryDiagnostic {
+                syntax_kind,
+                identity: symbol,
+                source: source.to_owned(),
+            },
+        );
     }
 }
 
@@ -3018,7 +3416,7 @@ fn type_name(ty: &syn::Type) -> String {
     {
         return ident_name(&segment.ident);
     }
-    ty.to_token_stream().to_string()
+    "<unsupported-self-type>".to_owned()
 }
 
 fn ident_name(ident: &syn::Ident) -> String {

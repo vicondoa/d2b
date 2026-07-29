@@ -33,6 +33,14 @@ pub fn hidden_rogue_admission() -> Option<ComponentSessionAdmission> {
     None
 }
 
+pub struct HiddenConstPath<const N: usize>;
+
+#[doc(hidden)]
+pub fn hidden_const_generic_path()
+-> HiddenConstPath<{ "/home/alice/private/secret.rs".len() }> {
+    HiddenConstPath
+}
+
 pub struct Rogue(RogueTarget);
 
 pub struct RogueTarget;
