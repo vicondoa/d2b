@@ -61,7 +61,12 @@ The base ref is resolved in this order:
 
 An explicit base ref (1 or 2) that `git rev-parse --verify` cannot resolve is a
 hard error (exit 1). The script never silently falls back to the repository
-default branch.
+default branch. The error names the recovery: re-run with `--base` naming an
+existing branch, tag or commit (for ADR-046 waves that is the integration
+lineage `v3`, or the predecessor wave branch when the wave is stacked), listing
+candidates with `git branch -a` and confirming one with
+`git rev-parse --verify <ref>`. The same guidance is emitted when `--base` is
+given without a value.
 
 **ADR-046 wave reviews MUST pass `--base` naming the wave's real base.** In this
 repository the integration lineage is `v3`, and `v3` never merges to `main`, so

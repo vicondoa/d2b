@@ -562,7 +562,7 @@ fn request_checked(
     snapshot: &SnapshotView,
     repository_roots: &BTreeMap<String, PathBuf>,
 ) -> Result<WorkflowOutput> {
-    super::work_item_state::require_prior_waves_merged_for_panel(
+    super::work_item_state::require_prior_waves_merged_for_exit(
         &snapshot.material,
         repository_roots,
     )?;
@@ -1422,7 +1422,99 @@ pub(crate) mod tests {
         assert!(
             error
                 .message()
-                .contains("cannot request a panel for or seal W1"),
+                .contains("cannot request a panel for, seal, or merge W1"),
+            "{}",
+            error.message()
+        );
+    }
+
+    /// Drives the real `wave snapshot` and `wave panel-request` entrypoints
+    /// from their argument vectors, so CLI parsing, state-root preparation,
+    /// artifact-reference chaining, and component wiring are all covered - not
+    /// just the inner `request_checked` helper.
+    ///
+    /// The state root sits inside the ignored build tree, which
+    /// `StateRoot::prepare` refuses in production, so the test installs the
+    /// `#[cfg(test)]`-only redirection for the duration of the run. The
+    /// production refusal is untouched.
+    #[test]
+    fn the_panel_request_entrypoint_runs_end_to_end_from_its_argument_vector() {
+        use crate::delivery::{
+            snapshot::{self, tests::GitFixture},
+            storage::test_root_override,
+        };
+
+        let fixture = GitFixture::new("panel-request-cli");
+        let _guard = test_root_override::install(&fixture.state());
+
+        let snapshot_output = snapshot::run(&fixture.snapshot_args()).expect("wave snapshot");
+        let snapshot_ref = snapshot_output
+            .artifact
+            .expect("snapshot artifact reference");
+        assert!(snapshot_ref.ends_with(SNAPSHOT_FILE), "{snapshot_ref}");
+
+        let args = vec![
+            "--snapshot".to_owned(),
+            snapshot_ref,
+            "--repo".to_owned(),
+            format!("github.com/example/d2b={}", fixture.repo().display()),
+        ];
+        let output = run_request(&args).expect("wave panel-request");
+        assert_eq!(output.operation.as_str(), "panel-request");
+        let artifact = output.artifact.expect("panel request artifact reference");
+        assert!(artifact.ends_with(PANEL_REQUEST_FILE), "{artifact}");
+    }
+
+    /// The same entrypoint, driven the same way, must still refuse an unmerged
+    /// predecessor: the gate is reached through real argument parsing, not only
+    /// through the inner helper.
+    #[test]
+    fn the_panel_request_entrypoint_refuses_an_unmerged_prior_wave_item() {
+        use crate::delivery::{
+            snapshot::{self, tests::GitFixture},
+            storage::test_root_override,
+        };
+
+        let fixture = GitFixture::new("panel-request-cli-prior-wave");
+        fixture.write(
+            "docs/specs/ADR-046-implementation-graph.json",
+            "{\"nodes\":[\
+             {\"id\":\"ADR046-foundation-001\",\"kind\":\"work-item\",\"wave\":\"W0\"},\
+             {\"id\":\"ADR046-backend-001\",\"kind\":\"work-item\",\"wave\":\"W1\"}]}\n",
+        );
+        fixture.write(
+            "docs/specs/ADR-046-work-items.json",
+            "{\"items\":[\
+             {\"workItemId\":\"ADR046-foundation-001\",\"implementationState\":\"Planned\"},\
+             {\"workItemId\":\"ADR046-backend-001\",\"implementationState\":\"Merged\"}]}\n",
+        );
+        fixture.commit("predecessor still unmerged");
+        let _guard = test_root_override::install(&fixture.state());
+
+        let mut args = fixture.snapshot_args();
+        let wave = args
+            .iter()
+            .position(|value| value == "--wave")
+            .expect("--wave in the fixture arguments")
+            + 1;
+        args[wave] = "W1".to_owned();
+        let snapshot_ref = snapshot::run(&args)
+            .expect("wave snapshot")
+            .artifact
+            .expect("snapshot artifact reference");
+
+        let request_args = vec![
+            "--snapshot".to_owned(),
+            snapshot_ref,
+            "--repo".to_owned(),
+            format!("github.com/example/d2b={}", fixture.repo().display()),
+        ];
+        let error = run_request(&request_args)
+            .expect_err("the entrypoint must refuse an unmerged predecessor");
+        assert!(
+            error
+                .message()
+                .contains("cannot request a panel for, seal, or merge W1"),
             "{}",
             error.message()
         );

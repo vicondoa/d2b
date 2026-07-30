@@ -120,6 +120,10 @@ impl StateRoot {
     /// working tree, when any component is a symlink, or when it already
     /// exists with a mode other than `0700`.
     pub fn prepare(repository_roots: &[PathBuf], requested_root: Option<&Path>) -> Result<Self> {
+        #[cfg(test)]
+        if let Some(path) = test_root_override::current() {
+            return Self::for_tests(&path);
+        }
         let root = match requested_root {
             Some(path) => absolute_path(path)?,
             None => default_state_root()?,
@@ -289,6 +293,47 @@ impl StateRoot {
         Ok(Self {
             path: fs::canonicalize(path)?,
         })
+    }
+}
+
+/// A `#[cfg(test)]`-only redirection of [`StateRoot::prepare`].
+///
+/// The production refusal - delivery state must not live inside a Git working
+/// tree - is a real safety property and stays intact: this module does not
+/// exist in a release build, there is no environment variable or CLI flag that
+/// reaches it, and [`StateRoot::prepare`] consults it only under `cfg(test)`.
+/// It exists so a test can drive a real CLI entrypoint end to end through its
+/// argument vector while its scratch state lives under the ignored build tree
+/// inside this repository, which `prepare` would otherwise refuse.
+///
+/// The override is thread-local, so a test that does not install one still
+/// exercises the production resolution, and the guard clears it on drop.
+#[cfg(test)]
+pub(crate) mod test_root_override {
+    use super::{Path, PathBuf};
+    use std::cell::RefCell;
+
+    thread_local! {
+        static OVERRIDE: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+    }
+
+    pub(crate) fn current() -> Option<PathBuf> {
+        OVERRIDE.with(|slot| slot.borrow().clone())
+    }
+
+    /// Installs the override for the current thread until the guard drops.
+    #[must_use]
+    pub(crate) fn install(path: &Path) -> Guard {
+        OVERRIDE.with(|slot| *slot.borrow_mut() = Some(path.to_path_buf()));
+        Guard
+    }
+
+    pub(crate) struct Guard;
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            OVERRIDE.with(|slot| *slot.borrow_mut() = None);
+        }
     }
 }
 

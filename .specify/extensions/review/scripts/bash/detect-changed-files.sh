@@ -59,7 +59,7 @@ while [[ $# -gt 0 ]]; do
         --json) JSON_MODE=true ;;
         --base)
             if [[ $# -lt 2 || -z "$2" ]]; then
-                echo "ERROR: --base requires a ref argument" >&2
+                echo "ERROR: --base requires a ref argument. Re-run as '--base <ref>' naming an existing branch, tag or commit: for ADR-046 waves that is the integration lineage 'v3', or the predecessor wave branch when the wave is stacked. List candidates with 'git branch -a' and confirm one with 'git rev-parse --verify <ref>'." >&2
                 exit 1
             fi
             BASE_REF_ARG="$2"
@@ -69,7 +69,7 @@ while [[ $# -gt 0 ]]; do
         --base=*)
             BASE_REF_ARG="${1#--base=}"
             if [[ -z "$BASE_REF_ARG" ]]; then
-                echo "ERROR: --base requires a ref argument" >&2
+                echo "ERROR: --base requires a ref argument. Re-run as '--base <ref>' naming an existing branch, tag or commit: for ADR-046 waves that is the integration lineage 'v3', or the predecessor wave branch when the wave is stacked. List candidates with 'git branch -a' and confirm one with 'git rev-parse --verify <ref>'." >&2
                 exit 1
             fi
             BASE_SOURCE="cli"
@@ -105,7 +105,7 @@ EXIT CODES:
 EOF
             exit 0
             ;;
-        *) echo "ERROR: Unknown option '$1'" >&2; exit 1 ;;
+        *) echo "ERROR: Unknown option '$1'. Run 'detect-changed-files.sh --help' to list the supported options (--base <ref>, --json, --help)." >&2; exit 1 ;;
     esac
     shift
 done
@@ -154,11 +154,11 @@ error_exit() {
 
 # --- 1a. Verify Git Availability ---
 if ! command -v git >/dev/null 2>&1; then
-    error_exit "git is not available. The review extension requires git to identify changed files." 1
+    error_exit "git is not available. The review extension requires git to identify changed files. Install git and confirm it is on PATH with 'command -v git', or tell the review agent explicitly which files to review instead of relying on detection." 1
 fi
 
 if ! git rev-parse --git-dir >/dev/null 2>&1; then
-    error_exit "Not a git repository. The review extension requires git to identify changed files." 1
+    error_exit "Not a git repository. The review extension requires git to identify changed files. Re-run this script from inside the repository worktree you want reviewed (check with 'git rev-parse --show-toplevel'), or tell the review agent explicitly which files to review." 1
 fi
 
 # --- 1b. Detect Branch Context ---
@@ -181,7 +181,7 @@ if [[ -n "$BASE_REF_ARG" ]]; then
         DEFAULT_BRANCH="$BASE_REF_ARG"
         BASE_REV="origin/$BASE_REF_ARG"
     else
-        error_exit "Cannot resolve base ref '${BASE_REF_ARG}' (source: ${BASE_SOURCE}). Tried '${BASE_REF_ARG}' and 'origin/${BASE_REF_ARG}'. Refusing to fall back to the repository default branch." 1
+        error_exit "Cannot resolve base ref '${BASE_REF_ARG}' (source: ${BASE_SOURCE}). Tried '${BASE_REF_ARG}' and 'origin/${BASE_REF_ARG}'. Refusing to fall back to the repository default branch. Re-run with --base naming an existing branch, tag or commit: for ADR-046 waves that is the integration lineage 'v3', or the predecessor wave branch when the wave is stacked. List candidates with 'git branch -a' and confirm one with 'git rev-parse --verify <ref>'." 1
     fi
 else
     # Try symbolic-ref first

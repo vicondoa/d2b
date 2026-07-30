@@ -1218,11 +1218,12 @@ the canonical proof tool (§12.6) verifies byte-identical integrated content.
 
 Creating a snapshot performs **no** prior-wave-merged assertion. A wave that
 started early under the pipelined-start conditions in §4 may snapshot while
-its predecessor is still unsealed. That condition binds later, at
-`panel-request` and `seal` (§12.3, §12.4), which is what keeps the pipeline
-executable without letting a wave be reviewed or delivered early.
+its predecessor is still unsealed. That condition binds later, at the wave's
+exit boundary - `panel-request`, `seal`, and `merge-eligibility` (§12.3,
+§12.4) - which is what keeps the pipeline executable without letting a wave be
+reviewed or delivered early.
 
-Those two gates read `ADR-046-implementation-graph.json` and
+Those exit gates read `ADR-046-implementation-graph.json` and
 `ADR-046-work-items.json` from the candidate's exact integrated Git tree, and
 refuse when any item assigned to an earlier wave is not `Merged`. Reading the
 manifests from the snapshot's own integrated tree is also what makes the
@@ -1232,8 +1233,8 @@ manifest and is refused. This is a manifest-content check rather than an
 ancestry proof - it asserts that the snapshot's manifest reports the
 predecessor merged, not that the predecessor's merge commit is an ancestor of
 the snapshot - so a hand-edited or cherry-picked manifest would pass it.
-Neither gate rejects `Planned` items in the wave being entered; the seal gate
-is what requires their promotion.
+Neither the prior-wave leg nor `panel-request` rejects `Planned` items in the
+wave being entered; the seal gate is what requires their promotion.
 
 Each repository requires at least one
 `--pull-request LOGICAL_ID=NUMBER:HEAD_REF` mapping, and the repeated mappings
@@ -1310,6 +1311,9 @@ model. Keep the two pins distinct when either is changed.
 `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave panel-request` writes the candidate-bound request
 (binding `candidate_id`/`content_id`/`snapshot_sha256`, the exact ten-role
 roster, and the required `gemini-3.1-pro-preview` model at reasoning effort `high`).
+It is the first of the wave's three exit gates: it refuses the request unless
+every prior-wave work item is `Merged` (§12.1), so ten reviewers cannot bind to
+a snapshot a predecessor finding can still invalidate.
 `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave panel-attest` validates a directory containing
 exactly one record per role, each shaped exactly as this repository's sibling
 ADR-0045-lineage panel-receipt artifact:

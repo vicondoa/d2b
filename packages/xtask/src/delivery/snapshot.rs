@@ -127,19 +127,15 @@ pub fn run(args: &[String]) -> Result<WorkflowOutput> {
         &repository_roots.values().cloned().collect::<Vec<_>>(),
         request.state_dir.as_deref(),
     )?;
-    run_with_root(&request, &root, &repository_roots)
+    run_with_root(&request, &root)
 }
 
-fn run_with_root(
-    request: &SnapshotRequest,
-    root: &StateRoot,
-    _repository_roots: &BTreeMap<String, PathBuf>,
-) -> Result<WorkflowOutput> {
+fn run_with_root(request: &SnapshotRequest, root: &StateRoot) -> Result<WorkflowOutput> {
     let material = discover(request)?;
     // FR-036/FR-048: a wave's implementation may start before its predecessor
     // is sealed and merged, so entry runs no prior-wave-merged assertion. That
-    // condition is enforced at the panel-request and seal boundary (FR-049) by
-    // `work_item_state::require_prior_waves_merged_for_panel`.
+    // condition is enforced at the panel-request, seal, and merge-eligibility
+    // boundary (FR-049) by `work_item_state::require_prior_waves_merged_for_exit`.
     let snapshot = WaveSnapshot::seal(material)?;
     let candidate = root.candidate(snapshot.wave(), &snapshot.candidate_id)?;
     write(&candidate, &snapshot)?;
@@ -893,6 +889,12 @@ pub(crate) mod tests {
             &self.scratch.path
         }
 
+        /// The fixture's scratch handle, so a test can build delivery state
+        /// under the same root the CLI entrypoints will resolve.
+        pub(crate) fn scratch_dir(&self) -> &Scratch {
+            &self.scratch
+        }
+
         pub(crate) fn write(&self, relative: &str, contents: &str) {
             let path = self.repo().join(relative);
             if let Some(parent) = path.parent() {
@@ -966,12 +968,7 @@ pub(crate) mod tests {
     pub(crate) fn take(fixture: &GitFixture) -> WaveSnapshot {
         let request = SnapshotRequest::parse(&fixture.snapshot_args()).expect("parse request");
         let root = StateRoot::for_tests(&fixture.state()).expect("anchor state root");
-        run_with_root(
-            &request,
-            &root,
-            &BTreeMap::from([("github.com/example/d2b".to_string(), fixture.repo())]),
-        )
-        .expect("snapshot");
+        run_with_root(&request, &root).expect("snapshot");
         read_file(
             &root
                 .path()
@@ -1025,12 +1022,8 @@ pub(crate) mod tests {
 
         let request = SnapshotRequest::parse(&args).expect("parse request");
         let root = StateRoot::for_tests(&fixture.state()).expect("anchor state root");
-        run_with_root(
-            &request,
-            &root,
-            &BTreeMap::from([("github.com/example/d2b".to_string(), fixture.repo())]),
-        )
-        .expect("entry must not block on an unmerged prior-wave item");
+        run_with_root(&request, &root)
+            .expect("entry must not block on an unmerged prior-wave item");
     }
 
     #[test]
