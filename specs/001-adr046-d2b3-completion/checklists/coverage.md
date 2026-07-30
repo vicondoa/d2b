@@ -94,7 +94,7 @@ Are requirements present for each scenario class, or explicitly excluded?
 - [ ] CHK044 Is the assumption that companions can adapt without any published preview artifact validated or flagged as a risk with a mitigation? [Assumption, Spec §FR-045]
 - [ ] CHK045 Is the assumption that the named design corrections will recover the memory deficit flagged as unvalidated, with a decision path if they do not? [Assumption, Research §RK-1]
 - [ ] CHK046 Is the daily-driver validation risk acceptance recorded with an explicit accepter and a stated fallback? [Assumption, Spec §Assumptions]
-- [ ] CHK047 Are the external dependencies required for cloud-backed Provider validation identified, including whether the necessary accounts and access exist? [Dependency, Gap, Spec §SC-022]
+- [x] CHK047 Are the external dependencies required for cloud-backed Provider validation identified, including whether the necessary accounts and access exist? [Dependency, Gap, Spec §SC-022]
 
 ## Notes
 
@@ -233,7 +233,7 @@ the row reads **needs integrator** rather than guessing.
 | CHK044 | Companion-adaptation assumption validated or risk-flagged | W5 | Same date-bound trigger as CHK025 |
 | CHK045 | Memory-deficit recovery assumption and its decision path | W5 | The corrected storage design is delivered and re-measured in W5 |
 | CHK046 | Daily-driver risk acceptance - explicit accepter and fallback | W7 | The first destructive live run is the cutover in W7 |
-| CHK047 | Cloud-backed Provider validation dependencies | **not deferred** | Escalated to the operator as an open question; see below |
+| CHK047 | Cloud-backed Provider validation dependencies | **closed** | Answered by the operator: access is reached through entrablau sign-in from a dev-realm VM, not host-side credentials. The cloud tier is not a wave-exit lane, so it gates only the release gate. See below |
 
 ### Open question escalated to the operator (2026-07-29)
 
@@ -260,7 +260,44 @@ unticked; it cannot be resolved from the repository.**
   stalled ready slice is itself a recorded process failure under FR-028.
 - **What it blocks**: the **release gate**, via the cloud-backed Provider validation that
   SC-022 requires. It does **not** block W2 entry, and it is not a Gate 2 item.
-- **What is requested of the operator**: confirm the accounts and access exist, or record an
-  explicit alternative - a reduced-scope validation for the cloud Providers, or a deferral of
-  those dossiers with a stated effect on the release gate. Until one of those is recorded,
-  CHK047 stays open.
+
+**Operator answer, recorded. CHK047 is closed.**
+
+Access is not a host-side credential and is not obtained by provisioning a
+subscription against this checklist. It is reached through the existing
+identity path:
+
+- Validation runs from the `dev-general` microVM on the operator's host, with
+  the security key attached to that VM and the operator connected through it.
+- That VM is a member of the **dev realm**, so the cloud-backed Providers are
+  exercised from inside a realm rather than from the host.
+- Microsoft sign-in is performed by **entrablau** on that VM, which yields
+  access to Azure Relay, Azure Container Apps, and Azure Virtual Machines.
+
+This satisfies the constraint the checklist could not verify from the
+repository, and it does so in the shape ADR 0032 already requires: realm
+credentials live inside the realm, never in `d2bd`, the broker, the host
+bundle, or any host-side activation artifact. No new credential custody
+question arises, because custody is the one the dev realm already has.
+
+The Azure **resources** do not exist yet and are not being pre-provisioned.
+They are created as part of the owning wave's plan, with operator input at
+that point.
+
+**Sequencing.** The mechanism depends on the host running the `v3` lineage,
+which happens at the W7 cutover, so the cloud tier is expected to run after
+that rather than during W6. That ordering is already what the delivery
+contract requires: section 10.11 records the cloud row as a **manual tier,
+never run in CI or as a required wave-exit lane, recorded as external
+evidence only**. The cloud validation is therefore **not** a W6 exit
+criterion and cannot stall a W6 slice. It feeds SC-022 and the release gate,
+both of which are evaluated against the final candidate snapshot - which by
+construction exists only after the cutover.
+
+The residual obligation is on the release gate alone: SC-022 requires the
+cloud tier to have executed at least once against the final candidate with
+recorded external evidence. If the resources are not stood up before the
+release gate is evaluated, the alternative is a recorded reduced-scope
+validation or an explicit deferral of those five dossiers with a stated
+effect on the gate, per FR-042's rule that a capability is never retired
+silently.
