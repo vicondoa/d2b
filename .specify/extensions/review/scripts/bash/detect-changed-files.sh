@@ -2,41 +2,78 @@
 # Detect changed files for code review via git diff
 #
 # Identifies changed files by comparing the current branch against
-# the default branch plus any uncommitted work (Mode A - feature branch
+# a base ref plus any uncommitted work (Mode A - feature branch
 # diff + working directory) or by collecting staged + unstaged changes
 # (Mode B - working directory changes only).
+#
+# The base ref is resolved in this order:
+#   1. --base <ref>                (explicit CLI override; wins)
+#   2. $SPECIFY_REVIEW_BASE_REF    (explicit environment override)
+#   3. git symbolic-ref refs/remotes/origin/HEAD
+#   4. origin/main
+#   5. origin/master
+#
+# An explicit base ref (1 or 2) is validated with `git rev-parse --verify`.
+# If it cannot be resolved the script fails with exit 1 rather than silently
+# falling back to the repository default branch: reviews of an integration
+# lineage that never merges to the default branch (for example the ADR-046
+# `v3` lineage) would otherwise be scoped against unrelated history.
 #
 # Usage: ./detect-changed-files.sh [OPTIONS]
 #
 # OPTIONS:
+#   --base <ref>  Explicit diff base ref (branch, tag or commit)
 #   --json        Output in JSON format (for machine consumption)
 #   --help, -h    Show this help message
 #
+# ENVIRONMENT:
+#   SPECIFY_REVIEW_BASE_REF   Explicit diff base ref; overridden by --base
+#
 # EXIT CODES:
 #   0  Changed files detected successfully
-#   1  Error (git unavailable, not a git repository)
+#   1  Error (git unavailable, not a git repository, unresolvable base ref)
 #   2  No changes detected
 #
 # OUTPUTS:
 #   Text mode:
 #     BRANCH: <current-branch>
-#     DEFAULT_BRANCH: <default-branch>
+#     DEFAULT_BRANCH: <ref actually used as the diff base>
+#     BASE_SOURCE: <how the base ref was resolved>
 #     MODE: <detection mode description>
 #     CHANGED_FILES:
 #       file1
 #       file2
 #
 #   JSON mode:
-#     {"branch":"...","default_branch":"...","mode":"...","changed_files":["..."]}
+#     {"branch":"...","default_branch":"...","base_source":"...","mode":"...","changed_files":["..."]}
 
 set -e
 
 # --- Argument parsing ---
 JSON_MODE=false
+BASE_REF_ARG=""
+BASE_SOURCE=""
 
-for arg in "$@"; do
-    case "$arg" in
+while [[ $# -gt 0 ]]; do
+    case "$1" in
         --json) JSON_MODE=true ;;
+        --base)
+            if [[ $# -lt 2 || -z "$2" ]]; then
+                echo "ERROR: --base requires a ref argument" >&2
+                exit 1
+            fi
+            BASE_REF_ARG="$2"
+            BASE_SOURCE="cli"
+            shift
+            ;;
+        --base=*)
+            BASE_REF_ARG="${1#--base=}"
+            if [[ -z "$BASE_REF_ARG" ]]; then
+                echo "ERROR: --base requires a ref argument" >&2
+                exit 1
+            fi
+            BASE_SOURCE="cli"
+            ;;
         --help|-h)
             cat << 'EOF'
 Usage: detect-changed-files.sh [OPTIONS]
@@ -44,19 +81,39 @@ Usage: detect-changed-files.sh [OPTIONS]
 Detect changed files for code review via git diff.
 
 OPTIONS:
+  --base <ref>  Explicit diff base ref (branch, tag or commit). Overrides
+                SPECIFY_REVIEW_BASE_REF and the repository default branch.
   --json        Output in JSON format
   --help, -h    Show this help message
 
+ENVIRONMENT:
+  SPECIFY_REVIEW_BASE_REF   Explicit diff base ref; --base takes precedence.
+
+BASE REF RESOLUTION ORDER:
+  --base > SPECIFY_REVIEW_BASE_REF > origin/HEAD > origin/main > origin/master
+
+An explicit base ref that cannot be resolved is a hard error (exit 1); the
+script never silently falls back to the repository default branch. Reviews of
+an integration lineage that does not merge to the default branch (for example
+the ADR-046 'v3' lineage) MUST pass --base naming that lineage, or naming the
+predecessor wave branch when the wave is stacked.
+
 EXIT CODES:
   0  Changed files detected successfully
-  1  Error (git unavailable, not a git repository)
+  1  Error (git unavailable, not a git repository, unresolvable base ref)
   2  No changes detected
 EOF
             exit 0
             ;;
-        *) echo "ERROR: Unknown option '$arg'" >&2; exit 1 ;;
+        *) echo "ERROR: Unknown option '$1'" >&2; exit 1 ;;
     esac
+    shift
 done
+
+if [[ -z "$BASE_REF_ARG" && -n "${SPECIFY_REVIEW_BASE_REF:-}" ]]; then
+    BASE_REF_ARG="$SPECIFY_REVIEW_BASE_REF"
+    BASE_SOURCE="env"
+fi
 
 # --- Helper: escape a string for safe JSON embedding ---
 json_escape() {
@@ -109,26 +166,52 @@ fi
 # Get current branch (empty string if detached HEAD)
 CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "")
 
-# Determine default branch
+# Determine the diff base ref.
+# DEFAULT_BRANCH holds the ref ACTUALLY used as the diff base (field name kept
+# for output compatibility). BASE_REV is the resolved rev handed to git.
 DEFAULT_BRANCH=""
+BASE_REV=""
 
-# Try symbolic-ref first
-symref=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null || echo "")
-if [[ -n "$symref" ]]; then
-    DEFAULT_BRANCH="${symref##refs/remotes/origin/}"
-fi
-
-# Fallback: check origin/main
-if [[ -z "$DEFAULT_BRANCH" ]]; then
-    if git rev-parse --verify origin/main >/dev/null 2>&1; then
-        DEFAULT_BRANCH="main"
+if [[ -n "$BASE_REF_ARG" ]]; then
+    # Explicit override: validate, never fall back.
+    if git rev-parse --verify --quiet "$BASE_REF_ARG" >/dev/null 2>&1; then
+        DEFAULT_BRANCH="$BASE_REF_ARG"
+        BASE_REV="$BASE_REF_ARG"
+    elif git rev-parse --verify --quiet "origin/$BASE_REF_ARG" >/dev/null 2>&1; then
+        DEFAULT_BRANCH="$BASE_REF_ARG"
+        BASE_REV="origin/$BASE_REF_ARG"
+    else
+        error_exit "Cannot resolve base ref '${BASE_REF_ARG}' (source: ${BASE_SOURCE}). Tried '${BASE_REF_ARG}' and 'origin/${BASE_REF_ARG}'. Refusing to fall back to the repository default branch." 1
     fi
-fi
+else
+    # Try symbolic-ref first
+    symref=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null || echo "")
+    if [[ -n "$symref" ]]; then
+        DEFAULT_BRANCH="${symref##refs/remotes/origin/}"
+        BASE_REV="origin/${DEFAULT_BRANCH}"
+        BASE_SOURCE="origin-head"
+    fi
 
-# Fallback: check origin/master
-if [[ -z "$DEFAULT_BRANCH" ]]; then
-    if git rev-parse --verify origin/master >/dev/null 2>&1; then
-        DEFAULT_BRANCH="master"
+    # Fallback: check origin/main
+    if [[ -z "$DEFAULT_BRANCH" ]]; then
+        if git rev-parse --verify --quiet origin/main >/dev/null 2>&1; then
+            DEFAULT_BRANCH="main"
+            BASE_REV="origin/main"
+            BASE_SOURCE="origin-main"
+        fi
+    fi
+
+    # Fallback: check origin/master
+    if [[ -z "$DEFAULT_BRANCH" ]]; then
+        if git rev-parse --verify --quiet origin/master >/dev/null 2>&1; then
+            DEFAULT_BRANCH="master"
+            BASE_REV="origin/master"
+            BASE_SOURCE="origin-master"
+        fi
+    fi
+
+    if [[ -z "$DEFAULT_BRANCH" ]]; then
+        BASE_SOURCE="none"
     fi
 fi
 
@@ -137,9 +220,26 @@ fi
 CHANGED_FILES=()
 MODE=""
 
-if [[ -n "$CURRENT_BRANCH" && -n "$DEFAULT_BRANCH" && "$CURRENT_BRANCH" != "$DEFAULT_BRANCH" ]]; then
+# Mode A applies when a usable base ref resolves to something other than HEAD.
+# With an explicit base ref the current branch name is irrelevant: a wave branch
+# based on 'v3' selects Mode A, while standing ON 'v3' with '--base v3' resolves
+# to HEAD and therefore falls through to Mode B (working directory changes).
+USE_MODE_A=false
+if [[ -n "$BASE_REV" ]]; then
+    if [[ -n "$BASE_REF_ARG" ]]; then
+        _base_sha=$(git rev-parse --verify --quiet "$BASE_REV" 2>/dev/null || echo "")
+        _head_sha=$(git rev-parse --verify --quiet HEAD 2>/dev/null || echo "")
+        if [[ -n "$_base_sha" && -n "$_head_sha" && "$_base_sha" != "$_head_sha" ]]; then
+            USE_MODE_A=true
+        fi
+    elif [[ -n "$CURRENT_BRANCH" && "$CURRENT_BRANCH" != "$DEFAULT_BRANCH" ]]; then
+        USE_MODE_A=true
+    fi
+fi
+
+if $USE_MODE_A; then
     # Mode A - Feature Branch
-    MERGE_BASE=$(git merge-base "origin/$DEFAULT_BRANCH" HEAD 2>/dev/null || echo "")
+    MERGE_BASE=$(git merge-base "$BASE_REV" HEAD 2>/dev/null || echo "")
 
     if [[ -n "$MERGE_BASE" ]]; then
         # Committed changes since merge-base
@@ -180,6 +280,7 @@ if [[ -n "$CURRENT_BRANCH" && -n "$DEFAULT_BRANCH" && "$CURRENT_BRANCH" != "$DEF
     else
         # merge-base failed - fall through to Mode B
         DEFAULT_BRANCH=""
+        BASE_SOURCE="none"
     fi
 fi
 
@@ -213,13 +314,14 @@ if [[ -z "$MODE" ]]; then
 
     MODE="Working directory changes (staged + unstaged)"
     [[ -z "$DEFAULT_BRANCH" ]] && DEFAULT_BRANCH="(unknown)"
+    [[ -z "$BASE_SOURCE" ]] && BASE_SOURCE="none"
 fi
 
 # --- 1d. Validate Changed Files ---
 if [[ ${#CHANGED_FILES[@]} -eq 0 ]]; then
     if $JSON_MODE; then
-        printf '{"branch":"%s","default_branch":"%s","mode":"%s","changed_files":[],"message":"No changes detected. Nothing to review."}\n' \
-            "$(json_escape "$CURRENT_BRANCH")" "$(json_escape "$DEFAULT_BRANCH")" "$(json_escape "$MODE")"
+        printf '{"branch":"%s","default_branch":"%s","base_source":"%s","mode":"%s","changed_files":[],"message":"No changes detected. Nothing to review."}\n' \
+            "$(json_escape "$CURRENT_BRANCH")" "$(json_escape "$DEFAULT_BRANCH")" "$(json_escape "$BASE_SOURCE")" "$(json_escape "$MODE")"
     else
         echo "No changes detected. Nothing to review."
     fi
@@ -228,11 +330,12 @@ fi
 
 # --- Output ---
 if $JSON_MODE; then
-    printf '{"branch":"%s","default_branch":"%s","mode":"%s","changed_files":%s}\n' \
-        "$(json_escape "$CURRENT_BRANCH")" "$(json_escape "$DEFAULT_BRANCH")" "$(json_escape "$MODE")" "$(fmt_array "${CHANGED_FILES[@]}")"
+    printf '{"branch":"%s","default_branch":"%s","base_source":"%s","mode":"%s","changed_files":%s}\n' \
+        "$(json_escape "$CURRENT_BRANCH")" "$(json_escape "$DEFAULT_BRANCH")" "$(json_escape "$BASE_SOURCE")" "$(json_escape "$MODE")" "$(fmt_array "${CHANGED_FILES[@]}")"
 else
     echo "BRANCH: $CURRENT_BRANCH"
     echo "DEFAULT_BRANCH: $DEFAULT_BRANCH"
+    echo "BASE_SOURCE: $BASE_SOURCE"
     echo "MODE: $MODE"
     echo "CHANGED_FILES:"
     for f in "${CHANGED_FILES[@]}"; do
