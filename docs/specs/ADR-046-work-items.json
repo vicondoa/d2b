@@ -1741,7 +1741,7 @@
       "dataMigration" : "None - full d2b 3.0 reset; no prior state to migrate",
       "dependencyOwner" : "`ADR046-delivery-002`, `ADR046-delivery-003`; panel-tooling integrator",
       "destination" : "`packages/xtask/src/delivery/panel.rs`",
-      "detailedDesign" : "`panel-request` writes the candidate-bound request naming the exact ten roles and required model; `panel-attest` validates a directory of exactly ten strict 14-field records, rejecting wrong model/candidate binding, duplicate provider/run provenance, or inconsistent `signoff`/`recommendations`, per §12.3 Primary reuse disposition: `adapt`. Preserved source-plan detail: copy-unchanged, then adapt to bind the fixed `gpt-5.6-sol` model at reasoning effort `xhigh`/`github-copilot` provider pair and this repository's existing ten-role roster (§12.3).",
+      "detailedDesign" : "`panel-request` writes the candidate-bound request naming the exact ten roles and required model; `panel-attest` validates a directory of exactly ten strict 14-field records, rejecting wrong model/candidate binding, duplicate provider/run provenance, or inconsistent `signoff`/`recommendations`, per §12.3 Primary reuse disposition: `adapt`. Preserved source-plan detail: copy-unchanged, then adapt to bind the fixed `gemini-3.1-pro-preview` model at reasoning effort `high`/`github-copilot` provider pair and this repository's existing ten-role roster (§12.3).",
       "evidence" : "The complete Destination and Validation obligations above have not both been verified in the indexed tree.",
       "implementationState" : "Planned",
       "integration" : "Every wave's exit criteria (§4) require ten unanimous attested records before `wave seal`",

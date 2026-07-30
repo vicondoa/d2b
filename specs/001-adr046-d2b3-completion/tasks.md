@@ -63,16 +63,16 @@ Every wave carries the same gate. Gate tasks are numbered inline with the wave t
 Gate 1 items were closed during planning; these are the Gate 2 items that block declaring W2
 entry criteria met.
 
-- [ ] T001 Resolve CHK013 - state Gate 0's standing re-evaluation obligation as a requirement, not only an assumption
-- [ ] T002 Resolve CHK027 - state the distinction between wave entry evidence and exit evidence so FR-025 and FR-036 do not read as conflicting
-- [ ] T003 Resolve CHK028 - fix the waiver scope for the nine `ADR046-delivery-*` items that remain Planned while owned by a waived wave
-- [ ] T004 Resolve CHK039 - state the contended-file prep discipline; W2 has a single `nixos-modules/assertions.nix` writer and this has immediate effect
-- [ ] T005 Record every Gate 3 checklist item as a deliberate deferral naming its owning wave, so a scheduled obligation is never mistaken for a coverage gap
-- [ ] T006 Answer CHK047 - confirm whether cloud accounts and access exist for the Azure-backed Provider validation required at W6 and by the release gate
-- [ ] T007 Prototype the RSS corrections (range-seek replay, streaming decode, shared immutable ChangeBatch fan-out) in `proofs/redb-resource-store-spike/` so W5 confirms rather than discovers (mitigates RK-1)
-- [ ] T574 **Author and record the W0/W1 delivered-without-seal waiver** (FR-034). It MUST name the missing artifacts (the ten panel receipts and the seal), state the evidence actually relied upon (all 14 assigned work items recorded as Merged, merged through reviewed pull requests), and exist before W2 entry is declared met. This is the sole mitigation for the tracked constitution Principle VI deviation; without it the deviation is undocumented in practice
-- [ ] T575 **Raise the recorded W2 destination drift to the integrator as a specification amendment** (FR-046). `ADR-046-validation-and-delivery` §3.2 lists `packages/d2b-process/` and `packages/d2b-provider-supervisor/` under W2, but the graph assigns their owning item `ADR046-process-001` to W4. Follow the graph; do not correct the prose inside a wave
-- [ ] T576 **Inventory which migration-map DELETE and REPLACE rows still lack a removal proof** and assign each missing proof to the wave that removes its path (FR-023). The map currently supplies explicit proofs for only 3 of its 16 DELETE rows
+- [X] T001 Resolve CHK013 - state Gate 0's standing re-evaluation obligation as a requirement, not only an assumption
+- [X] T002 Resolve CHK027 - state the distinction between wave entry evidence and exit evidence so FR-025 and FR-036 do not read as conflicting
+- [X] T003 Resolve CHK028 - fix the waiver scope for the nine `ADR046-delivery-*` items that remain Planned while owned by a waived wave
+- [X] T004 Resolve CHK039 - state the contended-file prep discipline; W2 has a single `nixos-modules/assertions.nix` writer and this has immediate effect
+- [X] T005 Record every Gate 3 checklist item as a deliberate deferral naming its owning wave, so a scheduled obligation is never mistaken for a coverage gap
+- [X] T006 Answer CHK047 - confirm whether cloud accounts and access exist for the Azure-backed Provider validation required at W6 and by the release gate
+- [X] T007 Prototype the RSS corrections (range-seek replay, streaming decode, shared immutable ChangeBatch fan-out) in `proofs/redb-resource-store-spike/` so W5 confirms rather than discovers (mitigates RK-1)
+- [X] T574 **Author and record the W0/W1 delivered-without-seal waiver** (FR-034). It MUST name the missing artifacts (the ten panel receipts and the seal), state the evidence actually relied upon (all 14 assigned work items recorded as Merged, merged through reviewed pull requests), and exist before W2 entry is declared met. This is the sole mitigation for the tracked constitution Principle VI deviation; without it the deviation is undocumented in practice
+- [X] T575 **Raise the recorded W2 destination drift to the integrator as a specification amendment** (FR-046). `ADR-046-validation-and-delivery` §3.2 lists `packages/d2b-process/` and `packages/d2b-provider-supervisor/` under W2, but the graph assigns their owning item `ADR046-process-001` to W4. Follow the graph; do not correct the prose inside a wave
+- [X] T576 **Inventory which migration-map DELETE and REPLACE rows still lack a removal proof** and assign each missing proof to the wave that removes its path (FR-023). The map currently supplies explicit proofs for only 3 of its 16 DELETE rows
 
 ### Panel model migration (BLOCKING - no wave can seal until this lands)
 
@@ -81,10 +81,10 @@ agent executing this plan. The delivery tooling currently pins a different model
 enforcing places, and `panel-attest` **rejects** any record whose model does not match. Until
 these tasks land, every panel record is invalid and `seal` cannot succeed.
 
-- [ ] T581 Amend `ADR-046-validation-and-delivery` §12.3 to bind the panel to `gemini-3.1-pro-preview`, updating the pinned provider/model/reasoning-effort triple and the 14-field record example. This is a member-spec amendment: it re-opens that spec's validation and panel evidence and re-triggers Gate 0 (FR-046)
-- [ ] T582 Update the pinned constants in `packages/xtask/src/delivery/model.rs` (`PANEL_PROVIDER_POLICY`, `PANEL_MODEL_POLICY`, `PANEL_REASONING_EFFORT_POLICY`) and the unit test at the bottom of that file that asserts their exact values
-- [ ] T583 Update the `ADR046-delivery-005` work item text, which explicitly says "adapt to bind the fixed `gpt-5.6-sol` model at reasoning effort `xhigh`", then regenerate the spec-set and work-item manifests and confirm `make test-drift` is clean
-- [ ] T584 Update the agent model pins in `.opencode/opencode-swarm.json` so panel lanes do not silently fall back to a model whose records `panel-attest` will reject
+- [X] T581 Amend `ADR-046-validation-and-delivery` §12.3 to bind the panel to `gemini-3.1-pro-preview`, updating the pinned provider/model/reasoning-effort triple and the 14-field record example. This is a member-spec amendment: it re-opens that spec's validation and panel evidence and re-triggers Gate 0 (FR-046)
+- [X] T582 Update the pinned constants in `packages/xtask/src/delivery/model.rs` (`PANEL_PROVIDER_POLICY`, `PANEL_MODEL_POLICY`, `PANEL_REASONING_EFFORT_POLICY`) and the unit test at the bottom of that file that asserts their exact values
+- [X] T583 Update the `ADR046-delivery-005` work item text, which explicitly says "adapt to bind the fixed `gpt-5.6-sol` model at reasoning effort `xhigh`", then regenerate the spec-set and work-item manifests and confirm `make test-drift` is clean
+- [X] T584 Add a read-only `panel` agent to `.opencode/opencode.json` pinned to the panel model, and correct the AGENTS.md panel-tooling wording, so panel lanes do not silently fall back to a model whose records `panel-attest` will reject. Spec correction: this task originally named `.opencode/opencode-swarm.json`, which does not exist in this repository and would not apply, because this program does not run swarm
 
 ### Pipelined-wave migration (BLOCKING - the pipeline is not executable until this lands)
 
@@ -92,10 +92,10 @@ Constitution 2.0.0 permits pipelined dispatch, but `ADR-046-validation-and-deliv
 reads "there is no partial-wave advance" and its entry criterion 1 still requires every prior
 wave item to be `Merged` before `wave snapshot` will accept entry.
 
-- [ ] T585 Amend `ADR-046-validation-and-delivery` §4 to permit pipelined implementation start under the four conditions (5 of 10 reviews returned, integration green, no successor panel/seal/merge before predecessor seal and merge, mandatory post-merge rebase before the successor panel). Preserve the strict panel/seal/merge ordering verbatim. Member-spec amendment: re-opens that spec's evidence and re-triggers Gate 0 (FR-046)
-- [ ] T586 Relax the `wave snapshot` entry check so an unsealed predecessor blocks the successor's **panel request and seal** rather than its implementation start; the predecessor-merged assertion moves to `panel-request` and `seal`. Add tests covering: start permitted at 5 of 10, panel request refused while the predecessor is unsealed, and seal refused when the successor has not rebased since the predecessor merge
-- [ ] T587 Record the accepted rework cost (FR-050) in the delivery contract so a future integrator cannot cite pipeline rework as grounds to shorten a panel
-- [ ] T588 Configure or document review scoping for the `v3` lineage. `detect-changed-files.sh` resolves the default branch to `main` via `origin/HEAD`, but ADR-046 integrates on `v3`, which never merges to `main`. Every wave review MUST pass an explicit diff scope (wave integration branch against its real base) or it will treat the whole v3 divergence as the wave changes
+- [X] T585 Amend `ADR-046-validation-and-delivery` §4 to permit pipelined implementation start under the four conditions (5 of 10 reviews returned, integration green, no successor panel/seal/merge before predecessor seal and merge, mandatory post-merge rebase before the successor panel). Preserve the strict panel/seal/merge ordering verbatim. Member-spec amendment: re-opens that spec's evidence and re-triggers Gate 0 (FR-046)
+- [X] T586 Relax the `wave snapshot` entry check so an unsealed predecessor blocks the successor's **exit boundary** rather than its implementation start; the predecessor-merged assertion moves to the exit boundary: `panel-request`, `seal`, and `merge-eligibility`. Add tests covering: start permitted at 5 of 10, panel request refused while the predecessor is unsealed, and seal refused when the successor has not rebased since the predecessor merge
+- [X] T587 Record the accepted rework cost (FR-050) in the delivery contract so a future integrator cannot cite pipeline rework as grounds to shorten a panel
+- [X] T588 Configure or document review scoping for the `v3` lineage. `detect-changed-files.sh` resolves the default branch to `main` via `origin/HEAD`, but ADR-046 integrates on `v3`, which never merges to `main`. Every wave review MUST pass an explicit diff scope (wave integration branch against its real base) or it will treat the whole v3 divergence as the wave changes
 
 **Checkpoint**: W2 entry criteria may now be declared met.
 
@@ -104,7 +104,7 @@ wave item to be `Merged` before `wave snapshot` will accept entry.
 
 **Requirements**: see spec-coverage.md traceability tables | **Story**: US1 | **Work items**: 19 | **Parallel groups**: 2
 
-- [ ] T008 [US1] W2 ENTRY - confirm every prior-wave work item is Merged, destinations uncontended, stack proposed against the exact parent commit, heavy-gate free, fast hermetic suite green
+- [ ] T008 [US1] W2 ENTRY - confirm destinations uncontended, stack proposed against the exact parent commit, heavy-gate free, fast hermetic suite green. Note: under FR-057 and delivery contract §4, "every prior-wave work item is Merged" is **not** an entry criterion; it binds at the exit boundary - panel request, seal, and merge eligibility (T028)
 
 ### Group `wi:ADR-046-primitive-resource-composition` (3 items)
 
@@ -131,7 +131,7 @@ wave item to be `Merged` before `wave snapshot` will accept entry.
 - [ ] T026 [US1] `ADR046-routing-015` - `packages/d2b-provider-toolkit/src/` (adapted in place) (adapt)
 - [ ] T027 [US1] `ADR046-routing-016` - `packages/d2b-zone-routing/src/service.rs` (adapt)
 
-- [ ] T028 [US1] W2 GATE - run `/speckit.verify.run` and `/speckit.review.run` in parallel against this wave scope FIRST and clear their CRITICAL findings; then snapshot, import validation evidence, panel-request, panel-attest (10/10 unanimous), seal (every wave item Merged), merge-target, merge-eligibility. Also confirm for every item in this wave: reference docs landed with their behavior (FR-019), no change contradicts a decision in the register (FR-047), and every removal proof for a path retired in this wave passed (FR-023). From round 9, LOW/MEDIUM may be deferred to deferred-findings.md; CRITICAL/HIGH never (FR-051, FR-052). At wave close, review both registers and log this wave friction in friction-log.md (FR-053)
+- [ ] T028 [US1] W2 GATE - run `/speckit.verify.run` and `/speckit.review.run` in parallel against this wave scope FIRST and clear their CRITICAL findings; then snapshot, import validation evidence, panel-request (refused unless every prior-wave work item is Merged, per FR-057), panel-attest (10/10 unanimous), seal (every prior-wave item and every wave item Merged), merge-target, merge-eligibility. Also confirm for every item in this wave: reference docs landed with their behavior (FR-019), no change contradicts a decision in the register (FR-047), and every removal proof for a path retired in this wave passed (FR-023). From round 9, LOW/MEDIUM may be deferred to deferred-findings.md; CRITICAL/HIGH never (FR-051, FR-052). At wave close, review both registers and log this wave friction in friction-log.md (FR-053)
 - [ ] T029 [US1] W2 CONVERGE + MERGE - merge every slice branch into the wave integration branch; run integration tests, panel, and CI against the converged tree only; open one PR against `v3`; merge after eligibility; rebase the next wave onto the updated `v3`; fold changelog fragments; then clean up in order: delete each worktree packages/target, remove worktrees, delete local branches, delete remote branches, nix-collect-garbage, and audit `git worktree list` plus `git branch -a` for residue
 
 **Checkpoint**: W2 converged, panelled, sealed, merged to `v3`, rebased, and cleaned up. Successor entry criteria satisfied.

@@ -82,32 +82,28 @@ are implementation details unless a target or `tests/AGENTS.md` tells
 you to run one directly.
 
 `nix develop` gives you the toolchain every gate expects - the pinned Rust
-release via rustup, plus sccache, cargo-nextest, cargo-deny, cargo-audit,
-shellcheck and jq. The gate scripts each re-enter a nix shell and bootstrap
-a private rustup toolchain when those are missing, so working inside the dev
-shell skips that setup entirely.
+release, plus sccache, cargo-nextest, cargo-deny, cargo-audit, shellcheck
+and jq. The gate scripts each re-enter a nix shell and bootstrap a private
+toolchain when those are missing, so working inside the dev shell skips
+that setup.
 
 Rust tests run under `cargo-nextest`. Two surfaces are not nextest surfaces
 and get explicit companion runs, so do not "simplify" them away: **doctests**
 (several `compile_fail` ones are capability seals) and **`harness = false`
 binaries** (`d2b-core-smoke` carries real fail-closed minijail assertions).
-The harness-free set is derived from `nextest list` rather than pinned, so a
-new one cannot silently drop out of the gate. The privileged broker
-workspace deliberately stays on `cargo test`: its tests are not
-process-per-test safe, and it runs 528 tests in about 1.4 s, so nextest has
-nothing to win there.
+The harness-free set is derived from `nextest list` rather than pinned. The
+privileged broker workspace deliberately stays on `cargo test`: its tests
+are not process-per-test safe, and it runs 528 tests in about 1.4 s.
 
 `make test-runtime-ledger` also stays on `cargo test`, and that is load
-bearing rather than an oversight. It enforces an aggregate process-CPU
-budget, and nextest's one-process-per-test model costs about 1.9x the CPU
-for the same census (measured: 1.2 s against 2.3 s). Porting it would mean
-roughly doubling the budget and losing that much sensitivity to real
-regressions, for no speedup - the gate already excludes compilation.
+bearing. It enforces an aggregate process-CPU budget, and nextest's
+one-process-per-test model costs about 1.9x the CPU for the same census
+(measured: 1.2 s against 2.3 s). Porting it would mean roughly doubling the
+budget and losing that much sensitivity, for no speedup.
 
 When a failure only reproduces inside the gate's own toolchain environment,
 use `tests/tools/repro-rust-gate-env.sh <command>` rather than re-running
-`make test-rust`. It reconstructs that environment for a single command and
-reuses its toolchain root between invocations.
+`make test-rust`.
 
 ```bash
 # Focused Layer-1 jobs, in tests/layer1-jobs.json local phase order.
@@ -780,6 +776,37 @@ rather than duplicating the validation themselves. This keeps panel
 review from stampeding the shared Nix store, cargo target, and git
 worktrees while parallel implementation agents are still active.
 
+A panel round after the first is a **delta review**, and its prompt MUST
+carry two explicit ranges rather than only the full branch diff:
+
+- `git diff <the commit that reviewer last reviewed>..HEAD` - the delta,
+  which is what the reviewer actually reviews. It is the only thing that
+  can have introduced a new defect or failed to close an old one.
+- `git diff <base>..HEAD` - the full branch, for context when the delta
+  touches something whose correctness depends on code outside it.
+
+The integrator therefore MUST record the tip commit each round reviewed, so
+the next round can be scoped against it. A prose summary of what changed is
+a statement of intent, not evidence: prompts MUST instruct reviewers to read
+the delta themselves rather than trust the summary, because a fix that
+silently touched something the summary omits is exactly what a delta review
+exists to catch. Prompts MUST also instruct reviewers to verify their own
+prior findings against the tree by inspection rather than marking them
+closed because the prompt says they were fixed.
+
+Where the integrator disputes a finding, the prompt MUST state the rebuttal
+and its evidence and ask the reviewer to judge it on the merits - explicitly
+permitting withdrawal of an incorrect finding, and explicitly not requiring
+it. An unfounded finding drives a wrong change into the tree, so sustaining
+one to save face is worse than admitting the error; equally, a reviewer must
+not withdraw a valid finding merely because the integrator pushed back.
+
+Any content change to the reviewed tree invalidates every prior sign-off in
+that phase, including sign-offs from reviewers whose focus the change did
+not touch. Those reviewers still re-report, but their prompt should scope
+them to the delta and permit a short confirmation that their area is
+unaffected.
+
 Each engineer returns a JSON sign-off record shaped like:
 
 ```json
@@ -797,6 +824,39 @@ reviewer returns findings, the integrator spawns follow-up
 implementation agents, lands the fixes, reruns the tests, and starts
 another panel round. Green tests do not waive this gate; a phase closes
 only on unanimous sign-off.
+
+### Fix rounds are scoped to the findings
+
+A fix round MUST address the findings the panel actually raised, and
+nothing else. Do not take a finding as licence to harden the surrounding
+area, add coverage the panel did not ask for, or fix an unrelated defect
+noticed in passing. File those separately.
+
+This rule exists because the alternative does not converge. Every
+unrequested change is new content, new content invalidates the round's
+evidence, and the next round reviews a larger diff that offers more to
+find - so the gate recedes while the actual deliverable sits finished and
+unmerged. The observed failure mode is a phase gate whose findings drift
+from "the specification contradicts the shipped code" to progressively
+more peripheral tooling nits, several rounds after the deliverable was
+ready.
+
+Two consequences worth stating outright:
+
+- A genuine defect discovered while fixing something else is still out of
+  scope for that fix round. Record it and land it separately, so the
+  round's diff stays reviewable against the findings it answers.
+- An integrator MUST NOT run `git add -A` while a build, test, or gate is
+  running. Those write scratch directories into the worktree, and a
+  catch-all add commits them. Stage the specific paths the fix touched.
+  The gitignore is a backstop, not the control - it can only cover
+  scratch patterns someone already thought of.
+
+Panel prompts SHOULD state the phase's deliverable and instruct reviewers
+to confine findings to defects in the delta that would cause incorrect
+behaviour or mask a regression, rather than proposing speculative
+robustness work. A reviewer who wants additional hardening should say so
+as an observation in the summary, not as a blocking recommendation.
 
 Escape hatches are narrow:
 
@@ -850,81 +910,83 @@ focused on the review contract rather than paydro-specific files.
 
 ### Running the panel under swarm
 
-There are two review surfaces in this repository and they are strictly
+There are three review surfaces in this repository and they are strictly
 ranked. Read this ordering before wiring any harness.
 
-1. **The wave-close gate** - the five-seat council run once, at wave
-   close, against the wave's one immutable snapshot. This is the
-   authority for an ADR 0046 wave. It is unanimous across all five
-   seats, `signoff` true iff there are no findings, every seat on the
-   pinned review binding. There is no override, no force flag, and no
-   partial pass.
-2. **The per-round gate** - the same five-seat council, run per
-   implementation round. This is the loop swarm automates, and it
-   satisfies the [Phase gate](#phase-gate) rule above.
+1. **The binding ten-role panel** - `cargo run --manifest-path
+   packages/Cargo.toml -p xtask -- delivery wave panel-request` /
+   `panel-attest` / `seal`. This is the authority for an ADR 0046 wave.
+   It runs **once, at wave close**, against the wave's one immutable
+   snapshot, and it is enforced in code by
+   `packages/xtask/src/delivery/panel.rs`: exactly one record per role
+   for all ten roles, `signoff` true iff `recommendations` is `[]`,
+   unanimous ten of ten, every record bound to the same
+   `candidate_id`/`content_id`/`snapshot_sha256`, and provider/model/
+   reasoning effort pinned to `github-copilot` /
+   `gemini-3.1-pro-preview` / `high`. The panel model is deliberately
+   not the coding model, so a lane cannot both author a change and
+   attest to it. There is no override, no force flag, and no partial
+   pass.
+   See [`docs/specs/ADR-046-validation-and-delivery.md`](./docs/specs/ADR-046-validation-and-delivery.md)
+   section 12.3.
+2. **The per-round phase panel** - the [Phase gate](#phase-gate) rule
+   above. Where ADR 0046 restricts the *binding* panel to one per wave,
+   this rule allows a panel per implementation round. This is the loop
+   swarm automates.
+3. **Swarm's five-seat phase council** - the per-round gate whenever
+   swarm drives the work. It stands in for surface 2 and has no bearing
+   on surface 1.
 
-**The council is the only review body.** No ten-role panel is convened
-at any point in an ADR 0046 wave, neither between implementation rounds
-nor at wave close. The two gates above are distinct and both apply: a
-green per-round verdict is not a wave close, and a wave-close verdict
-may not reuse a round verdict.
+**Swarm runs surface 2, not surface 1.** Under swarm the five-seat
+council is the per-round gate: no ten-role panel round is required
+between implementation rounds, which is the whole point of running the
+harness. Surface 1 is unchanged, because ADR 0046 section 12.3 already
+restricts the binding panel to exactly one run at wave close and never
+per implementation round. A green phase council is therefore not a
+sealed wave, and `phase_complete` passing is not `delivery wave seal`
+passing.
 
-**Consequence: waves complete unsealed.** `cargo run --manifest-path
-packages/Cargo.toml -p xtask -- delivery wave seal` requires ten
-unanimous panel records from a body this program does not convene, and
-`packages/xtask/src/delivery/panel.rs` offers no override. The sealing
-tool therefore cannot run, and the exit condition every work item
-inherits - that a seal is recorded - is knowingly waived. Every wave
-boundary report MUST state that waiver explicitly rather than leave it
-implied. See
-[`docs/specs/ADR-046-validation-and-delivery.md`](./docs/specs/ADR-046-validation-and-delivery.md)
-section 12.3 for the contract this departs from.
+**The 10 roles at wave close.** The ten-role roster is no longer run
+every round. It runs once, at wave close, to produce the records
+surface 1 consumes: dispatch one read-only lane per roster role via
+`dispatch_lanes_async`, seeded with that role's focus cell from the
+table above plus the integrator's validation evidence. Lanes are
+read-only by contract, which keeps them off the shared Nix store, cargo
+target directory, and heavy gate semaphore. Lane ids are free-form, so
+all 10 roles vote independently and each lane's verdict maps one-to-one
+onto a `panel-attest` record.
 
-**Accept the tradeoff knowingly.** Five synthesizing seats can agree
-where ten independent reviewers would have dissented, and the
-observability precedent above - a wave review that returned zero
-sign-offs with eleven high-severity findings the static gates had not
-caught - is exactly that failure shape. That risk is accepted, not
-mitigated.
+To keep those records attestable, the reviewing agents must run on the
+pinned panel binding. The `panel` entry under `agent` in
+`.opencode/opencode.json` pins them to
+`github-copilot/gemini-3.1-pro-preview` at reasoning effort `high` and
+denies the write, edit, patch, and bash tools, matching the read-only
+lane contract above. A lane on any other model produces a record
+`panel-attest` will reject, so do not let model fallback silently
+downgrade a panel lane, and do not dispatch a panel lane through the
+`general` agent - that one is pinned to the coding model
+`github-copilot/gpt-5.6-sol` and its records are rejected by design.
 
-**The roster and its mandates.** `submit_phase_council_verdicts` has a
-closed five-member roster (`critic`, `reviewer`, `sme`,
-`test_engineer`, `explorer`) and deduplicates by member, so the roster
-cannot be extended. Each seat carries an exact mandate:
+**The per-round council, and what it costs.**
+`submit_phase_council_verdicts` has a closed five-member roster
+(`critic`, `reviewer`, `sme`, `test_engineer`, `explorer`) and
+deduplicates by member, so ten distinct votes cannot be cast against it.
+Each seat carries the concerns of the roster roles nearest it:
 
-| Seat            | Covers                                   |
-|-----------------|------------------------------------------|
-| `reviewer`      | `software`, `rust`                       |
-| `test_engineer` | `test`                                   |
-| `sme`           | `nixos`, `networking`, `kernel`          |
-| `critic`        | `security` only                          |
-| `explorer`      | `docs`, `observability`, `product`       |
+| Seat            | Covers                          |
+|-----------------|---------------------------------|
+| `reviewer`      | `software`, `rust`              |
+| `test_engineer` | `test`                          |
+| `sme`           | `nixos`, `networking`, `kernel` |
+| `critic`        | `security`, `product`           |
+| `explorer`      | `docs`, `observability`         |
 
-The `critic` seat is a dedicated security engineer: attack surface,
-trust posture, capability and authority boundaries, privilege
-separation, authorization boundaries, sensitive-value exposure in
-diagnostics and telemetry, and retention defaults. It carries no
-competing mandate, because on a codebase whose principal risk is
-capability and privilege boundaries a diluted security seat is the
-seat most likely to miss the finding that matters. Product concerns -
-operator experience, naming surface, migration and deprecation policy,
-actionable error messages - move to the `explorer` seat, their nearest
-neighbour. A seat MUST NOT return `APPROVE` while any concern it covers
-is open, and the security seat's refusal blocks the wave from closing.
-
-**Findings are recorded.** Every finding and its resolution MUST be
-recorded at both gates, so a later reader can tell what was raised and
-what closed it.
-
-**The pinned review binding.** `agents.<name>.model` in
-`.opencode/opencode-swarm.json` pins every reviewing seat to
-`github-copilot/gemini-3.1-pro-preview`. A seat that runs on any other
-model invalidates that review rather than being silently accepted.
-Reviewing agents deliberately carry no `fallback_models`: a silent
-downgrade would produce a verdict that must be rejected, so a provider
-error fails the seat outright and, with `requireAllMembers` true,
-blocks the council rather than degrading it. Implementation runs on
-`github-copilot/gpt-5.6-sol`.
+A seat MUST NOT return `APPROVE` while any concern it covers is open.
+Accept the tradeoff knowingly: five synthesizers can agree where ten
+independent reviewers would have dissented, and the observability
+precedent above is exactly that failure shape. That is why this council
+gates a round and not a wave, and why the ten-role panel still runs
+before the seal.
 
 **Verdict rule.** Swarm's default is more permissive than this file: a
 `CONCERNS` verdict carrying only MEDIUM/LOW findings still passes. The
@@ -1032,11 +1094,17 @@ The panel contract is implementation-neutral: any harness that
 preserves the roster, the unanimity rule, the no-rerun discipline, and
 the two gates per phase is acceptable.
 
-The in-repo reference implementation is the `opencode-swarm` wiring
-described above, configured by `.opencode/opencode-swarm.json` and
-`.opencode/opencode.json`. Those two files are the tracked, reviewable
-surface for panel behaviour; change them in the same commit as any
-change to this section.
+The in-repo reference implementation is `.opencode/opencode.json`. Its
+`agent` table is the tracked, reviewable surface for panel behaviour:
+`panel` carries the reviewing binding and the read-only tool set, while
+`general` and `explore` carry the coding binding. Change that file in
+the same commit as any change to this section.
+
+The ADR 0046 program does not run swarm. Where this section describes
+swarm's five-seat council, treat it as documenting an available harness
+rather than the configuration in use; the per-round gate is run
+directly, and the binding wave panel is dispatched as ten read-only
+`panel` lanes.
 
 A second, host-local implementation lives in
 `/etc/nixos/scripts/panel-review.{md,sh}` and
@@ -1350,12 +1418,8 @@ fields that request panel, agent, or model metadata.
   flake-eval gates (W2fu4 H8/H9).
 - Rust worktrees do NOT share a cargo target directory. Each worktree
   keeps its own `packages/target/`; compiled-output dedup across
-  worktrees comes from `sccache`. `SCCACHE_DIR` defaults to
-  `~/.cache/d2b-sccache`: `tests/lib.sh` exports it for every gate script,
-  and the dev shell sets the same value, so both agree. A bare `cargo`
-  invocation outside both falls back to sccache's own `~/.cache/sccache`,
-  and Nix sandbox builds pin it empty because the sandbox has no sccache.
-  The wiring is the `[build] rustc-wrapper` lines in
+  worktrees comes from `sccache` (`$SCCACHE_DIR`, default
+  `~/.cache/d2b-sccache`), wired by the `[build] rustc-wrapper` lines in
   `packages/.cargo/config.toml` and the sibling-workspace configs under
   `packages/d2b-priv-broker/`, `packages/d2b-guest-shell-runner/`, and
   `packages/d2b-core/fuzz/`. A shared target dir is deliberately
@@ -1370,18 +1434,19 @@ fields that request panel, agent, or model metadata.
   no environment needs the variable cleared in order to build. Naming
   `sccache` directly used to make it a hard requirement, and the resulting
   `RUSTC_WRAPPER=""` workaround spread into environments that *did* have
-  sccache and silently disabled the compiler cache. Clearing it is now
-  reserved for a deliberate choice to run uncached (`D2B_NO_SCCACHE=1`, or
-  CI without `D2B_CI_SCCACHE=1`); if a command fails without it, fix the
-  cause rather than reintroducing the override.
+  sccache and silently disabled the compiler cache. Clearing it is reserved
+  for a deliberate choice: running uncached (`D2B_NO_SCCACHE=1`, or CI
+  without `D2B_CI_SCCACHE=1`), or the compile-fail seal fixtures, which
+  clear every wrapper spelling because a caching wrapper that exits nonzero
+  under concurrent cargo invocations is indistinguishable from the fixture
+  failing for the wrong reason.
 - Tests that shell out to `cargo` (the capability-seal guards in
-  `packages/d2b-bus/`, `packages/d2b-controller-toolkit/`) cache their
-  scratch trees between runs, keyed on `rustc --version`. Compiled
+  `packages/d2b-bus/` and `packages/d2b-controller-toolkit/`) cache their
+  scratch trees between runs, keyed on a hash of `rustc -vV`. Compiled
   artifacts are not portable across compiler versions, and the gate's
   pinned toolchain routinely differs from a dev shell's, so an unkeyed
-  cache lets one poison the other. Those caches are a few GB per worktree
-  under `.scratch/`; delete that directory to reclaim the space.
-
+  cache lets one poison the other. Those caches live under `.scratch/` and
+  are several GB per worktree; delete that directory to reclaim the space.
 - The persistent-shell helper is intentionally excluded from the main
   Rust workspace at `packages/d2b-guest-shell-runner/`. Run it by
   manifest path (and with `--features real-libshpool` when checking the

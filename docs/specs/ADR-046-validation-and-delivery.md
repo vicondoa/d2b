@@ -298,20 +298,43 @@ an anti-serialization violation (see §6 and `ADR046-streamline-013`).
 
 ## 4. Per-wave entry/exit criteria
 
-Every wave (`ADR046-W0`…`ADR046-W8`) uses this template. A wave's exit
-criteria are its successor's entry criteria; there is no partial-wave
-advance. `ADR046-W8` is no exception: having no spec members satisfies its
-spec-scoped entry and exit clauses vacuously, but every remaining clause -
-snapshot immutability, validator lanes, exactly one binding ten-role panel,
-seal, and merge eligibility - applies to it unchanged.
+Every wave (`ADR046-W0`…`ADR046-W8`) uses this template. `ADR046-W8` is no
+exception: having no spec members satisfies its spec-scoped entry and exit
+clauses vacuously, but every remaining clause - snapshot immutability,
+validator lanes, exactly one binding ten-role panel, seal, and merge
+eligibility - applies to it unchanged.
+
+Waves are **pipelined**, not strictly serial. A wave's implementation may
+begin before its predecessor's panel completes, under all four of these
+conditions:
+
+1. At least five of the predecessor's ten roster reviews have returned.
+2. The predecessor's integration tests pass on its converged tree.
+3. The successor issues no panel request, produces no seal, and merges
+   nothing until the predecessor is sealed at 10/10 unanimity with zero
+   recommendations **and** merged to the integration lineage.
+4. The successor rebases onto the updated integration lineage **before** its
+   own panel runs, so the panel binds to a snapshot that already contains
+   every predecessor finding.
+
+Panel, seal, and merge therefore remain **strictly ordered** between waves;
+only implementation start is pipelined. There is no partial-wave advance in
+the sense that matters: a wave is never *delivered* early, and its evidence is
+never accepted early.
+
+Rework is the accepted price of the pipeline. When a predecessor finding
+invalidates work the successor already started, that rework is absorbed by the
+wave that started early. It MUST NOT be cited as grounds to weaken, shorten,
+or partially accept the predecessor's panel - which would trade a bounded,
+known cost for an unbounded, unknown one.
 
 **Entry criteria (all required):**
 
-1. Gate 0 (§2) has passed. For `ADR046-W1` onward, `wave snapshot` reads the
-   implementation graph and work-item state manifest from the candidate's exact
-   integrated Git tree and rejects entry unless every work item in every prior
-   wave is `Merged`. Items in the wave being entered may remain `Planned`; the
-   seal gate below is what requires their promotion after implementation.
+1. Gate 0 (§2) has passed. Entry does **not** require the predecessor's work
+   items to be `Merged`; that condition binds at this wave's panel request and
+   seal instead (§12.3, §12.4), which is what makes the pipelined start above
+   executable. Items in the wave being entered may remain `Planned`; the seal
+   gate below is what requires their promotion after implementation.
 2. Every destination path this wave's work items name (§3.2, §7) is free of
    an open, unresolved contention flag from an earlier wave.
 3. The wave's Git Town stack (§5) has been proposed against the exact parent
@@ -353,6 +376,11 @@ rule (`## Panel review` → `### Phase gate`): where that rule allows a panel
 per implementation round, ADR 0046 restricts the **binding** panel to exactly
 one occurrence per wave, run only against the wave's single immutable final
 snapshot (§12), never against interim implementation rounds within the wave.
+
+Every wave's work reaches `v3` through pull requests that pass the gates
+above. Direct commits to the integration lineage, and local merges that
+bypass the panel/seal/eligibility sequence, are prohibited regardless of how
+small or how mechanical the change looks.
 
 ## 5. Git Town stack shape and worktree/branch ownership
 
@@ -413,6 +441,15 @@ in §3.2 closes, provided:
 2. no destination path it will write (per its work items' `Destination`
    field) is currently claimed by another **still-open** branch, per the
    contention index in §6.2/§7.
+
+Condition 1 is a **per-edge** rule and is deliberately stricter than the
+coarse per-wave pipelining in §4. The two compose rather than conflict: §4
+governs when a *wave* may begin implementing relative to its predecessor's
+seal, while this rule governs when an *individual slice* may open relative to
+the specific specs it depends on. A slice whose precise dependency edge is
+unmerged has a concrete reason to wait that wave adjacency does not capture,
+so §4 does not relax it. Nothing here reintroduces a wave-level merged
+precondition on entry.
 
 For example, `resources-network` (computed wave W4) and `resources-credential`
 (also W4) may each open as soon as `provider-model-and-packaging` (W3) merges -
@@ -1179,11 +1216,25 @@ both validator and panel evidence; the wave re-snapshots and both lanes
 rerun. A history-only rebase or retarget may reuse panel evidence only when
 the canonical proof tool (§12.6) verifies byte-identical integrated content.
 
-Before creating a snapshot for any wave after `W0`, the command reads
-`ADR-046-implementation-graph.json` and `ADR-046-work-items.json` from the
-candidate's exact integrated Git tree. It rejects entry when any item assigned
-to an earlier wave is not `Merged`; it does not reject `Planned` items in the
-wave being entered.
+Creating a snapshot performs **no** prior-wave-merged assertion. A wave that
+started early under the pipelined-start conditions in §4 may snapshot while
+its predecessor is still unsealed. That condition binds later, at the wave's
+exit boundary - `panel-request`, `seal`, and `merge-eligibility` (§12.3,
+§12.4) - which is what keeps the pipeline executable without letting a wave be
+reviewed or delivered early.
+
+Those exit gates read `ADR-046-implementation-graph.json` and
+`ADR-046-work-items.json` from the candidate's exact integrated Git tree, and
+refuse when any item assigned to an earlier wave is not `Merged`. Reading the
+manifests from the snapshot's own integrated tree is also what makes the
+rebase requirement in §4 self-enforcing in the common case: a successor that
+has not rebased since the predecessor merged still presents the pre-merge
+manifest and is refused. This is a manifest-content check rather than an
+ancestry proof - it asserts that the snapshot's manifest reports the
+predecessor merged, not that the predecessor's merge commit is an ancestor of
+the snapshot - so a hand-edited or cherry-picked manifest would pass it.
+Neither the prior-wave leg nor `panel-request` rejects `Planned` items in the
+wave being entered; the seal gate is what requires their promotion.
 
 Each repository requires at least one
 `--pull-request LOGICAL_ID=NUMBER:HEAD_REF` mapping, and the repeated mappings
@@ -1224,7 +1275,7 @@ never permits merge (§13.3). Command/result evidence is imported into an
 external, candidate-ID-addressed state directory - never committed to Git,
 copied into generated artifacts, or pasted into a PR body (§12.5).
 
-### 12.3 Ten-role final panel, bound to GPT-5.6 Sol
+### 12.3 Ten-role final panel, bound to Gemini 3.1 Pro Preview
 
 Every ADR 0046 wave's binding panel - run exactly once, at wave close,
 against the wave's one immutable snapshot, never per implementation round -
@@ -1234,9 +1285,15 @@ the wave's `panel-request` record to:
 
 ```text
 provider: github-copilot
-model_version: gpt-5.6-sol
-reasoning_effort: xhigh
+model_version: gemini-3.1-pro-preview
+reasoning_effort: high
 ```
+
+The panel model is deliberately **not** the model that writes the code. The
+implementation lanes for this program run on `gpt-5.6-sol`; binding the
+reviewing roster to a different model means a lane cannot both author a change
+and attest to it, and `panel-attest` rejects any record carrying the coding
+model. Keep the two pins distinct when either is changed.
 
 | Role | Focus (unchanged from this repository's existing default panel) |
 | --- | --- |
@@ -1253,7 +1310,10 @@ reasoning_effort: xhigh
 
 `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave panel-request` writes the candidate-bound request
 (binding `candidate_id`/`content_id`/`snapshot_sha256`, the exact ten-role
-roster, and the required `gpt-5.6-sol` model at reasoning effort `xhigh`).
+roster, and the required `gemini-3.1-pro-preview` model at reasoning effort `high`).
+It is the first of the wave's three exit gates: it refuses the request unless
+every prior-wave work item is `Merged` (§12.1), so ten reviewers cannot bind to
+a snapshot a predecessor finding can still invalidate.
 `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave panel-attest` validates a directory containing
 exactly one record per role, each shaped exactly as this repository's sibling
 ADR-0045-lineage panel-receipt artifact:
@@ -1266,9 +1326,9 @@ ADR-0045-lineage panel-receipt artifact:
   "candidate_id": "<sha256>",
   "content_id": "<sha256>",
   "snapshot_sha256": "<sha256>",
-  "model_version": "gpt-5.6-sol",
+  "model_version": "gemini-3.1-pro-preview",
   "provider": "github-copilot",
-  "reasoning_effort": "xhigh",
+  "reasoning_effort": "high",
   "run_id": "run-001",
   "receipt_locator": "github-copilot://runs/run-001/software",
   "output_sha256": "<sha256>",
@@ -1293,8 +1353,14 @@ present, unanimous, and bound to the same `candidate_id`/`content_id`/
 exact snapshot. It also reads the implementation graph and work-item state
 manifest from the snapshot's integrated Git tree and rejects the seal unless
 every item assigned to the current wave is `Merged`. The error names the item
-and the required state transition. `merge-eligibility` repeats this current-wave
-check so an eligibility result cannot bypass stale delivery state.
+and the required state transition. `merge-eligibility` re-derives **both** the
+current-wave and the prior-wave conditions from the sealed snapshot's own
+integrated tree, rather than trusting the seal artifact to have carried them.
+Re-derivation reads the same fixed manifests the seal bound, so it cannot refuse
+a seal that `seal` itself accepted; what it does catch is a seal record written
+by a binary predating the prior-wave gate, or by any future path that writes a
+seal without passing through it. This is the third enforcement point for the
+prior-wave condition, after `panel-request` and `seal`.
 
 `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave merge-target` then captures the wave's current
 pull-request stack into a canonical `merge-target.json` under the candidate.
@@ -1581,7 +1647,7 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | Reuse source | sibling-lineage `cargo xtask delivery wave panel-request`/`panel-attest` implementation |
 | Reuse action | adapt |
 | Destination | `packages/xtask/src/delivery/panel.rs` |
-| Detailed design | `panel-request` writes the candidate-bound request naming the exact ten roles and required model; `panel-attest` validates a directory of exactly ten strict 14-field records, rejecting wrong model/candidate binding, duplicate provider/run provenance, or inconsistent `signoff`/`recommendations`, per §12.3 Primary reuse disposition: `adapt`. Preserved source-plan detail: copy-unchanged, then adapt to bind the fixed `gpt-5.6-sol` model at reasoning effort `xhigh`/`github-copilot` provider pair and this repository's existing ten-role roster (§12.3). |
+| Detailed design | `panel-request` writes the candidate-bound request naming the exact ten roles and required model; `panel-attest` validates a directory of exactly ten strict 14-field records, rejecting wrong model/candidate binding, duplicate provider/run provenance, or inconsistent `signoff`/`recommendations`, per §12.3 Primary reuse disposition: `adapt`. Preserved source-plan detail: copy-unchanged, then adapt to bind the fixed `gemini-3.1-pro-preview` model at reasoning effort `high`/`github-copilot` provider pair and this repository's existing ten-role roster (§12.3). |
 | Integration | Every wave's exit criteria (§4) require ten unanimous attested records before `wave seal` |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Unit tests for every rejection class (wrong model, missing role, duplicate run_id, `signoff:true` with non-empty `recommendations`); integration test with ten synthetic valid records passing |

@@ -1602,6 +1602,16 @@ fn render_workspace_docs(
             .arg(&target)
             .env("CARGO_BUILD_BUILD_DIR", &build)
             .env("TMPDIR", &temp)
+            // Compile fixtures without any rustc wrapper. The repository config sets a
+            // caching wrapper, whose client or server can exit nonzero under concurrent
+            // cargo invocations; that failure is indistinguishable from the fixture
+            // failing for the wrong reason, so it turns a load-bearing seal assertion
+            // into a spurious failure. A compilation that is expected to fail gains
+            // nothing from a compiler cache anyway. Clear every wrapper spelling so an
+            // inherited workspace or config-env wrapper cannot reintroduce it.
+            .env("RUSTC_WRAPPER", "")
+            .env("RUSTC_WORKSPACE_WRAPPER", "")
+            .env("CARGO_BUILD_RUSTC_WRAPPER", "")
             .output()
             .unwrap_or_else(|_| panic!("start rustdoc for package {package_name}"));
         if !output.status.success() {

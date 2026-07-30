@@ -31,6 +31,16 @@ fn dependent_cannot_forge_registration_or_mint_admitted_session() {
         ])
         .env("CARGO_TARGET_DIR", scratch.path().join("target"))
         .env("TMPDIR", &temp)
+        // Compile fixtures without any rustc wrapper. The repository config sets a
+        // caching wrapper, whose client or server can exit nonzero under concurrent
+        // cargo invocations; that failure is indistinguishable from the fixture
+        // failing for the wrong reason, so it turns a load-bearing seal assertion
+        // into a spurious failure. A compilation that is expected to fail gains
+        // nothing from a compiler cache anyway. Clear every wrapper spelling so an
+        // inherited workspace or config-env wrapper cannot reintroduce it.
+        .env("RUSTC_WRAPPER", "")
+        .env("RUSTC_WORKSPACE_WRAPPER", "")
+        .env("CARGO_BUILD_RUSTC_WRAPPER", "")
         .output()
         .expect("run downstream From compile-pass fixture");
     assert!(
@@ -83,6 +93,16 @@ fn dependent_cannot_forge_registration_or_mint_admitted_session() {
             ])
             .env("CARGO_TARGET_DIR", scratch.path().join("target"))
             .env("TMPDIR", &temp)
+            // Compile fixtures without any rustc wrapper. The repository config sets a
+            // caching wrapper, whose client or server can exit nonzero under concurrent
+            // cargo invocations; that failure is indistinguishable from the fixture
+            // failing for the wrong reason, so it turns a load-bearing seal assertion
+            // into a spurious failure. A compilation that is expected to fail gains
+            // nothing from a compiler cache anyway. Clear every wrapper spelling so an
+            // inherited workspace or config-env wrapper cannot reintroduce it.
+            .env("RUSTC_WRAPPER", "")
+            .env("RUSTC_WORKSPACE_WRAPPER", "")
+            .env("CARGO_BUILD_RUSTC_WRAPPER", "")
             .output()
             .expect("run dependent compile-fail crate");
         let stderr = String::from_utf8(output.stderr).expect("compiler diagnostics are UTF-8");
@@ -139,6 +159,16 @@ fn dependent_cannot_forge_registration_or_mint_admitted_session() {
             )
             .env("CARGO_TARGET_DIR", scratch.path().join("target"))
             .env("TMPDIR", &temp)
+            // Compile fixtures without any rustc wrapper. The repository config sets a
+            // caching wrapper, whose client or server can exit nonzero under concurrent
+            // cargo invocations; that failure is indistinguishable from the fixture
+            // failing for the wrong reason, so it turns a load-bearing seal assertion
+            // into a spurious failure. A compilation that is expected to fail gains
+            // nothing from a compiler cache anyway. Clear every wrapper spelling so an
+            // inherited workspace or config-env wrapper cannot reintroduce it.
+            .env("RUSTC_WRAPPER", "")
+            .env("RUSTC_WORKSPACE_WRAPPER", "")
+            .env("CARGO_BUILD_RUSTC_WRAPPER", "")
             .output()
             .expect("run capability trait compile-fail mutation");
         let stderr = String::from_utf8(output.stderr).expect("compiler diagnostics are UTF-8");
@@ -162,7 +192,8 @@ fn dependent_cannot_forge_registration_or_mint_admitted_session() {
 /// invocations. Compiled artifacts are not portable across compiler versions,
 /// and the gate provisions its own pinned toolchain while a developer shell
 /// commonly has a different one, so each gets its own cache tree rather than
-/// corrupting a shared one.
+/// corrupting a shared one. Hashed because `rustc -vV` is multi-line and long
+/// enough to overflow NAME_MAX once a prefix is added.
 fn toolchain_cache_key() -> String {
     let version = Command::new("rustc")
         .arg("-vV")
@@ -174,9 +205,6 @@ fn toolchain_cache_key() -> String {
             "rustc -vV must identify the compiler: a cache shared between two \
              unidentified toolchains is the corruption this key prevents",
         );
-    // Hash rather than embed: `rustc -vV` is multi-line and runs past 200
-    // characters, which overflows NAME_MAX once a prefix is added. A digest
-    // keeps the commit hash and host triple participating at fixed width.
     let mut hasher = DefaultHasher::new();
     version.trim().hash(&mut hasher);
     format!("{:016x}", hasher.finish())
@@ -184,27 +212,19 @@ fn toolchain_cache_key() -> String {
 
 /// A reusable repository-local compiler scratch tree.
 ///
-/// This test drives roughly ten `cargo check` invocations against the
-/// compile-fail fixture crate. They already share one target directory within a
-/// run, but the tree used to be per-process and deleted on drop, so every run
-/// recompiled the fixture's whole dependency graph - d2b-bus, d2b-session,
-/// d2b-session-unix and everything beneath them - from cold. That made this the
-/// slowest test in the workspace and, once the suite moved to cargo-nextest,
-/// the critical path bounding the entire test phase.
+/// The tree used to be per-process and deleted on drop, so every run recompiled
+/// the fixture's whole dependency graph from cold - making this the slowest test
+/// in the workspace once the suite moved to cargo-nextest.
 ///
 /// Reuse is sound: Cargo owns staleness through its own fingerprints, and the
-/// assertions are about compiler diagnostics that Cargo re-produces whenever an
-/// input changes. Cargo does not cache failed builds, so each compile-fail case
-/// still genuinely recompiles the fixture crate; what survives is the
-/// dependency graph beneath it, which is the bulk of the cost.
-///
-/// Unlike the rustdoc cache in public_mint_surface there is no output-collision
-/// hazard here, because these invocations produce diagnostics rather than a
-/// shared HTML tree.
+/// assertions are about diagnostics Cargo re-produces whenever an input
+/// changes. Cargo does not cache failed builds, so each compile-fail case still
+/// genuinely recompiles the fixture; what survives is the dependency graph
+/// beneath it. The nested invocations deliberately clear every rustc wrapper,
+/// so this tree - not a compiler cache - is what makes repeat runs fast.
 ///
 /// A stable path also makes this leak-proof: an interrupted run leaves a
-/// directory the next run adopts, rather than stranding a per-process tree
-/// nothing will collect.
+/// directory the next run adopts rather than stranding a per-process tree.
 ///
 /// Set `D2B_EXTERNAL_SEALS_FRESH=1` to discard the cache and compile cold.
 struct Scratch(PathBuf);

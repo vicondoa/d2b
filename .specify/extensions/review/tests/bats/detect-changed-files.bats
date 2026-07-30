@@ -153,7 +153,7 @@ teardown() {
     assert_valid_json "$output"
 
     # both.txt should appear only once
-    local count=$(echo "$output" | python3 -c "import json,sys; print(json.load(sys.stdin)['changed_files'].count('both.txt'))")
+    local count=$(echo "$output" | jq -r '[.changed_files[] | select(. == "both.txt")] | length')
     [ "$count" -eq 1 ]
 
     # only-staged.txt should also be present
@@ -322,7 +322,7 @@ teardown() {
     assert_valid_json "$output"
 
     # shared.txt should appear exactly once
-    local count=$(echo "$output" | python3 -c "import json,sys; print(json.load(sys.stdin)['changed_files'].count('shared.txt'))")
+    local count=$(echo "$output" | jq -r '[.changed_files[] | select(. == "shared.txt")] | length')
     [ "$count" -eq 1 ]
 }
 
@@ -440,17 +440,15 @@ teardown() {
     assert_success
     assert_valid_json "$output"
 
-    # Verify all expected keys exist
-    echo "$output" | python3 -c "
-import json, sys
-data = json.load(sys.stdin)
-assert 'branch' in data, 'missing branch key'
-assert 'default_branch' in data, 'missing default_branch key'
-assert 'mode' in data, 'missing mode key'
-assert 'changed_files' in data, 'missing changed_files key'
-assert isinstance(data['changed_files'], list), 'changed_files should be a list'
-print('All keys present and correct types')
-"
+    # Verify all expected keys exist and carry the right types
+    echo "$output" | jq -e '
+        has("branch")
+        and has("default_branch")
+        and has("base_source")
+        and has("mode")
+        and has("changed_files")
+        and (.changed_files | type == "array")
+    ' > /dev/null || fail "missing key or wrong type in: $output"
 }
 
 @test "text mode output has correct format" {
@@ -608,7 +606,7 @@ print('All keys present and correct types')
     assert_valid_json "$output"
 
     # All three files should be present
-    local count=$(echo "$output" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['changed_files']))")
+    local count=$(echo "$output" | jq -r '.changed_files | length')
     [ "$count" -eq 3 ]
 }
 
@@ -647,4 +645,161 @@ print('All keys present and correct types')
     run bash "$SCRIPTS_DIR/detect-changed-files.sh" --json
     assert_success
     assert_output --partial '"renamed.txt"'
+}
+
+# ----------------------------------------------
+# Explicit base ref: --base and SPECIFY_REVIEW_BASE_REF
+# ----------------------------------------------
+
+@test "--base <ref> selects the diff base and uses Mode A" {
+    init_git_repo "$TEST_TEMP_DIR"
+    cd "$TEST_TEMP_DIR"
+
+    echo "base" > base.txt
+    git add base.txt
+    git commit --quiet -m "Base commit"
+    git branch lineage
+
+    git checkout --quiet -b wave-branch
+    echo "wave" > wave.txt
+    git add wave.txt
+    git commit --quiet -m "Wave commit"
+
+    run bash "$SCRIPTS_DIR/detect-changed-files.sh" --base lineage --json
+    assert_success
+    assert_valid_json "$output"
+
+    local default_branch=$(json_field "$output" "default_branch")
+    [ "$default_branch" = "lineage" ]
+    local base_source=$(json_field "$output" "base_source")
+    [ "$base_source" = "cli" ]
+    local mode=$(json_field "$output" "mode")
+    [[ "$mode" == "Feature branch diff (lineage...HEAD)"* ]]
+    assert_output --partial '"wave.txt"'
+}
+
+@test "SPECIFY_REVIEW_BASE_REF selects the diff base" {
+    init_git_repo "$TEST_TEMP_DIR"
+    cd "$TEST_TEMP_DIR"
+
+    echo "base" > base.txt
+    git add base.txt
+    git commit --quiet -m "Base commit"
+    git branch lineage
+
+    git checkout --quiet -b wave-branch
+    echo "wave" > wave.txt
+    git add wave.txt
+    git commit --quiet -m "Wave commit"
+
+    SPECIFY_REVIEW_BASE_REF=lineage run bash "$SCRIPTS_DIR/detect-changed-files.sh" --json
+    assert_success
+    assert_valid_json "$output"
+
+    local default_branch=$(json_field "$output" "default_branch")
+    [ "$default_branch" = "lineage" ]
+    local base_source=$(json_field "$output" "base_source")
+    [ "$base_source" = "env" ]
+    assert_output --partial '"wave.txt"'
+}
+
+@test "--base wins over SPECIFY_REVIEW_BASE_REF when both are set" {
+    init_git_repo "$TEST_TEMP_DIR"
+    cd "$TEST_TEMP_DIR"
+
+    echo "base" > base.txt
+    git add base.txt
+    git commit --quiet -m "Base commit"
+    git branch cli-lineage
+    git branch env-lineage
+
+    git checkout --quiet -b wave-branch
+    echo "wave" > wave.txt
+    git add wave.txt
+    git commit --quiet -m "Wave commit"
+
+    SPECIFY_REVIEW_BASE_REF=env-lineage run bash "$SCRIPTS_DIR/detect-changed-files.sh" --base cli-lineage --json
+    assert_success
+    assert_valid_json "$output"
+
+    local default_branch=$(json_field "$output" "default_branch")
+    [ "$default_branch" = "cli-lineage" ]
+    local base_source=$(json_field "$output" "base_source")
+    [ "$base_source" = "cli" ]
+}
+
+@test "--base - is treated as a ref, not as a missing value" {
+    init_git_repo "$TEST_TEMP_DIR"
+    cd "$TEST_TEMP_DIR"
+
+    # A bare '-' is git shorthand for the previous branch. This fixture has no
+    # previous branch, so it legitimately fails to RESOLVE; the point of the
+    # assertion is that it reached ref resolution at all rather than being
+    # rejected as a stray flag.
+    run bash "$SCRIPTS_DIR/detect-changed-files.sh" --base -
+    assert_failure
+    [ "$status" -eq 1 ]
+    assert_output --partial "Cannot resolve base ref '-'"
+    refute_output --partial "--base requires a ref argument"
+}
+
+@test "unresolvable base ref fails closed with valid JSON and does not fall back" {
+    init_git_repo_with_remote "$TEST_TEMP_DIR"
+    cd "$TEST_TEMP_DIR"
+
+    git checkout --quiet -b wave-branch
+    echo "wave" > wave.txt
+    git add wave.txt
+    git commit --quiet -m "Wave commit"
+
+    run bash "$SCRIPTS_DIR/detect-changed-files.sh" --base no-such-ref --json
+    assert_failure
+    [ "$status" -eq 1 ]
+    assert_valid_json "$output"
+
+    local err=$(json_field "$output" "error")
+    [[ "$err" == *"Cannot resolve base ref 'no-such-ref'"* ]]
+
+    # No silent fallback to the repository default branch: the error payload is
+    # the only output, with no changed-file scope at all.
+    echo "$output" | jq -e 'has("changed_files") | not' > /dev/null \
+        || fail "fell back to a default-branch scope instead of failing closed: $output"
+}
+
+# ----------------------------------------------
+# Flag-order independence on the JSON error path
+# ----------------------------------------------
+
+@test "--bogus --json emits valid JSON on the error path" {
+    run bash "$SCRIPTS_DIR/detect-changed-files.sh" --bogus --json
+    assert_failure
+    assert_valid_json "$output"
+    local err=$(json_field "$output" "error")
+    [[ "$err" == *"Unknown option"* ]]
+}
+
+@test "--json --bogus emits valid JSON on the error path" {
+    run bash "$SCRIPTS_DIR/detect-changed-files.sh" --json --bogus
+    assert_failure
+    assert_valid_json "$output"
+    local err=$(json_field "$output" "error")
+    [[ "$err" == *"Unknown option"* ]]
+}
+
+@test "--base --json reports a missing ref argument as valid JSON" {
+    run bash "$SCRIPTS_DIR/detect-changed-files.sh" --base --json
+    assert_failure
+    [ "$status" -eq 1 ]
+    assert_valid_json "$output"
+    local err=$(json_field "$output" "error")
+    [[ "$err" == *"--base requires a ref argument"* ]]
+}
+
+@test "--json --base reports a missing ref argument as valid JSON" {
+    run bash "$SCRIPTS_DIR/detect-changed-files.sh" --json --base
+    assert_failure
+    [ "$status" -eq 1 ]
+    assert_valid_json "$output"
+    local err=$(json_field "$output" "error")
+    [[ "$err" == *"--base requires a ref argument"* ]]
 }
