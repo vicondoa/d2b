@@ -2752,9 +2752,8 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             ))
         }
         RealBrokerRequest::OpenHidrawSecurityKey(req) => {
-            let outcome =
-                crate::ops::security_key::live_open_hidraw_security_key(&req, audit_log)
-                    .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
+            let outcome = crate::ops::security_key::live_open_hidraw_security_key(&req, audit_log)
+                .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
             write_success_op_record!(
                 audit_log,
                 bundle_metadata,
@@ -5068,11 +5067,9 @@ fn prepare_runner_preopened_fds(
     if req.role == d2b_contracts::broker_wire::RunnerRole::CloudHypervisor {
         let runner_intent = resolver
             .find_runner_intent(req.bundle_runner_intent_ref.as_str())
-            .ok_or_else(|| {
-                BrokerError::BundleIntentMissing {
-                    kind: "runner",
-                    intent_id: req.bundle_runner_intent_ref.as_str().to_owned(),
-                }
+            .ok_or_else(|| BrokerError::BundleIntentMissing {
+                kind: "runner",
+                intent_id: req.bundle_runner_intent_ref.as_str().to_owned(),
             })?;
         let intents = resolver
             .resolve_macvtap_intents(req.vm_id.as_str(), runner_intent.role_id.as_str())
@@ -5083,9 +5080,12 @@ fn prepare_runner_preopened_fds(
                 response_fds: Vec::new(),
             });
         }
-        let mut expected_fd = crate::sys::pidfd_sys::RENDER_NODE_INHERITED_FD;
         let mut child_fds = Vec::with_capacity(intents.len());
-        for intent in intents {
+        for (offset, intent) in intents.into_iter().enumerate() {
+            // The inherited-fd contract assigns each macvtap intent the fd
+            // RENDER_NODE_INHERITED_FD + index, in declaration order.
+            let expected_fd =
+                crate::sys::pidfd_sys::RENDER_NODE_INHERITED_FD + offset as libc::c_int;
             if intent.fd != expected_fd {
                 return Err(BrokerError::LiveHandler(format!(
                     "macvtap fd contract mismatch for {}: processes.json declares fd {}, broker would install fd {}",
@@ -5097,7 +5097,6 @@ fn prepare_runner_preopened_fds(
             let fd = crate::ops::tap::live_create_macvtap_fd(&intent)
                 .map_err(|err| BrokerError::LiveHandler(err.to_string()))?;
             child_fds.push(fd);
-            expected_fd += 1;
         }
         let _ = audit_log;
         let _ = daemon_uid;
@@ -9631,6 +9630,10 @@ mod tests {
     }
 
     #[test]
+    // BrokerMode has additional variants only under layer1-bootstrap, so this
+    // match is refutable in that configuration and irrefutable without it.
+    // Rewriting it as a `let` would stop compiling with the feature enabled.
+    #[allow(clippy::infallible_destructuring_match)]
     fn parse_command_accepts_realm_controllers_path_without_changing_socket_defaults() {
         let mode = parse_command([
             "serve".to_owned(),
@@ -9659,6 +9662,10 @@ mod tests {
     }
 
     #[test]
+    // BrokerMode has additional variants only under layer1-bootstrap, so this
+    // match is refutable in that configuration and irrefutable without it.
+    // Rewriting it as a `let` would stop compiling with the feature enabled.
+    #[allow(clippy::infallible_destructuring_match)]
     fn parse_command_defaults_realm_metadata_paths() {
         let mode = parse_command(["serve".to_owned(), "--test-mode".to_owned()])
             .expect("serve command parses with defaults");
@@ -11435,7 +11442,7 @@ mod tests {
 
         let spawn_runner = assert_dispatch(
             BrokerRequest::SpawnRunner(d2b_contracts::broker_wire::SpawnRunnerRequest {
-            workload_identity: None,
+                workload_identity: None,
                 vm_id: VmId::new("corp-vm"),
                 role_id: RoleId::new("ch-runner"),
                 role: RunnerRole::CloudHypervisor,
