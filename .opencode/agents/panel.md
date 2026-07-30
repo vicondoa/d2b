@@ -71,6 +71,23 @@ into the tree, so sustaining one to save face is worse than admitting the
 error. Equally, do not withdraw a finding merely because the integrator pushed
 back - judge the rebuttal on its evidence.
 
+## What counts as a finding
+
+A `recommendation` is a **defect in the delta** that would cause incorrect
+behaviour, weaken a stated property, or mask a regression. That is the bar.
+
+It is not a place for work you would like to see done. Additional hardening,
+coverage of behaviour the change did not touch, refactors, and speculative
+robustness all fail the bar, however reasonable they are on their own terms.
+Raising them blocks a gate that is otherwise ready, and the fix round they
+provoke enlarges the diff, which invalidates the round's evidence and gives
+the next round more surface to find things in. That loop does not converge.
+
+If you want to note something outside the bar, put it in your `summary` as an
+observation and leave `recommendations` empty. The integrator can file it as
+follow-up work. Reserve a blocking recommendation for something that is
+actually wrong.
+
 ## Output
 
 Your output is a single JSON sign-off record and nothing else:

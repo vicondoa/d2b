@@ -801,6 +801,39 @@ implementation agents, lands the fixes, reruns the tests, and starts
 another panel round. Green tests do not waive this gate; a phase closes
 only on unanimous sign-off.
 
+### Fix rounds are scoped to the findings
+
+A fix round MUST address the findings the panel actually raised, and
+nothing else. Do not take a finding as licence to harden the surrounding
+area, add coverage the panel did not ask for, or fix an unrelated defect
+noticed in passing. File those separately.
+
+This rule exists because the alternative does not converge. Every
+unrequested change is new content, new content invalidates the round's
+evidence, and the next round reviews a larger diff that offers more to
+find - so the gate recedes while the actual deliverable sits finished and
+unmerged. The observed failure mode is a phase gate whose findings drift
+from "the specification contradicts the shipped code" to progressively
+more peripheral tooling nits, several rounds after the deliverable was
+ready.
+
+Two consequences worth stating outright:
+
+- A genuine defect discovered while fixing something else is still out of
+  scope for that fix round. Record it and land it separately, so the
+  round's diff stays reviewable against the findings it answers.
+- An integrator MUST NOT run `git add -A` while a build, test, or gate is
+  running. Those write scratch directories into the worktree, and a
+  catch-all add commits them. Stage the specific paths the fix touched.
+  The gitignore is a backstop, not the control - it can only cover
+  scratch patterns someone already thought of.
+
+Panel prompts SHOULD state the phase's deliverable and instruct reviewers
+to confine findings to defects in the delta that would cause incorrect
+behaviour or mask a regression, rather than proposing speculative
+robustness work. A reviewer who wants additional hardening should say so
+as an observation in the summary, not as a blocking recommendation.
+
 Escape hatches are narrow:
 
 - **Swarm-driven work** satisfies the per-round gate with swarm's

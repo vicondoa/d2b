@@ -61,6 +61,7 @@ tests/smoke-run-log.txt
 .manifest-fuzz-bounded.*/
 .manifest-gate.*/
 .manifest-v04-roundtrip.*/
+.cargo-audit.*/
 .d2b-cleanups.*
 .d2b-scratch-registry
 .d2b-smoke-cache.*/
