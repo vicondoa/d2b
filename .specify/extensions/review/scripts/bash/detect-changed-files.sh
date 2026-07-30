@@ -49,18 +49,51 @@
 
 set -e
 
+# --- Helper: escape a string for safe JSON embedding ---
+json_escape() {
+    local s="$1"
+    s="${s//\\/\\\\}"   # backslash
+    s="${s//\"/\\\"}"   # double quote
+    s="${s//$'\t'/\\t}"    # tab
+    s="${s//$'\n'/\\n}"    # newline
+    s="${s//$'\r'/\\r}"    # carriage return
+    printf '%s' "$s"
+}
+
+# --- Helper: output error and exit ---
+# Defined before argument parsing so that CLI parse errors honour --json too.
+error_exit() {
+    local message="$1"
+    local code="${2:-1}"
+    if $JSON_MODE; then
+        printf '{"error":"%s"}\n' "$(json_escape "$message")"
+    else
+        echo "Error: $message" >&2
+    fi
+    exit "$code"
+}
+
 # --- Argument parsing ---
-JSON_MODE=false
 BASE_REF_ARG=""
 BASE_SOURCE=""
+
+# Pre-scan for --json so that JSON_MODE is known for every subsequent error,
+# regardless of where --json appears in the argument vector (for example
+# '--base --json' or '--bogus --json').
+JSON_MODE=false
+for _arg in "$@"; do
+    if [[ "$_arg" == "--json" ]]; then
+        JSON_MODE=true
+        break
+    fi
+done
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --json) JSON_MODE=true ;;
         --base)
-            if [[ $# -lt 2 || -z "$2" ]]; then
-                echo "ERROR: --base requires a ref argument. Re-run as '--base <ref>' naming an existing branch, tag or commit: for ADR-046 waves that is the integration lineage 'v3', or the predecessor wave branch when the wave is stacked. List candidates with 'git branch -a' and confirm one with 'git rev-parse --verify <ref>'." >&2
-                exit 1
+            if [[ $# -lt 2 || -z "$2" || "$2" == -* ]]; then
+                error_exit "--base requires a ref argument. Re-run as '--base <ref>' naming an existing branch, tag or commit: for ADR-046 waves that is the integration lineage 'v3', or the predecessor wave branch when the wave is stacked. List candidates with 'git branch -a' and confirm one with 'git rev-parse --verify <ref>'." 1
             fi
             BASE_REF_ARG="$2"
             BASE_SOURCE="cli"
@@ -69,8 +102,7 @@ while [[ $# -gt 0 ]]; do
         --base=*)
             BASE_REF_ARG="${1#--base=}"
             if [[ -z "$BASE_REF_ARG" ]]; then
-                echo "ERROR: --base requires a ref argument. Re-run as '--base <ref>' naming an existing branch, tag or commit: for ADR-046 waves that is the integration lineage 'v3', or the predecessor wave branch when the wave is stacked. List candidates with 'git branch -a' and confirm one with 'git rev-parse --verify <ref>'." >&2
-                exit 1
+                error_exit "--base requires a ref argument. Re-run as '--base <ref>' naming an existing branch, tag or commit: for ADR-046 waves that is the integration lineage 'v3', or the predecessor wave branch when the wave is stacked. List candidates with 'git branch -a' and confirm one with 'git rev-parse --verify <ref>'." 1
             fi
             BASE_SOURCE="cli"
             ;;
@@ -105,7 +137,7 @@ EXIT CODES:
 EOF
             exit 0
             ;;
-        *) echo "ERROR: Unknown option '$1'. Run 'detect-changed-files.sh --help' to list the supported options (--base <ref>, --json, --help)." >&2; exit 1 ;;
+        *) error_exit "Unknown option '$1'. Run 'detect-changed-files.sh --help' to list the supported options (--base <ref>, --json, --help)." 1 ;;
     esac
     shift
 done
@@ -114,17 +146,6 @@ if [[ -z "$BASE_REF_ARG" && -n "${SPECIFY_REVIEW_BASE_REF:-}" ]]; then
     BASE_REF_ARG="$SPECIFY_REVIEW_BASE_REF"
     BASE_SOURCE="env"
 fi
-
-# --- Helper: escape a string for safe JSON embedding ---
-json_escape() {
-    local s="$1"
-    s="${s//\\/\\\\}"   # \ → \\
-    s="${s//\"/\\\"}"   # " → \\"
-    s="${s//$'\t'/\\t}"    # tab → \t
-    s="${s//$'\n'/\\n}"    # newline → \n
-    s="${s//$'\r'/\\r}"    # carriage return → \r
-    printf '%s' "$s"
-}
 
 # --- Helper: format bash array as JSON array ---
 fmt_array() {
@@ -138,18 +159,6 @@ fmt_array() {
     done
     result+="]"
     echo "$result"
-}
-
-# --- Helper: output error and exit ---
-error_exit() {
-    local message="$1"
-    local code="${2:-1}"
-    if $JSON_MODE; then
-        printf '{"error":"%s"}\n' "$(json_escape "$message")"
-    else
-        echo "Error: $message" >&2
-    fi
-    exit "$code"
 }
 
 # --- 1a. Verify Git Availability ---

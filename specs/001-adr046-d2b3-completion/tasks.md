@@ -93,7 +93,7 @@ reads "there is no partial-wave advance" and its entry criterion 1 still require
 wave item to be `Merged` before `wave snapshot` will accept entry.
 
 - [X] T585 Amend `ADR-046-validation-and-delivery` §4 to permit pipelined implementation start under the four conditions (5 of 10 reviews returned, integration green, no successor panel/seal/merge before predecessor seal and merge, mandatory post-merge rebase before the successor panel). Preserve the strict panel/seal/merge ordering verbatim. Member-spec amendment: re-opens that spec's evidence and re-triggers Gate 0 (FR-046)
-- [X] T586 Relax the `wave snapshot` entry check so an unsealed predecessor blocks the successor's **panel request and seal** rather than its implementation start; the predecessor-merged assertion moves to `panel-request` and `seal`. Add tests covering: start permitted at 5 of 10, panel request refused while the predecessor is unsealed, and seal refused when the successor has not rebased since the predecessor merge
+- [X] T586 Relax the `wave snapshot` entry check so an unsealed predecessor blocks the successor's **exit boundary** rather than its implementation start; the predecessor-merged assertion moves to the exit boundary: `panel-request`, `seal`, and `merge-eligibility`. Add tests covering: start permitted at 5 of 10, panel request refused while the predecessor is unsealed, and seal refused when the successor has not rebased since the predecessor merge
 - [X] T587 Record the accepted rework cost (FR-050) in the delivery contract so a future integrator cannot cite pipeline rework as grounds to shorten a panel
 - [X] T588 Configure or document review scoping for the `v3` lineage. `detect-changed-files.sh` resolves the default branch to `main` via `origin/HEAD`, but ADR-046 integrates on `v3`, which never merges to `main`. Every wave review MUST pass an explicit diff scope (wave integration branch against its real base) or it will treat the whole v3 divergence as the wave changes
 
@@ -104,7 +104,7 @@ wave item to be `Merged` before `wave snapshot` will accept entry.
 
 **Requirements**: see spec-coverage.md traceability tables | **Story**: US1 | **Work items**: 19 | **Parallel groups**: 2
 
-- [ ] T008 [US1] W2 ENTRY - confirm destinations uncontended, stack proposed against the exact parent commit, heavy-gate free, fast hermetic suite green. Note: under FR-057 and delivery contract §4, "every prior-wave work item is Merged" is **not** an entry criterion; it binds at panel request and seal (T028)
+- [ ] T008 [US1] W2 ENTRY - confirm destinations uncontended, stack proposed against the exact parent commit, heavy-gate free, fast hermetic suite green. Note: under FR-057 and delivery contract §4, "every prior-wave work item is Merged" is **not** an entry criterion; it binds at the exit boundary - panel request, seal, and merge eligibility (T028)
 
 ### Group `wi:ADR-046-primitive-resource-composition` (3 items)
 

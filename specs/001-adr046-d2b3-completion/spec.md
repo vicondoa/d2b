@@ -451,8 +451,8 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   state, and no work item is recorded as complete on the strength of the waiver alone.
 - **FR-036**: W2 entry MUST NOT be blocked by the absence of W0 and W1 seals. Under FR-048 a
   wave's implementation may also begin while its predecessor's items are not yet `Merged`;
-  the predecessor-merged condition is enforced at the successor's **panel and seal**
-  boundary (FR-049), not at its implementation start.
+  the predecessor-merged condition is enforced at the successor's **exit boundary** - panel
+  request, seal, and merge eligibility (FR-049), not at its implementation start.
 - **FR-057**: The program MUST distinguish **entry evidence** from **exit evidence**, and
   MUST NOT treat a requirement for one as a requirement for the other. Entry evidence is what
   a wave needs in order to **start implementing**: Gate 0 has passed, its destination paths
@@ -683,7 +683,8 @@ Delegation is not omission. Every delegated obligation is enumerated in
   retroactively panelled and sealed. Their binding panel would otherwise have to run against
   a historical snapshot that no longer exists in a single canonical form. Per FR-057, every
   prior work item being recorded as merged is an **exit** condition, not an entry condition:
-  it is tested at W2's panel request and seal, not at W2's implementation start. That exit
+  it is tested at W2's exit boundary - panel request, seal, and merge eligibility - not at
+  W2's implementation start. That exit
   condition is already satisfied - all 14 W0 and W1 work items are independently verified as
   `Merged` - so the waiver removes no check that W2's close would otherwise have to make.
   The waiver is a one-time, documented exception, not a precedent, and its scope is bounded
