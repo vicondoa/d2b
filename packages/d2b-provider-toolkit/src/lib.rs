@@ -1,12 +1,59 @@
-//! Provider authoring toolkit.
+//! The Provider authoring toolkit.
 //!
-//! TODO: filled by ADR046-routing-015.
+//! Every Provider in the frozen catalog is an independently buildable crate
+//! that binds one or more ResourceTypes, runs as one or more Processes, and
+//! reaches host state only through an injected effect port. This crate owns
+//! the provider-neutral half of that: the Zone-allocator bootstrap check a
+//! Provider agent process performs before it serves anything, the bounded
+//! audit ring and bounded in-flight dispatch accounting every agent needs,
+//! the Provider resource conformance kit, and the redaction and test-driver
+//! helpers each Provider crate would otherwise re-derive.
+//!
+//! What this crate deliberately does not do, because
+//! `ADR-046-provider-model-and-packaging` forbids it for a Provider and for
+//! a common Provider library:
+//!
+//! - It registers no Provider identity of its own and composes no Provider.
+//!   It is a common library, so it can never become a hidden multi-Provider
+//!   binary.
+//! - It performs no privileged mutation. It opens no broker, D-Bus, or
+//!   systemd socket, resolves no host path, spawns no process, and offers no
+//!   direct-effect escape. A Provider validates semantics and calls its own
+//!   injected typed effect port, which the fixed core effect adapter alone
+//!   implements; the broker stays the sole privileged executor and
+//!   independent audit owner of every host mutation.
+//! - It defines no type that carries authority. The identity a bootstrap
+//!   check returns names who the agent is so it can label an audit event
+//!   and refuse a Zone it was not placed in; it authorizes no call, route,
+//!   or effect. Authorization stays with ComponentSession admission and the
+//!   Zone RBAC binding.
+//! - It imports no daemon, broker, Zone-store, Nix-emitter, or Provider
+//!   implementation internals. Its only dependency is the shared v3
+//!   contract catalog.
+//!
+//! No file descriptor, numeric UID or GID, device node, store path, socket
+//! path, or host path appears in any type here. A bootstrap binding names a
+//! Zone path, a `Provider/<name>` reference, a session purpose, and an
+//! opaque channel-binding digest, and nothing else.
 
-/// Marks this crate as scaffolding that no work item has filled yet.
-///
-/// The workspace capability-surface scan renders rustdoc for every member and
-/// fails closed when a crate advertises no public item, so an empty scaffold
-/// would break that gate for the whole workspace. This constant exists only to
-/// satisfy it and carries no design intent: the slice that implements
-/// `ADR046-routing-015` should delete it rather than build on it.
-pub const UNIMPLEMENTED_SCAFFOLD: () = ();
+#![deny(missing_docs)]
+
+mod audit;
+mod bootstrap;
+mod dispatch;
+mod error;
+mod redaction;
+
+pub mod conformance;
+pub mod testing;
+
+pub use audit::{
+    DEFAULT_AUDIT_CAPACITY, ProviderAgentAuditEvent, ProviderAgentAuditLog,
+    ProviderAgentAuditOutcome,
+};
+pub use bootstrap::{
+    AllocatorSessionBinding, PROVIDER_RESOURCE_TYPE, ProviderAgentBootstrap, ProviderAgentIdentity,
+};
+pub use dispatch::{DispatchLimiter, DispatchPermit, MAX_DISPATCH_IN_FLIGHT};
+pub use error::ProviderToolkitError;
+pub use redaction::Redacted;

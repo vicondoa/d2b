@@ -9,3 +9,11 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
+# Reused rather than restated: `ZoneRouteEngine::admit_relay_hop` is the one
+# owner of the D040 relay-plus-target-verb hop rule.
+d2b-zone-routing = { path = "../d2b-zone-routing", version = "0.0.0-bootstrap" }
+tokio = { workspace = true, features = ["sync", "time"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }

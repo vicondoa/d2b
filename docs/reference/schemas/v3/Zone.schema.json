@@ -1,0 +1,67 @@
+{
+  "$id": "https://d2bus.org/schemas/v3/Zone.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Zone store self-resource; a pure identity anchor with an empty spec.",
+  "properties": {
+    "apiVersion": {
+      "const": "resources.d2bus.org/v3"
+    },
+    "metadata": {
+      "additionalProperties": false,
+      "properties": {
+        "annotations": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Optional authored key-value annotation map.",
+          "type": "object"
+        },
+        "labels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Optional authored key-value label map.",
+          "type": "object"
+        },
+        "name": {
+          "description": "Zone-local resource name.",
+          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "ownerRef": {
+          "description": "Optional same-Zone ref of the owning resource.",
+          "pattern": "^[A-Z][A-Za-z0-9]{0,62}/[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "zone": {
+          "description": "Zone self-name; equals metadata.name for the Zone self-resource.",
+          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "zone"
+      ],
+      "type": "object"
+    },
+    "spec": {
+      "additionalProperties": false,
+      "properties": {},
+      "required": [],
+      "type": "object"
+    },
+    "type": {
+      "const": "Zone"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "metadata",
+    "spec",
+    "type"
+  ],
+  "title": "Zone",
+  "type": "object"
+}
