@@ -347,7 +347,8 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
 
 - **FR-025**: Remaining work MUST be delivered wave by wave following the ADR-046 delivery
   contract. Waves seal and merge in strict order; a wave MUST NOT seal or merge before its
-  predecessor has sealed at full unanimity and merged.
+  predecessor has sealed at full unanimity and merged. This ordering constrains **exit**
+  only. It does not constrain when a wave may begin implementing; see FR-057.
 - **FR-048**: A wave's implementation MAY begin before its predecessor's panel completes,
   provided at least five of the predecessor's ten roster reviews have returned and the
   predecessor's integration tests pass on its converged tree.
@@ -391,6 +392,20 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
 - **FR-028**: Independently ready, file-disjoint work MUST be launched in the same
   coordination cycle; a ready slice left unlaunched without a recorded blocker is a process
   failure to correct.
+- **FR-059**: A destination file written by more than one parallel slice in the same wave is
+  a contended file, and MUST NOT be edited concurrently by those slices. Before any of the
+  claimant slices is dispatched, the integrator MUST land a shared-prep commit on the wave's
+  root branch that establishes the contended symbol, module, or file once. Each claimant
+  slice MUST then branch from that prep commit and write only disjoint regions of the
+  resulting file, or the claimants MUST be internally ordered inside a single branch. Where
+  the delivery contract assigns a contended path to the integrator alone - the workspace
+  member list, the flake output list, the generated specification indexes, and the shared
+  changelog block - a slice MUST NOT write that path at all, and MUST use the per-slice
+  mechanism the contract names instead. Contention discovered during wave execution MUST be
+  recorded in the same change that discovers it, and the wave MUST record its
+  connected-component count, its launched-slice count, and any blocked slice with its exact
+  blocker at wave entry and after every panel round. This binds immediately at W2, which has
+  a single writer for `nixos-modules/assertions.nix`.
 - **FR-029**: Every heavy validation lane MUST run through the single shared sole-use
   semaphore, with no second lock, retry loop, or per-crate guard.
 - **FR-030**: A failed hard performance or footprint target MUST be resolved by changing the
@@ -424,10 +439,33 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
 - **FR-035**: Sealed delivery MUST begin at W2. Every wave from W2 through W8 MUST produce a
   complete seal satisfying FR-026, and the FR-034 waiver MUST NOT be extended, reused, or
   cited as precedent for any wave from W2 onward.
+- **FR-058**: The FR-034 waiver's scope MUST be read narrowly, and covers **only the absence
+  of the W0 and W1 seal artifacts** - the ten panel receipts and the seal record for those
+  two waves. It MUST NOT be read as waiving any work item's own completion obligation. In
+  particular, the nine `ADR046-delivery-001` through `ADR046-delivery-009` work items are
+  recorded as `Planned` and are assigned by the implementation graph to wave **W7**, not to
+  W0 or W1. Their `Planned` state is therefore outside the waiver entirely: each MUST reach
+  `Merged` under W7's own seal, evaluated against W7's snapshot under FR-026, and the waiver
+  MUST NOT be cited as evidence for any of them. More generally, a work item owned by a wave
+  later than W1 is never covered by the waiver regardless of its current implementation
+  state, and no work item is recorded as complete on the strength of the waiver alone.
 - **FR-036**: W2 entry MUST NOT be blocked by the absence of W0 and W1 seals. Under FR-048 a
   wave's implementation may also begin while its predecessor's items are not yet `Merged`;
   the predecessor-merged condition is enforced at the successor's **panel and seal**
   boundary (FR-049), not at its implementation start.
+- **FR-057**: The program MUST distinguish **entry evidence** from **exit evidence**, and
+  MUST NOT treat a requirement for one as a requirement for the other. Entry evidence is what
+  a wave needs in order to **start implementing**: Gate 0 has passed, its destination paths
+  carry no open contention flag, its stack is proposed against the exact named parent commit,
+  the heavy-gate semaphore is available, and the fast hermetic suite passes on its entry tree.
+  Exit evidence is what a wave needs in order to be **delivered** - sealed and merged: every
+  assigned work item recorded as merged, validation evidence imported for the exact snapshot,
+  and unanimous ten-role panel sign-off with zero outstanding recommendations against that
+  snapshot. A missing or absent predecessor seal blocks the successor's **exit** and never its
+  **entry**. FR-025's prohibition on partial-wave advance therefore means a wave is never
+  *delivered* early and its evidence is never *accepted* early; it does not mean implementation
+  must wait. This resolves the apparent conflict between FR-025 and FR-036, and matches the
+  delivery contract's pipelined-start conditions restated in FR-048 through FR-050.
 - **FR-044**: Every wave's work MUST land through pull requests opened against the
   integration lineage and merged only after that wave's gates pass: validation evidence
   imported for the exact snapshot, unanimous panel sign-off, a seal, and an eligible
@@ -446,6 +484,16 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
 - **FR-047**: Implementation MUST conform to every resolved decision in the ADR-046 decision
   register. A change that contradicts a decision is a specification amendment, not an
   implementation choice, and MUST follow FR-046's amendment path.
+- **FR-056**: Gate 0, the manifest closure gate, MUST be re-evaluated - never waived -
+  whenever any member of the ADR-046 specification manifest changes content after being
+  marked Accepted. Any amendment to a member specification MUST re-open that specification's
+  validation evidence and its panel evidence, and MUST re-trigger Gate 0 across the whole
+  manifest, including the manifest digests, the work-item bijection, and the required human
+  review gates. Gate 0 MUST pass again before any wave that depends on the amended
+  specification may seal, and a wave holding evidence gathered before the amendment MUST
+  regather that evidence rather than carry it forward. This is a standing program obligation
+  for the full duration of W2 through W8, not a one-time precondition satisfied at program
+  start.
 
 #### Program scope
 
@@ -615,7 +663,8 @@ Delegation is not omission. Every delegated obligation is enumerated in
 - The ADR-046 specification set is Accepted and closed. This feature implements the
   specifications as written; it does not renegotiate them. Where implementation reveals a
   specification defect, the correction is made in the specification set through its own
-  amendment path, which re-opens the affected validation evidence.
+  amendment path, which re-opens the affected validation evidence. The obligation this
+  creates is a requirement, not merely an assumption; see FR-056.
 - The ADR-046 delivery contract in `ADR-046-validation-and-delivery` governs how this work
   is delivered, and supersedes the repository's generic per-round phase gate for ADR-046
   work. This feature specification does not define a parallel process; the wave lifecycle,
@@ -624,8 +673,9 @@ Delegation is not omission. Every delegated obligation is enumerated in
 - The project constitution applies in full, in particular the audited-privilege boundary,
   the isolation-over-convenience rule, contract versioning, test-layer discipline, and the
   ban on internal process markers in shipped artifacts.
-- Delivery proceeds in the specified wave order W2 through W8, since each wave's exit
-  criteria are the next wave's entry criteria and no partial-wave advance is permitted. The
+- Delivery proceeds in the specified wave order W2 through W8. Sealing and merging are
+  strictly ordered and no partial-wave advance is permitted, but implementation start is
+  pipelined; the entry-evidence versus exit-evidence distinction is stated in FR-057. The
   program terminates at the release of d2b 3.0, not at feature completeness: the release
   gate is evaluated against the final wave's snapshot, because gating earlier would release
   a candidate that a later wave still modifies.
@@ -633,7 +683,8 @@ Delegation is not omission. Every delegated obligation is enumerated in
   retroactively panelled and sealed. Their binding panel would otherwise have to run against
   a historical snapshot that no longer exists in a single canonical form, and the entry
   condition W2 actually tests - every prior work item recorded as merged - is already
-  satisfied. The waiver is a one-time, documented exception, not a precedent.
+  satisfied. The waiver is a one-time, documented exception, not a precedent, and its scope
+  is bounded by FR-058.
 - The pre-ADR-046 control plane remains functional for operators throughout W2 through W6.
   It is replaced only by the cutover in W7 and removed under the release gate, so an
   operator's working host is not expected to be broken mid-program.
