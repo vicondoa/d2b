@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 # tests/test-rust.sh - `make test-rust`: the comprehensive Rust gate.
-#   fmt + clippy + `cargo test --workspace` (excluding the fixture-dependent
-#   d2b-contract-tests), an optional contract-crate run against D2B_FIXTURES,
-#   the CLI-contract layer, no-bash-ast-walker, the privileged broker workspace
-#   (3 feature passes, concurrent), schema-gen reproducibility, and cargo-deny.
+#   fmt + clippy + `cargo nextest run --workspace` (excluding the
+#   fixture-dependent d2b-contract-tests), an optional contract-crate run
+#   against D2B_FIXTURES, the CLI-contract layer, no-bash-ast-walker, the
+#   privileged broker workspace (3 feature passes, concurrent), schema-gen
+#   reproducibility, and cargo-deny.
+# Tests execute under cargo-nextest. Each workspace additionally runs the two
+#   surfaces nextest does not cover - doctests and harness=false binaries - via
+#   run_nextest_companions; see the comment above require_nextest for why.
 # If cargo is absent, re-enter through the repo-pinned nixpkgs toolchain.
 
 set -euo pipefail
@@ -252,6 +256,79 @@ fi
 log "--> rust toolchain version"
 assert_pinned_rust_toolchain
 
+# Test execution runs under cargo-nextest, which executes each test in its own
+# process and parallelises across test binaries rather than one binary at a
+# time. Two surfaces nextest cannot execute, and which therefore get their own
+# companion invocations below:
+#
+#   * DOCTESTS. nextest does not run them, and this repository's are
+#     load-bearing: the `compile_fail` doctests on AdmittedMutation and
+#     OwnerIndexMutation are capability seals (see the "Capability mint surface
+#     allowlist" row in AGENTS.md). A bare nextest swap deletes them silently.
+#   * harness=false BINARIES. They expose no libtest interface, so nextest
+#     filters them out (see packages/.config/nextest.toml). `cargo test` runs
+#     them, so they need an explicit invocation to stay gated.
+#
+# Both companions are wired per workspace, and the harness=false set is
+# DISCOVERED from cargo metadata rather than hard-coded, so a newly added
+# harness=false target cannot silently drop out of the gate.
+require_nextest() {
+  if cargo nextest --version >/dev/null 2>&1; then
+    return 0
+  fi
+  if [ -z "${D2B_RUST_GATE_NEXTEST_SHELL:-}" ] && command -v nix >/dev/null 2>&1; then
+    log "  cargo-nextest not on PATH; re-entering via nix shell to acquire it"
+    export D2B_RUST_GATE_NEXTEST_SHELL=1
+    exec nix shell --quiet --inputs-from "$ROOT" nixpkgs#cargo-nextest \
+      --command bash "$0" "$@"
+  fi
+  fail "cargo-nextest is required and neither PATH nor nix can provide it"
+  exit 1
+}
+require_nextest "$@"
+
+# Emit the harness=false test targets of a workspace as "<package>\t<binary>"
+# rows, for execution with a plain `cargo test --test`.
+#
+# Such a target exposes no libtest interface, so cargo-nextest builds it but
+# reports zero test cases and never runs it. Selecting on kind == "test" is what
+# separates it from an ordinary binary crate that simply contains no unit tests:
+# nextest reports zero cases for those too, but they are kind "bin" and `cargo
+# test --test <name>` would not address them.
+#
+# Deriving this set rather than pinning it means a newly added harness=false
+# target cannot silently drop out of the gate.
+nextest_unrunnable_targets() {
+  cargo nextest list "$@" --message-format json 2>/dev/null \
+    | jq -r '
+        ."rust-suites"
+        | to_entries[]
+        | .value
+        | select(.kind == "test")
+        | select((.testcases | length) == 0)
+        | "\(.["package-name"])\t\(.["binary-name"])"
+      '
+}
+
+# Run the surfaces cargo-nextest cannot: doctests, then any harness=false
+# binaries. `label` names the workspace for the log line; the remaining
+# arguments select the workspace and feature set and are shared with the
+# preceding nextest invocation.
+run_nextest_companions() {
+  local label="$1" manifest_path="$2"
+  shift 2
+  log "  --> cargo test --doc ($label)"
+  cargo test --doc --manifest-path "$manifest_path" "$@"
+  local pkg bin ran=0
+  while IFS=$'\t' read -r pkg bin; do
+    [ -n "$bin" ] || continue
+    log "  --> cargo test -p $pkg --test $bin ($label; harness=false, not a nextest surface)"
+    cargo test --manifest-path "$manifest_path" -p "$pkg" --test "$bin"
+    ran=$((ran + 1))
+  done < <(nextest_unrunnable_targets --manifest-path "$manifest_path" "$@")
+  ok "$label companions (doctests + $ran harness=false binaries)"
+}
+
 # The privileged broker is a SEPARATE workspace with three independent feature
 # passes (default, layer1-bootstrap, fake-backends), each on its OWN target dir.
 # They share nothing with the main workspace and nothing with each other, so the
@@ -260,6 +337,21 @@ assert_pinned_rust_toolchain
 # with the main workspace's timing-sensitive tests. With sccache the shared
 # crates are cache hits across all streams. Set D2B_NO_PARALLEL_BROKER=1 to force
 # serial. Each stream logs to its own file; failures surface at reap.
+#
+# These three streams deliberately stay on `cargo test` rather than moving to
+# cargo-nextest with the rest of the gate. The broker's tests are not
+# process-per-test safe: under nextest, runtime::tests::usbip_bind_* fails with
+# LiveHandler("USB device 1-2.3 is missing required sysfs attr devpath"),
+# because whatever keeps handler selection off live sysfs does not survive being
+# run in its own process. The same test passes under `cargo test` when filtered
+# down to itself alone, so this is a harness-environment dependency rather than
+# a flaky test or an inter-test ordering bug.
+#
+# The cost of not converting is nil: this suite runs 528 tests in about 1.4 s,
+# so nextest's cross-binary parallelism has nothing to win here, and `cargo test`
+# covers doctests and harness=false binaries without needing companions. Making
+# the broker process-per-test safe would mean reworking test setup inside a
+# critical, privileged, protected subsystem for no measurable gain.
 broker_stream_default() {
   cargo metadata --format-version 1 --manifest-path "$broker_manifest" >/dev/null
   CARGO_TARGET_DIR="$broker_target_dir" cargo check --workspace --manifest-path "$broker_manifest"
@@ -282,7 +374,9 @@ guest_shell_runner_gate() {
   cargo metadata --format-version 1 --manifest-path "$guest_shell_runner_manifest" >/dev/null
   CARGO_TARGET_DIR="$guest_shell_runner_target_dir" cargo fmt --manifest-path "$guest_shell_runner_manifest" --all --check
   CARGO_TARGET_DIR="$guest_shell_runner_target_dir" cargo clippy --manifest-path "$guest_shell_runner_manifest" --workspace --all-targets --features real-libshpool -- -D warnings
-  CARGO_TARGET_DIR="$guest_shell_runner_target_dir" cargo test --manifest-path "$guest_shell_runner_manifest" --workspace --features real-libshpool
+  CARGO_TARGET_DIR="$guest_shell_runner_target_dir" cargo nextest run --manifest-path "$guest_shell_runner_manifest" --workspace --features real-libshpool
+  CARGO_TARGET_DIR="$guest_shell_runner_target_dir" run_nextest_companions \
+    "guest shell runner" "$guest_shell_runner_manifest" --workspace --features real-libshpool
 }
 
 run_fixture_contract_tests() {
@@ -299,11 +393,14 @@ run_fixture_contract_tests() {
     contract_fixtures_full=$(nix build --extra-experimental-features 'nix-command flakes' \
       --no-warn-dirty --no-link --print-out-paths "$ROOT#checks.${contract_system}.fixture-smoke-full")
   fi
-  log "--> cargo test -p d2b-contract-tests (D2B_FIXTURES = fixture-smoke)"
+  log "--> cargo nextest run -p d2b-contract-tests (D2B_FIXTURES = fixture-smoke)"
   D2B_FIXTURES="$contract_fixtures" D2B_FIXTURES_FULL="$contract_fixtures_full" \
   CARGO_TARGET_DIR="$workspace_target_dir" \
-    cargo test --manifest-path "$manifest" -p d2b-contract-tests
-  ok "cargo test -p d2b-contract-tests (fixture-contract layer)"
+    cargo nextest run --manifest-path "$manifest" -p d2b-contract-tests
+  D2B_FIXTURES="$contract_fixtures" D2B_FIXTURES_FULL="$contract_fixtures_full" \
+  CARGO_TARGET_DIR="$workspace_target_dir" \
+    run_nextest_companions "contract crate" "$manifest" -p d2b-contract-tests
+  ok "d2b-contract-tests (fixture-contract layer)"
 }
 
 run_cli_contract_tests() {
@@ -329,12 +426,12 @@ run_cli_contract_tests() {
     fail "d2bd binary not found at $d2bd_bin"
     return 1
   }
-  log "--> cargo test -p d2b --tests (CLI-contract, D2B_FIXTURES = fixture-smoke)"
+  log "--> cargo nextest run -p d2b --tests (CLI-contract, D2B_FIXTURES = fixture-smoke)"
   D2B_FIXTURES="$fixture_path" \
   D2B_TEST_D2BD_BIN="$d2bd_bin" \
   CARGO_TARGET_DIR="$workspace_target_dir" \
-    cargo test --manifest-path "$manifest" -p d2b --tests
-  ok "cargo test -p d2b --tests (CLI-contract layer)"
+    cargo nextest run --manifest-path "$manifest" -p d2b --tests
+  ok "d2b --tests (CLI-contract layer)"
 }
 
 if [ "$fixture_contracts_only" = 1 ]; then
@@ -359,10 +456,12 @@ log "--> cargo clippy --locked --workspace --all-targets -- -D warnings"
 CARGO_TARGET_DIR="$workspace_target_dir" cargo clippy --locked --manifest-path "$manifest" --workspace --all-targets -- -D warnings
 ok "cargo clippy"
 
-log "--> cargo test --workspace ${workspace_test_excludes[*]}"
+log "--> cargo nextest run --workspace ${workspace_test_excludes[*]}"
 workspace_test_started=$SECONDS
-CARGO_TARGET_DIR="$workspace_target_dir" cargo test --locked --manifest-path "$manifest" --workspace "${workspace_test_excludes[@]}"
-ok "cargo test (duration: $((SECONDS - workspace_test_started))s)"
+CARGO_TARGET_DIR="$workspace_target_dir" cargo nextest run --locked --manifest-path "$manifest" --workspace "${workspace_test_excludes[@]}"
+CARGO_TARGET_DIR="$workspace_target_dir" run_nextest_companions \
+  "main workspace" "$manifest" --locked --workspace "${workspace_test_excludes[@]}"
+ok "workspace tests (duration: $((SECONDS - workspace_test_started))s)"
 
 # The d2b-contract-tests crate is excluded from the workspace test above because
 # its fixture-dependent tests read the Nix-rendered bundle via $D2B_FIXTURES.
