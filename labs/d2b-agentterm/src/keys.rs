@@ -1,8 +1,13 @@
 //! Key-name grammar and escape-sequence encoding.
 //!
 //! Derived from `ht` (headless terminal), `src/api/stdio.rs::parse_key`,
-//! version 0.4.0, Apache-2.0. See the NOTICE file at the crate root for the
-//! full attribution and the list of modifications.
+//! version 0.4.0, commit ed569e91a7a8930faea7d1364b2175747f8a54d2, Apache-2.0.
+//!
+//! `ht` is by Andy Konwinski, @andyk (<https://github.com/andyk/ht>); that file
+//! is largely the work of Marcin Kulik, @ku1ik (<https://github.com/ku1ik>),
+//! with a contribution from @MatrixManAtYrService. **This file has been
+//! modified** -- see README.md part 6 for the full attribution and the list of
+//! changes.
 //!
 //! The key names follow tmux's convention, which is what `ht` adopted:
 //!

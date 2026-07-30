@@ -365,22 +365,111 @@ the shell ignores PageUp - but you do not need to scroll at all there, because
 
 ---
 
-# Part 6: Sourcing and licences
+# Part 6: Credit, sourcing and licences
 
-| Source | Licence | Used how |
-|---|---|---|
-| [`avt`](https://github.com/asciinema/avt) 0.18 | Apache-2.0 | Cargo dependency. The emulator. |
-| [`ht`](https://github.com/andyk/ht) 0.4.0 | Apache-2.0 | **Vendored:** the key table, in `src/keys.rs`. See `NOTICE`. |
-| [asciinema CLI](https://github.com/asciinema/asciinema) | **GPL-3.0** | **Design reference only. No code copied.** |
+This prototype exists because other people did the hard parts first. The
+terminal emulation, the escape-sequence tables and the passthrough-recorder
+architecture are all borrowed, and the borrowing is the point: almost none of
+the difficult work here is mine.
 
-The asciinema CLI is GPL-3.0-or-later, incompatible with this crate's
-Apache-2.0. Its passthrough-recorder *architecture* was used as a reference and
-reimplemented; nothing was copied. `avt` itself is Apache-2.0 and is a normal
-dependency.
+## The people
+
+**[@ku1ik](https://github.com/ku1ik)** - Marcin Kulik
+([ku1ik.com](https://ku1ik.com), also known as sickill) - wrote essentially all
+of the terminal machinery this depends on. He is the author of **asciinema**, of
+the **avt** terminal emulator this crate uses as a dependency, and - though the
+project belongs to someone else - of most of **ht**, including the specific file
+whose key table is vendored here. Across the three projects that shaped this
+prototype he is the dominant author:
+
+| Project | His share |
+|---|---|
+| [`asciinema/avt`](https://github.com/asciinema/avt) | 377 of 379 commits |
+| [`andyk/ht`](https://github.com/andyk/ht) | 115 of ~138 commits |
+| [`andyk/ht`](https://github.com/andyk/ht) `src/api/stdio.rs` | 5 of 6 commits (the file vendored here) |
+| [`asciinema/asciinema`](https://github.com/asciinema/asciinema) | project author |
+
+**[@andyk](https://github.com/andyk)** - Andy Konwinski
+([andykonwinski.com](https://andykonwinski.com)) - created and owns
+**[`ht`](https://github.com/andyk/ht)**, the "headless terminal" project, and
+wrote its original design and motivation: making terminals usable by LLM agents,
+explicitly modelled on a headless browser. That framing is the direct ancestor
+of this prototype. If you want the general-purpose version of this idea rather
+than a d2b-specific lab, use `ht`.
+
+**[@MatrixManAtYrService](https://github.com/MatrixManAtYrService)** also
+contributed to `ht`'s `src/api/stdio.rs`, the file the key table comes from.
+
+## What is used, and how
+
+| Project | Author | Licence | Used how |
+|---|---|---|---|
+| [`avt`](https://github.com/asciinema/avt) 0.18 | [@ku1ik](https://github.com/ku1ik) | Apache-2.0 | Cargo dependency. The terminal emulator. |
+| [`ht`](https://github.com/andyk/ht) 0.4.0 | [@andyk](https://github.com/andyk), [@ku1ik](https://github.com/ku1ik) | Apache-2.0 | **Vendored:** the key table in `src/keys.rs`. |
+| [asciinema CLI](https://github.com/asciinema/asciinema) | [@ku1ik](https://github.com/ku1ik) | **GPL-3.0** | **Design reference only. No code copied.** |
+
+
+### `avt` - a dependency, not a copy
+
+`avt` is pulled from crates.io like any other dependency. It does the actual
+terminal emulation: parsing, the primary and alternate screen buffers, the
+dirty-line tracking that the delta engine is built on, and `dump()`.
+Apache-2.0, compatible with this crate.
+
+### `ht` - vendored key table
+
+`src/keys.rs` derives its key-name grammar and its name-to-escape-sequence table
+from `ht`:
+
+```
+https://github.com/andyk/ht
+src/api/stdio.rs, function `parse_key`
+version 0.4.0, commit ed569e91a7a8930faea7d1364b2175747f8a54d2
+Licensed under the Apache License, Version 2.0
+```
+
+**The file has been modified.** Changes from the original:
+
+- Extracted from `ht`'s stdio JSON API module into a standalone module with a
+  typed `KeySeq` return rather than `ht`'s internal `InputSeq`.
+- Reworked the modifier parser to accept modifiers in any order for every key.
+  `ht` enumerates every permutation as an explicit match arm, which is why its
+  table only supports combined modifiers on arrow keys. This version parses
+  modifiers into a bitset and computes the xterm modifier parameter
+  arithmetically. **The generated sequences are byte-identical to `ht`'s for
+  every input `ht` accepts**, which the test suite asserts case by case.
+- Added bracketed-paste encoding, which `ht` does not implement.
+- Added `Insert`, `Delete`, `BackTab` and shift/alt/ctrl `Tab` entries.
+- Error handling returns a typed error instead of falling through to literal
+  text where a modifier prefix was clearly intended.
+
+`ht` itself notes that its key and modifier specifications were inspired by
+[tmux](https://github.com/tmux/tmux/wiki/Modifier-Keys).
+
+Neither `avt` nor `ht` ships a `NOTICE` file, so Apache-2.0 section 4(d) creates
+no notice to propagate. This section is the attribution required by section 4(c)
+and the statement of modification required by section 4(b).
+
+### asciinema CLI - architecture only, no code
+
+The passthrough-recorder architecture - `/dev/tty` in raw mode rather than
+stdin/stdout, `forkpty`, the bidirectional pump, and
+`SIGWINCH -> TIOCGWINSZ -> TIOCSWINSZ` resize propagation - follows the design of
+the asciinema CLI.
+
+**The asciinema CLI is licensed GPL-3.0-or-later**, which is incompatible with
+this crate's Apache-2.0. No asciinema CLI code has been copied. Only the
+architecture was read and used as a reference, and it was reimplemented from
+scratch. The asciicast v3 file format and the ALiS wire protocol are
+specifications rather than code; the event shape used by `src/history.rs`
+follows the asciicast v3 spec.
 
 ## Three bugs in `ht` that are fixed here
 
-`ht`'s PTY layer was rewritten rather than vendored, because:
+None of this diminishes `ht` - it is a small, readable, useful project, and
+this prototype would have taken far longer without it to read. But its PTY layer
+was rewritten rather than vendored, because of three defects in exactly the code
+being replaced:
 
 1. **Resize never reached the kernel.** `ht`'s `Command::Resize` calls only
    `vt.resize()`; there is no `TIOCSWINSZ`. The child keeps its startup size
