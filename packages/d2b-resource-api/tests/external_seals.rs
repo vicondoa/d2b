@@ -99,7 +99,12 @@ exec "$rustc" "$@"
     );
     harness.check_rejected(
         "forge_subject",
-        &["error[E0599]", "no function or associated item named `new`"],
+        // rustc 1.97 rewords E0599 for an absent associated item from "no
+        // function or associated item named" to "no associated function or
+        // constant named". Match the shorter stable substring both spellings
+        // share, so the seal keeps asserting that `new` is unreachable without
+        // re-breaking on the next rewording.
+        &["error[E0599]", "named `new`"],
     );
     harness.check_rejected(
         "private_admission_path",
