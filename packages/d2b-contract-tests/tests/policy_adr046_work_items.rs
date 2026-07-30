@@ -914,9 +914,11 @@ fn generated_artifacts_are_deterministic_and_carry_no_superseded_bindings() {
         // writes the code. Keeping the reviewing model distinct from the
         // authoring model is the point, so the value this pins is inverted
         // rather than dropped - a manifest that reintroduces the coding model
-        // as a panel binding is the regression to catch now.
+        // as a panel binding is the regression to catch now. The comparison
+        // folds case so a manifest spelling the binding `GPT-5.6-Sol` cannot
+        // slip past it.
         assert!(
-            !text.contains("gpt-5.6-sol"),
+            !text.to_ascii_lowercase().contains("gpt-5.6-sol"),
             "`{rel}` still references the superseded panel model binding"
         );
         let root = repo_root();

@@ -55,6 +55,18 @@ struct WorkItemView {
 /// that has not rebased onto the integration lineage since the predecessor
 /// merged still carries the pre-merge manifest, in which the predecessor's
 /// items are not `Merged`, and is refused here.
+///
+/// Limitation: that freshness property is a manifest-content proxy, not an
+/// ancestry proof. All this gate asserts is that the tree at
+/// `integration_tree_oid` marks every prior-wave item `Merged`. A successor
+/// that hand-edited the work-item manifest, or cherry-picked the manifest
+/// change, without ever rebasing onto the predecessor's merge would pass it.
+/// Do not read a passing result as evidence that the snapshot's tree descends
+/// from the predecessor's merge commit. Closing that gap needs the stronger
+/// ancestry check - comparing the snapshot's tree against the predecessor's
+/// recorded merge commit, e.g. `git merge-base --is-ancestor <predecessor
+/// merge> <snapshot commit>` - and the panel/seal path does not currently
+/// carry the predecessor's merge commit, so the data for it is absent here.
 pub fn require_prior_waves_merged_for_panel(
     material: &CandidateMaterial,
     repository_roots: &BTreeMap<String, PathBuf>,

@@ -1207,11 +1207,24 @@ both validator and panel evidence; the wave re-snapshots and both lanes
 rerun. A history-only rebase or retarget may reuse panel evidence only when
 the canonical proof tool (§12.6) verifies byte-identical integrated content.
 
-Before creating a snapshot for any wave after `W0`, the command reads
-`ADR-046-implementation-graph.json` and `ADR-046-work-items.json` from the
-candidate's exact integrated Git tree. It rejects entry when any item assigned
-to an earlier wave is not `Merged`; it does not reject `Planned` items in the
-wave being entered.
+Creating a snapshot performs **no** prior-wave-merged assertion. A wave that
+started early under the pipelined-start conditions in §4 may snapshot while
+its predecessor is still unsealed. That condition binds later, at
+`panel-request` and `seal` (§12.3, §12.4), which is what keeps the pipeline
+executable without letting a wave be reviewed or delivered early.
+
+Those two gates read `ADR-046-implementation-graph.json` and
+`ADR-046-work-items.json` from the candidate's exact integrated Git tree, and
+refuse when any item assigned to an earlier wave is not `Merged`. Reading the
+manifests from the snapshot's own integrated tree is also what makes the
+rebase requirement in §4 self-enforcing in the common case: a successor that
+has not rebased since the predecessor merged still presents the pre-merge
+manifest and is refused. This is a manifest-content check rather than an
+ancestry proof - it asserts that the snapshot's manifest reports the
+predecessor merged, not that the predecessor's merge commit is an ancestor of
+the snapshot - so a hand-edited or cherry-picked manifest would pass it.
+Neither gate rejects `Planned` items in the wave being entered; the seal gate
+is what requires their promotion.
 
 Each repository requires at least one
 `--pull-request LOGICAL_ID=NUMBER:HEAD_REF` mapping, and the repeated mappings

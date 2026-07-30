@@ -9,6 +9,31 @@ corrections recover the 640 KiB by which the canonical run missed the
 whole-process RSS gate, so that the later rerun is a confirmation rather than a
 discovery.
 
+## Authority of this document (read before citing any figure below)
+
+This document has **no authority over the canonical RSS measurement**. Read
+every number below under the following bounds.
+
+- **It does not supersede `RESULTS.md`.** The canonical whole-process RSS
+  outcome for this fixture is the MEASURED-FAIL recorded in `RESULTS.md` and
+  carried into `docs/specs/ADR-046-validation-and-delivery.md` section 3.2.
+  Where this document and that record disagree, the canonical record stands.
+- **It does not reopen the wave-scoping decision derived from that outcome.**
+  The failed RSS result is the stated reason the production backend, the watch
+  dispatcher, and the real-backend reaction benchmark were deferred. A
+  prototype result does not restore any of that deferred scope.
+- **It is a prototype, not a re-measurement of record.** Its only purpose is to
+  let the later wave **confirm** a recovery it already expects rather than
+  **discover** one, and to pin the four corrections that produce it.
+- **Changing the canonical figure requires a specification amendment plus a
+  Gate 0 re-evaluation.** The generated manifests are authoritative over prose,
+  so amending the canonical RSS outcome means amending the specification and
+  regenerating, then re-evaluating Gate 0 - not editing this file or citing it
+  as evidence that the gate now passes.
+
+The measured numbers below are real and were measured as stated; nothing here
+softens them. What is bounded is their authority, not their accuracy.
+
 ## Summary
 
 | Item | Value |

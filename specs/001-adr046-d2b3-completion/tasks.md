@@ -84,7 +84,7 @@ these tasks land, every panel record is invalid and `seal` cannot succeed.
 - [X] T581 Amend `ADR-046-validation-and-delivery` §12.3 to bind the panel to `gemini-3.1-pro-preview`, updating the pinned provider/model/reasoning-effort triple and the 14-field record example. This is a member-spec amendment: it re-opens that spec's validation and panel evidence and re-triggers Gate 0 (FR-046)
 - [X] T582 Update the pinned constants in `packages/xtask/src/delivery/model.rs` (`PANEL_PROVIDER_POLICY`, `PANEL_MODEL_POLICY`, `PANEL_REASONING_EFFORT_POLICY`) and the unit test at the bottom of that file that asserts their exact values
 - [X] T583 Update the `ADR046-delivery-005` work item text, which explicitly says "adapt to bind the fixed `gpt-5.6-sol` model at reasoning effort `xhigh`", then regenerate the spec-set and work-item manifests and confirm `make test-drift` is clean
-- [X] T584 Update the agent model pins in `.opencode/opencode-swarm.json` so panel lanes do not silently fall back to a model whose records `panel-attest` will reject
+- [X] T584 Add a read-only `panel` agent to `.opencode/opencode.json` pinned to the panel model, and correct the AGENTS.md panel-tooling wording, so panel lanes do not silently fall back to a model whose records `panel-attest` will reject. Spec correction: this task originally named `.opencode/opencode-swarm.json`, which does not exist in this repository and would not apply, because this program does not run swarm
 
 ### Pipelined-wave migration (BLOCKING - the pipeline is not executable until this lands)
 
@@ -104,7 +104,7 @@ wave item to be `Merged` before `wave snapshot` will accept entry.
 
 **Requirements**: see spec-coverage.md traceability tables | **Story**: US1 | **Work items**: 19 | **Parallel groups**: 2
 
-- [ ] T008 [US1] W2 ENTRY - confirm every prior-wave work item is Merged, destinations uncontended, stack proposed against the exact parent commit, heavy-gate free, fast hermetic suite green
+- [ ] T008 [US1] W2 ENTRY - confirm destinations uncontended, stack proposed against the exact parent commit, heavy-gate free, fast hermetic suite green. Note: under FR-057 and delivery contract §4, "every prior-wave work item is Merged" is **not** an entry criterion; it binds at panel request and seal (T028)
 
 ### Group `wi:ADR-046-primitive-resource-composition` (3 items)
 
@@ -131,7 +131,7 @@ wave item to be `Merged` before `wave snapshot` will accept entry.
 - [ ] T026 [US1] `ADR046-routing-015` - `packages/d2b-provider-toolkit/src/` (adapted in place) (adapt)
 - [ ] T027 [US1] `ADR046-routing-016` - `packages/d2b-zone-routing/src/service.rs` (adapt)
 
-- [ ] T028 [US1] W2 GATE - run `/speckit.verify.run` and `/speckit.review.run` in parallel against this wave scope FIRST and clear their CRITICAL findings; then snapshot, import validation evidence, panel-request, panel-attest (10/10 unanimous), seal (every wave item Merged), merge-target, merge-eligibility. Also confirm for every item in this wave: reference docs landed with their behavior (FR-019), no change contradicts a decision in the register (FR-047), and every removal proof for a path retired in this wave passed (FR-023). From round 9, LOW/MEDIUM may be deferred to deferred-findings.md; CRITICAL/HIGH never (FR-051, FR-052). At wave close, review both registers and log this wave friction in friction-log.md (FR-053)
+- [ ] T028 [US1] W2 GATE - run `/speckit.verify.run` and `/speckit.review.run` in parallel against this wave scope FIRST and clear their CRITICAL findings; then snapshot, import validation evidence, panel-request (refused unless every prior-wave work item is Merged, per FR-057), panel-attest (10/10 unanimous), seal (every prior-wave item and every wave item Merged), merge-target, merge-eligibility. Also confirm for every item in this wave: reference docs landed with their behavior (FR-019), no change contradicts a decision in the register (FR-047), and every removal proof for a path retired in this wave passed (FR-023). From round 9, LOW/MEDIUM may be deferred to deferred-findings.md; CRITICAL/HIGH never (FR-051, FR-052). At wave close, review both registers and log this wave friction in friction-log.md (FR-053)
 - [ ] T029 [US1] W2 CONVERGE + MERGE - merge every slice branch into the wave integration branch; run integration tests, panel, and CI against the converged tree only; open one PR against `v3`; merge after eligibility; rebase the next wave onto the updated `v3`; fold changelog fragments; then clean up in order: delete each worktree packages/target, remove worktrees, delete local branches, delete remote branches, nix-collect-garbage, and audit `git worktree list` plus `git branch -a` for residue
 
 **Checkpoint**: W2 converged, panelled, sealed, merged to `v3`, rebased, and cleaned up. Successor entry criteria satisfied.

@@ -205,7 +205,21 @@ pub fn run(args: &[String]) -> Result<WorkflowOutput> {
     let seal_path = state.resolve_artifact_ref(&seal_path);
     let target_path = target_path.map(|path| state.resolve_artifact_ref(&path));
     let (candidate, seal) = open_sealed_candidate(&state, &seal_path)?;
+    // Both work-item conditions are re-derived here rather than trusted from
+    // the seal. `seal_checked` is the only writer of `seal.json` today, so
+    // there is no live hole, but "only one writer" is an invariant about the
+    // current call graph, not about the artifact: a seal written by a binary
+    // predating the prior-wave gate, or by any future path that writes the
+    // seal file directly, would carry no prior-wave assertion. Re-deriving is
+    // cheap - it reads the same two manifests out of the same sealed
+    // `integration_tree_oid` the seal already bound - and deterministic on
+    // that fixed input, so it cannot refuse a seal that `seal_checked`
+    // accepted.
     super::work_item_state::require_current_wave_merged(&seal.material, &repository_roots)?;
+    super::work_item_state::require_prior_waves_merged_for_panel(
+        &seal.material,
+        &repository_roots,
+    )?;
     let target = load_target(&candidate, target_path.as_deref())?;
     evaluate(&candidate, &seal, &target)
 }

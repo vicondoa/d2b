@@ -376,6 +376,44 @@ pub(crate) mod tests {
         );
     }
 
+    /// FR-049: the seal boundary carries the predecessor-merged condition in
+    /// its own right, not only through the panel request. This wave's own
+    /// items are all `Merged`, so the current-wave leg passes and cannot be
+    /// what refuses; only the prior-wave leg can produce the error below.
+    #[test]
+    fn seal_command_rejects_an_unmerged_prior_wave_item() {
+        let repository = GitFixture::new("seal-prior-wave-repository");
+        repository.write(
+            "docs/specs/ADR-046-implementation-graph.json",
+            "{\"nodes\":[\
+             {\"id\":\"ADR046-foundation-001\",\"kind\":\"work-item\",\"wave\":\"W0\"},\
+             {\"id\":\"ADR046-backend-001\",\"kind\":\"work-item\",\"wave\":\"W1\"}]}\n",
+        );
+        repository.write(
+            "docs/specs/ADR-046-work-items.json",
+            "{\"items\":[\
+             {\"workItemId\":\"ADR046-foundation-001\",\"implementationState\":\"Planned\"},\
+             {\"workItemId\":\"ADR046-backend-001\",\"implementationState\":\"Merged\"}]}\n",
+        );
+        repository.commit("predecessor wave still unmerged");
+        let mut material = take(&repository).material;
+        "W1".clone_into(&mut material.wave);
+
+        let scratch = Scratch::new("seal-prior-wave");
+        let (candidate, snapshot) = sealable_from(&scratch, material);
+        let roots = BTreeMap::from([("github.com/example/d2b".to_string(), repository.repo())]);
+        let error = seal_checked(&candidate, &snapshot, &roots)
+            .expect_err("an unmerged prior-wave item must block the seal command");
+        assert!(
+            error
+                .message()
+                .contains("cannot request a panel for or seal W1"),
+            "{error}"
+        );
+        assert!(error.message().contains("ADR046-foundation-001"), "{error}");
+        assert!(error.message().contains("in W0 is `Planned`"), "{error}");
+    }
+
     #[test]
     fn a_seal_without_panel_records_is_refused() {
         let scratch = Scratch::new("seal-no-panel");

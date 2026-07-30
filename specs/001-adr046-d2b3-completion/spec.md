@@ -681,10 +681,13 @@ Delegation is not omission. Every delegated obligation is enumerated in
   a candidate that a later wave still modifies.
 - Waves W0 and W1 are accepted as delivered under a written waiver rather than being
   retroactively panelled and sealed. Their binding panel would otherwise have to run against
-  a historical snapshot that no longer exists in a single canonical form, and the entry
-  condition W2 actually tests - every prior work item recorded as merged - is already
-  satisfied. The waiver is a one-time, documented exception, not a precedent, and its scope
-  is bounded by FR-058.
+  a historical snapshot that no longer exists in a single canonical form. Per FR-057, every
+  prior work item being recorded as merged is an **exit** condition, not an entry condition:
+  it is tested at W2's panel request and seal, not at W2's implementation start. That exit
+  condition is already satisfied - all 14 W0 and W1 work items are independently verified as
+  `Merged` - so the waiver removes no check that W2's close would otherwise have to make.
+  The waiver is a one-time, documented exception, not a precedent, and its scope is bounded
+  by FR-058.
 - The pre-ADR-046 control plane remains functional for operators throughout W2 through W6.
   It is replaced only by the cutover in W7 and removed under the release gate, so an
   operator's working host is not expected to be broken mid-program.

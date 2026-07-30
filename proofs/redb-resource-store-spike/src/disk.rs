@@ -351,25 +351,32 @@ impl DiskStore {
     /// decoded one at a time and handed to `visit`, which is expected to
     /// consume or drop it, so no older complete envelope is ever materialized
     /// and the caller never holds the whole log at once.
+    /// Streams every logged batch strictly after `after_revision`.
+    ///
+    /// Counters accumulate into the caller-owned `scan` as the scan makes
+    /// progress, so a mid-replay failure (backpressure, integrity, decode)
+    /// still leaves the partial range-seek / rows-scanned / rows-decoded
+    /// signals visible to the caller instead of discarding them.
     pub(crate) fn stream_revision_batches_after<F>(
         &self,
         after_revision: u64,
+        scan: &mut ReplayScan,
         mut visit: F,
-    ) -> StoreResult<ReplayScan>
+    ) -> StoreResult<()>
     where
         F: FnMut(ChangeBatch) -> StoreResult<()>,
     {
+        // Strictly-after means the first candidate revision is
+        // `after_revision + 1`. At `u64::MAX` there is no such revision, so
+        // there is nothing to replay and no seek is performed.
+        let Some(first) = after_revision.checked_add(1) else {
+            return Ok(());
+        };
         let read = self.database.begin_read().map_err(integrity)?;
         let table = read.open_table(REVISION_LOG).map_err(integrity)?;
-        let mut scan = ReplayScan {
-            range_seeks: 1,
-            rows_scanned: 0,
-            rows_decoded: 0,
-        };
-        let lower = key(0x08, &[KeyPart::Revision(after_revision.saturating_add(1))]);
-        let range = table
-            .range(lower.as_slice()..)
-            .map_err(integrity)?;
+        scan.range_seeks += 1;
+        let lower = key(0x08, &[KeyPart::Revision(first)]);
+        let range = table.range(lower.as_slice()..).map_err(integrity)?;
         for row in range {
             let (_, bytes) = row.map_err(integrity)?;
             scan.rows_scanned += 1;
@@ -377,7 +384,7 @@ impl DiskStore {
             let batch: ChangeBatch = decode(0x0008, bytes.value())?;
             visit(batch)?;
         }
-        Ok(scan)
+        Ok(())
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -386,7 +393,8 @@ impl DiskStore {
         after_revision: u64,
     ) -> StoreResult<Vec<ChangeBatch>> {
         let mut batches = Vec::new();
-        self.stream_revision_batches_after(after_revision, |batch| {
+        let mut scan = ReplayScan::default();
+        self.stream_revision_batches_after(after_revision, &mut scan, |batch| {
             batches.push(batch);
             Ok(())
         })?;
@@ -1401,6 +1409,43 @@ mod tests {
             CONTROLLER_INDEX,
             &final_controller
         ));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn streaming_replay_after_max_revision_seeks_nothing_and_replays_nothing() {
+        let path = crate::fixture_path("replay-max-revision-boundary");
+        let store = DiskStore::open_or_create(&path).unwrap();
+        let created = apply_one(&store, Mutation::create(crate::model::synthetic_resource(1)));
+        assert!(created.revision > 0);
+
+        let mut from_zero = ReplayScan::default();
+        let mut seen = Vec::new();
+        store
+            .stream_revision_batches_after(0, &mut from_zero, |batch| {
+                seen.push(batch);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(from_zero.range_seeks, 1);
+        assert!(!seen.is_empty(), "baseline replay saw no batch");
+
+        // Strictly-after u64::MAX has no successor revision, so nothing is
+        // replayed and no range seek is performed.
+        let mut at_max = ReplayScan::default();
+        let mut replayed = 0_u64;
+        store
+            .stream_revision_batches_after(u64::MAX, &mut at_max, |_| {
+                replayed += 1;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(replayed, 0);
+        assert_eq!(at_max.range_seeks, 0);
+        assert_eq!(at_max.rows_scanned, 0);
+        assert_eq!(at_max.rows_decoded, 0);
+
+        drop(store);
         let _ = std::fs::remove_file(path);
     }
 }

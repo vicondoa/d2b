@@ -536,20 +536,21 @@ impl Actor {
                 // each decoded batch is filtered, shared, sent, and dropped
                 // before the next row is read, so no older complete envelope
                 // and no whole-log vector is ever materialized.
+                //
+                // The scan is caller-owned so a failure mid-replay (the
+                // backpressure case, where the counters are most diagnostic)
+                // still accumulates the partial signals.
                 let mut scan = crate::disk::ReplayScan::default();
-                let result = self
-                    .disk
-                    .stream_revision_batches_after(after_revision, |mut batch| {
-                        batch.entries.retain(|entry| {
-                            resource_types.contains(&entry.resource.key.resource_type)
+                let result =
+                    self.disk
+                        .stream_revision_batches_after(after_revision, &mut scan, |mut batch| {
+                            batch.entries.retain(|entry| {
+                                resource_types.contains(&entry.resource.key.resource_type)
+                            });
+                            sender
+                                .try_send(Arc::new(batch))
+                                .map_err(|_| StoreError::Backpressure)
                         });
-                        sender
-                            .try_send(Arc::new(batch))
-                            .map_err(|_| StoreError::Backpressure)
-                    })
-                    .map(|observed| {
-                        scan = observed;
-                    });
                 self.stats.replay_range_seeks += scan.range_seeks;
                 self.stats.replay_rows_scanned += scan.rows_scanned;
                 self.stats.replay_rows_decoded += scan.rows_decoded;

@@ -4,7 +4,7 @@
 | --- | --- |
 | Scope | Waves W0 and W1 of the ADR-046 d2b 3.0 delivery program |
 | Satisfies | FR-034 |
-| Bounded by | FR-035, FR-036 |
+| Bounded by | FR-035, FR-036, FR-058 |
 | Status | Active, one-time, non-precedential |
 | Produced | Before W2 entry is declared met |
 
