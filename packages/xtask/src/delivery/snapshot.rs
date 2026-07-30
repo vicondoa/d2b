@@ -133,10 +133,13 @@ pub fn run(args: &[String]) -> Result<WorkflowOutput> {
 fn run_with_root(
     request: &SnapshotRequest,
     root: &StateRoot,
-    repository_roots: &BTreeMap<String, PathBuf>,
+    _repository_roots: &BTreeMap<String, PathBuf>,
 ) -> Result<WorkflowOutput> {
     let material = discover(request)?;
-    super::work_item_state::require_prior_waves_merged(&material, repository_roots)?;
+    // FR-036/FR-048: a wave's implementation may start before its predecessor
+    // is sealed and merged, so entry runs no prior-wave-merged assertion. That
+    // condition is enforced at the panel-request and seal boundary (FR-049) by
+    // `work_item_state::require_prior_waves_merged_for_panel`.
     let snapshot = WaveSnapshot::seal(material)?;
     let candidate = root.candidate(snapshot.wave(), &snapshot.candidate_id)?;
     write(&candidate, &snapshot)?;
@@ -989,6 +992,45 @@ pub(crate) mod tests {
     fn snapshot_of(fixture: &GitFixture) -> WaveSnapshot {
         let request = SnapshotRequest::parse(&fixture.snapshot_args()).expect("parse request");
         WaveSnapshot::seal(discover(&request).expect("discover")).expect("seal")
+    }
+
+    /// FR-036/FR-048: a successor wave's implementation may start - and take
+    /// its snapshot - while a predecessor work item is still `Planned`. The
+    /// fixture's sealed tree carries exactly that manifest, and entry accepts
+    /// it; the predecessor-merged condition now lives at panel/seal (FR-049).
+    #[test]
+    fn snapshot_entry_is_permitted_while_a_prior_wave_item_is_planned() {
+        let fixture = GitFixture::new("snapshot-pipelined-entry");
+        fixture.write(
+            "docs/specs/ADR-046-implementation-graph.json",
+            "{\"nodes\":[\
+             {\"id\":\"ADR046-foundation-001\",\"kind\":\"work-item\",\"wave\":\"W0\"},\
+             {\"id\":\"ADR046-backend-001\",\"kind\":\"work-item\",\"wave\":\"W1\"}]}\n",
+        );
+        fixture.write(
+            "docs/specs/ADR-046-work-items.json",
+            "{\"items\":[\
+             {\"workItemId\":\"ADR046-foundation-001\",\"implementationState\":\"Planned\"},\
+             {\"workItemId\":\"ADR046-backend-001\",\"implementationState\":\"Planned\"}]}\n",
+        );
+        fixture.commit("pre-merge predecessor manifest");
+
+        let mut args = fixture.snapshot_args();
+        let wave = args
+            .iter()
+            .position(|value| value == "--wave")
+            .expect("--wave in the fixture arguments")
+            + 1;
+        args[wave] = "W1".to_owned();
+
+        let request = SnapshotRequest::parse(&args).expect("parse request");
+        let root = StateRoot::for_tests(&fixture.state()).expect("anchor state root");
+        run_with_root(
+            &request,
+            &root,
+            &BTreeMap::from([("github.com/example/d2b".to_string(), fixture.repo())]),
+        )
+        .expect("entry must not block on an unmerged prior-wave item");
     }
 
     #[test]

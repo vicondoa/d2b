@@ -156,6 +156,10 @@ fn seal_checked(
     repository_roots: &BTreeMap<String, PathBuf>,
 ) -> Result<WorkflowOutput> {
     super::work_item_state::require_current_wave_merged(&snapshot.material, repository_roots)?;
+    super::work_item_state::require_prior_waves_merged_for_panel(
+        &snapshot.material,
+        repository_roots,
+    )?;
     seal(candidate, snapshot)
 }
 

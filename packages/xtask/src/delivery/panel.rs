@@ -534,10 +534,39 @@ pub fn open_candidate(
 }
 
 /// `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave panel-request`.
+///
+/// FR-049 binds the predecessor-merged condition at the panel request as well
+/// as at the seal: a wave that started early under FR-048 may implement
+/// against an unsealed predecessor, but it must not put a snapshot in front of
+/// the panel until every prior-wave item is `Merged`. Enforcing it here rather
+/// than only at `seal` is what stops ten reviewers from binding to a snapshot
+/// that a predecessor finding is still going to invalidate.
 pub fn run_request(args: &[String]) -> Result<WorkflowOutput> {
-    let (state, snapshot_path) = parse_snapshot_invocation(args)?;
+    let mut options = CliOptions::parse(args)?;
+    let snapshot_path = options.required_path("--snapshot")?;
+    let (state, repository_roots) = prepare_state_with_roots(&mut options)?;
+    options.finish()?;
+    let snapshot_path = state.resolve_artifact_ref(&snapshot_path);
     let (candidate, snapshot) = open_candidate(&state, &snapshot_path)?;
-    request(&candidate, &snapshot)
+    request_checked(&candidate, &snapshot, &repository_roots)
+}
+
+/// Applies the FR-049 predecessor-merged gate, then writes the request.
+///
+/// Split out from [`run_request`] so the gate is reachable from a test: the
+/// CLI entrypoint builds its [`StateRoot`] through `StateRoot::prepare`, which
+/// refuses a state root inside a Git working tree, and every hermetic fixture
+/// lives under the ignored build tree inside this repository.
+fn request_checked(
+    candidate: &CandidateDir,
+    snapshot: &SnapshotView,
+    repository_roots: &BTreeMap<String, PathBuf>,
+) -> Result<WorkflowOutput> {
+    super::work_item_state::require_prior_waves_merged_for_panel(
+        &snapshot.material,
+        repository_roots,
+    )?;
+    request(candidate, snapshot)
 }
 
 /// Writes the candidate-bound ten-role request.
@@ -1356,6 +1385,46 @@ pub(crate) mod tests {
             .expect_err("missing --records")
             .kind(),
             DeliveryErrorKind::Usage
+        );
+    }
+    /// FR-049: the panel-request gate must refuse a wave whose predecessor
+    /// still carries an unmerged work item, even though FR-048 permitted that
+    /// wave to start implementing. Enforcing it only at `seal` would let ten
+    /// reviewers bind to a snapshot a predecessor finding can still invalidate.
+    #[test]
+    fn panel_request_is_refused_while_a_prior_wave_item_is_unmerged() {
+        use crate::delivery::snapshot::tests::GitFixture;
+
+        let fixture = GitFixture::new("panel-request-prior-wave");
+        fixture.write(
+            "docs/specs/ADR-046-implementation-graph.json",
+            "{\"nodes\":[\
+             {\"id\":\"ADR046-foundation-001\",\"kind\":\"work-item\",\"wave\":\"W0\"},\
+             {\"id\":\"ADR046-backend-001\",\"kind\":\"work-item\",\"wave\":\"W1\"}]}\n",
+        );
+        fixture.write(
+            "docs/specs/ADR-046-work-items.json",
+            "{\"items\":[\
+             {\"workItemId\":\"ADR046-foundation-001\",\"implementationState\":\"Planned\"},\
+             {\"workItemId\":\"ADR046-backend-001\",\"implementationState\":\"Merged\"}]}\n",
+        );
+        fixture.commit("predecessor still unmerged");
+
+        let roots = BTreeMap::from([("github.com/example/d2b".to_owned(), fixture.repo())]);
+        let scratch = Scratch::new("panel-request-prior-wave-state");
+        let mut material = fixtures::material();
+        "W1".clone_into(&mut material.wave);
+        material.repository_set[0].integration_tree_oid = fixture.head();
+        let (_state, candidate, snapshot) = candidate_with_snapshot_from(&scratch, material);
+
+        let error = request_checked(&candidate, &snapshot, &roots)
+            .expect_err("panel-request must refuse an unmerged predecessor");
+        assert!(
+            error
+                .message()
+                .contains("cannot request a panel for or seal W1"),
+            "{}",
+            error.message()
         );
     }
 }
