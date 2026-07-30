@@ -1371,24 +1371,39 @@ mod tests {
         }
     }
 
-    /// Semantic factory-fingerprint stability under a Provider or adapter
-    /// identity change: the fingerprint has no Provider input at all, so two
-    /// distinct implementations derive byte-identical factory material.
+    /// The public projection accessors expose exactly the inputs the stored
+    /// factory fingerprint was derived from, so a consumer that re-derives
+    /// the factory material from the published surface reaches the same
+    /// value the catalog carries.
+    ///
+    /// The Provider-independence claim is discharged separately, and with a
+    /// varying Provider, by `tests_support::assert_base_is_provider_neutral`:
+    /// it installs two distinct Provider extensions and compares the whole
+    /// observed base surface, including this fingerprint.
     #[test]
-    fn the_factory_fingerprint_is_independent_of_provider_identity() {
+    fn the_stored_factory_fingerprint_is_rederivable_from_the_public_inputs() {
         for pair in catalog() {
-            let first = pair.projection().factory_fingerprint().clone();
-            // Recomputing from the same semantic inputs while a different
-            // Provider or adapter is installed cannot change the value,
-            // because no Provider or adapter identity is an input.
-            let second = factory_fingerprint(
-                pair.projection().service_type(),
-                pair.projection().binding_type(),
-                pair.projection().allowed_backing_ref_types(),
-                pair.projection().allowed_binding_target_ref_types(),
-                pair.projection().projection_schema_fingerprint(),
+            let projection = pair.projection();
+            let rederived = factory_fingerprint(
+                projection.service_type(),
+                projection.binding_type(),
+                projection.allowed_backing_ref_types(),
+                projection.allowed_binding_target_ref_types(),
+                projection.projection_schema_fingerprint(),
             );
-            assert_eq!(first, second);
+            assert_eq!(projection.factory_fingerprint(), &rederived);
+
+            // Negative control: the comparison above is capable of failing,
+            // so an accessor that published an input the stored fingerprint
+            // was not derived from is caught rather than absorbed.
+            let swapped = factory_fingerprint(
+                projection.binding_type(),
+                projection.service_type(),
+                projection.allowed_backing_ref_types(),
+                projection.allowed_binding_target_ref_types(),
+                projection.projection_schema_fingerprint(),
+            );
+            assert_ne!(projection.factory_fingerprint(), &swapped);
         }
     }
 
@@ -1457,17 +1472,29 @@ mod tests {
 
     /// No Device, Endpoint, or Binding projection: an import materializes one
     /// same-qualified-type local projection Service and nothing else.
+    ///
+    /// The rejection of `Device`, `Endpoint`, and the owner's own Binding
+    /// type as export targets is asserted by
+    /// `an_export_targets_only_the_owner_service`.
     #[test]
     fn a_projection_is_the_same_qualified_service_type_and_never_another_type() {
         for pair in catalog() {
             let projection = pair.projection();
             assert_eq!(projection.service_type(), pair.service().resource_type());
             assert_ne!(projection.service_type(), projection.binding_type());
-            for other in ["Device", "Endpoint"] {
+            for other in catalog() {
+                if other.family() == pair.family() {
+                    continue;
+                }
                 assert_ne!(
-                    projection.service_type().as_str(),
-                    other,
-                    "a projection is never a standard backing type"
+                    projection.service_type(),
+                    other.service().resource_type(),
+                    "a projection is never another family's Service type"
+                );
+                assert_ne!(
+                    projection.service_type(),
+                    other.binding().resource_type(),
+                    "a projection is never another family's Binding type"
                 );
             }
         }
