@@ -136,7 +136,7 @@
       "enforcesForSkip": "test-rust:D2B_SKIP_FIXTURE_BUILD",
       "ciKind": "rust",
       "ciJobId": "test-fixture-contracts",
-      "needs": ["test-rust"],
+      "needs": ["tier0"],
       "timeoutMinutes": 60,
       "runsOn": "ubuntu-latest"
     },
