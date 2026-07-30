@@ -1,13 +1,24 @@
 //! Canonical d2b v3 resource-plane contracts.
 
 pub mod component_session;
+pub mod credential;
+pub mod device;
 pub mod error;
+pub mod execution_policy;
+pub mod guest;
+pub mod host;
 pub mod identity;
 pub mod limits;
+pub mod network;
+pub mod process;
 pub mod resource;
 pub mod resource_ref;
 pub mod resource_schema;
 pub mod resource_status;
+pub mod user;
+pub mod volume;
+pub mod zone_routing;
+pub mod zone_session;
 
 pub use error::{
     MAX_RESOURCE_ERROR_REASON_BYTES, MAX_RESOURCE_ERROR_RETRY_AFTER_MS, ResourceError,

@@ -1,0 +1,11 @@
+[package]
+name = "d2b-provider-volume-virtiofs"
+version = "0.0.0-bootstrap"
+edition = "2024"
+publish = false
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]

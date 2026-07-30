@@ -1151,6 +1151,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-provider"
+version = "0.0.0-bootstrap"
+
+[[package]]
 name = "d2b-provider-aca"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -1189,6 +1193,26 @@ dependencies = [
  "urlencoding",
  "webpki-roots 0.26.11",
 ]
+
+[[package]]
+name = "d2b-provider-system-minijail"
+version = "0.0.0-bootstrap"
+
+[[package]]
+name = "d2b-provider-system-systemd"
+version = "0.0.0-bootstrap"
+
+[[package]]
+name = "d2b-provider-toolkit"
+version = "0.0.0-bootstrap"
+
+[[package]]
+name = "d2b-provider-volume-local"
+version = "0.0.0-bootstrap"
+
+[[package]]
+name = "d2b-provider-volume-virtiofs"
+version = "0.0.0-bootstrap"
 
 [[package]]
 name = "d2b-realm-codec-protobuf"
@@ -1264,6 +1288,10 @@ dependencies = [
  "tokio",
  "ttrpc",
 ]
+
+[[package]]
+name = "d2b-resource-client"
+version = "0.0.0-bootstrap"
 
 [[package]]
 name = "d2b-resource-store"
@@ -1370,6 +1398,10 @@ dependencies = [
  "uapi",
  "wl-proxy",
 ]
+
+[[package]]
+name = "d2b-zone-routing"
+version = "0.0.0-bootstrap"
 
 [[package]]
 name = "d2bd"
