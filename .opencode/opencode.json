@@ -10,15 +10,10 @@
     "bash": {
       "*": "allow",
       "sudo *": "ask",
-      "nixos-rebuild *": "ask",
-      "git push *": "ask",
-      "git reset --hard *": "ask",
-      "git worktree remove *": "ask",
-      "gh pr merge *": "ask",
       "rm -rf *": "ask"
     },
     "external_directory": {
-      "*": "ask",
+      "*": "allow",
       "/nix/store/**": "allow",
       "/tmp/**": "allow",
       "/run/d2b-heavy-gates/**": "allow",
