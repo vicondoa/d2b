@@ -98,9 +98,9 @@ Each agent auto-detects changed files independently when invoked directly.
 
 The consolidated report includes:
 
-- **Critical Issues**: Must-fix issues identified by agents — file, line, description
-- **Important Issues**: Should-fix issues — file, line, description
-- **Suggestions**: Nice-to-have improvements — file, line, description
+- **Critical Issues**: Must-fix issues identified by agents - file, line, description
+- **Important Issues**: Should-fix issues - file, line, description
+- **Suggestions**: Nice-to-have improvements - file, line, description
 - **Strengths**: What's well-done in the PR
 - **Recommended Action**: Prioritized remediation steps
 
@@ -171,7 +171,7 @@ The first version of this extension was modeled after the [PR Review Toolkit](ht
 
 ## License
 
-MIT License — see [LICENSE](LICENSE) file
+MIT License - see [LICENSE](LICENSE) file
 
 ## Support
 

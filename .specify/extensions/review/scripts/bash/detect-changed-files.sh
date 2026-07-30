@@ -2,9 +2,9 @@
 # Detect changed files for code review via git diff
 #
 # Identifies changed files by comparing the current branch against
-# the default branch plus any uncommitted work (Mode A — feature branch
+# the default branch plus any uncommitted work (Mode A - feature branch
 # diff + working directory) or by collecting staged + unstaged changes
-# (Mode B — working directory changes only).
+# (Mode B - working directory changes only).
 #
 # Usage: ./detect-changed-files.sh [OPTIONS]
 #
@@ -138,7 +138,7 @@ CHANGED_FILES=()
 MODE=""
 
 if [[ -n "$CURRENT_BRANCH" && -n "$DEFAULT_BRANCH" && "$CURRENT_BRANCH" != "$DEFAULT_BRANCH" ]]; then
-    # Mode A — Feature Branch
+    # Mode A - Feature Branch
     MERGE_BASE=$(git merge-base "origin/$DEFAULT_BRANCH" HEAD 2>/dev/null || echo "")
 
     if [[ -n "$MERGE_BASE" ]]; then
@@ -160,7 +160,7 @@ if [[ -n "$CURRENT_BRANCH" && -n "$DEFAULT_BRANCH" && "$CURRENT_BRANCH" != "$DEF
             [[ -n "$line" ]] && UNSTAGED+=("$line")
         done < <(git diff --name-only -z --diff-filter=ACMR 2>/dev/null)
 
-        # Combine and deduplicate (bash 3 compatible — no associative arrays)
+        # Combine and deduplicate (bash 3 compatible - no associative arrays)
         CHANGED_FILES=()
         for f in "${COMMITTED[@]}" "${STAGED[@]}" "${UNSTAGED[@]}"; do
             [[ -z "$f" ]] && continue
@@ -178,13 +178,13 @@ if [[ -n "$CURRENT_BRANCH" && -n "$DEFAULT_BRANCH" && "$CURRENT_BRANCH" != "$DEF
 
         MODE="Feature branch diff (${DEFAULT_BRANCH}...HEAD) + uncommitted changes"
     else
-        # merge-base failed — fall through to Mode B
+        # merge-base failed - fall through to Mode B
         DEFAULT_BRANCH=""
     fi
 fi
 
 if [[ -z "$MODE" ]]; then
-    # Mode B — Working Directory Changes
+    # Mode B - Working Directory Changes
     STAGED=()
     while IFS= read -r -d '' line; do
         [[ -n "$line" ]] && STAGED+=("$line")
@@ -195,7 +195,7 @@ if [[ -z "$MODE" ]]; then
         [[ -n "$line" ]] && UNSTAGED+=("$line")
     done < <(git diff --name-only -z --diff-filter=ACMR 2>/dev/null)
 
-    # Combine and deduplicate (bash 3 compatible — no associative arrays)
+    # Combine and deduplicate (bash 3 compatible - no associative arrays)
     CHANGED_FILES=()
     for f in "${STAGED[@]}" "${UNSTAGED[@]}"; do
         [[ -z "$f" ]] && continue

@@ -1,7 +1,7 @@
 # Review Extension Configuration
 #
 # Copy this file to your project as .specify/extensions/review/review-config.yml
-# and adjust settings as needed. All settings are optional — defaults apply
+# and adjust settings as needed. All settings are optional - defaults apply
 # when omitted.
 
 # ── Agent Toggles ─────────────────────────────────────────────────────

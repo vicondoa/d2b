@@ -1,4 +1,4 @@
-# load-config.ps1 — Load and validate the verify extension configuration.
+# load-config.ps1 - Load and validate the verify extension configuration.
 #
 # Reads report.max_findings from the YAML config file,
 # normalises YAML null sentinels, applies an optional environment
@@ -8,8 +8,8 @@
 # Usage:  load-config.ps1
 #
 # Exit codes:
-#   0 — configuration loaded successfully
-#   1 — config file missing, required value not set, or invalid value
+#   0 - configuration loaded successfully
+#   1 - config file missing, required value not set, or invalid value
 
 $configFile = ".specify/extensions/verify/verify-config.yml"
 $extensionFile = ".specify/extensions/verify/extension.yml"

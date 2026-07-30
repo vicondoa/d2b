@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# load-config.sh — Load and validate the verify extension configuration.
+# load-config.sh - Load and validate the verify extension configuration.
 #
 # Reads report.max_findings from the YAML config file,
 # normalises YAML null sentinels, applies an optional environment
@@ -9,8 +9,8 @@
 # Usage:  load-config.sh
 #
 # Exit codes:
-#   0 — configuration loaded successfully
-#   1 — config file missing, required value not set, or invalid value
+#   0 - configuration loaded successfully
+#   1 - config file missing, required value not set, or invalid value
 
 config_file=".specify/extensions/verify/verify-config.yml"
 extension_file=".specify/extensions/verify/extension.yml"

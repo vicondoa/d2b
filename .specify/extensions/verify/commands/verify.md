@@ -21,7 +21,7 @@ Validate the implementation against its specification artifacts (`spec.md`, `pla
 
 **STRICTLY READ-ONLY**: Do **not** modify any files. Output a structured analysis report. Offer an optional remediation plan (user must explicitly approve before any follow-up editing commands would be invoked manually).
 
-**Constitution Authority**: The project constitution (`.specify/memory/constitution.md`) is **non-negotiable** within this verification scope. Constitution conflicts are automatically CRITICAL and require adjustment of the spec, plan, tasks or implementation—not dilution, reinterpretation, or silent ignoring of the principle. If a principle itself needs to change, that must occur in a separate, explicit constitution update outside `/speckit.verify.run`.
+**Constitution Authority**: The project constitution (`.specify/memory/constitution.md`) is **non-negotiable** within this verification scope. Constitution conflicts are automatically CRITICAL and require adjustment of the spec, plan, tasks or implementation - not dilution, reinterpretation, or silent ignoring of the principle. If a principle itself needs to change, that must occur in a separate, explicit constitution update outside `/speckit.verify.run`.
 
 ## Execution Steps
 
@@ -86,7 +86,7 @@ Load only the minimal necessary context from each artifact:
 
 Build the set of files to verify from tasks.md.
 
-- Parse all tasks in tasks.md — both completed (`[x]`/`[X]`) and incomplete (`[ ]`)
+- Parse all tasks in tasks.md - both completed (`[x]`/`[X]`) and incomplete (`[ ]`)
 - Extract file paths referenced in each task description
 - Build **REVIEW_FILES** set from completed task file paths
 - Track **INCOMPLETE_TASK_FILES** from incomplete tasks (used by check C)
@@ -97,8 +97,8 @@ Create internal representations (do not include raw artifacts in output):
 
 - **Task inventory**: Each task with ID, completion status, referenced file paths, and phase grouping
 - **Implementation mapping**: Map each completed task to its referenced file paths
-- **File inventory**: All REVIEW_FILES with existence verification — flag any task-referenced file that does not exist on disk
-- **Requirements inventory**: Each functional requirement with a stable key — map to tasks and REVIEW_FILES for implementation evidence (evidence = file in REVIEW_FILES containing keyword/ID match, function signatures, or code paths that address the requirement)
+- **File inventory**: All REVIEW_FILES with existence verification - flag any task-referenced file that does not exist on disk
+- **Requirements inventory**: Each functional requirement with a stable key - map to tasks and REVIEW_FILES for implementation evidence (evidence = file in REVIEW_FILES containing keyword/ID match, function signatures, or code paths that address the requirement)
 - **Spec intent references**: User stories, acceptance criteria, scenarios, edge cases, and code-verifiable success criteria from spec.md
 - **Constitution rule set**: Extract principle names and MUST/SHOULD normative statements
 
@@ -131,7 +131,7 @@ Focus on high-signal findings. **Limit to the configured `max_findings` value** 
 
 - Implementation diverging from spec intent (minor vs fundamental divergence)
 - Compare acceptance criteria against actual behaviour in REVIEW_FILES
-- Code-verifiable success criteria (performance, security, availability, observability) with no evidence of implementation support — skip business/UX metrics that require post-deployment measurement
+- Code-verifiable success criteria (performance, security, availability, observability) with no evidence of implementation support - skip business/UX metrics that require post-deployment measurement
 
 #### F. Constitution Alignment
 
@@ -191,7 +191,7 @@ At end of report, output a concise Next Actions block:
 - If CRITICAL issues exist: Recommend resolving before proceeding
 - If HIGH issues exist: Recommend addressing before merge; user may proceed at own risk
 - If only LOW/MEDIUM: User may proceed, but provide improvement suggestions
-- Provide explicit command suggestions: e.g., "Run `/speckit.implement` to address findings and re-run verification", "Implementation verified — ready for review or merge"
+- Provide explicit command suggestions: e.g., "Run `/speckit.implement` to address findings and re-run verification", "Implementation verified - ready for review or merge"
 
 ### 10. Offer Remediation
 

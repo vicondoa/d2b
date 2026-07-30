@@ -20,7 +20,7 @@ provides:
   config:
     - name: "review-config.yml"
       template: "config-template.yml"
-      description: "Review extension configuration — confidence threshold and agent toggles"
+      description: "Review extension configuration - confidence threshold and agent toggles"
       required: false
 
   scripts:
@@ -37,22 +37,22 @@ provides:
       description: "Comprehensive code review using specialized agents"
     - name: "speckit.review.code"
       file: "commands/code.md"
-      description: "General code quality review — project guideline compliance, bug detection, code quality"
+      description: "General code quality review - project guideline compliance, bug detection, code quality"
     - name: "speckit.review.comments"
       file: "commands/comments.md"
       description: "Code comment accuracy verification, documentation completeness, comment rot detection"
     - name: "speckit.review.tests"
       file: "commands/tests.md"
-      description: "Test coverage quality analysis — behavioral coverage, critical gap identification, test resilience evaluation"
+      description: "Test coverage quality analysis - behavioral coverage, critical gap identification, test resilience evaluation"
     - name: "speckit.review.errors"
       file: "commands/errors.md"
-      description: "Error handling review — silent failure detection, catch block analysis, error logging"
+      description: "Error handling review - silent failure detection, catch block analysis, error logging"
     - name: "speckit.review.types"
       file: "commands/types.md"
-      description: "Type design analysis — encapsulation, invariant expression, usefulness, and enforcement"
+      description: "Type design analysis - encapsulation, invariant expression, usefulness, and enforcement"
     - name: "speckit.review.simplify"
       file: "commands/simplify.md"
-      description: "Code simplification suggestions — clarity, unnecessary complexity, redundant abstractions"
+      description: "Code simplification suggestions - clarity, unnecessary complexity, redundant abstractions"
 
 hooks:
   after_implement:

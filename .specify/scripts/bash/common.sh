@@ -25,7 +25,7 @@ find_specify_root() {
 }
 
 # Resolve an explicit SPECIFY_INIT_DIR project override (the directory that
-# *contains* .specify/), for non-interactive / CI use — e.g. running a Spec Kit
+# *contains* .specify/), for non-interactive / CI use - e.g. running a Spec Kit
 # command against a member project from a monorepo root without cd.
 #
 # Precondition: SPECIFY_INIT_DIR is non-empty. Echoes the validated absolute
@@ -82,7 +82,7 @@ get_current_branch() {
         return
     fi
 
-    # No explicit feature set — caller must handle this via feature.json
+    # No explicit feature set - caller must handle this via feature.json
     # in get_feature_paths(). Return empty to signal "unknown".
     echo ""
 }
@@ -130,7 +130,7 @@ read_feature_json_feature_directory() {
 
 # Persist a feature_directory value to .specify/feature.json.
 # Writes only when the file is missing or the value differs from what's stored.
-# Accepts the raw (possibly relative) path — callers should pass the original
+# Accepts the raw (possibly relative) path - callers should pass the original
 # user-supplied value, not the normalized absolute path.
 _persist_feature_json() {
     local repo_root="$1"
@@ -152,7 +152,7 @@ _persist_feature_json() {
     # Ensure .specify/ directory exists
     mkdir -p "$repo_root/.specify"
 
-    # Write feature.json — prefer jq for safe JSON, fall back to printf
+    # Write feature.json - prefer jq for safe JSON, fall back to printf
     if command -v jq >/dev/null 2>&1; then
         jq -cn --arg fd "$feature_dir_value" '{feature_directory:$fd}' > "$fj"
     else
@@ -180,14 +180,14 @@ get_feature_paths() {
     # Resolve feature directory.  Priority:
     #   1. SPECIFY_FEATURE_DIRECTORY env var (explicit override)
     #   2. .specify/feature.json "feature_directory" key (persisted by specify command)
-    #   3. Error — no feature context available
+    #   3. Error - no feature context available
     local feature_dir
     if [[ -n "${SPECIFY_FEATURE_DIRECTORY:-}" ]]; then
         feature_dir="$SPECIFY_FEATURE_DIRECTORY"
         # Normalize relative paths to absolute under repo root
         [[ "$feature_dir" != /* ]] && feature_dir="$repo_root/$feature_dir"
         # Persist to feature.json so future sessions without the env var still
-        # work — unless the caller opted out for read-only resolution (#3025).
+        # work - unless the caller opted out for read-only resolution (#3025).
         if [[ "$no_persist" != true ]]; then
             _persist_feature_json "$repo_root" "$SPECIFY_FEATURE_DIRECTORY"
         fi
@@ -252,8 +252,8 @@ get_invoke_separator() {
         # Windows `python3` commonly resolves to the Microsoft Store App
         # Execution Alias stub, which passes `command -v` but fails at runtime
         # (exit 49). An availability-gated branch would pick python3, swallow
-        # its failure, and — because this function historically had no text
-        # fallback — silently return "." even for `-`-separator integrations
+        # its failure, and - because this function historically had no text
+        # fallback - silently return "." even for `-`-separator integrations
         # (e.g. forge, cline), yielding wrong command hints (issue #3304).
         if command -v jq >/dev/null 2>&1; then
             local jq_separator
@@ -434,15 +434,15 @@ except Exception:
     sys.exit(1)
 " 2>/dev/null); then
                 if [ -n "$sorted_presets" ]; then
-                    # python3 succeeded and returned preset IDs — search in priority order
+                    # python3 succeeded and returned preset IDs - search in priority order
                     while IFS= read -r preset_id; do
                         local candidate="$presets_dir/$preset_id/templates/${template_name}.md"
                         [ -f "$candidate" ] && echo "$candidate" && return 0
                     done <<< "$sorted_presets"
                 fi
-                # python3 succeeded but registry has no presets — nothing to search
+                # python3 succeeded but registry has no presets - nothing to search
             else
-                # python3 failed (missing, or registry parse error) — fall back to unordered directory scan
+                # python3 failed (missing, or registry parse error) - fall back to unordered directory scan
                 for preset in "$presets_dir"/*/; do
                     [ -d "$preset" ] || continue
                     local candidate="$preset/templates/${template_name}.md"
@@ -586,7 +586,7 @@ except Exception:
                     done <<< "$sorted_presets"
                 fi
             else
-                # python3 failed — fall back to unordered directory scan (replace only)
+                # python3 failed - fall back to unordered directory scan (replace only)
                 for preset in "$presets_dir"/*/; do
                     [ -d "$preset" ] || continue
                     local candidate="$preset/templates/${template_name}.md"
@@ -597,7 +597,7 @@ except Exception:
                 done
             fi
         else
-            # No python3 or registry — fall back to unordered directory scan (replace only)
+            # No python3 or registry - fall back to unordered directory scan (replace only)
             for preset in "$presets_dir"/*/; do
                 [ -d "$preset" ] || continue
                 local candidate="$preset/templates/${template_name}.md"
@@ -639,7 +639,7 @@ except Exception:
         [ "$s" != "replace" ] && has_composition=true && break
     done
 
-    # If the top (highest-priority) layer is replace, it wins entirely —
+    # If the top (highest-priority) layer is replace, it wins entirely -
     # lower layers are irrelevant regardless of their strategies.
     if [ "${layer_strategies[0]}" = "replace" ]; then
         cat "${layer_paths[0]}"

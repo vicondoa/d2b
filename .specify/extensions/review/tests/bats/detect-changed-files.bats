@@ -75,7 +75,7 @@ teardown() {
 }
 
 # ──────────────────────────────────────────────
-# Mode B — Working Directory: Unstaged Changes
+# Mode B - Working Directory: Unstaged Changes
 # ──────────────────────────────────────────────
 
 @test "detects unstaged changes (Mode B)" {
@@ -112,7 +112,7 @@ teardown() {
 }
 
 # ──────────────────────────────────────────────
-# Mode B — Working Directory: Staged Changes
+# Mode B - Working Directory: Staged Changes
 # ──────────────────────────────────────────────
 
 @test "detects staged changes (Mode B)" {
@@ -129,7 +129,7 @@ teardown() {
 }
 
 # ──────────────────────────────────────────────
-# Mode B — Staged + Unstaged Deduplication
+# Mode B - Staged + Unstaged Deduplication
 # ──────────────────────────────────────────────
 
 @test "deduplicates staged and unstaged changes (Mode B)" {
@@ -161,7 +161,7 @@ teardown() {
 }
 
 # ──────────────────────────────────────────────
-# Mode A — Feature Branch Diff
+# Mode A - Feature Branch Diff
 # ──────────────────────────────────────────────
 
 @test "detects feature branch changes via merge-base (Mode A)" {
@@ -250,7 +250,7 @@ teardown() {
 }
 
 # ──────────────────────────────────────────────
-# Mode A — Feature Branch + Uncommitted Changes
+# Mode A - Feature Branch + Uncommitted Changes
 # ──────────────────────────────────────────────
 
 @test "Mode A includes staged uncommitted files" {
@@ -314,7 +314,7 @@ teardown() {
     git add shared.txt
     git commit --quiet -m "Add shared file"
 
-    # Modify the same file (unstaged) — it appears in both committed diff and unstaged
+    # Modify the same file (unstaged) - it appears in both committed diff and unstaged
     echo "v2" > shared.txt
 
     run bash "$SCRIPTS_DIR/detect-changed-files.sh" --json
@@ -508,7 +508,7 @@ print('All keys present and correct types')
     git add .
     git commit --quiet -m "Add files"
 
-    # Delete one, modify another — only staged
+    # Delete one, modify another - only staged
     git rm --quiet remove.txt
     echo "modified" > keep.txt
     echo "added" > added.txt

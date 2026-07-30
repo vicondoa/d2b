@@ -129,7 +129,7 @@ Describe "detect-changed-files.ps1" {
     }
 
     # ──────────────────────────────────────────────
-    # Mode B — Unstaged Changes
+    # Mode B - Unstaged Changes
     # ──────────────────────────────────────────────
 
     Describe "Mode B - Unstaged" {
@@ -156,7 +156,7 @@ Describe "detect-changed-files.ps1" {
     }
 
     # ──────────────────────────────────────────────
-    # Mode B — Staged Changes
+    # Mode B - Staged Changes
     # ──────────────────────────────────────────────
 
     Describe "Mode B - Staged" {
@@ -181,7 +181,7 @@ Describe "detect-changed-files.ps1" {
     }
 
     # ──────────────────────────────────────────────
-    # Mode B — Deduplication
+    # Mode B - Deduplication
     # ──────────────────────────────────────────────
 
     Describe "Mode B - Deduplication" {
@@ -209,7 +209,7 @@ Describe "detect-changed-files.ps1" {
     }
 
     # ──────────────────────────────────────────────
-    # Mode A — Feature Branch Diff
+    # Mode A - Feature Branch Diff
     # ──────────────────────────────────────────────
 
     Describe "Mode A - Feature Branch" {
@@ -314,7 +314,7 @@ Describe "detect-changed-files.ps1" {
     }
 
     # ──────────────────────────────────────────────
-    # Mode A — Feature Branch + Uncommitted Changes
+    # Mode A - Feature Branch + Uncommitted Changes
     # ──────────────────────────────────────────────
 
     Describe "Mode A - Uncommitted changes" {
@@ -721,7 +721,7 @@ Describe "detect-changed-files.ps1" {
                 Push-Location $tmp
 
                 # Create a file with a double quote in its name
-                # (skipped on Windows — NTFS does not allow " in filenames)
+                # (skipped on Windows - NTFS does not allow " in filenames)
                 $fname = 'file"quote.txt'
                 [System.IO.File]::WriteAllText((Join-Path $tmp $fname), "content")
                 git add .

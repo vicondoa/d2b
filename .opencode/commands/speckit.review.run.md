@@ -1,5 +1,5 @@
 ---
-description: Comprehensive code review using specialized agents — orchestrates code,
+description: Comprehensive code review using specialized agents - orchestrates code,
   comments, tests, errors, types, and simplify agents sequentially.
 scripts:
   sh: .specify/extensions/review/scripts/bash/detect-changed-files.sh
@@ -20,12 +20,12 @@ Run a comprehensive pull request review using multiple specialized agents, each 
 1. **Load Configuration**
    - Read the project config file at `.specify/extensions/review/review-config.yml` (if it exists).
    - If the file does not exist, fall back to the `defaults.agents` section in the extension's `extension.yml`.
-   - Extract the `agents` map — each key (`code`, `comments`, `tests`, `errors`, `types`, `simplify`) is a boolean toggle.
+   - Extract the `agents` map - each key (`code`, `comments`, `tests`, `errors`, `types`, `simplify`) is a boolean toggle.
    - Agents set to `false` **MUST** be excluded from this run. Do not launch them.
 
 2. **Determine Review Scope**
    - Parse arguments to see if user requested specific review aspects.
-   - If specific aspects were requested, run exactly those — config toggles do **not** apply (explicit user request overrides config).
+   - If specific aspects were requested, run exactly those - config toggles do **not** apply (explicit user request overrides config).
    - Default (no arguments): Run all applicable reviews that are enabled in config.
 
 3. **Available Review Aspects:**
@@ -41,12 +41,12 @@ Run a comprehensive pull request review using multiple specialized agents, each 
 4. **Identify Changed Files**
 
    - If the user provided a file list or explicit instructions on how to retrieve files (e.g., only staged, only unstaged, a specific folder, etc.), follow those instructions directly.
-   - Otherwise, you **MUST** execute the `.specify/extensions/review/scripts/bash/detect-changed-files.sh` with `--json` to detect changed files. **Do not** attempt to detect changes by running `git` commands directly, reading git state manually, or using any other method — always delegate to the script.
+   - Otherwise, you **MUST** execute the `.specify/extensions/review/scripts/bash/detect-changed-files.sh` with `--json` to detect changed files. **Do not** attempt to detect changes by running `git` commands directly, reading git state manually, or using any other method - always delegate to the script.
      - The script automatically picks the best detection mode:
        - **Mode A (feature branch):** diffs the current branch against the default branch (`main`/`master`) from the merge-base, plus any staged and unstaged changes.
        - **Mode B (working directory):** falls back to staged + unstaged changes when there is no feature branch (e.g., working directly on the default branch).
      - JSON output: `{"branch", "default_branch", "mode", "changed_files": [...]}`
-   - **Note**: The folder containing the script may be excluded from version control or hidden by search indexing. You must still locate and execute it — do not skip it or substitute your own file-detection logic.
+   - **Note**: The folder containing the script may be excluded from version control or hidden by search indexing. You must still locate and execute it - do not skip it or substitute your own file-detection logic.
 
 5. **Determine Applicable Reviews**
 

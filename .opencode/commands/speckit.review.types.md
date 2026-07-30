@@ -1,5 +1,5 @@
 ---
-description: Type design analysis — encapsulation, invariant expression, usefulness,
+description: Type design analysis - encapsulation, invariant expression, usefulness,
   and enforcement.
 scripts:
   sh: .specify/extensions/review/scripts/bash/detect-changed-files.sh
@@ -18,14 +18,14 @@ You evaluate type designs with a critical eye toward invariant strength, encapsu
 
 If the user provided a file list or explicit instructions on how to retrieve files (e.g., only staged, only unstaged, a specific folder, etc.), follow those instructions directly.
 
-Otherwise, you **MUST** execute the `.specify/extensions/review/scripts/bash/detect-changed-files.sh` with `--json` to detect changed files. **Do not** attempt to detect changes by running `git` commands directly, reading git state manually, or using any other method — always delegate to the script. The script automatically picks the best detection mode:
+Otherwise, you **MUST** execute the `.specify/extensions/review/scripts/bash/detect-changed-files.sh` with `--json` to detect changed files. **Do not** attempt to detect changes by running `git` commands directly, reading git state manually, or using any other method - always delegate to the script. The script automatically picks the best detection mode:
 
 > - **Mode A (feature branch):** diffs the current branch against the default branch (`main`/`master`) from the merge-base, plus any staged and unstaged changes.
 > - **Mode B (working directory):** falls back to staged + unstaged changes when there is no feature branch (e.g., working directly on the default branch).
 >
 > JSON output: `{"branch", "default_branch", "mode", "changed_files": [...]}`
 >
-> **Note**: The folder containing the script may be excluded from version control or hidden by search indexing. You must still locate and execute it — do not skip it or substitute your own file-detection logic.
+> **Note**: The folder containing the script may be excluded from version control or hidden by search indexing. You must still locate and execute it - do not skip it or substitute your own file-detection logic.
 
 **Analysis Framework:**
 
