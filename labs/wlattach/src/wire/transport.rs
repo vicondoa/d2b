@@ -2,7 +2,7 @@
 //!
 //! `AF_UNIX` + **`SOCK_SEQPACKET`**: one bounded datagram per frame. A stream
 //! socket would let reads coalesce or split, which can pair a frame with the
-//! wrong ancillary descriptors — a corruption class we design out rather than
+//! wrong ancillary descriptors - a corruption class we design out rather than
 //! test for.
 //!
 //! The socket is an inherited `socketpair`, never a filesystem path, so no other
@@ -203,7 +203,7 @@ mod tests {
         assert_ne!(fds[0].as_raw_fd(), f.as_raw_fd());
     }
 
-    /// A frame carrying more descriptors than the receiver expects must fail —
+    /// A frame carrying more descriptors than the receiver expects must fail -
     /// and must not leak the surplus.
     #[test]
     fn unexpected_fd_count_is_rejected() {

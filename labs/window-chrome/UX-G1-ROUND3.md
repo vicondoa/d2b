@@ -1,11 +1,11 @@
-# UX-G1 round 3 — corrections
+# UX-G1 round 3 - corrections
 
 Round 2 returned **0/8**, but the findings collapsed onto a small, consistent
 set. This round fixes them. Changes from round 2 are marked **[R2-fix]**.
 
 ## 1. Band height is a minimum with measured growth **[R2-fix]**
 
-Raised by **8/8 seats** — the clearest signal the panel produced.
+Raised by **8/8 seats** - the clearest signal the panel produced.
 
 - **32 logical px is the minimum and the normal single-line height**, not a
   fixed height.
@@ -20,7 +20,7 @@ Raised by **8/8 seats** — the clearest signal the panel produced.
   4. Then **grow the band**.
   Identity always wins; the status token always yields first.
 - **Honest cost, stated plainly:** every window pays its own band. A column of
-  N stacked windows loses **N × band height** of guest area — 6 × 32 = 192 px
+  N stacked windows loses **N × band height** of guest area - 6 × 32 = 192 px
   at the minimum, more under text enlargement. This is the design's real price
   and the ADR states it in these terms.
 
@@ -31,17 +31,17 @@ entirely; `security-ux` wanted *more* of them (mic-while-muted, `STOPPING`,
 `DEGRADED`); `information-architecture` wanted exactly one slot;
 `customization-ux` wanted a small typed registry.
 
-Resolution — **a single slot showing the highest-priority
+Resolution - **a single slot showing the highest-priority
 security-capability condition**, never an informational dashboard:
 
 | Priority | Token | Shown when |
 | --- | --- | --- |
 | 1 | `UNVERIFIED` | Host-verified identity unavailable |
-| 2 | `MIC` / `MIC MUTED` | Microphone **capability is granted or attached**, muted or not — the round-1 requirement, restored |
+| 2 | `MIC` / `MIC MUTED` | Microphone **capability is granted or attached**, muted or not - the round-1 requirement, restored |
 | 3 | `USB` | A USB device is attached |
 | 4 | `STOPPING` / `DEGRADED` | Lifecycle or verification degradation |
 
-Everything informational — pending restart, IP, uptime, closure drift — lives
+Everything informational - pending restart, IP, uptime, closure drift - lives
 in the menu, never on the band. The token is text + glyph, never colour alone,
 never replaces the realm accent, and yields to identity under space pressure.
 
@@ -59,9 +59,9 @@ fails closed:
 - **P2 ships only if it satisfies both** conditions simultaneously:
   (a) remains an `xdg_popup` parented to the trusted wrapper, tracking the
   window through niri's scrolling layout; and
-  (b) passes verified AT-SPI acceptance — Name/Role/Value, `has-popup`,
+  (b) passes verified AT-SPI acceptance - Name/Role/Value, `has-popup`,
   expanded state, actions, focus order, item semantics, and status
-  announcements — tested with **Orca and Accerciser on niri**.
+  announcements - tested with **Orca and Accerciser on niri**.
 - **AT-SPI scope includes the identity button itself**, not only menu items.
 - **If P2 proves infeasible**, the tab does **not** ship a painted menu.
   Activation instead opens the accessible `d2b-wlcontrol` surface, focused on
@@ -83,13 +83,13 @@ recovers. No realm colour is shown in this state.
 Recording the confirmed vulnerability is not remediation. Before the title may
 be treated as an identity channel, composition must:
 
-- strip bidi **overrides and embeddings** (U+202A–U+202E, U+2066–U+2069) and
+- strip bidi **overrides and embeddings** (U+202A-U+202E, U+2066-U+2069) and
   other category **Cf** formatting characters, not just category Cc;
 - **direction-isolate** the guest-controlled portion so it cannot reorder the
   host prefix;
 - normalize and strip **reserved leading identity syntax** so a guest cannot
   emit `[work] …` from `personal`, and so prefixes cannot stack;
-- use an unmistakable host-owned grammar (`d2b: work — <guest title>`);
+- use an unmistakable host-owned grammar (`d2b: work - <guest title>`);
 - carry **RTL and visual-order acceptance cases**, plus an Orca announcement
   test confirming the host prefix is spoken first.
 
@@ -97,7 +97,7 @@ be treated as an identity channel, composition must:
 
 Round 2 found the revision had misread this. Corrected:
 
-- The band shows a **uniqueness-checked human display name** — `Work`, not
+- The band shows a **uniqueness-checked human display name** - `Work`, not
   `work.local.d2b`.
 - **Provider kind is removed** from the default menu header; it does not answer
   "which environment owns this window?"
@@ -115,8 +115,8 @@ Round 2 found the revision had misread this. Corrected:
   `windowChrome` theme value.
 - **Per-VM exposes only** accent (via that contract) and a uniqueness-checked
   short display name. Typography, padding, and geometry are global-only.
-- **A bounded typed status registry is restored** — `microphone`, `usb`,
-  `pending-restart` — with fixed trusted data sources and closed action ids.
+- **A bounded typed status registry is restored** - `microphone`, `usb`,
+  `pending-restart` - with fixed trusted data sources and closed action ids.
   No format strings, no intervals, no shell, no arbitrary click handlers. This
   honours the operator's "parts" intent within a safe envelope.
 - GTK-only CSS is deferred entirely until a renderer is selected.
@@ -130,11 +130,11 @@ Round 2 found the revision had misread this. Corrected:
 - **The outer decoration contract is fixed and tested**, not assumed: the proxy
   negotiates `ServerSide` so niri draws its ordinary surrounding border under
   `prefer-no-csd`. A and B are rendered under SSD, forced CSD, guest CSD, and
-  both `draw-border-with-background` modes — because under CSD, niri's
+  both `draw-border-with-background` modes - because under CSD, niri's
   background-rect border may fill B's "transparent" band, making B not
   transparent at all.
 - **niri layout states are captured, not asserted:** overview (compositor zoom
-  can render a nominally persistent 12–14 px label unreadable), scrolling
+  can render a nominally persistent 12-14 px label unreadable), scrolling
   transition, floating, windowed-fullscreen, stacked columns, and tabbed
   columns alongside niri's native tab indicator.
 - **Added axes:** narrow window · long label · 200% text scaling · status token
@@ -155,7 +155,7 @@ text primary.
 
 Confirm your round-2 findings are resolved, or state precisely what is still
 wrong. The design is now narrow; if it is sound, sign off. If you still have a
-blocking finding, it should be a genuine defect rather than a preference —
+blocking finding, it should be a genuine defect rather than a preference -
 several seats noted the remaining items were converging, and this round exists
 to close them, not to accumulate new scope.
 

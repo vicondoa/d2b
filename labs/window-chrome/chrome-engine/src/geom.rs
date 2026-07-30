@@ -119,7 +119,7 @@ pub struct ChromeLayout {
 
 /// The steps a layout took to fit, in the order the panel fixed:
 /// short name, then wrap, then grow the band. Identity always wins, and
-/// security-capability state is never dropped — it moves to a second row and
+/// security-capability state is never dropped - it moves to a second row and
 /// grows the band rather than disappearing into the menu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Reflow {

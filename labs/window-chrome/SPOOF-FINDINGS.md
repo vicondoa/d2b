@@ -5,7 +5,7 @@ Produced by `bin/capture-spoof.sh`. Satisfies requirement **S5** in
 
 ## The question
 
-The proxy owns the band's pixels by construction — the guest cannot draw
+The proxy owns the band's pixels by construction - the guest cannot draw
 there. That is not the interesting question. The interesting question is
 whether a guest that controls every pixel *below* the band can produce
 something an operator would act on.

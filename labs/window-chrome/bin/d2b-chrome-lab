@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# d2b-chrome-lab — run an application on THIS desktop with the prototype
+# d2b-chrome-lab - run an application on THIS desktop with the prototype
 # window identity tab, to try it in real use.
 #
 #   d2b-chrome-lab                          # a terminal, label "Work"

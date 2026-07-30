@@ -1,4 +1,4 @@
-//! `d2b-wlattach` — tmux for GUI apps.
+//! `d2b-wlattach` - tmux for GUI apps.
 
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -103,7 +103,7 @@ fn session_dir(name: &str) -> PathBuf {
 
 /// Resolve which session a verb applies to.
 ///
-/// With `-s`, that one. Without, only if exactly one session exists — an
+/// With `-s`, that one. Without, only if exactly one session exists - an
 /// ambiguous target lists the candidates and fails rather than guessing.
 fn resolve(session: Option<String>) -> Result<String, String> {
     if let Some(s) = session {
@@ -434,7 +434,7 @@ fn serve(name: &str, argv: &[String]) -> Result<(), String> {
         if let Some(f) = hosted.frontend.as_mut()
             && matches!(f.try_wait(), Ok(Some(_)))
         {
-            // The frontend died. The application is untouched — this is exactly
+            // The frontend died. The application is untouched - this is exactly
             // the property the prototype exists to demonstrate.
             log::info!("frontend exited; application still running");
             hosted.frontend = None;

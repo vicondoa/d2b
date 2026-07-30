@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# demo/soak.sh — leak check: FD count and RSS across many attach/detach cycles.
+# demo/soak.sh - leak check: FD count and RSS across many attach/detach cycles.
 set -uo pipefail
 N="${1:-25}"
 APP=("${@:2}"); [ ${#APP[@]} -eq 0 ] && APP=(foot)

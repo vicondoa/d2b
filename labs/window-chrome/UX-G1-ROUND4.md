@@ -1,4 +1,4 @@
-# UX-G1 round 4 — closing findings, and a correction I owe the panel
+# UX-G1 round 4 - closing findings, and a correction I owe the panel
 
 Round 3: **4/8 sign-off** (`compositor-ux`, `information-architecture`,
 `visual-design`, `customization-ux`). Four seats returned specific, closable
@@ -27,12 +27,12 @@ weighed it when signing off. I am flagging it rather than letting it stand.
 
 **What is actually true, and still supports the neutral-plate decision:**
 
-1. **The margin is razor-thin.** 4.5826 vs a 4.5 floor is **1.8% headroom** —
+1. **The margin is razor-thin.** 4.5826 vs a 4.5 floor is **1.8% headroom** -
    no allowance for antialiasing, subpixel coverage, or fractional-scale
-   blending, all of which move effective contrast at 12–14 px.
+   blending, all of which move effective contrast at 12-14 px.
 2. **The shipping proxy's naive luma rule produces real failures, not just
    disagreements.** Sweeping the cube, its choice falls below 4.5:1 for
-   **262,386 sampled colours**, worst case **1.94:1** at `rgb(4,216,0)` — a
+   **262,386 sampled colours**, worst case **1.94:1** at `rgb(4,216,0)` - a
    bright green that sits just under the naive threshold and therefore gets
    white text. That is a severe, shipping WCAG violation.
 3. `visual-design`'s round-1 argument stands on its own: per-colour text
@@ -54,7 +54,7 @@ non-configurable contract:
 
 - Not configurable. No registry, no action ids, no ordering knobs.
 - **Pending restart is menu-only**, permanently.
-- Token activation always opens the **same identity menu** — the token is never
+- Token activation always opens the **same identity menu** - the token is never
   a separate control with separate behaviour.
 
 ## 2. Concurrent capabilities compose; they do not hide **[R3-fix, security]**
@@ -83,11 +83,11 @@ Round 3 correctly found that falling back to `wlcontrol` does not repair the
 identity **button's** missing Name/Role/State/Action. Corrected:
 
 If P2 cannot deliver AT semantics for the identity button itself, then the
-chrome is **non-interactive** — it renders identity only, and `wlcontrol` is
+chrome is **non-interactive** - it renders identity only, and `wlcontrol` is
 reached through an accessible compositor command. A clickable control with no
 AT semantics is not shipped in any configuration. The AT-SPI shipping gate
 covers **the identity button, the status token, the popup, its items, and the
-interstitial** — not menu items alone.
+interstitial** - not menu items alone.
 
 ## 4. The blocking interstitial is accessible **[R3-fix, accessibility]**
 
@@ -125,7 +125,7 @@ never renamed because another window appeared or a workspace changed.
   identity contrast.
 - **Activate on release inside** the button. Cancel on drag beyond threshold or
   release outside.
-- **Right-click** opens the same menu. **Middle-click and wheel do nothing** —
+- **Right-click** opens the same menu. **Middle-click and wheel do nothing** -
   no hidden volume gestures.
 - These states join candidate A's capture and acceptance axes.
 
@@ -149,15 +149,15 @@ a 32 px floor, neutral surface with a 4 px accent rule, persistent horizontal
 identity in every state including fullscreen, 14 px default / 12 px floor at
 weight 600, a 32×32 input region confined to chrome, drag-move without
 drag-resize, the reduced menu, bidi-safe title composition, human display names,
-Nix as sole configuration authority, candidate A with controls B–E, and the full
+Nix as sole configuration authority, candidate A with controls B-E, and the full
 decoration and niri layout capture matrices.
 
 ## Your task for round 4
 
 Two questions:
 
-1. **Seats that signed off in round 3** — does the §0 correction change your
+1. **Seats that signed off in round 3** - does the §0 correction change your
    position? Re-affirm or withdraw.
-2. **Seats with open findings** — are they closed?
+2. **Seats with open findings** - are they closed?
 
 Return the same JSON shape. `signoff` is `true` iff `recommendations` is `[]`.

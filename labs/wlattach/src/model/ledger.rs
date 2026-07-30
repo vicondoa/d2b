@@ -1,4 +1,4 @@
-//! The buffer ledger — a pure state machine.
+//! The buffer ledger - a pure state machine.
 //!
 //! This module deliberately contains **no** file descriptors, Smithay types or
 //! wayland-client types (plan §5.2). It manipulates opaque ids, reference sets
@@ -19,7 +19,7 @@
 //! * Releasing "the previous front on replacement" let the application mutate
 //!   memory the compositor was still sampling.
 //! * Releasing once per `wl_buffer` *object* stalled any client that reuses
-//!   buffers — which is to say, essentially every client.
+//!   buffers - which is to say, essentially every client.
 //! * Retiring references orphaned by a crash on a timer could never prove the
 //!   compositor had stopped reading. Elapsed time is not evidence.
 
@@ -308,7 +308,7 @@ impl Ledger {
 
     /// The frontend exited uncleanly.
     ///
-    /// Every unresolved reference for that generation is quarantined —
+    /// Every unresolved reference for that generation is quarantined -
     /// `Reserved` included, because "import unconfirmed" never means "import
     /// certainly absent": the frontend may have imported *and* committed before
     /// its report was durably delivered.
@@ -485,7 +485,7 @@ mod tests {
     }
 
     /// The load-bearing safety property: after an unclean exit, no reference of
-    /// that generation is ever released to the application — in ANY state,
+    /// that generation is ever released to the application - in ANY state,
     /// including `Reserved`.
     #[test]
     fn quarantine_never_releases_in_any_state() {

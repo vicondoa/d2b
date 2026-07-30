@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# demo/demo.sh — the scripted attach/detach demonstration.
+# demo/demo.sh - the scripted attach/detach demonstration.
 #
 # Proves the one claim the prototype exists to make: a real Wayland application
 # survives the death of the process that is showing its window, and gets its
-# window back — with the content that was on screen — on a brand-new compositor
+# window back - with the content that was on screen - on a brand-new compositor
 # connection.
 #
 # Usage:  bash demo/demo.sh [app...]        (default: foot)

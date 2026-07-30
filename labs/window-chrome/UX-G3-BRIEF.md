@@ -1,4 +1,4 @@
-# UX-G3 — finalist review
+# UX-G3 - finalist review
 
 You are reviewing the **finalist** design for d2b's window identity chrome
 (ADR 0047), as an *interactive* surface. This gate is the last UX gate before
@@ -23,7 +23,7 @@ Directory: `/home/paydro/projects/d2b-window-chrome/labs/window-chrome/out/g3-20
 | --- | --- |
 | `collapsed.png` | At rest. Default parts row. |
 | `expanded-default.png` | Expanded. Default row: terminal, audio, usb, info, stop. |
-| `expanded-custom.png` | Expanded, with an operator config selecting only audio, usb, terminal — in that order. |
+| `expanded-custom.png` | Expanded, with an operator config selecting only audio, usb, terminal - in that order. |
 | `long-label.png` | Long workload name (`corp-workstation.work`). |
 | `personal-realm.png` | A second realm, to check identity legibility across realms. |
 
@@ -70,7 +70,7 @@ containing a single left-aligned tab.
 
 - Press **arms** a control; release **activates** it, and only if the release
   lands on the same control. A press that drags off cancels.
-- The pointer region covers the **tab only** — never the window edges, never
+- The pointer region covers the **tab only** - never the window edges, never
   guest content. Edge resize and drag are restored.
 - Layout and hit-testing are derived from **one measured list of parts**, so
   the box a control was drawn into is the box that receives its presses.

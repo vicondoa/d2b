@@ -56,7 +56,7 @@ impl Rgba {
     /// ARGB8888 little-endian bytes, the wl_shm format the proxy uses.
     ///
     /// Straight (non-premultiplied) alpha. Correct for PNG output; NOT correct
-    /// for `wl_shm`, which expects premultiplied alpha — see
+    /// for `wl_shm`, which expects premultiplied alpha - see
     /// [`Self::argb8888_premultiplied`].
     pub fn argb8888(self) -> [u8; 4] {
         [self.b, self.g, self.r, self.a]

@@ -7,7 +7,7 @@ add, remove, merge, and sharpen the candidates so we build the right thing once.
 
 d2b is a NixOS desktop framework that runs applications inside per-VM isolation
 ("work" VM, "personal" VM, a media VM, and so on). Their windows appear on the
-host compositor — **niri**, a scrollable-tiling Wayland compositor — side by
+host compositor - **niri**, a scrollable-tiling Wayland compositor - side by
 side with each other and with host apps.
 
 The user MUST be able to tell, at a glance, which VM a window belongs to.
@@ -25,12 +25,12 @@ A 9-pixel-wide colored rail down the entire left edge of every window, with the
 VM name drawn as a 5×7 bitmap font, rotated 90°, and stretched 1× horizontally
 by 2× vertically to fit.
 
-Screenshots (view these — they are the actual current product):
+Screenshots (view these - they are the actual current product):
 
-- `lab/out/baseline-rail-focused.png` — the rail on a focused window, freshly
+- `lab/out/baseline-rail-focused.png` - the rail on a focused window, freshly
   captured in a pinned nested niri (window 880×560, gaps 16, border 4px,
   corner radius 8, niri border `#7fc8ff`, VM accent `#ffa500`).
-- `lab/out/baseline-rail-detail.png` — detail crop of the rail itself.
+- `lab/out/baseline-rail-detail.png` - detail crop of the rail itself.
 
 Confirmed defects, read from the source:
 
@@ -54,7 +54,7 @@ An **elegant, functional, minimal, accessible** identity affordance that:
 - integrates with niri's visual language instead of fighting it;
 - never blocks interaction it does not own;
 - is **clickable**, opening a menu of per-VM actions;
-- is customizable like waybar — ordered "parts", a declarative config, and a
+- is customizable like waybar - ordered "parts", a declarative config, and a
   stylesheet sharing `/etc/d2b/ui-colors.css` with our sibling tools
   (`d2b-wlcontrol`, `d2b-clip-picker`, `d2b-wlterm`).
 
@@ -86,7 +86,7 @@ These are facts, not opinions. Design within them.
    corner radius, gaps-between-tabs.
 4. **niri honours `xdg_toplevel.move` and `xdg_toplevel.resize`** from clients,
    in both tiling and floating modes. A tab can therefore offer drag-move and
-   drag-resize — niri has no native border-drag resize, so this is a genuine
+   drag-resize - niri has no native border-drag resize, so this is a genuine
    capability gain.
 5. **Layer-shell surfaces cannot track a window.** `zwlr_layer_shell_v1`
    anchors to screen edges only; it cannot be positioned under a specific
@@ -109,7 +109,7 @@ clipping at +0.12 em letter-spacing · visible keyboard focus state, ≥ 3:1 ·
 identity survives a grayscale render · CVD-safe palette · no flashing, respect
 `prefers-reduced-motion` · identity ALSO carried in the `xdg_toplevel` title
 (`[work] Firefox`) and app_id, because screen readers cannot see proxy-painted
-pixels — this is the only true AT channel.
+pixels - this is the only true AT channel.
 
 ## Prior art worth knowing
 
@@ -169,7 +169,7 @@ Specifically:
 
 - Which variants should be **cut** outright, and why?
 - Which should be **merged** or reframed?
-- What is **missing** from the slate — is there an obviously better placement,
+- What is **missing** from the slate - is there an obviously better placement,
   form, or interaction model nobody listed?
 - Where does the slate violate the constraints or the accessibility floor?
 - Is the menu's content and structure right? What should be removed?
@@ -200,5 +200,5 @@ Return **only** a JSON object:
 ```
 
 `signoff` is `true` **iff** `recommendations` is `[]`. On a first-round design
-review, findings are expected — do not sign off just to be agreeable, and do
+review, findings are expected - do not sign off just to be agreeable, and do
 not invent findings to look thorough.

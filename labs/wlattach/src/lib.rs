@@ -1,4 +1,4 @@
-//! `d2b-wlattach` — reconnectable Wayland application forwarding (prototype).
+//! `d2b-wlattach` - reconnectable Wayland application forwarding (prototype).
 //!
 //! *tmux for GUI apps.* A persistent **session host** owns the application's
 //! Wayland connection and all of its surface state. A disposable **window
@@ -10,8 +10,8 @@
 //!
 //! # Layout
 //!
-//! * [`model`] — pure state machines. No file descriptors, no Wayland types.
-//! * [`wire`] — the session-host/frontend protocol: DTOs and the
+//! * [`model`] - pure state machines. No file descriptors, no Wayland types.
+//! * [`wire`] - the session-host/frontend protocol: DTOs and the
 //!   `SOCK_SEQPACKET` + `SCM_RIGHTS` transport.
 
 pub mod model;

@@ -51,7 +51,7 @@ pub enum Role {
     Popup,
 }
 
-/// A buffer handed to the frontend. Pixel data never appears here — descriptors
+/// A buffer handed to the frontend. Pixel data never appears here - descriptors
 /// travel out of band via `SCM_RIGHTS`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BufferRef {
@@ -255,7 +255,7 @@ mod tests {
         assert_eq!(b.expected_fds(), 1);
     }
 
-    /// Buffer references must survive the wire intact — losing `flags` or a
+    /// Buffer references must survive the wire intact - losing `flags` or a
     /// per-plane modifier reconstructs visibly wrong content.
     #[test]
     fn buffer_ref_preserves_flags_and_per_plane_modifiers() {

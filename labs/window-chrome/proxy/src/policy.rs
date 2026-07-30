@@ -362,14 +362,14 @@ impl FilterPolicy {
     /// Rules:
     /// - If the value already starts with our exact identity prefix, pass through unchanged.
     /// - If the value starts with `d2b.<other>.`, prepend our prefix so it becomes
-    ///   `d2b.<this>.d2b.<other>....` — spoof prevention.
+    ///   `d2b.<this>.d2b.<other>....` - spoof prevention.
     /// - Otherwise prepend our prefix unconditionally.
     pub fn rewrite_app_id(&self, guest_value: &str) -> String {
         let guest_value = sanitize_rewritten_label(guest_value);
         if self.app_id_prefix.is_empty() {
             return guest_value;
         }
-        // Already has our exact prefix — pass through.
+        // Already has our exact prefix - pass through.
         if guest_value.starts_with(&self.app_id_prefix) {
             return guest_value;
         }
@@ -495,7 +495,7 @@ fn default_classified_entries() -> HashMap<String, PolicyEntry> {
     entry!("xdg_activation_token_v1", Allow, AppDefault);
     entry!("xdg_toplevel_tag_manager_v1", Allow, AppDefault);
 
-    // Input protocols — standard app-level input
+    // Input protocols - standard app-level input
     entry!("zwp_relative_pointer_manager_v1", Allow, AppDefault);
     entry!("zwp_pointer_constraints_v1", Allow, AppDefault);
     entry!("zwp_pointer_gestures_v1", Allow, AppDefault);
@@ -563,7 +563,7 @@ fn default_classified_entries() -> HashMap<String, PolicyEntry> {
     // --- security-context (disabled by default) ---
     entry!("wp_security_context_manager_v1", Deny, OffDefault);
 
-    // Legacy wl_shell — disabled
+    // Legacy wl_shell - disabled
     entry!("wl_shell", Deny, OffDefault);
 
     m
@@ -899,7 +899,7 @@ mod tests {
     #[test]
     fn app_id_cross_vm_spoof_gets_double_prefix() {
         let p = policy_for("work");
-        // Guest sends a value pre-prefixed for a different VM — must not be
+        // Guest sends a value pre-prefixed for a different VM - must not be
         // accepted as already-prefixed for this VM.
         let spoof = "d2b.personal.org.example.app";
         assert_eq!(

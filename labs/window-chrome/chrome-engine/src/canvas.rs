@@ -63,8 +63,8 @@ impl Canvas {
     /// right corners and a shared vertical radius, optionally clipped to a
     /// horizontal band.
     ///
-    /// The clip lets a caller paint part of a rounded shape — an accent bar
-    /// inside a card, say — so that the painted region follows the shape's
+    /// The clip lets a caller paint part of a rounded shape - an accent bar
+    /// inside a card, say - so that the painted region follows the shape's
     /// curve on one side and is straight on the other, without introducing a
     /// second, non-parallel curve.
     #[allow(clippy::too_many_arguments)]

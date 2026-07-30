@@ -219,7 +219,7 @@ mod tests {
     #[test]
     fn rate_limiter_suppresses_after_max() {
         let mut rl = DiagRateLimiter::new("test-vm".to_owned());
-        // Emit MAX_PER_WINDOW events for the same key — all should pass.
+        // Emit MAX_PER_WINDOW events for the same key - all should pass.
         for _ in 0..MAX_PER_WINDOW {
             let emitted = rl.emit("test-event", "test-label", || "msg".to_owned());
             assert!(emitted);

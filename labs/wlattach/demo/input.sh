@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# demo/input.sh — prove keyboard and pointer actually reach the application,
+# demo/input.sh - prove keyboard and pointer actually reach the application,
 # including after a detach/attach cycle.
 #
 # Input is injected into the session host's own stream rather than through a
 # virtual-input tool, because tools like wtype install their own keymap and so
-# send keycodes that mean nothing under ours — which looks exactly like a broken
+# send keycodes that mean nothing under ours - which looks exactly like a broken
 # input path when it isn't.
 set -uo pipefail
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# demo/visual.sh — verify what is actually ON SCREEN, not just what crossed the
+# demo/visual.sh - verify what is actually ON SCREEN, not just what crossed the
 # wire.
 #
 # Every other test here asserts protocol events or process liveness. Those can

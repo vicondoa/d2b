@@ -26,7 +26,7 @@ lab_log "nested niri exited rc=$rc"
 if compgen -G "$LAB_OUT/*.status" > /dev/null; then
   lab_log "status: $(cat "$LAB_OUT"/*.status | tr '\n' ' ')"
 else
-  lab_log "NO STATUS FILE — capture did not complete"
+  lab_log "NO STATUS FILE - capture did not complete"
   tail -30 "$LAB_OUT/niri.log" >&2
   exit 1
 fi

@@ -1,22 +1,22 @@
-# UX-G1 round 2 — revised design
+# UX-G1 round 2 - revised design
 
 Round 1 returned **0/8**. This is the revision. Every cut below is traceable to
 a finding; nothing was dropped for convenience.
 
 ## What round 1 killed
 
-- **V2, V4, V8** — identity that disappears at rest. 8/8.
-- **V5** — left-edge contention; collides with niri's native tab indicator
-  (default Left, x = −9 px). 7/8.
-- **V6** — weak scan priority and association. 7/8 (one seat allowed it as an
+- **V2, V4, V8** - identity that disappears at rest. 8/8.
+- **V5** - left-edge contention; collides with niri's native tab indicator
+  (default Left, x = -9 px). 7/8.
+- **V6** - weak scan priority and association. 7/8 (one seat allowed it as an
   optional placement; not carried).
-- **The waybar module model** — `modules-left/center/right`, `format`,
+- **The waybar module model** - `modules-left/center/right`, `format`,
   `interval`, `tooltip`, arbitrary `on-click`. 8/8.
-- **`custom/exec`** — the proxy must never execute user shell strings or render
+- **`custom/exec`** - the proxy must never execute user shell strings or render
   their output in trusted identity chrome. 8/8.
-- **The anchored GTK companion tab** — `zwlr_layer_shell_v1` anchors to screen
+- **The anchored GTK companion tab** - `zwlr_layer_shell_v1` anchors to screen
   edges and cannot track a window through niri's scrolling layout. 7/8.
-- **Menu as a control centre** — sliders, USB picker, IP, uptime, closure
+- **Menu as a control centre** - sliders, USB picker, IP, uptime, closure
   detail, restart, stop. Moved to `d2b-wlcontrol`.
 
 ## The geometric fact that dissolved the V1/V7-vs-V3 split
@@ -30,7 +30,7 @@ choice left is whether the band is painted or transparent.
 It also settles the operator's question: **niri's border cannot literally wrap
 around a protruding tab.** Client subsurfaces render above the compositor
 border, so a tab can only paint over it. Reserving geometry makes niri draw its
-ordinary border around the tab-inclusive rectangle — the honest version of the
+ordinary border around the tab-inclusive rectangle - the honest version of the
 wish, and the better-looking one.
 
 ## The design
@@ -38,26 +38,26 @@ wish, and the better-looking one.
 **Name:** the *window identity tab*.
 
 **Geometry.** Reserve **32 logical px** at the top of the wrapper's declared
-window geometry; guest content is offset below. 32 rather than 22–28 because the
+window geometry; guest content is offset below. 32 rather than 22-28 because the
 input region must be 32×32 and must live entirely inside reserved chrome,
 overlapping neither guest content nor resize zones.
 
 **Composition, left to right:**
 
-- **Identity button** — visible face ≥ 24 px high, input region 32×32.
+- **Identity button** - visible face ≥ 24 px high, input region 32×32.
   Neutral surface, high-contrast neutral text, **4 px VM accent rule**. The
   accent is never the text background.
-- **Label** — canonical lowercase (`work`, `corp-workstation.work`), 14 px
+- **Label** - canonical lowercase (`work`, `corp-workstation.work`), 14 px
   default / 12 px absolute floor, weight 600, text-driven width, survives
   +0.12 em tracking and 200% text scaling. The distinguishing portion is never
   auto-ellipsized; long labels wrap once at the realm delimiter, or use a
   configured, uniqueness-checked short name. The full name always remains in the
   menu, the window title, and the accessible name.
-- **State badges, right-aligned** — text + glyph, present only when the
+- **State badges, right-aligned** - text + glyph, present only when the
   condition is real: `MIC` while capture is actually active, `USB` while a
   device is attached, `UPDATE` for pending restart. Sourced from trusted daemon
   state, never from the guest.
-- **Remainder of the band** — optional drag-move region with a drag threshold.
+- **Remainder of the band** - optional drag-move region with a drag threshold.
   No drag-resize.
 
 **Always visible.** Focused, unfocused, fullscreen, windowed-fullscreen, and in
@@ -74,7 +74,7 @@ available range is 1.0. Persistent unique **text** is the identity; colour and a
 tested glyph/shape reinforce it. This is independently confirmed by the engine's
 contrast tests: for mid-tone fills, *neither* black nor white text reaches
 4.5:1, so small text on an arbitrary accent fill is unfixable by any
-auto-contrast rule — hence neutral plate plus accent rule.
+auto-contrast rule - hence neutral plate plus accent rule.
 
 ## Prototype slate (2 candidates, 3 controls)
 
@@ -100,8 +100,8 @@ Round 1 produced a genuine conflict rather than a consensus:
 
 - Positioning says **proxy-owned `xdg_popup`**: it tracks the window by
   construction, the guest cannot cover it, and layer-shell cannot do this.
-- Accessibility says a raw proxy-painted popup has **no AT-SPI at all** — no
-  role, name, expanded state, or menu-item semantics — and that keyboard
+- Accessibility says a raw proxy-painted popup has **no AT-SPI at all** - no
+  role, name, expanded state, or menu-item semantics - and that keyboard
   navigation without AT-SPI is not accessibility.
 
 Both seats independently proposed the same resolution: an **accessible
@@ -109,9 +109,9 @@ toolkit-backed surface that is still an `xdg_popup` of the trusted wrapper**.
 Whether that is achievable is an open technical question, so the prototype
 treats it as a spike and measures both paths:
 
-1. **P1 — proxy-painted `xdg_popup`.** Tracking, trust, and dismissal
+1. **P1 - proxy-painted `xdg_popup`.** Tracking, trust, and dismissal
    behaviour. Establishes the positioning baseline and the AT-SPI floor (zero).
-2. **P2 — accessible toolkit surface.** Real AT-SPI role/name/state, verified
+2. **P2 - accessible toolkit surface.** Real AT-SPI role/name/state, verified
    with Orca and Accerciser on niri. Measures what it costs in tracking fidelity.
 
 Deliverable is evidence for the ADR, not two shipped implementations.
@@ -156,7 +156,7 @@ both the JSON and CSS contracts.
    `sanitize_rewritten_label` (`packages/d2b-wayland-proxy/src/policy.rs`)
    strips ANSI escapes and `char::is_control()`, but `is_control()` covers only
    Unicode category Cc. U+202E RLO, U+202D LRO, and U+2067 RLI are category Cf
-   and pass through — verified empirically. The title is a load-bearing identity
+   and pass through - verified empirically. The title is a load-bearing identity
    channel, so this is a spoofing vector.
 2. **Title prefixes stack.** A guest in `personal` that titles itself
    `[work] Firefox` yields `[personal] [work] Firefox`. Fix: a host-owned
@@ -192,5 +192,5 @@ Review this revision against your round-1 findings.
 - Is 32 px the right reservation? What is the honest cost in a stacked column?
 
 Return the same JSON shape. `signoff` is `true` iff `recommendations` is `[]`.
-Sign off if the design is now sound — do not manufacture findings to appear
+Sign off if the design is now sound - do not manufacture findings to appear
 rigorous, and do not withhold sign-off over preferences you would not block on.

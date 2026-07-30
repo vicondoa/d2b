@@ -14,8 +14,8 @@
 
 `d2b-wayland-proxy` wraps every proxied guest toplevel in a proxy-owned wrapper
 `xdg_toplevel` and paints a 9 px full-window-height rail down its left edge.
-The rail exists to answer one question — *which VM does this window belong to?*
-— and it answers it badly.
+The rail exists to answer one question - *which VM does this window belong to?*
+- and it answers it badly.
 
 Read from the code, the defects are:
 
@@ -34,7 +34,7 @@ Read from the code, the defects are:
    hang the per-VM actions operators actually want.
 
 A 9 px hit target also fails WCAG 2.2 SC 2.5.8, and the rail's automatic text
-colour uses a weighted-sum brightness threshold rather than a contrast ratio —
+colour uses a weighted-sum brightness threshold rather than a contrast ratio -
 see [Colour selection](#colour-selection) for how badly that behaves.
 
 ### What the compositor allows
@@ -45,8 +45,8 @@ nested and then a live session.
 
 - **Client subsurfaces render above niri's border.** `tile.rs`'s render path
   pushes window content before the border, so a surface drawn outside window
-  geometry paints *over* the border. The intuitive request — "give the window a
-  tab and let niri's border wrap around it" — is therefore not implementable.
+  geometry paints *over* the border. The intuitive request - "give the window a
+  tab and let niri's border wrap around it" - is therefore not implementable.
   This eliminated every placement outside declared geometry.
 - **niri does not advertise `zxdg_decoration_manager_v1`.** It is absent from
   all 41 globals. There is consequently no negotiation to perform, and the
@@ -57,7 +57,7 @@ nested and then a live session.
   window.
 
 Conversely, because the chrome lives *inside* declared geometry,
-`clip-to-geometry true` **improves** it — the compositor rounds its corners —
+`clip-to-geometry true` **improves** it - the compositor rounds its corners -
 rather than clipping it away.
 
 ## Decision
@@ -108,8 +108,8 @@ Layout and hit-testing derive from **one measured list of parts**.
 
 This is the central implementation decision, and it is a correctness decision
 before it is a customization one. The prototype initially had three independent
-copies of the same arithmetic — one to lay out, one to hit-test, one to size
-the expansion — which have to agree about padding, tracking, icon pitch and
+copies of the same arithmetic - one to lay out, one to hit-test, one to size
+the expansion - which have to agree about padding, tracking, icon pitch and
 separator width forever. They disagreed three separate times during
 prototyping. That is what the operator experienced as "clicking doesn't select
 the item I click on" and "clicks sometimes don't register".
@@ -136,15 +136,15 @@ Actions draw an **icon plus a text label** by default.
 
 Three independent accessibility reviews rejected a row of bare glyphs. They
 were right: a glyph can accelerate a label, but it cannot replace one, and the
-actions that open further controls — audio level, USB device list, VM details —
+actions that open further controls - audio level, USB device list, VM details -
 cannot be guessed from a mark at all.
 
 `compact-actions` restores the icon-only row for operators who have learned the
 icons. It is recorded as a deliberate accessibility trade-off, not a supported
 default.
 
-The action vocabulary names outcomes rather than subsystems — `open-terminal`,
-`audio-controls`, `usb-devices`, `vm-details`, `stop-vm` — because a config
+The action vocabulary names outcomes rather than subsystems - `open-terminal`,
+`audio-controls`, `usb-devices`, `vm-details`, `stop-vm` - because a config
 that reads as a list of outcomes is one an operator can predict without
 consulting a table. Each action declares whether it is **destructive** or
 **opens further controls**, so a dispatcher cannot treat `stop-vm` as an
@@ -155,8 +155,8 @@ ordinary one-release activation.
 One tier is not enough. A volume level, a USB device list and a VM's full
 details cannot be expressed as icon toggles.
 
-- **Tier 1** — the expanded row. Labelled, immediate actions.
-- **Tier 2** — a proxy-drawn `xdg_popup` for actions whose `opens_submenu` flag
+- **Tier 1** - the expanded row. Labelled, immediate actions.
+- **Tier 2** - a proxy-drawn `xdg_popup` for actions whose `opens_submenu` flag
   is set, and for confirming destructive ones.
 
 Tier 2 is drawn by the proxy rather than by a companion process. A companion
@@ -180,7 +180,7 @@ Automatic label colour is chosen by **WCAG contrast ratio**, not brightness.
 The proxy currently uses a weighted-sum brightness threshold. That omits the
 sRGB transfer function and therefore over-estimates saturated colours. Measured
 across 592 704 sampled colours it selects text below WCAG AA for **88 702** of
-them, worst case **1.94:1** at `rgb(0, 216, 9)` — a colour an operator might
+them, worst case **1.94:1** at `rgb(0, 216, 9)` - a colour an operator might
 plausibly choose as a realm accent.
 
 Choosing the better of black and white always clears AA, but only just: the
@@ -190,7 +190,7 @@ in the proof so a regression in either direction is visible.
 ### Identity is realm and workload, from a trusted source
 
 The label names **both the realm and the workload**, and comes from host-side
-configuration — never from guest-supplied title text.
+configuration - never from guest-supplied title text.
 
 A realm-only label cannot distinguish two workloads in the same realm, and a
 workload-only label cannot distinguish the same workload name across realms.
@@ -208,7 +208,7 @@ The label is what an operator reads before deciding which realm to type a
 password into, so a workload name must not be able to lie about itself.
 
 `char::is_control` is not sufficient. It covers Unicode category Cc, while the
-overrides that reverse rendered text — U+202E and friends — are category Cf and
+overrides that reverse rendered text - U+202E and friends - are category Cf and
 pass straight through. A workload named `work\u{202E}lamron` renders as
 `worknormal`.
 
@@ -223,8 +223,8 @@ realm and workload identity live.
 The proxy owns the band's pixels, so a guest cannot draw *in* the band. But a
 guest controls every pixel below it, and a real toolkit can render a
 pixel-exact copy of the tab. The adversarial capture
-(`labs/window-chrome/SPOOF-FINDINGS.md`) stages both the obvious attack — a
-fake tab flush beneath the real one — and the dangerous one: a fake window
+(`labs/window-chrome/SPOOF-FINDINGS.md`) stages both the obvious attack - a
+fake tab flush beneath the real one - and the dangerous one: a fake window
 frame, complete with its own tab and a password prompt, drawn inside a
 different realm's window.
 
@@ -281,7 +281,7 @@ finished product.
 | A5 | Actions carry text labels by default. Icon-only is opt-in and documented as a trade-off. |
 | A6 | Keyboard access: a configurable host shortcut enters the chrome, with visible focus, traversal, Enter/Space activation, Escape collapse, and reliable focus return to the guest. This extends to tier 2: lists, sliders and confirm/cancel controls are all keyboard-operable, focus entry is deterministic, and focus is never trapped. |
 | A7 | The AT-SPI gap is documented, not papered over. Screen readers cannot see proxy-drawn pixels; the existing `--title-prefix` identity path is retained as the accessible fallback for *identity*, and is explicitly **not** an equivalent for the *actions*. Before `--title-prefix` is described as an identity fallback in shipped docs, it is verified end to end under niri with a real AT-SPI screen reader. Every action requires either AT-SPI exposure or a verified screen-reader-operable equivalent. |
-| A8 | Bidirectional overrides and other render-changing Unicode (U+202A–U+202E, U+2066–U+2069, zero-width and soft-hyphen characters) are removed from identity text before shaping. `char::is_control` covers category Cc only and does not catch these. |
+| A8 | Bidirectional overrides and other render-changing Unicode (U+202A-U+202E, U+2066-U+2069, zero-width and soft-hyphen characters) are removed from identity text before shaping. `char::is_control` covers category Cc only and does not catch these. |
 
 ### Security
 
@@ -291,7 +291,7 @@ finished product.
 | S2 | Identity-verification failure blocks guest pixels and renders a proxy-owned degraded placeholder. Visible guest content is never left unlabelled. |
 | S3 | Realm accents are validated for mutual distinguishability, and identity remains legible without colour. |
 | S4 | Destructive actions require a confirmation that names the realm and workload. |
-| S5 | An adversarial capture — a guest drawing a pixel-matched fake tab directly below the real one, and a fake nested window — is produced and reviewed before the implementation wave closes. **Satisfied**: `labs/window-chrome/SPOOF-FINDINGS.md`. |
+| S5 | An adversarial capture - a guest drawing a pixel-matched fake tab directly below the real one, and a fake nested window - is produced and reviewed before the implementation wave closes. **Satisfied**: `labs/window-chrome/SPOOF-FINDINGS.md`. |
 | S6 | Action dispatch belongs to the daemon. The surface that draws the icon reports the intent; it does not perform it. |
 | S7 | The identity label names both realm and workload, sourced from host configuration and never from guest-supplied title text. Truncation always preserves the realm; the untruncated canonical identifier is available in `vm-details`. |
 | S8 | Every tier-2 popup and every security-sensitive result repeats the verified realm and workload. A USB attachment names its target before commitment, and a terminal opened from the tab does not accept keyboard input until it is displaying verified chrome. |
@@ -317,7 +317,7 @@ finished product.
 | I3 | Repeat-click handling: double-clicking disclosure does not expand-then-collapse, and a pending one-shot action cannot activate twice. |
 | I4 | Tier-2 popup semantics are defined: placement relative to the invoking control, deterministic initial focus, traversal order, outside-click dismissal, Escape returning focus to the invoking control, dismissal on window deactivation, and a safe default focus (cancel) for destructive confirmation. |
 | I5 | Dispatched actions have visible disabled, pending, success and failure states. A pending control stays locked until the daemon acknowledges, and a failure is surfaced next to the invoking control rather than only in logs. |
-| I6 | Destructive actions are presented as destructive — last in the row, visually separated, and danger-styled — regardless of customization. `is_destructive` affects presentation as well as dispatch. |
+| I6 | Destructive actions are presented as destructive - last in the row, visually separated, and danger-styled - regardless of customization. `is_destructive` affects presentation as well as dispatch. |
 
 ### Customization
 
@@ -328,7 +328,7 @@ finished product.
 | K3 | A renderer-neutral style contract backed by `ui-colors.json` and mirrored into `ui-colors.css`: chrome surface, foreground, outline, focus, state tokens, and bounded global font/spacing/radius options. Light and dark palette behaviour is defined, and representative captures of both are reviewed. |
 | K4 | Identity appears exactly once, is the first part, and the disclosure control immediately follows it; `expanded` must preserve `collapsed` as an ordered prefix. |
 | K5 | Rows, spacers and total width are bounded, with actionable errors. |
-| K6 | `activity-status` has a defined contract: its trusted data source, the composition and priority of its tokens, its empty state, its label, what activating it does, and whether it may be omitted. Safety-relevant activity — microphone in use, USB devices attached — is not suppressible by configuration. Capabilities the workload merely *has* belong in `vm-details`, not in the row. |
+| K6 | `activity-status` has a defined contract: its trusted data source, the composition and priority of its tokens, its empty state, its label, what activating it does, and whether it may be omitted. Safety-relevant activity - microphone in use, USB devices attached - is not suppressible by configuration. Capabilities the workload merely *has* belong in `vm-details`, not in the row. |
 | K7 | The operator-facing Nix schema is documented alongside the wire form: canonical option paths, site and per-VM replacement semantics, `compactActions`, a typed spacer, bounds, and worked examples. `spacer:<px>` is generated wire data and is not the documented authoring form. |
 
 ## Configuration contract
@@ -367,11 +367,11 @@ not configurable.
 Configurations are **validated, not merely parsed**. Refused, with a message
 naming the valid parts:
 
-- a row without `identity`, or with more than one — an unlabelled window is the
+- a row without `identity`, or with more than one - an unlabelled window is the
   failure this surface exists to prevent, and two identities are worse than
   none;
 - a row that does not *begin* with `identity`, or where `disclosure` does not
-  immediately follow it — position is what distinguishes the real tab from a
+  immediately follow it - position is what distinguishes the real tab from a
   forgery, so it is not negotiable;
 - an `expanded` row that does not preserve `collapsed` as an ordered prefix,
   which would move identity at the moment the user is aiming at it;
@@ -412,7 +412,7 @@ anchors to screen edges and cannot track a window.
 
 **A GTK4 companion process rendering the menu.** Rejected. It introduces a
 second process that must be trusted to state identity truthfully, and it cannot
-render into the proxy's subsurface — one process cannot draw into another's.
+render into the proxy's subsurface - one process cannot draw into another's.
 The same reasoning rules out reusing `d2b-wlcontrol`'s Quickshell stack, which
 is a separate-process layer-shell surface.
 

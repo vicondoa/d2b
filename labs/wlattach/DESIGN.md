@@ -7,20 +7,20 @@ session that produced it.
 ## The problem
 
 Wayland object ids are scoped to a `wl_display` connection. When that connection
-dies, every object dies with it — surfaces, roles, buffers, callbacks, serials,
+dies, every object dies with it - surfaces, roles, buffers, callbacks, serials,
 registry bindings. Nothing survives. So "reconnect the proxy" is not a thing that
 can be done: the persistent side must be a real Wayland **server** owning the
 full surface tree, able to materialise it onto a fresh connection on demand.
 
 ## Two processes
 
-**Session host** (persistent) — a Smithay `wayland-server`. Owns the
+**Session host** (persistent) - a Smithay `wayland-server`. Owns the
 application's connection, the shadow surface tree, the buffer ledger, a synthetic
 seat and outputs, and frame pacing. It **never renders**: no EGL, no Vulkan, no
 GBM, and no GPU-side `unsafe`. (Reading `wl_shm` pixels needs one audited
-`unsafe` expression — see "Unsafe" below.)
+`unsafe` expression - see "Unsafe" below.)
 
-**Window frontend** (disposable) — a `wayland-client`. Rebuilt from scratch on
+**Window frontend** (disposable) - a `wayland-client`. Rebuilt from scratch on
 every attach; holds no durable state.
 
 They are *designed* to be connected by an inherited `AF_UNIX`
@@ -35,7 +35,7 @@ framebuffer descriptors.
 > seqpacket channel becomes load-bearing when DMA-BUF descriptors need to move.
 
 Because both halves share a machine, DMA-BUF descriptors move by `SCM_RIGHTS`
-instead of being serialised — **zero pixel copies on the steady-state path.**
+instead of being serialised - **zero pixel copies on the steady-state path.**
 
 ## The buffer ledger
 
@@ -51,15 +51,15 @@ Conflating any two of these is unsafe:
 | Id | What it is |
 | --- | --- |
 | `BackingId` | the storage (dmabuf planes / shm pool), shareable |
-| `AppBufferId` | the application's `wl_buffer` object — **reusable** |
+| `AppBufferId` | the application's `wl_buffer` object - **reusable** |
 | `BufferUseId` | one attach-to-release **epoch** |
 
 Release is owed **once per epoch**, not once per object. Clients reuse buffers
 constantly; owing one release per object stalls any double-buffered client.
 
 An epoch opens on the first attach while the buffer is idle. A further attach
-while it is still busy — the same buffer on a second surface, or a reattach
-before it drains — **joins** the open epoch. Opening a second epoch would emit a
+while it is still busy - the same buffer on a second surface, or a reattach
+before it drains - **joins** the open epoch. Opening a second epoch would emit a
 release while another surface is still reading.
 
 ### Four downstream states
@@ -82,19 +82,19 @@ reference already `HostHeld`, and it is quarantined rather than silently lost.
 ### Quarantine
 
 On an unclean frontend exit the socket queue is drained and applied **first**,
-then every unresolved reference — `Reserved` included — becomes `Quarantined`.
+then every unresolved reference - `Reserved` included - becomes `Quarantined`.
 `Reserved` is included because "import unconfirmed" never means "import
 certainly absent": the frontend may have imported *and* committed before its
 report was durably delivered.
 
 **Quarantine is never cleared before session end.** No timer, no heuristic, and
-specifically not "a replacement frame was presented" — the compositor may
+specifically not "a replacement frame was presented" - the compositor may
 process the new connection before the old hangup, the replacement may land on a
 different output, and the new event refers to an unrelated surface on an
 unrelated connection. Elapsed time and unrelated presentations are not evidence.
 
 The honest consequence: graceful `detach` is exact and quarantines nothing. A
-*forced kill* is fail-safe but not cost-free — in-flight buffers stay busy for
+*forced kill* is fail-safe but not cost-free - in-flight buffers stay busy for
 the rest of the session, and repeated forced kills of an app with a small fixed
 pool can stall it. We would rather stall than corrupt.
 
@@ -106,7 +106,7 @@ pool can stall it. We would rather stall than corrupt.
 | --- | --- |
 | `detach` | `suspended` + callbacks withheld; graceful drain. **No close sent.** |
 | frontend crash | same detached state; quarantine; reported, not hidden |
-| compositor close request | `xdg_toplevel.close` forwarded **only** to that toplevel — it is advisory, and the app decides |
+| compositor close request | `xdg_toplevel.close` forwarded **only** to that toplevel - it is advisory, and the app decides |
 | client-drawn X (CSD) | ordinary input; the app destroys its own objects. Not a close event at all. |
 
 The session ends only when the application's connection/process exits.
@@ -114,8 +114,8 @@ The session ends only when the application's connection/process exits.
 ## While detached
 
 Frame callbacks are withheld and `xdg_toplevel.suspended` is set (version-gated
-to clients bound at xdg-shell v6+). The application keeps running — timers,
-network and background work all continue — it simply stops drawing, exactly like
+to clients bound at xdg-shell v6+). The application keeps running - timers,
+network and background work all continue - it simply stops drawing, exactly like
 a minimised window. `suspended` is advisory, so "zero GPU while detached" is
 typical rather than guaranteed.
 
@@ -135,7 +135,7 @@ session host issues its own serial space and never forwards the compositor's.
 
 The retained frame rarely matches the compositor's new configure exactly (a
 tiling compositor will size the window differently), so the frontend owns the
-surface's single `wp_viewport` — only one may exist per surface — and *composes*
+surface's single `wp_viewport` - only one may exist per surface - and *composes*
 the retained client viewport, buffer scale, transform and the recovery fit,
 restoring client state atomically on the app's first normal redraw.
 
@@ -157,7 +157,7 @@ unsafe.
 
 That module deliberately **does not build a `&[u8]`** over the pool. The pool is
 client-writable shared memory, and a Rust reference promises no concurrent
-mutation — a promise the client is under no obligation to keep, which would be
+mutation - a promise the client is under no obligation to keep, which would be
 undefined behaviour. It copies byte-by-byte with `read_volatile` into owned
 storage, under checked arithmetic, a null check, an `end <= len` bound and a
 64 MiB cap. The accepted residual is that a racing client can produce a **torn**

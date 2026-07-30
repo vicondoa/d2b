@@ -6,7 +6,7 @@
 //! the wrong boundary and produced white fringes; concentric corners were
 //! approximated with ellipses that could not stay parallel; and a damage
 //! rectangle kept the axes of an older layout. A rasterizer removes the first
-//! two categories entirely — `Pixmap` is premultiplied by definition, and a
+//! two categories entirely - `Pixmap` is premultiplied by definition, and a
 //! stroked path is concentric with its fill by construction.
 //!
 //! Why not the toolkit `d2b-wlcontrol` uses: Quickshell renders its own
@@ -39,7 +39,7 @@ fn paint_of(c: Rgba) -> Paint<'static> {
 }
 
 /// Build a rounded-rectangle path. Corners are real arcs, so a stroke of this
-/// path is concentric with a fill of it — which is what keeps the accent border
+/// path is concentric with a fill of it - which is what keeps the accent border
 /// parallel to the card edge no matter the radius.
 pub fn rounded_rect_path(
     x: f32,

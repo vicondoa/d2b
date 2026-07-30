@@ -425,7 +425,7 @@ impl SessionHost {
 ///
 /// Serials are minted here, in the session host's own space. Serials from the
 /// frontend's compositor connection are never forwarded: they belong to a
-/// different connection and would be meaningless — or worse, misinterpreted —
+/// different connection and would be meaningless - or worse, misinterpreted -
 /// on this one.
 pub fn apply_input(state: &mut SessionHost, ev: crate::wire::dto::InputEvent) {
     use crate::wire::dto::InputEvent as E;
@@ -573,7 +573,7 @@ pub fn apply_input(state: &mut SessionHost, ev: crate::wire::dto::InputEvent) {
 ///
 /// Clients render on the frame-callback clock: draw once, request a callback,
 /// and wait. Nothing here ever ran that clock, so an application would render a
-/// single frame and then freeze — accepting input but never able to show the
+/// single frame and then freeze - accepting input but never able to show the
 /// result.
 ///
 /// This is also exactly the lever the design uses for detach: while no frontend

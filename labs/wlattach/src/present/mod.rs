@@ -202,7 +202,7 @@ impl Frontend {
     ///
     /// The pool and buffer are reused whenever the geometry is unchanged. The
     /// session host writes new pixels into the same file in place, so a redraw
-    /// is just damage plus commit — no allocation and no round-trip.
+    /// is just damage plus commit - no allocation and no round-trip.
     fn flush_pending(&mut self, key: u64, qh: &QueueHandle<Self>) -> Result<(), FrontendError> {
         let px_dir = self.px_dir.clone();
         let shm = self
@@ -272,7 +272,7 @@ impl Frontend {
 
         // Re-attach every frame, even when reusing the same buffer. The session
         // host rewrites the pixels in place, and a compositor is entitled to
-        // keep its uploaded texture until a buffer is attached again — without
+        // keep its uploaded texture until a buffer is attached again - without
         // this the window shows its first frame and never updates.
         if let Some(b) = w.buffer.as_ref() {
             w.surface.attach(Some(b), 0, 0);

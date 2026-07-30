@@ -3,11 +3,11 @@
 //! Three levels of buffer identity are required; conflating any two of them was
 //! a defect in earlier designs:
 //!
-//! * [`BackingId`] — the underlying storage (dmabuf planes / shm pool).
+//! * [`BackingId`] - the underlying storage (dmabuf planes / shm pool).
 //!   Shareable across several `wl_buffer` objects.
-//! * [`AppBufferId`] — the application's `wl_buffer` object. Clients routinely
+//! * [`AppBufferId`] - the application's `wl_buffer` object. Clients routinely
 //!   **reuse** these, so it cannot own "has been released".
-//! * [`BufferUseId`] — one attach-to-release *epoch*. Release is owed once per
+//! * [`BufferUseId`] - one attach-to-release *epoch*. Release is owed once per
 //!   epoch, not once per object.
 
 use serde::{Deserialize, Serialize};

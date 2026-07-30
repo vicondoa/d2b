@@ -1,10 +1,10 @@
-XX# `d2b-wlattach` — reconnectable Wayland application forwarding (prototype)
+XX# `d2b-wlattach` - reconnectable Wayland application forwarding (prototype)
 
 *tmux for GUI apps.*
 
 A persistent **session host** owns a real application's Wayland connection and
-all of its surface state. A disposable **window frontend** — the process
-actually connected to the compositor — can be detached and re-attached at will.
+all of its surface state. A disposable **window frontend** - the process
+actually connected to the compositor - can be detached and re-attached at will.
 The application keeps running throughout and never reconnects or restarts.
 
 ```
@@ -32,7 +32,7 @@ callbacks, serials, registry bindings. Nothing is recoverable from the
 connection itself.
 
 So the persistent side cannot be a pass-through proxy pairing client objects to
-upstream objects — it has to be a real Wayland **server** that owns the full
+upstream objects - it has to be a real Wayland **server** that owns the full
 surface tree and can materialise it onto a brand-new connection on demand. That
 is the whole design.
 
@@ -92,7 +92,7 @@ reads and never forms a Rust reference over client-writable memory.
 - No screen capture, layer-shell, virtual input or foreign-toplevel protocols.
 - Exact window *placement* is not restored by the protocol; niri places a
   re-attached window as a new window. Best-effort restore via niri IPC is opt-in.
-- A *forced kill* of the frontend is safe but not free — see `DESIGN.md`
+- A *forced kill* of the frontend is safe but not free - see `DESIGN.md`
   § "Quarantine".
 
 ## Layout
@@ -100,7 +100,7 @@ reads and never forms a Rust reference over client-writable memory.
 | Path | Role |
 | --- | --- |
 | `src/model/` | Pure state machines. No descriptors, no Wayland types. |
-| `src/model/ledger.rs` | The buffer ledger — the safety-critical core. |
+| `src/model/ledger.rs` | The buffer ledger - the safety-critical core. |
 | `src/wire/` | Frontend protocol: DTOs and the seqpacket/SCM_RIGHTS transport. |
 | `src/probe/` | Phase-0 de-risking probes. |
 | `demo/` | Presentation material only. Tests live in `tests/`. |
@@ -117,7 +117,7 @@ cargo test --locked
 
 **This crate is intentionally outside CI.** It lives under `labs/`, has its own
 Cargo workspace, and is not wired into `tests/test-rust.sh` or
-`tests/test-proofs.sh` — a lab should not consume a shipping gate before it has
+`tests/test-proofs.sh` - a lab should not consume a shipping gate before it has
 proven itself. `packages/d2b-wlproxy-spike` is unwired for the same reason.
 
 Instead, the following are **mandatory phase-gate evidence**, run locally and

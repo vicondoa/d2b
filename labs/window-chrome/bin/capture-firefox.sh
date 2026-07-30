@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Capture a real application — Firefox — through the proxy inside niri.
+# Capture a real application - Firefox - through the proxy inside niri.
 #
 # Firefox draws its own client-side decorations, so this is also the test for
 # whether the trusted tab reads as chrome or as a second titlebar stacked on

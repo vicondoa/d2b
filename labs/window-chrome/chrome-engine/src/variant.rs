@@ -267,7 +267,7 @@ pub fn resolve_for(spec: &ChromeSpec, fonts: &TextRenderer) -> (ChromeOutcome, u
     let line_h = (font_px * 1.3).ceil() as u32;
     // Left furniture, equal padding on both sides of the content, the label,
     // and the chevron. Measuring it this way is what keeps the visible gap on
-    // the left — which starts after the accent bar — equal to the one on the
+    // the left - which starts after the accent bar - equal to the one on the
     // right, which starts after the hairline.
     let pad = px(spec.theme.side_pad, spec.scale);
     let button_w = px(LEFT_FURNITURE, spec.scale)

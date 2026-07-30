@@ -35,7 +35,7 @@ const MAX_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
 /// hostile or merely racy client may mutate the bytes concurrently, and Rust
 /// references carry a no-concurrent-mutation guarantee the client is under no
 /// obligation to honour. Bounds validation proves the address range is mapped;
-/// it says nothing about immutability. So we never materialise a reference — we
+/// it says nothing about immutability. So we never materialise a reference - we
 /// copy with volatile reads straight into an owned `Vec`.
 ///
 /// The residual, deliberately accepted: a client mutating the pool mid-copy can
@@ -61,7 +61,7 @@ pub fn copy_shm(buffer: &WlBuffer) -> Option<Snapshot> {
         let base = unsafe { ptr.add(offset) };
 
         // Copy a machine word at a time where alignment allows. A byte-at-a-time
-        // volatile loop over a multi-megabyte frame costs tens of milliseconds —
+        // volatile loop over a multi-megabyte frame costs tens of milliseconds -
         // the difference between a usable window and a slideshow.
         const W: usize = std::mem::size_of::<usize>();
         let mut i = 0usize;

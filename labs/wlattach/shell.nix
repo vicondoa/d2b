@@ -25,6 +25,6 @@ pkgs.mkShell {
   ];
   shellHook = ''
     export LIBRARY_PATH="${pkgs.libxkbcommon}/lib:''${LIBRARY_PATH:-}"
-    echo "d2b-wlattach dev shell — cargo test --locked"
+    echo "d2b-wlattach dev shell - cargo test --locked"
   '';
 }
