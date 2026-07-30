@@ -4,6 +4,9 @@
     "AGENTS.md",
     "tests/AGENTS.md"
   ],
+  "plugin": [
+    "@bybrawe/opencode-loop"
+  ],
   "permission": {
     "edit": "allow",
     "webfetch": "allow",
