@@ -1,0 +1,144 @@
+{
+  "$id": "https://d2bus.org/schemas/v3/ZoneLink.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Child-local uplink carrying transport and local route state for one parent edge.",
+  "properties": {
+    "apiVersion": {
+      "const": "resources.d2bus.org/v3"
+    },
+    "metadata": {
+      "additionalProperties": false,
+      "properties": {
+        "annotations": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Optional authored key-value annotation map.",
+          "type": "object"
+        },
+        "labels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Optional authored key-value label map.",
+          "type": "object"
+        },
+        "name": {
+          "description": "Zone-local resource name.",
+          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "ownerRef": {
+          "description": "Optional same-Zone ref of the owning resource.",
+          "pattern": "^[A-Z][A-Za-z0-9]{0,62}/[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "zone": {
+          "description": "Name of the Zone this resource is local to.",
+          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "zone"
+      ],
+      "type": "object"
+    },
+    "spec": {
+      "additionalProperties": false,
+      "properties": {
+        "childZoneName": {
+          "description": "Self-reported name of the child Zone; must equal metadata.zone.",
+          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "disabled": {
+          "default": false,
+          "description": "When true the session is closed and reconnect is suppressed.",
+          "type": "boolean"
+        },
+        "limits": {
+          "additionalProperties": false,
+          "description": "Bounds on routing queues, streams, and reconnect activity.",
+          "properties": {
+            "maxActiveStreams": {
+              "default": 32,
+              "description": "Maximum concurrently active named streams over this link.",
+              "maximum": 128,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "maxPendingIntents": {
+              "default": 256,
+              "description": "Maximum locally queued intents while the link is disconnected.",
+              "maximum": 1024,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "reconnectMaxAttempts": {
+              "default": 10,
+              "description": "Maximum reconnect attempts inside one reconnect window.",
+              "minimum": 1,
+              "type": "integer"
+            },
+            "reconnectWindowSecs": {
+              "default": 300,
+              "description": "Length in seconds of the reconnect attempt window.",
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "maxActiveStreams",
+            "maxPendingIntents",
+            "reconnectMaxAttempts",
+            "reconnectWindowSecs"
+          ],
+          "type": "object"
+        },
+        "transportCredentials": {
+          "default": [],
+          "description": "Same-Zone Credential refs resolved for ComponentSession establishment.",
+          "items": {
+            "pattern": "^Credential/[a-z][a-z0-9-]{0,62}$",
+            "type": "string"
+          },
+          "maxItems": 8,
+          "type": "array"
+        },
+        "transportProviderRef": {
+          "description": "Same-Zone transport Provider that owns this link's session; always explicit.",
+          "pattern": "^Provider/transport-[a-z][a-z0-9-]*$",
+          "type": "string"
+        },
+        "transportSettings": {
+          "default": {},
+          "description": "Provider-specific settings validated against the transport Provider schema.",
+          "type": "object"
+        }
+      },
+      "required": [
+        "childZoneName",
+        "disabled",
+        "limits",
+        "transportCredentials",
+        "transportProviderRef",
+        "transportSettings"
+      ],
+      "type": "object"
+    },
+    "type": {
+      "const": "ZoneLink"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "metadata",
+    "spec",
+    "type"
+  ],
+  "title": "ZoneLink",
+  "type": "object"
+}

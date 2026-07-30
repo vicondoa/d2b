@@ -160,10 +160,16 @@ let
   collidingExtraArtifactNames =
     lib.attrNames (builtins.intersectAttrs singletonArtifacts extraArtifacts);
 
+  zoneResourceBundleArtifacts = topConfig.d2b._bundle.zoneResourceBundles;
+
   centrallyInstalledArtifacts =
     lib.filterAttrs
       (_: artifact: shouldInstall artifact)
-      (singletonArtifacts // extraArtifacts);
+      (singletonArtifacts // extraArtifacts
+        // (lib.mapAttrs'
+          (zoneName: artifact:
+            lib.nameValuePair "zoneResourceBundle-${zoneName}" artifact)
+          zoneResourceBundleArtifacts));
 
 in
 {
@@ -286,6 +292,14 @@ in
       internal = true;
       visible = false;
       description = "Internal typed minijail profile artifact metadata table.";
+    };
+
+    zoneResourceBundles = lib.mkOption {
+      type = types.attrsOf artifactModule;
+      default = { };
+      internal = true;
+      visible = false;
+      description = "Internal typed per-Zone zones/<zone>/resource-bundle.json artifact metadata table.";
     };
   };
 

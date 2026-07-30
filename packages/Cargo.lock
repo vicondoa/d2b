@@ -926,12 +926,18 @@ dependencies = [
  "d2b-resource-store",
  "d2b-session",
  "d2b-session-unix",
+ "futures-util",
  "getrandom 0.3.4",
+ "protobuf",
  "quote",
  "serde",
  "serde_json",
+ "sha2",
+ "snow",
  "syn 2.0.118",
  "tokio",
+ "ttrpc",
+ "zeroize",
 ]
 
 [[package]]
@@ -1151,6 +1157,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-process-conformance"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "d2b-provider"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "d2b-zone-routing",
+ "tokio",
+]
+
+[[package]]
 name = "d2b-provider-aca"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -1188,6 +1212,49 @@ dependencies = [
  "tracing",
  "urlencoding",
  "webpki-roots 0.26.11",
+]
+
+[[package]]
+name = "d2b-provider-system-minijail"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "d2b-process-conformance",
+]
+
+[[package]]
+name = "d2b-provider-system-systemd"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "d2b-process-conformance",
+]
+
+[[package]]
+name = "d2b-provider-toolkit"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+]
+
+[[package]]
+name = "d2b-provider-volume-local"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "d2b-provider-volume-virtiofs"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -1263,6 +1330,13 @@ dependencies = [
  "sha2",
  "tokio",
  "ttrpc",
+]
+
+[[package]]
+name = "d2b-resource-client"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
 ]
 
 [[package]]
@@ -1369,6 +1443,13 @@ dependencies = [
  "thiserror 2.0.18",
  "uapi",
  "wl-proxy",
+]
+
+[[package]]
+name = "d2b-zone-routing"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
 ]
 
 [[package]]

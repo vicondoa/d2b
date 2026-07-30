@@ -883,6 +883,32 @@ Canonical precedent: an early observability Wave-1 panel returned
 them. This is the canonical "you can't test your way out of needing a
 panel" data point.
 
+### Concurrent slices share one worktree, so destructive git is banned
+
+Parallel slices in a wave write to the same checkout. A slice therefore
+sees uncommitted files it does not own, and MUST treat them as read-only
+evidence rather than as its own stray edits.
+
+Two commands are prohibited inside a slice:
+
+- `git checkout -- <path>` and `git restore <path>` on any path the slice
+  does not own. Uncommitted work has no reflog entry and no dangling blob,
+  so this is an unrecoverable delete of a sibling's work. If a slice
+  believes it dirtied a file it does not own, it MUST report that rather
+  than revert it.
+- A package-wide or workspace-wide formatter. `cargo fmt -p <pkg>`
+  reformats every file in the package, not the slice's file, which makes
+  the slice's diff look like it touched files it never opened - and that
+  false signal is what motivates the revert above. Format the single file
+  instead.
+
+The integrator MUST commit each slice's output as it lands rather than
+accumulating several slices' work uncommitted, so a mistake costs one
+`git checkout` of committed content instead of a rewrite. Where work is
+already lost, check the rebase autostash before concluding it is gone: a
+rebase run during the wave captures the whole dirty tree, and that has
+already recovered one slice's uncommitted output in this program.
+
 ### Default panel
 
 | Engineer          | Focus |

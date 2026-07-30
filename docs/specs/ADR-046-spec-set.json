@@ -145,7 +145,7 @@
         "ADR-046-resource-reconciliation"
       ],
       "path" : "docs/specs/ADR-046-primitive-resource-composition.md",
-      "sha256" : "78786a6892be6a6f28ddec4a8d18b122a60f15910b39153c0a93cfd28b0ffbf5",
+      "sha256" : "af2e901221e1f29e15cb5651271c614eda18648a802510c45b34059fb473a67f",
       "specId" : "ADR-046-primitive-resource-composition",
       "status" : "Accepted",
       "supersedes" : "Current implementation-shaped ProcessRole composition",
@@ -730,7 +730,7 @@
         "ADR-046-zone-routing"
       ],
       "path" : "docs/specs/providers/ADR-046-provider-transport-unix.md",
-      "sha256" : "5b87dd7e8e9f3a04353d454cd5029444039bcbfd32822b09fa7beb267412d451",
+      "sha256" : "221c89de14803360dd9ae2bfbc07e9b56750504e70f002735bff13eb8ce7739a",
       "specId" : "ADR-046-provider-transport-unix",
       "status" : "Accepted",
       "supersedes" : "v1 of this dossier (ADR-046-provider-transport-unix v1; incorrect ownership model); `InheritedSocketTransport` SD_LISTEN_FDS path (`packages/d2b-session-unix/src/systemd.rs`)",
@@ -1225,7 +1225,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-zone-routing.md",
-      "sha256" : "1a850927019172e48dc3efcc00b67b756f9728276843b0efe8f18a16ad45ef23",
+      "sha256" : "a0c12f38d6c238192fa0ec1a00507041e74be505186b30209afc5acdae94fb3e",
       "specId" : "ADR-046-zone-routing",
       "status" : "Accepted",
       "supersedes" : "`RealmEntrypointTable`/`EntrypointMode`/`RealmControllerPlacement` enum (→ compiler-only `parentZone` topology + ZoneLink transport + private Zone runtime bootstrap placement); `RouteTreeEngine`/`routing.rs` route contracts (adapted, not deleted); `RemoteNodeRegistry` (→ ZoneLink controller); `OperationRouter` (→ ZoneLinkIdempotencyKey in d2b-bus); `realm_access_resolver` module (→ ZoneEntrypointResolver); `realm-controllers.json`/`realm-identity.json` bundle artifacts (→ Nix-authored Zone settings/ZoneLink resources); `d2b.realms.*` Nix option namespace (→ `d2b.zones.*`); `WorkloadId` routing targets (→ typed Guest/Host resource refs); `CapabilitySet`-only routing authz (→ per-hop RBAC narrowing + allocator-issued capability scope)",

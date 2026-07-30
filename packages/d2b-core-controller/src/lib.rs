@@ -1,10 +1,12 @@
 //! Core-side reconciliation indexes, hints, suppression, and admission.
 
+pub mod configuration;
 pub mod dependencies;
 pub mod hints;
 pub mod owner_reconcile;
 pub mod rbac;
 pub mod runtime;
+pub mod zone_links;
 
 pub use dependencies::{DependencyError, DependencyIndex, DependencyTrigger, UpgradeOrder};
 pub use hints::{

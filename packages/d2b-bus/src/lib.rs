@@ -10,8 +10,12 @@ extern crate self as d2b_bus;
 pub mod authorization;
 pub mod operations;
 pub mod registry;
+pub mod relay;
 pub mod router;
+pub mod session;
 pub mod streams;
+pub mod transport;
+pub mod zone_route;
 
 pub use authorization::{
     AuthorizationError, AuthorizationErrorClass, BusAuthorizer, session_verb_name,
