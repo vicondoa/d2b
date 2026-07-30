@@ -1151,6 +1151,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-process-conformance"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "d2b-provider"
 version = "0.0.0-bootstrap"
 
@@ -1197,10 +1206,18 @@ dependencies = [
 [[package]]
 name = "d2b-provider-system-minijail"
 version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "d2b-process-conformance",
+]
 
 [[package]]
 name = "d2b-provider-system-systemd"
 version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "d2b-process-conformance",
+]
 
 [[package]]
 name = "d2b-provider-toolkit"

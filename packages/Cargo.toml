@@ -27,6 +27,7 @@ members = [
     "d2b-resource-client",
     "d2b-provider",
     "d2b-provider-toolkit",
+    "d2b-process-conformance",
     "d2b-provider-system-systemd",
     "d2b-provider-system-minijail",
     "d2b-provider-volume-local",

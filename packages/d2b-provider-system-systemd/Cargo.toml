@@ -9,3 +9,5 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
+d2b-process-conformance = { path = "../d2b-process-conformance", version = "0.0.0-bootstrap" }
