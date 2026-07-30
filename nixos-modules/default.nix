@@ -29,6 +29,7 @@
     ./options.nix
     ./bundle-artifacts.nix
     ./options-observability.nix
+    ./provider-catalog.nix
     ./options-ownership-matrix.nix
     ./index.nix
     ./assertions.nix
