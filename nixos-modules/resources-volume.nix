@@ -137,7 +137,7 @@ let
           }
           {
             assertion = entryType != "symlink" -> target == null;
-            message = "${where}.target is accepted only for a symlink entry.";
+            message = "${where}.target is accepted only for a symlink entry. Remove target, or set ${where}.type to symlink.";
           }
           {
             assertion = entryType == "symlink" -> (target != null && anchoredPath target);
@@ -207,7 +207,7 @@ let
       }
       {
         assertion = lib.length writers <= 1;
-        message = "${path}.attachments may declare at most one read-write attachment.";
+        message = "${path}.attachments may declare at most one read-write attachment. Set every other attachment's access to read-only or shared-write.";
       }
     ]
     ++ lib.flatten (lib.imap0
@@ -237,7 +237,7 @@ let
           }
           {
             assertion = access == "read-only" || builtins.elem "write" rights;
-            message = "${where}.access requires the selected view to grant the write right.";
+            message = "${where}.access requires the selected view to grant the write right. Add write to that view's rights under ${path}.views, or set ${where}.access to read-only.";
           }
           {
             assertion = guestMountPath (attrOr attachment "mountPath" null);
@@ -266,7 +266,7 @@ let
       }
       {
         assertion = !(builtins.hasAttr "path" settings) && !(builtins.hasAttr "hostPath" settings);
-        message = "${path}.source.settings must not carry a host path; a Volume source is an opaque policy ID.";
+        message = "${path}.source.settings must not carry a host path; a Volume source is an opaque policy ID. Remove the path and hostPath keys and name the root through ${path}.source.settings.sourcePolicyId instead.";
       }
       {
         assertion = hostBacked -> (policyId != null && builtins.match tokenPattern policyId != null);
@@ -274,7 +274,7 @@ let
       }
       {
         assertion = !hostBacked -> policyId == null;
-        message = "${path}.source.settings.sourcePolicyId is accepted only for a host-backed source.";
+        message = "${path}.source.settings.sourcePolicyId is accepted only for a host-backed source. Remove sourcePolicyId, or set ${path}.source.settings.kind to local-path or block-image.";
       }
       {
         assertion = kind != "block-image" || maxBytes != null;

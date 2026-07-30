@@ -2289,6 +2289,12 @@ let
     let
       links = lib.filterAttrs (_: resource: resource.type == "ZoneLink") zone.resources;
       isLocalRoot = zoneName == localRootZoneName;
+      # Framework constants only. The offending key names are safe to
+      # print; a caller-supplied value never is.
+      foundForbiddenKeys = settings:
+        if builtins.isAttrs settings
+        then lib.filter (k: builtins.hasAttr k settings) forbiddenTransportSettingsKeys
+        else [ ];
       soleUplinkOk =
         if isLocalRoot
         then links == { }
@@ -2303,13 +2309,20 @@ let
         assertion = soleUplinkOk;
         message =
           "zones.${zoneName}: ZoneLink must be the sole child-local uplink"
-          + " and childZoneName must equal its Zone";
+          + " and childZoneName must equal its Zone."
+          + (if isLocalRoot
+             then " Remove every ZoneLink from d2b.zones.${zoneName}.resources:"
+               + " ${localRootZoneName} has no parent to uplink to."
+             else " Keep exactly one ZoneLink in"
+               + " d2b.zones.${zoneName}.resources and set its"
+               + " spec.childZoneName to ${zoneName}.");
       }
     ]
     ++ lib.flatten (lib.mapAttrsToList
       (linkName: link:
         let
           settings = zoneAttrOr link.spec "transportSettings" { };
+          forbiddenPresent = foundForbiddenKeys settings;
         in
         [
           {
@@ -2317,7 +2330,11 @@ let
               (zoneAttrOr link.spec "transportProviderRef" "");
             message =
               "zones.${zoneName}.resources.${linkName}: transportProviderRef"
-              + " does not resolve to a declared Provider resource";
+              + " does not resolve to a declared Provider resource."
+              + " Declare that Provider under"
+              + " d2b.zones.${zoneName}.resources, or point"
+              + " spec.transportProviderRef at one that is already declared"
+              + " there, in the form Provider/<name>.";
           }
           {
             assertion =
@@ -2326,7 +2343,12 @@ let
                 forbiddenTransportSettingsKeys);
             message =
               "zones.${zoneName}.resources.${linkName}: transportSettings must"
-              + " not contain host paths, socket paths, or secret material";
+              + " not contain host paths, socket paths, or secret material."
+              + " Remove the "
+              + lib.concatStringsSep ", " forbiddenPresent
+              + " key(s) from spec.transportSettings: transport endpoints are"
+              + " allocator-issued and secrets are referenced as Credential"
+              + " resources.";
           }
         ])
       links);
@@ -2336,13 +2358,18 @@ let
       {
         assertion = lib.length (builtins.attrNames cfg.zones) <= maxZoneCount;
         message =
-          "zones: zone count exceeds host limit of ${toString maxZoneCount}";
+          "zones: zone count exceeds host limit of ${toString maxZoneCount}."
+          + " Remove or consolidate d2b.zones entries until at most"
+          + " ${toString maxZoneCount} remain.";
       }
       {
         assertion = lib.all zoneAncestryOk (builtins.attrNames cfg.zones);
         message =
           "zones: parentZone topology has a cycle or exceeds depth"
-          + " ${toString maxZoneAncestryNames}";
+          + " ${toString maxZoneAncestryNames}."
+          + " Inspect d2b.zones.<zone>.parentZone and repoint the entries"
+          + " that close the loop, or flatten the hierarchy so no ancestry"
+          + " path names more than ${toString maxZoneAncestryNames} Zones.";
       }
     ]
     ++ lib.flatten (lib.mapAttrsToList
@@ -2355,7 +2382,11 @@ let
           {
             assertion =
               !(lib.hasPrefix "sys-" zoneName) && zoneName != "launcher";
-            message = "zones: zone key uses reserved prefix or exact name";
+            message =
+              "zones.${zoneName}: zone key uses a name reserved for the"
+              + " framework. Rename this d2b.zones entry: the sys- prefix"
+              + " and the exact name launcher are reserved for"
+              + " framework-declared Zones.";
           }
           {
             assertion = if isLocalRoot then parent == null else parent != null;
@@ -2377,7 +2408,9 @@ let
               <= maxZoneResourceCount;
             message =
               "zones.${zoneName}.resources: resource count exceeds zone limit"
-              + " of ${toString maxZoneResourceCount}";
+              + " of ${toString maxZoneResourceCount}."
+              + " Remove resources from this Zone, or move some of them into"
+              + " a separate Zone declared under d2b.zones.";
           }
         ]
         ++ lib.mapAttrsToList
@@ -2385,7 +2418,10 @@ let
             assertion = resource.type != "Zone";
             message =
               "zones.${zoneName}.resources.${resourceName}: Zone self-resource"
-              + " is runtime-created";
+              + " is runtime-created."
+              + " Remove this resource declaration; the controller creates the"
+              + " Zone self-resource from the d2b.zones.${zoneName} entry"
+              + " itself.";
           })
           zone.resources
         ++ zoneLinkAssertions zoneName zone)
