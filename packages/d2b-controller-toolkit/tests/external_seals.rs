@@ -4,6 +4,27 @@ use std::{
     process::Command,
 };
 
+/// A directory-safe token identifying the toolchain driving the nested cargo
+/// invocations. Compiled artifacts are not portable across compiler versions,
+/// and the gate provisions its own pinned toolchain while a developer shell
+/// commonly has a different one, so each gets its own cache tree rather than
+/// corrupting a shared one.
+fn toolchain_cache_key() -> String {
+    let version = Command::new("rustc")
+        .arg("--version")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .unwrap_or_else(|| "unknown".to_owned());
+    let token: String = version
+        .trim()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    token.trim_matches('-').to_owned()
+}
+
 /// A reusable repository-local compiler scratch tree.
 ///
 /// This test drives several `cargo check` invocations against the compile-fail
@@ -44,9 +65,10 @@ fn foreign_source_cannot_mint_committed_decision() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repository_root = crate_root.parent().unwrap().parent().unwrap();
     let fixture = crate_root.join("tests/ui/external-seals");
-    let scratch = repository_root
-        .join(".scratch")
-        .join("controller-toolkit-external-seals");
+    let scratch = repository_root.join(".scratch").join(format!(
+        "controller-toolkit-external-seals-{}",
+        toolchain_cache_key()
+    ));
     let scratch = Scratch::new(scratch);
     let temp = scratch.path().join("tmp");
     fs::create_dir_all(&temp).expect("create repository-local compiler scratch");

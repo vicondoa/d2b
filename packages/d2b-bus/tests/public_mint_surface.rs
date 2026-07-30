@@ -34,7 +34,11 @@ const CLAIM_TYPE_IDENTITIES: &[&str] = &["ResourceRef", "ResourceUid"];
 fn public_api_has_only_the_approved_capability_mint_surface() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repository_root = crate_root.parent().unwrap().parent().unwrap();
-    let scratch = Scratch::cache(repository_root.join(".scratch").join("bus-public-api"));
+    let scratch = Scratch::cache(
+        repository_root
+            .join(".scratch")
+            .join(format!("bus-public-api-{}", toolchain_cache_key())),
+    );
     let temp = scratch.path().join("tmp");
     fs::create_dir_all(&temp).expect("create repository-local rustdoc scratch");
 
@@ -1215,6 +1219,31 @@ fn assert_partial_render_fails_closed(docs: &[DocumentedCrate]) {
         error.contains(&symbol) && error.contains("doc-build problem"),
         "partial-render failure did not name the missing advertised item: {error}"
     );
+}
+
+/// A directory-safe token identifying the toolchain that will drive the nested
+/// `cargo doc` invocations.
+///
+/// The scratch trees cache compiled artifacts and rendered HTML, and neither is
+/// portable across compiler versions. The gate provisions its own pinned
+/// toolchain through rustup while a developer shell commonly has a different
+/// one, so the same repository can be exercised by two rustc versions that
+/// disagree about what a cached render should contain. Keying the cache path on
+/// the toolchain gives each its own tree instead of letting them corrupt one.
+fn toolchain_cache_key() -> String {
+    let version = Command::new("rustc")
+        .arg("--version")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .unwrap_or_else(|| "unknown".to_owned());
+    let token: String = version
+        .trim()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    token.trim_matches('-').to_owned()
 }
 
 /// A repository-local scratch tree that caches rustdoc's *compilation* work
