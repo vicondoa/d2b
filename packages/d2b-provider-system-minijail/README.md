@@ -2,44 +2,64 @@
 
 The `system-minijail` Process Provider controller.
 
-The sections below are the structure every Provider crate README must carry.
-They are placeholders here: each is filled by the slice that implements
-`ADR046-provider-003`. Nothing recorded here is a design statement.
-
 ## Provider identity
 
-Not yet declared. Filled by `ADR046-provider-003`.
+`system-minijail`, referenced as `Provider/system-minijail`. It is the
+second of the two fixed, non-configurable bootstrap Providers, and after the
+first Host exists it launches every other Provider, controller, service, and
+worker as a Process under a Host or a Guest.
 
 ## Config schema
 
-Not yet declared. Filled by `ADR046-provider-003`.
+None. Like the other bootstrap Provider, it takes no operator configuration.
 
 ## Exported resource types
 
-Not yet declared. Filled by `ADR046-provider-003`.
+`Process` and `EphemeralProcess`, the same pair `system-systemd` exports and
+under the same conformance, so a future Process Provider passes the suite
+without a schema change.
 
 ## Controllers / services / workers / binaries
 
-Not yet declared. Filled by `ADR046-provider-003`.
+One controller, shipped as a library type: `MinijailProcessProvider`,
+generic over the injected `ProcessLaunchEffectPort`. It ships no binary.
 
 ## Placement and dependencies
 
-Not yet declared. Filled by `ADR046-provider-003`.
+Runs in the fixed core-controller process boundary at bootstrap, under a
+distinct authenticated subject from `system-core`. The system domain is
+always supported; the user domain is admitted only where the Provider
+descriptor says so.
 
 ## RBAC requirements
 
-Not yet declared. Filled by `ADR046-provider-003`.
+Process and EphemeralProcess reconciliation under the compiled,
+non-extensible bootstrap policy that binds the exact `system-minijail`
+subject. After bootstrap it is an ordinary RBAC subject.
 
 ## Security posture
 
-Not yet declared. Filled by `ADR046-provider-003`. Until then the standing Provider rules
-apply unchanged: a Provider performs no privileged mutation, reaches host state
-only through an injected typed effect port, and the broker remains the sole
-privileged executor and audit owner.
+The sandbox is compiled inline, the spawn prefers `clone3(CLONE_PIDFD)` so
+the process is born directly in its final cgroup, and d2b owns `wait` and
+reap.
+
+This controller never imports or calls the broker. It validates the
+ExecutionSpec and SandboxSpec and calls the injected
+`ProcessLaunchEffectPort` with the resource UID and the compiled digests;
+the effect adapter is the sole caller of the broker's spawn effect, and the
+broker remains the sole privileged executor and audit owner.
+
+Adoption verifies pid, process start time, cgroup, executable, template, and
+generation before any `pidfd_open`. The pid and start-time pair is the
+pid-reuse guard: a matching pid whose start time disagrees is a different
+process, so it is ambiguity. Ambiguity quarantines and reports Unknown; it
+never signals, kills, or reuses.
 
 ## State and telemetry
 
-Not yet declared. Filled by `ADR046-provider-003`.
+No state of its own. Public status is the shared `ProcessStatusReport`,
+which carries an opaque identity digest, typed resource references, and
+closed enumerations only.
 
 ## Build and test
 
