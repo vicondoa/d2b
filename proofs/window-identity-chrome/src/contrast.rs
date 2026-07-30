@@ -249,6 +249,12 @@ mod tests {
     }
 
     #[test]
+    // Both operands are constants, which is the point: this pins the ordering
+    // of the two thresholds so a future edit cannot raise the non-text
+    // threshold above the text one. clippy 1.97 flags assertions over
+    // constants because they cannot fail at runtime; here that is the
+    // intended guarantee rather than a mistake.
+    #[allow(clippy::assertions_on_constants)]
     fn non_text_threshold_is_lower_than_text() {
         assert!(CONTRAST_NON_TEXT < CONTRAST_TEXT_AA);
     }
