@@ -312,6 +312,13 @@ nextest_unrunnable_targets() {
     fail "cargo nextest list failed while discovering harness=false targets"
     return 1
   fi
+  # Validate the shape before filtering. A schema change would otherwise let
+  # jq match nothing and exit 0, which reads identically to "this workspace has
+  # no harness-free targets" and would silently empty the gate surface.
+  if ! printf '%s' "$listing" | jq -e '."rust-suites" | length > 0' >/dev/null; then
+    fail "cargo nextest list returned no rust-suites; refusing to infer an empty harness=false set"
+    return 1
+  fi
   printf '%s' "$listing" | jq -r '
         ."rust-suites"
         | to_entries[]

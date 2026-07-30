@@ -11,12 +11,15 @@ use std::{
 /// corrupting a shared one.
 fn toolchain_cache_key() -> String {
     let version = Command::new("rustc")
-        .arg("--version")
+        .arg("-vV")
         .output()
         .ok()
         .filter(|output| output.status.success())
         .and_then(|output| String::from_utf8(output.stdout).ok())
-        .unwrap_or_else(|| "unknown".to_owned());
+        .expect(
+            "rustc -vV must identify the compiler: a cache shared between two \
+             unidentified toolchains is the corruption this key prevents",
+        );
     let token: String = version
         .trim()
         .chars()

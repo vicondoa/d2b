@@ -5,6 +5,18 @@ use std::{
     process::Command,
 };
 
+/// Owns the repository-local compiler scratch so it is removed on every exit
+/// path, including a panicking assertion. Removing it only on success leaves a
+/// uniquely-named target tree behind whenever cargo fails, and a repeatedly
+/// failing gate accumulates them until it trips the disk-space preflight.
+struct ScratchGuard(PathBuf);
+
+impl Drop for ScratchGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
 struct CompileFailHarness<'a> {
     cargo: &'a str,
     manifest: &'a Path,
@@ -50,10 +62,19 @@ fn dependent_cannot_mint_admission_or_session_capabilities() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repository_root = crate_root.parent().unwrap().parent().unwrap();
     let fixture = crate_root.join("tests/ui/external-seals");
-    let scratch = repository_root.join(".scratch").join(format!(
+    // Per-process and uncached, deliberately: the cfg_test_marker assertion
+    // below proves the crate was compiled under forced cfg(test), and a warm
+    // target dir would skip that compile and leave a stale marker satisfying
+    // the assertion without proving anything.
+    //
+    // Owned by a guard so the tree is removed on every exit path. Removing it
+    // only on success strands a uniquely-named multi-gigabyte tree per failing
+    // run, and preflight-disk-space.sh fails the wave below 10 GiB free.
+    let scratch_guard = ScratchGuard(repository_root.join(".scratch").join(format!(
         "resource-api-external-seals-{}",
         std::process::id()
-    ));
+    )));
+    let scratch = scratch_guard.0.clone();
     let target = scratch.join("target");
     let temp = scratch.join("tmp");
     fs::create_dir_all(&temp).expect("create repository-local compiler scratch");
@@ -136,5 +157,6 @@ exec "$rustc" "$@"
         "the resource API was not compiled under forced cfg(test)"
     );
 
-    fs::remove_dir_all(&scratch).expect("remove repository-local compiler scratch");
+    // ScratchGuard removes the tree on drop, including on a panicking
+    // assertion above, so there is no explicit cleanup here.
 }
