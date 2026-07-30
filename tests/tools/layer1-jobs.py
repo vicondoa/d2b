@@ -270,12 +270,13 @@ def rust_job(job: dict[str, Any]) -> str:
             tests/tools/no-bash-ast-walker/target
           prefix-key: "v0-rust"
           shared-key: "test-rust-${{{{ runner.os }}}}"
-          # Only one job writes this shared entry. test-rust, test-policy and
-          # test-runtime-ledger all fan out from tier0 and share a key, so on a
-          # cold cache every one of them compiles the same workspace at the same
-          # time and then races to save an entry the others already wrote.
-          # test-rust is the writer because test-fixture-contracts needs it
-          # anyway; the rest restore.
+          # A single writer keeps concurrent saves from racing one shared key.
+          # test-rust is that writer; the rest restore whatever the previous
+          # run left. Note test-fixture-contracts now starts alongside
+          # test-rust rather than after it, so on a cold key both compile the
+          # workspace and only one entry is kept - the wall-clock win from
+          # running them in parallel is worth more than the duplicated cold
+          # build.
           save-if: "{'true' if job["ciJobId"] == 'test-rust' else 'false'}"
 {heavy_gate_step(job)}      - name: {job["displayName"]}
         env:
