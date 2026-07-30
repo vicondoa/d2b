@@ -442,6 +442,15 @@ in §3.2 closes, provided:
    field) is currently claimed by another **still-open** branch, per the
    contention index in §6.2/§7.
 
+Condition 1 is a **per-edge** rule and is deliberately stricter than the
+coarse per-wave pipelining in §4. The two compose rather than conflict: §4
+governs when a *wave* may begin implementing relative to its predecessor's
+seal, while this rule governs when an *individual slice* may open relative to
+the specific specs it depends on. A slice whose precise dependency edge is
+unmerged has a concrete reason to wait that wave adjacency does not capture,
+so §4 does not relax it. Nothing here reintroduces a wave-level merged
+precondition on entry.
+
 For example, `resources-network` (computed wave W4) and `resources-credential`
 (also W4) may each open as soon as `provider-model-and-packaging` (W3) merges -
 they need nothing from `components-processes-and-sandbox` or
@@ -1340,8 +1349,14 @@ present, unanimous, and bound to the same `candidate_id`/`content_id`/
 exact snapshot. It also reads the implementation graph and work-item state
 manifest from the snapshot's integrated Git tree and rejects the seal unless
 every item assigned to the current wave is `Merged`. The error names the item
-and the required state transition. `merge-eligibility` repeats this current-wave
-check so an eligibility result cannot bypass stale delivery state.
+and the required state transition. `merge-eligibility` re-derives **both** the
+current-wave and the prior-wave conditions from the sealed snapshot's own
+integrated tree, rather than trusting the seal artifact to have carried them.
+Re-derivation reads the same fixed manifests the seal bound, so it cannot refuse
+a seal that `seal` itself accepted; what it does catch is a seal record written
+by a binary predating the prior-wave gate, or by any future path that writes a
+seal without passing through it. This is the third enforcement point for the
+prior-wave condition, after `panel-request` and `seal`.
 
 `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave merge-target` then captures the wave's current
 pull-request stack into a canonical `merge-target.json` under the candidate.

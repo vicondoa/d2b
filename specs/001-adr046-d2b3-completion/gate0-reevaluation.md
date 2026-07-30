@@ -38,23 +38,23 @@ manifests are:
 and `xtask implementation-graph`, regenerates all three manifests, and fails if
 the committed outputs differ from the regenerated ones.
 
-**Observed state at the time this record was written:** `make test-drift`
-reports the spec-registry as consistent at 55 members and 545 work items, and
-the implementation graph regenerates without a bijection error. It **fails** on
+**Observed state while the amendment was in flight:** `make test-drift` reported
+the spec-registry as consistent at 55 members and 545 work items, and the
+implementation graph regenerated without a bijection error. It **failed** on
 exactly one difference: the `sha256` digest recorded for
 `docs/specs/ADR-046-validation-and-delivery.md` in
-`docs/specs/ADR-046-spec-set.json` still names the pre-amendment content. No
-other manifest entry, and no work-item or graph edge, differs.
+`docs/specs/ADR-046-spec-set.json` still named the pre-amendment content. No
+other manifest entry, and no work-item or graph edge, differed.
 
-That single digest is the expected, mechanical consequence of amending a member
-without yet re-running the generator. Regenerating and committing the three
-manifests discharges the mechanical half of Gate 0. That regeneration is the
-one remaining mechanical action; it is not a semantic finding, and it is owned
-by the change that carries the amendment itself.
+That single digest was the expected, mechanical consequence of amending a member
+without yet re-running the generator. It is recorded here rather than omitted so
+a later reader can see that the only thing Gate 0 caught was the digest, not a
+semantic defect.
 
-This record does not claim `make test-drift` currently passes. It records the
-exact failure observed, so that a later reader is not misled into believing the
-digests already reconcile.
+**Current state:** the three manifests have been regenerated and committed, and
+`make test-drift` passes. The recorded digest for the amended member now matches
+its content. The mechanical half of Gate 0 is therefore discharged, and the
+regeneration was the only mechanical action the amendment required.
 
 ## 3. What the amendment does not change
 
