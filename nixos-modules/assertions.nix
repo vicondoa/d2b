@@ -2207,6 +2207,189 @@ let
         enabledRealms);
     in
     inheritEnvNudges ++ orphanLegacyVmWarnings;
+
+  # --- Zone topology and ZoneLink assertions (ADR046-routing-011) ---------
+  #
+  # These are the cross-resource Zone invariants that a per-field option
+  # type cannot express. Field-level shape (regex, enum, bounds) for a
+  # resource spec belongs to the generated per-ResourceType option modules,
+  # not here.
+  #
+  # The Zone-key and resource-key regex checks already live in
+  # options-zones.nix and are deliberately not repeated here.
+
+  localRootZoneName = "local-root";
+
+  # At most 16 Zone names on one ancestry path, counting the Zone itself
+  # and the local root.
+  maxZoneAncestryNames = 16;
+  maxZoneCount = 64;
+  maxZoneResourceCount = 1024;
+
+  # Top-level transportSettings keys that would carry a host path, a
+  # socket path, or secret material. A ZoneLink never configures any of
+  # them: transport is allocator-issued and secrets are Credential refs.
+  forbiddenTransportSettingsKeys = [
+    "socketPath"
+    "hostPath"
+    "password"
+    "token"
+    "key"
+  ];
+
+  zoneAttrOr = attrs: name: fallback:
+    if builtins.isAttrs attrs && builtins.hasAttr name attrs
+    then attrs.${name}
+    else fallback;
+
+  zoneResolvesAsProvider = resources: ref:
+    let
+      parts = lib.splitString "/" ref;
+    in
+    builtins.isString ref
+    && lib.length parts == 2
+    && builtins.elemAt parts 0 == "Provider"
+    && builtins.hasAttr (builtins.elemAt parts 1) resources
+    && resources.${builtins.elemAt parts 1}.type == "Provider";
+
+  # Walk one Zone's ancestry. Returns true when the walk terminates at a
+  # parentless Zone within the depth budget and never revisits a name.
+  # A parent that is not declared terminates the walk: the missing-parent
+  # case has its own assertion and must not also be reported as a cycle.
+  zoneAncestryOk = zoneName:
+    let
+      step = state:
+        if state.done then state
+        else
+          let
+            parent = cfg.zones.${state.current}.parentZone;
+          in
+          if parent == null || !(builtins.hasAttr parent cfg.zones)
+          then state // { done = true; }
+          else if builtins.elem parent state.seen
+          then state // { done = true; ok = false; }
+          else {
+            current = parent;
+            seen = state.seen ++ [ parent ];
+            done = false;
+            ok = state.ok;
+          };
+      final = lib.foldl' (state: _: step state)
+        {
+          current = zoneName;
+          seen = [ zoneName ];
+          done = false;
+          ok = true;
+        }
+        (lib.range 1 maxZoneAncestryNames);
+    in
+    final.done && final.ok;
+
+  zoneLinkAssertions = zoneName: zone:
+    let
+      links = lib.filterAttrs (_: resource: resource.type == "ZoneLink") zone.resources;
+      isLocalRoot = zoneName == localRootZoneName;
+      soleUplinkOk =
+        if isLocalRoot
+        then links == { }
+        else
+          lib.length (builtins.attrNames links) <= 1
+          && lib.all
+            (link: zoneAttrOr link.spec "childZoneName" null == zoneName)
+            (lib.attrValues links);
+    in
+    [
+      {
+        assertion = soleUplinkOk;
+        message =
+          "zones.${zoneName}: ZoneLink must be the sole child-local uplink"
+          + " and childZoneName must equal its Zone";
+      }
+    ]
+    ++ lib.flatten (lib.mapAttrsToList
+      (linkName: link:
+        let
+          settings = zoneAttrOr link.spec "transportSettings" { };
+        in
+        [
+          {
+            assertion = zoneResolvesAsProvider zone.resources
+              (zoneAttrOr link.spec "transportProviderRef" "");
+            message =
+              "zones.${zoneName}.resources.${linkName}: transportProviderRef"
+              + " does not resolve to a declared Provider resource";
+          }
+          {
+            assertion =
+              !(builtins.isAttrs settings)
+              || !(lib.any (k: builtins.hasAttr k settings)
+                forbiddenTransportSettingsKeys);
+            message =
+              "zones.${zoneName}.resources.${linkName}: transportSettings must"
+              + " not contain host paths, socket paths, or secret material";
+          }
+        ])
+      links);
+
+  zoneTopologyAssertions =
+    [
+      {
+        assertion = lib.length (builtins.attrNames cfg.zones) <= maxZoneCount;
+        message =
+          "zones: zone count exceeds host limit of ${toString maxZoneCount}";
+      }
+      {
+        assertion = lib.all zoneAncestryOk (builtins.attrNames cfg.zones);
+        message =
+          "zones: parentZone topology has a cycle or exceeds depth"
+          + " ${toString maxZoneAncestryNames}";
+      }
+    ]
+    ++ lib.flatten (lib.mapAttrsToList
+      (zoneName: zone:
+        let
+          isLocalRoot = zoneName == localRootZoneName;
+          parent = zone.parentZone;
+        in
+        [
+          {
+            assertion =
+              !(lib.hasPrefix "sys-" zoneName) && zoneName != "launcher";
+            message = "zones: zone key uses reserved prefix or exact name";
+          }
+          {
+            assertion = if isLocalRoot then parent == null else parent != null;
+            message =
+              "zones.${zoneName}: parentZone is required for non-root Zones"
+              + " and forbidden on ${localRootZoneName}";
+          }
+          {
+            assertion =
+              parent == null
+              || (builtins.hasAttr parent cfg.zones && parent != zoneName);
+            message =
+              "zones.${zoneName}.parentZone: parent must exist and differ"
+              + " from child";
+          }
+          {
+            assertion =
+              lib.length (builtins.attrNames zone.resources)
+              <= maxZoneResourceCount;
+            message =
+              "zones.${zoneName}.resources: resource count exceeds zone limit"
+              + " of ${toString maxZoneResourceCount}";
+          }
+        ]
+        ++ lib.mapAttrsToList
+          (resourceName: resource: {
+            assertion = resource.type != "Zone";
+            message =
+              "zones.${zoneName}.resources.${resourceName}: Zone self-resource"
+              + " is runtime-created";
+          })
+          zone.resources
+        ++ zoneLinkAssertions zoneName zone)
+      cfg.zones);
 in
 {
   assertions = lib.flatten (
@@ -2238,6 +2421,7 @@ in
     ++ securityKeyHostRequiredAssertions
     ++ securityKeyUsbipMutualExclusionAssertions
     ++ securityKeyDeviceAssertions
+    ++ zoneTopologyAssertions
   );
 
   # The daemon-only end state is now the default. Do not warn on the

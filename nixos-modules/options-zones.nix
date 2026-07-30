@@ -6,6 +6,16 @@ let
 
   zoneNamePattern = "^[a-z][a-z0-9-]{0,62}$";
 
+  zoneNameType = lib.types.strMatching zoneNamePattern;
+
+  # The distinguished local root Zone. It is the one Zone that must not
+  # declare a parent; every other Zone must.
+  localRootZoneName = "local-root";
+
+  # Maximum number of Zone names on one compiler-authored ancestry path,
+  # counting the Zone itself and the local root.
+  maxAncestryNames = 16;
+
   parseRef = ref:
     let
       parts = lib.splitString "/" ref;
@@ -149,9 +159,32 @@ in
   options.d2b.zones = lib.mkOption {
     type = lib.types.attrsOf (lib.types.submodule {
       freeformType = null;
+      options.parentZone = lib.mkOption {
+        type = lib.types.nullOr zoneNameType;
+        default = null;
+        example = "local-root";
+        description = ''
+          Compiler-only parent Zone name. Required for every non-root Zone
+          and forbidden on the distinguished local root Zone
+          "${localRootZoneName}". This is not a ResourceRef: it never enters
+          a ResourceSpec and is emitted only into the sealed allocator
+          bootstrap topology, never into Zone.spec.
+
+          The value must name another declared Zone, must differ from the
+          Zone declaring it, and the complete child-to-parent graph must be
+          acyclic with at most ${toString maxAncestryNames} Zone names on any
+          ancestry path. Conflicting definitions fail through normal Nix
+          module merging.
+        '';
+      };
       options.resources = lib.mkOption {
         type = lib.types.attrsOf (lib.types.submodule resourceTypes.resourceModule);
         default = { };
+        description = ''
+          Zone-local resources, keyed by ResourceName. Each entry mirrors the
+          canonical ResourceSpec shape for its ResourceType; there is no
+          second Nix vocabulary and no extra nesting.
+        '';
       };
     });
     default = { };
