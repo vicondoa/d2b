@@ -192,6 +192,118 @@ set -euo pipefail
             workflow,
         )
 
+    def test_manifest_rejects_expression_bearing_ci_job_ids(self) -> None:
+        layer1_jobs = load_layer1_jobs()
+        with self.assertRaises(SystemExit):
+            layer1_jobs.validate_job_id("bad-${{ github.token }}", "test")
+
+    def test_rust_gate_is_two_required_shards_with_one_stable_rollup(self) -> None:
+        layer1_jobs = load_layer1_jobs()
+        manifest = layer1_jobs.load_manifest()
+        workflow = layer1_jobs.render_workflow(manifest)
+
+        rust_rollup = manifest["jobs"]["test-rust"]
+        self.assertEqual(
+            rust_rollup["needs"],
+            ["test-rust-main", "test-rust-remaining"],
+        )
+        self.assertEqual(rust_rollup["ciKind"], "rust-rollup")
+        self.assertIn("run: make test-rust-main", workflow)
+        self.assertIn("run: make test-rust-remaining", workflow)
+        self.assertIn(
+            '[ "${{ needs.test-rust-main.result }}" = success ] || exit 1',
+            workflow,
+        )
+        self.assertIn(
+            '[ "${{ needs.test-rust-remaining.result }}" = success ] || exit 1',
+            workflow,
+        )
+        self.assertEqual(manifest["ci"]["rollupNeeds"].count("test-rust"), 1)
+
+    def test_expensive_cache_surfaces_and_fixture_key_are_fail_closed(self) -> None:
+        layer1_jobs = load_layer1_jobs()
+        workflow = layer1_jobs.render_workflow(layer1_jobs.load_manifest())
+
+        self.assertIn(".scratch/rust-test-cache", workflow)
+        self.assertIn("primary-key: nix-v1-", workflow)
+        self.assertIn("'**/*.nix'", workflow)
+        self.assertIn("'packages/**'", workflow)
+        self.assertIn("'pkgs/**'", workflow)
+        self.assertIn("'docs/manpages/**'", workflow)
+        self.assertIn("'docs/completions/**'", workflow)
+        self.assertIn("'tests/fixtures/guest-rust-workspace/**'", workflow)
+        self.assertIn("'tests/tools/fixture-cache-paths.sh'", workflow)
+        self.assertIn("Import cached fixture derivations", workflow)
+        self.assertIn("Export expensive fixture derivations", workflow)
+        self.assertIn("nix-store --import", workflow)
+        self.assertIn("nix-store --export", workflow)
+
+    def test_fixture_derivation_selector_is_narrow_and_fail_closed(self) -> None:
+        selector = (ROOT / "tests" / "tools" / "fixture-cache-paths.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("checks.fixture-smoke", selector)
+        self.assertIn("checks.fixture-smoke-full", selector)
+        self.assertIn('missing processes.json', selector)
+        self.assertIn('missing required family', selector)
+        self.assertIn("cloud-hypervisor", selector)
+        self.assertIn("crosvm", selector)
+        self.assertIn("d2b-wayland-proxy", selector)
+        self.assertIn("d2b-guestd-static", selector)
+        self.assertIn("d2b-exec-runner-static", selector)
+        self.assertNotIn("nix-store --export", selector)
+
+    def test_nix_unit_ci_uses_one_runner_per_discovered_shard(self) -> None:
+        layer1_jobs = load_layer1_jobs()
+        manifest = layer1_jobs.load_manifest()
+        workflow = layer1_jobs.render_workflow(manifest)
+
+        self.assertEqual(
+            manifest["jobs"]["test-nix-unit"]["needs"],
+            ["nix-unit-discover", "nix-unit-shards"],
+        )
+        self.assertIn("matrix:", workflow)
+        self.assertIn(
+            "check: ${{ fromJSON(needs.nix-unit-discover.outputs.checks) }}",
+            workflow,
+        )
+        self.assertIn("D2B_NIX_UNIT_CHECK: ${{ matrix.check }}", workflow)
+        self.assertIn("          ') || exit 1\n          echo \"discovered nix-unit checks", workflow)
+        self.assertIn('D2B_NIX_UNIT_JOBS: "1"', workflow)
+        self.assertIn("Every discovered Nix-unit shard passed.", workflow)
+        self.assertNotIn("run: make test-nix-unit\n\n  flake-eval-discover", workflow)
+
+    def test_nix_unit_driver_is_bounded_and_waits_every_discovered_check(self) -> None:
+        driver = (ROOT / "tests" / "test-nix-unit.sh").read_text(encoding="utf-8")
+
+        self.assertIn('jobs=${D2B_NIX_UNIT_JOBS:-2}', driver)
+        self.assertIn('D2B_NIX_UNIT_CHECK', driver)
+        self.assertIn('for check in "${checks[@]}"; do', driver)
+        self.assertIn('while [ "$running" -ge "$jobs" ]; do', driver)
+        self.assertIn('while [ "$running" -gt 0 ]; do', driver)
+        self.assertIn('failures+=("$check")', driver)
+        self.assertIn('nix build --no-link --print-out-paths', driver)
+
+    def test_fixture_driver_roots_both_outputs_only_in_github_actions(self) -> None:
+        driver = (ROOT / "tests" / "test-rust.sh").read_text(encoding="utf-8")
+
+        self.assertIn('if [ -n "${GITHUB_ACTIONS:-}" ]; then', driver)
+        self.assertIn('local runner_temp=${RUNNER_TEMP:?', driver)
+        self.assertIn(
+            'nix-store --add-root "$root_dir/$label" -r "$store_path"',
+            driver,
+        )
+        self.assertIn(
+            'retain_fixture_for_ci_cache fixture-smoke "$contract_fixtures"',
+            driver,
+        )
+        self.assertIn(
+            'retain_fixture_for_ci_cache fixture-smoke-full "$contract_fixtures_full"',
+            driver,
+        )
+        self.assertNotIn("nix-store --delete", driver)
+
     def test_diagnostic_redaction_normalizes_ansi_before_matching(self) -> None:
         layer1_jobs = load_layer1_jobs()
         diagnostic = f"error:\x1b[31m{ROOT}/private/output\x1b[0m"

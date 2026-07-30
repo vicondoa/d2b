@@ -24,6 +24,7 @@ SELF_TEST = ROOT / "tests" / "unit" / "meta" / "ci-runner-regression.py"
 CHECKOUT = "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5"
 INSTALL_NIX = "cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077"
 RUST_CACHE = "Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32"
+ACTIONS_CACHE = "actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830"
 # Caches /nix through the GitHub Actions cache. The developer host has a local
 # attic substituter, which is why a fixture build that costs half an hour in CI
 # completes in seconds there; runners cannot reach that endpoint, so without
@@ -42,6 +43,11 @@ ABSOLUTE_PATH = re.compile(
 )
 
 
+def validate_job_id(job_id: str, context: str) -> None:
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", job_id):
+        raise SystemExit(f"{MANIFEST}: invalid job id {job_id!r} in {context}")
+
+
 def load_manifest() -> dict[str, Any]:
     with MANIFEST.open(encoding="utf-8") as fh:
         manifest = json.load(fh)
@@ -50,24 +56,46 @@ def load_manifest() -> dict[str, Any]:
     jobs = manifest.get("jobs")
     if not isinstance(jobs, dict):
         raise SystemExit(f"{MANIFEST}: jobs must be an object")
+    for job_id, job in jobs.items():
+        validate_job_id(job_id, "jobs")
+        ci_job_id = job.get("ciJobId")
+        if ci_job_id is not None:
+            if not isinstance(ci_job_id, str):
+                raise SystemExit(f"{MANIFEST}: ciJobId for {job_id!r} must be a string")
+            validate_job_id(ci_job_id, f"jobs.{job_id}.ciJobId")
+
     local_job_ids: list[str] = []
     for phase in manifest.get("local", {}).get("phases", []):
         for job_id in phase.get("jobs", []):
+            validate_job_id(job_id, "local.phases")
             if job_id not in jobs:
                 raise SystemExit(f"{MANIFEST}: local phase references unknown job {job_id!r}")
             local_job_ids.append(job_id)
     local_jobs = set(local_job_ids)
     if len(local_jobs) != len(local_job_ids):
         raise SystemExit(f"{MANIFEST}: a job appears in more than one local phase")
+    ci_jobs = set(manifest.get("ci", {}).get("jobs", []))
     for job_id in manifest.get("ci", {}).get("jobs", []):
+        validate_job_id(job_id, "ci.jobs")
         if job_id not in jobs:
             raise SystemExit(f"{MANIFEST}: ci.jobs references unknown job {job_id!r}")
-        if jobs[job_id].get("makeTarget") and job_id not in local_jobs:
+        for need in jobs[job_id].get("needs", []):
+            validate_job_id(need, f"jobs.{job_id}.needs")
+            if need not in ci_jobs:
+                raise SystemExit(
+                    f"{MANIFEST}: CI job {job_id!r} needs unknown/non-CI job {need!r}"
+                )
+        if (
+            jobs[job_id].get("makeTarget")
+            and job_id not in local_jobs
+            and not jobs[job_id].get("ciOnly")
+        ):
             raise SystemExit(
                 f"{MANIFEST}: CI job {job_id!r} has a local make target but is absent "
-                "from local.phases"
+                "from local.phases and is not declared ciOnly"
             )
     for job_id in manifest.get("ci", {}).get("rollupNeeds", []):
+        validate_job_id(job_id, "ci.rollupNeeds")
         if job_id not in jobs:
             raise SystemExit(f"{MANIFEST}: ci.rollupNeeds references unknown job {job_id!r}")
     return manifest
@@ -121,13 +149,35 @@ def ci_env_block(job: dict[str, Any], spaces: int) -> str:
 # configuration is deliberately near enough to the cap that it should be
 # re-measured against the repository cache-usage page after a run rather than
 # assumed.
-NIX_CACHED_JOBS = frozenset({"test-fixture-contracts", "test-nix-unit"})
+NIX_CACHED_JOBS = frozenset({"test-fixture-contracts", "nix-unit-shards"})
 NIX_CACHE_MAX_STORE = "4G"
+NIX_CACHE_FORMAT = "v1"
 # Scope suffix for a matrix job, so shards do not share one key. Defined here
 # rather than at the call site because a brace-doubled literal written inside an
 # f-string replacement field is ordinary Python source, not escaped f-string
 # text, and would emit four literal braces - an invalid GitHub expression.
 MATRIX_CHECK_SCOPE = "-${{ matrix.check }}"
+
+
+def nix_cache_hash_files(job: dict[str, Any]) -> str:
+    if job["ciJobId"] == "test-fixture-contracts":
+        # The fixture outputs depend on evaluated modules, source-built host and
+        # guest tools, patched VMM sources, and generated CLI shell artifacts.
+        # Keep this list explicit so a source-only change cannot hit an exact
+        # cache key created for different fixture derivations.
+        patterns = [
+            "flake.lock",
+            "**/*.nix",
+            "packages/**",
+            "pkgs/**",
+            "docs/manpages/**",
+            "docs/completions/**",
+            "tests/fixtures/guest-rust-workspace/**",
+            "tests/tools/fixture-cache-paths.sh",
+        ]
+    else:
+        patterns = ["flake.lock", "**/*.nix"]
+    return ", ".join(repr(pattern) for pattern in patterns)
 
 
 def nix_setup_step(job: dict[str, Any], scope_suffix: str = "") -> str:
@@ -149,6 +199,7 @@ def nix_setup_step(job: dict[str, Any], scope_suffix: str = "") -> str:
     exists to prevent.
     """
     scope = job["ciJobId"] + scope_suffix
+    hash_files = nix_cache_hash_files(job)
     setup = f"""      - uses: {INSTALL_NIX}
         with:
           nix_path: nixpkgs=channel:nixos-unstable
@@ -167,11 +218,14 @@ def nix_setup_step(job: dict[str, Any], scope_suffix: str = "") -> str:
         # NIX_CACHED_JOBS for why only some jobs carry an entry.
         uses: {NIX_CACHE}
         with:
-          primary-key: nix-${{{{ runner.os }}}}-{scope}-${{{{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}}}
-          restore-prefixes-first-match: nix-${{{{ runner.os }}}}-{scope}-
+          # The format epoch rotates immutable Actions caches when retention
+          # semantics change. Fixture jobs use a source-complete hash; other
+          # cached Nix jobs hash the flake and Nix corpus they evaluate.
+          primary-key: nix-{NIX_CACHE_FORMAT}-${{{{ runner.os }}}}-{scope}-${{{{ hashFiles({hash_files}) }}}}
+          restore-prefixes-first-match: nix-{NIX_CACHE_FORMAT}-${{{{ runner.os }}}}-{scope}-
           gc-max-store-size-linux: {NIX_CACHE_MAX_STORE}
           purge: true
-          purge-prefixes: nix-${{{{ runner.os }}}}-{scope}-
+          purge-prefixes: nix-{NIX_CACHE_FORMAT}-${{{{ runner.os }}}}-{scope}-
           purge-created: 0
           purge-primary-key: never"""
     )
@@ -247,6 +301,45 @@ def render_env(job: dict[str, Any]) -> str:
     return "\n".join(f'          {key}: "{value}"' for key, value in sorted(env.items()))
 
 
+def fixture_derivation_cache_steps(job: dict[str, Any]) -> tuple[str, str]:
+    if job["ciJobId"] != "test-fixture-contracts":
+        return "", ""
+    hash_files = nix_cache_hash_files(job)
+    key = (
+        f"fixture-derivations-v1-${{{{ runner.os }}}}-"
+        f"${{{{ hashFiles({hash_files}) }}}}"
+    )
+    directory = "${{ runner.temp }}/d2b-fixture-derivation-cache"
+    restore = f"""      - name: Restore fixture derivation cache
+        id: fixture-derivations
+        uses: {ACTIONS_CACHE}
+        with:
+          path: {directory}
+          key: {key}
+          restore-keys: |
+            fixture-derivations-v1-${{{{ runner.os }}}}-
+      - name: Import cached fixture derivations
+        run: |
+          cache="{directory}/closure.nar.zst"
+          if [ -s "$cache" ]; then
+            zstd -dc "$cache" | nix-store --import
+          fi
+"""
+    save = f"""      - name: Export expensive fixture derivations
+        run: |
+          cache_dir="{directory}"
+          mkdir -p "$cache_dir"
+          mapfile -t roots < <(bash tests/tools/fixture-cache-paths.sh)
+          [ "${{#roots[@]}}" -gt 0 ] || {{ echo "no fixture cache roots discovered" >&2; exit 1; }}
+          nix-store --query --requisites "${{roots[@]}}" \\
+            | LC_ALL=C sort -u \\
+            | xargs nix-store --export \\
+            | zstd -T0 -q -o "$cache_dir/closure.nar.zst"
+          du -h "$cache_dir/closure.nar.zst"
+"""
+    return restore, save
+
+
 def heavy_gate_step(job: dict[str, Any]) -> str:
     """Renders the heavy-gate provisioning step for jobs that need the gate.
 
@@ -264,6 +357,7 @@ def heavy_gate_step(job: dict[str, Any]) -> str:
 
 
 def rust_job(job: dict[str, Any]) -> str:
+    fixture_restore, fixture_save = fixture_derivation_cache_steps(job)
     return f"""  {job["ciJobId"]}:
 {needs_line(job)}    runs-on: {job["runsOn"]}
     # Warm (rust-cache hit): ~8-12 min. Cold (no cache): ~43 min.
@@ -294,7 +388,7 @@ def rust_job(job: dict[str, Any]) -> str:
           persist-credentials: false
           fetch-depth: 0
 {nix_setup_step(job)}
-      - name: Free runner disk for Rust gate
+{fixture_restore}      - name: Free runner disk for Rust gate
         run: |
           df -h
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL || true
@@ -329,20 +423,115 @@ def rust_job(job: dict[str, Any]) -> str:
             packages/d2b-priv-broker/target-layer1
             packages/d2b-priv-broker/target-fakebackends
             tests/tools/no-bash-ast-walker/target
-          prefix-key: "v0-rust"
+            .scratch/rust-test-cache
+          prefix-key: "v1-rust"
           shared-key: "test-rust-${{{{ runner.os }}}}"
+          # The repository-local trees are keyed on rustc -vV by their owning
+          # tests. Cargo fingerprints compiled inputs on restore, while failed
+          # compile units are never cached and still rerun on every gate.
           # A single writer keeps concurrent saves from racing one shared key.
-          # test-rust is that writer; the rest restore whatever the previous
-          # run left. Note test-fixture-contracts now starts alongside
-          # test-rust rather than after it, so on a cold key both compile the
-          # workspace and only one entry is kept - the wall-clock win from
-          # running them in parallel is worth more than the duplicated cold
-          # build.
-          save-if: "{'true' if job["ciJobId"] == 'test-rust' else 'false'}"
+          # The main-workspace Rust shard is that writer; it produces both the
+          # common Cargo target and the slow compiler/rustdoc scratch trees.
+          # Every other Rust job restores the last complete entry. On a cold key
+          # parallel shards may duplicate compilation, but only one entry wins.
+          save-if: "{'true' if job["ciJobId"] == 'test-rust-main' else 'false'}"
 {heavy_gate_step(job)}      - name: {job["displayName"]}
         env:
 {render_env(job)}
-        run: make {job["makeTarget"]}"""
+        run: make {job["makeTarget"]}
+{fixture_save}"""
+
+
+def rust_rollup_job(job: dict[str, Any]) -> str:
+    needs = job["needs"]
+    lines = [
+        f'  {job["ciJobId"]}:',
+        f'    needs: {yaml_list(needs)}',
+        '    if: always()',
+        f'    runs-on: {job["runsOn"]}',
+        f'    timeout-minutes: {job["timeoutMinutes"]}',
+        '    steps:',
+        f'      - uses: {CHECKOUT}',
+        '        with:',
+        '          persist-credentials: false',
+        f'      - name: {job["displayName"]}',
+        '        run: |',
+    ]
+    for need in needs:
+        lines.append(f"          echo \"{need}=${{{{ needs.{need}.result }}}}\"")
+        lines.append(f"          [ \"${{{{ needs.{need}.result }}}}\" = success ] || exit 1")
+    lines.append('          echo "Both Rust gate shards passed."')
+    return "\n".join(lines)
+
+
+def nix_unit_discover_job(job: dict[str, Any]) -> str:
+    return f"""  {job["ciJobId"]}:
+{needs_line(job)}    runs-on: {job["runsOn"]}
+    timeout-minutes: {job["timeoutMinutes"]}
+    outputs:
+      checks: ${{{{ steps.list.outputs.checks }}}}
+    steps:
+      - uses: {CHECKOUT}
+        with:
+          persist-credentials: false
+{nix_setup_step(job)}
+      - id: list
+        name: {job["displayName"]}
+        run: |
+          checks=$(nix eval --json .#checks.x86_64-linux --apply '
+            cs: builtins.filter
+              (name: name == "nix-unit" || builtins.substring 0 9 name == "nix-unit-")
+              (builtins.sort builtins.lessThan (builtins.attrNames cs))
+          ') || exit 1
+          echo "discovered nix-unit checks: $checks"
+          echo "checks=$checks" >> "$GITHUB_OUTPUT"
+"""
+
+
+def nix_unit_shards_job(job: dict[str, Any]) -> str:
+    return f"""  {job["ciJobId"]}:
+{needs_line(job)}    runs-on: {job["runsOn"]}
+    timeout-minutes: {job["timeoutMinutes"]}
+    strategy:
+      fail-fast: false
+      max-parallel: {job["maxParallel"]}
+      matrix:
+        check: ${{{{ fromJSON(needs.nix-unit-discover.outputs.checks) }}}}
+    steps:
+      - uses: {CHECKOUT}
+        with:
+          persist-credentials: false
+{nix_setup_step(job, MATRIX_CHECK_SCOPE)}
+      - name: {job["displayName"]}
+        env:
+          # The matrix value is data, not shell source. The driver validates it
+          # against both the safe-name grammar and the discovered check set.
+          D2B_NIX_UNIT_CHECK: ${{{{ matrix.check }}}}
+          D2B_NIX_UNIT_JOBS: "1"
+        run: make test-nix-unit"""
+
+
+def nix_unit_rollup_job(job: dict[str, Any]) -> str:
+    return f"""  {job["ciJobId"]}:
+    needs: {yaml_list(job["needs"])}
+    if: always()
+    runs-on: {job["runsOn"]}
+    timeout-minutes: {job["timeoutMinutes"]}
+    steps:
+      - uses: {CHECKOUT}
+        with:
+          persist-credentials: false
+      - name: {job["displayName"]}
+        run: |
+          discover='${{{{ needs.nix-unit-discover.result }}}}'
+          shards='${{{{ needs.nix-unit-shards.result }}}}'
+          echo "nix-unit-discover=$discover  nix-unit-shards=$shards"
+          if [ "$discover" = success ] && [ "$shards" = success ]; then
+            echo "Every discovered Nix-unit shard passed."
+          else
+            echo "::error::Nix-unit gate failed (discover=$discover, shards=$shards)"
+            exit 1
+          fi"""
 
 
 def flake_discover_job(job: dict[str, Any]) -> str:
@@ -541,6 +730,10 @@ RENDERERS = {
     "simple-nix": simple_nix_job,
     "changelog": changelog_job,
     "rust": rust_job,
+    "rust-rollup": rust_rollup_job,
+    "nix-unit-discover": nix_unit_discover_job,
+    "nix-unit-shards": nix_unit_shards_job,
+    "nix-unit-rollup": nix_unit_rollup_job,
     "flake-discover": flake_discover_job,
     "flake-x86-shards": flake_x86_shards_job,
     "flake-x86-outputs": flake_x86_outputs_job,

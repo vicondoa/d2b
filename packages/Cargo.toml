@@ -51,6 +51,28 @@ members = [
 [workspace.package]
 license = "Apache-2.0"
 
+# Keep ordinary development/test builds useful for panic backtraces without
+# paying to generate and link full DWARF for the entire dependency graph.
+# `debugging` is the explicit full-debug escape hatch for debugger sessions.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
+[profile.test]
+debug = "line-tables-only"
+
+[profile.test.package."*"]
+debug = false
+
+[profile.debugging]
+inherits = "dev"
+debug = 2
+
+[profile.debugging.package."*"]
+debug = 2
+
 [workspace.lints.clippy]
 all = "warn"
 

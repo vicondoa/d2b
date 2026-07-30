@@ -84,6 +84,36 @@ fn stale_ipc_crate_name_is_absent_from_current_sources() {
     );
 }
 
+fn assert_fast_dev_profile(manifest: &str, workspace: &str) {
+    for required in [
+        "[profile.dev]",
+        "[profile.dev.package.\"*\"]",
+        "[profile.test]",
+        "[profile.test.package.\"*\"]",
+        "[profile.debugging]",
+        "inherits = \"dev\"",
+        "debug = \"line-tables-only\"",
+        "debug = false",
+        "debug = 2",
+    ] {
+        assert!(
+            manifest.contains(required),
+            "{workspace} must keep the measured fast-development profile and full-debug escape hatch: missing {required}"
+        );
+    }
+}
+
+#[test]
+fn every_tested_workspace_uses_fast_debug_profiles() {
+    assert_fast_dev_profile(&read_repo_file("packages/Cargo.toml"), "main workspace");
+    for workspace in EXCLUDED_WORKSPACES {
+        assert_fast_dev_profile(
+            &read_repo_file(&format!("packages/{workspace}/Cargo.toml")),
+            workspace,
+        );
+    }
+}
+
 #[test]
 fn excluded_workspaces_keep_own_lock_and_supply_chain_policy() {
     let root = repo_root();

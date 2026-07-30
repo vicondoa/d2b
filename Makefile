@@ -11,7 +11,8 @@ SHELL := $(CURDIR)/tests/tools/scrub-shell-environment
 .PHONY: pre-tag smoke-lite i3-check \
         check check-static check-ci check-all check-fast check-tier0 \
         test test-unit \
-        test-lint test-rust test-fixture-contracts test-proofs test-flake test-nix-unit \
+        test-lint test-rust test-rust-main test-rust-remaining \
+        test-fixture-contracts test-proofs test-flake test-nix-unit \
         test-performance-budgets test-adr-index-coverage test-ci-coverage \
         test-flake-list \
         test-drift test-policy test-integration test-host-integration test-hardware perf \
@@ -107,6 +108,14 @@ test-lint:
 ## stub-no-socket, assert-pinned-tests).
 test-rust:
 	bash tests/test-rust.sh
+
+## test-rust-main / test-rust-remaining - CI shards of the comprehensive gate.
+## Local developers should run test-rust, which executes both once in order.
+test-rust-main:
+	bash tests/test-rust.sh main-workspace
+
+test-rust-remaining:
+	bash tests/test-rust.sh remaining-suite
 
 ## test-fixture-contracts - enforcing fixture-backed contract and CLI layer.
 ## Layer-1 local and CI orchestration set D2B_ENABLE_FIXTURE_BUILD=1.

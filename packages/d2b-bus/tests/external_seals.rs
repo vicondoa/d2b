@@ -13,7 +13,7 @@ fn dependent_cannot_forge_registration_or_mint_admitted_session() {
     let fixture = crate_root.join("tests/ui/external-seals");
     let scratch = Scratch::new(
         repository_root
-            .join(".scratch")
+            .join(".scratch/rust-test-cache")
             .join(format!("bus-external-seals-{}", toolchain_cache_key())),
     );
     let temp = scratch.path().join("tmp");

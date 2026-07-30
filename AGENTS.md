@@ -85,7 +85,9 @@ you to run one directly.
 release, plus sccache, cargo-nextest, cargo-deny, cargo-audit, shellcheck
 and jq. The gate scripts each re-enter a nix shell and bootstrap a private
 toolchain when those are missing, so working inside the dev shell skips
-that setup.
+that setup. Normal dev/test profiles retain line tables for panic locations but
+omit full dependency DWARF; use `cargo build --profile debugging` or
+`cargo test --profile debugging` when a debugger needs full symbols.
 
 Rust tests run under `cargo-nextest`. Two surfaces are not nextest surfaces
 and get explicit companion runs, so do not "simplify" them away: **doctests**
@@ -1471,8 +1473,9 @@ fields that request panel, agent, or model metadata.
   scratch trees between runs, keyed on a hash of `rustc -vV`. Compiled
   artifacts are not portable across compiler versions, and the gate's
   pinned toolchain routinely differs from a dev shell's, so an unkeyed
-  cache lets one poison the other. Those caches live under `.scratch/` and
-  are several GB per worktree; delete that directory to reclaim the space.
+  cache lets one poison the other. Those persistent caches live under
+  `.scratch/rust-test-cache/`, which CI restores as one cache surface. They
+  are several GB per worktree; delete that subtree to reclaim the space.
 - The persistent-shell helper is intentionally excluded from the main
   Rust workspace at `packages/d2b-guest-shell-runner/`. Run it by
   manifest path (and with `--features real-libshpool` when checking the

@@ -175,10 +175,11 @@ The privileged broker workspace stays on `cargo test`. Its tests are not
 process-per-test safe, and it runs 528 tests in about 1.4 s, so nextest has
 nothing to win there.
 
-Tests that shell out to `cargo` cache their scratch trees between runs, keyed
-on `rustc --version`, because compiled artifacts are not portable across
-compiler versions. When adding such a test, key its cache the same way and
-reuse the compilation but not any output whose freshness the test asserts on.
+Tests that shell out to `cargo` cache their scratch trees between runs under
+`.scratch/rust-test-cache/`, keyed on `rustc -vV`, because compiled artifacts
+are not portable across compiler versions. CI restores that directory as one
+cache surface. When adding such a test, key its subtree the same way and reuse
+the compilation but not any output whose freshness the test asserts on.
 
 When a failure reproduces only inside the gate's toolchain environment, use
 `tests/tools/repro-rust-gate-env.sh <command>` instead of re-running the whole

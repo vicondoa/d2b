@@ -22,11 +22,17 @@ test_script="$ROOT/tests/test-rust.sh"
 
 rc=0
 
-# --- Build the set of target dirs that test-rust.sh actually uses ---
-# These are the paths that MUST be cached for warm CI builds.
+# --- Build the set of compiler artifact dirs the Rust gate actually uses ---
+# These paths MUST be cached for warm CI builds. The .scratch subtree contains
+# only toolchain-keyed persistent trees owned by tests that invoke nested Cargo
+# or rustdoc; omitting it restores the outer workspace but leaves its 12-minute
+# critical path cold.
 declared_dirs=(
   "packages -> target"
   "packages/d2b-priv-broker -> target"
+  "packages/d2b-guest-shell-runner -> target"
+  "tests/tools/no-bash-ast-walker/target"
+  ".scratch/rust-test-cache"
 )
 # Broker parallel feature-pass target dirs: the script uses
 # ${broker_target_dir%/}-<suffix> where broker_target_dir resolves to
@@ -41,7 +47,7 @@ done < <(
 # The workflow's Swatinem/rust-cache step declares paths in `workspaces:`
 # (format: "path -> target") and `cache-directories:` (plain paths).
 cached_in_ci=$(
-  grep -E '^\s+(packages|packages/)' "$wf" \
+  grep -E '^\s+(packages|packages/|tests/tools/no-bash-ast-walker/target|\.scratch/)' "$wf" \
     | sed 's/^[[:space:]]*//' | sed 's/[[:space:]]*$//' \
     | sort -u
 )

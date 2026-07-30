@@ -3,8 +3,10 @@
 #   fmt + clippy + `cargo nextest run --workspace` (excluding the
 #   fixture-dependent d2b-contract-tests), an optional contract-crate run
 #   against D2B_FIXTURES, the CLI-contract layer, no-bash-ast-walker, the
-#   privileged broker workspace (3 feature passes, concurrent), schema-gen
+#   privileged broker workspace (3 feature passes), schema-gen
 #   reproducibility, and cargo-deny.
+# CI may split this driver into main-workspace and remaining-suite jobs. The
+# default all mode still executes both partitions exactly once for local gates.
 # Tests execute under cargo-nextest. Each workspace additionally runs the two
 #   surfaces nextest does not cover - doctests and harness=false binaries - via
 #   run_nextest_companions; see the comment above require_nextest for why.
@@ -21,26 +23,28 @@ ROOT=${ROOT:-$(cd "$HERE/.." && pwd)}
 
 cd "$ROOT"
 
-fixture_contracts_only=0
-case "${1:-}" in
-  "")
+rust_mode="${1:-all}"
+case "$rust_mode" in
+  all)
     [ "$#" -eq 0 ] || {
-      fail "usage: tests/test-rust.sh [fixture-contracts]"
+      fail "usage: tests/test-rust.sh [main-workspace|remaining-suite|fixture-contracts]"
       exit 2
     }
     ;;
-  fixture-contracts)
+  main-workspace|remaining-suite|fixture-contracts)
     [ "$#" -eq 1 ] || {
-      fail "usage: tests/test-rust.sh [fixture-contracts]"
+      fail "usage: tests/test-rust.sh [main-workspace|remaining-suite|fixture-contracts]"
       exit 2
     }
-    fixture_contracts_only=1
     ;;
   *)
-    fail "usage: tests/test-rust.sh [fixture-contracts]"
+    fail "usage: tests/test-rust.sh [main-workspace|remaining-suite|fixture-contracts]"
     exit 2
     ;;
 esac
+
+fixture_contracts_only=0
+[ "$rust_mode" = fixture-contracts ] && fixture_contracts_only=1
 
 if [ "$fixture_contracts_only" = 1 ] && [ "${D2B_ENABLE_FIXTURE_BUILD:-0}" != 1 ]; then
   fail "fixture-contracts mode requires D2B_ENABLE_FIXTURE_BUILD=1; refusing to report a skipped gate as passing"
@@ -90,6 +94,7 @@ broker_target_dir=$(d2b_cargo_target_dir broker)
 broker_layer1_target_dir="${broker_target_dir%/}-layer1"
 broker_fakebackends_target_dir="${broker_target_dir%/}-fakebackends"
 guest_shell_runner_target_dir=$(d2b_cargo_target_dir guest-shell-runner)
+no_bash_target_dir="$ROOT/tests/tools/no-bash-ast-walker/target"
 
 # Keep fixture-dependent contract crates out of generic workspace tests.
 # Full D2B_FIXTURES delivery to the sandbox/CI is tracked separately.
@@ -377,12 +382,11 @@ run_nextest_companions() {
 
 # The privileged broker is a SEPARATE workspace with three independent feature
 # passes (default, layer1-bootstrap, fake-backends), each on its OWN target dir.
-# They share nothing with the main workspace and nothing with each other, so the
-# three are run CONCURRENTLY among themselves in the broker section below - but
-# AFTER the main-workspace section, not overlapping it, so they don't contend
-# with the main workspace's timing-sensitive tests. With sccache the shared
-# crates are cache hits across all streams. Set D2B_NO_PARALLEL_BROKER=1 to force
-# serial. Each stream logs to its own file; failures surface at reap.
+# They share nothing with the main workspace and nothing with each other. The
+# streams stay serial by default because their tests manipulate process-global
+# signal/reap state; an explicit timing-only opt-in can use their separate target
+# directories. With sccache the shared crates are cache hits across all streams.
+# Each parallel stream logs to its own file and failures surface at reap.
 #
 # These three streams deliberately stay on `cargo test` rather than moving to
 # cargo-nextest with the rest of the gate. The broker's tests are not
@@ -412,9 +416,6 @@ broker_stream_fakebackends() {
   CARGO_TARGET_DIR="$broker_fakebackends_target_dir" cargo test --workspace --manifest-path "$broker_manifest" --features fake-backends
 }
 broker_streams=(default layer1 fakebackends)
-declare -A broker_pid broker_log
-broker_parallel=0
-[ "${D2B_PARALLEL_BROKER:-0}" = 1 ] && broker_parallel=1
 
 guest_shell_runner_gate() {
   cargo metadata --format-version 1 --manifest-path "$guest_shell_runner_manifest" >/dev/null
@@ -423,6 +424,23 @@ guest_shell_runner_gate() {
   CARGO_TARGET_DIR="$guest_shell_runner_target_dir" cargo nextest run --manifest-path "$guest_shell_runner_manifest" --workspace --features real-libshpool
   CARGO_TARGET_DIR="$guest_shell_runner_target_dir" run_nextest_companions \
     "guest shell runner" "$guest_shell_runner_manifest" --workspace --features real-libshpool
+}
+
+retain_fixture_for_ci_cache() {
+  local label="$1" store_path="$2"
+  [ -n "$store_path" ] || return 0
+  if [ -n "${GITHUB_ACTIONS:-}" ]; then
+    local runner_temp=${RUNNER_TEMP:?GITHUB_ACTIONS requires RUNNER_TEMP for fixture cache roots}
+    local root_dir="$runner_temp/d2b-fixture-cache-roots"
+    mkdir -p "$root_dir"
+    rm -f -- "$root_dir/$label"
+    nix-store --add-root "$root_dir/$label" -r "$store_path" >/dev/null
+    nix-store --query --roots "$store_path" | grep -F "$root_dir/$label" >/dev/null || {
+      fail "fixture cache root $label was not registered under RUNNER_TEMP"
+      return 1
+    }
+    ok "fixture cache root $label retained through the CI cache post-step"
+  fi
 }
 
 run_fixture_contract_tests() {
@@ -439,6 +457,11 @@ run_fixture_contract_tests() {
     contract_fixtures_full=$(nix build --extra-experimental-features 'nix-command flakes' \
       --no-warn-dirty --no-link --print-out-paths "$ROOT#checks.${contract_system}.fixture-smoke-full")
   fi
+  # cache-nix-action runs `nix store gc` in its post-step. CI roots keep the
+  # just-built closures alive until that post-step saves /nix; local runs create
+  # no root and retain the repository's normal garbage-collection behaviour.
+  retain_fixture_for_ci_cache fixture-smoke "$contract_fixtures"
+  retain_fixture_for_ci_cache fixture-smoke-full "$contract_fixtures_full"
   log "--> cargo nextest run -p d2b-contract-tests (D2B_FIXTURES = fixture-smoke)"
   D2B_FIXTURES="$contract_fixtures" D2B_FIXTURES_FULL="$contract_fixtures_full" \
   CARGO_TARGET_DIR="$workspace_target_dir" \
@@ -491,9 +514,10 @@ if [ "$fixture_contracts_only" = 1 ]; then
   exit 0
 fi
 
-log "--> cargo fmt --check"
-cargo fmt --manifest-path "$manifest" --all --check
-ok "cargo fmt --check"
+run_main_workspace_gate() {
+  log "--> cargo fmt --check"
+  cargo fmt --manifest-path "$manifest" --all --check
+  ok "cargo fmt --check"
 
 # --locked so a stale committed Cargo.lock fails the gate instead of being
 # silently regenerated. flake.nix vendors the committed lockfile, so a lock
@@ -523,7 +547,10 @@ elif command -v nix >/dev/null 2>&1; then
 else
   log "  SKIP: fixture-dependent d2b-contract-tests (nix unavailable to build fixture-smoke; not covered by flake shards)"
 fi
+  log "test-rust main-workspace OK (duration: $((SECONDS - suite_started))s)"
+}
 
+run_remaining_suite_gate() {
 # no-bash-exec AST layer (ADR 0017): the per-line `Command::new("bash")` scan
 # is covered by d2b-contract-tests/tests/policy_source.rs, but the
 # AST-level walk (which catches cross-line / obfuscated bash-exec sites the
@@ -532,48 +559,28 @@ fi
 # it here so the AST coverage stays gated. Fails closed on any bash-literal
 # Command::new site under packages/.
 log "--> no-bash-ast-walker (ADR 0017 AST-level bash-exec scan)"
-CARGO_TARGET_DIR="$workspace_target_dir" \
+CARGO_TARGET_DIR="$no_bash_target_dir" \
   cargo run --release --quiet \
     --manifest-path "$ROOT/tests/tools/no-bash-ast-walker/Cargo.toml" \
     -- "$ROOT/packages"
 ok "no-bash-ast-walker (zero Command::new bash-literal sites)"
 
 # Broker workspace: run the three feature passes (default, layer1-bootstrap,
-# fake-backends) - each on its own target dir - serially by default because
-# the broker's SIGCHLD reaper tests manipulate process-global signal/reap state.
-# Set D2B_PARALLEL_BROKER=1 only for local timing experiments. The fail-closed
+# fake-backends) - each on its own target dir - serially. Tests inside each
+# cargo-test process manipulate process-global SIGCHLD/reap state, so do not
+# overlap the three harnesses unless a dedicated isolation review proves it safe.
+# The fail-closed
 # `fake-backends` stream runs the broker's hermetic
 # integration tests (e.g. tests/pidfd_handoff_scm_rights.rs,
 # #![cfg(feature = "fake-backends")], pinned in
 # tests/golden/pinned/pidfd-handoff.txt) that neither the default nor the
 # layer1-bootstrap pass enables - without it those fd-passing tests would not
 # run in the gate at all (the retired tests/pidfd-handoff.sh used --all-features).
-if [ "$broker_parallel" = 1 ]; then
-  log "--> broker workspace: running default|layer1|fake-backends concurrently (separate target dirs)"
-  broker_logdir=$(d2b_mktemp ".d2b-broker-logs.XXXXXX")
-  for _stream in "${broker_streams[@]}"; do
-    broker_log[$_stream]="$broker_logdir/$_stream.log"
-    ( "broker_stream_$_stream" ) >"${broker_log[$_stream]}" 2>&1 &
-    broker_pid[$_stream]=$!
-  done
-  broker_failed=0
-  for _stream in "${broker_streams[@]}"; do
-    if wait "${broker_pid[$_stream]}"; then
-      ok "broker cargo ($_stream feature pass)"
-    else
-      log "broker stream '$_stream' FAILED - captured output follows:"
-      cat "${broker_log[$_stream]}" >&2 || true
-      broker_failed=1
-    fi
-  done
-  [ "$broker_failed" -eq 0 ] || { fail "broker workspace checks failed"; exit 1; }
-else
-  for _stream in "${broker_streams[@]}"; do
-    log "--> broker cargo ($_stream feature pass, serial)"
-    "broker_stream_$_stream"
-    ok "broker cargo ($_stream feature pass)"
-  done
-fi
+for _stream in "${broker_streams[@]}"; do
+  log "--> broker cargo ($_stream feature pass, serial)"
+  "broker_stream_$_stream"
+  ok "broker cargo ($_stream feature pass)"
+done
 
 log "--> guest shell runner cargo (standalone workspace, real-libshpool feature)"
 guest_shell_runner_gate
@@ -584,6 +591,7 @@ cleanup_cargo_special_files "broker cargo test" "$broker_target_dir"
 cleanup_cargo_special_files "broker layer1 cargo test" "$broker_layer1_target_dir"
 cleanup_cargo_special_files "broker fake-backends cargo test" "$broker_fakebackends_target_dir"
 cleanup_cargo_special_files "guest shell runner cargo test" "$guest_shell_runner_target_dir"
+cleanup_cargo_special_files "no-bash-ast-walker" "$no_bash_target_dir"
 cleanup_package_test_scratch "workspace cargo test" "$ROOT/packages/d2bd/target"
 
 schema_out="$ROOT/packages/xtask/out"
@@ -707,4 +715,19 @@ ok "stub-no-socket"
 log "--> tests/tools/assert-pinned-tests.sh"
 bash "$ROOT/tests/tools/assert-pinned-tests.sh"
 ok "assert-pinned-tests"
-log "test-rust OK (duration: $((SECONDS - suite_started))s)"
+  log "test-rust remaining-suite OK (duration: $((SECONDS - suite_started))s)"
+}
+
+case "$rust_mode" in
+  main-workspace)
+    run_main_workspace_gate
+    ;;
+  remaining-suite)
+    run_remaining_suite_gate
+    ;;
+  all)
+    run_main_workspace_gate
+    run_remaining_suite_gate
+    log "test-rust OK (duration: $((SECONDS - suite_started))s)"
+    ;;
+esac
