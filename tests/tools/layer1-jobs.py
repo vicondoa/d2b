@@ -102,7 +102,25 @@ def ci_env_block(job: dict[str, Any], spaces: int) -> str:
     return "\n".join(lines) + "\n"
 
 
-def nix_setup_step() -> str:
+def nix_setup_step(job: dict[str, Any] | None = None) -> str:
+    """Renders nix installation plus a per-job nix store cache.
+
+    The cache key is scoped to the job id. Every nix job used to share one key,
+    and because actions/cache never overwrites an existing entry, whichever job
+    finished first froze the cache at whatever its store happened to hold. In
+    practice that was a trivial lint or drift job with a nearly-empty store, so
+    the fixture-contract gate restored ~94 MB and then still logged "these 166
+    derivations will be built" - the cache hit, reported success, and saved
+    nothing worth having. Scoping by job means each one accumulates and reuses
+    its own store.
+
+    The 8G ceiling is per entry, and GitHub evicts repository caches by LRU
+    against a fixed total, so scoping this way deliberately trades some of that
+    budget for the fixture job actually getting a warm store. If the rust-cache
+    entries start being evicted, narrow this to the jobs that genuinely build
+    derivations rather than widening the ceiling.
+    """
+    scope = job["ciJobId"] if job else "shared"
     return f"""      - uses: {INSTALL_NIX}
         with:
           nix_path: nixpkgs=channel:nixos-unstable
@@ -115,11 +133,11 @@ def nix_setup_step() -> str:
         # Restore is best-effort: a cache miss is slow, never incorrect.
         uses: {NIX_CACHE}
         with:
-          primary-key: nix-${{{{ runner.os }}}}-${{{{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}}}
-          restore-prefixes-first-match: nix-${{{{ runner.os }}}}-
+          primary-key: nix-${{{{ runner.os }}}}-{scope}-${{{{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}}}
+          restore-prefixes-first-match: nix-${{{{ runner.os }}}}-{scope}-
           gc-max-store-size-linux: 8G
           purge: true
-          purge-prefixes: nix-${{{{ runner.os }}}}-
+          purge-prefixes: nix-${{{{ runner.os }}}}-{scope}-
           purge-created: 0
           purge-primary-key: never"""
 
@@ -133,7 +151,7 @@ def simple_nix_job(job: dict[str, Any]) -> str:
       - uses: {CHECKOUT}
         with:
           persist-credentials: false
-{nix_setup_step()}
+{nix_setup_step(job)}
       - name: {job["displayName"]}
         run: make {job["makeTarget"]}"""
 
@@ -240,7 +258,7 @@ def rust_job(job: dict[str, Any]) -> str:
         with:
           persist-credentials: false
           fetch-depth: 0
-{nix_setup_step()}
+{nix_setup_step(job)}
       - name: Free runner disk for Rust gate
         run: |
           df -h
@@ -302,7 +320,7 @@ def flake_discover_job(job: dict[str, Any]) -> str:
       - uses: {CHECKOUT}
         with:
           persist-credentials: false
-{nix_setup_step()}
+{nix_setup_step(job)}
       - id: list
         name: {job["displayName"]}
         run: |
@@ -337,7 +355,7 @@ def flake_x86_shards_job(job: dict[str, Any]) -> str:
           sudo chmod 600 "$SWAP"
           sudo mkswap "$SWAP"
           sudo swapon "$SWAP"
-{nix_setup_step()}
+{nix_setup_step(job)}
       - name: Install flake shard diagnostics
         run: sudo apt-get update && sudo apt-get install -y gdb
       - name: {job["displayName"]}
@@ -358,7 +376,7 @@ def flake_x86_outputs_job(job: dict[str, Any]) -> str:
       - uses: {CHECKOUT}
         with:
           persist-credentials: false
-{nix_setup_step()}
+{nix_setup_step(job)}
       - name: {job["displayName"]}
         env:
           D2B_FLAKE_OUTPUTS: "1"
@@ -397,7 +415,7 @@ def flake_aarch64_smoke_job(job: dict[str, Any]) -> str:
       - uses: {CHECKOUT}
         with:
           persist-credentials: false
-{nix_setup_step()}
+{nix_setup_step(job)}
       - name: {job["displayName"]}
         run: |
           nix-instantiate --eval --strict \\

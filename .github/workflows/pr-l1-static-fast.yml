@@ -73,11 +73,11 @@ jobs:
         # Restore is best-effort: a cache miss is slow, never incorrect.
         uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569
         with:
-          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}
-          restore-prefixes-first-match: nix-${{ runner.os }}-
+          primary-key: nix-${{ runner.os }}-test-lint-${{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-test-lint-
           gc-max-store-size-linux: 8G
           purge: true
-          purge-prefixes: nix-${{ runner.os }}-
+          purge-prefixes: nix-${{ runner.os }}-test-lint-
           purge-created: 0
           purge-primary-key: never
       - name: Lint gate (preflight + parse + shellcheck)
@@ -138,11 +138,11 @@ jobs:
         # Restore is best-effort: a cache miss is slow, never incorrect.
         uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569
         with:
-          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}
-          restore-prefixes-first-match: nix-${{ runner.os }}-
+          primary-key: nix-${{ runner.os }}-test-rust-${{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-test-rust-
           gc-max-store-size-linux: 8G
           purge: true
-          purge-prefixes: nix-${{ runner.os }}-
+          purge-prefixes: nix-${{ runner.os }}-test-rust-
           purge-created: 0
           purge-primary-key: never
       - name: Free runner disk for Rust gate
@@ -237,11 +237,11 @@ jobs:
         # Restore is best-effort: a cache miss is slow, never incorrect.
         uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569
         with:
-          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}
-          restore-prefixes-first-match: nix-${{ runner.os }}-
+          primary-key: nix-${{ runner.os }}-test-fixture-contracts-${{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-test-fixture-contracts-
           gc-max-store-size-linux: 8G
           purge: true
-          purge-prefixes: nix-${{ runner.os }}-
+          purge-prefixes: nix-${{ runner.os }}-test-fixture-contracts-
           purge-created: 0
           purge-primary-key: never
       - name: Free runner disk for Rust gate
@@ -316,11 +316,11 @@ jobs:
         # Restore is best-effort: a cache miss is slow, never incorrect.
         uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569
         with:
-          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}
-          restore-prefixes-first-match: nix-${{ runner.os }}-
+          primary-key: nix-${{ runner.os }}-test-proofs-${{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-test-proofs-
           gc-max-store-size-linux: 8G
           purge: true
-          purge-prefixes: nix-${{ runner.os }}-
+          purge-prefixes: nix-${{ runner.os }}-test-proofs-
           purge-created: 0
           purge-primary-key: never
       - name: Proof crates gate
@@ -346,11 +346,11 @@ jobs:
         # Restore is best-effort: a cache miss is slow, never incorrect.
         uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569
         with:
-          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}
-          restore-prefixes-first-match: nix-${{ runner.os }}-
+          primary-key: nix-${{ runner.os }}-test-nix-unit-${{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-test-nix-unit-
           gc-max-store-size-linux: 8G
           purge: true
-          purge-prefixes: nix-${{ runner.os }}-
+          purge-prefixes: nix-${{ runner.os }}-test-nix-unit-
           purge-created: 0
           purge-primary-key: never
       - name: Nix unit corpus gate
@@ -378,11 +378,11 @@ jobs:
         # Restore is best-effort: a cache miss is slow, never incorrect.
         uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569
         with:
-          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}
-          restore-prefixes-first-match: nix-${{ runner.os }}-
+          primary-key: nix-${{ runner.os }}-flake-eval-discover-${{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-flake-eval-discover-
           gc-max-store-size-linux: 8G
           purge: true
-          purge-prefixes: nix-${{ runner.os }}-
+          purge-prefixes: nix-${{ runner.os }}-flake-eval-discover-
           purge-created: 0
           purge-primary-key: never
       - id: list
@@ -430,11 +430,11 @@ jobs:
         # Restore is best-effort: a cache miss is slow, never incorrect.
         uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569
         with:
-          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}
-          restore-prefixes-first-match: nix-${{ runner.os }}-
+          primary-key: nix-${{ runner.os }}-flake-eval-x86-${{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-flake-eval-x86-
           gc-max-store-size-linux: 8G
           purge: true
-          purge-prefixes: nix-${{ runner.os }}-
+          purge-prefixes: nix-${{ runner.os }}-flake-eval-x86-
           purge-created: 0
           purge-primary-key: never
       - name: Install flake shard diagnostics
@@ -468,11 +468,11 @@ jobs:
         # Restore is best-effort: a cache miss is slow, never incorrect.
         uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569
         with:
-          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}
-          restore-prefixes-first-match: nix-${{ runner.os }}-
+          primary-key: nix-${{ runner.os }}-flake-eval-x86-outputs-${{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-flake-eval-x86-outputs-
           gc-max-store-size-linux: 8G
           purge: true
-          purge-prefixes: nix-${{ runner.os }}-
+          purge-prefixes: nix-${{ runner.os }}-flake-eval-x86-outputs-
           purge-created: 0
           purge-primary-key: never
       - name: Flake non-checks outputs (x86_64-linux)
@@ -522,11 +522,11 @@ jobs:
         # Restore is best-effort: a cache miss is slow, never incorrect.
         uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569
         with:
-          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}
-          restore-prefixes-first-match: nix-${{ runner.os }}-
+          primary-key: nix-${{ runner.os }}-test-flake-aarch64-${{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-test-flake-aarch64-
           gc-max-store-size-linux: 8G
           purge: true
-          purge-prefixes: nix-${{ runner.os }}-
+          purge-prefixes: nix-${{ runner.os }}-test-flake-aarch64-
           purge-created: 0
           purge-primary-key: never
       - name: aarch64 smoke eval
@@ -555,11 +555,11 @@ jobs:
         # Restore is best-effort: a cache miss is slow, never incorrect.
         uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569
         with:
-          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}
-          restore-prefixes-first-match: nix-${{ runner.os }}-
+          primary-key: nix-${{ runner.os }}-test-drift-${{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-test-drift-
           gc-max-store-size-linux: 8G
           purge: true
-          purge-prefixes: nix-${{ runner.os }}-
+          purge-prefixes: nix-${{ runner.os }}-test-drift-
           purge-created: 0
           purge-primary-key: never
       - name: Drift gate
@@ -607,11 +607,11 @@ jobs:
         # Restore is best-effort: a cache miss is slow, never incorrect.
         uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569
         with:
-          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}
-          restore-prefixes-first-match: nix-${{ runner.os }}-
+          primary-key: nix-${{ runner.os }}-test-policy-${{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-test-policy-
           gc-max-store-size-linux: 8G
           purge: true
-          purge-prefixes: nix-${{ runner.os }}-
+          purge-prefixes: nix-${{ runner.os }}-test-policy-
           purge-created: 0
           purge-primary-key: never
       - name: Free runner disk for Rust gate
@@ -706,11 +706,11 @@ jobs:
         # Restore is best-effort: a cache miss is slow, never incorrect.
         uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569
         with:
-          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}
-          restore-prefixes-first-match: nix-${{ runner.os }}-
+          primary-key: nix-${{ runner.os }}-test-runtime-ledger-${{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-test-runtime-ledger-
           gc-max-store-size-linux: 8G
           purge: true
-          purge-prefixes: nix-${{ runner.os }}-
+          purge-prefixes: nix-${{ runner.os }}-test-runtime-ledger-
           purge-created: 0
           purge-primary-key: never
       - name: Free runner disk for Rust gate
