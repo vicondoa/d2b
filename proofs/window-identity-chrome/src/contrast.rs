@@ -250,6 +250,12 @@ mod tests {
 
     #[test]
     fn non_text_threshold_is_lower_than_text() {
-        assert!(CONTRAST_NON_TEXT < CONTRAST_TEXT_AA);
+        // Both operands are constants, so this is decidable at compile time.
+        // A const block asserts it there, which is strictly stronger than the
+        // runtime form: the ordering can no longer be broken and merely caught
+        // when someone happens to run the tests.
+        const {
+            assert!(CONTRAST_NON_TEXT < CONTRAST_TEXT_AA);
+        }
     }
 }
