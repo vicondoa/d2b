@@ -615,7 +615,7 @@ were named by no slice.
 | `ADR046-provider-001` | One-crate / one-identity policy | **Met, but delivered outside this item's Destination.** The rule is enforced by `one_crate_is_exactly_one_provider_identity` in `policy_provider_crates.rs`, which the packaging slice owns. Recorded so a later reader does not look for it under `ADR046-provider-001`'s three destination paths and conclude it is missing | - |
 | `ADR046-provider-002` | Workspace **naming** policy | **Met.** `the_naming_convention_reads_base_before_implementation`, plus the pinned exemption case | - |
 | `ADR046-provider-002` | Workspace **dependency** policy | **Met.** `every_provider_crate_respects_the_dependency_direction`, with negative cases for the daemon, broker, store and a sibling Provider | - |
-| `ADR046-provider-002` | Workspace **output** policy | **Not met, and named by no slice.** Nothing checks a Provider crate's build outputs. `nixos-modules/provider-catalog.nix` types an artifact's `package` as a consumer-supplied `types.package` and takes its `storePath`, so the catalog records whatever derivation a consumer hands it and asserts nothing about that derivation's shape. A Provider whose package emits the wrong outputs is admitted | A check on the emitted Provider package's outputs, or an explicit ruling that the catalog's exact-digest selection is the whole output contract and the word "output" in the validation field is satisfied by it |
+| `ADR046-provider-002` | Workspace **output** policy | **Not met, but this row mislocates the obligation. Corrected in section 12.1; read that first.** The finding as originally written asserted that `nixos-modules/provider-catalog.nix` should have asserted something about a derivation's shape. It should not, and could not. What is genuinely unmet is the crate-to-package-output cardinality rule | Section 12.1 |
 | `ADR046-provider-002` | Workspace **dossier** parity policy | **Not met, and named by no slice.** `docs/specs/providers/` holds a dossier per Provider, and `policy_provider_crates.rs` contains no occurrence of "dossier". Nothing ties a Provider crate to its dossier, checks that every dossier has a crate or every crate a dossier, or compares the identity the crate declares with the identity the dossier names. This is the one obligation of the four items that has no partial coverage at all | A policy case pairing `packages/d2b-provider-<base>-<implementation>/` with `docs/specs/providers/ADR-046-provider-<base>-<implementation>.md` and comparing the declared identity, with the same two exemptions already pinned |
 | `ADR046-provider-002` | **Catalog parity** policy | **Not met.** Recorded in 10.1; repeated here because it is this item's own named validation and would otherwise look like a slice observation rather than an obligation | The parity test in 10.1 |
 | `ADR046-provider-003` | Shared conformance tests | **Met at the logic layer, unproven at every real boundary.** The shared suite in `packages/d2b-process-conformance/src/suite.rs` runs against both Providers, and two further cells are duplicated per crate rather than shared (10.1). Every cell runs over `ScriptedEffectPort` | `ADR046-process-001` in W4, then the same suite re-run against the production adapter |
@@ -638,3 +638,211 @@ construction, every one is unwired, and the first evidence that any of it
 matches a real system arrives with `ADR046-process-001` in W4. That is the
 correct sequencing and it was chosen deliberately, but it means a green
 Wave 3 gate is evidence about internal consistency and not about behaviour.
+
+## 12. Corrections and new findings on the `ADR046-provider-002` output and parity obligations
+
+Section 11 audited `ADR046-provider-002`'s five-term validation phrase -
+"Workspace naming/dependency/output/dossier/catalog parity policy" - and got the
+**output** term wrong. The correction is recorded here rather than silently
+rewritten in place, because a mislocated obligation that is quietly moved leaves
+no trace that the earlier reading was ever held.
+
+### 12.1 Correction: the output obligation was located in the wrong actor
+
+**What section 11 claimed.** That the output term was unmet because
+`nixos-modules/provider-catalog.nix` "asserts nothing about that derivation's
+shape", and that discharging it needed "a check on the emitted Provider
+package's outputs".
+
+**Why that is wrong.** Two independent reasons, either sufficient.
+
+First, the sentence the term comes from is a **cardinality** rule, not a
+contents rule. The crate/package boundary section of
+`docs/specs/ADR-046-provider-model-and-packaging.md` reads
+`- has one Nix package/conformance output;` inside a bullet list whose other
+members map one-to-one onto the remaining four terms of the same validation
+phrase: `declares one Provider identity` (naming), `depends only on public
+neutral contracts/toolkit/SDK crates` and `does not import d2bd, broker,
+Zone-store, Nix-emitter, or another Provider's implementation internals`
+(dependency), `has one ADR-046-provider-<provider-name>.md dossier` (dossier),
+and the "Package catalog" section the same document carries (catalog parity).
+Every one of those four is a filesystem or manifest scan. Reading the fifth as a
+derivation-contents check makes it the only member of a homogeneous list that
+means something structurally different.
+
+Second, the derivation-contents requirement exists, but it is stated in a
+**different specification and assigned to a different actor**.
+`docs/specs/ADR-046-resources-zone-control.md` section 14.10, "Phase 2 - Nix
+build", carries the row:
+
+> Artifact catalog entry has required derivation outputs (manifest, config
+> schema, executable) - Provider only | Resource compiler | build failure
+
+The mechanism column names the **resource compiler**, and the phase is Nix
+**build**. `provider-catalog.nix` is Phase 1 NixOS eval. A pure eval cannot read
+the contents of a derivation it has only declared, so that check could never
+have lived there, and the section 11 remediation was unimplementable as written.
+
+**Where the derivation-contents rule actually belongs.** Work item
+**`ADR046-zone-control-015`**, wave **W5**. Determined by reading the manifests
+rather than inferring: the item's `destination` is
+`packages/d2b-resource-compiler/src/{main,bundle,schema,validator,digest,sort,secret_lint,generation}.rs`
+exposed as `pkgs.d2b-resource-compiler`; its `detailedDesign` opens "Implement
+all Phase 2 build-time checks (§14.10 Phase 2 table)" and states explicitly that
+for each `d2b.artifacts.*` entry the compiler must "extract and hash manifest and
+config schema files"; its `validation` field enumerates the section 15.8 Phase 2
+build tests. The wave is read from that item's node in
+`ADR-046-implementation-graph.json`, whose `wave` field is `W5`. The
+`implementationState` is `Planned` and no `packages/d2b-resource-compiler/`
+exists in the tree, so nothing about this obligation is discharged anywhere
+today.
+
+**What the output term therefore is, and its state.** A cardinality rule over
+the workspace: one Provider crate yields one Nix package output, not several.
+Its state is recorded in 12.2 immediately below, because attempting to check it
+is what exposed the gap.
+
+### 12.2 Specification gap: the required derivation outputs have no path, name, or layout
+
+**Unimplementable as specified.** The Phase 2 row above names three required
+derivation outputs - manifest, config schema, executable - and specifies no
+path, no filename, no Nix output name, and no directory layout for any of them.
+`docs/specs/` was searched for `manifest.json`, `provider-manifest`,
+`config-schema`, `$out` and `/bin/`; none appears in any Provider packaging
+context. Nor can "existing code is canon" resolve it: no Provider crate has a
+Nix package output at all (`packages.x86_64-linux` exposes thirteen attributes,
+none naming any of the nine `packages/d2b-provider*` crates), no Provider crate
+carries a `.nix` file, and nothing anywhere in this tree asserts a derivation's
+internal shape, so there is no precedent to follow either.
+
+Consequently an implementer of `ADR046-zone-control-015` cannot write that check
+without **inventing the layout contract every Provider package must satisfy**,
+and an invented layout would be indistinguishable from a specified one the moment
+it is committed and the first Provider package is built against it.
+
+**This needs a specification amendment, not a wave.** The amendment must fix,
+for a Provider derivation: the output name or names, the exact relative path of
+the signed manifest, the exact relative path of the root config JSON Schema, and
+how the executable set is located - which must be consistent with the artifact
+catalog's `executableDigests` being a `map[name]sha256` with one entry per built
+binary. Until it lands, `ADR046-zone-control-015` carries a hole in the middle of
+its own Phase 2 table.
+
+**Consequence for the output term, stated separately so the two are not
+conflated.** The cardinality rule of 12.1 is likewise not checkable from this
+source tree today, for a related but distinct reason: with zero Provider crates
+carrying any package output, there is no relation in the tree between a Provider
+crate and "its" Nix package output, so counting that relation would require
+inventing the naming convention that maps one to the other. No such check was
+written. Writing one against an invented mapping would encode a convention the
+tree does not hold, which is the same failure the dossier-parity work already
+declined when it chose the spec-id row over the owners row.
+
+One thing is worth recording so the term is not later read as wholly unaddressed.
+`nixos-modules/provider-catalog.nix` types `d2b.artifacts.<id>.package` as
+`types.package` - singular, one derivation per `artifactId`, and an `artifactId`
+selects exactly one Provider. That is the cardinality rule enforced structurally
+at the one point where a Provider derivation enters d2b, by the option type
+rather than by an assertion. This is an **inference**, not a discharge: it is a
+defensible reading that the option type already satisfies the bullet, and a
+reviewer should confirm or reject it. If confirmed, the output term is met and
+section 11's row closes; if rejected, the term stays open behind the amendment
+above.
+
+### 12.3 Specification gap: the required-outputs rule has no conformance scenario
+
+Smaller, and independent of whether 12.2 is amended.
+
+The Phase 2 build-test table gives a named conformance scenario for each of the
+two digest-mismatch rows - `nix-build-schema-digest-mismatch` and
+`nix-build-manifest-digest-mismatch` - but gives **no scenario at all** for the
+required-outputs-present row. Verified by reading the whole table: its fifteen
+entries are `nix-build-artifact-id-missing-from-catalog`,
+`nix-build-artifact-wrong-type-rejected`, `nix-build-duplicate-artifact-id`,
+`nix-build-artifact-store-path-absent-from-bundle`,
+`nix-build-artifact-store-path-absent-from-config`,
+`nix-build-config-schema-failure`, `nix-build-schema-digest-mismatch`,
+`nix-build-manifest-digest-mismatch`, `nix-build-resourcetype-collision`,
+`nix-build-bundle-sorted`, `nix-build-content-hash-stable`,
+`nix-build-artifact-catalog-digest-anchored`,
+`nix-build-credential-ref-survives-build`,
+`nix-build-inline-secret-lint-warning` and
+`nix-build-inline-secret-strict-failure`. None of them is an
+absent-required-output case.
+
+The effect is that the rule is stated once, in the section 14.10 Phase 2 table,
+and has **no conformance identity to cite**. `ADR046-zone-control-015`'s
+`validation` field enumerates those fifteen scenarios by name, so an
+implementation that omitted the required-outputs check entirely would satisfy
+its stated validation. The amendment of 12.2 should add the missing scenario in
+the same edit that fixes the layout, since a scenario cannot be written without
+one.
+
+**One correction to how this was reported to the register.** The finding reached
+here as "section 15.3's Phase 2 build-test table". Section 15.3 is
+"Provider tests"; the Phase 2 build-test table is in section **15.8**,
+"Configuration generation and cleanup tests", and both work items that cite it
+cite it as §15.8. The finding is correct; only the section number was wrong.
+
+### 12.4 The catalog/manifest parity divergences, now confirmed by a landed test
+
+Section 10.1 recorded the catalog/manifest parity test as owed. It landed in
+`e15f88cc`, and it found real divergence, which it pins as exact data so that
+resolving any of it fails the test and forces the entry to be struck in the same
+change. The findings are read out of
+`packages/xtask/src/provider_packaging.rs` and are recorded here so they are
+visible outside the test that holds them.
+
+**The digest disagreement.** Both artifacts declare exactly six digests and
+agree on four - package, executable, manifest and config. The catalog's other
+two follow the specification bullet
+`package/executable/manifest/component/descriptor/config digests` and name a
+**component** digest and a **descriptor** digest. `ArtifactDigestSet` in
+`packages/d2b-contracts/src/v3/provider.rs` instead names an **exported schema
+set** digest and an **exported service surface** digest. These are different
+facts, not two spellings of one fact, and the contract is the side that departed
+from the bullet's wording.
+
+*Does the specification settle which side is wrong?* **Partly, and not enough to
+act on.** It settles that the catalog's two names are attested concepts: the
+same packaging document names a "component schema digest" among a component's
+declared fields, and a Provider descriptor digest appears as a normative concept
+in several Provider dossiers. It also settles that the contract's two names are
+attested **nowhere**: `exported schema digest` and `exported service surface
+digest` appear in no document under `docs/specs/`. What it does **not** settle is
+whether `ArtifactDigestSet` is obliged to mirror the catalog bullet at all,
+because the one normative artifact-catalog field table - section 4.3.1 of
+`docs/specs/ADR-046-resources-zone-control.md` - enumerates only `digest`,
+`executableDigests`, `manifestDigest`, `configSchemaDigest` and
+`conformanceAttestationDigest`, and names **neither** pair. Two documents
+therefore give two different digest sets for the same artifact, and a third
+spelling sits in the contract.
+
+**Ruling needed**, and it is a three-way reconciliation rather than a choice
+between two: whether the artifact catalog carries six digests or the four-plus-
+attestation of section 4.3.1, and if six, whether the fifth and sixth are
+component/descriptor or schema/service. Recorded as needing a ruling; not
+resolved here, because picking a side would be exactly the invention this
+register exists to prevent.
+
+**Five catalog facts with no counterpart in the manifest at all.** Each is named
+by a specification bullet on the catalog side and absent from `ProviderManifest`:
+package name, version, systems, platform, and support contact. Pinned in the
+test as `CATALOG_FIELDS_WITHOUT_A_CONTRACT_FIELD` alongside the two disputed
+digests.
+
+**One contract-only field.** `TrustEvidence::publisher_trusted` - whether the
+publisher is in the Zone's trusted publisher set at the verified root epoch - has
+no catalog counterpart. Pinned as
+`CONTRACT_FIELDS_WITHOUT_A_CATALOG_FIELD` together with the two contract-side
+digests.
+
+| Finding | Class | Owning wave |
+| --- | --- | --- |
+| Output obligation mislocated to `provider-catalog.nix`; the derivation-contents rule is `ADR046-zone-control-015` | Correction to this register | Recorded, no wave work |
+| Required derivation outputs have no path, filename, output name, or layout | Specification gap | Amendment, before `ADR046-zone-control-015` in W5 |
+| Output cardinality not checkable: no Provider crate has a package output, so the crate-to-output relation does not exist in the tree | Unmet obligation, blocked | Behind the amendment above |
+| `d2b.artifacts.<id>.package` typed `types.package` already enforces the cardinality at the one entry point | Inference, needs confirm or reject | W3 panel |
+| Required-outputs row has no conformance scenario in the section 15.8 Phase 2 table | Specification gap | Same amendment |
+| Catalog names component and descriptor digests; contract names exported schema and service digests; section 4.3.1 names neither | Ruling needed, three-way | Amendment, before the Provider packaging surface is treated as frozen |
+| Five catalog facts absent from the manifest; one contract field absent from the catalog | Unmet obligation, pinned as data | `ADR046-provider-002`, closes when the ruling above lands |
