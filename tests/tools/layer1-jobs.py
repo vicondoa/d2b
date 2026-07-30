@@ -112,10 +112,22 @@ def ci_env_block(job: dict[str, Any], spaces: int) -> str:
 # to matter get an entry: measured on this gate, test-fixture-contracts spent 40
 # minutes building 166 derivations and test-nix-unit ran 15 minutes, while the
 # flake-eval shards finish in under a minute and the lint/drift jobs only
-# evaluate. Two entries at 4G plus the ~2 GB rust-cache fits the budget with
-# room to spare.
+# evaluate.
+#
+# On sizing: gc-max-store-size-linux caps the UNCOMPRESSED /nix store before
+# save, which is not the size of the resulting cache entry - the entry is
+# compressed and materially smaller. Two capped stores plus rust-cache
+# therefore sit inside the budget rather than consuming it outright, but this
+# configuration is deliberately near enough to the cap that it should be
+# re-measured against the repository cache-usage page after a run rather than
+# assumed.
 NIX_CACHED_JOBS = frozenset({"test-fixture-contracts", "test-nix-unit"})
 NIX_CACHE_MAX_STORE = "4G"
+# Scope suffix for a matrix job, so shards do not share one key. Defined here
+# rather than at the call site because a brace-doubled literal written inside an
+# f-string replacement field is ordinary Python source, not escaped f-string
+# text, and would emit four literal braces - an invalid GitHub expression.
+MATRIX_CHECK_SCOPE = "-${{ matrix.check }}"
 
 
 def nix_setup_step(job: dict[str, Any], scope_suffix: str = "") -> str:
@@ -378,7 +390,7 @@ def flake_x86_shards_job(job: dict[str, Any]) -> str:
           sudo chmod 600 "$SWAP"
           sudo mkswap "$SWAP"
           sudo swapon "$SWAP"
-{nix_setup_step(job, "-${{{{ matrix.check }}}}")}
+{nix_setup_step(job, MATRIX_CHECK_SCOPE)}
       - name: Install flake shard diagnostics
         run: sudo apt-get update && sudo apt-get install -y gdb
       - name: {job["displayName"]}
