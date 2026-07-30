@@ -57,7 +57,18 @@ pub use resource_status::{
 
 // The `provider` module's re-exports. Keep every `pub use provider::...` line
 // inside this region so it stays one contiguous block.
-// (empty until `ADR046-provider-001` lands)
+pub use provider::{
+    ArtifactDigest, ArtifactDigestSet, ArtifactId, BindingTargetType, CapabilitySupport,
+    CompatibilityRange, ComponentDescriptor, ComponentType, DependencyAlias, DependencyDeclaration,
+    Exportability, ExtensionSchemaRegistration, MAX_ARTIFACT_ID_BYTES,
+    MAX_CAPABILITY_MATRIX_ENTRIES, MAX_COMPONENT_METHODS, MAX_COMPONENT_RESOURCE_TYPES,
+    MAX_PROJECTION_FACTORIES, MAX_PROJECTION_REF_TYPES, MAX_PROVIDER_API_BINDINGS,
+    MAX_PROVIDER_COMPONENTS, MAX_PUBLISHER_ID_BYTES, PROVIDER_RESOURCE_TYPE, PolicyEvaluation,
+    ProjectionFactory, ProviderContractError, ProviderManifest, ProviderSpec, ResourceApiBinding,
+    RevocationState, SignatureState, SpecifiedProviderMethod, StandardCapabilityMatrix,
+    TrustEvidence, UNSUPPORTED_CAPABILITY_CODE, UpgradeDisposition,
+    UpgradePolicy as ProviderUpgradePolicy,
+};
 
 // The `semantic_services` module's re-exports. Keep every
 // `pub use semantic_services::...` line inside this region so it stays one

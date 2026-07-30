@@ -36,6 +36,7 @@ mod descriptor;
 mod error;
 mod forwarding;
 mod identity;
+mod installation;
 mod registry;
 mod session;
 
@@ -50,6 +51,9 @@ pub use identity::{
     MAX_PROVIDER_CAPABILITIES, MAX_PROVIDER_REGISTRY_ENTRIES, PROVIDER_RESOURCE_TYPE,
     PROVIDER_SCHEMA_VERSION, ProviderCapabilitySet, ProviderClass, ProviderImplementationId,
     ProviderMethodName,
+};
+pub use installation::{
+    InstalledProvider, ProviderReadiness, RequiredProviderApi, admit_installation,
 };
 pub use registry::{
     AdmissionOptions, AdmittedProvider, InFlightPermit, MAX_REGISTRY_DRAIN_MS, ProviderRegistry,

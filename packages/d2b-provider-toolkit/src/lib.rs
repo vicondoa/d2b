@@ -45,6 +45,7 @@ mod error;
 mod redaction;
 
 pub mod conformance;
+pub mod fakes;
 pub mod testing;
 
 pub use audit::{
