@@ -314,9 +314,14 @@ dependencies = [
  "d2b-resource-api",
  "d2b-session",
  "d2b-session-unix",
+ "futures-util",
  "getrandom 0.3.4",
  "serde",
+ "sha2",
+ "snow",
  "tokio",
+ "ttrpc",
+ "zeroize",
 ]
 
 [[package]]
