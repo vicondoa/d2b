@@ -834,8 +834,11 @@ ranked. Read this ordering before wiring any harness.
    for all ten roles, `signoff` true iff `recommendations` is `[]`,
    unanimous ten of ten, every record bound to the same
    `candidate_id`/`content_id`/`snapshot_sha256`, and provider/model/
-   reasoning effort pinned to `github-copilot` / `gpt-5.6-sol` /
-   `xhigh`. There is no override, no force flag, and no partial pass.
+   reasoning effort pinned to `github-copilot` /
+   `gemini-3.1-pro-preview` / `xhigh`. The panel model is deliberately
+   not the coding model, so a lane cannot both author a change and
+   attest to it. There is no override, no force flag, and no partial
+   pass.
    See [`docs/specs/ADR-046-validation-and-delivery.md`](./docs/specs/ADR-046-validation-and-delivery.md)
    section 12.3.
 2. **The per-round phase panel** - the [Phase gate](#phase-gate) rule
@@ -866,11 +869,15 @@ all 10 roles vote independently and each lane's verdict maps one-to-one
 onto a `panel-attest` record.
 
 To keep those records attestable, the reviewing agents must run on the
-pinned panel binding. `agents.<name>.model` in
-`.opencode/opencode-swarm.json` pins them to
-`github-copilot/gpt-5.6-sol`; a lane on any other model produces a
-record `panel-attest` will reject, so do not let model fallback silently
-downgrade a panel lane.
+pinned panel binding. The `panel` entry under `agent` in
+`.opencode/opencode.json` pins them to
+`github-copilot/gemini-3.1-pro-preview` at reasoning effort `xhigh` and
+denies the write, edit, patch, and bash tools, matching the read-only
+lane contract above. A lane on any other model produces a record
+`panel-attest` will reject, so do not let model fallback silently
+downgrade a panel lane, and do not dispatch a panel lane through the
+`general` agent - that one is pinned to the coding model
+`github-copilot/gpt-5.6-sol` and its records are rejected by design.
 
 **The per-round council, and what it costs.**
 `submit_phase_council_verdicts` has a closed five-member roster
@@ -999,11 +1006,17 @@ The panel contract is implementation-neutral: any harness that
 preserves the roster, the unanimity rule, the no-rerun discipline, and
 the two gates per phase is acceptable.
 
-The in-repo reference implementation is the `opencode-swarm` wiring
-described above, configured by `.opencode/opencode-swarm.json` and
-`.opencode/opencode.json`. Those two files are the tracked, reviewable
-surface for panel behaviour; change them in the same commit as any
-change to this section.
+The in-repo reference implementation is `.opencode/opencode.json`. Its
+`agent` table is the tracked, reviewable surface for panel behaviour:
+`panel` carries the reviewing binding and the read-only tool set, while
+`general` and `explore` carry the coding binding. Change that file in
+the same commit as any change to this section.
+
+The ADR 0046 program does not run swarm. Where this section describes
+swarm's five-seat council, treat it as documenting an available harness
+rather than the configuration in use; the per-round gate is run
+directly, and the binding wave panel is dispatched as ten read-only
+`panel` lanes.
 
 A second, host-local implementation lives in
 `/etc/nixos/scripts/panel-review.{md,sh}` and
