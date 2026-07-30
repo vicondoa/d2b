@@ -1,0 +1,33 @@
+# Standalone supply-chain config for this lab.
+#
+# This crate is NOT referenced by tests/, the Makefile or flake.nix, so nothing
+# runs this automatically. Run it by hand from this directory:
+#
+#     cargo deny --manifest-path Cargo.toml check
+#
+# (labs/wlattach/deny.toml claims it is wired into a per-manifest loop in
+# tests/test-rust.sh. It is not -- `git grep wlattach -- tests/ Makefile` is
+# empty. Recording the accurate state here rather than copying that claim.)
+[advisories]
+version = 2
+yanked = "deny"
+
+[licenses]
+version = 2
+allow = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "MIT",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",
+  "Zlib",
+]
+
+[bans]
+multiple-versions = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
