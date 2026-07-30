@@ -94,7 +94,11 @@ _require_jq() {
 assert_valid_json() {
     local output="$1"
     _require_jq
-    echo "$output" | jq -e . > /dev/null 2>&1 \
+    # Plain `jq .`, not `jq -e .`. The -e flag sets a nonzero exit for a
+    # parsed value that is null or false, which would report syntactically
+    # valid JSON as invalid. This assertion is purely syntactic, matching the
+    # `python3 -m json.tool` it replaced.
+    echo "$output" | jq . > /dev/null 2>&1 \
         || fail "Invalid JSON: $output"
 }
 
@@ -103,7 +107,11 @@ json_field() {
     local json="$1"
     local field="$2"
     _require_jq
-    echo "$json" | jq -r --arg f "$field" '.[$f] // "" | if type == "array" then "" else . end'
+    # `has($f)` rather than `.[$f] // ""`. The alternative operator treats
+    # false the same as absent, so a field whose value is legitimately false
+    # would be indistinguishable from a missing one - the same conflation the
+    # python `.get(field, '')` this replaces did not make.
+    echo "$json" | jq -r --arg f "$field" 'if has($f) then .[$f] else "" end'
 }
 
 # Extract a JSON array field as newline-separated values
@@ -111,5 +119,10 @@ json_array_field() {
     local json="$1"
     local field="$2"
     _require_jq
-    echo "$json" | jq -r --arg f "$field" '(.[$f] // [])[]'
+    # `has($f)` again, and deliberately no `// []` coalesce: a field that is
+    # present but not iterable must raise rather than silently yield zero
+    # items, matching the TypeError the python loop this replaces would have
+    # raised. Masking a type mismatch here would let an assertion pass
+    # vacuously, which is worse than the helper failing outright.
+    echo "$json" | jq -r --arg f "$field" 'if has($f) then .[$f] else [] end | .[]'
 }
