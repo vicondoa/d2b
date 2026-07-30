@@ -92,7 +92,12 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --json) JSON_MODE=true ;;
         --base)
-            if [[ $# -lt 2 || -z "$2" || "$2" == -* ]]; then
+            # A following option-looking token means the value was omitted, so
+            # `--base --json` reports a missing value rather than resolving a
+            # ref literally named `--json`. A bare `-` is exempt: git accepts
+            # it as shorthand for the previous branch (`@{-1}`), so it is a
+            # legitimate base ref rather than a stray flag.
+            if [[ $# -lt 2 || -z "$2" || ( "$2" == -* && "$2" != "-" ) ]]; then
                 error_exit "--base requires a ref argument. Re-run as '--base <ref>' naming an existing branch, tag or commit: for ADR-046 waves that is the integration lineage 'v3', or the predecessor wave branch when the wave is stacked. List candidates with 'git branch -a' and confirm one with 'git rev-parse --verify <ref>'." 1
             fi
             BASE_REF_ARG="$2"

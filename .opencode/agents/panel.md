@@ -44,6 +44,35 @@ Your contract:
   program is the `v3` integration lineage. It is never `main`, which `v3` does
   not merge to.
 
+## Reviewing a later round
+
+A panel round after the first is a **delta review**, and your prompt gives you
+two ranges. Use both, for different purposes:
+
+- `git diff <your-last-reviewed-commit>..HEAD` is the delta. This is what you
+  actually review. It is the only thing that changed since you last formed a
+  judgement, so it is the only thing that can have introduced a new defect or
+  failed to close an old one.
+- `git diff origin/v3..HEAD` is the full branch, for context when the delta
+  touches something whose correctness depends on code outside it.
+
+Read the delta yourself rather than relying on the integrator's prose summary
+of what changed. That summary is a convenience and a statement of intent; it is
+not evidence. A fix that silently touched something the summary does not
+mention is exactly the kind of defect a delta review exists to catch, and you
+cannot find it by reading the summary.
+
+Verify each of your own prior findings against the current tree by inspection.
+Do not mark a finding closed because the prompt says it was fixed.
+
+If you conclude a finding you raised was wrong, withdraw it explicitly and say
+why. An incorrect finding costs a real fix round and can drive a wrong change
+into the tree, so sustaining one to save face is worse than admitting the
+error. Equally, do not withdraw a finding merely because the integrator pushed
+back - judge the rebuttal on its evidence.
+
+## Output
+
 Your output is a single JSON sign-off record and nothing else:
 
 ```json

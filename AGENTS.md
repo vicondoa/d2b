@@ -752,6 +752,37 @@ rather than duplicating the validation themselves. This keeps panel
 review from stampeding the shared Nix store, cargo target, and git
 worktrees while parallel implementation agents are still active.
 
+A panel round after the first is a **delta review**, and its prompt MUST
+carry two explicit ranges rather than only the full branch diff:
+
+- `git diff <the commit that reviewer last reviewed>..HEAD` - the delta,
+  which is what the reviewer actually reviews. It is the only thing that
+  can have introduced a new defect or failed to close an old one.
+- `git diff <base>..HEAD` - the full branch, for context when the delta
+  touches something whose correctness depends on code outside it.
+
+The integrator therefore MUST record the tip commit each round reviewed, so
+the next round can be scoped against it. A prose summary of what changed is
+a statement of intent, not evidence: prompts MUST instruct reviewers to read
+the delta themselves rather than trust the summary, because a fix that
+silently touched something the summary omits is exactly what a delta review
+exists to catch. Prompts MUST also instruct reviewers to verify their own
+prior findings against the tree by inspection rather than marking them
+closed because the prompt says they were fixed.
+
+Where the integrator disputes a finding, the prompt MUST state the rebuttal
+and its evidence and ask the reviewer to judge it on the merits - explicitly
+permitting withdrawal of an incorrect finding, and explicitly not requiring
+it. An unfounded finding drives a wrong change into the tree, so sustaining
+one to save face is worse than admitting the error; equally, a reviewer must
+not withdraw a valid finding merely because the integrator pushed back.
+
+Any content change to the reviewed tree invalidates every prior sign-off in
+that phase, including sign-offs from reviewers whose focus the change did
+not touch. Those reviewers still re-report, but their prompt should scope
+them to the delta and permit a short confirmation that their area is
+unaffected.
+
 Each engineer returns a JSON sign-off record shaped like:
 
 ```json

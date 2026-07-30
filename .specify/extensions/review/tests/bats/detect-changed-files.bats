@@ -153,7 +153,7 @@ teardown() {
     assert_valid_json "$output"
 
     # both.txt should appear only once
-    local count=$(echo "$output" | python3 -c "import json,sys; print(json.load(sys.stdin)['changed_files'].count('both.txt'))")
+    local count=$(echo "$output" | jq -r '[.changed_files[] | select(. == "both.txt")] | length')
     [ "$count" -eq 1 ]
 
     # only-staged.txt should also be present
@@ -322,7 +322,7 @@ teardown() {
     assert_valid_json "$output"
 
     # shared.txt should appear exactly once
-    local count=$(echo "$output" | python3 -c "import json,sys; print(json.load(sys.stdin)['changed_files'].count('shared.txt'))")
+    local count=$(echo "$output" | jq -r '[.changed_files[] | select(. == "shared.txt")] | length')
     [ "$count" -eq 1 ]
 }
 
@@ -440,17 +440,14 @@ teardown() {
     assert_success
     assert_valid_json "$output"
 
-    # Verify all expected keys exist
-    echo "$output" | python3 -c "
-import json, sys
-data = json.load(sys.stdin)
-assert 'branch' in data, 'missing branch key'
-assert 'default_branch' in data, 'missing default_branch key'
-assert 'mode' in data, 'missing mode key'
-assert 'changed_files' in data, 'missing changed_files key'
-assert isinstance(data['changed_files'], list), 'changed_files should be a list'
-print('All keys present and correct types')
-"
+    # Verify all expected keys exist and carry the right types
+    echo "$output" | jq -e '
+        has("branch")
+        and has("default_branch")
+        and has("mode")
+        and has("changed_files")
+        and (.changed_files | type == "array")
+    ' > /dev/null || fail "missing key or wrong type in: $output"
 }
 
 @test "text mode output has correct format" {
@@ -608,7 +605,7 @@ print('All keys present and correct types')
     assert_valid_json "$output"
 
     # All three files should be present
-    local count=$(echo "$output" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['changed_files']))")
+    local count=$(echo "$output" | jq -r '.changed_files | length')
     [ "$count" -eq 3 ]
 }
 
