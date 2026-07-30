@@ -61,6 +61,17 @@ pub(crate) struct AppliedGroup {
     pub batch: Option<ChangeBatch>,
 }
 
+/// Bounded backend replay signals for one registration scan.
+///
+/// Fixed cardinality: three counters per scan, no per-watch or per-revision
+/// labels, so accumulating them across registrations cannot grow unbounded.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct ReplayScan {
+    pub range_seeks: u64,
+    pub rows_scanned: u64,
+    pub rows_decoded: u64,
+}
+
 pub(crate) struct DiskStore {
     database: Database,
 }
@@ -331,20 +342,54 @@ impl DiskStore {
         })
     }
 
+    /// Streaming replay bounded by a revision-key range seek.
+    ///
+    /// The revision log key encodes the revision as big-endian bytes after a
+    /// fixed header, so lexicographic key order equals numeric revision order.
+    /// Seeking to `after_revision + 1` therefore means rows at or below
+    /// `after_revision` are never read and never decoded. Each row in range is
+    /// decoded one at a time and handed to `visit`, which is expected to
+    /// consume or drop it, so no older complete envelope is ever materialized
+    /// and the caller never holds the whole log at once.
+    pub(crate) fn stream_revision_batches_after<F>(
+        &self,
+        after_revision: u64,
+        mut visit: F,
+    ) -> StoreResult<ReplayScan>
+    where
+        F: FnMut(ChangeBatch) -> StoreResult<()>,
+    {
+        let read = self.database.begin_read().map_err(integrity)?;
+        let table = read.open_table(REVISION_LOG).map_err(integrity)?;
+        let mut scan = ReplayScan {
+            range_seeks: 1,
+            rows_scanned: 0,
+            rows_decoded: 0,
+        };
+        let lower = key(0x08, &[KeyPart::Revision(after_revision.saturating_add(1))]);
+        let range = table
+            .range(lower.as_slice()..)
+            .map_err(integrity)?;
+        for row in range {
+            let (_, bytes) = row.map_err(integrity)?;
+            scan.rows_scanned += 1;
+            scan.rows_decoded += 1;
+            let batch: ChangeBatch = decode(0x0008, bytes.value())?;
+            visit(batch)?;
+        }
+        Ok(scan)
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn revision_batches_after(
         &self,
         after_revision: u64,
     ) -> StoreResult<Vec<ChangeBatch>> {
-        let read = self.database.begin_read().map_err(integrity)?;
-        let table = read.open_table(REVISION_LOG).map_err(integrity)?;
         let mut batches = Vec::new();
-        for row in table.iter().map_err(integrity)? {
-            let (_, bytes) = row.map_err(integrity)?;
-            let batch: ChangeBatch = decode(0x0008, bytes.value())?;
-            if batch.revision > after_revision {
-                batches.push(batch);
-            }
-        }
+        self.stream_revision_batches_after(after_revision, |batch| {
+            batches.push(batch);
+            Ok(())
+        })?;
         Ok(batches)
     }
 
