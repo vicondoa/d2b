@@ -58,6 +58,8 @@ run_xtask gen-resource-proto
 run_xtask gen-resource-ttrpc
 run_xtask spec-registry
 run_xtask implementation-graph
+run_xtask gen-zone-schemas
+run_xtask gen-zone-nix-options
 run_xtask process-marker-pin
 
 drift_paths=(
@@ -71,6 +73,7 @@ drift_paths=(
   docs/specs/ADR-046-work-items.json
   docs/specs/ADR-046-implementation-graph.json
   docs/specs/ADR-046-implementation-graph.md
+  nixos-modules/generated/
   packages/d2b-contracts/src/generated
   packages/d2b-guestd/src/generated
   packages/d2b-resource-api/src/generated

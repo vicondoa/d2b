@@ -1107,17 +1107,38 @@ impl<'de> Deserialize<'de> for VolumeSpec {
     }
 }
 
+/// Accepts one anchored path in a single normal form.
+///
+/// Containment is the obvious job: a leading separator, a `..` segment, a
+/// backslash or an embedded NUL is refused, so a layout entry cannot name a
+/// location outside its Volume.
+///
+/// Requiring a normal form is the less obvious one, and it is what makes the
+/// per-path uniqueness check downstream mean anything. Entry uniqueness is an
+/// exact string comparison, so admitting `state`, `./state` and `state/` would
+/// admit three distinct entries that resolve to one host path and may carry
+/// conflicting create, repair, cleanup or ACL settings. Refusing the redundant
+/// spellings is what turns that comparison into a real check. The empty string
+/// stays admitted: it names the Volume root, which the canonical minimal spec
+/// uses.
 fn validate_anchored_path(value: &str) -> Result<(), PrimitiveSpecError> {
     if value.len() > MAX_LAYOUT_PATH_BYTES
         || value.starts_with('/')
         || value.contains('\0')
         || value.contains('\\')
-        || value.split('/').any(|segment| segment == "..")
     {
-        Err(PrimitiveSpecError::InvalidPath)
-    } else {
-        Ok(())
+        return Err(PrimitiveSpecError::InvalidPath);
     }
+    if value.is_empty() {
+        return Ok(());
+    }
+    if value
+        .split('/')
+        .any(|segment| segment.is_empty() || segment == "." || segment == "..")
+    {
+        return Err(PrimitiveSpecError::InvalidPath);
+    }
+    Ok(())
 }
 
 const fn yes() -> bool {
@@ -1459,5 +1480,37 @@ mod tests {
     #[test]
     fn diagnostics_stay_redacted() {
         assert_eq!(format!("{:?}", minimal_volume()), "VolumeSpec(<redacted>)");
+    }
+
+    /// An anchored path is admitted in exactly one spelling.
+    ///
+    /// Entry uniqueness is an exact string comparison, so a redundant
+    /// spelling would be a second entry resolving to the same host path,
+    /// free to carry a conflicting policy. The root stays admitted as the
+    /// empty string because the canonical minimal spec uses it.
+    #[test]
+    fn an_anchored_path_is_admitted_in_one_normal_form_only() {
+        for admitted in ["", "state", "state/tpm", "a/b/c"] {
+            assert!(
+                validate_anchored_path(admitted).is_ok(),
+                "normal form rejected: {admitted:?}"
+            );
+        }
+        for refused in [
+            "/state",
+            "./state",
+            "state/",
+            "state//tpm",
+            "state/./tpm",
+            "state/../tpm",
+            "..",
+            ".",
+            "state\\tpm",
+        ] {
+            assert!(
+                validate_anchored_path(refused).is_err(),
+                "redundant or unsafe spelling admitted: {refused:?}"
+            );
+        }
     }
 }

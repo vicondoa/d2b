@@ -155,7 +155,16 @@ impl core::fmt::Debug for OpaqueCallToken {
 /// The routing spec names this `principalDigest` and defines it as the SHA-256
 /// of the subject reference. It is taken over the canonical `Type/name`
 /// rendering the identity contract already produces, so a caller cannot supply
-/// it and a Zone that receives it cannot expand it back into an identity.
+/// one it did not earn.
+///
+/// It is a correlation key, not a confidentiality primitive, and must not be
+/// relied on as one. The digest is unsalted and undomained, and the subject
+/// namespace it covers is small and structurally constrained, so a Zone that
+/// receives a digest can recover the subject by enumerating candidate
+/// `Type/name` strings. What the digest does provide is a stable identifier
+/// that is the same for the same subject across hops and that a peer cannot
+/// forge. Hiding the identity from a receiving Zone would need a keyed
+/// construction, which is a contract change rather than a local one.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PrincipalDigest(String);
 
