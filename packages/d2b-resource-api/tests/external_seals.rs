@@ -11,6 +11,20 @@ use std::{
 /// failing gate accumulates them until it trips the disk-space preflight.
 struct ScratchGuard(PathBuf);
 
+impl ScratchGuard {
+    /// Drop does not run when the process is killed by a signal - nextest's
+    /// slow-timeout terminate, SIGKILL and OOM all skip it - so a tree can
+    /// outlive its run and be adopted by a later one that reuses the PID. That
+    /// would hand the seal a warm target dir plus a stale
+    /// `resource-api-cfg-test-active` marker, and `cfg_test_marker.is_file()`
+    /// would pass without a compile having happened. Remove any existing tree
+    /// before creating, so adoption cannot occur.
+    fn new(path: PathBuf) -> Self {
+        let _ = fs::remove_dir_all(&path);
+        Self(path)
+    }
+}
+
 impl Drop for ScratchGuard {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
@@ -70,7 +84,7 @@ fn dependent_cannot_mint_admission_or_session_capabilities() {
     // Owned by a guard so the tree is removed on every exit path. Removing it
     // only on success strands a uniquely-named multi-gigabyte tree per failing
     // run, and preflight-disk-space.sh fails the wave below 10 GiB free.
-    let scratch_guard = ScratchGuard(repository_root.join(".scratch").join(format!(
+    let scratch_guard = ScratchGuard::new(repository_root.join(".scratch").join(format!(
         "resource-api-external-seals-{}",
         std::process::id()
     )));

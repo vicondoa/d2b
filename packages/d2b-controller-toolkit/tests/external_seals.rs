@@ -1,5 +1,7 @@
 use std::{
+    collections::hash_map::DefaultHasher,
     fs,
+    hash::{Hash as _, Hasher as _},
     path::{Path, PathBuf},
     process::Command,
 };
@@ -20,12 +22,12 @@ fn toolchain_cache_key() -> String {
             "rustc -vV must identify the compiler: a cache shared between two \
              unidentified toolchains is the corruption this key prevents",
         );
-    let token: String = version
-        .trim()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect();
-    token.trim_matches('-').to_owned()
+    // Hash rather than embed: `rustc -vV` is multi-line and runs past 200
+    // characters, which overflows NAME_MAX once a prefix is added. A digest
+    // keeps the commit hash and host triple participating at fixed width.
+    let mut hasher = DefaultHasher::new();
+    version.trim().hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
 }
 
 /// A reusable repository-local compiler scratch tree.
