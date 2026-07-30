@@ -272,6 +272,21 @@ deprecations ship one minor release before removal.
 - Bound expedited commit evidence to the target Zone before effect permits are
   minted, preventing matching evidence from another Zone from authorizing a
   reconcile effect.
+- Added `labs/wlattach`, an experimental crate exploring reconnectable Wayland
+  application forwarding: a persistent session host keeps an application alive
+  while a disposable window frontend can be detached and re-attached, so a real
+  desktop application survives the death of the process showing its window and
+  gets that window back on a fresh compositor connection. It has its own Cargo
+  workspace under `labs/`, is outside CI, and changes no shipping component.
+- Added ADR 0047, replacing the Wayland proxy's fixed-width identity rail with
+  a reserved band containing a single accessible identity tab. The tab renders
+  horizontal text at a real target size, derives its layout and its pointer
+  handling from one measured list of parts, discloses labelled per-workload
+  actions in two tiers, selects label colour by WCAG contrast ratio rather than
+  a brightness threshold, sanitizes identity text against bidirectional
+  overrides, and reports a typed failure instead of ever leaving a proxied
+  window unlabelled. Adds the `proofs/window-identity-chrome/` proof for the
+  geometry, parts, contrast, and label logic.
 
 ## [1.4.1] - 2026-07-12
 
