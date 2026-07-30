@@ -308,6 +308,198 @@ mod tests {
         }
     }
 
+    /// One catalog field and the exact Rust contract field expressing the
+    /// same concept, as `(catalog field, contract struct, contract field)`.
+    ///
+    /// The mapping is written out rather than derived. The two artifacts
+    /// were authored independently from the same specification bullets,
+    /// which name concepts and not identifiers, so the same concept is
+    /// legitimately spelled differently on each side. Normalising the two
+    /// spellings together - lowercasing, dropping separators, matching on a
+    /// shared prefix - would make a genuinely wrong name look right, which
+    /// is exactly the drift this check exists to catch.
+    const CATALOG_TO_CONTRACT: &[(&str, &str, &str)] = &[
+        ("providerName", "ProviderManifest", "artifact_id"),
+        ("publisher", "TrustEvidence", "publisher"),
+        ("packageDigest", "ArtifactDigestSet", "package"),
+        ("executableDigest", "ArtifactDigestSet", "executable"),
+        ("manifestDigest", "ArtifactDigestSet", "manifest"),
+        ("configDigest", "ArtifactDigestSet", "config"),
+        ("apiCompatibility", "CompatibilityRange", "api_major"),
+        ("apiCompatibility", "CompatibilityRange", "api_minor"),
+        (
+            "serviceCompatibility",
+            "CompatibilityRange",
+            "descriptor_fingerprint",
+        ),
+        ("signature", "TrustEvidence", "signature"),
+        ("rootEpoch", "TrustEvidence", "root_epoch"),
+        ("revocationStatus", "TrustEvidence", "revocation"),
+        ("denyStatus", "TrustEvidence", "emergency_deny"),
+        ("provenanceEvidence", "TrustEvidence", "provenance"),
+        ("sbomEvidence", "TrustEvidence", "sbom"),
+        ("licenseEvidence", "TrustEvidence", "license"),
+        ("vulnerabilityEvidence", "TrustEvidence", "vulnerability"),
+        ("conformanceAttestation", "TrustEvidence", "conformance"),
+        ("supportChannel", "TrustEvidence", "support_channel"),
+    ];
+
+    /// Catalog fields with no counterpart in the Rust contract.
+    ///
+    /// This is a recorded finding, not an accepted equivalence. Each entry
+    /// is a catalog fact the specification's "Package catalog" bullets name
+    /// and the contract does not carry. The list is pinned exactly, so
+    /// closing one of these on either side fails this test and forces the
+    /// entry to be removed alongside the fix.
+    const CATALOG_FIELDS_WITHOUT_A_CONTRACT_FIELD: &[&str] = &[
+        "componentDigest",
+        "descriptorDigest",
+        "packageName",
+        "platform",
+        "supportContact",
+        "systems",
+        "version",
+    ];
+
+    /// Contract fields on the catalog-fact carriers with no counterpart in
+    /// the catalog shape, pinned on the same terms as the list above.
+    ///
+    /// `ArtifactDigestSet::schema` and `ArtifactDigestSet::service` are the
+    /// other half of the digest divergence: both artifacts declare exactly
+    /// six digests and agree on four of them, but the catalog's remaining
+    /// two name the component and descriptor sets while the contract's name
+    /// the exported schema and service surfaces. Those are different facts,
+    /// not two spellings of one.
+    const CONTRACT_FIELDS_WITHOUT_A_CATALOG_FIELD: &[(&str, &str)] = &[
+        ("ArtifactDigestSet", "schema"),
+        ("ArtifactDigestSet", "service"),
+        ("TrustEvidence", "publisher_trusted"),
+    ];
+
+    /// The contract structs whose every field must be accounted for.
+    ///
+    /// These two carry the leaf catalog facts. `ProviderManifest` and
+    /// `CompatibilityRange` are read for the fields the mapping names but
+    /// are not held to exhaustiveness: their remaining fields are the
+    /// manifest's composite sub-structures and the state-schema version,
+    /// which the catalog entry does not restate.
+    const EXHAUSTIVE_CONTRACT_STRUCTS: &[&str] = &["ArtifactDigestSet", "TrustEvidence"];
+
+    /// The declared field names of one struct in the Provider contract.
+    ///
+    /// The contract source is read from disk rather than transcribed here,
+    /// so a rename on that side is observed rather than assumed.
+    fn contract_struct_fields(source: &str, struct_name: &str) -> Vec<String> {
+        let header = format!("pub struct {struct_name} {{");
+        let body = source
+            .split_once(&header)
+            .unwrap_or_else(|| panic!("{struct_name} is not declared as a braced struct"))
+            .1;
+        let mut fields = Vec::new();
+        for line in body.lines() {
+            let line = line.trim();
+            if line == "}" {
+                return fields;
+            }
+            if line.is_empty() || line.starts_with('#') || line.starts_with("//") {
+                continue;
+            }
+            let Some((name, _)) = line.split_once(':') else {
+                continue;
+            };
+            let name = name.trim().trim_start_matches("pub ").trim();
+            if !name.is_empty()
+                && name
+                    .chars()
+                    .all(|character| character.is_ascii_lowercase() || character == '_')
+            {
+                fields.push(name.to_owned());
+            }
+        }
+        panic!("{struct_name} has no closing brace at column zero");
+    }
+
+    #[test]
+    fn the_catalog_shape_and_the_provider_contract_describe_the_same_fields() {
+        let contract_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../d2b-contracts/src/v3/provider.rs")
+            .canonicalize()
+            .expect("the Provider contract source is in the tree");
+        let source = fs::read_to_string(&contract_path).expect("the contract source is readable");
+
+        // Every mapped contract field is really declared by that struct.
+        for (catalog_field, struct_name, contract_field) in CATALOG_TO_CONTRACT {
+            let declared = contract_struct_fields(&source, struct_name);
+            assert!(
+                declared.iter().any(|field| field == contract_field),
+                "catalog field '{catalog_field}' maps to {struct_name}::{contract_field}, \
+                 which that struct no longer declares"
+            );
+        }
+
+        // Every catalog field is either mapped or a recorded divergence,
+        // and the two sets partition the catalog exactly.
+        let mapped_catalog: BTreeSet<&str> = CATALOG_TO_CONTRACT
+            .iter()
+            .map(|(catalog_field, _, _)| *catalog_field)
+            .collect();
+        let unmapped_catalog: BTreeSet<&str> = CATALOG_FIELDS_WITHOUT_A_CONTRACT_FIELD
+            .iter()
+            .copied()
+            .collect();
+        assert!(
+            mapped_catalog.is_disjoint(&unmapped_catalog),
+            "a catalog field is both mapped and recorded as unmapped"
+        );
+        let accounted: BTreeSet<&str> = mapped_catalog.union(&unmapped_catalog).copied().collect();
+        let actual: BTreeSet<String> = all_fields().into_iter().collect();
+        let actual_borrowed: BTreeSet<&str> = actual.iter().map(String::as_str).collect();
+        assert_eq!(
+            accounted, actual_borrowed,
+            "the catalog fields and the parity mapping have diverged"
+        );
+
+        // Every field of the catalog-fact carriers is either mapped or a
+        // recorded divergence.
+        let unmapped_contract: BTreeSet<(&str, &str)> = CONTRACT_FIELDS_WITHOUT_A_CATALOG_FIELD
+            .iter()
+            .copied()
+            .collect();
+        for struct_name in EXHAUSTIVE_CONTRACT_STRUCTS {
+            for field in contract_struct_fields(&source, struct_name) {
+                let mapped = CATALOG_TO_CONTRACT
+                    .iter()
+                    .any(|(_, owner, name)| owner == struct_name && *name == field);
+                let recorded = unmapped_contract.contains(&(struct_name, field.as_str()));
+                assert!(
+                    mapped ^ recorded,
+                    "{struct_name}::{field} is neither mapped to a catalog field nor \
+                     recorded as having no catalog counterpart, or is both"
+                );
+            }
+        }
+
+        // The recorded contract-side divergences still exist; a resolved
+        // one must be struck from the list rather than left behind.
+        for (struct_name, field) in CONTRACT_FIELDS_WITHOUT_A_CATALOG_FIELD {
+            assert!(
+                contract_struct_fields(&source, struct_name)
+                    .iter()
+                    .any(|declared| declared == field),
+                "{struct_name}::{field} is recorded as having no catalog counterpart \
+                 but is no longer declared"
+            );
+        }
+
+        // Both artifacts declare six digests; four of those agree.
+        let digest_fields = contract_struct_fields(&source, "ArtifactDigestSet");
+        assert_eq!(
+            digest_fields.len(),
+            DIGEST_FIELDS.len(),
+            "the catalog and the contract disagree on how many digests pin an artifact"
+        );
+    }
+
     #[test]
     fn the_generator_never_reports_an_empty_success() {
         // The contract the stub established and this implementation keeps: a
