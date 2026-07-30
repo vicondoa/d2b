@@ -1,0 +1,59 @@
+# Experimental crate under labs/. Its own Cargo workspace, and deliberately not
+# wired into any repo CI gate -- a lab should not consume a shipping gate.
+# Validation is local and recorded in README.md.
+[workspace]
+
+[package]
+name = "d2b-agentterm"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+description = "Agent-drivable terminal prototype: PTY passthrough plus a headless VT the agent can read and drive"
+
+[[bin]]
+name = "d2b-agentterm"
+path = "src/main.rs"
+
+[dependencies]
+# Terminal emulator. Apache-2.0, same as this crate.
+avt = "0.18"
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+libc = "0.2"
+nix = { version = "0.30", features = [
+  "term",
+  "process",
+  "signal",
+  "fs",
+  "poll",
+  # `socket` for SO_PEERCRED on the agent socket, `user` for getuid.
+  "socket",
+  "user",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# `net` is what gates tokio::io::unix::AsyncFd, which the pump needs for
+# /dev/tty and the PTY master.
+tokio = { version = "1", features = [
+  "rt-multi-thread",
+  "macros",
+  "net",
+  "sync",
+  "time",
+  "io-util",
+  "signal",
+] }
+
+[lints.rust]
+# `deny`, not `forbid`, because two modules need unsafe: forkpty/execvp in
+# src/pty.rs and the winsize ioctls in src/tty.rs. `forbid` cannot be locally
+# overridden, so a quarantined module requires `deny`.
+unsafe_code = "deny"
+
+[lints.clippy]
+all = "warn"
+# Nothing on a path fed by the child process, the terminal or the agent socket
+# may panic.
+unwrap_used = "warn"
+expect_used = "warn"
