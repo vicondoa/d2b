@@ -5,11 +5,7 @@ fn dependent_cannot_forge_registration_or_mint_admitted_session() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repository_root = crate_root.parent().unwrap().parent().unwrap();
     let fixture = crate_root.join("tests/ui/external-seals");
-    let scratch = Scratch::new(
-        repository_root
-            .join(".scratch")
-            .join(format!("bus-external-seals-{}", std::process::id())),
-    );
+    let scratch = Scratch::new(repository_root.join(".scratch").join("bus-external-seals"));
     let temp = scratch.path().join("tmp");
     fs::create_dir_all(&temp).expect("create repository-local compiler scratch");
 
@@ -25,7 +21,6 @@ fn dependent_cannot_forge_registration_or_mint_admitted_session() {
         ])
         .env("CARGO_TARGET_DIR", scratch.path().join("target"))
         .env("TMPDIR", &temp)
-        .env("RUSTC_WRAPPER", "")
         .output()
         .expect("run downstream From compile-pass fixture");
     assert!(
@@ -78,7 +73,6 @@ fn dependent_cannot_forge_registration_or_mint_admitted_session() {
             ])
             .env("CARGO_TARGET_DIR", scratch.path().join("target"))
             .env("TMPDIR", &temp)
-            .env("RUSTC_WRAPPER", "")
             .output()
             .expect("run dependent compile-fail crate");
         let stderr = String::from_utf8(output.stderr).expect("compiler diagnostics are UTF-8");
@@ -135,7 +129,6 @@ fn dependent_cannot_forge_registration_or_mint_admitted_session() {
             )
             .env("CARGO_TARGET_DIR", scratch.path().join("target"))
             .env("TMPDIR", &temp)
-            .env("RUSTC_WRAPPER", "")
             .output()
             .expect("run capability trait compile-fail mutation");
         let stderr = String::from_utf8(output.stderr).expect("compiler diagnostics are UTF-8");
@@ -155,12 +148,37 @@ fn dependent_cannot_forge_registration_or_mint_admitted_session() {
     }
 }
 
+/// A reusable repository-local compiler scratch tree.
+///
+/// This test drives roughly ten `cargo check` invocations against the
+/// compile-fail fixture crate. They already share one target directory within a
+/// run, but the tree used to be per-process and deleted on drop, so every run
+/// recompiled the fixture's whole dependency graph - d2b-bus, d2b-session,
+/// d2b-session-unix and everything beneath them - from cold. That made this the
+/// slowest test in the workspace and, once the suite moved to cargo-nextest,
+/// the critical path bounding the entire test phase.
+///
+/// Reuse is sound: Cargo owns staleness through its own fingerprints, and the
+/// assertions are about compiler diagnostics that Cargo re-produces whenever an
+/// input changes. Cargo does not cache failed builds, so each compile-fail case
+/// still genuinely recompiles the fixture crate; what survives is the
+/// dependency graph beneath it, which is the bulk of the cost.
+///
+/// Unlike the rustdoc cache in public_mint_surface there is no output-collision
+/// hazard here, because these invocations produce diagnostics rather than a
+/// shared HTML tree.
+///
+/// A stable path also makes this leak-proof: an interrupted run leaves a
+/// directory the next run adopts, rather than stranding a per-process tree
+/// nothing will collect.
+///
+/// Set `D2B_EXTERNAL_SEALS_FRESH=1` to discard the cache and compile cold.
 struct Scratch(PathBuf);
 
 impl Scratch {
     fn new(path: PathBuf) -> Self {
-        if path.exists() {
-            fs::remove_dir_all(&path).expect("remove stale repository-local scratch");
+        if std::env::var_os("D2B_EXTERNAL_SEALS_FRESH").is_some() && path.exists() {
+            fs::remove_dir_all(&path).expect("discard repository-local compiler scratch");
         }
         fs::create_dir_all(&path).expect("create repository-local scratch");
         Self(path)
@@ -168,11 +186,5 @@ impl Scratch {
 
     fn path(&self) -> &std::path::Path {
         &self.0
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
     }
 }

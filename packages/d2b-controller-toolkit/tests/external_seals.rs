@@ -4,16 +4,31 @@ use std::{
     process::Command,
 };
 
-/// Owns the repository-local compiler scratch so it is removed on every exit
-/// path. Removing it only on success leaves a uniquely-named target tree behind
-/// whenever cargo fails or an assertion panics, and a repeatedly failing gate
-/// then accumulates them until it fills the disk.
+/// A reusable repository-local compiler scratch tree.
+///
+/// This test drives several `cargo check` invocations against the compile-fail
+/// fixture crate. The tree used to be per-process and deleted on drop, so every
+/// run recompiled the fixture's whole dependency graph from cold.
+///
+/// The stable path also subsumes the reason the drop guard existed. A
+/// uniquely-named tree removed only on success accumulates one leftover per
+/// failed run until it fills the disk; a single stable tree is instead adopted
+/// and reused by the next run, so a repeatedly failing gate costs one directory
+/// rather than one per attempt.
+///
+/// Reuse is sound: Cargo owns staleness through its own fingerprints, and the
+/// assertions are about compiler diagnostics Cargo re-produces whenever an
+/// input changes. Cargo does not cache failed builds, so each compile-fail case
+/// still genuinely recompiles the fixture; what survives is the dependency
+/// graph beneath it.
+///
+/// Set `D2B_EXTERNAL_SEALS_FRESH=1` to discard the cache and compile cold.
 struct Scratch(PathBuf);
 
 impl Scratch {
     fn new(path: PathBuf) -> Self {
-        if path.exists() {
-            fs::remove_dir_all(&path).expect("remove stale repository-local scratch");
+        if std::env::var_os("D2B_EXTERNAL_SEALS_FRESH").is_some() && path.exists() {
+            fs::remove_dir_all(&path).expect("discard repository-local compiler scratch");
         }
         fs::create_dir_all(&path).expect("create repository-local scratch");
         Self(path)
@@ -24,21 +39,14 @@ impl Scratch {
     }
 }
 
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
-
 #[test]
 fn foreign_source_cannot_mint_committed_decision() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repository_root = crate_root.parent().unwrap().parent().unwrap();
     let fixture = crate_root.join("tests/ui/external-seals");
-    let scratch = repository_root.join(".scratch").join(format!(
-        "controller-toolkit-external-seals-{}",
-        std::process::id()
-    ));
+    let scratch = repository_root
+        .join(".scratch")
+        .join("controller-toolkit-external-seals");
     let scratch = Scratch::new(scratch);
     let temp = scratch.path().join("tmp");
     fs::create_dir_all(&temp).expect("create repository-local compiler scratch");
