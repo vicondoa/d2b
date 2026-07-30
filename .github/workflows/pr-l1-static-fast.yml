@@ -99,19 +99,22 @@ jobs:
   test-rust:
     needs: [tier0]
     runs-on: ubuntu-latest
-    # Warm (rust-cache hit): ~8-12 min. Cold (no cache): ~43 min.
+    # Warm (rust-cache + sccache hit): ~8-12 min. Cold (no cache): ~43 min.
     timeout-minutes: 60
     env:
-      # CI relies on Swatinem/rust-cache (target-dir caching) rather than
-      # sccache, which caches ALL compiled artifacts including proc-macros and
-      # bin/lib crates. sccache is simply not installed on the runner, and the
-      # cargo configs route rustc through .cargo/rustc-wrapper.sh, which falls
-      # through to plain rustc when sccache is absent - so no override is
-      # needed to keep cargo working here.
-      #
-      # CARGO_INCREMENTAL=0 is still set: incremental compilation artifacts are
-      # non-deterministic and bloat the cache without benefit for CI (each PR
-      # run starts from a different commit).
+      # sccache complements Swatinem/rust-cache rather than replacing it:
+      # rust-cache restores whole target directories keyed on Cargo.lock, so a
+      # dependency bump misses entirely and rebuilds everything from scratch,
+      # while sccache still hits per-crate for every dependency that did not
+      # change. D2B_CI_SCCACHE opts test-rust.sh's own detection into using it;
+      # see that script for why RUSTC_WRAPPER is never set directly to the
+      # sccache binary path (it would bypass the wrapper shim's classification
+      # of a broken cache invocation as distinct from a compile error).
+      D2B_CI_SCCACHE: "1"
+      SCCACHE_DIR: "/home/runner/.cache/d2b-sccache-ci"
+      # Incremental artifacts are non-deterministic and sccache cannot cache
+      # them at all (see "Non-cacheable reasons: incremental" in its stats), so
+      # this stays off regardless of which cache is doing the work.
       CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -155,6 +158,28 @@ jobs:
           rustup default "$PINNED"
           echo "Rust toolchain: $(rustc --version)"
           sudo apt-get update && sudo apt-get install -y ripgrep acl
+      - name: Install sccache
+        # Built through the already-installed nix, matching how cargo-nextest,
+        # cargo-deny and cargo-audit are provisioned elsewhere in this gate,
+        # rather than adding a second binary-fetch mechanism. Copied to a fixed
+        # PATH-visible location because a nix profile/shell does not persist
+        # across separate `run:` steps.
+        run: |
+          sccache_out=$(nix build --inputs-from "$PWD" nixpkgs#sccache --no-link --print-out-paths)
+          mkdir -p "$HOME/.local/bin"
+          cp "$sccache_out/bin/sccache" "$HOME/.local/bin/sccache"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: sccache cache (compiled-artifact cache, complements rust-cache)
+        # actions/cache, not sccache's own GHA-cache backend: see SCCACHE_CACHE
+        # above for why. Keyed on the pinned toolchain and Cargo.lock so a
+        # version or dependency change gets a fresh, correctly-scoped cache
+        # rather than silently reusing entries a different compiler produced.
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ env.SCCACHE_DIR }}
+          key: sccache-${{ runner.os }}-${{ hashFiles('packages/rust-toolchain.toml', 'packages/Cargo.lock') }}
+          restore-keys: |
+            sccache-${{ runner.os }}-
       - name: Rust dependency cache (target dirs + cargo registry)
         # Swatinem/rust-cache caches dependency artifacts in target dirs
         # and the cargo registry. It performs all I/O in its own action
@@ -190,19 +215,22 @@ jobs:
   test-fixture-contracts:
     needs: [tier0]
     runs-on: ubuntu-latest
-    # Warm (rust-cache hit): ~8-12 min. Cold (no cache): ~43 min.
+    # Warm (rust-cache + sccache hit): ~8-12 min. Cold (no cache): ~43 min.
     timeout-minutes: 60
     env:
-      # CI relies on Swatinem/rust-cache (target-dir caching) rather than
-      # sccache, which caches ALL compiled artifacts including proc-macros and
-      # bin/lib crates. sccache is simply not installed on the runner, and the
-      # cargo configs route rustc through .cargo/rustc-wrapper.sh, which falls
-      # through to plain rustc when sccache is absent - so no override is
-      # needed to keep cargo working here.
-      #
-      # CARGO_INCREMENTAL=0 is still set: incremental compilation artifacts are
-      # non-deterministic and bloat the cache without benefit for CI (each PR
-      # run starts from a different commit).
+      # sccache complements Swatinem/rust-cache rather than replacing it:
+      # rust-cache restores whole target directories keyed on Cargo.lock, so a
+      # dependency bump misses entirely and rebuilds everything from scratch,
+      # while sccache still hits per-crate for every dependency that did not
+      # change. D2B_CI_SCCACHE opts test-rust.sh's own detection into using it;
+      # see that script for why RUSTC_WRAPPER is never set directly to the
+      # sccache binary path (it would bypass the wrapper shim's classification
+      # of a broken cache invocation as distinct from a compile error).
+      D2B_CI_SCCACHE: "1"
+      SCCACHE_DIR: "/home/runner/.cache/d2b-sccache-ci"
+      # Incremental artifacts are non-deterministic and sccache cannot cache
+      # them at all (see "Non-cacheable reasons: incremental" in its stats), so
+      # this stays off regardless of which cache is doing the work.
       CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -246,6 +274,28 @@ jobs:
           rustup default "$PINNED"
           echo "Rust toolchain: $(rustc --version)"
           sudo apt-get update && sudo apt-get install -y ripgrep acl
+      - name: Install sccache
+        # Built through the already-installed nix, matching how cargo-nextest,
+        # cargo-deny and cargo-audit are provisioned elsewhere in this gate,
+        # rather than adding a second binary-fetch mechanism. Copied to a fixed
+        # PATH-visible location because a nix profile/shell does not persist
+        # across separate `run:` steps.
+        run: |
+          sccache_out=$(nix build --inputs-from "$PWD" nixpkgs#sccache --no-link --print-out-paths)
+          mkdir -p "$HOME/.local/bin"
+          cp "$sccache_out/bin/sccache" "$HOME/.local/bin/sccache"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: sccache cache (compiled-artifact cache, complements rust-cache)
+        # actions/cache, not sccache's own GHA-cache backend: see SCCACHE_CACHE
+        # above for why. Keyed on the pinned toolchain and Cargo.lock so a
+        # version or dependency change gets a fresh, correctly-scoped cache
+        # rather than silently reusing entries a different compiler produced.
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ env.SCCACHE_DIR }}
+          key: sccache-${{ runner.os }}-${{ hashFiles('packages/rust-toolchain.toml', 'packages/Cargo.lock') }}
+          restore-keys: |
+            sccache-${{ runner.os }}-
       - name: Rust dependency cache (target dirs + cargo registry)
         # Swatinem/rust-cache caches dependency artifacts in target dirs
         # and the cargo registry. It performs all I/O in its own action
@@ -552,19 +602,22 @@ jobs:
   test-policy:
     needs: [tier0]
     runs-on: ubuntu-latest
-    # Warm (rust-cache hit): ~8-12 min. Cold (no cache): ~43 min.
+    # Warm (rust-cache + sccache hit): ~8-12 min. Cold (no cache): ~43 min.
     timeout-minutes: 60
     env:
-      # CI relies on Swatinem/rust-cache (target-dir caching) rather than
-      # sccache, which caches ALL compiled artifacts including proc-macros and
-      # bin/lib crates. sccache is simply not installed on the runner, and the
-      # cargo configs route rustc through .cargo/rustc-wrapper.sh, which falls
-      # through to plain rustc when sccache is absent - so no override is
-      # needed to keep cargo working here.
-      #
-      # CARGO_INCREMENTAL=0 is still set: incremental compilation artifacts are
-      # non-deterministic and bloat the cache without benefit for CI (each PR
-      # run starts from a different commit).
+      # sccache complements Swatinem/rust-cache rather than replacing it:
+      # rust-cache restores whole target directories keyed on Cargo.lock, so a
+      # dependency bump misses entirely and rebuilds everything from scratch,
+      # while sccache still hits per-crate for every dependency that did not
+      # change. D2B_CI_SCCACHE opts test-rust.sh's own detection into using it;
+      # see that script for why RUSTC_WRAPPER is never set directly to the
+      # sccache binary path (it would bypass the wrapper shim's classification
+      # of a broken cache invocation as distinct from a compile error).
+      D2B_CI_SCCACHE: "1"
+      SCCACHE_DIR: "/home/runner/.cache/d2b-sccache-ci"
+      # Incremental artifacts are non-deterministic and sccache cannot cache
+      # them at all (see "Non-cacheable reasons: incremental" in its stats), so
+      # this stays off regardless of which cache is doing the work.
       CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -608,6 +661,28 @@ jobs:
           rustup default "$PINNED"
           echo "Rust toolchain: $(rustc --version)"
           sudo apt-get update && sudo apt-get install -y ripgrep acl
+      - name: Install sccache
+        # Built through the already-installed nix, matching how cargo-nextest,
+        # cargo-deny and cargo-audit are provisioned elsewhere in this gate,
+        # rather than adding a second binary-fetch mechanism. Copied to a fixed
+        # PATH-visible location because a nix profile/shell does not persist
+        # across separate `run:` steps.
+        run: |
+          sccache_out=$(nix build --inputs-from "$PWD" nixpkgs#sccache --no-link --print-out-paths)
+          mkdir -p "$HOME/.local/bin"
+          cp "$sccache_out/bin/sccache" "$HOME/.local/bin/sccache"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: sccache cache (compiled-artifact cache, complements rust-cache)
+        # actions/cache, not sccache's own GHA-cache backend: see SCCACHE_CACHE
+        # above for why. Keyed on the pinned toolchain and Cargo.lock so a
+        # version or dependency change gets a fresh, correctly-scoped cache
+        # rather than silently reusing entries a different compiler produced.
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ env.SCCACHE_DIR }}
+          key: sccache-${{ runner.os }}-${{ hashFiles('packages/rust-toolchain.toml', 'packages/Cargo.lock') }}
+          restore-keys: |
+            sccache-${{ runner.os }}-
       - name: Rust dependency cache (target dirs + cargo registry)
         # Swatinem/rust-cache caches dependency artifacts in target dirs
         # and the cargo registry. It performs all I/O in its own action
@@ -643,19 +718,22 @@ jobs:
   test-runtime-ledger:
     needs: [tier0]
     runs-on: ubuntu-latest
-    # Warm (rust-cache hit): ~8-12 min. Cold (no cache): ~43 min.
+    # Warm (rust-cache + sccache hit): ~8-12 min. Cold (no cache): ~43 min.
     timeout-minutes: 30
     env:
-      # CI relies on Swatinem/rust-cache (target-dir caching) rather than
-      # sccache, which caches ALL compiled artifacts including proc-macros and
-      # bin/lib crates. sccache is simply not installed on the runner, and the
-      # cargo configs route rustc through .cargo/rustc-wrapper.sh, which falls
-      # through to plain rustc when sccache is absent - so no override is
-      # needed to keep cargo working here.
-      #
-      # CARGO_INCREMENTAL=0 is still set: incremental compilation artifacts are
-      # non-deterministic and bloat the cache without benefit for CI (each PR
-      # run starts from a different commit).
+      # sccache complements Swatinem/rust-cache rather than replacing it:
+      # rust-cache restores whole target directories keyed on Cargo.lock, so a
+      # dependency bump misses entirely and rebuilds everything from scratch,
+      # while sccache still hits per-crate for every dependency that did not
+      # change. D2B_CI_SCCACHE opts test-rust.sh's own detection into using it;
+      # see that script for why RUSTC_WRAPPER is never set directly to the
+      # sccache binary path (it would bypass the wrapper shim's classification
+      # of a broken cache invocation as distinct from a compile error).
+      D2B_CI_SCCACHE: "1"
+      SCCACHE_DIR: "/home/runner/.cache/d2b-sccache-ci"
+      # Incremental artifacts are non-deterministic and sccache cannot cache
+      # them at all (see "Non-cacheable reasons: incremental" in its stats), so
+      # this stays off regardless of which cache is doing the work.
       CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -699,6 +777,28 @@ jobs:
           rustup default "$PINNED"
           echo "Rust toolchain: $(rustc --version)"
           sudo apt-get update && sudo apt-get install -y ripgrep acl
+      - name: Install sccache
+        # Built through the already-installed nix, matching how cargo-nextest,
+        # cargo-deny and cargo-audit are provisioned elsewhere in this gate,
+        # rather than adding a second binary-fetch mechanism. Copied to a fixed
+        # PATH-visible location because a nix profile/shell does not persist
+        # across separate `run:` steps.
+        run: |
+          sccache_out=$(nix build --inputs-from "$PWD" nixpkgs#sccache --no-link --print-out-paths)
+          mkdir -p "$HOME/.local/bin"
+          cp "$sccache_out/bin/sccache" "$HOME/.local/bin/sccache"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: sccache cache (compiled-artifact cache, complements rust-cache)
+        # actions/cache, not sccache's own GHA-cache backend: see SCCACHE_CACHE
+        # above for why. Keyed on the pinned toolchain and Cargo.lock so a
+        # version or dependency change gets a fresh, correctly-scoped cache
+        # rather than silently reusing entries a different compiler produced.
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ env.SCCACHE_DIR }}
+          key: sccache-${{ runner.os }}-${{ hashFiles('packages/rust-toolchain.toml', 'packages/Cargo.lock') }}
+          restore-keys: |
+            sccache-${{ runner.os }}-
       - name: Rust dependency cache (target dirs + cargo registry)
         # Swatinem/rust-cache caches dependency artifacts in target dirs
         # and the cargo registry. It performs all I/O in its own action

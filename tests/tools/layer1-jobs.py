@@ -29,6 +29,13 @@ RUST_CACHE = "Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32"
 # completes in seconds there; runners cannot reach that endpoint, so without
 # this they rebuild the entire Rust host-tool set from source on every run.
 NIX_CACHE = "nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569"
+# Caches SCCACHE_DIR (the sccache local-disk backend) across runs. This is
+# deliberately actions/cache, NOT sccache's own GHA-cache backend
+# (SCCACHE_GHA_ENABLED): that backend needs ACTIONS_RUNTIME_TOKEN exported into
+# the process compiling untrusted crate code (build scripts, proc-macros), and
+# this action's cache I/O happens in its own process instead. Same reasoning as
+# the nix store cache above.
+SCCACHE_CACHE = "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
 # The shell program must be resolvable by the Actions runner itself, which
 # looks the first token up on PATH rather than against the workspace, and whose
 # argument splitter does not preserve nested quoting. The runner resolves `sh`
@@ -213,19 +220,22 @@ def heavy_gate_step(job: dict[str, Any]) -> str:
 def rust_job(job: dict[str, Any]) -> str:
     return f"""  {job["ciJobId"]}:
 {needs_line(job)}    runs-on: {job["runsOn"]}
-    # Warm (rust-cache hit): ~8-12 min. Cold (no cache): ~43 min.
+    # Warm (rust-cache + sccache hit): ~8-12 min. Cold (no cache): ~43 min.
     timeout-minutes: {job["timeoutMinutes"]}
     env:
-      # CI relies on Swatinem/rust-cache (target-dir caching) rather than
-      # sccache, which caches ALL compiled artifacts including proc-macros and
-      # bin/lib crates. sccache is simply not installed on the runner, and the
-      # cargo configs route rustc through .cargo/rustc-wrapper.sh, which falls
-      # through to plain rustc when sccache is absent - so no override is
-      # needed to keep cargo working here.
-      #
-      # CARGO_INCREMENTAL=0 is still set: incremental compilation artifacts are
-      # non-deterministic and bloat the cache without benefit for CI (each PR
-      # run starts from a different commit).
+      # sccache complements Swatinem/rust-cache rather than replacing it:
+      # rust-cache restores whole target directories keyed on Cargo.lock, so a
+      # dependency bump misses entirely and rebuilds everything from scratch,
+      # while sccache still hits per-crate for every dependency that did not
+      # change. D2B_CI_SCCACHE opts test-rust.sh's own detection into using it;
+      # see that script for why RUSTC_WRAPPER is never set directly to the
+      # sccache binary path (it would bypass the wrapper shim's classification
+      # of a broken cache invocation as distinct from a compile error).
+      D2B_CI_SCCACHE: "1"
+      SCCACHE_DIR: "/home/runner/.cache/d2b-sccache-ci"
+      # Incremental artifacts are non-deterministic and sccache cannot cache
+      # them at all (see "Non-cacheable reasons: incremental" in its stats), so
+      # this stays off regardless of which cache is doing the work.
       CARGO_INCREMENTAL: "0"
     steps:
       - uses: {CHECKOUT}
@@ -251,6 +261,28 @@ def rust_job(job: dict[str, Any]) -> str:
           rustup default "$PINNED"
           echo "Rust toolchain: $(rustc --version)"
           sudo apt-get update && sudo apt-get install -y ripgrep acl
+      - name: Install sccache
+        # Built through the already-installed nix, matching how cargo-nextest,
+        # cargo-deny and cargo-audit are provisioned elsewhere in this gate,
+        # rather than adding a second binary-fetch mechanism. Copied to a fixed
+        # PATH-visible location because a nix profile/shell does not persist
+        # across separate `run:` steps.
+        run: |
+          sccache_out=$(nix build --inputs-from "$PWD" nixpkgs#sccache --no-link --print-out-paths)
+          mkdir -p "$HOME/.local/bin"
+          cp "$sccache_out/bin/sccache" "$HOME/.local/bin/sccache"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: sccache cache (compiled-artifact cache, complements rust-cache)
+        # actions/cache, not sccache's own GHA-cache backend: see SCCACHE_CACHE
+        # above for why. Keyed on the pinned toolchain and Cargo.lock so a
+        # version or dependency change gets a fresh, correctly-scoped cache
+        # rather than silently reusing entries a different compiler produced.
+        uses: {SCCACHE_CACHE}
+        with:
+          path: {"${{ env.SCCACHE_DIR }}"}
+          key: sccache-${{{{ runner.os }}}}-${{{{ hashFiles('packages/rust-toolchain.toml', 'packages/Cargo.lock') }}}}
+          restore-keys: |
+            sccache-${{{{ runner.os }}}}-
       - name: Rust dependency cache (target dirs + cargo registry)
         # Swatinem/rust-cache caches dependency artifacts in target dirs
         # and the cargo registry. It performs all I/O in its own action
@@ -688,9 +720,18 @@ def selected_phases(manifest: dict[str, Any], include_preflight: bool) -> list[d
 def command_run_local(args: argparse.Namespace) -> int:
     manifest = load_manifest()
     jobs = manifest["jobs"]
+    # Resolved in two steps rather than via os.environ.get's default argument:
+    # the environment lookup is str | None, the manifest fallback is untyped,
+    # and folding them together makes the argument to int() an optional that a
+    # type checker rejects. An `or` would type-check but would also treat an
+    # explicit "0" as unset, silently substituting the default instead of
+    # reaching the >= 1 rejection below.
+    raw_max_jobs: object = os.environ.get("D2B_CHECK_JOBS")
+    if raw_max_jobs is None:
+        raw_max_jobs = manifest["local"].get("defaultJobs", 4)
     try:
-        max_jobs = int(os.environ.get("D2B_CHECK_JOBS", manifest["local"].get("defaultJobs", 4)))
-    except ValueError:
+        max_jobs = int(raw_max_jobs)  # type: ignore[call-overload]
+    except (TypeError, ValueError):
         print("D2B_CHECK_JOBS must be an integer", file=sys.stderr)
         return 2
     if max_jobs < 1:
