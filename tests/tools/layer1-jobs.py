@@ -102,44 +102,67 @@ def ci_env_block(job: dict[str, Any], spaces: int) -> str:
     return "\n".join(lines) + "\n"
 
 
-def nix_setup_step(job: dict[str, Any] | None = None) -> str:
-    """Renders nix installation plus a per-job nix store cache.
+# Jobs whose nix store cache is worth its share of the repository cache budget.
+#
+# GitHub evicts repository caches by LRU against a fixed ~10 GB total, shared
+# with the rust-cache entries this gate also depends on. Caching /nix for all
+# twelve nix-using jobs would fan the key space out far past that total, and the
+# steady state would be everything evicting everything - worse than not caching.
+# So only the jobs that actually build derivations and take long enough for it
+# to matter get an entry: measured on this gate, test-fixture-contracts spent 40
+# minutes building 166 derivations and test-nix-unit ran 15 minutes, while the
+# flake-eval shards finish in under a minute and the lint/drift jobs only
+# evaluate. Two entries at 4G plus the ~2 GB rust-cache fits the budget with
+# room to spare.
+NIX_CACHED_JOBS = frozenset({"test-fixture-contracts", "test-nix-unit"})
+NIX_CACHE_MAX_STORE = "4G"
 
-    The cache key is scoped to the job id. Every nix job used to share one key,
-    and because actions/cache never overwrites an existing entry, whichever job
-    finished first froze the cache at whatever its store happened to hold. In
-    practice that was a trivial lint or drift job with a nearly-empty store, so
-    the fixture-contract gate restored ~94 MB and then still logged "these 166
-    derivations will be built" - the cache hit, reported success, and saved
-    nothing worth having. Scoping by job means each one accumulates and reuses
-    its own store.
 
-    The 8G ceiling is per entry, and GitHub evicts repository caches by LRU
-    against a fixed total, so scoping this way deliberately trades some of that
-    budget for the fixture job actually getting a warm store. If the rust-cache
-    entries start being evicted, narrow this to the jobs that genuinely build
-    derivations rather than widening the ceiling.
+def nix_setup_step(job: dict[str, Any], scope_suffix: str = "") -> str:
+    """Renders nix installation, plus a store cache for the jobs that earn one.
+
+    The cache key is scoped to the job id (and, for a matrix job, to the shard
+    via scope_suffix). Every nix job used to share one key, and because
+    actions/cache never overwrites an existing entry, whichever job finished
+    first froze the cache at whatever its store held. In practice that was a
+    trivial lint or drift job, so the fixture-contract gate restored ~94 MB and
+    then still logged "these 166 derivations will be built" - the cache hit,
+    reported success, and saved nothing worth having.
+
+    Scoping also bounds purge-prefixes, which with purge-created 0 could
+    otherwise delete another job's entry.
+
+    The job parameter is required rather than optional: defaulting it would make
+    an omitted argument silently emit a shared key, which is the defect this
+    exists to prevent.
     """
-    scope = job["ciJobId"] if job else "shared"
-    return f"""      - uses: {INSTALL_NIX}
+    scope = job["ciJobId"] + scope_suffix
+    setup = f"""      - uses: {INSTALL_NIX}
         with:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
-            experimental-features = nix-command flakes
+            experimental-features = nix-command flakes"""
+    if job["ciJobId"] not in NIX_CACHED_JOBS:
+        return setup
+    return (
+        setup
+        + f"""
       - name: Nix store cache
-        # Without this every nix job rebuilds the Rust host-tool set from
-        # source, which is what makes the fixture-contract gate cost half an
-        # hour here while completing in seconds on a host with a substituter.
-        # Restore is best-effort: a cache miss is slow, never incorrect.
+        # Without this the job rebuilds the Rust host-tool set from source,
+        # which is what makes the fixture-contract gate cost half an hour here
+        # while completing in seconds on a host with a substituter. Restore is
+        # best-effort: a cache miss is slow, never incorrect. See
+        # NIX_CACHED_JOBS for why only some jobs carry an entry.
         uses: {NIX_CACHE}
         with:
           primary-key: nix-${{{{ runner.os }}}}-{scope}-${{{{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}}}
           restore-prefixes-first-match: nix-${{{{ runner.os }}}}-{scope}-
-          gc-max-store-size-linux: 8G
+          gc-max-store-size-linux: {NIX_CACHE_MAX_STORE}
           purge: true
           purge-prefixes: nix-${{{{ runner.os }}}}-{scope}-
           purge-created: 0
           purge-primary-key: never"""
+    )
 
 
 def simple_nix_job(job: dict[str, Any]) -> str:
@@ -355,7 +378,7 @@ def flake_x86_shards_job(job: dict[str, Any]) -> str:
           sudo chmod 600 "$SWAP"
           sudo mkswap "$SWAP"
           sudo swapon "$SWAP"
-{nix_setup_step(job)}
+{nix_setup_step(job, "-${{{{ matrix.check }}}}")}
       - name: Install flake shard diagnostics
         run: sudo apt-get update && sudo apt-get install -y gdb
       - name: {job["displayName"]}
