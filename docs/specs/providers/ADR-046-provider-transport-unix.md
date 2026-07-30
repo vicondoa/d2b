@@ -1391,7 +1391,7 @@ These supplement generated per-field option type checks and live in
 | --- | --- |
 | ZoneLink and selected Provider are declared in the same child Zone; `spec.childZoneName` equals that Zone; compiler-only `parentZone` resolves to the allocator owner; no reciprocal parent resource is emitted | `zones.<zone>: transport-unix ZoneLink and Provider must be child-local with a self-matching childZoneName` |
 | `spec.transportSettings` must not contain `attachmentsEnabled` | `zones.<zone>.resources.<name>: spec.transportSettings.attachmentsEnabled is not a valid ZoneLink transport field; FD attachment across Zone boundaries is prohibited` |
-| `spec.transportSettings` contains no top-level key `socketPath`, `hostPath`, `password`, `token`, or `key` | `zones.<zone>.resources.<name>: spec.transportSettings must not contain host paths, socket paths, or secret material` |
+| `spec.transportSettings` contains no top-level key `socketPath`, `hostPath`, `password`, `token`, or `key` | `zones.<zone>.resources.<name>: transportSettings must not contain host paths, socket paths, or secret material. Remove the <forbidden-keys> key(s) from spec.transportSettings: transport endpoints are allocator-issued and secrets are referenced as Credential resources.`, where `<forbidden-keys>` is the comma-separated list of the forbidden keys actually present |
 
 These are belt-and-suspenders: the JSON Schema `additionalProperties: false` and
 the `not/anyOf` block already reject these keys. The eval assertion catches them

@@ -903,17 +903,18 @@ option types from `xtask gen-zone-nix-options` and are not repeated here.
 | Assertion | Error message |
 | --- | --- |
 | `<zone>` key matches `^[a-z][a-z0-9-]{0,62}$` (1 to 63 bytes, D113) | `zones: zone key must match ^[a-z][a-z0-9-]{0,62}$` |
-| `<zone>` key not `sys-*` or `launcher` | `zones: zone key uses reserved prefix or exact name` |
+| `<zone>` key not `sys-*` or `launcher` | `zones.<zone>: zone key uses a name reserved for the framework. Rename this d2b.zones entry: the sys- prefix and the exact name launcher are reserved for framework-declared Zones.` |
 | `parentZone` omitted on `local-root` and defined once on every other Zone | `zones.<zone>: parentZone is required for non-root Zones and forbidden on local-root` |
 | `parentZone` resolves to a declared Zone and does not equal `<zone>` | `zones.<zone>.parentZone: parent must exist and differ from child` |
-| Complete `parentZone` graph is acyclic and each ancestry path contains at most 16 Zone names | `zones: parentZone topology has a cycle or exceeds depth 16` |
+| Complete `parentZone` graph is acyclic and each ancestry path contains at most 16 Zone names | `zones: parentZone topology has a cycle or exceeds depth 16. Inspect d2b.zones.<zone>.parentZone and repoint the entries that close the loop, or flatten the hierarchy so no ancestry path names more than 16 Zones.` |
 | `<name>` key matches `^[a-z][a-z0-9-]{0,62}$` (1 to 63 bytes, D113) | `zones.<zone>.resources: resource key must match ^[a-z][a-z0-9-]{0,62}$` |
-| No operator-authored `type = "Zone"` under `resources` | `zones.<zone>.resources.<name>: Zone self-resource is runtime-created` |
-| For `type = "ZoneLink"`: `spec.childZoneName` equals `<zone>`; at most one uplink resource exists in a non-root Zone; local root has none | `zones.<zone>: ZoneLink must be the sole child-local uplink and childZoneName must equal its Zone` |
-| For `type = "ZoneLink"`: `spec.transportProviderRef` resolves to a declared `Provider` resource in the same `<zone>` | `zones.<zone>.resources.<name>: transportProviderRef does not resolve to a declared Provider resource` |
-| Total `d2b.zones` keys ≤ 64 | `zones: zone count exceeds host limit of 64` |
-| `resources` count per `<zone>` ≤ 1024 | `zones.<zone>.resources: resource count exceeds zone limit of 1024` |
-| `spec.transportSettings` for `type = "ZoneLink"` has no top-level key named `socketPath`, `hostPath`, `password`, `token`, or `key` | `zones.<zone>.resources.<name>: transportSettings must not contain host paths, socket paths, or secret material` |
+| No operator-authored `type = "Zone"` under `resources` | `zones.<zone>.resources.<name>: Zone self-resource is runtime-created. Remove this resource declaration; the controller creates the Zone self-resource from the d2b.zones.<zone> entry itself.` |
+| For `type = "ZoneLink"` on a non-root `<zone>`: `spec.childZoneName` equals `<zone>` and exactly one uplink resource exists | `zones.<zone>: ZoneLink must be the sole child-local uplink and childZoneName must equal its Zone. Keep exactly one ZoneLink in d2b.zones.<zone>.resources and set its spec.childZoneName to <zone>.` |
+| For `type = "ZoneLink"` on `local-root`: no uplink resource exists | `zones.local-root: ZoneLink must be the sole child-local uplink and childZoneName must equal its Zone. Remove every ZoneLink from d2b.zones.local-root.resources: local-root has no parent to uplink to.` |
+| For `type = "ZoneLink"`: `spec.transportProviderRef` resolves to a declared `Provider` resource in the same `<zone>` | `zones.<zone>.resources.<name>: transportProviderRef does not resolve to a declared Provider resource. Declare that Provider under d2b.zones.<zone>.resources, or point spec.transportProviderRef at one that is already declared there, in the form Provider/<name>.` |
+| Total `d2b.zones` keys ≤ 64 | `zones: zone count exceeds host limit of 64. Remove or consolidate d2b.zones entries until at most 64 remain.` |
+| `resources` count per `<zone>` ≤ 1024 | `zones.<zone>.resources: resource count exceeds zone limit of 1024. Remove resources from this Zone, or move some of them into a separate Zone declared under d2b.zones.` |
+| `spec.transportSettings` for `type = "ZoneLink"` has no top-level key named `socketPath`, `hostPath`, `password`, `token`, or `key` | `zones.<zone>.resources.<name>: transportSettings must not contain host paths, socket paths, or secret material. Remove the <forbidden-keys> key(s) from spec.transportSettings: transport endpoints are allocator-issued and secrets are referenced as Credential resources.`, where `<forbidden-keys>` is the comma-separated list of the forbidden keys actually present |
 
 ### Example configurations
 

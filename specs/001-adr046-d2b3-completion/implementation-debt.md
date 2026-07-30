@@ -139,6 +139,30 @@ and never corrected inside an implementation wave.
   fields. Not emitted.
 - **Frozen Provider method taxonomy** has no v3 re-freeze, so the capability
   set is a bounded token set rather than the specified taxonomy.
+- **Zone and Volume assertion messages rewritten for FR-017 actionability.**
+  A panel finding established that the assertion messages pinned verbatim by
+  the specification were not FR-017 compliant: each named the violated rule
+  but no concrete operator action. The shipped code in
+  `nixos-modules/assertions.nix` and `nixos-modules/resources-volume.nix` was
+  rewritten so every message names the option path to edit and the edit to
+  make. Code wins, so the pinned strings in the specification validation
+  tables were updated to match the emitted text byte-for-byte: the Zone
+  assertion table in `docs/specs/ADR-046-zone-routing.md` (reserved zone key,
+  `parentZone` topology, Zone self-resource, ZoneLink sole-uplink, unresolved
+  `transportProviderRef`, zone count, per-zone resource count, and forbidden
+  `transportSettings` keys) and the transport-settings row of the assertion
+  table in `docs/specs/providers/ADR-046-provider-transport-unix.md`. Two
+  shapes could not be pinned as a single literal. The sole-uplink message now
+  branches on whether the Zone is `local-root`, so its single table row was
+  split into one row per case. The forbidden-key message now interpolates the
+  offending key names from a framework constant list, so the table uses a
+  `<forbidden-keys>` placeholder and states what it stands for. The
+  transport-unix row also carried a pre-existing defect independent of this
+  rewrite: it pinned a `spec.transportSettings` message prefix where the code
+  has always emitted `transportSettings`. That prefix was corrected in the
+  same edit. Prose that describes these rules rather than pinning their exact
+  text, such as the Zone self-resource line in
+  `docs/specs/ADR-046-resources-zone-control.md`, was left unchanged.
 
 ## 6. Corrections to this program's own process
 
@@ -184,6 +208,13 @@ The panel found these silent rather than recorded, which is the defect: an
 unmet obligation is acceptable when it is written down and a scheduling
 problem when it is not. Each names the work item that owes it.
 
+This section was first written by transcribing the three items a reviewer
+happened to name, which is not an audit and produced exactly the gap the
+panel then caught. It has since been rebuilt by reading the `validation`
+field of every one of the wave's nineteen work items against the tests that
+actually exist. The three Zone configuration entries below are unchanged;
+what follows them is the remainder of that audit.
+
 The three Zone configuration items carry obligations at test layers this wave
 did not reach. The Rust behaviour they describe is covered by in-crate tests;
 what is missing is the declarative and integration layer that proves the same
@@ -213,3 +244,59 @@ non-deterministic bundle, and nothing else in the wave covers that. The
 generators are deterministic by construction and the drift gate now compares
 their output, but neither proves determinism across two independent
 evaluations of the same input.
+
+### The rest of the audit
+
+Six further obligations are owed by four other items. Each is recorded with
+the honest reason it is not met and the thing that would discharge it.
+
+| Work item | Obligation | Why it is not met | What would discharge it |
+| --- | --- | --- | --- |
+| `ADR046-primitives-002` | Host/Guest/user integration, alongside the shared conformance suite | Both Provider conformance suites run only against `ScriptedEffectPort`, a hermetic mock. A scripted collaborator proves the Provider's own decision logic and proves nothing about a real Host, Guest, or user domain, and the crates are imported by no production caller. | The `ProcessLaunchEffectPort` production adapter, then the same conformance obligations re-run against it across the three domains. The adapter is `ADR046-process-001` in W4. |
+| `ADR046-primitives-003` | virtiofs host/guest mount tests | `export_lifecycle.rs` drives `VirtiofsExportController` through a `ScriptedPort`, so "the host serves and the guest mounts" is asserted as a controller state transition, not as a mount. Nothing in the wave mounts anything. | A host-integration check that exports a Volume and mounts it in a booted guest. Blocked on the same absent effect adapter. |
+| `ADR046-primitives-003` | ACL, no-follow, and marker tests | `packages/d2b-provider-volume-local/integration/README.md` names the five fixtures that need a real filesystem boundary - Host-path access, the `st_dev` store-view boundary, marker durability across restart, quota enforcement, and the TPM marker - and states plainly that none is wired, because without the adapter they would assert against a stub. The hermetic suite proves these at the policy layer only. | Wiring those fixtures behind the landed effect adapter. |
+| `ADR046-primitives-003` | Eval cases for the Volume assertions in `resources-volume.nix` | The module is imported by nothing (section 3), and `tests/unit/nix/cases/` holds no Volume case, so the assertions neither run in a configuration nor in the gate. | An import from `index.nix` or `default.nix`, then eval cases plus `make nix-unit-pin`. Both owned by later slices. |
+| `ADR046-routing-001` | Golden advertisement, path, and failure vectors **shared by Rust and Nix** | The Rust half is met: the vectors are pinned in `v3/zone_routing.rs` and render canonical bytes. The Nix half does not exist, because no Nix code consumes a routing vector and no Zone eval case is committed. A vector that only one side reads cannot detect the two sides diverging, which is the entire point of sharing it. | A Nix-side consumer of the same vector bytes, landing with the `ADR046-routing-011` eval cases. |
+| `ADR046-routing-006` | p95 benchmark gate | `benches/route_decision.rs` exists and is declared `harness = false`, but no target runs it: it appears in no `Makefile` target, no `tests/layer1-jobs.json` job, and `tests/unit/gates/performance-budgets.sh` names no Zone routing budget. An unrun benchmark enforces no latency, and that gate is in any case classified advisory. | A budget entry naming the route-decision measurement, and an entrypoint that runs the benchmark. |
+
+Two more deserve stating precisely rather than being counted as met.
+
+`ADR046-routing-005` owes an end-to-end K0 to K1 to K2 resource call and
+`ADR046-routing-010` owes a cross-Zone K0 to K1 end-to-end test. Both have a
+test of that name, and both are in-crate simulations: the bus test seals an
+envelope and pins a reverse path against an engine decision it is handed, and
+the client test walks a route table. The routing, hop-budget, and
+idempotency semantics they assert are genuinely covered. What is not covered
+is any hop crossing a transport, because the bus stays deliberately unwired
+from production listeners. Recorded as covered-at-the-logic-layer rather
+than as end-to-end.
+
+`ADR046-routing-016` owes bootstrap, enroll, resolve-route and shortcut
+integration tests against a child-local fake ZoneLink. Resolve-route and
+shortcut are met in `service.rs`. Bootstrap and enroll are not, and cannot
+be: the service has no handler for them, which its own
+`a_method_without_a_landed_handler_is_refused_at_admission` test pins. The
+blocker and its W3 owner are already recorded in section 1; the validation
+obligation is named here so it is not lost when that row closes.
+
+Two port obligations - `ADR046-routing-007`'s `component_session.rs` tests
+and `ADR046-routing-008`'s `unix_session.rs` tests - are unmet by delegation
+rather than by omission, and are already recorded with their reasoning in
+the wave-close table above. They are not repeated here.
+
+The remaining ten items were audited and their obligations are discharged:
+`primitives-001` (schema vectors across the nine v3 primitive modules, and
+the folded-field and duplicate-type policy, which runs enforcing under
+`make test-policy`); `routing-002` (the route-engine suite is present with
+relay, hop-count and capability-narrowing cells, and every reason the engine
+can produce is proved covered by a closed-set test); `routing-003`
+(longest-suffix vectors over a sealed topology, and the stale, withdrawn,
+unauthenticated and no-parent-row cells); `routing-004` (the state-machine
+transitions, all three crash windows, the key-lifecycle cells, and the
+structural metric-descriptor test asserting no identity reaches a label);
+`routing-005` and `routing-010` as qualified above; `routing-006`'s
+baseline vector cases, separately from its unwired benchmark; `routing-008`'s
+allocator FD handoff and its no-socket-activation cell; `routing-009`
+(round-trip, canonical encoding stability, and closed-enum exhaustiveness);
+`routing-012`'s two drift obligations, which the drift gate now runs;
+and `routing-016` other than bootstrap and enroll.
