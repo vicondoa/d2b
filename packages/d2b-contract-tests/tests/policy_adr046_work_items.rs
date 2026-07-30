@@ -906,9 +906,9 @@ fn generated_artifacts_are_deterministic_and_carry_no_superseded_bindings() {
             text.ends_with('\n'),
             "`{rel}` must end with exactly one trailing newline"
         );
-        // The panel binding has moved twice. ADR046-W0 rebound it from an
-        // early Gemini model to `gpt-5.6-sol`, and this assertion then pinned
-        // "gemini" as the superseded value. The 2026-07-29 operator decision
+        // The panel binding has moved twice. An earlier change rebound it from
+        // an early Gemini model to `gpt-5.6-sol`, and this assertion then
+        // pinned "gemini" as the superseded value. A later operator decision
         // supersedes that rebinding: the panel now runs on
         // `gemini-3.1-pro-preview` while `gpt-5.6-sol` is the model that
         // writes the code. Keeping the reviewing model distinct from the
