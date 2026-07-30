@@ -55,9 +55,13 @@ export RUSTUP_TOOLCHAIN="$pinned_channel"
 echo "repro: pinned channel $pinned_channel, toolchain root $repro_home" >&2
 echo "repro: running: $*" >&2
 
-# Mirror the gate's nix shell exactly: same inputs, same package set.
+# Mirror the gate's toolchain environment. cargo-nextest and jq are included
+# because the gate now runs its tests through nextest and discovers
+# harness=false targets with jq, so without them this cannot reproduce the
+# failure class it exists for.
 exec nix shell --quiet --inputs-from "$ROOT" \
   nixpkgs#rustup nixpkgs#stdenv.cc nixpkgs#sccache \
+  nixpkgs#cargo-nextest nixpkgs#jq \
   --command bash -c '
     set -euo pipefail
     if ! rustup toolchain list 2>/dev/null | grep -q "^${RUSTUP_TOOLCHAIN}"; then

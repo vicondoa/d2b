@@ -6,7 +6,15 @@ ROOT=${ROOT:-$(cd "$HERE/../.." && pwd)}
 DEFAULT_PINNED_DIR="$ROOT/tests/golden/pinned"
 
 if ! command -v cargo >/dev/null 2>&1; then
-  for candidate in "$HOME"/.rustup/toolchains/1.94.1-*/bin; do
+  # Read the channel rather than hardcoding it: a stale literal here silently
+  # stops matching after a pin bump, and the script then falls through to
+  # whatever cargo the surrounding shell provides - asserting the pinned test
+  # inventory under a compiler that is not the pinned one.
+  pinned_channel=$(
+    sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]\+\)".*/\1/p' \
+      "$ROOT/packages/rust-toolchain.toml" | head -1
+  )
+  for candidate in "$HOME"/.rustup/toolchains/"${pinned_channel:-0.0.0}"-*/bin; do
     if [ -x "$candidate/cargo" ]; then
       PATH="$candidate:$PATH"
       export PATH

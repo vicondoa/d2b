@@ -34,6 +34,20 @@ const CLAIM_TYPE_IDENTITIES: &[&str] = &["ResourceRef", "ResourceUid"];
 fn public_api_has_only_the_approved_capability_mint_surface() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repository_root = crate_root.parent().unwrap().parent().unwrap();
+    let updating = std::env::var_os("D2B_UPDATE_BUS_PUBLIC_API").is_some();
+    // Regenerating the approved snapshots must never read a cached render.
+    // The assert path below is an exact-set comparison and so fails closed on a
+    // render that came back short, but the write path has no such check: it
+    // would bake whatever the cache produced into a narrower allowlist, after
+    // which every later run passes against the reduced inventory. Rendering
+    // cold costs one slow run on a command that is already deliberate.
+    if updating && std::env::var_os("D2B_BUS_PUBLIC_API_FRESH").is_none() {
+        panic!(
+            "refusing to rewrite the approved API snapshots from a possibly cached render; \
+             re-run with D2B_BUS_PUBLIC_API_FRESH=1 D2B_UPDATE_BUS_PUBLIC_API=1 so the \
+             workspace is rendered from scratch"
+        );
+    }
     let scratch = Scratch::cache(
         repository_root
             .join(".scratch")
@@ -76,7 +90,7 @@ fn public_api_has_only_the_approved_capability_mint_surface() {
     let (_, capability_surface) = workspace_public_api(&workspace_docs, &BTreeSet::new(), true);
     let hidden_public = workspace_hidden_public_api(&workspace_docs);
     let capability_trait_impls = workspace_capability_trait_impls(&workspace_docs);
-    if std::env::var_os("D2B_UPDATE_BUS_PUBLIC_API").is_some() {
+    if updating {
         write_snapshot(&crate_root.join("tests/approved-public-api.txt"), &actual);
         write_snapshot(
             &crate_root.join("tests/approved-capability-api.txt"),

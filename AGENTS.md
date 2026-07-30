@@ -850,76 +850,81 @@ focused on the review contract rather than paydro-specific files.
 
 ### Running the panel under swarm
 
-There are three review surfaces in this repository and they are strictly
+There are two review surfaces in this repository and they are strictly
 ranked. Read this ordering before wiring any harness.
 
-1. **The binding ten-role panel** - `cargo run --manifest-path
-   packages/Cargo.toml -p xtask -- delivery wave panel-request` /
-   `panel-attest` / `seal`. This is the authority for an ADR 0046 wave.
-   It runs **once, at wave close**, against the wave's one immutable
-   snapshot, and it is enforced in code by
-   `packages/xtask/src/delivery/panel.rs`: exactly one record per role
-   for all ten roles, `signoff` true iff `recommendations` is `[]`,
-   unanimous ten of ten, every record bound to the same
-   `candidate_id`/`content_id`/`snapshot_sha256`, and provider/model/
-   reasoning effort pinned to `github-copilot` / `gpt-5.6-sol` /
-   `xhigh`. There is no override, no force flag, and no partial pass.
-   See [`docs/specs/ADR-046-validation-and-delivery.md`](./docs/specs/ADR-046-validation-and-delivery.md)
-   section 12.3.
-2. **The per-round phase panel** - the [Phase gate](#phase-gate) rule
-   above. Where ADR 0046 restricts the *binding* panel to one per wave,
-   this rule allows a panel per implementation round. This is the loop
-   swarm automates.
-3. **Swarm's five-seat phase council** - the per-round gate whenever
-   swarm drives the work. It stands in for surface 2 and has no bearing
-   on surface 1.
+1. **The wave-close gate** - the five-seat council run once, at wave
+   close, against the wave's one immutable snapshot. This is the
+   authority for an ADR 0046 wave. It is unanimous across all five
+   seats, `signoff` true iff there are no findings, every seat on the
+   pinned review binding. There is no override, no force flag, and no
+   partial pass.
+2. **The per-round gate** - the same five-seat council, run per
+   implementation round. This is the loop swarm automates, and it
+   satisfies the [Phase gate](#phase-gate) rule above.
 
-**Swarm runs surface 2, not surface 1.** Under swarm the five-seat
-council is the per-round gate: no ten-role panel round is required
-between implementation rounds, which is the whole point of running the
-harness. Surface 1 is unchanged, because ADR 0046 section 12.3 already
-restricts the binding panel to exactly one run at wave close and never
-per implementation round. A green phase council is therefore not a
-sealed wave, and `phase_complete` passing is not `delivery wave seal`
-passing.
+**The council is the only review body.** No ten-role panel is convened
+at any point in an ADR 0046 wave, neither between implementation rounds
+nor at wave close. The two gates above are distinct and both apply: a
+green per-round verdict is not a wave close, and a wave-close verdict
+may not reuse a round verdict.
 
-**The 10 roles at wave close.** The ten-role roster is no longer run
-every round. It runs once, at wave close, to produce the records
-surface 1 consumes: dispatch one read-only lane per roster role via
-`dispatch_lanes_async`, seeded with that role's focus cell from the
-table above plus the integrator's validation evidence. Lanes are
-read-only by contract, which keeps them off the shared Nix store, cargo
-target directory, and heavy gate semaphore. Lane ids are free-form, so
-all 10 roles vote independently and each lane's verdict maps one-to-one
-onto a `panel-attest` record.
+**Consequence: waves complete unsealed.** `cargo run --manifest-path
+packages/Cargo.toml -p xtask -- delivery wave seal` requires ten
+unanimous panel records from a body this program does not convene, and
+`packages/xtask/src/delivery/panel.rs` offers no override. The sealing
+tool therefore cannot run, and the exit condition every work item
+inherits - that a seal is recorded - is knowingly waived. Every wave
+boundary report MUST state that waiver explicitly rather than leave it
+implied. See
+[`docs/specs/ADR-046-validation-and-delivery.md`](./docs/specs/ADR-046-validation-and-delivery.md)
+section 12.3 for the contract this departs from.
 
-To keep those records attestable, the reviewing agents must run on the
-pinned panel binding. `agents.<name>.model` in
-`.opencode/opencode-swarm.json` pins them to
-`github-copilot/gpt-5.6-sol`; a lane on any other model produces a
-record `panel-attest` will reject, so do not let model fallback silently
-downgrade a panel lane.
+**Accept the tradeoff knowingly.** Five synthesizing seats can agree
+where ten independent reviewers would have dissented, and the
+observability precedent above - a wave review that returned zero
+sign-offs with eleven high-severity findings the static gates had not
+caught - is exactly that failure shape. That risk is accepted, not
+mitigated.
 
-**The per-round council, and what it costs.**
-`submit_phase_council_verdicts` has a closed five-member roster
-(`critic`, `reviewer`, `sme`, `test_engineer`, `explorer`) and
-deduplicates by member, so ten distinct votes cannot be cast against it.
-Each seat carries the concerns of the roster roles nearest it:
+**The roster and its mandates.** `submit_phase_council_verdicts` has a
+closed five-member roster (`critic`, `reviewer`, `sme`,
+`test_engineer`, `explorer`) and deduplicates by member, so the roster
+cannot be extended. Each seat carries an exact mandate:
 
-| Seat            | Covers                          |
-|-----------------|---------------------------------|
-| `reviewer`      | `software`, `rust`              |
-| `test_engineer` | `test`                          |
-| `sme`           | `nixos`, `networking`, `kernel` |
-| `critic`        | `security`, `product`           |
-| `explorer`      | `docs`, `observability`         |
+| Seat            | Covers                                   |
+|-----------------|------------------------------------------|
+| `reviewer`      | `software`, `rust`                       |
+| `test_engineer` | `test`                                   |
+| `sme`           | `nixos`, `networking`, `kernel`          |
+| `critic`        | `security` only                          |
+| `explorer`      | `docs`, `observability`, `product`       |
 
-A seat MUST NOT return `APPROVE` while any concern it covers is open.
-Accept the tradeoff knowingly: five synthesizers can agree where ten
-independent reviewers would have dissented, and the observability
-precedent above is exactly that failure shape. That is why this council
-gates a round and not a wave, and why the ten-role panel still runs
-before the seal.
+The `critic` seat is a dedicated security engineer: attack surface,
+trust posture, capability and authority boundaries, privilege
+separation, authorization boundaries, sensitive-value exposure in
+diagnostics and telemetry, and retention defaults. It carries no
+competing mandate, because on a codebase whose principal risk is
+capability and privilege boundaries a diluted security seat is the
+seat most likely to miss the finding that matters. Product concerns -
+operator experience, naming surface, migration and deprecation policy,
+actionable error messages - move to the `explorer` seat, their nearest
+neighbour. A seat MUST NOT return `APPROVE` while any concern it covers
+is open, and the security seat's refusal blocks the wave from closing.
+
+**Findings are recorded.** Every finding and its resolution MUST be
+recorded at both gates, so a later reader can tell what was raised and
+what closed it.
+
+**The pinned review binding.** `agents.<name>.model` in
+`.opencode/opencode-swarm.json` pins every reviewing seat to
+`github-copilot/gemini-3.1-pro-preview`. A seat that runs on any other
+model invalidates that review rather than being silently accepted.
+Reviewing agents deliberately carry no `fallback_models`: a silent
+downgrade would produce a verdict that must be rejected, so a provider
+error fails the seat outright and, with `requireAllMembers` true,
+blocks the council rather than degrading it. Implementation runs on
+`github-copilot/gpt-5.6-sol`.
 
 **Verdict rule.** Swarm's default is more permissive than this file: a
 `CONCERNS` verdict carrying only MEDIUM/LOW findings still passes. The
@@ -1345,17 +1350,20 @@ fields that request panel, agent, or model metadata.
   flake-eval gates (W2fu4 H8/H9).
 - Rust worktrees do NOT share a cargo target directory. Each worktree
   keeps its own `packages/target/`; compiled-output dedup across
-  worktrees comes from `sccache` (`$SCCACHE_DIR`, which nothing in this
-  repo sets, so it takes sccache's own default of `~/.cache/sccache`
-  unless your shell or the dev shell exports it), wired by the
-  `[build] rustc-wrapper` lines in `packages/.cargo/config.toml` and the
-  sibling-workspace configs under `packages/d2b-priv-broker/`,
-  `packages/d2b-guest-shell-runner/`, and `packages/d2b-core/fuzz/`. A
-  shared target dir is deliberately avoided: cargo's target-dir lock is
-  workspace-wide, so two worktrees building concurrently at different SHAs
-  would serialize pessimistically and stomp each other's incremental
-  caches. To bypass sccache locally (e.g. when bisecting a compiler
-  issue), set `RUSTC_WRAPPER=` or `CARGO_BUILD_RUSTC_WRAPPER=` explicitly.
+  worktrees comes from `sccache`. `SCCACHE_DIR` defaults to
+  `~/.cache/d2b-sccache`: `tests/lib.sh` exports it for every gate script,
+  and the dev shell sets the same value, so both agree. A bare `cargo`
+  invocation outside both falls back to sccache's own `~/.cache/sccache`,
+  and Nix sandbox builds pin it empty because the sandbox has no sccache.
+  The wiring is the `[build] rustc-wrapper` lines in
+  `packages/.cargo/config.toml` and the sibling-workspace configs under
+  `packages/d2b-priv-broker/`, `packages/d2b-guest-shell-runner/`, and
+  `packages/d2b-core/fuzz/`. A shared target dir is deliberately
+  avoided: cargo's target-dir lock is workspace-wide, so two worktrees
+  building concurrently at different SHAs would serialize pessimistically
+  and stomp each other's incremental caches. To bypass sccache locally
+  (e.g. when bisecting a compiler issue), set `RUSTC_WRAPPER=` or
+  `CARGO_BUILD_RUSTC_WRAPPER=` explicitly.
 - **Never clear `RUSTC_WRAPPER` to make a command work.** Every
   `rustc-wrapper` line points at a repo-local `.cargo/rustc-wrapper.sh`
   that uses sccache when it is on PATH and plain rustc when it is not, so
