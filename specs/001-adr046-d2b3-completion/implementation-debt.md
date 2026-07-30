@@ -34,9 +34,9 @@ hole. Each must be closed by the wave named.
 
 | Item | Debt | Owning wave |
 | --- | --- | --- |
-| `ADR046-routing-007` | Not started. Requires `packages/d2b-bus/Cargo.toml` to declare `snow`, `sha2`, `zeroize`, `ttrpc`, `futures-util` and widened `tokio` features, which is an integrator prep change, not a slice change. Also requires `ADR046-routing-009`'s `zone_session.rs` contract, which the graph records as depending on routing-007 rather than the reverse. | W2 |
-| `ADR046-routing-009` | Dependency edge appears inverted against routing-007. The graph says 009 depends on 007, but 007's detailed design imports 009's contract module. One of the two records is wrong. | W2, needs an integrator ruling before either can start |
-| `ADR046-routing-016` service | `zone-bootstrap` and `zone-enroll` have **no handler**. Both are frozen in the method inventory and refused at admission rather than stubbed. The four enrollment validation obligations (initial IKpsk2 consuming the allocator PSK, follow-on KK, KK reconnect, fresh IKpsk2 after revocation) are unmet and unmeetable until the session contract lands. | W2, unblocked by routing-007/009 |
+| `ADR046-routing-007` | CLOSED. The dependency declarations landed as integrator prep and the contract module landed first, on the reading that the recorded edge is inverted for the contract. | Closed in W2 |
+| `ADR046-routing-009` | Both landed, 009 first. The recorded edge remains wrong in the graph: it says 009 depends on 007, but 007 imports 009's contract. The manifest should be corrected as a separate amendment under the drift rule. | Amendment, not blocking |
+| `ADR046-routing-016` service | Still no handler for `zone-bootstrap` and `zone-enroll`, but the blocker moved: the session contract and enrollment machine now exist in the bus, so wiring the service to them is ordinary work rather than a missing contract. The four enrollment obligations are met in the bus session module, not in the service. | W3 |
 | `ADR046-primitives-002` providers | `ProcessLaunchEffectPort` has no production adapter, so both process Providers are complete but unwired. The adapter is `ADR046-process-001`, destination `packages/d2b-provider-supervisor/`. | W4 |
 | `ADR046-routing-014` | `ProviderInstance`'s eleven trait objects and the whole `RpcProviderProxy` family are not delivered. They are built on `d2b_contracts::v2_provider` types with no v3 replacement. Needs a v3 Provider-method DTO work item before it can be finished. | Needs an integrator ruling on which wave owns the v3 Provider DTO catalogue |
 | `ADR046-routing-015` | `GeneratedProviderServiceServer` ttrpc dispatch not implemented: no v3 Provider proto, no service-name freeze, no generated bindings exist. `ProviderAgentAdapter`, `register_exact_instances`, and `ProviderAgentProcess` all depend on routing-014 surfaces that are themselves incomplete. | Same ruling as above |
@@ -120,3 +120,23 @@ and never corrected inside an implementation wave.
   requirement in the same breath. The requirement is real and was met; the
   prompt was wrong. Future dispatch prompts must cite a requirement by its
   file, not only by its number.
+
+---
+
+## Added at Wave 2 close
+
+New debt discovered while completing the wave's last five items.
+
+| Debt | Detail | Owning wave |
+| --- | --- | --- |
+| Appended Zone tags cannot reach the wire | The session contract appends six Zone members at new tags, but the canonical handshake offer encoder types its fields with the un-extended enums and lives in a file no W2 slice owned. Widening it in place would have invalidated the committed golden vectors. Enrolled links and bootstrap use preserved tags, so ZoneLink is unaffected; carrying an appended tag needs an owned decision on the offer encoding. | W3 |
+| Session tag values are an inference | No specification fixes the numeric tags for the six appended members, nor the ZoneLink service wire string. The scheme chosen is append-only, next unused tag, never renumber, with two tags permanently reserved rather than reused. These are wire-visible and need panel confirmation before anything depends on them. | W2 panel |
+| Subject-digest prologue field is a choice | The specs name no field for the subject-context digest. It is folded into the existing channel binding, which is already inside the canonical offer and therefore inside the handshake prologue, so no wire change was needed. Worth confirming. | W2 panel |
+| Sealed enrollment record does not bind the child uid | The spec says the record binds the child static key pin to the child Zone uid. The session module holds the fingerprint and an opaque allocator-binding digest; the uid binding belongs to the durable store transaction owned by the ZoneLink controller. | W3 |
+| No durable persistence for enrollment | Recovery takes the persisted facts as arguments. The store transaction that seals or invalidates a record is the controller's and is not implemented. | W3 |
+| `component_session` runtime tests not duplicated | The bus re-exports the session runtime rather than forking it, so its 2,121 lines of tests were deliberately not copied; they run in the owning crate. The ported golden vectors are the port evidence. A scope judgement worth a reviewer's confirmation. | W2 panel |
+| Principal digest has no frozen domain tag | The cross-Zone idempotency key needs a subject digest, but the frozen digest-tag list has no principal or subject tag, so the digest is currently undomained. If a tag is later frozen, the computation changes. | W3 |
+| No closed reason for a multi-Zone batch | The routing reason enum has no variant for a batch spanning Zones, so a structural error is returned rather than misusing an unrelated routing reason. | W3 |
+| `approved-public-api.txt` regeneration | Two slices added public items to the bus and flagged that the crate's public-API snapshot needs regenerating. Distinct from the capability allowlist, which they reported should be unchanged. | W2 close |
+| Unix session tests delegated rather than ported | The manifest asked to port the unix session tests verbatim, but the integrator wired the owning crate as a dependency instead, so copying them would fork the audited substrate. Zone-level semantics were ported instead. Needs a ruling: accept delegation, or add the syscall dev-dependency and port literally. | W2 panel |
+| Listener portal transport variant | One spec describes a pre-bound socket handed over a portal call while another describes an inherited connected socket. Only the connected form is implemented; the portal wire contract belongs to a transport Provider crate and is unspecified for the bus. | W6 |
