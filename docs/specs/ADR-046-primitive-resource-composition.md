@@ -431,8 +431,8 @@ systemd unit/minijail state; they write Process status.
 | Data migration | Full reset |
 | Validation | Schema vectors and folded-field/no-duplicate-type policy tests |
 | Removal proof | Old DTOs removed only by owning future slices |
-| Implementation state | Planned |
-| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
+| Implementation state | Merged |
+| Evidence | All nine Destination modules are present: `packages/d2b-contracts/src/v3/host.rs`, `guest.rs`, `execution_policy.rs`, `process.rs`, `volume.rs`, `user.rs`, `network.rs`, `device.rs`, and `credential.rs`. Each carries inline schema-vector tests pinning its minimal base spec and rejecting unknown, renamed, or layer-three fields (`schema_vector_pins_the_minimal_*_base_spec`, `base_object_never_carries_a_universal_or_layer_three_field`). The folded-field and no-duplicate-type policy is proved by `every_primitive_base_object_folds_rather_than_restating_a_universal_field` and `every_primitive_resource_type_is_declared_exactly_once_and_stays_unqualified` in `execution_policy.rs`. Caveat: those two policy tests are in-crate Rust tests that run under the Rust suite, not under `make test-policy`; no `d2b-contract-tests` policy file covers them. |
 
 ### ADR046-primitives-002
 
@@ -447,8 +447,8 @@ systemd unit/minijail state; they write Process status.
 | Data migration | Current ProcessRoles converted by exact disposition table |
 | Validation | Shared conformance plus Host/Guest/user integration |
 | Removal proof | Role branches removed only after successor Provider tests |
-| Implementation state | Planned |
-| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
+| Implementation state | Merged |
+| Evidence | Both Destination crates are present, `packages/d2b-provider-system-systemd/` and `packages/d2b-provider-system-minijail/`, alongside the shared neutral conformance library `packages/d2b-process-conformance/`. Each Provider crate carries `tests/conformance.rs` running the shared suite (`shared_conformance_holds`) plus provider-specific cells for wait/reap ownership, identity, adoption, and pid-reuse quarantine. Caveat: the shared Host/Guest/user integration obligation is not met. Both conformance suites instantiate the Provider over `ScriptedEffectPort` in `packages/d2b-process-conformance/src/testing.rs`, a hermetic scripted effect port, and neither crate has a production caller. The `ProcessLaunchEffectPort` production adapter is `ADR046-process-001` in W4; the three-domain integration obligation is re-owed against that adapter. |
 
 ### ADR046-primitives-003
 
@@ -463,5 +463,5 @@ systemd unit/minijail state; they write Process status.
 | Data migration | Full reset; Provider-specific state export only where separately specified |
 | Validation | ACL/no-follow/marker, sharing/views, virtiofs host/guest mount tests |
 | Removal proof | storage.json rows removed only after Volume successor parity |
-| Implementation state | Planned |
-| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
+| Implementation state | Merged |
+| Evidence | Both Volume Provider crates are present, `packages/d2b-provider-volume-local/` and `packages/d2b-provider-volume-virtiofs/`, and `nixos-modules/resources-volume.nix` exists. `packages/d2b-provider-volume-local/tests/{layout_conformance,store_view_and_swtpm,views_and_sharing}.rs` exercise layout anchoring, the store-view and swtpm boundaries, and view sharing and single-writer rules; `packages/d2b-provider-volume-virtiofs/tests/export_lifecycle.rs` exercises export readiness, degraded and pending states, read-only worker launch, drain ordering, and status redaction. Three caveats. First, the virtiofs host/guest mount obligation is not met: `an_export_reaches_ready_only_when_the_host_serves_and_the_guest_mounts` drives `VirtiofsExportController` over `ScriptedPort`, so the host-serves-guest-mounts step is a controller phase transition and nothing is mounted. Second, the ACL, no-follow, and marker obligations are met at the policy layer only: `packages/d2b-provider-volume-local/integration/README.md` names five real-filesystem fixtures (Host-path access, the `st_dev` store-view boundary, marker durability across restart, quota enforcement, and the TPM marker) and states plainly that none is wired, because the effect adapter they would drive is not landed. Third, no eval case covers the `resources-volume.nix` Volume assertions: `tests/unit/nix/cases/` holds no Volume resource case, and the module is imported by neither `index.nix` nor `default.nix`, so the assertions run in no configuration. |

@@ -286,8 +286,10 @@ the wave-close table above. They are not repeated here.
 
 The remaining ten items were audited and their obligations are discharged:
 `primitives-001` (schema vectors across the nine v3 primitive modules, and
-the folded-field and duplicate-type policy, which runs enforcing under
-`make test-policy`); `routing-002` (the route-engine suite is present with
+the folded-field and duplicate-type checks, which are inline Rust tests in
+`packages/d2b-contracts/src/v3/{process,resource,resource_schema}.rs` and so
+run enforcing under `make test-rust`, not under `make test-policy`);
+`routing-002` (the route-engine suite is present with
 relay, hop-count and capability-narrowing cells, and every reason the engine
 can produce is proved covered by a closed-set test); `routing-003`
 (longest-suffix vectors over a sealed topology, and the stale, withdrawn,

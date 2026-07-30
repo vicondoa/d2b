@@ -2533,8 +2533,8 @@ The following transitions are NOT simple textual renames:
 | Data migration | Full reset; no v2 Realm route compatibility |
 | Validation | Golden advertisement/path/failure vectors shared by Rust/Nix; property tests for NCA/loop/allocated-capability narrowing; replay-window tests; hop-count tests |
 | Removal proof | v3 old `RealmPath` route types retired after zone-routing engine is live and all callers switched |
-| Implementation state | Planned |
-| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
+| Implementation state | Merged |
+| Evidence | `packages/d2b-contracts/src/v3/zone_routing.rs` is present with eleven inline tests covering golden advertisement vectors and canonical byte round-trip (`golden_advertisement_vector_renders_canonical_bytes_and_round_trips`), stable route path and failure labels, ZonePath bounds and ancestry, advertisement invariants, monotonic private allocated-capability narrowing, withdrawal and namespace-allocation bounds, hop bounds and contiguity, opaque-token rejection, fail-closed wire decoding, and diagnostic redaction. Caveat: the golden vectors are shared by Rust only. No Nix code consumes a routing vector and no Zone eval case is committed, so the vectors cannot detect the Rust and Nix sides diverging, which is the point of sharing them. A Nix-side consumer lands with the `ADR046-routing-011` eval cases. |
 
 ### ADR046-routing-002
 
@@ -2551,8 +2551,8 @@ The following transitions are NOT simple textual renames:
 | Data migration | None (pure in-memory engine) |
 | Validation | Copy exact `route_engine.rs` test suite adapted to ZonePath; add relay/hop-count/RBAC-narrowing/shortcut integration tests |
 | Removal proof | `RouteTreeEngine` on v3 RealmPath types retired after ZoneRouteEngine is exercised in all bus routing paths |
-| Implementation state | Planned |
-| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
+| Implementation state | Merged |
+| Evidence | `packages/d2b-zone-routing/src/engine.rs` is present with the full `ZoneRouteEngine` and an inline suite covering NCA walks, advertisement admission and withdrawal, loop and multi-parent detection, capability ceiling and monotonic narrowing, replay-window and expiry cells, capacity pressure, relay grants, and hop-budget boundaries. `every_reason_the_engine_can_produce_is_covered_by_this_suite` proves the refusal-reason set is closed and fully covered. No caveat is owed on this item. |
 
 ### ADR046-routing-003
 
@@ -2569,8 +2569,8 @@ The following transitions are NOT simple textual renames:
 | Data migration | None; ZoneLink resources created from Nix configuration at v3 reset |
 | Validation | Longest-suffix match vectors over sealed topology; child-local ZoneLink spec validation; resolver rejects unknown/stale/withdrawn/unauthenticated route projections; parent-store fixture contains no ZoneLink row or handler |
 | Removal proof | `RealmEntrypointTable` retired after all host-daemon routing paths use ZoneEntrypointResolver |
-| Implementation state | Planned |
-| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
+| Implementation state | Merged |
+| Evidence | `packages/d2b-zone-routing/src/resolver.rs` is present with `ZoneEntrypointResolver` and an inline suite covering longest-suffix match over a sealed topology (`a_descendant_matches_its_nearest_sealed_ancestor_not_the_root`, `an_unsealed_descendant_resolves_to_its_sealed_ancestor_entrypoint`), sealing rejection of a local-root child and an out-of-scope subtree, and fail-closed handling of stale, withdrawn, unauthenticated, absent, and foreign-root projections. `the_local_root_has_no_row_and_no_parent_store_row_exists` in `service.rs` covers the parent-store no-row obligation. No caveat is owed on this item. |
 
 ### ADR046-routing-004
 
@@ -2588,8 +2588,8 @@ The following transitions are NOT simple textual renames:
 | Data migration | New ZoneLink resources from Nix configuration; no prior enrollment compatibility |
 | Validation | Session lifecycle tests; state-machine transition tests `Unenrolled -> IKpsk2 -> EnrollmentCommitted -> KK -> Ready`; fault-injection cells for each crash window (consumed-PSK crash fails closed `bootstrap-psk-consumed` and refuses PSK reuse; persist crash before enrollment commit stays `Unenrolled`; teardown crash re-derives `Unenrolled` from the durable invalidation marker); old-KK-rejection cell asserting a peer presenting a pre-revocation static key is refused before any resource exchange; resource-traffic-before-`Ready` rejection cell; key-lifecycle cells: an expired bootstrap PSK is refused with `bootstrap-psk-expired` and issuing a fresh PSK invalidates any prior outstanding PSK; a failed IKpsk2 handshake burns the PSK and returns `Unenrolled` with `bootstrap-handshake-failed`; an enrolled KK session past `KK_SESSION_MAX_LIFETIME_MS` performs a fresh enrolled KK rehandshake from `EnrollmentCommitted` (new `linkEpoch`, no PSK, no IKpsk2 reuse); an enrolled KK key mismatch fails closed `zone-link-enrollment-key-mismatch`, stays `EnrollmentCommitted`/`Degraded`, and retries only under the bounded reconnect budget; a `EnrollmentCommitted` link never downgrades to IKpsk2 or an unauthenticated pattern and only a durable revocation returns it to `Unenrolled`; reconnect/disabled/revocation/allocator-policy-change; revocation invalidates both enrollment and active session and re-enrollment requires a fresh PSK plus new IKpsk2; intent queue drain; cursor resync; advertisement renewal timing; fake-child tests; structural metric descriptor test asserts `vm`, `zone`, `zone_id`, `zone_uid`, and `link_name_hash` are absent and a ZoneLink-name canary never enters label values |
 | Removal proof | `RemoteNodeRegistry` retired after all enrolled peer routing moves to ZoneLink handler |
-| Implementation state | Planned |
-| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
+| Implementation state | Merged |
+| Evidence | `packages/d2b-core-controller/src/zone_links.rs` is present with the ZoneLink handler and twenty-six inline tests: the canonical `Unenrolled -> IKpsk2 -> EnrollmentCommitted -> KK -> Ready` transitions, all three crash windows (consumed-PSK, persist-before-commit, teardown), key-lifecycle cells for expiry, fresh-PSK invalidation, burned handshake, revocation, pre-revocation key refusal, key mismatch under the reconnect budget, and KK cryptoperiod rehandshake, plus resource-traffic-before-Ready refusal, bounded intent queue drain, monotonic cursor resync across restart, advertisement renewal, and the structural test `metric_labels_carry_no_identity`. No caveat is owed on this item. |
 
 ### ADR046-routing-005
 
@@ -2607,8 +2607,8 @@ The following transitions are NOT simple textual renames:
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | End-to-end K0→K1→K2 resource call; relay-missing, target-verb-missing, wildcard/self-asserted relay, hop-limit, and FD-rejection tests; prove relay alone grants no CRUD/local lifecycle; idempotency namespace collision tests; cancellation delivery tests; watch resync tests |
 | Removal proof | Old direct-dispatch and gateway-backed paths retired per bus routing parity |
-| Implementation state | Planned |
-| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
+| Implementation state | Merged |
+| Evidence | `packages/d2b-bus/src/zone_route.rs` and `packages/d2b-bus/src/relay.rs` are both present, with twenty and sixteen inline tests respectively. They cover pinned reverse paths and per-hop session generations, reconnect invalidation, cancellation delivery, descriptor-attachment rejection at the serialization boundary, hop-budget exhaustion, the full six-tuple idempotency namespace with in-progress, replay, conflict, expired and no-reuse-horizon cells, watch cursor forwarding and revision-expired relist, and the independent relay-plus-target-verb checks including `relay_alone_grants_no_resource_or_local_lifecycle_verb` and `a_self_asserted_relay_claim_cannot_produce_a_grant`. Caveat: the end-to-end K0 to K1 to K2 obligation is covered at the logic layer only. `an_end_to_end_call_pins_the_reverse_path_and_seals_one_envelope` is an in-crate simulation that seals an envelope and pins a reverse path against an engine decision it is handed; no hop crosses a transport, because the bus stays deliberately unwired from production listeners. |
 
 ### ADR046-routing-006
 
@@ -2625,8 +2625,8 @@ The following transitions are NOT simple textual renames:
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | All v3 baseline route_engine test cases must pass; p95 benchmark gate |
 | Removal proof | Not applicable |
-| Implementation state | Planned |
-| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
+| Implementation state | Merged |
+| Evidence | `packages/d2b-zone-routing/tests/route_engine_vectors.rs` and `packages/d2b-zone-routing/benches/route_decision.rs` both exist. The vector suite ports the baseline route-engine cases to ZonePath and adds the K0/K1/K2 topology scenario, relay-grant vectors, hop-count boundary vectors, relay budget monotonicity, and refusal ordering. Caveat: the p95 benchmark gate is not met. `benches/route_decision.rs` is declared `harness = false` but no entrypoint runs it: it appears in no `Makefile` target, in no `tests/layer1-jobs.json` job, and `tests/unit/gates/performance-budgets.sh` names no Zone routing budget. An unrun benchmark enforces no latency, and that gate is classified advisory in any case. |
 
 ### ADR046-routing-007
 
@@ -2643,8 +2643,8 @@ The following transitions are NOT simple textual renames:
 | Data migration | None (new infrastructure) |
 | Validation | Port all `component_session.rs` tests; port `noise_vectors.rs`; add a ZoneLink IKpsk2 allocator-PSK bootstrap-enrollment test and the follow-on KK enrollment test; add ZoneLink reconnect/revocation integration test |
 | Removal proof | Not applicable (new crate) |
-| Implementation state | Planned |
-| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
+| Implementation state | Merged |
+| Evidence | `packages/d2b-bus/src/session/` is present as `contract.rs`, `enrollment.rs`, `noise_vectors.rs`, `prologue.rs`, and `zone_link.rs`. `noise_vectors.rs` pins the exact Nn, Kk and IKpsk2 profiles and proves the Zone-typed ZoneLink policies negotiate through the same runtime. `enrollment.rs` carries eighteen tests including the ZoneLink IKpsk2 allocator-PSK bootstrap and the follow-on enrolled KK path, single-use and superseded PSK handling, the three crash windows, reconnect, and revocation. Caveat: the `component_session.rs` port obligation is unmet by delegation rather than omission. The bus re-exports the session runtime instead of forking it, so those tests run in the owning crate `packages/d2b-session/` and were deliberately not copied; the ported golden vectors in `noise_vectors.rs` are the port evidence. That scope judgement is recorded in the debt register and is owed a reviewer ruling. |
 
 ### ADR046-routing-008
 
@@ -2661,8 +2661,8 @@ The following transitions are NOT simple textual renames:
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Port all `unix_session.rs` tests; add allocator-issued FD handoff test; add inherited-socket no-SD-listen test |
 | Removal proof | Not applicable (new infrastructure) |
-| Implementation state | Planned |
-| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
+| Implementation state | Merged |
+| Evidence | `packages/d2b-bus/src/transport/unix.rs` and `packages/d2b-bus/src/transport/credit.rs` are both present. `unix.rs` proves the allocator FD handoff and the no-socket-activation cell (`the_allocator_handoff_consults_no_socket_activation_protocol`), descriptor-discipline typing, and peer-identity Debug redaction. `credit.rs` carries twelve tests over the credit scope set, admission bounds, packet-atomic policy, reservation and release across every scope, and identifier-free error reasons. Caveat: the `unix_session.rs` port obligation is unmet by delegation rather than omission. The integrator wired the owning crate as a dependency instead of copying its tests, so Zone-level semantics were ported rather than the literal suite; the debt register records this as needing a ruling to accept delegation or add the syscall dev-dependency and port literally. |
 
 ### ADR046-routing-009
 
@@ -2679,8 +2679,8 @@ The following transitions are NOT simple textual renames:
 | Data migration | None (new contract module) |
 | Validation | Updated `negotiate_offer`/`validate_exact` round-trip tests for v3 purposes; canonical encoding stability test; closed-enum exhaustiveness tests |
 | Removal proof | v2 contracts remain; v3 module is additive |
-| Implementation state | Planned |
-| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
+| Implementation state | Merged |
+| Evidence | `packages/d2b-contracts/src/v3/zone_session.rs` is present with ten inline tests: frozen tag and wire-string vectors, tag round-trip and uniqueness, per-enumeration wire-string uniqueness, fail-closed unassigned and reserved tags, serde round-trip through the frozen wire string, rejection of unknown wire strings, fail-closed purpose-class admission for bootstrap and zone-local, total lifts with partial lowers, variant-name-only Debug, and `guest_session_credential_surface_is_absent` proving the stripped `GUEST_SESSION_CREDENTIAL_*` surface. Caveat: the numeric tag values for the six appended Zone members and the ZoneLink service wire string are an inference; no specification fixes them, and the append-only scheme chosen is wire-visible and is owed panel confirmation. Separately, the appended tags cannot yet reach the wire, because the canonical handshake offer encoder types its fields with the un-extended enums and lives in a file no Wave 2 slice owned; `every_appended_zone_member_refuses_to_reach_the_wire` in `session/contract.rs` pins that. |
 
 ### ADR046-routing-010
 
@@ -2697,8 +2697,8 @@ The following transitions are NOT simple textual renames:
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Port `client.rs` tests; add ZonePath routing test; add cross-Zone K0→K1 end-to-end test; add retry/cancellation forwarding test |
 | Removal proof | v2 `d2b-client` package remains for ADR45 callers; v3 `d2b-resource-client` is additive |
-| Implementation state | Planned |
-| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
+| Implementation state | Merged |
+| Evidence | `packages/d2b-resource-client/` is present as `call.rs`, `client.rs`, `dispatch.rs`, `error.rs`, and `target.rs`, with twenty-four inline tests. They cover ZonePath routing (`every_target_names_exactly_one_routing_zone`, `route_lookup_is_keyed_on_the_exact_zone_path`), fail-closed resolution on service carriage and ambiguity, retry-budget exactness and typed exhaustion, cancellation forwarding before every attempt, session-failure classification carried over from the reuse source, and low-cardinality client-prefixed error labels. Caveat: the cross-Zone K0 to K1 end-to-end obligation is covered at the logic layer only. `a_k0_caller_reaches_k1_over_the_uplink_and_k0_locally` walks a route table in-crate; no hop crosses a transport, because the client is deliberately unwired from production listeners. |
 
 ### ADR046-routing-014
 
@@ -2715,8 +2715,8 @@ The following transitions are NOT simple textual renames:
 | Data migration | None (pure runtime) |
 | Validation | Port inline registry lifecycle/drain/shutdown tests; add v3 ZonePath routing test; prove provider admission cannot self-assert relay and each forward requires relay plus the target verb |
 | Removal proof | Provider registry is v3 core infrastructure; no retirement |
-| Implementation state | Planned |
-| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
+| Implementation state | Merged |
+| Evidence | The Destination `packages/d2b-provider/src/` is present as `context.rs`, `descriptor.rs`, `error.rs`, `forwarding.rs`, `identity.rs`, `registry.rs`, and `session.rs`, with twenty-four tests. Every Validation obligation is discharged: the inline registry lifecycle, drain and shutdown tests are ported (`shutdown_closes_final_permit_notify_race`, `finish_drain_closes_final_permit_notify_race`, `shutdown_drains_then_retires_and_refuses_a_second_transition`, `the_in_flight_permit_is_released_when_the_admission_is_dropped`); the v3 ZonePath routing obligation is met by `admission_requires_the_exact_zone_path`, `publish_refuses_a_stale_generation_and_a_foreign_zone` and `a_descriptor_from_another_zone_is_refused`; and the relay obligation is met by `a_provider_cannot_self_assert_relay`, `each_forward_requires_relay_plus_the_target_verb` and `every_hop_re_evaluates_both_grants_and_the_budget`. Caveat: the Destination is not complete. `ProviderInstance`'s eleven trait objects and the whole `RpcProviderProxy` family are not delivered, because they are built from Provider method DTOs for which no v3 replacement exists in any crate. Rather than invent that wire contract, the crate makes `ProviderRegistry` generic over the Zone runtime's own instance handle and preserves the eleven frozen families as the `ProviderClass` discriminant, pinned by `the_eleven_provider_families_are_preserved`. The missing v3 Provider-method DTO catalogue is the debt register's only entry with no owning wave and needs an integrator ruling. |
 
 ### ADR046-routing-015
 
@@ -2733,8 +2733,8 @@ The following transitions are NOT simple textual renames:
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Port `audit_capacity_is_closed_and_bounded`; add v3 bootstrap-via-allocator test; add conformance test for new Provider ResourceType schema |
 | Removal proof | Provider toolkit is v3 core infrastructure; no retirement |
-| Implementation state | Planned |
-| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
+| Implementation state | Merged |
+| Evidence | The Destination `packages/d2b-provider-toolkit/src/` is present as `audit.rs`, `bootstrap.rs`, `conformance.rs`, `dispatch.rs`, `error.rs`, `redaction.rs`, and `testing.rs`, with twenty-three tests. Every Validation obligation is discharged: `audit_capacity_is_closed_and_bounded` is ported verbatim alongside `the_default_log_uses_the_frozen_capacity`; the v3 bootstrap-via-allocator obligation is met by `an_allocator_issued_binding_admits_the_expected_agent_identity` with its fail-closed siblings for a foreign provider or Zone, a non-Provider resource, and a wrong purpose or non-local session; and the new-Provider-ResourceType conformance obligation is met by `a_new_provider_resource_type_binding_passes_descriptor_and_live_conformance` and the eight surrounding conformance cells. Caveat: the Destination is not complete. `GeneratedProviderServiceServer` ttrpc dispatch is not implemented, because no v3 Provider proto, service-name freeze, or generated bindings exist, and `ProviderAgentAdapter`, `register_exact_instances` and `ProviderAgentProcess` all depend on `ADR046-routing-014` surfaces that are themselves incomplete for the same reason. The bounded dispatch limiter, the bounded audit ring and the redaction helpers those types would use are delivered. This is blocked on the same missing v3 Provider-method DTO catalogue and the same integrator ruling. |
 
 ### ADR046-routing-016
 
@@ -2751,8 +2751,8 @@ The following transitions are NOT simple textual renames:
 | Data migration | None; v3 Zone service is new; no v2 realm-service compatibility |
 | Validation | Bootstrap/enroll/resolve-route/shortcut integration tests against a child-local fake ZoneLink; topology list/inspect/watch golden vectors contain exact `{ childZone, parentZone }` rows plus authenticated status and no ZoneLink fields; stale/withdrawn/unauthenticated projection tests; parent-store no-row/no-handler test; relay-plus-target-verb RBAC tests; initial IKpsk2 bootstrap-enrollment test consuming the allocator-issued single-use PSK, follow-on KK enrollment test, KK reconnect test while enrollment remains valid, and fresh IKpsk2 bootstrap test after revocation; shortcut ZonePath addressing test; concurrent dispatch bound test (64 in-flight) |
 | Removal proof | `RealmServiceServer` on `d2b.realm.v2` retires after `ZoneServiceServer` handles all routing; display-session path migrates separately as part of Provider resource work |
-| Implementation state | Planned |
-| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
+| Implementation state | Merged |
+| Evidence | `packages/d2b-zone-routing/src/service.rs` is present with `ZoneServiceServer` and twenty-eight inline tests. The frozen v3 wire name and the distinct kebab method names are pinned; the topology projection obligations are met by `the_projection_is_exactly_the_sealed_rows_in_child_order`, `the_local_root_has_no_row_and_no_parent_store_row_exists`, the stale, withdrawn and unauthenticated projection cells, and `watch_reports_once_then_only_on_change_with_a_monotonic_revision`; the RBAC obligation by `a_forwarding_hop_needs_the_relay_grant_and_the_target_verb_independently`; the shortcut obligations by the ZonePath addressing, refusal, and exactly-once revocation-and-close cells; and the concurrent dispatch bound by `dispatch_admits_exactly_the_in_flight_ceiling_and_drops_the_new_request`. `no_audit_record_can_carry_a_zone_path_or_a_free_form_string` pins the audit redaction. Caveat: the bootstrap and enroll integration obligations are not met and cannot be from this crate. The service has no handler for `zone-bootstrap` or `zone-enroll`, which its own `a_method_without_a_landed_handler_is_refused_at_admission` test pins. The four enrollment obligations are met in the bus session module (`packages/d2b-bus/src/session/enrollment.rs`) rather than in the service; wiring the service to them is W3 work. |
 
 ### ADR046-routing-011
 
@@ -2769,8 +2769,8 @@ The following transitions are NOT simple textual renames:
 | Data migration | None; Zone options are new; Realm options retained until migration PR |
 | Validation | `nix-unit: zone-name-regex`, all five `nix-unit: zone-parent-*` vectors, `nix-unit: zone-link-credential-ref`, `nix-unit: zone-link-child-name`, `nix-unit: zone-link-one-uplink`, `nix-unit: zone-link-closed-spec`, `nix-unit: zone-link-limits`, `nix-unit: transport-settings-secret-key`; add `drift: standard-resource-type-registry` asserting the generated standard subset is exactly all 19 canonical types with no omission/addition/duplicate/reordering, plus `drift: zone-nix-options` (`xtask gen-zone-nix-options && git diff --exit-code`); run `make nix-unit-pin` after adding eval cases |
 | Removal proof | `nixos-modules/options-realms-workloads.nix` `d2b.realms` namespace retires after all hosts migrate to `d2b.zones` |
-| Implementation state | Planned |
-| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
+| Implementation state | Merged |
+| Evidence | `nixos-modules/options-zones.nix`, `nixos-modules/generated/resource-types.nix`, `nixos-modules/generated/options-zones-Zone.nix`, and `nixos-modules/generated/options-zones-ZoneLink.nix` are all present, and the Zone assertions are in `nixos-modules/assertions.nix`. The `xtask gen-zone-nix-options` drift obligation is met: `tests/unit/gates/drift-check.sh` runs both Zone generators and compares `nixos-modules/generated/`. Three caveats. First, none of the named eval cases exists: `tests/unit/nix/cases/` holds no zone case file, so the zone name grammar, the five parent-topology vectors, the uplink placement rules, the credential reference shape, and the transport-settings secret rejection do not run in the gate. Those behaviours were exercised out of tree during implementation with a conformant Zone yielding no assertion and thirteen distinct misconfigurations each producing their intended message, but that evidence is not committed as a case file. Second, `nix-unit: zone-link-closed-spec` cannot pass while the shared `spec` type injects execution-policy defaults into every resource. Third, `options-zones.nix` is imported by `nixos-modules/index.nix` only, not by `nixos-modules/default.nix` as the item requires, and the generated modules are imported by nothing. |
 
 ### ADR046-routing-012
 
@@ -2787,8 +2787,8 @@ The following transitions are NOT simple textual renames:
 | Data migration | None; new artifact file |
 | Validation | `drift: zone-resource-schema`, `drift: zone-nix-options`, `build: zone-bundle-deterministic`, `build: parent-topology-sealed`, `build: child-local-zonelink-bundle` (K0 has no ZoneLink; K1 contains its self-matching ZoneLink and same-Zone transport Provider; neither is copied to K0), `build: zone-link-exact-six-fields`, `build: transport-settings-unknown-field`, `build: transport-credential-ref`, `build: missing-transport-provider`; run `make flake-matrix-pin` after adding flake checks |
 | Removal proof | `realm-controllers.json` artifact retires after Zone runtime is live and all hosts migrated |
-| Implementation state | Planned |
-| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
+| Implementation state | Merged |
+| Evidence | `nixos-modules/zone-resources-json.nix` is present, `packages/xtask` carries the `gen-zone-schemas` and `gen-zone-nix-options` subcommands, and both drift obligations (`drift: zone-resource-schema` and `drift: zone-nix-options`) are met by `tests/unit/gates/drift-check.sh`, which runs both generators and compares the committed output. Two caveats. First, none of the seven named build-level flake checks exists: `build: zone-bundle-deterministic`, `build: parent-topology-sealed`, `build: child-local-zonelink-bundle`, `build: zone-link-exact-six-fields`, `build: transport-settings-unknown-field`, `build: transport-credential-ref`, and `build: missing-transport-provider` are absent from `flake.checks.<system>`, and `checks.<system>.zone-schema-drift` was not added to `flake.nix`. This is the layer that would catch a generator emitting a non-deterministic bundle: the generators are deterministic by construction and the drift gate compares their output, but neither proves determinism across two independent evaluations of the same input. Second, `zone-resources-json.nix` takes its canonical bytes from the Nix JSON builtin, which coincides with the canonical form for the ASCII-constrained data here; a full canonicalization implementation is absent. |
 
 ### ADR046-routing-013
 
@@ -2805,5 +2805,5 @@ The following transitions are NOT simple textual renames:
 | Data migration | None; new runtime component |
 | Validation | `host-integration: cleanup-removed-zonelink`, `host-integration: rollback-restores-zonelink`, `host-integration: dynamic-child-not-deleted`, `host-integration: zonelink-no-reciprocal-row`; unit tests: deterministic generationId, no-op on same generationId, cross-ownership invariant enforcement, prior-bundle write/prune cycle, UpdateSpec canonical comparison, store-transaction-then-audit-append ordering, exactly-once audit dedup; activation-ordering tests: the atomic `generation.json` commit is performed before any intent is queued (before-rename ordering) and reconcile is notified only after the commit returns (before-notify ordering); restart-adoption of a committed active generation whose staged bundle integrity-verifies; quarantine of an ambiguous or interrupted generation with continued service from the recorded prior pointer; cleanup-order (adopt or quarantine before any prune, and no prune of a bundle that is still a rollback target or an in-flight Delete source) |
 | Removal proof | `realm_access_resolver.rs` (B) retires after `d2b-core-controller` configuration tracking is live; `RealmControllersJson` (C) retires after all hosts migrated to Zone bundles |
-| Implementation state | Planned |
-| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
+| Implementation state | Merged |
+| Evidence | `packages/d2b-core-controller/src/configuration.rs` is present with twenty-eight inline tests. Every named unit obligation is covered: deterministic `generationId`, no-op on an unchanged generation, cross-ownership invariants (`controller_owned_resource_is_never_seized`, `configuration_owned_resource_without_generation_fails_closed`), the prior-bundle ring write and prune cycle with `a_generation_with_an_in_flight_delete_is_never_pruned`, canonical-form UpdateSpec comparison, and store-transaction-then-audit-append ordering with exactly-once dedup. The activation-ordering obligations are met by `commit_precedes_every_effect_and_reconcile_is_notified_last`, and the restart obligations by `restart_adopts_a_verified_active_generation` and `restart_quarantines_an_ambiguous_generation_and_serves_the_prior_pointer`. Caveat: none of the four host-integration checks exists. `host-integration: cleanup-removed-zonelink`, `rollback-restores-zonelink`, `dynamic-child-not-deleted`, and `zonelink-no-reciprocal-row` are absent from `tests/host-integration/`, and they cannot be met until the modules are imported and a production store exists, both of which belong to later waves; writing them now would produce checks that cannot execute. |

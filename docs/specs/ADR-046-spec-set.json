@@ -145,7 +145,7 @@
         "ADR-046-resource-reconciliation"
       ],
       "path" : "docs/specs/ADR-046-primitive-resource-composition.md",
-      "sha256" : "78786a6892be6a6f28ddec4a8d18b122a60f15910b39153c0a93cfd28b0ffbf5",
+      "sha256" : "af2e901221e1f29e15cb5651271c614eda18648a802510c45b34059fb473a67f",
       "specId" : "ADR-046-primitive-resource-composition",
       "status" : "Accepted",
       "supersedes" : "Current implementation-shaped ProcessRole composition",
@@ -1225,7 +1225,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-zone-routing.md",
-      "sha256" : "b06100c287ee5d34a354e40efdae354a2dc888874ae230b30de87055b24727cd",
+      "sha256" : "a0c12f38d6c238192fa0ec1a00507041e74be505186b30209afc5acdae94fb3e",
       "specId" : "ADR-046-zone-routing",
       "status" : "Accepted",
       "supersedes" : "`RealmEntrypointTable`/`EntrypointMode`/`RealmControllerPlacement` enum (→ compiler-only `parentZone` topology + ZoneLink transport + private Zone runtime bootstrap placement); `RouteTreeEngine`/`routing.rs` route contracts (adapted, not deleted); `RemoteNodeRegistry` (→ ZoneLink controller); `OperationRouter` (→ ZoneLinkIdempotencyKey in d2b-bus); `realm_access_resolver` module (→ ZoneEntrypointResolver); `realm-controllers.json`/`realm-identity.json` bundle artifacts (→ Nix-authored Zone settings/ZoneLink resources); `d2b.realms.*` Nix option namespace (→ `d2b.zones.*`); `WorkloadId` routing targets (→ typed Guest/Host resource refs); `CapabilitySet`-only routing authz (→ per-hop RBAC narrowing + allocator-issued capability scope)",
