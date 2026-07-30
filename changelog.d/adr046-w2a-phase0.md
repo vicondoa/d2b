@@ -24,6 +24,11 @@
 
 ### Fixed
 
+- Code review no longer reports an empty change set when the underlying diff
+  could not be computed. A failing diff previously yielded no entries and was
+  indistinguishable from a genuinely unchanged tree, so a reviewer could be
+  told there was nothing to review. The failure is now reported and the exit
+  status distinguishes it from the no-changes case.
 - Replay no longer decodes every revision-log entry before discarding it, and
   a change batch is materialized once and shared across matching watchers
   rather than deep-copied per watcher. At ten thousand resources and one
