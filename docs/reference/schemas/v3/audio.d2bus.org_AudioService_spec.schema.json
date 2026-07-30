@@ -1,0 +1,25 @@
+{
+  "$id": "https://d2bus.org/schemas/v3/audio.d2bus.org/AudioService/spec",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Frozen provider-neutral base spec layer. Every conformant implementation binds this exact version and fingerprint, accepts the canonical minimal base without spec.provider, and adds only its own strict extension schema.",
+  "properties": {
+    "authority": {},
+    "implementationEndpointRefs": {},
+    "operations": {},
+    "providerRef": {},
+    "serviceRole": {},
+    "updatePolicy": {}
+  },
+  "required": [
+    "implementationEndpointRefs",
+    "operations",
+    "providerRef",
+    "serviceRole"
+  ],
+  "title": "audio.d2bus.org/AudioService/spec",
+  "type": "object",
+  "x-d2b-resource-type": "audio.d2bus.org.AudioService",
+  "x-d2b-schema-fingerprint": "sha256:d1ae72b9a56ac46f83406609bee1a0991fa1dc9f9cf7b0b63b52dd3b6c67b62b",
+  "x-d2b-schema-version": "1.0"
+}

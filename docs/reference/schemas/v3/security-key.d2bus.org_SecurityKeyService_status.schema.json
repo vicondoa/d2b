@@ -1,0 +1,16 @@
+{
+  "$id": "https://d2bus.org/schemas/v3/security-key.d2bus.org/SecurityKeyService/status",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Frozen provider-neutral common status layer, written under status.resource. Implementation observation belongs only under status.provider and may not duplicate a field here.",
+  "properties": {
+    "authority": {},
+    "import": {}
+  },
+  "required": [],
+  "title": "security-key.d2bus.org/SecurityKeyService/status",
+  "type": "object",
+  "x-d2b-resource-type": "security-key.d2bus.org.SecurityKeyService",
+  "x-d2b-schema-fingerprint": "sha256:b4d66b61f8c4826a62a5e765f831c0018ac16a37c2435db889d416ca5b9a95e8",
+  "x-d2b-schema-version": "1.0"
+}

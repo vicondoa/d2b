@@ -1,0 +1,25 @@
+{
+  "$id": "https://d2bus.org/schemas/v3/audio.d2bus.org/projection/spec",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Strict deny-unknown semantic base schema for a Core-generated projection Service. It carries only providerRef, the semantic base and import fields, and ResourceImport ownership; spec.provider is forbidden.",
+  "properties": {
+    "implementationEndpointRefs": {},
+    "providerRef": {},
+    "serviceRole": {}
+  },
+  "required": [
+    "implementationEndpointRefs",
+    "providerRef",
+    "serviceRole"
+  ],
+  "title": "audio.d2bus.org/projection/spec",
+  "type": "object",
+  "x-d2b-allowed-backing-ref-types": [
+    "Endpoint"
+  ],
+  "x-d2b-binding-resource-type": "audio.d2bus.org.AudioBinding",
+  "x-d2b-factory-fingerprint": "sha256:80ef3d08378a61ac924944564efa136b0cfba314d1e48567680d16cc75ac4b38",
+  "x-d2b-projection-schema-fingerprint": "sha256:e0aafd9924df4b1bf21792a0c4fc7b8d1637dde960dfae33e9d7de2452028690",
+  "x-d2b-resource-type": "audio.d2bus.org.AudioService"
+}

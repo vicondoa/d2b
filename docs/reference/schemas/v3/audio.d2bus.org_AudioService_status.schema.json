@@ -1,0 +1,22 @@
+{
+  "$id": "https://d2bus.org/schemas/v3/audio.d2bus.org/AudioService/status",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Frozen provider-neutral common status layer, written under status.resource. Implementation observation belongs only under status.provider and may not duplicate a field here.",
+  "properties": {
+    "activeConsumerCount": {},
+    "activeMicCaptureCount": {},
+    "availability": {},
+    "implementationEndpointRefs": {},
+    "pendingMicRequestCount": {},
+    "pendingMicZoneCount": {},
+    "routeState": {},
+    "serviceRole": {}
+  },
+  "required": [],
+  "title": "audio.d2bus.org/AudioService/status",
+  "type": "object",
+  "x-d2b-resource-type": "audio.d2bus.org.AudioService",
+  "x-d2b-schema-fingerprint": "sha256:b8269d1a7ebeeb3a2846392c6a1e08142b07fc66c16dd93cf5857a69f942c509",
+  "x-d2b-schema-version": "1.0"
+}

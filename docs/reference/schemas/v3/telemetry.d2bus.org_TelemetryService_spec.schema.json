@@ -1,0 +1,28 @@
+{
+  "$id": "https://d2bus.org/schemas/v3/telemetry.d2bus.org/TelemetryService/spec",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Frozen provider-neutral base spec layer. Every conformant implementation binds this exact version and fingerprint, accepts the canonical minimal base without spec.provider, and adds only its own strict extension schema.",
+  "properties": {
+    "authorityDescriptor": {},
+    "ingestEndpointRefs": {},
+    "policy": {},
+    "providerRef": {},
+    "quota": {},
+    "serviceRole": {},
+    "signals": {},
+    "updatePolicy": {}
+  },
+  "required": [
+    "policy",
+    "providerRef",
+    "quota",
+    "serviceRole",
+    "signals"
+  ],
+  "title": "telemetry.d2bus.org/TelemetryService/spec",
+  "type": "object",
+  "x-d2b-resource-type": "telemetry.d2bus.org.TelemetryService",
+  "x-d2b-schema-fingerprint": "sha256:34b6fed0153fc573f7014c017e9e566a3a09009c3156745fa106d860c11a0024",
+  "x-d2b-schema-version": "1.0"
+}

@@ -73,4 +73,10 @@ pub use provider::{
 // The `semantic_services` module's re-exports. Keep every
 // `pub use semantic_services::...` line inside this region so it stays one
 // contiguous block.
-// (empty until `ADR046-provider-004` lands)
+pub use semantic_services::{
+    PROVIDER_REF_FIELD, SEMANTIC_BASE_SCHEMA_MAJOR, SEMANTIC_BASE_SCHEMA_MINOR,
+    SEMANTIC_PROJECTION_PROTOCOL_VERSION, SemanticContractError, SemanticFamily, SemanticLayer,
+    SemanticLayerSchema, SemanticPairContract, SemanticProjectionBinding, SemanticRole,
+    SemanticSchemaId, SemanticTypeContract, UPDATE_POLICY_FIELD,
+    catalog as semantic_service_catalog,
+};

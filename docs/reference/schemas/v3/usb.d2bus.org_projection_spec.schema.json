@@ -1,0 +1,26 @@
+{
+  "$id": "https://d2bus.org/schemas/v3/usb.d2bus.org/projection/spec",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Strict deny-unknown semantic base schema for a Core-generated projection Service. It carries only providerRef, the semantic base and import fields, and ResourceImport ownership; spec.provider is forbidden.",
+  "properties": {
+    "accessPolicy": {},
+    "mode": {},
+    "providerRef": {},
+    "sourceSchemaFingerprint": {}
+  },
+  "required": [
+    "accessPolicy",
+    "mode",
+    "providerRef"
+  ],
+  "title": "usb.d2bus.org/projection/spec",
+  "type": "object",
+  "x-d2b-allowed-backing-ref-types": [
+    "Device"
+  ],
+  "x-d2b-binding-resource-type": "usb.d2bus.org.UsbBinding",
+  "x-d2b-factory-fingerprint": "sha256:72b5cafbd2409d187b523b1d6076094f8d6246d0a5714240d1b7bac775ed7b45",
+  "x-d2b-projection-schema-fingerprint": "sha256:dc40fd25748ca024cdd03f74566494f949de8531046ee997cf0e6787e58b34c6",
+  "x-d2b-resource-type": "usb.d2bus.org.UsbService"
+}

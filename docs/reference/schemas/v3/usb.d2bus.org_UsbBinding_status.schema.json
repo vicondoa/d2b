@@ -1,0 +1,15 @@
+{
+  "$id": "https://d2bus.org/schemas/v3/usb.d2bus.org/UsbBinding/status",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Frozen provider-neutral common status layer, written under status.resource. Implementation observation belongs only under status.provider and may not duplicate a field here.",
+  "properties": {
+    "attachmentPhase": {}
+  },
+  "required": [],
+  "title": "usb.d2bus.org/UsbBinding/status",
+  "type": "object",
+  "x-d2b-resource-type": "usb.d2bus.org.UsbBinding",
+  "x-d2b-schema-fingerprint": "sha256:c35b46f9fa0314d401a2dc61eb8dda7d90e9d5e7d8e203c08f5df986264d0127",
+  "x-d2b-schema-version": "1.0"
+}

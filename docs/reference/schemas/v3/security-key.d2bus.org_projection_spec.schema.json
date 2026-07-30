@@ -1,0 +1,21 @@
+{
+  "$id": "https://d2bus.org/schemas/v3/security-key.d2bus.org/projection/spec",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Strict deny-unknown semantic base schema for a Core-generated projection Service. It carries only providerRef, the semantic base and import fields, and ResourceImport ownership; spec.provider is forbidden.",
+  "properties": {
+    "mode": {},
+    "providerRef": {}
+  },
+  "required": [
+    "mode",
+    "providerRef"
+  ],
+  "title": "security-key.d2bus.org/projection/spec",
+  "type": "object",
+  "x-d2b-allowed-backing-ref-types": null,
+  "x-d2b-binding-resource-type": "security-key.d2bus.org.SecurityKeyBinding",
+  "x-d2b-factory-fingerprint": "sha256:444b0f9ba1d9997a392314a5aa9b49ca180a2e8c5d7541d1eb1846d2b3c460dc",
+  "x-d2b-projection-schema-fingerprint": "sha256:8b63b67989477970d9a0196695aa040b806061a13bacc79e6e71fbc274006d6f",
+  "x-d2b-resource-type": "security-key.d2bus.org.SecurityKeyService"
+}
