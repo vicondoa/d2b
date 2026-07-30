@@ -20,7 +20,7 @@
       "description": "Read-only ADR-046 binding panel reviewer. One lane per roster role, dispatched only at wave close against the wave's immutable snapshot.",
       "mode": "subagent",
       "model": "github-copilot/gemini-3.1-pro-preview",
-      "reasoningEffort": "xhigh",
+      "reasoningEffort": "high",
       "tools": {
         "write": false,
         "edit": false,

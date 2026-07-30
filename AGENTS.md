@@ -835,7 +835,7 @@ ranked. Read this ordering before wiring any harness.
    unanimous ten of ten, every record bound to the same
    `candidate_id`/`content_id`/`snapshot_sha256`, and provider/model/
    reasoning effort pinned to `github-copilot` /
-   `gemini-3.1-pro-preview` / `xhigh`. The panel model is deliberately
+   `gemini-3.1-pro-preview` / `high`. The panel model is deliberately
    not the coding model, so a lane cannot both author a change and
    attest to it. There is no override, no force flag, and no partial
    pass.
@@ -871,7 +871,7 @@ onto a `panel-attest` record.
 To keep those records attestable, the reviewing agents must run on the
 pinned panel binding. The `panel` entry under `agent` in
 `.opencode/opencode.json` pins them to
-`github-copilot/gemini-3.1-pro-preview` at reasoning effort `xhigh` and
+`github-copilot/gemini-3.1-pro-preview` at reasoning effort `high` and
 denies the write, edit, patch, and bash tools, matching the read-only
 lane contract above. A lane on any other model produces a record
 `panel-attest` will reject, so do not let model fallback silently

@@ -1285,7 +1285,7 @@ the wave's `panel-request` record to:
 ```text
 provider: github-copilot
 model_version: gemini-3.1-pro-preview
-reasoning_effort: xhigh
+reasoning_effort: high
 ```
 
 The panel model is deliberately **not** the model that writes the code. The
@@ -1309,7 +1309,7 @@ model. Keep the two pins distinct when either is changed.
 
 `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave panel-request` writes the candidate-bound request
 (binding `candidate_id`/`content_id`/`snapshot_sha256`, the exact ten-role
-roster, and the required `gemini-3.1-pro-preview` model at reasoning effort `xhigh`).
+roster, and the required `gemini-3.1-pro-preview` model at reasoning effort `high`).
 `cargo run --manifest-path packages/Cargo.toml -p xtask -- delivery wave panel-attest` validates a directory containing
 exactly one record per role, each shaped exactly as this repository's sibling
 ADR-0045-lineage panel-receipt artifact:
@@ -1324,7 +1324,7 @@ ADR-0045-lineage panel-receipt artifact:
   "snapshot_sha256": "<sha256>",
   "model_version": "gemini-3.1-pro-preview",
   "provider": "github-copilot",
-  "reasoning_effort": "xhigh",
+  "reasoning_effort": "high",
   "run_id": "run-001",
   "receipt_locator": "github-copilot://runs/run-001/software",
   "output_sha256": "<sha256>",
@@ -1643,7 +1643,7 @@ tags `vX.Y.Z` and builds/releases the host binaries.
 | Reuse source | sibling-lineage `cargo xtask delivery wave panel-request`/`panel-attest` implementation |
 | Reuse action | adapt |
 | Destination | `packages/xtask/src/delivery/panel.rs` |
-| Detailed design | `panel-request` writes the candidate-bound request naming the exact ten roles and required model; `panel-attest` validates a directory of exactly ten strict 14-field records, rejecting wrong model/candidate binding, duplicate provider/run provenance, or inconsistent `signoff`/`recommendations`, per §12.3 Primary reuse disposition: `adapt`. Preserved source-plan detail: copy-unchanged, then adapt to bind the fixed `gemini-3.1-pro-preview` model at reasoning effort `xhigh`/`github-copilot` provider pair and this repository's existing ten-role roster (§12.3). |
+| Detailed design | `panel-request` writes the candidate-bound request naming the exact ten roles and required model; `panel-attest` validates a directory of exactly ten strict 14-field records, rejecting wrong model/candidate binding, duplicate provider/run provenance, or inconsistent `signoff`/`recommendations`, per §12.3 Primary reuse disposition: `adapt`. Preserved source-plan detail: copy-unchanged, then adapt to bind the fixed `gemini-3.1-pro-preview` model at reasoning effort `high`/`github-copilot` provider pair and this repository's existing ten-role roster (§12.3). |
 | Integration | Every wave's exit criteria (§4) require ten unanimous attested records before `wave seal` |
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Unit tests for every rejection class (wrong model, missing role, duplicate run_id, `signoff:true` with non-empty `recommendations`); integration test with ten synthetic valid records passing |

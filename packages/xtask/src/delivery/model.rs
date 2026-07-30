@@ -53,7 +53,7 @@ pub const EVIDENCE_ARTIFACT_KIND: &str = "d2b-delivery/validation-evidence";
 /// compare against.
 pub const PANEL_PROVIDER_POLICY: &str = "github-copilot";
 pub const PANEL_MODEL_POLICY: &str = "gemini-3.1-pro-preview";
-pub const PANEL_REASONING_EFFORT_POLICY: &str = "xhigh";
+pub const PANEL_REASONING_EFFORT_POLICY: &str = "high";
 
 pub const MAX_REPOSITORIES: usize = 16;
 /// Upper bound on the pull requests a single repository may bind, shared by the
@@ -1097,6 +1097,6 @@ mod tests {
     fn the_panel_binding_pins_provider_model_and_reasoning_effort() {
         assert_eq!(PANEL_PROVIDER_POLICY, "github-copilot");
         assert_eq!(PANEL_MODEL_POLICY, "gemini-3.1-pro-preview");
-        assert_eq!(PANEL_REASONING_EFFORT_POLICY, "xhigh");
+        assert_eq!(PANEL_REASONING_EFFORT_POLICY, "high");
     }
 }
