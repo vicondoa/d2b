@@ -1231,17 +1231,16 @@ fn assert_partial_render_fails_closed(docs: &[DocumentedCrate]) {
 ///   is reused between runs. Cargo owns staleness through its own fingerprints,
 ///   so a surviving build directory cannot make a changed crate look unchanged.
 ///
-/// * `renders/` holds rustdoc's HTML and is reset on every run by
-///   [`render_workspace_docs`]. It must NOT be reused, because a package with a
-///   `lib` and a `bin` of the same name (`d2b` is one) renders both targets into
-///   a single `doc/<crate>` directory. That is an output filename collision: on
-///   a clean directory both targets always render, but against a warm one Cargo
-///   re-runs only the target it considers dirty and overwrites the shared
-///   directory with just that target's pages. The lost pages are exactly the
-///   private items `--document-private-items` exists to surface, so a cached
-///   render can silently shrink the inventory this guard compares against.
-///   Resetting the output keeps the comparison fail-closed and reproduces the
-///   original per-run semantics exactly.
+/// * `renders/` holds rustdoc's HTML and mostly persists too, but
+///   [`render_workspace_docs`] discards the render of any package whose lib and
+///   bin targets collide on a single `doc/<crate>` directory. Cargo re-runs only
+///   the target it considers dirty, and that target overwrites the shared
+///   directory with its own pages alone; in the lib case the pages lost are
+///   exactly the private items `--document-private-items` exists to surface, so
+///   a cached render there can silently shrink the inventory this guard compares
+///   against. Discarding only the colliding packages (8 of 35 in this
+///   workspace) keeps the guard fail-closed while letting the rest stay cached,
+///   which is where most of the speedup comes from.
 ///
 /// Concurrency is delegated to Cargo's target-directory lock, which serializes
 /// concurrent `cargo doc` invocations against the same directory. The only
@@ -1456,6 +1455,16 @@ struct RenderPackage {
     dependency_features: BTreeSet<String>,
     external_crates: BTreeSet<String>,
     workspace_dependencies: BTreeSet<String>,
+    /// Whether this package has a binary target that rustdoc renders into the
+    /// same `doc/<crate>` directory as its library target.
+    ///
+    /// Such a package cannot reuse a cached render. Cargo re-runs only the
+    /// target it considers dirty, and that target then overwrites the shared
+    /// directory with its own pages alone - dropping, in the lib case, exactly
+    /// the private items `--document-private-items` exists to surface. Only
+    /// these packages need their render discarded before each run; the rest
+    /// reuse theirs, which is where the speedup comes from.
+    doc_name_collision: bool,
 }
 
 #[derive(Debug)]
@@ -1475,14 +1484,12 @@ fn render_workspace_docs(
     let packages = workspace_render_packages(manifest);
     let temp = scratch.join("tmp");
     fs::create_dir_all(&temp).expect("create rustdoc temporary directory");
-    // Compiled artifacts persist across runs; rendered HTML does not. See the
-    // `Scratch` docs for why reusing a render is unsafe for packages whose lib
-    // and bin targets collide on one output directory.
+    // Compiled artifacts persist across runs. Renders persist too, except for
+    // the packages whose lib and bin collide on one output directory - those
+    // are discarded per run. See RenderPackage::doc_name_collision and the
+    // `Scratch` docs.
     let build = scratch.join("build");
     let renders = scratch.join("renders");
-    if renders.exists() {
-        fs::remove_dir_all(&renders).expect("reset rustdoc render output");
-    }
     let mut docs = Vec::new();
     for (package_name, package) in dependency_order(packages) {
         let crate_name = package.crate_name;
@@ -1493,6 +1500,11 @@ fn render_workspace_docs(
             &package.external_crates,
         );
         let target = renders.join(&crate_name);
+        if package.doc_name_collision && target.exists() {
+            fs::remove_dir_all(&target).unwrap_or_else(|_| {
+                panic!("discard colliding rustdoc render for package {package_name}")
+            });
+        }
         let doc_root = target.join("doc");
         fs::create_dir_all(&doc_root).unwrap_or_else(|_| {
             panic!("create isolated rustdoc output for package {package_name}")
@@ -1631,6 +1643,27 @@ fn workspace_render_packages(manifest: &Path) -> BTreeMap<String, RenderPackage>
             });
         if let Some(library) = library {
             let crate_name = library["name"].as_str().expect("library target name");
+            // rustdoc derives a target's output directory from its crate name,
+            // so a binary whose name normalises to the library's name renders
+            // into the same directory. See RenderPackage::doc_name_collision.
+            let doc_name_collision = package["targets"]
+                .as_array()
+                .expect("package targets")
+                .iter()
+                .filter(|target| {
+                    target["kind"]
+                        .as_array()
+                        .expect("target kind")
+                        .iter()
+                        .any(|kind| kind == "bin")
+                })
+                .any(|target| {
+                    target["name"]
+                        .as_str()
+                        .expect("binary target name")
+                        .replace('-', "_")
+                        == crate_name.replace('-', "_")
+                });
             let mut dependency_features = BTreeSet::new();
             let mut external_crates = BTreeSet::new();
             let mut workspace_dependencies = BTreeSet::new();
@@ -1669,6 +1702,7 @@ fn workspace_render_packages(manifest: &Path) -> BTreeMap<String, RenderPackage>
                     dependency_features,
                     external_crates,
                     workspace_dependencies,
+                    doc_name_collision,
                 },
             );
         }
