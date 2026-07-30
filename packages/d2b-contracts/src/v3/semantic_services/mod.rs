@@ -871,7 +871,11 @@ pub fn catalog() -> [&'static SemanticPairContract; 4] {
 pub(crate) mod tests_support {
     use super::*;
     use crate::v3::{
-        ResourceName, resource_ref::ResourceRef, resource_schema::CanonicalJsonObject,
+        ResourceName,
+        resource_ref::ResourceRef,
+        resource_schema::{
+            CanonicalJsonObject, CanonicalJsonValue, ExtensionSchemaId, ExtensionSchemaLayer,
+        },
     };
 
     /// A `Provider/<name>` reference.
@@ -913,10 +917,218 @@ pub(crate) mod tests_support {
             .expect("the round-tripped minimal base is still accepted");
     }
 
-    /// Prove the base is genuinely Provider-neutral: the identical base
-    /// fixture is accepted for the initial implementation and for a fake
-    /// alternate implementation, and every schema identity, version, and
-    /// fingerprint is byte-identical across the two.
+    /// The Provider-observable base surface of one catalog member, recorded
+    /// while a specific Provider extension is the installed implementation.
+    ///
+    /// Everything a downstream consumer can see of the common base is in
+    /// here: both schema identities, both versions, both frozen field sets,
+    /// both base fingerprints, the semantic factory fingerprint recomputed
+    /// from its declared inputs, and the canonical bytes of the identical
+    /// minimal base fixture after that installed contract admitted it.
+    #[derive(Debug, PartialEq, Eq)]
+    pub(crate) struct ObservedBase {
+        spec_schema_id: String,
+        status_schema_id: String,
+        spec_version: String,
+        status_version: String,
+        spec_allowed: Vec<&'static str>,
+        spec_required: Vec<&'static str>,
+        status_allowed: Vec<&'static str>,
+        status_required: Vec<&'static str>,
+        spec_fingerprint: String,
+        status_fingerprint: String,
+        projection_schema_fingerprint: String,
+        factory_fingerprint: String,
+        minimal_base_bytes: Vec<u8>,
+        enforced_base_probes: Vec<(String, String)>,
+    }
+
+    /// The Provider-specific settings field each installed implementation
+    /// registers under `spec.provider`, and a name no implementation
+    /// registers at all. Every observation probes all three, so a base that
+    /// admitted one implementation's detail - or admitted an arbitrary extra
+    /// field for one implementation and not the other - moves a probe.
+    const PROBE_EXTRA_FIELDS: [&str; 3] = [
+        INITIAL_EXTENSION_FIELD,
+        ALTERNATE_EXTENSION_FIELD,
+        "unregisteredForeignField",
+    ];
+
+    /// The settings field the initial implementation registers.
+    const INITIAL_EXTENSION_FIELD: &str = "initialImplementationDetail";
+
+    /// The settings field the alternate implementation registers.
+    const ALTERNATE_EXTENSION_FIELD: &str = "alternateImplementationDetail";
+
+    /// Map the base spec schema the installed contract actually enforces.
+    ///
+    /// The frozen field set is not readable from the built contract, so it is
+    /// probed instead: the minimal fixture plus one extra field name maps the
+    /// enforced allowed set, and the fixture minus one field maps the
+    /// enforced required set. An implementation that widened or narrowed the
+    /// common base for itself moves at least one probe outcome, which a
+    /// comparison of only the accepted fixture would miss.
+    fn probe_enforced_base(
+        contract: &ResourceSchemaContract,
+        member: &SemanticTypeContract,
+        provider_ref: &ResourceRef,
+        base: &CanonicalJsonObject,
+    ) -> Vec<(String, String)> {
+        let mut probes = Vec::new();
+        let mut candidates: Vec<String> =
+            member.spec().allowed_names().map(str::to_owned).collect();
+        candidates.extend(PROBE_EXTRA_FIELDS.iter().map(|name| (*name).to_owned()));
+        candidates.sort();
+        candidates.dedup();
+
+        for candidate in &candidates {
+            let mut values = base.clone().into_inner();
+            values.insert(candidate.clone(), CanonicalJsonValue::Bool(true));
+            probes.push((
+                format!("plus:{candidate}"),
+                probe_outcome(
+                    contract,
+                    provider_ref,
+                    CanonicalJsonObject::from_inner(values),
+                ),
+            ));
+        }
+
+        let present: Vec<String> = base.keys().map(str::to_owned).collect();
+        for absent in &present {
+            let mut values = base.clone().into_inner();
+            values.remove(absent);
+            probes.push((
+                format!("minus:{absent}"),
+                probe_outcome(
+                    contract,
+                    provider_ref,
+                    CanonicalJsonObject::from_inner(values),
+                ),
+            ));
+        }
+        probes
+    }
+
+    /// The closed outcome label of one base-schema probe.
+    fn probe_outcome(
+        contract: &ResourceSchemaContract,
+        provider_ref: &ResourceRef,
+        values: CanonicalJsonObject,
+    ) -> String {
+        let spec = match ResourceSpec::new(Some(provider_ref.clone()), None, values, None) {
+            Ok(spec) => spec,
+            Err(_) => return "spec-rejected".to_owned(),
+        };
+        match contract.validate_minimal_base_spec(&spec) {
+            Ok(()) => "accepted".to_owned(),
+            Err(error) => format!("rejected:{error:?}"),
+        }
+    }
+
+    /// Register a distinct Provider extension for `member`, then observe the
+    /// common base through the contract that Provider installation produced.
+    ///
+    /// The extension carries a Provider-specific settings field so the two
+    /// installations are genuinely different registrations, not the same
+    /// value under two names.
+    fn observe_base_with_provider_installed(
+        pair: &SemanticPairContract,
+        member: &SemanticTypeContract,
+        base: &str,
+        provider: &str,
+        extension_field: &'static str,
+    ) -> (ResourceSchemaContract, ObservedBase) {
+        let provider_ref = provider_ref(provider);
+        let provider_name =
+            ResourceName::parse(provider).expect("a test provider name is a valid resource name");
+        let registration = ProviderExtensionRegistration {
+            provider_ref: provider_ref.clone(),
+            spec_schema_id: ExtensionSchemaId::new(
+                provider_name.clone(),
+                member.resource_type().clone(),
+                ExtensionSchemaLayer::Spec,
+            ),
+            spec_schema_version: SchemaVersion::new(1, 0).expect("1.0 is a valid schema version"),
+            spec_settings: ObjectFieldSchema::new(
+                [extension_field.to_owned()],
+                std::iter::empty::<String>(),
+            )
+            .expect("a single-field extension schema is valid"),
+            status_schema_id: ExtensionSchemaId::new(
+                provider_name,
+                member.resource_type().clone(),
+                ExtensionSchemaLayer::Status,
+            ),
+            status_schema_version: SchemaVersion::new(1, 0).expect("1.0 is a valid schema version"),
+            status_details: ObjectFieldSchema::new(
+                [extension_field.to_owned()],
+                std::iter::empty::<String>(),
+            )
+            .expect("a single-field extension schema is valid"),
+        };
+
+        let contract = member
+            .schema_contract([registration])
+            .expect("the common base admits an implementation's extension registration");
+
+        let spec = member
+            .minimal_base_spec(provider_ref.clone(), object(base))
+            .expect("the identical fixture supplies the required base fields");
+        assert!(spec.provider().is_none());
+        contract
+            .validate_minimal_base_spec(&spec)
+            .expect("the installed implementation admits the identical base fixture");
+        let enforced_base_probes =
+            probe_enforced_base(&contract, member, &provider_ref, spec.base());
+
+        let observed = ObservedBase {
+            spec_schema_id: member.spec().schema_id().to_canonical_string(),
+            status_schema_id: member.status().schema_id().to_canonical_string(),
+            spec_version: member.spec().version().to_canonical_string(),
+            status_version: member.status().version().to_canonical_string(),
+            spec_allowed: member.spec().allowed_names().collect(),
+            spec_required: member.spec().required_names().collect(),
+            status_allowed: member.status().allowed_names().collect(),
+            status_required: member.status().required_names().collect(),
+            spec_fingerprint: member.spec().fingerprint().as_str().to_owned(),
+            status_fingerprint: member.status().fingerprint().as_str().to_owned(),
+            projection_schema_fingerprint: pair
+                .projection()
+                .projection_schema_fingerprint()
+                .as_str()
+                .to_owned(),
+            factory_fingerprint: super::factory_fingerprint(
+                pair.projection().service_type(),
+                pair.projection().binding_type(),
+                pair.projection().allowed_backing_ref_types(),
+                pair.projection().allowed_binding_target_ref_types(),
+                pair.projection().projection_schema_fingerprint(),
+            )
+            .as_str()
+            .to_owned(),
+            minimal_base_bytes: spec.base().to_canonical_bytes(),
+            enforced_base_probes,
+        };
+        (contract, observed)
+    }
+
+    /// Prove the base is genuinely Provider-neutral.
+    ///
+    /// Two different implementations are installed in turn - each with its
+    /// own registered `spec.provider` / `status.provider` extension - and the
+    /// entire Provider-observable base surface is captured under each. The
+    /// two observations must be equal: same schema identities, same versions,
+    /// same frozen field sets, same base and factory fingerprints, and the
+    /// same canonical bytes for the identical minimal base fixture. A base
+    /// shaped around one implementation moves at least one of those.
+    ///
+    /// The comparison is guarded against degenerating into "a constant equals
+    /// itself" by two negative controls. The two installed contracts must
+    /// differ from each other, which shows the Provider identity really did
+    /// reach the object under test; and the fingerprint functions must move
+    /// when one of their declared inputs moves, which shows a fingerprint
+    /// comparison is capable of failing at all.
     pub(crate) fn assert_base_is_provider_neutral(
         pair: &SemanticPairContract,
         service_base: &str,
@@ -929,32 +1141,65 @@ pub(crate) mod tests_support {
             (pair.service(), service_base),
             (pair.binding(), binding_base),
         ] {
-            let contract = member
-                .schema_contract(std::iter::empty())
-                .expect("the base contract builds with no Provider installed");
-            let mut canonical = Vec::new();
-            for provider in [initial_provider, alternate_provider] {
-                let spec = member
-                    .minimal_base_spec(provider_ref(provider), object(base))
-                    .expect("the identical fixture supplies the required base fields");
-                contract
-                    .validate_minimal_base_spec(&spec)
-                    .expect("every implementation accepts the identical base fixture");
-                canonical.push(spec.base().to_canonical_bytes());
-            }
-            assert_eq!(
-                canonical[0], canonical[1],
-                "the base bytes are identical across implementations"
+            let (initial_contract, initial_observed) = observe_base_with_provider_installed(
+                pair,
+                member,
+                base,
+                initial_provider,
+                INITIAL_EXTENSION_FIELD,
             );
+            let (alternate_contract, alternate_observed) = observe_base_with_provider_installed(
+                pair,
+                member,
+                base,
+                alternate_provider,
+                ALTERNATE_EXTENSION_FIELD,
+            );
+
+            // Negative control: the two installations are genuinely
+            // different, so an equal observation below is a claim about the
+            // base and not an artifact of comparing one value with itself.
+            assert_ne!(
+                initial_contract, alternate_contract,
+                "the two implementations must install distinct contracts"
+            );
+
             assert_eq!(
-                member.spec().fingerprint().as_str(),
-                member.spec().fingerprint().as_str()
+                initial_observed, alternate_observed,
+                "the observable base must not move when the implementation changes"
             );
         }
-        // Neither the Service nor the Binding fingerprint takes a Provider
-        // input, so an implementation change cannot move them.
-        let before = pair.projection().factory_fingerprint().clone();
-        assert_eq!(&before, pair.projection().factory_fingerprint());
+
+        // Negative control on the fingerprint functions themselves: each
+        // moves when one of its declared inputs moves. Neither takes a
+        // Provider or adapter identity as an input, which is why the
+        // observations above are equal across implementations.
+        const FIELDS: &[&str] = &["alpha"];
+        const OTHER_FIELDS: &[&str] = &["beta"];
+        let schema_id = SemanticSchemaId::new("probe.d2bus.org", "Probe", SemanticLayer::Spec);
+        let version = SchemaVersion::new(1, 0).expect("1.0 is a valid schema version");
+        assert_ne!(
+            layer_fingerprint(&schema_id, version, FIELDS, &[]),
+            layer_fingerprint(&schema_id, version, OTHER_FIELDS, &[]),
+            "a layer fingerprint must move when its field set moves"
+        );
+        assert_ne!(
+            super::factory_fingerprint(
+                pair.projection().service_type(),
+                pair.projection().binding_type(),
+                pair.projection().allowed_backing_ref_types(),
+                pair.projection().allowed_binding_target_ref_types(),
+                pair.projection().projection_schema_fingerprint(),
+            ),
+            super::factory_fingerprint(
+                pair.projection().service_type(),
+                pair.projection().binding_type(),
+                pair.projection().allowed_backing_ref_types(),
+                pair.projection().allowed_binding_target_ref_types(),
+                &layer_fingerprint(&schema_id, version, OTHER_FIELDS, &[]),
+            ),
+            "a factory fingerprint must move when its projection schema moves"
+        );
     }
 }
 
