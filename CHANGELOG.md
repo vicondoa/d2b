@@ -12,6 +12,16 @@ deprecations ship one minor release before removal.
 
 ### Added
 
+- Added `labs/d2b-agentterm`, an experimental crate exploring a terminal that a
+  human and an AI agent can drive at the same time. It wraps a program in a
+  pseudoterminal and passes it through unchanged, so a person interacts with the
+  program normally, while a headless terminal emulator consumes the same output
+  and answers structured questions over a unix socket: what is on screen, what
+  changed over a trailing window, and when the screen last settled. It also
+  accepts injected keystrokes, which merge into the same input queue as the
+  human's so the two can never interleave mid-escape-sequence. It has its own
+  Cargo workspace under `labs/`, is outside CI, and changes no shipping
+  component.
 - Added `labs/wlattach`, an experimental crate exploring reconnectable Wayland
   application forwarding: a persistent session host keeps an application alive
   while a disposable window frontend can be detached and re-attached, so a real
