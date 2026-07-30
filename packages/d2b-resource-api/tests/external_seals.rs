@@ -20,7 +20,20 @@ impl ScratchGuard {
     /// would pass without a compile having happened. Remove any existing tree
     /// before creating, so adoption cannot occur.
     fn new(path: PathBuf) -> Self {
-        let _ = fs::remove_dir_all(&path);
+        // Fail closed, matching Scratch::ephemeral in d2b-bus. Swallowing the
+        // error would let a tree that could not be removed (EACCES on a
+        // mode-changed entry, EBUSY, a racing writer) be adopted anyway, since
+        // create_dir_all succeeds on an existing directory - reinstating the
+        // very hole this guard closes.
+        match fs::remove_dir_all(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => panic!(
+                "could not discard a stranded scratch tree at {}; adopting it would let the \
+                 cfg(test) marker pass without a compile: {error}",
+                path.display()
+            ),
+        }
         Self(path)
     }
 }
