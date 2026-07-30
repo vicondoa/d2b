@@ -249,16 +249,23 @@ elif [ "$_ci_active" = 1 ] && [ "${D2B_CI_SCCACHE:-0}" != 1 ]; then
   export RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER=""
   log "sccache: disabled (CI without D2B_CI_SCCACHE opt-in)"
 else
-  # Do not point RUSTC_WRAPPER at the sccache binary directly: that bypasses
-  # each workspace's own .cargo/rustc-wrapper.sh shim, which is what classifies
-  # a broken sccache invocation as a wrapper error (exit 97) instead of letting
-  # it masquerade as a compiler diagnostic. Unset any inherited override so the
-  # per-workspace config's rustc-wrapper takes effect.
-  unset RUSTC_WRAPPER CARGO_BUILD_RUSTC_WRAPPER
+  # Point at the shim explicitly rather than at the sccache binary. Setting
+  # RUSTC_WRAPPER to sccache directly would bypass .cargo/rustc-wrapper.sh,
+  # which is what classifies a broken sccache invocation as a wrapper error
+  # (exit 97) instead of letting it read like a compiler diagnostic.
+  #
+  # An export is required; unsetting is NOT equivalent. Cargo resolves
+  # .cargo/config.toml from the CWD, this script runs from $ROOT and passes
+  # --manifest-path to every invocation, and there is no $ROOT/.cargo/config.toml
+  # - so relying on the config would silently disable the wrapper for the whole
+  # gate. The four shim copies are byte-identical, so one absolute path serves
+  # every workspace.
+  _wrapper_shim="$ROOT/packages/.cargo/rustc-wrapper.sh"
+  export RUSTC_WRAPPER="$_wrapper_shim" CARGO_BUILD_RUSTC_WRAPPER="$_wrapper_shim"
   if [ "$_ci_active" = 1 ]; then
-    log "sccache: enabled via repo-local wrapper shim (CI opt-in, local backend at ${SCCACHE_DIR:-default})"
+    log "sccache: enabled via $_wrapper_shim (CI opt-in, local backend at ${SCCACHE_DIR:-default})"
   else
-    log "sccache: enabled via repo-local wrapper shim"
+    log "sccache: enabled via $_wrapper_shim"
   fi
 fi
 

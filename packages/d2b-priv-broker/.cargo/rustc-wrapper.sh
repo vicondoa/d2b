@@ -19,6 +19,14 @@
 # fix for the two is opposite (restart/bypass sccache vs. fix the code). Detect
 # a known sccache-failure signature and exit 97 with an explicit message
 # instead, so a wrapper failure is never mistaken for a compile failure.
+#
+# The signature must be anchored to sccache's OWN output. Matching bare text
+# like "panicked at" or "Broken pipe" anywhere in stderr misclassifies in the
+# more dangerous direction: a rustc internal compiler error prints "thread
+# 'rustc' panicked at" and a rendered diagnostic echoes the offending source
+# line, and this repository has source containing both of those strings. Either
+# would report a genuine build failure as a cache problem and send someone to
+# restart sccache while the compiler was telling them about a real error.
 set -eu
 
 if ! command -v sccache >/dev/null 2>&1; then
@@ -26,15 +34,21 @@ if ! command -v sccache >/dev/null 2>&1; then
 fi
 
 stderr_capture=$(mktemp "${TMPDIR:-/tmp}/d2b-rustc-wrapper-stderr.XXXXXX")
+# Flush the capture before removing it on a signal: cargo signals its rustc
+# children on Ctrl-C, on first-error abort and on job timeout, and an EXIT-only
+# trap would both leak the file and swallow whatever diagnostics had been
+# written before the interruption.
 trap 'rm -f "$stderr_capture"' EXIT
+trap 'cat "$stderr_capture" >&2 2>/dev/null || true; rm -f "$stderr_capture"; exit 130' INT
+trap 'cat "$stderr_capture" >&2 2>/dev/null || true; rm -f "$stderr_capture"; exit 143' TERM HUP
 
 status=0
 sccache "$@" 2>"$stderr_capture" || status=$?
 cat "$stderr_capture" >&2
 
-if [ "$status" -ne 0 ] && grep -qE \
-  'sccache: (error|encountered)|failed to (start|spawn|connect to) (the )?(sccache )?server|couldn.t connect to (the )?server|Connection refused|Broken pipe|panicked at' \
-  "$stderr_capture"; then
+if [ "$status" -ne 0 ] \
+  && grep -qE '^sccache: (error|encountered|Failed)|sccache::|failed to (start|spawn|connect to) (the )?sccache' "$stderr_capture" \
+  && ! grep -qE "thread '"'rustc'"' panicked|internal compiler error" "$stderr_capture"; then
   printf 'd2b-rustc-wrapper: sccache failed to invoke the compiler (wrapper error, not a compile error); original exit %s\n' "$status" >&2
   exit 97
 fi

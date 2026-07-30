@@ -169,16 +169,27 @@ jobs:
           mkdir -p "$HOME/.local/bin"
           cp "$sccache_out/bin/sccache" "$HOME/.local/bin/sccache"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - name: sccache cache (compiled-artifact cache, complements rust-cache)
-        # actions/cache, not sccache's own GHA-cache backend: see SCCACHE_CACHE
-        # above for why. Keyed on the pinned toolchain and Cargo.lock so a
-        # version or dependency change gets a fresh, correctly-scoped cache
-        # rather than silently reusing entries a different compiler produced.
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      - name: Restore sccache (compiled-artifact cache, complements rust-cache)
+        # actions/cache/restore, not the combined action: only test-rust saves
+        # (see the save step at the end of this job), mirroring the
+        # single-writer discipline the rust-cache step below applies so the four
+        # rust jobs do not race one key. Keyed on the pinned toolchain and
+        # Cargo.lock so a version or dependency change gets a fresh,
+        # correctly-scoped cache rather than reusing entries a different
+        # compiler produced.
+        #
+        # The run id makes the save key unique, with restore-keys doing the
+        # prefix match. actions/cache never overwrites an existing entry, so a
+        # pure content-hash key would freeze the cache at whatever the first run
+        # produced and no later run could add to it - defeating the per-crate
+        # accumulation this cache exists for.
+        id: sccache-restore
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: ${{ env.SCCACHE_DIR }}
-          key: sccache-${{ runner.os }}-${{ hashFiles('packages/rust-toolchain.toml', 'packages/Cargo.lock') }}
+          key: sccache-${{ runner.os }}-${{ hashFiles('packages/rust-toolchain.toml', 'packages/Cargo.lock') }}-${{ github.run_id }}
           restore-keys: |
+            sccache-${{ runner.os }}-${{ hashFiles('packages/rust-toolchain.toml', 'packages/Cargo.lock') }}-
             sccache-${{ runner.os }}-
       - name: Rust dependency cache (target dirs + cargo registry)
         # Swatinem/rust-cache caches dependency artifacts in target dirs
@@ -211,6 +222,13 @@ jobs:
         env:
           D2B_SKIP_FIXTURE_BUILD: "1"
         run: make test-rust
+      - name: Save sccache
+        if: success()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ env.SCCACHE_DIR }}
+          key: ${{ steps.sccache-restore.outputs.cache-primary-key }}
+
 
   test-fixture-contracts:
     needs: [tier0]
@@ -285,16 +303,27 @@ jobs:
           mkdir -p "$HOME/.local/bin"
           cp "$sccache_out/bin/sccache" "$HOME/.local/bin/sccache"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - name: sccache cache (compiled-artifact cache, complements rust-cache)
-        # actions/cache, not sccache's own GHA-cache backend: see SCCACHE_CACHE
-        # above for why. Keyed on the pinned toolchain and Cargo.lock so a
-        # version or dependency change gets a fresh, correctly-scoped cache
-        # rather than silently reusing entries a different compiler produced.
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      - name: Restore sccache (compiled-artifact cache, complements rust-cache)
+        # actions/cache/restore, not the combined action: only test-rust saves
+        # (see the save step at the end of this job), mirroring the
+        # single-writer discipline the rust-cache step below applies so the four
+        # rust jobs do not race one key. Keyed on the pinned toolchain and
+        # Cargo.lock so a version or dependency change gets a fresh,
+        # correctly-scoped cache rather than reusing entries a different
+        # compiler produced.
+        #
+        # The run id makes the save key unique, with restore-keys doing the
+        # prefix match. actions/cache never overwrites an existing entry, so a
+        # pure content-hash key would freeze the cache at whatever the first run
+        # produced and no later run could add to it - defeating the per-crate
+        # accumulation this cache exists for.
+        id: sccache-restore
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: ${{ env.SCCACHE_DIR }}
-          key: sccache-${{ runner.os }}-${{ hashFiles('packages/rust-toolchain.toml', 'packages/Cargo.lock') }}
+          key: sccache-${{ runner.os }}-${{ hashFiles('packages/rust-toolchain.toml', 'packages/Cargo.lock') }}-${{ github.run_id }}
           restore-keys: |
+            sccache-${{ runner.os }}-${{ hashFiles('packages/rust-toolchain.toml', 'packages/Cargo.lock') }}-
             sccache-${{ runner.os }}-
       - name: Rust dependency cache (target dirs + cargo registry)
         # Swatinem/rust-cache caches dependency artifacts in target dirs
@@ -329,6 +358,7 @@ jobs:
         env:
           D2B_ENABLE_FIXTURE_BUILD: "1"
         run: make test-fixture-contracts
+
 
   test-proofs:
     needs: [tier0]
@@ -672,16 +702,27 @@ jobs:
           mkdir -p "$HOME/.local/bin"
           cp "$sccache_out/bin/sccache" "$HOME/.local/bin/sccache"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - name: sccache cache (compiled-artifact cache, complements rust-cache)
-        # actions/cache, not sccache's own GHA-cache backend: see SCCACHE_CACHE
-        # above for why. Keyed on the pinned toolchain and Cargo.lock so a
-        # version or dependency change gets a fresh, correctly-scoped cache
-        # rather than silently reusing entries a different compiler produced.
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      - name: Restore sccache (compiled-artifact cache, complements rust-cache)
+        # actions/cache/restore, not the combined action: only test-rust saves
+        # (see the save step at the end of this job), mirroring the
+        # single-writer discipline the rust-cache step below applies so the four
+        # rust jobs do not race one key. Keyed on the pinned toolchain and
+        # Cargo.lock so a version or dependency change gets a fresh,
+        # correctly-scoped cache rather than reusing entries a different
+        # compiler produced.
+        #
+        # The run id makes the save key unique, with restore-keys doing the
+        # prefix match. actions/cache never overwrites an existing entry, so a
+        # pure content-hash key would freeze the cache at whatever the first run
+        # produced and no later run could add to it - defeating the per-crate
+        # accumulation this cache exists for.
+        id: sccache-restore
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: ${{ env.SCCACHE_DIR }}
-          key: sccache-${{ runner.os }}-${{ hashFiles('packages/rust-toolchain.toml', 'packages/Cargo.lock') }}
+          key: sccache-${{ runner.os }}-${{ hashFiles('packages/rust-toolchain.toml', 'packages/Cargo.lock') }}-${{ github.run_id }}
           restore-keys: |
+            sccache-${{ runner.os }}-${{ hashFiles('packages/rust-toolchain.toml', 'packages/Cargo.lock') }}-
             sccache-${{ runner.os }}-
       - name: Rust dependency cache (target dirs + cargo registry)
         # Swatinem/rust-cache caches dependency artifacts in target dirs
@@ -714,6 +755,7 @@ jobs:
         env:
           {}
         run: make test-policy
+
 
   test-runtime-ledger:
     needs: [tier0]
@@ -788,16 +830,27 @@ jobs:
           mkdir -p "$HOME/.local/bin"
           cp "$sccache_out/bin/sccache" "$HOME/.local/bin/sccache"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - name: sccache cache (compiled-artifact cache, complements rust-cache)
-        # actions/cache, not sccache's own GHA-cache backend: see SCCACHE_CACHE
-        # above for why. Keyed on the pinned toolchain and Cargo.lock so a
-        # version or dependency change gets a fresh, correctly-scoped cache
-        # rather than silently reusing entries a different compiler produced.
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+      - name: Restore sccache (compiled-artifact cache, complements rust-cache)
+        # actions/cache/restore, not the combined action: only test-rust saves
+        # (see the save step at the end of this job), mirroring the
+        # single-writer discipline the rust-cache step below applies so the four
+        # rust jobs do not race one key. Keyed on the pinned toolchain and
+        # Cargo.lock so a version or dependency change gets a fresh,
+        # correctly-scoped cache rather than reusing entries a different
+        # compiler produced.
+        #
+        # The run id makes the save key unique, with restore-keys doing the
+        # prefix match. actions/cache never overwrites an existing entry, so a
+        # pure content-hash key would freeze the cache at whatever the first run
+        # produced and no later run could add to it - defeating the per-crate
+        # accumulation this cache exists for.
+        id: sccache-restore
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: ${{ env.SCCACHE_DIR }}
-          key: sccache-${{ runner.os }}-${{ hashFiles('packages/rust-toolchain.toml', 'packages/Cargo.lock') }}
+          key: sccache-${{ runner.os }}-${{ hashFiles('packages/rust-toolchain.toml', 'packages/Cargo.lock') }}-${{ github.run_id }}
           restore-keys: |
+            sccache-${{ runner.os }}-${{ hashFiles('packages/rust-toolchain.toml', 'packages/Cargo.lock') }}-
             sccache-${{ runner.os }}-
       - name: Rust dependency cache (target dirs + cargo registry)
         # Swatinem/rust-cache caches dependency artifacts in target dirs
@@ -830,6 +883,7 @@ jobs:
         env:
           {}
         run: make test-runtime-ledger
+
 
   check:
     needs: [tier0, check-inventory, test-performance-budgets, test-lint, test-changelog, test-rust, test-fixture-contracts, test-proofs, test-nix-unit, test-flake-x86, test-flake-aarch64, test-drift, test-policy, test-runtime-ledger]

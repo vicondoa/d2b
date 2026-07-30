@@ -36,6 +36,8 @@ NIX_CACHE = "nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d0608
 # this action's cache I/O happens in its own process instead. Same reasoning as
 # the nix store cache above.
 SCCACHE_CACHE = "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
+SCCACHE_RESTORE = "actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
+SCCACHE_SAVE = "actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
 # The shell program must be resolvable by the Actions runner itself, which
 # looks the first token up on PATH rather than against the workspace, and whose
 # argument splitter does not preserve nested quoting. The runner resolves `sh`
@@ -217,6 +219,29 @@ def heavy_gate_step(job: dict[str, Any]) -> str:
     )
 
 
+def sccache_save_step(job: dict[str, Any]) -> str:
+    """Renders the sccache save step, for the single writing job only.
+
+    Only test-rust writes the shared sccache key. The other rust jobs restore
+    it and never save, so four concurrent jobs cannot race one key - the same
+    single-writer discipline the rust-cache step applies through save-if.
+
+    Saving runs after the gate step so the cache reflects the compilation that
+    the gate actually performed, and is conditioned on success so a failed run
+    cannot persist a partially-populated cache.
+    """
+    if job["ciJobId"] != "test-rust":
+        return ""
+    return (
+        "      - name: Save sccache\n"
+        "        if: success()\n"
+        f"        uses: {SCCACHE_SAVE}\n"
+        "        with:\n"
+        "          path: ${{ env.SCCACHE_DIR }}\n"
+        "          key: ${{ steps.sccache-restore.outputs.cache-primary-key }}\n"
+    )
+
+
 def rust_job(job: dict[str, Any]) -> str:
     return f"""  {job["ciJobId"]}:
 {needs_line(job)}    runs-on: {job["runsOn"]}
@@ -272,16 +297,27 @@ def rust_job(job: dict[str, Any]) -> str:
           mkdir -p "$HOME/.local/bin"
           cp "$sccache_out/bin/sccache" "$HOME/.local/bin/sccache"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - name: sccache cache (compiled-artifact cache, complements rust-cache)
-        # actions/cache, not sccache's own GHA-cache backend: see SCCACHE_CACHE
-        # above for why. Keyed on the pinned toolchain and Cargo.lock so a
-        # version or dependency change gets a fresh, correctly-scoped cache
-        # rather than silently reusing entries a different compiler produced.
-        uses: {SCCACHE_CACHE}
+      - name: Restore sccache (compiled-artifact cache, complements rust-cache)
+        # actions/cache/restore, not the combined action: only test-rust saves
+        # (see the save step at the end of this job), mirroring the
+        # single-writer discipline the rust-cache step below applies so the four
+        # rust jobs do not race one key. Keyed on the pinned toolchain and
+        # Cargo.lock so a version or dependency change gets a fresh,
+        # correctly-scoped cache rather than reusing entries a different
+        # compiler produced.
+        #
+        # The run id makes the save key unique, with restore-keys doing the
+        # prefix match. actions/cache never overwrites an existing entry, so a
+        # pure content-hash key would freeze the cache at whatever the first run
+        # produced and no later run could add to it - defeating the per-crate
+        # accumulation this cache exists for.
+        id: sccache-restore
+        uses: {SCCACHE_RESTORE}
         with:
           path: {"${{ env.SCCACHE_DIR }}"}
-          key: sccache-${{{{ runner.os }}}}-${{{{ hashFiles('packages/rust-toolchain.toml', 'packages/Cargo.lock') }}}}
+          key: sccache-${{{{ runner.os }}}}-${{{{ hashFiles('packages/rust-toolchain.toml', 'packages/Cargo.lock') }}}}-${{{{ github.run_id }}}}
           restore-keys: |
+            sccache-${{{{ runner.os }}}}-${{{{ hashFiles('packages/rust-toolchain.toml', 'packages/Cargo.lock') }}}}-
             sccache-${{{{ runner.os }}}}-
       - name: Rust dependency cache (target dirs + cargo registry)
         # Swatinem/rust-cache caches dependency artifacts in target dirs
@@ -313,7 +349,8 @@ def rust_job(job: dict[str, Any]) -> str:
 {heavy_gate_step(job)}      - name: {job["displayName"]}
         env:
 {render_env(job)}
-        run: make {job["makeTarget"]}"""
+        run: make {job["makeTarget"]}
+{sccache_save_step(job)}"""
 
 
 def flake_discover_job(job: dict[str, Any]) -> str:
