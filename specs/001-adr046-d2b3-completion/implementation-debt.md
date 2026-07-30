@@ -42,8 +42,19 @@ what to hold to a completion standard.
   process are not.
 
 Both are blocked on the same missing thing: a v3 Provider-method DTO catalogue
-that exists in no crate. That catalogue is this register's only entry with no
-owning wave, and it needs an integrator ruling rather than a schedule.
+that exists in no crate. That catalogue is now owned: **Wave 3, inside
+`ADR046-provider-001`**, whose destination already names
+`packages/d2b-contracts/src/v3/provider.rs`, `packages/d2b-provider/src/lib.rs`
+and `packages/d2b-provider-toolkit/` - exactly where the catalogue belongs. It
+is scoped into that existing item rather than raised as a fifth work item,
+because a fifth item would contradict `ADR-046-implementation-graph.json`,
+whose `.waves[]` entry for W3 pins `workItemCount: 4`. Discharging it closes
+the Destination caveats recorded against `ADR046-routing-014` and
+`ADR046-routing-015` below.
+
+The Evidence rows for those two items in `docs/specs/ADR-046-zone-routing.md`
+are deliberately left alone: they record what Wave 2 actually delivered and are
+already panel-attested. This register is the forward-looking record.
 
 ## 1. Blocked and unlanded dependencies
 
@@ -54,10 +65,10 @@ hole. Each must be closed by the wave named.
 | --- | --- | --- |
 | `ADR046-routing-007` | CLOSED. The dependency declarations landed as integrator prep and the contract module landed first, on the reading that the recorded edge is inverted for the contract. | Closed in W2 |
 | `ADR046-routing-009` | Both landed, 009 first. The recorded edge remains wrong in the graph: it says 009 depends on 007, but 007 imports 009's contract. The manifest should be corrected as a separate amendment under the drift rule. | Amendment, not blocking |
-| `ADR046-routing-016` service | Still no handler for `zone-bootstrap` and `zone-enroll`, but the blocker moved: the session contract and enrollment machine now exist in the bus, so wiring the service to them is ordinary work rather than a missing contract. The four enrollment obligations are met in the bus session module, not in the service. | W3 |
+| `ADR046-routing-016` service | Still no handler for `zone-bootstrap` and `zone-enroll`, but the blocker moved: the session contract and enrollment machine now exist in the bus, so wiring the service to them is ordinary work rather than a missing contract. The four enrollment obligations are met in the bus session module, not in the service. **Not W3**: the destination is `packages/d2b-zone-routing/src/service.rs`, which no W3 work item owns. Every work item whose destination names `packages/d2b-zone-routing/` - `routing-002`, `routing-003`, `routing-006`, `routing-016` - is W2, so the artifacts name no later owning wave. Practically it is also blocked behind the same W5 durable enrollment store as the two enrollment rows in the wave-close table below. | Needs an integrator ruling: the only owning item is `ADR046-routing-016` in the sealed W2, and no post-W2 item owns the file |
 | `ADR046-primitives-002` providers | `ProcessLaunchEffectPort` has no production adapter, so both process Providers are complete but unwired. The adapter is `ADR046-process-001`, destination `packages/d2b-provider-supervisor/`. | W4 |
-| `ADR046-routing-014` | `ProviderInstance`'s eleven trait objects and the whole `RpcProviderProxy` family are not delivered. They are built on `d2b_contracts::v2_provider` types with no v3 replacement. Needs a v3 Provider-method DTO work item before it can be finished. | Needs an integrator ruling on which wave owns the v3 Provider DTO catalogue |
-| `ADR046-routing-015` | `GeneratedProviderServiceServer` ttrpc dispatch not implemented: no v3 Provider proto, no service-name freeze, no generated bindings exist. `ProviderAgentAdapter`, `register_exact_instances`, and `ProviderAgentProcess` all depend on routing-014 surfaces that are themselves incomplete. | Same ruling as above |
+| `ADR046-routing-014` | `ProviderInstance`'s eleven trait objects and the whole `RpcProviderProxy` family are not delivered. They are built on `d2b_contracts::v2_provider` types with no v3 replacement. Blocked on the v3 Provider-method DTO catalogue. | W3, inside `ADR046-provider-001` |
+| `ADR046-routing-015` | `GeneratedProviderServiceServer` ttrpc dispatch not implemented: no v3 Provider proto, no service-name freeze, no generated bindings exist. `ProviderAgentAdapter`, `register_exact_instances`, and `ProviderAgentProcess` all depend on routing-014 surfaces that are themselves incomplete. | W3, inside `ADR046-provider-001` |
 
 ## 2. Semantics inferred where the specification is silent
 
@@ -139,6 +150,28 @@ and never corrected inside an implementation wave.
   fields. Not emitted.
 - **Frozen Provider method taxonomy** has no v3 re-freeze, so the capability
   set is a bounded token set rather than the specified taxonomy.
+- **W3 destination set disagrees with the section 3.2 wave table.**
+  `docs/specs/ADR-046-validation-and-delivery.md` section 3.2 gives W3's
+  destinations as only `packages/d2b-provider/`, `packages/d2b-provider-toolkit/`
+  and a `packages/d2b-provider-<base>-<implementation>/` skeleton generator. It
+  names neither `packages/d2b-contracts/src/v3/provider.rs` (destination of
+  `ADR046-provider-001`), nor
+  `packages/d2b-contracts/src/v3/semantic_services/` (destination of
+  `ADR046-provider-004`), nor `packages/d2b-provider-system-core/` (destination
+  of `ADR046-provider-003`). The same table lists
+  `packages/d2b-provider-system-{core,systemd,minijail}/` in its **W5** row,
+  while `ADR046-provider-003` is a W3 item in
+  `ADR-046-implementation-graph.json`. `ADR-046-work-items.json` is canon:
+  FR-046 makes the generated manifests authoritative over prose on wave
+  assignment, destination paths, and work-item identity, and `tasks.md` states
+  that each task is a pointer to a manifest entry and that those manifest
+  fields are the task. Implementers follow the manifest; the section 3.2 W3 and
+  W5 rows are treated as stale prose for those entries only. Not corrected in
+  place, per FR-046 - `ADR-046-validation-and-delivery.md` is untouched, and
+  this is the same shape as
+  [`amendment-w2-destination-drift.md`](./amendment-w2-destination-drift.md),
+  which should carry the prose change in its own amendment with its own
+  validation and panel round.
 - **Zone and Volume assertion messages rewritten for FR-017 actionability.**
   A panel finding established that the assertion messages pinned verbatim by
   the specification were not FR-017 compliant: each named the violated rule
@@ -181,16 +214,37 @@ New debt discovered while completing the wave's last five items.
 
 | Debt | Detail | Owning wave |
 | --- | --- | --- |
-| Appended Zone tags cannot reach the wire | The session contract appends six Zone members at new tags, but the canonical handshake offer encoder types its fields with the un-extended enums and lives in a file no W2 slice owned. Widening it in place would have invalidated the committed golden vectors. Enrolled links and bootstrap use preserved tags, so ZoneLink is unaffected; carrying an appended tag needs an owned decision on the offer encoding. | W3 |
+| Appended Zone tags cannot reach the wire | The session contract appends six Zone members at new tags, but the canonical handshake offer encoder types its fields with the un-extended enums and lives in a file no W2 slice owned. Widening it in place would have invalidated the committed golden vectors. Enrolled links and bootstrap use preserved tags, so ZoneLink is unaffected; carrying an appended tag needs an owned decision on the offer encoding. **Not W3**: the encoder is `packages/d2b-session/src/handshake.rs`, and no W3 work item names `packages/d2b-session/`. `ADR046-exec-018` (W5) owns the v3 session wire types and re-types `EndpointPolicy` - `encode_offer`'s sole input - onto v3 `ZoneId`/`ProviderId`, and `ADR046-reuse-001` (W5) owns the v3 contract extension to that crate. | W5, `ADR046-exec-018` |
 | Session tag values are an inference | No specification fixes the numeric tags for the six appended members, nor the ZoneLink service wire string. The scheme chosen is append-only, next unused tag, never renumber, with two tags permanently reserved rather than reused. These are wire-visible and need panel confirmation before anything depends on them. | W2 panel |
 | Subject-digest prologue field is a choice | The specs name no field for the subject-context digest. It is folded into the existing channel binding, which is already inside the canonical offer and therefore inside the handshake prologue, so no wire change was needed. Worth confirming. | W2 panel |
-| Sealed enrollment record does not bind the child uid | The spec says the record binds the child static key pin to the child Zone uid. The session module holds the fingerprint and an opaque allocator-binding digest; the uid binding belongs to the durable store transaction owned by the ZoneLink controller. | W3 |
-| No durable persistence for enrollment | Recovery takes the persisted facts as arguments. The store transaction that seals or invalidates a record is the controller's and is not implemented. | W3 |
+| Sealed enrollment record does not bind the child uid | The spec says the record binds the child static key pin to the child Zone uid. The session module holds the fingerprint and an opaque allocator-binding digest; the uid binding belongs to the durable store transaction owned by the ZoneLink controller. **Not W3**: no W3 work item owns `packages/d2b-session/` or `packages/d2b-core-controller/`. The transaction is `ADR046-store-004`, destination `packages/d2b-resource-store-redb/src/transaction.rs`, which the graph places in W5; the controller-side write lands in `zone_links.rs` behind it. | W5, `ADR046-store-004` |
+| No durable persistence for enrollment | Recovery takes the persisted facts as arguments. The store transaction that seals or invalidates a record is the controller's and is not implemented. **Not W3**: same determination as the row above - the durable store backend and its transaction module are `ADR046-store-004` in W5, and no W3 destination is a store or controller path. | W5, `ADR046-store-004` |
 | `component_session` runtime tests not duplicated | The bus re-exports the session runtime rather than forking it, so its 2,121 lines of tests were deliberately not copied; they run in the owning crate. The ported golden vectors are the port evidence. A scope judgement worth a reviewer's confirmation. | W2 panel |
-| Principal digest has no frozen domain tag | The cross-Zone idempotency key needs a subject digest, but the frozen digest-tag list has no principal or subject tag, so the digest is currently undomained. If a tag is later frozen, the computation changes. | W3 |
-| No closed reason for a multi-Zone batch | The routing reason enum has no variant for a batch spanning Zones, so a structural error is returned rather than misusing an unrelated routing reason. | W3 |
+| Principal digest has no frozen domain tag | The cross-Zone idempotency key needs a subject digest, but the frozen digest-tag list has no principal or subject tag, so the digest is currently undomained. If a tag is later frozen, the computation changes. **Not W3**: the digest site is `packages/d2b-bus/src/zone_route.rs` (`ADR046-routing-005`, W2) and the frozen tag list is decision D101, landed by `ADR046-object-001` in W0. Both waves are sealed, and no W3 destination is either file. Freezing a new domain tag amends the decision register, which is an FR-046/FR-047 amendment path rather than wave work. | Needs an integrator ruling: a D101 register amendment, with no owning wave in the artifacts |
+| No closed reason for a multi-Zone batch | The routing reason enum has no variant for a batch spanning Zones, so a structural error is returned rather than misusing an unrelated routing reason. **Not W3**: `ZoneRouteFailClosedReason` lives in `packages/d2b-contracts/src/v3/zone_routing.rs`, whose sole owning item is `ADR046-routing-001` in the sealed W2, and the refusal site `ZoneRouteError` is in `packages/d2b-bus/src/zone_route.rs` (`ADR046-routing-005`, W2). No post-W2 item names either file. | Needs an integrator ruling: no post-W2 item owns the routing reason enum |
 | Unix session tests delegated rather than ported | The manifest asked to port the unix session tests verbatim, but the integrator wired the owning crate as a dependency instead, so copying them would fork the audited substrate. Zone-level semantics were ported instead. Needs a ruling: accept delegation, or add the syscall dev-dependency and port literally. | W2 panel |
 | Listener portal transport variant | One spec describes a pre-bound socket handed over a portal call while another describes an inherited connected socket. Only the connected form is implemented; the portal wire contract belongs to a transport Provider crate and is unspecified for the bus. | W6 |
+
+## Wave 3 provider-crate layout and naming policy: scope and exemptions
+
+The Wave 3 crate-layout and naming policy - the mandatory `src/`, `tests/`,
+`integration/`, `README.md` shape and the naming rule that `ADR046-provider-002`
+carries - scopes to crates matching `d2b-provider-<base>-<implementation>`.
+
+Two existing crates are **exempt**:
+
+| Crate | Reason for exemption | Owner of retiring the exemption |
+| --- | --- | --- |
+| `packages/d2b-provider-aca` | Pre-ADR-046 crate. Its name carries a single segment after `d2b-provider-`, so it does not match `<base>-<implementation>` at all. `ADR-046-current-code-migration-map.md` dispositions `AcaWorkloadProvider` and its `GuestControlEndpointProvider` impl as REPLACE, superseded by `Provider/runtime-azure-container-apps`. Forcing it to conform in W3 would reshape a crate scheduled for deletion. | W6, `ADR046-aca-001`, whose removal proof is "`packages/d2b-provider-aca/` removed only after conformance suite green" |
+| `packages/d2b-provider-relay` | Pre-ADR-046 crate, same single-segment naming mismatch. The migration map dispositions `AzureRelayTransportProvider` as REPLACE, superseded by `Provider/transport-azure-relay`. | W6, `ADR046-aca-004`, whose removal proof is "`packages/d2b-provider-relay/` removed after `transport-azure-relay` Provider conformance". `ADR046-transport-relay-001` (also W6) retains the relay plumbing until ACA display migration completes, so the exemption cannot retire before both land |
+
+Every other `packages/d2b-provider-*` crate in the tree already matches the
+`<base>-<implementation>` form and is in scope:
+`d2b-provider-system-systemd`, `d2b-provider-system-minijail`,
+`d2b-provider-volume-local`, `d2b-provider-volume-virtiofs`.
+`packages/d2b-provider-toolkit` is the shared toolkit named by
+`ADR046-provider-001`, not a Provider crate, and is out of the naming rule's
+scope by construction.
 
 ## 7. Known flakes observed during Wave 2
 
