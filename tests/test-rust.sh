@@ -304,8 +304,15 @@ require_nextest "$@"
 # Deriving this set rather than pinning it means a newly added harness=false
 # target cannot silently drop out of the gate.
 nextest_unrunnable_targets() {
-  cargo nextest list "$@" --message-format json 2>/dev/null \
-    | jq -r '
+  local listing
+  # No stderr suppression and an explicit status check: this discovers a gate
+  # surface, so a listing that errors must fail the gate rather than silently
+  # yield an empty set and let the companion report "0 harness=false binaries".
+  if ! listing=$(cargo nextest list "$@" --message-format json); then
+    fail "cargo nextest list failed while discovering harness=false targets"
+    return 1
+  fi
+  printf '%s' "$listing" | jq -r '
         ."rust-suites"
         | to_entries[]
         | .value
@@ -324,13 +331,23 @@ run_nextest_companions() {
   shift 2
   log "  --> cargo test --doc ($label)"
   cargo test --doc --manifest-path "$manifest_path" "$@"
+  # Capture before looping. A process substitution hides its exit status from
+  # `set -e`, so discovering through `done < <(...)` would let a failed listing
+  # look like an empty one.
+  local targets
+  targets=$(nextest_unrunnable_targets --manifest-path "$manifest_path" "$@") || {
+    fail "$label: could not discover harness=false targets"
+    exit 1
+  }
   local pkg bin ran=0
   while IFS=$'\t' read -r pkg bin; do
     [ -n "$bin" ] || continue
     log "  --> cargo test -p $pkg --test $bin ($label; harness=false, not a nextest surface)"
-    cargo test --manifest-path "$manifest_path" -p "$pkg" --test "$bin"
+    # Forward the same selectors the listing used, so the companion runs the
+    # configuration that produced it rather than a default-feature rebuild.
+    cargo test --manifest-path "$manifest_path" "$@" -p "$pkg" --test "$bin"
     ran=$((ran + 1))
-  done < <(nextest_unrunnable_targets --manifest-path "$manifest_path" "$@")
+  done <<<"$targets"
   ok "$label companions (doctests + $ran harness=false binaries)"
 }
 

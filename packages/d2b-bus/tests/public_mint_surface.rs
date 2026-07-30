@@ -1209,11 +1209,20 @@ fn assert_partial_render_fails_closed(docs: &[DocumentedCrate]) {
         .advertised
         .first()
         .expect("selected rustdoc crate has an advertised item");
-    fs::remove_file(documented.root.join(&advertised.href))
+    // Restore the page afterwards. The render tree is now a cache that outlives
+    // the process, so deleting a page and leaving it deleted would poison every
+    // later run: Cargo's doc fingerprint stays fresh, rustdoc is not re-run, and
+    // the missing page resurfaces as "this is a doc-build problem" against a
+    // crate nobody touched. Reading it back first also keeps the simulation
+    // honest if the assertion below panics.
+    let page = documented.root.join(&advertised.href);
+    let preserved = fs::read(&page).expect("read the advertised item page before removing it");
+    fs::remove_file(&page)
         .expect("remove one advertised item to simulate a partial rustdoc render");
 
-    let error = validate_documented_crate(&documented.crate_name, &documented.root)
-        .expect_err("partial rustdoc render passed completeness validation");
+    let outcome = validate_documented_crate(&documented.crate_name, &documented.root);
+    fs::write(&page, &preserved).expect("restore the advertised item page");
+    let error = outcome.expect_err("partial rustdoc render passed completeness validation");
     let symbol = format!("{}::{}", documented.crate_name, advertised.name);
     assert!(
         error.contains(&symbol) && error.contains("doc-build problem"),
