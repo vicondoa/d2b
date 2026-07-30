@@ -333,6 +333,15 @@ artifacts, complete Story 1, and exercise each desktop companion against it.
   MUST be removed in its own change separate from the change that introduced the
   replacement. This governs *how* a path is removed; FR-041 and FR-042 govern *whether* the
   capability it provided must survive.
+- **FR-060**: The FR-023 removal-proof obligation binds the wave that **performs the
+  removal**, not the wave that recorded the path in the migration map. A path whose recorded
+  owning wave has already sealed and merged MUST NOT be treated as carrying an outstanding
+  proof obligation against that closed wave, because a sealed wave cannot produce new
+  evidence and its snapshot is immutable. Such a path acquires its proof obligation when a
+  later wave removes it, and a path that no wave removes is not removed at all - so no proof
+  is owed. This is a scoping rule, not a waiver: it changes *which* wave owes the proof, and
+  never whether a removal needs one. A path being removed in the current wave always owes a
+  proof under FR-023, regardless of which wave the map records as its owner.
 - **FR-024**: The shipped release MUST NOT contain both the pre-ADR-046 control plane and
   its replacement.
 - **FR-041**: Every operator-facing capability whose migration disposition promises a

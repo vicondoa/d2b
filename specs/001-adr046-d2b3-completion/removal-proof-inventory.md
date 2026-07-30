@@ -145,12 +145,21 @@ as `Merged`: `ADR046-session-001` (W1) owns twelve REPLACE rows and
 supply the missing proof retrospectively, because the wave is closed and, per
 the W0 and W1 waiver, was delivered without sealed records in the first place.
 
-These rows are therefore **not** discharged by their nominal wave. They need the
-integrator to rebind them - most plausibly to the wave that actually performs
-the physical removal, which for the superseded realm session and router crates
-is the destructive cutover and superseded-control-plane removal later in the
-program. Until rebound, treat their owner as
-`unassigned-needs-integrator` in practice.
+**Resolved by FR-060.** These rows carry no outstanding obligation against
+their closed wave. FR-060 binds the removal proof to the wave that performs the
+removal rather than the wave the map records as owner, so a sealed wave is never
+asked to produce evidence it cannot produce and whose snapshot is immutable.
+
+The practical consequence is unchanged in substance and clearer in ownership:
+these paths acquire a proof obligation at the moment a later wave removes them,
+which for the superseded realm session and router crates is the destructive
+cutover and superseded-control-plane removal. A path that no wave ever removes
+is not removed at all, so nothing is owed and nothing is silently dropped.
+
+This is a scoping rule and not a second waiver. It moves *which* wave owes the
+proof; it never removes the requirement that a removal has one. The same is true
+of the single row at line 654 that maps to no work item: it owes a proof if and
+when it is removed, and the wave performing that removal owns it.
 
 ### 3.4 Summary by owning wave
 
