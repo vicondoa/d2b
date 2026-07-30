@@ -23,16 +23,29 @@ let
   modePattern = "^[0-7][0-7][0-7][0-7]$";
   permissionsPattern = "^[rwx]{0,3}$";
 
+  # Parse a "Type/name" reference, or report that it is not one.
+  #
+  # The type and length checks are load-bearing. These helpers back assertions,
+  # and indexing a split without checking its shape turns a malformed ref into
+  # a fatal evaluation abort rather than the assertion message that names the
+  # offending option. Returning null lets the caller answer false and let its
+  # own assertion report the real problem.
   parseRef = ref:
-    let parts = lib.splitString "/" ref;
-    in {
-      type = builtins.elemAt parts 0;
-      name = builtins.elemAt parts 1;
-    };
+    let
+      parts = if builtins.isString ref then lib.splitString "/" ref else [ ];
+    in
+    if lib.length parts == 2 then
+      {
+        type = builtins.elemAt parts 0;
+        name = builtins.elemAt parts 1;
+      }
+    else
+      null;
 
   resolvesAs = resources: expectedType: ref:
     let parsed = parseRef ref;
-    in parsed.type == expectedType
+    in parsed != null
+    && parsed.type == expectedType
     && builtins.hasAttr parsed.name resources
     && resources.${parsed.name}.type == expectedType;
 

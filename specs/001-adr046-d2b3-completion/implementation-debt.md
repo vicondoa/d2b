@@ -100,14 +100,24 @@ also invisible until wired, so it must not be mistaken for working behaviour.
 
 | Debt | Detail | Owner |
 | --- | --- | --- |
-| Capability snapshot needs re-approval | New public items landed in `d2b-zone-routing`, `d2b-provider`, `d2b-provider-toolkit` and `d2b-core-controller` after the last approval. The gate must be re-run and the additions reviewed with a stated reason. | W2 close |
-| `drift-check.sh` does not cover the Zone generators | `gen-zone-schemas` and `gen-zone-nix-options` are not in `drift_paths`, so the gate does not regenerate their artifacts. An xtask unit test is the interim byte-for-byte guard. | W2 |
 | `flake.nix` zone-schema-drift check | The work item asks for `checks.<system>.zone-schema-drift` plus a matrix pin refresh. Not added. | W2 |
 | `public_mint_surface` runtime | Renders rustdoc for all 47 workspace members sequentially into isolated target dirs; roughly 30 minutes and growing with every crate added. The render phase is parallelizable; the dependency ordering is only needed for the analysis phase. | Integrator decision, standalone change |
 | Unknown-spec-field rejection | Cannot be enforced while the shared `spec` type injects execution-policy defaults into every resource. Needs the generated per-type submodule to replace the freeform type, which requires editing a file the generator slice does not own. `nix-unit: zone-link-closed-spec` cannot pass until then. | W2 |
 | Two engine refusal branches unreachable from outside | The contract constructors already reject the shapes that would trip them, so they guard only the deserialization path. Exercising them needs a deserialization-based vector, a different surface than the vector suite owns. | W2 panel to rule |
 | Enrollment validation obligations | Four obligations unmet, blocked on the session contract. | W2, with routing-007/009 |
 | `UNIMPLEMENTED_SCAFFOLD` markers | Still present in several crates, deliberately, because the capability gate fails closed on a crate advertising no public item. Each must be deleted by the slice that fills its crate. | Per slice |
+
+
+### Discharged during Wave 2
+
+Recorded as closed rather than deleted, so a reader can tell the difference
+between debt that was paid and debt that was never real.
+
+- The capability and public-API snapshots were regenerated and reviewed, and
+  the widening was approved with a stated reason.
+- The drift gate now runs both Zone generators and compares
+  `nixos-modules/generated/`, so the header those artifacts carry promising
+  byte-for-byte comparison is now true rather than aspirational.
 
 ## 5. Specification drift found while implementing
 
@@ -155,7 +165,6 @@ New debt discovered while completing the wave's last five items.
 | `component_session` runtime tests not duplicated | The bus re-exports the session runtime rather than forking it, so its 2,121 lines of tests were deliberately not copied; they run in the owning crate. The ported golden vectors are the port evidence. A scope judgement worth a reviewer's confirmation. | W2 panel |
 | Principal digest has no frozen domain tag | The cross-Zone idempotency key needs a subject digest, but the frozen digest-tag list has no principal or subject tag, so the digest is currently undomained. If a tag is later frozen, the computation changes. | W3 |
 | No closed reason for a multi-Zone batch | The routing reason enum has no variant for a batch spanning Zones, so a structural error is returned rather than misusing an unrelated routing reason. | W3 |
-| `approved-public-api.txt` regeneration | Two slices added public items to the bus and flagged that the crate's public-API snapshot needs regenerating. Distinct from the capability allowlist, which they reported should be unchanged. | W2 close |
 | Unix session tests delegated rather than ported | The manifest asked to port the unix session tests verbatim, but the integrator wired the owning crate as a dependency instead, so copying them would fork the audited substrate. Zone-level semantics were ported instead. Needs a ruling: accept delegation, or add the syscall dev-dependency and port literally. | W2 panel |
 | Listener portal transport variant | One spec describes a pre-bound socket handed over a portal call while another describes an inherited connected socket. Only the connected form is implemented; the portal wire contract belongs to a transport Provider crate and is unspecified for the bus. | W6 |
 
@@ -168,3 +177,39 @@ Recorded so a later run does not rediscover them as regressions.
 | `d2b-unsafe-local-helper::shell_supervisor real_supervisor_preserves_pty_across_reconnect_and_kills_exact_scope` | Failed once with "supervisor did not exit" during a full parallel run, passed 3 of 3 in isolation, and passed on the next full run of all 4499 tests. | Environment-sensitive, not a wave regression. The wave never touched that crate, and the test spawns a real supervisor in a transient scope and waits for it to exit, which is timing-sensitive under heavy parallel load. Worth a bounded wait rather than an unbounded one if it recurs. |
 | Capability seal fixtures | Two seal fixtures reported a downstream compile failure that read as a trust-boundary regression. The real cause was a stale fixture lock after the bus gained dependencies. | Fixed. Worth knowing that this failure mode is indistinguishable from a genuine seal break in its message, so a stale lock should be ruled out first. |
 | Compile-fail tests under a caching compiler wrapper | A capability seal failed once with a wrapper client exiting nonzero under concurrent cargo invocations. | Mitigated earlier in the program by clearing every wrapper spelling for those spawned compilers. The original failure was never reproduced on demand, so that remains a reasoned mitigation rather than a demonstrated fix. |
+
+## 8. Validation obligations not met by Wave 2
+
+The panel found these silent rather than recorded, which is the defect: an
+unmet obligation is acceptable when it is written down and a scheduling
+problem when it is not. Each names the work item that owes it.
+
+The three Zone configuration items carry obligations at test layers this wave
+did not reach. The Rust behaviour they describe is covered by in-crate tests;
+what is missing is the declarative and integration layer that proves the same
+behaviour through the module system and against a booted host.
+
+| Work item | Obligation | Where it belongs |
+| --- | --- | --- |
+| `ADR046-routing-011` | Eval cases for the zone name grammar, the parent topology rules, the uplink placement rules, the credential reference shape, and the transport-settings secret rejection. Also a drift case pinning the standard resource-type registry. | `tests/unit/nix/cases/`, plus the drift gate |
+| `ADR046-routing-012` | Build-level flake checks for bundle determinism, sealed parent topology, the child-local uplink bundle, the exactly-six-field uplink spec, unknown transport-settings fields, the transport credential reference, and a missing transport provider. | `flake.checks.<system>` |
+| `ADR046-routing-013` | Host-integration checks for cleanup of a removed uplink, rollback restoring one, a dynamic child surviving cleanup, and the absence of a reciprocal row in the parent store. | `tests/host-integration/` |
+
+Two things make this smaller than it looks, and one makes it larger.
+
+Smaller: the eval-case obligations were exercised out of tree during
+implementation, with a conformant Zone yielding no assertion and thirteen
+distinct misconfigurations each producing their intended message. That
+evidence exists in the implementation record but is not committed as a case
+file, so it does not run in the gate. Landing it is transcription rather than
+design.
+
+Also smaller: the host-integration obligations cannot be met until the modules
+are imported and a production store exists, both of which belong to later
+waves. Writing them now would produce checks that cannot execute.
+
+Larger: the flake checks are the layer that would catch a generator emitting a
+non-deterministic bundle, and nothing else in the wave covers that. The
+generators are deterministic by construction and the drift gate now compares
+their output, but neither proves determinism across two independent
+evaluations of the same input.

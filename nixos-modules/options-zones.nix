@@ -16,20 +16,33 @@ let
   # counting the Zone itself and the local root.
   maxAncestryNames = 16;
 
+  # Parse a "Type/name" reference, or report that it is not one.
+  #
+  # The type and length checks are load-bearing, not defensive noise. These
+  # helpers back assertions, and an assertion exists to report a misconfigured
+  # value clearly. Indexing a split without checking its shape turns a bad ref
+  # into a fatal evaluation abort - "expected a string" or an out-of-bounds
+  # index - which reports the wrong problem and buries the offending option
+  # path. Returning null lets every caller answer false and let its own
+  # assertion produce the real message.
   parseRef = ref:
     let
-      parts = lib.splitString "/" ref;
+      parts = if builtins.isString ref then lib.splitString "/" ref else [ ];
     in
-    {
-      type = builtins.elemAt parts 0;
-      name = builtins.elemAt parts 1;
-    };
+    if lib.length parts == 2 then
+      {
+        type = builtins.elemAt parts 0;
+        name = builtins.elemAt parts 1;
+      }
+    else
+      null;
 
   resolvesAs = resources: expectedType: ref:
     let
       parsed = parseRef ref;
     in
-    parsed.type == expectedType
+    parsed != null
+    && parsed.type == expectedType
     && builtins.hasAttr parsed.name resources
     && resources.${parsed.name}.type == expectedType;
 
@@ -37,7 +50,8 @@ let
     let
       parsed = parseRef ref;
     in
-    builtins.hasAttr parsed.name resources
+    parsed != null
+    && builtins.hasAttr parsed.name resources
     && resources.${parsed.name}.type == parsed.type;
 
   resourceAssertions = zoneName: resources:
