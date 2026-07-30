@@ -249,12 +249,16 @@ elif [ "$_ci_active" = 1 ] && [ "${D2B_CI_SCCACHE:-0}" != 1 ]; then
   export RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER=""
   log "sccache: disabled (CI without D2B_CI_SCCACHE opt-in)"
 else
-  _sccache_bin=$(command -v sccache)
-  export RUSTC_WRAPPER="$_sccache_bin" CARGO_BUILD_RUSTC_WRAPPER="$_sccache_bin"
+  # Do not point RUSTC_WRAPPER at the sccache binary directly: that bypasses
+  # each workspace's own .cargo/rustc-wrapper.sh shim, which is what classifies
+  # a broken sccache invocation as a wrapper error (exit 97) instead of letting
+  # it masquerade as a compiler diagnostic. Unset any inherited override so the
+  # per-workspace config's rustc-wrapper takes effect.
+  unset RUSTC_WRAPPER CARGO_BUILD_RUSTC_WRAPPER
   if [ "$_ci_active" = 1 ]; then
-    log "sccache: enabled ($_sccache_bin; CI opt-in, local backend at ${SCCACHE_DIR:-default})"
+    log "sccache: enabled via repo-local wrapper shim (CI opt-in, local backend at ${SCCACHE_DIR:-default})"
   else
-    log "sccache: enabled ($_sccache_bin)"
+    log "sccache: enabled via repo-local wrapper shim"
   fi
 fi
 
