@@ -1226,10 +1226,22 @@ version = "0.0.0-bootstrap"
 [[package]]
 name = "d2b-provider-volume-local"
 version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "serde",
+ "serde_json",
+ "sha2",
+]
 
 [[package]]
 name = "d2b-provider-volume-virtiofs"
 version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "serde",
+ "serde_json",
+ "sha2",
+]
 
 [[package]]
 name = "d2b-realm-codec-protobuf"
