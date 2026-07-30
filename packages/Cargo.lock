@@ -1431,6 +1431,9 @@ dependencies = [
 [[package]]
 name = "d2b-zone-routing"
 version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+]
 
 [[package]]
 name = "d2bd"
