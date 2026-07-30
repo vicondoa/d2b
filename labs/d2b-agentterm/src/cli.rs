@@ -48,8 +48,35 @@ pub enum Command {
     Raw(RawArgs),
     /// Request a resize. Advisory; the attached terminal wins.
     Resize(ResizeArgs),
+    /// Block until the screen content has been unchanged for a period.
+    WaitIdle(WaitIdleArgs),
     /// Print a sequence that reconstructs the current screen.
     Dump(ClientArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct WaitIdleArgs {
+    #[command(flatten)]
+    pub client: ClientArgs,
+
+    /// How long the content must stay unchanged, e.g. `5s`.
+    #[arg(long = "for", default_value = "5s")]
+    pub quiet_for: String,
+
+    /// Give up after this long.
+    #[arg(long, default_value = "120s")]
+    pub timeout: String,
+
+    /// How often to check.
+    #[arg(long, default_value = "250ms")]
+    pub poll: String,
+
+    /// Require the screen to change at least once before it can be idle.
+    ///
+    /// Use this after submitting input, so a screen that has not started
+    /// reacting yet is not mistaken for one that has already settled.
+    #[arg(long)]
+    pub await_change: bool,
 }
 
 #[derive(Debug, Args)]
@@ -145,6 +172,9 @@ pub struct ResizeArgs {
 }
 
 /// Parse `COLSxROWS`.
+///
+/// Zero is rejected rather than clamped: `avt::Vt` panics when constructed with
+/// a zero dimension, so this is the boundary where that has to be caught.
 pub fn parse_size(text: &str) -> anyhow::Result<TtySize> {
     let (cols, rows) = text
         .split_once(['x', 'X'])
@@ -167,12 +197,16 @@ pub fn parse_size(text: &str) -> anyhow::Result<TtySize> {
 }
 
 /// Parse a duration such as `10s`, `500ms`, `2m`, or a bare number of seconds.
+///
+/// Note the suffix order: `ms` is checked before `s`, because `"500ms"` also
+/// ends in `s` and would otherwise parse as 500 million milliseconds.
 pub fn parse_duration(text: &str) -> anyhow::Result<Duration> {
     let text = text.trim();
     if text.is_empty() {
         anyhow::bail!("empty duration");
     }
 
+    // Longest suffix first. A bare number is treated as seconds.
     let (value, unit) = match text.strip_suffix("ms") {
         Some(value) => (value, "ms"),
         None => match text.strip_suffix('s') {
@@ -205,6 +239,12 @@ pub fn parse_duration(text: &str) -> anyhow::Result<Duration> {
 
 /// Resolve the socket path, defaulting to the sole running session if there is
 /// exactly one.
+///
+/// Precedence: explicit `--socket`, then `D2B_AGENTTERM_SOCKET`, then discovery.
+///
+/// Discovery deliberately refuses to guess when several sessions are running.
+/// Picking one arbitrarily would mean an agent silently typing into the wrong
+/// terminal, which is far worse than an error message.
 fn resolve_socket(explicit: &Option<PathBuf>) -> anyhow::Result<PathBuf> {
     if let Some(path) = explicit {
         return Ok(path.clone());
@@ -245,6 +285,10 @@ fn resolve_socket(explicit: &Option<PathBuf>) -> anyhow::Result<PathBuf> {
 }
 
 /// Send one request and return the response.
+///
+/// One connection per request. That is slightly wasteful but keeps every client
+/// subcommand independent and stateless, which is what lets an agent drive this
+/// with plain shell commands instead of managing a session.
 pub async fn request(socket: &PathBuf, request: Request) -> anyhow::Result<Response> {
     let stream = UnixStream::connect(socket)
         .await
@@ -263,7 +307,8 @@ pub async fn request(socket: &PathBuf, request: Request) -> anyhow::Result<Respo
     }
 }
 
-/// Entry point.
+/// Entry point. Dispatches to `run` (which starts a session) or to a one-shot
+/// socket client, and returns the process exit code.
 pub async fn main(cli: Cli) -> anyhow::Result<i32> {
     match cli.command {
         Command::Run(args) => run(args).await,
@@ -292,7 +337,93 @@ pub async fn main(cli: Cli) -> anyhow::Result<i32> {
             )
             .await
         }
+        Command::WaitIdle(args) => wait_idle(args).await,
         Command::Dump(args) => client(args, Request::Dump).await,
+    }
+}
+
+/// Poll the delta until the visible content has been stable for `--for`.
+///
+/// Deliberately keyed on `content_changed` rather than on raw output bytes: an
+/// application that repositions its cursor on a timer emits PTY traffic forever
+/// while the screen stays visually identical, and treating that as activity
+/// means never reporting idle.
+async fn wait_idle(args: WaitIdleArgs) -> anyhow::Result<i32> {
+    let quiet_for = parse_duration(&args.quiet_for)?;
+    let timeout = parse_duration(&args.timeout)?;
+    let poll = parse_duration(&args.poll)?;
+    let socket = resolve_socket(&args.client.socket)?;
+
+    let started = std::time::Instant::now();
+    let mut seen_change = !args.await_change;
+
+    loop {
+        if started.elapsed() > timeout {
+            let message = format!(
+                "timed out after {:.1}s waiting for {:.1}s of stable content",
+                started.elapsed().as_secs_f64(),
+                quiet_for.as_secs_f64()
+            );
+            if args.client.json {
+                println!(
+                    "{}",
+                    serde_json::json!({ "type": "timeout", "message": message })
+                );
+            } else {
+                println!("timeout: {message}");
+            }
+            return Ok(2);
+        }
+
+        let response = request(
+            &socket,
+            Request::Delta {
+                window_ms: quiet_for.as_millis() as u64,
+            },
+        )
+        .await?;
+
+        let report = match response {
+            Response::Delta(report) => report,
+            Response::Error { message } => anyhow::bail!("{message}"),
+            other => anyhow::bail!("unexpected response: {other:?}"),
+        };
+
+        if report.content_changed {
+            seen_change = true;
+        } else if seen_change {
+            let waited = started.elapsed();
+            if args.client.json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "type": "idle",
+                        "waitedMs": waited.as_millis() as u64,
+                        "quietForMs": quiet_for.as_millis() as u64,
+                        "cursorMoved": report.cursor_moved,
+                        "outputBytes": report.output_bytes,
+                        "truncated": report.truncated,
+                    })
+                );
+            } else {
+                let extra = if report.cursor_only_activity() {
+                    format!(
+                        " ({} bytes of cursor/control traffic moved nothing visible)",
+                        report.output_bytes
+                    )
+                } else {
+                    String::new()
+                };
+                println!(
+                    "idle after {:.1}s: content unchanged for {:.1}s{extra}",
+                    waited.as_secs_f64(),
+                    quiet_for.as_secs_f64()
+                );
+            }
+            return Ok(0);
+        }
+
+        tokio::time::sleep(poll).await;
     }
 }
 
@@ -316,6 +447,9 @@ async fn run(args: RunArgs) -> anyhow::Result<i32> {
     .await
 }
 
+/// Run one client subcommand: resolve the socket, send the request, print the
+/// response, and map an error response to a non-zero exit code so shell callers
+/// can branch on it.
 async fn client(args: ClientArgs, req: Request) -> anyhow::Result<i32> {
     let socket = resolve_socket(&args.socket)?;
     let response = request(&socket, req).await?;
@@ -333,6 +467,10 @@ async fn client(args: ClientArgs, req: Request) -> anyhow::Result<i32> {
     Ok(if is_error { 1 } else { 0 })
 }
 
+/// Render a response for a human reader.
+///
+/// The `--json` path bypasses this entirely; this is only the convenience view
+/// for someone debugging a session by hand.
 fn render_human(response: &Response) -> String {
     match response {
         Response::Info(info) => {

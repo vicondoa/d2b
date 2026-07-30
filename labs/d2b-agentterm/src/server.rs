@@ -124,6 +124,11 @@ pub async fn serve(
     }
 }
 
+/// Handle one client connection: read request lines, write response lines.
+///
+/// The connection is line-oriented and stateless. A client may send several
+/// requests down one connection, but nothing is remembered between them, so the
+/// one-shot CLI clients and a long-lived agent connection behave identically.
 async fn handle(
     stream: UnixStream,
     session: SharedSession,
@@ -139,11 +144,16 @@ async fn handle(
             continue;
         }
 
+        // A malformed request is answered with an error rather than closing the
+        // connection, so a client can recover from one bad line.
         let response = match serde_json::from_str::<Request>(&line) {
             Ok(request) => dispatch(request, &session, &commands),
             Err(err) => Response::error(format!("malformed request: {err}")),
         };
 
+        // Encoding cannot realistically fail, but falling back to a literal
+        // error line is better than dropping the response and hanging a client
+        // that is blocked on a read.
         let encoded = encode_line(&response)
             .unwrap_or_else(|_| "{\"type\":\"error\",\"message\":\"encode failed\"}\n".into());
         write_half.write_all(encoded.as_bytes()).await?;
@@ -153,6 +163,19 @@ async fn handle(
     Ok(())
 }
 
+/// Turn one request into one response.
+///
+/// Read-only requests are answered directly from the shared session. Requests
+/// that affect the child are forwarded to the pump over `commands` instead of
+/// being applied here, which is what preserves the single-writer invariant on
+/// the PTY.
+///
+/// # Locking
+///
+/// This function is deliberately synchronous. Every arm takes the session lock,
+/// reads or mutates, and drops it before returning. Holding a `std::sync::Mutex`
+/// across an `await` would let a slow client stall the pump, so the boundary is
+/// enforced by simply having no await points in here at all.
 fn dispatch(
     request: Request,
     session: &SharedSession,

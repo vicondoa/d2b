@@ -80,6 +80,21 @@ pub struct DeltaReport {
     pub appended: Vec<String>,
     /// Bytes of decoded output recorded during the window.
     pub output_bytes: usize,
+    /// Whether any row's rendered content differs from the baseline.
+    ///
+    /// This is the field to use for idle detection, not `output_bytes`. An
+    /// application that repositions the cursor on a timer emits PTY traffic
+    /// continuously while the screen stays visually identical: `avt`
+    /// deliberately does not mark a line dirty for pure cursor movement, so
+    /// such a session shows `output_bytes > 0` with no content change at all.
+    /// Treating raw traffic as activity reports those sessions as busy forever.
+    pub content_changed: bool,
+    /// Whether the cursor moved during the window.
+    ///
+    /// Note that a cursor *blink* rendered by the terminal itself produces no
+    /// PTY output and is invisible here, which is correct: it is a property of
+    /// the display, not of the application.
+    pub cursor_moved: bool,
     /// Whether any history ring evicted, so this answer may be partial.
     pub truncated: bool,
     /// Human-readable caveat, when one applies.
@@ -87,12 +102,21 @@ pub struct DeltaReport {
 }
 
 impl DeltaReport {
-    /// True when nothing at all happened in the window.
+    /// True when nothing at all happened in the window, including cursor and
+    /// control traffic that left the visible content unchanged.
     pub fn is_empty(&self) -> bool {
-        self.changed_rows.is_empty()
-            && self.diff.is_empty()
-            && self.appended.is_empty()
-            && self.output_bytes == 0
+        !self.content_changed && self.output_bytes == 0
+    }
+
+    /// True when the visible content is unchanged, regardless of any cursor or
+    /// control traffic. This is the predicate for "has the screen settled".
+    pub fn is_idle(&self) -> bool {
+        !self.content_changed
+    }
+
+    /// True when the child emitted output that changed nothing visible.
+    pub fn cursor_only_activity(&self) -> bool {
+        !self.content_changed && self.output_bytes > 0
     }
 
     /// Render the report for a terminal reader.
@@ -120,8 +144,16 @@ impl DeltaReport {
             let _ = writeln!(out, "! {note}");
         }
 
-        if self.is_empty() {
-            let _ = writeln!(out, "(no change)");
+        if !self.content_changed {
+            if self.cursor_only_activity() {
+                let _ = writeln!(
+                    out,
+                    "(no change; {} bytes of cursor/control traffic moved nothing visible)",
+                    self.output_bytes
+                );
+            } else {
+                let _ = writeln!(out, "(no change)");
+            }
             return out;
         }
 
@@ -363,6 +395,8 @@ mod tests {
             diff: vec![],
             appended: vec![],
             output_bytes: 5,
+            content_changed: true,
+            cursor_moved: false,
             truncated: false,
             note: None,
         }
@@ -382,7 +416,47 @@ mod tests {
         r.changed_rows.clear();
         r.rows.clear();
         r.output_bytes = 0;
+        r.content_changed = false;
         assert!(r.is_empty());
+        assert!(r.is_idle());
+    }
+
+    #[test]
+    fn cursor_only_traffic_counts_as_idle_but_not_as_empty() {
+        // The case that breaks naive idle detection: an application that
+        // repositions its cursor on a timer emits PTY traffic continuously
+        // while the screen stays visually identical. Keying idle off raw
+        // output bytes would report such a session busy forever.
+        let mut r = report();
+        r.changed_rows.clear();
+        r.rows.clear();
+        r.content_changed = false;
+        r.cursor_moved = true;
+        r.output_bytes = 4096;
+
+        assert!(r.is_idle(), "visible content did not change");
+        assert!(!r.is_empty(), "raw traffic did occur");
+        assert!(r.cursor_only_activity());
+    }
+
+    #[test]
+    fn content_change_is_never_idle() {
+        let r = report();
+        assert!(r.content_changed);
+        assert!(!r.is_idle());
+        assert!(!r.is_empty());
+    }
+
+    #[test]
+    fn human_render_explains_cursor_only_traffic() {
+        let mut r = report();
+        r.changed_rows.clear();
+        r.rows.clear();
+        r.content_changed = false;
+        r.output_bytes = 4096;
+        let text = r.render_human();
+        assert!(text.contains("no change"), "{text}");
+        assert!(text.contains("moved nothing visible"), "{text}");
     }
 
     #[test]
@@ -406,6 +480,7 @@ mod tests {
         r.changed_rows.clear();
         r.rows.clear();
         r.output_bytes = 0;
+        r.content_changed = false;
         assert!(r.render_human().contains("(no change)"));
     }
 }

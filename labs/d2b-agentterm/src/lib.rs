@@ -4,7 +4,42 @@
 //! maintaining a headless VT emulator that an agent can read and drive over a
 //! unix socket.
 //!
-//! See `DESIGN.md` for the architecture and `README.md` for usage.
+//! # How the pieces fit together
+//!
+//! ```text
+//!         your keystrokes                                agent
+//!               |                                          |
+//!         /dev/tty (raw)                            unix socket
+//!          [tty.rs]                                  [server.rs]
+//!               |                                          |
+//!               v                                          v
+//!    +----------------------------------------------------------+
+//!    |  the pump  [pump.rs]                                     |
+//!    |                                                          |
+//!    |    both input sources merge into ONE queue, then go to    |
+//!    |    the PTY master  [pty.rs]                              |
+//!    |                                                          |
+//!    |    child output forks two ways:                          |
+//!    |      - verbatim bytes to your screen                     |
+//!    |      - decoded text to the emulator  [session.rs]        |
+//!    +----------------------------------------------------------+
+//! ```
+//!
+//! # Reading order
+//!
+//! If you are new to this crate, read the modules in this order:
+//!
+//! 1. [`pump`] -- the I/O loop. Everything else is called from there.
+//! 2. [`session`] -- the state an agent can observe.
+//! 3. [`delta`] -- the "what changed" engine, which is where the real design
+//!    content lives.
+//! 4. [`server`] and [`protocol`] -- how an agent talks to it.
+//!
+//! The rest ([`tty`], [`pty`], [`utf8`], [`modes`], [`keys`], [`screen`],
+//! [`history`]) are supporting pieces that do one thing each.
+//!
+//! See `README.md` for the full design rationale, including the two bugs found
+//! during development that shaped the delta engine.
 
 pub mod cli;
 pub mod delta;

@@ -51,11 +51,23 @@ pub fn trim_row(row: &str) -> String {
 }
 
 /// Render an `avt` viewport into trimmed rows.
+///
+/// Always returns exactly one entry per terminal row, including blank ones.
+/// An agent correlating the cursor position against this list needs the indices
+/// to line up, so blank rows must not be filtered out.
 pub fn render_view(vt: &avt::Vt) -> Vec<String> {
     vt.view().map(|line| trim_row(&line.text())).collect()
 }
 
 /// Render the primary buffer's text, trailing blank lines removed.
+///
+/// Note this reads the *primary* buffer even when the alternate buffer is
+/// active, because that is what `avt::Vt::text()` does. That asymmetry with
+/// [`render_view`] is deliberate and useful: it means the shell transcript
+/// stays readable underneath a full-screen TUI.
+///
+/// Trailing blanks are dropped here, unlike in `render_view`, because this is a
+/// transcript rather than a positional grid.
 pub fn render_primary_text(vt: &avt::Vt) -> Vec<String> {
     let mut lines: Vec<String> = vt.text().iter().map(|l| trim_row(l)).collect();
     while lines.last().is_some_and(|l| l.is_empty()) {

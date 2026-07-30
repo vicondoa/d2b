@@ -120,11 +120,15 @@ impl Session {
         let now = Instant::now();
         let was_alt = self.scanner.modes().alt_screen;
 
+        // Scan for mode changes before feeding the emulator. `avt` swallows
+        // these sequences without exposing their effect, so this is the only
+        // place the alternate-buffer and bracketed-paste state is observable.
         self.scanner.feed(text);
         let is_alt = self.scanner.modes().alt_screen;
 
-        // Destructure so the evicted scrollback iterator is drained before the
-        // mutable borrow of `vt` ends.
+        // `Changes` borrows the emulator mutably, and its `scrollback` field is
+        // a lazy iterator. Both must be consumed inside this scope, or the
+        // evicted lines are silently dropped when the borrow ends.
         let (dirty, evicted) = {
             let changes = self.vt.feed_str(text);
             let dirty = changes.lines;
@@ -134,12 +138,16 @@ impl Session {
 
         self.history.record_output(now, text.to_string());
         self.history.record_dirty(now, dirty);
+        // Recorded separately from dirty rows because `avt` does not mark a
+        // line dirty for pure cursor movement; see `history::CursorRecord`.
+        self.history.record_cursor(now, read_cursor(&self.vt));
         if !evicted.is_empty() {
             self.history.record_scrollback(now, evicted);
         }
 
-        // A buffer switch invalidates row-index comparison, so force a fresh
-        // baseline at exactly that instant.
+        // A buffer switch replaces the whole screen, so row indices either side
+        // of it are not comparable. Force a fresh baseline at exactly that
+        // instant rather than letting the interval decide.
         let switched = was_alt != is_alt;
         let view = render_view(&self.vt);
         self.history
@@ -204,10 +212,20 @@ impl Session {
     }
 
     /// Answer a delta query over the trailing `window`.
+    ///
+    /// This is the most subtle function in the crate. Read `README.md` part 3
+    /// before changing it; the two short-circuit conditions below each exist
+    /// because of a specific bug found in testing.
     pub fn delta(&self, window: Duration) -> DeltaReport {
         let now = Instant::now();
+        // `checked_sub` guards a window longer than the process has been up,
+        // which would otherwise underflow the monotonic clock.
         let cutoff = now.checked_sub(window).unwrap_or(self.started);
 
+        // The mode decides how "changed" is interpreted at all. On the
+        // alternate buffer the viewport is fixed, so a dirty row index means
+        // the content there is new. On the primary buffer rows scroll, so the
+        // same index only means content moved through that position.
         let alt_screen = self.scanner.modes().alt_screen;
         let mode = if alt_screen {
             DeltaMode::AltScreen
@@ -218,11 +236,17 @@ impl Session {
         let changed_rows = self.history.dirty_rows_since(cutoff);
         let output = self.history.output_since(cutoff);
 
-        // Exact short circuit. Every screen change originates in child output,
-        // and a resize records dirty rows, so if neither happened in the window
-        // then nothing changed. Answering from the checkpoint diff instead
-        // would report spurious changes whenever the newest baseline predates
-        // the window, which is the common case for a settled screen.
+        // Exact short circuit, and the fix for the "idle baseline" bug.
+        //
+        // Every screen change originates in child output, and a resize records
+        // dirty rows, so if neither happened in the window then nothing
+        // changed -- full stop, without consulting a checkpoint.
+        //
+        // Answering from the checkpoint diff instead would report spurious
+        // changes whenever the newest baseline predates the window, which is
+        // the common case for a screen that has settled. That bug reported the
+        // entire screen as freshly changed forever, and got worse the longer a
+        // session idled.
         if output.is_empty() && changed_rows.is_empty() {
             return DeltaReport {
                 window_ms: window.as_millis() as u64,
@@ -238,6 +262,8 @@ impl Session {
                 diff: Vec::new(),
                 appended: Vec::new(),
                 output_bytes: 0,
+                content_changed: false,
+                cursor_moved: false,
                 truncated: self.history.has_evicted(),
                 note: None,
             };
@@ -305,6 +331,13 @@ impl Session {
             appended
         };
 
+        // Content change is judged from the rendered screen, never from raw
+        // traffic volume. Cursor repositioning and mode changes cross the PTY
+        // without altering a single visible cell, so an application that parks
+        // its cursor on a timer would otherwise look permanently busy.
+        let content_changed = !changed_rows.is_empty() || !diff.is_empty() || !appended.is_empty();
+        let cursor_moved = self.history.cursor_moved_since(cutoff);
+
         DeltaReport {
             window_ms: window.as_millis() as u64,
             mode,
@@ -316,6 +349,8 @@ impl Session {
             diff,
             appended,
             output_bytes: output.len(),
+            content_changed,
+            cursor_moved,
             truncated: self.history.has_evicted(),
             note,
         }

@@ -11,9 +11,16 @@ use crate::delta::DeltaReport;
 use crate::screen::ScreenSnapshot;
 
 /// Protocol version, bumped on any incompatible change to these types.
+///
+/// Reported by `Request::Info` so a client can detect a mismatch against a
+/// session started from a different build.
 pub const PROTOCOL_VERSION: u32 = 1;
 
 /// A request from the agent.
+///
+/// Serialised as `{"type": "<variant>", ...}` with camelCase fields. Note that
+/// `rename_all` on an enum renames the *variants*; `rename_all_fields` is what
+/// renames the fields inside them, and omitting it silently emits snake_case.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(
     tag = "type",
@@ -56,6 +63,9 @@ pub struct SessionInfo {
 }
 
 /// Result of an input or resize request.
+///
+/// `cols`/`rows` report the size actually in effect, which for a resize is not
+/// necessarily what was asked for: the attached terminal wins.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Applied {
@@ -100,6 +110,10 @@ impl Response {
 }
 
 /// Encode a value as one protocol line, newline included.
+///
+/// The framing is newline-delimited JSON, so the payload must never contain a
+/// raw newline. `serde_json::to_string` escapes them, which is why the compact
+/// form is used here rather than the pretty one.
 pub fn encode_line<T: Serialize>(value: &T) -> Result<String, serde_json::Error> {
     let mut line = serde_json::to_string(value)?;
     line.push('\n');

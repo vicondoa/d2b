@@ -19,6 +19,8 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
+use crate::screen::CursorPos;
+
 /// Default interval between view checkpoints.
 pub const DEFAULT_CHECKPOINT_INTERVAL: Duration = Duration::from_millis(500);
 /// Default number of view checkpoints retained.
@@ -61,6 +63,19 @@ pub struct ScrollbackRecord {
     pub text: String,
 }
 
+/// Where the cursor was after a feed.
+///
+/// Tracked separately from dirty rows because `avt` deliberately does not mark
+/// a line dirty for pure cursor movement. An application that repositions the
+/// cursor on a timer therefore produces PTY traffic and zero dirty rows, and
+/// distinguishing that from a genuinely changing screen is what makes idle
+/// detection trustworthy.
+#[derive(Debug, Clone, Copy)]
+pub struct CursorRecord {
+    pub at: Instant,
+    pub cursor: CursorPos,
+}
+
 /// Tunable ring sizes.
 #[derive(Debug, Clone, Copy)]
 pub struct HistoryLimits {
@@ -93,6 +108,7 @@ pub struct History {
     checkpoints: VecDeque<Checkpoint>,
     output: VecDeque<OutputRecord>,
     scrollback: VecDeque<ScrollbackRecord>,
+    cursor: VecDeque<CursorRecord>,
     output_bytes: usize,
     last_checkpoint: Option<Instant>,
     /// Set once any ring has evicted, so a query can say so rather than
@@ -108,6 +124,7 @@ impl History {
             checkpoints: VecDeque::new(),
             output: VecDeque::new(),
             scrollback: VecDeque::new(),
+            cursor: VecDeque::new(),
             output_bytes: 0,
             last_checkpoint: None,
             evicted: false,
@@ -123,6 +140,10 @@ impl History {
     }
 
     /// Record the rows a feed marked dirty.
+    ///
+    /// Empty sets are dropped rather than stored: a feed that changed no rows (a
+    /// pure mode change, say) would otherwise fill the ring with noise and trigger
+    /// eviction of records that matter.
     pub fn record_dirty(&mut self, at: Instant, rows: Vec<usize>) {
         if rows.is_empty() {
             return;
@@ -135,6 +156,10 @@ impl History {
     }
 
     /// Record a chunk of decoded output.
+    ///
+    /// Bounded by record count *and* total bytes. The byte bound is the one that
+    /// matters in practice: a full-screen TUI redrawing at 60 Hz produces few
+    /// records but a great many bytes.
     pub fn record_output(&mut self, at: Instant, text: String) {
         if text.is_empty() {
             return;
@@ -202,6 +227,9 @@ impl History {
 
     /// The most recent checkpoint at or before `cutoff`.
     ///
+    /// Searches backwards because the newest matching checkpoint is the tightest
+    /// baseline, and recent queries are the common case.
+    ///
     /// Returns `None` when the window reaches back further than any retained
     /// checkpoint, which the caller must report rather than paper over.
     pub fn checkpoint_at_or_before(&self, cutoff: Instant) -> Option<&Checkpoint> {
@@ -216,7 +244,28 @@ impl History {
         self.checkpoints.front()
     }
 
+    /// Record where the cursor ended up after a feed.
+    pub fn record_cursor(&mut self, at: Instant, cursor: CursorPos) {
+        if self.cursor.back().is_some_and(|last| last.cursor == cursor) {
+            // Unchanged; no need to store a duplicate.
+            return;
+        }
+        self.cursor.push_back(CursorRecord { at, cursor });
+        while self.cursor.len() > self.limits.dirty_capacity {
+            self.cursor.pop_front();
+            self.evicted = true;
+        }
+    }
+
+    /// Whether the cursor moved at or after `cutoff`.
+    pub fn cursor_moved_since(&self, cutoff: Instant) -> bool {
+        self.cursor.iter().any(|record| record.at >= cutoff)
+    }
+
     /// Union of every dirty row recorded at or after `cutoff`, sorted.
+    ///
+    /// Deduplicated, because a row touched on every frame of a redraw should be
+    /// reported once, not once per frame.
     pub fn dirty_rows_since(&self, cutoff: Instant) -> Vec<usize> {
         let mut rows: Vec<usize> = self
             .dirty

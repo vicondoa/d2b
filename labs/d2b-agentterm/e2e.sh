@@ -196,7 +196,78 @@ else
   no "keys session started" "socket never appeared"
 fi
 
-printf '\n== 6. socket hygiene ==\n'
+printf '\n== 6. page up/down scrolling in a pager ==\n'
+seq 1 500 >"$WORK/numbers.txt"
+if command -v less >/dev/null && start_session 80 20 less "$WORK/numbers.txt"; then
+  # Assert relative movement rather than an absolute starting line: the pager
+  # may open partway down if earlier output already scrolled the terminal, and
+  # what is under test is that PageDown/PageUp move and are reversible.
+  start_line="$(agent screen | head -1 | tr -d ' ')"
+  if [[ "$start_line" =~ ^[0-9]+$ ]]; then
+    ok "pager rendered a numbered line (starts at $start_line)"
+  else
+    no "pager rendered a numbered line" "got '$start_line'"
+  fi
+
+  agent keys PageDown >/dev/null; sleep 0.4
+  down1="$(agent screen | head -1 | tr -d ' ')"
+  if [[ "$down1" =~ ^[0-9]+$ ]] && [[ "$down1" -gt "$start_line" ]]; then
+    ok "PageDown advanced the pager ($start_line -> $down1)"
+  else
+    no "PageDown advanced the pager" "went from $start_line to $down1"
+  fi
+
+  agent keys PageDown >/dev/null; sleep 0.4
+  down2="$(agent screen | head -1 | tr -d ' ')"
+  if [[ "$down2" =~ ^[0-9]+$ ]] && [[ "$down2" -gt "$down1" ]]; then
+    ok "a second PageDown advanced further ($down1 -> $down2)"
+  else
+    no "a second PageDown advanced further" "went from $down1 to $down2"
+  fi
+
+  agent keys PageUp >/dev/null; sleep 0.4
+  up1="$(agent screen | head -1 | tr -d ' ')"
+  if [[ "$up1" == "$down1" ]]; then
+    ok "PageUp returned to the previous page (line $up1)"
+  else
+    no "PageUp returned to the previous page" "expected $down1, got $up1"
+  fi
+
+  stop_session
+else
+  printf '  skip  less not available\n'
+fi
+
+printf '\n== 7. idle detection ignores cursor-only traffic ==\n'
+if start_session 80 24 bash --norc --noprofile; then
+  agent text 'echo settling' >/dev/null
+  agent keys Enter >/dev/null
+
+  # wait-idle must return promptly once the screen stops changing.
+  idle_start=$(date +%s)
+  idle_out="$(agent wait-idle --for 2s --timeout 30s --await-change)"
+  idle_elapsed=$(( $(date +%s) - idle_start ))
+
+  check "wait-idle reports idle" "idle after" "$idle_out"
+  if [[ "$idle_elapsed" -ge 2 && "$idle_elapsed" -le 15 ]]; then
+    ok "wait-idle returned in a sane time (${idle_elapsed}s)"
+  else
+    no "wait-idle returned in a sane time" "took ${idle_elapsed}s"
+  fi
+
+  json="$(agent wait-idle --for 1s --timeout 20s --json)"
+  check "wait-idle emits structured output" '"type":"idle"' "$json"
+
+  delta_json="$(agent delta --since 2s --json)"
+  check "delta exposes contentChanged" '"contentChanged"' "$delta_json"
+  check "delta exposes cursorMoved" '"cursorMoved"' "$delta_json"
+
+  stop_session
+else
+  no "idle session started" "socket never appeared"
+fi
+
+printf '\n== 8. socket hygiene ==\n'
 if start_session 80 24 bash --norc --noprofile; then
   mode="$(stat -c '%a' "$SOCK" 2>/dev/null)"
   check "socket is owner-only" "600" "$mode"

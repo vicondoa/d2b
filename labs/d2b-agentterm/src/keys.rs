@@ -156,12 +156,29 @@ fn base_for(name: &str) -> Option<Base> {
 }
 
 /// Encode a base sequence with a modifier set applied.
+///
+/// The four `Base` shapes differ in where the modifier parameter goes, which is
+/// why they are modelled separately rather than as flat strings:
+///
+/// ```text
+/// CursorLike('A')  unmodified  ESC [ A      (or ESC O A in application mode)
+///                  modified    ESC [ 1;<m> A
+/// Ss3('P')         unmodified  ESC O P
+///                  modified    ESC [ 1;<m> P
+/// Tilde(15)        unmodified  ESC [ 15 ~
+///                  modified    ESC [ 15;<m> ~
+/// Literal("\t")    no modifier encoding at all
+/// ```
 fn encode(base: Base, mods: Mods) -> KeySeq {
     match base {
         Base::CursorLike(final_ch) => {
             if mods.any() {
+                // Once a modifier is present the CSI form is always used, even
+                // in application cursor mode. This matches xterm and is what
+                // `ht` did.
                 KeySeq::Standard(format!("\x1b[1;{}{}", mods.xterm_param(), final_ch))
             } else {
+                // Deferred: the caller resolves this once DECCKM is known.
                 KeySeq::Cursor(format!("\x1b[{final_ch}"), format!("\x1bO{final_ch}"))
             }
         }
@@ -203,6 +220,10 @@ fn encode(base: Base, mods: Mods) -> KeySeq {
 }
 
 /// Strip modifier prefixes, returning the modifier set and the bare key name.
+///
+/// Loops rather than matching a fixed order, which is what makes `C-S-Left`,
+/// `S-C-Left` and `S-A-C-Left` all equivalent. `ht` enumerated every
+/// permutation by hand and so only supported them on arrow keys.
 fn split_mods(key: &str) -> (Mods, &str) {
     let mut mods = Mods::default();
     let mut rest = key;
