@@ -27,6 +27,24 @@ invent a wire contract, and that was the correct outcome each time.
 
 ---
 
+## 0. Wave 2 delivery claim, stated precisely
+
+Wave 2 is **17 of 19 items complete, 2 partial**. Saying "all nineteen
+implemented" overstates it, and the difference matters to a reviewer deciding
+what to hold to a completion standard.
+
+- `ADR046-routing-014` is partial. The Provider registry, admission, lifecycle
+  and forwarding are delivered; the eleven ProviderInstance trait objects and
+  the whole RPC proxy family are not.
+- `ADR046-routing-015` is partial. The conformance kit, bootstrap admission,
+  audit ring, dispatch limiter and redaction are delivered; the generated
+  service dispatch, the agent adapter, one-shot registration and the agent
+  process are not.
+
+Both are blocked on the same missing thing: a v3 Provider-method DTO catalogue
+that exists in no crate. That catalogue is this register's only entry with no
+owning wave, and it needs an integrator ruling rather than a schedule.
+
 ## 1. Blocked and unlanded dependencies
 
 These prevent a work item from being completed at all, or force it to ship a
