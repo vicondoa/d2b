@@ -66,6 +66,20 @@ jobs:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
+      - name: Nix store cache
+        # Without this every nix job rebuilds the Rust host-tool set from
+        # source, which is what makes the fixture-contract gate cost half an
+        # hour here while completing in seconds on a host with a substituter.
+        # Restore is best-effort: a cache miss is slow, never incorrect.
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          gc-max-store-size-linux: 8G
+          purge: true
+          purge-prefixes: nix-${{ runner.os }}-
+          purge-created: 0
+          purge-primary-key: never
       - name: Lint gate (preflight + parse + shellcheck)
         run: make test-lint
 
@@ -109,6 +123,20 @@ jobs:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
+      - name: Nix store cache
+        # Without this every nix job rebuilds the Rust host-tool set from
+        # source, which is what makes the fixture-contract gate cost half an
+        # hour here while completing in seconds on a host with a substituter.
+        # Restore is best-effort: a cache miss is slow, never incorrect.
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          gc-max-store-size-linux: 8G
+          purge: true
+          purge-prefixes: nix-${{ runner.os }}-
+          purge-created: 0
+          purge-primary-key: never
       - name: Free runner disk for Rust gate
         run: |
           df -h
@@ -139,9 +167,11 @@ jobs:
           workspaces: |
             packages -> target
             packages/d2b-priv-broker -> target
+            packages/d2b-guest-shell-runner -> target
           cache-directories: |
             packages/d2b-priv-broker/target-layer1
             packages/d2b-priv-broker/target-fakebackends
+            tests/tools/no-bash-ast-walker/target
           prefix-key: "v0-rust"
           shared-key: "test-rust-${{ runner.os }}"
           save-if: "true"
@@ -177,6 +207,20 @@ jobs:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
+      - name: Nix store cache
+        # Without this every nix job rebuilds the Rust host-tool set from
+        # source, which is what makes the fixture-contract gate cost half an
+        # hour here while completing in seconds on a host with a substituter.
+        # Restore is best-effort: a cache miss is slow, never incorrect.
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          gc-max-store-size-linux: 8G
+          purge: true
+          purge-prefixes: nix-${{ runner.os }}-
+          purge-created: 0
+          purge-primary-key: never
       - name: Free runner disk for Rust gate
         run: |
           df -h
@@ -207,9 +251,11 @@ jobs:
           workspaces: |
             packages -> target
             packages/d2b-priv-broker -> target
+            packages/d2b-guest-shell-runner -> target
           cache-directories: |
             packages/d2b-priv-broker/target-layer1
             packages/d2b-priv-broker/target-fakebackends
+            tests/tools/no-bash-ast-walker/target
           prefix-key: "v0-rust"
           shared-key: "test-rust-${{ runner.os }}"
           save-if: "true"
@@ -233,6 +279,20 @@ jobs:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
+      - name: Nix store cache
+        # Without this every nix job rebuilds the Rust host-tool set from
+        # source, which is what makes the fixture-contract gate cost half an
+        # hour here while completing in seconds on a host with a substituter.
+        # Restore is best-effort: a cache miss is slow, never incorrect.
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          gc-max-store-size-linux: 8G
+          purge: true
+          purge-prefixes: nix-${{ runner.os }}-
+          purge-created: 0
+          purge-primary-key: never
       - name: Proof crates gate
         run: make test-proofs
 
@@ -249,6 +309,20 @@ jobs:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
+      - name: Nix store cache
+        # Without this every nix job rebuilds the Rust host-tool set from
+        # source, which is what makes the fixture-contract gate cost half an
+        # hour here while completing in seconds on a host with a substituter.
+        # Restore is best-effort: a cache miss is slow, never incorrect.
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          gc-max-store-size-linux: 8G
+          purge: true
+          purge-prefixes: nix-${{ runner.os }}-
+          purge-created: 0
+          purge-primary-key: never
       - name: Nix unit corpus gate
         run: make test-nix-unit
 
@@ -267,6 +341,20 @@ jobs:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
+      - name: Nix store cache
+        # Without this every nix job rebuilds the Rust host-tool set from
+        # source, which is what makes the fixture-contract gate cost half an
+        # hour here while completing in seconds on a host with a substituter.
+        # Restore is best-effort: a cache miss is slow, never incorrect.
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          gc-max-store-size-linux: 8G
+          purge: true
+          purge-prefixes: nix-${{ runner.os }}-
+          purge-created: 0
+          purge-primary-key: never
       - id: list
         name: Enumerate flake checks (x86_64-linux)
         run: |
@@ -305,6 +393,20 @@ jobs:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
+      - name: Nix store cache
+        # Without this every nix job rebuilds the Rust host-tool set from
+        # source, which is what makes the fixture-contract gate cost half an
+        # hour here while completing in seconds on a host with a substituter.
+        # Restore is best-effort: a cache miss is slow, never incorrect.
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          gc-max-store-size-linux: 8G
+          purge: true
+          purge-prefixes: nix-${{ runner.os }}-
+          purge-created: 0
+          purge-primary-key: never
       - name: Install flake shard diagnostics
         run: sudo apt-get update && sudo apt-get install -y gdb
       - name: Flake check shard (x86_64-linux)
@@ -329,6 +431,20 @@ jobs:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
+      - name: Nix store cache
+        # Without this every nix job rebuilds the Rust host-tool set from
+        # source, which is what makes the fixture-contract gate cost half an
+        # hour here while completing in seconds on a host with a substituter.
+        # Restore is best-effort: a cache miss is slow, never incorrect.
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          gc-max-store-size-linux: 8G
+          purge: true
+          purge-prefixes: nix-${{ runner.os }}-
+          purge-created: 0
+          purge-primary-key: never
       - name: Flake non-checks outputs (x86_64-linux)
         env:
           D2B_FLAKE_OUTPUTS: "1"
@@ -369,6 +485,20 @@ jobs:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
+      - name: Nix store cache
+        # Without this every nix job rebuilds the Rust host-tool set from
+        # source, which is what makes the fixture-contract gate cost half an
+        # hour here while completing in seconds on a host with a substituter.
+        # Restore is best-effort: a cache miss is slow, never incorrect.
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          gc-max-store-size-linux: 8G
+          purge: true
+          purge-prefixes: nix-${{ runner.os }}-
+          purge-created: 0
+          purge-primary-key: never
       - name: aarch64 smoke eval
         run: |
           nix-instantiate --eval --strict \
@@ -388,6 +518,20 @@ jobs:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
+      - name: Nix store cache
+        # Without this every nix job rebuilds the Rust host-tool set from
+        # source, which is what makes the fixture-contract gate cost half an
+        # hour here while completing in seconds on a host with a substituter.
+        # Restore is best-effort: a cache miss is slow, never incorrect.
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          gc-max-store-size-linux: 8G
+          purge: true
+          purge-prefixes: nix-${{ runner.os }}-
+          purge-created: 0
+          purge-primary-key: never
       - name: Drift gate
         run: make test-drift
 
@@ -418,6 +562,20 @@ jobs:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
+      - name: Nix store cache
+        # Without this every nix job rebuilds the Rust host-tool set from
+        # source, which is what makes the fixture-contract gate cost half an
+        # hour here while completing in seconds on a host with a substituter.
+        # Restore is best-effort: a cache miss is slow, never incorrect.
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          gc-max-store-size-linux: 8G
+          purge: true
+          purge-prefixes: nix-${{ runner.os }}-
+          purge-created: 0
+          purge-primary-key: never
       - name: Free runner disk for Rust gate
         run: |
           df -h
@@ -448,9 +606,11 @@ jobs:
           workspaces: |
             packages -> target
             packages/d2b-priv-broker -> target
+            packages/d2b-guest-shell-runner -> target
           cache-directories: |
             packages/d2b-priv-broker/target-layer1
             packages/d2b-priv-broker/target-fakebackends
+            tests/tools/no-bash-ast-walker/target
           prefix-key: "v0-rust"
           shared-key: "test-rust-${{ runner.os }}"
           save-if: "true"
@@ -486,6 +646,20 @@ jobs:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
+      - name: Nix store cache
+        # Without this every nix job rebuilds the Rust host-tool set from
+        # source, which is what makes the fixture-contract gate cost half an
+        # hour here while completing in seconds on a host with a substituter.
+        # Restore is best-effort: a cache miss is slow, never incorrect.
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          gc-max-store-size-linux: 8G
+          purge: true
+          purge-prefixes: nix-${{ runner.os }}-
+          purge-created: 0
+          purge-primary-key: never
       - name: Free runner disk for Rust gate
         run: |
           df -h
@@ -516,9 +690,11 @@ jobs:
           workspaces: |
             packages -> target
             packages/d2b-priv-broker -> target
+            packages/d2b-guest-shell-runner -> target
           cache-directories: |
             packages/d2b-priv-broker/target-layer1
             packages/d2b-priv-broker/target-fakebackends
+            tests/tools/no-bash-ast-walker/target
           prefix-key: "v0-rust"
           shared-key: "test-rust-${{ runner.os }}"
           save-if: "true"

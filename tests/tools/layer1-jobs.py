@@ -24,6 +24,11 @@ SELF_TEST = ROOT / "tests" / "unit" / "meta" / "ci-runner-regression.py"
 CHECKOUT = "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5"
 INSTALL_NIX = "cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077"
 RUST_CACHE = "Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32"
+# Caches /nix through the GitHub Actions cache. The developer host has a local
+# attic substituter, which is why a fixture build that costs half an hour in CI
+# completes in seconds there; runners cannot reach that endpoint, so without
+# this they rebuild the entire Rust host-tool set from source on every run.
+NIX_CACHE = "nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569"
 # The shell program must be resolvable by the Actions runner itself, which
 # looks the first token up on PATH rather than against the workspace, and whose
 # argument splitter does not preserve nested quoting. The runner resolves `sh`
@@ -102,7 +107,21 @@ def nix_setup_step() -> str:
         with:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
-            experimental-features = nix-command flakes"""
+            experimental-features = nix-command flakes
+      - name: Nix store cache
+        # Without this every nix job rebuilds the Rust host-tool set from
+        # source, which is what makes the fixture-contract gate cost half an
+        # hour here while completing in seconds on a host with a substituter.
+        # Restore is best-effort: a cache miss is slow, never incorrect.
+        uses: {NIX_CACHE}
+        with:
+          primary-key: nix-${{{{ runner.os }}}}-${{{{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}}}
+          restore-prefixes-first-match: nix-${{{{ runner.os }}}}-
+          gc-max-store-size-linux: 8G
+          purge: true
+          purge-prefixes: nix-${{{{ runner.os }}}}-
+          purge-created: 0
+          purge-primary-key: never"""
 
 
 def simple_nix_job(job: dict[str, Any]) -> str:
@@ -244,9 +263,11 @@ def rust_job(job: dict[str, Any]) -> str:
           workspaces: |
             packages -> target
             packages/d2b-priv-broker -> target
+            packages/d2b-guest-shell-runner -> target
           cache-directories: |
             packages/d2b-priv-broker/target-layer1
             packages/d2b-priv-broker/target-fakebackends
+            tests/tools/no-bash-ast-walker/target
           prefix-key: "v0-rust"
           shared-key: "test-rust-${{{{ runner.os }}}}"
           save-if: "true"
