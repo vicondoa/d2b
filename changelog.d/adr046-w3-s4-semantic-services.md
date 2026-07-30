@@ -23,7 +23,7 @@
   identity as an input, so selecting a different conformant implementation on
   either side of a cross-Zone export leaves it unchanged.
 
-### Known limitations
+### Changed
 
 - The security-key family publishes no closed set of allowed same-Zone
   backing reference types, because its base names no backing resource.
