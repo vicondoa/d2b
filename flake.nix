@@ -458,47 +458,24 @@
             d2b.site.usePrebuiltHostTools = lib.mkForce false;
           })
         ];
-        # Materialise a bundle artifact's JSON without taking a dependency on
-        # the derivations its own contents name.
-        #
-        # A rendered artifact embeds store paths as strings. Copying the built
-        # file makes Nix scan those strings, register them as references, and
-        # realise them before the fixture is valid.
-        #
-        # Writing from `jsonText` with the string context discarded produces a
-        # byte-identical file - the paths are computed at eval time either way -
-        # without that edge. `usePrebuiltHostTools` stays false, so the fixture
-        # still renders the just-built workspace's argv and helper paths.
-        #
-        # This does NOT mean the fixture realises nothing, and the tests are not
-        # uniformly path-agnostic. Most contract tests only read the JSON and
-        # assert on its shape, but video_binary_contract.rs stats and executes
-        # the `video` and `cloud-hypervisor` binaryPaths from the FULL fixture's
-        # processes.json. Those binaries stay realised through bundle.json,
-        # which is still copied from its built path (see below) and whose
-        # artifact-hash inputs carry context on the other artifacts. Removing
-        # that edge would break those tests, so the saving here is partial by
-        # design rather than total.
-        fixtureJson = name: text:
-          pkgs.writeText name (builtins.unsafeDiscardStringContext text);
         smokeFixture = let
           bundle = smokeEval.config.d2b._bundle;
-          manifestText = smokeEval.config.d2b._manifestJsonText;
+          manifestPkg = smokeEval.config.d2b._manifestPkg;
         in pkgs.runCommand "d2b-fixture-smoke" { } ''
           mkdir -p $out $out/closures
-          cp ${fixtureJson "privileges.json" bundle.privilegesJson.jsonText} $out/privileges.json
-          cp ${fixtureJson "host.json" bundle.hostJson.jsonText} $out/host.json
-          cp ${fixtureJson "processes.json" bundle.processesJson.jsonText} $out/processes.json
-          cp ${fixtureJson "storage.json" bundle.storageJson.jsonText} $out/storage.json
-          cp ${fixtureJson "sync.json" bundle.syncJson.jsonText} $out/sync.json
-          cp ${fixtureJson "allocator.json" bundle.allocatorJson.jsonText} $out/allocator.json
-          cp ${fixtureJson "realm-controllers.json" bundle.realmControllersJson.jsonText} $out/realm-controllers.json
-          cp ${fixtureJson "realm-identity.json" bundle.realmIdentityJson.jsonText} $out/realm-identity.json
-          cp ${fixtureJson "realm-workloads-launcher.json" bundle.realmWorkloadsLauncherJson.jsonText} $out/realm-workloads-launcher.json
-          cp ${fixtureJson "realm-workloads-launcher-v2.json" bundle.realmWorkloadsLauncherV2Json.jsonText} $out/realm-workloads-launcher-v2.json
-          cp ${fixtureJson "unsafe-local-workloads.json" bundle.unsafeLocalWorkloadsJson.jsonText} $out/unsafe-local-workloads.json
+          cp ${bundle.privilegesJson.path} $out/privileges.json
+          cp ${bundle.hostJson.path} $out/host.json
+          cp ${bundle.processesJson.path} $out/processes.json
+          cp ${bundle.storageJson.path} $out/storage.json
+          cp ${bundle.syncJson.path} $out/sync.json
+          cp ${bundle.allocatorJson.path} $out/allocator.json
+          cp ${bundle.realmControllersJson.path} $out/realm-controllers.json
+          cp ${bundle.realmIdentityJson.path} $out/realm-identity.json
+          cp ${bundle.realmWorkloadsLauncherJson.path} $out/realm-workloads-launcher.json
+          cp ${bundle.realmWorkloadsLauncherV2Json.path} $out/realm-workloads-launcher-v2.json
+          cp ${bundle.unsafeLocalWorkloadsJson.path} $out/unsafe-local-workloads.json
           cp ${bundle.bundle.path} $out/bundle.json
-          cp ${fixtureJson "manifest.json" manifestText} $out/manifest.json
+          cp ${manifestPkg}/share/d2b/vms.json $out/manifest.json
           ${nixpkgs.lib.concatStringsSep "\n" (nixpkgs.lib.mapAttrsToList
             (vm: c: "cp ${c.path} $out/closures/${vm}.json")
             bundle.closures)}
@@ -573,19 +550,19 @@
         ];
         fullFixture = let
           bundle = fullEval.config.d2b._bundle;
-          manifestText = fullEval.config.d2b._manifestJsonText;
+          manifestPkg = fullEval.config.d2b._manifestPkg;
         in pkgs.runCommand "d2b-fixture-smoke-full" { } ''
           mkdir -p $out $out/closures
-          cp ${fixtureJson "privileges.json" bundle.privilegesJson.jsonText} $out/privileges.json
-          cp ${fixtureJson "host.json" bundle.hostJson.jsonText} $out/host.json
-          cp ${fixtureJson "processes.json" bundle.processesJson.jsonText} $out/processes.json
-          cp ${fixtureJson "storage.json" bundle.storageJson.jsonText} $out/storage.json
-          cp ${fixtureJson "sync.json" bundle.syncJson.jsonText} $out/sync.json
-          cp ${fixtureJson "allocator.json" bundle.allocatorJson.jsonText} $out/allocator.json
-          cp ${fixtureJson "realm-controllers.json" bundle.realmControllersJson.jsonText} $out/realm-controllers.json
-          cp ${fixtureJson "realm-identity.json" bundle.realmIdentityJson.jsonText} $out/realm-identity.json
+          cp ${bundle.privilegesJson.path} $out/privileges.json
+          cp ${bundle.hostJson.path} $out/host.json
+          cp ${bundle.processesJson.path} $out/processes.json
+          cp ${bundle.storageJson.path} $out/storage.json
+          cp ${bundle.syncJson.path} $out/sync.json
+          cp ${bundle.allocatorJson.path} $out/allocator.json
+          cp ${bundle.realmControllersJson.path} $out/realm-controllers.json
+          cp ${bundle.realmIdentityJson.path} $out/realm-identity.json
           cp ${bundle.bundle.path} $out/bundle.json
-          cp ${fixtureJson "manifest.json" manifestText} $out/manifest.json
+          cp ${manifestPkg}/share/d2b/vms.json $out/manifest.json
           ${nixpkgs.lib.concatStringsSep "\n" (nixpkgs.lib.mapAttrsToList
             (vm: c: "cp ${c.path} $out/closures/${vm}.json")
             fullEval.config.d2b._bundle.closures)}

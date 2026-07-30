@@ -832,21 +832,6 @@ in
     '';
   };
 
-  options.d2b._manifestJsonText = lib.mkOption {
-    type = lib.types.str;
-    default = "";
-    internal = true;
-    description = ''
-      Internal: the rendered `vms.json` content as a string, before it is
-      written to the store.
-
-      Contract fixtures consume this rather than reading the built package so
-      they can materialise identical JSON without realising the host-tool
-      derivations the manifest's own store paths refer to. Reading the built
-      file would force those builds; the text is the same either way.
-    '';
-  };
-
   options.d2b._manifestPkg = lib.mkOption {
     type = lib.types.package;
     internal = true;
@@ -863,7 +848,6 @@ in
   config = {
     d2b.manifest = computedManifest;
     d2b._manifestJsonPath = "${manifestPkg}/share/d2b/vms.json";
-    d2b._manifestJsonText = builtins.toJSON manifestJson;
     d2b._manifestPkg = manifestPkg;
     environment.systemPackages = [ manifestPkg ];
   };
