@@ -1335,6 +1335,9 @@ dependencies = [
 [[package]]
 name = "d2b-resource-client"
 version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+]
 
 [[package]]
 name = "d2b-resource-store"
