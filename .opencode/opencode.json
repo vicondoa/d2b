@@ -7,23 +7,15 @@
   "plugin": [
     "@bybrawe/opencode-loop"
   ],
-  "permission": {
-    "edit": "allow",
-    "webfetch": "allow",
-    "bash": {
-      "*": "allow",
-      "sudo *": "ask",
-      "rm -rf *": "ask"
+  "agent": {
+    "general": {
+      "model": "github-copilot/gpt-5.6-sol",
+      "reasoningEffort": "xhigh"
     },
-    "external_directory": {
-      "*": "allow",
-      "/nix/store/**": "allow",
-      "/tmp/**": "allow",
-      "/run/d2b-heavy-gates/**": "allow",
-      "~/.cache/d2b-sccache/**": "allow",
-      "~/projects/d2b*/**": "allow",
-      "~/.ssh/**": "deny",
-      "~/.gnupg/**": "deny"
+    "explore": {
+      "model": "github-copilot/gpt-5.6-sol",
+      "reasoningEffort": "xhigh"
     }
-  }
+  },
+  "permission": "allow"
 }
