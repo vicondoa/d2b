@@ -62,6 +62,49 @@
       #   overlays.default     - adds vhostDeviceSound, crosvmPatched, …
       nixosModules.default = import ./nixos-modules { inherit inputs; };
 
+      # Developer shell: everything the Layer-1 gates need, in one place.
+      #
+      # Without this each gate script provisions its own toolchain, which is
+      # why tests/test-rust.sh, tests/test-policy.sh and
+      # tests/tools/assert-pinned-tests.sh each carry their own nix-shell
+      # re-entry and rustup bootstrap. Enter this shell and those paths are
+      # skipped entirely, because the tools they look for are already present.
+      #
+      # rustup rather than pkgs.rustc: packages/rust-toolchain.toml pins a
+      # version nixpkgs does not carry (the pin is 1.97.0; this nixpkgs has
+      # 1.95.0), and rustup reads that file itself. Once the nixpkgs input
+      # advances far enough to supply the pinned release, rustup can be dropped
+      # for pkgs.rustc/pkgs.cargo and the pin will be served natively.
+      devShells = forAllSystems (system: let
+        pkgs = nixpkgsFor.${system};
+      in {
+        default = pkgs.mkShell {
+          name = "d2b-dev";
+          packages = with pkgs; [
+            # Toolchain. rustup resolves packages/rust-toolchain.toml.
+            rustup
+            stdenv.cc
+            # Compiler cache. The cargo configs route rustc through
+            # .cargo/rustc-wrapper.sh, which uses this when present and plain
+            # rustc when absent, so the shell never has to clear RUSTC_WRAPPER.
+            sccache
+            # Test and audit tooling the gates otherwise fetch per invocation.
+            cargo-nextest
+            cargo-deny
+            cargo-audit
+            # Shell and data tooling used by the gate scripts themselves.
+            shellcheck
+            jq
+            ripgrep
+            acl
+          ];
+          shellHook = ''
+            export SCCACHE_DIR="''${SCCACHE_DIR:-$HOME/.cache/d2b-sccache}"
+            echo "d2b dev shell: rust $(sed -n 's/.*channel = "\(.*\)".*/\1/p' packages/rust-toolchain.toml) via rustup, sccache at $SCCACHE_DIR"
+          '';
+        };
+      });
+
       packages = forAllSystems (system: let
         pkgs = nixpkgsFor.${system};
         rustPackagesSrc = pkgs.runCommand "d2b-rust-src" { } ''
