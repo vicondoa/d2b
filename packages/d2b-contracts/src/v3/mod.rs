@@ -11,10 +11,12 @@ pub mod identity;
 pub mod limits;
 pub mod network;
 pub mod process;
+pub mod provider;
 pub mod resource;
 pub mod resource_ref;
 pub mod resource_schema;
 pub mod resource_status;
+pub mod semantic_services;
 pub mod user;
 pub mod volume;
 pub mod zone_routing;
@@ -52,3 +54,12 @@ pub use resource_status::{
     ResourceOutcome, ResourcePhase, ResourceStatus, ResourceStatusError, ResourceUpdateStatus,
     StatusCode, StatusMessage, UpdateDisruption, UpdateReason, UpdateState,
 };
+
+// The `provider` module's re-exports. Keep every `pub use provider::...` line
+// inside this region so it stays one contiguous block.
+// (empty until `ADR046-provider-001` lands)
+
+// The `semantic_services` module's re-exports. Keep every
+// `pub use semantic_services::...` line inside this region so it stays one
+// contiguous block.
+// (empty until `ADR046-provider-004` lands)

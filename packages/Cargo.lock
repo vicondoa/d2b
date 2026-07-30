@@ -1215,6 +1215,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-provider-system-core"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "d2b-process-conformance",
+]
+
+[[package]]
 name = "d2b-provider-system-minijail"
 version = "0.0.0-bootstrap"
 dependencies = [
