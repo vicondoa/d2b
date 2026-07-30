@@ -3,4 +3,4 @@
 # target/, shared compiled-output dedup via sccache.
 
 [build]
-rustc-wrapper = "sccache"
+rustc-wrapper = ".cargo/rustc-wrapper.sh"

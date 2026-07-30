@@ -81,6 +81,30 @@ Use the top-level `Makefile` targets. The shell scripts under `tests/`
 are implementation details unless a target or `tests/AGENTS.md` tells
 you to run one directly.
 
+`nix develop` gives you the toolchain every gate expects - the pinned Rust
+release, plus sccache, cargo-nextest, cargo-deny, cargo-audit, shellcheck
+and jq. The gate scripts each re-enter a nix shell and bootstrap a private
+toolchain when those are missing, so working inside the dev shell skips
+that setup.
+
+Rust tests run under `cargo-nextest`. Two surfaces are not nextest surfaces
+and get explicit companion runs, so do not "simplify" them away: **doctests**
+(several `compile_fail` ones are capability seals) and **`harness = false`
+binaries** (`d2b-core-smoke` carries real fail-closed minijail assertions).
+The harness-free set is derived from `nextest list` rather than pinned. The
+privileged broker workspace deliberately stays on `cargo test`: its tests
+are not process-per-test safe, and it runs 528 tests in about 1.4 s.
+
+`make test-runtime-ledger` also stays on `cargo test`, and that is load
+bearing. It enforces an aggregate process-CPU budget, and nextest's
+one-process-per-test model costs about 1.9x the CPU for the same census
+(measured: 1.2 s against 2.3 s). Porting it would mean roughly doubling the
+budget and losing that much sensitivity, for no speedup.
+
+When a failure only reproduces inside the gate's own toolchain environment,
+use `tests/tools/repro-rust-gate-env.sh <command>` rather than re-running
+`make test-rust`.
+
 ```bash
 # Focused Layer-1 jobs, in tests/layer1-jobs.json local phase order.
 # Read each job's current enforcement classification from that manifest.
@@ -1404,6 +1428,25 @@ fields that request panel, agent, or model metadata.
   and stomp each other's incremental caches. To bypass sccache locally
   (e.g. when bisecting a compiler issue), set `RUSTC_WRAPPER=` or
   `CARGO_BUILD_RUSTC_WRAPPER=` explicitly.
+- **Never clear `RUSTC_WRAPPER` to make a command work.** Every
+  `rustc-wrapper` line points at a repo-local `.cargo/rustc-wrapper.sh`
+  that uses sccache when it is on PATH and plain rustc when it is not, so
+  no environment needs the variable cleared in order to build. Naming
+  `sccache` directly used to make it a hard requirement, and the resulting
+  `RUSTC_WRAPPER=""` workaround spread into environments that *did* have
+  sccache and silently disabled the compiler cache. Clearing it is reserved
+  for a deliberate choice: running uncached (`D2B_NO_SCCACHE=1`, or CI
+  without `D2B_CI_SCCACHE=1`), or the compile-fail seal fixtures, which
+  clear every wrapper spelling because a caching wrapper that exits nonzero
+  under concurrent cargo invocations is indistinguishable from the fixture
+  failing for the wrong reason.
+- Tests that shell out to `cargo` (the capability-seal guards in
+  `packages/d2b-bus/` and `packages/d2b-controller-toolkit/`) cache their
+  scratch trees between runs, keyed on a hash of `rustc -vV`. Compiled
+  artifacts are not portable across compiler versions, and the gate's
+  pinned toolchain routinely differs from a dev shell's, so an unkeyed
+  cache lets one poison the other. Those caches live under `.scratch/` and
+  are several GB per worktree; delete that directory to reclaim the space.
 - The persistent-shell helper is intentionally excluded from the main
   Rust workspace at `packages/d2b-guest-shell-runner/`. Run it by
   manifest path (and with `--features real-libshpool` when checking the

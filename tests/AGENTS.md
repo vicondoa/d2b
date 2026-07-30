@@ -156,6 +156,34 @@ branch protection. Keep intermediate job/matrix names as generated
 implementation details unless a required-context migration explicitly needs
 them preserved.
 
+### Running the Rust suites
+
+Rust tests execute under `cargo-nextest`. Two surfaces are not nextest
+surfaces, so each workspace runs them explicitly and you must not fold them
+back into a single invocation:
+
+- **Doctests.** nextest does not run them. Several here are `compile_fail`
+  capability seals (`AdmittedMutation`, `OwnerIndexMutation`), so dropping
+  them removes a trust boundary without failing anything.
+- **`harness = false` binaries.** They expose no libtest interface, so nextest
+  builds them and reports zero test cases. `d2b-core-smoke` is one and carries
+  real fail-closed minijail assertions. The set is derived from `nextest list`
+  (kind `test` with zero cases) rather than pinned, so a new one cannot
+  silently drop out of the gate.
+
+The privileged broker workspace stays on `cargo test`. Its tests are not
+process-per-test safe, and it runs 528 tests in about 1.4 s, so nextest has
+nothing to win there.
+
+Tests that shell out to `cargo` cache their scratch trees between runs, keyed
+on `rustc --version`, because compiled artifacts are not portable across
+compiler versions. When adding such a test, key its cache the same way and
+reuse the compilation but not any output whose freshness the test asserts on.
+
+When a failure reproduces only inside the gate's toolchain environment, use
+`tests/tools/repro-rust-gate-env.sh <command>` instead of re-running the whole
+gate.
+
 ### Standalone Rust workspaces
 
 Most Rust crates are members of `packages/Cargo.toml`, but some crates are
