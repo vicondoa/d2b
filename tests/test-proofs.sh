@@ -45,7 +45,9 @@ if [ -z "${D2B_PROOFS_IN_NIX_SHELL:-}" ] && ! command -v cargo >/dev/null 2>&1; 
 fi
 
 export RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-$pinned_channel}"
-export CARGO_BUILD_RUSTC_WRAPPER="" RUSTC_WRAPPER=""
+# No RUSTC_WRAPPER override: the cargo configs route through
+# .cargo/rustc-wrapper.sh, which degrades to plain rustc when sccache is
+# absent, so clearing it here would only disable the compiler cache.
 
 # Ensure the clippy component exists for the pinned toolchain. On CI runners
 # that ship rustup pre-installed, cargo is already on PATH so the nix-shell
