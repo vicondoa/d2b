@@ -461,20 +461,24 @@
         # Materialise a bundle artifact's JSON without taking a dependency on
         # the derivations its own contents name.
         #
-        # A rendered artifact embeds host-tool store paths as strings. Copying
-        # the built file makes Nix scan those strings, register them as
-        # references, and therefore BUILD every one of them - the whole Rust
-        # host-tool set - before the fixture is valid. The contract tests never
-        # open those paths: they read the JSON and assert on its shape and on
-        # the path strings themselves (see d2b-contract-tests/src/lib.rs, which
-        # only ever read_to_string's $D2B_FIXTURES/<name>.json).
+        # A rendered artifact embeds store paths as strings. Copying the built
+        # file makes Nix scan those strings, register them as references, and
+        # realise them before the fixture is valid.
         #
         # Writing from `jsonText` with the string context discarded produces a
         # byte-identical file - the paths are computed at eval time either way -
-        # while realising nothing. This keeps `usePrebuiltHostTools = false`, so
-        # the fixture still renders the just-built workspace's argv and helper
-        # paths exactly as before; it only stops compiling binaries no assertion
-        # inspects.
+        # without that edge. `usePrebuiltHostTools` stays false, so the fixture
+        # still renders the just-built workspace's argv and helper paths.
+        #
+        # This does NOT mean the fixture realises nothing, and the tests are not
+        # uniformly path-agnostic. Most contract tests only read the JSON and
+        # assert on its shape, but video_binary_contract.rs stats and executes
+        # the `video` and `cloud-hypervisor` binaryPaths from the FULL fixture's
+        # processes.json. Those binaries stay realised through bundle.json,
+        # which is still copied from its built path (see below) and whose
+        # artifact-hash inputs carry context on the other artifacts. Removing
+        # that edge would break those tests, so the saving here is partial by
+        # design rather than total.
         fixtureJson = name: text:
           pkgs.writeText name (builtins.unsafeDiscardStringContext text);
         smokeFixture = let
