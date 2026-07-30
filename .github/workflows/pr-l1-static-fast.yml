@@ -88,18 +88,25 @@ jobs:
     # Warm (rust-cache hit): ~8-12 min. Cold (no cache): ~43 min.
     timeout-minutes: 60
     env:
-      # Disable sccache in CI - we use Swatinem/rust-cache (target-dir
-      # caching) instead, which caches ALL compiled artifacts including
-      # proc-macros and bin/lib crates that sccache cannot cache (~60% of
-      # compilations are "non-cacheable" by sccache due to crate-type).
-      # CARGO_INCREMENTAL=0 is still set: incremental compilation artifacts
-      # are non-deterministic and bloat the cache without benefit for CI
-      # (each PR run starts from a different commit).
+      # CI uses Swatinem/rust-cache (target-dir caching) and NOT sccache. That
+      # is not a preference - sccache is incompatible with this workspace's
+      # integration tests. Its server forwards only a whitelist of environment
+      # variables to rustc, and CARGO_BIN_EXE_<name>, which Cargo injects so an
+      # integration test can locate the binary it exercises, is not on it. Any
+      # test using env!("CARGO_BIN_EXE_...") then fails to compile with
+      # "environment variable ... not defined at compile time"; measured on this
+      # gate, d2b-exec-runner/tests/tty_pty_integration.rs fails exactly that
+      # way. It does not reproduce locally because CARGO_INCREMENTAL is on
+      # there, which makes sccache treat those compilations as non-cacheable and
+      # pass them through untouched.
+      #
+      # sccache remains enabled for local development, where the same shim is
+      # reached through packages/.cargo/config.toml. Only CI opts out.
+      #
+      # CARGO_INCREMENTAL=0 is still set: incremental compilation artifacts are
+      # non-deterministic and bloat the cache without benefit for CI (each PR
+      # run starts from a different commit).
       CARGO_INCREMENTAL: "0"
-      # Override the repo .cargo/config.toml rustc-wrapper (sccache) so
-      # rust-cache's post-step `cargo metadata` doesn't fail looking for
-      # an sccache binary that isn't installed.
-      CARGO_BUILD_RUSTC_WRAPPER: ""
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -140,11 +147,20 @@ jobs:
           workspaces: |
             packages -> target
             packages/d2b-priv-broker -> target
+            packages/d2b-guest-shell-runner -> target
           cache-directories: |
             packages/d2b-priv-broker/target-layer1
             packages/d2b-priv-broker/target-fakebackends
+            tests/tools/no-bash-ast-walker/target
           prefix-key: "v0-rust"
           shared-key: "test-rust-${{ runner.os }}"
+          # A single writer keeps concurrent saves from racing one shared key.
+          # test-rust is that writer; the rest restore whatever the previous
+          # run left. Note test-fixture-contracts now starts alongside
+          # test-rust rather than after it, so on a cold key both compile the
+          # workspace and only one entry is kept - the wall-clock win from
+          # running them in parallel is worth more than the duplicated cold
+          # build.
           save-if: "true"
       - name: Rust workspace gate
         env:
@@ -152,23 +168,30 @@ jobs:
         run: make test-rust
 
   test-fixture-contracts:
-    needs: [test-rust]
+    needs: [tier0]
     runs-on: ubuntu-latest
     # Warm (rust-cache hit): ~8-12 min. Cold (no cache): ~43 min.
     timeout-minutes: 60
     env:
-      # Disable sccache in CI - we use Swatinem/rust-cache (target-dir
-      # caching) instead, which caches ALL compiled artifacts including
-      # proc-macros and bin/lib crates that sccache cannot cache (~60% of
-      # compilations are "non-cacheable" by sccache due to crate-type).
-      # CARGO_INCREMENTAL=0 is still set: incremental compilation artifacts
-      # are non-deterministic and bloat the cache without benefit for CI
-      # (each PR run starts from a different commit).
+      # CI uses Swatinem/rust-cache (target-dir caching) and NOT sccache. That
+      # is not a preference - sccache is incompatible with this workspace's
+      # integration tests. Its server forwards only a whitelist of environment
+      # variables to rustc, and CARGO_BIN_EXE_<name>, which Cargo injects so an
+      # integration test can locate the binary it exercises, is not on it. Any
+      # test using env!("CARGO_BIN_EXE_...") then fails to compile with
+      # "environment variable ... not defined at compile time"; measured on this
+      # gate, d2b-exec-runner/tests/tty_pty_integration.rs fails exactly that
+      # way. It does not reproduce locally because CARGO_INCREMENTAL is on
+      # there, which makes sccache treat those compilations as non-cacheable and
+      # pass them through untouched.
+      #
+      # sccache remains enabled for local development, where the same shim is
+      # reached through packages/.cargo/config.toml. Only CI opts out.
+      #
+      # CARGO_INCREMENTAL=0 is still set: incremental compilation artifacts are
+      # non-deterministic and bloat the cache without benefit for CI (each PR
+      # run starts from a different commit).
       CARGO_INCREMENTAL: "0"
-      # Override the repo .cargo/config.toml rustc-wrapper (sccache) so
-      # rust-cache's post-step `cargo metadata` doesn't fail looking for
-      # an sccache binary that isn't installed.
-      CARGO_BUILD_RUSTC_WRAPPER: ""
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -179,6 +202,21 @@ jobs:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
+      - name: Nix store cache
+        # Without this the job rebuilds the Rust host-tool set from source,
+        # which is what makes the fixture-contract gate cost half an hour here
+        # while completing in seconds on a host with a substituter. Restore is
+        # best-effort: a cache miss is slow, never incorrect. See
+        # NIX_CACHED_JOBS for why only some jobs carry an entry.
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569
+        with:
+          primary-key: nix-${{ runner.os }}-test-fixture-contracts-${{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-test-fixture-contracts-
+          gc-max-store-size-linux: 4G
+          purge: true
+          purge-prefixes: nix-${{ runner.os }}-test-fixture-contracts-
+          purge-created: 0
+          purge-primary-key: never
       - name: Free runner disk for Rust gate
         run: |
           df -h
@@ -209,12 +247,21 @@ jobs:
           workspaces: |
             packages -> target
             packages/d2b-priv-broker -> target
+            packages/d2b-guest-shell-runner -> target
           cache-directories: |
             packages/d2b-priv-broker/target-layer1
             packages/d2b-priv-broker/target-fakebackends
+            tests/tools/no-bash-ast-walker/target
           prefix-key: "v0-rust"
           shared-key: "test-rust-${{ runner.os }}"
-          save-if: "true"
+          # A single writer keeps concurrent saves from racing one shared key.
+          # test-rust is that writer; the rest restore whatever the previous
+          # run left. Note test-fixture-contracts now starts alongside
+          # test-rust rather than after it, so on a cold key both compile the
+          # workspace and only one entry is kept - the wall-clock win from
+          # running them in parallel is worth more than the duplicated cold
+          # build.
+          save-if: "false"
       - name: Provision the heavy-gate runtime root
         run: make heavy-gate-provision
       - name: Fixture-dependent Rust contract tests
@@ -251,6 +298,21 @@ jobs:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
+      - name: Nix store cache
+        # Without this the job rebuilds the Rust host-tool set from source,
+        # which is what makes the fixture-contract gate cost half an hour here
+        # while completing in seconds on a host with a substituter. Restore is
+        # best-effort: a cache miss is slow, never incorrect. See
+        # NIX_CACHED_JOBS for why only some jobs carry an entry.
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569
+        with:
+          primary-key: nix-${{ runner.os }}-test-nix-unit-${{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-test-nix-unit-
+          gc-max-store-size-linux: 4G
+          purge: true
+          purge-prefixes: nix-${{ runner.os }}-test-nix-unit-
+          purge-created: 0
+          purge-primary-key: never
       - name: Nix unit corpus gate
         run: make test-nix-unit
 
@@ -399,18 +461,25 @@ jobs:
     # Warm (rust-cache hit): ~8-12 min. Cold (no cache): ~43 min.
     timeout-minutes: 60
     env:
-      # Disable sccache in CI - we use Swatinem/rust-cache (target-dir
-      # caching) instead, which caches ALL compiled artifacts including
-      # proc-macros and bin/lib crates that sccache cannot cache (~60% of
-      # compilations are "non-cacheable" by sccache due to crate-type).
-      # CARGO_INCREMENTAL=0 is still set: incremental compilation artifacts
-      # are non-deterministic and bloat the cache without benefit for CI
-      # (each PR run starts from a different commit).
+      # CI uses Swatinem/rust-cache (target-dir caching) and NOT sccache. That
+      # is not a preference - sccache is incompatible with this workspace's
+      # integration tests. Its server forwards only a whitelist of environment
+      # variables to rustc, and CARGO_BIN_EXE_<name>, which Cargo injects so an
+      # integration test can locate the binary it exercises, is not on it. Any
+      # test using env!("CARGO_BIN_EXE_...") then fails to compile with
+      # "environment variable ... not defined at compile time"; measured on this
+      # gate, d2b-exec-runner/tests/tty_pty_integration.rs fails exactly that
+      # way. It does not reproduce locally because CARGO_INCREMENTAL is on
+      # there, which makes sccache treat those compilations as non-cacheable and
+      # pass them through untouched.
+      #
+      # sccache remains enabled for local development, where the same shim is
+      # reached through packages/.cargo/config.toml. Only CI opts out.
+      #
+      # CARGO_INCREMENTAL=0 is still set: incremental compilation artifacts are
+      # non-deterministic and bloat the cache without benefit for CI (each PR
+      # run starts from a different commit).
       CARGO_INCREMENTAL: "0"
-      # Override the repo .cargo/config.toml rustc-wrapper (sccache) so
-      # rust-cache's post-step `cargo metadata` doesn't fail looking for
-      # an sccache binary that isn't installed.
-      CARGO_BUILD_RUSTC_WRAPPER: ""
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -451,12 +520,21 @@ jobs:
           workspaces: |
             packages -> target
             packages/d2b-priv-broker -> target
+            packages/d2b-guest-shell-runner -> target
           cache-directories: |
             packages/d2b-priv-broker/target-layer1
             packages/d2b-priv-broker/target-fakebackends
+            tests/tools/no-bash-ast-walker/target
           prefix-key: "v0-rust"
           shared-key: "test-rust-${{ runner.os }}"
-          save-if: "true"
+          # A single writer keeps concurrent saves from racing one shared key.
+          # test-rust is that writer; the rest restore whatever the previous
+          # run left. Note test-fixture-contracts now starts alongside
+          # test-rust rather than after it, so on a cold key both compile the
+          # workspace and only one entry is kept - the wall-clock win from
+          # running them in parallel is worth more than the duplicated cold
+          # build.
+          save-if: "false"
       - name: Policy meta-gates
         env:
           {}
@@ -468,18 +546,25 @@ jobs:
     # Warm (rust-cache hit): ~8-12 min. Cold (no cache): ~43 min.
     timeout-minutes: 30
     env:
-      # Disable sccache in CI - we use Swatinem/rust-cache (target-dir
-      # caching) instead, which caches ALL compiled artifacts including
-      # proc-macros and bin/lib crates that sccache cannot cache (~60% of
-      # compilations are "non-cacheable" by sccache due to crate-type).
-      # CARGO_INCREMENTAL=0 is still set: incremental compilation artifacts
-      # are non-deterministic and bloat the cache without benefit for CI
-      # (each PR run starts from a different commit).
+      # CI uses Swatinem/rust-cache (target-dir caching) and NOT sccache. That
+      # is not a preference - sccache is incompatible with this workspace's
+      # integration tests. Its server forwards only a whitelist of environment
+      # variables to rustc, and CARGO_BIN_EXE_<name>, which Cargo injects so an
+      # integration test can locate the binary it exercises, is not on it. Any
+      # test using env!("CARGO_BIN_EXE_...") then fails to compile with
+      # "environment variable ... not defined at compile time"; measured on this
+      # gate, d2b-exec-runner/tests/tty_pty_integration.rs fails exactly that
+      # way. It does not reproduce locally because CARGO_INCREMENTAL is on
+      # there, which makes sccache treat those compilations as non-cacheable and
+      # pass them through untouched.
+      #
+      # sccache remains enabled for local development, where the same shim is
+      # reached through packages/.cargo/config.toml. Only CI opts out.
+      #
+      # CARGO_INCREMENTAL=0 is still set: incremental compilation artifacts are
+      # non-deterministic and bloat the cache without benefit for CI (each PR
+      # run starts from a different commit).
       CARGO_INCREMENTAL: "0"
-      # Override the repo .cargo/config.toml rustc-wrapper (sccache) so
-      # rust-cache's post-step `cargo metadata` doesn't fail looking for
-      # an sccache binary that isn't installed.
-      CARGO_BUILD_RUSTC_WRAPPER: ""
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -520,12 +605,21 @@ jobs:
           workspaces: |
             packages -> target
             packages/d2b-priv-broker -> target
+            packages/d2b-guest-shell-runner -> target
           cache-directories: |
             packages/d2b-priv-broker/target-layer1
             packages/d2b-priv-broker/target-fakebackends
+            tests/tools/no-bash-ast-walker/target
           prefix-key: "v0-rust"
           shared-key: "test-rust-${{ runner.os }}"
-          save-if: "true"
+          # A single writer keeps concurrent saves from racing one shared key.
+          # test-rust is that writer; the rest restore whatever the previous
+          # run left. Note test-fixture-contracts now starts alongside
+          # test-rust rather than after it, so on a cold key both compile the
+          # workspace and only one entry is kept - the wall-clock win from
+          # running them in parallel is worth more than the duplicated cold
+          # build.
+          save-if: "false"
       - name: Runtime execution-budget ledger gate
         env:
           {}

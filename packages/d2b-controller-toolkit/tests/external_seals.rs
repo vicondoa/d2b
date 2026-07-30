@@ -1,19 +1,60 @@
 use std::{
+    collections::hash_map::DefaultHasher,
     fs,
+    hash::{Hash as _, Hasher as _},
     path::{Path, PathBuf},
     process::Command,
 };
 
-/// Owns the repository-local compiler scratch so it is removed on every exit
-/// path. Removing it only on success leaves a uniquely-named target tree behind
-/// whenever cargo fails or an assertion panics, and a repeatedly failing gate
-/// then accumulates them until it fills the disk.
+/// A directory-safe token identifying the toolchain driving the nested cargo
+/// invocations. Compiled artifacts are not portable across compiler versions,
+/// and the gate provisions its own pinned toolchain while a developer shell
+/// commonly has a different one, so each gets its own cache tree rather than
+/// corrupting a shared one.
+fn toolchain_cache_key() -> String {
+    let version = Command::new("rustc")
+        .arg("-vV")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .expect(
+            "rustc -vV must identify the compiler: a cache shared between two \
+             unidentified toolchains is the corruption this key prevents",
+        );
+    // Hash rather than embed: `rustc -vV` is multi-line and runs past 200
+    // characters, which overflows NAME_MAX once a prefix is added. A digest
+    // keeps the commit hash and host triple participating at fixed width.
+    let mut hasher = DefaultHasher::new();
+    version.trim().hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+/// A reusable repository-local compiler scratch tree.
+///
+/// This test drives several `cargo check` invocations against the compile-fail
+/// fixture crate. The tree used to be per-process and deleted on drop, so every
+/// run recompiled the fixture's whole dependency graph from cold.
+///
+/// The stable path also subsumes the reason the drop guard existed. A
+/// uniquely-named tree removed only on success accumulates one leftover per
+/// failed run until it fills the disk; a single stable tree is instead adopted
+/// and reused by the next run, so a repeatedly failing gate costs one directory
+/// rather than one per attempt.
+///
+/// Reuse is sound: Cargo owns staleness through its own fingerprints, and the
+/// assertions are about compiler diagnostics Cargo re-produces whenever an
+/// input changes. Cargo does not cache failed builds, so each compile-fail case
+/// still genuinely recompiles the fixture; what survives is the dependency
+/// graph beneath it.
+///
+/// Set `D2B_EXTERNAL_SEALS_FRESH=1` to discard the cache and compile cold.
 struct Scratch(PathBuf);
 
 impl Scratch {
     fn new(path: PathBuf) -> Self {
-        if path.exists() {
-            fs::remove_dir_all(&path).expect("remove stale repository-local scratch");
+        if std::env::var_os("D2B_EXTERNAL_SEALS_FRESH").is_some() && path.exists() {
+            fs::remove_dir_all(&path).expect("discard repository-local compiler scratch");
         }
         fs::create_dir_all(&path).expect("create repository-local scratch");
         Self(path)
@@ -24,12 +65,6 @@ impl Scratch {
     }
 }
 
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
-
 #[test]
 fn foreign_source_cannot_mint_committed_decision() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -37,7 +72,7 @@ fn foreign_source_cannot_mint_committed_decision() {
     let fixture = crate_root.join("tests/ui/external-seals");
     let scratch = repository_root.join(".scratch").join(format!(
         "controller-toolkit-external-seals-{}",
-        std::process::id()
+        toolchain_cache_key()
     ));
     let scratch = Scratch::new(scratch);
     let temp = scratch.path().join("tmp");

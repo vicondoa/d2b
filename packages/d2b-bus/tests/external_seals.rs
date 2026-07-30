@@ -1,4 +1,10 @@
-use std::{fs, path::PathBuf, process::Command};
+use std::{
+    collections::hash_map::DefaultHasher,
+    fs,
+    hash::{Hash as _, Hasher as _},
+    path::PathBuf,
+    process::Command,
+};
 
 #[test]
 fn dependent_cannot_forge_registration_or_mint_admitted_session() {
@@ -8,7 +14,7 @@ fn dependent_cannot_forge_registration_or_mint_admitted_session() {
     let scratch = Scratch::new(
         repository_root
             .join(".scratch")
-            .join(format!("bus-external-seals-{}", std::process::id())),
+            .join(format!("bus-external-seals-{}", toolchain_cache_key())),
     );
     let temp = scratch.path().join("tmp");
     fs::create_dir_all(&temp).expect("create repository-local compiler scratch");
@@ -182,12 +188,51 @@ fn dependent_cannot_forge_registration_or_mint_admitted_session() {
     }
 }
 
+/// A directory-safe token identifying the toolchain driving the nested cargo
+/// invocations. Compiled artifacts are not portable across compiler versions,
+/// and the gate provisions its own pinned toolchain while a developer shell
+/// commonly has a different one, so each gets its own cache tree rather than
+/// corrupting a shared one. Hashed because `rustc -vV` is multi-line and long
+/// enough to overflow NAME_MAX once a prefix is added.
+fn toolchain_cache_key() -> String {
+    let version = Command::new("rustc")
+        .arg("-vV")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .expect(
+            "rustc -vV must identify the compiler: a cache shared between two \
+             unidentified toolchains is the corruption this key prevents",
+        );
+    let mut hasher = DefaultHasher::new();
+    version.trim().hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+/// A reusable repository-local compiler scratch tree.
+///
+/// The tree used to be per-process and deleted on drop, so every run recompiled
+/// the fixture's whole dependency graph from cold - making this the slowest test
+/// in the workspace once the suite moved to cargo-nextest.
+///
+/// Reuse is sound: Cargo owns staleness through its own fingerprints, and the
+/// assertions are about diagnostics Cargo re-produces whenever an input
+/// changes. Cargo does not cache failed builds, so each compile-fail case still
+/// genuinely recompiles the fixture; what survives is the dependency graph
+/// beneath it. The nested invocations deliberately clear every rustc wrapper,
+/// so this tree - not a compiler cache - is what makes repeat runs fast.
+///
+/// A stable path also makes this leak-proof: an interrupted run leaves a
+/// directory the next run adopts rather than stranding a per-process tree.
+///
+/// Set `D2B_EXTERNAL_SEALS_FRESH=1` to discard the cache and compile cold.
 struct Scratch(PathBuf);
 
 impl Scratch {
     fn new(path: PathBuf) -> Self {
-        if path.exists() {
-            fs::remove_dir_all(&path).expect("remove stale repository-local scratch");
+        if std::env::var_os("D2B_EXTERNAL_SEALS_FRESH").is_some() && path.exists() {
+            fs::remove_dir_all(&path).expect("discard repository-local compiler scratch");
         }
         fs::create_dir_all(&path).expect("create repository-local scratch");
         Self(path)
@@ -195,11 +240,5 @@ impl Scratch {
 
     fn path(&self) -> &std::path::Path {
         &self.0
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
     }
 }

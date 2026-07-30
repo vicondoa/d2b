@@ -6,7 +6,15 @@ ROOT=${ROOT:-$(cd "$HERE/../.." && pwd)}
 DEFAULT_PINNED_DIR="$ROOT/tests/golden/pinned"
 
 if ! command -v cargo >/dev/null 2>&1; then
-  for candidate in "$HOME"/.rustup/toolchains/1.94.1-*/bin; do
+  # Read the channel rather than hardcoding it: a stale literal here silently
+  # stops matching after a pin bump, and the script then falls through to
+  # whatever cargo the surrounding shell provides - asserting the pinned test
+  # inventory under a compiler that is not the pinned one.
+  pinned_channel=$(
+    sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]\+\)".*/\1/p' \
+      "$ROOT/packages/rust-toolchain.toml" | head -1
+  )
+  for candidate in "$HOME"/.rustup/toolchains/"${pinned_channel:-0.0.0}"-*/bin; do
     if [ -x "$candidate/cargo" ]; then
       PATH="$candidate:$PATH"
       export PATH
@@ -25,8 +33,10 @@ if ! cargo nextest --version >/dev/null 2>&1; then
   exit 1
 fi
 
-export CARGO_BUILD_RUSTC_WRAPPER=${CARGO_BUILD_RUSTC_WRAPPER:-}
-export RUSTC_WRAPPER=${RUSTC_WRAPPER:-}
+# No RUSTC_WRAPPER override here. The cargo configs route through
+# .cargo/rustc-wrapper.sh, which uses sccache when present and plain rustc when
+# not, so this gate no longer has to disable the compiler cache to stay robust
+# in a shell that omits nixpkgs#sccache.
 
 pinned_inputs=("$@")
 if [ "${#pinned_inputs[@]}" -eq 0 ]; then

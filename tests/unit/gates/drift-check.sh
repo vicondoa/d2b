@@ -34,8 +34,7 @@ xtask_bin="$workspace_target_dir/debug/xtask"
   # Always ask Cargo to refresh xtask in the selected target dir. Cargo reuses
   # cached artifacts when fresh, but this prevents an old repo-local
   # packages/target/debug/xtask from masking generated schema/docs drift.
-  RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" \
-    CARGO_TARGET_DIR="$workspace_target_dir" \
+  CARGO_TARGET_DIR="$workspace_target_dir" \
     cargo build -q --manifest-path "$ROOT/packages/Cargo.toml" -p xtask --bin xtask
 )
 
@@ -44,7 +43,7 @@ run_xtask() {
   log "--> drift-check: cargo xtask $subcommand"
   (
     cd "$ROOT/packages"
-    RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" "$xtask_bin" "$subcommand"
+    "$xtask_bin" "$subcommand"
   )
 }
 

@@ -4446,10 +4446,8 @@ fn dispatch_console(
             {
                 let mut table = state.console_sessions.lock().unwrap();
                 if !table.has_session(vm) {
-                    match create_console_session_for_vm(state, vm, provider_kind) {
-                        Ok(session) => table.register_session(vm.clone(), session),
-                        Err(e) => return Err(e),
-                    }
+                    let session = create_console_session_for_vm(state, vm, provider_kind)?;
+                    table.register_session(vm.clone(), session);
                 }
             }
 
