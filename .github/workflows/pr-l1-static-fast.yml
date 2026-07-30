@@ -174,6 +174,12 @@ jobs:
             tests/tools/no-bash-ast-walker/target
           prefix-key: "v0-rust"
           shared-key: "test-rust-${{ runner.os }}"
+          # Only one job writes this shared entry. test-rust, test-policy and
+          # test-runtime-ledger all fan out from tier0 and share a key, so on a
+          # cold cache every one of them compiles the same workspace at the same
+          # time and then races to save an entry the others already wrote.
+          # test-rust is the writer because test-fixture-contracts needs it
+          # anyway; the rest restore.
           save-if: "true"
       - name: Rust workspace gate
         env:
@@ -258,7 +264,13 @@ jobs:
             tests/tools/no-bash-ast-walker/target
           prefix-key: "v0-rust"
           shared-key: "test-rust-${{ runner.os }}"
-          save-if: "true"
+          # Only one job writes this shared entry. test-rust, test-policy and
+          # test-runtime-ledger all fan out from tier0 and share a key, so on a
+          # cold cache every one of them compiles the same workspace at the same
+          # time and then races to save an entry the others already wrote.
+          # test-rust is the writer because test-fixture-contracts needs it
+          # anyway; the rest restore.
+          save-if: "false"
       - name: Provision the heavy-gate runtime root
         run: make heavy-gate-provision
       - name: Fixture-dependent Rust contract tests
@@ -613,7 +625,13 @@ jobs:
             tests/tools/no-bash-ast-walker/target
           prefix-key: "v0-rust"
           shared-key: "test-rust-${{ runner.os }}"
-          save-if: "true"
+          # Only one job writes this shared entry. test-rust, test-policy and
+          # test-runtime-ledger all fan out from tier0 and share a key, so on a
+          # cold cache every one of them compiles the same workspace at the same
+          # time and then races to save an entry the others already wrote.
+          # test-rust is the writer because test-fixture-contracts needs it
+          # anyway; the rest restore.
+          save-if: "false"
       - name: Policy meta-gates
         env:
           {}
@@ -697,7 +715,13 @@ jobs:
             tests/tools/no-bash-ast-walker/target
           prefix-key: "v0-rust"
           shared-key: "test-rust-${{ runner.os }}"
-          save-if: "true"
+          # Only one job writes this shared entry. test-rust, test-policy and
+          # test-runtime-ledger all fan out from tier0 and share a key, so on a
+          # cold cache every one of them compiles the same workspace at the same
+          # time and then races to save an entry the others already wrote.
+          # test-rust is the writer because test-fixture-contracts needs it
+          # anyway; the rest restore.
+          save-if: "false"
       - name: Runtime execution-budget ledger gate
         env:
           {}
