@@ -65,10 +65,44 @@ hole. Each must be closed by the wave named.
 | --- | --- | --- |
 | `ADR046-routing-007` | CLOSED. The dependency declarations landed as integrator prep and the contract module landed first, on the reading that the recorded edge is inverted for the contract. | Closed in W2 |
 | `ADR046-routing-009` | Both landed, 009 first. The recorded edge remains wrong in the graph: it says 009 depends on 007, but 007 imports 009's contract. The manifest should be corrected as a separate amendment under the drift rule. | Amendment, not blocking |
-| `ADR046-routing-016` service | Still no handler for `zone-bootstrap` and `zone-enroll`, but the blocker moved: the session contract and enrollment machine now exist in the bus, so wiring the service to them is ordinary work rather than a missing contract. The four enrollment obligations are met in the bus session module, not in the service. **Not W3**: the destination is `packages/d2b-zone-routing/src/service.rs`, which no W3 work item owns. Every work item whose destination names `packages/d2b-zone-routing/` - `routing-002`, `routing-003`, `routing-006`, `routing-016` - is W2, so the artifacts name no later owning wave. Practically it is also blocked behind the same W5 durable enrollment store as the two enrollment rows in the wave-close table below. | Needs an integrator ruling: the only owning item is `ADR046-routing-016` in the sealed W2, and no post-W2 item owns the file |
+| `ADR046-routing-016` service | Still no handler for `zone-bootstrap` and `zone-enroll`, but the blocker moved: the session contract and enrollment machine now exist in the bus, so wiring the service to them is ordinary work rather than a missing contract. The four enrollment obligations are met in the bus session module, not in the service. **Not W3**: the destination is `packages/d2b-zone-routing/src/service.rs`, which no W3 work item owns. Every work item whose destination names `packages/d2b-zone-routing/` - `routing-002`, `routing-003`, `routing-006`, `routing-016` - is W2, so the artifacts name no later owning wave. **Ruled: W5, alongside `ADR046-store-004`.** See the ruling note below the table. | W5, `ADR046-store-004` |
 | `ADR046-primitives-002` providers | `ProcessLaunchEffectPort` has no production adapter, so both process Providers are complete but unwired. The adapter is `ADR046-process-001`, destination `packages/d2b-provider-supervisor/`. | W4 |
 | `ADR046-routing-014` | `ProviderInstance`'s eleven trait objects and the whole `RpcProviderProxy` family are not delivered. They are built on `d2b_contracts::v2_provider` types with no v3 replacement. Blocked on the v3 Provider-method DTO catalogue. | W3, inside `ADR046-provider-001` |
 | `ADR046-routing-015` | `GeneratedProviderServiceServer` ttrpc dispatch not implemented: no v3 Provider proto, no service-name freeze, no generated bindings exist. `ProviderAgentAdapter`, `register_exact_instances`, and `ProviderAgentProcess` all depend on routing-014 surfaces that are themselves incomplete. | W3, inside `ADR046-provider-001` |
+
+### Ruling: the bootstrap and enroll handler is W5 work
+
+The `ADR046-routing-016` row above had no natural owner, because every work
+item naming `packages/d2b-zone-routing/` sits in the sealed W2. It is assigned
+to **W5, alongside `ADR046-store-004`**, on a dependency rather than on a
+file-ownership argument.
+
+Two sibling rows in the wave-close table below - "Sealed enrollment record does
+not bind the child uid" and "No durable persistence for enrollment" - were
+already resolved to W5 `ADR046-store-004`, whose destination is
+`packages/d2b-resource-store-redb/src/{lib,actor,transaction}.rs`. A
+`zone-enroll` handler cannot be completed without the durable enrollment
+persistence those two rows describe, so scheduling the handler in any earlier
+wave would schedule work that cannot finish.
+
+That dependency was verified rather than assumed.
+`packages/d2b-bus/src/session/enrollment.rs` states in its own module
+documentation that the durable store transaction which seals or invalidates an
+enrollment is not part of the module, that recovery re-derives a restarting
+handler's state "from what the durable store holds" and "takes the persisted
+facts rather than a prior in-memory state", and that "the caller performs the
+single durable store transaction that seals the record". The enroll handler is
+that caller. Its correctness on the crash boundary is defined entirely in terms
+of a persisted record and a persisted invalidation marker, neither of which
+exists before `ADR046-store-004`.
+
+One correction to the shipped code's own account, recorded rather than
+silently reconciled: the `service.rs` module documentation still names the
+absent Zone session contract as the blocker and says
+`d2b_contracts::v3::zone_session` "is still empty". The session contract and
+the enrollment state machine have since landed in `packages/d2b-bus/src/session/`.
+The stale comment is not corrected here, because `service.rs` belongs to the
+sealed W2; the W5 slice that lands the handler should correct it.
 
 ## 2. Semantics inferred where the specification is silent
 
@@ -112,7 +146,7 @@ also invisible until wired, so it must not be mistaken for working behaviour.
 | Debt | Detail | Owner |
 | --- | --- | --- |
 | `flake.nix` zone-schema-drift check | The work item asks for `checks.<system>.zone-schema-drift` plus a matrix pin refresh. Not added. | W2 |
-| `public_mint_surface` runtime | Renders rustdoc for all 47 workspace members sequentially into isolated target dirs; roughly 30 minutes and growing with every crate added. The render phase is parallelizable; the dependency ordering is only needed for the analysis phase. | Integrator decision, standalone change |
+| `public_mint_surface` runtime | Renders rustdoc for every workspace member sequentially into isolated target dirs; roughly 30 minutes and growing with every crate added. Its earlier characterization here - that the render phase is parallelizable and the dependency ordering is only needed for the analysis phase - is corrected below; the ordering is needed by the render itself. | **Ruled: W3.** See section 9 |
 | Unknown-spec-field rejection | Cannot be enforced while the shared `spec` type injects execution-policy defaults into every resource. Needs the generated per-type submodule to replace the freeform type, which requires editing a file the generator slice does not own. `nix-unit: zone-link-closed-spec` cannot pass until then. | W2 |
 | Two engine refusal branches unreachable from outside | The contract constructors already reject the shapes that would trip them, so they guard only the deserialization path. Exercising them needs a deserialization-based vector, a different surface than the vector suite owns. | W2 panel to rule |
 | Enrollment validation obligations | Four obligations unmet, blocked on the session contract. | W2, with routing-007/009 |
@@ -220,8 +254,8 @@ New debt discovered while completing the wave's last five items.
 | Sealed enrollment record does not bind the child uid | The spec says the record binds the child static key pin to the child Zone uid. The session module holds the fingerprint and an opaque allocator-binding digest; the uid binding belongs to the durable store transaction owned by the ZoneLink controller. **Not W3**: no W3 work item owns `packages/d2b-session/` or `packages/d2b-core-controller/`. The transaction is `ADR046-store-004`, destination `packages/d2b-resource-store-redb/src/transaction.rs`, which the graph places in W5; the controller-side write lands in `zone_links.rs` behind it. | W5, `ADR046-store-004` |
 | No durable persistence for enrollment | Recovery takes the persisted facts as arguments. The store transaction that seals or invalidates a record is the controller's and is not implemented. **Not W3**: same determination as the row above - the durable store backend and its transaction module are `ADR046-store-004` in W5, and no W3 destination is a store or controller path. | W5, `ADR046-store-004` |
 | `component_session` runtime tests not duplicated | The bus re-exports the session runtime rather than forking it, so its 2,121 lines of tests were deliberately not copied; they run in the owning crate. The ported golden vectors are the port evidence. A scope judgement worth a reviewer's confirmation. | W2 panel |
-| Principal digest has no frozen domain tag | The cross-Zone idempotency key needs a subject digest, but the frozen digest-tag list has no principal or subject tag, so the digest is currently undomained. If a tag is later frozen, the computation changes. **Not W3**: the digest site is `packages/d2b-bus/src/zone_route.rs` (`ADR046-routing-005`, W2) and the frozen tag list is decision D101, landed by `ADR046-object-001` in W0. Both waves are sealed, and no W3 destination is either file. Freezing a new domain tag amends the decision register, which is an FR-046/FR-047 amendment path rather than wave work. | Needs an integrator ruling: a D101 register amendment, with no owning wave in the artifacts |
-| No closed reason for a multi-Zone batch | The routing reason enum has no variant for a batch spanning Zones, so a structural error is returned rather than misusing an unrelated routing reason. **Not W3**: `ZoneRouteFailClosedReason` lives in `packages/d2b-contracts/src/v3/zone_routing.rs`, whose sole owning item is `ADR046-routing-001` in the sealed W2, and the refusal site `ZoneRouteError` is in `packages/d2b-bus/src/zone_route.rs` (`ADR046-routing-005`, W2). No post-W2 item names either file. | Needs an integrator ruling: no post-W2 item owns the routing reason enum |
+| Principal digest has no frozen domain tag | The cross-Zone idempotency key needs a subject digest, but the frozen digest-tag list has no principal or subject tag, so the digest is currently undomained. If a tag is later frozen, the computation changes. **Not W3**: the digest site is `packages/d2b-bus/src/zone_route.rs` (`ADR046-routing-005`, W2) and the frozen tag list is decision D101, landed by `ADR046-object-001` in W0. Both waves are sealed, and no W3 destination is either file. **Ruled: amendment-shaped, batched with the row below.** | Amendment, not wave work: [`amendment-frozen-cross-zone-contracts.md`](./amendment-frozen-cross-zone-contracts.md), before W6 |
+| No closed reason for a multi-Zone batch | The routing reason enum has no variant for a batch spanning Zones, so a structural error is returned rather than misusing an unrelated routing reason. **Not W3**: `ZoneRouteFailClosedReason` lives in `packages/d2b-contracts/src/v3/zone_routing.rs`, whose sole owning item is `ADR046-routing-001` in the sealed W2, and the refusal site `ZoneRouteError` is in `packages/d2b-bus/src/zone_route.rs` (`ADR046-routing-005`, W2). No post-W2 item names either file. **Ruled: amendment-shaped, batched with the row above.** | Amendment, not wave work: [`amendment-frozen-cross-zone-contracts.md`](./amendment-frozen-cross-zone-contracts.md), before W6 |
 | Unix session tests delegated rather than ported | The manifest asked to port the unix session tests verbatim, but the integrator wired the owning crate as a dependency instead, so copying them would fork the audited substrate. Zone-level semantics were ported instead. Needs a ruling: accept delegation, or add the syscall dev-dependency and port literally. | W2 panel |
 | Listener portal transport variant | One spec describes a pre-bound socket handed over a portal call while another describes an inherited connected socket. Only the connected form is implemented; the portal wire contract belongs to a transport Provider crate and is unspecified for the bus. | W6 |
 
@@ -356,3 +390,82 @@ allocator FD handoff and its no-socket-activation cell; `routing-009`
 (round-trip, canonical encoding stability, and closed-enum exhaustiveness);
 `routing-012`'s two drift obligations, which the drift gate now runs;
 and `routing-016` other than bootstrap and enroll.
+
+## 9. What implementation debt Wave 3 takes on, and what it does not
+
+Recorded before the wave's slices open, so its scope is settled rather than
+argued at review. Three items are in scope and one named group is explicitly
+not.
+
+### In scope
+
+**1. The v3 Provider-method DTO catalogue.** Already ruled as owned by
+`ADR046-provider-001` and stated in section 0. Discharging it closes the
+Destination caveats recorded against `ADR046-routing-014` and
+`ADR046-routing-015` in section 1, which are the two partial items in the
+Wave 2 delivery claim. Nothing else in the register turns those two rows from
+partial to complete.
+
+**2. The `public_mint_surface` gate runtime.** Wave 3 pays this rather than
+inheriting it, because Wave 3 is the wave that makes it worse. The gate's cost
+scales with workspace member count, and Wave 3 adds at least
+`packages/d2b-provider-system-core/` (destination of `ADR046-provider-003`,
+absent from `packages/Cargo.toml` today) and possibly several more through
+`ADR046-provider-002`'s skeleton generator, which emits one
+`packages/d2b-provider-<base>-<implementation>/` crate per Provider. A wave
+that adds crates to a per-crate-linear gate is the wave that should pay for the
+gate's shape.
+
+The register's earlier characterization was verified against
+`packages/d2b-bus/tests/public_mint_surface.rs` and is **partly wrong**, which
+matters because the wrong half was the argument that the fix is cheap:
+
+- Confirmed: `render_workspace_docs` loops over `dependency_order(packages)`
+  and runs one `cargo doc --no-deps -p <package>` per workspace member, in
+  sequence, into a per-crate isolated render directory.
+- Corrected: the dependency ordering is **not** needed only by the analysis
+  phase. Before rendering a package, the loop calls
+  `plant_dependency_doc_link` for every already-rendered crate
+  (`external_docs.iter().chain(docs.iter())`), symlinking those render roots
+  into the package's own doc root. A render therefore consumes the output of
+  the renders before it, and a flat parallel render would not have them.
+- Consequence for the fix: a render/analyze split is **not** available in the
+  form the register claimed. What is genuinely available is (a) hoisting the
+  pure source scans - `hidden_public_api` and
+  `source_capability_inventory_with_externals` - out of the render loop, since
+  neither reads rendered output, and (b) parallelising the render *within* each
+  level of the dependency order rather than across the whole workspace. Both
+  are real wins; neither is the flat parallelisation the old wording implied.
+  A Wave 3 slice must scope to the corrected shape.
+
+**3. A build-level determinism flake check for Wave 3's own generated Nix
+catalog.** Section 8 records that the flake-check layer - proving a generator
+emits identical output across two independent evaluations - is the one thing
+neither construction-time tests nor the drift gate cover. The drift gate
+compares a generator's output against the committed tree, which catches a
+generator that changed; it does not catch a generator that emits different
+bytes on two runs of the same input. Wave 3 ships a new generator
+(`ADR046-provider-002`'s Provider package and catalog emitter), so it must not
+repeat the gap it can see in the wave before it.
+
+### Not in scope
+
+**4. The missing nix-unit eval cases and host-integration checks recorded
+against `ADR046-routing-011`, `ADR046-routing-012`, `ADR046-routing-013` and
+`ADR046-primitives-003`.** These stay where section 8 puts them.
+
+Two reasons, and the first is sufficient on its own. Every one of those
+obligations is owed by a work item in the sealed Wave 2 and already carries a
+recorded owner; transcribing them into Wave 3 would give the same obligation
+two wave attributions and make the wave that discharges it ambiguous, for no
+gain in when it actually lands. Second, several cannot execute yet regardless
+of who owns them: section 3 records that `resources-volume.nix` and
+`options-zones.nix` are imported by no module, and section 8 records that the
+host-integration obligations need both those imports and a production store,
+all owned by later waves. Writing them in Wave 3 would produce checks that do
+not run.
+
+What Wave 3 does owe them is the pattern. Item 3 above establishes the
+build-level determinism flake check on Wave 3's own generator; the
+`ADR046-routing-012` determinism obligations follow that shape when their wave
+lands, rather than each wave re-deciding what a determinism check looks like.
