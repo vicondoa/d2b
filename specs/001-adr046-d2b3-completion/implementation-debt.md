@@ -620,7 +620,7 @@ were named by no slice.
 | `ADR046-provider-002` | **Catalog parity** policy | **Met, in `e15f88cc`, after this row first recorded it as unmet.** Discharged by `the_catalog_shape_and_the_provider_contract_describe_the_same_fields` in `packages/xtask/src/provider_packaging.rs`, an enforcing `make test-rust` surface. The obligation is to compare the two descriptions, and that is met; the divergences the comparison found are a separate open item, pinned as exact data in the test and recorded in 12.4 | - |
 | `ADR046-provider-003` | Shared conformance tests | **Met at the logic layer, unproven at every real boundary.** The shared suite in `packages/d2b-process-conformance/src/suite.rs` runs against both Providers, and two further cells are duplicated per crate rather than shared (10.1). Every cell runs over `ScriptedEffectPort` | `ADR046-process-001` in W4, then the same suite re-run against the production adapter |
 | `ADR046-provider-003` | Host / user / non-Host tests | **Met at the logic layer.** `tests/host_reconciliation.rs`, `tests/user_discovery.rs` and both `tests/execution_parents.rs` cover the three cases, over injected ports only | As above |
-| `ADR046-provider-004` | Shared semantic Service / Binding contract tests, and generated schema artifacts for the eight exact qualified ResourceTypes | **Not assessable here.** `packages/d2b-contracts/src/v3/semantic_services/` was being written concurrently with the three slices this section audits and is not part of them. Two facts this row originally stated are now stale and are corrected rather than left: the module exists (`audio.rs`, `security_key.rs`, `telemetry.rs`, `usb.rs` and `mod.rs`, landed in `70eb17a4`), and `docs/reference/schemas/v3/` no longer holds only `Zone.schema.json` and `ZoneLink.schema.json` - it now also holds the semantic-service artifacts, four per domain across the four domains plus a `projection_spec` schema each. That is an inventory observation, not an assessment: whether those artifacts and the crate's tests discharge the item's roughly fourteen enumerated obligations is that slice's own audit to make, and this row remains a placeholder for it rather than a finding either way | The semantic-services slice's audit against its own `validation` field |
+| `ADR046-provider-004` | Shared semantic Service / Binding contract tests, and generated schema artifacts for the eight exact qualified ResourceTypes | **Audited in full; see section 13.** This row previously read "Not assessable here" and deferred to "the semantic-services slice's own audit". That deferral had no owner and nothing behind it, so it is retired rather than left standing. Summary of the result recorded in section 13: eleven of the sixteen enumerated obligations are met, four are met only at a weaker level than the phrase implies, one is met, and the item ships two live caveats - a telemetry Binding whose common status layer is empty and rejects everything, and a security-key family that cannot construct a signed projection factory at all - which were recorded only in Rust source comments and pinned by tests until now | Section 13, and the two amendments it names |
 
 Two further observations from the audit, neither of which is an obligation.
 
@@ -846,3 +846,191 @@ digests.
 | Required-outputs row has no conformance scenario in the section 15.8 Phase 2 table | Specification gap | Same amendment |
 | Catalog names component and descriptor digests; contract names exported schema and service digests; section 4.3.1 names neither | Ruling needed, three-way | Amendment, before the Provider packaging surface is treated as frozen |
 | Five catalog facts absent from the manifest; one contract field absent from the catalog | Unmet obligation, pinned as data | `ADR046-provider-002`, closes when the ruling above lands |
+
+## 13. The `ADR046-provider-004` audit, performed
+
+Section 11's row for `ADR046-provider-004` was a placeholder. It said the
+common semantic Service and Binding catalog was "not assessable here" and
+deferred the assessment to "the semantic-services slice's own audit". No such
+audit was performed and the deferral named no owner, so for the interval
+between `70eb17a4` and this section the register carried a row that recorded
+neither a pass nor a failure for the largest validation field in the wave.
+That is worse than an unmet obligation, because a reader cannot tell from it
+whether anything is owed.
+
+This section performs that audit the same way sections 8 and 11 were built: by
+reading the item's `validation` field in `docs/specs/ADR-046-work-items.json`
+clause by clause against the tests and code that exist in
+`packages/d2b-contracts/src/v3/semantic_services/` and the generated artifacts
+in `docs/reference/schemas/v3/`, rather than by transcribing a slice's account
+of its own work.
+
+One note on method. The Provider-neutrality proof this item leans on was
+rewritten in `c4e89e26` after a panel reviewer found the original vacuous - two
+of its assertions compared a value with itself, a third compared a clone with
+its original, and its byte comparison built the schema contract once, outside
+the loop, with no Provider installed. Everything below audits the **current**
+test, not the one `70eb17a4` shipped.
+
+### 13.1 Obligation by obligation
+
+The `validation` field is one sentence with fourteen comma-separated clauses
+plus a closing sentence, and the item's `destination` carries a sixteenth
+obligation about generated artifacts. Each is taken separately.
+
+| # | Obligation, as the field words it | State | What discharges it, or which part is missing |
+| --- | --- | --- | --- |
+| 1 | Exact names | **Met.** | `the_catalog_names_exactly_the_eight_frozen_resource_types` in `mod.rs` pins the sorted list of all eight dot-qualified types against a literal. `schema_identities_use_the_slash_form_and_the_api_type_uses_the_dot_form` separately pins that the schema identity is `<namespace>/<Type>/{spec,status}` and asserts the dot-qualified infix is absent from it, so the two spellings cannot be conflated. Each family module repeats the pair in `the_pair_names_the_exact_frozen_resource_types` against its own `*_RESOURCE_TYPE` constant |
+| 2 | Strict serde / schema round trips | **Met for `spec`, absent for `status` and for the projection.** `assert_minimal_base_round_trips` serializes the minimal base `ResourceSpec`, deserializes it, compares canonical bytes, and re-validates the decoded value, and every one of the eight members runs it. Nothing round-trips a `status` layer or a projection spec through serde: the status layers are exercised only as field-name sets through `SemanticLayerSchema::validate_names`, and `validate_projection_spec` is driven with hand-built `ResourceSpec` values that are never encoded. The clause says "round trips" without restricting the layer | The two missing layers, or an explicit ruling that the spec layer is the whole obligation |
+| 3 | Common base discoverability without any Provider package | **Met.** | `every_base_contract_builds_with_no_provider_installed` builds `schema_contract(std::iter::empty())` for all eight members and asserts the resulting contract's ResourceType, a `sha256:`-prefixed fingerprint, and version `1.0`. The catalog is a `OnceLock` per family behind `pub fn contract()`, reachable from `d2b-contracts` with no Provider crate in the dependency graph, which is the structural half of the same claim |
+| 4 | Canonical minimal base acceptance without `spec.provider` | **Met.** | Each family's `the_canonical_minimal_base_is_accepted_without_a_provider_extension` runs `minimal_base_spec` for both members and asserts `spec.provider().is_none()` before `validate_minimal_base_spec` admits it. `minimal_base_spec` itself is the enforcing half: it rejects a fixture that supplies `provider`, `providerRef`, or `updatePolicy` (`MinimalBaseReservedField`) and rejects any fixture whose field set is not exactly the required set minus `providerRef` (`MinimalBaseFieldSetMismatch`), so the fixture cannot drift into being minimal in name only |
+| 5 | Same-Zone refs / targets | **Met only at the type half. The same-Zone half is not implemented and not tested.** | `admit_binding_refs` checks two things: that `serviceRef` names this pair's Service ResourceType, and that the target is in the family's closed `BindingTargetType` set. Its own doc comment states the rest plainly - "Both must be same-Zone, which the caller establishes by resolving them in the Binding's Zone before calling" - so the Zone predicate is delegated to a caller that does not exist yet. The one test, `binding_refs_and_targets_are_admitted_against_the_frozen_sets`, covers audio only, with one accepted target, one rejected target, and one foreign Service type; the other three families' target sets are unexercised. **This is the largest gap in the item and it is invisible from the test names**, because a test called "same-Zone refs and targets are admitted against the frozen sets" reads as though it checked Zones |
+| 6 | Owner versus projection discrimination | **Met.** | Structurally by `the_projection_field_set_is_a_strict_subset_of_the_service_base`, which asserts subset **and** strict inequality of cardinality for all four families, so a projection cannot silently become the owner base. Behaviourally by one negative case per family naming that family's owner-only fields: audio rejects `authority`, telemetry rejects `ingestEndpointRefs` and `authorityDescriptor`, USB rejects `backingDeviceRef` and `backingAuthority`, security-key rejects `authority` |
+| 7 | Core projection rejection of `spec.provider` | **Met.** | `validate_projection_spec` returns `ProjectionProviderExtensionForbidden` before any field-name work, and `a_core_projection_rejects_a_provider_extension` drives it with a real `ProviderSpecExtension`. The check is one shared code path, so exercising it on one family is exercising it on four |
+| 8 | Common fields only under `status.resource` | **Met at the registration boundary.** | `a_provider_status_extension_may_not_shadow_a_common_status_field` registers a USB Provider whose `status_details` declares `access`, which the USB Service common status layer already carries, and asserts `schema_contract` **fails**. The enforcement lives in `validate_provider_registration` in `resource_schema.rs`, which returns `ProviderFieldShadowsBase`. `a_pipewire_observation_is_not_a_common_status_field` adds the positive/negative pair on the audio Service layer |
+| 9 | Implementation observation only under `status.provider` | **Met at the same boundary, and only there.** | Same shadow rejection as obligation 8 read from the other side. No test in this module drives `ResourceSchemaContract::validate_envelope`, which is where the full three-layer `status.resource` / `status.provider` split is actually enforced, so the layering is proved over field-name sets and registration rather than over a populated envelope |
+| 10 | Status-only observations | **Met for two families, structurally impossible for a third, absent for the fourth.** | Security-key's `attachment_is_a_status_field_and_not_a_binding_spec_field` and USB's `the_attachment_phase_is_status_only` each assert the field is accepted by the status layer and rejected by the spec layer, which is the shape the clause wants. Audio has no such pair for its Binding. Telemetry cannot have one: its Binding common status layer is **empty**, so there is no observation to prove is status-only, and its test asserts exactly that instead. See 13.2 |
+| 11 | No Device / Endpoint / Binding projection | **Met, though one of its two tests is close to vacuous.** | The discriminating one is `an_export_targets_only_the_owner_service`: for every family it accepts a `ResourceExport.resourceRef` naming the Service and rejects `Device`, `Endpoint`, and that family's own `*Binding`. The other, `a_projection_is_the_same_qualified_service_type_and_never_another_type`, asserts among other things that `audio.d2bus.org.AudioService` is not the string `"Device"`, which cannot fail; its useful content is that the projection's service type equals the pair's Service type and differs from the Binding type |
+| 12 | Implementation-detail rejection | **Met.** | Catalog-wide by `an_implementation_detail_is_rejected_from_every_base_spec`, which pushes `pipeWireNodeAlias` at all eight members. Per family with details that family would plausibly have absorbed: audio `captureAlias`, telemetry `backend` / `ingestProtocol` / `backendEndpointRefs`, USB `busid` / `networkRef` / `relayEndpointRef` / `sysfsPath`, security-key `deviceRef` |
+| 13 | Semantic factory-fingerprint stability under Provider / adapter identity changes | **Met, by `assert_base_is_provider_neutral` and not by the test whose name claims it.** | `the_factory_fingerprint_is_independent_of_provider_identity` recomputes `factory_fingerprint` from the identical inputs and asserts equality; that is a purity check on a pure function and it would pass however Provider-dependent the catalog were. What genuinely discharges the clause is `assert_base_is_provider_neutral`, run by all four families. It installs two **different** Provider extension registrations, each with its own settings field name, captures the whole Provider-observable surface under each - both schema identities, both versions, all four frozen field sets, both base fingerprints, the projection schema fingerprint, the recomputed factory fingerprint, the canonical bytes of the identical minimal fixture, and a probe map of the contract's enforced accept/reject outcome for every candidate field plus and every present field minus - and requires the two observations to be equal. It carries two negative controls: the two installed contracts must differ from each other, and both fingerprint functions must move when a declared input moves. Structurally, `factory_fingerprint` takes no Provider or adapter argument, which is why the equality holds |
+| 14 | Rejection of every implementation-qualified and former `*State` alias | **Met at a weaker level than "rejection".** | `no_implementation_qualified_or_state_alias_is_registered` builds the set of eight registered types and asserts nine aliases - `audio-pipewire.d2bus.org.AudioService`, `audio.d2bus.org.AudioState`, `device-security-key.*`, `observability-otel.*`, `device-usbip.*` and the rest - are not members. That proves **non-registration**, which is what the module can prove: there is no registry here to reject a lookup, and the module doc records that these eight types are deliberately absent from the closed standard ResourceType registry. An alias presented to a real resolver is rejected by nothing this item ships | The resolver-side rejection, whenever the Zone store admits installed Provider schemas |
+| 15 | Each initial and fake alternate Provider must pass the identical base conformance fixture | **Met.** | Each family runs `every_implementation_passes_the_identical_base_fixture` with its real initial Provider name and an invented alternate: `audio-pipewire` / `audio-alternate`, `device-security-key` / `security-key-alternate`, `observability-otel` / `telemetry-alternate`, `device-usbip` / `usb-alternate`. The fixture string is one constant passed to both, so "identical" is enforced by construction rather than by two fixtures that happen to agree |
+| 16 | Destination: generated schema artifacts for the eight exact qualified ResourceTypes | **Met, and over-delivered.** | `docs/reference/schemas/v3/` holds 20 semantic artifacts: `_spec` and `_status` for each of the eight types, plus one `_projection_spec` per family. They are generated by `packages/xtask/src/semantic_service_schemas.rs` from the catalog itself as single source, and regeneration is gated by `run_xtask gen-semantic-service-schemas` in `tests/unit/gates/drift-check.sh`, which is the **enforcing** `make test-drift` lane. Each carries `additionalProperties: false`, the frozen `properties`/`required` sets, and `x-d2b-*` extensions pinning the ResourceType, schema version and fingerprint; the projection artifacts additionally pin `x-d2b-allowed-backing-ref-types`, the Binding type, and both fingerprints |
+
+Counted as the field words them: eleven met, four met only at a weaker level
+than the clause states (2, 5, 9, 14), and one met for two of four families with
+a recorded reason for the other two (10). Nothing in the field is wholly unmet.
+
+### 13.2 Telemetry's Binding common status layer is empty and rejects everything
+
+Recorded here because it was visible only in a Rust module comment and pinned
+by a single test whose name states it, which is not where a reader of this
+register would look for it.
+
+**What the tree does.** `BINDING_STATUS_ALLOWED` in
+`packages/d2b-contracts/src/v3/semantic_services/telemetry.rs` is the empty
+slice. The layer's required set is empty too, so
+`contract().binding().status().validate_names([])` succeeds and every non-empty
+name set fails with `SemanticContractError::SchemaViolation`. The generated
+`telemetry.d2bus.org_TelemetryBinding_status.schema.json` says the same thing in
+the shipped artifact: `"properties": {}`, `"required": []`,
+`"additionalProperties": false`. `the_binding_common_status_layer_is_closed_pending_frozen_names`
+pins both halves, using `stamped` as the rejected probe.
+
+**The consequence, stated plainly.** A controller reconciling a telemetry
+Binding cannot write **any** common status field. Everything it observes has to
+go under `status.provider`, which means it is implementation-owned rather than
+provider-neutral, which is the opposite of what a common base exists for.
+
+**Why.** The telemetry dossier describes `TelemetryBinding.status.resource` in
+prose rather than as a member table. The module comment enumerates what is
+described but unnamed: the effective signal, quota and policy digests, the
+ingest and import readiness summaries, the producer counts, the queue and drop
+counters, and the Binding's observed generations, occupancy, and stamping flag.
+The Service side of the same family fared better only because two spellings -
+`serviceRole` and `serviceReadiness` - happen to be stated literally.
+
+**Class: specification gap.** Not an unmet obligation, because nothing in
+`ADR046-provider-004`'s validation field requires a non-empty status layer, and
+the slice's behaviour is the correct fail-closed reading of a document that does
+not name the fields. Not an inference either, because the catalog declined to
+infer - it froze nothing and rejects everything rather than choosing plausible
+names that would then bind every implementation. The gap is in the telemetry
+dossier, and it is discharged by amending that dossier to state the field-name
+table, not by any change here.
+
+### 13.3 Security-key cannot construct a signed projection factory at all
+
+**What the tree does.** `security_key.rs` declares
+`allowed_backing_ref_types: None`. `SemanticProjectionBinding::projection_factory`
+turns that into `Err(SemanticContractError::BackingRefTypesUndetermined)`,
+whose diagnostic label is `semantic-backing-ref-types-undetermined`.
+`the_backing_ref_set_is_undetermined_and_fails_closed` pins both the `None` and
+the error. The other three families return a factory: audio and telemetry back
+onto `Endpoint`, USB onto `Device`.
+
+**Why the failure is genuine rather than a missing line.** `ProjectionFactory::new`
+in `packages/d2b-contracts/src/v3/provider.rs` rejects an empty
+`allowed_backing_ref_types` with `ProviderContractError::BoundExceeded`, so
+there is no "empty means unconstrained" spelling available. The catalog cannot
+pass an empty set and cannot invent a non-empty one, so `None` and a typed
+error is the only honest option left.
+
+**Why the set is undetermined.** The security-key dossier places `deviceRef`
+and the relay Endpoint inside the implementation's strict `spec.provider`
+extension, not in the semantic base. No semantic base field of this family names
+a backing resource at all, so there is nothing to derive the closed set from.
+`Device` is the plausible guess and is exactly what the catalog refused to
+assume.
+
+**Consequence.** `ADR046-zone-control-019` and `-020` are documented in this
+item's `integration` field as using the factory metadata to admit an owner
+Service and core-create one same-type projection Service. For security-key,
+there is no factory to use. Whichever wave owns those items will find three of
+four families work and the fourth returns a typed error.
+
+**Class: specification gap, with an unmet-obligation consequence downstream.**
+The gap is the security-key dossier not stating a semantic backing set, and it
+is fixed by amendment - either by naming the closed set at the semantic level,
+or by ruling that a family with no semantic backing resource legitimately has no
+projection factory, in which case `ProjectionFactory`'s non-empty requirement is
+the thing that needs to change. The consequence for `ADR046-zone-control-019`
+and `-020` is a real unmet obligation, but it is theirs and it is blocked behind
+this amendment.
+
+### 13.4 The other underdetermined semantics this slice reported
+
+Checked against sections 2 and 10.2 first; none of the four was already
+recorded. All four are **inferences** rather than gaps in the sense of 13.2 and
+13.3, because in each case the catalog did choose something and a reviewer needs
+to confirm or correct that choice.
+
+| Where | Inference | Class | Owning wave |
+| --- | --- | --- | --- |
+| All four family modules | **Only the top-level field-name set of each layer is frozen.** The module doc states the rule and each family module names the interiors it declines to model: audio `grants` and `channels`, security-key `authority` / `target` / `policy`, telemetry `signals` / `quota` / `policy`, USB `accessPolicy` / `backingAuthority` / `attachmentPolicy`. The reason differs per case and is worth keeping distinct - some interiors are stated as prose, some appear only inside a dossier example, and audio's `grants` members and domains **are** stated but were still left unfrozen for consistency with the others. So this is not uniformly forced by the documents; part of it is a consistency choice. The effect either way is that two implementations of one family can disagree about an interior and both pass the common base | Inference | W3 panel, before the semantic bases are treated as frozen |
+| `security_key.rs`, `usb.rs` versus `audio.rs`, `telemetry.rs` | **The Service mode discriminant is spelled three ways and each family keeps its own.** Security-key and USB use a field named `mode`; audio and telemetry use `serviceRole`. The values diverge again inside that: telemetry's authority value is `"authority"` while audio's is `"owner"`, so the three live spellings are `mode: "authority"`, `serviceRole: "authority"`, and `serviceRole: "owner"`. Each is what its own dossier says, so per-family fidelity and cross-family uniformity are in direct conflict and the catalog chose fidelity. Recorded because a consumer writing one code path across the four families has to special-case it, and because a later decision to unify moves four frozen field sets and therefore four fingerprints | Inference | W3 panel; unification, if wanted, must precede the fingerprints being consumed |
+| `mod.rs`, `SEMANTIC_BASE_SCHEMA_MAJOR` / `_MINOR` | **No base schema version is stated for the semantic bases themselves, so `1.0` was chosen.** The constant's own doc says so. The value is not inert: it is an input to `layer_fingerprint` and therefore reaches every one of the sixteen base fingerprints and, through the projection schema fingerprint, all four factory fingerprints and the committed schema artifacts | Inference | W3 panel, before any Provider manifest pins a base fingerprint |
+| `mod.rs`, `SEMANTIC_PROJECTION_PROTOCOL_VERSION` | **The semantic projection-protocol version has no stated spelling, so `"1.0"` was chosen.** The specification requires the factory fingerprint to bind this value and to exclude Provider and adapter identity; it fixes neither the spelling nor the value. It is an input to `factory_fingerprint`, so all four committed `x-d2b-factory-fingerprint` values depend on a string nobody specified | Inference | Same as above |
+
+### 13.5 Where code and comment or register disagree
+
+Three, all small, all recorded rather than corrected in place.
+
+- **Section 11's row was stale in one further way it did not admit.** It said
+  `docs/reference/schemas/v3/` "now also holds the semantic-service artifacts,
+  four per domain across the four domains plus a `projection_spec` schema each".
+  That is right and the count is 20, but the row presented it as an inventory
+  observation while declining to assess it; the artifacts were already
+  drift-gated at the time the row was written, which is assessable evidence the
+  row had in hand and did not use.
+- **Two test names overstate what their bodies check**, both noted in 13.1.
+  `binding_refs_and_targets_are_admitted_against_the_frozen_sets` sits under a
+  doc comment headed "Same-Zone refs and targets" and checks no Zone;
+  `the_factory_fingerprint_is_independent_of_provider_identity` checks a pure
+  function against itself and derives its force entirely from a different test.
+  Neither is wrong about the code's behaviour - the same-Zone predicate really is
+  the caller's, and the fingerprint really is Provider-independent - but a reader
+  auditing by test name would credit both with more than they carry.
+- **The catalog has no production caller.** Nothing outside
+  `packages/d2b-contracts/src/v3/mod.rs` and
+  `packages/xtask/src/semantic_service_schemas.rs` names `semantic_services`.
+  This extends section 10.4's observation about Wave 3 rather than contradicting
+  it: like the three system-Provider crates, the semantic catalog is proven only
+  against itself and its own generator, and the first evidence it matches a real
+  Zone store arrives with the zone-control items that consume the factory
+  metadata.
+
+### 13.6 Summary of what this section adds to the register
+
+| Finding | Class | Owning wave |
+| --- | --- | --- |
+| Telemetry Binding common status layer is empty, so no common status is writable for that type | Specification gap | Amendment to the telemetry dossier, before a telemetry controller is written |
+| Security-key names no semantic backing resource, so no signed projection factory can be built for that family | Specification gap | Amendment to the security-key dossier, before `ADR046-zone-control-019` / `-020` |
+| `ADR046-zone-control-019` / `-020` will find one of four families without factory metadata | Unmet obligation, blocked | Behind the amendment above |
+| Same-Zone half of the Binding ref/target rule is delegated to a caller that does not exist, and three of four families' target sets are untested | Unmet obligation | `ADR046-provider-004`, or the wave that first resolves refs in a Zone |
+| Serde round trip proved for the spec layer only, not status or projection | Unmet obligation, minor | Any later slice owning `semantic_services` |
+| Alias rejection proved as non-registration, not as resolver rejection | Unmet obligation, deferred by construction | The wave that admits installed Provider schemas into a resolver |
+| Only top-level field-name sets are frozen; every named interior is unmodelled, partly by necessity and partly by consistency choice | Inference | W3 panel |
+| Service mode discriminant has three live spellings across four families | Inference | W3 panel |
+| Semantic base schema version `1.0` chosen with none stated; it reaches every base fingerprint | Inference | W3 panel |
+| Semantic projection-protocol version `"1.0"` chosen with no stated spelling; it reaches every factory fingerprint | Inference | W3 panel |
