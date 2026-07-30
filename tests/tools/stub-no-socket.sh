@@ -157,7 +157,6 @@ run_stub() {
   set +e
   output=$(
     cd "$ROOT/packages" && \
-      RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" \
       CARGO_TARGET_DIR="$workspace_target_dir" \
       cargo run --manifest-path "$manifest" --quiet --bin "$bin" 2>&1
   )

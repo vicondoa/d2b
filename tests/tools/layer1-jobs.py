@@ -24,6 +24,11 @@ SELF_TEST = ROOT / "tests" / "unit" / "meta" / "ci-runner-regression.py"
 CHECKOUT = "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5"
 INSTALL_NIX = "cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077"
 RUST_CACHE = "Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32"
+# Caches /nix through the GitHub Actions cache. The developer host has a local
+# attic substituter, which is why a fixture build that costs half an hour in CI
+# completes in seconds there; runners cannot reach that endpoint, so without
+# this they rebuild the entire Rust host-tool set from source on every run.
+NIX_CACHE = "nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569"
 # The shell program must be resolvable by the Actions runner itself, which
 # looks the first token up on PATH rather than against the workspace, and whose
 # argument splitter does not preserve nested quoting. The runner resolves `sh`
@@ -97,12 +102,79 @@ def ci_env_block(job: dict[str, Any], spaces: int) -> str:
     return "\n".join(lines) + "\n"
 
 
-def nix_setup_step() -> str:
-    return f"""      - uses: {INSTALL_NIX}
+# Jobs whose nix store cache is worth its share of the repository cache budget.
+#
+# GitHub evicts repository caches by LRU against a fixed ~10 GB total, shared
+# with the rust-cache entries this gate also depends on. Caching /nix for all
+# twelve nix-using jobs would fan the key space out far past that total, and the
+# steady state would be everything evicting everything - worse than not caching.
+# So only the jobs that actually build derivations and take long enough for it
+# to matter get an entry: measured on this gate, test-fixture-contracts spent 40
+# minutes building 166 derivations and test-nix-unit ran 15 minutes, while the
+# flake-eval shards finish in under a minute and the lint/drift jobs only
+# evaluate.
+#
+# On sizing: gc-max-store-size-linux caps the UNCOMPRESSED /nix store before
+# save, which is not the size of the resulting cache entry - the entry is
+# compressed and materially smaller. Two capped stores plus rust-cache
+# therefore sit inside the budget rather than consuming it outright, but this
+# configuration is deliberately near enough to the cap that it should be
+# re-measured against the repository cache-usage page after a run rather than
+# assumed.
+NIX_CACHED_JOBS = frozenset({"test-fixture-contracts", "test-nix-unit"})
+NIX_CACHE_MAX_STORE = "4G"
+# Scope suffix for a matrix job, so shards do not share one key. Defined here
+# rather than at the call site because a brace-doubled literal written inside an
+# f-string replacement field is ordinary Python source, not escaped f-string
+# text, and would emit four literal braces - an invalid GitHub expression.
+MATRIX_CHECK_SCOPE = "-${{ matrix.check }}"
+
+
+def nix_setup_step(job: dict[str, Any], scope_suffix: str = "") -> str:
+    """Renders nix installation, plus a store cache for the jobs that earn one.
+
+    The cache key is scoped to the job id (and, for a matrix job, to the shard
+    via scope_suffix). Every nix job used to share one key, and because
+    actions/cache never overwrites an existing entry, whichever job finished
+    first froze the cache at whatever its store held. In practice that was a
+    trivial lint or drift job, so the fixture-contract gate restored ~94 MB and
+    then still logged "these 166 derivations will be built" - the cache hit,
+    reported success, and saved nothing worth having.
+
+    Scoping also bounds purge-prefixes, which with purge-created 0 could
+    otherwise delete another job's entry.
+
+    The job parameter is required rather than optional: defaulting it would make
+    an omitted argument silently emit a shared key, which is the defect this
+    exists to prevent.
+    """
+    scope = job["ciJobId"] + scope_suffix
+    setup = f"""      - uses: {INSTALL_NIX}
         with:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes"""
+    if job["ciJobId"] not in NIX_CACHED_JOBS:
+        return setup
+    return (
+        setup
+        + f"""
+      - name: Nix store cache
+        # Without this the job rebuilds the Rust host-tool set from source,
+        # which is what makes the fixture-contract gate cost half an hour here
+        # while completing in seconds on a host with a substituter. Restore is
+        # best-effort: a cache miss is slow, never incorrect. See
+        # NIX_CACHED_JOBS for why only some jobs carry an entry.
+        uses: {NIX_CACHE}
+        with:
+          primary-key: nix-${{{{ runner.os }}}}-{scope}-${{{{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}}}
+          restore-prefixes-first-match: nix-${{{{ runner.os }}}}-{scope}-
+          gc-max-store-size-linux: {NIX_CACHE_MAX_STORE}
+          purge: true
+          purge-prefixes: nix-${{{{ runner.os }}}}-{scope}-
+          purge-created: 0
+          purge-primary-key: never"""
+    )
 
 
 def simple_nix_job(job: dict[str, Any]) -> str:
@@ -114,7 +186,7 @@ def simple_nix_job(job: dict[str, Any]) -> str:
       - uses: {CHECKOUT}
         with:
           persist-credentials: false
-{nix_setup_step()}
+{nix_setup_step(job)}
       - name: {job["displayName"]}
         run: make {job["makeTarget"]}"""
 
@@ -197,24 +269,31 @@ def rust_job(job: dict[str, Any]) -> str:
     # Warm (rust-cache hit): ~8-12 min. Cold (no cache): ~43 min.
     timeout-minutes: {job["timeoutMinutes"]}
     env:
-      # Disable sccache in CI - we use Swatinem/rust-cache (target-dir
-      # caching) instead, which caches ALL compiled artifacts including
-      # proc-macros and bin/lib crates that sccache cannot cache (~60% of
-      # compilations are "non-cacheable" by sccache due to crate-type).
-      # CARGO_INCREMENTAL=0 is still set: incremental compilation artifacts
-      # are non-deterministic and bloat the cache without benefit for CI
-      # (each PR run starts from a different commit).
+      # CI uses Swatinem/rust-cache (target-dir caching) and NOT sccache. That
+      # is not a preference - sccache is incompatible with this workspace's
+      # integration tests. Its server forwards only a whitelist of environment
+      # variables to rustc, and CARGO_BIN_EXE_<name>, which Cargo injects so an
+      # integration test can locate the binary it exercises, is not on it. Any
+      # test using env!("CARGO_BIN_EXE_...") then fails to compile with
+      # "environment variable ... not defined at compile time"; measured on this
+      # gate, d2b-exec-runner/tests/tty_pty_integration.rs fails exactly that
+      # way. It does not reproduce locally because CARGO_INCREMENTAL is on
+      # there, which makes sccache treat those compilations as non-cacheable and
+      # pass them through untouched.
+      #
+      # sccache remains enabled for local development, where the same shim is
+      # reached through packages/.cargo/config.toml. Only CI opts out.
+      #
+      # CARGO_INCREMENTAL=0 is still set: incremental compilation artifacts are
+      # non-deterministic and bloat the cache without benefit for CI (each PR
+      # run starts from a different commit).
       CARGO_INCREMENTAL: "0"
-      # Override the repo .cargo/config.toml rustc-wrapper (sccache) so
-      # rust-cache's post-step `cargo metadata` doesn't fail looking for
-      # an sccache binary that isn't installed.
-      CARGO_BUILD_RUSTC_WRAPPER: ""
     steps:
       - uses: {CHECKOUT}
         with:
           persist-credentials: false
           fetch-depth: 0
-{nix_setup_step()}
+{nix_setup_step(job)}
       - name: Free runner disk for Rust gate
         run: |
           df -h
@@ -245,12 +324,21 @@ def rust_job(job: dict[str, Any]) -> str:
           workspaces: |
             packages -> target
             packages/d2b-priv-broker -> target
+            packages/d2b-guest-shell-runner -> target
           cache-directories: |
             packages/d2b-priv-broker/target-layer1
             packages/d2b-priv-broker/target-fakebackends
+            tests/tools/no-bash-ast-walker/target
           prefix-key: "v0-rust"
           shared-key: "test-rust-${{{{ runner.os }}}}"
-          save-if: "true"
+          # A single writer keeps concurrent saves from racing one shared key.
+          # test-rust is that writer; the rest restore whatever the previous
+          # run left. Note test-fixture-contracts now starts alongside
+          # test-rust rather than after it, so on a cold key both compile the
+          # workspace and only one entry is kept - the wall-clock win from
+          # running them in parallel is worth more than the duplicated cold
+          # build.
+          save-if: "{'true' if job["ciJobId"] == 'test-rust' else 'false'}"
 {heavy_gate_step(job)}      - name: {job["displayName"]}
         env:
 {render_env(job)}
@@ -267,7 +355,7 @@ def flake_discover_job(job: dict[str, Any]) -> str:
       - uses: {CHECKOUT}
         with:
           persist-credentials: false
-{nix_setup_step()}
+{nix_setup_step(job)}
       - id: list
         name: {job["displayName"]}
         run: |
@@ -302,7 +390,7 @@ def flake_x86_shards_job(job: dict[str, Any]) -> str:
           sudo chmod 600 "$SWAP"
           sudo mkswap "$SWAP"
           sudo swapon "$SWAP"
-{nix_setup_step()}
+{nix_setup_step(job, MATRIX_CHECK_SCOPE)}
       - name: Install flake shard diagnostics
         run: sudo apt-get update && sudo apt-get install -y gdb
       - name: {job["displayName"]}
@@ -323,7 +411,7 @@ def flake_x86_outputs_job(job: dict[str, Any]) -> str:
       - uses: {CHECKOUT}
         with:
           persist-credentials: false
-{nix_setup_step()}
+{nix_setup_step(job)}
       - name: {job["displayName"]}
         env:
           D2B_FLAKE_OUTPUTS: "1"
@@ -362,7 +450,7 @@ def flake_aarch64_smoke_job(job: dict[str, Any]) -> str:
       - uses: {CHECKOUT}
         with:
           persist-credentials: false
-{nix_setup_step()}
+{nix_setup_step(job)}
       - name: {job["displayName"]}
         run: |
           nix-instantiate --eval --strict \\
@@ -661,9 +749,18 @@ def selected_phases(manifest: dict[str, Any], include_preflight: bool) -> list[d
 def command_run_local(args: argparse.Namespace) -> int:
     manifest = load_manifest()
     jobs = manifest["jobs"]
+    # Resolved in two steps rather than via os.environ.get's default argument:
+    # the environment lookup is str | None, the manifest fallback is untyped,
+    # and folding them together makes the argument to int() an optional that a
+    # type checker rejects. A boolean-or fallback would type-check but would
+    # also treat an explicit "0" as unset, silently substituting the default
+    # instead of reaching the >= 1 rejection below.
+    raw_max_jobs: object = os.environ.get("D2B_CHECK_JOBS")
+    if raw_max_jobs is None:
+        raw_max_jobs = manifest["local"].get("defaultJobs", 4)
     try:
-        max_jobs = int(os.environ.get("D2B_CHECK_JOBS", manifest["local"].get("defaultJobs", 4)))
-    except ValueError:
+        max_jobs = int(raw_max_jobs)  # type: ignore[call-overload]
+    except (TypeError, ValueError):
         print("D2B_CHECK_JOBS must be an integer", file=sys.stderr)
         return 2
     if max_jobs < 1:

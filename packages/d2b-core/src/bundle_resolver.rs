@@ -2409,7 +2409,7 @@ fn build_usbip_bind_intents(host: &HostJson) -> BTreeMap<String, ResolvedUsbipBi
         for lock in &env.usbip_busid_locks {
             for bus_id in synthesize_bus_ids(lock) {
                 let intent_id = intent_id_usbip_bind(&env.env, &lock.vm, &bus_id);
-                let lock_path = PathBuf::from(format!("/run/d2b/locks/usbip/{}", &bus_id));
+                let lock_path = PathBuf::from(format!("/run/d2b/locks/usbip/{bus_id}"));
                 out.insert(
                     intent_id.clone(),
                     ResolvedUsbipBindIntent {

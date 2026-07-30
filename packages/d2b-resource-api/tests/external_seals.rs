@@ -5,6 +5,45 @@ use std::{
     process::Command,
 };
 
+/// Owns the repository-local compiler scratch so it is removed on every exit
+/// path, including a panicking assertion. Removing it only on success leaves a
+/// uniquely-named target tree behind whenever cargo fails, and a repeatedly
+/// failing gate accumulates them until it trips the disk-space preflight.
+struct ScratchGuard(PathBuf);
+
+impl ScratchGuard {
+    /// Drop does not run when the process is killed by a signal - nextest's
+    /// slow-timeout terminate, SIGKILL and OOM all skip it - so a tree can
+    /// outlive its run and be adopted by a later one that reuses the PID. That
+    /// would hand the seal a warm target dir plus a stale
+    /// `resource-api-cfg-test-active` marker, and `cfg_test_marker.is_file()`
+    /// would pass without a compile having happened. Remove any existing tree
+    /// before creating, so adoption cannot occur.
+    fn new(path: PathBuf) -> Self {
+        // Fail closed, matching Scratch::ephemeral in d2b-bus. Swallowing the
+        // error would let a tree that could not be removed (EACCES on a
+        // mode-changed entry, EBUSY, a racing writer) be adopted anyway, since
+        // create_dir_all succeeds on an existing directory - reinstating the
+        // very hole this guard closes.
+        match fs::remove_dir_all(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => panic!(
+                "could not discard a stranded scratch tree at {}; adopting it would let the \
+                 cfg(test) marker pass without a compile: {error}",
+                path.display()
+            ),
+        }
+        Self(path)
+    }
+}
+
+impl Drop for ScratchGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
 struct CompileFailHarness<'a> {
     cargo: &'a str,
     manifest: &'a Path,
@@ -59,10 +98,19 @@ fn dependent_cannot_mint_admission_or_session_capabilities() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repository_root = crate_root.parent().unwrap().parent().unwrap();
     let fixture = crate_root.join("tests/ui/external-seals");
-    let scratch = repository_root.join(".scratch").join(format!(
+    // Per-process and uncached, deliberately: the cfg_test_marker assertion
+    // below proves the crate was compiled under forced cfg(test), and a warm
+    // target dir would skip that compile and leave a stale marker satisfying
+    // the assertion without proving anything.
+    //
+    // Owned by a guard so the tree is removed on every exit path. Removing it
+    // only on success strands a uniquely-named multi-gigabyte tree per failing
+    // run, and preflight-disk-space.sh fails the wave below 10 GiB free.
+    let scratch_guard = ScratchGuard::new(repository_root.join(".scratch").join(format!(
         "resource-api-external-seals-{}",
         std::process::id()
-    ));
+    )));
+    let scratch = scratch_guard.0.clone();
     let target = scratch.join("target");
     let temp = scratch.join("tmp");
     fs::create_dir_all(&temp).expect("create repository-local compiler scratch");
@@ -108,7 +156,12 @@ exec "$rustc" "$@"
     );
     harness.check_rejected(
         "forge_subject",
-        &["error[E0599]", "no function or associated item named `new`"],
+        // rustc 1.97 rewords E0599 for an absent associated item from "no
+        // function or associated item named" to "no associated function or
+        // constant named". Match the shorter stable substring both spellings
+        // share, so the seal keeps asserting that `new` is unreachable without
+        // re-breaking on the next rewording.
+        &["error[E0599]", "named `new`"],
     );
     harness.check_rejected(
         "private_admission_path",
@@ -140,5 +193,6 @@ exec "$rustc" "$@"
         "the resource API was not compiled under forced cfg(test)"
     );
 
-    fs::remove_dir_all(&scratch).expect("remove repository-local compiler scratch");
+    // ScratchGuard removes the tree on drop, including on a panicking
+    // assertion above, so there is no explicit cleanup here.
 }

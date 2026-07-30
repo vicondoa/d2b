@@ -14,9 +14,15 @@
 #
 # To skip sccache locally (e.g. when bisecting a compiler issue), set
 # RUSTC_WRAPPER= explicitly or set CARGO_BUILD_RUSTC_WRAPPER=.
+#
+# rustc-wrapper points at a shim rather than at "sccache" directly. Naming the
+# binary here makes it a hard requirement of every cargo invocation, so any
+# environment without it fails outright, and the usual workaround - exporting
+# RUSTC_WRAPPER="" - then spreads into environments that do have sccache and
+# silently disables the cache. The shim degrades to plain rustc instead.
 
 [alias]
 xtask = "run -p xtask --"
 
 [build]
-rustc-wrapper = "sccache"
+rustc-wrapper = ".cargo/rustc-wrapper.sh"
