@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Instant;
 
 use tokio::sync::{mpsc, oneshot};
@@ -28,12 +29,18 @@ pub struct Hint {
     pub committed_at: Instant,
 }
 
+/// One shared immutable ChangeBatch, fanned out to matching watchers.
+///
+/// Watchers receive a refcount handle rather than a private deep copy, so N
+/// matching watchers cost one batch plus N pointers instead of N batches.
+pub type SharedChangeBatch = Arc<ChangeBatch>;
+
 pub struct Watch {
-    receiver: mpsc::Receiver<ChangeBatch>,
+    receiver: mpsc::Receiver<SharedChangeBatch>,
 }
 
 impl Watch {
-    pub async fn recv(&mut self) -> Option<ChangeBatch> {
+    pub async fn recv(&mut self) -> Option<SharedChangeBatch> {
         self.receiver.recv().await
     }
 }
@@ -45,6 +52,16 @@ pub struct ActorStats {
     pub commits: u64,
     pub watch_delivery_failures: u64,
     pub hint_delivery_failures: u64,
+    /// Bounded backend signals. Fixed cardinality: every field below is a
+    /// single process-wide counter or gauge with no per-watch, per-resource,
+    /// or per-revision label, so the signal set cannot grow with the fixture.
+    pub replay_range_seeks: u64,
+    pub replay_rows_scanned: u64,
+    pub replay_rows_decoded: u64,
+    pub shared_batches: u64,
+    pub shared_batch_fanout_refs: u64,
+    pub write_queue_depth: u64,
+    pub write_queue_capacity: u64,
 }
 
 #[derive(Clone)]
@@ -64,7 +81,7 @@ enum Command {
     Watch {
         after_revision: u64,
         resource_types: BTreeSet<String>,
-        sender: mpsc::Sender<ChangeBatch>,
+        sender: mpsc::Sender<SharedChangeBatch>,
         response: oneshot::Sender<StoreResult<()>>,
     },
     HintConsumer {
@@ -90,7 +107,7 @@ enum Command {
 
 struct WatchRegistration {
     resource_types: BTreeSet<String>,
-    sender: mpsc::Sender<ChangeBatch>,
+    sender: mpsc::Sender<SharedChangeBatch>,
 }
 
 struct HintRegistration {
@@ -411,23 +428,56 @@ impl Actor {
         }
     }
 
+    /// Fan one shared immutable ChangeBatch out to every matching watcher.
+    ///
+    /// Watchers that share a filter share a single `Arc<ChangeBatch>`, so the
+    /// per-commit cost is one materialized batch per distinct filter plus one
+    /// refcount bump per watcher, not one deep clone per watcher. When a
+    /// filter admits every entry the unfiltered batch is shared directly and
+    /// nothing is copied at all.
     fn dispatch_watch(&mut self, batch: &ChangeBatch) {
+        if self.watches.is_empty() {
+            return;
+        }
+        let unfiltered: SharedChangeBatch = Arc::new(batch.clone());
+        let mut shared: BTreeMap<BTreeSet<String>, SharedChangeBatch> = BTreeMap::new();
+        let mut materialized = 1_u64;
+        let mut fanout_refs = 0_u64;
+        let stats = &mut self.stats;
         self.watches.retain(|watch| {
-            let mut filtered = batch.clone();
-            filtered.entries.retain(|entry| {
-                watch
-                    .resource_types
-                    .contains(&entry.resource.key.resource_type)
-            });
-            match watch.sender.try_send(filtered) {
+            let shared_batch = shared
+                .entry(watch.resource_types.clone())
+                .or_insert_with(|| {
+                    if batch.entries.iter().all(|entry| {
+                        watch
+                            .resource_types
+                            .contains(&entry.resource.key.resource_type)
+                    }) {
+                        Arc::clone(&unfiltered)
+                    } else {
+                        let mut filtered = batch.clone();
+                        filtered.entries.retain(|entry| {
+                            watch
+                                .resource_types
+                                .contains(&entry.resource.key.resource_type)
+                        });
+                        materialized += 1;
+                        Arc::new(filtered)
+                    }
+                })
+                .clone();
+            fanout_refs += 1;
+            match watch.sender.try_send(shared_batch) {
                 Ok(()) => true,
                 Err(mpsc::error::TrySendError::Full(_)) => {
-                    self.stats.watch_delivery_failures += 1;
+                    stats.watch_delivery_failures += 1;
                     false
                 }
                 Err(mpsc::error::TrySendError::Closed(_)) => false,
             }
         });
+        self.stats.shared_batches += materialized;
+        self.stats.shared_batch_fanout_refs += fanout_refs;
     }
 
     fn dispatch_hints(&mut self, batch: &ChangeBatch, committed_at: Instant) {
@@ -481,20 +531,29 @@ impl Actor {
                 sender,
                 response,
             } => {
-                let result = self
-                    .disk
-                    .revision_batches_after(after_revision)
-                    .and_then(|batches| {
-                        for mut batch in batches {
+                // Replay streams one range-seeked row at a time. Rows at or
+                // below `after_revision` are never read and never decoded, and
+                // each decoded batch is filtered, shared, sent, and dropped
+                // before the next row is read, so no older complete envelope
+                // and no whole-log vector is ever materialized.
+                //
+                // The scan is caller-owned so a failure mid-replay (the
+                // backpressure case, where the counters are most diagnostic)
+                // still accumulates the partial signals.
+                let mut scan = crate::disk::ReplayScan::default();
+                let result =
+                    self.disk
+                        .stream_revision_batches_after(after_revision, &mut scan, |mut batch| {
                             batch.entries.retain(|entry| {
                                 resource_types.contains(&entry.resource.key.resource_type)
                             });
                             sender
-                                .try_send(batch)
-                                .map_err(|_| StoreError::Backpressure)?;
-                        }
-                        Ok(())
-                    });
+                                .try_send(Arc::new(batch))
+                                .map_err(|_| StoreError::Backpressure)
+                        });
+                self.stats.replay_range_seeks += scan.range_seeks;
+                self.stats.replay_rows_scanned += scan.rows_scanned;
+                self.stats.replay_rows_decoded += scan.rows_decoded;
                 if result.is_ok() {
                     self.watches.push(WatchRegistration {
                         resource_types,
@@ -527,6 +586,8 @@ impl Actor {
                 let _ = response.send(self.disk.current_revision());
             }
             Command::Stats { response } => {
+                self.stats.write_queue_depth = u64::try_from(self.scheduler.len).unwrap_or(u64::MAX);
+                self.stats.write_queue_capacity = WRITE_QUEUE_CAPACITY as u64;
                 let _ = response.send(self.stats);
             }
             Command::Write(_) => unreachable!("writes are handled separately"),

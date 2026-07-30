@@ -44,11 +44,15 @@ Removed sections: none
 
 Templates and artifacts requiring follow-up:
 - specs/001-adr046-d2b3-completion/spec.md - FR-025 and FR-036 restated for the
-  pipeline; new FRs added for the strict panel/seal/merge ordering.
-- docs/specs/ADR-046-validation-and-delivery.md - Section 4 entry criteria still
-  say "there is no partial-wave advance" and the tooling still enforces it.
-  A member-spec amendment plus a tooling change is required before the pipeline
-  is executable; tracked as tasks in the feature plan.
+  pipeline; new FRs added for the strict panel/seal/merge ordering. DISCHARGED:
+  FR-056 through FR-059 landed, FR-025 was narrowed to exit, and FR-057 states
+  the entry-versus-exit distinction that reconciles FR-025 with FR-036.
+- docs/specs/ADR-046-validation-and-delivery.md - Section 4 entry criteria said
+  "there is no partial-wave advance" and the tooling enforced it. DISCHARGED:
+  sections 4, 12.1 and 12.4 were amended to permit a pipelined start under the
+  four Principle VI conditions, and the tooling moved the prior-wave-merged
+  assertion out of wave entry to the panel-request, seal and merge-eligibility
+  boundary. The pipeline is executable.
 
 Deferred / TODO items: none.
 -->

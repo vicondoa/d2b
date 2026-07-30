@@ -4,23 +4,30 @@
     "AGENTS.md",
     "tests/AGENTS.md"
   ],
-  "permission": {
-    "edit": "allow",
-    "webfetch": "allow",
-    "bash": {
-      "*": "allow",
-      "sudo *": "ask",
-      "rm -rf *": "ask"
+  "plugin": [
+    "@bybrawe/opencode-loop"
+  ],
+  "agent": {
+    "general": {
+      "model": "github-copilot/gpt-5.6-sol",
+      "reasoningEffort": "xhigh"
     },
-    "external_directory": {
-      "*": "allow",
-      "/nix/store/**": "allow",
-      "/tmp/**": "allow",
-      "/run/d2b-heavy-gates/**": "allow",
-      "~/.cache/d2b-sccache/**": "allow",
-      "~/projects/d2b*/**": "allow",
-      "~/.ssh/**": "deny",
-      "~/.gnupg/**": "deny"
+    "explore": {
+      "model": "github-copilot/gpt-5.6-sol",
+      "reasoningEffort": "xhigh"
+    },
+    "panel": {
+      "description": "Read-only ADR-046 binding panel reviewer. One lane per roster role, dispatched only at wave close against the wave's immutable snapshot.",
+      "mode": "subagent",
+      "model": "github-copilot/gemini-3.1-pro-preview",
+      "reasoningEffort": "high",
+      "tools": {
+        "write": false,
+        "edit": false,
+        "patch": false,
+        "bash": false
+      }
     }
-  }
+  },
+  "permission": "allow"
 }

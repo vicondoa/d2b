@@ -29,7 +29,16 @@ impl CompileFailHarness<'_> {
             ])
             .env("CARGO_TARGET_DIR", self.target)
             .env("D2B_CFG_TEST_MARKER", self.cfg_test_marker)
+            // This harness owns RUSTC_WRAPPER: it must be the selective
+            // cfg(test) shim below, never the repository's caching wrapper,
+            // whose client or server can exit nonzero under concurrent cargo
+            // invocations and turn a load-bearing seal assertion into a
+            // spurious failure. Clear the other wrapper spellings for the same
+            // reason, so an inherited workspace or config-env wrapper cannot
+            // layer that contention back on top of the shim.
             .env("RUSTC_WRAPPER", self.rustc_wrapper)
+            .env("RUSTC_WORKSPACE_WRAPPER", "")
+            .env("CARGO_BUILD_RUSTC_WRAPPER", "")
             .env("TMPDIR", self.temp)
             .output()
             .expect("run dependent compile-fail crate");

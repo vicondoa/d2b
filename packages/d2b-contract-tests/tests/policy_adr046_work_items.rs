@@ -906,8 +906,19 @@ fn generated_artifacts_are_deterministic_and_carry_no_superseded_bindings() {
             text.ends_with('\n'),
             "`{rel}` must end with exactly one trailing newline"
         );
+        // The panel binding has moved twice. An earlier change rebound it from
+        // an early Gemini model to `gpt-5.6-sol`, and this assertion then
+        // pinned "gemini" as the superseded value. A later operator decision
+        // supersedes that rebinding: the panel now runs on
+        // `gemini-3.1-pro-preview` while `gpt-5.6-sol` is the model that
+        // writes the code. Keeping the reviewing model distinct from the
+        // authoring model is the point, so the value this pins is inverted
+        // rather than dropped - a manifest that reintroduces the coding model
+        // as a panel binding is the regression to catch now. The comparison
+        // folds case so a manifest spelling the binding `GPT-5.6-Sol` cannot
+        // slip past it.
         assert!(
-            !text.to_ascii_lowercase().contains("gemini"),
+            !text.to_ascii_lowercase().contains("gpt-5.6-sol"),
             "`{rel}` still references the superseded panel model binding"
         );
         let root = repo_root();

@@ -46,8 +46,48 @@ Run all specialized agents against your changes and get a consolidated report:
 ```
 
 All commands (coordinator and individual agents) use the built-in `detect-changed-files` script to automatically identify what to review when no files are specified:
-- **Feature branch**: Committed changes since the merge base with the default branch (main/master), plus any uncommitted work
-- **Default branch**: Only uncommitted work (staged and unstaged changes)
+- **Feature branch**: Committed changes since the merge base with the base ref, plus any uncommitted work
+- **Base ref itself**: Only uncommitted work (staged and unstaged changes)
+
+#### Choosing the diff base
+
+The base ref is resolved in this order:
+
+1. `--base <ref>` (CLI option; wins)
+2. `SPECIFY_REVIEW_BASE_REF` environment variable
+3. `git symbolic-ref refs/remotes/origin/HEAD`
+4. `origin/main`
+5. `origin/master`
+
+An explicit base ref (1 or 2) that `git rev-parse --verify` cannot resolve is a
+hard error (exit 1). The script never silently falls back to the repository
+default branch. The error names the recovery: re-run with `--base` naming an
+existing branch, tag or commit (for ADR-046 waves that is the integration
+lineage `v3`, or the predecessor wave branch when the wave is stacked), listing
+candidates with `git branch -a` and confirming one with
+`git rev-parse --verify <ref>`. The same guidance is emitted when `--base` is
+given without a value.
+
+**ADR-046 wave reviews MUST pass `--base` naming the wave's real base.** In this
+repository the integration lineage is `v3`, and `v3` never merges to `main`, so
+the automatically detected default branch does not share the wave's history.
+Without an explicit base the review would be scoped against the entire `v3`
+divergence instead of the wave's own diff, which is exactly the scoping the
+requirement forbids. Use the integration lineage:
+
+```
+.specify/extensions/review/scripts/bash/detect-changed-files.sh --base v3 --json
+```
+
+or, when the wave is stacked on a predecessor wave branch, name that branch:
+
+```
+.specify/extensions/review/scripts/bash/detect-changed-files.sh --base realm-workloads-w13-adr --json
+```
+
+The `default_branch` output field (text and JSON) reports the ref actually used
+as the diff base; the companion `base_source` field reports how it was resolved
+(`cli`, `env`, `origin-head`, `origin-main`, `origin-master`, or `none`).
 
 You can skip the script entirely by telling the agent what to review:
 

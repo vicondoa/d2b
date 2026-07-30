@@ -752,6 +752,37 @@ rather than duplicating the validation themselves. This keeps panel
 review from stampeding the shared Nix store, cargo target, and git
 worktrees while parallel implementation agents are still active.
 
+A panel round after the first is a **delta review**, and its prompt MUST
+carry two explicit ranges rather than only the full branch diff:
+
+- `git diff <the commit that reviewer last reviewed>..HEAD` - the delta,
+  which is what the reviewer actually reviews. It is the only thing that
+  can have introduced a new defect or failed to close an old one.
+- `git diff <base>..HEAD` - the full branch, for context when the delta
+  touches something whose correctness depends on code outside it.
+
+The integrator therefore MUST record the tip commit each round reviewed, so
+the next round can be scoped against it. A prose summary of what changed is
+a statement of intent, not evidence: prompts MUST instruct reviewers to read
+the delta themselves rather than trust the summary, because a fix that
+silently touched something the summary omits is exactly what a delta review
+exists to catch. Prompts MUST also instruct reviewers to verify their own
+prior findings against the tree by inspection rather than marking them
+closed because the prompt says they were fixed.
+
+Where the integrator disputes a finding, the prompt MUST state the rebuttal
+and its evidence and ask the reviewer to judge it on the merits - explicitly
+permitting withdrawal of an incorrect finding, and explicitly not requiring
+it. An unfounded finding drives a wrong change into the tree, so sustaining
+one to save face is worse than admitting the error; equally, a reviewer must
+not withdraw a valid finding merely because the integrator pushed back.
+
+Any content change to the reviewed tree invalidates every prior sign-off in
+that phase, including sign-offs from reviewers whose focus the change did
+not touch. Those reviewers still re-report, but their prompt should scope
+them to the delta and permit a short confirmation that their area is
+unaffected.
+
 Each engineer returns a JSON sign-off record shaped like:
 
 ```json
@@ -769,6 +800,39 @@ reviewer returns findings, the integrator spawns follow-up
 implementation agents, lands the fixes, reruns the tests, and starts
 another panel round. Green tests do not waive this gate; a phase closes
 only on unanimous sign-off.
+
+### Fix rounds are scoped to the findings
+
+A fix round MUST address the findings the panel actually raised, and
+nothing else. Do not take a finding as licence to harden the surrounding
+area, add coverage the panel did not ask for, or fix an unrelated defect
+noticed in passing. File those separately.
+
+This rule exists because the alternative does not converge. Every
+unrequested change is new content, new content invalidates the round's
+evidence, and the next round reviews a larger diff that offers more to
+find - so the gate recedes while the actual deliverable sits finished and
+unmerged. The observed failure mode is a phase gate whose findings drift
+from "the specification contradicts the shipped code" to progressively
+more peripheral tooling nits, several rounds after the deliverable was
+ready.
+
+Two consequences worth stating outright:
+
+- A genuine defect discovered while fixing something else is still out of
+  scope for that fix round. Record it and land it separately, so the
+  round's diff stays reviewable against the findings it answers.
+- An integrator MUST NOT run `git add -A` while a build, test, or gate is
+  running. Those write scratch directories into the worktree, and a
+  catch-all add commits them. Stage the specific paths the fix touched.
+  The gitignore is a backstop, not the control - it can only cover
+  scratch patterns someone already thought of.
+
+Panel prompts SHOULD state the phase's deliverable and instruct reviewers
+to confine findings to defects in the delta that would cause incorrect
+behaviour or mask a regression, rather than proposing speculative
+robustness work. A reviewer who wants additional hardening should say so
+as an observation in the summary, not as a blocking recommendation.
 
 Escape hatches are narrow:
 
@@ -834,8 +898,11 @@ ranked. Read this ordering before wiring any harness.
    for all ten roles, `signoff` true iff `recommendations` is `[]`,
    unanimous ten of ten, every record bound to the same
    `candidate_id`/`content_id`/`snapshot_sha256`, and provider/model/
-   reasoning effort pinned to `github-copilot` / `gpt-5.6-sol` /
-   `xhigh`. There is no override, no force flag, and no partial pass.
+   reasoning effort pinned to `github-copilot` /
+   `gemini-3.1-pro-preview` / `high`. The panel model is deliberately
+   not the coding model, so a lane cannot both author a change and
+   attest to it. There is no override, no force flag, and no partial
+   pass.
    See [`docs/specs/ADR-046-validation-and-delivery.md`](./docs/specs/ADR-046-validation-and-delivery.md)
    section 12.3.
 2. **The per-round phase panel** - the [Phase gate](#phase-gate) rule
@@ -866,11 +933,15 @@ all 10 roles vote independently and each lane's verdict maps one-to-one
 onto a `panel-attest` record.
 
 To keep those records attestable, the reviewing agents must run on the
-pinned panel binding. `agents.<name>.model` in
-`.opencode/opencode-swarm.json` pins them to
-`github-copilot/gpt-5.6-sol`; a lane on any other model produces a
-record `panel-attest` will reject, so do not let model fallback silently
-downgrade a panel lane.
+pinned panel binding. The `panel` entry under `agent` in
+`.opencode/opencode.json` pins them to
+`github-copilot/gemini-3.1-pro-preview` at reasoning effort `high` and
+denies the write, edit, patch, and bash tools, matching the read-only
+lane contract above. A lane on any other model produces a record
+`panel-attest` will reject, so do not let model fallback silently
+downgrade a panel lane, and do not dispatch a panel lane through the
+`general` agent - that one is pinned to the coding model
+`github-copilot/gpt-5.6-sol` and its records are rejected by design.
 
 **The per-round council, and what it costs.**
 `submit_phase_council_verdicts` has a closed five-member roster
@@ -999,11 +1070,17 @@ The panel contract is implementation-neutral: any harness that
 preserves the roster, the unanimity rule, the no-rerun discipline, and
 the two gates per phase is acceptable.
 
-The in-repo reference implementation is the `opencode-swarm` wiring
-described above, configured by `.opencode/opencode-swarm.json` and
-`.opencode/opencode.json`. Those two files are the tracked, reviewable
-surface for panel behaviour; change them in the same commit as any
-change to this section.
+The in-repo reference implementation is `.opencode/opencode.json`. Its
+`agent` table is the tracked, reviewable surface for panel behaviour:
+`panel` carries the reviewing binding and the read-only tool set, while
+`general` and `explore` carry the coding binding. Change that file in
+the same commit as any change to this section.
+
+The ADR 0046 program does not run swarm. Where this section describes
+swarm's five-seat council, treat it as documenting an available harness
+rather than the configuration in use; the per-round gate is run
+directly, and the binding wave panel is dispatched as ten read-only
+`panel` lanes.
 
 A second, host-local implementation lives in
 `/etc/nixos/scripts/panel-review.{md,sh}` and
