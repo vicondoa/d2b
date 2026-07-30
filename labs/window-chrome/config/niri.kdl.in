@@ -1,0 +1,81 @@
+// niri config for the window-chrome capture lab.
+//
+// Everything that could make a screenshot non-deterministic is pinned:
+// output mode/scale, gaps, border, corner radius, animations off.
+// Values mirror a typical operator setup so captures are representative.
+
+environment {
+    DISPLAY null
+}
+
+input {
+    keyboard {
+        xkb {}
+    }
+    focus-follows-mouse
+}
+
+output "winit" {
+    mode "@@MODE@@"
+    scale @@SCALE@@
+    position x=0 y=0
+}
+
+layout {
+    gaps @@GAPS@@
+    center-focused-column "never"
+
+    preset-column-widths {
+        proportion 0.5
+        proportion 0.75
+    }
+
+    default-column-width { proportion 0.6; }
+
+    focus-ring {
+        off
+    }
+
+    border {
+        on
+        width @@BORDER@@
+        active-color "@@BORDER_ACTIVE@@"
+        inactive-color "@@BORDER_INACTIVE@@"
+        urgent-color "@@BORDER_URGENT@@"
+    }
+
+    shadow {
+        off
+    }
+
+    struts {
+        left 0
+        right 0
+        top 0
+        bottom 0
+    }
+}
+
+prefer-no-csd
+
+hotkey-overlay {
+    skip-at-startup
+}
+
+animations {
+    off
+}
+
+window-rule {
+    geometry-corner-radius @@RADIUS@@
+    clip-to-geometry @@CLIP@@
+    // The chrome band is deliberately transparent outside the tab. Without
+    // this, niri fills the window rect with the border colour as a background
+    // and that fill shows through the transparent strip.
+    draw-border-with-background false
+}
+
+binds {
+    Mod+Shift+E { quit skip-confirmation=true; }
+    Mod+Q { close-window; }
+}

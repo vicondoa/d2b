@@ -1,0 +1,29 @@
+// Window rule for the window-identity-chrome prototype.
+//
+// Include from ~/.config/niri/config.kdl:
+//
+//     include "/home/paydro/projects/d2b-window-chrome/lab/config/chromelab-niri.kdl"
+//
+// Then: niri msg action load-config-file
+//
+// WHY THIS IS NEEDED
+//
+// The identity tab reserves a strip at the top of the window and paints only
+// the tab itself, leaving the rest transparent so the desktop shows through.
+//
+// niri fills a window's rect with the border colour as a *background* when the
+// window uses client-side decorations, which is how it renders a border behind
+// semitransparent CSD shadows. That fill shows straight through the transparent
+// strip, so the strip appears as a solid slab of the border colour instead of
+// the desktop.
+//
+// This rule disables that fill for prototype windows only.
+//
+// The durable fix is for the proxy to negotiate ServerSide decoration on its
+// wrapper toplevel, at which point niri draws its ordinary surrounding border
+// and no rule is required. That is tracked as an open item for ADR 0047.
+
+window-rule {
+    match app-id=r#"^d2b\.chromelab\."#
+    draw-border-with-background false
+}
