@@ -55,6 +55,17 @@ fn foreign_source_cannot_mint_committed_decision() {
         ])
         .env("CARGO_TARGET_DIR", scratch.path().join("target"))
         .env("TMPDIR", &temp)
+        // Compile the fixture without any rustc wrapper. The repository config
+        // sets a caching wrapper, whose client or server can exit nonzero under
+        // concurrent cargo invocations; that failure is indistinguishable from
+        // the fixture failing for the wrong reason, so it turns a load-bearing
+        // seal assertion into a spurious failure. A compilation that is
+        // expected to fail gains nothing from a compiler cache anyway. Clear
+        // every wrapper spelling, not just RUSTC_WRAPPER, so an inherited
+        // workspace or config-env wrapper cannot reintroduce the contention.
+        .env("RUSTC_WRAPPER", "")
+        .env("RUSTC_WORKSPACE_WRAPPER", "")
+        .env("CARGO_BUILD_RUSTC_WRAPPER", "")
         .output()
         .expect("run dependent compile-fail crate");
     let stderr = String::from_utf8(output.stderr).expect("compiler diagnostics are UTF-8");

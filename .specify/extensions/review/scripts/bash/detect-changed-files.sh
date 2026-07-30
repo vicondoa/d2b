@@ -229,6 +229,54 @@ else
     fi
 fi
 
+# --- Helper: collect NUL-delimited git output into COLLECTED ---
+#
+# A `while read` fed by a process substitution - `done < <(git ...)` - cannot
+# fail closed: the process substitution is asynchronous, so bash never
+# propagates git's exit status to `set -e` and a failed git (bad ref, corrupt
+# index, OOM) is indistinguishable from an empty diff. For a review gate that
+# is fail-open: the reviewer is told there is nothing to review when the diff
+# could not be computed at all.
+#
+# Capturing into a shell variable via `$(...)` would check the status but is
+# not NUL-safe: bash silently drops NUL bytes from command substitution, which
+# destroys the `-z` record separator and mangles filenames containing spaces or
+# newlines. So the bytes go to a temporary file instead:
+#   - `git ... >"$_out"` is a synchronous simple command, so its exit status is
+#     checked explicitly and a failure exits 1;
+#   - the file holds the raw NUL-delimited bytes untouched;
+#   - `while ... done < "$_out"` is a plain file redirection, not a pipeline or
+#     process substitution, so the loop runs in the main shell and the
+#     collected array stays visible to the caller.
+_DIFF_TMPDIR=""
+
+# shellcheck disable=SC2329  # invoked indirectly by the EXIT trap below
+_cleanup_diff_tmpdir() {
+    if [[ -n "$_DIFF_TMPDIR" ]]; then
+        rm -rf "$_DIFF_TMPDIR"
+    fi
+}
+trap '_cleanup_diff_tmpdir' EXIT
+
+COLLECTED=()
+
+collect_git_nul() {
+    COLLECTED=()
+    if [[ -z "$_DIFF_TMPDIR" ]]; then
+        if ! _DIFF_TMPDIR=$(mktemp -d 2>/dev/null); then
+            error_exit "Cannot create a temporary directory to collect git output. Check that TMPDIR is writable and has free space, then re-run." 1
+        fi
+    fi
+    local _out="${_DIFF_TMPDIR}/git-out.bin"
+    if ! git "$@" >"$_out" 2>/dev/null; then
+        error_exit "git $* failed while collecting changed files. The change set could not be computed, so this run reports an error rather than an empty review scope. Re-run the command by hand to see git's own diagnostics, and check that the base ref still resolves ('git rev-parse --verify <ref>') and that the repository index is intact ('git status')." 1
+    fi
+    local line
+    while IFS= read -r -d '' line; do
+        [[ -n "$line" ]] && COLLECTED+=("$line")
+    done < "$_out"
+}
+
 # --- 1c. Get Changed Files ---
 
 CHANGED_FILES=()
@@ -257,22 +305,16 @@ if $USE_MODE_A; then
 
     if [[ -n "$MERGE_BASE" ]]; then
         # Committed changes since merge-base
-        COMMITTED=()
-        while IFS= read -r -d '' line; do
-            [[ -n "$line" ]] && COMMITTED+=("$line")
-        done < <(git diff --name-only -z --diff-filter=ACMR "${MERGE_BASE}...HEAD" 2>/dev/null)
+        collect_git_nul diff --name-only -z --diff-filter=ACMR "${MERGE_BASE}...HEAD"
+        COMMITTED=("${COLLECTED[@]}")
 
         # Staged (index) changes
-        STAGED=()
-        while IFS= read -r -d '' line; do
-            [[ -n "$line" ]] && STAGED+=("$line")
-        done < <(git diff --cached --name-only -z --diff-filter=ACMR 2>/dev/null)
+        collect_git_nul diff --cached --name-only -z --diff-filter=ACMR
+        STAGED=("${COLLECTED[@]}")
 
         # Unstaged (working tree) changes
-        UNSTAGED=()
-        while IFS= read -r -d '' line; do
-            [[ -n "$line" ]] && UNSTAGED+=("$line")
-        done < <(git diff --name-only -z --diff-filter=ACMR 2>/dev/null)
+        collect_git_nul diff --name-only -z --diff-filter=ACMR
+        UNSTAGED=("${COLLECTED[@]}")
 
         # Combine and deduplicate (bash 3 compatible - no associative arrays)
         CHANGED_FILES=()
@@ -300,15 +342,11 @@ fi
 
 if [[ -z "$MODE" ]]; then
     # Mode B - Working Directory Changes
-    STAGED=()
-    while IFS= read -r -d '' line; do
-        [[ -n "$line" ]] && STAGED+=("$line")
-    done < <(git diff --cached --name-only -z --diff-filter=ACMR 2>/dev/null)
+    collect_git_nul diff --cached --name-only -z --diff-filter=ACMR
+    STAGED=("${COLLECTED[@]}")
 
-    UNSTAGED=()
-    while IFS= read -r -d '' line; do
-        [[ -n "$line" ]] && UNSTAGED+=("$line")
-    done < <(git diff --name-only -z --diff-filter=ACMR 2>/dev/null)
+    collect_git_nul diff --name-only -z --diff-filter=ACMR
+    UNSTAGED=("${COLLECTED[@]}")
 
     # Combine and deduplicate (bash 3 compatible - no associative arrays)
     CHANGED_FILES=()
