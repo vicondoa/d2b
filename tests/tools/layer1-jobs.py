@@ -29,15 +29,6 @@ RUST_CACHE = "Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32"
 # completes in seconds there; runners cannot reach that endpoint, so without
 # this they rebuild the entire Rust host-tool set from source on every run.
 NIX_CACHE = "nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569"
-# Caches SCCACHE_DIR (the sccache local-disk backend) across runs. This is
-# deliberately actions/cache, NOT sccache's own GHA-cache backend
-# (SCCACHE_GHA_ENABLED): that backend needs ACTIONS_RUNTIME_TOKEN exported into
-# the process compiling untrusted crate code (build scripts, proc-macros), and
-# this action's cache I/O happens in its own process instead. Same reasoning as
-# the nix store cache above.
-SCCACHE_CACHE = "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
-SCCACHE_RESTORE = "actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
-SCCACHE_SAVE = "actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
 # The shell program must be resolvable by the Actions runner itself, which
 # looks the first token up on PATH rather than against the workspace, and whose
 # argument splitter does not preserve nested quoting. The runner resolves `sh`
@@ -219,48 +210,30 @@ def heavy_gate_step(job: dict[str, Any]) -> str:
     )
 
 
-def sccache_save_step(job: dict[str, Any]) -> str:
-    """Renders the sccache save step, for the single writing job only.
-
-    Only test-rust writes the shared sccache key. The other rust jobs restore
-    it and never save, so four concurrent jobs cannot race one key - the same
-    single-writer discipline the rust-cache step applies through save-if.
-
-    Saving runs after the gate step so the cache reflects the compilation that
-    the gate actually performed, and is conditioned on success so a failed run
-    cannot persist a partially-populated cache.
-    """
-    if job["ciJobId"] != "test-rust":
-        return ""
-    return (
-        "      - name: Save sccache\n"
-        "        if: success()\n"
-        f"        uses: {SCCACHE_SAVE}\n"
-        "        with:\n"
-        "          path: ${{ env.SCCACHE_DIR }}\n"
-        "          key: ${{ steps.sccache-restore.outputs.cache-primary-key }}\n"
-    )
-
-
 def rust_job(job: dict[str, Any]) -> str:
     return f"""  {job["ciJobId"]}:
 {needs_line(job)}    runs-on: {job["runsOn"]}
-    # Warm (rust-cache + sccache hit): ~8-12 min. Cold (no cache): ~43 min.
+    # Warm (rust-cache hit): ~8-12 min. Cold (no cache): ~43 min.
     timeout-minutes: {job["timeoutMinutes"]}
     env:
-      # sccache complements Swatinem/rust-cache rather than replacing it:
-      # rust-cache restores whole target directories keyed on Cargo.lock, so a
-      # dependency bump misses entirely and rebuilds everything from scratch,
-      # while sccache still hits per-crate for every dependency that did not
-      # change. D2B_CI_SCCACHE opts test-rust.sh's own detection into using it;
-      # see that script for why RUSTC_WRAPPER is never set directly to the
-      # sccache binary path (it would bypass the wrapper shim's classification
-      # of a broken cache invocation as distinct from a compile error).
-      D2B_CI_SCCACHE: "1"
-      SCCACHE_DIR: "/home/runner/.cache/d2b-sccache-ci"
-      # Incremental artifacts are non-deterministic and sccache cannot cache
-      # them at all (see "Non-cacheable reasons: incremental" in its stats), so
-      # this stays off regardless of which cache is doing the work.
+      # CI uses Swatinem/rust-cache (target-dir caching) and NOT sccache. That
+      # is not a preference - sccache is incompatible with this workspace's
+      # integration tests. Its server forwards only a whitelist of environment
+      # variables to rustc, and CARGO_BIN_EXE_<name>, which Cargo injects so an
+      # integration test can locate the binary it exercises, is not on it. Any
+      # test using env!("CARGO_BIN_EXE_...") then fails to compile with
+      # "environment variable ... not defined at compile time"; measured on this
+      # gate, d2b-exec-runner/tests/tty_pty_integration.rs fails exactly that
+      # way. It does not reproduce locally because CARGO_INCREMENTAL is on
+      # there, which makes sccache treat those compilations as non-cacheable and
+      # pass them through untouched.
+      #
+      # sccache remains enabled for local development, where the same shim is
+      # reached through packages/.cargo/config.toml. Only CI opts out.
+      #
+      # CARGO_INCREMENTAL=0 is still set: incremental compilation artifacts are
+      # non-deterministic and bloat the cache without benefit for CI (each PR
+      # run starts from a different commit).
       CARGO_INCREMENTAL: "0"
     steps:
       - uses: {CHECKOUT}
@@ -286,39 +259,6 @@ def rust_job(job: dict[str, Any]) -> str:
           rustup default "$PINNED"
           echo "Rust toolchain: $(rustc --version)"
           sudo apt-get update && sudo apt-get install -y ripgrep acl
-      - name: Install sccache
-        # Built through the already-installed nix, matching how cargo-nextest,
-        # cargo-deny and cargo-audit are provisioned elsewhere in this gate,
-        # rather than adding a second binary-fetch mechanism. Copied to a fixed
-        # PATH-visible location because a nix profile/shell does not persist
-        # across separate `run:` steps.
-        run: |
-          sccache_out=$(nix build --inputs-from "$PWD" nixpkgs#sccache --no-link --print-out-paths)
-          mkdir -p "$HOME/.local/bin"
-          cp "$sccache_out/bin/sccache" "$HOME/.local/bin/sccache"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - name: Restore sccache (compiled-artifact cache, complements rust-cache)
-        # actions/cache/restore, not the combined action: only test-rust saves
-        # (see the save step at the end of this job), mirroring the
-        # single-writer discipline the rust-cache step below applies so the four
-        # rust jobs do not race one key. Keyed on the pinned toolchain and
-        # Cargo.lock so a version or dependency change gets a fresh,
-        # correctly-scoped cache rather than reusing entries a different
-        # compiler produced.
-        #
-        # The run id makes the save key unique, with restore-keys doing the
-        # prefix match. actions/cache never overwrites an existing entry, so a
-        # pure content-hash key would freeze the cache at whatever the first run
-        # produced and no later run could add to it - defeating the per-crate
-        # accumulation this cache exists for.
-        id: sccache-restore
-        uses: {SCCACHE_RESTORE}
-        with:
-          path: {"${{ env.SCCACHE_DIR }}"}
-          key: sccache-${{{{ runner.os }}}}-${{{{ hashFiles('packages/rust-toolchain.toml', 'packages/Cargo.lock') }}}}-${{{{ github.run_id }}}}
-          restore-keys: |
-            sccache-${{{{ runner.os }}}}-${{{{ hashFiles('packages/rust-toolchain.toml', 'packages/Cargo.lock') }}}}-
-            sccache-${{{{ runner.os }}}}-
       - name: Rust dependency cache (target dirs + cargo registry)
         # Swatinem/rust-cache caches dependency artifacts in target dirs
         # and the cargo registry. It performs all I/O in its own action
@@ -349,8 +289,7 @@ def rust_job(job: dict[str, Any]) -> str:
 {heavy_gate_step(job)}      - name: {job["displayName"]}
         env:
 {render_env(job)}
-        run: make {job["makeTarget"]}
-{sccache_save_step(job)}"""
+        run: make {job["makeTarget"]}"""
 
 
 def flake_discover_job(job: dict[str, Any]) -> str:
@@ -760,9 +699,9 @@ def command_run_local(args: argparse.Namespace) -> int:
     # Resolved in two steps rather than via os.environ.get's default argument:
     # the environment lookup is str | None, the manifest fallback is untyped,
     # and folding them together makes the argument to int() an optional that a
-    # type checker rejects. An `or` would type-check but would also treat an
-    # explicit "0" as unset, silently substituting the default instead of
-    # reaching the >= 1 rejection below.
+    # type checker rejects. A boolean-or fallback would type-check but would
+    # also treat an explicit "0" as unset, silently substituting the default
+    # instead of reaching the >= 1 rejection below.
     raw_max_jobs: object = os.environ.get("D2B_CHECK_JOBS")
     if raw_max_jobs is None:
         raw_max_jobs = manifest["local"].get("defaultJobs", 4)
