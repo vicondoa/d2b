@@ -25,8 +25,10 @@ if ! cargo nextest --version >/dev/null 2>&1; then
   exit 1
 fi
 
-export CARGO_BUILD_RUSTC_WRAPPER=${CARGO_BUILD_RUSTC_WRAPPER:-}
-export RUSTC_WRAPPER=${RUSTC_WRAPPER:-}
+# No RUSTC_WRAPPER override here. The cargo configs route through
+# .cargo/rustc-wrapper.sh, which uses sccache when present and plain rustc when
+# not, so this gate no longer has to disable the compiler cache to stay robust
+# in a shell that omits nixpkgs#sccache.
 
 pinned_inputs=("$@")
 if [ "${#pinned_inputs[@]}" -eq 0 ]; then

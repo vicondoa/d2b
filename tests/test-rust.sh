@@ -231,8 +231,13 @@ cleanup_package_test_scratch() {
 # environment, where the untrusted crate code this gate compiles and runs
 # (build scripts, proc-macros, `cargo test`) could read and exfiltrate it.
 # actions/cache performs its I/O in its own action process and never exposes
-# that token to `run:` steps. The per-command `RUSTC_WRAPPER=""` overrides below
-# (xtask gen-schemas) intentionally opt out regardless of this mode.
+# that token to `run:` steps.
+#
+# The explicit RUSTC_WRAPPER="" below is a real opt-out (D2B_NO_SCCACHE, or CI
+# without the opt-in), not a robustness workaround. Cargo configs route rustc
+# through .cargo/rustc-wrapper.sh, which falls through to plain rustc when
+# sccache is missing, so no command needs to clear the variable merely to keep
+# working in a shell that omits nixpkgs#sccache.
 _ci_active=0
 if [ -n "${CI:-}" ] || [ -n "${GITHUB_ACTIONS:-}" ]; then
   _ci_active=1
@@ -558,9 +563,9 @@ snapshot_schema_out() {
 }
 
 log "--> schema generation reproducibility"
-(cd "$ROOT/packages" && RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" cargo xtask gen-schemas)
+(cd "$ROOT/packages" && cargo xtask gen-schemas)
 schema_snapshot_1=$(snapshot_schema_out)
-(cd "$ROOT/packages" && RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" cargo xtask gen-schemas)
+(cd "$ROOT/packages" && cargo xtask gen-schemas)
 schema_snapshot_2=$(snapshot_schema_out)
 if [ "$schema_snapshot_1" != "$schema_snapshot_2" ]; then
   fail "schema generation reproducibility: cargo xtask gen-schemas output is not reproducible"
@@ -578,14 +583,12 @@ cargo_deny_check() {
   local label="$1" manifest_path="$2" config_path="$3"
   if command -v cargo-deny >/dev/null 2>&1; then
     log "--> cargo deny check ($label)"
-    RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" \
-      cargo deny --manifest-path "$manifest_path" check --config "$config_path"
+    cargo deny --manifest-path "$manifest_path" check --config "$config_path"
     ok "cargo deny check ($label)"
   elif command -v nix >/dev/null 2>&1; then
     log "--> cargo deny check ($label via nix shell)"
     nix shell --quiet --inputs-from "$ROOT" nixpkgs#cargo-deny --command \
-      env RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" \
-        cargo deny --manifest-path "$manifest_path" check --config "$config_path"
+      cargo deny --manifest-path "$manifest_path" check --config "$config_path"
     ok "cargo deny check ($label)"
   else
     fail "cargo deny check cannot run for $label: cargo-deny and nix are unavailable; ADR 0009 does not authorize a waiver"
@@ -608,13 +611,13 @@ cargo_audit_check() {
     log "  attempt $attempt/$attempts"
     if command -v cargo-audit >/dev/null 2>&1; then
       set +e
-      RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" cargo audit --file "$lock_path" "$@" >"$audit_out" 2>&1
+      cargo audit --file "$lock_path" "$@" >"$audit_out" 2>&1
       rc=$?
       set -e
     else
       set +e
       nix shell --quiet --inputs-from "$ROOT" nixpkgs#cargo-audit --command \
-        env RUSTC_WRAPPER="" CARGO_BUILD_RUSTC_WRAPPER="" cargo audit --file "$lock_path" "$@" >"$audit_out" 2>&1
+        cargo audit --file "$lock_path" "$@" >"$audit_out" 2>&1
       rc=$?
       set -e
     fi

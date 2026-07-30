@@ -88,18 +88,17 @@ jobs:
     # Warm (rust-cache hit): ~8-12 min. Cold (no cache): ~43 min.
     timeout-minutes: 60
     env:
-      # Disable sccache in CI - we use Swatinem/rust-cache (target-dir
-      # caching) instead, which caches ALL compiled artifacts including
-      # proc-macros and bin/lib crates that sccache cannot cache (~60% of
-      # compilations are "non-cacheable" by sccache due to crate-type).
-      # CARGO_INCREMENTAL=0 is still set: incremental compilation artifacts
-      # are non-deterministic and bloat the cache without benefit for CI
-      # (each PR run starts from a different commit).
+      # CI relies on Swatinem/rust-cache (target-dir caching) rather than
+      # sccache, which caches ALL compiled artifacts including proc-macros and
+      # bin/lib crates. sccache is simply not installed on the runner, and the
+      # cargo configs route rustc through .cargo/rustc-wrapper.sh, which falls
+      # through to plain rustc when sccache is absent - so no override is
+      # needed to keep cargo working here.
+      #
+      # CARGO_INCREMENTAL=0 is still set: incremental compilation artifacts are
+      # non-deterministic and bloat the cache without benefit for CI (each PR
+      # run starts from a different commit).
       CARGO_INCREMENTAL: "0"
-      # Override the repo .cargo/config.toml rustc-wrapper (sccache) so
-      # rust-cache's post-step `cargo metadata` doesn't fail looking for
-      # an sccache binary that isn't installed.
-      CARGO_BUILD_RUSTC_WRAPPER: ""
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -157,18 +156,17 @@ jobs:
     # Warm (rust-cache hit): ~8-12 min. Cold (no cache): ~43 min.
     timeout-minutes: 60
     env:
-      # Disable sccache in CI - we use Swatinem/rust-cache (target-dir
-      # caching) instead, which caches ALL compiled artifacts including
-      # proc-macros and bin/lib crates that sccache cannot cache (~60% of
-      # compilations are "non-cacheable" by sccache due to crate-type).
-      # CARGO_INCREMENTAL=0 is still set: incremental compilation artifacts
-      # are non-deterministic and bloat the cache without benefit for CI
-      # (each PR run starts from a different commit).
+      # CI relies on Swatinem/rust-cache (target-dir caching) rather than
+      # sccache, which caches ALL compiled artifacts including proc-macros and
+      # bin/lib crates. sccache is simply not installed on the runner, and the
+      # cargo configs route rustc through .cargo/rustc-wrapper.sh, which falls
+      # through to plain rustc when sccache is absent - so no override is
+      # needed to keep cargo working here.
+      #
+      # CARGO_INCREMENTAL=0 is still set: incremental compilation artifacts are
+      # non-deterministic and bloat the cache without benefit for CI (each PR
+      # run starts from a different commit).
       CARGO_INCREMENTAL: "0"
-      # Override the repo .cargo/config.toml rustc-wrapper (sccache) so
-      # rust-cache's post-step `cargo metadata` doesn't fail looking for
-      # an sccache binary that isn't installed.
-      CARGO_BUILD_RUSTC_WRAPPER: ""
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -399,18 +397,17 @@ jobs:
     # Warm (rust-cache hit): ~8-12 min. Cold (no cache): ~43 min.
     timeout-minutes: 60
     env:
-      # Disable sccache in CI - we use Swatinem/rust-cache (target-dir
-      # caching) instead, which caches ALL compiled artifacts including
-      # proc-macros and bin/lib crates that sccache cannot cache (~60% of
-      # compilations are "non-cacheable" by sccache due to crate-type).
-      # CARGO_INCREMENTAL=0 is still set: incremental compilation artifacts
-      # are non-deterministic and bloat the cache without benefit for CI
-      # (each PR run starts from a different commit).
+      # CI relies on Swatinem/rust-cache (target-dir caching) rather than
+      # sccache, which caches ALL compiled artifacts including proc-macros and
+      # bin/lib crates. sccache is simply not installed on the runner, and the
+      # cargo configs route rustc through .cargo/rustc-wrapper.sh, which falls
+      # through to plain rustc when sccache is absent - so no override is
+      # needed to keep cargo working here.
+      #
+      # CARGO_INCREMENTAL=0 is still set: incremental compilation artifacts are
+      # non-deterministic and bloat the cache without benefit for CI (each PR
+      # run starts from a different commit).
       CARGO_INCREMENTAL: "0"
-      # Override the repo .cargo/config.toml rustc-wrapper (sccache) so
-      # rust-cache's post-step `cargo metadata` doesn't fail looking for
-      # an sccache binary that isn't installed.
-      CARGO_BUILD_RUSTC_WRAPPER: ""
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -468,18 +465,17 @@ jobs:
     # Warm (rust-cache hit): ~8-12 min. Cold (no cache): ~43 min.
     timeout-minutes: 30
     env:
-      # Disable sccache in CI - we use Swatinem/rust-cache (target-dir
-      # caching) instead, which caches ALL compiled artifacts including
-      # proc-macros and bin/lib crates that sccache cannot cache (~60% of
-      # compilations are "non-cacheable" by sccache due to crate-type).
-      # CARGO_INCREMENTAL=0 is still set: incremental compilation artifacts
-      # are non-deterministic and bloat the cache without benefit for CI
-      # (each PR run starts from a different commit).
+      # CI relies on Swatinem/rust-cache (target-dir caching) rather than
+      # sccache, which caches ALL compiled artifacts including proc-macros and
+      # bin/lib crates. sccache is simply not installed on the runner, and the
+      # cargo configs route rustc through .cargo/rustc-wrapper.sh, which falls
+      # through to plain rustc when sccache is absent - so no override is
+      # needed to keep cargo working here.
+      #
+      # CARGO_INCREMENTAL=0 is still set: incremental compilation artifacts are
+      # non-deterministic and bloat the cache without benefit for CI (each PR
+      # run starts from a different commit).
       CARGO_INCREMENTAL: "0"
-      # Override the repo .cargo/config.toml rustc-wrapper (sccache) so
-      # rust-cache's post-step `cargo metadata` doesn't fail looking for
-      # an sccache binary that isn't installed.
-      CARGO_BUILD_RUSTC_WRAPPER: ""
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
