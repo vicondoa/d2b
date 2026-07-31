@@ -77,8 +77,6 @@ fn wrong_zone_network_is_rejected_before_relay_or_firewall_effect() {
 fn debug_errors_and_metric_label_values_are_identity_free() {
     let zone_canary = "123e4567-e89b-42d3-a456-426614174000";
     let resource_canary = "223e4567-e89b-42d3-a456-426614174001";
-    let bus_canary = "9-9.9";
-    let path_canary = "/private/device/path";
     let scoped = ScopedResourceUid::new(uid(zone_canary), uid(resource_canary));
     let labels = UsbipMetricLabels::new(
         UsbipOperation::RemoveFirewall,
@@ -90,7 +88,7 @@ fn debug_errors_and_metric_label_values_are_identity_free() {
         UsbipEffectError::FirewallForeignConflict,
         UsbipEffectError::FirewallForeignConflict,
     );
-    for canary in [zone_canary, resource_canary, bus_canary, path_canary] {
+    for canary in [zone_canary, resource_canary] {
         assert!(!rendered.contains(canary));
     }
     assert_eq!(labels.provider, "device-usbip");

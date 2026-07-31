@@ -2,24 +2,87 @@ use d2b_provider_network_local::controller::{
     NetworkEffectError, NetworkMetricLabels, NetworkMetricOperation, NetworkMetricOutcome,
 };
 
-#[test]
-fn metric_keys_and_values_are_closed_and_identity_free() {
-    let labels = NetworkMetricLabels::new(
-        NetworkMetricOperation::Reconcile,
-        NetworkMetricOutcome::Retry,
-        Some(NetworkEffectError::Transient),
-    );
-    let keys = ["operation", "outcome", "error"];
-    for forbidden_key in ["vm", "zone", "zone_id", "zone_uid", "network", "resource"] {
-        assert!(!keys.contains(&forbidden_key));
+fn expected_operation(operation: NetworkMetricOperation) -> &'static str {
+    match operation {
+        NetworkMetricOperation::Reconcile => "reconcile",
+        NetworkMetricOperation::Observe => "observe",
+        NetworkMetricOperation::Finalize => "finalize",
+        NetworkMetricOperation::VolumeSync => "volume-sync",
+        NetworkMetricOperation::AgentReload => "agent-reload",
     }
-    let values = [labels.operation, labels.outcome, labels.error];
-    for forbidden in [
-        "work-net-canary",
-        "198.51.100.77",
-        "/run/private",
-        "d2b-tsecret",
-    ] {
-        assert!(!values.iter().any(|value| value.contains(forbidden)));
+}
+
+fn expected_outcome(outcome: NetworkMetricOutcome) -> &'static str {
+    match outcome {
+        NetworkMetricOutcome::Success => "success",
+        NetworkMetricOutcome::Retry => "retry",
+        NetworkMetricOutcome::Blocked => "blocked",
+    }
+}
+
+fn expected_error(error: Option<NetworkEffectError>) -> &'static str {
+    match error {
+        None => "none",
+        Some(NetworkEffectError::Transient) => "network-effect-transient",
+        Some(NetworkEffectError::BridgeCreate) => "bridge-create-error",
+        Some(NetworkEffectError::ConfigVolume) => "config-volume-error",
+        Some(NetworkEffectError::HostMemoryBudgetExceeded) => "host-memory-budget-exceeded",
+        Some(NetworkEffectError::StaleConfigurationGeneration) => "stale-projection-generation",
+        Some(NetworkEffectError::StaleAttachmentGeneration) => "attachment-generation-mismatch",
+        Some(NetworkEffectError::ForeignOwnership) => "foreign-nft-rule-preserved",
+        Some(NetworkEffectError::CidrConflict) => "cidr-conflict",
+        Some(NetworkEffectError::CrossZoneL2) => "external-physical-nic-cross-zone-l2",
+        Some(NetworkEffectError::Artifact) => "net-vm-artifact-resolution",
+        Some(NetworkEffectError::InvalidState) => "network-controller-invalid-state",
+    }
+}
+
+#[test]
+fn metric_constructor_projects_only_the_closed_schema_and_values() {
+    let constructor: fn(
+        NetworkMetricOperation,
+        NetworkMetricOutcome,
+        Option<NetworkEffectError>,
+    ) -> NetworkMetricLabels = NetworkMetricLabels::new;
+    let operations = [
+        NetworkMetricOperation::Reconcile,
+        NetworkMetricOperation::Observe,
+        NetworkMetricOperation::Finalize,
+        NetworkMetricOperation::VolumeSync,
+        NetworkMetricOperation::AgentReload,
+    ];
+    let outcomes = [
+        NetworkMetricOutcome::Success,
+        NetworkMetricOutcome::Retry,
+        NetworkMetricOutcome::Blocked,
+    ];
+    let errors = [
+        None,
+        Some(NetworkEffectError::Transient),
+        Some(NetworkEffectError::BridgeCreate),
+        Some(NetworkEffectError::ConfigVolume),
+        Some(NetworkEffectError::HostMemoryBudgetExceeded),
+        Some(NetworkEffectError::StaleConfigurationGeneration),
+        Some(NetworkEffectError::StaleAttachmentGeneration),
+        Some(NetworkEffectError::ForeignOwnership),
+        Some(NetworkEffectError::CidrConflict),
+        Some(NetworkEffectError::CrossZoneL2),
+        Some(NetworkEffectError::Artifact),
+        Some(NetworkEffectError::InvalidState),
+    ];
+
+    for operation in operations {
+        for outcome in outcomes {
+            for error in errors {
+                let NetworkMetricLabels {
+                    operation: actual_operation,
+                    outcome: actual_outcome,
+                    error: actual_error,
+                } = constructor(operation, outcome, error);
+                assert_eq!(actual_operation, expected_operation(operation));
+                assert_eq!(actual_outcome, expected_outcome(outcome));
+                assert_eq!(actual_error, expected_error(error));
+            }
+        }
     }
 }

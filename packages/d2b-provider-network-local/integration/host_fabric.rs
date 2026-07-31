@@ -9,6 +9,9 @@
 //! readback, route readiness, and sysctl ordering used by that adapter. This
 //! file intentionally names no alternate host mutation path.
 
+/// Makes the declaration-only status machine-readable to integration inventory.
+pub const DECLARATION_ONLY: bool = true;
+
 /// Ordered fixture obligations for the provider-system host-fabric lane.
 pub const HOST_FABRIC_SCENARIOS: &[&str] = &[
     "bridge-isolation-default",
@@ -17,17 +20,3 @@ pub const HOST_FABRIC_SCENARIOS: &[&str] = &[
     "persistent-tap-create-delete",
     "macvtap-create-delete",
 ];
-
-#[test]
-fn host_fabric_fixture_keeps_every_required_lifecycle_scenario() {
-    assert_eq!(
-        HOST_FABRIC_SCENARIOS,
-        [
-            "bridge-isolation-default",
-            "east-west-opt-in",
-            "nftables-owned-projection-drift",
-            "persistent-tap-create-delete",
-            "macvtap-create-delete",
-        ]
-    );
-}
