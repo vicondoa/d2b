@@ -19,14 +19,21 @@ layer-validation err : 0
 BLIT failures        : 0
 CmdSubmit3d refusals : 0
 Illegal cmd buffer   : 0
-guest coredumps      : 0
-renderer decode      : decode_cmds=1024 sessions=1
-host NVDEC engine    : nonzero in 28 of 35 samples, mean 2.83%, max 6%
+renderer decode      : decode_cmds=2048 sessions=1
+frames               : 810 total, 6 dropped
+host NVDEC engine    : nonzero in 35 of 35 samples
+picture              : 12,619 distinct colours, mean RGB 152,158,158
 ```
 
 Firefox carries **no patches**. Every change is in guest Mesa, host
 virglrenderer, or lab configuration. `SOLUTION.md` is the full account of what
 was wrong and why each change is needed; the short version is below.
+
+The lab no longer asserts a capability the guest lacks. It previously set
+`gfx.blacklist.hardwarevideodecoding` to skip a VA-API probe the guest could not
+pass, which was a diagnostic rather than a fix. The guest passes that probe on
+the merits now, and the pref is gone - see `SOLUTION.md` section 6a. Decode is
+still Vulkan Video; VA-API only answers the capability question.
 
 ### Reading the NVDEC number
 
