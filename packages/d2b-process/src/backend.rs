@@ -214,6 +214,10 @@ pub trait ProcessEffectBackend: Send + Sync + 'static {
     ) -> Result<Self::Handle, ProcessEffectError>;
 
     /// Stop only the exact process represented by `handle`.
+    ///
+    /// A successful [`ProcessStopClass::Terminate`] result certifies that the
+    /// represented process no longer survives. Accepting a signal or stop
+    /// request without confirming exit is not success.
     fn stop(
         &self,
         handle: &Self::Handle,

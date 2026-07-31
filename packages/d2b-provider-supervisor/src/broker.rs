@@ -9,20 +9,23 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use d2b_contracts::broker_wire::{
-    BrokerRequest, BrokerRequestEnvelope, BrokerResponse, OpenPidfdRequest, RunnerRole,
-    RunnerSignal, SignalRunnerRequest, SpawnRunnerRequest,
+    BrokerRequest, BrokerRequestEnvelope, BrokerResponse, DeregisterRunnerPidfdRequest,
+    OpenPidfdRequest, RunnerRole, RunnerSignal, SignalRunnerRequest, SpawnRunnerRequest,
 };
 use d2b_contracts::types::{BundleOpId, RoleId, VmId};
 use d2b_process::{
     BackendLaunch, BackendObservation, IdentityBinding, ObservedIdentity, ProcessEffectBackend,
     ProcessEffectError, ProcessIdentityDigest, ProcessRequest, ProcessStopClass, WaitReapOwner,
 };
+use rustix::event::{PollFd, PollFlags, poll};
 use rustix::net::{
     AddressFamily, RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, SocketFlags, SocketType,
     recvmsg, send, socket_with,
 };
 use sha2::{Digest, Sha256};
 use socket2::Socket;
+
+const MAX_PENDING_OBSERVATIONS: usize = 1024;
 
 /// Trusted-bundle launch intent resolved for one generic Process ticket.
 #[derive(Clone, PartialEq, Eq)]
@@ -183,11 +186,30 @@ impl<R: BrokerLaunchResolver> BrokerProcessBackend<R> {
     }
 
     fn record(&self, observed: BrokerObservedProcess) -> Result<(), ProcessEffectError> {
+        let mut observations = self
+            .observations
+            .lock()
+            .map_err(|_| ProcessEffectError::ObserveFailed)?;
+        let identity = observed.digest();
+        if observations.len() >= MAX_PENDING_OBSERVATIONS
+            && !observations.contains_key(&identity)
+            && let Some(candidate) = observations.keys().next().copied()
+        {
+            observations.remove(&candidate);
+        }
+        observations.insert(identity, observed);
+        Ok(())
+    }
+
+    fn take_observation(
+        &self,
+        identity: &ProcessIdentityDigest,
+    ) -> Result<BrokerObservedProcess, ProcessEffectError> {
         self.observations
             .lock()
             .map_err(|_| ProcessEffectError::ObserveFailed)?
-            .insert(observed.digest(), observed);
-        Ok(())
+            .remove(identity)
+            .ok_or(ProcessEffectError::IdentityChanged)
     }
 }
 
@@ -215,7 +237,7 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
             workload_identity: None,
         }))?;
         let BrokerResponse::SpawnRunner(ref response) = frame.response else {
-            return Err(response_error(&frame.response));
+            return Err(response_error(&frame.response, BrokerOperation::Other));
         };
         if response.vm_id != intent.vm_id
             || response.role_id != intent.role_id
@@ -238,7 +260,6 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
         };
         observed.validate()?;
         let observation = observed.observation();
-        self.record(observed.clone())?;
         Ok(BackendLaunch::new(
             observation,
             BrokerPidfdHandle { pidfd, observed },
@@ -262,13 +283,7 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
         &self,
         observation: BackendObservation,
     ) -> Result<Self::Handle, ProcessEffectError> {
-        let observed = self
-            .observations
-            .lock()
-            .map_err(|_| ProcessEffectError::ObserveFailed)?
-            .get(&observation.identity())
-            .cloned()
-            .ok_or(ProcessEffectError::IdentityChanged)?;
+        let observed = self.take_observation(&observation.identity())?;
         let frame = self.request(BrokerRequest::OpenPidfd(OpenPidfdRequest {
             vm_id: observed.intent.vm_id.clone(),
             role_id: observed.intent.role_id.clone(),
@@ -277,7 +292,7 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
             tracing_span_id: None,
         }))?;
         let BrokerResponse::OpenPidfd(ref response) = frame.response else {
-            return Err(response_error(&frame.response));
+            return Err(response_error(&frame.response, BrokerOperation::OpenPidfd));
         };
         if response.vm_id != observed.intent.vm_id
             || response.role_id != observed.intent.role_id
@@ -317,10 +332,39 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
                     && response.role_id == handle.observed.intent.role_id =>
             {
                 let _ = handle.pidfd.as_fd();
-                Ok(())
             }
-            _ => Err(ProcessEffectError::StopFailed),
+            _ => return Err(ProcessEffectError::StopFailed),
         }
+        if class == ProcessStopClass::Terminate {
+            wait_pidfd_exit(&handle.pidfd, self.io_timeout)?;
+            let frame = self.request(BrokerRequest::DeregisterRunnerPidfd(
+                DeregisterRunnerPidfdRequest {
+                    vm_id: handle.observed.intent.vm_id.clone(),
+                    role_id: handle.observed.intent.role_id.clone(),
+                    tracing_span_id: None,
+                },
+            ))?;
+            match frame.response {
+                BrokerResponse::DeregisterRunnerPidfd(response)
+                    if response.vm_id == handle.observed.intent.vm_id
+                        && response.role_id == handle.observed.intent.role_id => {}
+                _ => return Err(ProcessEffectError::StopFailed),
+            }
+        }
+        Ok(())
+    }
+}
+
+fn wait_pidfd_exit(pidfd: &OwnedFd, timeout: Duration) -> Result<(), ProcessEffectError> {
+    let timeout_ms = timeout.as_millis().min(i32::MAX as u128) as i32;
+    let mut fds = [PollFd::new(
+        pidfd,
+        PollFlags::IN | PollFlags::ERR | PollFlags::HUP,
+    )];
+    match poll(&mut fds, timeout_ms) {
+        Ok(0) | Err(_) => Err(ProcessEffectError::StopFailed),
+        Ok(_) if fds[0].revents().intersects(PollFlags::IN | PollFlags::HUP) => Ok(()),
+        Ok(_) => Err(ProcessEffectError::StopFailed),
     }
 }
 
@@ -340,13 +384,115 @@ impl BrokerFrame {
     }
 }
 
-fn response_error(response: &BrokerResponse) -> ProcessEffectError {
+#[derive(Clone, Copy)]
+enum BrokerOperation {
+    OpenPidfd,
+    Other,
+}
+
+fn response_error(response: &BrokerResponse, operation: BrokerOperation) -> ProcessEffectError {
     match response {
-        BrokerResponse::Error(error) if error.kind.contains("Pidfd") => {
+        BrokerResponse::Error(error)
+            if error.kind.contains("Pidfd")
+                || (matches!(operation, BrokerOperation::OpenPidfd)
+                    && error.kind == "Broker.LiveHandlerFailed") =>
+        {
             ProcessEffectError::IdentityChanged
         }
         BrokerResponse::Error(_) => ProcessEffectError::LaunchFailed,
         _ => ProcessEffectError::LaunchFailed,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use d2b_contracts::broker_wire::BrokerErrorResponse;
+
+    use super::*;
+
+    struct Resolver;
+
+    impl BrokerLaunchResolver for Resolver {
+        fn resolve(
+            &self,
+            _request: &ProcessRequest,
+        ) -> Result<BrokerLaunchIntent, ProcessEffectError> {
+            Err(ProcessEffectError::ResolutionFailed)
+        }
+
+        fn observe(
+            &self,
+            _request: &ProcessRequest,
+        ) -> Result<Option<BrokerObservedProcess>, ProcessEffectError> {
+            Ok(None)
+        }
+    }
+
+    fn observed(seed: u16) -> BrokerObservedProcess {
+        BrokerObservedProcess {
+            intent: BrokerLaunchIntent {
+                vm_id: VmId::new("corp-vm"),
+                role_id: RoleId::new("worker"),
+                role: RunnerRole::Virtiofsd,
+                bundle_runner_intent_ref: BundleOpId::new("runner:vm:corp-vm:role:worker"),
+                provider_identity: [1; 32],
+                template_identity: [2; 32],
+                generation: 1,
+            },
+            pid: i32::from(seed) + 1,
+            start_time_ticks: u64::from(seed) + 1,
+            cgroup_verified: true,
+            executable_verified: true,
+        }
+    }
+
+    #[test]
+    fn pending_broker_observations_are_bounded_and_consumed() {
+        let backend =
+            BrokerProcessBackend::with_socket(Resolver, "/unused", Duration::from_millis(1));
+        for seed in 0..=MAX_PENDING_OBSERVATIONS {
+            backend
+                .record(observed(u16::try_from(seed).unwrap()))
+                .unwrap();
+        }
+        assert_eq!(
+            backend.observations.lock().unwrap().len(),
+            MAX_PENDING_OBSERVATIONS
+        );
+        let identity = observed(u16::try_from(MAX_PENDING_OBSERVATIONS).unwrap()).digest();
+        backend.take_observation(&identity).unwrap();
+        assert_eq!(
+            backend.observations.lock().unwrap().len(),
+            MAX_PENDING_OBSERVATIONS - 1
+        );
+    }
+
+    #[test]
+    fn open_pidfd_live_handler_failures_are_identity_changes() {
+        let response = BrokerResponse::Error(BrokerErrorResponse {
+            kind: "Broker.LiveHandlerFailed".to_owned(),
+            operation: "LiveHandler".to_owned(),
+            target_wave: None,
+            message: "pid 42 changed from start time 100 to 200".to_owned(),
+            action: "inspect private audit".to_owned(),
+        });
+        let error = response_error(&response, BrokerOperation::OpenPidfd);
+        assert_eq!(error, ProcessEffectError::IdentityChanged);
+        assert_eq!(error.to_string(), "identity-changed");
+        assert_eq!(
+            response_error(&response, BrokerOperation::Other),
+            ProcessEffectError::LaunchFailed
+        );
+    }
+
+    #[test]
+    fn broker_diagnostics_redact_process_identity_values() {
+        let process = observed(41);
+        assert_eq!(format!("{process:?}"), "BrokerObservedProcess(<redacted>)");
+        assert_eq!(
+            format!("{:?}", process.intent),
+            "BrokerLaunchIntent(<redacted>)"
+        );
     }
 }
 

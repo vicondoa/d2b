@@ -10,6 +10,8 @@ use d2b_process::{
 };
 use sha2::{Digest, Sha256};
 
+const MAX_PENDING_OBSERVATIONS: usize = 1024;
+
 /// Atomic identity read from one active non-forking transient unit or scope.
 ///
 /// The effect owner must obtain the invocation identifier, cgroup identity,
@@ -145,6 +147,9 @@ pub trait SystemdEffectOwner: Send + Sync + 'static {
     ) -> Result<SystemdEffectLaunch<Self::Handle>, ProcessEffectError>;
 
     /// Stop only the unit represented by the verified local handle.
+    ///
+    /// A successful [`ProcessStopClass::Terminate`] result certifies that the
+    /// unit's represented process no longer survives.
     fn stop(
         &self,
         handle: &Self::Handle,
@@ -168,11 +173,111 @@ impl<O: SystemdEffectOwner> SystemdProcessBackend<O> {
     }
 
     fn record(&self, identity: SystemdInvocationIdentity) -> Result<(), ProcessEffectError> {
+        let mut observations = self
+            .observations
+            .lock()
+            .map_err(|_| ProcessEffectError::ObserveFailed)?;
+        let digest = identity.digest();
+        if observations.len() >= MAX_PENDING_OBSERVATIONS
+            && !observations.contains_key(&digest)
+            && let Some(oldest) = observations.keys().next().copied()
+        {
+            observations.remove(&oldest);
+        }
+        observations.insert(digest, identity);
+        Ok(())
+    }
+
+    fn take_observation(
+        &self,
+        identity: &ProcessIdentityDigest,
+    ) -> Result<SystemdInvocationIdentity, ProcessEffectError> {
         self.observations
             .lock()
             .map_err(|_| ProcessEffectError::ObserveFailed)?
-            .insert(identity.digest(), identity);
-        Ok(())
+            .remove(identity)
+            .ok_or(ProcessEffectError::IdentityChanged)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Owner;
+
+    impl SystemdEffectOwner for Owner {
+        type Handle = ();
+
+        fn launch(
+            &self,
+            _request: ProcessRequest,
+        ) -> Result<SystemdEffectLaunch<Self::Handle>, ProcessEffectError> {
+            Err(ProcessEffectError::LaunchFailed)
+        }
+
+        fn observe(
+            &self,
+            _request: ProcessRequest,
+        ) -> Result<Option<SystemdInvocationIdentity>, ProcessEffectError> {
+            Ok(None)
+        }
+
+        fn reopen(
+            &self,
+            _expected: &SystemdInvocationIdentity,
+        ) -> Result<SystemdEffectLaunch<Self::Handle>, ProcessEffectError> {
+            Err(ProcessEffectError::PidfdUnavailable)
+        }
+
+        fn stop(
+            &self,
+            _handle: &Self::Handle,
+            _class: ProcessStopClass,
+        ) -> Result<(), ProcessEffectError> {
+            Ok(())
+        }
+    }
+
+    fn identity(seed: u32) -> SystemdInvocationIdentity {
+        let mut invocation_id = [0; 16];
+        invocation_id[..4].copy_from_slice(&(seed + 1).to_le_bytes());
+        SystemdInvocationIdentity::new(
+            invocation_id,
+            [1; 32],
+            NonZeroU32::new(seed + 1).unwrap(),
+            u64::from(seed) + 1,
+            [2; 32],
+            [3; 32],
+            1,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn pending_systemd_observations_are_bounded_and_consumed() {
+        let backend = SystemdProcessBackend::new(Owner);
+        for seed in 0..=u32::try_from(MAX_PENDING_OBSERVATIONS).unwrap() {
+            backend.record(identity(seed)).unwrap();
+        }
+        assert_eq!(
+            backend.observations.lock().unwrap().len(),
+            MAX_PENDING_OBSERVATIONS
+        );
+        let digest = identity(u32::try_from(MAX_PENDING_OBSERVATIONS).unwrap()).digest();
+        backend.take_observation(&digest).unwrap();
+        assert_eq!(
+            backend.observations.lock().unwrap().len(),
+            MAX_PENDING_OBSERVATIONS - 1
+        );
+    }
+
+    #[test]
+    fn systemd_identity_diagnostics_are_redacted() {
+        assert_eq!(
+            format!("{:?}", identity(41)),
+            "SystemdInvocationIdentity(<redacted>)"
+        );
     }
 }
 
@@ -192,7 +297,6 @@ impl<O: SystemdEffectOwner> ProcessEffectBackend for SystemdProcessBackend<O> {
         let launch = self.owner.launch(request)?;
         let (identity, handle) = launch.into_parts();
         let observation = identity.observation();
-        self.record(identity)?;
         Ok(BackendLaunch::new(observation, handle))
     }
 
@@ -212,13 +316,7 @@ impl<O: SystemdEffectOwner> ProcessEffectBackend for SystemdProcessBackend<O> {
         &self,
         observation: BackendObservation,
     ) -> Result<Self::Handle, ProcessEffectError> {
-        let expected = self
-            .observations
-            .lock()
-            .map_err(|_| ProcessEffectError::ObserveFailed)?
-            .get(&observation.identity())
-            .cloned()
-            .ok_or(ProcessEffectError::IdentityChanged)?;
+        let expected = self.take_observation(&observation.identity())?;
         let reopened = self.owner.reopen(&expected)?;
         let (actual, handle) = reopened.into_parts();
         if actual != expected || actual.digest() != observation.identity() {
