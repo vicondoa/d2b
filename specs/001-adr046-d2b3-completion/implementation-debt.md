@@ -1034,3 +1034,396 @@ Three, all small, all recorded rather than corrected in place.
 | Service mode discriminant has three live spellings across four families | Inference | W3 panel |
 | Semantic base schema version `1.0` chosen with none stated; it reaches every base fingerprint | Inference | W3 panel |
 | Semantic projection-protocol version `"1.0"` chosen with no stated spelling; it reaches every factory fingerprint | Inference | W3 panel |
+
+## 14. Rulings recorded before Wave 4 opens, and what debt the wave takes on
+
+Recorded the way section 9 was, before the wave's slices open, so its scope and
+its shared-file decisions are settled rather than argued at review. Wave 4 is
+the program's largest wave - 32 work items across six parallel groups, against
+Wave 3's four - so a shared-file collision that Wave 3 could absorb in a
+follow-up round would here collide across three groups at once.
+
+Six rulings follow. Each was verified against the tree and the manifests before
+being recorded, and the three categories this register already separates are
+kept apart: an **unmet obligation** names work someone still owes, an
+**inference** names a reading a reviewer must confirm or correct, and a
+**specification correction** names a place where shipped code and written
+specification disagree and code was kept.
+
+### 14.1 Wave 4 stays one sealed wave and runs as two integration phases
+
+**The ruling.** Wave 4 remains **one** wave for panel and seal purposes. Its
+first two slice rounds run as an explicit opening phase with its own integrator
+merge, so the binding ten-role panel at T070 reviews a tree whose keystone is
+already integrated rather than a tree assembled in one merge from six groups.
+
+**What was verified.** `ADR-046-implementation-graph.json` pins W4 at
+`workItemCount: 32`, read from the `.waves[]` entry. That is what forbids
+splitting the wave: the Wave 3 precedent in section 0 established that adding or
+removing an item contradicts the manifest, and the same argument applies to
+moving one out. What the manifest does **not** state anywhere is how many
+integrator merge rounds a wave's delivery takes, so the number of integration
+phases is not a manifest fact and is free to be decided here.
+
+**Tag spelling, stated exactly, with one correction.** The planning pass held
+that `AGENTS.md` "already defines the opening-phase commit tag form for exactly
+this". The form exists, but its documented meaning is narrower than that phrase
+implies, and using it as-if would misfile the commits. `AGENTS.md`
+"Commit conventions" defines `( W<N>a-<H> )` / `( W<N>a H<H> )` as a **post-wave**
+opening phase, "used when the work is genuinely pre-wave-N+1 prep". A W4 opening
+phase whose content is W4's own work items is therefore **not** what that form
+names. Contributors use:
+
+| Commit | Tag |
+| --- | --- |
+| Integrator contract-prep commit landed before any W4 worktree opens | `( W4 )` |
+| Slice implementer work in either integration phase | `( W4 )` |
+| Integrator merge closing the opening phase, and each later round | `( W4fu<M> )` |
+| Single finding fixed in round `M` | `( W4fu<M> <S><N> )`, e.g. `( W4fu1 H3 )` |
+
+`( W4 )` for the prep commit is not an improvisation: the
+"Integrator-prep-first pattern" section states that the prep commit carries the
+wave's own tag with no scope label inside the parentheses. The `W4a` form stays
+reserved for its documented meaning, prep landing between W4 and W5.
+
+**Class: inference.** The manifest is silent on merge rounds, so this is a
+defensible reading rather than a stated rule, and a reviewer should confirm that
+two integration phases inside one sealed wave does not offend the one-snapshot
+requirement of the binding panel. It does not appear to: that requirement binds
+the panel to one immutable snapshot at wave close, which the second phase's
+merge produces.
+
+### 14.2 The four new broker ops land in the prep commit as typed-unimplemented
+
+**The ruling.** The integrator prep commit declares all four broker op variants
+with their request and response types, and lands dispatch arms returning a typed
+unimplemented error. Both consuming slices then read a landed closed enum instead
+of racing to extend it.
+
+**What was verified.**
+
+- **None of the four exists today.** Searching `packages/` and
+  `docs/reference/privileges.md` for `DeletePersistentTap`, `CreateBridge`,
+  `DeleteBridge` and `ApplyNftablesProjection` returns nothing, so all four are
+  new surface rather than extensions of a landed variant.
+- **Two W4 items in two different parallel groups need them.**
+  `ADR046-network-005` (group `wi:ADR-046-resources-network`) and
+  `ADR046-network-007` (same group) both consume them, and
+  `ADR046-network-008`'s validation field additionally pins that "bridge
+  `DeleteBridge` broker call made exactly once during finalizer" - and that item
+  sits in the separate `wi:core-config-hub:w4` group. So the enum is read across
+  group boundaries, not only within one.
+- **The broker is an excluded sibling workspace.** `tests/AGENTS.md` records
+  `packages/d2b-priv-broker/` as intentionally outside `packages/Cargo.toml`
+  with its own lockfile, and `AGENTS.md` records its `unsafe_code = "deny"`
+  policy. Two slices editing it concurrently would collide on both the enum and
+  that separate `Cargo.lock`.
+
+**The catalogue row moves with the op, and prep must carry it.** Verified in
+`AGENTS.md`: the "Adding new per-VM behaviour" section requires privileged side
+effects to be "routed through a typed `d2b-priv-broker` op declared in
+`packages/d2b-contracts/`" and points at
+[`docs/reference/privileges.md`](../../docs/reference/privileges.md) as "the
+broker op catalogue", and the References section names that file
+"authoritative broker op catalogue". An authoritative catalogue that omits a
+declared op is wrong the moment the op lands, so the prep commit adds the four
+rows in the same change as the four variants. Note that
+`docs/reference/privileges.md` is shipped reference prose, so no wave or finding
+marker may appear in those rows.
+
+**Class: inference.** Landing a variant whose dispatch arm cannot succeed is a
+deliberate, temporary hole in a fail-closed surface. It is the right trade here
+because the alternative is a merge conflict in the one workspace where a
+conflict is most expensive, but a reviewer should confirm that the typed
+unimplemented error is refused rather than treated as a soft failure by every
+caller, and that no slice ships against it without replacing it.
+
+### 14.3 `d2b-core-controller/src/configuration.rs` becomes a directory module in prep
+
+**The ruling.** The prep commit converts
+`packages/d2b-core-controller/src/configuration.rs` to
+`configuration/{mod,bundle_apply,generation_transition}.rs`, so each of the three
+items writing it owns a distinct file.
+
+**What was verified.** The file exists in the tree today, and all three items
+name it in their `destination`, in three different parallel groups:
+
+| Item | Group | What its destination says about the file |
+| --- | --- | --- |
+| `ADR046-core-001` | `wi:ADR-046-core-controllers` | names `configuration` in its `src/{...}.rs` brace list |
+| `ADR046-pstate-010` | `wi:ADR-046-provider-state` | "diff/apply loop, name-conflict detection, `pending-cleanup` Zone status, `maxFinalizerDurationSeconds` stall detection" |
+| `ADR046-network-008` | `wi:core-config-hub:w4` | "bundle application, diff, generation-transition logic ..., prior-bundle retention" |
+
+The two detailed destinations overlap substantively rather than merely sharing a
+path: both claim the diff, both claim name-conflict handling, and both claim
+generation transition. A file split alone does not resolve that overlap - it
+resolves the *edit* collision, and the ownership question of who writes the diff
+is a separate matter for the wave plan's file-ownership map.
+
+**Class: specification correction is not the right class; this is an integrator
+decision on landed code.** `configuration.rs` is committed, passing code, so
+reshaping it is a refactor governed by the "existing code is canon" rule. That
+rule makes the code authoritative over prose, which means a slice may not
+restructure it on its own judgement to make its own destination fit. Recording
+the split here is what makes it an explicit decision rather than a slice-level
+improvisation, and it is deliberately taken in prep - before any slice opens -
+so no slice's diff carries a move it did not choose.
+
+### 14.4 No new shell gate; the provider-crate-layout check is an xtask policy
+
+**Class: specification correction. Code and the test contract are canon.**
+
+**What was verified, on both sides.**
+
+- **The destination text.** `ADR046-pstate-011`'s `destination` reads
+  `` `packages/xtask/src/provider_crate_policy.rs`; `tests/unit/gates/provider-crate-layout-check.sh` ``.
+  It names both.
+- **The closed-set rule.** `tests/AGENTS.md` states it without an escape hatch:
+  "There is no 'type 7/8' escape hatch: the drift gates and meta gates are a
+  **closed set** - do not add a new `tests/*.sh`", and its directory map labels
+  `tests/unit/gates/` "drift/perf gates (closed set)". `AGENTS.md` repeats the
+  prohibition from the other direction.
+- **The item's own `integration` field, which settles it.** It reads
+  "`make test-policy` runs `cargo xtask check-provider-crate-layout`; GitHub CI
+  runs `make test-policy` on every PR; `make check` includes `test-policy` as a
+  required Layer-1 shard". So the item already describes its check executing as
+  an xtask subcommand under an enforcing lane, with no role left for a shell
+  script. The **destination is the outlier within the item itself**, not a rule
+  the ruling overrides.
+
+**The ruling.** Implement `packages/xtask/src/provider_crate_policy.rs`, expose
+it as `cargo xtask check-provider-crate-layout`, wire it into the existing
+`test-policy` target, and do **not** create
+`tests/unit/gates/provider-crate-layout-check.sh`. The item's eight validation
+outcomes - missing `src/`, `tests/`, `integration/` or `README.md`; an
+`integration/` with no `.rs` files; all four present and non-empty passing;
+non-provider `d2b-*` crates unflagged; idempotence across re-runs - are all
+filesystem predicates and need no shell.
+
+Per FR-046 the manifest is not corrected in place; the prose change belongs in
+its own amendment, the same shape as the destination drift already recorded in
+section 5 and the crate-layout policy file-name drift already recorded in 10.3.
+That 10.3 entry is the direct precedent: the same policy family already shipped
+under a different file name in the enforcing hermetic lane rather than the named
+advisory one, for the same reason, and code was kept.
+
+### 14.5 The config-hub item's task ordering is correct
+
+`ADR046-network-008` at T069 sitting after `ADR046-network-009` at T068 is not a
+transcription error: the graph gives `-008` `parallelGroup`
+`wi:core-config-hub:w4` and `topologicalRank` 13, against `-009`'s
+`wi:ADR-046-resources-network` and rank 11, and `tasks.md` carries the matching
+`### Group ``wi:core-config-hub:w4`` (1 items)` heading immediately above T069.
+The two are in different groups and `-008` genuinely sorts last in the wave.
+
+### 14.6 Which crate, module, and type name own the bundle input DTO
+
+The two items disagree, and the disagreement is real:
+`ADR046-pstate-010` puts `ZoneResourceBundle` / `BundleResource` and the
+`contentHash` computation in `packages/d2b-core/src/v3/zone_bundle.rs`;
+`ADR046-network-008` puts `ZoneBundle` / `BundleResource` / `BundleMetadata` in
+`packages/d2b-contracts/src/generation_bundle.rs`, with the explicit rule that
+`managedBy` and `configurationGeneration` must not be fields of `BundleResource`
+and instead live in `packages/d2b-core-controller/src/resource_store.rs` as
+persisted metadata.
+
+**The crate is decided: `d2b-contracts`.** Four independent things point one way
+and nothing points back.
+
+1. **The manifest is three-to-one for `d2b-contracts`.** Searching every item's
+   destination for a bundle DTO module returns four, not two:
+   `ADR046-cli-011` (W5) names `packages/d2b-contracts/src/zone_bundle.rs`,
+   `ADR046-volume-006` (W5) names `packages/d2b-contracts/src/v3/zone_bundle.rs`,
+   `ADR046-network-008` (W4) names `packages/d2b-contracts/src/generation_bundle.rs`,
+   and only `ADR046-pstate-010` (W4) names `packages/d2b-core/`.
+2. **`d2b-core` has no `v3` module at all.** `packages/d2b-core/src/` holds no
+   `v3` directory; every v3 resource DTO in this tree lives under
+   `packages/d2b-contracts/src/v3/`. Honouring `d2b-core/src/v3/zone_bundle.rs`
+   would open a second, parallel v3 namespace in a crate that has none, which is
+   how one concept acquires two homes as well as two spellings.
+3. **The dependency direction favours it.** `packages/d2b-contracts/Cargo.toml`
+   depends on `d2b-core`, so contracts is downstream of core. The named Rust
+   consumer of the DTO in both items, `d2b-core-controller`, declares exactly two
+   d2b dependencies - `d2b-contracts` and `d2b-controller-toolkit` - and does
+   **not** depend on `d2b-core`. Placing the DTO in `d2b-contracts` is reachable
+   today; placing it in `d2b-core` requires adding a dependency edge to satisfy
+   one item against three.
+4. **The counter-argument was weighed and does not carry.** `AGENTS.md` records
+   `d2b-core` DTOs as canonical for the bundle/manifest artifacts, and
+   `ADR046-pstate-010` pairs its DTO with a Nix emitter
+   (`nixos-modules/zone-resources.nix`), which mirrors that established
+   emitter-to-`d2b-core`-DTO pattern. But that pattern is the v2 `/etc/d2b`
+   private bundle - `bundle.rs`, `host.rs`, `processes.rs`, `privileges.rs` -
+   and a Zone resource bundle is a v3 resource artifact, whose established home
+   is `d2b-contracts/src/v3/`. The landed `nixos-modules/zone-resources-json.nix`
+   emitter is grounded in a generated Nix table
+   (`generated/zone-spec-canonical.nix`), not in a `d2b-core` DTO, so there is no
+   precedent in the tree for this emitter reaching into `d2b-core` either.
+
+**The module path and the type names are now ruled too:
+`ADR046-network-008`'s spelling wins.** The DTOs land at
+`packages/d2b-contracts/src/generation_bundle.rs` as `ZoneBundle`,
+`BundleResource` and `BundleMetadata`. Three things carry it.
+
+1. **`ADR046-network-008` is the only one of the four that *defines* the DTOs;
+   the other three merely *name a module*.** Its `destination` was re-read in
+   full against `docs/specs/ADR-046-work-items.json`. It enumerates all three
+   type names, marks them explicitly as the **input** DTOs, and states a
+   normative exclusion with its reason: `BundleResource` MUST NOT carry
+   `managedBy` or `configurationGeneration`, because both are persisted resource
+   metadata that core sets at activation rather than bundle input fields. It
+   then places the closed `ManagedBy` enum `{ Configuration, Controller, Api }`
+   and `configurationGeneration: u64` in
+   `packages/d2b-core-controller/src/resource_store.rs`, and its
+   `detailedDesign` repeats the exclusion. A specification that says what a type
+   must not contain, and why, is a definition. One that names a file is a
+   reference. `ADR046-cli-011` and `ADR046-volume-006` name their module with a
+   parenthetical (`(new)`, `(bundle index schema)`) and no types at all;
+   `ADR046-pstate-010` names two types and a `contentHash` computation inside a
+   destination list without any field-level rule.
+2. **Specificity beats headcount here, because there is no majority to count.**
+   The three-to-one figure the crate ruling rests on is about the **crate**,
+   where three items genuinely agree on `d2b-contracts`. On path and type name
+   they do not agree with each other either: the four destinations give four
+   distinct module spellings, and the two W4 items give two distinct top-level
+   type names. Counting cannot decide a four-way split with no repeated value,
+   so the most normative text decides it, and that is `ADR046-network-008`.
+3. **`ZoneResourceBundle` and `ZoneBundle` are one concept, so only one ships.**
+   `ADR046-pstate-010`'s `ZoneResourceBundle` is `ZoneBundle` under another
+   name, and its `contentHash` computation is a field or method **on**
+   `ZoneBundle`, not a second DTO beside it. Recording that here is the point of
+   the ruling: without it the two W4 slices land two spellings of one thing,
+   which is the identical failure this register already flags for
+   `UserDiscoveryEffectPort` in section 10.4 and for the duplicated conformance
+   cells in 10.1. `BundleResource` is already common to both items and is
+   unaffected.
+
+**Forward-looking specification correction, for the W5 items.**
+`ADR046-cli-011` (`packages/d2b-contracts/src/zone_bundle.rs`) and
+`ADR046-volume-006` (`packages/d2b-contracts/src/v3/zone_bundle.rs`) must be
+reconciled onto `packages/d2b-contracts/src/generation_bundle.rs` when their
+wave runs. Both are named here so this is not rediscovered as a fresh
+three-way disagreement in W5; neither is in Wave 4's scope and neither blocks
+it.
+
+**This ruling unblocks the Wave 4 prep commit.** The prior pass recorded the
+path-and-name question as blocking prep, because prep cannot land a shared
+module whose path and type names are undetermined. Both are now fixed, so prep
+may land `packages/d2b-contracts/src/generation_bundle.rs` with `ZoneBundle`,
+`BundleResource` and `BundleMetadata`, and the two W4 consumers open on a
+stable contract.
+
+**Class: ruled. The W5 reconciliation is a specification correction owed by
+W5.**
+
+### 14.7 What debt Wave 4 takes on
+
+Three items are in scope, each with the reason it belongs to this wave rather
+than to a later one.
+
+**1. `ADR046-process-001` discharges Wave 3's largest recorded gap.** Verified
+in both directions: the register names the item repeatedly - section 1's
+`ADR046-primitives-002` row, section 8's `ADR046-primitives-002` and
+`ADR046-primitives-003` rows, and section 10.4's owner line - and the
+implementation graph places `ADR046-process-001` in W4 with
+`parallelGroup` `wi:ADR-046-components-processes-and-sandbox`. The gap it closes
+is the one section 11 called the single largest thing Wave 3 leaves: three
+crates proven only over scripted ports, with no production caller and
+`integration/` directories holding nothing but a `README.md`. The
+`ProcessLaunchEffectPort` production adapter is what turns a green Wave 3 gate
+from evidence about internal consistency into evidence about behaviour.
+
+**2. The `public_mint_surface` gate runtime, in the corrected fix shape.**
+Section 9 assigned this to Wave 3 on the argument that the wave making a
+per-crate-linear gate worse should pay for its shape. Wave 3 did not pay it, and
+Wave 4 adds roughly eight crates - the `d2b-provider-network-local` and
+credential and provider-state destinations across three groups - so the same
+argument now points here, more strongly.
+
+The fix shape is the corrected one section 9 already established, and it must
+not be re-derived as the flat parallelisation the register originally claimed. A
+flat parallel render is **not available**: before rendering a package the loop
+calls `plant_dependency_doc_link` for every already-rendered crate, symlinking
+those render roots into the package's own doc root, so a render consumes the
+output of the renders before it. What is available is (a) hoisting the two pure
+source scans out of the render loop, since neither reads rendered output, and
+(b) parallelising the render *within* each level of the dependency order.
+
+**Verified: no Wave 3 commit paid it, and the one commit that touched the file
+did something else.** `packages/d2b-bus/tests/public_mint_surface.rs` was last
+touched 18 commits before this branch tip, by a commit that moved the Rust gate
+to nextest and cached what it was rebuilding. That is a genuine runtime
+mitigation - renders and compiled artifacts now persist across runs - but it is
+cross-run caching, not the recorded fix: `render_workspace_docs` still loops
+sequentially over `dependency_order(packages)`, and `hidden_public_api` and
+`source_capability_inventory_with_externals` are both still called inside that
+loop. Neither half of the corrected shape has been done, and the cold-run cost
+the register recorded is unchanged.
+
+**3. Importing `nixos-modules/resources-volume.nix`.** Section 3 records the
+Volume assertions as imported by no module, so they do not run, and section 8
+records the matching eval-case obligation as blocked behind that import. It is
+one line in `nixos-modules/index.nix`.
+
+**One correction to the reasoning offered for this item.** The planning pass
+justified it as "three W4 slices already open `nixos-modules/index.nix`, so this
+is one line in a file the wave is already in". That is wrong on the count.
+Searching every W4 item's `destination`, `detailedDesign` and `integration`
+fields for `index.nix` returns exactly **one** item, `ADR046-network-004`; the
+other three items naming that file are `ADR046-identities-002` (W0, sealed),
+`ADR046-nix-004` (W5) and `ADR046-zone-control-007` (W5). The scope decision
+survives the correction - the wave does open the file, once, so the marginal
+cost is still one line and one owner - but the file is a **single-owner** file in
+this wave, not a shared one, so the import must be assigned to
+`ADR046-network-004`'s slice in the file-ownership map rather than dropped in by
+whichever slice notices first.
+
+### 14.8 What Wave 4 does not take on
+
+Four groups stay where the register already puts them. None is deferred for
+convenience; each has a reason that would not change by moving it.
+
+**The sealed Wave 2 nix-unit and host-integration obligations** recorded in
+section 8 against `ADR046-routing-011`, `-012`, `-013` and
+`ADR046-primitives-003`. Section 9 already declined these for Wave 3 and both of
+its reasons still hold: every one is owed by a sealed-W2 item that already
+carries a recorded owner, so transcribing them here would give one obligation two
+wave attributions and make the discharging wave ambiguous; and several still
+cannot execute, because they need a production store that no W4 item delivers.
+
+**The `zone-bootstrap` / `zone-enroll` handler**, ruled to W5 alongside
+`ADR046-store-004` in section 1. That ruling rests on a verified dependency
+rather than on file ownership: `packages/d2b-bus/src/session/enrollment.rs`
+defines recovery entirely in terms of persisted facts and states that the caller
+performs the single durable store transaction that seals the record. The enroll
+handler is that caller, and the durable store lands in W5. Scheduling it into W4
+would schedule work that cannot finish.
+
+**`ADR046-routing-014` and `ADR046-routing-015`**, the two partial Provider
+items. Section 10.1 verified that these are blocked on specification content
+that exists nowhere: no request or response payload is written for any Provider
+method, including the six that are named, and there is no proto, frozen service
+name or field numbering. No wave can discharge that, so moving it into W4 would
+move the hole rather than close it. `ADR046-provider-001` retains ownership.
+
+**The Wave 3 specification gaps about required derivation outputs**, recorded in
+12.2 and 12.3. The Phase 2 rule names three required outputs and specifies no
+path, filename, Nix output name or layout for any of them, and the rule has no
+conformance scenario to cite. Both need a specification amendment before
+`ADR046-zone-control-015` in W5; neither is wave work, and neither is W4's.
+
+### 14.9 Summary of what this section adds to the register
+
+| Finding | Class | Owning wave |
+| --- | --- | --- |
+| W4 stays one sealed wave and delivers in two integration phases; the opening phase's commits take `( W4 )` and `( W4fu<M> )`, not the `W4a` form, which means post-W4 prep | Inference | W4, confirmed at the wave panel |
+| Four new broker ops land in the prep commit as typed-unimplemented, with their `docs/reference/privileges.md` catalogue rows in the same change | Inference | W4 prep |
+| `d2b-core-controller/src/configuration.rs` splits into a directory module in prep; the three items' substantive overlap on diff and generation transition is a separate ownership question | Integrator decision on landed code | W4 prep, plus the wave file-ownership map |
+| `ADR046-pstate-011`'s destination names a shell gate the closed-set rule forbids; its own `integration` field already describes the xtask form, so the destination is the outlier | Specification correction, code and the test contract canon | W4; prose amendment separately, per FR-046 |
+| `ADR046-network-008` at T069 after `ADR046-network-009` at T068 is correct ordering across two groups | Not debt; recorded to forestall a finding | - |
+| The bundle input DTO belongs to `d2b-contracts` on four independent grounds | Ruled | W4 prep |
+| Its module is `packages/d2b-contracts/src/generation_bundle.rs` with `ZoneBundle`, `BundleResource`, `BundleMetadata`; `ADR046-pstate-010`'s `ZoneResourceBundle` is the same type and its `contentHash` is a member of it, not a second DTO. Prep is unblocked | Ruled | W4 prep |
+| `ADR046-cli-011` and `ADR046-volume-006` name two further module spellings for that same DTO and must be reconciled onto it | Specification correction, owed by W5 | W5 |
+| `ADR046-process-001` closes Wave 3's largest gap: three crates with no production caller, proven only over scripted ports | Unmet obligation, in scope | W4 |
+| `public_mint_surface` runtime: hoist the two pure source scans out of the render loop and parallelise within each dependency level. Verified unpaid by Wave 3; the one commit touching the file added cross-run caching, not this | Unmet obligation, in scope | W4 |
+| `nixos-modules/resources-volume.nix` imported by nothing; one line in `index.nix`, which exactly one W4 item opens | Unmet obligation, in scope | W4, assigned to `ADR046-network-004`'s slice |
