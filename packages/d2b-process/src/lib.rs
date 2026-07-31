@@ -1,18 +1,22 @@
-//! The neutral process launch and supervision primitives.
+//! Neutral process launch and supervision primitives.
 //!
-//! This crate will own the shared process-launch and supervision surface the Process Providers and the supervisor Provider both build on, named by work item
-//! `ADR046-process-001`.
-//!
-//! Nothing here is implemented yet. Nothing here is a design statement, and no
-//! consumer should read a shape from this file.
+//! Process Providers receive only the provider-neutral conformance types.
+//! Core-owned effect adapters use [`ProcessEffectBackend`] to reach the local
+//! broker or service manager without exposing a path, numeric identity, process
+//! identifier, unit name, cgroup, argument vector, environment, or descriptor
+//! to Provider code.
 
 #![deny(missing_docs)]
 
-/// Marks this crate as scaffolding that no work item has filled yet.
-///
-/// The workspace capability-surface scan renders rustdoc for every member and
-/// fails closed when a crate advertises no public item, so an empty scaffold
-/// would break that gate for the whole workspace. This constant exists only to
-/// satisfy it and carries no design intent: the slice that implements
-/// `ADR046-process-001` should delete it rather than build on it.
-pub const UNIMPLEMENTED_SCAFFOLD: () = ();
+mod backend;
+
+pub use backend::{
+    BackendLaunch, BackendObservation, ProcessEffectBackend, ProcessEffectError, ProcessRequest,
+    ProcessStopClass,
+};
+
+pub use d2b_process_conformance::{
+    AdoptionCandidate, CompiledDigests, ConfigurationDigest, IdentityBinding, LaunchTicket,
+    LaunchedProcess, ObservedIdentity, OperationBinding, PidfdEvidence, ProcessConformanceError,
+    ProcessIdentityDigest, ProcessLaunchEffectPort, StopClass, WaitReapOwner,
+};

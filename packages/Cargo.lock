@@ -1178,6 +1178,7 @@ name = "d2b-process"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
+ "d2b-process-conformance",
 ]
 
 [[package]]
@@ -1278,6 +1279,15 @@ name = "d2b-provider-supervisor"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
+ "d2b-process",
+ "d2b-process-conformance",
+ "d2b-provider-system-minijail",
+ "d2b-provider-system-systemd",
+ "rustix 0.38.44",
+ "sha2",
+ "socket2 0.5.10",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

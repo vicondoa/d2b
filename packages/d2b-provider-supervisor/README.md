@@ -1,45 +1,59 @@
 # `d2b-provider-supervisor`
 
-The supervisor Provider.
-
-This crate is scaffolding. The sections below are the structure every Provider
-crate README must carry; each is filled by the slice that implements
-`ADR046-process-001`. Nothing recorded here is a design statement.
+The fixed core-owned Process effect adapter. It is not a configurable Provider
+resource and cannot be replaced by a third-party artifact.
 
 ## Provider identity
 
-Not yet declared. Filled by `ADR046-process-001`.
+Fixed `provider-supervisor` bootstrap component. It has no `providerRef` because
+it is the trusted adapter between Process Provider decisions and local effect
+owners.
 
 ## Config schema
 
-Not yet declared. Filled by `ADR046-process-001`.
+No public config schema. Construction accepts a core-owned backend, a bounded
+blocking concurrency limit, and a fallback timeout. Broker and service-manager
+details remain private to their effect owners.
 
 ## Exported resource types
 
-Not yet declared. Filled by `ADR046-process-001`.
+None. It implements `ProcessLaunchEffectPort` for the Process Providers but
+does not own `Process` or `EphemeralProcess` resources.
 
 ## Controllers / services / workers / binaries
 
-Not yet declared. Filled by `ADR046-process-001`.
+`ProviderSupervisor` is an in-process fixed adapter, not a controller, service,
+worker, or binary. `BrokerProcessBackend` dispatches existing broker runner
+roles; `SystemdProcessBackend` wraps a core-owned system or user manager.
 
 ## Placement and dependencies
 
-Not yet declared. Filled by `ADR046-process-001`.
+Runs beside the local Host or Guest process supervisor. It depends on
+`d2b-process`, `d2b-process-conformance`, the broker wire contract, and an
+injected trusted launch resolver or service-manager effect owner. The crate does
+not depend on `d2bd` or the privileged broker implementation.
 
 ## RBAC requirements
 
-Not yet declared. Filled by `ADR046-process-001`.
+Only a Process-controller-authenticated `LaunchTicket` enters the adapter.
+Authorization, controller lease, resource revision, endpoint policy, and trusted
+bundle installation are validated before this boundary.
 
 ## Security posture
 
-Not yet declared. Filled by `ADR046-process-001`. Until then the standing Provider rules
-apply unchanged: a Provider performs no privileged mutation, reaches host state
-only through an injected typed effect port, and the broker remains the sole
-privileged executor and audit owner.
+The broker backend sends only opaque `SpawnRunner`, `OpenPidfd`, and
+`SignalRunner` requests and retains descriptors received through `SCM_RIGHTS`.
+The broker remains the sole privileged executor and audit owner, including
+user-namespace setup and final cgroup placement. The systemd backend accepts
+only an atomic invocation, cgroup, main-process, start-time, and
+Provider/template/generation identity and rechecks the entire tuple after
+opening a fresh descriptor. All diagnostics are value-free and redacted.
 
 ## State and telemetry
 
-Not yet declared. Filled by `ADR046-process-001`.
+Local descriptors and verified observations exist only in memory and are not
+serialized or exposed through status. Errors map to a closed code set; metric
+labels must use only those codes and closed operation names.
 
 ## Build and test
 
@@ -47,3 +61,8 @@ Not yet declared. Filled by `ADR046-process-001`.
 cd packages && cargo test -p d2b-provider-supervisor
 cd packages && cargo clippy -p d2b-provider-supervisor --all-targets
 ```
+
+The hermetic suite drives both existing Process Providers through the production
+adapter over deterministic core-owned backends. The declared `integration/`
+scenarios separately name the container and booted-host evidence still required
+for real broker, sandbox, cgroup, systemd, pidfd, and wait/reap behavior.

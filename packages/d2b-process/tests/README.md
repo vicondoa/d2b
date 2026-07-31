@@ -1,5 +1,6 @@
 # `d2b-process` hermetic tests
 
-Cargo integration, ResourceType and controller conformance, fault, redaction,
-schema, and fake-port tests live here. None is declared yet; the slice that
-fills this crate adds them.
+Unit coverage in `src/backend.rs` pins value-free diagnostics and the opaque
+request/observation/handle boundary. Cross-process descriptor and process
+identity scenarios live under `integration/` because they require Linux process
+and pidfd behavior rather than a scripted port.
