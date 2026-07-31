@@ -1574,3 +1574,165 @@ again.
 - **Still open:** the prior `ADR046-primitives-002` Host/Guest/user integration
   obligation. The new adapter makes the test implementable; the hermetic
   locality loop does not turn it into a real integration test.
+
+## 16. Added after Wave 4 Round B
+
+This is the Round B debt audit, performed against tree snapshot `91fd5b9e`.
+The audited work items are `ADR046-process-002`, `ADR046-network-002`,
+`ADR046-pstate-003`, `ADR046-pstate-008`, `ADR046-pstate-010`,
+`ADR046-credential-003`, `ADR046-credential-004`,
+`ADR046-credential-005`, `ADR046-credential-007` and
+`ADR046-network-008`. That set was derived from the Round B slice commits and
+then checked against every item's complete `validation` field in
+`docs/specs/ADR-046-work-items.json`; the reported caveats were starting
+points, not the inventory.
+
+### 16.1 Specification correction: `ADR046-process-002` cannot fit in its destination
+
+All three structural blockers reported by the slice held on verification.
+
+1. **The dependency direction forbids the obvious local wiring.**
+   `packages/d2b-contract-tests/tests/policy_provider_crates.rs` implements an
+   allowlist, not a denylist. An in-scope Provider crate may depend only on
+   `d2b-contracts`, `d2b-controller-toolkit`, `d2b-core`,
+   `d2b-process-conformance`, `d2b-provider` and `d2b-provider-toolkit`.
+   `d2b-provider-supervisor` is deliberately classified as a non-Provider
+   host-side supervisor and is not in that allowlist. Neither
+   `d2b-provider-system-systemd` nor `d2b-provider-system-minijail` may add the
+   dependency that would let it construct `ProviderSupervisor` locally.
+2. **No production composition point currently constructs the supervisor.**
+   The only `ProviderSupervisor::new` and `ProviderSupervisor::with_limits`
+   sites are in `d2b-provider-supervisor`'s own unit and integration tests.
+   No production `Cargo.toml` depends on that crate. The candidate
+   `packages/d2b-core-controller/src/providers.rs` is not such a point: it is an
+   effect-free Provider lifecycle planner whose actions stop at
+   `EnsureComponent`; it imports neither Process Provider and constructs no
+   supervisor. `d2b-core-controller` is also `autobins = false`, and its
+   `main.rs` records that the production ResourceClient, authenticated session
+   connector and store watch dispatcher do not exist. No other production
+   runtime or composition crate in the tree fills that role.
+3. **Executable scenarios require repository Layer 2 wiring outside the stated
+   destination.** `tests/AGENTS.md` places container scenarios under
+   `tests/integration/containers/`, driven by `make test-integration`, and
+   booted-system scenarios under `tests/host-integration/`, driven by
+   `make test-host-integration`. The two Provider crates' `integration/`
+   directories contain only README files. Adding a declaration-only Rust file
+   there would not make either repository lane execute it and would repeat the
+   dead-test pattern already rejected in Round A.
+
+**Ruling and class: specification correction.** The generated work-item
+manifest is normally authoritative over prose for destination and validation,
+which is precisely why this is a manifest defect rather than permission for a
+slice-local workaround. `ADR046-process-002`'s destination is insufficient to
+discharge its own integration and validation obligations. Its scope must extend
+to the production composition point that instantiates both Process Providers
+over `ProviderSupervisor`, and to the container and host-integration wiring
+that exercises system, user, Host and Guest behavior.
+
+There is no suitable composition point to name today. One must first exist in
+the production Zone runtime or `ProviderDeployment` path, own child Process
+Provider instantiation, and be permitted to depend on
+`d2b-provider-supervisor`, `d2b-provider-system-systemd` and
+`d2b-provider-system-minijail`. The dependency-direction rule constrains the
+two Provider crates, not such a core composition crate. Until that actor is
+landed or designated, naming `providers.rs` would be a guess and the item
+remains blocked. The manifest amendment must add that composition destination
+and the two Layer 2 destinations; the item cannot be marked partial merely
+because the pre-existing hermetic schema, status and adoption tests still pass.
+
+### 16.2 Effect-adapter deferrals
+
+Two Round B slices correctly stopped at their typed Provider boundaries rather
+than adding privileged or runtime code to files they did not own.
+
+| Work item | Verified state | Owner / closing condition |
+| --- | --- | --- |
+| `ADR046-network-002` | The five Provider modules and their hermetic bridge-port, nftables, route and IPv6 tests landed. The production `NetworkEffectPort` does not exist in `d2b-contracts` or `d2b-core`, and `ApplyNftablesProjection`, `CreateBridge`, `DeleteBridge` and `DeletePersistentTap` still return typed `BrokerError::Unimplemented` from the real broker dispatcher. `integration/host_fabric.rs` is a declaration-only contract and is routed by no repository lane. | `ADR046-nl-001` owns the neutral trait and core adapter; `ADR046-nl-002` owns the live handlers and executable `host_fabric` scenario. The graph places both in W6. `ADR046-network-005` consumes the adapter from the W4 controller side but cannot make the broker stubs live by writing inside `ADR046-network-002`'s destination. |
+| `ADR046-pstate-003` | Marker, quota and domain policy landed, but `integration/volume_local.rs` is declaration-only. The exact Volume effect surface is not merely one of the four Network stubs: the neutral `VolumeEffectPort`, its host-runtime adapter and required closed Volume operations are absent. Existing legacy storage and swtpm broker handlers do not constitute that adapter. | `ADR046-vl-012` owns the concrete core/broker `VolumeEffectPort` adapter and its full provision/sealing scenarios in W6. `ADR046-pstate-009` owns the later W4 end-to-end provider-state and audit fixtures, but those cannot prove the real filesystem boundary until the adapter exists. The current `integration/README.md` statement that ProviderSupervisor owns this adapter is stale; the generated manifest assigns it to `ADR046-vl-012`. |
+
+The distinction in the second row matters. The Network deferral is directly
+blocked by four typed-unimplemented operations already present in this wave.
+The Volume deferral is blocked by an absent neutral contract and adapter plus
+operations assigned to a later item. Both are real structural blockers and both
+would have required out-of-destination writes, but they are not the same broker
+state.
+
+### 16.3 Credential Provider work is in progress, not complete
+
+`ADR046-credential-003`, `ADR046-credential-004` and
+`ADR046-credential-005` landed partial against their exact `src/`, `tests/`,
+`integration/` and README destinations. At snapshot `91fd5b9e`, the tree had
+each crate's four named source modules and six named Cargo integration-test
+files, while each `integration/` directory still had only a README. A
+concurrent completion pass is now adding those fixture files and reshaping the
+managed-identity entrypoint. That moving file inventory is not completion
+evidence, so this register makes no final claim about individual test cells.
+
+The acceptance criterion is the complete validation command and fixture set,
+not compilation of the crate or the presence of files:
+
+| Work item | Validation that must run before closure |
+| --- | --- |
+| `ADR046-credential-003` | `cargo test -p d2b-provider-credential-secret-service`, including its `src/` unit cells and all six named test targets, then `container-service.sh`, `host-placement.nix` and `cleanup-rollback.sh` through their repository Layer 2 lanes. |
+| `ADR046-credential-004` | `cargo test -p d2b-provider-credential-entra --lib --tests`, including the complete lifecycle, conformance, fault, canary, delivery and placement matrix, then `container-service.sh`, `guest-placement.nix` and `cleanup-rollback.sh` through their repository Layer 2 lanes. |
+| `ADR046-credential-005` | `cargo test -p d2b-provider-credential-managed-identity`, including the complete lifecycle, conformance, fault, canary, delivery and placement matrix named by this work item, then `container-service.sh`, `host-guest-placement.nix`, `aca-credential-ref.sh` and `cleanup-rollback.sh` through their repository Layer 2 lanes. |
+
+The dedicated managed-identity dossier has a later, larger controller/agent
+topology item whose exact command also names `tests/topology.rs`. That is not a
+reason to silently add the later item's obligation to
+`ADR046-credential-005`; this row records the W4 generated item's own six-test
+destination and validation field.
+
+### 16.4 `d2b-core::error::BrokerOp` is a completeness gap only
+
+`packages/d2b-core/src/error.rs` has a second broker-operation enum used only
+to format `broker-unimplemented` operator errors. It omits
+`ApplyNftablesProjection`, `CreateBridge`, `DeleteBridge` and
+`DeletePersistentTap`.
+
+The omission is not the authorization-matrix defect closed in `f8e13283`.
+Verification found only three concrete `BrokerOp` construction sites: two
+`CreateTapFd` uses in `error.rs` tests and one in the `d2b-core` fuzz target.
+The production broker dispatch instead matches
+`d2b_contracts::broker_wire::BrokerRequest` and reports operation names through
+its own string-based error and audit path. The current omission therefore
+cannot make one of the four operations callable, deny it, or change its broker
+dispatch. It leaves the generic core error catalogue incomplete and would
+prevent a future core caller from representing those four operations through
+that envelope. **Class: completeness gap. Owner: a Wave 4 integrator follow-up
+on `packages/d2b-core/src/error.rs`, before any production caller uses
+`Error::broker_unimplemented` for the new operations.**
+
+### 16.5 Independent Round B validation audit
+
+| Work item | Result of reading the complete validation field against the tree |
+| --- | --- |
+| `ADR046-process-002` | **Blocked, with a destination defect.** The two Provider implementations have pre-existing hermetic conformance and adoption coverage, but no Round B production wiring or executable integration scenario exists. Section 16.1 records all three blockers and the amendment required. |
+| `ADR046-network-002` | **Behavior met at the hermetic Provider layer; pin clause not met and production integration deferred.** Equivalent bridge-port, nftables coexistence, route and IPv6 tests exist in `d2b-provider-network-local`. The validation field's literal statement that all named tests are pinned in `host-prepare-network.txt` and `net-canaries.txt` is false: those files still identify the old `d2b-host`/broker and IfName tests, the IPv6 sequence is pinned in `ipv6-off-readback.txt`, the old nftables matrix is pinned in `nft-coexistence.txt`, and no pin names the adapted Provider coexistence test. Section 16.2 records the real adapter gap. |
+| `ADR046-pstate-003` | **Partial.** Marker missing, replaced and mismatched states, cross-domain refusal, quota soft checks and the visible marker crash states are hermetically covered. A memory marker store does not prove crash behavior at each real filesystem provision step, a broker-maintained marker, cross-process isolation or real quota enforcement. The named host-integration file is non-executable. Section 16.2 records the W6 adapter owner. |
+| `ADR046-pstate-008` | **Validation met at the descriptor and golden-record layer; integration not met.** `audit_unit.rs` pins bounded audit records, forbidden payload-field classes, the closed metric labels and `d2b.zone` as a Resource attribute. Nothing outside `audit.rs` calls `emit_volume_event`, and no emitter exports `METRICS` to `observability-otel`. `ADR046-pstate-009` owns the live audit and OTEL fixtures; the lifecycle items that perform each transition must call the sink when they land. This production-wiring gap was not in the supplied list. |
+| `ADR046-credential-003` | **In progress.** The specified source and Cargo test files existed at the audit snapshot; its three Layer 2 fixtures were absent then and are being added concurrently. The full named command and repository lane executions have not been accepted as passing in this audit. Section 16.3 is the closure rule. |
+| `ADR046-credential-004` | **In progress.** Same status: source and six Cargo test files existed at the snapshot; the three Layer 2 fixtures are being added concurrently, and complete command/lane evidence is still owed. Section 16.3 is the closure rule. |
+| `ADR046-credential-005` | **In progress.** Source and six Cargo test files existed at the snapshot; a concurrent pass is adding the four Layer 2 fixtures and the separately specified controller/agent topology. Complete command/lane evidence is still owed. Section 16.3 is the closure rule. |
+| `ADR046-pstate-010` | **Partial, with a specification count defect.** The linked section says "All eight" but actually enumerates nine obligations: absent Volume, absent Provider, incident hold, bundle integrity failure, rollback, finalizer timeout, credential-ref guard, name conflict and metric identity absence. The core logic covers diff ownership, intent ordering, incident-hold/finalizer disposition, rollback, count retention and name conflicts; the input DTO rejects a bad content hash; the Nix case covers the credential-ref guard. There is no real store/controller cleanup, no Zone status/audit integration, no generation metric descriptor or canary, no container generation-activation scenario, no full Provider-config schema build rejection, and no test that performs two independent Nix builds and compares their bundle bytes. The destination's named `tests/configuration.rs` and `integration/configuration.rs` do not exist. The eight-versus-nine wording needs a manifest amendment; the missing behavior remains owned by this item and the production store/runtime work it depends on. |
+| `ADR046-credential-007` | **Partial.** The generic option surface, Credential assertions, activation Role, one canonical envelope, sort/digest projection and store-path absence checks exist. The eval corpus does not cover a wrong-type artifact, duplicate catalog identity, the complete Provider-specific signed-schema cross-check, or every example promised by the field. None of the eight named host-integration cleanup, nonblocking, pending-status, stalled, child-preservation, dynamic-isolation, retention/rollback and tampered-bundle scenarios exists. The work item remains the owner; production execution also depends on the W5 resource compiler/store/runtime path. |
+| `ADR046-network-008` | **Partial.** `generation_bundle.rs`, `configuration/mod.rs` and `configuration/bundle_apply.rs` cover the input DTO, content-hash tamper rejection, closed management agents, configuration-only deletion, item-level conflict, unchanged refresh, retention, rollback and finalizer/child ordering. The destination's `cleanup.rs` and `configuration/generation_transition.rs` are still explicit scaffolds. The named nix-unit, contract-test, controller integration and host-integration files do not exist; no Network finalizer deletes mDNS before clearing, no live `DeleteBridge` can run while the broker arm is unimplemented, no Deleted watch event is consumed, and the three-case name-conflict matrix is represented by only one generic controller-owned case. This was not in the supplied list. |
+
+### 16.6 What the independent pass added
+
+The supplied list correctly identified the blocked Process item, the three
+in-progress Credential items, both effect-adapter deferrals and the core error
+catalogue omission. The independent validation-field pass additionally found:
+
+- `ADR046-network-002`'s adapted Provider tests are not pinned as its validation
+  field claims.
+- `ADR046-pstate-008` has complete hermetic record/label validation but no
+  transition calls, Zone audit emission or OTEL export.
+- `ADR046-pstate-010` says eight cleanup tests while its linked normative list
+  contains nine, and several build, runtime, metric and independent-build
+  obligations remain absent.
+- `ADR046-credential-007` has no Layer 2 cleanup matrix and only partial
+  eval/build coverage.
+- `ADR046-network-008` has logic-level bundle coverage but not its named Nix,
+  Rust integration, Network-finalizer or host-integration scenarios; two owned
+  modules remain explicit scaffolds.
