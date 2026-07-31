@@ -52,9 +52,7 @@ fn audit_golden_record_is_bounded_and_carries_no_sensitive_field_class() {
     let rendered = serde_json::to_string(&event).unwrap();
     assert_eq!(
         rendered,
-        concat!(
-            r#"{"kind":"volume-provisioned","zone":["work"],"volumeRef":"Volume/controller-state","outcome":"succeeded","schemaId":"example-provider.d2bus.org/controller/main-state","schemaVersion":"1.0","persistenceClass":"persistent"}"#
-        )
+        r#"{"kind":"volume-provisioned","zone":["work"],"volumeRef":"Volume/controller-state","outcome":"succeeded","schemaId":"example-provider.d2bus.org/controller/main-state","schemaVersion":"1.0","persistenceClass":"persistent"}"#
     );
     let value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
     for key in value.as_object().unwrap().keys() {

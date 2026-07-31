@@ -45,13 +45,13 @@ impl SecretServiceCredentialProvider {
         {
             let mut leases = self.leases.lock().map_err(|_| invariant())?;
             leases.retain(|_, record| record.metadata.state == CredentialLeaseState::Active);
-            if let Some(existing) = leases.get(&key) {
-                if existing.idempotency_key == request.idempotency_key() {
-                    return Ok(CredentialResponse::AcquireToken(DeliveryResponse {
-                        metadata: existing.metadata.clone(),
-                        delivery_session_params: delivery,
-                    }));
-                }
+            if let Some(existing) = leases.get(&key)
+                && existing.idempotency_key == request.idempotency_key()
+            {
+                return Ok(CredentialResponse::AcquireToken(DeliveryResponse {
+                    metadata: existing.metadata.clone(),
+                    delivery_session_params: delivery,
+                }));
             }
             if leases.len() >= self.config.max_leases() as usize {
                 return Err(CredentialServiceError::new(

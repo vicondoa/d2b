@@ -294,6 +294,8 @@ impl BundleApplyPlan {
 
 /// Result of diffing one verified input bundle.
 #[derive(Debug)]
+// Boxing the plan would change this public outcome's ownership API.
+#[allow(clippy::large_enum_variant)]
 pub enum BundleApplyOutcome {
     /// The content-derived generation identity is already serving.
     Unchanged { name_conflicts: Vec<NameConflict> },

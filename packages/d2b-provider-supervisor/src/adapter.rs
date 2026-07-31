@@ -208,12 +208,11 @@ fn deadline_worker(receiver: Receiver<Deadline>) {
             Err(RecvTimeoutError::Timeout) => {
                 let now = Instant::now();
                 while deadlines.last().is_some_and(|deadline| deadline.at <= now) {
-                    if let Some(deadline) = deadlines.pop() {
-                        if let Some(state) = deadline.state.upgrade()
-                            && !state.is_completed()
-                        {
-                            state.wake_deadline();
-                        }
+                    if let Some(deadline) = deadlines.pop()
+                        && let Some(state) = deadline.state.upgrade()
+                        && !state.is_completed()
+                    {
+                        state.wake_deadline();
                     }
                 }
             }
@@ -404,12 +403,12 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
             .state
             .lock()
             .map_err(|_| ProcessEffectError::LaunchFailed)?;
-        if let Some(launch) = state.launches.remove(operation_uid) {
-            if launch.quarantined {
-                state.quarantined_processes.remove(&launch.process_uid);
-                if let Some(identity) = launch.identity {
-                    state.quarantined_identities.remove(&identity);
-                }
+        if let Some(launch) = state.launches.remove(operation_uid)
+            && launch.quarantined
+        {
+            state.quarantined_processes.remove(&launch.process_uid);
+            if let Some(identity) = launch.identity {
+                state.quarantined_identities.remove(&identity);
             }
         }
         Ok(())
@@ -470,12 +469,12 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
                     (Err(error), late) => {
                         let mut state =
                             state.lock().map_err(|_| ProcessEffectError::LaunchFailed)?;
-                        if let Some(launch) = state.launches.remove(&worker_operation_uid) {
-                            if launch.quarantined {
-                                state.quarantined_processes.remove(&launch.process_uid);
-                                if let Some(identity) = launch.identity {
-                                    state.quarantined_identities.remove(&identity);
-                                }
+                        if let Some(launch) = state.launches.remove(&worker_operation_uid)
+                            && launch.quarantined
+                        {
+                            state.quarantined_processes.remove(&launch.process_uid);
+                            if let Some(identity) = launch.identity {
+                                state.quarantined_identities.remove(&identity);
                             }
                         }
                         if late {

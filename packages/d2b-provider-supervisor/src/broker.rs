@@ -417,6 +417,8 @@ fn response_error(response: &BrokerResponse, operation: BrokerOperation<'_>) -> 
 }
 
 #[cfg(test)]
+// Keep focused broker tests beside the response mapping they exercise.
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use d2b_contracts::broker_wire::BrokerErrorResponse;
 

@@ -1227,7 +1227,7 @@ impl<'de> Deserialize<'de> for ComponentDescriptor {
             state_namespaces: Vec<ComponentStateNamespace>,
         }
         let wire = Wire::deserialize(deserializer)?;
-        if wire.declares_state_volume != !wire.state_namespaces.is_empty() {
+        if wire.declares_state_volume == wire.state_namespaces.is_empty() {
             let error = if wire.declares_state_volume {
                 ProviderContractError::MissingRequiredField
             } else {
@@ -1773,7 +1773,7 @@ impl ProviderManifest {
         let mut component_ids = BTreeSet::new();
         let mut owned_types = BTreeSet::new();
         for component in &components {
-            if component.declares_state_volume() != !component.state_namespaces().is_empty() {
+            if component.declares_state_volume() == component.state_namespaces().is_empty() {
                 return Err(ProviderContractError::MissingRequiredField);
             }
             if !component_ids.insert(component.component_id().clone()) {

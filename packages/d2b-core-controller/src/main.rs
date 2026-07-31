@@ -8,8 +8,9 @@
 use crate::controllers::{AggregateHealth, CoreHandlerRegistry};
 
 /// Fixed process startup stage.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum StartupStage {
+    #[default]
     WaitingForStore,
     WaitingForResourceApi,
     WaitingForAuthenticatedSession,
@@ -74,12 +75,6 @@ pub struct CoreProcess {
     handlers: CoreHandlerRegistry,
     stage: StartupStage,
     recovery: Option<RecoverySnapshot>,
-}
-
-impl Default for StartupStage {
-    fn default() -> Self {
-        Self::WaitingForStore
-    }
 }
 
 impl CoreProcess {

@@ -258,7 +258,7 @@ impl SnapshotCatalog {
 
     /// Record one terminal worker result for status projection.
     pub fn record(&mut self, status: SnapshotStatus) -> Result<(), SnapshotError> {
-        if self.records.len() >= self.policy.retain_count() + 1 {
+        if self.records.len() > self.policy.retain_count() {
             return Err(SnapshotError::CatalogueFull);
         }
         if self.records.iter().any(|entry| entry.id == status.id) {

@@ -295,13 +295,13 @@ impl CoreHandlerRegistry {
             .filter(|kind| kind.mandatory())
             .map(|kind| self.handlers[&kind].phase);
         let phases = mandatory.collect::<Vec<_>>();
-        if phases.iter().any(|phase| *phase == HandlerPhase::Failed) {
+        if phases.contains(&HandlerPhase::Failed) {
             return AggregateHealth::Failed;
         }
-        if phases.iter().any(|phase| *phase == HandlerPhase::Unknown) {
+        if phases.contains(&HandlerPhase::Unknown) {
             return AggregateHealth::Unknown;
         }
-        if phases.iter().any(|phase| *phase == HandlerPhase::Degraded) {
+        if phases.contains(&HandlerPhase::Degraded) {
             return AggregateHealth::Degraded;
         }
         if phases.iter().all(|phase| *phase == HandlerPhase::Ready) {

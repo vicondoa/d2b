@@ -201,6 +201,8 @@ impl<O: SystemdEffectOwner> SystemdProcessBackend<O> {
 }
 
 #[cfg(test)]
+// Keep focused observation tests beside the state helpers they exercise.
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
 
