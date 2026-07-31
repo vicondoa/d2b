@@ -1,6 +1,6 @@
 //! Bounded async adapter for the blocking process effect owner.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -12,6 +12,7 @@ use std::task::{Context, Poll, Waker};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use d2b_contracts::v3::ResourceUid;
 use d2b_process::{
     AdoptionCandidate, BackendObservation, LaunchTicket, LaunchedProcess, PidfdEvidence,
     ProcessConformanceError, ProcessEffectBackend, ProcessEffectError, ProcessIdentityDigest,
@@ -116,9 +117,7 @@ impl BlockingPool {
 impl Drop for BlockingPool {
     fn drop(&mut self) {
         self.sender.take();
-        for worker in self.workers.drain(..) {
-            let _ = worker.join();
-        }
+        self.workers.clear();
         self.deadline_sender.take();
         if let Some(worker) = self.deadline_worker.take() {
             let _ = worker.join();
@@ -228,12 +227,6 @@ struct JobFuture<T> {
     deadline: Instant,
 }
 
-impl<T> JobFuture<T> {
-    fn reconcile(self) -> ReconciledJobFuture<T> {
-        ReconciledJobFuture { state: self.state }
-    }
-}
-
 impl<T> Future for JobFuture<T> {
     type Output = Result<T, ProcessEffectError>;
 
@@ -258,35 +251,33 @@ impl<T> Future for JobFuture<T> {
     }
 }
 
-struct ReconciledJobFuture<T> {
-    state: Arc<JobState<T>>,
-}
-
-impl<T> Future for ReconciledJobFuture<T> {
-    type Output = Result<T, ProcessEffectError>;
-
-    fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
-        if let Ok(mut result) = self.state.result.lock()
-            && let Some(result) = result.take()
-        {
-            return Poll::Ready(result);
-        }
-        if let Ok(mut waker) = self.state.waker.lock() {
-            *waker = Some(context.waker().clone());
-        }
-        if let Ok(mut result) = self.state.result.lock()
-            && let Some(result) = result.take()
-        {
-            return Poll::Ready(result);
-        }
-        Poll::Pending
-    }
-}
-
-enum LaunchOutcome<H> {
-    OnTime(BackendObservation, H),
+enum LaunchOutcome {
+    OnTime(BackendObservation),
     TimedOut,
-    LateUnstopped(BackendObservation, H),
+}
+
+struct LaunchReconciliation {
+    process_uid: ResourceUid,
+    identity: Option<ProcessIdentityDigest>,
+    quarantined: bool,
+}
+
+struct RuntimeState<H> {
+    handles: BTreeMap<ProcessIdentityDigest, Arc<H>>,
+    launches: BTreeMap<ResourceUid, LaunchReconciliation>,
+    quarantined_processes: BTreeSet<ResourceUid>,
+    quarantined_identities: BTreeSet<ProcessIdentityDigest>,
+}
+
+impl<H> Default for RuntimeState<H> {
+    fn default() -> Self {
+        Self {
+            handles: BTreeMap::new(),
+            launches: BTreeMap::new(),
+            quarantined_processes: BTreeSet::new(),
+            quarantined_identities: BTreeSet::new(),
+        }
+    }
 }
 
 /// The fixed core-owned implementation of [`ProcessLaunchEffectPort`].
@@ -301,7 +292,7 @@ pub struct ProviderSupervisor<B: ProcessEffectBackend> {
 struct Inner<B: ProcessEffectBackend> {
     backend: Arc<B>,
     pool: BlockingPool,
-    handles: Mutex<BTreeMap<ProcessIdentityDigest, Arc<B::Handle>>>,
+    state: Arc<Mutex<RuntimeState<B::Handle>>>,
     default_timeout: Duration,
 }
 
@@ -335,7 +326,7 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
             inner: Arc::new(Inner {
                 backend: Arc::new(backend),
                 pool: BlockingPool::new(blocking_limit),
-                handles: Mutex::new(BTreeMap::new()),
+                state: Arc::new(Mutex::new(RuntimeState::default())),
                 default_timeout,
             }),
         }
@@ -359,10 +350,68 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
         handle: B::Handle,
     ) -> Result<(), ProcessEffectError> {
         self.inner
-            .handles
+            .state
             .lock()
             .map_err(|_| ProcessEffectError::LaunchFailed)?
+            .handles
             .insert(identity, Arc::new(handle));
+        Ok(())
+    }
+
+    fn begin_launch(&self, ticket: &LaunchTicket) -> Result<ResourceUid, ProcessEffectError> {
+        let operation_uid = ticket.operation().operation_uid().clone();
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .map_err(|_| ProcessEffectError::LaunchFailed)?;
+        if state.launches.contains_key(&operation_uid) {
+            return Err(ProcessEffectError::Busy);
+        }
+        state.launches.insert(
+            operation_uid.clone(),
+            LaunchReconciliation {
+                process_uid: ticket.process_uid().clone(),
+                identity: None,
+                quarantined: false,
+            },
+        );
+        Ok(operation_uid)
+    }
+
+    fn quarantine_launch(&self, operation_uid: &ResourceUid) -> Result<bool, ProcessEffectError> {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .map_err(|_| ProcessEffectError::LaunchFailed)?;
+        let Some(launch) = state.launches.get_mut(operation_uid) else {
+            return Ok(false);
+        };
+        launch.quarantined = true;
+        let process_uid = launch.process_uid.clone();
+        let identity = launch.identity;
+        state.quarantined_processes.insert(process_uid);
+        if let Some(identity) = identity {
+            state.quarantined_identities.insert(identity);
+        }
+        Ok(true)
+    }
+
+    fn finish_launch_success(&self, operation_uid: &ResourceUid) -> Result<(), ProcessEffectError> {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .map_err(|_| ProcessEffectError::LaunchFailed)?;
+        if let Some(launch) = state.launches.remove(operation_uid) {
+            if launch.quarantined {
+                state.quarantined_processes.remove(&launch.process_uid);
+                if let Some(identity) = launch.identity {
+                    state.quarantined_identities.remove(&identity);
+                }
+            }
+        }
         Ok(())
     }
 
@@ -371,31 +420,34 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
         identity: &ProcessIdentityDigest,
     ) -> Result<Arc<B::Handle>, ProcessEffectError> {
         self.inner
-            .handles
+            .state
             .lock()
             .map_err(|_| ProcessEffectError::StopFailed)?
+            .handles
             .get(identity)
             .cloned()
             .ok_or(ProcessEffectError::Vanished)
     }
 
-    fn retire_handle(
+    fn quarantine_handle(
         &self,
-        identity: &ProcessIdentityDigest,
+        identity: ProcessIdentityDigest,
         handle: &Arc<B::Handle>,
-    ) -> Result<(), ProcessEffectError> {
-        let mut handles = self
+    ) -> Result<bool, ProcessEffectError> {
+        let mut state = self
             .inner
-            .handles
+            .state
             .lock()
             .map_err(|_| ProcessEffectError::StopFailed)?;
-        if handles
-            .get(identity)
+        if !state
+            .handles
+            .get(&identity)
             .is_some_and(|retained| Arc::ptr_eq(retained, handle))
         {
-            handles.remove(identity);
+            return Ok(false);
         }
-        Ok(())
+        state.quarantined_identities.insert(identity);
+        Ok(true)
     }
 
     async fn launch_with_timeout(
@@ -403,8 +455,11 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
         ticket: &LaunchTicket,
         timeout: Duration,
     ) -> Result<LaunchedProcess, ProcessConformanceError> {
+        let operation_uid = self.begin_launch(ticket).map_err(map_error)?;
         let request = ProcessRequest::new(ticket.clone());
         let backend = Arc::clone(&self.inner.backend);
+        let state = Arc::clone(&self.inner.state);
+        let worker_operation_uid = operation_uid.clone();
         let outcome = self
             .inner
             .pool
@@ -412,33 +467,97 @@ impl<B: ProcessEffectBackend> ProviderSupervisor<B> {
                 let launch = backend.launch(request);
                 let late = Instant::now() >= deadline;
                 match (launch, late) {
-                    (Err(_), true) => Err(ProcessEffectError::DeadlineExceeded),
-                    (Err(error), false) => Err(error),
+                    (Err(error), late) => {
+                        let mut state =
+                            state.lock().map_err(|_| ProcessEffectError::LaunchFailed)?;
+                        if let Some(launch) = state.launches.remove(&worker_operation_uid) {
+                            if launch.quarantined {
+                                state.quarantined_processes.remove(&launch.process_uid);
+                                if let Some(identity) = launch.identity {
+                                    state.quarantined_identities.remove(&identity);
+                                }
+                            }
+                        }
+                        if late {
+                            Err(ProcessEffectError::DeadlineExceeded)
+                        } else {
+                            Err(error)
+                        }
+                    }
                     (Ok(launch), false) => {
                         let (observation, handle) = launch.into_parts();
-                        Ok(LaunchOutcome::OnTime(observation, handle))
+                        let identity = observation.identity();
+                        let mut state =
+                            state.lock().map_err(|_| ProcessEffectError::LaunchFailed)?;
+                        state.handles.insert(identity, Arc::new(handle));
+                        if let Some(launch) = state.launches.get_mut(&worker_operation_uid) {
+                            launch.identity = Some(identity);
+                        }
+                        Ok(LaunchOutcome::OnTime(observation))
                     }
                     (Ok(launch), true) => {
                         let (observation, handle) = launch.into_parts();
-                        match backend.stop(&handle, ProcessStopClass::Terminate) {
+                        let identity = observation.identity();
+                        let handle = Arc::new(handle);
+                        {
+                            let mut state =
+                                state.lock().map_err(|_| ProcessEffectError::LaunchFailed)?;
+                            state.handles.insert(identity, Arc::clone(&handle));
+                            state.quarantined_identities.insert(identity);
+                            let process_uid = if let Some(launch) =
+                                state.launches.get_mut(&worker_operation_uid)
+                            {
+                                launch.identity = Some(identity);
+                                launch.quarantined = true;
+                                Some(launch.process_uid.clone())
+                            } else {
+                                None
+                            };
+                            if let Some(process_uid) = process_uid {
+                                state.quarantined_processes.insert(process_uid);
+                            }
+                        }
+                        match backend.stop(handle.as_ref(), ProcessStopClass::Terminate) {
                             Ok(()) | Err(ProcessEffectError::Vanished) => {
+                                let mut state =
+                                    state.lock().map_err(|_| ProcessEffectError::StopFailed)?;
+                                if state
+                                    .handles
+                                    .get(&identity)
+                                    .is_some_and(|retained| Arc::ptr_eq(retained, &handle))
+                                {
+                                    state.handles.remove(&identity);
+                                    state.quarantined_identities.remove(&identity);
+                                }
+                                if let Some(launch) = state.launches.remove(&worker_operation_uid) {
+                                    state.quarantined_processes.remove(&launch.process_uid);
+                                }
                                 Ok(LaunchOutcome::TimedOut)
                             }
-                            Err(_) => Ok(LaunchOutcome::LateUnstopped(observation, handle)),
+                            Err(_) => Err(ProcessEffectError::FateUnknown),
                         }
                     }
                 }
             })
-            .reconcile()
-            .await
-            .map_err(map_error)?;
-        let (observation, handle) = match outcome {
-            LaunchOutcome::TimedOut => return Err(ProcessConformanceError::DeadlineExceeded),
-            LaunchOutcome::OnTime(observation, handle)
-            | LaunchOutcome::LateUnstopped(observation, handle) => (observation, handle),
+            .await;
+        let outcome = match outcome {
+            Ok(outcome) => outcome,
+            Err(ProcessEffectError::DeadlineExceeded) => {
+                return if self.quarantine_launch(&operation_uid).map_err(map_error)? {
+                    Err(ProcessConformanceError::AdoptionAmbiguous)
+                } else {
+                    Err(ProcessConformanceError::DeadlineExceeded)
+                };
+            }
+            Err(error) => return Err(map_error(error)),
         };
+        let observation = match outcome {
+            LaunchOutcome::TimedOut => return Err(ProcessConformanceError::DeadlineExceeded),
+            LaunchOutcome::OnTime(observation) => observation,
+        };
+        self.finish_launch_success(&operation_uid)
+            .map_err(map_error)?;
         let identity = observation.identity();
-        self.remember(identity, handle).map_err(map_error)?;
         Ok(LaunchedProcess {
             identity,
             observed: observation.observed().clone(),
@@ -507,23 +626,47 @@ impl<B: ProcessEffectBackend> ProcessLaunchEffectPort for ProviderSupervisor<B> 
         let stop_handle = Arc::clone(&handle);
         if class == StopClass::Terminate {
             let backend = Arc::clone(&self.inner.backend);
-            let (result, late) = self
+            let state = Arc::clone(&self.inner.state);
+            let stop_identity = *identity;
+            let result = self
                 .inner
                 .pool
                 .submit_with_deadline(self.inner.default_timeout, move |deadline| {
                     let result = backend.stop(stop_handle.as_ref(), backend_class);
-                    Ok((result, Instant::now() >= deadline))
+                    let late = Instant::now() >= deadline;
+                    if matches!(result, Ok(()) | Err(ProcessEffectError::Vanished)) {
+                        let mut state = state.lock().map_err(|_| ProcessEffectError::StopFailed)?;
+                        if state
+                            .handles
+                            .get(&stop_identity)
+                            .is_some_and(|retained| Arc::ptr_eq(retained, &stop_handle))
+                        {
+                            state.handles.remove(&stop_identity);
+                            state.quarantined_identities.remove(&stop_identity);
+                        }
+                        return if late {
+                            Err(ProcessEffectError::DeadlineExceeded)
+                        } else {
+                            Ok(())
+                        };
+                    }
+                    if late {
+                        state
+                            .lock()
+                            .map_err(|_| ProcessEffectError::StopFailed)?
+                            .quarantined_identities
+                            .insert(stop_identity);
+                        return Err(ProcessEffectError::FateUnknown);
+                    }
+                    result
                 })
-                .reconcile()
-                .await
-                .map_err(map_error)?;
-            if matches!(result, Ok(()) | Err(ProcessEffectError::Vanished)) {
-                self.retire_handle(identity, &handle).map_err(map_error)?;
-                return if late {
-                    Err(ProcessConformanceError::DeadlineExceeded)
-                } else {
-                    Ok(())
-                };
+                .await;
+            if matches!(result, Err(ProcessEffectError::DeadlineExceeded))
+                && self
+                    .quarantine_handle(*identity, &handle)
+                    .map_err(map_error)?
+            {
+                return Err(ProcessConformanceError::AdoptionAmbiguous);
             }
             return result.map_err(map_error);
         }
@@ -538,7 +681,7 @@ impl<B: ProcessEffectBackend> ProcessLaunchEffectPort for ProviderSupervisor<B> 
 fn map_error(error: ProcessEffectError) -> ProcessConformanceError {
     match error {
         ProcessEffectError::WaitOwnerMismatch => ProcessConformanceError::WaitOwnerMismatch,
-        ProcessEffectError::IdentityChanged | ProcessEffectError::ObserveFailed => {
+        ProcessEffectError::IdentityChanged | ProcessEffectError::FateUnknown => {
             ProcessConformanceError::AdoptionAmbiguous
         }
         ProcessEffectError::PidfdUnavailable | ProcessEffectError::Vanished => {
@@ -550,6 +693,7 @@ fn map_error(error: ProcessEffectError) -> ProcessConformanceError {
         ProcessEffectError::UnsupportedProvider
         | ProcessEffectError::ResolutionFailed
         | ProcessEffectError::LaunchFailed
+        | ProcessEffectError::ObserveFailed
         | ProcessEffectError::StopFailed => ProcessConformanceError::LaunchFailed,
         _ => ProcessConformanceError::LaunchFailed,
     }
@@ -558,7 +702,7 @@ fn map_error(error: ProcessEffectError) -> ProcessConformanceError {
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicBool, AtomicU8};
-    use std::sync::mpsc::{Receiver, Sender, TryRecvError, channel};
+    use std::sync::mpsc::{Receiver, Sender, channel};
 
     use d2b_process::{IdentityBinding, ObservedIdentity, WaitReapOwner};
     use d2b_process_conformance::testing::{block_on, fixtures};
@@ -646,37 +790,55 @@ mod tests {
         )
     }
 
+    fn wait_until(timeout: Duration, predicate: impl Fn() -> bool) {
+        let deadline = Instant::now() + timeout;
+        while !predicate() {
+            assert!(Instant::now() < deadline, "condition did not become true");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
     #[test]
-    fn a_late_launch_is_stopped_before_deadline_exceeded_is_returned() {
+    fn timed_out_launch_is_quarantined_until_late_cleanup_succeeds() {
         let (backend, started, release, live) = controlled_backend(false);
         let supervisor = ProviderSupervisor::new(backend);
+        let worker_supervisor = supervisor.clone();
         let (result_sender, result_receiver) = channel();
         let thread = std::thread::spawn(move || {
             let ticket = fixtures::ticket_builder().build().unwrap();
             result_sender
                 .send(block_on(
-                    supervisor.launch_with_timeout(&ticket, Duration::ZERO),
+                    worker_supervisor.launch_with_timeout(&ticket, Duration::from_millis(10)),
                 ))
                 .unwrap();
         });
 
         started.recv().unwrap();
-        assert!(matches!(
-            result_receiver.try_recv(),
-            Err(TryRecvError::Empty)
-        ));
         assert!(live.load(Ordering::Acquire));
-        release.send(()).unwrap();
         assert_eq!(
-            result_receiver.recv().unwrap().unwrap_err(),
-            ProcessConformanceError::DeadlineExceeded
+            result_receiver
+                .recv_timeout(Duration::from_millis(250))
+                .unwrap()
+                .unwrap_err(),
+            ProcessConformanceError::AdoptionAmbiguous
         );
-        assert!(!live.load(Ordering::Acquire));
         thread.join().unwrap();
+        {
+            let state = supervisor.inner.state.lock().unwrap();
+            assert_eq!(state.launches.len(), 1);
+            assert_eq!(state.quarantined_processes.len(), 1);
+        }
+        release.send(()).unwrap();
+        wait_until(Duration::from_millis(250), || !live.load(Ordering::Acquire));
+        let state = supervisor.inner.state.lock().unwrap();
+        assert!(state.launches.is_empty());
+        assert!(state.quarantined_processes.is_empty());
+        assert!(state.handles.is_empty());
+        assert!(state.quarantined_identities.is_empty());
     }
 
     #[test]
-    fn a_late_launch_is_returned_as_tracked_when_cleanup_fails() {
+    fn a_late_launch_cleanup_failure_stays_quarantined_and_tracked() {
         let (backend, started, release, live) = controlled_backend(true);
         let supervisor = ProviderSupervisor::new(backend);
         let worker_supervisor = supervisor.clone();
@@ -685,24 +847,167 @@ mod tests {
             let ticket = fixtures::ticket_builder().build().unwrap();
             result_sender
                 .send(block_on(
-                    worker_supervisor.launch_with_timeout(&ticket, Duration::ZERO),
+                    worker_supervisor.launch_with_timeout(&ticket, Duration::from_millis(10)),
                 ))
                 .unwrap();
         });
 
         started.recv().unwrap();
-        release.send(()).unwrap();
-        let launched = result_receiver.recv().unwrap().unwrap();
-        assert!(live.load(Ordering::Acquire));
-        assert!(
-            supervisor
-                .inner
-                .handles
-                .lock()
+        assert_eq!(
+            result_receiver
+                .recv_timeout(Duration::from_millis(250))
                 .unwrap()
-                .contains_key(&launched.identity)
+                .unwrap_err(),
+            ProcessConformanceError::AdoptionAmbiguous
         );
         thread.join().unwrap();
+        assert!(live.load(Ordering::Acquire));
+        release.send(()).unwrap();
+        wait_until(Duration::from_millis(250), || {
+            !supervisor.inner.state.lock().unwrap().handles.is_empty()
+        });
+        let state = supervisor.inner.state.lock().unwrap();
+        assert_eq!(state.launches.len(), 1);
+        assert_eq!(state.quarantined_processes.len(), 1);
+        assert_eq!(state.handles.len(), 1);
+        assert_eq!(state.quarantined_identities.len(), 1);
+    }
+
+    struct HungStopBackend {
+        stop_started: Mutex<Option<Sender<()>>>,
+        launch_delay: Duration,
+        live: Arc<AtomicBool>,
+    }
+
+    impl ProcessEffectBackend for HungStopBackend {
+        type Handle = ();
+
+        fn launch(
+            &self,
+            _request: ProcessRequest,
+        ) -> Result<d2b_process::BackendLaunch<Self::Handle>, ProcessEffectError> {
+            if !self.launch_delay.is_zero() {
+                std::thread::sleep(self.launch_delay);
+            }
+            self.live.store(true, Ordering::Release);
+            Ok(d2b_process::BackendLaunch::new(
+                BackendObservation::new(
+                    ProcessIdentityDigest::from_bytes([9; 32]),
+                    ObservedIdentity::from_verified([IdentityBinding::Cgroup]),
+                    WaitReapOwner::Local,
+                ),
+                (),
+            ))
+        }
+
+        fn observe(
+            &self,
+            _request: ProcessRequest,
+        ) -> Result<Option<BackendObservation>, ProcessEffectError> {
+            Ok(None)
+        }
+
+        fn open_pidfd(
+            &self,
+            _observation: BackendObservation,
+        ) -> Result<Self::Handle, ProcessEffectError> {
+            Ok(())
+        }
+
+        fn stop(
+            &self,
+            _handle: &Self::Handle,
+            _class: ProcessStopClass,
+        ) -> Result<(), ProcessEffectError> {
+            if let Some(started) = self.stop_started.lock().unwrap().take() {
+                started.send(()).unwrap();
+            }
+            loop {
+                std::thread::park();
+            }
+        }
+    }
+
+    #[test]
+    fn hung_late_launch_cleanup_is_bounded_and_quarantined() {
+        let (stop_started_sender, stop_started_receiver) = channel();
+        let live = Arc::new(AtomicBool::new(false));
+        let supervisor = ProviderSupervisor::with_limits(
+            HungStopBackend {
+                stop_started: Mutex::new(Some(stop_started_sender)),
+                launch_delay: Duration::from_millis(20),
+                live: Arc::clone(&live),
+            },
+            1,
+            Duration::from_millis(10),
+        );
+        let ticket = fixtures::ticket_builder().build().unwrap();
+        let worker_supervisor = supervisor.clone();
+        let (result_sender, result_receiver) = channel();
+        std::thread::spawn(move || {
+            result_sender
+                .send(block_on(
+                    worker_supervisor.launch_with_timeout(&ticket, Duration::from_millis(10)),
+                ))
+                .unwrap();
+        });
+
+        assert_eq!(
+            result_receiver
+                .recv_timeout(Duration::from_millis(250))
+                .unwrap()
+                .unwrap_err(),
+            ProcessConformanceError::AdoptionAmbiguous
+        );
+        stop_started_receiver
+            .recv_timeout(Duration::from_millis(250))
+            .unwrap();
+        assert!(live.load(Ordering::Acquire));
+        let state = supervisor.inner.state.lock().unwrap();
+        assert_eq!(state.launches.len(), 1);
+        assert_eq!(state.quarantined_processes.len(), 1);
+        assert_eq!(state.handles.len(), 1);
+        assert_eq!(state.quarantined_identities.len(), 1);
+    }
+
+    #[test]
+    fn hung_terminate_is_bounded_and_quarantined() {
+        let (stop_started_sender, stop_started_receiver) = channel();
+        let supervisor = ProviderSupervisor::with_limits(
+            HungStopBackend {
+                stop_started: Mutex::new(Some(stop_started_sender)),
+                launch_delay: Duration::ZERO,
+                live: Arc::new(AtomicBool::new(false)),
+            },
+            1,
+            Duration::from_millis(10),
+        );
+        let ticket = fixtures::ticket_builder().build().unwrap();
+        let launched = block_on(supervisor.launch(&ticket)).unwrap();
+        let worker_supervisor = supervisor.clone();
+        let identity = launched.identity;
+        let (result_sender, result_receiver) = channel();
+        std::thread::spawn(move || {
+            result_sender
+                .send(block_on(
+                    worker_supervisor.stop(&identity, StopClass::Terminate),
+                ))
+                .unwrap();
+        });
+
+        assert_eq!(
+            result_receiver
+                .recv_timeout(Duration::from_millis(250))
+                .unwrap()
+                .unwrap_err(),
+            ProcessConformanceError::AdoptionAmbiguous
+        );
+        stop_started_receiver
+            .recv_timeout(Duration::from_millis(250))
+            .unwrap();
+        let state = supervisor.inner.state.lock().unwrap();
+        assert!(state.handles.contains_key(&launched.identity));
+        assert!(state.quarantined_identities.contains(&launched.identity));
     }
 
     #[test]
@@ -720,7 +1025,7 @@ mod tests {
         for _ in 0..64 {
             let launched = block_on(supervisor.launch(&ticket)).unwrap();
             block_on(supervisor.stop(&launched.identity, StopClass::Terminate)).unwrap();
-            assert!(supervisor.inner.handles.lock().unwrap().is_empty());
+            assert!(supervisor.inner.state.lock().unwrap().handles.is_empty());
         }
     }
 }

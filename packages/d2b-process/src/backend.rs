@@ -154,6 +154,8 @@ pub enum ProcessEffectError {
     Busy,
     /// The effect did not complete inside the ticket deadline.
     DeadlineExceeded,
+    /// The operation deadline passed while the process fate remained unknown.
+    FateUnknown,
     /// The exact verified process could not be stopped.
     StopFailed,
 }
@@ -172,6 +174,7 @@ impl ProcessEffectError {
             Self::WaitOwnerMismatch => "wait-owner-mismatch",
             Self::Busy => "effect-adapter-busy",
             Self::DeadlineExceeded => "deadline-exceeded",
+            Self::FateUnknown => "process-fate-unknown",
             Self::StopFailed => "stop-failed",
         }
     }
@@ -253,6 +256,7 @@ mod tests {
             ProcessEffectError::WaitOwnerMismatch,
             ProcessEffectError::Busy,
             ProcessEffectError::DeadlineExceeded,
+            ProcessEffectError::FateUnknown,
             ProcessEffectError::StopFailed,
         ] {
             assert_eq!(error.to_string(), error.code());

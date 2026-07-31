@@ -292,7 +292,10 @@ impl<R: BrokerLaunchResolver> ProcessEffectBackend for BrokerProcessBackend<R> {
             tracing_span_id: None,
         }))?;
         let BrokerResponse::OpenPidfd(ref response) = frame.response else {
-            return Err(response_error(&frame.response, BrokerOperation::OpenPidfd));
+            return Err(response_error(
+                &frame.response,
+                BrokerOperation::OpenPidfd(&observed),
+            ));
         };
         if response.vm_id != observed.intent.vm_id
             || response.role_id != observed.intent.role_id
@@ -385,19 +388,28 @@ impl BrokerFrame {
 }
 
 #[derive(Clone, Copy)]
-enum BrokerOperation {
-    OpenPidfd,
+enum BrokerOperation<'a> {
+    OpenPidfd(&'a BrokerObservedProcess),
     Other,
 }
 
-fn response_error(response: &BrokerResponse, operation: BrokerOperation) -> ProcessEffectError {
+fn response_error(response: &BrokerResponse, operation: BrokerOperation<'_>) -> ProcessEffectError {
     match response {
         BrokerResponse::Error(error)
-            if error.kind.contains("Pidfd")
-                || (matches!(operation, BrokerOperation::OpenPidfd)
-                    && error.kind == "Broker.LiveHandlerFailed") =>
+            if error.kind == "Broker.LiveHandlerFailed"
+                && matches!(operation, BrokerOperation::OpenPidfd(_)) =>
         {
-            ProcessEffectError::IdentityChanged
+            let BrokerOperation::OpenPidfd(observed) = operation else {
+                unreachable!("guard requires OpenPidfd")
+            };
+            match read_proc_start_time(observed.pid) {
+                Ok(Some(start_time)) if start_time != observed.start_time_ticks => {
+                    ProcessEffectError::IdentityChanged
+                }
+                Ok(Some(_)) => ProcessEffectError::PidfdUnavailable,
+                Ok(None) => ProcessEffectError::Vanished,
+                Err(error) => error,
+            }
         }
         BrokerResponse::Error(_) => ProcessEffectError::LaunchFailed,
         _ => ProcessEffectError::LaunchFailed,
@@ -446,6 +458,36 @@ mod tests {
         }
     }
 
+    fn observed_process(pid: i32, start_time_ticks: u64) -> BrokerObservedProcess {
+        BrokerObservedProcess {
+            pid,
+            start_time_ticks,
+            ..observed(1)
+        }
+    }
+
+    fn producer_live_handler_error_kind() -> &'static str {
+        const SOURCE: &str = include_str!("../../d2b-priv-broker/src/runtime.rs");
+        const ARM: &str = "Self::LiveHandler(message) => error_response(";
+        let arm = SOURCE
+            .split_once(ARM)
+            .expect("broker LiveHandler response arm")
+            .1;
+        arm.split('"')
+            .nth(1)
+            .expect("broker LiveHandler error kind")
+    }
+
+    fn live_handler_response() -> BrokerResponse {
+        BrokerResponse::Error(BrokerErrorResponse {
+            kind: producer_live_handler_error_kind().to_owned(),
+            operation: "LiveHandler".to_owned(),
+            target_wave: None,
+            message: "privileged host operation failed".to_owned(),
+            action: "inspect private audit".to_owned(),
+        })
+    }
+
     #[test]
     fn pending_broker_observations_are_bounded_and_consumed() {
         let backend =
@@ -468,17 +510,33 @@ mod tests {
     }
 
     #[test]
-    fn open_pidfd_live_handler_failures_are_identity_changes() {
-        let response = BrokerResponse::Error(BrokerErrorResponse {
-            kind: "Broker.LiveHandlerFailed".to_owned(),
-            operation: "LiveHandler".to_owned(),
-            target_wave: None,
-            message: "pid 42 changed from start time 100 to 200".to_owned(),
-            action: "inspect private audit".to_owned(),
-        });
-        let error = response_error(&response, BrokerOperation::OpenPidfd);
-        assert_eq!(error, ProcessEffectError::IdentityChanged);
-        assert_eq!(error.to_string(), "identity-changed");
+    fn open_pidfd_live_handler_failure_is_ambiguous_only_after_identity_drift() {
+        const LIVE_HANDLER_SOURCE: &str =
+            include_str!("../../d2b-priv-broker/src/live_handlers.rs");
+        for producer_error in ["PidfdRace", "PidfdOpenFailed", "ProcStatReadFailed"] {
+            assert!(LIVE_HANDLER_SOURCE.contains(producer_error));
+        }
+
+        let response = live_handler_response();
+        let pid = i32::try_from(std::process::id()).unwrap();
+        let current_start_time = read_proc_start_time(pid).unwrap().unwrap();
+        let drifted = observed_process(pid, current_start_time.saturating_add(1));
+        assert_eq!(
+            response_error(&response, BrokerOperation::OpenPidfd(&drifted)),
+            ProcessEffectError::IdentityChanged
+        );
+
+        let unchanged = observed_process(pid, current_start_time);
+        assert_eq!(
+            response_error(&response, BrokerOperation::OpenPidfd(&unchanged)),
+            ProcessEffectError::PidfdUnavailable
+        );
+
+        let vanished = observed_process(-1, current_start_time);
+        assert_eq!(
+            response_error(&response, BrokerOperation::OpenPidfd(&vanished)),
+            ProcessEffectError::Vanished
+        );
         assert_eq!(
             response_error(&response, BrokerOperation::Other),
             ProcessEffectError::LaunchFailed
