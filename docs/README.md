@@ -164,6 +164,11 @@ Task-oriented recipes. Prescriptive, copy-and-adapt.
   retirement, polkit allowlist removal, default-switch auto-flip,
   whole-migration rollback. Also documents v1.1 deferred verbs and daemon-down
   rendering pointers (`audit` / `console` / `audio` / `keys`).
+- [`how-to/migrate-d2b-v1-0-to-v1-1.md`](./how-to/migrate-d2b-v1-0-to-v1-1.md) -
+  consumer migration guide for v1.0 to v1.1.
+- [`how-to/migrate-d2b-v1-1-to-v1-2.md`](./how-to/migrate-d2b-v1-1-to-v1-2.md) -
+  consumer migration guide for v1.1 to v1.2, including the canonical
+  `d2b` lifecycle group rename.
 - [`how-to/uninstall-d2b.md`](./how-to/uninstall-d2b.md) -
   rollback and uninstall runbook for both NixOS and host-install
   scaffold paths.
@@ -231,5 +236,14 @@ Understanding-oriented prose. The "why" behind the design choices.
 Operator runbooks and troubleshooting procedures live under How-to.
 Reference pages should describe contracts, schemas, and invariants, then
 link to the relevant how-to for day-2 procedures.
+
+## Contributing
+
+Process documentation for changing d2b itself, rather than consuming it,
+lives outside the Diataxis quadrants in
+[`contributing/`](./contributing/README.md): workflow, panel review,
+changelog and commit conventions, gates and lints, critical subsystems, and
+architecture conventions. Start from [`../AGENTS.md`](../AGENTS.md), which
+indexes them and carries the binding rules.
 
 [Diataxis]: https://diataxis.fr/

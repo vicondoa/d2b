@@ -272,7 +272,12 @@ scan_process_markers() {
       continue
     fi
     case "$f" in
-      AGENTS.md|docs/adr/*|docs/specs/*|changelog.d/*)
+      # Process-methodology docs. These legitimately carry wave/phase/finding
+      # markers because they *document* the methodology rather than ship it.
+      # docs/contributing/* is listed explicitly: the case statement has no
+      # default arm, so an unlisted path would be silently unclassified and
+      # exempt by accident rather than by decision.
+      AGENTS.md|docs/contributing/*|docs/adr/*|docs/specs/*|changelog.d/*)
         ;;
       README.md|SECURITY.md|docs/reference/*|docs/how-to/*|docs/explanation/*|examples/*/README*)
         full_files+=("$f")
