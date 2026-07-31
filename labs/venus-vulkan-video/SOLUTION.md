@@ -433,13 +433,141 @@ Changed:
   Vulkan, it would be selecting on an advertisement this lab has now measured
   against. It does not select it today.
 
-Open, and deliberately not guessed at here: where the guest VA path actually
-terminates. The caps reach the guest, which is why the profiles appear, but the
-decode does not reach NVDEC. Whether virgl's video protocol is carrying the
-decode at all, and what those 135,090 frames contained, is unmeasured. The next
-step is to instrument both ends of a single guest VA decode, which is the method
-that resolved the plane defects and the method whose absence produced the
-overstatement above.
+### Where it terminates
+
+That question is now answered, by counting the virgl decode path the way the
+Venus one was already counted. Adding the counter took one small change; not
+having it is why the earlier claim went unchallenged.
+
+The guest is not the problem. Commands flow all the way across:
+
+```
+VIRGL-VIDEO-EVIDENCE decode_bitstream=2048 failed=0 last_err=0
+```
+
+The guest sends decode commands, virglrenderer receives them, and every
+`vaCreateBuffer` and `vaRenderPicture` succeeds. Then:
+
+```
+ERROR  end picture failed, err = 0x17
+```
+
+2790 of them in one run, no other error code. `0x17` is
+`VA_STATUS_ERROR_DECODING_ERROR`. The submission stage succeeds and
+`vaEndPicture` - the call that actually commits the decode - is rejected by
+`nvidia-vaapi-driver` for every frame.
+
+That explains all three observations at once: NVDEC stays idle because no
+decode is ever committed; the path runs 5.7x faster than real hardware because
+nothing decodes; and the guest sees no error because the failure is entirely
+host side and never travels back.
+
+It also means the counter that read `failed=0` was measuring the wrong stage.
+It counts `decode_bitstream`, which is `vaRenderPicture`; the failure is one
+call later. A counter placed one stage short of the failure reports success
+just as confidently as a correct one.
+
+### The upstream check was load bearing after all
+
+The `Mesa Gallium` refusal was overridden on the reading that it looked
+conservative: the only host API this path needs to return a frame is
+`vaExportSurfaceHandle()` with `DRM_PRIME_2`, which is standard and which
+`nvidia-vaapi-driver` implements.
+
+That reading was wrong, and this is what wrong looks like when it is measured
+rather than argued. Export was never the hard part. **Consuming
+virglrenderer's picture parameters and slice data is**, and this driver will
+not. Upstream's "only supports mesa va drivers now" is a real constraint on
+this driver, not an unreviewed leftover.
+
+The override is kept, reclassified from unproven to known-failing, because the
+failure is now precisely located and worth being able to reproduce. Its warning
+names the call, the status code and the conclusion.
+
+Keeping it separate from `VIRGL_FORCE_VIDEO` is what made this attributable at
+all: video initialisation was correct and stayed correct, and the driver was
+the thing that did not work. A single combined knob would have left both
+suspects alive.
+
+### Consequences for the pref
+
+`gfx.blacklist.hardwarevideodecoding` stays removed, and the reasoning is now
+fully in the open rather than resting on an assumption:
+
+- Firefox decodes through Vulkan Video, which is measured as hardware backed.
+  It never uses VA-API for a frame.
+- Removing the pref stops bypassing the probe, which is strictly more
+  transparent than asserting `FEATURE_STATUS_OK` over it.
+- The advertisement Firefox reads is nonetheless **not** hardware backed on
+  this host, and that is now a measured fact rather than an open question.
+
+The residual risk is unchanged and narrow: a Firefox that preferred VA-API over
+Vulkan would select on an advertisement whose decode fails. It does not, because
+`InitHWDecoderIfAllowed()` tries `InitVulkanDecoder()` first.
+
+Making the advertisement honest means making `vaEndPicture` succeed on a
+non-Mesa driver. That is not configuration, and it is not a small fix.
+
+### Why, exactly
+
+The driver's own log names the failing call:
+
+```
+nvEndPicture cuvidDecodePicture failed: 1
+```
+
+`cuvidDecodePicture` is NVDEC's entry point and `1` is
+`CUDA_ERROR_INVALID_VALUE`. Surfaces are created without complaint
+(`nvCreateSurfaces2 Creating surface 1280x720, format 1`), so the rejection is
+the picture itself.
+
+virglrenderer's `h264_fill_slice_param()` sets two fields and leaves the rest
+commented out:
+
+```c
+//vasp->slice_data_size;
+//vasp->slice_data_offset;
+//vasp->slice_data_flag;
+//vasp->slice_data_bit_offset;
+//vasp->first_mb_in_slice;
+//vasp->slice_type;
+ITEM_SET(vasp, desc, num_ref_idx_l0_active_minus1);
+ITEM_SET(vasp, desc, num_ref_idx_l1_active_minus1);
+```
+
+That looks like laziness. It is not. **The data is not on the wire.** The
+protocol's `virgl_h264_picture_desc` carries exactly one slice-related field:
+
+```c
+uint32_t slice_count;
+```
+
+A count. No per-slice size, offset, type, or first-macroblock. So
+`h264_fill_slice_param()` cannot populate those fields, because the guest never
+sent them.
+
+### Why that is fine for Mesa and fatal for NVDEC
+
+The virgl video protocol was designed against Mesa's VA drivers, which hand the
+bitstream to hardware that parses slice headers itself. A driver that re-parses
+does not need per-slice VA parameters, so the protocol never carried them.
+
+NVDEC does not re-parse. `nvidia-vaapi-driver` builds `CUVIDPICPARAMS` from the
+VA slice parameters, gets zeros where offsets and sizes belong, and
+`cuvidDecodePicture` correctly rejects it.
+
+So the constraint is **architectural, not a bug**. Upstream's
+"only supports mesa va drivers now" is an accurate statement about what the
+protocol can express. Lifting it requires extending the virgl video wire format
+to carry per-slice parameters, across guest Mesa and virglrenderer, for every
+codec - a protocol change, not a patch.
+
+The lab's decision rule covers exactly this case: when forwarding is blocked by
+a fundamental limitation, stop and document the exact blocker rather than
+inventing a second architecture. This is that blocker, named to the field.
+
+None of it is required here. This prototype decodes through Vulkan Video, which
+is a different path with its own wire format, and which works.
 
 ---
 
