@@ -87,7 +87,12 @@ pub use semantic_services::{
 // The `volume_state` module's re-exports. Keep every
 // `pub use volume_state::...` line inside this region so it stays one
 // contiguous block.
-// (empty until `ADR046-pstate-001` lands)
+pub use volume_state::{
+    MAX_STATE_DOCUMENT_BYTES, MAX_STATE_GENERATION, MarkerStatus, MigrationPolicy,
+    PersistenceClass, QuotaUsage, SealingStatus, SensitivityClass, StateDigest, StateEnvelope,
+    StateSchemaPhase, VolumeStateError, VolumeStateSchema, VolumeStateSchemaId, VolumeStateStatus,
+    canonical_state_payload_bytes, canonical_state_payload_digest,
+};
 
 // The `ifname` module's re-exports. Keep every `pub use ifname::...` line
 // inside this region so it stays one contiguous block.

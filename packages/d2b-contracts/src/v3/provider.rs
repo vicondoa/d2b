@@ -37,6 +37,10 @@ use super::{
     identity::{ResourceTypeName, SchemaFingerprint},
     resource_ref::ResourceRef,
     resource_schema::{CanonicalJsonObject, ExtensionSchemaId, SchemaVersion},
+    volume::{MAX_VIEWS, ViewRight, ViewSpec},
+    volume_state::{
+        MigrationPolicy, PersistenceClass, SensitivityClass, VolumeStateSchema, VolumeStateSchemaId,
+    },
 };
 
 /// The canonical ResourceType name for this module.
@@ -116,6 +120,18 @@ pub enum ProviderContractError {
     /// A cross-Zone export was requested for a capability whose
     /// exportability is forbidden.
     ExportForbidden,
+    /// A component state declaration has no qualifying storage need.
+    ComponentStateNotJustified,
+    /// A component state declaration is not a state Volume declaration.
+    ComponentKindInvalid,
+    /// A component state declaration uses a forbidden persistence class.
+    ComponentPersistenceClassForbidden,
+    /// A component state declaration's byte quota is below the minimum.
+    ComponentQuotaTooSmall,
+    /// Host custody was not explicitly permitted for host-backed Guest state.
+    PlacementHostCustodyViolation,
+    /// The schema category requires Guest-local custody.
+    GuestLocalRequired,
 }
 
 impl core::fmt::Display for ProviderContractError {
@@ -149,6 +165,12 @@ impl ProviderContractError {
             Self::StateSchemaIncompatible => "provider-state-schema-incompatible",
             Self::ProjectionFactoryInvalid => "provider-projection-factory-invalid",
             Self::ExportForbidden => "provider-export-forbidden",
+            Self::ComponentStateNotJustified => "component-state-not-justified",
+            Self::ComponentKindInvalid => "component-kind-invalid",
+            Self::ComponentPersistenceClassForbidden => "component-persistence-class-forbidden",
+            Self::ComponentQuotaTooSmall => "component-quota-too-small",
+            Self::PlacementHostCustodyViolation => "placement-host-custody-violation",
+            Self::GuestLocalRequired => "guest-local-required",
         }
     }
 }
@@ -560,6 +582,430 @@ impl DependencyAlias {
     }
 }
 
+/// Minimum byte quota for a declared component state namespace.
+pub const MIN_COMPONENT_STATE_QUOTA_BYTES: u64 = 4_096;
+
+/// The component-Volume kind carried by a namespace declaration.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum ComponentStateKind {
+    /// A long-lived component payload Volume.
+    State,
+    /// A migration staging Volume. Component descriptors cannot declare one.
+    Staging,
+}
+
+/// Why a payload cannot use resource status or the core Operation ledger.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum StorageNeed {
+    /// Secret or sensitive private recovery data.
+    Secret,
+    /// Large binary or file content.
+    LargeBinary,
+    /// Private content unsafe for authorized status readers.
+    PrivateUnsafeForStatus,
+    /// Bounded content whose churn is unsuitable for revision history.
+    RevisionUnsuitable,
+}
+
+/// Signed placement of state for a component executing under a Guest.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum StatePlacementMode {
+    /// The Volume source and controller both live inside the Guest.
+    GuestLocal,
+    /// The source lives on a Host and Guest access uses Export children.
+    HostBackedGuest,
+}
+
+/// Trusted schema classification used by ProviderDeployment custody checks.
+///
+/// The state schema ID alone does not encode this category. The signed schema
+/// registry supplies it when admitting the namespace.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum StateSchemaCustodyClass {
+    Ordinary,
+    Credential,
+    Audit,
+    RemoteNode,
+    CloudControl,
+}
+
+impl StateSchemaCustodyClass {
+    const fn requires_guest_local(self) -> bool {
+        !matches!(self, Self::Ordinary)
+    }
+}
+
+/// Projection facts ProviderDeployment must copy into a generated state
+/// Volume and its Export children.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ComponentStateVolumeProjection {
+    source_execution_ref: ResourceRef,
+    quota_max_bytes: u64,
+    quota_max_inodes: u64,
+    export_count: usize,
+}
+
+impl ComponentStateVolumeProjection {
+    /// Borrow the Host or Guest that owns the source Volume bytes.
+    pub const fn source_execution_ref(&self) -> &ResourceRef {
+        &self.source_execution_ref
+    }
+
+    /// Return the Volume `quota.maxBytes` value.
+    pub const fn quota_max_bytes(&self) -> u64 {
+        self.quota_max_bytes
+    }
+
+    /// Return the nonzero Volume `quota.maxInodes` value.
+    pub const fn quota_max_inodes(&self) -> u64 {
+        self.quota_max_inodes
+    }
+
+    /// Return the required Export child count.
+    pub const fn export_count(&self) -> usize {
+        self.export_count
+    }
+}
+
+impl core::fmt::Debug for ComponentStateVolumeProjection {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("ComponentStateVolumeProjection(<redacted>)")
+    }
+}
+
+/// One named component view copied into its generated state Volume.
+#[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ComponentStateView {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    path: String,
+    rights: Vec<ViewRight>,
+}
+
+impl ComponentStateView {
+    /// Construct a view after applying the Volume view path and rights rules.
+    pub fn new(
+        path: impl Into<String>,
+        mut rights: Vec<ViewRight>,
+    ) -> Result<Self, ProviderContractError> {
+        let path = path.into();
+        ViewSpec::new(path.clone(), rights.clone())?;
+        rights.sort_unstable();
+        Ok(Self { path, rights })
+    }
+
+    /// Borrow the anchored path relative to the Volume root.
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
+    /// Borrow the granted rights.
+    pub fn rights(&self) -> &[ViewRight] {
+        &self.rights
+    }
+}
+
+impl core::fmt::Debug for ComponentStateView {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ComponentStateView")
+            .field("right_count", &self.rights.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<'de> Deserialize<'de> for ComponentStateView {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Wire {
+            #[serde(default)]
+            path: String,
+            rights: Vec<ViewRight>,
+        }
+
+        let wire = Wire::deserialize(deserializer)?;
+        Self::new(wire.path, wire.rights).map_err(serde::de::Error::custom)
+    }
+}
+
+/// One state Volume namespace signed into a component descriptor.
+#[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ComponentStateNamespace {
+    id: BoundedToken,
+    kind: ComponentStateKind,
+    #[serde(flatten)]
+    state_schema: VolumeStateSchema,
+    persistence_class: PersistenceClass,
+    sensitivity_class: SensitivityClass,
+    #[schemars(range(min = 4_096, max = 9_223_372_036_854_775_807_u64))]
+    quota_bytes: u64,
+    storage_need: StorageNeed,
+    sealing_required: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    placement_mode: Option<StatePlacementMode>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    host_custody_permitted: bool,
+    views: BTreeMap<String, ComponentStateView>,
+}
+
+impl ComponentStateNamespace {
+    /// Construct and intrinsically validate a signed state declaration.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        id: BoundedToken,
+        kind: ComponentStateKind,
+        schema_id: VolumeStateSchemaId,
+        schema_version: SchemaVersion,
+        schema_digest: SchemaFingerprint,
+        persistence_class: PersistenceClass,
+        sensitivity_class: SensitivityClass,
+        migration_policy: MigrationPolicy,
+        quota_bytes: u64,
+        storage_need: Option<StorageNeed>,
+        sealing_required: bool,
+        placement_mode: Option<StatePlacementMode>,
+        host_custody_permitted: bool,
+        views: BTreeMap<String, ComponentStateView>,
+    ) -> Result<Self, ProviderContractError> {
+        if kind != ComponentStateKind::State {
+            return Err(ProviderContractError::ComponentKindInvalid);
+        }
+        if persistence_class != PersistenceClass::Persistent {
+            return Err(ProviderContractError::ComponentPersistenceClassForbidden);
+        }
+        if quota_bytes < MIN_COMPONENT_STATE_QUOTA_BYTES {
+            return Err(ProviderContractError::ComponentQuotaTooSmall);
+        }
+        if quota_bytes > i64::MAX as u64 {
+            return Err(ProviderContractError::InvalidPrimitive);
+        }
+        let storage_need = storage_need.ok_or(ProviderContractError::ComponentStateNotJustified)?;
+        if views.is_empty() {
+            return Err(ProviderContractError::MissingRequiredField);
+        }
+        if views.len() > MAX_VIEWS {
+            return Err(ProviderContractError::BoundExceeded);
+        }
+        for name in views.keys() {
+            BoundedToken::parse(name.clone())?;
+        }
+        match placement_mode {
+            Some(StatePlacementMode::HostBackedGuest) if !host_custody_permitted => {
+                return Err(ProviderContractError::PlacementHostCustodyViolation);
+            }
+            Some(StatePlacementMode::GuestLocal) | None if host_custody_permitted => {
+                return Err(ProviderContractError::PlacementHostCustodyViolation);
+            }
+            _ => {}
+        }
+        Ok(Self {
+            id,
+            kind,
+            state_schema: VolumeStateSchema::new(
+                schema_id,
+                schema_version,
+                schema_digest,
+                migration_policy,
+            ),
+            persistence_class,
+            sensitivity_class,
+            quota_bytes,
+            storage_need,
+            sealing_required,
+            placement_mode,
+            host_custody_permitted,
+            views,
+        })
+    }
+
+    /// Borrow the component-local namespace ID.
+    pub const fn id(&self) -> &BoundedToken {
+        &self.id
+    }
+
+    /// Return the required state kind.
+    pub const fn kind(&self) -> ComponentStateKind {
+        self.kind
+    }
+
+    /// Borrow the schema declaration copied into the Volume.
+    pub const fn state_schema(&self) -> &VolumeStateSchema {
+        &self.state_schema
+    }
+
+    /// Return the required persistence class.
+    pub const fn persistence_class(&self) -> PersistenceClass {
+        self.persistence_class
+    }
+
+    /// Return the payload visibility class.
+    pub const fn sensitivity_class(&self) -> SensitivityClass {
+        self.sensitivity_class
+    }
+
+    /// Return the byte quota copied to `quota.maxBytes`.
+    pub const fn quota_bytes(&self) -> u64 {
+        self.quota_bytes
+    }
+
+    /// Return the storage-need justification.
+    pub const fn storage_need(&self) -> StorageNeed {
+        self.storage_need
+    }
+
+    /// Whether the state must be sealed before it becomes Ready.
+    pub const fn sealing_required(&self) -> bool {
+        self.sealing_required
+    }
+
+    /// Return the signed Guest placement mode, if this targets a Guest.
+    pub const fn placement_mode(&self) -> Option<StatePlacementMode> {
+        self.placement_mode
+    }
+
+    /// Whether the signed descriptor explicitly permits Host custody.
+    pub const fn host_custody_permitted(&self) -> bool {
+        self.host_custody_permitted
+    }
+
+    /// Borrow the named Volume views.
+    pub const fn views(&self) -> &BTreeMap<String, ComponentStateView> {
+        &self.views
+    }
+
+    /// Reject Host-backed placement for schema classes that require Guest
+    /// custody.
+    pub fn validate_schema_custody(
+        &self,
+        class: StateSchemaCustodyClass,
+    ) -> Result<(), ProviderContractError> {
+        if class.requires_guest_local()
+            && self.placement_mode == Some(StatePlacementMode::HostBackedGuest)
+        {
+            Err(ProviderContractError::GuestLocalRequired)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Validate and project the signed declaration for one execution target.
+    ///
+    /// Host targets omit placement and use themselves as the source. Guest
+    /// targets require a frozen placement. Guest-local uses the Guest as the
+    /// source and creates no Export; Host-backed Guest state requires the
+    /// supplied Host source and one Export per attachment.
+    pub fn project_volume(
+        &self,
+        execution_ref: &ResourceRef,
+        host_source: Option<&ResourceRef>,
+        attachment_count: usize,
+        quota_max_inodes: u64,
+    ) -> Result<ComponentStateVolumeProjection, ProviderContractError> {
+        if quota_max_inodes == 0 {
+            return Err(ProviderContractError::ComponentQuotaTooSmall);
+        }
+        let (source_execution_ref, export_count) = match execution_ref.resource_type().as_str() {
+            "Host" if self.placement_mode.is_none() && host_source.is_none() => {
+                (execution_ref.clone(), 0)
+            }
+            "Guest" if self.placement_mode == Some(StatePlacementMode::GuestLocal) => {
+                if host_source.is_some() {
+                    return Err(ProviderContractError::ConflictingFields);
+                }
+                (execution_ref.clone(), 0)
+            }
+            "Guest" if self.placement_mode == Some(StatePlacementMode::HostBackedGuest) => {
+                let host_source = host_source.ok_or(ProviderContractError::MissingRequiredField)?;
+                if host_source.resource_type().as_str() != "Host" {
+                    return Err(ProviderContractError::WrongResourceType);
+                }
+                (host_source.clone(), attachment_count)
+            }
+            "Host" | "Guest" => return Err(ProviderContractError::ConflictingFields),
+            _ => return Err(ProviderContractError::WrongResourceType),
+        };
+        Ok(ComponentStateVolumeProjection {
+            source_execution_ref,
+            quota_max_bytes: self.quota_bytes,
+            quota_max_inodes,
+            export_count,
+        })
+    }
+}
+
+impl core::fmt::Debug for ComponentStateNamespace {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ComponentStateNamespace")
+            .field("kind", &self.kind)
+            .field("persistence_class", &self.persistence_class)
+            .field("sensitivity_class", &self.sensitivity_class)
+            .field("storage_need", &self.storage_need)
+            .field("sealing_required", &self.sealing_required)
+            .field("placement_mode", &self.placement_mode)
+            .field("host_custody_permitted", &self.host_custody_permitted)
+            .field("view_count", &self.views.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<'de> Deserialize<'de> for ComponentStateNamespace {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase", deny_unknown_fields)]
+        struct Wire {
+            id: BoundedToken,
+            kind: ComponentStateKind,
+            schema_id: VolumeStateSchemaId,
+            schema_version: SchemaVersion,
+            schema_digest: SchemaFingerprint,
+            persistence_class: PersistenceClass,
+            sensitivity_class: SensitivityClass,
+            migration_policy: MigrationPolicy,
+            quota_bytes: u64,
+            #[serde(default)]
+            storage_need: Option<StorageNeed>,
+            sealing_required: bool,
+            #[serde(default)]
+            placement_mode: Option<StatePlacementMode>,
+            #[serde(default)]
+            host_custody_permitted: bool,
+            views: BTreeMap<String, ComponentStateView>,
+        }
+
+        let wire = Wire::deserialize(deserializer)?;
+        Self::new(
+            wire.id,
+            wire.kind,
+            wire.schema_id,
+            wire.schema_version,
+            wire.schema_digest,
+            wire.persistence_class,
+            wire.sensitivity_class,
+            wire.migration_policy,
+            wire.quota_bytes,
+            wire.storage_need,
+            wire.sealing_required,
+            wire.placement_mode,
+            wire.host_custody_permitted,
+            wire.views,
+        )
+        .map_err(serde::de::Error::custom)
+    }
+}
+
 /// One declared dependency on an alias.
 ///
 /// An optional dependency produces declared degraded behaviour only; it
@@ -592,6 +1038,7 @@ pub struct ComponentDescriptor {
     config_digest: ArtifactDigest,
     dependencies: BTreeSet<DependencyDeclaration>,
     declares_state_volume: bool,
+    state_namespaces: Vec<ComponentStateNamespace>,
 }
 
 impl ComponentDescriptor {
@@ -663,7 +1110,27 @@ impl ComponentDescriptor {
             config_digest,
             dependencies: dependency_set,
             declares_state_volume,
+            state_namespaces: Vec::new(),
         })
+    }
+
+    /// Add the signed state namespace declarations to this descriptor.
+    pub fn with_state_namespaces(
+        mut self,
+        state_namespaces: impl IntoIterator<Item = ComponentStateNamespace>,
+    ) -> Result<Self, ProviderContractError> {
+        let state_namespaces: Vec<_> = state_namespaces.into_iter().collect();
+        let mut ids = BTreeSet::new();
+        for namespace in &state_namespaces {
+            if !ids.insert(namespace.id().clone()) {
+                return Err(ProviderContractError::DuplicateDeclaration);
+            }
+        }
+        if !state_namespaces.is_empty() {
+            self.declares_state_volume = true;
+        }
+        self.state_namespaces = state_namespaces;
+        Ok(self)
     }
 
     /// The component identifier, unique within the manifest.
@@ -712,6 +1179,11 @@ impl ComponentDescriptor {
     pub const fn declares_state_volume(&self) -> bool {
         self.declares_state_volume
     }
+
+    /// The zero or more state namespaces signed into this descriptor.
+    pub fn state_namespaces(&self) -> &[ComponentStateNamespace] {
+        &self.state_namespaces
+    }
 }
 
 impl core::fmt::Debug for ComponentDescriptor {
@@ -722,6 +1194,7 @@ impl core::fmt::Debug for ComponentDescriptor {
             .field("method_count", &self.exported_methods.len())
             .field("dependency_count", &self.dependencies.len())
             .field("declares_state_volume", &self.declares_state_volume)
+            .field("state_namespace_count", &self.state_namespaces.len())
             .finish_non_exhaustive()
     }
 }
@@ -744,8 +1217,15 @@ impl<'de> Deserialize<'de> for ComponentDescriptor {
             dependencies: BTreeSet<DependencyDeclaration>,
             #[serde(default)]
             declares_state_volume: bool,
+            #[serde(default)]
+            state_namespaces: Vec<ComponentStateNamespace>,
         }
         let wire = Wire::deserialize(deserializer)?;
+        if !wire.state_namespaces.is_empty() && !wire.declares_state_volume {
+            return Err(serde::de::Error::custom(
+                ProviderContractError::ConflictingFields,
+            ));
+        }
         Self::new(
             wire.component_id,
             wire.component_type,
@@ -757,6 +1237,7 @@ impl<'de> Deserialize<'de> for ComponentDescriptor {
             wire.dependencies,
             wire.declares_state_volume,
         )
+        .and_then(|descriptor| descriptor.with_state_namespaces(wire.state_namespaces))
         .map_err(serde::de::Error::custom)
     }
 }
@@ -1509,7 +1990,9 @@ impl SpecifiedProviderMethod {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::v3::{execution_policy::to_base_object, resource_schema::canonical_json_bytes};
+    use crate::v3::{
+        execution_policy::to_base_object, resource_schema::canonical_json_bytes, volume::ViewRight,
+    };
 
     const DIGEST_A: &str =
         "sha256:0000000000000000000000000000000000000000000000000000000000000001";
@@ -1517,6 +2000,7 @@ mod tests {
         "sha256:0000000000000000000000000000000000000000000000000000000000000002";
 
     const MINIMAL_PROVIDER_SPEC: &[u8] = br#"{"artifactId":"provider-wayland","config":{}}"#;
+    const STATEFUL_COMPONENT: &[u8] = br#"{"allowedDomains":["system"],"cardinality":1,"componentId":"volume-controller","componentType":"controller","configDigest":"sha256:0000000000000000000000000000000000000000000000000000000000000002","declaresStateVolume":true,"dependencies":[{"alias":"volume","required":true}],"exportedMethods":["assess-update"],"exportedResourceTypes":["Volume"],"stateNamespaces":[{"id":"main-state","kind":"state","migrationPolicy":"pre-launch-required","persistenceClass":"persistent","placementMode":"guest-local","quotaBytes":4096,"schemaDigest":"sha256:0000000000000000000000000000000000000000000000000000000000000001","schemaId":"example-provider.d2bus.org/controller/main-state","schemaVersion":"1.0","sealingRequired":false,"sensitivityClass":"private","storageNeed":"secret","views":{"main":{"rights":["read","write","create","delete","traverse"]}}}]}"#;
 
     fn fingerprint(hex_tail: &str) -> SchemaFingerprint {
         SchemaFingerprint::parse(format!("sha256:{}{hex_tail}", "0".repeat(63))).unwrap()
@@ -1575,6 +2059,53 @@ mod tests {
             false,
         )
         .unwrap()
+    }
+
+    fn state_views() -> BTreeMap<String, ComponentStateView> {
+        BTreeMap::from([(
+            "main".to_owned(),
+            ComponentStateView::new(
+                String::new(),
+                vec![
+                    ViewRight::Read,
+                    ViewRight::Write,
+                    ViewRight::Create,
+                    ViewRight::Delete,
+                    ViewRight::Traverse,
+                ],
+            )
+            .unwrap(),
+        )])
+    }
+
+    fn state_namespace(
+        kind: ComponentStateKind,
+        persistence_class: PersistenceClass,
+        quota_bytes: u64,
+        storage_need: Option<StorageNeed>,
+        placement_mode: Option<StatePlacementMode>,
+        host_custody_permitted: bool,
+    ) -> Result<ComponentStateNamespace, ProviderContractError> {
+        ComponentStateNamespace::new(
+            BoundedToken::parse("main-state").unwrap(),
+            kind,
+            VolumeStateSchemaId::parse("example-provider.d2bus.org/controller/main-state").unwrap(),
+            SchemaVersion::new(1, 0).unwrap(),
+            SchemaFingerprint::parse(DIGEST_A).unwrap(),
+            persistence_class,
+            SensitivityClass::Private,
+            MigrationPolicy::PreLaunchRequired,
+            quota_bytes,
+            storage_need,
+            false,
+            placement_mode,
+            host_custody_permitted,
+            state_views(),
+        )
+    }
+
+    fn stateful_controller(namespace: ComponentStateNamespace) -> ComponentDescriptor {
+        controller().with_state_namespaces([namespace]).unwrap()
     }
 
     fn binding() -> ResourceApiBinding {
@@ -1636,6 +2167,224 @@ mod tests {
             assert!(base.get(absent).is_none());
         }
         assert_eq!(base.len(), 2);
+    }
+
+    #[test]
+    fn descriptor_schema_vector_pins_signed_state_namespaces() {
+        let descriptor = stateful_controller(
+            state_namespace(
+                ComponentStateKind::State,
+                PersistenceClass::Persistent,
+                MIN_COMPONENT_STATE_QUOTA_BYTES,
+                Some(StorageNeed::Secret),
+                Some(StatePlacementMode::GuestLocal),
+                false,
+            )
+            .unwrap(),
+        );
+        assert_eq!(
+            canonical_json_bytes(&descriptor).unwrap(),
+            STATEFUL_COMPONENT
+        );
+        let parsed: ComponentDescriptor = serde_json::from_slice(STATEFUL_COMPONENT).unwrap();
+        assert_eq!(parsed, descriptor);
+        assert_eq!(parsed.state_namespaces().len(), 1);
+        assert!(parsed.declares_state_volume());
+    }
+
+    #[test]
+    fn stateless_component_declares_no_namespace_round_trip() {
+        let descriptor = controller();
+        let bytes = canonical_json_bytes(&descriptor).unwrap();
+        let parsed: ComponentDescriptor = serde_json::from_slice(&bytes).unwrap();
+        assert!(parsed.state_namespaces().is_empty());
+        assert!(!parsed.declares_state_volume());
+    }
+
+    #[test]
+    fn component_state_not_justified_is_rejected() {
+        assert_eq!(
+            state_namespace(
+                ComponentStateKind::State,
+                PersistenceClass::Persistent,
+                MIN_COMPONENT_STATE_QUOTA_BYTES,
+                None,
+                None,
+                false,
+            ),
+            Err(ProviderContractError::ComponentStateNotJustified)
+        );
+        assert_eq!(
+            ProviderContractError::ComponentStateNotJustified.code(),
+            "component-state-not-justified"
+        );
+    }
+
+    #[test]
+    fn component_kind_invalid_is_rejected() {
+        assert_eq!(
+            state_namespace(
+                ComponentStateKind::Staging,
+                PersistenceClass::Persistent,
+                MIN_COMPONENT_STATE_QUOTA_BYTES,
+                Some(StorageNeed::LargeBinary),
+                None,
+                false,
+            ),
+            Err(ProviderContractError::ComponentKindInvalid)
+        );
+        assert_eq!(
+            ProviderContractError::ComponentKindInvalid.code(),
+            "component-kind-invalid"
+        );
+    }
+
+    #[test]
+    fn component_persistence_class_forbidden_is_rejected() {
+        assert_eq!(
+            state_namespace(
+                ComponentStateKind::State,
+                PersistenceClass::Ephemeral,
+                MIN_COMPONENT_STATE_QUOTA_BYTES,
+                Some(StorageNeed::RevisionUnsuitable),
+                None,
+                false,
+            ),
+            Err(ProviderContractError::ComponentPersistenceClassForbidden)
+        );
+        assert_eq!(
+            ProviderContractError::ComponentPersistenceClassForbidden.code(),
+            "component-persistence-class-forbidden"
+        );
+    }
+
+    #[test]
+    fn component_quota_too_small_is_rejected() {
+        for quota_bytes in [0, 1_024] {
+            assert_eq!(
+                state_namespace(
+                    ComponentStateKind::State,
+                    PersistenceClass::Persistent,
+                    quota_bytes,
+                    Some(StorageNeed::PrivateUnsafeForStatus),
+                    None,
+                    false,
+                ),
+                Err(ProviderContractError::ComponentQuotaTooSmall)
+            );
+        }
+        assert_eq!(
+            ProviderContractError::ComponentQuotaTooSmall.code(),
+            "component-quota-too-small"
+        );
+    }
+
+    #[test]
+    fn placement_host_custody_violation_is_rejected() {
+        assert_eq!(
+            state_namespace(
+                ComponentStateKind::State,
+                PersistenceClass::Persistent,
+                MIN_COMPONENT_STATE_QUOTA_BYTES,
+                Some(StorageNeed::Secret),
+                Some(StatePlacementMode::HostBackedGuest),
+                false,
+            ),
+            Err(ProviderContractError::PlacementHostCustodyViolation)
+        );
+        assert_eq!(
+            ProviderContractError::PlacementHostCustodyViolation.code(),
+            "placement-host-custody-violation"
+        );
+    }
+
+    #[test]
+    fn guest_local_required_schema_classes_reject_host_backed_guest() {
+        let namespace = state_namespace(
+            ComponentStateKind::State,
+            PersistenceClass::Persistent,
+            MIN_COMPONENT_STATE_QUOTA_BYTES,
+            Some(StorageNeed::Secret),
+            Some(StatePlacementMode::HostBackedGuest),
+            true,
+        )
+        .unwrap();
+        for class in [
+            StateSchemaCustodyClass::Credential,
+            StateSchemaCustodyClass::Audit,
+            StateSchemaCustodyClass::RemoteNode,
+            StateSchemaCustodyClass::CloudControl,
+        ] {
+            assert_eq!(
+                namespace.validate_schema_custody(class),
+                Err(ProviderContractError::GuestLocalRequired)
+            );
+        }
+        assert!(
+            namespace
+                .validate_schema_custody(StateSchemaCustodyClass::Ordinary)
+                .is_ok()
+        );
+        assert_eq!(
+            ProviderContractError::GuestLocalRequired.code(),
+            "guest-local-required"
+        );
+    }
+
+    #[test]
+    fn descriptor_volume_projection_preserves_quota_source_and_exports() {
+        for quota_bytes in [MIN_COMPONENT_STATE_QUOTA_BYTES, 1_048_576, 100_000_000] {
+            let guest_local = state_namespace(
+                ComponentStateKind::State,
+                PersistenceClass::Persistent,
+                quota_bytes,
+                Some(StorageNeed::LargeBinary),
+                Some(StatePlacementMode::GuestLocal),
+                false,
+            )
+            .unwrap();
+            let guest = ResourceRef::parse("Guest/work").unwrap();
+            let projected = guest_local.project_volume(&guest, None, 2, 4_096).unwrap();
+            assert_eq!(projected.source_execution_ref(), &guest);
+            assert_eq!(projected.quota_max_bytes(), quota_bytes);
+            assert!(projected.quota_max_inodes() > 0);
+            assert_eq!(projected.export_count(), 0);
+
+            let host_backed = state_namespace(
+                ComponentStateKind::State,
+                PersistenceClass::Persistent,
+                quota_bytes,
+                Some(StorageNeed::LargeBinary),
+                Some(StatePlacementMode::HostBackedGuest),
+                true,
+            )
+            .unwrap();
+            let host = ResourceRef::parse("Host/host-system").unwrap();
+            let projected = host_backed
+                .project_volume(&guest, Some(&host), 2, 4_096)
+                .unwrap();
+            assert_eq!(projected.source_execution_ref(), &host);
+            assert_eq!(projected.quota_max_bytes(), quota_bytes);
+            assert!(projected.quota_max_inodes() > 0);
+            assert_eq!(projected.export_count(), 2);
+        }
+    }
+
+    #[test]
+    fn zero_volume_inode_quota_is_rejected() {
+        let namespace = state_namespace(
+            ComponentStateKind::State,
+            PersistenceClass::Persistent,
+            MIN_COMPONENT_STATE_QUOTA_BYTES,
+            Some(StorageNeed::LargeBinary),
+            Some(StatePlacementMode::GuestLocal),
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            namespace.project_volume(&ResourceRef::parse("Guest/work").unwrap(), None, 0, 0),
+            Err(ProviderContractError::ComponentQuotaTooSmall)
+        );
     }
 
     #[test]
