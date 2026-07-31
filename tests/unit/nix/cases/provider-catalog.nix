@@ -6,7 +6,7 @@
 # compiled catalog's sort order, the frozen entry field set, the exact-digest
 # requirement, and the private store path being absent from the public
 # projection.
-{ mkEval, lib, pkgs, ... }:
+{ mkEval, lib, pkgs, flakeRoot, ... }:
 
 let
   shape = import ../../../../nixos-modules/generated/provider-catalog-shape.nix;
@@ -131,6 +131,8 @@ let
 
   zoneCfg = (mkEval [ base zoneResourceFixture ]).config;
   zoneBundle = zoneCfg.d2b._bundle.zoneResourceBundles.local-root.data;
+  digestRendererSource =
+    builtins.readFile (flakeRoot + "/nixos-modules/zone-resources-json.nix");
 
   zoneFailureMessages = module:
     map (assertion: assertion.message)
@@ -294,13 +296,26 @@ in
     expr = {
       envelope = lib.head zoneBundle.resources;
       order = map (resource: resource.type) zoneBundle.resources;
-      digest = zoneBundle.contentHash;
-      expectedDigest = "sha256:${builtins.hashString "sha256"
-        ("d2b:v3:resource-bundle"
-          + builtins.fromJSON "\"\\u0000\""
-          + builtins.toJSON zoneBundle.resources)}";
-      artifactCatalogDigest = zoneBundle.artifactCatalogDigest;
-      catalogDigest = zoneCfg.d2b._bundle.extraArtifacts.artifactCatalog.data.catalogDigest;
+      evalBundleFields = lib.attrNames zoneBundle;
+      evalCatalogFields = lib.attrNames
+        zoneCfg.d2b._bundle.extraArtifacts.artifactCatalog.data;
+      pathsAreBuildBacked =
+        zoneCfg.d2b._bundle.zoneResourceBundles.local-root.path != null
+        && zoneCfg.d2b._bundle.extraArtifacts.artifactCatalog.path != null;
+      digestContract = {
+        nulSeparator = lib.hasInfix "printf '%s\\000' \"$domain\""
+          digestRendererSource;
+        resourceBundleDomain = lib.hasInfix
+          "domain_digest 'd2b:v3:resource-bundle'" digestRendererSource;
+        resourceBundleGolden = lib.hasInfix
+          "38bbe7643fbe19b682a1c266fd6b0b6d3dd41e9e5a5abdf5d13be38b8fc37894"
+          digestRendererSource;
+        artifactCatalogDomain = lib.hasInfix
+          "domain_digest 'd2b:v3:artifact-catalog'" digestRendererSource;
+        artifactCatalogGolden = lib.hasInfix
+          "e2d86f09e58fd957f7750ebcb9b7b194976db06a5578e823afbc2501ef6f4464"
+          digestRendererSource;
+      };
       role = zoneCfg.d2b._resourceCompiler.zones.local-root.role;
       retention = zoneCfg.d2b._resourceCompiler.zones.local-root.retainedGenerations;
     };
@@ -338,10 +353,23 @@ in
         };
       };
       order = [ "Credential" "Provider" "Provider" "User" ];
-      digest = zoneBundle.contentHash;
-      expectedDigest = zoneBundle.contentHash;
-      artifactCatalogDigest = zoneBundle.artifactCatalogDigest;
-      catalogDigest = zoneBundle.artifactCatalogDigest;
+      evalBundleFields = [
+        "bundleVersion"
+        "generatedAt"
+        "providerSchemaDigests"
+        "resources"
+        "schemaVersion"
+        "zone"
+      ];
+      evalCatalogFields = [ "entries" "schemaVersion" ];
+      pathsAreBuildBacked = true;
+      digestContract = {
+        nulSeparator = true;
+        resourceBundleDomain = true;
+        resourceBundleGolden = true;
+        artifactCatalogDomain = true;
+        artifactCatalogGolden = true;
+      };
       role = {
         type = "Role";
         metadata = {

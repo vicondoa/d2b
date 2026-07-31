@@ -63,12 +63,15 @@ let
   first = generation true;
   second = generation false;
   redeclared = generation true;
+  firstBundle = first.d2b._bundle.zoneResourceBundles.work;
+  secondBundle = second.d2b._bundle.zoneResourceBundles.work;
+  redeclaredBundle = redeclared.d2b._bundle.zoneResourceBundles.work;
   firstTypes = map (resource: resource.type)
-    first.d2b._bundle.zoneResourceBundles.work.data.resources;
+    firstBundle.data.resources;
   secondTypes = map (resource: resource.type)
-    second.d2b._bundle.zoneResourceBundles.work.data.resources;
+    secondBundle.data.resources;
   redeclaredTypes = map (resource: resource.type)
-    redeclared.d2b._bundle.zoneResourceBundles.work.data.resources;
+    redeclaredBundle.data.resources;
   cleanup = first.d2b._resourceCompiler.zones.work;
 in
 {
@@ -78,8 +81,10 @@ in
         && !(builtins.elem "Network" secondTypes);
       identicalNetworkRedeclared = builtins.elem "Network" firstTypes
         && builtins.elem "Network" redeclaredTypes
-        && first.d2b._bundle.zoneResourceBundles.work.data.contentHash
-          == redeclared.d2b._bundle.zoneResourceBundles.work.data.contentHash;
+        && firstBundle.data.resources == redeclaredBundle.data.resources
+        && toString firstBundle.path == toString redeclaredBundle.path;
+      removedNetworkChangesArtifact =
+        toString firstBundle.path != toString secondBundle.path;
       absentResourceAction = cleanup.transition.absentResourceAction;
       pendingCondition = cleanup.transition.pendingCondition;
       directDeleteOwner = cleanup.ownership.eligibleValue;
@@ -90,6 +95,7 @@ in
     expected = {
       networkRemoved = true;
       identicalNetworkRedeclared = true;
+      removedNetworkChangesArtifact = true;
       absentResourceAction = "delete";
       pendingCondition = "PendingCleanup";
       directDeleteOwner = "configuration";

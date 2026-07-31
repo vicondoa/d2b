@@ -1,14 +1,11 @@
 # Canonical monolithic per-Zone resource bundle compiler.
-{ config, lib, ... }:
+{ config, lib, pkgs, ... }:
 
 let
   cfg = config.d2b;
   specCanonical = import ./generated/zone-spec-canonical.nix;
+  artifactRenderer = import ./zone-resources-json.nix { inherit pkgs; };
   apiVersion = "resources.d2bus.org/v3";
-  nul = builtins.fromJSON "\"\\u0000\"";
-
-  domainDigest = domain: bytes:
-    "sha256:${builtins.hashString "sha256" (domain + nul + bytes)}";
 
   artifactCatalogEntries = map
     (entry: {
@@ -30,11 +27,10 @@ let
     schemaVersion = 3;
     entries = artifactCatalogEntries;
   };
-  artifactCatalogDigest = domainDigest
-    "d2b:v3:artifact-catalog"
-    (builtins.toJSON artifactCatalogPreimage);
-  artifactCatalog = artifactCatalogPreimage // {
-    catalogDigest = artifactCatalogDigest;
+  artifactCatalogPreimageJson = builtins.toJSON artifactCatalogPreimage;
+  artifactCatalogPath = artifactRenderer.mkArtifactCatalog {
+    entriesJson = builtins.toJSON artifactCatalogEntries;
+    preimageJson = artifactCatalogPreimageJson;
   };
 
   emittedResources = resources:
@@ -168,30 +164,41 @@ let
   bundleData = zoneName: zone:
     let
       resources = zoneResourceList zoneName zone;
-      contentHash = domainDigest "d2b:v3:resource-bundle" (builtins.toJSON resources);
     in {
       schemaVersion = 3;
       bundleVersion = 1;
       zone = zoneName;
-      inherit contentHash artifactCatalogDigest resources;
+      inherit resources;
       generatedAt = "1970-01-01T00:00:00.000Z";
       providerSchemaDigests = providerSchemaDigests zone;
     };
 
+  bundlePath = zoneName: data:
+    artifactRenderer.mkZoneResourceBundle {
+      inherit zoneName artifactCatalogPreimageJson;
+      resourcesJson = builtins.toJSON data.resources;
+      providerSchemaDigestsJson = builtins.toJSON data.providerSchemaDigests;
+      zoneJson = builtins.toJSON zoneName;
+    };
+
   zoneBundles = lib.mapAttrs
-    (zoneName: zone: {
-      data = bundleData zoneName zone;
-      installFileName = "zones/${zoneName}/resource-bundle.json";
-      classification = "contractPrivateNonSecret";
-      sensitivity = "nonSecret";
-    })
+    (zoneName: zone:
+      let data = bundleData zoneName zone;
+      in {
+        inherit data;
+        path = bundlePath zoneName data;
+        installFileName = "zones/${zoneName}/resource-bundle.json";
+        classification = "contractPrivateNonSecret";
+        sensitivity = "nonSecret";
+      })
     cfg.zones;
 in
 {
   config = lib.mkIf (cfg.zones != { }) {
     d2b._bundle.zoneResourceBundles = zoneBundles;
     d2b._bundle.extraArtifacts.artifactCatalog = {
-      data = artifactCatalog;
+      data = artifactCatalogPreimage;
+      path = artifactCatalogPath;
       installFileName = "artifact-catalog.json";
       classification = "contractPrivateNonSecret";
       sensitivity = "nonSecret";
