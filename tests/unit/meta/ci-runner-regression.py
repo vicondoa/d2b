@@ -248,6 +248,8 @@ set -euo pipefail
         )
         self.assertIn("D2B_NIX_UNIT_CHECK: ${{ matrix.check }}", workflow)
         self.assertIn("          ') || exit 1\n          echo \"discovered nix-unit checks", workflow)
+        self.assertEqual(manifest["jobs"]["nix-unit-shards"]["maxParallel"], 4)
+        self.assertIn("      max-parallel: 4", workflow)
         self.assertIn('D2B_NIX_UNIT_JOBS: "1"', workflow)
         self.assertIn("Every discovered Nix-unit shard passed.", workflow)
         self.assertNotIn("run: make test-nix-unit\n\n  flake-eval-discover", workflow)
@@ -256,6 +258,8 @@ set -euo pipefail
         driver = (ROOT / "tests" / "test-nix-unit.sh").read_text(encoding="utf-8")
 
         self.assertIn('jobs=${D2B_NIX_UNIT_JOBS:-2}', driver)
+        self.assertIn('if [ "$jobs" -gt 4 ]; then', driver)
+        self.assertIn('D2B_NIX_UNIT_JOBS must not exceed 4', driver)
         self.assertIn('D2B_NIX_UNIT_CHECK', driver)
         self.assertIn('for check in "${checks[@]}"; do', driver)
         self.assertIn('while [ "$running" -ge "$jobs" ]; do', driver)

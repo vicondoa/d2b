@@ -56,16 +56,20 @@ if [ -n "${D2B_NIX_UNIT_CHECK:-}" ]; then
   fi
 fi
 
-# Two evaluators are safe on development hosts. CI does not increase this:
-# each shard gets a separate runner, since four concurrent Nix evaluators
-# repeatedly exhausted an ubuntu-latest runner and were terminated with 143.
+# Two evaluators are the conservative default on development hosts. Four is
+# the hard ceiling everywhere: larger local fan-out exhausts ordinary hosts,
+# and CI expresses the same ceiling as the shard matrix's max-parallel value.
 jobs=${D2B_NIX_UNIT_JOBS:-2}
 case "$jobs" in
   ''|*[!0-9]*|0)
-    fail "D2B_NIX_UNIT_JOBS must be a positive integer (got ${jobs@Q})" || true
+    fail "D2B_NIX_UNIT_JOBS must be an integer from 1 through 4 (got ${jobs@Q})" || true
     exit 2
     ;;
 esac
+if [ "$jobs" -gt 4 ]; then
+  fail "D2B_NIX_UNIT_JOBS must not exceed 4 (got ${jobs@Q})" || true
+  exit 2
+fi
 
 # Every discovered check gets one process, one log, and one wait. The bounded
 # scheduler overlaps independent pure-eval shards without changing the corpus

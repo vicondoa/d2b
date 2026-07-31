@@ -200,7 +200,7 @@
       "needs": ["nix-unit-discover"],
       "timeoutMinutes": 20,
       "runsOn": "ubuntu-latest",
-      "maxParallel": 7
+      "maxParallel": 4
     },
     "test-nix-unit": {
       "displayName": "Require every Nix unit shard to pass",
