@@ -589,14 +589,33 @@ Recorded because each cost real time and would otherwise be retried.
   `GL_INVALID_OPERATION` from the decoder context to the renderer context. Both
   consumers fail on the same badly described surface.
 - **Teaching the blit to find the later plane.** The obvious repair for the copy
-  path is to give the blit the same per-plane image the sampler view gets. It
-  does not work, and the reason is worth recording because the idea is the first
-  one anybody has: with zero copy off, the guest never imports the chroma plane
-  as a separate resource at all. Measured with `VIRGL_TRACE_IMPORT`, that run
-  produced 6482 `plane=0` imports and **zero** `plane=1` imports. There is no
-  plane for the blit to find, so plane-index inference correctly returns -1
-  every time and the blit fails for the original reason. Fixing the copy path
-  means changing what gets imported, not what the blit looks up.
+  path is to give the blit the same per-plane image the sampler view gets. An
+  attempt at it failed, and the reason recorded here was that the guest never
+  imports the chroma plane separately when zero copy is off - measured with
+  `VIRGL_TRACE_IMPORT` as 6482 `plane=0` imports and zero `plane=1`.
+
+  **That reason was wrong, or at least not general.** Re-measured later, forcing
+  the copy path with `media.ffmpeg.vaapi.force-surface-zero-copy = 0`, the same
+  trace shows **6867 `plane=0` and 1372 `plane=1`**. The chroma plane is
+  imported separately, so there *is* a plane for a blit to find.
+
+  The two runs entered the copy path by different doors, and that is the whole
+  difference. The earlier one removed `gfx.blacklist.hardwarevideodecoding`, so
+  `HW_DECODED_VIDEO_ZERO_COPY` was never configured and `ShouldCopySurface()`
+  returned true unconditionally. The later one leaves the feature configured and
+  turns the surface pref off. Same destination, different import behaviour, and
+  nothing in either run announces which door was used.
+
+  So the copy-path repair is **unresolved rather than refuted**, and worth
+  retrying against the pref route. What that run does establish is that the
+  failure is no longer catastrophic: 881 blit failures, but zero illegal command
+  buffers and zero `CmdSubmit3d` refusals, where the original defect poisoned
+  the context and refused 11,270 submissions. Playback reached 510 frames with
+  2 dropped.
+
+  The generalisable lesson is narrower than the original claim and more useful:
+  **"force the copy path" is not one configuration.** A measurement of it has to
+  say which mechanism selected it.
 - **Resolving the plane through GBM.** `virgl_egl_aux_plane_image_from_gbm_bo()`
   is the upstream route and cannot serve here, because crosvm gives
   virglrenderer surfaceless EGL with no GBM device.
