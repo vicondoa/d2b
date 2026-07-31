@@ -861,7 +861,8 @@ def run_job(job_id: str, job: dict[str, Any]) -> int:
     assert failed_target is not None
     print(
         f"FAIL: {failed_target} for Layer-1 job {job_id} "
-        f"(exit {returncode}); redacted retained tail:",
+        f"(exit {returncode}); full retained log: "
+        f"{redact_diagnostic_line(str(log_path))}; redacted retained tail:",
         file=sys.stderr,
         flush=True,
     )

@@ -158,6 +158,7 @@ set -euo pipefail
         self.assertEqual(calls, ["check-tier0", "test-ci-coverage"])
         self.assertIn("FAIL: test-ci-coverage", diagnostic)
         self.assertIn("Layer-1 job tier0", diagnostic)
+        self.assertIn("full retained log: <repo>/", diagnostic)
         self.assertNotIn(str(log_dir), diagnostic)
         self.assertNotIn(str(ROOT), diagnostic)
         self.assertNotIn(str(pathlib.Path.home()), diagnostic)

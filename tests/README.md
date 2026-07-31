@@ -204,8 +204,8 @@ drift gate keeps the matrix and smoke wiring in sync with the flake (`make
 flake-matrix-pin` to update its pin). Locally, manifest-driven `make check`
 sets `D2B_FLAKE_LOCAL_SHARDS=1` for `make test-flake` and
 `D2B_SKIP_FIXTURE_BUILD=1` for `make test-rust`, matching the PR Rust job. The
-flake shards do not execute `d2b-contract-tests`; only the separate advisory
-fixture lane can do so, and it currently skips unless explicitly enabled. Tune
+flake shards do not execute `d2b-contract-tests`; the separate enforcing
+fixture-contract lane runs them with evaluated fixtures and fails rather than skipping. Tune
 `D2B_CHECK_JOBS` and `D2B_FLAKE_JOBS` for host capacity. Agent-owned PRs also run
 `make test-integration` and `make test-host-integration` on the host before the
 PR is opened; those manual integration tiers are not replaced by PR pipeline

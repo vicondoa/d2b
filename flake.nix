@@ -601,11 +601,13 @@
           (throw "video binary contract: cloud-hypervisor node missing") fullCorpDag.nodes;
         videoBinaryContract = pkgs.runCommand "d2b-video-binary-command-surface"
           { nativeBuildInputs = [ pkgs.gnugrep ]; } ''
-          set -eu
+          set -euo pipefail
           test -x ${fullVideoNode.binaryPath}
           test -x ${fullCloudHypervisorNode.binaryPath}
-          ${fullVideoNode.binaryPath} device video-decoder --help 2>&1 | grep -F -- --backend >/dev/null
-          ${fullCloudHypervisorNode.binaryPath} --help 2>&1 | grep -F -- --vhost-user-media >/dev/null
+          video_help=$(${fullVideoNode.binaryPath} device video-decoder --help 2>&1)
+          printf '%s\n' "$video_help" | grep -F -- --backend
+          vmm_help=$(${fullCloudHypervisorNode.binaryPath} --help 2>&1)
+          printf '%s\n' "$vmm_help" | grep -F -- --vhost-user-media
           touch "$out"
         '';
         # Rust tests reach repo-level fixtures under tests/golden/

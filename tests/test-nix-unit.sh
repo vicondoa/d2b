@@ -82,6 +82,7 @@ running=0
 stop_running_checks() {
   local pid
   for pid in "${pids[@]:-}"; do
+    [ -n "$pid" ] || continue
     kill "$pid" 2>/dev/null || true
   done
 }
@@ -108,9 +109,11 @@ reap_next() {
   local index=$next_to_wait check=${labels[$next_to_wait]}
   local output=${logs[$next_to_wait]}
   if wait "${pids[$next_to_wait]}"; then
+    pids[$next_to_wait]=""
     cat "$output"
     ok "nix-unit check $check ($system)"
   else
+    pids[$next_to_wait]=""
     log "nix-unit check $check FAILED - captured output follows:"
     cat "$output" >&2 || true
     failures+=("$check")

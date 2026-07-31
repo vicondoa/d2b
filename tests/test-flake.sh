@@ -260,6 +260,9 @@ if [ -n "${D2B_FLAKE_CHECK:-}" ]; then
   fi
   if [ "$rc" -eq 0 ]; then
     ok "flake check shard: ${D2B_FLAKE_CHECK}"
+  elif [ "$D2B_FLAKE_CHECK" = video-binary-contract ]; then
+    fail "realized flake check shard: ${D2B_FLAKE_CHECK} (exit $rc)"
+    exit "$rc"
   elif [ "$rc" -eq 139 ]; then
     log "  WARN: nix eval segfaulted for shard ${D2B_FLAKE_CHECK}; retrying via nix-instantiate"
     dump_flake_eval_segfault \
