@@ -1,6 +1,6 @@
 //! Core-owned Process Provider supervisor.
 //!
-//! [`ProviderSupervisor`] is the async [`ProcessLaunchEffectPort`] adapter. It
+//! [`ProviderSupervisor`] is the async [`d2b_process_conformance::ProcessLaunchEffectPort`] adapter. It
 //! keeps blocking broker, service-manager, kernel, and filesystem operations
 //! off the controller executor, retains local process authority, and exposes
 //! only opaque conformance results to Process Providers.
