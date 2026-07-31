@@ -1533,11 +1533,15 @@ again.
 - **Provider-state digesting no longer accepts an invented caller domain.** It
   fails with `DigestDomainUnavailable` until the exact D101 amendment above
   lands.
-- **The broker catalogue change is accurately versioned and classified.** The
-  constant is four, the four new operations are in the current closed catalogue
-  rather than the legacy list, and their privilege metadata is explicit. The
-  tests prove old request decode and old-decoder rejection of new operations;
-  they do not claim runtime negotiation.
+- **The broker catalogue change is now accurately versioned, authorized and
+  classified.** The earlier fix set the constant to four, added the four new
+  operations to the current closed catalogue rather than the legacy list, and
+  pinned their audited and destructive flags. It did not add them to the
+  canonical authorization matrix, its Nix mirror, generated schemas or broker
+  dispositions. This correction completes those machine-readable contracts.
+  The compatibility tests prove old request decode and old-decoder rejection of
+  new operations; they do not claim runtime negotiation or implementation of
+  the deliberately unimplemented dispatch arms.
 
 ### 15.6 Verification of the eleven reported caveats
 
