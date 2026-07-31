@@ -1,0 +1,117 @@
+{
+  "nodes": {
+    "mesa-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1785489595,
+        "narHash": "sha256-6VmYmAuxvcyopOGN8cpFaK6PQ91b5D6Bf/Qc0tDH3Ns=",
+        "owner": "vicondoa",
+        "repo": "mesa-venus-vulkan-video",
+        "rev": "848ed88cbbfa14438185a504f2a09c4eb66d5bb2",
+        "type": "github"
+      },
+      "original": {
+        "owner": "vicondoa",
+        "ref": "vulkan-video",
+        "repo": "mesa-venus-vulkan-video",
+        "type": "github"
+      }
+    },
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1785141334,
+        "narHash": "sha256-kh35kIx7el4Jk8Ki3BH9/Pn1eZYSYLJ6LMALos0zOy0=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "38a4887411571457d700c51c64a6e49ead2ed5ab",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "38a4887411571457d700c51c64a6e49ead2ed5ab",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "mesa-src": "mesa-src",
+        "nixpkgs": "nixpkgs",
+        "venus-protocol-base": "venus-protocol-base",
+        "venus-protocol-src": "venus-protocol-src",
+        "virglrenderer-base": "virglrenderer-base",
+        "virglrenderer-src": "virglrenderer-src"
+      }
+    },
+    "venus-protocol-base": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1771439778,
+        "narHash": "sha256-27ZwQcw/kBiuHoOuDlzAw7pOqzuwaImHIn5Z3WLivlU=",
+        "owner": "vicondoa",
+        "repo": "venus-protocol-vulkan-video",
+        "rev": "70991d4c7e4e5a7bfa2fbb8a6e77e4eac350145d",
+        "type": "github"
+      },
+      "original": {
+        "owner": "vicondoa",
+        "repo": "venus-protocol-vulkan-video",
+        "rev": "70991d4c7e4e5a7bfa2fbb8a6e77e4eac350145d",
+        "type": "github"
+      }
+    },
+    "venus-protocol-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1785326581,
+        "narHash": "sha256-Pt+N6Qd2GRNSIRo7ppHC/b0J4pgTNopV2SaL8T+1ZTI=",
+        "owner": "vicondoa",
+        "repo": "venus-protocol-vulkan-video",
+        "rev": "f81cb9634ffac0527bc6cef1dc483e0e2a666438",
+        "type": "github"
+      },
+      "original": {
+        "owner": "vicondoa",
+        "ref": "vulkan-video",
+        "repo": "venus-protocol-vulkan-video",
+        "type": "github"
+      }
+    },
+    "virglrenderer-base": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1784558622,
+        "narHash": "sha256-vVH+DVXAIOYL7h/lJLe7rXAkHpiP89Oaq+6QDvuQsqo=",
+        "owner": "vicondoa",
+        "repo": "virglrenderer-venus-vulkan-video",
+        "rev": "9ae1fb1cca8ec884f5e44d6ae09425288aeae4cd",
+        "type": "github"
+      },
+      "original": {
+        "owner": "vicondoa",
+        "repo": "virglrenderer-venus-vulkan-video",
+        "rev": "9ae1fb1cca8ec884f5e44d6ae09425288aeae4cd",
+        "type": "github"
+      }
+    },
+    "virglrenderer-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1785489598,
+        "narHash": "sha256-BnDfWRwbl7a/LbpNj9wPz83WCJRh2yemV/mnw9FSYUw=",
+        "owner": "vicondoa",
+        "repo": "virglrenderer-venus-vulkan-video",
+        "rev": "335be0b7e4f07bdbf0655d69858ad03bc48abb79",
+        "type": "github"
+      },
+      "original": {
+        "owner": "vicondoa",
+        "ref": "vulkan-video",
+        "repo": "virglrenderer-venus-vulkan-video",
+        "type": "github"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}

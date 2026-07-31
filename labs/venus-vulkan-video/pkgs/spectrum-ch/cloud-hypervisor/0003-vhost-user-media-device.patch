@@ -1,0 +1,1104 @@
+diff -ruN a/cloud-hypervisor/src/main.rs b/cloud-hypervisor/src/main.rs
+--- a/cloud-hypervisor/src/main.rs	2026-05-22 07:10:02.411473284 -0700
++++ b/cloud-hypervisor/src/main.rs	2026-05-22 07:10:02.447473416 -0700
+@@ -33,10 +33,9 @@
+ use vmm::vm_config::IvshmemConfig;
+ use vmm::vm_config::{
+     BalloonConfig, ConsoleConfig, DeviceConfig, DiskConfig, FsConfig, GenericVhostUserConfig,
+-    LandlockConfig, NetConfig, NumaConfig, PciSegmentConfig, PlatformConfig, PmemConfig,
+-    RateLimiterGroupConfig, RngConfig, SerialConfig, TpmConfig, UserDeviceConfig, VdpaConfig,
+-    VmConfig, VsockConfig,
+-    GpuConfig,
++    GpuConfig, LandlockConfig, MediaConfig, NetConfig, NumaConfig, PciSegmentConfig,
++    PlatformConfig, PmemConfig, RateLimiterGroupConfig, RngConfig, SerialConfig, TpmConfig,
++    UserDeviceConfig, VdpaConfig, VmConfig, VsockConfig,
+ };
+ use vmm_sys_util::eventfd::EventFd;
+ use vmm_sys_util::signal::block_signal;
+@@ -444,6 +443,12 @@
+             .action(ArgAction::SetTrue)
+             .help("Print version")
+             .num_args(0),
++        Arg::new("vhost-user-media")
++            .long("vhost-user-media")
++            .help(MediaConfig::SYNTAX)
++            .num_args(1..)
++            .action(ArgAction::Append)
++            .group("vm-config"),
+         Arg::new("vsock")
+             .long("vsock")
+             .help(VsockConfig::SYNTAX)
+@@ -1019,6 +1024,7 @@
+             balloon: None,
+             fs: None,
+             gpu: None,
++            media: None,
+             generic_vhost_user: None,
+             pmem: None,
+             serial: SerialConfig {
+diff -ruN a/virtio-devices/src/seccomp_filters.rs b/virtio-devices/src/seccomp_filters.rs
+--- a/virtio-devices/src/seccomp_filters.rs	2026-05-22 07:10:02.413270740 -0700
++++ b/virtio-devices/src/seccomp_filters.rs	2026-05-22 07:10:02.448133036 -0700
+@@ -25,6 +25,7 @@
+     VirtioVhostBlock,
+     VirtioVhostFs,
+     VirtioVhostGpu,
++    VirtioVhostMedia,
+     VirtioGenericVhostUser,
+     VirtioVhostNet,
+     VirtioVhostNetCtl,
+@@ -234,6 +235,10 @@
+     ]
+ }
+ 
++fn virtio_vhost_media_thread_rules() -> Vec<(i64, Vec<SeccompRule>)> {
++    virtio_vhost_gpu_thread_rules()
++}
++
+ fn virtio_vhost_net_ctl_thread_rules() -> Vec<(i64, Vec<SeccompRule>)> {
+     vec![]
+ }
+@@ -314,6 +319,7 @@
+         Thread::VirtioRng => virtio_rng_thread_rules(),
+         Thread::VirtioVhostBlock => virtio_vhost_block_thread_rules(),
+         Thread::VirtioVhostGpu => virtio_vhost_gpu_thread_rules(),
++        Thread::VirtioVhostMedia => virtio_vhost_media_thread_rules(),
+         Thread::VirtioVhostFs => virtio_vhost_fs_thread_rules(),
+         Thread::VirtioGenericVhostUser => virtio_generic_vhost_user_thread_rules(),
+         Thread::VirtioVhostNet => virtio_vhost_net_thread_rules(),
+diff -ruN a/virtio-devices/src/vhost_user/media.rs b/virtio-devices/src/vhost_user/media.rs
+--- /dev/null
++++ b/virtio-devices/src/vhost_user/media.rs	2026-05-22 07:10:02.476452392 -0700
+@@ -0,0 +1,376 @@
++// Copyright © 2025 Intel Corporation
++//
++// SPDX-License-Identifier: Apache-2.0
++//
++use std::io;
++use std::os::unix::io::AsRawFd;
++use std::result;
++use std::sync::{Arc, Barrier, Mutex};
++
++use event_monitor::event;
++use seccompiler::SeccompAction;
++use vhost::vhost_user::message::{
++    VhostSharedMemoryRegion, VhostUserConfigFlags, VhostUserMMap, VhostUserProtocolFeatures,
++    VhostUserVirtioFeatures,
++};
++use vhost::vhost_user::{
++    FrontendReqHandler, HandlerResult, VhostUserFrontend, VhostUserFrontendReqHandler,
++};
++use vm_device::UserspaceMapping;
++use vm_memory::volatile_memory::PtrGuardMut;
++use vm_memory::{GuestMemoryAtomic, VolatileMemory};
++use vm_migration::{MigratableError, Pausable};
++use vmm_sys_util::eventfd::EventFd;
++
++use super::vu_common_ctrl::VhostUserHandle;
++use super::{DEFAULT_VIRTIO_FEATURES, Error, Result};
++use crate::seccomp_filters::Thread;
++use crate::thread_helper::spawn_virtio_thread;
++use crate::vhost_user::VhostUserCommon;
++use crate::{
++    ActivateError, ActivateResult, GuestMemoryMmap, GuestRegionMmap, MmapRegion,
++    VIRTIO_F_ACCESS_PLATFORM, VirtioDevice, VirtioSharedMemoryList,
++};
++
++const VIRTIO_ID_MEDIA: u32 = 48;
++const QUEUE_SIZES: &[u16] = &[256, 256];
++const NUM_QUEUES: u16 = QUEUE_SIZES.len() as _;
++
++struct BackendReqHandler {
++    mapping: Arc<MmapRegion>,
++}
++
++impl BackendReqHandler {
++    fn ptr_guard_mut(&self, offset: u64, len: u64) -> io::Result<PtrGuardMut> {
++        let shm_offset = offset
++            .try_into()
++            .map_err(|_| io::Error::from_raw_os_error(libc::EINVAL))?;
++        let len = len
++            .try_into()
++            .map_err(|_| io::Error::from_raw_os_error(libc::EINVAL))?;
++        Ok(self
++            .mapping
++            .get_slice(shm_offset, len)
++            .map_err(|_| io::Error::from_raw_os_error(libc::EINVAL))?
++            .ptr_guard_mut())
++    }
++}
++
++impl VhostUserFrontendReqHandler for BackendReqHandler {
++    fn shmem_map(&self, req: &VhostUserMMap, fd: &dyn AsRawFd) -> HandlerResult<u64> {
++        let target = self.ptr_guard_mut(req.shm_offset, req.len)?;
++
++        // SAFETY: we've checked we're only giving addr and length
++        // within the region, and are passing MAP_FIXED to ensure they
++        // are respected.
++        // crosvm sends VhostUserMMapFlags::WRITABLE = 1<<0 to mean
++        // "writable mapping"; v0.22 vhost defines no other bits. Translate
++        // to libc::PROT_*. The spectrum-50 code treated `req.flags as i32`
++        // as raw PROT_* bits, but that interpretation matches NEITHER the
++        // crosvm bit layout NOR the v0.22 layout and produces non-writable
++        // mappings that the guest EFAULTs on first write.
++        let writable = (req.flags & 1) != 0; // VhostUserMMapFlags::WRITABLE
++        let prot: i32 = libc::PROT_READ | if writable { libc::PROT_WRITE } else { 0 };
++        let ret = unsafe {
++            libc::mmap(
++                target.as_ptr().cast(),
++                target.len(),
++                prot,
++                if prot & libc::PROT_WRITE != 0 {
++                    libc::MAP_SHARED
++                } else {
++                    libc::MAP_PRIVATE
++                } | libc::MAP_FIXED,
++                fd.as_raw_fd(),
++                req.fd_offset as libc::off_t,
++            )
++        };
++
++        if ret == libc::MAP_FAILED {
++            return Err(io::Error::last_os_error());
++        }
++
++        Ok(0)
++    }
++
++    fn shmem_unmap(&self, req: &VhostUserMMap) -> HandlerResult<u64> {
++        let target = self.ptr_guard_mut(req.shm_offset, req.len)?;
++
++        // SAFETY: we've checked we're only giving addr and length
++        // within the region, and are passing MAP_FIXED to ensure they
++        // are respected.
++        let ret = unsafe {
++            libc::mmap(
++                target.as_ptr().cast(),
++                target.len(),
++                libc::PROT_NONE,
++                libc::MAP_ANONYMOUS | libc::MAP_PRIVATE | libc::MAP_FIXED,
++                -1,
++                0,
++            )
++        };
++        if ret == libc::MAP_FAILED {
++            return Err(io::Error::last_os_error());
++        }
++
++        Ok(0)
++    }
++}
++
++pub struct Media {
++    vu_common: VhostUserCommon,
++    id: String,
++    cache: Option<VirtioSharedMemoryList>,
++    seccomp_action: SeccompAction,
++    guest_memory: Option<GuestMemoryAtomic<GuestMemoryMmap>>,
++    exit_evt: EventFd,
++    access_platform_enabled: bool,
++}
++
++impl Media {
++    pub fn new(
++        id: String,
++        path: &str,
++        seccomp_action: SeccompAction,
++        exit_evt: EventFd,
++        access_platform_enabled: bool,
++    ) -> Result<(Self, VhostSharedMemoryRegion)> {
++        let mut vu =
++            VhostUserHandle::connect_vhost_user(false, path, NUM_QUEUES as u64, false, None)?;
++
++        let avail_protocol_features = VhostUserProtocolFeatures::CONFIG
++            | VhostUserProtocolFeatures::BACKEND_REQ
++            | VhostUserProtocolFeatures::SHMEM_MAP_CROSVM
++            | VhostUserProtocolFeatures::REPLY_ACK;
++
++        let (acked_features, acked_protocol_features) =
++            vu.negotiate_features_vhost_user(DEFAULT_VIRTIO_FEATURES, avail_protocol_features)?;
++
++        let shm_region = VhostSharedMemoryRegion { id: 0, padding: [0; 7], length: 256 * 1024 * 1024 };
++
++        Ok((
++            Self {
++                vu_common: VhostUserCommon {
++                    virtio_common: crate::VirtioCommon {
++                        device_type: VIRTIO_ID_MEDIA,
++                        avail_features: acked_features,
++                        acked_features: acked_features
++                            & VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits(),
++                        paused_sync: Some(Arc::new(Barrier::new(NUM_QUEUES as usize))),
++                        queue_sizes: QUEUE_SIZES.to_vec(),
++                        min_queues: NUM_QUEUES,
++                        ..Default::default()
++                    },
++                    vu: Some(Arc::new(Mutex::new(vu))),
++                    acked_protocol_features,
++                    socket_path: path.to_string(),
++                    vu_num_queues: NUM_QUEUES as usize,
++                    ..Default::default()
++                },
++                id,
++                cache: None,
++                seccomp_action,
++                guest_memory: None,
++                exit_evt,
++                access_platform_enabled,
++            },
++            shm_region,
++        ))
++    }
++
++    pub fn set_cache(&mut self, cache: VirtioSharedMemoryList) {
++        self.cache = Some(cache);
++    }
++}
++
++impl Drop for Media {
++    fn drop(&mut self) {
++        self.vu_common.shutdown();
++    }
++}
++
++impl VirtioDevice for Media {
++    fn device_type(&self) -> u32 {
++        self.vu_common.virtio_common.device_type
++    }
++
++    fn queue_max_sizes(&self) -> &[u16] {
++        &self.vu_common.virtio_common.queue_sizes
++    }
++
++    fn features(&self) -> u64 {
++        let mut features = self.vu_common.virtio_common.avail_features;
++        if self.access_platform_enabled {
++            features |= 1u64 << VIRTIO_F_ACCESS_PLATFORM;
++        }
++        features
++    }
++
++    fn ack_features(&mut self, value: u64) {
++        self.vu_common.virtio_common.ack_features(value);
++    }
++
++    fn read_config(&self, offset: u64, mut data: &mut [u8]) {
++        if let Some(vu) = &self.vu_common.vu {
++            if let Err(e) = vu
++                .lock()
++                .unwrap()
++                .socket_handle()
++                .get_config(
++                    offset as u32,
++                    data.len() as u32,
++                    VhostUserConfigFlags::WRITABLE,
++                    data,
++                )
++                .map_err(|e| format!("{e:?}"))
++                .and_then(|(_, config)| {
++                    use std::io::Write;
++                    data.write_all(&config).map_err(|e| format!("{e:?}"))
++                })
++            {
++                log::error!("Failed getting vhost-user-media configuration: {e:?}");
++            }
++        }
++    }
++
++    fn activate(&mut self, context: crate::device::ActivationContext) -> ActivateResult {
++        let crate::device::ActivationContext {
++            mem,
++            interrupt_cb,
++            queues,
++            device_status,
++        } = context;
++        self.vu_common
++            .virtio_common
++            .activate(&queues, interrupt_cb.clone())?;
++        self.guest_memory = Some(mem.clone());
++
++        let backend_req_handler = if self.vu_common.acked_protocol_features
++            & VhostUserProtocolFeatures::BACKEND_REQ.bits()
++            != 0
++        {
++            if let Some(cache) = self.cache.as_ref() {
++                let vu_frontend_req_handler = Arc::new(BackendReqHandler {
++                    mapping: cache.mapping.clone(),
++                });
++
++                let mut req_handler =
++                    FrontendReqHandler::new(vu_frontend_req_handler).map_err(|e| {
++                        ActivateError::VhostUserSetup(Error::FrontendReqHandlerCreation(e))
++                    })?;
++
++                if self.vu_common.acked_protocol_features
++                    & VhostUserProtocolFeatures::REPLY_ACK.bits()
++                    != 0
++                {
++                    req_handler.set_reply_ack_flag(true);
++                }
++
++                Some(req_handler)
++            } else {
++                None
++            }
++        } else {
++            None
++        };
++
++        let (kill_evt, pause_evt) = self.vu_common.virtio_common.dup_eventfds();
++
++        // Force SET_VRING_BASE(0) for all queues. The virtio-media guest driver
++        // pre-queues event buffers on queue 1 before DRIVER_OK, so by the time
++        // activate() runs, avail_idx is already non-zero. Without this override,
++        // setup_vhost_user reads avail_idx from guest memory and uses it as the
++        // base, making the pre-queued event buffers invisible to the backend.
++        if self.vu_common.vring_bases.is_none() {
++            self.vu_common.vring_bases = Some(vec![0; queues.len()]);
++        }
++
++        let mut handler = self.vu_common.activate(
++            mem,
++            &queues,
++            interrupt_cb.clone(),
++            self.vu_common.virtio_common.acked_features,
++            backend_req_handler,
++            kill_evt,
++            pause_evt,
++        )?;
++
++        let paused = self.vu_common.virtio_common.paused.clone();
++        let paused_sync = self.vu_common.virtio_common.paused_sync.clone();
++
++        let mut epoll_threads = Vec::new();
++        spawn_virtio_thread(
++            &self.id,
++            &self.seccomp_action,
++            Thread::VirtioVhostMedia,
++            &mut epoll_threads,
++            &self.exit_evt,
++            device_status.clone(),
++            interrupt_cb.clone(),
++            move || handler.run(&paused, paused_sync.as_ref().unwrap()),
++        )?;
++        self.vu_common.epoll_thread = Some(epoll_threads.remove(0));
++
++        event!("virtio-device", "activated", "id", &self.id);
++        Ok(())
++    }
++
++    fn reset(&mut self) {
++        self.vu_common.reset(&self.id);
++    }
++
++    fn shutdown(&mut self) {
++        self.vu_common.shutdown();
++    }
++
++    fn get_shm_regions(&self) -> Option<VirtioSharedMemoryList> {
++        let has = self.cache.is_some();
++        log::warn!("media get_shm_regions called: cache={has}");
++        self.cache.clone()
++    }
++
++    fn set_shm_regions(
++        &mut self,
++        shm_regions: VirtioSharedMemoryList,
++    ) -> std::result::Result<(), crate::Error> {
++        if let Some(cache) = self.cache.as_mut() {
++            *cache = shm_regions;
++            Ok(())
++        } else {
++            Err(crate::Error::SetShmRegionsNotSupported)
++        }
++    }
++
++    fn add_memory_region(
++        &mut self,
++        region: &Arc<GuestRegionMmap>,
++    ) -> std::result::Result<(), crate::Error> {
++        self.vu_common.add_memory_region(&self.guest_memory, region)
++    }
++
++    fn userspace_mappings(&self) -> Vec<UserspaceMapping> {
++        // SHM is registered with KVM via create_userspace_mapping in make_media_device
++        // and cleaned up by the OS on VM shutdown. Not returned here because vhost-user
++        // devices send all userspace_mappings via SET_MEM_TABLE during activate(), and
++        // the SHM anonymous mapping (PROT_NONE, no file backing) breaks the backend's
++        // GuestMemory resolution.
++        Vec::new()
++    }
++}
++
++impl Pausable for Media {
++    fn pause(&mut self) -> result::Result<(), MigratableError> {
++        self.vu_common.pause()?;
++        self.vu_common.virtio_common.pause()
++    }
++
++    fn resume(&mut self) -> result::Result<(), MigratableError> {
++        self.vu_common.virtio_common.resume()?;
++
++        if let Some(epoll_thread) = &self.vu_common.epoll_thread {
++            epoll_thread.thread().unpark();
++        }
++
++        self.vu_common.resume()
++    }
++}
+diff -ruN a/virtio-devices/src/vhost_user/mod.rs b/virtio-devices/src/vhost_user/mod.rs
+--- a/virtio-devices/src/vhost_user/mod.rs	2026-05-22 07:10:02.414015669 -0700
++++ b/virtio-devices/src/vhost_user/mod.rs	2026-05-22 07:10:02.448820910 -0700
+@@ -38,13 +38,15 @@
+ pub mod fs;
+ pub mod generic_vhost_user;
+ pub mod gpu;
++pub mod media;
+ pub mod net;
+ pub mod vu_common_ctrl;
+ 
+ pub use self::blk::Blk;
+ pub use self::fs::*;
+-pub use self::gpu::*;
+ pub use self::generic_vhost_user::GenericVhostUser;
++pub use self::gpu::*;
++pub use self::media::Media;
+ pub use self::net::Net;
+ pub use self::vu_common_ctrl::VhostUserConfig;
+ 
+diff -ruN a/vmm/src/api/mod.rs b/vmm/src/api/mod.rs
+--- a/vmm/src/api/mod.rs	2026-05-22 07:10:02.415137978 -0700
++++ b/vmm/src/api/mod.rs	2026-05-22 07:10:02.449282769 -0700
+@@ -56,9 +56,8 @@
+ use crate::migration_transport::MAX_MIGRATION_CONNECTIONS;
+ use crate::vm::{Error as VmError, VmState};
+ use crate::vm_config::{
+-    DeviceConfig, DiskConfig, FsConfig, GenericVhostUserConfig, NetConfig, PmemConfig,
+-    UserDeviceConfig, VdpaConfig, VmConfig, VsockConfig,
+-    GpuConfig,
++    DeviceConfig, DiskConfig, FsConfig, GenericVhostUserConfig, GpuConfig, MediaConfig,
++    NetConfig, PmemConfig, UserDeviceConfig, VdpaConfig, VmConfig, VsockConfig,
+ };
+ 
+ /// API errors are sent back from the VMM API server through the ApiResponse.
+@@ -568,6 +567,8 @@
+ 
+     fn vm_add_gpu(&mut self, gpu_cfg: GpuConfig) -> Result<Option<Vec<u8>>, VmError>;
+ 
++    fn vm_add_media(&mut self, media_cfg: MediaConfig) -> Result<Option<Vec<u8>>, VmError>;
++
+     fn vm_add_pmem(&mut self, pmem_cfg: PmemConfig) -> Result<Option<Vec<u8>>, VmError>;
+ 
+     fn vm_add_net(&mut self, net_cfg: NetConfig) -> Result<Option<Vec<u8>>, VmError>;
+diff -ruN a/vmm/src/config.rs b/vmm/src/config.rs
+--- a/vmm/src/config.rs	2026-05-22 07:10:02.416219948 -0700
++++ b/vmm/src/config.rs	2026-05-22 07:10:02.450473427 -0700
+@@ -55,6 +55,12 @@
+     /// GPU socket is missing
+     #[error("Error parsing --gpu: socket missing")]
+     ParseGpuSockMissing,
++    /// Media parameter is invalid
++    #[error("Error parsing --vhost-user-media: {0}")]
++    ParseMedia(OptionParserError),
++    /// Media socket is missing
++    #[error("Error parsing --vhost-user-media: socket missing")]
++    ParseMediaSockMissing,
+     /// Generic vhost-user virtio ID is invalid
+     #[error(
+         "Error parsing --generic-vhost-user: virtio ID {0:?} invalid (leading zeros or unknown string)"
+@@ -466,6 +472,7 @@
+     pub balloon: Option<&'a str>,
+     pub fs: Option<Vec<&'a str>>,
+     pub gpu: Option<Vec<&'a str>>,
++    pub media: Option<Vec<&'a str>>,
+     pub generic_vhost_user: Option<Vec<&'a str>>,
+     pub pmem: Option<Vec<&'a str>>,
+     pub serial: &'a str,
+@@ -531,6 +538,9 @@
+         let gpu: Option<Vec<&str>> = args
+             .get_many::<String>("gpu")
+             .map(|x| x.map(|y| y as &str).collect());
++        let media: Option<Vec<&str>> = args
++            .get_many::<String>("vhost-user-media")
++            .map(|x| x.map(|y| y as &str).collect());
+         let generic_vhost_user: Option<Vec<&str>> = args
+             .get_many::<String>("generic-vhost-user")
+             .map(|x| x.map(|y| y as &str).collect());
+@@ -589,6 +599,7 @@
+             balloon,
+             fs,
+             gpu,
++            media,
+             generic_vhost_user,
+             pmem,
+             serial,
+@@ -2053,6 +2064,48 @@
+     }
+ }
+ 
++impl MediaConfig {
++    pub const SYNTAX: &'static str = "vhost-user-media parameters \
++    \"socket=<socket_path>,id=<device_id>,pci_segment=<segment_id>\"";
++
++    pub fn parse(media: &str) -> Result<Self> {
++        let mut parser = OptionParser::new();
++        parser.add("socket").add("id").add("pci_segment");
++        parser.parse(media).map_err(Error::ParseMedia)?;
++
++        let socket = PathBuf::from(parser.get("socket").ok_or(Error::ParseMediaSockMissing)?);
++        let id = parser.get("id");
++        let pci_segment = parser
++            .convert("pci_segment")
++            .map_err(Error::ParseMedia)?
++            .unwrap_or_default();
++
++        Ok(MediaConfig {
++            socket,
++            pci_common: PciDeviceCommonConfig {
++                id,
++                pci_segment,
++                ..Default::default()
++            },
++        })
++    }
++
++    pub fn validate(&self, vm_config: &VmConfig) -> ValidationResult<()> {
++        if let Some(platform_config) = vm_config.platform.as_ref() {
++            if self.pci_common.pci_segment >= platform_config.num_pci_segments {
++                return Err(ValidationError::InvalidPciSegment(self.pci_common.pci_segment));
++            }
++            if let Some(iommu_segments) = platform_config.iommu_segments.as_ref()
++                && iommu_segments.contains(&self.pci_common.pci_segment)
++                && !self.pci_common.iommu
++            {
++                return Err(ValidationError::OnIommuSegment(self.pci_common.pci_segment));
++            }
++        }
++        Ok(())
++    }
++}
++
+ #[cfg(feature = "fw_cfg")]
+ impl FwCfgConfig {
+     pub const SYNTAX: &'static str = "Boot params to pass to FW CFG device \
+@@ -3094,6 +3147,18 @@
+             }
+         }
+ 
++        if let Some(media_devices) = &self.media {
++            if !media_devices.is_empty() && !self.backed_by_shared_memory() {
++                return Err(ValidationError::VhostUserRequiresSharedMemory);
++            }
++            for media_device in media_devices {
++                media_device.validate(self)?;
++                self.iommu |= media_device.pci_common.iommu;
++
++                Self::validate_identifier(&mut id_list, &media_device.pci_common.id)?;
++            }
++        }
++
+         if let Some(pmems) = &self.pmem {
+             for pmem in pmems {
+                 pmem.validate(self)?;
+@@ -3380,6 +3445,15 @@
+             gpu = Some(gpu_config_list);
+         }
+ 
++        let mut media: Option<Vec<MediaConfig>> = None;
++        if let Some(media_list) = &vm_params.media {
++            let mut media_config_list = Vec::new();
++            for item in media_list.iter() {
++                media_config_list.push(MediaConfig::parse(item)?);
++            }
++            media = Some(media_config_list);
++        }
++
+         let mut pmem: Option<Vec<PmemConfig>> = None;
+         if let Some(pmem_list) = &vm_params.pmem {
+             let mut pmem_config_list = Vec::new();
+@@ -3518,6 +3592,7 @@
+             generic_vhost_user,
+             fs,
+             gpu,
++            media,
+             pmem,
+             serial,
+             console,
+@@ -3660,6 +3735,7 @@
+             pvmemcontrol: self.pvmemcontrol.clone(),
+             fs: self.fs.clone(),
+             gpu: self.gpu.clone(),
++            media: self.media.clone(),
+             generic_vhost_user: self.generic_vhost_user.clone(),
+             pmem: self.pmem.clone(),
+             serial: self.serial.clone(),
+@@ -4433,8 +4509,7 @@
+     fn gpu_fixture() -> GpuConfig {
+         GpuConfig {
+             socket: PathBuf::from("/tmp/sock"),
+-            id: None,
+-            pci_segment: 0,
++            pci_common: PciDeviceCommonConfig::default(),
+         }
+     }
+ 
+@@ -4447,6 +4522,21 @@
+         Ok(())
+     }
+ 
++    fn media_fixture() -> MediaConfig {
++        MediaConfig {
++            socket: PathBuf::from("/tmp/sock"),
++            pci_common: PciDeviceCommonConfig::default(),
++        }
++    }
++
++    #[test]
++    fn test_parse_media() -> Result<()> {
++        assert!(MediaConfig::parse("").is_err());
++        assert_eq!(MediaConfig::parse("socket=/tmp/sock")?, media_fixture());
++
++        Ok(())
++    }
++
+     fn pmem_fixture() -> PmemConfig {
+         PmemConfig {
+             pci_common: PciDeviceCommonConfig::default(),
+@@ -4893,6 +4983,7 @@
+             balloon: None,
+             fs: None,
+             gpu: None,
++            media: None,
+             pmem: None,
+             serial: SerialConfig::default(),
+             console: ConsoleConfig::default(),
+@@ -5127,6 +5218,7 @@
+             balloon: None,
+             fs: None,
+             gpu: None,
++            media: None,
+             generic_vhost_user: None,
+             pmem: None,
+             serial: SerialConfig {
+diff -ruN a/vmm/src/device_manager.rs b/vmm/src/device_manager.rs
+--- a/vmm/src/device_manager.rs	2026-05-22 07:10:02.418075621 -0700
++++ b/vmm/src/device_manager.rs	2026-05-22 07:10:02.477473526 -0700
+@@ -123,9 +123,9 @@
+ use crate::vm_config::IvshmemConfig;
+ use crate::vm_config::{
+     ConsoleOutputMode, DEFAULT_IOMMU_ADDRESS_WIDTH_BITS, DEFAULT_PCI_SEGMENT_APERTURE_WEIGHT,
+-    DeviceConfig, DiskConfig, FsConfig, GenericVhostUserConfig, NetConfig, PciDeviceCommonConfig,
+-    PmemConfig, UserDeviceConfig, VdpaConfig, VhostMode, VmConfig, VsockConfig,
+-    GpuConfig,
++    DeviceConfig, DiskConfig, FsConfig, GenericVhostUserConfig, GpuConfig, MediaConfig,
++    NetConfig, PciDeviceCommonConfig, PmemConfig, UserDeviceConfig, VdpaConfig, VhostMode,
++    VmConfig, VsockConfig,
+ };
+ use crate::{DEVICE_MANAGER_SNAPSHOT_ID, GuestRegionMmap, PciDeviceInfo, device_node};
+ 
+@@ -155,6 +155,7 @@
+ const DISK_DEVICE_NAME_PREFIX: &str = "_disk";
+ const FS_DEVICE_NAME_PREFIX: &str = "_fs";
+ const GPU_DEVICE_NAME_PREFIX: &str = "_gpu";
++const MEDIA_DEVICE_NAME_PREFIX: &str = "_media";
+ const NET_DEVICE_NAME_PREFIX: &str = "_net";
+ const GENERIC_VHOST_USER_DEVICE_NAME_PREFIX: &str = "_generic_vhost_user";
+ const PMEM_DEVICE_NAME_PREFIX: &str = "_pmem";
+@@ -208,6 +209,10 @@
+     #[error("Cannot create virtio-gpu device: {0}")]
+     CreateVirtioGpu(#[source] virtio_devices::vhost_user::Error),
+ 
++    /// Cannot create virtio-media device
++    #[error("Cannot create virtio-media device: {0}")]
++    CreateVirtioMedia(#[source] virtio_devices::vhost_user::Error),
++
+     /// Virtio-fs device was created without a socket.
+     #[error("Virtio-fs device was created without a socket")]
+     NoVirtioFsSock,
+@@ -216,6 +221,10 @@
+     #[error("Virtio-gpu device was created without a socket")]
+     NoVirtioGpuSock,
+ 
++    /// Virtio-media device was created without a socket.
++    #[error("Virtio-media device was created without a socket")]
++    NoVirtioMediaSock,
++
+     /// Generic vhost-user device was created without a socket.
+     #[error("Generic vhost-user device was created without a socket")]
+     NoGenericVhostUserSock,
+@@ -333,6 +342,10 @@
+     #[error("Cannot find a memory range for virtio-gpu")]
+     GpuRangeAllocation,
+ 
++    /// Cannot find a memory range for virtio-media
++    #[error("Cannot find a memory range for virtio-media")]
++    MediaRangeAllocation,
++
+     /// Error creating serial output file
+     #[error("Error creating serial output file")]
+     SerialOutputFileOpen(#[source] io::Error),
+@@ -2648,6 +2661,9 @@
+         // Add virtio-gpu if required
+         self.make_virtio_gpu_devices()?;
+ 
++        // Add virtio-media if required
++        self.make_virtio_media_devices()?;
++
+         // Add virtio-pmem if required
+         self.make_virtio_pmem_devices()?;
+ 
+@@ -3295,13 +3311,16 @@
+                 size: region.length,
+             });
+ 
++            let shm_fd = unsafe { libc::memfd_create(b"virtio-media-shm\0".as_ptr().cast(), libc::MFD_CLOEXEC) };
++            if shm_fd < 0 { return Err(DeviceManagerError::MediaRangeAllocation); }
++            let shm_file = unsafe { std::fs::File::from_raw_fd(shm_fd) };
++            shm_file.set_len(region.length).map_err(|_| DeviceManagerError::MediaRangeAllocation)?;
+             let mmap_region = MmapRegion::build(
+-                None,
++                Some(vm_memory::FileOffset::new(shm_file, 0)),
+                 region.length as usize,
+-                libc::PROT_NONE,
+-                libc::MAP_ANONYMOUS | libc::MAP_PRIVATE,
+-            )
+-            .map_err(DeviceManagerError::NewMmapRegion)?;
++                libc::PROT_READ | libc::PROT_WRITE,
++                libc::MAP_SHARED,
++            ).map_err(DeviceManagerError::NewMmapRegion)?;
+ 
+             // SAFETY: `mmap_region.size()` and `mmap_region.as_ptr()` refer to an allocation.
+             // We remove the userspace mapping before dropping the device if the device is
+@@ -3363,6 +3382,115 @@
+         Ok(())
+     }
+ 
++    fn make_media_device(
++        &mut self,
++        media_cfg: &mut MediaConfig,
++    ) -> DeviceManagerResult<MetaVirtioDevice> {
++        let id = if let Some(id) = &media_cfg.pci_common.id {
++            id.clone()
++        } else {
++            let id = self.next_device_name(MEDIA_DEVICE_NAME_PREFIX)?;
++            media_cfg.pci_common.id = Some(id.clone());
++            id
++        };
++
++        info!("Creating virtio-media device: {media_cfg:?}");
++
++        let mut node = device_node!(id);
++
++        if let Some(media_socket) = media_cfg.socket.to_str() {
++            let (mut media_device, region) = virtio_devices::vhost_user::Media::new(
++                id.clone(),
++                media_socket,
++                self.seccomp_action.clone(),
++                self.exit_evt
++                    .try_clone()
++                    .map_err(DeviceManagerError::EventFd)?,
++                self.force_access_platform | media_cfg.pci_common.iommu,
++            )
++            .map_err(DeviceManagerError::CreateVirtioMedia)?;
++
++            let cache_base = self.pci_segments[media_cfg.pci_common.pci_segment as usize]
++                .mem64_allocator
++                .lock()
++                .unwrap()
++                .allocate(None, region.length as GuestUsize, Some(region.length))
++                .ok_or(DeviceManagerError::MediaRangeAllocation)?
++                .raw_value();
++
++            node.resources.push(Resource::MmioAddressRange {
++                base: cache_base,
++                size: region.length,
++            });
++
++            let shm_fd = unsafe { libc::memfd_create(b"virtio-media-shm\0".as_ptr().cast(), libc::MFD_CLOEXEC) };
++            if shm_fd < 0 { return Err(DeviceManagerError::MediaRangeAllocation); }
++            let shm_file = unsafe { std::fs::File::from_raw_fd(shm_fd) };
++            shm_file.set_len(region.length).map_err(|_| DeviceManagerError::MediaRangeAllocation)?;
++            let mmap_region = MmapRegion::build(
++                Some(vm_memory::FileOffset::new(shm_file, 0)),
++                region.length as usize,
++                libc::PROT_READ | libc::PROT_WRITE,
++                libc::MAP_SHARED,
++            ).map_err(DeviceManagerError::NewMmapRegion)?;
++
++            let mem_slot = unsafe {
++                self.memory_manager
++                    .lock()
++                    .unwrap()
++                    .create_userspace_mapping(
++                        cache_base,
++                        mmap_region.size(),
++                        mmap_region.as_ptr(),
++                        false,
++                        false,
++                        false,
++                    )
++                    .map_err(DeviceManagerError::MemoryManager)?
++            };
++
++            let region_list = once((
++                region.id,
++                VirtioSharedMemory {
++                    offset: 0,
++                    len: region.length,
++                },
++            ))
++            .collect();
++
++            media_device.set_cache(VirtioSharedMemoryList {
++                mapping: Arc::new(mmap_region),
++                mem_slot,
++                addr: GuestAddress(cache_base),
++                region_list,
++            });
++
++            self.device_tree.lock().unwrap().insert(id.clone(), node);
++
++            Ok(MetaVirtioDevice {
++                virtio_device: Arc::new(Mutex::new(media_device))
++                    as Arc<Mutex<dyn virtio_devices::VirtioDevice>>,
++                pci_common: media_cfg.pci_common.clone(),
++                dma_handler: None,
++            })
++        } else {
++            Err(DeviceManagerError::NoVirtioMediaSock)
++        }
++    }
++
++    fn make_virtio_media_devices(&mut self) -> DeviceManagerResult<()> {
++        let mut media_devices = self.config.lock().unwrap().media.clone();
++        if let Some(media_list_cfg) = &mut media_devices {
++            for media_cfg in media_list_cfg.iter_mut() {
++                let device = self.make_media_device(media_cfg)?;
++                self.virtio_devices.push(device);
++            }
++        }
++        self.config.lock().unwrap().media = media_devices;
++
++        Ok(())
++    }
++
+     fn make_virtio_pmem_device(
+         &mut self,
+         pmem_cfg: &mut PmemConfig,
+@@ -5223,6 +5351,16 @@
+         self.hotplug_virtio_pci_device(device)
+     }
+ 
++    pub fn add_media(
++        &mut self,
++        media_cfg: &mut MediaConfig,
++    ) -> DeviceManagerResult<PciDeviceInfo> {
++        self.validate_identifier(&media_cfg.pci_common.id)?;
++
++        let device = self.make_media_device(media_cfg)?;
++        self.hotplug_virtio_pci_device(device)
++    }
++
+     pub fn add_pmem(&mut self, pmem_cfg: &mut PmemConfig) -> DeviceManagerResult<PciDeviceInfo> {
+         self.validate_identifier(&pmem_cfg.pci_common.id)?;
+ 
+diff -ruN a/vmm/src/lib.rs b/vmm/src/lib.rs
+--- a/vmm/src/lib.rs	2026-05-22 07:10:02.419473314 -0700
++++ b/vmm/src/lib.rs	2026-05-22 07:10:02.453473438 -0700
+@@ -65,9 +65,8 @@
+ use crate::seccomp_filters::{Thread, get_seccomp_filter};
+ use crate::vm::{Error as VmError, Vm, VmState};
+ use crate::vm_config::{
+-    DeviceConfig, DiskConfig, FsConfig, GenericVhostUserConfig, NetConfig, PmemConfig,
+-    UserDeviceConfig, VdpaConfig, VmConfig, VsockConfig,
+-    GpuConfig,
++    DeviceConfig, DiskConfig, FsConfig, GenericVhostUserConfig, GpuConfig, MediaConfig,
++    NetConfig, PmemConfig, UserDeviceConfig, VdpaConfig, VmConfig, VsockConfig,
+ };
+ 
+ mod acpi;
+@@ -2391,6 +2390,29 @@
+         }
+     }
+ 
++    fn vm_add_media(&mut self, media_cfg: MediaConfig) -> result::Result<Option<Vec<u8>>, VmError> {
++        self.vm_config.as_ref().ok_or(VmError::VmNotCreated)?;
++
++        {
++            let mut config = self.vm_config.as_ref().unwrap().lock().unwrap().clone();
++            add_to_config(&mut config.media, media_cfg.clone());
++            config.validate().map_err(VmError::ConfigValidation)?;
++        }
++
++        if let Some(ref mut vm) = self.vm {
++            let info = vm.add_media(media_cfg).inspect_err(|e| {
++                error!("Error when adding new media device to the VM: {e:?}");
++            })?;
++            serde_json::to_vec(&info)
++                .map(Some)
++                .map_err(VmError::SerializeJson)
++        } else {
++            let mut config = self.vm_config.as_ref().unwrap().lock().unwrap();
++            add_to_config(&mut config.media, media_cfg);
++            Ok(None)
++        }
++    }
++
+     fn vm_add_pmem(&mut self, pmem_cfg: PmemConfig) -> result::Result<Option<Vec<u8>>, VmError> {
+         self.vm_config.as_ref().ok_or(VmError::VmNotCreated)?;
+ 
+@@ -2680,9 +2702,8 @@
+     use crate::vm_config::DebugConsoleConfig;
+     use crate::vm_config::{
+         CommonConsoleConfig, ConsoleConfig, ConsoleOutputMode, CoreScheduling, CpuFeatures,
+-        CpusConfig, HotplugMethod, MemoryConfig, PayloadConfig, PciDeviceCommonConfig, RngConfig,
+-        SerialConfig,
+-    GpuConfig,
++        CpusConfig, GpuConfig, HotplugMethod, MediaConfig, MemoryConfig, PayloadConfig,
++        PciDeviceCommonConfig, RngConfig, SerialConfig,
+     };
+ 
+     fn create_dummy_vmm() -> Vmm {
+@@ -2710,7 +2731,6 @@
+                 kvm_hyperv: false,
+                 max_phys_bits: 46,
+                 affinity: None,
+-            gpu: None,
+                 features: CpuFeatures::default(),
+                 nested: true,
+                 core_scheduling: CoreScheduling::default(),
+@@ -2749,6 +2769,8 @@
+             },
+             balloon: None,
+             fs: None,
++            gpu: None,
++            media: None,
+             generic_vhost_user: None,
+             pmem: None,
+             serial: SerialConfig {
+@@ -3091,6 +3113,55 @@
+         );
+     }
+ 
++    #[test]
++    fn test_vmm_vm_cold_add_media() {
++        let mut vmm = create_dummy_vmm();
++        let media_config = MediaConfig::parse("socket=/tmp/sock").unwrap();
++
++        assert!(matches!(
++            vmm.vm_add_media(media_config.clone()),
++            Err(VmError::VmNotCreated)
++        ));
++
++        let _ = vmm.vm_create(create_dummy_vm_config());
++        assert!(
++            vmm.vm_config
++                .as_ref()
++                .unwrap()
++                .lock()
++                .unwrap()
++                .media
++                .is_none()
++        );
++
++        let result = vmm.vm_add_media(media_config.clone());
++        assert!(result.is_ok());
++        assert!(result.unwrap().is_none());
++        assert_eq!(
++            vmm.vm_config
++                .as_ref()
++                .unwrap()
++                .lock()
++                .unwrap()
++                .media
++                .clone()
++                .unwrap()
++                .len(),
++            1
++        );
++        assert_eq!(
++            vmm.vm_config
++                .as_ref()
++                .unwrap()
++                .lock()
++                .unwrap()
++                .media
++                .clone()
++                .unwrap()[0],
++            media_config
++        );
++    }
++
+     #[test]
+     fn test_vmm_vm_cold_add_pmem() {
+         let mut vmm = create_dummy_vmm();
+diff -ruN a/vmm/src/vm_config.rs b/vmm/src/vm_config.rs
+--- a/vmm/src/vm_config.rs	2026-05-22 07:10:02.421550890 -0700
++++ b/vmm/src/vm_config.rs	2026-05-22 07:10:02.454525332 -0700
+@@ -524,6 +524,13 @@
+ }
+ 
+ #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
++pub struct MediaConfig {
++    pub socket: PathBuf,
++    #[serde(flatten)]
++    pub pci_common: PciDeviceCommonConfig,
++}
++
++#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
+ pub struct PmemConfig {
+     #[serde(flatten)]
+     pub pci_common: PciDeviceCommonConfig,
+@@ -1036,6 +1043,7 @@
+     pub generic_vhost_user: Option<Vec<GenericVhostUserConfig>>,
+     pub fs: Option<Vec<FsConfig>>,
+     pub gpu: Option<Vec<GpuConfig>>,
++    pub media: Option<Vec<MediaConfig>>,
+     pub pmem: Option<Vec<PmemConfig>>,
+     #[serde(default)]
+     pub serial: SerialConfig,
+diff -ruN a/vmm/src/vm.rs b/vmm/src/vm.rs
+--- a/vmm/src/vm.rs	2026-05-22 07:10:02.420473317 -0700
++++ b/vmm/src/vm.rs	2026-05-22 07:10:02.455232432 -0700
+@@ -115,9 +115,9 @@
+ #[cfg(feature = "fw_cfg")]
+ use crate::vm_config::FwCfgConfig;
+ use crate::vm_config::{
+-    DeviceConfig, DiskConfig, FsConfig, GenericVhostUserConfig, HotplugMethod, NetConfig,
+-    NumaConfig, PayloadConfig, PmemConfig, UserDeviceConfig, VdpaConfig, VmConfig, VsockConfig,
+-    GpuConfig,
++    DeviceConfig, DiskConfig, FsConfig, GenericVhostUserConfig, GpuConfig, HotplugMethod,
++    MediaConfig, NetConfig, NumaConfig, PayloadConfig, PmemConfig, UserDeviceConfig, VdpaConfig,
++    VmConfig, VsockConfig,
+ };
+ use crate::{
+     CPU_MANAGER_SNAPSHOT_ID, DEVICE_MANAGER_SNAPSHOT_ID, GuestMemoryMmap,
+@@ -2365,6 +2365,28 @@
+         }
+ 
+         self.device_manager
++            .lock()
++            .unwrap()
++            .notify_hotplug(AcpiNotificationFlags::PCI_DEVICES_CHANGED)
++            .map_err(Error::DeviceManager)?;
++
++        Ok(pci_device_info)
++    }
++
++    pub fn add_media(&mut self, mut media_cfg: MediaConfig) -> Result<PciDeviceInfo> {
++        let pci_device_info = self
++            .device_manager
++            .lock()
++            .unwrap()
++            .add_media(&mut media_cfg)
++            .map_err(Error::DeviceManager)?;
++
++        {
++            let mut config = self.config.lock().unwrap();
++            add_to_config(&mut config.media, media_cfg);
++        }
++
++        self.device_manager
+             .lock()
+             .unwrap()
+             .notify_hotplug(AcpiNotificationFlags::PCI_DEVICES_CHANGED)

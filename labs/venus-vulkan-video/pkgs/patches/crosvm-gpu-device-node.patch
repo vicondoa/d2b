@@ -1,0 +1,45 @@
+diff --git a/devices/src/virtio/gpu/mod.rs b/devices/src/virtio/gpu/mod.rs
+index 48ff722..15f1947 100644
+--- a/devices/src/virtio/gpu/mod.rs
++++ b/devices/src/virtio/gpu/mod.rs
+@@ -1501,6 +1501,10 @@ impl Gpu {
+                     path: path.clone(),
+                     path_type: RUTABAGA_PATH_TYPE_WAYLAND,
+                 }),
++                "gpu" => rutabaga_paths.push(RutabagaPath {
++                    path: path.clone(),
++                    path_type: RUTABAGA_PATH_TYPE_GPU,
++                }),
+                 _ => error!("unknown rutabaga path"),
+             }
+         }
+diff --git a/devices/src/virtio/vhost_user_backend/gpu/sys/linux.rs b/devices/src/virtio/vhost_user_backend/gpu/sys/linux.rs
+index 8534e90..1061851 100644
+--- a/devices/src/virtio/vhost_user_backend/gpu/sys/linux.rs
++++ b/devices/src/virtio/vhost_user_backend/gpu/sys/linux.rs
+@@ -146,6 +146,10 @@ pub struct Options {
+     #[argh(option, arg_name = "DISPLAY")]
+     /// X11 display name to use
+     x_display: Option<String>,
++    #[argh(option, arg_name = "PATH")]
++    /// path to the DRM render node (e.g. /dev/dri/renderD128) for
++    /// virglrenderer video decode acceleration
++    gpu_device_node: Option<PathBuf>,
+     #[argh(
+         option,
+         from_str_fn(gpu_parameters_from_str),
+@@ -165,9 +169,13 @@ pub fn run_gpu_device(opts: Options) -> anyhow::Result<()> {
+         socket_path,
+         fd,
+         wayland_sock,
++        gpu_device_node,
+     } = opts;
+ 
+-    let channels: BTreeMap<_, _> = wayland_sock.into_iter().collect();
++    let mut channels: BTreeMap<_, _> = wayland_sock.into_iter().collect();
++    if let Some(node) = gpu_device_node {
++        channels.insert("gpu".to_string(), node);
++    }
+ 
+     let resource_bridge_listeners = resource_bridge
+         .into_iter()
