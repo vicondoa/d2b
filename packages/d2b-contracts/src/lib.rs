@@ -590,4 +590,7 @@ mod resource_proto_formatting_tests;
 // The `generation_bundle` module's re-exports. Keep every
 // `pub use generation_bundle::...` line inside this region so it stays one
 // contiguous block.
-// (empty until `ADR046-network-008` lands)
+pub use generation_bundle::{
+    BundleMetadata, BundleResource, ZONE_BUNDLE_DOMAIN_TAG, ZONE_BUNDLE_GENERATED_AT,
+    ZONE_BUNDLE_SCHEMA_VERSION, ZONE_BUNDLE_VERSION, ZoneBundle, ZoneBundleError,
+};

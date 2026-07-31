@@ -596,6 +596,9 @@ provider-catalog/resource-ref-shaped-id-rejected
 provider-catalog/single-artifact
 provider-catalog/sorted-by-artifact-id
 provider-catalog/unknown-field-rejected
+provider-catalog/zone-resource-bundle-credential-envelope-and-digest
+provider-catalog/zone-resource-credential-invalid-inputs-rejected
+provider-catalog/zone-resource-runtime-metadata-and-store-path-absent
 readiness-waves/daemon-auto-default
 readiness-waves/has-p0
 readiness-waves/has-p1
