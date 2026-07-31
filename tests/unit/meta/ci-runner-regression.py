@@ -343,6 +343,12 @@ set -euo pipefail
         self.assertIn("is not a discovered flake check", partition)
         self.assertIn("partitioned $partitioned of $total checks", partition)
 
+        # Each element is validated whole, so a name carrying the separator
+        # splits into pieces that abort rather than dropping out of every lane.
+        self.assertIn("enumeration is not a JSON array", partition)
+        self.assertIn("enumeration element is not a quoted name", partition)
+        self.assertIn("'\"'?*'\"') ;;", partition)
+
         # Both discovery jobs read the same partition, so the names dropped
         # from the eval matrix are exactly the names the Nix-unit lane runs.
         self.assertEqual(workflow.count("partition=$(make -s test-flake-partition)"), 2)

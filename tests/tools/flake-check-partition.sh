@@ -28,19 +28,39 @@ cd "$ROOT"
 
 all_json=$(bash "$ROOT/tests/test-flake-list.sh")
 
-# Read the names without a JSON parser: test-flake-list.sh emits a compact array
-# of strings drawn from flake attrNames, and test-flake.sh independently rejects
-# any name outside [A-Za-z0-9._-] before it reaches a nix attr path or a shell.
-names=$(printf '%s' "$all_json" | tr ',' '\n' | sed -n 's/.*"\([^"]*\)".*/\1/p')
+# Read the names without a JSON parser. test-flake-list.sh emits a compact array
+# of strings drawn from flake attrNames, so the shape is `["a","b"]`. Splitting
+# on the separator is only safe once every element is known to be a quoted
+# charset-safe token, so each token is validated as a whole: an element carrying
+# a separator or a quote splits into pieces that fail that check and abort,
+# rather than being silently dropped from the dispatch.
+case "$all_json" in
+  '['*']') ;;
+  *)
+    printf '%s\n' "flake-check-partition: enumeration is not a JSON array" >&2
+    exit 1
+    ;;
+esac
+inner=${all_json#[}
+inner=${inner%]}
 
 eval_names=()
 realized_names=()
 nix_unit_names=()
 total=0
-for name in $names; do
+for token in $(printf '%s' "$inner" | tr ',' '\n'); do
+  case "$token" in
+    '"'?*'"') ;;
+    *)
+      printf '%s\n' "flake-check-partition: enumeration element is not a quoted name" >&2
+      exit 1
+      ;;
+  esac
+  name=${token#\"}
+  name=${name%\"}
   case "$name" in
-    "" | *[!A-Za-z0-9._-]*)
-      printf '%s\n' "flake-check-partition: check name '$name' is outside [A-Za-z0-9._-]" >&2
+    *[!A-Za-z0-9._-]*)
+      printf '%s\n' "flake-check-partition: a check name is outside [A-Za-z0-9._-]" >&2
       exit 1
       ;;
   esac

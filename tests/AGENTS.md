@@ -16,6 +16,16 @@ are a **closed set** - do not add a new `tests/*.sh`. If you think you need a
 shell gate, you almost certainly want a nix-unit case (type 1) or a Rust test
 (types 2-5) instead.
 
+That closed set covers *gates*. `tests/tools/` is the open home for the
+plumbing a gate or a CI job calls - enumerators, partitioners, generators,
+runners - and a new file may land there when it is genuinely plumbing and not a
+test case. The distinction is what fails: a gate asserts an invariant and
+belongs to the closed set; a tool produces or transforms data for something
+else to assert on, and is itself covered by whichever gate consumes it. The
+migration ledger inventories `tests/*.sh` only, so a tool needs no ledger row -
+which is exactly why it must not smuggle in assertions that would then go
+untracked.
+
 When in doubt, push the test *down* the tiers (toward type 1), not up.
 
 ## Taxonomy - name, definition, home, how it runs
