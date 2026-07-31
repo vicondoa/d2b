@@ -31,9 +31,16 @@ was wrong and why each change is needed; the short version is below.
 
 The lab no longer asserts a capability the guest lacks. It previously set
 `gfx.blacklist.hardwarevideodecoding` to skip a VA-API probe the guest could not
-pass, which was a diagnostic rather than a fix. The guest passes that probe on
-the merits now, and the pref is gone - see `SOLUTION.md` section 6a. Decode is
-still Vulkan Video; VA-API only answers the capability question.
+pass, which was a diagnostic rather than a fix. The guest advertises H.264
+through VA-API now, so Firefox reaches its own conclusion instead of having the
+probe bypassed, and the pref is gone.
+
+Read one limit with that: the guest's VA-API decode has since been measured
+**not** to reach the host decode engine, where the same probe on the host
+reaches 94-98%. So the advertisement Firefox reads has not been shown to be
+hardware backed. It does not affect what decodes - that is Vulkan Video, and it
+is genuinely hardware backed - but the pref removal rests on a weaker footing
+than "the capability is real". See `SOLUTION.md` section 6a.
 
 ### Reading the NVDEC number
 
