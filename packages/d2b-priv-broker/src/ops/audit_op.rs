@@ -7,7 +7,8 @@
 
 use std::io;
 
-use d2b_contracts::broker_wire::RunnerAllocation;
+use d2b_contracts::broker_wire::{NftablesProjectionAction, RunnerAllocation};
+use d2b_contracts::v3::{ResourceBundleGenerationId, ResourceGeneration};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -127,6 +128,11 @@ pub enum OperationFields {
         desired_hash: Option<String>,
         destroy: bool,
     },
+    ApplyNftablesProjection {
+        projection_digest: String,
+        expected_generation_id: ResourceBundleGenerationId,
+        action: NftablesProjectionAction,
+    },
     ApplyRoute {
         bundle_route_intent_ref: String,
         destination: String,
@@ -152,6 +158,17 @@ pub enum OperationFields {
         role_id: String,
         tap_ifname: String,
         bridge_ifname: Option<String>,
+    },
+    CreateBridge {
+        bridge_intent_digest: String,
+    },
+    DeleteBridge {
+        bridge_intent_digest: String,
+    },
+    DeletePersistentTap {
+        attachment_digest: String,
+        expected_network_generation: ResourceGeneration,
+        expected_attachment_generation: ResourceGeneration,
     },
     OpenKvm {
         role_id: String,
@@ -495,6 +512,11 @@ impl OperationFields {
                 desired_hash: Option<String>,
                 destroy: bool,
             }),
+            "ApplyNftablesProjection" => parse_fields!(value => ApplyNftablesProjection {
+                projection_digest: String,
+                expected_generation_id: ResourceBundleGenerationId,
+                action: NftablesProjectionAction,
+            }),
             "ApplyRoute" => parse_fields!(value => ApplyRoute {
                 bundle_route_intent_ref: String,
                 destination: String,
@@ -520,6 +542,17 @@ impl OperationFields {
                 role_id: String,
                 tap_ifname: String,
                 bridge_ifname: Option<String>,
+            }),
+            "CreateBridge" => parse_fields!(value => CreateBridge {
+                bridge_intent_digest: String,
+            }),
+            "DeleteBridge" => parse_fields!(value => DeleteBridge {
+                bridge_intent_digest: String,
+            }),
+            "DeletePersistentTap" => parse_fields!(value => DeletePersistentTap {
+                attachment_digest: String,
+                expected_network_generation: ResourceGeneration,
+                expected_attachment_generation: ResourceGeneration,
             }),
             "OpenKvm" => parse_fields!(value => OpenKvm {
                 role_id: String,
@@ -924,6 +957,42 @@ mod tests {
             scope_id: "env:work".to_owned(),
             desired_hash: Some("fnv1a64:1234".to_owned()),
             destroy: false,
+        }
+    );
+    roundtrip_test!(
+        apply_nftables_projection_round_trip,
+        "ApplyNftablesProjection",
+        OperationFields::ApplyNftablesProjection {
+            projection_digest: "sha256:projection".to_owned(),
+            expected_generation_id: ResourceBundleGenerationId::parse(format!(
+                "sha256:{}",
+                "1".repeat(64)
+            ))
+            .unwrap(),
+            action: NftablesProjectionAction::Apply,
+        }
+    );
+    roundtrip_test!(
+        create_bridge_round_trip,
+        "CreateBridge",
+        OperationFields::CreateBridge {
+            bridge_intent_digest: "sha256:bridge".to_owned(),
+        }
+    );
+    roundtrip_test!(
+        delete_bridge_round_trip,
+        "DeleteBridge",
+        OperationFields::DeleteBridge {
+            bridge_intent_digest: "sha256:bridge".to_owned(),
+        }
+    );
+    roundtrip_test!(
+        delete_persistent_tap_round_trip,
+        "DeletePersistentTap",
+        OperationFields::DeletePersistentTap {
+            attachment_digest: "sha256:attachment".to_owned(),
+            expected_network_generation: ResourceGeneration::new(7).unwrap(),
+            expected_attachment_generation: ResourceGeneration::new(11).unwrap(),
         }
     );
     roundtrip_test!(

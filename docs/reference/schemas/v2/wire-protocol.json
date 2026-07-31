@@ -3865,15 +3865,22 @@
       "additionalProperties": false
     },
     "DeletePersistentTapRequest": {
-      "description": "See [`CreatePersistentTapRequest`] for the opaque-ID rationale; `DeletePersistentTap` follows the same contract, and the broker re-derives the ifname it removes rather than accepting one.",
+      "description": "Delete one trusted attachment realization without accepting its ifname, path, or ownership marker from the caller.",
       "type": "object",
       "required": [
-        "roleId",
-        "vmId"
+        "attachmentId",
+        "expectedAttachmentGeneration",
+        "expectedNetworkGeneration"
       ],
       "properties": {
-        "roleId": {
-          "type": "string"
+        "attachmentId": {
+          "$ref": "#/definitions/ResourceUid"
+        },
+        "expectedAttachmentGeneration": {
+          "$ref": "#/definitions/ResourceGeneration"
+        },
+        "expectedNetworkGeneration": {
+          "$ref": "#/definitions/ResourceGeneration"
         },
         "tracingSpanId": {
           "default": null,
@@ -3881,9 +3888,6 @@
             "string",
             "null"
           ]
-        },
-        "vmId": {
-          "type": "string"
         }
       },
       "additionalProperties": false
@@ -9023,6 +9027,16 @@
       "maxLength": 71,
       "minLength": 71,
       "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "ResourceGeneration": {
+      "type": "integer",
+      "minimum": 1.0
+    },
+    "ResourceUid": {
+      "type": "string",
+      "maxLength": 36,
+      "minLength": 36,
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
     },
     "RotateKnownHostRequest": {
       "description": "Common flags every mutating-verb request carries. The daemon rejects requests that set neither `dry_run` nor `apply`.",

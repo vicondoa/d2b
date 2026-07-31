@@ -3,7 +3,8 @@ use d2b_contracts::broker_wire::{
     ApplyNftablesProjectionRequest, BrokerCallerRole, BrokerRequest, BrokerRequestEnvelope,
     CreateBridgeRequest, DeleteBridgeRequest, DeletePersistentTapRequest, NftablesProjectionAction,
 };
-use d2b_contracts::types::{BundleOpId, RoleId, ScopeId, VmId};
+use d2b_contracts::types::{BundleOpId, ScopeId};
+use d2b_contracts::v3::{ResourceBundleGenerationId, ResourceGeneration, ResourceUid};
 use serde::{Deserialize, Serialize};
 
 const PREVIOUS_PROTOCOL_VERSION: u32 = 3;
@@ -33,11 +34,14 @@ fn current_envelope(request: BrokerRequest) -> BrokerRequestEnvelope {
 }
 
 fn current_only_requests() -> [BrokerRequest; 4] {
+    let generation_id = ResourceBundleGenerationId::parse(format!("sha256:{}", "1".repeat(64)))
+        .expect("valid generation identity");
     [
         BrokerRequest::ApplyNftablesProjection(ApplyNftablesProjectionRequest {
             bundle_nft_projection_intent_ref: BundleOpId::new("nft-projection:test"),
             scope_id: ScopeId::new("scope:test"),
             action: NftablesProjectionAction::Apply,
+            expected_generation_id: generation_id,
             desired_hash: None,
             tracing_span_id: None,
         }),
@@ -52,8 +56,12 @@ fn current_only_requests() -> [BrokerRequest; 4] {
             tracing_span_id: None,
         }),
         BrokerRequest::DeletePersistentTap(DeletePersistentTapRequest {
-            role_id: RoleId::new("role:test"),
-            vm_id: VmId::new("vm:test"),
+            attachment_id: ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000")
+                .expect("valid attachment id"),
+            expected_network_generation: ResourceGeneration::new(7)
+                .expect("valid network generation"),
+            expected_attachment_generation: ResourceGeneration::new(11)
+                .expect("valid attachment generation"),
             tracing_span_id: None,
         }),
     ]

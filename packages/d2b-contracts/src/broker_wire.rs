@@ -13,7 +13,7 @@ use crate::types::{
     BundleClosureRef, BundleOpId, MediaRef, PathClass, RoleId, ScopeId, SubjectId, TracingSpanId,
     VmId,
 };
-use crate::v3::ResourceBundleGenerationId;
+use crate::v3::{ResourceBundleGenerationId, ResourceGeneration, ResourceUid};
 use d2b_core::host::IfName;
 use d2b_core::workload_identity::WorkloadIdentity;
 use schemars::JsonSchema;
@@ -738,14 +738,14 @@ pub struct CreatePersistentTapRequest {
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
-/// See [`CreatePersistentTapRequest`] for the opaque-ID rationale;
-/// `DeletePersistentTap` follows the same contract, and the broker
-/// re-derives the ifname it removes rather than accepting one.
+/// Delete one trusted attachment realization without accepting its ifname,
+/// path, or ownership marker from the caller.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DeletePersistentTapRequest {
-    pub role_id: RoleId,
-    pub vm_id: VmId,
+    pub attachment_id: ResourceUid,
+    pub expected_network_generation: ResourceGeneration,
+    pub expected_attachment_generation: ResourceGeneration,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
 }
@@ -2541,6 +2541,39 @@ mod tests {
             .unwrap()
             .remove("expectedGenerationId");
         assert!(serde_json::from_value::<ApplyNftablesProjectionRequest>(payload).is_err());
+    }
+
+    #[test]
+    fn delete_persistent_tap_requires_opaque_id_and_both_generation_fences() {
+        let mut payload = serde_json::json!({
+            "attachmentId": "123e4567-e89b-42d3-a456-426614174000",
+            "expectedNetworkGeneration": 7,
+            "expectedAttachmentGeneration": 11,
+        });
+        let request: DeletePersistentTapRequest =
+            serde_json::from_value(payload.clone()).expect("valid fenced tap deletion request");
+        assert_eq!(
+            request.attachment_id.as_str(),
+            "123e4567-e89b-42d3-a456-426614174000"
+        );
+        assert_eq!(request.expected_network_generation.get(), 7);
+        assert_eq!(request.expected_attachment_generation.get(), 11);
+
+        for required in [
+            "attachmentId",
+            "expectedNetworkGeneration",
+            "expectedAttachmentGeneration",
+        ] {
+            let mut missing = payload.clone();
+            missing.as_object_mut().unwrap().remove(required);
+            assert!(serde_json::from_value::<DeletePersistentTapRequest>(missing).is_err());
+        }
+
+        payload
+            .as_object_mut()
+            .unwrap()
+            .insert("vmId".to_owned(), serde_json::json!("corp-vm"));
+        assert!(serde_json::from_value::<DeletePersistentTapRequest>(payload).is_err());
     }
 
     #[test]
