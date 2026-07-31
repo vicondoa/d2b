@@ -119,10 +119,25 @@ jobs:
             experimental-features = nix-command flakes
       - name: Free runner disk for Rust gate
         run: |
-          df -h
+          df -h /
+          avail_kib=$(df -Pk / | awk 'NR == 2 { print $4 }')
+          # Reclaiming the preinstalled Android/dotnet/GHC trees and the Docker
+          # image cache costs real wall time - measured across this workflow's
+          # four Rust-profile jobs it ranged from 43 s to 3 min 48 s, the worst
+          # of which sat on the critical path - and buys about 22 GiB on a
+          # runner image that already arrives with 83-88 GiB free. Nothing in
+          # this gate approaches that, so only pay the cost when an image
+          # actually turns up short. This still fails safe: a fuller image
+          # reclaims exactly as before.
+          threshold_kib=$((70 * 1024 * 1024))
+          if [ "$avail_kib" -ge "$threshold_kib" ]; then
+            echo "free space $((avail_kib / 1024 / 1024)) GiB is at or above the $((threshold_kib / 1024 / 1024)) GiB threshold; skipping reclaim"
+            exit 0
+          fi
+          echo "free space $((avail_kib / 1024 / 1024)) GiB is below the $((threshold_kib / 1024 / 1024)) GiB threshold; reclaiming"
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL || true
           docker system prune -af || true
-          df -h
+          df -h /
       - name: Install pinned Rust toolchain + ripgrep + acl
         # MUST run BEFORE Swatinem/rust-cache: the cache action reads
         # `rustc --version` to compute its key hash, so the pinned
@@ -207,10 +222,25 @@ jobs:
             experimental-features = nix-command flakes
       - name: Free runner disk for Rust gate
         run: |
-          df -h
+          df -h /
+          avail_kib=$(df -Pk / | awk 'NR == 2 { print $4 }')
+          # Reclaiming the preinstalled Android/dotnet/GHC trees and the Docker
+          # image cache costs real wall time - measured across this workflow's
+          # four Rust-profile jobs it ranged from 43 s to 3 min 48 s, the worst
+          # of which sat on the critical path - and buys about 22 GiB on a
+          # runner image that already arrives with 83-88 GiB free. Nothing in
+          # this gate approaches that, so only pay the cost when an image
+          # actually turns up short. This still fails safe: a fuller image
+          # reclaims exactly as before.
+          threshold_kib=$((70 * 1024 * 1024))
+          if [ "$avail_kib" -ge "$threshold_kib" ]; then
+            echo "free space $((avail_kib / 1024 / 1024)) GiB is at or above the $((threshold_kib / 1024 / 1024)) GiB threshold; skipping reclaim"
+            exit 0
+          fi
+          echo "free space $((avail_kib / 1024 / 1024)) GiB is below the $((threshold_kib / 1024 / 1024)) GiB threshold; reclaiming"
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL || true
           docker system prune -af || true
-          df -h
+          df -h /
       - name: Install pinned Rust toolchain + ripgrep + acl
         # MUST run BEFORE Swatinem/rust-cache: the cache action reads
         # `rustc --version` to compute its key hash, so the pinned
@@ -334,10 +364,25 @@ jobs:
           purge-primary-key: never
       - name: Free runner disk for Rust gate
         run: |
-          df -h
+          df -h /
+          avail_kib=$(df -Pk / | awk 'NR == 2 { print $4 }')
+          # Reclaiming the preinstalled Android/dotnet/GHC trees and the Docker
+          # image cache costs real wall time - measured across this workflow's
+          # four Rust-profile jobs it ranged from 43 s to 3 min 48 s, the worst
+          # of which sat on the critical path - and buys about 22 GiB on a
+          # runner image that already arrives with 83-88 GiB free. Nothing in
+          # this gate approaches that, so only pay the cost when an image
+          # actually turns up short. This still fails safe: a fuller image
+          # reclaims exactly as before.
+          threshold_kib=$((70 * 1024 * 1024))
+          if [ "$avail_kib" -ge "$threshold_kib" ]; then
+            echo "free space $((avail_kib / 1024 / 1024)) GiB is at or above the $((threshold_kib / 1024 / 1024)) GiB threshold; skipping reclaim"
+            exit 0
+          fi
+          echo "free space $((avail_kib / 1024 / 1024)) GiB is below the $((threshold_kib / 1024 / 1024)) GiB threshold; reclaiming"
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL || true
           docker system prune -af || true
-          df -h
+          df -h /
       - name: Install pinned Rust toolchain + ripgrep + acl
         # MUST run BEFORE Swatinem/rust-cache: the cache action reads
         # `rustc --version` to compute its key hash, so the pinned
@@ -406,7 +451,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
-      checks: ${{ steps.list.outputs.checks }}
+      checks: ${{ steps.list.outputs.nixunitchecks }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -419,13 +464,11 @@ jobs:
       - id: list
         name: Enumerate Nix unit checks
         run: |
-          checks=$(nix eval --json .#checks.x86_64-linux --apply '
-            cs: builtins.filter
-              (name: name == "nix-unit" || builtins.substring 0 9 name == "nix-unit-")
-              (builtins.sort builtins.lessThan (builtins.attrNames cs))
-          ') || exit 1
-          echo "discovered nix-unit checks: $checks"
-          echo "checks=$checks" >> "$GITHUB_OUTPUT"
+          # Same partition tool as flake-eval-discover, so this lane is handed
+          # exactly the names that lane drops from its instantiate-only matrix.
+          partition=$(make -s test-flake-partition)
+          echo "$partition"
+          echo "$partition" >> "$GITHUB_OUTPUT"
 
 
   nix-unit-shards:
@@ -480,7 +523,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
-      checks: ${{ steps.list.outputs.checks }}
+      evalchecks: ${{ steps.list.outputs.evalchecks }}
+      realizedchecks: ${{ steps.list.outputs.realizedchecks }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -493,9 +537,13 @@ jobs:
       - id: list
         name: Enumerate flake checks (x86_64-linux)
         run: |
-          checks=$(make -s test-flake-list)
-          echo "discovered checks: $checks"
-          echo "checks=$checks" >> "$GITHUB_OUTPUT"
+          # One enumeration produces every dispatch class, so the names dropped
+          # from the eval matrix are provably the names another lane realizes.
+          # The tool fails closed on an empty enumeration or a realized name
+          # that is not a discovered check.
+          partition=$(make -s test-flake-partition)
+          echo "$partition"
+          echo "$partition" >> "$GITHUB_OUTPUT"
 
 
   flake-eval-x86:
@@ -506,7 +554,7 @@ jobs:
       fail-fast: false
       max-parallel: 4
       matrix:
-        check: ${{ fromJSON(needs.flake-eval-discover.outputs.checks) }}
+        check: ${{ fromJSON(needs.flake-eval-discover.outputs.evalchecks) }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -539,6 +587,33 @@ jobs:
           D2B_FLAKE_CHECK: ${{ matrix.check }}
         run: make test-flake
 
+  flake-eval-x86-realized:
+    needs: [flake-eval-discover]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        check: ${{ fromJSON(needs.flake-eval-discover.outputs.realizedchecks) }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - uses: cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Flake check shard (x86_64-linux, realized)
+        # D2B_FLAKE_CHECK is passed via the step environment, NOT interpolated
+        # into the shell command: a flake check attr name is PR-controlled, so
+        # `D2B_FLAKE_CHECK='${{ matrix.check }}' ...` would be a shell-injection
+        # vector. test-flake.sh additionally rejects names outside [A-Za-z0-9._-].
+        env:
+          D2B_FLAKE_CHECK: ${{ matrix.check }}
+        run: make test-flake
+
   flake-eval-x86-outputs:
     needs: [tier0]
     runs-on: ubuntu-latest
@@ -558,7 +633,7 @@ jobs:
         run: make test-flake
 
   test-flake-x86:
-    needs: [flake-eval-discover, flake-eval-x86, flake-eval-x86-outputs]
+    needs: [flake-eval-discover, flake-eval-x86, flake-eval-x86-realized, flake-eval-x86-outputs]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -570,12 +645,14 @@ jobs:
         run: |
           discover='${{ needs.flake-eval-discover.result }}'
           shards='${{ needs.flake-eval-x86.result }}'
+          realized='${{ needs.flake-eval-x86-realized.result }}'
           outputs='${{ needs.flake-eval-x86-outputs.result }}'
-          echo "flake-eval-discover=$discover  flake-eval-x86=$shards  flake-eval-x86-outputs=$outputs"
-          if [ "$discover" = success ] && [ "$shards" = success ] && [ "$outputs" = success ]; then
+          echo "flake-eval-discover=$discover  flake-eval-x86=$shards  flake-eval-x86-realized=$realized  flake-eval-x86-outputs=$outputs"
+          if [ "$discover" = success ] && [ "$shards" = success ] \
+            && [ "$realized" = success ] && [ "$outputs" = success ]; then
             echo "All x86_64-linux flake checks + outputs passed."
           else
-            echo "::error::x86_64 flake gate failed (discover=$discover, shards=$shards, outputs=$outputs)"
+            echo "::error::x86_64 flake gate failed (discover=$discover, shards=$shards, realized=$realized, outputs=$outputs)"
             exit 1
           fi
 
@@ -651,10 +728,25 @@ jobs:
             experimental-features = nix-command flakes
       - name: Free runner disk for Rust gate
         run: |
-          df -h
+          df -h /
+          avail_kib=$(df -Pk / | awk 'NR == 2 { print $4 }')
+          # Reclaiming the preinstalled Android/dotnet/GHC trees and the Docker
+          # image cache costs real wall time - measured across this workflow's
+          # four Rust-profile jobs it ranged from 43 s to 3 min 48 s, the worst
+          # of which sat on the critical path - and buys about 22 GiB on a
+          # runner image that already arrives with 83-88 GiB free. Nothing in
+          # this gate approaches that, so only pay the cost when an image
+          # actually turns up short. This still fails safe: a fuller image
+          # reclaims exactly as before.
+          threshold_kib=$((70 * 1024 * 1024))
+          if [ "$avail_kib" -ge "$threshold_kib" ]; then
+            echo "free space $((avail_kib / 1024 / 1024)) GiB is at or above the $((threshold_kib / 1024 / 1024)) GiB threshold; skipping reclaim"
+            exit 0
+          fi
+          echo "free space $((avail_kib / 1024 / 1024)) GiB is below the $((threshold_kib / 1024 / 1024)) GiB threshold; reclaiming"
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL || true
           docker system prune -af || true
-          df -h
+          df -h /
       - name: Install pinned Rust toolchain + ripgrep + acl
         # MUST run BEFORE Swatinem/rust-cache: the cache action reads
         # `rustc --version` to compute its key hash, so the pinned
@@ -739,10 +831,25 @@ jobs:
             experimental-features = nix-command flakes
       - name: Free runner disk for Rust gate
         run: |
-          df -h
+          df -h /
+          avail_kib=$(df -Pk / | awk 'NR == 2 { print $4 }')
+          # Reclaiming the preinstalled Android/dotnet/GHC trees and the Docker
+          # image cache costs real wall time - measured across this workflow's
+          # four Rust-profile jobs it ranged from 43 s to 3 min 48 s, the worst
+          # of which sat on the critical path - and buys about 22 GiB on a
+          # runner image that already arrives with 83-88 GiB free. Nothing in
+          # this gate approaches that, so only pay the cost when an image
+          # actually turns up short. This still fails safe: a fuller image
+          # reclaims exactly as before.
+          threshold_kib=$((70 * 1024 * 1024))
+          if [ "$avail_kib" -ge "$threshold_kib" ]; then
+            echo "free space $((avail_kib / 1024 / 1024)) GiB is at or above the $((threshold_kib / 1024 / 1024)) GiB threshold; skipping reclaim"
+            exit 0
+          fi
+          echo "free space $((avail_kib / 1024 / 1024)) GiB is below the $((threshold_kib / 1024 / 1024)) GiB threshold; reclaiming"
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL || true
           docker system prune -af || true
-          df -h
+          df -h /
       - name: Install pinned Rust toolchain + ripgrep + acl
         # MUST run BEFORE Swatinem/rust-cache: the cache action reads
         # `rustc --version` to compute its key hash, so the pinned

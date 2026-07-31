@@ -333,10 +333,25 @@ def rust_job(job: dict[str, Any]) -> str:
 {nix_setup_step(job)}
       - name: Free runner disk for Rust gate
         run: |
-          df -h
+          df -h /
+          avail_kib=$(df -Pk / | awk 'NR == 2 {{ print $4 }}')
+          # Reclaiming the preinstalled Android/dotnet/GHC trees and the Docker
+          # image cache costs real wall time - measured across this workflow's
+          # four Rust-profile jobs it ranged from 43 s to 3 min 48 s, the worst
+          # of which sat on the critical path - and buys about 22 GiB on a
+          # runner image that already arrives with 83-88 GiB free. Nothing in
+          # this gate approaches that, so only pay the cost when an image
+          # actually turns up short. This still fails safe: a fuller image
+          # reclaims exactly as before.
+          threshold_kib=$((70 * 1024 * 1024))
+          if [ "$avail_kib" -ge "$threshold_kib" ]; then
+            echo "free space $((avail_kib / 1024 / 1024)) GiB is at or above the $((threshold_kib / 1024 / 1024)) GiB threshold; skipping reclaim"
+            exit 0
+          fi
+          echo "free space $((avail_kib / 1024 / 1024)) GiB is below the $((threshold_kib / 1024 / 1024)) GiB threshold; reclaiming"
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL || true
           docker system prune -af || true
-          df -h
+          df -h /
       - name: Install pinned Rust toolchain + ripgrep + acl
         # MUST run BEFORE Swatinem/rust-cache: the cache action reads
         # `rustc --version` to compute its key hash, so the pinned
@@ -415,7 +430,7 @@ def nix_unit_discover_job(job: dict[str, Any]) -> str:
 {needs_line(job)}    runs-on: {job["runsOn"]}
     timeout-minutes: {job["timeoutMinutes"]}
     outputs:
-      checks: ${{{{ steps.list.outputs.checks }}}}
+      checks: ${{{{ steps.list.outputs.nixunitchecks }}}}
     steps:
       - uses: {CHECKOUT}
         with:
@@ -424,13 +439,11 @@ def nix_unit_discover_job(job: dict[str, Any]) -> str:
       - id: list
         name: {job["displayName"]}
         run: |
-          checks=$(nix eval --json .#checks.x86_64-linux --apply '
-            cs: builtins.filter
-              (name: name == "nix-unit" || builtins.substring 0 9 name == "nix-unit-")
-              (builtins.sort builtins.lessThan (builtins.attrNames cs))
-          ') || exit 1
-          echo "discovered nix-unit checks: $checks"
-          echo "checks=$checks" >> "$GITHUB_OUTPUT"
+          # Same partition tool as flake-eval-discover, so this lane is handed
+          # exactly the names that lane drops from its instantiate-only matrix.
+          partition=$(make -s test-flake-partition)
+          echo "$partition"
+          echo "$partition" >> "$GITHUB_OUTPUT"
 """
 
 
@@ -485,7 +498,8 @@ def flake_discover_job(job: dict[str, Any]) -> str:
 {needs_line(job)}    runs-on: {job["runsOn"]}
     timeout-minutes: {job["timeoutMinutes"]}
     outputs:
-      checks: ${{{{ steps.list.outputs.checks }}}}
+      evalchecks: ${{{{ steps.list.outputs.evalchecks }}}}
+      realizedchecks: ${{{{ steps.list.outputs.realizedchecks }}}}
     steps:
       - uses: {CHECKOUT}
         with:
@@ -494,9 +508,13 @@ def flake_discover_job(job: dict[str, Any]) -> str:
       - id: list
         name: {job["displayName"]}
         run: |
-          checks=$(make -s test-flake-list)
-          echo "discovered checks: $checks"
-          echo "checks=$checks" >> "$GITHUB_OUTPUT"
+          # One enumeration produces every dispatch class, so the names dropped
+          # from the eval matrix are provably the names another lane realizes.
+          # The tool fails closed on an empty enumeration or a realized name
+          # that is not a discovered check.
+          partition=$(make -s test-flake-partition)
+          echo "$partition"
+          echo "$partition" >> "$GITHUB_OUTPUT"
 """
 
 
@@ -508,7 +526,7 @@ def flake_x86_shards_job(job: dict[str, Any]) -> str:
       fail-fast: false
       max-parallel: {job["maxParallel"]}
       matrix:
-        check: ${{{{ fromJSON(needs.flake-eval-discover.outputs.checks) }}}}
+        check: ${{{{ fromJSON(needs.flake-eval-discover.outputs.evalchecks) }}}}
     steps:
       - uses: {CHECKOUT}
         with:
@@ -528,6 +546,42 @@ def flake_x86_shards_job(job: dict[str, Any]) -> str:
 {nix_setup_step(job, MATRIX_CHECK_SCOPE)}
       - name: Install flake shard diagnostics
         run: sudo apt-get update && sudo apt-get install -y gdb
+      - name: {job["displayName"]}
+        # D2B_FLAKE_CHECK is passed via the step environment, NOT interpolated
+        # into the shell command: a flake check attr name is PR-controlled, so
+        # `D2B_FLAKE_CHECK='${{{{ matrix.check }}}}' ...` would be a shell-injection
+        # vector. test-flake.sh additionally rejects names outside [A-Za-z0-9._-].
+        env:
+          D2B_FLAKE_CHECK: ${{{{ matrix.check }}}}
+        run: make test-flake"""
+
+
+def flake_x86_realized_job(job: dict[str, Any]) -> str:
+    """Renders the lane for flake checks whose shard builds rather than evaluates.
+
+    These are minutes-long where an instantiate-only shard is seconds, so they
+    get their own matrix instead of a slot in the bounded eval matrix. Measured
+    on the run that motivated this split: the single realized check ran 15.9
+    min but was dispatched last, so it did not start until 12.4 min into the
+    run and set a ~29 min critical path on its own.
+
+    No gdb step here. The eval lane installs it for the segfault retry path in
+    test-flake.sh, and that path is unreachable for a realized shard - those
+    fail hard on any nonzero status instead of retrying.
+    """
+    return f"""  {job["ciJobId"]}:
+{needs_line(job)}    runs-on: {job["runsOn"]}
+    timeout-minutes: {job["timeoutMinutes"]}
+    strategy:
+      fail-fast: false
+      max-parallel: {job["maxParallel"]}
+      matrix:
+        check: ${{{{ fromJSON(needs.flake-eval-discover.outputs.realizedchecks) }}}}
+    steps:
+      - uses: {CHECKOUT}
+        with:
+          persist-credentials: false
+{nix_setup_step(job, MATRIX_CHECK_SCOPE)}
       - name: {job["displayName"]}
         # D2B_FLAKE_CHECK is passed via the step environment, NOT interpolated
         # into the shell command: a flake check attr name is PR-controlled, so
@@ -567,12 +621,14 @@ def flake_x86_rollup_job(job: dict[str, Any]) -> str:
         run: |
           discover='${{{{ needs.flake-eval-discover.result }}}}'
           shards='${{{{ needs.flake-eval-x86.result }}}}'
+          realized='${{{{ needs.flake-eval-x86-realized.result }}}}'
           outputs='${{{{ needs.flake-eval-x86-outputs.result }}}}'
-          echo "flake-eval-discover=$discover  flake-eval-x86=$shards  flake-eval-x86-outputs=$outputs"
-          if [ "$discover" = success ] && [ "$shards" = success ] && [ "$outputs" = success ]; then
+          echo "flake-eval-discover=$discover  flake-eval-x86=$shards  flake-eval-x86-realized=$realized  flake-eval-x86-outputs=$outputs"
+          if [ "$discover" = success ] && [ "$shards" = success ] \\
+            && [ "$realized" = success ] && [ "$outputs" = success ]; then
             echo "All x86_64-linux flake checks + outputs passed."
           else
-            echo "::error::x86_64 flake gate failed (discover=$discover, shards=$shards, outputs=$outputs)"
+            echo "::error::x86_64 flake gate failed (discover=$discover, shards=$shards, realized=$realized, outputs=$outputs)"
             exit 1
           fi"""
 
@@ -682,6 +738,7 @@ RENDERERS = {
     "nix-unit-rollup": nix_unit_rollup_job,
     "flake-discover": flake_discover_job,
     "flake-x86-shards": flake_x86_shards_job,
+    "flake-x86-realized": flake_x86_realized_job,
     "flake-x86-outputs": flake_x86_outputs_job,
     "flake-x86-rollup": flake_x86_rollup_job,
     "flake-aarch64-smoke": flake_aarch64_smoke_job,

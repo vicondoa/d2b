@@ -246,7 +246,10 @@ set -euo pipefail
             workflow,
         )
         self.assertIn("D2B_NIX_UNIT_CHECK: ${{ matrix.check }}", workflow)
-        self.assertIn("          ') || exit 1\n          echo \"discovered nix-unit checks", workflow)
+        self.assertIn(
+            "checks: ${{ steps.list.outputs.nixunitchecks }}",
+            workflow,
+        )
         self.assertEqual(manifest["jobs"]["nix-unit-shards"]["maxParallel"], 4)
         self.assertIn("      max-parallel: 4", workflow)
         self.assertIn('D2B_NIX_UNIT_JOBS: "1"', workflow)
@@ -278,11 +281,84 @@ set -euo pipefail
         self.assertIn("not binary(video_binary_contract)", driver)
         flake = (ROOT / "flake.nix").read_text(encoding="utf-8")
         self.assertIn("video-binary-contract =", flake)
-        self.assertIn('D2B_FLAKE_CHECK" = video-binary-contract', (ROOT / "tests" / "test-flake.sh").read_text(encoding="utf-8"))
+        self.assertIn(
+            'D2B_FLAKE_REALIZED_CHECKS="video-binary-contract"',
+            (ROOT / "tests" / "tools" / "flake-check-classes.sh").read_text(encoding="utf-8"),
+        )
+        self.assertIn(
+            'd2b_flake_check_is_realized "$D2B_FLAKE_CHECK"',
+            (ROOT / "tests" / "test-flake.sh").read_text(encoding="utf-8"),
+        )
         self.assertIn('nix build --no-link --print-out-paths', (ROOT / "tests" / "test-flake.sh").read_text(encoding="utf-8"))
         self.assertNotIn("checks.${contract_system}.fixture-smoke", driver)
         self.assertIn("nix eval", fixture_driver)
         self.assertNotIn("nix build", fixture_driver)
+
+    def test_realized_flake_check_gets_its_own_unblocked_lane(self) -> None:
+        manifest = load_layer1_jobs().load_manifest()
+        workflow = load_layer1_jobs().render_workflow(manifest)
+
+        # The realized lane must not share the bounded eval matrix: dispatched
+        # there it queues behind two dozen sub-minute shards and sets the whole
+        # run's critical path.
+        self.assertEqual(
+            manifest["jobs"]["flake-eval-x86-realized"]["needs"],
+            ["flake-eval-discover"],
+        )
+        self.assertIn(
+            "check: ${{ fromJSON(needs.flake-eval-discover.outputs.realizedchecks) }}",
+            workflow,
+        )
+        self.assertIn(
+            "check: ${{ fromJSON(needs.flake-eval-discover.outputs.evalchecks) }}",
+            workflow,
+        )
+        # Both lanes stay required through the stable rollup context.
+        self.assertIn(
+            "flake-eval-x86-realized",
+            manifest["jobs"]["test-flake-x86"]["needs"],
+        )
+        self.assertIn("realized='${{ needs.flake-eval-x86-realized.result }}'", workflow)
+        self.assertIn('[ "$realized" = success ]', workflow)
+
+    def test_flake_check_partition_is_total_and_single_sourced(self) -> None:
+        partition = (
+            ROOT / "tests" / "tools" / "flake-check-partition.sh"
+        ).read_text(encoding="utf-8")
+        classes = (
+            ROOT / "tests" / "tools" / "flake-check-classes.sh"
+        ).read_text(encoding="utf-8")
+        workflow = load_layer1_jobs().render_workflow(load_layer1_jobs().load_manifest())
+
+        # One classifier, consumed by the dispatcher and by the driver that
+        # decides build-versus-instantiate, so a shard cannot be routed to the
+        # realized lane and then merely evaluated there.
+        self.assertIn("flake-check-classes.sh", partition)
+        self.assertIn("d2b_flake_check_is_realized", classes)
+        self.assertIn("d2b_flake_check_is_nix_unit", classes)
+
+        # Fail closed rather than emitting empty matrices, which GitHub would
+        # report as a vacuously green flake gate.
+        self.assertIn("enumerated zero checks", partition)
+        self.assertIn("is not a discovered flake check", partition)
+        self.assertIn("partitioned $partitioned of $total checks", partition)
+
+        # Both discovery jobs read the same partition, so the names dropped
+        # from the eval matrix are exactly the names the Nix-unit lane runs.
+        self.assertEqual(workflow.count("partition=$(make -s test-flake-partition)"), 2)
+
+    def test_disk_reclaim_is_conditional_but_still_fails_safe(self) -> None:
+        workflow = load_layer1_jobs().render_workflow(load_layer1_jobs().load_manifest())
+
+        self.assertIn("threshold_kib=$((70 * 1024 * 1024))", workflow)
+        self.assertIn('if [ "$avail_kib" -ge "$threshold_kib" ]; then', workflow)
+        # The reclaim itself must survive: a fuller runner image still pays it.
+        self.assertIn(
+            "sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc "
+            "/usr/local/.ghcup /opt/hostedtoolcache/CodeQL || true",
+            workflow,
+        )
+        self.assertIn("docker system prune -af || true", workflow)
 
     def test_api_surface_json_gate_is_enforcing_and_cacheable(self) -> None:
         driver = (ROOT / "tests" / "test-rust.sh").read_text(encoding="utf-8")

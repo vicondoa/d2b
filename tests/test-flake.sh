@@ -24,6 +24,8 @@ export ROOT D2B_LOG
 
 # shellcheck disable=SC1091
 . "$ROOT/tests/lib.sh"
+# shellcheck source=tests/tools/flake-check-classes.sh
+. "$ROOT/tests/tools/flake-check-classes.sh"
 
 export NIX_CONFIG="${NIX_CONFIG:-experimental-features = nix-command flakes}"
 cd "$ROOT"
@@ -245,7 +247,7 @@ if [ -n "${D2B_FLAKE_CHECK:-}" ]; then
       ;;
   esac
   native=$(nix eval --raw --impure --expr builtins.currentSystem 2>/dev/null || echo "native")
-  if [ "$D2B_FLAKE_CHECK" = video-binary-contract ]; then
+  if d2b_flake_check_is_realized "$D2B_FLAKE_CHECK"; then
     log "--> flake check shard: checks.$native.${D2B_FLAKE_CHECK} (realized)"
     set +e
     nix build --no-link --print-out-paths "${flake_ref}#checks.${native}.${D2B_FLAKE_CHECK}" >/dev/null
@@ -260,7 +262,7 @@ if [ -n "${D2B_FLAKE_CHECK:-}" ]; then
   fi
   if [ "$rc" -eq 0 ]; then
     ok "flake check shard: ${D2B_FLAKE_CHECK}"
-  elif [ "$D2B_FLAKE_CHECK" = video-binary-contract ]; then
+  elif d2b_flake_check_is_realized "$D2B_FLAKE_CHECK"; then
     fail "realized flake check shard: ${D2B_FLAKE_CHECK} (exit $rc)"
     exit "$rc"
   elif [ "$rc" -eq 139 ]; then
