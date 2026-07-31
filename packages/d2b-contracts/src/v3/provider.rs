@@ -1055,6 +1055,9 @@ impl ComponentDescriptor {
         dependencies: impl IntoIterator<Item = DependencyDeclaration>,
         declares_state_volume: bool,
     ) -> Result<Self, ProviderContractError> {
+        if declares_state_volume {
+            return Err(ProviderContractError::MissingRequiredField);
+        }
         let exported_resource_types: BTreeSet<_> = exported_resource_types.into_iter().collect();
         let exported_methods: BTreeSet<_> = exported_methods.into_iter().collect();
         let allowed_domains: BTreeSet<_> = allowed_domains.into_iter().collect();
@@ -1120,6 +1123,9 @@ impl ComponentDescriptor {
         state_namespaces: impl IntoIterator<Item = ComponentStateNamespace>,
     ) -> Result<Self, ProviderContractError> {
         let state_namespaces: Vec<_> = state_namespaces.into_iter().collect();
+        if state_namespaces.is_empty() && self.declares_state_volume {
+            return Err(ProviderContractError::MissingRequiredField);
+        }
         let mut ids = BTreeSet::new();
         for namespace in &state_namespaces {
             if !ids.insert(namespace.id().clone()) {
@@ -1221,10 +1227,13 @@ impl<'de> Deserialize<'de> for ComponentDescriptor {
             state_namespaces: Vec<ComponentStateNamespace>,
         }
         let wire = Wire::deserialize(deserializer)?;
-        if !wire.state_namespaces.is_empty() && !wire.declares_state_volume {
-            return Err(serde::de::Error::custom(
-                ProviderContractError::ConflictingFields,
-            ));
+        if wire.declares_state_volume != !wire.state_namespaces.is_empty() {
+            let error = if wire.declares_state_volume {
+                ProviderContractError::MissingRequiredField
+            } else {
+                ProviderContractError::ConflictingFields
+            };
+            return Err(serde::de::Error::custom(error));
         }
         Self::new(
             wire.component_id,
@@ -1235,7 +1244,7 @@ impl<'de> Deserialize<'de> for ComponentDescriptor {
             wire.cardinality,
             wire.config_digest,
             wire.dependencies,
-            wire.declares_state_volume,
+            false,
         )
         .and_then(|descriptor| descriptor.with_state_namespaces(wire.state_namespaces))
         .map_err(serde::de::Error::custom)
@@ -1764,6 +1773,9 @@ impl ProviderManifest {
         let mut component_ids = BTreeSet::new();
         let mut owned_types = BTreeSet::new();
         for component in &components {
+            if component.declares_state_volume() != !component.state_namespaces().is_empty() {
+                return Err(ProviderContractError::MissingRequiredField);
+            }
             if !component_ids.insert(component.component_id().clone()) {
                 return Err(ProviderContractError::DuplicateDeclaration);
             }
@@ -2199,6 +2211,55 @@ mod tests {
         let parsed: ComponentDescriptor = serde_json::from_slice(&bytes).unwrap();
         assert!(parsed.state_namespaces().is_empty());
         assert!(!parsed.declares_state_volume());
+    }
+
+    #[test]
+    fn declared_state_volume_requires_at_least_one_namespace() {
+        assert_eq!(
+            ComponentDescriptor::new(
+                BoundedToken::parse("volume-controller").unwrap(),
+                ComponentType::Controller,
+                [ResourceTypeName::parse("Volume").unwrap()],
+                [BoundedToken::parse("assess-update").unwrap()],
+                [ExecutionDomain::System],
+                1,
+                ArtifactDigest::parse(DIGEST_B).unwrap(),
+                [DependencyDeclaration {
+                    alias: DependencyAlias::Volume,
+                    required: true,
+                }],
+                true,
+            ),
+            Err(ProviderContractError::MissingRequiredField)
+        );
+
+        let mut descriptor = controller();
+        descriptor.declares_state_volume = true;
+        assert_eq!(
+            descriptor.clone().with_state_namespaces([]),
+            Err(ProviderContractError::MissingRequiredField)
+        );
+        assert_eq!(
+            ProviderManifest::new(
+                ArtifactId::parse("provider-volume-local").unwrap(),
+                digests(),
+                trusted(),
+                compatibility(),
+                [descriptor.clone()],
+                [binding()],
+                [],
+                UpgradePolicy {
+                    drain_before_upgrade: true,
+                    max_automatic_disposition: UpgradeDisposition::InPlace,
+                    preserves_durable_state: true,
+                },
+            ),
+            Err(ProviderContractError::MissingRequiredField)
+        );
+
+        let mut wire = serde_json::to_value(descriptor).unwrap();
+        wire["stateNamespaces"] = serde_json::json!([]);
+        assert!(serde_json::from_value::<ComponentDescriptor>(wire).is_err());
     }
 
     #[test]

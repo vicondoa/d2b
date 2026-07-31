@@ -484,7 +484,7 @@ pub struct ExternalIpv4Spec {
 }
 
 impl ExternalIpv4Spec {
-    /// Construct IPv4 settings, requiring an address for the static method.
+    /// Construct IPv4 settings, requiring an address and gateway for static.
     pub fn new(
         method: Ipv4Method,
         address: Option<Ipv4Cidr>,
@@ -492,7 +492,7 @@ impl ExternalIpv4Spec {
         dns: Vec<Ipv4Address>,
     ) -> Result<Self, PrimitiveSpecError> {
         match method {
-            Ipv4Method::Static if address.is_none() => {
+            Ipv4Method::Static if address.is_none() || gateway.is_none() => {
                 return Err(PrimitiveSpecError::MissingRequiredField);
             }
             Ipv4Method::Dhcp if address.is_some() || gateway.is_some() || !dns.is_empty() => {
@@ -1837,6 +1837,30 @@ mod tests {
                 Vec::new(),
             )
             .is_ok()
+        );
+    }
+
+    #[test]
+    fn static_external_ipv4_requires_a_gateway() {
+        let address = Ipv4Cidr::parse("192.0.2.8/29").unwrap();
+        assert_eq!(
+            ExternalIpv4Spec::new(Ipv4Method::Static, Some(address.clone()), None, Vec::new()),
+            Err(PrimitiveSpecError::MissingRequiredField)
+        );
+        assert!(
+            ExternalIpv4Spec::new(
+                Ipv4Method::Static,
+                Some(address),
+                Some(Ipv4Address::parse("192.0.2.9").unwrap()),
+                Vec::new(),
+            )
+            .is_ok()
+        );
+        assert!(
+            serde_json::from_slice::<ExternalIpv4Spec>(
+                br#"{"method":"static","address":"192.0.2.8/29"}"#,
+            )
+            .is_err()
         );
     }
 

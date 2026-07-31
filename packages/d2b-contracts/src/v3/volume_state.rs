@@ -11,7 +11,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use super::{
     identity::{SchemaFingerprint, Timestamp},
-    resource_schema::{CanonicalJsonError, SchemaVersion, canonical_digest, canonical_json_bytes},
+    resource_schema::{CanonicalJsonError, SchemaVersion, canonical_json_bytes},
 };
 
 /// Largest component generation retained from the atomic-state contract.
@@ -38,6 +38,8 @@ pub enum VolumeStateError {
     QuotaOutOfRange,
     /// The canonical state document exceeded its retained byte bound.
     DocumentTooLarge,
+    /// No Provider payload state digest domain has been frozen.
+    DigestDomainUnavailable,
 }
 
 impl VolumeStateError {
@@ -50,6 +52,7 @@ impl VolumeStateError {
             Self::DigestMismatch => "volume-state-digest-mismatch",
             Self::QuotaOutOfRange => "volume-state-quota-out-of-range",
             Self::DocumentTooLarge => "volume-state-document-too-large",
+            Self::DigestDomainUnavailable => "volume-state-digest-domain-unavailable",
         }
     }
 }
@@ -467,7 +470,7 @@ impl core::fmt::Debug for VolumeStateStatus {
 ///
 /// `generation` is the component's optimistic state counter, not a Zone
 /// resource generation. The digest covers only canonical payload bytes under
-/// the trusted domain tag supplied by the owning schema contract.
+/// a domain tag frozen by the resource-plane digest contract.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct StateEnvelope<T> {
@@ -516,18 +519,14 @@ impl<T> StateEnvelope<T> {
 
 impl<T: Serialize> StateEnvelope<T> {
     /// Canonicalize a payload and construct its generation-bound envelope.
-    pub fn from_payload(
-        domain_tag: &str,
-        generation: u64,
-        payload: T,
-    ) -> Result<Self, VolumeStateError> {
-        let digest = canonical_state_payload_digest(domain_tag, &payload)?;
+    pub fn from_payload(generation: u64, payload: T) -> Result<Self, VolumeStateError> {
+        let digest = canonical_state_payload_digest(&payload)?;
         Self::new(generation, digest, payload)
     }
 
     /// Verify that the stored digest covers the canonical payload bytes.
-    pub fn validate_digest(&self, domain_tag: &str) -> Result<(), VolumeStateError> {
-        if canonical_state_payload_digest(domain_tag, &self.payload)? == self.digest {
+    pub fn validate_digest(&self) -> Result<(), VolumeStateError> {
+        if canonical_state_payload_digest(&self.payload)? == self.digest {
             Ok(())
         } else {
             Err(VolumeStateError::DigestMismatch)
@@ -567,13 +566,11 @@ pub fn canonical_state_payload_bytes<T: Serialize>(
     Ok(bytes)
 }
 
-/// Digest canonical payload bytes under a trusted schema-specific domain tag.
+/// Refuse to digest state until a Provider payload state domain is frozen.
 pub fn canonical_state_payload_digest<T: Serialize>(
-    domain_tag: &str,
-    payload: &T,
+    _payload: &T,
 ) -> Result<StateDigest, VolumeStateError> {
-    let bytes = canonical_state_payload_bytes(payload)?;
-    StateDigest::parse(canonical_digest(domain_tag, &bytes))
+    Err(VolumeStateError::DigestDomainUnavailable)
 }
 
 fn validate_generation(generation: u64) -> Result<(), VolumeStateError> {
@@ -590,7 +587,6 @@ mod tests {
     use serde_json::json;
 
     const DIGEST: &str = "sha256:0000000000000000000000000000000000000000000000000000000000000001";
-    const STATE_DOMAIN: &str = "test:provider-state:payload";
     const SCHEMA_VECTOR: &[u8] = br#"{"migrationPolicy":"pre-launch-required","schemaDigest":"sha256:0000000000000000000000000000000000000000000000000000000000000001","schemaId":"example-provider.d2bus.org/controller/main-state","schemaVersion":"1.0"}"#;
     const STATUS_VECTOR: &[u8] = br#"{"installedSchemaVersion":"1.0","lastMigrationAt":"2026-07-22T00:00:00.000Z","markerStatus":"verified","quotaUsage":{"inodeCount":3,"usedBytes":42},"sealingStatus":"sealed","stateSchemaPhase":"current"}"#;
 
@@ -653,39 +649,33 @@ mod tests {
     }
 
     #[test]
-    fn state_envelope_digest_binds_canonical_payload_and_carries_generation() {
+    fn state_payload_digesting_fails_closed_without_a_frozen_domain() {
         let payload = json!({"checkpoint": 7, "ready": true});
-        let envelope = StateEnvelope::from_payload(STATE_DOMAIN, 4, payload).unwrap();
-        envelope.validate_digest(STATE_DOMAIN).unwrap();
-        assert_eq!(envelope.next_generation().unwrap(), 5);
-
-        let bytes = canonical_json_bytes(&envelope).unwrap();
-        let decoded: StateEnvelope<serde_json::Value> = serde_json::from_slice(&bytes).unwrap();
-        decoded.validate_digest(STATE_DOMAIN).unwrap();
-        assert_eq!(decoded, envelope);
-
-        let mut changed = decoded;
-        changed.payload = json!({"checkpoint": 8, "ready": true});
         assert_eq!(
-            changed.validate_digest(STATE_DOMAIN),
-            Err(VolumeStateError::DigestMismatch)
+            canonical_state_payload_digest(&payload),
+            Err(VolumeStateError::DigestDomainUnavailable)
         );
         assert_eq!(
-            changed.validate_digest("test:other-domain"),
-            Err(VolumeStateError::DigestMismatch)
+            StateEnvelope::from_payload(4, payload.clone()),
+            Err(VolumeStateError::DigestDomainUnavailable)
+        );
+        let envelope = StateEnvelope::new(4, StateDigest::parse(DIGEST).unwrap(), payload).unwrap();
+        assert_eq!(envelope.next_generation().unwrap(), 5);
+        assert_eq!(
+            envelope.validate_digest(),
+            Err(VolumeStateError::DigestDomainUnavailable)
         );
     }
 
     #[test]
     fn state_envelope_rejects_invalid_generations_and_redacts_payload() {
-        let digest =
-            canonical_state_payload_digest(STATE_DOMAIN, &json!({"secret": "canary"})).unwrap();
+        let digest = StateDigest::parse(DIGEST).unwrap();
         assert!(StateEnvelope::new(0, digest.clone(), json!({})).is_err());
         assert!(StateEnvelope::new(MAX_STATE_GENERATION + 1, digest, json!({})).is_err());
 
-        let envelope = StateEnvelope::from_payload(
-            STATE_DOMAIN,
+        let envelope = StateEnvelope::new(
             1,
+            StateDigest::parse(DIGEST).unwrap(),
             json!({"secret": "caller-supplied-canary"}),
         )
         .unwrap();
