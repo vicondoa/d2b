@@ -161,6 +161,15 @@ function rolesLiteral(roles) {
   return `const ROLES = [\n  ${roles.map((r) => `"${r}"`).join(", ")},\n];`;
 }
 
+// Append a row to a memory register in the fixture. Both register cases below
+// work by appending rather than by rewriting an existing row, so the case does
+// not depend on what the repo's registers happen to contain today.
+function appendRegisterRow(dir, reg, row) {
+  const path = join(dir, ".specify", "memory", reg);
+  const src = readFileSync(path, "utf8");
+  writeFileSync(path, `${src.trimEnd()}\n${row}\n`);
+}
+
 // A negative case asserts both a nonzero exit and a substring from the roster
 // guard itself. Exit status alone would pass if the gate failed for some
 // unrelated reason, which is precisely how a guard that no longer fires hides.
@@ -203,6 +212,36 @@ const CASES = [
     mutate: (dir) => setRolesBlock(dir, "const ROLES = PANEL_SEATS.slice();"),
     expectExit: 1,
     expectText: "cannot parse ROLES",
+  },
+  // The registers do not share a column shape. deferred-work.md carries a
+  // trailing Ref column, so a guard that reads the last cell reads the ref.
+  // The ref below is a legal wave token, which is exactly how that guard
+  // passes a row whose disposition is nonsense.
+  {
+    name: "a bogus disposition is rejected even behind a trailing Ref column",
+    mutate: (dir) =>
+      appendRegisterRow(
+        dir,
+        "deferred-work.md",
+        "| copilotw6 | test | 2026-07-31 | fixture row | notavocabularyterm | copilotw6 |",
+      ),
+    expectExit: 1,
+    expectText: "is not in the closed set",
+  },
+  // A statement legitimately quotes a shell pipeline, and the escaped pipe is
+  // an extra cell to a naive split. The Recurrence value below is a legal
+  // disposition, so a shifted read lands on it and the bogus disposition in
+  // the next column goes unseen.
+  {
+    name: "a bogus disposition is rejected in a row whose statement escapes a pipe",
+    mutate: (dir) =>
+      appendRegisterRow(
+        dir,
+        "friction-log.md",
+        "| copilotw6 | test | 2026-07-31 | a \\| b | open | notavocabularyterm |",
+      ),
+    expectExit: 1,
+    expectText: "is not in the closed set",
   },
 ];
 

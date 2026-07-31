@@ -469,11 +469,30 @@ for (const reg of ["friction-log.md", "deferred-work.md", "engineering-debt.md"]
   const path = join(memoryDir, reg);
   if (!existsSync(path)) continue;
   const lines = readFileSync(path, "utf8").split("\n");
+  // Locate the disposition column by its header rather than assuming it is
+  // last. The registers do not share a shape: deferred-work.md carries a
+  // trailing Ref column, so reading the last cell read the ref, found it
+  // empty, and validated nothing. A guard that silently checks the wrong
+  // column is worse than no guard, because the register looks covered.
+  let dispositionIdx = -1;
   for (const [i, line] of lines.entries()) {
     if (!line.trim().startsWith("|")) continue;
-    const cells = line.split("|").slice(1, -1).map((c) => c.trim());
+    // Split on unescaped pipes. A statement legitimately contains `\|` when it
+    // quotes a shell pipeline, and a naive split turns that row into an extra
+    // cell, shifting every column after it.
+    const cells = line.split(/(?<!\\)\|/).slice(1, -1).map((c) => c.trim().replace(/\\\|/g, "|"));
     if (cells.length < 4) continue;
-    if (/^-+$/.test(cells[0]) || cells[0].toLowerCase() === "wave") continue;
+    if (/^-+$/.test(cells[0])) continue;
+    if (cells[0].toLowerCase() === "wave") {
+      dispositionIdx = cells.findIndex((c) => c.toLowerCase() === "disposition");
+      if (dispositionIdx < 0) {
+        fail(
+          `.specify/memory/${reg}:${i + 1}: the header row names no Disposition ` +
+          `column, so no row in this register can be validated.`,
+        );
+      }
+      continue;
+    }
     const wave = cells[0].replace(/`/g, "");
     if (wave && !ORIGIN_WAVE.test(wave)) {
       fail(
@@ -490,7 +509,8 @@ for (const reg of ["friction-log.md", "deferred-work.md", "engineering-debt.md"]
         `with its siblings, so the three-wave escalation rule stops counting it.`,
       );
     }
-    const disposition = cells[cells.length - 1].replace(/`/g, "");
+    const disposition = (cells[dispositionIdx >= 0 ? dispositionIdx : cells.length - 1] ?? "")
+      .replace(/`/g, "");
     // A folded row records its target wave in the disposition column instead
     // of a vocabulary term. Both wave spellings are legal there: the legacy
     // closed set W0..W8, and the qualified token this repo now prefers. The
