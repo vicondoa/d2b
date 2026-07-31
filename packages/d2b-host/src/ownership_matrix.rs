@@ -16,7 +16,7 @@
 //!
 //! 1. NEVER recurses into the `store` subdirectory regardless of the
 //!    declared `recursive` field. The carve-out is asserted in
-//!    [`should_recurse`] and unit-tested in [`tests`].
+//!    [`should_recurse`] and covered by unit tests.
 //! 2. Performs only `stat(2)` + comparison; it does NOT mutate
 //!    ownership/mode. Mutation belongs to the broker's
 //!    host-prepare dispatch surface (audited path).

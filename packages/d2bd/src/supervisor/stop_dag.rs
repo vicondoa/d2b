@@ -6,7 +6,7 @@
 //! exposed by [`BundleResolver`], compares it against an
 //! [`ObservedHostState`] snapshot (probed from the live host or, in
 //! tests, synthesized), and emits a typed [`ReconcileReport`] that
-//! enumerates the [existing] broker ops the supervisor must dispatch
+//! enumerates the existing broker ops the supervisor must dispatch
 //! to converge.
 //!
 //! The planner deliberately does NOT add new broker wire variants: every

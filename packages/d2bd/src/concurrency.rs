@@ -4,16 +4,16 @@
 //! hermetically-testable types so the accept-loop and dispatch paths in
 //! `lib.rs` stay thin:
 //!
-//! 1. [`ConnSemaphore`] - a non-blocking, bounded admission gate for
+//! 1. `ConnSemaphore` - a non-blocking, bounded admission gate for
 //!    in-flight connection-handler threads. The accept loop performs a
-//!    NON-blocking [`ConnSemaphore::try_acquire`]; on a miss it refuses
+//!    NON-blocking `ConnSemaphore::try_acquire`; on a miss it refuses
 //!    the connection immediately (typed-busy) instead of ever blocking
-//!    `accept()`. The returned [`ConnPermit`] is an RAII token that is
+//!    `accept()`. The returned `ConnPermit` is an RAII token that is
 //!    moved INTO the handler thread (and, for an attached exec session,
 //!    into the owner closure) so the slot is released exactly when the
 //!    handler - not the accept loop - finishes.
 //!
-//! 2. [`OpLockManager`] - per-VM and global in-process locks so a
+//! 2. `OpLockManager` - per-VM and global in-process locks so a
 //!    mutating lifecycle op (vm start/stop/restart, …) cannot race
 //!    another op on the same VM, and a global op (host prepare, keys
 //!    rotate, …) is mutually exclusive with every per-VM op. Read-only

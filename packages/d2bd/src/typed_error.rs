@@ -120,7 +120,7 @@ pub enum GuestControlExecErrorKind {
     ExecNotFound,
     /// The requested detached exec id has expired or been reaped.
     ExecExpired,
-    /// The command failed guest-side argv[0] validation.
+    /// The command failed guest-side `argv[0]` validation.
     InvalidProgram,
     /// A deterministic guest-side op rejection (exec already exited, etc.).
     GuestError,

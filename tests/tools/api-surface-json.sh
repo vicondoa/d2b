@@ -27,7 +27,8 @@ if ! command -v rustup >/dev/null 2>&1; then
   exit 1
 fi
 
-rustup toolchain install "$pin" --profile minimal
+rustup set profile minimal >/dev/null
+rustup toolchain install "$pin" >/dev/null
 
 scratch=$(d2b_mktemp ".d2b-api-surface.XXXXXX")
 public_dir="$scratch/public"
@@ -50,7 +51,7 @@ log "--> rustdoc JSON public workspace census ($pin)"
     RUSTC_WRAPPER= \
     RUSTC_WORKSPACE_WRAPPER= \
     CARGO_BUILD_RUSTC_WRAPPER= \
-    RUSTDOCFLAGS="-Z unstable-options --output-format json" \
+    RUSTDOCFLAGS="-D warnings -Z unstable-options --output-format json" \
     cargo "+$pin" doc --locked --workspace --lib --no-deps \
       --target-dir "$public_target"
 )
@@ -63,7 +64,7 @@ log "--> rustdoc JSON private + hidden workspace census ($pin)"
     RUSTC_WRAPPER= \
     RUSTC_WORKSPACE_WRAPPER= \
     CARGO_BUILD_RUSTC_WRAPPER= \
-    RUSTDOCFLAGS="-Z unstable-options --output-format json --document-private-items --document-hidden-items" \
+    RUSTDOCFLAGS="-D warnings -Z unstable-options --output-format json --document-private-items --document-hidden-items" \
     cargo "+$pin" doc --locked --workspace --lib --no-deps \
       --target-dir "$private_target"
 )

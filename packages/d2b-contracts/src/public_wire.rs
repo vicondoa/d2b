@@ -1865,8 +1865,9 @@ pub enum AudioEnforcementPosture {
 
 /// Low-cardinality error kind for a per-VM audio failure.
 ///
-/// Used in [`AudioVmError`] and [`VmAudioErrorOutputV1`](crate::VmAudioErrorOutputV1)
-/// so that both the wire protocol and the generated CLI schema carry enum
+/// Used in [`AudioVmError`] and
+/// [`VmAudioErrorOutputV1`](crate::cli_output::VmAudioErrorOutputV1) so that both
+/// the wire protocol and the generated CLI schema carry enum
 /// constraints rather than a free-form string.
 ///
 /// Serde names match the canonical wire strings exactly.

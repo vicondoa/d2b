@@ -1247,7 +1247,7 @@ fn ymd_from_unix(unix: i64) -> (i32, u32, u32) {
 /// hard-coding `None`.
 ///
 /// File format: `{"apiReady": <value>}` where `<value>` mirrors the
-/// [`supervisor::dag::ApiReadyState`] wire encoding:
+/// [`crate::supervisor::dag::ApiReadyState`] wire encoding:
 /// - `"yes"` | `"pending"` | `"timeout"` for simple states
 /// - `{"error": "<reason>"}` for error states
 ///

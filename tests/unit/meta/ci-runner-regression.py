@@ -286,7 +286,10 @@ set -euo pipefail
 
         self.assertIn('bash "$ROOT/tests/tools/api-surface-json.sh"', driver)
         self.assertNotIn("D2B_SKIP_API_SURFACE", driver)
+        self.assertIn('export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-D warnings"', driver)
+        self.assertIn('export RUSTDOCFLAGS="${RUSTDOCFLAGS:+$RUSTDOCFLAGS }-D warnings"', driver)
         self.assertIn("nightly-2026-02-16", api_driver)
+        self.assertEqual(api_driver.count('RUSTDOCFLAGS="-D warnings '), 2)
         self.assertIn("--document-hidden-items", api_driver)
         self.assertIn("--document-private-items", api_driver)
         self.assertIn("--workspace --lib --no-deps", api_driver)

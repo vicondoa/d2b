@@ -13,7 +13,7 @@
 //! * [`QemuAudioController`] - offline-only enforcement for qemu-media VMs.
 //!   Writing the state file IS the policy for qemu-media; no live runtime
 //!   enforcement exists and no guestd call is made.
-//! * [`FakeHostController`] - test-only injectable with configurable results.
+//! * `FakeHostController` - test-only injectable with configurable results.
 //!   Gated behind `#[cfg(test)]` so it never compiles into production builds.
 //!
 //! ## PipeWire node targeting
@@ -65,7 +65,7 @@ pub trait HostAudioController {
 
     /// Enforce a volume/gain level change on a running VM's audio node.
     ///
-    /// Same success/failure contract as [`enforce_grant`].
+    /// Same success/failure contract as [`Self::enforce_grant`].
     fn enforce_level(
         &self,
         vm_name: &str,

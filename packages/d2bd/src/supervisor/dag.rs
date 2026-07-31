@@ -45,7 +45,7 @@ pub enum NodeOutcome {
     Failed { reason: String },
     /// Node was reached but skipped because a predecessor failed and
     /// the executor is unwinding. Recorded so the caller can render
-    /// "skipped because <node-id> failed" alongside the failure.
+    /// "skipped because `<node-id>` failed" alongside the failure.
     Skipped { predecessor: NodeId },
 }
 

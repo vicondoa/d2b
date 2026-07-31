@@ -11,7 +11,7 @@
 //! - [`ApiService`] - the transport-neutral CLI-facing daemon API surface.
 //! - [`TargetResolver`] - resolves a realm-path target to a node/provider.
 //! - [`PeerOperationRouter`] - binds the codec-neutral
-//!   [`OperationRouter`](d2b_realm_router::OperationRouter). It
+//!   [`OperationRouter`]. It
 //!   holds a **shared** node/gateway-scoped router (see [`SharedRouter`]) so
 //!   reconnecting peer sessions share one dedup owner; a fresh per-session
 //!   router would let reconnect retries bypass dedup and double-dispatch.

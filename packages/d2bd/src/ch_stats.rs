@@ -134,7 +134,7 @@ impl ChStatsSource for UnixSocketChStatsSource {
 
 /// Render the full Prometheus text-format block for a set of VMs.
 /// The output is appended to the daemon's `/metrics` response by
-/// [`metrics_handler_with_ch_stats`]. Output is deterministic:
+/// [`crate::metrics::metrics_handler_with_ch_stats`]. Output is deterministic:
 /// VMs are emitted in the slice order supplied by the caller, and
 /// the metric families are emitted in a fixed sequence.
 pub fn render_ch_stats(

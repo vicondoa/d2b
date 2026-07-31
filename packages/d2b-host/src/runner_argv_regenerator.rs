@@ -227,8 +227,8 @@ pub fn regenerate_argv(
     }
 }
 
-/// Replace argv[0] with the resolved-intent's arg0 (`microvm@<vm>`
-/// or similar). Per-role generators emit argv[0] = binary_path for
+/// Replace `argv[0]` with the resolved-intent's arg0 (`microvm@<vm>`
+/// or similar). Per-role generators emit `argv[0] = binary_path` for
 /// execve(2) parity; SpawnRunnerPlanInput expects the process title.
 fn replace_arg0(argv: &mut [String], intent: &ResolvedRunnerIntent) {
     if argv.is_empty() {

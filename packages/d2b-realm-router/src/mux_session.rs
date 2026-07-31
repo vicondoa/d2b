@@ -1,6 +1,6 @@
 //! Post-handshake stream-mux driver (ADR 0032).
 //!
-//! [`PeerSession`](crate::PeerSession) proves that the byte transport completed
+//! [`crate::PeerSession`] proves that the byte transport completed
 //! protocol/codec negotiation. [`MuxSession`] is the next boundary: every
 //! post-handshake stream frame is applied to the pure
 //! [`d2b_realm_core::StreamMux`] state machine before it is exposed

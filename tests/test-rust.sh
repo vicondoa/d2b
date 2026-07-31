@@ -96,6 +96,13 @@ workspace_test_excludes=(--exclude d2b-contract-tests)
 
 d2b_activate_rust_toolchain_path || true
 export RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-$pinned_channel}"
+# No Rust compiler warning is advisory in this gate. Clippy already receives
+# `-D warnings`; this also covers cargo check/build/test, doctests, nextest,
+# standalone workspaces, and build scripts. Compile-fail fixtures replace this
+# inherited value with their exact mutation flags so expected diagnostics stay
+# attributable to the capability seal they exercise.
+export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-D warnings"
+export RUSTDOCFLAGS="${RUSTDOCFLAGS:+$RUSTDOCFLAGS }-D warnings"
 
 if [ -z "${D2B_RUST_GATE_IN_NIX_SHELL:-}" ] && ! command -v rustup >/dev/null 2>&1; then
   if ! command -v nix >/dev/null 2>&1; then
