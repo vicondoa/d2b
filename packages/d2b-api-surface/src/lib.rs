@@ -1238,19 +1238,8 @@ fn capability_public_api(
                     error_label::PUBLIC_API_INCOMPLETE,
                 )
             })?;
-        let mut public_references = BTreeSet::new();
-        visit_item_signatures(&item.inner, &mut public_references);
-        let mut signature_capability = false;
-        for id in public_references {
-            if let Some(identity) = resolve_reference(
-                &loaded.metadata.crate_name,
-                loaded.public_local_crate_id,
-                &loaded.public_krate,
-                id,
-            )? {
-                signature_capability |= capability_types.contains(&identity);
-            }
-        }
+        let signature_capability =
+            item_signature_references_capability(loaded, item, capability_types)?;
         let own_capability = public_owner_identity(loaded, public)
             .is_some_and(|identity| capability_types.contains(&identity));
         if signature_capability || own_capability {
@@ -1260,6 +1249,27 @@ fn capability_public_api(
     lines.sort();
     lines.dedup();
     Ok(lines)
+}
+
+fn item_signature_references_capability(
+    loaded: &LoadedCrate,
+    item: &Item,
+    capability_types: &BTreeSet<Identity>,
+) -> Result<bool> {
+    let mut public_references = BTreeSet::new();
+    visit_item_signatures(&item.inner, &mut public_references);
+    for id in public_references {
+        if let Some(identity) = resolve_reference(
+            &loaded.metadata.crate_name,
+            loaded.public_local_crate_id,
+            &loaded.public_krate,
+            id,
+        )? && capability_types.contains(&identity)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn public_owner_identity(loaded: &LoadedCrate, public: &CanonicalPublicItem) -> Option<Identity> {
@@ -2053,6 +2063,169 @@ mod tests {
         let mut references = BTreeSet::new();
         visit_type(&type_, &mut references);
         assert_eq!(references, BTreeSet::from([Id(1), root, trait_id]));
+    }
+
+    #[test]
+    fn mutation_fixture_classifies_rogue_capability_factories() {
+        let capability = Id(1);
+        let rogue = Id(2);
+        let mut krate: RustdocCrate = minimal_crate("demo").into();
+        krate.index.get_mut(&krate.root).unwrap().inner = ItemEnum::Module(rustdoc_types::Module {
+            is_crate: true,
+            items: vec![capability, rogue],
+            is_stripped: false,
+        });
+        krate.index.insert(
+            capability,
+            Item {
+                id: capability,
+                crate_id: 0,
+                name: Some("Capability".to_owned()),
+                span: None,
+                visibility: Visibility::Public,
+                docs: None,
+                links: HashMap::new(),
+                attrs: Vec::new(),
+                deprecation: None,
+                inner: ItemEnum::Struct(rustdoc_types::Struct {
+                    kind: StructKind::Unit,
+                    generics: Generics {
+                        params: Vec::new(),
+                        where_predicates: Vec::new(),
+                    },
+                    impls: Vec::new(),
+                }),
+            },
+        );
+        krate.paths.insert(
+            capability,
+            ItemSummary {
+                crate_id: 0,
+                path: vec!["demo".to_owned(), "Capability".to_owned()],
+                kind: ItemKind::Struct,
+            },
+        );
+        krate.index.insert(
+            rogue,
+            Item {
+                id: rogue,
+                crate_id: 0,
+                name: Some("rogue".to_owned()),
+                span: None,
+                visibility: Visibility::Public,
+                docs: None,
+                links: HashMap::new(),
+                attrs: Vec::new(),
+                deprecation: None,
+                inner: ItemEnum::Function(Function {
+                    sig: FunctionSignature {
+                        inputs: Vec::new(),
+                        output: Some(Type::ResolvedPath(RustdocPath {
+                            path: "Capability".to_owned(),
+                            id: capability,
+                            args: None,
+                        })),
+                        is_c_variadic: false,
+                    },
+                    generics: Generics {
+                        params: Vec::new(),
+                        where_predicates: Vec::new(),
+                    },
+                    header: rustdoc_types::FunctionHeader {
+                        is_const: false,
+                        is_unsafe: false,
+                        is_async: false,
+                        abi: rustdoc_types::Abi::Rust,
+                    },
+                    has_body: true,
+                }),
+            },
+        );
+        krate.paths.insert(
+            rogue,
+            ItemSummary {
+                crate_id: 0,
+                path: vec!["demo".to_owned(), "rogue".to_owned()],
+                kind: ItemKind::Function,
+            },
+        );
+
+        let mut metadata = crate_metadata("demo", "demo.json");
+        metadata.private_census = census(3, 3, 0);
+        let validated =
+            validate_crate_blob(&metadata, krate, BlobKind::Private, TEST_TARGET).unwrap();
+        let loaded = LoadedCrate {
+            metadata,
+            public_json_path: PathBuf::new(),
+            public_krate: validated.krate.clone(),
+            public_local_crate_id: validated.local_crate_id,
+            public_identities: validated.identities.clone(),
+            public_identity_by_id: validated.identity_by_id.clone(),
+            public_owner_by_id: validated.owner_by_id.clone(),
+            private_krate: validated.krate,
+            private_local_crate_id: validated.local_crate_id,
+            private_identities: validated.identities,
+            private_identity_by_id: validated.identity_by_id,
+            private_owner_by_id: validated.owner_by_id,
+        };
+        let crates = BTreeMap::from([("demo".to_owned(), loaded)]);
+        let workspace = Workspace {
+            all_private_identities: collect_workspace_identities(&crates, BlobKind::Private)
+                .unwrap(),
+            crates,
+        };
+        let root = identity("demo", &["demo", "Capability"], IdentityKind::Struct);
+        let rogue = identity("demo", &["demo", "rogue"], IdentityKind::Function);
+        let loaded = &workspace.crates["demo"];
+        let capability_types = BTreeSet::from([root.clone()]);
+        assert!(
+            item_signature_references_capability(
+                loaded,
+                &loaded.public_krate.index[&Id(2)],
+                &capability_types,
+            )
+            .unwrap()
+        );
+
+        let mut clean = workspace.crates["demo"].private_krate.clone();
+        let ItemEnum::Function(function) = &mut clean.index.get_mut(&Id(2)).unwrap().inner else {
+            panic!("mutation fixture function missing");
+        };
+        function.sig.output = Some(Type::Primitive("bool".to_owned()));
+        let mut metadata = crate_metadata("demo", "demo.json");
+        metadata.private_census = census(3, 3, 0);
+        let validated =
+            validate_crate_blob(&metadata, clean, BlobKind::Private, TEST_TARGET).unwrap();
+        let clean_loaded = LoadedCrate {
+            metadata,
+            public_json_path: PathBuf::new(),
+            public_krate: validated.krate.clone(),
+            public_local_crate_id: validated.local_crate_id,
+            public_identities: validated.identities.clone(),
+            public_identity_by_id: validated.identity_by_id.clone(),
+            public_owner_by_id: validated.owner_by_id.clone(),
+            private_krate: validated.krate,
+            private_local_crate_id: validated.local_crate_id,
+            private_identities: validated.identities,
+            private_identity_by_id: validated.identity_by_id,
+            private_owner_by_id: validated.owner_by_id,
+        };
+        let clean_crates = BTreeMap::from([("demo".to_owned(), clean_loaded)]);
+        let clean_workspace = Workspace {
+            all_private_identities: collect_workspace_identities(&clean_crates, BlobKind::Private)
+                .unwrap(),
+            crates: clean_crates,
+        };
+        let clean_loaded = &clean_workspace.crates["demo"];
+        assert!(
+            !item_signature_references_capability(
+                clean_loaded,
+                &clean_loaded.public_krate.index[&Id(2)],
+                &BTreeSet::from([root]),
+            )
+            .unwrap()
+        );
+        assert_eq!(rogue.kind, IdentityKind::Function);
     }
 
     #[test]
