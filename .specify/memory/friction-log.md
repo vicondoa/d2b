@@ -19,3 +19,4 @@ row lands, it gets promoted into the plan.
 | spec-copilot-w3 | build | 2026-07-31 | `specify init` replaces `installed_integrations` rather than appending, silently dropping a coexisting install | 1 | filed-guard |
 | spec-copilot-w3 | build | 2026-07-31 | `specify init` rewrites shared `.specify/scripts` and `.specify/templates`, reintroducing banned dash codepoints into tracked files | 1 | open |
 | spec-copilot-w3 | codegen | 2026-07-31 | Shipped spec-kit skill text carries banned dash codepoints and must be de-dashed on every import | 1 | open |
+| spec-copilot-w3 | codegen | 2026-07-31 | Delivery help output is pinned by a wire-fingerprint golden, so even a documentation-only field needs a schema bump that would invalidate in-flight artifacts | 1 | resolved |
