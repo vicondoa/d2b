@@ -267,21 +267,112 @@ The copy path is therefore still wrong even with everything above, and the lab
 selects zero copy. That selection is itself gated: `HW_DECODED_VIDEO_ZERO_COPY`
 is configured only after `gfxPlatformGtk::InitPlatformHardwareVideoConfig()`
 passes an early return that requires `HARDWARE_VIDEO_DECODING` to be enabled,
-and that feature is runtime force-disabled here by a VA-API probe that cannot
-succeed - the virtio-gpu VA driver loads and initialises but advertises no H.264
-profiles.
+and that feature is decided by a VA-API probe.
 
-`gfx.blacklist.hardwarevideodecoding` is set to `1` (`FEATURE_STATUS_OK`) to
-skip that probe. This is honestly a lie told to the browser about a capability
-the guest does not have, and it is written down as one in the flake. It does not
-hand decoding to VA-API: `InitHWDecoderIfAllowed()` tries `InitVulkanDecoder()`
-before `InitVAAPIDecoder()`, so Vulkan still decodes and VA-API is never used
-for a frame.
+That probe used to be unpassable, because the guest's `virtio_gpu` VA driver
+loaded and initialised and then advertised no H.264 profiles. The lab therefore
+set `gfx.blacklist.hardwarevideodecoding` to `1` (`FEATURE_STATUS_OK`) to skip
+it - a lie told to the browser about a capability the guest did not have,
+written down as one in the flake.
 
-Making that capability genuinely true - by finishing virgl's VA-API video path,
-or by V4L2 through `virtio_media` - would remove the need for the pref. Fixing
-the copy path to use per-plane images would remove the need for zero copy. Both
-are open.
+**That pref is gone, and the capability is real.** See section 6a.
+
+`InitHWDecoderIfAllowed()` tries `InitVulkanDecoder()` before
+`InitVAAPIDecoder()`, so VA-API is what makes the capability true and Vulkan
+Video is still what decodes every frame.
+
+Fixing the copy path to use per-plane images would remove the need for zero copy
+in the first place. That one is still open, and the note in section 7 records a
+measurement that narrows it.
+
+---
+
+## 6a. Making the capability honest
+
+The guest advertising no H.264 profiles read like a missing host capability. It
+was not. It was one flag.
+
+Measured in order, each one cheap and each one narrowing the next:
+
+| Question | Answer |
+|---|---|
+| Does the host do VA-API H.264 at all? | Yes - Main, High, ConstrainedBaseline, NVDEC direct backend |
+| Does it still work inside the crosvm GPU sidecar's exact bwrap bind set? | Yes, identical |
+| Is virglrenderer built with video? | Yes, `-Dvideo=true`, so `ENABLE_VIDEO` is defined |
+| Does rutabaga supply the `get_drm_fd` callback video needs? | Yes |
+| Does anything pass `VIRGL_RENDERER_USE_VIDEO`? | **No** |
+
+That last row is the whole defect. `VIRGL_RENDERER_USE_VIDEO` is bit 11 of the
+flags word `virgl_renderer_init()` takes. `rutabaga_gfx` generates the constant
+into `src/generated/virgl_renderer_bindings.rs` and references it nowhere; its
+`VirglRendererFlags` stops at bit 10 and exposes no `use_video()` builder, and
+the inner `u32` is private, so crosvm cannot set the bit even deliberately.
+
+The failure is silent because of where it lands. `virgl_video_init()` is what
+assigns `va_dpy`; `virgl_video_fill_caps()` returns `-1` immediately on a NULL
+`va_dpy`; so the virgl2 capset reaches the guest with `num_video_caps = 0` and
+nothing anywhere reports an error. The guest driver then loads cleanly and
+advertises nothing, which is indistinguishable from a host that cannot decode.
+
+Turning it on exposed a second refusal underneath, and this one is a string
+comparison:
+
+```
+INFO   VA-API version: 1.24
+INFO   Driver version: VA-API NVDEC driver [direct backend]
+ERROR  only supports mesa va drivers now
+```
+
+`virgl_video_init()` rejects every VA driver whose vendor string lacks
+`Mesa Gallium`. libva had initialised and the NVDEC driver had loaded; it was
+turned away on its name. The one host API this path needs is
+`vaExportSurfaceHandle()` with `VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2`, which
+is standard rather than Mesa-specific and which `nvidia-vaapi-driver`
+implements already - it is how that driver hands frames to EGL consumers.
+Upstream's own "now" reads as provisional.
+
+Both are opt-in in the fork, and deliberately **two** knobs rather than one:
+`VIRGL_FORCE_VIDEO` enables video, `VIRGL_VIDEO_ALLOW_ANY_VA_DRIVER` accepts a
+non-Mesa driver. Enabling video and trusting this driver are different
+decisions, and keeping them separable is what makes a later failure
+attributable to one of them. Unset, both refuse exactly as upstream does.
+
+`VIRGL_FORCE_VIDEO` tests its **value**, not its presence, unlike the trace
+knobs in the same file. Those are diagnostics; this gates a capability that
+needs a negative control, and a knob that cannot express "off" is precisely how
+this program already produced one false pass on a locked Firefox pref.
+
+### The result
+
+| `VIRGL_FORCE_VIDEO` | host renderer | guest H.264 profiles |
+|---|---|---|
+| `0` | `Video not enabled` | **0** - driver loads, advertises nothing |
+| `1` | `Video initialised on drm_fd 43` | **3** - ConstrainedBaseline, Main, High |
+
+The off row reproduces the original symptom exactly, on demand. That is what
+makes this causation rather than coincidence.
+
+With the pref removed and the probe passing on the merits:
+
+```
+renderer decode      : decode_cmds=2048 sessions=1
+plane image failures : 0     BLIT failures      : 0
+layer-validation err : 0     CmdSubmit3d        : 0
+Illegal cmd buffer   : 0
+frames               : 810 total, 6 dropped
+host NVDEC           : nonzero in 35 of 35 samples
+picture              : 12,619 distinct colours, mean RGB 152,158,158
+```
+
+`decode_cmds` is the load-bearing number: the negative control established that
+it reads `0` when the Vulkan decoder is off, so a nonzero value means Vulkan
+Video decoded, not VA-API. VA-API's only job here is to answer the probe
+honestly.
+
+The NVDEC percentage sampled higher than earlier runs in this lab. That is
+**not** claimed as an improvement: this sampling window sat entirely inside
+continuous looping playback, where earlier windows included startup, and the
+earlier configuration has not been re-measured under this window. Unattributed.
 
 ---
 
@@ -302,6 +393,15 @@ Recorded because each cost real time and would otherwise be retried.
 - **Turning zero copy off to avoid the failing blit.** Moves
   `GL_INVALID_OPERATION` from the decoder context to the renderer context. Both
   consumers fail on the same badly described surface.
+- **Teaching the blit to find the later plane.** The obvious repair for the copy
+  path is to give the blit the same per-plane image the sampler view gets. It
+  does not work, and the reason is worth recording because the idea is the first
+  one anybody has: with zero copy off, the guest never imports the chroma plane
+  as a separate resource at all. Measured with `VIRGL_TRACE_IMPORT`, that run
+  produced 6482 `plane=0` imports and **zero** `plane=1` imports. There is no
+  plane for the blit to find, so plane-index inference correctly returns -1
+  every time and the blit fails for the original reason. Fixing the copy path
+  means changing what gets imported, not what the blit looks up.
 - **Resolving the plane through GBM.** `virgl_egl_aux_plane_image_from_gbm_bo()`
   is the upstream route and cannot serve here, because crosvm gives
   virglrenderer surfaceless EGL with no GBM device.

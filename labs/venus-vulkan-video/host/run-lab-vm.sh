@@ -300,6 +300,30 @@ main() {
             VREND_DEBUG VIRGL_TRACE_DMABUF_IMPORT VIRGL_TRACE_BLIT VIRGL_TRACE_IMPORT VK_LOADER_DEBUG VK_INSTANCE_LAYERS; do
     [ -n "${!ev:-}" ] && bw+=(--setenv "$ev" "${!ev}")
   done
+  # Turn on virglrenderer's video (VA-API) backend.
+  #
+  # crosvm never passes VIRGL_RENDERER_USE_VIDEO: rutabaga_gfx generates the
+  # constant and references it nowhere, and its VirglRendererFlags has no
+  # builder for bit 11. Without it virgl_video_init() never runs, va_dpy stays
+  # NULL, virgl_video_fill_caps() returns early, and the guest's virtio_gpu VA
+  # driver advertises no profiles at all - which looks like a missing host
+  # capability rather than an unset flag.
+  #
+  # Defaulted on rather than forced, so the negative control can turn it off
+  # with VIRGL_FORCE_VIDEO=0. The renderer tests the value, not merely its
+  # presence, so that control genuinely controls.
+  bw+=(--setenv VIRGL_FORCE_VIDEO "${VIRGL_FORCE_VIDEO:-1}")
+  # Accept the host's non-Mesa VA driver.
+  #
+  # virglrenderer refuses any VA driver whose vendor string lacks "Mesa
+  # Gallium". Here that is the only thing between the guest and a decoder:
+  # libva initialises, nvidia-vaapi-driver loads and reports H.264 Main, High
+  # and ConstrainedBaseline, and it is turned away on the string alone.
+  #
+  # Kept separate from VIRGL_FORCE_VIDEO on purpose. Turning video on and
+  # accepting a non-Mesa driver are different decisions, and separable knobs
+  # are what make a later failure attributable to one of them.
+  bw+=(--setenv VIRGL_VIDEO_ALLOW_ANY_VA_DRIVER "${VIRGL_VIDEO_ALLOW_ANY_VA_DRIVER:-1}")
   # The broad /etc bind is needed for the Vulkan loader and NSS config, but it
   # would also expose /etc/d2b to the sidecar -- which the lab isolation
   # contract (AGENTS.md rule 3) forbids. Mask it with an empty tmpfs so the
