@@ -1,0 +1,165 @@
+From d56efa072f28c203bdf6b0c6e62a04984ebb1e28 Mon Sep 17 00:00:00 2001
+From: David Stevens <stevensd@chromium.org>
+Date: Wed, 15 Jun 2022 15:56:18 +0900
+Subject: [PATCH 2/4] vhost: fix receiving reply payloads
+SPDX-FileCopyrightText: 2019 Alibaba Cloud Computing. All rights reserved.
+SPDX-FileCopyrightText: The Chromium OS Authors
+SPDX-FileCopyrightText: 2023 Alyssa Ross <hi@alyssa.is>
+SPDX-FileCopyrightText: 2024 Red Hat, Inc.
+SPDX-License-Identifier: Apache-2.0
+
+The existing code confuses the length of the request with the length of
+the reply in recv_reply_with_payload. This makes it impossible to use
+for any requests where the reply differs in size. Fix this by
+determining payload size after reading the reply header.
+
+(cherry-picked from crosvm commit 31f04e92709980a4ffc56b1631f8b4be437cc2fe)
+
+Co-authored-by: Alyssa Ross <hi@alyssa.is>
+Signed-off-by: Alyssa Ross <hi@alyssa.is>
+---
+ vhost/src/vhost_user/connection.rs      | 29 ++++++++++---------------
+ vhost/src/vhost_user/frontend.rs        | 16 +++-----------
+ vhost/src/vhost_user/gpu_backend_req.rs | 14 +++++-------
+ 3 files changed, 21 insertions(+), 38 deletions(-)
+
+diff --git a/vhost/src/vhost_user/connection.rs b/vhost/src/vhost_user/connection.rs
+index 4fca9c5bc..0ce72154e 100644
+--- a/vhost/src/vhost_user/connection.rs
++++ b/vhost/src/vhost_user/connection.rs
+@@ -543,7 +543,7 @@ impl<H: MsgHeader> Endpoint<H> {
+     /// accepted and all other file descriptor will be discard silently.
+     ///
+     /// # Return:
+-    /// * - (message header, message body, size of payload, [received files]) on success.
++    /// * - (message header, message body, payload, [received files]) on success.
+     /// * - SocketRetry: temporary error caused by signals or short of resources.
+     /// * - SocketBroken: the underline socket is broken.
+     /// * - SocketError: other socket related errors.
+@@ -552,15 +552,13 @@ impl<H: MsgHeader> Endpoint<H> {
+     #[allow(clippy::type_complexity)]
+     pub fn recv_payload_into_buf<T: ByteValued + Sized + VhostUserMsgValidator + Default>(
+         &mut self,
+-        buf: &mut [u8],
+-    ) -> Result<(H, T, usize, Option<Vec<File>>)> {
+-        let mut hdr = H::default();
++    ) -> Result<(H, T, Vec<u8>, Option<Vec<File>>)> {
+         let mut body: T = Default::default();
++        let (hdr, files) = self.recv_header()?;
++
++        let payload_size = hdr.get_size() as usize - mem::size_of::<T>();
++        let mut buf: Vec<u8> = vec![0; payload_size];
+         let mut iovs = [
+-            iovec {
+-                iov_base: (&mut hdr as *mut H) as *mut c_void,
+-                iov_len: mem::size_of::<H>(),
+-            },
+             iovec {
+                 iov_base: (&mut body as *mut T) as *mut c_void,
+                 iov_len: mem::size_of::<T>(),
+@@ -570,19 +568,16 @@ impl<H: MsgHeader> Endpoint<H> {
+                 iov_len: buf.len(),
+             },
+         ];
+-        // SAFETY: Safe because we own hdr and body and have a mutable borrow of buf, and
+-        // hdr and body are ByteValued, and it's safe to fill a byte slice with
+-        // arbitrary data.
+-        let (bytes, files) = unsafe { self.recv_into_iovec_all(&mut iovs[..])? };
+-
+-        let total = mem::size_of::<H>() + mem::size_of::<T>();
+-        if bytes < total {
++        // SAFETY: Safe because we own body and buf, and body is ByteValued, and it's safe
++        // to fill a byte slice with arbitrary data.
++        let (bytes, more_files) = unsafe { self.recv_into_iovec_all(&mut iovs)? };
++        if bytes < hdr.get_size() as usize {
+             return Err(Error::PartialMessage);
+-        } else if !hdr.is_valid() || !body.is_valid() {
++        } else if !body.is_valid() || more_files.is_some() {
+             return Err(Error::InvalidMessage);
+         }
+ 
+-        Ok((hdr, body, bytes - total, files))
++        Ok((hdr, body, buf, files))
+     }
+ }
+ 
+diff --git a/vhost/src/vhost_user/frontend.rs b/vhost/src/vhost_user/frontend.rs
+index ea6284980..195a6af1e 100644
+--- a/vhost/src/vhost_user/frontend.rs
++++ b/vhost/src/vhost_user/frontend.rs
+@@ -756,23 +756,13 @@ impl FrontendInternal {
+         &mut self,
+         hdr: &VhostUserMsgHeader<FrontendReq>,
+     ) -> VhostUserResult<(T, Vec<u8>, Option<Vec<File>>)> {
+-        if mem::size_of::<T>() > MAX_MSG_SIZE
+-            || hdr.get_size() as usize <= mem::size_of::<T>()
+-            || hdr.get_size() as usize > MAX_MSG_SIZE
+-            || hdr.is_reply()
+-        {
++        if mem::size_of::<T>() > MAX_MSG_SIZE || hdr.is_reply() {
+             return Err(VhostUserError::InvalidParam);
+         }
+         self.check_state()?;
+ 
+-        let mut buf: Vec<u8> = vec![0; hdr.get_size() as usize - mem::size_of::<T>()];
+-        let (reply, body, bytes, files) = self.main_sock.recv_payload_into_buf::<T>(&mut buf)?;
+-        if !reply.is_reply_for(hdr)
+-            || reply.get_size() as usize != mem::size_of::<T>() + bytes
+-            || files.is_some()
+-            || !body.is_valid()
+-            || bytes != buf.len()
+-        {
++        let (reply, body, buf, files) = self.main_sock.recv_payload_into_buf::<T>()?;
++        if !reply.is_reply_for(hdr) || files.is_some() || !body.is_valid() {
+             return Err(VhostUserError::InvalidMessage);
+         }
+ 
+diff --git a/vhost/src/vhost_user/gpu_backend_req.rs b/vhost/src/vhost_user/gpu_backend_req.rs
+index 140063093..f7160c9c4 100644
+--- a/vhost/src/vhost_user/gpu_backend_req.rs
++++ b/vhost/src/vhost_user/gpu_backend_req.rs
+@@ -437,9 +437,8 @@ mod tests {
+             let _: () = backend.update_scanout(&request, &payload).unwrap();
+         });
+ 
+-        let mut recv_buf = [0u8; 4096];
+-        let (hdr, req_body, recv_buf_len, fds) = frontend
+-            .recv_payload_into_buf::<VhostUserGpuUpdate>(&mut recv_buf)
++        let (hdr, req_body, recv_buf, fds) = frontend
++            .recv_payload_into_buf::<VhostUserGpuUpdate>()
+             .unwrap();
+         assert!(fds.is_none());
+         assert_hdr(
+@@ -449,7 +448,7 @@ mod tests {
+         );
+         assert_eq!(req_body, request);
+ 
+-        assert_eq!(&payload[..], &recv_buf[..recv_buf_len]);
++        assert_eq!(&payload[..], recv_buf);
+ 
+         sender_thread.join().expect("Failed to send!");
+     }
+@@ -611,9 +610,8 @@ mod tests {
+             let _: () = backend.cursor_update(&request, &payload).unwrap();
+         });
+ 
+-        let mut recv_buf = vec![0u8; 1 + size_of_val(&payload)];
+-        let (hdr, req_body, recv_buf_len, fds) = frontend
+-            .recv_payload_into_buf::<VhostUserGpuCursorUpdate>(&mut recv_buf)
++        let (hdr, req_body, recv_buf, fds) = frontend
++            .recv_payload_into_buf::<VhostUserGpuCursorUpdate>()
+             .unwrap();
+         assert!(fds.is_none());
+         assert_hdr(
+@@ -623,7 +621,7 @@ mod tests {
+         );
+         assert_eq!(req_body, request);
+ 
+-        assert_eq!(&payload[..], &recv_buf[..recv_buf_len]);
++        assert_eq!(&payload[..], recv_buf);
+ 
+         sender_thread.join().expect("Failed to send!");
+     }
+-- 
+2.50.0
+
