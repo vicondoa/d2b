@@ -14,7 +14,7 @@ SHELL := $(CURDIR)/tests/tools/scrub-shell-environment
         test-lint test-rust test-rust-main test-rust-remaining \
         test-fixture-contracts test-proofs test-flake test-nix-unit \
         test-performance-budgets test-adr-index-coverage test-ci-coverage \
-        test-flake-list \
+        test-flake-list test-flake-partition \
         test-drift test-policy test-integration test-host-integration test-hardware perf \
         heavy-lane-guard heavy-lane-integration heavy-lane-host-integration \
         heavy-lane-hardware heavy-lane-perf \
@@ -140,6 +140,14 @@ test-flake:
 ## .github/workflows/pr-l1-static-fast.yml). Invoke as `make -s test-flake-list`.
 test-flake-list:
 	@bash tests/test-flake-list.sh
+
+## test-flake-partition - emit the native-system flake check names split into
+## the three CI dispatch classes as `<key>=<json-array>` lines on stdout (CI
+## dynamic-matrix plumbing for the sharded test-flake; see
+## .github/workflows/pr-l1-static-fast.yml). Invoke as
+## `make -s test-flake-partition`.
+test-flake-partition:
+	@bash tests/tools/flake-check-partition.sh
 
 ## test-nix-unit - build all sharded nix-unit corpus checks. Kept as explicit
 ## Layer-1 evidence even though test-flake also evaluates the checks.

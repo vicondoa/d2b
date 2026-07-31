@@ -38,6 +38,7 @@
       "test-nix-unit",
       "flake-eval-discover",
       "flake-eval-x86",
+      "flake-eval-x86-realized",
       "flake-eval-x86-outputs",
       "test-flake-x86",
       "test-flake-aarch64",
@@ -228,6 +229,15 @@
       "runsOn": "ubuntu-latest",
       "maxParallel": 4
     },
+    "flake-eval-x86-realized": {
+      "displayName": "Flake check shard (x86_64-linux, realized)",
+      "ciKind": "flake-x86-realized",
+      "ciJobId": "flake-eval-x86-realized",
+      "needs": ["flake-eval-discover"],
+      "timeoutMinutes": 60,
+      "runsOn": "ubuntu-latest",
+      "maxParallel": 2
+    },
     "flake-eval-x86-outputs": {
       "displayName": "Flake non-checks outputs (x86_64-linux)",
       "ciKind": "flake-x86-outputs",
@@ -240,7 +250,7 @@
       "displayName": "Require all x86 flake jobs to pass",
       "ciKind": "flake-x86-rollup",
       "ciJobId": "test-flake-x86",
-      "needs": ["flake-eval-discover", "flake-eval-x86", "flake-eval-x86-outputs"],
+      "needs": ["flake-eval-discover", "flake-eval-x86", "flake-eval-x86-realized", "flake-eval-x86-outputs"],
       "timeoutMinutes": 5,
       "runsOn": "ubuntu-latest"
     },
