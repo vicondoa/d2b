@@ -96,7 +96,11 @@ pub use volume_state::{
 
 // The `ifname` module's re-exports. Keep every `pub use ifname::...` line
 // inside this region so it stays one contiguous block.
-// (empty until `ADR046-network-001` lands)
+pub use ifname::{
+    BRIDGE_TAG, DEFAULT_PREFIX, DerivedRole, HASH_SUFFIX_LEN, IfName, IfNameError, IfNameMapping,
+    MAX_IFNAME_BYTES, NetworkIfRole, TAP_TAG, derive_from_env_vm, derive_ifname, detect_collisions,
+    looks_d2b_owned, validate_prefix,
+};
 
 // The `credential_controller` module's re-exports. Keep every
 // `pub use credential_controller::...` line inside this region so it stays one
