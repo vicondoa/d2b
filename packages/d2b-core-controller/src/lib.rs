@@ -1,4 +1,4 @@
-//! Core-side reconciliation indexes, hints, suppression, and admission.
+//! Fixed core-controller handlers and pure reconciliation policy.
 
 // `main.rs` is a library module here, not a binary crate root; the crate turns
 // off binary auto-discovery so cargo does not claim it as one. The lint that
@@ -27,6 +27,10 @@ pub mod store;
 pub mod watches;
 pub mod zone_links;
 
+pub use controllers::{
+    AggregateHealth, CoreHandlerKind, CoreHandlerRegistry, CurrencyAggregation,
+    CurrencyAggregationError, HandlerOutcome, HandlerPhase, HandlerStatus,
+};
 pub use dependencies::{DependencyError, DependencyIndex, DependencyTrigger, UpgradeOrder};
 pub use hints::{
     ChangeField, ChangeRecord, ControllerBinding, ControllerHint, ControllerLeaseKey,
