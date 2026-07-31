@@ -173,6 +173,7 @@ test-drift:
 ## every concurrent branch.
 test-policy:
 	bash tests/test-policy.sh
+	cd packages && cargo run --quiet -p xtask -- check-provider-crate-layout
 
 ## test-performance-budgets - execute the self-gating performance canary.
 ## Hosted runners take the cheap skip path; pinned stable runners enforce it.
