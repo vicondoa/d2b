@@ -297,7 +297,7 @@ main() {
   # blit debug path is what prints the formats and regions behind it.
   local ev
   for ev in VKR_DEBUG VN_DEBUG VN_PERF VIRGL_LOG_LEVEL MESA_LOG_LEVEL \
-            VREND_DEBUG VIRGL_TRACE_DMABUF_IMPORT VIRGL_TRACE_BLIT VIRGL_TRACE_IMPORT VK_LOADER_DEBUG VK_INSTANCE_LAYERS; do
+            VREND_DEBUG VIRGL_TRACE_DMABUF_IMPORT VIRGL_TRACE_BLIT VIRGL_TRACE_BLIT_PLANE VIRGL_TRACE_IMPORT VK_LOADER_DEBUG VK_INSTANCE_LAYERS; do
     [ -n "${!ev:-}" ] && bw+=(--setenv "$ev" "${!ev}")
   done
   # Turn on virglrenderer's video (VA-API) backend.

@@ -29,6 +29,14 @@ Firefox carries **no patches**. Every change is in guest Mesa, host
 virglrenderer, or lab configuration. `SOLUTION.md` is the full account of what
 was wrong and why each change is needed; the short version is below.
 
+**Both presentation routes now work.** Zero copy is the preferred one and the
+one selected, because handing the surface to the compositor beats copying it per
+frame. The GPU-copy fallback used to render green, and no longer does: a blit
+does not go through a sampler view, so it needed the same per-plane resolution
+wiring separately, and it needed to reach it through the shader path rather than
+`glCopyImageSubData`. Zero copy is unchanged and provably untouched by that fix -
+its runs issue no blits at all. See `SOLUTION.md` section 6b.
+
 The lab no longer asserts a capability the guest lacks. It previously set
 `gfx.blacklist.hardwarevideodecoding` to skip a VA-API probe the guest could not
 pass, which was a diagnostic rather than a fix. The guest advertises H.264

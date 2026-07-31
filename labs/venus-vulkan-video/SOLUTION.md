@@ -253,21 +253,24 @@ them.
 
 ---
 
-## 6. Why the copy path is not the one in use
+## 6. The two presentation routes, and why zero copy is preferred
 
 Firefox has two routes from a decoded frame to the screen.
 
-- **GPU copy** blits plane by plane from the imported surface into its own
-  textures. That blit goes through the resource's own texture rather than a
-  sampler view, so it does not benefit from per-plane images.
 - **Zero copy** hands the imported surface to the compositor, which samples it -
-  through sampler views, which do select per-plane images.
+  through sampler views, which select per-plane images. **This is the preferred
+  route and the one the lab selects**, because handing the surface over beats
+  copying it: no per-frame plane copies at all.
+- **GPU copy** blits plane by plane from the imported surface into Firefox's own
+  textures. A blit does not go through a sampler view, so it needed the same
+  per-plane resolution wiring separately. It now has it - see 6b - so the
+  fallback is correct rather than broken, but it is still a copy, and still the
+  fallback.
 
-The copy path is therefore still wrong even with everything above, and the lab
-selects zero copy. That selection is itself gated: `HW_DECODED_VIDEO_ZERO_COPY`
-is configured only after `gfxPlatformGtk::InitPlatformHardwareVideoConfig()`
-passes an early return that requires `HARDWARE_VIDEO_DECODING` to be enabled,
-and that feature is decided by a VA-API probe.
+Zero copy is gated: `HW_DECODED_VIDEO_ZERO_COPY` is configured only after
+`gfxPlatformGtk::InitPlatformHardwareVideoConfig()` passes an early return that
+requires `HARDWARE_VIDEO_DECODING` to be enabled, and that feature is decided by
+a VA-API probe.
 
 That probe used to be unpassable, because the guest's `virtio_gpu` VA driver
 loaded and initialised and then advertised no H.264 profiles. The lab therefore
@@ -571,6 +574,90 @@ is a different path with its own wire format, and which works.
 
 ---
 
+## 6b. Fixing the GPU-copy fallback
+
+The copy path produced a green picture: luma copied, chroma did not. That is the
+original green-frame symptom, arriving through the other route.
+
+Two separate defects, and the first fix hid the second.
+
+### The plane was found; the copy was the problem
+
+A blit command carries only resource handles, so when the planes of one buffer
+share a resource nothing in the command names the plane. Resolving it needs the
+same per-plane image the sampler views already use.
+
+That resolution was written first and appeared not to work. Instrumenting each
+of its five guards separately showed it working perfectly:
+
+```
+BLIT-PLANE calls=512 ok=256 same_fmt=256 no_egl=0 no_aux=0 ambiguous=0 bad_dims=0
+```
+
+512 blits splitting exactly 256 resolved and 256 `same_fmt` - the luma/chroma
+pair, one of each per frame. **A bare `-1` return had said nothing about which
+condition rejected, and five conditions have to hold together.** Counting them
+separately turned "it does not work" into "it works, look elsewhere" in one run.
+
+### `glCopyImageSubData` cannot consume an EGLImage texture
+
+The failure was one step later, and the diagnostic named it:
+
+```
+BLIT FAILED (gl 0x502) via glCopyImageSubData:
+  src fmt PIPE_FORMAT_R8_UNORM (view PIPE_FORMAT_R8G8_UNORM) gl_ifmt:0x1903
+  -> dst fmt PIPE_FORMAT_R8G8_UNORM gl_ifmt:0x822b
+```
+
+`0x502` is `GL_INVALID_OPERATION`. `glCopyImageSubData` takes no formats: it
+derives them from the texture objects and requires the two to share a texel size
+class. Reading the format off the plane texture directly, while bound, gives the
+answer:
+
+```
+BLIT-PLANE tex plane=1 ifmt=0x0 640x360
+```
+
+**The dimensions are right and the internal format is nothing at all.** A texture
+bound from an EGLImage reports `GL_TEXTURE_INTERNAL_FORMAT` as `0` here, so
+`glCopyImageSubData` cannot classify it and refuses.
+
+Sampling carries no such requirement. That is precisely why these same per-plane
+images already work for zero copy's sampler views, and it is the whole fix: the
+plane blit belongs on the shader path, which samples.
+
+`vrend_renderer_blit()` already excludes one case from the copy fast path for a
+related reason - resources needing colorspace conversion "must have it applied
+manually in a shader, i.e. require following the `vrend_renderer_blit_int()`
+path". The plane blit joins it, one line above the existing guard.
+
+The plane's own dimensions are set on the temporary resource, because the
+blitter derives its source rectangle from them and the resource is typed by
+luma.
+
+### Result
+
+| | before | after |
+|---|---:|---:|
+| `BLIT FAILED` | 1696 | **0** |
+| Illegal command buffer | 0 | 0 |
+| `CmdSubmit3d` refusals | 0 | 0 |
+| Picture | flat green | **colour bars, mean RGB 155,155,158** |
+
+### Zero copy is unchanged, and provably so
+
+Zero copy remains the preferred and selected route
+(`media.ffmpeg.vaapi.force-surface-zero-copy = 1`). Re-measured after the fix:
+zero blit failures, zero plane-image failures, zero layer-validation errors,
+zero illegal command buffers, zero refusals, `decode_cmds=512`, 511 frames with
+6 dropped, and a correct picture at mean RGB 155,155,159.
+
+The stronger evidence is that `BLIT-PLANE` printed **nothing at all** on that
+run. The plane lookup is never reached, because zero copy issues no blits. The
+change is inert on the preferred path by construction, not by luck.
+
+---
+
 ## 7. Things that look like fixes and are not
 
 Recorded because each cost real time and would otherwise be retried.
@@ -588,34 +675,29 @@ Recorded because each cost real time and would otherwise be retried.
 - **Turning zero copy off to avoid the failing blit.** Moves
   `GL_INVALID_OPERATION` from the decoder context to the renderer context. Both
   consumers fail on the same badly described surface.
-- **Teaching the blit to find the later plane.** The obvious repair for the copy
-  path is to give the blit the same per-plane image the sampler view gets. An
-  attempt at it failed, and the reason recorded here was that the guest never
-  imports the chroma plane separately when zero copy is off - measured with
-  `VIRGL_TRACE_IMPORT` as 6482 `plane=0` imports and zero `plane=1`.
+- **Two wrong reasons for the copy path's failure**, both recorded here as
+  settled before they were. The repair itself is real and is described in 6b;
+  what belongs in this section is the pair of dead ends on the way to it.
 
-  **That reason was wrong, or at least not general.** Re-measured later, forcing
-  the copy path with `media.ffmpeg.vaapi.force-surface-zero-copy = 0`, the same
-  trace shows **6867 `plane=0` and 1372 `plane=1`**. The chroma plane is
-  imported separately, so there *is* a plane for a blit to find.
+  First: "the guest never imports the chroma plane separately when zero copy is
+  off", measured as 6482 `plane=0` imports and zero `plane=1`. Re-measured while
+  forcing the copy path with `media.ffmpeg.vaapi.force-surface-zero-copy = 0`,
+  the same trace gives **6867 `plane=0` and 1372 `plane=1`**. Both runs reached
+  the copy path, by different doors - the first by removing
+  `gfx.blacklist.hardwarevideodecoding` so `HW_DECODED_VIDEO_ZERO_COPY` was
+  never configured, the second by turning the surface pref off - and only the
+  first suppresses the separate import. **"Force the copy path" is not one
+  configuration**, and a measurement of it has to say which mechanism selected
+  it.
 
-  The two runs entered the copy path by different doors, and that is the whole
-  difference. The earlier one removed `gfx.blacklist.hardwarevideodecoding`, so
-  `HW_DECODED_VIDEO_ZERO_COPY` was never configured and `ShouldCopySurface()`
-  returned true unconditionally. The later one leaves the feature configured and
-  turns the surface pref off. Same destination, different import behaviour, and
-  nothing in either run announces which door was used.
+  Second: "the plane lookup returns -1, so plane resolution does not work." It
+  returned -1 for a reason nobody had asked for. Five guards have to hold
+  together and a bare -1 names none of them; counting each separately showed the
+  lookup resolving 256 of 512 blits correctly on the first instrumented run. The
+  defect was one call later, in `glCopyImageSubData`.
 
-  So the copy-path repair is **unresolved rather than refuted**, and worth
-  retrying against the pref route. What that run does establish is that the
-  failure is no longer catastrophic: 881 blit failures, but zero illegal command
-  buffers and zero `CmdSubmit3d` refusals, where the original defect poisoned
-  the context and refused 11,270 submissions. Playback reached 510 frames with
-  2 dropped.
-
-  The generalisable lesson is narrower than the original claim and more useful:
-  **"force the copy path" is not one configuration.** A measurement of it has to
-  say which mechanism selected it.
+  The shared shape is worth more than either: **a negative result from a
+  predicate with several clauses is not evidence about any one of them.**
 - **Resolving the plane through GBM.** `virgl_egl_aux_plane_image_from_gbm_bo()`
   is the upstream route and cannot serve here, because crosvm gives
   virglrenderer surfaceless EGL with no GBM device.
@@ -664,6 +746,7 @@ Useful opt-in traces, all off by default because they fire per frame:
 | `VIRGL_TRACE_IMPORT` | guest | every dmabuf import: GEM handle, cache hit or miss, plane index, `blob_mem`, whether it will be described |
 | `VIRGL_TRACE_DMABUF_IMPORT` | host | the fourcc and geometry the host receives |
 | `VIRGL_TRACE_BLIT` | host | every blit, not only failures, with resource identity and both formats |
+| `VIRGL_TRACE_BLIT_PLANE` | host | per-plane blit resolution: a separate count for each guard that can reject it, plus the plane texture's real internal format and size |
 
 `VREND_DEBUG` is **not** usable for any of this: `VREND_DEBUG_ENABLED` is false
 whenever `NDEBUG` is defined, which is every build this lab runs, so
