@@ -464,6 +464,41 @@ const TARGET_WAVE = /^(W[0-8]|[a-z][a-z0-9]{2,15}w[0-8])$/;
 // disposition column keeps the stricter pattern above.
 const ORIGIN_WAVE = /^(W[0-8]|[a-z][a-z0-9]{2,15}w[0-8])(fu[1-9][0-9]?)?$/;
 
+// Split one Markdown table row into cells.
+//
+// A naive split on "|" is wrong in two directions and both fail open. A
+// statement legitimately quotes a shell pipeline as `\|`, which a naive split
+// reads as an extra cell, shifting every column after it. And a cell that ends
+// in a literal backslash is written `\\`, so a lookbehind for a single
+// backslash refuses to split at the separator that follows and fuses two cells
+// into one. Either way a later column is read in place of the one intended, and
+// a row short of the header index is skipped without being validated at all.
+//
+// So walk the row rather than pattern-matching it. `\|` is a literal pipe, `\\`
+// is a literal backslash and does not protect the pipe after it, and any other
+// pipe is a separator. The leading and trailing empty cells around the outer
+// pipes are dropped, matching the shape the rest of the parser expects.
+function splitRow(line) {
+  const cells = [];
+  let cur = "";
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (ch === "\\" && (line[i + 1] === "|" || line[i + 1] === "\\")) {
+      cur += line[i + 1];
+      i += 1;
+      continue;
+    }
+    if (ch === "|") {
+      cells.push(cur.trim());
+      cur = "";
+      continue;
+    }
+    cur += ch;
+  }
+  cells.push(cur.trim());
+  return cells.slice(1, -1);
+}
+
 const memoryDir = join(root, ".specify", "memory");
 for (const reg of ["friction-log.md", "deferred-work.md", "engineering-debt.md"]) {
   const path = join(memoryDir, reg);
@@ -474,13 +509,19 @@ for (const reg of ["friction-log.md", "deferred-work.md", "engineering-debt.md"]
   // trailing Ref column, so reading the last cell read the ref, found it
   // empty, and validated nothing. A guard that silently checks the wrong
   // column is worse than no guard, because the register looks covered.
+  //
+  // The index belongs to one table, so it resets at the first line that is not
+  // a row. A file with two tables of different shapes would otherwise carry the
+  // first table's index into the second, and a data row that appears before any
+  // header has no index at all. Both are rejected below rather than guessed at:
+  // there is no fallback, because the fallback was the defect.
   let dispositionIdx = -1;
   for (const [i, line] of lines.entries()) {
-    if (!line.trim().startsWith("|")) continue;
-    // Split on unescaped pipes. A statement legitimately contains `\|` when it
-    // quotes a shell pipeline, and a naive split turns that row into an extra
-    // cell, shifting every column after it.
-    const cells = line.split(/(?<!\\)\|/).slice(1, -1).map((c) => c.trim().replace(/\\\|/g, "|"));
+    if (!line.trim().startsWith("|")) {
+      dispositionIdx = -1;
+      continue;
+    }
+    const cells = splitRow(line);
     if (cells.length < 4) continue;
     if (/^-+$/.test(cells[0])) continue;
     if (cells[0].toLowerCase() === "wave") {
@@ -509,8 +550,25 @@ for (const reg of ["friction-log.md", "deferred-work.md", "engineering-debt.md"]
         `with its siblings, so the three-wave escalation rule stops counting it.`,
       );
     }
-    const disposition = (cells[dispositionIdx >= 0 ? dispositionIdx : cells.length - 1] ?? "")
-      .replace(/`/g, "");
+    // No fallback. A data row the parser cannot address is rejected, because
+    // reading some other column instead is exactly how this guard passed rows
+    // it had never checked.
+    if (dispositionIdx < 0) {
+      fail(
+        `.specify/memory/${reg}:${i + 1}: this row precedes any header row, so ` +
+        `there is no Disposition column to validate it against.`,
+      );
+      continue;
+    }
+    if (dispositionIdx >= cells.length) {
+      fail(
+        `.specify/memory/${reg}:${i + 1}: this row has ${cells.length} cells and the ` +
+        `header names Disposition as column ${dispositionIdx + 1}, so the row has no ` +
+        `disposition to validate.`,
+      );
+      continue;
+    }
+    const disposition = cells[dispositionIdx].replace(/`/g, "");
     // A folded row records its target wave in the disposition column instead
     // of a vocabulary term. Both wave spellings are legal there: the legacy
     // closed set W0..W8, and the qualified token this repo now prefers. The

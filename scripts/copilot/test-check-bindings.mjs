@@ -170,6 +170,12 @@ function appendRegisterRow(dir, reg, row) {
   writeFileSync(path, `${src.trimEnd()}\n${row}\n`);
 }
 
+// Replace a register outright, for the cases that need a table shape the real
+// registers do not have.
+function writeRegister(dir, reg, text) {
+  writeFileSync(join(dir, ".specify", "memory", reg), text);
+}
+
 // A negative case asserts both a nonzero exit and a substring from the roster
 // guard itself. Exit status alone would pass if the gate failed for some
 // unrelated reason, which is precisely how a guard that no longer fires hides.
@@ -242,6 +248,53 @@ const CASES = [
       ),
     expectExit: 1,
     expectText: "is not in the closed set",
+  },
+  // The other direction. A cell ending in a literal backslash is written `\\`,
+  // and a lookbehind for one backslash refuses to split at the separator that
+  // follows, fusing two cells. The row then falls short of the header's
+  // disposition index and is skipped without being validated at all.
+  {
+    name: "a bogus disposition is rejected in a row whose cell ends in a backslash",
+    mutate: (dir) =>
+      appendRegisterRow(
+        dir,
+        "friction-log.md",
+        "| copilotw6 | test | 2026-07-31 | ends in a backslash \\\\| open | notavocabularyterm |",
+      ),
+    expectExit: 1,
+    expectText: "is not in the closed set",
+  },
+  // A data row with no header above it has no column to be validated against.
+  // The ref below is a legal wave token, so a guard that falls back to the last
+  // cell accepts the row and validates nothing.
+  {
+    name: "a row that precedes any header row is rejected rather than guessed at",
+    mutate: (dir) =>
+      writeRegister(
+        dir,
+        "deferred-work.md",
+        "| copilotw6 | test | 2026-07-31 | fixture row | notavocabularyterm | copilotw6 |\n",
+      ),
+    expectExit: 1,
+    expectText: "precedes any header row",
+  },
+  // A header that names no Disposition column cannot validate anything below
+  // it, and saying so is the only honest outcome.
+  {
+    name: "a header with no Disposition column is rejected",
+    mutate: (dir) =>
+      writeRegister(
+        dir,
+        "deferred-work.md",
+        [
+          "| Wave | Category | Date | Statement | Ref |",
+          "|---|---|---|---|---|",
+          "| copilotw6 | test | 2026-07-31 | fixture row | copilotw6 |",
+          "",
+        ].join("\n"),
+      ),
+    expectExit: 1,
+    expectText: "names no Disposition",
   },
 ];
 
