@@ -400,9 +400,12 @@ def rust_rollup_job(job: dict[str, Any]) -> str:
         f'      - name: {job["displayName"]}',
         '        run: |',
     ]
+    lines.append("          failed=0")
     for need in needs:
-        lines.append(f"          echo \"{need}=${{{{ needs.{need}.result }}}}\"")
-        lines.append(f"          [ \"${{{{ needs.{need}.result }}}}\" = success ] || exit 1")
+        lines.append(f"          result='${{{{ needs.{need}.result }}}}'")
+        lines.append(f'          echo "{need}=$result"')
+        lines.append(f'          [ "$result" = success ] || failed=1')
+    lines.append('          [ "$failed" -eq 0 ] || exit 1')
     lines.append('          echo "Both Rust gate shards passed."')
     return "\n".join(lines)
 

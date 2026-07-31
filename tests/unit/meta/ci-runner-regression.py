@@ -210,14 +210,10 @@ set -euo pipefail
         self.assertEqual(rust_rollup["ciKind"], "rust-rollup")
         self.assertIn("run: make test-rust-main", workflow)
         self.assertIn("run: make test-rust-remaining", workflow)
-        self.assertIn(
-            '[ "${{ needs.test-rust-main.result }}" = success ] || exit 1',
-            workflow,
-        )
-        self.assertIn(
-            '[ "${{ needs.test-rust-remaining.result }}" = success ] || exit 1',
-            workflow,
-        )
+        self.assertIn("test-rust-main=$result", workflow)
+        self.assertIn("test-rust-remaining=$result", workflow)
+        self.assertEqual(workflow.count('[ "$result" = success ] || failed=1'), 2)
+        self.assertIn('[ "$failed" -eq 0 ] || exit 1', workflow)
         self.assertEqual(manifest["ci"]["rollupNeeds"].count("test-rust"), 1)
 
     def test_expensive_rust_cache_surface_is_present(self) -> None:
@@ -258,8 +254,9 @@ set -euo pipefail
         driver = (ROOT / "tests" / "test-nix-unit.sh").read_text(encoding="utf-8")
 
         self.assertIn('jobs=${D2B_NIX_UNIT_JOBS:-2}', driver)
-        self.assertIn('if [ "$jobs" -gt 4 ]; then', driver)
-        self.assertIn('D2B_NIX_UNIT_JOBS must not exceed 4', driver)
+        self.assertIn('1|2|3|4) ;;', driver)
+        self.assertIn('D2B_NIX_UNIT_JOBS must be an integer from 1 through 4', driver)
+        self.assertNotIn('[ "$jobs" -gt 4 ]', driver)
         self.assertIn('D2B_NIX_UNIT_CHECK', driver)
         self.assertIn('for check in "${checks[@]}"; do', driver)
         self.assertIn('while [ "$running" -ge "$jobs" ]; do', driver)
@@ -276,7 +273,9 @@ set -euo pipefail
         self.assertIn('bash "$ROOT/tests/tools/eval-fixtures.sh"', driver)
         self.assertIn("not binary(video_binary_contract)", driver)
         flake = (ROOT / "flake.nix").read_text(encoding="utf-8")
-        self.assertIn("video-binary-contract = videoBinaryContract", flake)
+        self.assertIn("video-binary-contract =", flake)
+        self.assertIn('D2B_FLAKE_CHECK" = video-binary-contract', (ROOT / "tests" / "test-flake.sh").read_text(encoding="utf-8"))
+        self.assertIn('nix build --no-link --print-out-paths', (ROOT / "tests" / "test-flake.sh").read_text(encoding="utf-8"))
         self.assertNotIn("checks.${contract_system}.fixture-smoke", driver)
         self.assertIn("nix eval", fixture_driver)
         self.assertNotIn("nix build", fixture_driver)
@@ -298,6 +297,11 @@ set -euo pipefail
         self.assertIn("--document-private-items", api_driver)
         self.assertIn("--workspace --lib --no-deps", api_driver)
         self.assertIn(".scratch/rust-test-cache/api-surface-", api_driver)
+        self.assertIn('D2B_API_SURFACE_TARGET_DIR must be an absolute path', api_driver)
+        self.assertIn('D2B_API_SURFACE_UPDATE must be 0 or 1', api_driver)
+        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+        self.assertIn("api-surface-pin:", makefile)
+        self.assertIn("D2B_API_SURFACE_UPDATE=1 bash tests/tools/api-surface-json.sh", makefile)
         self.assertIn('prefix-key: "v2-rust-api-json"', workflow)
 
     def test_diagnostic_redaction_normalizes_ansi_before_matching(self) -> None:

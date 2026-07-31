@@ -107,10 +107,22 @@ fn argument_error() -> PolicyError {
 fn apply_snapshots(args: &Args, snapshots: &Snapshots) -> Result<()> {
     match args.mode {
         Mode::Check => {
-            check_snapshot(&args.public_api, &snapshots.public_api)?;
-            check_snapshot(&args.capability_api, &snapshots.capability_api)?;
-            check_snapshot(&args.hidden_public_api, &snapshots.hidden_public_api)?;
-            check_snapshot(&args.trait_impls, &snapshots.capability_trait_impls)?;
+            check_named_snapshot("public-api", &args.public_api, &snapshots.public_api)?;
+            check_named_snapshot(
+                "capability-api",
+                &args.capability_api,
+                &snapshots.capability_api,
+            )?;
+            check_named_snapshot(
+                "hidden-public-api",
+                &args.hidden_public_api,
+                &snapshots.hidden_public_api,
+            )?;
+            check_named_snapshot(
+                "capability-trait-impls",
+                &args.trait_impls,
+                &snapshots.capability_trait_impls,
+            )?;
         }
         Mode::Write => {
             write_snapshot(&args.public_api, &snapshots.public_api)?;
@@ -120,4 +132,10 @@ fn apply_snapshots(args: &Args, snapshots: &Snapshots) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn check_named_snapshot(name: &str, path: &std::path::Path, lines: &[String]) -> Result<()> {
+    check_snapshot(path, lines).inspect_err(|_error| {
+        eprintln!("snapshot {name} failed; regenerate with `make api-surface-pin`");
+    })
 }

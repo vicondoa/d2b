@@ -891,10 +891,24 @@
           (n: "MISSING PINNED CASE: ${n} (a pinned nix-unit case was deleted - restore it or run `make nix-unit-pin`)")
           nixUnitMissingPins;
       in {
-        eval-fixture-contracts = (mkEvalOnlyCheck "eval-fixture-contracts" evalFixtureData) // {
-          fixtureData = evalFixtureData;
-        };
-        video-binary-contract = videoBinaryContract;
+        eval-fixture-contracts =
+          if system == "x86_64-linux" then
+            (mkEvalOnlyCheck "eval-fixture-contracts" evalFixtureData) // {
+              fixtureData = evalFixtureData;
+            }
+          else
+            (pkgs.runCommand "d2b-eval-fixture-contracts-unsupported" { } ''
+              echo "eval-fixture-contracts is x86_64-linux only (graphics gate)" > $out
+            '') // {
+              fixtureData = { };
+            };
+        video-binary-contract =
+          if system == "x86_64-linux" then
+            videoBinaryContract
+          else
+            pkgs.runCommand "d2b-video-binary-contract-unsupported" { } ''
+              echo "video-binary-contract is x86_64-linux only (graphics gate)" > $out
+            '';
         fixture-smoke = smokeFixture;
 
         # Feature-rich fixture for the per-role minijail-validator contract

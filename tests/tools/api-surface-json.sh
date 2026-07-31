@@ -36,7 +36,21 @@ private_dir="$scratch/private"
 mkdir -p "$public_dir" "$private_dir"
 metadata="$scratch/workspace-metadata.json"
 golden="$ROOT/tests/golden/api-surface"
+case "${D2B_API_SURFACE_UPDATE:-0}" in
+  0|1) ;;
+  *)
+    fail "D2B_API_SURFACE_UPDATE must be 0 or 1"
+    exit 2
+    ;;
+esac
 target_root=${D2B_API_SURFACE_TARGET_DIR:-$ROOT/.scratch/rust-test-cache/api-surface-$pin}
+case "$target_root" in
+  /*) ;;
+  *)
+    fail "D2B_API_SURFACE_TARGET_DIR must be an absolute path"
+    exit 2
+    ;;
+esac
 public_target="$target_root/public"
 private_target="$target_root/private"
 

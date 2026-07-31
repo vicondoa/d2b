@@ -223,10 +223,11 @@ if [ "${D2B_FLAKE_LOCAL_SHARDS:-0}" = 1 ]; then
   exit 0
 fi
 
-# Single-check shard mode (CI dynamic matrix): D2B_FLAKE_CHECK=<name> instantiates
-# just that one flake check's derivation for the native system, matching the
-# `--no-build` semantics of the full sweep (evaluate + instantiate, do not
-# build). Sharding lets CI fan the checks out across parallel runners so no
+# Single-check shard mode (CI dynamic matrix): D2B_FLAKE_CHECK=<name> normally
+# instantiates just that check's derivation for the native system, matching the
+# `--no-build` semantics of the full sweep. The video binary command-surface
+# contract is the one narrow realized exception because it must execute both
+# patched binaries. Sharding lets CI fan the checks out across parallel runners so no
 # single evaluator process holds every nixosSystem toplevel at once - the
 # OOM/swap-spill the monolithic `nix flake check` hit on a 16 GB hosted runner.
 # The complementary `test-flake-aarch64` job runs only the dedicated
@@ -244,11 +245,19 @@ if [ -n "${D2B_FLAKE_CHECK:-}" ]; then
       ;;
   esac
   native=$(nix eval --raw --impure --expr builtins.currentSystem 2>/dev/null || echo "native")
-  log "--> flake check shard: checks.$native.${D2B_FLAKE_CHECK} (instantiate-only)"
-  set +e
-  nix eval --raw "${flake_ref}#checks.${native}.${D2B_FLAKE_CHECK}.drvPath" >/dev/null
-  rc=$?
-  set -e
+  if [ "$D2B_FLAKE_CHECK" = video-binary-contract ]; then
+    log "--> flake check shard: checks.$native.${D2B_FLAKE_CHECK} (realized)"
+    set +e
+    nix build --no-link --print-out-paths "${flake_ref}#checks.${native}.${D2B_FLAKE_CHECK}" >/dev/null
+    rc=$?
+    set -e
+  else
+    log "--> flake check shard: checks.$native.${D2B_FLAKE_CHECK} (instantiate-only)"
+    set +e
+    nix eval --raw "${flake_ref}#checks.${native}.${D2B_FLAKE_CHECK}.drvPath" >/dev/null
+    rc=$?
+    set -e
+  fi
   if [ "$rc" -eq 0 ]; then
     ok "flake check shard: ${D2B_FLAKE_CHECK}"
   elif [ "$rc" -eq 139 ]; then

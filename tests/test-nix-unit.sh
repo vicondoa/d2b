@@ -61,15 +61,12 @@ fi
 # and CI expresses the same ceiling as the shard matrix's max-parallel value.
 jobs=${D2B_NIX_UNIT_JOBS:-2}
 case "$jobs" in
-  ''|*[!0-9]*|0)
+  1|2|3|4) ;;
+  *)
     fail "D2B_NIX_UNIT_JOBS must be an integer from 1 through 4 (got ${jobs@Q})" || true
     exit 2
     ;;
 esac
-if [ "$jobs" -gt 4 ]; then
-  fail "D2B_NIX_UNIT_JOBS must not exceed 4 (got ${jobs@Q})" || true
-  exit 2
-fi
 
 # Every discovered check gets one process, one log, and one wait. The bounded
 # scheduler overlaps independent pure-eval shards without changing the corpus

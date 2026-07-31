@@ -23,7 +23,7 @@ SHELL := $(CURDIR)/tests/tools/scrub-shell-environment
         heavy-test-integration heavy-test-host-integration heavy-test-hardware \
         layer1-workflow layer1-workflow-check \
         ledger-regen check-inventory pr-checklist-gate nix-unit-pin flake-matrix-pin \
-        runtime-ledger-pin
+        api-surface-pin runtime-ledger-pin
 
 # Current Nix system double, used to address per-system flake.checks attrs.
 # Falls back to x86_64-linux if `nix` is unavailable (e.g. a docs-only host).
@@ -145,6 +145,10 @@ test-flake-list:
 ## Layer-1 evidence even though test-flake also evaluates the checks.
 test-nix-unit:
 	bash tests/test-nix-unit.sh
+
+## api-surface-pin - explicitly regenerate compiler-derived API snapshots.
+api-surface-pin:
+	D2B_API_SURFACE_UPDATE=1 bash tests/tools/api-surface-json.sh
 
 ## test-drift - generated-artifact drift gates (xtask gen-*, vms-json parity).
 test-drift:

@@ -269,10 +269,14 @@ jobs:
           persist-credentials: false
       - name: Require both Rust gate shards to pass
         run: |
-          echo "test-rust-main=${{ needs.test-rust-main.result }}"
-          [ "${{ needs.test-rust-main.result }}" = success ] || exit 1
-          echo "test-rust-remaining=${{ needs.test-rust-remaining.result }}"
-          [ "${{ needs.test-rust-remaining.result }}" = success ] || exit 1
+          failed=0
+          result='${{ needs.test-rust-main.result }}'
+          echo "test-rust-main=$result"
+          [ "$result" = success ] || failed=1
+          result='${{ needs.test-rust-remaining.result }}'
+          echo "test-rust-remaining=$result"
+          [ "$result" = success ] || failed=1
+          [ "$failed" -eq 0 ] || exit 1
           echo "Both Rust gate shards passed."
 
   test-fixture-contracts:
