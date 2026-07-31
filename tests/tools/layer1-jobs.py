@@ -22,6 +22,7 @@ TEMPLATE = ROOT / "tests" / "ci" / "layer1-workflow.template.yml"
 WORKFLOW = ROOT / ".github" / "workflows" / "pr-l1-static-fast.yml"
 SELF_TEST = ROOT / "tests" / "unit" / "meta" / "ci-runner-regression.py"
 CHECKOUT = "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5"
+CACHE = "actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830"
 INSTALL_NIX = "cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077"
 RUST_CACHE = "Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32"
 # Caches /nix through the GitHub Actions cache. The developer host has a local
@@ -156,6 +157,13 @@ NIX_CACHE_FORMAT = "v1"
 # f-string replacement field is ordinary Python source, not escaped f-string
 # text, and would emit four literal braces - an invalid GitHub expression.
 MATRIX_CHECK_SCOPE = "-${{ matrix.check }}"
+# Where the realized lane's targeted binary cache lives. Deliberately under the
+# runner temp directory rather than the workspace: a volatile file inside $ROOT
+# races the source capture that flake evaluation performs, which is the same
+# reason tests/lib.sh keeps its bookkeeping out of the repository root. Written
+# with single braces because this is ordinary module-level source, not f-string
+# text - see MATRIX_CHECK_SCOPE above for the same hazard.
+REALIZED_CACHE_DIR = "${{ runner.temp }}/d2b-realized-cache"
 
 
 def nix_cache_hash_files(job: dict[str, Any]) -> str:
@@ -568,7 +576,25 @@ def flake_x86_realized_job(job: dict[str, Any]) -> str:
     No gdb step here. The eval lane installs it for the segfault retry path in
     test-flake.sh, and that path is unreachable for a realized shard - those
     fail hard on any nonzero status instead of retrying.
+
+    The shard carries a targeted binary cache rather than a whole-store one.
+    Measured on this tree, the single realized check has five direct build
+    inputs and cache.nixos.org already serves three of them; only the two
+    patched VMM packages must ever be built, and they export to about 30 MB of
+    compressed NAR. Caching just those recovers the entire ~16 min compile for
+    an entry small enough not to compete for the repository's ~10 GB budget -
+    unlike the 4G-capped store cache the fixture job needs, which is why
+    NIX_CACHED_JOBS deliberately does not extend to this lane.
+
+    A stale entry is harmless: store paths are content-addressed, so a changed
+    derivation has a changed output path, the restored entry cannot satisfy it,
+    and the shard builds exactly as it does today. The key therefore only has
+    to be good enough for a useful hit rate, and restore-keys are safe.
     """
+    cache_key = (
+        "d2b-realized-v1-${{ runner.os }}-${{ matrix.check }}-"
+        "${{ hashFiles('flake.lock', 'flake.nix', 'pkgs/**') }}"
+    )
     return f"""  {job["ciJobId"]}:
 {needs_line(job)}    runs-on: {job["runsOn"]}
     timeout-minutes: {job["timeoutMinutes"]}
@@ -582,6 +608,19 @@ def flake_x86_realized_job(job: dict[str, Any]) -> str:
         with:
           persist-credentials: false
 {nix_setup_step(job, MATRIX_CHECK_SCOPE)}
+      - name: Realized-check input cache
+        uses: {CACHE}
+        with:
+          path: {REALIZED_CACHE_DIR}
+          key: {cache_key}
+          restore-keys: |
+            d2b-realized-v1-${{{{ runner.os }}}}-${{{{ matrix.check }}}}-
+      - name: Restore prebuilt check inputs
+        # Best-effort: a miss costs the build this cache exists to avoid, and
+        # can never produce a wrong result, so it must not fail the shard.
+        env:
+          D2B_FLAKE_CHECK: ${{{{ matrix.check }}}}
+        run: bash tests/tools/realized-check-cache.sh import "$D2B_FLAKE_CHECK" {REALIZED_CACHE_DIR}
       - name: {job["displayName"]}
         # D2B_FLAKE_CHECK is passed via the step environment, NOT interpolated
         # into the shell command: a flake check attr name is PR-controlled, so
@@ -589,7 +628,11 @@ def flake_x86_realized_job(job: dict[str, Any]) -> str:
         # vector. test-flake.sh additionally rejects names outside [A-Za-z0-9._-].
         env:
           D2B_FLAKE_CHECK: ${{{{ matrix.check }}}}
-        run: make test-flake"""
+        run: make test-flake
+      - name: Publish built check inputs
+        env:
+          D2B_FLAKE_CHECK: ${{{{ matrix.check }}}}
+        run: bash tests/tools/realized-check-cache.sh export "$D2B_FLAKE_CHECK" {REALIZED_CACHE_DIR}"""
 
 
 def flake_x86_outputs_job(job: dict[str, Any]) -> str:

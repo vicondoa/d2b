@@ -605,6 +605,19 @@ jobs:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
+      - name: Realized-check input cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: ${{ runner.temp }}/d2b-realized-cache
+          key: d2b-realized-v1-${{ runner.os }}-${{ matrix.check }}-${{ hashFiles('flake.lock', 'flake.nix', 'pkgs/**') }}
+          restore-keys: |
+            d2b-realized-v1-${{ runner.os }}-${{ matrix.check }}-
+      - name: Restore prebuilt check inputs
+        # Best-effort: a miss costs the build this cache exists to avoid, and
+        # can never produce a wrong result, so it must not fail the shard.
+        env:
+          D2B_FLAKE_CHECK: ${{ matrix.check }}
+        run: bash tests/tools/realized-check-cache.sh import "$D2B_FLAKE_CHECK" ${{ runner.temp }}/d2b-realized-cache
       - name: Flake check shard (x86_64-linux, realized)
         # D2B_FLAKE_CHECK is passed via the step environment, NOT interpolated
         # into the shell command: a flake check attr name is PR-controlled, so
@@ -613,6 +626,10 @@ jobs:
         env:
           D2B_FLAKE_CHECK: ${{ matrix.check }}
         run: make test-flake
+      - name: Publish built check inputs
+        env:
+          D2B_FLAKE_CHECK: ${{ matrix.check }}
+        run: bash tests/tools/realized-check-cache.sh export "$D2B_FLAKE_CHECK" ${{ runner.temp }}/d2b-realized-cache
 
   flake-eval-x86-outputs:
     needs: [tier0]
