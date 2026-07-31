@@ -352,7 +352,7 @@ this program already produced one false pass on a locked Firefox pref.
 The off row reproduces the original symptom exactly, on demand. That is what
 makes this causation rather than coincidence.
 
-With the pref removed and the probe passing on the merits:
+With the pref removed and the probe passing on what the driver reports:
 
 ```
 renderer decode      : decode_cmds=2048 sessions=1
@@ -366,13 +366,80 @@ picture              : 12,619 distinct colours, mean RGB 152,158,158
 
 `decode_cmds` is the load-bearing number: the negative control established that
 it reads `0` when the Vulkan decoder is off, so a nonzero value means Vulkan
-Video decoded, not VA-API. VA-API's only job here is to answer the probe
-honestly.
+Video decoded, not VA-API.
 
 The NVDEC percentage sampled higher than earlier runs in this lab. That is
 **not** claimed as an improvement: this sampling window sat entirely inside
 continuous looping playback, where earlier windows included startup, and the
 earlier configuration has not been re-measured under this window. Unattributed.
+
+### Correction: the guest's VA-API decode is not hardware backed
+
+An earlier revision of this section said the probe now passes "on the merits"
+and called the capability real without qualification. That was overstated, and
+the measurement that should have accompanied the claim contradicts it.
+
+What was actually established is that the guest **advertises** H.264 through
+VA-API, and that the advertisement is what Firefox's probe reads. Whether that
+advertisement is honest all the way to the decode engine is a separate question,
+and it was not asked before the claim was made.
+
+Asked afterwards, with the same probe run on both stacks:
+
+| Decode | Frames | Speed | Host NVDEC |
+|---|---:|---:|---:|
+| Host-native VA-API | 72,180 | 46x | **94-98%** |
+| Guest VA-API through virgl | 135,090 | 264x | **0%, every sample** |
+
+The host row is the control, and it earns its keep twice: it proves the
+instrument attributes NVDEC correctly, and it proves `nvidia-vaapi-driver`
+drives the engine. So the guest row is not a measurement artefact.
+
+The speed is the tell. The guest path ran **5.7x faster than the real hardware
+decoder** while reporting 0 decode errors. Nothing beats the decode engine by
+5.7x while using it, so whatever the guest is doing, it is not that.
+
+Two readings that were wrong along the way, recorded because both are easy to
+repeat:
+
+- **`h264 (native)` in the stream mapping does not mean software.** With
+  `-hwaccel`, "native" names the *decoder*; the hwaccel backend does the work.
+  `pix_fmt: vaapi` is the field that actually answers the question.
+- **`-hwaccel_output_format vaapi` exiting 0 does not prove hardware decode.**
+  It proves VA-API surfaces were produced, not that a decode engine produced
+  them.
+
+### What this does and does not change
+
+Unaffected, and still measured:
+
+- Firefox carries no patches.
+- Firefox decodes through **Vulkan Video**, not VA-API. `InitHWDecoderIfAllowed()`
+  tries `InitVulkanDecoder()` before `InitVAAPIDecoder()`, `decode_cmds` is
+  nonzero, and host NVDEC is nonzero during Firefox playback. That path is
+  genuinely hardware backed.
+- Removing `gfx.blacklist.hardwarevideodecoding` is still the right move and
+  still works: Firefox now reaches its own conclusion from what the driver
+  reports, instead of having the probe bypassed. Playback is correct with zero
+  errors on every surface.
+
+Changed:
+
+- The justification is weaker than claimed. The pref removal replaced "assert a
+  capability the guest does not have" with "rely on a capability the guest
+  advertises but has not been shown to possess". That is an improvement, not the
+  clean result the earlier wording described.
+- The residual risk is narrow but real: if Firefox ever selected VA-API ahead of
+  Vulkan, it would be selecting on an advertisement this lab has now measured
+  against. It does not select it today.
+
+Open, and deliberately not guessed at here: where the guest VA path actually
+terminates. The caps reach the guest, which is why the profiles appear, but the
+decode does not reach NVDEC. Whether virgl's video protocol is carrying the
+decode at all, and what those 135,090 frames contained, is unmeasured. The next
+step is to instrument both ends of a single guest VA decode, which is the method
+that resolved the plane defects and the method whose absence produced the
+overstatement above.
 
 ---
 

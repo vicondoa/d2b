@@ -181,12 +181,18 @@
         # so virglrenderer never called virgl_video_init(), so va_dpy stayed
         # NULL and the virgl2 capset reached the guest with num_video_caps = 0.
         # With video initialised the guest reports H264 ConstrainedBaseline,
-        # Main and High, so the probe passes on the merits and the assertion is
-        # no longer needed.
+        # Main and High, so Firefox reaches its own conclusion from what the
+        # driver reports instead of having the probe bypassed.
         #
-        # Decode is still Vulkan Video, not VA-API: InitHWDecoderIfAllowed
-        # tries InitVulkanDecoder() before InitVAAPIDecoder(), so VA-API is
-        # what makes the capability true, never what decodes a frame.
+        # That advertisement has NOT been shown to be hardware backed. A guest
+        # VA-API decode was later measured against the same decode on the host:
+        # the host reached 94-98% NVDEC, the guest reached 0% on every sample
+        # while running 5.7x faster than the real decoder. So this removes a
+        # bypass rather than establishing a capability. See SOLUTION.md 6a.
+        #
+        # It does not affect what decodes. InitHWDecoderIfAllowed tries
+        # InitVulkanDecoder() before InitVAAPIDecoder(), so Vulkan Video decodes
+        # every frame and VA-API is never used for one.
         extraPolicies = {
           DisableTelemetry = true;
           DisableFirefoxStudies = true;
