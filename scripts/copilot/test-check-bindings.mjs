@@ -126,17 +126,15 @@ function setRolesBlock(dir, text) {
 // The roster the negative cases perturb is read out of the fixture rather than
 // written down here.
 //
-// An earlier revision hardcoded it, on the reasoning that the baseline case
-// would catch any divergence from the real roster. That reasoning was wrong,
-// and the rust seat was right to reject it: the baseline case mutates nothing,
-// so it never evaluates the hardcoded array at all. A stale copy would sail
-// past the baseline, and the negative cases would still pass, because
-// perturbing a stale roster also mismatches `model.rs`. The suite would stay
-// green while testing a roster the repo had stopped using.
+// Writing it down would make a third copy, alongside `model.rs` and
+// `make-records.mjs`, and drift between copies is the exact class the guard
+// under test exists to catch. Nothing in this suite would notice such a drift:
+// the baseline case mutates nothing, so it never evaluates the array at all,
+// and the negative cases still pass, because perturbing a stale roster also
+// mismatches `model.rs`. The suite would stay green while testing a roster the
+// repo had stopped using.
 //
-// Deriving it removes the third copy entirely, which is the same drift class
-// the guard under test exists to prevent. Applying it to the harness rather
-// than only to the code under test is the point.
+// Deriving it removes the third copy instead of documenting it.
 function rosterFromFixture(dir) {
   const src = readFileSync(join(dir, HELPER), "utf8");
   const block = src.match(ROLES_DECL);
