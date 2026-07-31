@@ -1,0 +1,123 @@
+---
+name: d2b-memory
+description: Record, triage, fold, and file d2b delivery memory - deferred work, engineering friction, and debt. Use when a wave defers something, when the toolchain gets in the way, or at the end of a run to fold the open set into the next plan and file the rest as issues.
+user-invocable: true
+---
+
+# Delivery memory
+
+Three registers under `.specify/memory/`, one skill, four operations.
+
+```
+/d2b-memory record   <category> <what happened>
+/d2b-memory triage
+/d2b-memory fold
+/d2b-memory file-issue <id>
+```
+
+The registers exist because the alternative is that every run rediscovers the
+same friction, and every deferral is either forgotten or silently carried
+forever. They are:
+
+| Register | Holds |
+|---|---|
+| `.specify/memory/deferred-work.md` | work a wave consciously chose not to do |
+| `.specify/memory/friction-log.md` | the engineering setup getting in the way |
+| `.specify/memory/engineering-debt.md` | accepted shortcuts with a named cost |
+
+## What may be recorded
+
+**Classification metadata only.** Never transcripts, never validation output,
+never attestation payloads, never diffs. An entry is a category, a wave
+address, a one-line statement, a disposition, and an owner. If an entry needs
+a paragraph of context to be actionable, it is a task, not a memory entry.
+
+Categories, carried forward from the existing register taxonomy:
+`signoff`, `build`, `test`, `merge`, `codegen`, `disk`.
+
+Dispositions: `open`, `folded`, `filed`, `resolved`, `wontfix`.
+
+## record
+
+Append one row. The wave address uses the qualified token
+(`spec001w1`, `adr046w3fu2`); a legacy bare `W1` remains valid for the
+in-flight program.
+
+```
+| spec001w2 | test | 2026-02-14 | Contract lane needs a fixture build every run | open |  |
+```
+
+Record at the moment it happens, not at the end. A friction point noticed
+during a fix round and not written down is lost, and it is the single most
+common thing lost.
+
+**A finding is not a memory entry.** Critical and high panel findings are
+never deferrable and never auto-filed. They are fixed in the round that raised
+them.
+
+**A defect discovered while fixing something else goes here.** That is the
+mechanism that lets a fix round stay scoped to the findings it answers without
+losing the defect.
+
+## triage
+
+Read the open set and assign a disposition. Three rules decide it:
+
+1. **A category recurring across three waves stops being friction and becomes
+   a task.** Promote it into the plan. This is what keeps the register from
+   becoming a graveyard, and it is not a judgement call: count the rows.
+2. **Anything blocking the next wave folds now.** It is not memory; it is
+   scope.
+3. **Everything else that is genuinely low priority leaves the plan
+   entirely** and becomes a GitHub issue. An item that stays `open` across
+   three triages without being promoted or filed is being avoided; force it to
+   one or the other.
+
+## fold
+
+Emit the open, foldable set as planning input for the next feature or wave:
+a short list of concrete items, each with its category, its recurrence count,
+and the wave that raised it. That output goes to the architect, who decides
+whether each becomes a task.
+
+Folding **does not** silently add tasks to a plan. It produces the input to
+that decision, so the plan's task list stays something a person approved.
+
+Mark folded rows `folded` with the target wave in the disposition column.
+
+## file-issue
+
+For a low-priority item that should leave the plan:
+
+```
+gh issue create \
+  --title "<category>: <one-line statement>" \
+  --label "delivery-memory,<category>" \
+  --body-file <rendered body>
+```
+
+Body template:
+
+```markdown
+## What
+
+<the one-line statement, expanded to two or three sentences>
+
+## Where it came from
+
+Raised during <qualified wave token>. Recurred <n> time(s).
+
+## Why it is not in a plan
+
+<the triage reason>
+```
+
+Then mark the row `filed` with the issue number.
+
+**Never auto-file a critical or high finding.** Never include a transcript,
+validation output, an attestation payload, a store path, or a real identifier
+in an issue body. Redact any screenshot before attaching it: credentials,
+tokens, real names, email addresses, host paths, and window titles naming a
+real person or organisation all have to go, and a screenshot that cannot be
+redacted without losing what it demonstrates should be replaced by a text
+description.
