@@ -1825,3 +1825,241 @@ defect. Fix the Rust doc comments first, then run
 `cargo run --manifest-path packages/Cargo.toml -p xtask -- gen-schemas` to
 regenerate `wire-protocol.json`; hand-editing the generated schema would leave
 the canonical source stale and fail the drift contract.
+
+## 19. Rulings recorded before Wave 5 opens, and what debt the wave takes on
+
+Recorded the way sections 9 and 14 were, before any slice opens, so the wave's
+scope and its shared-file decisions are settled rather than argued at review.
+Wave 5 is by a wide margin the program's largest wave - **146 work items across
+twelve parallel groups**, against Wave 4's 32 - so a shared-file collision that
+Wave 4 absorbed in a follow-up round would here collide across several groups at
+once.
+
+Nine rulings follow. Each was verified against the tree and the manifests before
+being recorded, and the three categories this register separates are kept apart:
+an **unmet obligation** names work someone still owes, an **inference** names a
+reading a reviewer must confirm or correct, and a **specification correction**
+names a place where shipped code and written specification disagree and code was
+kept.
+
+### 19.1 Wave 5 stays one sealed wave and runs as per-round integrator prep
+
+**The ruling.** Wave 5 remains **one** wave for panel and seal purposes, on the
+Wave 4 precedent in section 14.1: `ADR-046-implementation-graph.json` pins W5 at
+`workItemCount: 146`, and the section 0 Wave 3 precedent established that adding
+or removing an item contradicts the manifest. The manifest is silent on merge
+rounds, so the number of integration rounds remains free.
+
+**What differs from Wave 4.** Wave 4 landed a single integrator contract-prep
+commit before any worktree opened. At 146 items that is not reproducible: the
+prep commit would have to scaffold shared surfaces for twelve groups blind,
+before any slice has demonstrated what it actually reads. Wave 5 therefore lands
+**one prep commit per round**, each scaffolding only the surfaces that round's
+slices contend on. The Integrator-prep-first pattern's guarantee - that a scope
+worktree opens against a stable contract - is preserved per round, which is the
+level at which slices actually run concurrently.
+
+**Tag spelling.** Unchanged from the section 14.1 table, with `W5` substituted:
+`( W5 )` for every prep and slice commit, `( W5fu<M> )` for the integrator merge
+closing round `M`, and `( W5fu<M> <S><N> )` for a single finding. `W5a` stays
+reserved for its documented post-wave meaning.
+
+**Class: inference.** A reviewer should confirm that per-round prep does not
+offend the binding panel's one-snapshot requirement. It does not appear to: that
+requirement binds the panel to one immutable snapshot at wave close, which the
+final round's merge produces.
+
+### 19.2 The canonical crate names are the ones that exist
+
+**The ruling.** Where a destination names a crate that does not exist and a
+near-synonym does, the existing crate is canon:
+
+| Manifest also spells | Canonical crate | Evidence |
+| --- | --- | --- |
+| `d2b-bus-session` | **`d2b-session`** | 19 source files, workspace member at `packages/Cargo.toml:45` |
+| `d2b-client`, `d2b-bus-client` | **`d2b-resource-client`** | 6 source files, workspace member at line 28 |
+| `d2b-zone-router` | **`d2b-zone-routing`** | 4 source files, workspace member at line 27 |
+
+Every alternative spelling is absent from `packages/` and from the workspace
+member list. This is the AGENTS.md "Existing code is canon" rule applied
+directly: the manifest prose disagrees with committed, passing code, so the code
+wins and the drift is recorded rather than resolved by creating a second crate.
+
+**Why this is worth a ruling rather than a slice-local judgement.** The failure
+mode is not ambiguity, it is duplication. A slice that honours the absent
+spelling creates a parallel session, client, or router implementation, and the
+program then has two homes for one concept - exactly the outcome the Wave 4
+bundle-DTO ruling in section 14.6 was recorded to prevent.
+
+**Class: specification correction.** Code kept; the manifest destinations are
+stale prose for these entries only.
+
+### 19.3 The zone bundle DTO is `packages/d2b-contracts/src/zone_bundle.rs`
+
+**The ruling.** The crate was already decided in section 14.6 (`d2b-contracts`).
+What remained open is the module path, which the manifest spells two ways:
+`ADR046-cli-011` names `packages/d2b-contracts/src/zone_bundle.rs` and
+`ADR046-volume-006` names `packages/d2b-contracts/src/v3/zone_bundle.rs`.
+Neither file exists. **The crate root wins.**
+
+**What was verified.** Wave 4 landed the sibling bundle DTO at
+`packages/d2b-contracts/src/generation_bundle.rs` - the crate root, not `v3/`.
+The `v3/` directory holds the resource object model: `resource.rs`,
+`resource_ref.rs`, `resource_schema.rs`, `resource_status.rs`, and the
+per-resource DTOs. A bundle is an emitted configuration artifact, not a resource,
+so root placement is the convention the tree already shipped and `v3/` would put
+one concept in two namespaces.
+
+**Class: specification correction.** Code kept; `ADR046-volume-006`'s `v3/`
+spelling is stale for this entry only.
+
+### 19.4 `redb` lands with the slice that consumes it, not in prep
+
+**The ruling.** The `redb = "=4.1.0"` dependency, and any `cargo-deny` license or
+advisory allowance it needs, land in the **`ADR046-store-004` slice commit**, not
+in a prep commit.
+
+**What was verified.** `packages/d2b-resource-store-redb/Cargo.toml` currently
+declares no `redb` dependency, and `packages/Cargo.lock` has no `redb` entry, so
+nothing in the workspace consumes it today. The version is pinned exactly at
+`=4.1.0` in `proofs/redb-resource-store-spike/Cargo.toml` and resolved to
+`4.1.0` in that spike's `Cargo.lock`; "the already-pinned redb API" in the work
+item's detailed design refers to that pin.
+
+**The precedent this follows.** The Wave 3 prep commit's panel ruled exactly this
+for `rtnetlink` and `nftnl`, and the reasoning is recorded inline in
+`packages/Cargo.toml`: a new third-party dependency ships with the scope commit
+that first consumes it, so the license and advisory whitelist update lands in the
+same commit as the consumer. `rustix` went into that prep only because prep stubs
+had to compile against it. No W5 prep stub needs `redb`, so the exception does
+not apply and only one slice consumes it.
+
+**Class: inference.** Defensible from an explicit prior panel ruling on
+materially identical facts, but not a stated rule.
+
+### 19.5 The corrected SPIKE-01 rerun is a measurement of record, and amending the
+canonical figure is part of the work item
+
+**The ruling.** `ADR046-store-004` is gated on a rerun that must pass the
+unchanged 24,576 KiB whole-process maximum-RSS threshold with no baseline
+subtraction. That rerun is a **measurement of record**, and landing it requires
+four things together: the corrected fixture, the new figure in
+`proofs/redb-resource-store-spike/RESULTS.md`, the amended canonical figure in
+`docs/specs/ADR-046-validation-and-delivery.md` section 3.2, and a Gate 0
+re-evaluation. Any one alone is incomplete.
+
+**What was verified.** `RESULTS.md` records the canonical run as MEASURED-FAIL at
+25,216 KiB (24.625 MiB), 640 KiB or about 2.6% above the gate.
+`RESULTS-corrections.md` records a **prototype** of four corrections measuring
+18,468 KiB, a pass with 6,108 KiB (24.9%) of headroom. That document is explicit
+and correct that it has no authority over the canonical measurement, does not
+supersede `RESULTS.md`, does not reopen the wave-scoping decision, and that
+changing the canonical figure requires a specification amendment plus Gate 0
+re-evaluation. This ruling does not weaken any of those bounds; it schedules the
+amendment they require.
+
+**The lint consequence, which is easy to miss.** The whole-process RSS value is
+one of the seven canonical feasibility measurements that
+`policy_adr046_spec_literals.rs` inventories globally across `docs/**` and
+`CHANGELOG.md`, matching RSS values together with their units. Changing the
+canonical figure therefore also changes that lint's pinned inventory and every
+registered site. A slice that edits `RESULTS.md` alone will fail the lint, and a
+slice that edits the lint alone will ship a figure contradicted by the register.
+
+**The finding the corrections document already surfaced, which the wave inherits.**
+Correction 3, shared immutable ChangeBatch fan-out, contributes **zero** to the
+gate number, because `src/bin/rss-fixture.rs` registers its watches only after
+its last write, so `dispatch_watch` is never called with a non-empty watch list.
+The entire recovery comes from corrections 1 and 2. The canonical fixture
+therefore under-tests the design it gates. This is recorded as an **unmet
+obligation** against `ADR046-store-004`: the clone-per-watcher path needs
+coverage that actually executes it, and a fixture that cannot exercise a
+correction cannot be cited as evidence that the correction works.
+
+**Class: unmet obligation**, for the fan-out coverage gap; the amendment
+scheduling itself is an inference.
+
+### 19.6 Hard latency targets without a pinned runner are recorded, not met
+
+**The ruling.** W5 work items naming hard p95 or p99 latency targets are
+delivered with their obligation **recorded as unmeetable** in this register,
+exactly as Wave 4 did, rather than marked met on advisory evidence.
+
+**What was verified.** AGENTS.md states that `test-performance-budgets` prints
+`SKIP` and enforces no latency budget unless `D2B_PERF_STABLE=1`, that promoting
+it requires a pinned self-hosted runner with that variable set, and that "the
+project does not currently have such a runner."
+`tests/layer1-jobs.json` classifies the job `advisory`, and an advisory result
+must not be cited as validation evidence.
+
+**What this does not license.** It does not license deleting the target,
+loosening it, or asserting it from a developer-workstation number. The obligation
+stays open and visible until a runner exists.
+
+**Class: unmet obligation.**
+
+### 19.7 `ADR046-zone-control-015` stays blocked pending an amendment
+
+**The ruling.** The item is **not** delivered in W5 on invented facts. Section
+12.3 and the required-outputs register row already record the gap: the required
+derivation outputs have no path, filename, output name, or layout anywhere in the
+specification set, and the recorded remedy is an amendment **before**
+`ADR046-zone-control-015`.
+
+**The consequence for two dependent items, stated explicitly.**
+`ADR046-zone-control-016` lists `ADR046-zone-control-015` among its
+prerequisites, and `ADR046-zone-control-021` depends on `016` in turn. Both are in
+`wi:core-config-hub:w5`. A slice that delivers `016` while `015` is blocked is
+building on a contract that does not exist yet, so the blocking status propagates
+and must be reported rather than absorbed.
+
+**Class: specification gap.** The remedy is an amendment, which is owner work,
+not slice work.
+
+### 19.8 The security-key semantic projection is not invented
+
+**The ruling.** Section 13.3 records that security-key cannot construct a signed
+projection factory at all, because no backing set is defined. W5 does not invent
+one. This follows the Wave 3 precedent, which correctly refused to invent a
+missing backing set rather than shipping a plausible guess.
+
+**Class: specification gap**, carried forward unchanged.
+
+### 19.9 What Wave 5 takes on from the standing register
+
+Wave 5 is where a large share of the program's accumulated debt comes due,
+because the items that were deferred "pending the durable store" all name
+destinations this wave owns. Carried in explicitly, so no reviewer has to
+reconstruct it:
+
+| Debt | Recorded at | Owner in W5 |
+| --- | --- | --- |
+| `zone-bootstrap` / `zone-enroll` handler still unimplemented | `ADR046-routing-016` row, ruled W5 | alongside `ADR046-store-004` |
+| Sealed enrollment record does not bind the child uid | Wave 3 carry-forward table | `ADR046-store-004`, `transaction.rs` |
+| No durable persistence for enrollment | Wave 3 carry-forward table | `ADR046-store-004` |
+| Appended Zone tags cannot reach the handshake offer encoder | Wave 3 carry-forward table | `ADR046-exec-018` |
+| `volumeAttachmentDefaults` entry shape undefined | primitive-surface inference table | `v3/volume.rs` |
+| `SensitivityClass` admits values only `private` attests | primitive-surface inference table | `v3/volume.rs` |
+| `RepairPolicy` / `CleanupPolicy` / `AdoptionPolicy` / `EntryRestartPolicy` / `LeaseClass` / `Invariant` value sets exemplified, never enumerated | primitive-surface inference table | `v3/volume.rs`, `v3/process.rs` |
+| MTU bound `576..=9216` inferred | primitive-surface inference table | `v3/network.rs` |
+| `ExpirySpec.hardDeadlineMs` lease cap not a stated rule | primitive-surface inference table | `v3/credential.rs` |
+| Canonical JSON relies on the Nix builtin rather than a canonicalization implementation | primitive-surface inference table | `zone-resources-json.nix` |
+
+The four items whose destinations are the production store chain -
+`ADR046-store-004`, `ADR046-store-002`, `ADR046-store-005`, `ADR046-reconcile-003` -
+are the wave's critical path. Until they land, much of what Waves 3 and 4
+delivered is proven only against test doubles, which is the honest reading of
+their validation evidence rather than a criticism of it.
+
+### 19.10 Summary of what this section adds to the register
+
+- Three **specification corrections**: the canonical crate names (19.2), the
+  zone bundle module path (19.3), and by extension the manifest destinations that
+  spell them otherwise.
+- Three **unmet obligations**: the ChangeBatch fan-out coverage gap that the
+  canonical RSS fixture cannot exercise (19.5), the latency targets that no
+  runner can measure (19.6), and the standing debt table in 19.9.
+- Two **specification gaps** carried forward: derivation output layout (19.7) and
+  the security-key backing set (19.8).
+- Two **inferences** a reviewer should confirm: per-round prep against the
+  one-snapshot requirement (19.1) and the `redb` dependency placement (19.4).
