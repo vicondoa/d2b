@@ -5,11 +5,11 @@ use d2b_contracts::v3::credential::{
 };
 use d2b_contracts::v3::{ResourceGeneration, ResourceRef, ResourceUid};
 use d2b_credential_service::{
-    error_for_failure_state, CredentialAdmission, CredentialAuthorization, CredentialFailureState,
-    CredentialMetadata, CredentialMethod, CredentialOutcomeCode, CredentialProvider,
-    CredentialRequest, CredentialResponse, CredentialServer, CredentialServiceError,
-    CredentialServiceErrorCode, CredentialTransport, DeliveryResponse, DeliveryRouteDigest,
-    DeliverySessionParams, MetadataResponse,
+    CredentialAdmission, CredentialAuthorization, CredentialFailureState, CredentialMetadata,
+    CredentialMethod, CredentialOutcomeCode, CredentialProvider, CredentialRequest,
+    CredentialResponse, CredentialServer, CredentialServiceError, CredentialServiceErrorCode,
+    CredentialTransport, DeliveryResponse, DeliveryRouteDigest, DeliverySessionParams,
+    MetadataResponse, error_for_failure_state,
 };
 
 struct Admission {
@@ -275,9 +275,11 @@ fn provider_cannot_replace_the_bus_authorized_delivery_binding() {
             result: Ok(acquire_authorization(authorized.clone())),
         },
     );
-    assert!(matching_server
-        .call(CredentialMethod::AcquireToken, request())
-        .is_ok());
+    assert!(
+        matching_server
+            .call(CredentialMethod::AcquireToken, request())
+            .is_ok()
+    );
 
     for change in [
         DeliveryChange::CredentialRef,
@@ -375,7 +377,9 @@ fn non_delivery_methods_reject_a_delivery_shaped_response() {
             result: Ok(metadata_authorization()),
         },
     );
-    assert!(server
-        .call(CredentialMethod::InspectMetadata, request())
-        .is_err());
+    assert!(
+        server
+            .call(CredentialMethod::InspectMetadata, request())
+            .is_err()
+    );
 }

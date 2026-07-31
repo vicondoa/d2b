@@ -110,8 +110,11 @@ const EXEMPT_CRATES: &[(&str, &str)] = &[
 /// and none is a Provider: the supervisor launches Providers rather than
 /// implementing one, so holding it to the Provider layout would assert a
 /// dossier and an identity it has no business declaring.
-const NON_PROVIDER_PREFIXED: &[&str] =
-    &["d2b-provider", "d2b-provider-supervisor", "d2b-provider-toolkit"];
+const NON_PROVIDER_PREFIXED: &[&str] = &[
+    "d2b-provider",
+    "d2b-provider-supervisor",
+    "d2b-provider-toolkit",
+];
 
 // ---------------------------------------------------------------------------
 // The checker, expressed over a crate directory so it can be driven by both the

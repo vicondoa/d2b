@@ -4,9 +4,9 @@ use d2b_contracts::v3::credential::{
 };
 use d2b_contracts::v3::{ResourceGeneration, ResourceRef, ResourceUid};
 use d2b_credential_service::{
-    encode_outer, CredentialAuthorization, CredentialMetadata, CredentialMethod,
-    CredentialOutcomeCode, CredentialRequest, CredentialServiceError, CredentialServiceErrorCode,
-    DeliveryResponse, DeliveryRouteDigest, DeliverySessionParams, SensitiveDeliveryRecord,
+    CredentialAuthorization, CredentialMetadata, CredentialMethod, CredentialOutcomeCode,
+    CredentialRequest, CredentialServiceError, CredentialServiceErrorCode, DeliveryResponse,
+    DeliveryRouteDigest, DeliverySessionParams, SensitiveDeliveryRecord, encode_outer,
 };
 
 #[test]
