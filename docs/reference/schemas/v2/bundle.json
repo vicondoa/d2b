@@ -146,7 +146,7 @@
   "additionalProperties": false,
   "definitions": {
     "BundleClosureRef": {
-      "description": "Reference to a per-VM closure artifact under closures/<vm>.json.",
+      "description": "Reference to a per-VM closure artifact under `closures/<vm>.json`.",
       "type": "object",
       "required": [
         "path",

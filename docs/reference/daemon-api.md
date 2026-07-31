@@ -232,15 +232,15 @@ host reboot.
 | `UsbipUnbindCliRequest` | struct | [`UsbipUnbindCliRequest`](../../packages/d2b-contracts/src/public_wire.rs#L559) | struct { `vm`: `String`; `bus_id`: `String`; `flags`: `MutationFlags` } |
 | `StoreVerifyRequest` | struct | [`StoreVerifyRequest`](../../packages/d2b-contracts/src/public_wire.rs#L568) | struct { `vm`: `String`; `repair`: `bool` } |
 | `ReadGuestConfigRequest` | struct | [`ReadGuestConfigRequest`](../../packages/d2b-contracts/src/public_wire.rs#L581) | struct { `vm`: `String` } |
-| `MigrateRequest` | struct | [`MigrateRequest`](../../packages/d2b-contracts/src/public_wire.rs#L2040) | struct { `flags`: `MutationFlags` } |
-| `HostPrepareRequest` | struct | [`HostPrepareRequest`](../../packages/d2b-contracts/src/public_wire.rs#L2047) | struct { `flags`: `MutationFlags` } |
-| `HostDestroyRequest` | struct | [`HostDestroyRequest`](../../packages/d2b-contracts/src/public_wire.rs#L2054) | struct { `flags`: `MutationFlags` } |
-| `HostInstallRequest` | struct | [`HostInstallRequest`](../../packages/d2b-contracts/src/public_wire.rs#L2061) | struct { `flags`: `MutationFlags`; `enable`: `bool`; `start`: `bool`; `no_start`: `bool` } |
-| `HostReconcileRequest` | struct | [`HostReconcileRequest`](../../packages/d2b-contracts/src/public_wire.rs#L2079) | struct { `flags`: `MutationFlags`; `network`: `bool` } |
-| `UsbSecurityKeyStatusRequest` | struct | [`UsbSecurityKeyStatusRequest`](../../packages/d2b-contracts/src/public_wire.rs#L3695) | empty struct |
-| `UsbSecurityKeySessionsRequest` | struct | [`UsbSecurityKeySessionsRequest`](../../packages/d2b-contracts/src/public_wire.rs#L3781) | empty struct |
-| `UsbSecurityKeyCancelRequest` | struct | [`UsbSecurityKeyCancelRequest`](../../packages/d2b-contracts/src/public_wire.rs#L3835) | struct { `session_id`: `Option<String>`; `current`: `bool` } |
-| `UsbSecurityKeyTestRequest` | struct | [`UsbSecurityKeyTestRequest`](../../packages/d2b-contracts/src/public_wire.rs#L3860) | struct { `vm`: `String` } |
+| `MigrateRequest` | struct | [`MigrateRequest`](../../packages/d2b-contracts/src/public_wire.rs#L2041) | struct { `flags`: `MutationFlags` } |
+| `HostPrepareRequest` | struct | [`HostPrepareRequest`](../../packages/d2b-contracts/src/public_wire.rs#L2048) | struct { `flags`: `MutationFlags` } |
+| `HostDestroyRequest` | struct | [`HostDestroyRequest`](../../packages/d2b-contracts/src/public_wire.rs#L2055) | struct { `flags`: `MutationFlags` } |
+| `HostInstallRequest` | struct | [`HostInstallRequest`](../../packages/d2b-contracts/src/public_wire.rs#L2062) | struct { `flags`: `MutationFlags`; `enable`: `bool`; `start`: `bool`; `no_start`: `bool` } |
+| `HostReconcileRequest` | struct | [`HostReconcileRequest`](../../packages/d2b-contracts/src/public_wire.rs#L2080) | struct { `flags`: `MutationFlags`; `network`: `bool` } |
+| `UsbSecurityKeyStatusRequest` | struct | [`UsbSecurityKeyStatusRequest`](../../packages/d2b-contracts/src/public_wire.rs#L3696) | empty struct |
+| `UsbSecurityKeySessionsRequest` | struct | [`UsbSecurityKeySessionsRequest`](../../packages/d2b-contracts/src/public_wire.rs#L3782) | empty struct |
+| `UsbSecurityKeyCancelRequest` | struct | [`UsbSecurityKeyCancelRequest`](../../packages/d2b-contracts/src/public_wire.rs#L3836) | struct { `session_id`: `Option<String>`; `current`: `bool` } |
+| `UsbSecurityKeyTestRequest` | struct | [`UsbSecurityKeyTestRequest`](../../packages/d2b-contracts/src/public_wire.rs#L3861) | struct { `vm`: `String` } |
 
 ### Broker socket request types
 
@@ -349,21 +349,21 @@ see the auto-generated tables above for the committed Rust variants.
 | `ExecOpResponse` | enum | [`ExecOpResponse`](../../packages/d2b-contracts/src/public_wire.rs#L1233) | `Start` - (ExecStartResult); `DetachedCreate` - (ExecDetachedCreateResult); `WriteStdin` - (ExecWriteStdinResult); `ReadOutput` - (ExecReadOutputResult); `Signal` - (ExecControlResult); `Resize` - (ExecControlResult); `Wait` - (ExecWaitResult); `Close` - (ExecCloseResult); `List` - (ExecDetachedListResult); `Logs` - (ExecDetachedLogsResult); `Status` - (ExecDetachedStatusResult); `Kill` - (ExecDetachedKillResult) |
 | `ShellOpResponse` | enum | [`ShellOpResponse`](../../packages/d2b-contracts/src/public_wire.rs#L1532) | `Attach` - (ShellAttachResult); `WriteStdin` - (crate::terminal_wire::TerminalWriteStdinResult); `ReadOutput` - (crate::terminal_wire::TerminalReadOutputChunk); `Resize` - (crate::terminal_wire::TerminalControlResult); `Wait` - (crate::terminal_wire::TerminalWaitResult); `CloseStdin` - (crate::terminal_wire::TerminalCloseResult); `CloseAttach` - (ShellDetachResult); `List` - (ShellListResult); `Detach` - (ShellDetachResult); `Kill` - (ShellKillResult) |
 | `ConsoleOpResponse` | enum | [`ConsoleOpResponse`](../../packages/d2b-contracts/src/public_wire.rs#L1825) | `Attach` - (ConsoleAttachResult); `WriteStdin` - (ConsoleControlResult); `ReadOutput` - (ConsoleReadOutputResult); `Resize` - (ConsoleControlResult); `Wait` - (ConsoleWaitResult); `Close` - (ConsoleCloseResult) |
-| `AudioOpResponse` | enum | [`AudioOpResponse`](../../packages/d2b-contracts/src/public_wire.rs#L2030) | `Status` - (AudioStatusResult); `SetVolume` - (AudioSetResult); `Mute` - (AudioSetResult) |
-| `MutatingVerbResponse` | struct | [`MutatingVerbResponse`](../../packages/d2b-contracts/src/public_wire.rs#L2112) | struct { `verb`: `String`; `outcome`: `MutatingVerbOutcome`; `target_wave`: `Option<String>`; `summary`: `Option<String>`; `remediation`: `Option<String>`; `api_ready`: `Option<String>` } |
-| `CapabilitiesResponse` | struct | [`CapabilitiesResponse`](../../packages/d2b-contracts/src/public_wire.rs#L2138) | struct { `broker_socket`: `String`; `capabilities`: `Vec<FeatureFlag>`; `public_socket`: `String`; `server_version`: `Version`; `selected_version`: `Version` } |
-| `AuthStatusResponse` | struct | [`AuthStatusResponse`](../../packages/d2b-contracts/src/public_wire.rs#L2148) | struct { `allowed_subcommands`: `Vec<String>`; `denied_subcommands`: `Vec<DeniedCommandHint>`; `role`: `AuthRole`; `sockets`: `Vec<SocketReachability>` } |
-| `ListResponse` | struct | [`ListResponse`](../../packages/d2b-contracts/src/public_wire.rs#L2157) | struct { `vms`: `Vec<ListEntry>`; `read_model`: `Option<PublicReadModelMetadata>` } |
-| `StatusResponse` | struct | [`StatusResponse`](../../packages/d2b-contracts/src/public_wire.rs#L2165) | struct { `entries`: `Vec<VmStatus>`; `read_model`: `Option<PublicReadModelMetadata>` } |
-| `AuditResponse` | struct | [`AuditResponse`](../../packages/d2b-contracts/src/public_wire.rs#L2185) | struct { `entries`: `Vec<AuditEntry>` } |
-| `HostCheckResponse` | struct | [`HostCheckResponse`](../../packages/d2b-contracts/src/public_wire.rs#L2191) | struct { `exit_code`: `u8`; `findings`: `Vec<HostFinding>` } |
-| `KeysListResponse` | struct | [`KeysListResponse`](../../packages/d2b-contracts/src/public_wire.rs#L2209) | struct { `entries`: `Vec<KeyEntry>` } |
-| `KeysShowResponse` | struct | [`KeysShowResponse`](../../packages/d2b-contracts/src/public_wire.rs#L2215) | struct { `vm`: `String`; `env`: `Option<String>`; `managed_key_path`: `String`; `public_key`: `String`; `fingerprint`: `String`; `known_hosts_entry`: `Option<String>` } |
-| `UsbipProbeResponse` | struct | [`UsbipProbeResponse`](../../packages/d2b-contracts/src/public_wire.rs#L2456) | struct { `entries`: `Vec<UsbipProbeEntry>` } |
-| `UsbSecurityKeyStatusResponse` | struct | [`UsbSecurityKeyStatusResponse`](../../packages/d2b-contracts/src/public_wire.rs#L3766) | struct { `host_proxy_enabled`: `bool`; `physical_keys`: `Vec<UsbSkPhysicalKeyStatus>`; `vm_devices`: `Vec<UsbSkVirtualDeviceStatus>`; `lease`: `UsbSkLeaseStatus` } |
-| `UsbSecurityKeySessionsResponse` | struct | [`UsbSecurityKeySessionsResponse`](../../packages/d2b-contracts/src/public_wire.rs#L3828) | struct { `sessions`: `Vec<UsbSkSession>` } |
-| `UsbSecurityKeyCancelResponse` | struct | [`UsbSecurityKeyCancelResponse`](../../packages/d2b-contracts/src/public_wire.rs#L3846) | struct { `cancelled_session_id`: `Option<String>`; `already_idle`: `bool` } |
-| `UsbSecurityKeyTestResponse` | struct | [`UsbSecurityKeyTestResponse`](../../packages/d2b-contracts/src/public_wire.rs#L3883) | struct { `vm`: `String`; `ok`: `bool`; `checks`: `Vec<UsbSkTestCheck>` } |
+| `AudioOpResponse` | enum | [`AudioOpResponse`](../../packages/d2b-contracts/src/public_wire.rs#L2031) | `Status` - (AudioStatusResult); `SetVolume` - (AudioSetResult); `Mute` - (AudioSetResult) |
+| `MutatingVerbResponse` | struct | [`MutatingVerbResponse`](../../packages/d2b-contracts/src/public_wire.rs#L2113) | struct { `verb`: `String`; `outcome`: `MutatingVerbOutcome`; `target_wave`: `Option<String>`; `summary`: `Option<String>`; `remediation`: `Option<String>`; `api_ready`: `Option<String>` } |
+| `CapabilitiesResponse` | struct | [`CapabilitiesResponse`](../../packages/d2b-contracts/src/public_wire.rs#L2139) | struct { `broker_socket`: `String`; `capabilities`: `Vec<FeatureFlag>`; `public_socket`: `String`; `server_version`: `Version`; `selected_version`: `Version` } |
+| `AuthStatusResponse` | struct | [`AuthStatusResponse`](../../packages/d2b-contracts/src/public_wire.rs#L2149) | struct { `allowed_subcommands`: `Vec<String>`; `denied_subcommands`: `Vec<DeniedCommandHint>`; `role`: `AuthRole`; `sockets`: `Vec<SocketReachability>` } |
+| `ListResponse` | struct | [`ListResponse`](../../packages/d2b-contracts/src/public_wire.rs#L2158) | struct { `vms`: `Vec<ListEntry>`; `read_model`: `Option<PublicReadModelMetadata>` } |
+| `StatusResponse` | struct | [`StatusResponse`](../../packages/d2b-contracts/src/public_wire.rs#L2166) | struct { `entries`: `Vec<VmStatus>`; `read_model`: `Option<PublicReadModelMetadata>` } |
+| `AuditResponse` | struct | [`AuditResponse`](../../packages/d2b-contracts/src/public_wire.rs#L2186) | struct { `entries`: `Vec<AuditEntry>` } |
+| `HostCheckResponse` | struct | [`HostCheckResponse`](../../packages/d2b-contracts/src/public_wire.rs#L2192) | struct { `exit_code`: `u8`; `findings`: `Vec<HostFinding>` } |
+| `KeysListResponse` | struct | [`KeysListResponse`](../../packages/d2b-contracts/src/public_wire.rs#L2210) | struct { `entries`: `Vec<KeyEntry>` } |
+| `KeysShowResponse` | struct | [`KeysShowResponse`](../../packages/d2b-contracts/src/public_wire.rs#L2216) | struct { `vm`: `String`; `env`: `Option<String>`; `managed_key_path`: `String`; `public_key`: `String`; `fingerprint`: `String`; `known_hosts_entry`: `Option<String>` } |
+| `UsbipProbeResponse` | struct | [`UsbipProbeResponse`](../../packages/d2b-contracts/src/public_wire.rs#L2457) | struct { `entries`: `Vec<UsbipProbeEntry>` } |
+| `UsbSecurityKeyStatusResponse` | struct | [`UsbSecurityKeyStatusResponse`](../../packages/d2b-contracts/src/public_wire.rs#L3767) | struct { `host_proxy_enabled`: `bool`; `physical_keys`: `Vec<UsbSkPhysicalKeyStatus>`; `vm_devices`: `Vec<UsbSkVirtualDeviceStatus>`; `lease`: `UsbSkLeaseStatus` } |
+| `UsbSecurityKeySessionsResponse` | struct | [`UsbSecurityKeySessionsResponse`](../../packages/d2b-contracts/src/public_wire.rs#L3829) | struct { `sessions`: `Vec<UsbSkSession>` } |
+| `UsbSecurityKeyCancelResponse` | struct | [`UsbSecurityKeyCancelResponse`](../../packages/d2b-contracts/src/public_wire.rs#L3847) | struct { `cancelled_session_id`: `Option<String>`; `already_idle`: `bool` } |
+| `UsbSecurityKeyTestResponse` | struct | [`UsbSecurityKeyTestResponse`](../../packages/d2b-contracts/src/public_wire.rs#L3884) | struct { `vm`: `String`; `ok`: `bool`; `checks`: `Vec<UsbSkTestCheck>` } |
 
 ### Broker socket response types
 
@@ -467,7 +467,7 @@ running live guest activation.
 
 | Type | Kind | Rust definition | Shape |
 | --- | --- | --- | --- |
-| `VmLifecycleState` | enum | [`VmLifecycleState`](../../packages/d2b-contracts/src/public_wire.rs#L2610) | `Stopped`; `Starting`; `Booted`; `Running`; `Stopping`; `Restarting`; `Failed`; `Unknown` |
+| `VmLifecycleState` | enum | [`VmLifecycleState`](../../packages/d2b-contracts/src/public_wire.rs#L2611) | `Stopped`; `Starting`; `Booted`; `Running`; `Stopping`; `Restarting`; `Failed`; `Unknown` |
 
 ### Other documented enums
 
@@ -536,25 +536,25 @@ running live guest activation.
 | `ConsoleOp` | enum | [`ConsoleOp`](../../packages/d2b-contracts/src/public_wire.rs#L1693) | `Attach` - (ConsoleAttachArgs); `WriteStdin` - (ConsoleWriteStdinArgs); `ReadOutput` - (ConsoleReadOutputArgs); `Resize` - (ConsoleResizeArgs); `Wait` - (ConsoleWaitArgs); `Close` - (ConsoleCloseArgs) |
 | `AudioChannel` | enum | [`AudioChannel`](../../packages/d2b-contracts/src/public_wire.rs#L1839) | `Speaker`; `Microphone` |
 | `AudioEnforcementPosture` | enum | [`AudioEnforcementPosture`](../../packages/d2b-contracts/src/public_wire.rs#L1853) | `HostAndGuest`; `HostOnly`; `GuestOnly`; `Unsupported` |
-| `AudioProviderKind` | enum | [`AudioProviderKind`](../../packages/d2b-contracts/src/public_wire.rs#L1894) | `LocalHypervisor`; `QemuMedia`; `AcaSandbox` |
-| `AudioOp` | enum | [`AudioOp`](../../packages/d2b-contracts/src/public_wire.rs#L1939) | `Status` - (AudioStatusArgs); `SetVolume` - (AudioSetVolumeArgs); `Mute` - (AudioMuteArgs) |
-| `AudioSetApplied` | enum | [`AudioSetApplied`](../../packages/d2b-contracts/src/public_wire.rs#L2002) | `HostAndGuest`; `HostOnly`; `GuestOnly`; `Unsupported` |
-| `MutatingVerbOutcome` | enum | [`MutatingVerbOutcome`](../../packages/d2b-contracts/src/public_wire.rs#L2127) | `DryRunPlanned`; `Applied`; `ApiReadyTimeout`; `NotYetImplemented`; `BrokerError`; `InvalidRequest` |
-| `UsbipProbeStatus` | enum | [`UsbipProbeStatus`](../../packages/d2b-contracts/src/public_wire.rs#L2227) | `Bound`; `Unbound`; `Degraded`; `Enrollable`; `Enrolled`; `Stale`; `DirectConfig`; `Unknown` |
-| `UsbipDurableClaimState` | enum | [`UsbipDurableClaimState`](../../packages/d2b-contracts/src/public_wire.rs#L2245) | `Missing`; `HeldByDesiredOwner`; `HeldByOtherOwner`; `StaleOwner`; `Corrupt`; `NotApplicable`; `Unknown` |
-| `UsbipHostBindState` | enum | [`UsbipHostBindState`](../../packages/d2b-contracts/src/public_wire.rs#L2270) | `Unbound`; `BoundToUsbipHost`; `BoundToUnexpectedDriver`; `DeviceMissing`; `NotApplicable`; `Unknown` |
-| `UsbipHostCarrierState` | enum | [`UsbipHostCarrierState`](../../packages/d2b-contracts/src/public_wire.rs#L2283) | `Absent`; `Unavailable`; `WithheldForOwner`; `Ready`; `DepartedDuringProbe`; `NotApplicable`; `Unknown` |
-| `UsbipProxyState` | enum | [`UsbipProxyState`](../../packages/d2b-contracts/src/public_wire.rs#L2297) | `NotDeclared`; `Stopped`; `Starting`; `Listening`; `Stale`; `Failed`; `NotApplicable`; `Unknown` |
-| `UsbipGuestImportState` | enum | [`UsbipGuestImportState`](../../packages/d2b-contracts/src/public_wire.rs#L2320) | `Detached`; `Imported`; `Unavailable`; `NotApplicable`; `Unknown` |
-| `UsbipTopologyState` | enum | [`UsbipTopologyState`](../../packages/d2b-contracts/src/public_wire.rs#L2338) | `Match`; `Mismatch`; `Incomplete`; `NotObserved`; `NotApplicable`; `Unknown` |
-| `UsbipPolicyState` | enum | [`UsbipPolicyState`](../../packages/d2b-contracts/src/public_wire.rs#L2351) | `Allowed`; `Denied`; `Missing`; `NotApplicable`; `Unknown` |
-| `UsbipProbeDegradedReasonCode` | enum | [`UsbipProbeDegradedReasonCode`](../../packages/d2b-contracts/src/public_wire.rs#L2370) | `PolicyFailed`; `DeviceDepartedBeforeClaim`; `DeviceDepartedAfterLock`; `DeviceDepartedDuringMutation`; `DeviceReappearedWithDifferentTopology`; `LockHeldByOtherOwner`; `InvalidPersistedLockClaim`; `CarrierUnavailable`; `HostBindUnavailable`; `ProxyUnavailable`; `GuestImportUnavailable`; `StaleHostState`; `StaleGuestState`; `ProbeIncomplete`; `Unknown` |
-| `UsbProbeEntryKind` | enum | [`UsbProbeEntryKind`](../../packages/d2b-contracts/src/public_wire.rs#L2406) | `Usbip`; `QemuMediaSlot` |
-| `AuditFormat` | enum | [`AuditFormat`](../../packages/d2b-contracts/src/public_wire.rs#L2470) | `Human`; `Json` |
-| `AuthRole` | enum | [`AuthRole`](../../packages/d2b-contracts/src/public_wire.rs#L2478) | `None`; `Launcher`; `Admin` |
-| `HostFindingSeverity` | enum | [`HostFindingSeverity`](../../packages/d2b-contracts/src/public_wire.rs#L2699) | `Pass`; `Warn`; `Fail` |
-| `UsbSkLeaseState` | enum | [`UsbSkLeaseState`](../../packages/d2b-contracts/src/public_wire.rs#L3733) | `Idle`; `Active`; `Queued`; `Unknown` |
-| `UsbSkSessionOutcome` | enum | [`UsbSkSessionOutcome`](../../packages/d2b-contracts/src/public_wire.rs#L3788) | `Success`; `Timeout`; `Cancelled`; `DeviceUnavailable`; `Active`; `Unknown` |
+| `AudioProviderKind` | enum | [`AudioProviderKind`](../../packages/d2b-contracts/src/public_wire.rs#L1895) | `LocalHypervisor`; `QemuMedia`; `AcaSandbox` |
+| `AudioOp` | enum | [`AudioOp`](../../packages/d2b-contracts/src/public_wire.rs#L1940) | `Status` - (AudioStatusArgs); `SetVolume` - (AudioSetVolumeArgs); `Mute` - (AudioMuteArgs) |
+| `AudioSetApplied` | enum | [`AudioSetApplied`](../../packages/d2b-contracts/src/public_wire.rs#L2003) | `HostAndGuest`; `HostOnly`; `GuestOnly`; `Unsupported` |
+| `MutatingVerbOutcome` | enum | [`MutatingVerbOutcome`](../../packages/d2b-contracts/src/public_wire.rs#L2128) | `DryRunPlanned`; `Applied`; `ApiReadyTimeout`; `NotYetImplemented`; `BrokerError`; `InvalidRequest` |
+| `UsbipProbeStatus` | enum | [`UsbipProbeStatus`](../../packages/d2b-contracts/src/public_wire.rs#L2228) | `Bound`; `Unbound`; `Degraded`; `Enrollable`; `Enrolled`; `Stale`; `DirectConfig`; `Unknown` |
+| `UsbipDurableClaimState` | enum | [`UsbipDurableClaimState`](../../packages/d2b-contracts/src/public_wire.rs#L2246) | `Missing`; `HeldByDesiredOwner`; `HeldByOtherOwner`; `StaleOwner`; `Corrupt`; `NotApplicable`; `Unknown` |
+| `UsbipHostBindState` | enum | [`UsbipHostBindState`](../../packages/d2b-contracts/src/public_wire.rs#L2271) | `Unbound`; `BoundToUsbipHost`; `BoundToUnexpectedDriver`; `DeviceMissing`; `NotApplicable`; `Unknown` |
+| `UsbipHostCarrierState` | enum | [`UsbipHostCarrierState`](../../packages/d2b-contracts/src/public_wire.rs#L2284) | `Absent`; `Unavailable`; `WithheldForOwner`; `Ready`; `DepartedDuringProbe`; `NotApplicable`; `Unknown` |
+| `UsbipProxyState` | enum | [`UsbipProxyState`](../../packages/d2b-contracts/src/public_wire.rs#L2298) | `NotDeclared`; `Stopped`; `Starting`; `Listening`; `Stale`; `Failed`; `NotApplicable`; `Unknown` |
+| `UsbipGuestImportState` | enum | [`UsbipGuestImportState`](../../packages/d2b-contracts/src/public_wire.rs#L2321) | `Detached`; `Imported`; `Unavailable`; `NotApplicable`; `Unknown` |
+| `UsbipTopologyState` | enum | [`UsbipTopologyState`](../../packages/d2b-contracts/src/public_wire.rs#L2339) | `Match`; `Mismatch`; `Incomplete`; `NotObserved`; `NotApplicable`; `Unknown` |
+| `UsbipPolicyState` | enum | [`UsbipPolicyState`](../../packages/d2b-contracts/src/public_wire.rs#L2352) | `Allowed`; `Denied`; `Missing`; `NotApplicable`; `Unknown` |
+| `UsbipProbeDegradedReasonCode` | enum | [`UsbipProbeDegradedReasonCode`](../../packages/d2b-contracts/src/public_wire.rs#L2371) | `PolicyFailed`; `DeviceDepartedBeforeClaim`; `DeviceDepartedAfterLock`; `DeviceDepartedDuringMutation`; `DeviceReappearedWithDifferentTopology`; `LockHeldByOtherOwner`; `InvalidPersistedLockClaim`; `CarrierUnavailable`; `HostBindUnavailable`; `ProxyUnavailable`; `GuestImportUnavailable`; `StaleHostState`; `StaleGuestState`; `ProbeIncomplete`; `Unknown` |
+| `UsbProbeEntryKind` | enum | [`UsbProbeEntryKind`](../../packages/d2b-contracts/src/public_wire.rs#L2407) | `Usbip`; `QemuMediaSlot` |
+| `AuditFormat` | enum | [`AuditFormat`](../../packages/d2b-contracts/src/public_wire.rs#L2471) | `Human`; `Json` |
+| `AuthRole` | enum | [`AuthRole`](../../packages/d2b-contracts/src/public_wire.rs#L2479) | `None`; `Launcher`; `Admin` |
+| `HostFindingSeverity` | enum | [`HostFindingSeverity`](../../packages/d2b-contracts/src/public_wire.rs#L2700) | `Pass`; `Warn`; `Fail` |
+| `UsbSkLeaseState` | enum | [`UsbSkLeaseState`](../../packages/d2b-contracts/src/public_wire.rs#L3734) | `Idle`; `Active`; `Queued`; `Unknown` |
+| `UsbSkSessionOutcome` | enum | [`UsbSkSessionOutcome`](../../packages/d2b-contracts/src/public_wire.rs#L3789) | `Success`; `Timeout`; `Cancelled`; `DeviceUnavailable`; `Active`; `Unknown` |
 | `SecurityKeyVmSessionState` | enum | [`SecurityKeyVmSessionState`](../../packages/d2b-contracts/src/security_key.rs#L165) | `Idle`; `AwaitingLease`; `Active`; `Completed`; `Cancelled` |
 | `SecurityKeySessionResult` | enum | [`SecurityKeySessionResult`](../../packages/d2b-contracts/src/security_key.rs#L230) | `InProgress`; `Success`; `CtapError`; `Timeout`; `Cancelled`; `InternalError` |
 | `SecurityKeyEvent` | enum | [`SecurityKeyEvent`](../../packages/d2b-contracts/src/security_key.rs#L290) | `SessionStarted` - struct { `session_id`: `SecurityKeySessionId`; `vm`: `String`; `device_label`: `SecurityKeyDeviceLabel`; `started_at`: `String` }; `SessionSucceeded` - struct { `session_id`: `SecurityKeySessionId`; `vm`: `String`; `device_label`: `SecurityKeyDeviceLabel`; `ended_at`: `String` }; `SessionFailed` - struct { `session_id`: `SecurityKeySessionId`; `vm`: `String`; `device_label`: `SecurityKeyDeviceLabel`; `result`: `SecurityKeySessionResult`; `ended_at`: `String` }; `SessionCancelled` - struct { `session_id`: `SecurityKeySessionId`; `vm`: `String`; `device_label`: `SecurityKeyDeviceLabel`; `ended_at`: `String` }; `DeviceRemoved` - struct { `device_label`: `SecurityKeyDeviceLabel`; `interrupted_session_id`: `Option<SecurityKeySessionId>` }; `DeviceReinserted` - struct { `device_label`: `SecurityKeyDeviceLabel` }; `SessionQueued` - struct { `session_id`: `SecurityKeySessionId`; `vm`: `String`; `device_label`: `SecurityKeyDeviceLabel`; `queued_at`: `String`; `blocking_vm`: `String` } |
@@ -628,8 +628,8 @@ the failure class, for example `host check`, `audit`, `status`, or
 | `GuestControlError` | struct | [`GuestControlError`](../../packages/d2b-contracts/src/guest_wire.rs#L1489) | struct { `kind`: `GuestControlErrorKind`; `remediation`: `HealthRemediation`; `retry_after_ms`: `Option<u64>` } |
 | `GuestControlErrorKind` | enum | [`GuestControlErrorKind`](../../packages/d2b-contracts/src/guest_wire.rs#L1497) | `ProtocolError`; `MaxChunkExceeded`; `StdinBackpressure`; `StdinClosed`; `StdinNotOpen`; `StdinClosedByProcess`; `StdinOffsetMismatch`; `StdinByteBudgetExhausted`; `OffsetExpired`; `OffsetInFuture`; `OffsetExhausted`; `OutputLost`; `TtyStderrUnavailable`; `TtyRequired`; `ExecCapacityExceeded`; `ExecAttachCapacityExceeded`; `ExecNotFound`; `ExecAlreadyExited`; `GuestExecDisabled`; `GuestExecRootDenied`; `GuestExecUserDenied`; `CwdInvalid`; `CwdDenied`; `RetainedLogPathUnsafe`; `RetainedLogQuotaExceeded`; `ReadWaitCapacityExceeded`; `WaitCapacityExceeded`; `SupersededReadWait`; `RateLimited`; `RequestIdConflict`; `ControlSeqMismatch`; `SlowConsumerCancelled`; `StaleSession`; `GuestControlUnavailableOldGeneration`; `AuthFailed`; `TransportUnreachable`; `ExecExpired`; `FileNotFound`; `FileTooLarge`; `PathUnsafe`; `ReadDenied`; `InvalidProgram`; `UsbipUnavailable`; `UsbipCommandFailed`; `UsbipInvalidBusId`; `UsbipInvalidHost`; `GuestShellDisabled`; `ShellInvalidName`; `ShellCapacityExceeded`; `ShellAttachCapacityExceeded`; `ShellNotFound`; `ShellAlreadyAttached`; `ShellPoolUnavailable`; `ShellDaemonEpochMismatch`; `ShellOutputGap`; `UsbipCommandTimeout`; `UsbipInvalidOutput`; `ActivationInvalidId`; `ActivationInvalidPath`; `ActivationInvalidMode`; `ActivationNotFound`; `ActivationStatusUnavailable`; `ActivationTimedOut`; `ActivationSpawnFailed`; `AudioPipeWireUnavailable`; `AudioChannelUnknown`; `AudioLevelOutOfRange`; `AudioEnforcementFailed` |
 | `ShellNameError` | struct | [`ShellNameError`](../../packages/d2b-contracts/src/public_wire.rs#L1268) | empty struct |
-| `AudioErrorKind` | enum | [`AudioErrorKind`](../../packages/d2b-contracts/src/public_wire.rs#L1875) | `ProviderMisconfigured`; `VmNotFound`; `EnforcementUnavailable`; `AudioNotEnabled`; `InternalError` |
-| `AudioVmError` | struct | [`AudioVmError`](../../packages/d2b-contracts/src/public_wire.rs#L1976) | struct { `vm`: `String`; `kind`: `AudioErrorKind`; `remediation`: `Option<String>` } |
+| `AudioErrorKind` | enum | [`AudioErrorKind`](../../packages/d2b-contracts/src/public_wire.rs#L1876) | `ProviderMisconfigured`; `VmNotFound`; `EnforcementUnavailable`; `AudioNotEnabled`; `InternalError` |
+| `AudioVmError` | struct | [`AudioVmError`](../../packages/d2b-contracts/src/public_wire.rs#L1977) | struct { `vm`: `String`; `kind`: `AudioErrorKind`; `remediation`: `Option<String>` } |
 | `BusIdError` | enum | [`BusIdError`](../../packages/d2b-contracts/src/usbip.rs#L22) | `Empty`; `Invalid`; `TooLong` - struct { `max`: `usize` } |
 <!-- END AUTO-GENERATED: error-envelope -->
 
