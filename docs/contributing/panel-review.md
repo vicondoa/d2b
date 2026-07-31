@@ -393,11 +393,22 @@ The panel contract is implementation-neutral: any harness that
 preserves the roster, the unanimity rule, the no-rerun discipline, and
 the two gates per phase is acceptable.
 
-The in-repo reference implementation is `.opencode/opencode.json`. Its
-`agent` table is the tracked, reviewable surface for panel behaviour:
-`panel` carries the reviewing binding and the read-only tool set, while
-`general` and `explore` carry the coding binding. Change that file in
-the same commit as any change to this section.
+The in-repo reference implementation is the Copilot surface: ten
+`.github/agents/panel-<role>.agent.md` files, one per roster role, each
+carrying its own domain checklist and `tools: [view, grep, glob]`, driven
+by `.github/skills/d2b-panel-round/`. The binding table in that skill is
+the tracked, reviewable surface for panel behaviour, and
+`scripts/copilot/check-bindings.mjs` enforces that it agrees with both the
+agents and the delivery policy constants. See
+[copilot-agents.md](./copilot-agents.md). Change those files in the same
+commit as any change to this section.
+
+`.opencode/opencode.json` is the **frozen legacy binding**, retained
+byte-identical for the in-flight ADR 0046 program. Its `agent` table pins
+`panel` to the reviewing binding and `general`/`explore` to the coding
+binding. It is not modified during the overlap, and where the two surfaces
+disagree the legacy one wins until the cutover named in
+[copilot-agents.md](./copilot-agents.md).
 
 The ADR 0046 program does not run swarm. Where this section describes
 swarm's five-seat council, treat it as documenting an available harness

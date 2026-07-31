@@ -21,6 +21,18 @@
   or context-tier key in agent frontmatter.
 - Delivery memory registers under `.specify/memory/` for deferred work,
   engineering friction, and accepted debt.
+- spec-kit is installed for Copilot in skills mode alongside the existing
+  opencode integration, as `/speckit-<name>` commands under
+  `.github/skills/`. Both integrations are listed in `.specify/integration.json`,
+  and `check-bindings.mjs` fails if either is dropped.
+- `scripts/copilot/autopilot.sh` for unattended runs, pinning the session
+  binding, continuation and credit ceilings, and log destination. It refuses a
+  dirty worktree, refuses a protected branch, and validates the binding tables
+  before the session starts.
+- ADR 0048 recording the measured Copilot substrate, the panel and autopilot
+  design, and why the model binding is indirected through dispatch parameters.
+- `docs/contributing/copilot-agents.md` describing the agent and skill surface,
+  the authoring and execution sequences, and the spec-kit coexistence rules.
 - `docs/contributing/` with workflow, panel review, changelog and commit
   conventions, gates and lints, critical subsystems, and architecture
   conventions.
@@ -30,6 +42,12 @@
 - Retired-surface policy scanning now also covers `docs/contributing/`, which
   keeps the ADR 0015 coverage that would otherwise have been lost when the
   prose moved out of `AGENTS.md`.
+
+- Delivery waves may now be addressed by a qualified lowercase token fusing
+  program and wave, such as `spec001w1`. The delivery state layout does not
+  carry the program as a path component, so two programs would otherwise share
+  a wave directory. The legacy `--program ADR046 --wave W1` form and every
+  existing `W0`..`W8` state directory are unchanged and are not deprecated.
 
 ### Fixed
 
