@@ -37,6 +37,12 @@ import { fileURLToPath } from "node:url";
 const here = fileURLToPath(new URL(".", import.meta.url));
 const root = join(here, "..", "..");
 
+// The gate under test. It is not in REQUIRED_INPUTS: the classification cases
+// below omit one input at a time to measure how the gate reacts, and omitting
+// the gate itself measures nothing. Node exits nonzero because the script is
+// missing, which it would do even if every check inside had been deleted.
+const GATE = "scripts/copilot/check-bindings.mjs";
+
 // Everything check-bindings.mjs reads, as repo-relative paths. Keeping this
 // list explicit rather than copying the whole tree keeps a fixture build cheap.
 //
@@ -61,7 +67,6 @@ const root = join(here, "..", "..");
 // classification cases at the bottom of this file measure every entry, so a
 // misfiled path is a test failure rather than a stale comment.
 const REQUIRED_INPUTS = [
-  "scripts/copilot/check-bindings.mjs",
   ".github/agents",
   ".github/skills",
   "packages/xtask/src/delivery/model.rs",
@@ -88,7 +93,7 @@ let failures = 0;
 // classification cases below measure the rule the two lists assert.
 function buildFixture(omit) {
   const dir = mkdtempSync(join(tmpdir(), "d2b-check-bindings-"));
-  for (const rel of REQUIRED_INPUTS) {
+  for (const rel of [GATE, ...REQUIRED_INPUTS]) {
     if (rel === omit) continue;
     const dest = join(dir, rel);
     mkdirSync(dirname(dest), { recursive: true });
