@@ -18,3 +18,4 @@ They are fixed in the round that raised them.
 | Wave | Category | Date | Statement | Disposition | Ref |
 |---|---|---|---|---|---|
 | copilotw3 | build | 2026-07-31 | `specify init` not run in-repo; skills imported additively instead, so a spec-kit upgrade needs the same manual import | open |  |
+| copilotw6fu4 | test | 2026-07-31 | `test-check-bindings.mjs` covers the seat-roster guard only; the scalar constant mirrors share a loop and have no negative case | open |  |

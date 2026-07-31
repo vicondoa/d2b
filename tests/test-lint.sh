@@ -111,4 +111,23 @@ else
   exit 1
 fi
 
+# --- binding gate self-coverage -------------------------------------------
+# The seat-roster comparison inside check-bindings.mjs is enforced by parsing
+# source with a regex, and a regex guard can stop matching without anything
+# else changing. A guard that no longer matches fails open in silence, so it
+# gets a negative test rather than being trusted because it once worked.
+log "--> copilot binding gate self-coverage"
+if [ -f "$ROOT/scripts/copilot/test-check-bindings.mjs" ]; then
+  if command -v node >/dev/null 2>&1; then
+    node "$ROOT/scripts/copilot/test-check-bindings.mjs" >/dev/null
+    ok "copilot binding gate self-coverage"
+  else
+    fail "node not found; scripts/copilot/test-check-bindings.mjs cannot run"
+    exit 1
+  fi
+else
+  fail "required gate is missing: scripts/copilot/test-check-bindings.mjs"
+  exit 1
+fi
+
 log "test-lint OK (duration: $((SECONDS - suite_started))s)"
