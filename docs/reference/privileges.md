@@ -105,7 +105,7 @@ are denied (`defaultForUnknown: deny`).
 > `PrivilegesJson.publicOperations` and the generated
 > `OperationAuthz.operation` enum, but not in the broker-only catalog below.
 
-## Operation catalog (PROTOCOL_VERSION = 2)
+## Operation catalog (PROTOCOL_VERSION = 4)
 
 The currently implemented broker operation catalog. Every row carries
 `audit: yes` and `defaultForUnknown: deny`.

@@ -171,7 +171,7 @@ wave item to be `Merged` before `wave snapshot` will accept entry.
 
 ### Group `wi:ADR-046-core-controllers` (1 items)
 
-- [ ] T040 [P] [US1] `ADR046-core-001` - `packages/d2b-core-controller/src/{main (adapt)
+- [ ] T040 [P] [US1] `ADR046-core-001` - `packages/d2b-core-controller/src/{main,configuration,api_catalog,authz,providers,controllers,ownership,watches,cleanup,zone_links,budgets,store}.rs` (adapt)
 
 ### Group `wi:ADR-046-provider-state` (12 items)
 
