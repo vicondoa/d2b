@@ -1577,6 +1577,7 @@ d2b_contracts	pub fn d2b_contracts::v3::process::ProcessSpec::clone(&self) -> d2
 d2b_contracts	pub fn d2b_contracts::v3::process::ProcessSpec::eq(&self, &d2b_contracts::v3::process::ProcessSpec) -> bool
 d2b_contracts	pub fn d2b_contracts::v3::process::ProcessSpec::minimal(d2b_contracts::v3::process::ExecutionSpec) -> Self
 d2b_contracts	pub fn d2b_contracts::v3::process::ProcessSpec::new(d2b_contracts::v3::process::ExecutionSpec, d2b_contracts::v3::process::DesiredLifecycle, d2b_contracts::v3::process::RestartPolicySpec, d2b_contracts::v3::process::ReadinessSpec, d2b_contracts::v3::process::HealthCheckSpec, d2b_contracts::v3::process::AdoptionPolicy, d2b_contracts::v3::execution_policy::DurationMs) -> core::result::Result<Self, d2b_contracts::v3::execution_policy::PrimitiveSpecError>
+d2b_contracts	pub fn d2b_contracts::v3::provider::ProjectionFactory::admits_export_target(&self, &d2b_contracts::v3::resource_ref::ResourceRef) -> core::result::Result<(), d2b_contracts::v3::provider::ProviderContractError>
 d2b_contracts	pub fn d2b_contracts::v3::resource::ResourceEnvelope::clone(&self) -> d2b_contracts::v3::resource::ResourceEnvelope
 d2b_contracts	pub fn d2b_contracts::v3::resource::ResourceEnvelope::eq(&self, &d2b_contracts::v3::resource::ResourceEnvelope) -> bool
 d2b_contracts	pub fn d2b_contracts::v3::resource::ResourceEnvelope::new(d2b_contracts::v3::identity::ResourceTypeName, d2b_contracts::v3::resource::ResourceMetadata, d2b_contracts::v3::resource::ResourceSpec, d2b_contracts::v3::resource_status::ResourceStatus) -> core::result::Result<Self, d2b_contracts::v3::resource::ResourceError>
@@ -1613,6 +1614,11 @@ d2b_contracts	pub fn d2b_contracts::v3::resource_status::ResourceStatus::provide
 d2b_contracts	pub fn d2b_contracts::v3::resource_status::ResourceUpdateStatus::clone(&self) -> d2b_contracts::v3::resource_status::ResourceUpdateStatus
 d2b_contracts	pub fn d2b_contracts::v3::resource_status::ResourceUpdateStatus::eq(&self, &d2b_contracts::v3::resource_status::ResourceUpdateStatus) -> bool
 d2b_contracts	pub fn d2b_contracts::v3::resource_status::ResourceUpdateStatus::new(d2b_contracts::v3::resource_status::UpdateState, alloc::vec::Vec<d2b_contracts::v3::resource_status::UpdateReason>, d2b_contracts::v3::identity::ObservedGeneration, d2b_contracts::v3::identity::ResourceGeneration, d2b_contracts::v3::resource_status::UpdateDisruption, bool, core::option::Option<d2b_realm_core::ids::OperationId>, core::option::Option<d2b_contracts::v3::identity::Timestamp>, d2b_contracts::v3::resource_status::ResourceCurrencySet, d2b_contracts::v3::resource_status::ResourceCurrencySet) -> core::result::Result<Self, d2b_contracts::v3::resource_status::ResourceStatusError>
+d2b_contracts	pub fn d2b_contracts::v3::semantic_services::SemanticPairContract::admit_binding_refs(&self, &d2b_contracts::v3::resource_ref::ResourceRef, d2b_contracts::v3::provider::BindingTargetType) -> core::result::Result<(), d2b_contracts::v3::semantic_services::SemanticContractError>
+d2b_contracts	pub fn d2b_contracts::v3::semantic_services::SemanticPairContract::admit_export_target(&self, &d2b_contracts::v3::resource_ref::ResourceRef) -> core::result::Result<(), d2b_contracts::v3::semantic_services::SemanticContractError>
+d2b_contracts	pub fn d2b_contracts::v3::semantic_services::SemanticProjectionBinding::validate_projection_spec(&self, &d2b_contracts::v3::resource::ResourceSpec) -> core::result::Result<(), d2b_contracts::v3::semantic_services::SemanticContractError>
+d2b_contracts	pub fn d2b_contracts::v3::semantic_services::SemanticTypeContract::minimal_base_spec(&self, d2b_contracts::v3::resource_ref::ResourceRef, d2b_contracts::v3::resource_schema::CanonicalJsonObject) -> core::result::Result<d2b_contracts::v3::resource::ResourceSpec, d2b_contracts::v3::semantic_services::SemanticContractError>
+d2b_contracts	pub fn d2b_contracts::v3::semantic_services::SemanticTypeContract::schema_contract(&self, impl core::iter::traits::collect::IntoIterator<Item = d2b_contracts::v3::resource_schema::ProviderExtensionRegistration>) -> core::result::Result<d2b_contracts::v3::resource_schema::ResourceSchemaContract, d2b_contracts::v3::semantic_services::SemanticContractError>
 d2b_contracts	pub fn d2b_contracts::v3::volume::AclGrant::clone(&self) -> d2b_contracts::v3::volume::AclGrant
 d2b_contracts	pub fn d2b_contracts::v3::volume::AclGrant::eq(&self, &d2b_contracts::v3::volume::AclGrant) -> bool
 d2b_contracts	pub fn d2b_contracts::v3::volume::AclGrant::new(d2b_contracts::v3::volume::AclPrincipal, impl core::convert::Into<alloc::string::String>) -> core::result::Result<Self, d2b_contracts::v3::execution_policy::PrimitiveSpecError>
@@ -3497,68 +3503,81 @@ d2b_process_conformance	pub struct d2b_process_conformance::testing::fixtures::T
 d2b_process_conformance	pub trait d2b_process_conformance::ProcessLaunchEffectPort: core::marker::Send + core::marker::Sync
 d2b_process_conformance	pub trait d2b_process_conformance::ProcessProvider: core::marker::Send + core::marker::Sync
 d2b_provider	impl core::clone::Clone for d2b_provider::AdmissionOptions
+d2b_provider	impl core::clone::Clone for d2b_provider::InstalledProvider
 d2b_provider	impl core::clone::Clone for d2b_provider::OwnedOperationContext
 d2b_provider	impl core::clone::Clone for d2b_provider::ProviderDescriptor
 d2b_provider	impl core::clone::Clone for d2b_provider::ProviderForwardRequest
 d2b_provider	impl core::clone::Clone for d2b_provider::ProviderRegistrySnapshot
 d2b_provider	impl core::clone::Clone for d2b_provider::SessionIdentity
+d2b_provider	impl core::cmp::Eq for d2b_provider::InstalledProvider
 d2b_provider	impl core::cmp::Eq for d2b_provider::ProviderDescriptor
 d2b_provider	impl core::cmp::Eq for d2b_provider::ProviderRegistrySnapshot
 d2b_provider	impl core::cmp::Eq for d2b_provider::SessionIdentity
+d2b_provider	impl core::cmp::PartialEq for d2b_provider::InstalledProvider
 d2b_provider	impl core::cmp::PartialEq for d2b_provider::ProviderDescriptor
 d2b_provider	impl core::cmp::PartialEq for d2b_provider::ProviderRegistrySnapshot
 d2b_provider	impl core::cmp::PartialEq for d2b_provider::SessionIdentity
 d2b_provider	impl core::fmt::Debug for d2b_provider::AdmissionOptions
+d2b_provider	impl core::fmt::Debug for d2b_provider::InstalledProvider
 d2b_provider	impl core::fmt::Debug for d2b_provider::OwnedOperationContext
 d2b_provider	impl core::fmt::Debug for d2b_provider::ProviderDescriptor
 d2b_provider	impl core::fmt::Debug for d2b_provider::ProviderForwardRequest
 d2b_provider	impl core::fmt::Debug for d2b_provider::ProviderRegistrySnapshot
 d2b_provider	impl core::fmt::Debug for d2b_provider::SessionIdentity
 d2b_provider	impl core::marker::Freeze for d2b_provider::AdmissionOptions
+d2b_provider	impl core::marker::Freeze for d2b_provider::InstalledProvider
 d2b_provider	impl core::marker::Freeze for d2b_provider::OwnedOperationContext
 d2b_provider	impl core::marker::Freeze for d2b_provider::ProviderDescriptor
 d2b_provider	impl core::marker::Freeze for d2b_provider::ProviderForwardRequest
 d2b_provider	impl core::marker::Freeze for d2b_provider::ProviderRegistrySnapshot
 d2b_provider	impl core::marker::Freeze for d2b_provider::SessionIdentity
 d2b_provider	impl core::marker::Send for d2b_provider::AdmissionOptions
+d2b_provider	impl core::marker::Send for d2b_provider::InstalledProvider
 d2b_provider	impl core::marker::Send for d2b_provider::OwnedOperationContext
 d2b_provider	impl core::marker::Send for d2b_provider::ProviderDescriptor
 d2b_provider	impl core::marker::Send for d2b_provider::ProviderForwardRequest
 d2b_provider	impl core::marker::Send for d2b_provider::ProviderRegistrySnapshot
 d2b_provider	impl core::marker::Send for d2b_provider::SessionIdentity
+d2b_provider	impl core::marker::StructuralPartialEq for d2b_provider::InstalledProvider
 d2b_provider	impl core::marker::StructuralPartialEq for d2b_provider::ProviderDescriptor
 d2b_provider	impl core::marker::StructuralPartialEq for d2b_provider::ProviderRegistrySnapshot
 d2b_provider	impl core::marker::StructuralPartialEq for d2b_provider::SessionIdentity
 d2b_provider	impl core::marker::Sync for d2b_provider::AdmissionOptions
+d2b_provider	impl core::marker::Sync for d2b_provider::InstalledProvider
 d2b_provider	impl core::marker::Sync for d2b_provider::OwnedOperationContext
 d2b_provider	impl core::marker::Sync for d2b_provider::ProviderDescriptor
 d2b_provider	impl core::marker::Sync for d2b_provider::ProviderForwardRequest
 d2b_provider	impl core::marker::Sync for d2b_provider::ProviderRegistrySnapshot
 d2b_provider	impl core::marker::Sync for d2b_provider::SessionIdentity
 d2b_provider	impl core::marker::Unpin for d2b_provider::AdmissionOptions
+d2b_provider	impl core::marker::Unpin for d2b_provider::InstalledProvider
 d2b_provider	impl core::marker::Unpin for d2b_provider::OwnedOperationContext
 d2b_provider	impl core::marker::Unpin for d2b_provider::ProviderDescriptor
 d2b_provider	impl core::marker::Unpin for d2b_provider::ProviderForwardRequest
 d2b_provider	impl core::marker::Unpin for d2b_provider::ProviderRegistrySnapshot
 d2b_provider	impl core::marker::Unpin for d2b_provider::SessionIdentity
 d2b_provider	impl core::marker::UnsafeUnpin for d2b_provider::AdmissionOptions
+d2b_provider	impl core::marker::UnsafeUnpin for d2b_provider::InstalledProvider
 d2b_provider	impl core::marker::UnsafeUnpin for d2b_provider::OwnedOperationContext
 d2b_provider	impl core::marker::UnsafeUnpin for d2b_provider::ProviderDescriptor
 d2b_provider	impl core::marker::UnsafeUnpin for d2b_provider::ProviderForwardRequest
 d2b_provider	impl core::marker::UnsafeUnpin for d2b_provider::ProviderRegistrySnapshot
 d2b_provider	impl core::marker::UnsafeUnpin for d2b_provider::SessionIdentity
 d2b_provider	impl core::panic::unwind_safe::RefUnwindSafe for d2b_provider::AdmissionOptions
+d2b_provider	impl core::panic::unwind_safe::RefUnwindSafe for d2b_provider::InstalledProvider
 d2b_provider	impl core::panic::unwind_safe::RefUnwindSafe for d2b_provider::OwnedOperationContext
 d2b_provider	impl core::panic::unwind_safe::RefUnwindSafe for d2b_provider::ProviderDescriptor
 d2b_provider	impl core::panic::unwind_safe::RefUnwindSafe for d2b_provider::ProviderForwardRequest
 d2b_provider	impl core::panic::unwind_safe::RefUnwindSafe for d2b_provider::ProviderRegistrySnapshot
 d2b_provider	impl core::panic::unwind_safe::RefUnwindSafe for d2b_provider::SessionIdentity
 d2b_provider	impl core::panic::unwind_safe::UnwindSafe for d2b_provider::AdmissionOptions
+d2b_provider	impl core::panic::unwind_safe::UnwindSafe for d2b_provider::InstalledProvider
 d2b_provider	impl core::panic::unwind_safe::UnwindSafe for d2b_provider::OwnedOperationContext
 d2b_provider	impl core::panic::unwind_safe::UnwindSafe for d2b_provider::ProviderDescriptor
 d2b_provider	impl core::panic::unwind_safe::UnwindSafe for d2b_provider::ProviderForwardRequest
 d2b_provider	impl core::panic::unwind_safe::UnwindSafe for d2b_provider::ProviderRegistrySnapshot
 d2b_provider	impl core::panic::unwind_safe::UnwindSafe for d2b_provider::SessionIdentity
+d2b_provider	impl d2b_provider::InstalledProvider
 d2b_provider	impl d2b_provider::OwnedOperationContext
 d2b_provider	impl d2b_provider::ProviderDescriptor
 d2b_provider	impl d2b_provider::ProviderForwardRequest
@@ -3614,6 +3633,7 @@ d2b_provider	impl<I> d2b_provider::ProviderRegistryBuilder<I>
 d2b_provider	impl<T, U> core::convert::Into<U> for d2b_provider::AdmissionOptions where U: core::convert::From<T>
 d2b_provider	impl<T, U> core::convert::Into<U> for d2b_provider::AdmittedProvider<I> where U: core::convert::From<T>
 d2b_provider	impl<T, U> core::convert::Into<U> for d2b_provider::InFlightPermit<I> where U: core::convert::From<T>
+d2b_provider	impl<T, U> core::convert::Into<U> for d2b_provider::InstalledProvider where U: core::convert::From<T>
 d2b_provider	impl<T, U> core::convert::Into<U> for d2b_provider::OwnedOperationContext where U: core::convert::From<T>
 d2b_provider	impl<T, U> core::convert::Into<U> for d2b_provider::ProviderDescriptor where U: core::convert::From<T>
 d2b_provider	impl<T, U> core::convert::Into<U> for d2b_provider::ProviderForwardRequest where U: core::convert::From<T>
@@ -3625,6 +3645,7 @@ d2b_provider	impl<T, U> core::convert::Into<U> for d2b_provider::SessionIdentity
 d2b_provider	impl<T, U> core::convert::TryFrom<U> for d2b_provider::AdmissionOptions where U: core::convert::Into<T>
 d2b_provider	impl<T, U> core::convert::TryFrom<U> for d2b_provider::AdmittedProvider<I> where U: core::convert::Into<T>
 d2b_provider	impl<T, U> core::convert::TryFrom<U> for d2b_provider::InFlightPermit<I> where U: core::convert::Into<T>
+d2b_provider	impl<T, U> core::convert::TryFrom<U> for d2b_provider::InstalledProvider where U: core::convert::Into<T>
 d2b_provider	impl<T, U> core::convert::TryFrom<U> for d2b_provider::OwnedOperationContext where U: core::convert::Into<T>
 d2b_provider	impl<T, U> core::convert::TryFrom<U> for d2b_provider::ProviderDescriptor where U: core::convert::Into<T>
 d2b_provider	impl<T, U> core::convert::TryFrom<U> for d2b_provider::ProviderForwardRequest where U: core::convert::Into<T>
@@ -3636,6 +3657,7 @@ d2b_provider	impl<T, U> core::convert::TryFrom<U> for d2b_provider::SessionIdent
 d2b_provider	impl<T, U> core::convert::TryInto<U> for d2b_provider::AdmissionOptions where U: core::convert::TryFrom<T>
 d2b_provider	impl<T, U> core::convert::TryInto<U> for d2b_provider::AdmittedProvider<I> where U: core::convert::TryFrom<T>
 d2b_provider	impl<T, U> core::convert::TryInto<U> for d2b_provider::InFlightPermit<I> where U: core::convert::TryFrom<T>
+d2b_provider	impl<T, U> core::convert::TryInto<U> for d2b_provider::InstalledProvider where U: core::convert::TryFrom<T>
 d2b_provider	impl<T, U> core::convert::TryInto<U> for d2b_provider::OwnedOperationContext where U: core::convert::TryFrom<T>
 d2b_provider	impl<T, U> core::convert::TryInto<U> for d2b_provider::ProviderDescriptor where U: core::convert::TryFrom<T>
 d2b_provider	impl<T, U> core::convert::TryInto<U> for d2b_provider::ProviderForwardRequest where U: core::convert::TryFrom<T>
@@ -3645,6 +3667,7 @@ d2b_provider	impl<T, U> core::convert::TryInto<U> for d2b_provider::ProviderRegi
 d2b_provider	impl<T, U> core::convert::TryInto<U> for d2b_provider::ProviderRegistrySnapshot where U: core::convert::TryFrom<T>
 d2b_provider	impl<T, U> core::convert::TryInto<U> for d2b_provider::SessionIdentity where U: core::convert::TryFrom<T>
 d2b_provider	impl<T> alloc::borrow::ToOwned for d2b_provider::AdmissionOptions where T: core::clone::Clone
+d2b_provider	impl<T> alloc::borrow::ToOwned for d2b_provider::InstalledProvider where T: core::clone::Clone
 d2b_provider	impl<T> alloc::borrow::ToOwned for d2b_provider::OwnedOperationContext where T: core::clone::Clone
 d2b_provider	impl<T> alloc::borrow::ToOwned for d2b_provider::ProviderDescriptor where T: core::clone::Clone
 d2b_provider	impl<T> alloc::borrow::ToOwned for d2b_provider::ProviderForwardRequest where T: core::clone::Clone
@@ -3655,6 +3678,7 @@ d2b_provider	impl<T> alloc::borrow::ToOwned for d2b_provider::SessionIdentity wh
 d2b_provider	impl<T> core::any::Any for d2b_provider::AdmissionOptions where T: 'static + ?core::marker::Sized
 d2b_provider	impl<T> core::any::Any for d2b_provider::AdmittedProvider<I> where T: 'static + ?core::marker::Sized
 d2b_provider	impl<T> core::any::Any for d2b_provider::InFlightPermit<I> where T: 'static + ?core::marker::Sized
+d2b_provider	impl<T> core::any::Any for d2b_provider::InstalledProvider where T: 'static + ?core::marker::Sized
 d2b_provider	impl<T> core::any::Any for d2b_provider::OwnedOperationContext where T: 'static + ?core::marker::Sized
 d2b_provider	impl<T> core::any::Any for d2b_provider::ProviderDescriptor where T: 'static + ?core::marker::Sized
 d2b_provider	impl<T> core::any::Any for d2b_provider::ProviderForwardRequest where T: 'static + ?core::marker::Sized
@@ -3666,6 +3690,7 @@ d2b_provider	impl<T> core::any::Any for d2b_provider::SessionIdentity where T: '
 d2b_provider	impl<T> core::borrow::Borrow<T> for d2b_provider::AdmissionOptions where T: ?core::marker::Sized
 d2b_provider	impl<T> core::borrow::Borrow<T> for d2b_provider::AdmittedProvider<I> where T: ?core::marker::Sized
 d2b_provider	impl<T> core::borrow::Borrow<T> for d2b_provider::InFlightPermit<I> where T: ?core::marker::Sized
+d2b_provider	impl<T> core::borrow::Borrow<T> for d2b_provider::InstalledProvider where T: ?core::marker::Sized
 d2b_provider	impl<T> core::borrow::Borrow<T> for d2b_provider::OwnedOperationContext where T: ?core::marker::Sized
 d2b_provider	impl<T> core::borrow::Borrow<T> for d2b_provider::ProviderDescriptor where T: ?core::marker::Sized
 d2b_provider	impl<T> core::borrow::Borrow<T> for d2b_provider::ProviderForwardRequest where T: ?core::marker::Sized
@@ -3677,6 +3702,7 @@ d2b_provider	impl<T> core::borrow::Borrow<T> for d2b_provider::SessionIdentity w
 d2b_provider	impl<T> core::borrow::BorrowMut<T> for d2b_provider::AdmissionOptions where T: ?core::marker::Sized
 d2b_provider	impl<T> core::borrow::BorrowMut<T> for d2b_provider::AdmittedProvider<I> where T: ?core::marker::Sized
 d2b_provider	impl<T> core::borrow::BorrowMut<T> for d2b_provider::InFlightPermit<I> where T: ?core::marker::Sized
+d2b_provider	impl<T> core::borrow::BorrowMut<T> for d2b_provider::InstalledProvider where T: ?core::marker::Sized
 d2b_provider	impl<T> core::borrow::BorrowMut<T> for d2b_provider::OwnedOperationContext where T: ?core::marker::Sized
 d2b_provider	impl<T> core::borrow::BorrowMut<T> for d2b_provider::ProviderDescriptor where T: ?core::marker::Sized
 d2b_provider	impl<T> core::borrow::BorrowMut<T> for d2b_provider::ProviderForwardRequest where T: ?core::marker::Sized
@@ -3686,6 +3712,7 @@ d2b_provider	impl<T> core::borrow::BorrowMut<T> for d2b_provider::ProviderRegist
 d2b_provider	impl<T> core::borrow::BorrowMut<T> for d2b_provider::ProviderRegistrySnapshot where T: ?core::marker::Sized
 d2b_provider	impl<T> core::borrow::BorrowMut<T> for d2b_provider::SessionIdentity where T: ?core::marker::Sized
 d2b_provider	impl<T> core::clone::CloneToUninit for d2b_provider::AdmissionOptions where T: core::clone::Clone
+d2b_provider	impl<T> core::clone::CloneToUninit for d2b_provider::InstalledProvider where T: core::clone::Clone
 d2b_provider	impl<T> core::clone::CloneToUninit for d2b_provider::OwnedOperationContext where T: core::clone::Clone
 d2b_provider	impl<T> core::clone::CloneToUninit for d2b_provider::ProviderDescriptor where T: core::clone::Clone
 d2b_provider	impl<T> core::clone::CloneToUninit for d2b_provider::ProviderForwardRequest where T: core::clone::Clone
@@ -3696,6 +3723,7 @@ d2b_provider	impl<T> core::clone::CloneToUninit for d2b_provider::SessionIdentit
 d2b_provider	impl<T> core::convert::From<T> for d2b_provider::AdmissionOptions
 d2b_provider	impl<T> core::convert::From<T> for d2b_provider::AdmittedProvider<I>
 d2b_provider	impl<T> core::convert::From<T> for d2b_provider::InFlightPermit<I>
+d2b_provider	impl<T> core::convert::From<T> for d2b_provider::InstalledProvider
 d2b_provider	impl<T> core::convert::From<T> for d2b_provider::OwnedOperationContext
 d2b_provider	impl<T> core::convert::From<T> for d2b_provider::ProviderDescriptor
 d2b_provider	impl<T> core::convert::From<T> for d2b_provider::ProviderForwardRequest
@@ -3705,6 +3733,7 @@ d2b_provider	impl<T> core::convert::From<T> for d2b_provider::ProviderRegistryMa
 d2b_provider	impl<T> core::convert::From<T> for d2b_provider::ProviderRegistrySnapshot
 d2b_provider	impl<T> core::convert::From<T> for d2b_provider::SessionIdentity
 d2b_provider	impl<T> dyn_clone::DynClone for d2b_provider::AdmissionOptions where T: core::clone::Clone
+d2b_provider	impl<T> dyn_clone::DynClone for d2b_provider::InstalledProvider where T: core::clone::Clone
 d2b_provider	impl<T> dyn_clone::DynClone for d2b_provider::OwnedOperationContext where T: core::clone::Clone
 d2b_provider	impl<T> dyn_clone::DynClone for d2b_provider::ProviderDescriptor where T: core::clone::Clone
 d2b_provider	impl<T> dyn_clone::DynClone for d2b_provider::ProviderForwardRequest where T: core::clone::Clone
@@ -3715,6 +3744,7 @@ d2b_provider	impl<T> dyn_clone::DynClone for d2b_provider::SessionIdentity where
 d2b_provider	impl<T> typenum::type_operators::Same for d2b_provider::AdmissionOptions
 d2b_provider	impl<T> typenum::type_operators::Same for d2b_provider::AdmittedProvider<I>
 d2b_provider	impl<T> typenum::type_operators::Same for d2b_provider::InFlightPermit<I>
+d2b_provider	impl<T> typenum::type_operators::Same for d2b_provider::InstalledProvider
 d2b_provider	impl<T> typenum::type_operators::Same for d2b_provider::OwnedOperationContext
 d2b_provider	impl<T> typenum::type_operators::Same for d2b_provider::ProviderDescriptor
 d2b_provider	impl<T> typenum::type_operators::Same for d2b_provider::ProviderForwardRequest
@@ -3724,6 +3754,7 @@ d2b_provider	impl<T> typenum::type_operators::Same for d2b_provider::ProviderReg
 d2b_provider	impl<T> typenum::type_operators::Same for d2b_provider::ProviderRegistrySnapshot
 d2b_provider	impl<T> typenum::type_operators::Same for d2b_provider::SessionIdentity
 d2b_provider	pub async fn d2b_provider::ProviderRegistryManager<I>::publish(&self, d2b_provider::ProviderRegistry<I>, d2b_provider::RegistryDrainPolicy) -> core::result::Result<d2b_provider::RegistryShutdownReport, d2b_provider::ProviderRuntimeError>
+d2b_provider	pub const fn d2b_provider::InstalledProvider::provider_ref(&self) -> &d2b_contracts::v3::resource_ref::ResourceRef
 d2b_provider	pub const fn d2b_provider::OwnedOperationContext::identity(&self) -> &d2b_provider::SessionIdentity
 d2b_provider	pub const fn d2b_provider::ProviderDescriptor::provider_ref(&self) -> &d2b_contracts::v3::resource_ref::ResourceRef
 d2b_provider	pub const fn d2b_provider::ProviderForwardRequest::identity(&self) -> &d2b_provider::SessionIdentity
@@ -3737,6 +3768,8 @@ d2b_provider	pub d2b_provider::AdmissionOptions::identity: d2b_provider::Session
 d2b_provider	pub d2b_provider::AdmittedProvider::context: d2b_provider::OwnedOperationContext
 d2b_provider	pub d2b_provider::AdmittedProvider::instance: I
 d2b_provider	pub fn d2b_provider::AdmissionOptions::clone(&self) -> d2b_provider::AdmissionOptions
+d2b_provider	pub fn d2b_provider::InstalledProvider::clone(&self) -> d2b_provider::InstalledProvider
+d2b_provider	pub fn d2b_provider::InstalledProvider::eq(&self, &d2b_provider::InstalledProvider) -> bool
 d2b_provider	pub fn d2b_provider::OwnedOperationContext::clone(&self) -> d2b_provider::OwnedOperationContext
 d2b_provider	pub fn d2b_provider::ProviderDescriptor::clone(&self) -> d2b_provider::ProviderDescriptor
 d2b_provider	pub fn d2b_provider::ProviderDescriptor::eq(&self, &d2b_provider::ProviderDescriptor) -> bool
@@ -3757,10 +3790,12 @@ d2b_provider	pub fn d2b_provider::SessionIdentity::clone(&self) -> d2b_provider:
 d2b_provider	pub fn d2b_provider::SessionIdentity::eq(&self, &d2b_provider::SessionIdentity) -> bool
 d2b_provider	pub fn d2b_provider::SessionIdentity::from_authenticated(d2b_contracts::v3::zone_routing::ZonePath, &d2b_contracts::v3::identity::AuthenticatedSubjectContext) -> core::result::Result<Self, d2b_provider::ProviderRuntimeError>
 d2b_provider	pub fn d2b_provider::SessionIdentity::matches_descriptor(&self, &d2b_provider::ProviderDescriptor) -> core::result::Result<(), d2b_provider::ProviderRuntimeError>
+d2b_provider	pub fn d2b_provider::admit_installation(&d2b_contracts::v3::provider::ProviderSpec, &d2b_contracts::v3::provider::ProviderManifest, &d2b_provider::ProviderDescriptor, &d2b_provider::RequiredProviderApi, d2b_provider::ProviderReadiness) -> core::result::Result<d2b_provider::InstalledProvider, d2b_provider::RegistryBuildError>
 d2b_provider	pub fn d2b_provider::admit_provider_forward(&d2b_provider::ProviderForwardRequest, d2b_provider::LocalHopGrants) -> core::result::Result<d2b_provider::ForwardedCall, d2b_contracts::v3::zone_routing::ZoneRouteFailClosedReason>
 d2b_provider	pub struct d2b_provider::AdmissionOptions
 d2b_provider	pub struct d2b_provider::AdmittedProvider<I>
 d2b_provider	pub struct d2b_provider::InFlightPermit<I>
+d2b_provider	pub struct d2b_provider::InstalledProvider
 d2b_provider	pub struct d2b_provider::OwnedOperationContext
 d2b_provider	pub struct d2b_provider::ProviderDescriptor
 d2b_provider	pub struct d2b_provider::ProviderForwardRequest
@@ -3769,6 +3804,106 @@ d2b_provider	pub struct d2b_provider::ProviderRegistryBuilder<I>
 d2b_provider	pub struct d2b_provider::ProviderRegistryManager<I>
 d2b_provider	pub struct d2b_provider::ProviderRegistrySnapshot
 d2b_provider	pub struct d2b_provider::SessionIdentity
+d2b_provider_system_core	impl core::clone::Clone for d2b_provider_system_core::HostStatusReport
+d2b_provider_system_core	impl core::clone::Clone for d2b_provider_system_core::UserStatusReport
+d2b_provider_system_core	impl core::cmp::Eq for d2b_provider_system_core::HostStatusReport
+d2b_provider_system_core	impl core::cmp::Eq for d2b_provider_system_core::UserStatusReport
+d2b_provider_system_core	impl core::cmp::PartialEq for d2b_provider_system_core::HostStatusReport
+d2b_provider_system_core	impl core::cmp::PartialEq for d2b_provider_system_core::UserStatusReport
+d2b_provider_system_core	impl core::fmt::Debug for d2b_provider_system_core::HostStatusReport
+d2b_provider_system_core	impl core::fmt::Debug for d2b_provider_system_core::UserStatusReport
+d2b_provider_system_core	impl core::marker::Freeze for d2b_provider_system_core::HostStatusReport
+d2b_provider_system_core	impl core::marker::Freeze for d2b_provider_system_core::UserStatusReport
+d2b_provider_system_core	impl core::marker::Send for d2b_provider_system_core::HostStatusReport
+d2b_provider_system_core	impl core::marker::Send for d2b_provider_system_core::UserStatusReport
+d2b_provider_system_core	impl core::marker::StructuralPartialEq for d2b_provider_system_core::HostStatusReport
+d2b_provider_system_core	impl core::marker::StructuralPartialEq for d2b_provider_system_core::UserStatusReport
+d2b_provider_system_core	impl core::marker::Sync for d2b_provider_system_core::HostStatusReport
+d2b_provider_system_core	impl core::marker::Sync for d2b_provider_system_core::UserStatusReport
+d2b_provider_system_core	impl core::marker::Unpin for d2b_provider_system_core::HostStatusReport
+d2b_provider_system_core	impl core::marker::Unpin for d2b_provider_system_core::UserStatusReport
+d2b_provider_system_core	impl core::marker::UnsafeUnpin for d2b_provider_system_core::HostStatusReport
+d2b_provider_system_core	impl core::marker::UnsafeUnpin for d2b_provider_system_core::UserStatusReport
+d2b_provider_system_core	impl core::panic::unwind_safe::RefUnwindSafe for d2b_provider_system_core::HostStatusReport
+d2b_provider_system_core	impl core::panic::unwind_safe::RefUnwindSafe for d2b_provider_system_core::UserStatusReport
+d2b_provider_system_core	impl core::panic::unwind_safe::UnwindSafe for d2b_provider_system_core::HostStatusReport
+d2b_provider_system_core	impl core::panic::unwind_safe::UnwindSafe for d2b_provider_system_core::UserStatusReport
+d2b_provider_system_core	impl d2b_provider_system_core::HostStatusReport
+d2b_provider_system_core	impl d2b_provider_system_core::UserDiscoveryEffectPort for d2b_provider_system_core::testing::ScriptedDiscoveryPort
+d2b_provider_system_core	impl serde_core::ser::Serialize for d2b_provider_system_core::HostStatusReport
+d2b_provider_system_core	impl serde_core::ser::Serialize for d2b_provider_system_core::UserStatusReport
+d2b_provider_system_core	impl<P: core::fmt::Debug + d2b_provider_system_core::UserDiscoveryEffectPort> core::fmt::Debug for d2b_provider_system_core::UserReconciler<P>
+d2b_provider_system_core	impl<P: d2b_provider_system_core::UserDiscoveryEffectPort> d2b_provider_system_core::UserReconciler<P>
+d2b_provider_system_core	impl<P> core::marker::Freeze for d2b_provider_system_core::UserReconciler<P> where P: core::marker::Freeze
+d2b_provider_system_core	impl<P> core::marker::Send for d2b_provider_system_core::UserReconciler<P> where P: core::marker::Send
+d2b_provider_system_core	impl<P> core::marker::Sync for d2b_provider_system_core::UserReconciler<P> where P: core::marker::Sync
+d2b_provider_system_core	impl<P> core::marker::Unpin for d2b_provider_system_core::UserReconciler<P> where P: core::marker::Unpin
+d2b_provider_system_core	impl<P> core::marker::UnsafeUnpin for d2b_provider_system_core::UserReconciler<P> where P: core::marker::UnsafeUnpin
+d2b_provider_system_core	impl<P> core::panic::unwind_safe::RefUnwindSafe for d2b_provider_system_core::UserReconciler<P> where P: core::panic::unwind_safe::RefUnwindSafe
+d2b_provider_system_core	impl<P> core::panic::unwind_safe::UnwindSafe for d2b_provider_system_core::UserReconciler<P> where P: core::panic::unwind_safe::UnwindSafe
+d2b_provider_system_core	impl<T, U> core::convert::Into<U> for d2b_provider_system_core::HostStatusReport where U: core::convert::From<T>
+d2b_provider_system_core	impl<T, U> core::convert::Into<U> for d2b_provider_system_core::UserReconciler<P> where U: core::convert::From<T>
+d2b_provider_system_core	impl<T, U> core::convert::Into<U> for d2b_provider_system_core::UserStatusReport where U: core::convert::From<T>
+d2b_provider_system_core	impl<T, U> core::convert::TryFrom<U> for d2b_provider_system_core::HostStatusReport where U: core::convert::Into<T>
+d2b_provider_system_core	impl<T, U> core::convert::TryFrom<U> for d2b_provider_system_core::UserReconciler<P> where U: core::convert::Into<T>
+d2b_provider_system_core	impl<T, U> core::convert::TryFrom<U> for d2b_provider_system_core::UserStatusReport where U: core::convert::Into<T>
+d2b_provider_system_core	impl<T, U> core::convert::TryInto<U> for d2b_provider_system_core::HostStatusReport where U: core::convert::TryFrom<T>
+d2b_provider_system_core	impl<T, U> core::convert::TryInto<U> for d2b_provider_system_core::UserReconciler<P> where U: core::convert::TryFrom<T>
+d2b_provider_system_core	impl<T, U> core::convert::TryInto<U> for d2b_provider_system_core::UserStatusReport where U: core::convert::TryFrom<T>
+d2b_provider_system_core	impl<T> alloc::borrow::ToOwned for d2b_provider_system_core::HostStatusReport where T: core::clone::Clone
+d2b_provider_system_core	impl<T> alloc::borrow::ToOwned for d2b_provider_system_core::UserStatusReport where T: core::clone::Clone
+d2b_provider_system_core	impl<T> core::any::Any for d2b_provider_system_core::HostStatusReport where T: 'static + ?core::marker::Sized
+d2b_provider_system_core	impl<T> core::any::Any for d2b_provider_system_core::UserReconciler<P> where T: 'static + ?core::marker::Sized
+d2b_provider_system_core	impl<T> core::any::Any for d2b_provider_system_core::UserStatusReport where T: 'static + ?core::marker::Sized
+d2b_provider_system_core	impl<T> core::borrow::Borrow<T> for d2b_provider_system_core::HostStatusReport where T: ?core::marker::Sized
+d2b_provider_system_core	impl<T> core::borrow::Borrow<T> for d2b_provider_system_core::UserReconciler<P> where T: ?core::marker::Sized
+d2b_provider_system_core	impl<T> core::borrow::Borrow<T> for d2b_provider_system_core::UserStatusReport where T: ?core::marker::Sized
+d2b_provider_system_core	impl<T> core::borrow::BorrowMut<T> for d2b_provider_system_core::HostStatusReport where T: ?core::marker::Sized
+d2b_provider_system_core	impl<T> core::borrow::BorrowMut<T> for d2b_provider_system_core::UserReconciler<P> where T: ?core::marker::Sized
+d2b_provider_system_core	impl<T> core::borrow::BorrowMut<T> for d2b_provider_system_core::UserStatusReport where T: ?core::marker::Sized
+d2b_provider_system_core	impl<T> core::clone::CloneToUninit for d2b_provider_system_core::HostStatusReport where T: core::clone::Clone
+d2b_provider_system_core	impl<T> core::clone::CloneToUninit for d2b_provider_system_core::UserStatusReport where T: core::clone::Clone
+d2b_provider_system_core	impl<T> core::convert::From<T> for d2b_provider_system_core::HostStatusReport
+d2b_provider_system_core	impl<T> core::convert::From<T> for d2b_provider_system_core::UserReconciler<P>
+d2b_provider_system_core	impl<T> core::convert::From<T> for d2b_provider_system_core::UserStatusReport
+d2b_provider_system_core	impl<T> dyn_clone::DynClone for d2b_provider_system_core::HostStatusReport where T: core::clone::Clone
+d2b_provider_system_core	impl<T> dyn_clone::DynClone for d2b_provider_system_core::UserStatusReport where T: core::clone::Clone
+d2b_provider_system_core	impl<T> typenum::type_operators::Same for d2b_provider_system_core::HostStatusReport
+d2b_provider_system_core	impl<T> typenum::type_operators::Same for d2b_provider_system_core::UserReconciler<P>
+d2b_provider_system_core	impl<T> typenum::type_operators::Same for d2b_provider_system_core::UserStatusReport
+d2b_provider_system_core	pub async fn d2b_provider_system_core::UserReconciler<P>::reconcile(&self, &d2b_contracts::v3::resource_ref::ResourceRef, &d2b_contracts::v3::user::UserSpec) -> core::result::Result<d2b_provider_system_core::UserStatusReport, d2b_provider_system_core::SystemCoreError>
+d2b_provider_system_core	pub async fn d2b_provider_system_core::testing::ScriptedDiscoveryPort::discover(&self, &d2b_contracts::v3::resource_ref::ResourceRef, &d2b_contracts::v3::user::UserSpec) -> core::result::Result<core::option::Option<d2b_provider_system_core::DiscoveredUser>, d2b_provider_system_core::SystemCoreError>
+d2b_provider_system_core	pub d2b_provider_system_core::HostStatusReport::allowed_domains: alloc::vec::Vec<d2b_contracts::v3::execution_policy::ExecutionDomain>
+d2b_provider_system_core	pub d2b_provider_system_core::HostStatusReport::default_domain: d2b_contracts::v3::execution_policy::ExecutionDomain
+d2b_provider_system_core	pub d2b_provider_system_core::HostStatusReport::default_user_ref: core::option::Option<d2b_contracts::v3::resource_ref::ResourceRef>
+d2b_provider_system_core	pub d2b_provider_system_core::HostStatusReport::host_ref: d2b_contracts::v3::resource_ref::ResourceRef
+d2b_provider_system_core	pub d2b_provider_system_core::HostStatusReport::isolation_posture: core::option::Option<d2b_contracts::v3::host::IsolationPosture>
+d2b_provider_system_core	pub d2b_provider_system_core::HostStatusReport::isolation_posture_message: core::option::Option<&'static str>
+d2b_provider_system_core	pub d2b_provider_system_core::HostStatusReport::phase: d2b_contracts::v3::resource_status::ResourcePhase
+d2b_provider_system_core	pub d2b_provider_system_core::HostStatusReport::provider: &'static str
+d2b_provider_system_core	pub d2b_provider_system_core::UserStatusReport::discovery: d2b_provider_system_core::UserDiscoveryCondition
+d2b_provider_system_core	pub d2b_provider_system_core::UserStatusReport::identity: core::option::Option<d2b_provider_system_core::UserIdentityDigest>
+d2b_provider_system_core	pub d2b_provider_system_core::UserStatusReport::phase: d2b_contracts::v3::resource_status::ResourcePhase
+d2b_provider_system_core	pub d2b_provider_system_core::UserStatusReport::provider: &'static str
+d2b_provider_system_core	pub d2b_provider_system_core::UserStatusReport::user_ref: d2b_contracts::v3::resource_ref::ResourceRef
+d2b_provider_system_core	pub fn d2b_provider_system_core::HostReconciler::reconcile(&self, &d2b_contracts::v3::resource_ref::ResourceRef, &d2b_contracts::v3::resource_ref::ResourceRef, &d2b_contracts::v3::host::HostSpec) -> core::result::Result<d2b_provider_system_core::HostStatusReport, d2b_provider_system_core::SystemCoreError>
+d2b_provider_system_core	pub fn d2b_provider_system_core::HostStatusReport::clone(&self) -> d2b_provider_system_core::HostStatusReport
+d2b_provider_system_core	pub fn d2b_provider_system_core::HostStatusReport::eq(&self, &d2b_provider_system_core::HostStatusReport) -> bool
+d2b_provider_system_core	pub fn d2b_provider_system_core::UserDiscoveryEffectPort::discover(&self, &d2b_contracts::v3::resource_ref::ResourceRef, &d2b_contracts::v3::user::UserSpec) -> impl core::future::future::Future<Output = core::result::Result<core::option::Option<d2b_provider_system_core::DiscoveredUser>, d2b_provider_system_core::SystemCoreError>>
+d2b_provider_system_core	pub fn d2b_provider_system_core::UserStatusReport::clone(&self) -> d2b_provider_system_core::UserStatusReport
+d2b_provider_system_core	pub fn d2b_provider_system_core::UserStatusReport::eq(&self, &d2b_provider_system_core::UserStatusReport) -> bool
+d2b_provider_system_core	pub fn d2b_provider_system_core::ownership::require_owned(&d2b_contracts::v3::resource_ref::ResourceRef) -> core::result::Result<(), d2b_provider_system_core::SystemCoreError>
+d2b_provider_system_core	pub fn d2b_provider_system_core::ownership::require_resource_type(&d2b_contracts::v3::resource_ref::ResourceRef, &str) -> core::result::Result<(), d2b_provider_system_core::SystemCoreError>
+d2b_provider_system_core	pub fn d2b_provider_system_core::testing::fixtures::host_ref() -> d2b_contracts::v3::resource_ref::ResourceRef
+d2b_provider_system_core	pub fn d2b_provider_system_core::testing::fixtures::system_core_provider_ref() -> d2b_contracts::v3::resource_ref::ResourceRef
+d2b_provider_system_core	pub fn d2b_provider_system_core::testing::fixtures::system_host_spec() -> d2b_contracts::v3::host::HostSpec
+d2b_provider_system_core	pub fn d2b_provider_system_core::testing::fixtures::user_only_host_ref() -> d2b_contracts::v3::resource_ref::ResourceRef
+d2b_provider_system_core	pub fn d2b_provider_system_core::testing::fixtures::user_only_host_spec() -> d2b_contracts::v3::host::HostSpec
+d2b_provider_system_core	pub fn d2b_provider_system_core::testing::fixtures::user_ref() -> d2b_contracts::v3::resource_ref::ResourceRef
+d2b_provider_system_core	pub struct d2b_provider_system_core::HostStatusReport
+d2b_provider_system_core	pub struct d2b_provider_system_core::UserReconciler<P: d2b_provider_system_core::UserDiscoveryEffectPort>
+d2b_provider_system_core	pub struct d2b_provider_system_core::UserStatusReport
+d2b_provider_system_core	pub trait d2b_provider_system_core::UserDiscoveryEffectPort
 d2b_provider_system_minijail	impl<P: core::fmt::Debug + d2b_process_conformance::port::ProcessLaunchEffectPort> core::fmt::Debug for d2b_provider_system_minijail::MinijailProcessProvider<P>
 d2b_provider_system_minijail	impl<P: d2b_process_conformance::port::ProcessLaunchEffectPort> d2b_process_conformance::provider::ProcessProvider for d2b_provider_system_minijail::MinijailProcessProvider<P>
 d2b_provider_system_minijail	impl<P: d2b_process_conformance::port::ProcessLaunchEffectPort> d2b_provider_system_minijail::MinijailProcessProvider<P>
@@ -3821,21 +3956,25 @@ d2b_provider_toolkit	impl core::cmp::PartialEq for d2b_provider_toolkit::Provide
 d2b_provider_toolkit	impl core::cmp::PartialEq for d2b_provider_toolkit::ProviderAgentBootstrap
 d2b_provider_toolkit	impl core::cmp::PartialEq for d2b_provider_toolkit::ProviderAgentIdentity
 d2b_provider_toolkit	impl core::default::Default for d2b_provider_toolkit::ProviderAgentAuditLog
+d2b_provider_toolkit	impl core::default::Default for d2b_provider_toolkit::fakes::FakeBus
 d2b_provider_toolkit	impl core::fmt::Debug for d2b_provider_toolkit::AllocatorSessionBinding
 d2b_provider_toolkit	impl core::fmt::Debug for d2b_provider_toolkit::ProviderAgentAuditEvent
 d2b_provider_toolkit	impl core::fmt::Debug for d2b_provider_toolkit::ProviderAgentAuditLog
 d2b_provider_toolkit	impl core::fmt::Debug for d2b_provider_toolkit::ProviderAgentBootstrap
 d2b_provider_toolkit	impl core::fmt::Debug for d2b_provider_toolkit::ProviderAgentIdentity
+d2b_provider_toolkit	impl core::fmt::Debug for d2b_provider_toolkit::fakes::FakeBus
 d2b_provider_toolkit	impl core::marker::Freeze for d2b_provider_toolkit::AllocatorSessionBinding
 d2b_provider_toolkit	impl core::marker::Freeze for d2b_provider_toolkit::ProviderAgentAuditEvent
 d2b_provider_toolkit	impl core::marker::Freeze for d2b_provider_toolkit::ProviderAgentAuditLog
 d2b_provider_toolkit	impl core::marker::Freeze for d2b_provider_toolkit::ProviderAgentBootstrap
 d2b_provider_toolkit	impl core::marker::Freeze for d2b_provider_toolkit::ProviderAgentIdentity
+d2b_provider_toolkit	impl core::marker::Freeze for d2b_provider_toolkit::fakes::FakeBus
 d2b_provider_toolkit	impl core::marker::Send for d2b_provider_toolkit::AllocatorSessionBinding
 d2b_provider_toolkit	impl core::marker::Send for d2b_provider_toolkit::ProviderAgentAuditEvent
 d2b_provider_toolkit	impl core::marker::Send for d2b_provider_toolkit::ProviderAgentAuditLog
 d2b_provider_toolkit	impl core::marker::Send for d2b_provider_toolkit::ProviderAgentBootstrap
 d2b_provider_toolkit	impl core::marker::Send for d2b_provider_toolkit::ProviderAgentIdentity
+d2b_provider_toolkit	impl core::marker::Send for d2b_provider_toolkit::fakes::FakeBus
 d2b_provider_toolkit	impl core::marker::StructuralPartialEq for d2b_provider_toolkit::ProviderAgentAuditEvent
 d2b_provider_toolkit	impl core::marker::StructuralPartialEq for d2b_provider_toolkit::ProviderAgentBootstrap
 d2b_provider_toolkit	impl core::marker::StructuralPartialEq for d2b_provider_toolkit::ProviderAgentIdentity
@@ -3844,46 +3983,55 @@ d2b_provider_toolkit	impl core::marker::Sync for d2b_provider_toolkit::ProviderA
 d2b_provider_toolkit	impl core::marker::Sync for d2b_provider_toolkit::ProviderAgentAuditLog
 d2b_provider_toolkit	impl core::marker::Sync for d2b_provider_toolkit::ProviderAgentBootstrap
 d2b_provider_toolkit	impl core::marker::Sync for d2b_provider_toolkit::ProviderAgentIdentity
+d2b_provider_toolkit	impl core::marker::Sync for d2b_provider_toolkit::fakes::FakeBus
 d2b_provider_toolkit	impl core::marker::Unpin for d2b_provider_toolkit::AllocatorSessionBinding
 d2b_provider_toolkit	impl core::marker::Unpin for d2b_provider_toolkit::ProviderAgentAuditEvent
 d2b_provider_toolkit	impl core::marker::Unpin for d2b_provider_toolkit::ProviderAgentAuditLog
 d2b_provider_toolkit	impl core::marker::Unpin for d2b_provider_toolkit::ProviderAgentBootstrap
 d2b_provider_toolkit	impl core::marker::Unpin for d2b_provider_toolkit::ProviderAgentIdentity
+d2b_provider_toolkit	impl core::marker::Unpin for d2b_provider_toolkit::fakes::FakeBus
 d2b_provider_toolkit	impl core::marker::UnsafeUnpin for d2b_provider_toolkit::AllocatorSessionBinding
 d2b_provider_toolkit	impl core::marker::UnsafeUnpin for d2b_provider_toolkit::ProviderAgentAuditEvent
 d2b_provider_toolkit	impl core::marker::UnsafeUnpin for d2b_provider_toolkit::ProviderAgentAuditLog
 d2b_provider_toolkit	impl core::marker::UnsafeUnpin for d2b_provider_toolkit::ProviderAgentBootstrap
 d2b_provider_toolkit	impl core::marker::UnsafeUnpin for d2b_provider_toolkit::ProviderAgentIdentity
+d2b_provider_toolkit	impl core::marker::UnsafeUnpin for d2b_provider_toolkit::fakes::FakeBus
 d2b_provider_toolkit	impl core::panic::unwind_safe::RefUnwindSafe for d2b_provider_toolkit::AllocatorSessionBinding
 d2b_provider_toolkit	impl core::panic::unwind_safe::RefUnwindSafe for d2b_provider_toolkit::ProviderAgentAuditEvent
 d2b_provider_toolkit	impl core::panic::unwind_safe::RefUnwindSafe for d2b_provider_toolkit::ProviderAgentAuditLog
 d2b_provider_toolkit	impl core::panic::unwind_safe::RefUnwindSafe for d2b_provider_toolkit::ProviderAgentBootstrap
 d2b_provider_toolkit	impl core::panic::unwind_safe::RefUnwindSafe for d2b_provider_toolkit::ProviderAgentIdentity
+d2b_provider_toolkit	impl core::panic::unwind_safe::RefUnwindSafe for d2b_provider_toolkit::fakes::FakeBus
 d2b_provider_toolkit	impl core::panic::unwind_safe::UnwindSafe for d2b_provider_toolkit::AllocatorSessionBinding
 d2b_provider_toolkit	impl core::panic::unwind_safe::UnwindSafe for d2b_provider_toolkit::ProviderAgentAuditEvent
 d2b_provider_toolkit	impl core::panic::unwind_safe::UnwindSafe for d2b_provider_toolkit::ProviderAgentAuditLog
 d2b_provider_toolkit	impl core::panic::unwind_safe::UnwindSafe for d2b_provider_toolkit::ProviderAgentBootstrap
 d2b_provider_toolkit	impl core::panic::unwind_safe::UnwindSafe for d2b_provider_toolkit::ProviderAgentIdentity
+d2b_provider_toolkit	impl core::panic::unwind_safe::UnwindSafe for d2b_provider_toolkit::fakes::FakeBus
 d2b_provider_toolkit	impl d2b_provider_toolkit::AllocatorSessionBinding
 d2b_provider_toolkit	impl d2b_provider_toolkit::ProviderAgentAuditEvent
 d2b_provider_toolkit	impl d2b_provider_toolkit::ProviderAgentAuditLog
 d2b_provider_toolkit	impl d2b_provider_toolkit::ProviderAgentBootstrap
 d2b_provider_toolkit	impl d2b_provider_toolkit::ProviderAgentIdentity
+d2b_provider_toolkit	impl d2b_provider_toolkit::fakes::FakeBus
 d2b_provider_toolkit	impl<T, U> core::convert::Into<U> for d2b_provider_toolkit::AllocatorSessionBinding where U: core::convert::From<T>
 d2b_provider_toolkit	impl<T, U> core::convert::Into<U> for d2b_provider_toolkit::ProviderAgentAuditEvent where U: core::convert::From<T>
 d2b_provider_toolkit	impl<T, U> core::convert::Into<U> for d2b_provider_toolkit::ProviderAgentAuditLog where U: core::convert::From<T>
 d2b_provider_toolkit	impl<T, U> core::convert::Into<U> for d2b_provider_toolkit::ProviderAgentBootstrap where U: core::convert::From<T>
 d2b_provider_toolkit	impl<T, U> core::convert::Into<U> for d2b_provider_toolkit::ProviderAgentIdentity where U: core::convert::From<T>
+d2b_provider_toolkit	impl<T, U> core::convert::Into<U> for d2b_provider_toolkit::fakes::FakeBus where U: core::convert::From<T>
 d2b_provider_toolkit	impl<T, U> core::convert::TryFrom<U> for d2b_provider_toolkit::AllocatorSessionBinding where U: core::convert::Into<T>
 d2b_provider_toolkit	impl<T, U> core::convert::TryFrom<U> for d2b_provider_toolkit::ProviderAgentAuditEvent where U: core::convert::Into<T>
 d2b_provider_toolkit	impl<T, U> core::convert::TryFrom<U> for d2b_provider_toolkit::ProviderAgentAuditLog where U: core::convert::Into<T>
 d2b_provider_toolkit	impl<T, U> core::convert::TryFrom<U> for d2b_provider_toolkit::ProviderAgentBootstrap where U: core::convert::Into<T>
 d2b_provider_toolkit	impl<T, U> core::convert::TryFrom<U> for d2b_provider_toolkit::ProviderAgentIdentity where U: core::convert::Into<T>
+d2b_provider_toolkit	impl<T, U> core::convert::TryFrom<U> for d2b_provider_toolkit::fakes::FakeBus where U: core::convert::Into<T>
 d2b_provider_toolkit	impl<T, U> core::convert::TryInto<U> for d2b_provider_toolkit::AllocatorSessionBinding where U: core::convert::TryFrom<T>
 d2b_provider_toolkit	impl<T, U> core::convert::TryInto<U> for d2b_provider_toolkit::ProviderAgentAuditEvent where U: core::convert::TryFrom<T>
 d2b_provider_toolkit	impl<T, U> core::convert::TryInto<U> for d2b_provider_toolkit::ProviderAgentAuditLog where U: core::convert::TryFrom<T>
 d2b_provider_toolkit	impl<T, U> core::convert::TryInto<U> for d2b_provider_toolkit::ProviderAgentBootstrap where U: core::convert::TryFrom<T>
 d2b_provider_toolkit	impl<T, U> core::convert::TryInto<U> for d2b_provider_toolkit::ProviderAgentIdentity where U: core::convert::TryFrom<T>
+d2b_provider_toolkit	impl<T, U> core::convert::TryInto<U> for d2b_provider_toolkit::fakes::FakeBus where U: core::convert::TryFrom<T>
 d2b_provider_toolkit	impl<T> alloc::borrow::ToOwned for d2b_provider_toolkit::ProviderAgentAuditEvent where T: core::clone::Clone
 d2b_provider_toolkit	impl<T> alloc::borrow::ToOwned for d2b_provider_toolkit::ProviderAgentBootstrap where T: core::clone::Clone
 d2b_provider_toolkit	impl<T> alloc::borrow::ToOwned for d2b_provider_toolkit::ProviderAgentIdentity where T: core::clone::Clone
@@ -3892,16 +4040,19 @@ d2b_provider_toolkit	impl<T> core::any::Any for d2b_provider_toolkit::ProviderAg
 d2b_provider_toolkit	impl<T> core::any::Any for d2b_provider_toolkit::ProviderAgentAuditLog where T: 'static + ?core::marker::Sized
 d2b_provider_toolkit	impl<T> core::any::Any for d2b_provider_toolkit::ProviderAgentBootstrap where T: 'static + ?core::marker::Sized
 d2b_provider_toolkit	impl<T> core::any::Any for d2b_provider_toolkit::ProviderAgentIdentity where T: 'static + ?core::marker::Sized
+d2b_provider_toolkit	impl<T> core::any::Any for d2b_provider_toolkit::fakes::FakeBus where T: 'static + ?core::marker::Sized
 d2b_provider_toolkit	impl<T> core::borrow::Borrow<T> for d2b_provider_toolkit::AllocatorSessionBinding where T: ?core::marker::Sized
 d2b_provider_toolkit	impl<T> core::borrow::Borrow<T> for d2b_provider_toolkit::ProviderAgentAuditEvent where T: ?core::marker::Sized
 d2b_provider_toolkit	impl<T> core::borrow::Borrow<T> for d2b_provider_toolkit::ProviderAgentAuditLog where T: ?core::marker::Sized
 d2b_provider_toolkit	impl<T> core::borrow::Borrow<T> for d2b_provider_toolkit::ProviderAgentBootstrap where T: ?core::marker::Sized
 d2b_provider_toolkit	impl<T> core::borrow::Borrow<T> for d2b_provider_toolkit::ProviderAgentIdentity where T: ?core::marker::Sized
+d2b_provider_toolkit	impl<T> core::borrow::Borrow<T> for d2b_provider_toolkit::fakes::FakeBus where T: ?core::marker::Sized
 d2b_provider_toolkit	impl<T> core::borrow::BorrowMut<T> for d2b_provider_toolkit::AllocatorSessionBinding where T: ?core::marker::Sized
 d2b_provider_toolkit	impl<T> core::borrow::BorrowMut<T> for d2b_provider_toolkit::ProviderAgentAuditEvent where T: ?core::marker::Sized
 d2b_provider_toolkit	impl<T> core::borrow::BorrowMut<T> for d2b_provider_toolkit::ProviderAgentAuditLog where T: ?core::marker::Sized
 d2b_provider_toolkit	impl<T> core::borrow::BorrowMut<T> for d2b_provider_toolkit::ProviderAgentBootstrap where T: ?core::marker::Sized
 d2b_provider_toolkit	impl<T> core::borrow::BorrowMut<T> for d2b_provider_toolkit::ProviderAgentIdentity where T: ?core::marker::Sized
+d2b_provider_toolkit	impl<T> core::borrow::BorrowMut<T> for d2b_provider_toolkit::fakes::FakeBus where T: ?core::marker::Sized
 d2b_provider_toolkit	impl<T> core::clone::CloneToUninit for d2b_provider_toolkit::ProviderAgentAuditEvent where T: core::clone::Clone
 d2b_provider_toolkit	impl<T> core::clone::CloneToUninit for d2b_provider_toolkit::ProviderAgentBootstrap where T: core::clone::Clone
 d2b_provider_toolkit	impl<T> core::clone::CloneToUninit for d2b_provider_toolkit::ProviderAgentIdentity where T: core::clone::Clone
@@ -3910,6 +4061,7 @@ d2b_provider_toolkit	impl<T> core::convert::From<T> for d2b_provider_toolkit::Pr
 d2b_provider_toolkit	impl<T> core::convert::From<T> for d2b_provider_toolkit::ProviderAgentAuditLog
 d2b_provider_toolkit	impl<T> core::convert::From<T> for d2b_provider_toolkit::ProviderAgentBootstrap
 d2b_provider_toolkit	impl<T> core::convert::From<T> for d2b_provider_toolkit::ProviderAgentIdentity
+d2b_provider_toolkit	impl<T> core::convert::From<T> for d2b_provider_toolkit::fakes::FakeBus
 d2b_provider_toolkit	impl<T> dyn_clone::DynClone for d2b_provider_toolkit::ProviderAgentAuditEvent where T: core::clone::Clone
 d2b_provider_toolkit	impl<T> dyn_clone::DynClone for d2b_provider_toolkit::ProviderAgentBootstrap where T: core::clone::Clone
 d2b_provider_toolkit	impl<T> dyn_clone::DynClone for d2b_provider_toolkit::ProviderAgentIdentity where T: core::clone::Clone
@@ -3918,6 +4070,7 @@ d2b_provider_toolkit	impl<T> typenum::type_operators::Same for d2b_provider_tool
 d2b_provider_toolkit	impl<T> typenum::type_operators::Same for d2b_provider_toolkit::ProviderAgentAuditLog
 d2b_provider_toolkit	impl<T> typenum::type_operators::Same for d2b_provider_toolkit::ProviderAgentBootstrap
 d2b_provider_toolkit	impl<T> typenum::type_operators::Same for d2b_provider_toolkit::ProviderAgentIdentity
+d2b_provider_toolkit	impl<T> typenum::type_operators::Same for d2b_provider_toolkit::fakes::FakeBus
 d2b_provider_toolkit	pub const fn d2b_provider_toolkit::AllocatorSessionBinding::new(d2b_contracts::v3::zone_routing::ZonePath, d2b_contracts::v3::resource_ref::ResourceRef, d2b_contracts::v3::identity::SessionPurpose, d2b_contracts::v3::identity::TransportBinding) -> Self
 d2b_provider_toolkit	pub const fn d2b_provider_toolkit::ProviderAgentAuditEvent::new(d2b_contracts::v3::zone_routing::ZonePath, d2b_contracts::v3::resource_ref::ResourceRef, d2b_contracts::v3::execution_policy::BoundedToken, d2b_provider_toolkit::ProviderAgentAuditOutcome) -> Self
 d2b_provider_toolkit	pub const fn d2b_provider_toolkit::ProviderAgentAuditEvent::provider_ref(&self) -> &d2b_contracts::v3::resource_ref::ResourceRef
@@ -3934,11 +4087,17 @@ d2b_provider_toolkit	pub fn d2b_provider_toolkit::ProviderAgentIdentity::clone(&
 d2b_provider_toolkit	pub fn d2b_provider_toolkit::ProviderAgentIdentity::eq(&self, &d2b_provider_toolkit::ProviderAgentIdentity) -> bool
 d2b_provider_toolkit	pub fn d2b_provider_toolkit::conformance::check_descriptor_conformance(&[d2b_provider_toolkit::conformance::ProviderResourceTypeBinding], &[d2b_contracts::v3::resource_schema::ResourceSchemaContract]) -> core::result::Result<(), d2b_provider_toolkit::conformance::ConformanceError>
 d2b_provider_toolkit	pub fn d2b_provider_toolkit::conformance::check_provider_conformance(&d2b_provider_toolkit::conformance::ProviderResourceTypeBinding, &[d2b_contracts::v3::resource_schema::ResourceSchemaContract], &d2b_contracts::v3::resource::ResourceSpec) -> core::result::Result<(), d2b_provider_toolkit::conformance::ConformanceError>
+d2b_provider_toolkit	pub fn d2b_provider_toolkit::fakes::FakeBus::default() -> d2b_provider_toolkit::fakes::FakeBus
+d2b_provider_toolkit	pub fn d2b_provider_toolkit::fakes::FakeBus::resolve_alias(&mut self, d2b_contracts::v3::provider::DependencyAlias) -> core::result::Result<d2b_contracts::v3::resource_ref::ResourceRef, d2b_provider_toolkit::fakes::FakePortError>
+d2b_provider_toolkit	pub fn d2b_provider_toolkit::fakes::FakeBus::with_bindings(impl core::iter::traits::collect::IntoIterator<Item = (d2b_contracts::v3::provider::DependencyAlias, d2b_contracts::v3::resource_ref::ResourceRef)>) -> Self
+d2b_provider_toolkit	pub fn d2b_provider_toolkit::fakes::FakeCoreClient::resolve_provider_ref(&mut self, &d2b_contracts::v3::resource_ref::ResourceRef) -> core::result::Result<(), d2b_provider_toolkit::fakes::FakePortError>
+d2b_provider_toolkit	pub fn d2b_provider_toolkit::fakes::FakeResourceStore::write_status(&mut self, &d2b_contracts::v3::resource_ref::ResourceRef) -> core::result::Result<(), d2b_provider_toolkit::fakes::FakePortError>
 d2b_provider_toolkit	pub struct d2b_provider_toolkit::AllocatorSessionBinding
 d2b_provider_toolkit	pub struct d2b_provider_toolkit::ProviderAgentAuditEvent
 d2b_provider_toolkit	pub struct d2b_provider_toolkit::ProviderAgentAuditLog
 d2b_provider_toolkit	pub struct d2b_provider_toolkit::ProviderAgentBootstrap
 d2b_provider_toolkit	pub struct d2b_provider_toolkit::ProviderAgentIdentity
+d2b_provider_toolkit	pub struct d2b_provider_toolkit::fakes::FakeBus
 d2b_provider_volume_local	impl core::clone::Clone for d2b_provider_volume_local::AttachmentPlan
 d2b_provider_volume_local	impl core::clone::Clone for d2b_provider_volume_local::AttachmentStatus
 d2b_provider_volume_local	impl core::clone::Clone for d2b_provider_volume_local::EntryRequest

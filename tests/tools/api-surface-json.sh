@@ -75,6 +75,13 @@ cmp -s "$metadata" "$golden/workspace-metadata.json" || {
   if [ "${D2B_API_SURFACE_UPDATE:-0}" = 1 ]; then
     cp "$metadata" "$golden/workspace-metadata.json"
   else
+    # This file contains only crate identities and numeric census values. Show
+    # the exact drift so CI identifies the changed crate without exposing raw
+    # rustdoc JSON, source text, signatures, or runner-local paths.
+    diff --unified=3 \
+      --label committed-workspace-metadata.json \
+      --label generated-workspace-metadata.json \
+      "$golden/workspace-metadata.json" "$metadata" || true
     fail "api-surface workspace metadata census drifted"
     exit 1
   fi

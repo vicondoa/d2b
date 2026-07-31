@@ -606,6 +606,11 @@ d2b_provider::d2b_provider::descriptor::ProviderDescriptor	struct	core::core::fm
 d2b_provider::d2b_provider::descriptor::ProviderDescriptor	struct	core::core::marker::StructuralPartialEq	trait	impl core::marker::StructuralPartialEq for d2b_provider::ProviderDescriptor
 d2b_provider::d2b_provider::forwarding::ProviderForwardRequest	struct	core::core::clone::Clone	trait	impl core::clone::Clone for d2b_provider::ProviderForwardRequest
 d2b_provider::d2b_provider::forwarding::ProviderForwardRequest	struct	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2b_provider::ProviderForwardRequest
+d2b_provider::d2b_provider::installation::InstalledProvider	struct	core::core::clone::Clone	trait	impl core::clone::Clone for d2b_provider::InstalledProvider
+d2b_provider::d2b_provider::installation::InstalledProvider	struct	core::core::cmp::Eq	trait	impl core::cmp::Eq for d2b_provider::InstalledProvider
+d2b_provider::d2b_provider::installation::InstalledProvider	struct	core::core::cmp::PartialEq	trait	impl core::cmp::PartialEq for d2b_provider::InstalledProvider
+d2b_provider::d2b_provider::installation::InstalledProvider	struct	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2b_provider::InstalledProvider
+d2b_provider::d2b_provider::installation::InstalledProvider	struct	core::core::marker::StructuralPartialEq	trait	impl core::marker::StructuralPartialEq for d2b_provider::InstalledProvider
 d2b_provider::d2b_provider::registry::AdmissionOptions	struct	core::core::clone::Clone	trait	impl core::clone::Clone for d2b_provider::AdmissionOptions
 d2b_provider::d2b_provider::registry::AdmissionOptions	struct	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2b_provider::AdmissionOptions
 d2b_provider::d2b_provider::registry::AdmittedProvider	struct	core::core::fmt::Debug	trait	impl<I> core::fmt::Debug for d2b_provider::AdmittedProvider<I>
@@ -626,6 +631,19 @@ d2b_provider::d2b_provider::session::SessionIdentity	struct	core::core::cmp::Eq	
 d2b_provider::d2b_provider::session::SessionIdentity	struct	core::core::cmp::PartialEq	trait	impl core::cmp::PartialEq for d2b_provider::SessionIdentity
 d2b_provider::d2b_provider::session::SessionIdentity	struct	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2b_provider::SessionIdentity
 d2b_provider::d2b_provider::session::SessionIdentity	struct	core::core::marker::StructuralPartialEq	trait	impl core::marker::StructuralPartialEq for d2b_provider::SessionIdentity
+d2b_provider_system_core::d2b_provider_system_core::host::HostStatusReport	struct	core::core::clone::Clone	trait	impl core::clone::Clone for d2b_provider_system_core::HostStatusReport
+d2b_provider_system_core::d2b_provider_system_core::host::HostStatusReport	struct	core::core::cmp::Eq	trait	impl core::cmp::Eq for d2b_provider_system_core::HostStatusReport
+d2b_provider_system_core::d2b_provider_system_core::host::HostStatusReport	struct	core::core::cmp::PartialEq	trait	impl core::cmp::PartialEq for d2b_provider_system_core::HostStatusReport
+d2b_provider_system_core::d2b_provider_system_core::host::HostStatusReport	struct	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2b_provider_system_core::HostStatusReport
+d2b_provider_system_core::d2b_provider_system_core::host::HostStatusReport	struct	core::core::marker::StructuralPartialEq	trait	impl core::marker::StructuralPartialEq for d2b_provider_system_core::HostStatusReport
+d2b_provider_system_core::d2b_provider_system_core::host::HostStatusReport	struct	serde_core::serde_core::ser::Serialize	trait	impl serde_core::ser::Serialize for d2b_provider_system_core::HostStatusReport
+d2b_provider_system_core::d2b_provider_system_core::user::UserReconciler	struct	core::core::fmt::Debug	trait	impl<P: core::fmt::Debug + d2b_provider_system_core::UserDiscoveryEffectPort> core::fmt::Debug for d2b_provider_system_core::UserReconciler<P>
+d2b_provider_system_core::d2b_provider_system_core::user::UserStatusReport	struct	core::core::clone::Clone	trait	impl core::clone::Clone for d2b_provider_system_core::UserStatusReport
+d2b_provider_system_core::d2b_provider_system_core::user::UserStatusReport	struct	core::core::cmp::Eq	trait	impl core::cmp::Eq for d2b_provider_system_core::UserStatusReport
+d2b_provider_system_core::d2b_provider_system_core::user::UserStatusReport	struct	core::core::cmp::PartialEq	trait	impl core::cmp::PartialEq for d2b_provider_system_core::UserStatusReport
+d2b_provider_system_core::d2b_provider_system_core::user::UserStatusReport	struct	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2b_provider_system_core::UserStatusReport
+d2b_provider_system_core::d2b_provider_system_core::user::UserStatusReport	struct	core::core::marker::StructuralPartialEq	trait	impl core::marker::StructuralPartialEq for d2b_provider_system_core::UserStatusReport
+d2b_provider_system_core::d2b_provider_system_core::user::UserStatusReport	struct	serde_core::serde_core::ser::Serialize	trait	impl serde_core::ser::Serialize for d2b_provider_system_core::UserStatusReport
 d2b_provider_system_minijail::d2b_provider_system_minijail::MinijailProcessProvider	struct	core::core::fmt::Debug	trait	impl<P: core::fmt::Debug + d2b_process_conformance::port::ProcessLaunchEffectPort> core::fmt::Debug for d2b_provider_system_minijail::MinijailProcessProvider<P>
 d2b_provider_system_minijail::d2b_provider_system_minijail::MinijailProcessProvider	struct	d2b_process_conformance::d2b_process_conformance::provider::ProcessProvider	trait	impl<P: d2b_process_conformance::port::ProcessLaunchEffectPort> d2b_process_conformance::provider::ProcessProvider for d2b_provider_system_minijail::MinijailProcessProvider<P>
 d2b_provider_system_systemd::d2b_provider_system_systemd::SystemdProcessProvider	struct	core::core::fmt::Debug	trait	impl<P: core::fmt::Debug + d2b_process_conformance::port::ProcessLaunchEffectPort> core::fmt::Debug for d2b_provider_system_systemd::SystemdProcessProvider<P>
@@ -648,6 +666,8 @@ d2b_provider_toolkit::d2b_provider_toolkit::bootstrap::ProviderAgentIdentity	str
 d2b_provider_toolkit::d2b_provider_toolkit::bootstrap::ProviderAgentIdentity	struct	core::core::cmp::PartialEq	trait	impl core::cmp::PartialEq for d2b_provider_toolkit::ProviderAgentIdentity
 d2b_provider_toolkit::d2b_provider_toolkit::bootstrap::ProviderAgentIdentity	struct	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2b_provider_toolkit::ProviderAgentIdentity
 d2b_provider_toolkit::d2b_provider_toolkit::bootstrap::ProviderAgentIdentity	struct	core::core::marker::StructuralPartialEq	trait	impl core::marker::StructuralPartialEq for d2b_provider_toolkit::ProviderAgentIdentity
+d2b_provider_toolkit::d2b_provider_toolkit::fakes::FakeBus	struct	core::core::default::Default	trait	impl core::default::Default for d2b_provider_toolkit::fakes::FakeBus
+d2b_provider_toolkit::d2b_provider_toolkit::fakes::FakeBus	struct	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2b_provider_toolkit::fakes::FakeBus
 d2b_provider_volume_local::d2b_provider_volume_local::layout::EntryRequest	struct	core::core::clone::Clone	trait	impl core::clone::Clone for d2b_provider_volume_local::EntryRequest
 d2b_provider_volume_local::d2b_provider_volume_local::layout::EntryRequest	struct	core::core::cmp::Eq	trait	impl core::cmp::Eq for d2b_provider_volume_local::EntryRequest
 d2b_provider_volume_local::d2b_provider_volume_local::layout::EntryRequest	struct	core::core::cmp::PartialEq	trait	impl core::cmp::PartialEq for d2b_provider_volume_local::EntryRequest
