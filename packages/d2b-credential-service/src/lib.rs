@@ -1,18 +1,15 @@
 //! The Credential service contract and its client and server halves.
 //!
-//! This crate will own the Credential delivery service, its client, and its server, named by work item
-//! `ADR046-credential-002`.
-//!
-//! Nothing here is implemented yet. Nothing here is a design statement, and no
-//! consumer should read a shape from this file.
+//! The service is intentionally not registered with a production bus listener.
+//! Its server accepts an injected admission boundary so authorization must run
+//! before Provider dispatch without creating a second subject-resolution path.
 
 #![deny(missing_docs)]
 
-/// Marks this crate as scaffolding that no work item has filled yet.
-///
-/// The workspace capability-surface scan renders rustdoc for every member and
-/// fails closed when a crate advertises no public item, so an empty scaffold
-/// would break that gate for the whole workspace. This constant exists only to
-/// satisfy it and carries no design intent: the slice that implements
-/// `ADR046-credential-002` should delete it rather than build on it.
-pub const UNIMPLEMENTED_SCAFFOLD: () = ();
+pub mod client;
+pub mod server;
+pub mod service;
+
+pub use client::{CredentialClient, CredentialTransport};
+pub use server::{CredentialAdmission, CredentialProvider, CredentialServer};
+pub use service::*;

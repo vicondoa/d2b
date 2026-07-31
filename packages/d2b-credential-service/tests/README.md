@@ -1,5 +1,6 @@
 # `d2b-credential-service` hermetic tests
 
-Cargo integration, ResourceType and controller conformance, fault, redaction,
-schema, and fake-port tests live here. None is declared yet; the slice that
-fills this crate adds them.
+The Cargo integration tests pin all five operation vectors, exact Role mapping,
+strict malformed and oversize rejection, admission-before-dispatch, closed
+failure states, delivery binding, zeroization, and process-unique redaction
+canaries.
