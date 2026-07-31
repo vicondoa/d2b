@@ -154,7 +154,7 @@ let
                 && rawSpec.networkAttachments == [ ]
                 && rawSpec.deviceAttachments == [ ]
                 && rawSpec.volumeAttachmentDefaults == [ ];
-              message = "${path}.spec contains an ExecutionPolicy field outside the Credential schema.";
+              message = "${path}.spec overrides Credential execution policy defaults. Remove those overrides so the Credential remains system-only with no default user or network, device, or Volume attachments.";
             }
             {
               assertion = exactKeys [
@@ -171,14 +171,14 @@ let
                 "loginEndpointRef"
                 "provider"
               ] spec;
-              message = "${path}.spec contains a field outside the Credential ResourceType schema.";
+              message = "${path}.spec contains an unsupported field. Remove fields not declared by the Credential ResourceType schema.";
             }
             {
               assertion = exactKeys [ "executionRef" "domainFilter" "userRef" ] scope
                 && optionalRef (scope.executionRef or null)
                 && optionalRef (scope.userRef or null)
                 && builtins.elem domainFilter [ null "system" "user" ];
-              message = "${path}.spec.scope does not match the Credential ResourceType schema.";
+              message = "${path}.spec.scope is invalid. Keep only executionRef, domainFilter, and userRef; use resource references and set domainFilter to null, system, or user.";
             }
             {
               assertion = exactKeys [ "policy" "proactiveWindowMs" "maxLeaseLifetimeMs" ] rotation
@@ -186,12 +186,12 @@ let
                   [ "on-expiry" "proactive" "on-demand" ]
                 && (proactiveWindow == null || builtins.isInt proactiveWindow)
                 && builtins.isInt maximumLifetime;
-              message = "${path}.spec.rotation does not match the Credential ResourceType schema.";
+              message = "${path}.spec.rotation is invalid. Keep only policy, proactiveWindowMs, and maxLeaseLifetimeMs; select on-expiry, proactive, or on-demand and use integer durations.";
             }
             {
               assertion = exactKeys [ "hardDeadlineMs" ] (spec.expiry or { })
                 && builtins.isInt ((spec.expiry or { }).hardDeadlineMs or 0);
-              message = "${path}.spec.expiry does not match the Credential ResourceType schema.";
+              message = "${path}.spec.expiry is invalid. Keep only hardDeadlineMs and set it to an integer duration.";
             }
             {
               assertion = exactKeys [ "onOwnerDelete" "onProviderGeneration" ] (spec.revocation or { })
@@ -199,7 +199,7 @@ let
                   [ "immediate" "drain-leases" ]
                 && builtins.elem ((spec.revocation or { }).onProviderGeneration or "immediate")
                   [ "immediate" "drain-leases" ];
-              message = "${path}.spec.revocation does not match the Credential ResourceType schema.";
+              message = "${path}.spec.revocation is invalid. Keep only onOwnerDelete and onProviderGeneration, and set each to immediate or drain-leases.";
             }
             {
               assertion = spec ? providerRef && provider != null;
@@ -222,7 +222,7 @@ let
             }
             {
               assertion = domainFilter == null || builtins.elem domainFilter supportedDomains;
-              message = "${path}.spec.scope.domainFilter is not supported by its Provider.";
+              message = "${path}.spec.scope.domainFilter is not supported by its Provider. Set it to null or to a domain declared by the referenced Provider's config.credentialDomains.";
             }
             {
               assertion = domainFilter != "user" || scope.userRef or null != null;
@@ -250,13 +250,13 @@ let
               assertion = !(providerRef != null
                 && providerRef.name == "credential-secret-service"
                 && domainFilter == "system");
-              message = "${path}: credential-secret-service does not support system-domain placement.";
+              message = "${path}: credential-secret-service does not support system-domain placement. Set ${path}.spec.scope.domainFilter to user or select a Provider that declares the system domain.";
             }
             {
               assertion = !(providerRef != null
                 && providerRef.name == "credential-managed-identity"
                 && domainFilter == "user");
-              message = "${path}: credential-managed-identity does not support user-domain placement.";
+              message = "${path}: credential-managed-identity does not support user-domain placement. Set ${path}.spec.scope.domainFilter to system or select a Provider that declares the user domain.";
             }
             {
               assertion = lib.all (value: !containsSensitiveShape value) (stringsIn spec);
@@ -275,7 +275,7 @@ let
         credentials);
     in perCredential ++ [{
       assertion = lib.length bindings == lib.length (lib.unique bindings);
-      message = "d2b.zones.${zoneName}.resources contains a duplicate Credential binding tuple.";
+      message = "d2b.zones.${zoneName}.resources contains a duplicate Credential binding tuple. Change providerRef, scope, or audience on one Credential so every binding tuple is unique.";
     }];
 
   allCredentialAssertions = lib.flatten (lib.mapAttrsToList
@@ -289,7 +289,7 @@ let
         in {
           assertion = violations == [ ];
           message =
-            "d2b.zones.${zoneName}.resources.${resourceName}: credential-value-must-be-ref"
+            "d2b.zones.${zoneName}.resources.${resourceName}: credential-value-must-be-ref. Set each named field to a Credential/<name> reference or remove the field"
             + lib.optionalString (violations != [ ])
               " (${lib.concatStringsSep ", " violations})";
         })

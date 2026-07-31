@@ -1,3 +1,3 @@
 ### Added
 
-- Added fail-closed Volume state markers, durable atomic state-write sequencing, ordered locks, quota checks, redacted lifecycle audit events, and bounded telemetry descriptors to the local Volume Provider.
+- Added local Volume Provider policy and hermetic coverage for fail-closed state markers, atomic state-write sequencing, ordered locks, quota checks, redacted audit event shapes, and bounded telemetry descriptors. No neutral Volume effect adapter drives these rules against a real filesystem, and the audit and telemetry catalogues have no production sink calls.

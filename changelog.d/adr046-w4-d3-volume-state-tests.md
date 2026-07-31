@@ -1,3 +1,3 @@
 ### Security
 
-- Persistent local Volume state now has regression-guarded fail-closed behavior for missing or replaced roots, ordered migration and relocation cutovers, status-first sealing, and ambiguous snapshot retention.
+- Added hermetic regression coverage for local Volume state policy, including missing or replaced roots, ordered migration and relocation decisions, status-first sealing, and ambiguous snapshot retention. A production Volume effect adapter and real filesystem scenarios are still absent.

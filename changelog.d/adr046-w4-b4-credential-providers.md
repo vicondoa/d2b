@@ -1,7 +1,7 @@
 ### Added
 
-- Added Secret Service, Entra identity-Guest, and managed-identity Credential Providers with exact-consumer admission, immutable delivery bindings, opaque lease lifecycle handling, placement validation, and process-unique redaction canaries. Managed identity uses separate secret-free controller and client-holding agent binaries.
+- Added Secret Service, Entra identity-Guest, and managed-identity Credential Provider implementations with hermetic admission, delivery-binding, lease, placement, fault, and redaction coverage. Their binaries still report production runtime wiring as unavailable, so these Providers are not yet consumer-reachable Credential sources.
 
 ### Security
 
-- Kept credential bytes inside injected secret-holding clients and dedicated authenticated delivery sessions, with no Provider-selected consumer, audience, route, or delivery limit and no secret or Credential identity in diagnostics or telemetry.
+- Provider contracts keep credential bytes behind injected secret-holding clients and prevent Providers from selecting the consumer, audience, route, or delivery limit. Production authenticated delivery sessions and telemetry sinks are not wired yet.

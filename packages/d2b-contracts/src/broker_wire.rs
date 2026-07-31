@@ -30,8 +30,8 @@ pub enum BrokerRequest {
     /// Provider owns, and its action is a closed enum rather than a
     /// boolean, so a caller cannot express a third meaning.
     ///
-    /// Currently a typed stub (`Unimplemented`) until the live handler is
-    /// wired.
+    /// The live handler refuses a request whose fence differs from the
+    /// installed generation, mutating nothing and requeueing as stale.
     ApplyNftablesProjection(ApplyNftablesProjectionRequest),
     ApplyNmUnmanaged(ApplyNmUnmanagedRequest),
     ApplyRoute(ApplyRouteRequest),
@@ -43,22 +43,21 @@ pub enum BrokerRequest {
     /// derives the bridge ifname and its attributes from its own trusted
     /// bundle copy.
     ///
-    /// Currently a typed stub (`Unimplemented`) until the live handler is
-    /// wired.
+    /// The live handler suppresses IPv6 on the link before bringing it up.
     CreateBridge(CreateBridgeRequest),
     /// Delete a bridge this framework created. Follows the same
     /// opaque-identifier contract as [`BrokerRequest::CreateBridge`].
     ///
-    /// Currently a typed stub (`Unimplemented`) until the live handler is
-    /// wired.
+    /// The live handler removes the bridge only after its TAP removals are
+    /// confirmed.
     DeleteBridge(DeleteBridgeRequest),
     CreatePersistentTap(CreatePersistentTapRequest),
     /// Delete a persistent TAP this framework created. Follows the same
     /// opaque-identifier contract as
     /// [`BrokerRequest::CreatePersistentTap`].
     ///
-    /// Currently a typed stub (`Unimplemented`) until the live handler is
-    /// wired.
+    /// The live handler requires both generation fences to match and the
+    /// VMM descriptor to be closed before removing the TAP.
     DeletePersistentTap(DeletePersistentTapRequest),
     CreateTapFd(CreateTapFdRequest),
     DelegateCgroupV2(DelegateCgroupV2Request),

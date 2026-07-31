@@ -1,7 +1,7 @@
 ### Added
 
-- Added canonical Network resource validation and status contracts, deterministic Linux-safe interface names, opaque attachment generation fences, and the reserved Network controller User readiness contract.
+- Added Network resource validation and status contracts, deterministic Linux-safe interface names, opaque attachment generation fences, and a reserved Network controller User readiness contract. These are contract and validation surfaces, not proof of a live Network Provider lifecycle.
 
 ### Security
 
-- Reject physical-NIC bridge multiplexing across Zones before any host effect so separate Zones cannot share an L2 broadcast domain.
+- Contract and Nix validation refuse physical-NIC bridge multiplexing across Zones before any host effect; executable external-NIC host integration remains pending.

@@ -1109,7 +1109,7 @@
           }
         },
         {
-          "description": "Apply or remove one Provider-owned nftables projection.\n\nDistinct from [`BrokerRequest::ApplyNftables`], which owns the framework's own `inet d2b` table: this op carries a projection a Provider owns, and its action is a closed enum rather than a boolean, so a caller cannot express a third meaning.\n\nCurrently a typed stub (`Unimplemented`) until the live handler is wired.",
+          "description": "Apply or remove one Provider-owned nftables projection.\n\nDistinct from [`BrokerRequest::ApplyNftables`], which owns the framework's own `inet d2b` table: this op carries a projection a Provider owns, and its action is a closed enum rather than a boolean, so a caller cannot express a third meaning.\n\nThe live handler refuses a request whose fence differs from the installed generation, mutating nothing and requeueing as stale.",
           "type": "object",
           "required": [
             "kind",
@@ -1218,7 +1218,7 @@
           }
         },
         {
-          "description": "Create the bridge an environment's links attach to. The daemon names only the opaque bundle intent ref and scope; the broker derives the bridge ifname and its attributes from its own trusted bundle copy.\n\nCurrently a typed stub (`Unimplemented`) until the live handler is wired.",
+          "description": "Create the bridge an environment's links attach to. The daemon names only the opaque bundle intent ref and scope; the broker derives the bridge ifname and its attributes from its own trusted bundle copy.\n\nThe live handler suppresses IPv6 on the link before bringing it up.",
           "type": "object",
           "required": [
             "kind",
@@ -1237,7 +1237,7 @@
           }
         },
         {
-          "description": "Delete a bridge this framework created. Follows the same opaque-identifier contract as [`BrokerRequest::CreateBridge`].\n\nCurrently a typed stub (`Unimplemented`) until the live handler is wired.",
+          "description": "Delete a bridge this framework created. Follows the same opaque-identifier contract as [`BrokerRequest::CreateBridge`].\n\nThe live handler removes the bridge only after its TAP removals are confirmed.",
           "type": "object",
           "required": [
             "kind",
@@ -1274,7 +1274,7 @@
           }
         },
         {
-          "description": "Delete a persistent TAP this framework created. Follows the same opaque-identifier contract as [`BrokerRequest::CreatePersistentTap`].\n\nCurrently a typed stub (`Unimplemented`) until the live handler is wired.",
+          "description": "Delete a persistent TAP this framework created. Follows the same opaque-identifier contract as [`BrokerRequest::CreatePersistentTap`].\n\nThe live handler requires both generation fences to match and the VMM descriptor to be closed before removing the TAP.",
           "type": "object",
           "required": [
             "kind",

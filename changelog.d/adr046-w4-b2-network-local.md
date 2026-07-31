@@ -1,7 +1,7 @@
 ### Added
 
-- Added local Network provider primitives for deterministic interface naming, isolated bridge ports, ownership-scoped firewall updates, route readiness, and defense-in-depth IPv6 suppression.
+- Added local Network Provider primitives and hermetic tests for deterministic interface naming, isolated bridge ports, ownership-scoped firewall plans, route readiness, and defense-in-depth IPv6 suppression. The matching broker handlers are live, but the neutral Network effect adapter and production caller are not yet present.
 
 ### Security
 
-- Local Network firewall updates preserve sibling and foreign rules, fail closed on ownership-marker conflicts, and reject cross-Zone shared L2 attachments before host mutation.
+- The live broker handlers preserve sibling and foreign firewall rules and fail closed on ownership-marker conflicts, while Provider-level cross-Zone and lifecycle behavior remains proven only through hermetic admission tests.

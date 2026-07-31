@@ -254,7 +254,7 @@ let
             assertion = exactKeys
               [ "protocol" "listenPort" "targetRef" "targetIp" "targetPort" "sourceCidrs" ]
               forward;
-            message = "${where} contains a field outside the Network ResourceSpec schema.";
+            message = "${where} contains an unsupported field. Remove every field except protocol, listenPort, targetRef, targetIp, targetPort, and sourceCidrs.";
           }
           {
             assertion = builtins.elem (attrOr forward "protocol" null) [ "tcp" "udp" ]
@@ -312,7 +312,7 @@ let
     [
       {
         assertion = exactKeys (networkSpecFields ++ executionPolicyDefaultFields) network.spec;
-        message = "${network.path}.spec contains a field outside the Network ResourceSpec schema.";
+        message = "${network.path}.spec contains an unsupported field. Remove fields not declared by the Network ResourceSpec schema.";
       }
       {
         assertion = attrOr spec "providerRef" null != null
@@ -372,7 +372,7 @@ let
           && (attrOr dhcp "domain" null == null
             || builtins.match tokenPattern dhcp.domain != null)
           && builtins.isBool (attrOr dhcp "ignoreClientNames" true);
-        message = "${network.path}.spec.dhcp does not match the Network ResourceSpec schema.";
+        message = "${network.path}.spec.dhcp is invalid. Keep only domain and ignoreClientNames, use a bounded domain token or null, and set ignoreClientNames to a boolean.";
       }
       {
         assertion = exactKeys [ "forwarders" "cacheSize" ] dns
@@ -380,7 +380,7 @@ let
           && lib.length (attrOr dns "forwarders" [ ]) <= 8
           && lib.all validIpv4 (attrOr dns "forwarders" [ ])
           && builtins.isInt (attrOr dns "cacheSize" 1000);
-        message = "${network.path}.spec.dns does not match the Network ResourceSpec schema.";
+        message = "${network.path}.spec.dns is invalid. Keep only forwarders and cacheSize, use at most eight IPv4 forwarders, and set cacheSize to an integer.";
       }
       {
         assertion = exactKeys
@@ -393,14 +393,14 @@ let
           && attrOr mdns "dnsmasqLocalPort" 0 >= 1
           && attrOr mdns "dnsmasqLocalPort" 0 <= 65535
           && builtins.isBool (attrOr mdns "publishWorkstation" false);
-        message = "${network.path}.spec.mdns does not match the Network ResourceSpec schema.";
+        message = "${network.path}.spec.mdns is invalid. Keep only enable, reflector, dnsmasqLocal, dnsmasqLocalPort, and publishWorkstation; use booleans and a port from 1 through 65535.";
       }
       {
         assertion = netVmName == null
           || (builtins.match tokenPattern netVmName != null
             && netVmName != "launcher"
             && !lib.hasPrefix "sys-" netVmName);
-        message = "${network.path}.spec.netVmNameOverride is invalid or reserved.";
+        message = "${network.path}.spec.netVmNameOverride is invalid or reserved. Set it to null or to a bounded lowercase name other than launcher and names beginning with sys-.";
       }
       {
         assertion = builtins.isList attachments
@@ -415,7 +415,7 @@ let
         in [
           {
             assertion = exactKeys [ "executionRef" "index" "mac" ] attachment;
-            message = "${where} contains a field outside AttachmentSpec.";
+            message = "${where} contains an unsupported field. Remove every field except executionRef, index, and mac.";
           }
           {
             assertion = builtins.match resourceRefPattern (attrOr attachment "executionRef" "") != null
@@ -439,7 +439,7 @@ let
         assertion = exactKeys
           [ "mode" "parentInterface" "macvtapMode" "sharingPolicy" "mac" "ipv4" "egress" "portForwards" ]
           external;
-        message = "${network.path}.spec.externalAttachment contains an unknown field.";
+        message = "${network.path}.spec.externalAttachment contains an unsupported field. Remove every field except mode, parentInterface, macvtapMode, sharingPolicy, mac, ipv4, egress, and portForwards.";
       }
       {
         assertion = attrOr external "mode" "macvtap" == "macvtap"
@@ -451,7 +451,7 @@ let
           && (attrOr external "sharingPolicy" "exclusive" != "multiplexed"
             || attrOr external "macvtapMode" "bridge" == "bridge")
           && validMac (attrOr external "mac" null);
-        message = "${network.path}.spec.externalAttachment mode, interface, sharing, or MAC is invalid.";
+        message = "${network.path}.spec.externalAttachment is invalid. Set mode to macvtap, use a Linux interface name, select bridge, private, vepa, or passthru mode, use exclusive or bridge-mode multiplexed sharing, and use null or a lowercase unicast MAC.";
       }
       {
         assertion =
@@ -466,7 +466,7 @@ let
               -> (validAnyCidr (attrOr ipv4 "address" "")
                 && validIpv4 (attrOr ipv4 "gateway" null)
                 && lib.all validIpv4 (attrOr ipv4 "dns" [ ])));
-        message = "${network.path}.spec.externalAttachment.ipv4 has inconsistent DHCP or static fields.";
+        message = "${network.path}.spec.externalAttachment.ipv4 is inconsistent. For dhcp, remove address, gateway, and dns; for static, set a CIDR address, an IPv4 gateway, and only IPv4 dns entries.";
       }
       {
         assertion =
@@ -491,13 +491,13 @@ let
     ++ map
       (pair: {
         assertion = false;
-        message = "${pair.left.path}.spec.${pair.left.field} (${pair.left.cidr}) overlaps ${pair.right.path}.spec.${pair.right.field} (${pair.right.cidr}).";
+        message = "${pair.left.path}.spec.${pair.left.field} overlaps ${pair.right.path}.spec.${pair.right.field}. Change one of these CIDR options so the two Network ranges are disjoint.";
       })
       cidrOverlaps
     ++ map
       (pair: {
         assertion = false;
-        message = "${pair.left.path} and ${pair.right.path}: external-physical-nic-cross-zone-l2.";
+        message = "${pair.left.path} and ${pair.right.path}: external-physical-nic-cross-zone-l2. d2b refuses cross-Zone macvtap bridge sharing by design and provides no override. Assign the Networks different physical NICs through externalAttachment.parentInterface, or set at least one externalAttachment.macvtapMode to private, vepa, or passthru.";
       })
       crossZoneExternalClaims;
 
