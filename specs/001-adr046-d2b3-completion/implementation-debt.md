@@ -1451,7 +1451,7 @@ The distinction used by the rest of this register is preserved here:
 | Work item | Result of reading the complete validation field against the tree |
 | --- | --- |
 | `ADR046-process-001` | **Met at the hermetic adapter layer, not at the real system boundaries.** `production_adapter.rs` runs the shared suite through `ProviderSupervisor`, carries a deterministic fault matrix, tests a real seqpacket frame plus genuine pidfd transfer, and has a current-thread heartbeat latency test. The fix round additionally proves that a late successful launch is stopped before timeout is returned, or remains tracked if cleanup fails; terminal stops retire handles; pending observations are bounded; and the broker's actual pid-reuse diagnostic is classified as identity change. It does not prove privileged broker spawn with the real namespace/cgroup policy, real systemd units, real wait/reap, or real PID reuse. No production crate constructs the supervisor, and the three `integration/*.rs` files are declaration-only and run in no lane. The latency test is also weaker than the equal-or-stricter spike retirement condition: one 50 ms call with a 40 ms maximum heartbeat-gap assertion, rather than 200 concurrent calls and the 15 ms bound. |
-| `ADR046-core-001` | **Partial.** Every implemented Round A module has focused unit tests, including authorization refusals, catalog activation, handler health, budgets, ownership, provider lifecycle, store-operation admission and watch accounting. The tests are example based; no property or permutation corpus was found for the field's explicit property-test half. Multi-process startup/restart is absent. `Cargo.toml` has `autobins = false`; `main.rs` is a library coordinator over supplied booleans and snapshots because the production ResourceClient, authenticated session connector, operation ledger and watch dispatcher do not exist. `cleanup.rs` remains `UNIMPLEMENTED_SCAFFOLD` even though the work-item Destination names `cleanup`; its file comment instead assigns it to `ADR046-network-008`. |
+| `ADR046-core-001` | **Partial.** Every implemented Round A module has focused unit tests, including authorization refusals, catalog activation, handler health, budgets, ownership, provider lifecycle, store-operation admission and watch accounting. The tests are example based; no property or permutation corpus was found for the field's explicit property-test half. Multi-process startup/restart is absent. `Cargo.toml` has `autobins = false`; `main.rs` is a library coordinator over supplied booleans and snapshots because the production ResourceClient, authenticated session connector, operation ledger and watch dispatcher do not exist. `cleanup.rs` is no longer a scaffold: it now implements the pure `PendingCleanup` projection and prior-generation pruning policy with focused tests. Store transactions, finalizer effects, watch delivery and audit appends remain unwired production-adapter work. |
 | `ADR046-pstate-001` | **Partial and fail-closed.** The schema and status golden vectors are real. The enum round-trip test covers `StateSchemaPhase`, `MarkerStatus` and `SealingStatus`. Its name says `phase_and_status_reason_tokens_round_trip`, but no reason type is present and its body round-trips no reason. StateEnvelope construction, next-generation bounds and redacted diagnostics are tested, but digest construction and verification now deliberately return `DigestDomainUnavailable`. `VolumeStateSchema` is consumed by the Provider component namespace, but `VolumeSpec` and `VolumeStateStatus` are not integrated: outside `volume_state.rs`, only `provider.rs` consumes `VolumeStateSchema`, and `volume.rs` consumes none of these types. |
 | `ADR046-pstate-002` | **Partial.** Descriptor bytes, the stateless round trip, missing namespace rejection, invalid kind, forbidden persistence, quota floor, host-custody refusal and guest-local-required refusal are covered. The named descriptor-Volume consistency property test is not: `descriptor_volume_projection_preserves_quota_source_and_exports` checks three example quotas against a four-field `ComponentStateVolumeProjection`; it constructs no `VolumeSpec`, creates no Volume or Export, and compares no schema, views, layout, ownership or attachment content. The custody check accepts a caller-supplied `StateSchemaCustodyClass`; no authoritative schema-id-to-custody mapping exists. Derivability rejection and placement-change version increment remain unimplementable with the current types. |
 | `ADR046-network-001` | **Partial.** The JSON spec/status vectors, CIDR examples, attachment-index uniqueness, host blocklist, IfName collision and deterministic repeated derivation, external-NIC cross-Zone refusal, and reserved User declaration/gate are covered. No CBOR codec or profile exists. The CIDR test is a fixed example table, not the requested property test. The User test constructs a contract value and calls a pure phase gate; no controller creates the User, waits on a watch, aborts a real config-Volume operation, or proves the status UID/GID is ignored by authorization and audit. Two written specifications disagree about who creates the User and whether an authored empty additive blocklist is valid. |
@@ -1464,7 +1464,7 @@ The distinction used by the rest of this register is preserved here:
 | --- | --- | --- |
 | Core production process and multi-process startup/restart | `CoreProcess` proves the in-process ordering policy over supplied readiness and recovery facts. There is no binary, ResourceClient, authenticated connector, accepted store/operation ledger, or real watch dispatcher, so no restart has re-established those facts across processes. | W5 production store/watch integration (`ADR046-store-004`, `ADR046-store-002`, `ADR046-reconcile-003`) plus the Zone-runtime connector that constructs the process |
 | Core property-test half | The nine Round A modules have example-based unit tests. No generated or permutation tests prove ordering independence, deterministic aggregation, or state-machine properties over a broad input space. Construction-time use of `BTreeMap` is not that evidence. | `ADR046-core-001`, before its validation field is called complete |
-| Core cleanup destination | `packages/d2b-core-controller/src/cleanup.rs` is still an explicit scaffold, while `CoreHandlerKind::Cleanup` is a live registry slot and the work-item Destination names `cleanup`. | Resolve the ownership conflict with `ADR046-network-008`, then implement and test the fixed cleanup handler |
+| Core cleanup production adapter | `packages/d2b-core-controller/src/cleanup.rs` now implements and tests the pure `PendingCleanup` and prior-generation pruning policy. It deliberately performs no store transaction, finalizer effect, watch delivery or audit append, and no production runtime adapter invokes those effects. | Production store/watch and finalizer integration must consume the typed cleanup policy; the pure module is no longer an implementation blocker |
 | Process real-boundary integration | The adapter and its policy are real Rust code, but its conformance/fault tests inject deterministic or scripted backends. Privileged spawn and namespace/cgroup placement, transient system/user units, parent-owned wait/reap and actual PID reuse remain unproved. | Container and host-integration scenarios wired through repository lanes; the declarations in `integration/` are not evidence |
 | Process production reachability | Only the supervisor crate and its tests construct `ProviderSupervisor`; no production crate depends on `d2b-provider-supervisor`. The prior absence of an adapter is closed, but the prior absence of a production caller is not. | Process controller/runtime integration, including `ADR046-reconcile-003` against the accepted store/watch backend |
 | Process blocking-adapter retirement proof | `blocking_effects_do_not_stall_the_async_executor` is useful but weaker than the recorded spike cleanup: it drives one delayed call and permits a 40 ms gap. It does not drive 200 concurrent calls or enforce the 15 ms gap bound. | `ADR046-process-001` for the Process adapter half; end-to-end commit-to-launch latency remains `ADR046-reconcile-003` |
@@ -1489,7 +1489,7 @@ The distinction used by the rest of this register is preserved here:
 | Provider-state payload digest domain | D101 freezes the complete domain-tag set and contains no Provider-state payload domain. Accepting a caller tag would permit two domains for the same payload, so the helper now correctly fails closed. | **Amend D101 to freeze exactly the domain tag `d2b:v3:provider-state-payload` and define the StateEnvelope payload digest as `SHA-256(b"d2b:v3:provider-state-payload" || 0x00 || d2b-cjson/v1(payload))`, rendered in the D101 `sha256:<64 lowercase hex>` form.** Only then may `from_payload` and `validate_digest` succeed |
 | Credential interactive challenge metadata and method ownership | D093 names bounded non-secret challenge/progress metadata but defines no fields, enum, bounds or null rules. It also places `BeginLogin`, `ObserveLogin` and `CancelLogin` in the common Credential surface while `ADR046-credential-002` freezes exactly five service methods that omit them. | Define the challenge metadata schema and decide whether the three login operations extend `d2b.credential.v3` or live on a separate typed Endpoint service; then add the corresponding vectors |
 | Credential opaque-wrapper keying | Lease/source wrappers use domain-separated unkeyed SHA-256. The raw value is absent from output, but a low-entropy input remains guessable offline, and no keying authority or minimum-entropy contract exists. | Define a keyed opacity derivation and key owner/rotation contract, or explicitly classify these inputs as non-authorizing high-entropy values and enforce that at construction |
-| Core cleanup file ownership | `ADR046-core-001` names `cleanup` in its Destination while the landed scaffold assigns the same file to `ADR046-network-008`. The prep ruling resolved the configuration-module edit collision but did not resolve this ownership conflict. | Amend one Destination or record a single implementation owner before either item is marked complete |
+| Core cleanup file attribution | `ADR046-core-001` and `ADR046-network-008` both name `cleanup`, but the shared file is now implemented as pure cleanup policy and covered by focused tests. The former scaffold no longer creates an implementation ownership conflict; only the overlapping destination prose remains. | Amend the two Destinations to identify the module as shared policy when the generated manifest is next corrected; no code ownership decision is still blocking |
 
 ### 15.4 Inferences
 
@@ -1540,8 +1540,9 @@ again.
   canonical authorization matrix, its Nix mirror, generated schemas or broker
   dispositions. This correction completes those machine-readable contracts.
   The compatibility tests prove old request decode and old-decoder rejection of
-  new operations; they do not claim runtime negotiation or implementation of
-  the deliberately unimplemented dispatch arms.
+  new operations; they do not claim runtime negotiation. The four dispatch arms
+  were deliberately unimplemented at this Round A snapshot and have since been
+  promoted live, as recorded in section 18.
 
 ### 15.6 Verification of the eleven reported caveats
 
@@ -1647,15 +1648,15 @@ than adding privileged or runtime code to files they did not own.
 
 | Work item | Verified state | Owner / closing condition |
 | --- | --- | --- |
-| `ADR046-network-002` | The five Provider modules and their hermetic bridge-port, nftables, route and IPv6 tests landed. The production `NetworkEffectPort` does not exist in `d2b-contracts` or `d2b-core`, and `ApplyNftablesProjection`, `CreateBridge`, `DeleteBridge` and `DeletePersistentTap` still return typed `BrokerError::Unimplemented` from the real broker dispatcher. `integration/host_fabric.rs` is a declaration-only contract and is routed by no repository lane. | `ADR046-nl-001` owns the neutral trait and core adapter; `ADR046-nl-002` owns the live handlers and executable `host_fabric` scenario. The graph places both in W6. `ADR046-network-005` consumes the adapter from the W4 controller side but cannot make the broker stubs live by writing inside `ADR046-network-002`'s destination. |
+| `ADR046-network-002` | The five Provider modules and their hermetic bridge-port, nftables, route and IPv6 tests landed. `ApplyNftablesProjection`, `CreateBridge`, `DeleteBridge` and `DeletePersistentTap` now have live production broker handlers, generation fencing and audit fields. The production `NetworkEffectPort` still does not exist in `d2b-contracts` or `d2b-core`, and `integration/host_fabric.rs` remains a declaration-only Rust test routed by no repository lane. | `ADR046-nl-001` owns the remaining neutral trait and core adapter. The live-handler half formerly assigned to `ADR046-nl-002` is complete; its executable `host_fabric` scenario remains owed. `ADR046-network-005` cannot reach the live broker operations until the adapter exists. |
 | `ADR046-pstate-003` | Marker, quota and domain policy landed, but `integration/volume_local.rs` is declaration-only. The exact Volume effect surface is not merely one of the four Network stubs: the neutral `VolumeEffectPort`, its host-runtime adapter and required closed Volume operations are absent. Existing legacy storage and swtpm broker handlers do not constitute that adapter. | `ADR046-vl-012` owns the concrete core/broker `VolumeEffectPort` adapter and its full provision/sealing scenarios in W6. `ADR046-pstate-009` owns the later W4 end-to-end provider-state and audit fixtures, but those cannot prove the real filesystem boundary until the adapter exists. The current `integration/README.md` statement that ProviderSupervisor owns this adapter is stale; the generated manifest assigns it to `ADR046-vl-012`. |
 
-The distinction in the second row matters. The Network deferral is directly
-blocked by four typed-unimplemented operations already present in this wave.
-The Volume deferral is blocked by an absent neutral contract and adapter plus
-operations assigned to a later item. Both are real structural blockers and both
-would have required out-of-destination writes, but they are not the same broker
-state.
+The distinction in the second row matters. The Network deferral is no longer
+blocked by typed-unimplemented broker operations; it is narrowed to the absent
+neutral contract, core adapter and executable lifecycle scenario. The Volume
+deferral remains blocked by an absent neutral contract and adapter plus
+operations assigned to a later item. Both still require out-of-destination
+writes, but they are not the same broker state.
 
 ### 16.3 Credential Provider work is in progress, not complete
 
@@ -1716,7 +1717,7 @@ on `packages/d2b-core/src/error.rs`, before any production caller uses
 | `ADR046-credential-005` | **In progress.** Source and six Cargo test files existed at the snapshot; a concurrent pass is adding the four Layer 2 fixtures and the separately specified controller/agent topology. Complete command/lane evidence is still owed. Section 16.3 is the closure rule. |
 | `ADR046-pstate-010` | **Partial, with a specification count defect.** The linked section says "All eight" but actually enumerates nine obligations: absent Volume, absent Provider, incident hold, bundle integrity failure, rollback, finalizer timeout, credential-ref guard, name conflict and metric identity absence. The core logic covers diff ownership, intent ordering, incident-hold/finalizer disposition, rollback, count retention and name conflicts; the input DTO rejects a bad content hash; the Nix case covers the credential-ref guard. There is no real store/controller cleanup, no Zone status/audit integration, no generation metric descriptor or canary, no container generation-activation scenario, no full Provider-config schema build rejection, and no test that performs two independent Nix builds and compares their bundle bytes. The destination's named `tests/configuration.rs` and `integration/configuration.rs` do not exist. The eight-versus-nine wording needs a manifest amendment; the missing behavior remains owned by this item and the production store/runtime work it depends on. |
 | `ADR046-credential-007` | **Partial.** The generic option surface, Credential assertions, activation Role, one canonical envelope, sort/digest projection and store-path absence checks exist. The eval corpus does not cover a wrong-type artifact, duplicate catalog identity, the complete Provider-specific signed-schema cross-check, or every example promised by the field. None of the eight named host-integration cleanup, nonblocking, pending-status, stalled, child-preservation, dynamic-isolation, retention/rollback and tampered-bundle scenarios exists. The work item remains the owner; production execution also depends on the W5 resource compiler/store/runtime path. |
-| `ADR046-network-008` | **Partial.** `generation_bundle.rs`, `configuration/mod.rs` and `configuration/bundle_apply.rs` cover the input DTO, content-hash tamper rejection, closed management agents, configuration-only deletion, item-level conflict, unchanged refresh, retention, rollback and finalizer/child ordering. The destination's `cleanup.rs` and `configuration/generation_transition.rs` are still explicit scaffolds. The named nix-unit, contract-test, controller integration and host-integration files do not exist; no Network finalizer deletes mDNS before clearing, no live `DeleteBridge` can run while the broker arm is unimplemented, no Deleted watch event is consumed, and the three-case name-conflict matrix is represented by only one generic controller-owned case. This was not in the supplied list. |
+| `ADR046-network-008` | **Partial, with the former scaffold gap closed.** `cleanup.rs` now implements `PendingCleanup` projection and prior-generation pruning. `configuration/generation_transition.rs` now proves post-commit binding, Provider-schema verification, configuration metadata assignment, per-item controller/API name conflicts, absent-resource deletion scheduling and closed audit projections. The named generation-bundle contract test, nix-unit case and focused core tests now exist, and all four required Network broker operations are live. The production store/watch adapter and the named host-integration file remain absent; no executable end-to-end scenario proves mDNS-child deletion, one live `DeleteBridge` request and consumption of the terminal Deleted watch event before finalizer clearance. |
 
 ### 16.6 What the independent pass added
 
@@ -1734,9 +1735,10 @@ catalogue omission. The independent validation-field pass additionally found:
   obligations remain absent.
 - `ADR046-credential-007` has no Layer 2 cleanup matrix and only partial
   eval/build coverage.
-- `ADR046-network-008` has logic-level bundle coverage but not its named Nix,
-  Rust integration, Network-finalizer or host-integration scenarios; two owned
-  modules remain explicit scaffolds.
+- `ADR046-network-008` now has its input-bundle contract, nix-unit case,
+  generation-transition logic, cleanup policy and focused core integration
+  tests. Production store/watch wiring and its end-to-end Network-finalizer and
+  host-integration scenarios remain absent.
 
 ## 17. Credential Provider dependency-direction correction
 
@@ -1762,3 +1764,64 @@ linking the crate that owns service admission and server wiring. Provider tests
 exercise their neutral dispatch contract directly. The service crate's own
 tests remain responsible for proving denial-before-dispatch and rejection of
 every altered delivery-binding field. No dependency allowlist was widened.
+
+## 18. Wave 4 closing verification gate
+
+This section records only the non-CRITICAL findings selected for the closing
+register update. The concurrent completion agent owns the five destination
+files for `ADR046-pstate-004`, `ADR046-pstate-005`, `ADR046-pstate-006`,
+`ADR046-pstate-007` and `ADR046-pstate-012`, plus the Core USBIP effect adapter
+for `ADR046-network-007`. Those paths appeared or were changing during this
+inspection, but their final content and validation outcome were not stable.
+This register therefore makes no final completeness claim for those six work
+items. T044, T045, T046, T047, T052 and T067 stay unchecked pending that
+agent's accepted outcome.
+
+### 18.1 C2 HIGH: Credential controller and observability completion gaps
+
+| Work item | Verified state | Closing condition |
+| --- | --- | --- |
+| `ADR046-credential-006` | The neutral controller contract implements reconcile, observe, revoke, single-flight, exact subresource admission, idempotency derivation and bounded retry decisions. Its `rotation_policy_matrix_is_closed` test contains four timing cases only. It is not the required complete proactive, on-demand and on-expiry policy matrix crossed with success, locked, unavailable and expired outcomes, and no controller state-machine golden vectors pin complete decisions. The three Provider controllers delegate to this shared helper and add no complete matrix of their own. | Add canonical controller decision vectors and the complete 3 x 4 policy/outcome matrix, including the typed rotation-failure path, then execute them in an enforcing Rust lane. |
+| `ADR046-credential-008` | All three Provider crates contain audit and telemetry builders, and `packages/d2b-contract-tests/tests/credential_audit.rs` structurally checks the common record, descriptors, collector fields and identity canaries. The production service `dispatch`, acquire, refresh, revoke and inspect paths call none of those builders, and the Provider binaries still report that production runtime wiring is unavailable. No production Credential controller or service path emits a record or frame into the Zone audit/OTEL sinks. | Wire authorized service and controller transitions to the Zone audit/OTEL sinks, preserve denied-request identity silence, and add execution evidence that the production path emits the validated frames. |
+
+### 18.2 D1 HIGH: Network integration and latency evidence gaps
+
+| Obligation | Work items | Verified state | Closing condition |
+| --- | --- | --- | --- |
+| mDNS integration | `ADR046-network-003`, `ADR046-network-005`, `ADR046-network-006` | Hermetic controller fakes record the mDNS toggle, and legacy nix-unit cases inspect old inline service behavior. No executable integration test proves creation and deletion of the separately owned mDNS Process resources required by the v3 controller contract. | Add an executable repository-routed integration scenario for enable, disable and finalizer deletion ordering. |
+| p95 hint-to-handler latency | `ADR046-network-005` | No production benchmark enforces the named p95 threshold. `tests/unit/gates/performance-budgets.sh` does not measure this path, is classified advisory in `tests/layer1-jobs.json`, and exits with `SKIP` unless `D2B_PERF_STABLE=1`. The project has no pinned stable runner, so this obligation is unmeetable in the current gate and cannot be cited as validation evidence. | Land the production hint-to-handler benchmark, provision a pinned stable runner, enable it there and promote the job from advisory before citing a result. |
+| Container network lifecycle | `ADR046-network-005`, `ADR046-network-006` | `packages/d2b-provider-network-local/integration/host_fabric.rs` is a constant-list Rust test, is not a Cargo integration target from that directory and is routed by no repository lane. There is no `tests/integration/containers/` runner for the required bridge, east-west, nftables, persistent-TAP and macvtap lifecycle scenarios. | Add the executable container fixture under the repository Layer 2 lane and run `make test-integration`. |
+| External-NIC host integration | `ADR046-network-009` | Hermetic admission tests cover selected same-Zone and cross-Zone claim decisions, but no host-integration scenario covers fake macvtap-parent create, disruptive update, delete, status transitions and raw-identity exclusion. | Add the named runNixOSTest scenario and run `make test-host-integration`. |
+
+These obligations cover `ADR046-network-003`, `ADR046-network-004`,
+`ADR046-network-005`, `ADR046-network-006` and `ADR046-network-009` as a
+closing set. `ADR046-network-004` also has the evidence omission recorded in
+section 18.3; its emitter-to-example integration cannot be treated as complete
+without that named flake lane.
+
+### 18.3 C3 HIGH: Validation evidence lane corrections
+
+| Work item | Omitted obligation | Correction |
+| --- | --- | --- |
+| `ADR046-network-004` | Its generated validation field explicitly requires `make test-flake` with the updated examples, but the collected Wave 4 evidence omitted that command. | Run and import `make test-flake`; another Nix or drift result is not a substitute for this named example-evaluation obligation. |
+| `ADR046-credential-008` | The collected evidence cited `make test-rust` and `make test-policy`, but neither executes `packages/d2b-contract-tests/tests/credential_audit.rs`. `make test-rust` explicitly excludes the fixture-dependent `d2b-contract-tests` crate. `make test-policy` selects only its closed list of policy binaries and does not select `credential_audit`. | Run and import `make test-fixture-contracts`. `tests/AGENTS.md`, `tests/test-rust.sh` and `tests/layer1-jobs.json` identify that enforcing fixture-contract lane as the job that builds `D2B_FIXTURES` and executes the full contract crate. |
+
+### 18.4 G1 MEDIUM: Live broker operations retain stale generated descriptions
+
+The finding's characterization held. `ApplyNftablesProjection`, `CreateBridge`,
+`DeleteBridge` and `DeletePersistentTap` all dispatch to live handlers in
+`packages/d2b-priv-broker/src/runtime.rs`, and
+`docs/reference/broker-w2-dispositions.md` correctly marks each one
+`promoted-live`. The contrary text is descriptive only:
+
+- `packages/d2b-contracts/src/broker_wire.rs` still calls each operation a
+  typed `Unimplemented` stub in its source doc comment.
+- `docs/reference/schemas/v2/wire-protocol.json` contains the same stale
+  descriptions because schemars copied those comments into the generated
+  schema.
+
+This is stale source and generated documentation, not a functional dispatcher
+defect. Fix the Rust doc comments first, then run
+`cargo run --manifest-path packages/Cargo.toml -p xtask -- gen-schemas` to
+regenerate `wire-protocol.json`; hand-editing the generated schema would leave
+the canonical source stale and fail the drift contract.

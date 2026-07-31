@@ -166,44 +166,44 @@ wave item to be `Merged` before `wave snapshot` will accept entry.
 
 ### Group `wi:ADR-046-components-processes-and-sandbox` (2 items)
 
-- [ ] T038 [P] [US1] `ADR046-process-001` - `packages/d2b-process/src/` (adapt)
-- [ ] T039 [US1] `ADR046-process-002` - `packages/d2b-provider-system-systemd/` (adapt)
+- [x] T038 [P] [US1] `ADR046-process-001` - `packages/d2b-process/src/` (adapt)
+- [x] T039 [US1] `ADR046-process-002` - `packages/d2b-provider-system-systemd/` (adapt)
 
 ### Group `wi:ADR-046-core-controllers` (1 items)
 
-- [ ] T040 [P] [US1] `ADR046-core-001` - `packages/d2b-core-controller/src/{main,configuration,api_catalog,authz,providers,controllers,ownership,watches,cleanup,zone_links,budgets,store}.rs` (adapt)
+- [x] T040 [P] [US1] `ADR046-core-001` - `packages/d2b-core-controller/src/{main,configuration,api_catalog,authz,providers,controllers,ownership,watches,cleanup,zone_links,budgets,store}.rs` (adapt)
 
 ### Group `wi:ADR-046-provider-state` (12 items)
 
-- [ ] T041 [US1] `ADR046-pstate-001` - `packages/d2b-contracts/src/v3/volume_state.rs` (adapt)
-- [ ] T042 [US1] `ADR046-pstate-002` - `packages/d2b-contracts/src/v3/provider.rs` (component descriptor `stateNamespaces` field) (adapt)
-- [ ] T043 [US1] `ADR046-pstate-003` - `packages/d2b-provider-volume-local/` (new crate (adapt)
+- [x] T041 [US1] `ADR046-pstate-001` - `packages/d2b-contracts/src/v3/volume_state.rs` (adapt)
+- [x] T042 [US1] `ADR046-pstate-002` - `packages/d2b-contracts/src/v3/provider.rs` (component descriptor `stateNamespaces` field) (adapt)
+- [x] T043 [US1] `ADR046-pstate-003` - `packages/d2b-provider-volume-local/` (new crate (adapt)
 - [ ] T044 [US1] `ADR046-pstate-004` - `packages/d2b-provider-volume-local/src/migration.rs` (adapt)
 - [ ] T045 [US1] `ADR046-pstate-005` - `packages/d2b-provider-volume-local/src/sealing.rs` (adapt)
 - [ ] T046 [US1] `ADR046-pstate-006` - `packages/d2b-provider-volume-local/src/snapshot.rs` (adapt)
 - [ ] T047 [US1] `ADR046-pstate-007` - `packages/d2b-provider-volume-local/src/relocation.rs` (adapt)
-- [ ] T048 [US1] `ADR046-pstate-008` - `packages/d2b-provider-volume-local/src/audit.rs` (adapt)
-- [ ] T049 [US1] `ADR046-pstate-009` - `packages/d2b-provider-volume-local/tests/state.rs` (ported hermetic atomic/lock/quarantine/lease tests) (adapt)
-- [ ] T050 [US1] `ADR046-pstate-010` - `nixos-modules/zone-resources.nix` (per-Zone bundle emitter NixOS module) (adapt)
-- [ ] T051 [US1] `ADR046-pstate-011` - `packages/xtask/src/provider_crate_policy.rs` (adapt)
+- [x] T048 [US1] `ADR046-pstate-008` - `packages/d2b-provider-volume-local/src/audit.rs` (adapt)
+- [x] T049 [US1] `ADR046-pstate-009` - `packages/d2b-provider-volume-local/tests/state.rs` (ported hermetic atomic/lock/quarantine/lease tests) (adapt)
+- [x] T050 [US1] `ADR046-pstate-010` - `nixos-modules/zone-resources.nix` (per-Zone bundle emitter NixOS module) (adapt)
+- [x] T051 [US1] `ADR046-pstate-011` - `packages/xtask/src/provider_crate_policy.rs` (adapt)
 - [ ] T052 [US1] `ADR046-pstate-012` - `packages/d2b-core-controller/src/optional_state_admission.rs` (storage-need admission: reject a declared namespace whose payload is derivable from spec/status/core ledger/external observation with `component-state-not-justified` (adapt)
 
 ### Group `wi:ADR-046-resources-credential` (8 items)
 
-- [ ] T053 [US1] `ADR046-credential-001` - `packages/d2b-contracts/src/v3/credential.rs` (adapt)
-- [ ] T054 [US1] `ADR046-credential-002` - `packages/d2b-contracts/proto/v3/credential.proto` (adapt)
-- [ ] T055 [US1] `ADR046-credential-003` - `packages/d2b-provider-credential-secret-service/src/{lib.rs (adapt)
-- [ ] T056 [US1] `ADR046-credential-004` - `packages/d2b-provider-credential-entra/src/{lib.rs (adapt)
-- [ ] T057 [US1] `ADR046-credential-005` - `packages/d2b-provider-credential-managed-identity/src/{lib.rs (adapt)
+- [x] T053 [US1] `ADR046-credential-001` - `packages/d2b-contracts/src/v3/credential.rs` (adapt)
+- [x] T054 [US1] `ADR046-credential-002` - `packages/d2b-contracts/proto/v3/credential.proto` (adapt)
+- [x] T055 [US1] `ADR046-credential-003` - `packages/d2b-provider-credential-secret-service/src/{lib.rs (adapt)
+- [x] T056 [US1] `ADR046-credential-004` - `packages/d2b-provider-credential-entra/src/{lib.rs (adapt)
+- [x] T057 [US1] `ADR046-credential-005` - `packages/d2b-provider-credential-managed-identity/src/{lib.rs (adapt)
 - [ ] T058 [US1] `ADR046-credential-006` - `packages/d2b-provider-credential-<impl>/src/controller.rs` (adapt)
-- [ ] T059 [US1] `ADR046-credential-007` - `nixos-modules/options-resources.nix` (generic schema-derived resource options (adapt)
+- [x] T059 [US1] `ADR046-credential-007` - `nixos-modules/options-resources.nix` (generic schema-derived resource options (adapt)
 - [ ] T060 [US1] `ADR046-credential-008` - `packages/d2b-provider-credential-<impl>/src/audit.rs` (adapt)
 
 ### Group `wi:ADR-046-resources-network` (8 items)
 
-- [ ] T061 [P] [US1] `ADR046-network-001` - `packages/d2b-contracts/src/v3/network.rs`: NetworkSpec (adapt)
-- [ ] T062 [US1] `ADR046-network-002` - `packages/d2b-provider-network-local/src/ifname.rs` (adapt)
-- [ ] T063 [US1] `ADR046-network-003` - `packages/d2b-provider-network-local/` - artifact catalog integration for net-VM nixos-system artifact resolution (adapt)
+- [x] T061 [P] [US1] `ADR046-network-001` - `packages/d2b-contracts/src/v3/network.rs`: NetworkSpec (adapt)
+- [x] T062 [US1] `ADR046-network-002` - `packages/d2b-provider-network-local/src/ifname.rs` (adapt)
+- [x] T063 [US1] `ADR046-network-003` - `packages/d2b-provider-network-local/` - artifact catalog integration for net-VM nixos-system artifact resolution (adapt)
 - [ ] T064 [US1] `ADR046-network-004` - `nixos-modules/resources-network.nix`: Nix resource object emitter for Network ResourceType (adapt)
 - [ ] T065 [US1] `ADR046-network-005` - `packages/d2b-provider-network-local/src/controller.rs`: async NetworkReconciler (adapt)
 - [ ] T066 [US1] `ADR046-network-006` - `tests/unit/nix/cases/net-vm-network.nix` (adapted to v3 resource API) (adapt)
@@ -212,7 +212,7 @@ wave item to be `Merged` before `wave snapshot` will accept entry.
 
 ### Group `wi:core-config-hub:w4` (1 items)
 
-- [ ] T069 [US1] `ADR046-network-008` - `packages/d2b-core-controller/src/configuration.rs`: bundle application (create)
+- [x] T069 [US1] `ADR046-network-008` - `packages/d2b-core-controller/src/configuration.rs`: bundle application (create)
 
 - [ ] T070 [US1] W4 GATE - run `/speckit.verify.run` and `/speckit.review.run` in parallel against this wave scope FIRST and clear their CRITICAL findings; then snapshot, import validation evidence, panel-request, panel-attest (10/10 unanimous), seal (every wave item Merged), merge-target, merge-eligibility. Also confirm for every item in this wave: reference docs landed with their behavior (FR-019), no change contradicts a decision in the register (FR-047), and every removal proof for a path retired in this wave passed (FR-023). From round 9, LOW/MEDIUM may be deferred to deferred-findings.md; CRITICAL/HIGH never (FR-051, FR-052). At wave close, review both registers and log this wave friction in friction-log.md (FR-053)
 - [ ] T071 [US1] W4 CONVERGE + MERGE - merge every slice branch into the wave integration branch; run integration tests, panel, and CI against the converged tree only; open one PR against `v3`; merge after eligibility; rebase the next wave onto the updated `v3`; fold changelog fragments; then clean up in order: delete each worktree packages/target, remove worktrees, delete local branches, delete remote branches, nix-collect-garbage, and audit `git worktree list` plus `git branch -a` for residue
