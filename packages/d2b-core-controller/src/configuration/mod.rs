@@ -44,6 +44,14 @@
 //! The audit append for a completed deletion is deliberately *not* part of the
 //! store transaction: it is released only from the committed cleanup proof and
 //! deduplicated by committed revision, so recovery replay appends exactly once.
+//!
+//! This is a directory module so that the work items extending it each own a
+//! distinct file. [`bundle_apply`] and [`generation_transition`] are empty
+//! scaffolds; every item landed so far lives here in `mod.rs`, unmoved, and
+//! `mod.rs` stays the single re-export point for the module's public surface.
+
+pub mod bundle_apply;
+pub mod generation_transition;
 
 use std::collections::{BTreeMap, BTreeSet};
 

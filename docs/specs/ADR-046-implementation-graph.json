@@ -18113,11 +18113,11 @@
       "entryContracts" : [
         "ADR-046-components-processes-and-sandbox"
       ],
-      "exitGate" : "ADR046-W4 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
+      "exitGate" : "ADR046-W6 exit criteria (ADR-046-validation-and-delivery §4): every spec/work item in this wave Merged with clean destinations, all validators green, and the ten-role panel seal recorded",
       "id" : "ADR046-process-002",
       "kind" : "work-item",
       "owner" : "ADR046-process-001; systemd/minijail Provider owners",
-      "parallelGroup" : "wi:ADR-046-components-processes-and-sandbox",
+      "parallelGroup" : "wi:process-provider-integration:w6",
       "prerequisites" : [
         "ADR-046-components-processes-and-sandbox",
         "ADR046-process-001"
@@ -18125,7 +18125,7 @@
       "specId" : "ADR-046-components-processes-and-sandbox",
       "topologicalRank" : 10,
       "validation" : "Identical schema/status conformance plus provider-specific adoption",
-      "wave" : "W4"
+      "wave" : "W6"
     },
     {
       "blockers" : [],
@@ -24729,7 +24729,7 @@
       ],
       "specCount" : 5,
       "wave" : "W4",
-      "workItemCount" : 32
+      "workItemCount" : 31
     },
     {
       "parallelGroups" : [
@@ -24785,11 +24785,12 @@
         "wi:ADR-046-provider-transport-vsock",
         "wi:ADR-046-provider-volume-local",
         "wi:ADR-046-provider-volume-virtiofs",
-        "wi:core-controller-coordination:w6"
+        "wi:core-controller-coordination:w6",
+        "wi:process-provider-integration:w6"
       ],
       "specCount" : 27,
       "wave" : "W6",
-      "workItemCount" : 257
+      "workItemCount" : 258
     },
     {
       "parallelGroups" : [

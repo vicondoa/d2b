@@ -11,9 +11,81 @@
 # evaluations under `config.d2b._computed.<vm>.config`; these cases assert
 # the same intended values there instead of preserving the bash gate's late
 # skip after only the catch-all DHCP neutralization check.
-{ mkEval, lib, ... }:
+{ mkEval, lib, pkgs, ... }:
 
 let
+  catalogShape = import ../../../../nixos-modules/generated/provider-catalog-shape.nix;
+
+  catalogEntry = name:
+    let
+      digestFields = lib.listToAttrs (map
+        (field: lib.nameValuePair field
+          "sha256:${builtins.hashString "sha256" "${name}/${field}"}")
+        catalogShape.digestFields);
+      plainFields = lib.listToAttrs (map
+        (field: lib.nameValuePair field "${name}/${field}")
+        (lib.filter (field: !(builtins.elem field catalogShape.digestFields))
+          catalogShape.fields));
+    in digestFields // plainFields;
+
+  artifact = name: type: {
+    package = pkgs.writeText name name;
+    inherit type;
+    catalog = catalogEntry name;
+  };
+
+  minimalHost = { ... }: {
+    boot.loader.grub.enable = false;
+    boot.loader.systemd-boot.enable = false;
+    boot.initrd.includeDefaultModules = false;
+    fileSystems."/" = { device = "tmpfs"; fsType = "tmpfs"; };
+    environment.etc."machine-id".text = "00000000000000000000000000000000";
+    system.stateVersion = "25.11";
+    users.users.alice = { isNormalUser = true; uid = 1000; };
+    d2b.site = {
+      waylandUser = "alice";
+      launcherUsers = [ "alice" ];
+    };
+  };
+
+  networkResources = {
+    network-local = {
+      type = "Provider";
+      spec.artifactId = "provider-network-local";
+    };
+    work-net = {
+      type = "Network";
+      spec = {
+        providerRef = "Provider/network-local";
+        lanCidr = "10.20.0.0/24";
+        uplinkCidr = "192.0.2.0/30";
+        netVmSystemArtifactId = "net-vm-base";
+      };
+    };
+  };
+
+  v3Fixture = { ... }: {
+    d2b.artifacts = {
+      provider-network-local = artifact "provider-network-local" "provider";
+      net-vm-base = artifact "net-vm-base" "nixos-system";
+    };
+    d2b.zones.local-root.resources = networkResources;
+  };
+
+  v3Cfg = (mkEval [ minimalHost v3Fixture ]).config;
+  compiledNetwork = v3Cfg.d2b._index.networks.byZone.local-root.work-net;
+  v3Bundle = v3Cfg.d2b._bundle.zoneResourceBundles.local-root.data;
+  emittedNetwork = builtins.head (builtins.filter
+    (resource: resource.type == "Network") v3Bundle.resources);
+
+  v3FailureMessages = module:
+    map (assertion: assertion.message)
+      (lib.filter (assertion: !assertion.assertion)
+        (mkEval [ minimalHost v3Fixture module ]).config.assertions);
+
+  v3Rejects = needle: module:
+    lib.any (message: lib.hasInfix needle message) (v3FailureMessages module);
+
   fixture = { lib, ... }: {
     boot.loader.grub.enable = false;
     boot.loader.systemd-boot.enable = false;
@@ -164,6 +236,180 @@ let
     firstLine != null && secondLine != null && firstLine < secondLine;
 in
 {
+  "net-vm-network/v3-resource-canonical-spec" = {
+    expr = compiledNetwork.spec;
+    expected = {
+      providerRef = "Provider/network-local";
+      lanCidr = "10.20.0.0/24";
+      uplinkCidr = "192.0.2.0/30";
+      mtu = null;
+      mssClamp = false;
+      isolation.allowEastWest = false;
+      routing.hostBlocklist = [
+        "10.0.0.0/8"
+        "169.254.0.0/16"
+        "172.16.0.0/12"
+        "192.168.0.0/16"
+      ];
+      dhcp = {
+        domain = null;
+        ignoreClientNames = true;
+      };
+      dns = {
+        forwarders = [ ];
+        cacheSize = 1000;
+      };
+      externalAttachment = null;
+      mdns = {
+        enable = false;
+        reflector = true;
+        dnsmasqLocal = false;
+        dnsmasqLocalPort = 53530;
+        publishWorkstation = false;
+      };
+      netVmNameOverride = null;
+      netVmSystemArtifactId = "net-vm-base";
+      attachments = [ ];
+    };
+  };
+  "net-vm-network/v3-resource-bundle-omits-runtime-metadata" = {
+    expr = {
+      keys = lib.attrNames emittedNetwork;
+      metadataKeys = lib.attrNames emittedNetwork.metadata;
+      hasStorePath = lib.hasInfix "/nix/store/" (builtins.toJSON emittedNetwork);
+    };
+    expected = {
+      keys = [ "apiVersion" "metadata" "spec" "type" ];
+      metadataKeys = [ "name" "zone" ];
+      hasStorePath = false;
+    };
+  };
+  "net-vm-network/v3-resource-static-prerequisites-only" = {
+    expr = {
+      unmanaged = builtins.elem "interface-name:d2b-*"
+        v3Cfg.networking.networkmanager.unmanaged;
+      netdevs = v3Cfg.systemd.network.netdevs;
+      bridgeSysctls = lib.filterAttrs
+        (name: _: lib.hasPrefix "net.ipv6.conf.d2b-b" name)
+        v3Cfg.boot.kernel.sysctl;
+    };
+    expected = {
+      unmanaged = true;
+      netdevs = { };
+      bridgeSysctls = { };
+    };
+  };
+  "net-vm-network/v3-resource-provider-package-deployed" = {
+    expr = builtins.elem
+      v3Cfg.d2b.artifacts.provider-network-local.package
+      v3Cfg.environment.systemPackages;
+    expected = true;
+  };
+  "net-vm-network/v3-resource-cidr-overlap-rejected" = {
+    expr = v3Rejects "overlaps" {
+      d2b.zones.local-root.resources.personal-net = {
+        type = "Network";
+        spec = {
+          providerRef = "Provider/network-local";
+          lanCidr = "10.20.0.0/24";
+          uplinkCidr = "198.51.100.0/30";
+          netVmSystemArtifactId = "net-vm-base";
+        };
+      };
+    };
+    expected = true;
+  };
+  "net-vm-network/v3-resource-duplicate-attachment-index-rejected" = {
+    expr = v3Rejects "unique indices" {
+      d2b.zones.local-root.resources = {
+        host-system = {
+          type = "Host";
+          spec.providerRef = "Provider/network-local";
+        };
+        work-net.spec.attachments = [
+          { executionRef = "Host/host-system"; index = 10; }
+          { executionRef = "Host/host-system"; index = 10; }
+        ];
+      };
+    };
+    expected = true;
+  };
+  "net-vm-network/v3-resource-port-forward-target-mutual-exclusion-rejected" = {
+    expr = v3Rejects "exactly one" {
+      d2b.zones.local-root.resources = {
+        host-system = {
+          type = "Host";
+          spec.providerRef = "Provider/network-local";
+        };
+        work-net.spec.externalAttachment = {
+          parentInterface = "eno1";
+          portForwards = [ {
+            protocol = "tcp";
+            listenPort = 2222;
+            targetRef = "Host/host-system";
+            targetIp = "10.20.0.10";
+            targetPort = 22;
+          } ];
+        };
+      };
+    };
+    expected = true;
+  };
+  "net-vm-network/v3-resource-system-artifact-type-rejected" = {
+    expr = v3Rejects "nixos-system artifact" {
+      d2b.zones.local-root.resources.work-net.spec.netVmSystemArtifactId =
+        lib.mkForce "provider-network-local";
+    };
+    expected = true;
+  };
+  "net-vm-network/v3-resource-system-artifact-kind-admitted" = {
+    expr = {
+      kind = v3Cfg.d2b.artifacts.net-vm-base.type;
+      catalogKind = (builtins.head (builtins.filter
+        (entry: entry.id == "net-vm-base")
+        v3Cfg.d2b._providerCatalog.entries)).type;
+      catalogFields = lib.attrNames (builtins.head (builtins.filter
+        (entry: entry.id == "net-vm-base")
+        v3Cfg.d2b._providerCatalog.entries)).entry;
+    };
+    expected = {
+      kind = "nixos-system";
+      catalogKind = "nixos-system";
+      catalogFields = catalogShape.fields;
+    };
+  };
+  "net-vm-network/v3-resource-cross-zone-bridge-multiplex-rejected" = {
+    expr = v3Rejects "external-physical-nic-cross-zone-l2" {
+      d2b.zones = {
+        local-root.resources.work-net.spec.externalAttachment = {
+          parentInterface = "eno1";
+          macvtapMode = "bridge";
+          sharingPolicy = "multiplexed";
+        };
+        personal = {
+          parentZone = "local-root";
+          resources = networkResources // {
+            personal-net = {
+              type = "Network";
+              spec = {
+                providerRef = "Provider/network-local";
+                lanCidr = "10.30.0.0/24";
+                uplinkCidr = "198.51.100.0/30";
+                netVmSystemArtifactId = "net-vm-base";
+                externalAttachment = {
+                  parentInterface = "eno1";
+                  macvtapMode = "bridge";
+                  sharingPolicy = "multiplexed";
+                };
+              };
+            };
+          };
+        };
+      };
+    };
+    expected = true;
+  };
+
   "net-vm-network/eth-dhcp-match-type-not-ether" = {
     expr = (workEthDhcp.matchConfig.Type or null) == "ether";
     expected = false;

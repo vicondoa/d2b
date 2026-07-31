@@ -6,6 +6,7 @@ pub mod owner_hints;
 pub mod queue;
 pub mod result;
 pub mod runner;
+pub mod state_migration;
 
 pub use context::{
     Cancellation, CommittedRevisionProof, ContextError, DependencySnapshot, EffectPermit,
@@ -34,4 +35,8 @@ pub use runner::{
     RunnerConfig, RunnerCounter, RunnerError, RunnerFailure, RunnerFuture, RunnerObservation,
     RunnerObservationReason, RunnerObserver, RunnerOutcome, RunnerReport, SourceError, WatchEvent,
     WatchFailure, WatchHint,
+};
+pub use state_migration::{
+    MigrationMember, MigrationPlan, MigrationPlanError, MigrationWorkerPhase,
+    plan as plan_state_migration,
 };

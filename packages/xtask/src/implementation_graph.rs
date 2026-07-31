@@ -208,6 +208,12 @@ const EARLY_WORK_ITEM_SCHEDULES: &[(&str, u8, &str, &str)] = &[
         "reconciliation-real-backend",
     ),
     (
+        "ADR046-process-002",
+        6,
+        "ADR-046-components-processes-and-sandbox",
+        "process-provider-integration",
+    ),
+    (
         "ADR046-store-003",
         5,
         "ADR-046-resource-store-redb",
@@ -1364,6 +1370,12 @@ mod tests {
                 5,
                 "ADR-046-resource-reconciliation",
                 "reconciliation-real-backend",
+            ),
+            (
+                "ADR046-process-002",
+                6,
+                "ADR-046-components-processes-and-sandbox",
+                "process-provider-integration",
             ),
             (
                 "ADR046-store-003",

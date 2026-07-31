@@ -43,8 +43,12 @@ pub enum W3BrokerOperation {
     OpenDevice,
     CreateTapFd,
     CreatePersistentTap,
+    DeletePersistentTap,
+    CreateBridge,
+    DeleteBridge,
     SetBridgePortFlags,
     ApplyNftables,
+    ApplyNftablesProjection,
     ApplyRoute,
     ApplySysctl,
     ApplyNmUnmanaged,
@@ -78,8 +82,12 @@ impl W3BrokerOperation {
             Self::OpenDevice => "OpenDevice",
             Self::CreateTapFd => "CreateTapFd",
             Self::CreatePersistentTap => "CreatePersistentTap",
+            Self::DeletePersistentTap => "DeletePersistentTap",
+            Self::CreateBridge => "CreateBridge",
+            Self::DeleteBridge => "DeleteBridge",
             Self::SetBridgePortFlags => "SetBridgePortFlags",
             Self::ApplyNftables => "ApplyNftables",
+            Self::ApplyNftablesProjection => "ApplyNftablesProjection",
             Self::ApplyRoute => "ApplyRoute",
             Self::ApplySysctl => "ApplySysctl",
             Self::ApplyNmUnmanaged => "ApplyNmUnmanaged",
@@ -109,8 +117,12 @@ impl W3BrokerOperation {
             Self::OpenDevice,
             Self::CreateTapFd,
             Self::CreatePersistentTap,
+            Self::DeletePersistentTap,
+            Self::CreateBridge,
+            Self::DeleteBridge,
             Self::SetBridgePortFlags,
             Self::ApplyNftables,
+            Self::ApplyNftablesProjection,
             Self::ApplyRoute,
             Self::ApplySysctl,
             Self::ApplyNmUnmanaged,
@@ -154,8 +166,12 @@ impl W3BrokerOperation {
             }
             Self::CreateTapFd
             | Self::CreatePersistentTap
+            | Self::DeletePersistentTap
+            | Self::CreateBridge
+            | Self::DeleteBridge
             | Self::SetBridgePortFlags
             | Self::ApplyNftables
+            | Self::ApplyNftablesProjection
             | Self::ApplyRoute
             | Self::ApplySysctl
             | Self::ApplyNmUnmanaged
@@ -230,6 +246,14 @@ mod tests {
         assert!(!W3BrokerOperation::DelegateCgroupV2.flags().destructive);
         assert!(W3BrokerOperation::PrepareStateDir.flags().destructive);
         assert!(W3BrokerOperation::ApplyNftables.flags().destructive);
+        assert!(
+            W3BrokerOperation::ApplyNftablesProjection
+                .flags()
+                .destructive
+        );
+        assert!(W3BrokerOperation::CreateBridge.flags().destructive);
+        assert!(W3BrokerOperation::DeleteBridge.flags().destructive);
+        assert!(W3BrokerOperation::DeletePersistentTap.flags().destructive);
         assert!(!W3BrokerOperation::UsbipBindFirewallRule.flags().destructive);
     }
 

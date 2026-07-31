@@ -29,7 +29,7 @@
         "ADR-046-provider-model-and-packaging"
       ],
       "path" : "docs/specs/ADR-046-components-processes-and-sandbox.md",
-      "sha256" : "357c819af0a7642d95ee480d14e5d3879b345c87ac934845910051cb4ed77763",
+      "sha256" : "c587cdfcff5e192979de9e5c05aa1f0f72b09a81875704ee0d77d77e73cc7b75",
       "specId" : "ADR-046-components-processes-and-sandbox",
       "status" : "Accepted",
       "supersedes" : "Current ProcessRole/VmProcessDag as the public process model",
@@ -62,7 +62,7 @@
         "ADR-046-resource-store-redb"
       ],
       "path" : "docs/specs/ADR-046-core-controllers.md",
-      "sha256" : "74560195888344369f77e78f4b11326ba41ba2e5de20580362dab76e012c3d7c",
+      "sha256" : "7e2742854a6d14c73971d8162dc89d4df6a9b3fd8ea37bd16b3a38588bcf54d8",
       "specId" : "ADR-046-core-controllers",
       "status" : "Accepted",
       "supersedes" : "Current daemon-global hard-coded orchestration ownership",
@@ -620,7 +620,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-provider-state.md",
-      "sha256" : "c8f81d903502a28c246744f512f79c40a4facdf616bf8cfffd8dccdf581b2682",
+      "sha256" : "eed5b57c86af2072f409a6b7ab8548785137399f0ffd5fa1aa420f8708ba991b",
       "specId" : "ADR-046-provider-state",
       "status" : "Accepted",
       "supersedes" : "`d2b-core/src/storage.rs` generated contract, ADR 0034 storage/sync/adoption model for v3",
@@ -914,7 +914,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-resources-credential.md",
-      "sha256" : "4660fc3e49de05e14b212b11241911269c498402c187195a93c3276850196484",
+      "sha256" : "61c538abadb800347625c99629df6b0fe095c9b1ab898567647d83a94723d37f",
       "specId" : "ADR-046-resources-credential",
       "status" : "Accepted",
       "supersedes" : "Current v3 `CredentialProvider` trait, `CredentialStatus`, `CredentialPlane` model in `d2b-realm-provider/src/credential.rs` and `provider.rs`",
@@ -974,7 +974,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-resources-network.md",
-      "sha256" : "95ffa44ef4c29320e696f7b5e5d20740af5e952d6c1925a8cd86285726a1fbdf",
+      "sha256" : "5848fea34024c2d7d207cfe46fb70cbe57ce42f72dd378f35ef881c3330fef95",
       "specId" : "ADR-046-resources-network",
       "status" : "Accepted",
       "supersedes" : "`d2b.envs.<env>` and `d2b.realms.<realm>.network` Nix surfaces (v3 reset)",
@@ -1207,7 +1207,7 @@
         "ADR-046-zone-routing"
       ],
       "path" : "docs/specs/ADR-046-validation-and-delivery.md",
-      "sha256" : "bf64f44a065f32f240d8329e612d1e18dde87c79ead677f6930d8ec3c7707beb",
+      "sha256" : "4bf87ec6c5fdaf268f4bcd223905ee3118d727985d7d782addf1c1a737d98bb3",
       "specId" : "ADR-046-validation-and-delivery",
       "status" : "Accepted",
       "supersedes" : "This repository's current `AGENTS.md` \"Panel review\" phase-gate as the *sole* review mechanism for ADR 0046 work (extended, not replaced, per §12); ad hoc per-agent validation ordering for ADR 0046 implementation",

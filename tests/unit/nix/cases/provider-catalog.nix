@@ -6,7 +6,7 @@
 # compiled catalog's sort order, the frozen entry field set, the exact-digest
 # requirement, and the private store path being absent from the public
 # projection.
-{ mkEval, lib, pkgs, ... }:
+{ mkEval, lib, pkgs, flakeRoot, ... }:
 
 let
   shape = import ../../../../nixos-modules/generated/provider-catalog-shape.nix;
@@ -82,6 +82,86 @@ let
       broken = lib.filter (a: !a.assertion) evaluated.assertions;
     in
     if broken == [ ] then "no assertion fired" else (lib.head broken).message;
+
+  zoneResourceFixture = { ... }: {
+    d2b.artifacts = {
+      credential-entra = artifactFor "credential-entra";
+      display-wayland = artifactFor "display-wayland";
+    };
+    d2b.zones.local-root.resources = {
+      alice.type = "User";
+      credential-entra = {
+        type = "Provider";
+        spec = {
+          artifactId = "credential-entra";
+          config = {
+            credentialDomains = [ "user" ];
+            supportedOperations = [ "acquire-token" "refresh-token" ];
+          };
+        };
+      };
+      display-wayland = {
+        type = "Provider";
+        spec = {
+          artifactId = "display-wayland";
+          config = { };
+        };
+      };
+      work-access = {
+        type = "Credential";
+        metadata.labels.team = "platform";
+        spec = {
+          providerRef = "Provider/credential-entra";
+          scope = {
+            domainFilter = "user";
+            userRef = "User/alice";
+          };
+          audience = "azure-resource-manager";
+          consumerRef = "Provider/display-wayland";
+          allowedOperations = [ "refresh-token" "acquire-token" ];
+          rotation = {
+            policy = "proactive";
+            proactiveWindowMs = 300000;
+            maxLeaseLifetimeMs = 3600000;
+          };
+        };
+      };
+    };
+  };
+
+  zoneCfg = (mkEval [ base zoneResourceFixture ]).config;
+  zoneBundle = zoneCfg.d2b._bundle.zoneResourceBundles.local-root.data;
+  digestRendererSource =
+    builtins.readFile (flakeRoot + "/nixos-modules/zone-resources-json.nix");
+
+  zoneFailureMessages = module:
+    map (assertion: assertion.message)
+      (lib.filter (assertion: !assertion.assertion)
+        (mkEval [ base zoneResourceFixture module ]).config.assertions);
+
+  zoneRejects = needle: module:
+    lib.any (message: lib.hasInfix needle message) (zoneFailureMessages module);
+
+  duplicateBindingModule = { ... }: {
+    d2b.zones.local-root.resources.work-access-copy = {
+      type = "Credential";
+      spec = {
+        providerRef = "Provider/credential-entra";
+        scope = {
+          domainFilter = "user";
+          userRef = "User/alice";
+        };
+        audience = "azure-resource-manager";
+        consumerRef = "Provider/display-wayland";
+        allowedOperations = [ "acquire-token" ];
+        rotation = {
+          policy = "proactive";
+          proactiveWindowMs = 300000;
+          maxLeaseLifetimeMs = 3600000;
+        };
+      };
+    };
+  };
 in
 {
   # An empty catalog is the default: no artifact exists unless it is authored.
@@ -210,5 +290,166 @@ in
   "provider-catalog/single-artifact" = {
     expr = evalArtifacts { solo = artifactFor "solo"; };
     expected = [ "solo" ];
+  };
+
+  "provider-catalog/zone-resource-bundle-credential-envelope-and-digest" = {
+    expr = {
+      envelope = lib.head zoneBundle.resources;
+      order = map (resource: resource.type) zoneBundle.resources;
+      evalBundleFields = lib.attrNames zoneBundle;
+      evalCatalogFields = lib.attrNames
+        zoneCfg.d2b._bundle.extraArtifacts.artifactCatalog.data;
+      pathsAreBuildBacked =
+        zoneCfg.d2b._bundle.zoneResourceBundles.local-root.path != null
+        && zoneCfg.d2b._bundle.extraArtifacts.artifactCatalog.path != null;
+      digestContract = {
+        nulSeparator = lib.hasInfix "printf '%s\\000' \"$domain\""
+          digestRendererSource;
+        resourceBundleDomain = lib.hasInfix
+          "domain_digest 'd2b:v3:resource-bundle'" digestRendererSource;
+        resourceBundleGolden = lib.hasInfix
+          "38bbe7643fbe19b682a1c266fd6b0b6d3dd41e9e5a5abdf5d13be38b8fc37894"
+          digestRendererSource;
+        artifactCatalogDomain = lib.hasInfix
+          "domain_digest 'd2b:v3:artifact-catalog'" digestRendererSource;
+        artifactCatalogGolden = lib.hasInfix
+          "e2d86f09e58fd957f7750ebcb9b7b194976db06a5578e823afbc2501ef6f4464"
+          digestRendererSource;
+      };
+      role = zoneCfg.d2b._resourceCompiler.zones.local-root.role;
+      retention = zoneCfg.d2b._resourceCompiler.zones.local-root.retainedGenerations;
+    };
+    expected = {
+      envelope = {
+        apiVersion = "resources.d2bus.org/v3";
+        type = "Credential";
+        metadata = {
+          name = "work-access";
+          zone = "local-root";
+          labels.team = "platform";
+        };
+        spec = {
+          providerRef = "Provider/credential-entra";
+          scope = {
+            executionRef = null;
+            domainFilter = "user";
+            userRef = "User/alice";
+          };
+          audience = "azure-resource-manager";
+          consumerRef = "Provider/display-wayland";
+          allowedOperations = [ "acquire-token" "refresh-token" ];
+          rotation = {
+            policy = "proactive";
+            proactiveWindowMs = 300000;
+            maxLeaseLifetimeMs = 3600000;
+          };
+          expiry.hardDeadlineMs = 0;
+          revocation = {
+            onOwnerDelete = "immediate";
+            onProviderGeneration = "immediate";
+          };
+          identityGuestRef = null;
+          loginEndpointRef = null;
+        };
+      };
+      order = [ "Credential" "Provider" "Provider" "User" ];
+      evalBundleFields = [
+        "bundleVersion"
+        "generatedAt"
+        "providerSchemaDigests"
+        "resources"
+        "schemaVersion"
+        "zone"
+      ];
+      evalCatalogFields = [ "entries" "schemaVersion" ];
+      pathsAreBuildBacked = true;
+      digestContract = {
+        nulSeparator = true;
+        resourceBundleDomain = true;
+        resourceBundleGolden = true;
+        artifactCatalogDomain = true;
+        artifactCatalogGolden = true;
+      };
+      role = {
+        type = "Role";
+        metadata = {
+          name = "activation-nixos";
+          zone = "local-root";
+        };
+        spec.rules = [
+          {
+            resourceTypes = [ "Credential" ];
+            verbs = [ "create" "update-spec" "delete" ];
+            subresources = [ ];
+            resourceNames = [ ];
+            zones = [ "local-root" ];
+            executionRefs = [ ];
+            sessionVerbs = [ ];
+          }
+          {
+            resourceTypes = [ "Credential" ];
+            verbs = [ "admin-credential" ];
+            subresources = [ "create" "update-spec" "delete" ];
+            resourceNames = [ ];
+            zones = [ "local-root" ];
+            executionRefs = [ ];
+            sessionVerbs = [ ];
+          }
+        ];
+      };
+      retention = 3;
+    };
+  };
+
+  "provider-catalog/zone-resource-credential-invalid-inputs-rejected" = {
+    expr = {
+      secret = zoneRejects "secret-shaped" {
+        d2b.zones.local-root.resources.work-access.spec.audience =
+          "-----BEGIN PRIVATE KEY-----";
+      };
+      providerDomain = zoneRejects "not supported" {
+        d2b.zones.local-root.resources.work-access.spec.scope.domainFilter = "system";
+      };
+      rotation = zoneRejects "less than half" {
+        d2b.zones.local-root.resources.work-access.spec.rotation.proactiveWindowMs =
+          1800000;
+      };
+      unresolved = zoneRejects "must resolve" {
+        d2b.zones.local-root.resources.work-access.spec.consumerRef = "Provider/missing";
+      };
+      duplicate = zoneRejects "duplicate Credential binding" duplicateBindingModule;
+      missingArtifact = zoneRejects "declared artifactId" {
+        d2b.zones.local-root.resources.credential-entra.spec.artifactId = "missing";
+      };
+      credentialRef = zoneRejects "credential-value-must-be-ref" {
+        d2b.zones.local-root.resources.credential-entra.spec.config.sealingCredentialRef =
+          "raw-value";
+      };
+    };
+    expected = {
+      secret = true;
+      providerDomain = true;
+      rotation = true;
+      unresolved = true;
+      duplicate = true;
+      missingArtifact = true;
+      credentialRef = true;
+    };
+  };
+
+  "provider-catalog/zone-resource-runtime-metadata-and-store-path-absent" = {
+    expr = {
+      resourceKeys = lib.attrNames (lib.head zoneBundle.resources);
+      metadataKeys = lib.attrNames (lib.head zoneBundle.resources).metadata;
+      hasStorePath = lib.hasInfix "/nix/store/" (builtins.toJSON zoneBundle);
+      artifactEntryKeys = lib.attrNames
+        (lib.head zoneCfg.d2b._bundle.extraArtifacts.artifactCatalog.data.entries);
+    };
+    expected = {
+      resourceKeys = [ "apiVersion" "metadata" "spec" "type" ];
+      metadataKeys = [ "labels" "name" "zone" ];
+      hasStorePath = false;
+      artifactEntryKeys = [ "closureMetadata" "id" "packageDigest" "storePath" "type" ];
+    };
   };
 }

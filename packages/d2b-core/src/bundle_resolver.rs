@@ -31,6 +31,9 @@
 //! | --------------- | --------------------------------------------------------- | ----------------------------------------------------------------- |
 //! | nft             | `nft:host`                                                | [`crate::host::HostJson::nftables`] (whole-host table)            |
 //! | nft per-env     | `nft:env:<env>`                                           | [`crate::host::NetEnv`] subset of the global table                |
+//! | nft projection  | `nft-projection:env:<env>`                                | per-env rule set + trusted ownership-marker row                   |
+//! | ownership marker| `ownership-marker:env:<env>`                               | bundle-derived marker for one environment projection              |
+//! | bridge          | `bridge:env:<env>`                                         | [`crate::host::NetEnv`] bridge, MTU, and fixed hardening policy    |
 //! | route           | `route:env:<env>:<idx>`                                   | derived from [`crate::host::NetEnv`] (gateway + default route)    |
 //! | sysctl          | `sysctl:env:<env>:if:<if>:<key>`                          | [`crate::host::Ipv6SysctlEntry`]                                  |
 //! | hosts file      | `hosts:host`                                              | [`crate::host::HostsFileOwnership`] + per-env LAN entries         |
@@ -107,7 +110,11 @@ pub struct BundleResolver {
     pub manifest: ManifestV04,
     audit_bundle_version: String,
     audit_bundle_hash: String,
+    installed_generation_identity: Option<ResolvedInstalledGenerationIdentity>,
     nft_intents: BTreeMap<String, ResolvedNftIntent>,
+    nft_projection_intents: BTreeMap<String, ResolvedNftablesProjectionIntent>,
+    ownership_marker_intents: BTreeMap<String, ResolvedOwnershipMarkerIntent>,
+    bridge_intents: BTreeMap<String, ResolvedBridgeIntent>,
     route_intents: BTreeMap<String, ResolvedRouteIntent>,
     sysctl_intents: BTreeMap<String, ResolvedSysctlIntent>,
     hosts_intents: BTreeMap<String, ResolvedHostsIntent>,
@@ -154,6 +161,48 @@ pub struct ResolvedNftIntent {
     pub desired_hash: String,
     /// Comment marker installed on every emitted rule.
     pub ownership_id: String,
+}
+
+/// Trusted bridge configuration resolved from the private host bundle.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedBridgeIntent {
+    pub intent_id: String,
+    pub scope_label: String,
+    pub bridge_ifname: IfName,
+    pub mtu: u16,
+    pub stp_disabled: bool,
+    pub multicast_snooping_disabled: bool,
+    pub ipv6_suppressed: bool,
+}
+
+/// Trusted ownership marker resolved separately from a projection request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedOwnershipMarkerIntent {
+    pub intent_id: String,
+    pub marker: String,
+}
+
+/// Trusted rule set for one ownership-scoped nftables projection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedNftablesProjectionIntent {
+    pub intent_id: String,
+    pub scope_label: String,
+    pub script_body: String,
+    pub desired_hash: String,
+    pub ownership_marker_intent_ref: String,
+}
+
+/// Immutable identity of the installed private configuration bundle.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedInstalledGenerationIdentity {
+    generation_id: String,
+}
+
+impl ResolvedInstalledGenerationIdentity {
+    /// Borrow the validated immutable bundle generation identity.
+    pub fn as_str(&self) -> &str {
+        &self.generation_id
+    }
 }
 
 /// Resolved ip-route command ready for `live_apply_route`.
@@ -1019,7 +1068,11 @@ impl BundleResolver {
             manifest,
             closures,
         } = artifacts;
+        let installed_generation_identity = build_installed_generation_identity(&bundle);
         let nft_intents = build_nft_intents(&host);
+        let nft_projection_intents = build_nft_projection_intents(&host);
+        let ownership_marker_intents = build_ownership_marker_intents(&host);
+        let bridge_intents = build_bridge_intents(&host);
         let route_intents = build_route_intents(&host);
         let sysctl_intents = build_sysctl_intents(&host);
         let hosts_intents = build_hosts_intents(&host);
@@ -1043,6 +1096,7 @@ impl BundleResolver {
         Self {
             audit_bundle_version: format!("v{}", bundle.bundle_version),
             audit_bundle_hash: bundle_hash,
+            installed_generation_identity,
             bundle,
             host,
             processes,
@@ -1054,6 +1108,9 @@ impl BundleResolver {
             unsafe_local_workloads,
             manifest,
             nft_intents,
+            nft_projection_intents,
+            ownership_marker_intents,
+            bridge_intents,
             route_intents,
             sysctl_intents,
             hosts_intents,
@@ -1186,6 +1243,25 @@ impl BundleResolver {
 
     pub fn find_nft_intent(&self, id: &str) -> Option<&ResolvedNftIntent> {
         self.nft_intents.get(id)
+    }
+
+    pub fn find_nft_projection_intent(
+        &self,
+        id: &str,
+    ) -> Option<&ResolvedNftablesProjectionIntent> {
+        self.nft_projection_intents.get(id)
+    }
+
+    pub fn find_ownership_marker_intent(&self, id: &str) -> Option<&ResolvedOwnershipMarkerIntent> {
+        self.ownership_marker_intents.get(id)
+    }
+
+    pub fn find_bridge_intent(&self, id: &str) -> Option<&ResolvedBridgeIntent> {
+        self.bridge_intents.get(id)
+    }
+
+    pub fn installed_generation_identity(&self) -> Option<&ResolvedInstalledGenerationIdentity> {
+        self.installed_generation_identity.as_ref()
     }
 
     pub fn find_route_intent(&self, id: &str) -> Option<&ResolvedRouteIntent> {
@@ -1954,6 +2030,18 @@ pub fn intent_id_nft_env(env: &str) -> String {
     format!("nft:env:{env}")
 }
 
+pub fn intent_id_nft_projection_env(env: &str) -> String {
+    format!("nft-projection:env:{env}")
+}
+
+pub fn intent_id_ownership_marker_env(env: &str) -> String {
+    format!("ownership-marker:env:{env}")
+}
+
+pub fn intent_id_bridge_env(env: &str) -> String {
+    format!("bridge:env:{env}")
+}
+
 pub fn intent_id_route_env(env: &str, idx: usize) -> String {
     format!("route:env:{env}:{idx}")
 }
@@ -2019,6 +2107,85 @@ fn build_nft_intents(host: &HostJson) -> BTreeMap<String, ResolvedNftIntent> {
         );
     }
     out
+}
+
+fn build_bridge_intents(host: &HostJson) -> BTreeMap<String, ResolvedBridgeIntent> {
+    host.environments
+        .iter()
+        .map(|env| {
+            let intent_id = intent_id_bridge_env(&env.env);
+            let bridge_ifname =
+                resolved_ifname_for(host, &env.env, None, crate::host::TapRole::NetVmLan)
+                    .and_then(|value| IfName::new(value).ok())
+                    .unwrap_or_else(|| env.bridge.clone());
+            (
+                intent_id.clone(),
+                ResolvedBridgeIntent {
+                    intent_id,
+                    scope_label: format!("env:{}", env.env),
+                    bridge_ifname,
+                    mtu: env.mtu,
+                    stp_disabled: true,
+                    multicast_snooping_disabled: true,
+                    ipv6_suppressed: true,
+                },
+            )
+        })
+        .collect()
+}
+
+fn build_ownership_marker_intents(
+    host: &HostJson,
+) -> BTreeMap<String, ResolvedOwnershipMarkerIntent> {
+    host.environments
+        .iter()
+        .map(|env| {
+            let intent_id = intent_id_ownership_marker_env(&env.env);
+            (
+                intent_id.clone(),
+                ResolvedOwnershipMarkerIntent {
+                    intent_id,
+                    marker: format!("{}:env:{}", host.nftables.ownership_id, env.env),
+                },
+            )
+        })
+        .collect()
+}
+
+fn build_nft_projection_intents(
+    host: &HostJson,
+) -> BTreeMap<String, ResolvedNftablesProjectionIntent> {
+    host.environments
+        .iter()
+        .map(|env| {
+            let intent_id = intent_id_nft_projection_env(&env.env);
+            let script_body = render_env_nft_subset(host, env);
+            (
+                intent_id.clone(),
+                ResolvedNftablesProjectionIntent {
+                    intent_id,
+                    scope_label: format!("env:{}", env.env),
+                    desired_hash: stable_digest(&script_body),
+                    script_body,
+                    ownership_marker_intent_ref: intent_id_ownership_marker_env(&env.env),
+                },
+            )
+        })
+        .collect()
+}
+
+fn build_installed_generation_identity(
+    bundle: &Bundle,
+) -> Option<ResolvedInstalledGenerationIdentity> {
+    let generation_id = bundle.bundle_hash.as_deref()?;
+    let valid = generation_id.len() == 71
+        && generation_id.starts_with("sha256:")
+        && generation_id[7..]
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase());
+    valid.then(|| ResolvedInstalledGenerationIdentity {
+        generation_id: generation_id.to_owned(),
+    })
 }
 
 fn render_host_nft_script(host: &HostJson) -> String {

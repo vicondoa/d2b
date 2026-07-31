@@ -20,8 +20,12 @@ use d2b_host::nftables::{
     evaluate_coexistence_policy, hash_inet_d2b_table,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256 as Sha256Hasher};
 use std::env;
 use std::fs;
+use std::fs::OpenOptions;
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -331,6 +335,354 @@ fn map_live_nft_error(err: LiveHandlerError) -> ApplyWithCoexistenceError {
     }
 }
 
+/// Closed result of a projection-scoped mutation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProjectionMutation {
+    /// SHA-256 digest over this projection only.
+    pub projection_digest: String,
+    /// Whether the live projection was already absent during removal.
+    pub validated_absent: bool,
+}
+
+/// Value-free projection mutation failures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectionMutationError {
+    /// The immutable installed configuration generation changed.
+    StaleGeneration,
+    /// A caller hash disagreed with the trusted projection.
+    DesiredHashMismatch,
+    /// The trusted projection is not structurally valid.
+    InvalidProjection,
+    /// A foreign marker occupies a chain owned by this projection.
+    ForeignMarker,
+    /// Live table state could not be parsed safely.
+    InvalidLiveState,
+    /// The ordered OFD lock could not be acquired.
+    LockUnavailable,
+    /// The live nft operation failed.
+    Backend,
+}
+
+impl ProjectionMutationError {
+    /// Return the stable redacted reason code.
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::StaleGeneration => "stale-projection-generation",
+            Self::DesiredHashMismatch => "projection-desired-hash-mismatch",
+            Self::InvalidProjection => "projection-invalid",
+            Self::ForeignMarker => "foreign-nft-rule-preserved",
+            Self::InvalidLiveState => "projection-live-state-invalid",
+            Self::LockUnavailable => "projection-lock-unavailable",
+            Self::Backend => "projection-backend-error",
+        }
+    }
+}
+
+impl std::fmt::Display for ProjectionMutationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.code())
+    }
+}
+
+impl std::error::Error for ProjectionMutationError {}
+
+#[derive(Clone, PartialEq, Eq)]
+struct ProjectionChain {
+    name: String,
+    declaration: String,
+    rules: Vec<String>,
+}
+
+impl std::fmt::Debug for ProjectionChain {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ProjectionChain(<redacted>)")
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LiveProjectionState {
+    table_present: bool,
+    owned_chains: Vec<String>,
+    validated_absent: bool,
+}
+
+/// Apply or remove one trusted ownership projection without replacing the
+/// shared table. The generation comparison happens before lock acquisition,
+/// live-state reads, or mutation and never advances a counter.
+pub fn apply_nftables_projection(
+    executor: &dyn ReconcileExecutor,
+    nft_binary: &Path,
+    script_body: &str,
+    marker: &str,
+    trusted_hash: &str,
+    caller_hash: Option<&str>,
+    expected_generation: &str,
+    installed_generation: &str,
+    action: d2b_contracts::broker_wire::NftablesProjectionAction,
+) -> Result<ProjectionMutation, ProjectionMutationError> {
+    if expected_generation != installed_generation {
+        return Err(ProjectionMutationError::StaleGeneration);
+    }
+    if caller_hash.is_some_and(|hash| hash != trusted_hash) {
+        return Err(ProjectionMutationError::DesiredHashMismatch);
+    }
+    let expected_comment = validate_projection_marker(marker)?;
+    let chains = parse_projection_script(script_body, &expected_comment)?;
+    let _lock = acquire_projection_lock()?;
+    let live_json = read_live_table_json_optional(nft_binary, "inet", "d2b")
+        .map_err(|_| ProjectionMutationError::Backend)?;
+    let live = inspect_live_projection(live_json.as_deref(), &chains, &expected_comment)?;
+    let mutation_script = render_projection_mutation(&chains, &live, action);
+    if !mutation_script.is_empty() {
+        executor
+            .apply_nft_script(nft_binary, &mutation_script)
+            .map_err(|_| ProjectionMutationError::Backend)?;
+    }
+    let projection_digest = match action {
+        d2b_contracts::broker_wire::NftablesProjectionAction::Apply => trusted_hash.to_owned(),
+        d2b_contracts::broker_wire::NftablesProjectionAction::Remove => projection_digest(&[]),
+    };
+    Ok(ProjectionMutation {
+        projection_digest,
+        validated_absent: matches!(
+            action,
+            d2b_contracts::broker_wire::NftablesProjectionAction::Remove
+        ) && live.validated_absent,
+    })
+}
+
+fn validate_projection_marker(marker: &str) -> Result<String, ProjectionMutationError> {
+    if marker.is_empty()
+        || marker.len() > 256
+        || !marker
+            .bytes()
+            .all(|byte| byte.is_ascii_graphic() && byte != b'"')
+    {
+        return Err(ProjectionMutationError::InvalidProjection);
+    }
+    Ok(format!("d2b managed: {marker}"))
+}
+
+fn parse_projection_script(
+    script: &str,
+    expected_comment: &str,
+) -> Result<Vec<ProjectionChain>, ProjectionMutationError> {
+    let mut chains = Vec::new();
+    let mut current: Option<ProjectionChain> = None;
+    for raw_line in script.lines() {
+        let line = raw_line.trim();
+        if line.is_empty()
+            || line.starts_with('#')
+            || line == "table inet d2b {"
+            || (line == "}" && current.is_none())
+        {
+            continue;
+        }
+        if let Some(chain) = current.as_mut() {
+            if line == "}" {
+                chains.push(current.take().expect("current chain exists"));
+                continue;
+            }
+            if !has_exact_comment(line, expected_comment) {
+                return Err(ProjectionMutationError::InvalidProjection);
+            }
+            chain.rules.push(line.trim_end_matches(';').to_owned());
+            continue;
+        }
+        let Some(rest) = line.strip_prefix("chain ") else {
+            return Err(ProjectionMutationError::InvalidProjection);
+        };
+        let Some((name, declaration)) = rest.split_once('{') else {
+            return Err(ProjectionMutationError::InvalidProjection);
+        };
+        let name = name.trim().trim_matches('"');
+        if name.is_empty()
+            || name.len() > 255
+            || !name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        {
+            return Err(ProjectionMutationError::InvalidProjection);
+        }
+        if chains
+            .iter()
+            .any(|chain: &ProjectionChain| chain.name == name)
+        {
+            return Err(ProjectionMutationError::InvalidProjection);
+        }
+        let declaration = declaration.trim();
+        if declaration.ends_with('}') {
+            let declaration = declaration.trim_end_matches('}').trim();
+            if !has_exact_comment(declaration, expected_comment) {
+                return Err(ProjectionMutationError::InvalidProjection);
+            }
+            chains.push(ProjectionChain {
+                name: name.to_owned(),
+                declaration: declaration.to_owned(),
+                rules: Vec::new(),
+            });
+        } else {
+            if !has_exact_comment(declaration, expected_comment) {
+                return Err(ProjectionMutationError::InvalidProjection);
+            }
+            current = Some(ProjectionChain {
+                name: name.to_owned(),
+                declaration: declaration.to_owned(),
+                rules: Vec::new(),
+            });
+        }
+    }
+    if current.is_some() || chains.is_empty() {
+        return Err(ProjectionMutationError::InvalidProjection);
+    }
+    Ok(chains)
+}
+
+fn has_exact_comment(line: &str, expected_comment: &str) -> bool {
+    let needle = format!("comment \"{expected_comment}\"");
+    line.matches(&needle).count() == 1
+}
+
+fn inspect_live_projection(
+    live_json: Option<&[u8]>,
+    desired: &[ProjectionChain],
+    expected_comment: &str,
+) -> Result<LiveProjectionState, ProjectionMutationError> {
+    let Some(live_json) = live_json else {
+        return Ok(LiveProjectionState {
+            table_present: false,
+            owned_chains: Vec::new(),
+            validated_absent: true,
+        });
+    };
+    let value: serde_json::Value =
+        serde_json::from_slice(live_json).map_err(|_| ProjectionMutationError::InvalidLiveState)?;
+    let entries = value
+        .get("nftables")
+        .and_then(serde_json::Value::as_array)
+        .ok_or(ProjectionMutationError::InvalidLiveState)?;
+    let desired_names: std::collections::BTreeSet<_> =
+        desired.iter().map(|chain| chain.name.as_str()).collect();
+    let mut owned_chains = std::collections::BTreeSet::new();
+    for entry in entries {
+        if let Some(chain) = entry.get("chain") {
+            if chain.get("family").and_then(serde_json::Value::as_str) != Some("inet")
+                || chain.get("table").and_then(serde_json::Value::as_str) != Some("d2b")
+            {
+                continue;
+            }
+            let name = chain
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .ok_or(ProjectionMutationError::InvalidLiveState)?;
+            let comment = chain.get("comment").and_then(serde_json::Value::as_str);
+            if desired_names.contains(name) && comment != Some(expected_comment) {
+                return Err(ProjectionMutationError::ForeignMarker);
+            }
+            if comment == Some(expected_comment) {
+                owned_chains.insert(name.to_owned());
+            }
+        }
+        if let Some(rule) = entry.get("rule") {
+            if rule.get("family").and_then(serde_json::Value::as_str) != Some("inet")
+                || rule.get("table").and_then(serde_json::Value::as_str) != Some("d2b")
+            {
+                continue;
+            }
+            let chain = rule
+                .get("chain")
+                .and_then(serde_json::Value::as_str)
+                .ok_or(ProjectionMutationError::InvalidLiveState)?;
+            if owned_chains.contains(chain)
+                && rule.get("comment").and_then(serde_json::Value::as_str) != Some(expected_comment)
+            {
+                return Err(ProjectionMutationError::ForeignMarker);
+            }
+        }
+    }
+    Ok(LiveProjectionState {
+        table_present: true,
+        validated_absent: owned_chains.is_empty(),
+        owned_chains: owned_chains.into_iter().collect(),
+    })
+}
+
+fn render_projection_mutation(
+    desired: &[ProjectionChain],
+    live: &LiveProjectionState,
+    action: d2b_contracts::broker_wire::NftablesProjectionAction,
+) -> String {
+    let mut script = String::new();
+    if matches!(
+        action,
+        d2b_contracts::broker_wire::NftablesProjectionAction::Apply
+    ) && !live.table_present
+    {
+        script.push_str("add table inet d2b\n");
+    }
+    for chain in &live.owned_chains {
+        script.push_str(&format!("delete chain inet d2b {chain}\n"));
+    }
+    if matches!(
+        action,
+        d2b_contracts::broker_wire::NftablesProjectionAction::Apply
+    ) {
+        for chain in desired {
+            script.push_str(&format!(
+                "add chain inet d2b {} {{ {} }}\n",
+                chain.name, chain.declaration
+            ));
+            for rule in &chain.rules {
+                script.push_str(&format!("add rule inet d2b {} {rule}\n", chain.name));
+            }
+        }
+    }
+    script
+}
+
+fn projection_digest(bytes: &[u8]) -> String {
+    let raw: [u8; 32] = Sha256Hasher::digest(bytes).into();
+    format!(
+        "sha256:{}",
+        raw.iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    )
+}
+
+struct ProjectionLock(std::fs::File);
+
+impl std::fmt::Debug for ProjectionLock {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ProjectionLock(<redacted>)")
+    }
+}
+
+fn acquire_projection_lock() -> Result<ProjectionLock, ProjectionMutationError> {
+    let path = persisted_nft_hash_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|_| ProjectionMutationError::LockUnavailable)?;
+    }
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .mode(0o640)
+        .custom_flags(nix::libc::O_CLOEXEC)
+        .open(path)
+        .map_err(|_| ProjectionMutationError::LockUnavailable)?;
+    let lock = nix::libc::flock {
+        l_type: nix::libc::F_WRLCK as _,
+        l_whence: nix::libc::SEEK_SET as _,
+        l_start: 0,
+        l_len: 0,
+        l_pid: 0,
+    };
+    nix::fcntl::fcntl(file.as_raw_fd(), nix::fcntl::FcntlArg::F_OFD_SETLKW(&lock))
+        .map_err(|_| ProjectionMutationError::LockUnavailable)?;
+    Ok(ProjectionLock(file))
+}
+
 pub fn read_live_table_json_optional(
     nft_binary: &Path,
     family: &str,
@@ -421,6 +773,39 @@ mod tests {
         (script, hash)
     }
 
+    fn projection_script(marker: &str, chain: &str, expression: &str) -> String {
+        format!(
+            "table inet d2b {{\n  chain {chain} {{ type filter hook forward priority -5; policy drop; comment \"d2b managed: {marker}\";\n    {expression} comment \"d2b managed: {marker}\";\n  }}\n}}\n"
+        )
+    }
+
+    fn live_json(chains: &[(&str, &str)]) -> Vec<u8> {
+        let entries = chains
+            .iter()
+            .flat_map(|(name, marker)| {
+                [
+                    serde_json::json!({
+                        "chain": {
+                            "family": "inet",
+                            "table": "d2b",
+                            "name": name,
+                            "comment": marker,
+                        }
+                    }),
+                    serde_json::json!({
+                        "rule": {
+                            "family": "inet",
+                            "table": "d2b",
+                            "chain": name,
+                            "comment": marker,
+                        }
+                    }),
+                ]
+            })
+            .collect::<Vec<_>>();
+        serde_json::to_vec(&serde_json::json!({ "nftables": entries })).unwrap()
+    }
+
     struct TestDir {
         path: PathBuf,
     }
@@ -466,6 +851,142 @@ mod tests {
             decision.audit.table_hash_after,
             decision.batch.canonical_hash()
         );
+    }
+
+    #[test]
+    fn projection_apply_preserves_sibling_and_usbip_entries() {
+        let exec = FakeReconcileExecutor::new();
+        let script = projection_script("network-a", "forward-a", "ip saddr 10.20.0.0/24 accept");
+        let trusted_hash = projection_digest(script.as_bytes());
+        let live = live_json(&[
+            ("forward-b", "d2b managed: network-b"),
+            ("usbip-1", "d2b managed: usbip-1"),
+        ]);
+        let desired = parse_projection_script(&script, "d2b managed: network-a").unwrap();
+        let state =
+            inspect_live_projection(Some(&live), &desired, "d2b managed: network-a").unwrap();
+        let rendered = render_projection_mutation(
+            &desired,
+            &state,
+            d2b_contracts::broker_wire::NftablesProjectionAction::Apply,
+        );
+        assert!(rendered.contains("add chain inet d2b forward-a"));
+        assert!(!rendered.contains("forward-b"));
+        assert!(!rendered.contains("usbip-1"));
+        assert!(!rendered.contains("delete table"));
+        assert_eq!(trusted_hash.len(), 71);
+        assert!(exec.take_log().is_empty());
+    }
+
+    #[test]
+    fn projection_remove_deletes_only_owned_chains_and_keeps_table() {
+        let script = projection_script("network-a", "forward-a", "ip saddr 10.20.0.0/24 accept");
+        let desired = parse_projection_script(&script, "d2b managed: network-a").unwrap();
+        let live = live_json(&[
+            ("forward-a", "d2b managed: network-a"),
+            ("forward-b", "d2b managed: network-b"),
+            ("usbip-1", "d2b managed: usbip-1"),
+        ]);
+        let state =
+            inspect_live_projection(Some(&live), &desired, "d2b managed: network-a").unwrap();
+        let rendered = render_projection_mutation(
+            &desired,
+            &state,
+            d2b_contracts::broker_wire::NftablesProjectionAction::Remove,
+        );
+        assert_eq!(rendered, "delete chain inet d2b forward-a\n");
+        assert!(!rendered.contains("delete table"));
+    }
+
+    #[test]
+    fn projection_foreign_marker_fails_closed() {
+        let script = projection_script("network-a", "forward-a", "ip saddr 10.20.0.0/24 accept");
+        let desired = parse_projection_script(&script, "d2b managed: network-a").unwrap();
+        let live = live_json(&[("forward-a", "foreign marker")]);
+        assert_eq!(
+            inspect_live_projection(Some(&live), &desired, "d2b managed: network-a"),
+            Err(ProjectionMutationError::ForeignMarker)
+        );
+    }
+
+    #[test]
+    fn projection_validated_absence_is_idempotent() {
+        let script = projection_script("network-a", "forward-a", "ip saddr 10.20.0.0/24 accept");
+        let desired = parse_projection_script(&script, "d2b managed: network-a").unwrap();
+        let state = inspect_live_projection(
+            Some(&live_json(&[("forward-b", "d2b managed: network-b")])),
+            &desired,
+            "d2b managed: network-a",
+        )
+        .unwrap();
+        assert!(state.validated_absent);
+        assert!(
+            render_projection_mutation(
+                &desired,
+                &state,
+                d2b_contracts::broker_wire::NftablesProjectionAction::Remove,
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn projection_stale_generation_refuses_before_any_mutation() {
+        let exec = FakeReconcileExecutor::new();
+        let script = projection_script("network-a", "forward-a", "ip saddr 10.20.0.0/24 accept");
+        let hash = projection_digest(script.as_bytes());
+        assert_eq!(
+            apply_nftables_projection(
+                &exec,
+                Path::new("/usr/sbin/nft"),
+                &script,
+                "network-a",
+                &hash,
+                None,
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                d2b_contracts::broker_wire::NftablesProjectionAction::Apply,
+            ),
+            Err(ProjectionMutationError::StaleGeneration)
+        );
+        assert!(exec.take_log().is_empty());
+    }
+
+    #[test]
+    fn projection_digest_is_scoped_to_trusted_projection() {
+        let script = projection_script("network-a", "forward-a", "ip saddr 10.20.0.0/24 accept");
+        let digest_before = projection_digest(script.as_bytes());
+        let _usbip_churn = live_json(&[("usbip-1", "d2b managed: usbip-replaced")]);
+        let digest_after = projection_digest(script.as_bytes());
+        assert_eq!(digest_before, digest_after);
+    }
+
+    #[test]
+    fn projection_request_and_audit_digest_exclude_sensitive_values() {
+        let request = d2b_contracts::broker_wire::ApplyNftablesProjectionRequest {
+            bundle_nft_projection_intent_ref: d2b_contracts::types::BundleOpId::new(
+                "nft-projection:opaque",
+            ),
+            scope_id: d2b_contracts::types::ScopeId::new("scope:opaque"),
+            action: d2b_contracts::broker_wire::NftablesProjectionAction::Apply,
+            expected_generation_id: d2b_contracts::v3::ResourceBundleGenerationId::parse(
+                "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            )
+            .unwrap(),
+            desired_hash: None,
+            tracing_span_id: None,
+        };
+        let json = serde_json::to_string(&request).unwrap();
+        let digest = projection_digest(b"trusted projection");
+        for forbidden in [
+            "ip saddr 10.20.0.0/24 accept",
+            "d2b-b12345678",
+            "/run/private",
+            "d2b managed: network-a",
+        ] {
+            assert!(!json.contains(forbidden));
+            assert!(!digest.contains(forbidden));
+        }
     }
 
     #[test]

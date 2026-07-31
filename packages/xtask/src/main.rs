@@ -98,6 +98,7 @@ mod heavy_gate;
 mod implementation_graph;
 mod inventory;
 mod process_marker_pin;
+mod provider_crate_policy;
 mod provider_packaging;
 mod semantic_service_schemas;
 mod test_runtime_ledger;
@@ -403,12 +404,13 @@ fn main() -> std::process::ExitCode {
             implementation_graph::generate(repo_root()?)
         }),
         [command] if command == "process-marker-pin" => run_process_marker_pin(),
+        [command] if command == "check-provider-crate-layout" => run_provider_crate_layout(),
         [command, rest @ ..] if command == "test-runtime-ledger" => {
             test_runtime_ledger::run_cli(rest)
         }
         _ => {
             eprintln!(
-                "usage: cargo run --manifest-path packages/Cargo.toml -p xtask -- <gen-schemas|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-error-codes|gen-provider-packaging|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|spec-registry|implementation-graph|process-marker-pin|test-runtime-ledger <record|check|lint|help> [options]|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|panel-request|panel-attest|seal|merge-target|merge-eligibility|help> [options]|heavy-gate <-- <command> [args...] | verify-slot>>"
+                "usage: cargo run --manifest-path packages/Cargo.toml -p xtask -- <gen-schemas|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-error-codes|gen-provider-packaging|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|spec-registry|implementation-graph|process-marker-pin|check-provider-crate-layout|test-runtime-ledger <record|check|lint|help> [options]|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|panel-request|panel-attest|seal|merge-target|merge-eligibility|help> [options]|heavy-gate <-- <command> [args...] | verify-slot>>"
             );
             std::process::ExitCode::FAILURE
         }
@@ -423,6 +425,19 @@ fn run_process_marker_pin() -> std::process::ExitCode {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("process-marker-pin failed: {error}");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+fn run_provider_crate_layout() -> std::process::ExitCode {
+    let result = repo_root()
+        .map_err(|error| error.to_string())
+        .and_then(provider_crate_policy::check);
+    match result {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("check-provider-crate-layout failed: {error}");
             std::process::ExitCode::FAILURE
         }
     }

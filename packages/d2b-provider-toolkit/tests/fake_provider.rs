@@ -10,6 +10,8 @@
 //! `malicious_provider.rs` is the negative half: it reuses this same
 //! Provider and mutates one thing at a time.
 
+use std::collections::BTreeMap;
+
 use d2b_contracts::v3::identity::BindingDigest;
 use d2b_contracts::v3::{
     Locality, TransportBinding,
@@ -17,12 +19,15 @@ use d2b_contracts::v3::{
     identity::{ResourceTypeName, SchemaFingerprint, SessionPurpose},
     provider::{
         ArtifactDigest, ArtifactDigestSet, ArtifactId, CapabilitySupport, CompatibilityRange,
-        ComponentDescriptor, ComponentType, DependencyAlias, DependencyDeclaration,
-        PolicyEvaluation, ProviderManifest, ProviderSpec, ResourceApiBinding, RevocationState,
-        SignatureState, StandardCapabilityMatrix, TrustEvidence, UpgradeDisposition, UpgradePolicy,
+        ComponentDescriptor, ComponentStateKind, ComponentStateNamespace, ComponentStateView,
+        ComponentType, DependencyAlias, DependencyDeclaration, PolicyEvaluation, ProviderManifest,
+        ProviderSpec, ResourceApiBinding, RevocationState, SignatureState,
+        StandardCapabilityMatrix, StorageNeed, TrustEvidence, UpgradeDisposition, UpgradePolicy,
     },
     resource_ref::ResourceRef,
     resource_schema::SchemaVersion,
+    volume::ViewRight,
+    volume_state::{MigrationPolicy, PersistenceClass, SensitivityClass, VolumeStateSchemaId},
     zone_routing::ZonePath,
 };
 use d2b_provider_toolkit::fakes::{
@@ -79,9 +84,37 @@ pub fn controller() -> ComponentDescriptor {
             alias: DependencyAlias::Volume,
             required: true,
         }],
-        true,
+        false,
     )
     .expect("a controller owning one ResourceType is valid")
+}
+
+fn state_namespace() -> ComponentStateNamespace {
+    ComponentStateNamespace::new(
+        BoundedToken::parse("main-state").expect("valid namespace id"),
+        ComponentStateKind::State,
+        VolumeStateSchemaId::parse("example-provider.d2bus.org/controller/main-state")
+            .expect("valid state schema id"),
+        SchemaVersion::new(1, 0).expect("valid version"),
+        fingerprint("4"),
+        PersistenceClass::Persistent,
+        SensitivityClass::Private,
+        MigrationPolicy::PreLaunchRequired,
+        4096,
+        Some(StorageNeed::Secret),
+        false,
+        None,
+        false,
+        BTreeMap::from([(
+            "main".to_owned(),
+            ComponentStateView::new(
+                String::new(),
+                vec![ViewRight::Read, ViewRight::Write, ViewRight::Traverse],
+            )
+            .expect("valid state view"),
+        )]),
+    )
+    .expect("a complete persistent state namespace is valid")
 }
 
 pub fn binding() -> ResourceApiBinding {
@@ -222,7 +255,12 @@ fn an_honest_provider_runs_the_whole_admission_path() {
 
 #[test]
 fn a_declared_state_volume_is_visible_and_a_stateless_provider_declares_none() {
-    assert!(manifest().declares_state_volume());
+    let stateful = controller()
+        .with_state_namespaces([state_namespace()])
+        .expect("a controller with a complete namespace is stateful");
+    let manifest = manifest_with(trusted(), vec![stateful], vec![binding()])
+        .expect("a stateful manifest is valid");
+    assert!(manifest.declares_state_volume());
 
     let stateless = ComponentDescriptor::new(
         BoundedToken::parse("volume-controller").expect("valid id"),
