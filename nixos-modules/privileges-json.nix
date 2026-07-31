@@ -1023,6 +1023,42 @@ let
     "auditMode": "yes"
   },
   {
+    "operation": "DeletePersistentTap",
+    "subject": "network",
+    "scope": "per-env/VM/TAP",
+    "allowedGroups": [
+      "d2bd"
+    ],
+    "destructive": true,
+    "secretAccess": "none",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
+    "operation": "CreateBridge",
+    "subject": "network",
+    "scope": "per-env",
+    "allowedGroups": [
+      "d2bd"
+    ],
+    "destructive": true,
+    "secretAccess": "none",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
+    "operation": "DeleteBridge",
+    "subject": "network",
+    "scope": "per-env",
+    "allowedGroups": [
+      "d2bd"
+    ],
+    "destructive": true,
+    "secretAccess": "none",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
     "operation": "SetBridgePortFlags",
     "subject": "network",
     "scope": "per-env/VM/TAP",
@@ -1036,6 +1072,18 @@ let
   },
   {
     "operation": "ApplyNftables",
+    "subject": "network-host",
+    "scope": "global/per-env",
+    "allowedGroups": [
+      "d2bd"
+    ],
+    "destructive": true,
+    "secretAccess": "none",
+    "brokerRequired": "yes",
+    "auditMode": "yes"
+  },
+  {
+    "operation": "ApplyNftablesProjection",
     "subject": "network-host",
     "scope": "global/per-env",
     "allowedGroups": [

@@ -118,6 +118,41 @@
       },
       "additionalProperties": false
     },
+    "ApplyNftablesProjectionRequest": {
+      "description": "The broker re-derives the desired projection from `bundle_nft_projection_intent_ref`. As with [`ApplyNftablesRequest`], the daemon passes no inline rule text.",
+      "type": "object",
+      "required": [
+        "action",
+        "bundleNftProjectionIntentRef",
+        "scopeId"
+      ],
+      "properties": {
+        "action": {
+          "$ref": "#/definitions/NftablesProjectionAction"
+        },
+        "bundleNftProjectionIntentRef": {
+          "type": "string"
+        },
+        "desiredHash": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scopeId": {
+          "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
     "ApplyNftablesRequest": {
       "description": "The broker re-derives the desired nft state from `bundle_nft_intent_ref`. The daemon does NOT pass inline rule text. `desired_hash` is a stable digest of the resolved intent, used for idempotent audit + drift detection.",
       "type": "object",
@@ -1065,6 +1100,25 @@
           }
         },
         {
+          "description": "Apply or remove one Provider-owned nftables projection.\n\nDistinct from [`BrokerRequest::ApplyNftables`], which owns the framework's own `inet d2b` table: this op carries a projection a Provider owns, and its action is a closed enum rather than a boolean, so a caller cannot express a third meaning.\n\nCurrently a typed stub (`Unimplemented`) until the live handler is wired.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ApplyNftablesProjection"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ApplyNftablesProjectionRequest"
+            }
+          }
+        },
+        {
           "type": "object",
           "required": [
             "kind",
@@ -1155,6 +1209,44 @@
           }
         },
         {
+          "description": "Create the bridge an environment's links attach to. The daemon names only the opaque bundle intent ref and scope; the broker derives the bridge ifname and its attributes from its own trusted bundle copy.\n\nCurrently a typed stub (`Unimplemented`) until the live handler is wired.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "CreateBridge"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/CreateBridgeRequest"
+            }
+          }
+        },
+        {
+          "description": "Delete a bridge this framework created. Follows the same opaque-identifier contract as [`BrokerRequest::CreateBridge`].\n\nCurrently a typed stub (`Unimplemented`) until the live handler is wired.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "DeleteBridge"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/DeleteBridgeRequest"
+            }
+          }
+        },
+        {
           "type": "object",
           "required": [
             "kind",
@@ -1169,6 +1261,25 @@
             },
             "payload": {
               "$ref": "#/definitions/CreatePersistentTapRequest"
+            }
+          }
+        },
+        {
+          "description": "Delete a persistent TAP this framework created. Follows the same opaque-identifier contract as [`BrokerRequest::CreatePersistentTap`].\n\nCurrently a typed stub (`Unimplemented`) until the live handler is wired.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "DeletePersistentTap"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/DeletePersistentTapRequest"
             }
           }
         },
@@ -3606,6 +3717,30 @@
       "minLength": 1,
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$"
     },
+    "CreateBridgeRequest": {
+      "description": "The broker derives the bridge ifname and its attributes from the trusted bundle row anchored by `bundle_bridge_intent_ref` + `scope_id`. As with the TAP ops, no caller-supplied ifname crosses the wire; the observed ifname appears only in the audit record.",
+      "type": "object",
+      "required": [
+        "bundleBridgeIntentRef",
+        "scopeId"
+      ],
+      "properties": {
+        "bundleBridgeIntentRef": {
+          "type": "string"
+        },
+        "scopeId": {
+          "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
     "CreateOrReconcileUsersGroupsRequest": {
       "type": "object",
       "required": [
@@ -3692,6 +3827,54 @@
             "string",
             "null"
           ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "DeleteBridgeRequest": {
+      "description": "See [`CreateBridgeRequest`] for the opaque-ID rationale; `DeleteBridge` follows the same contract.",
+      "type": "object",
+      "required": [
+        "bundleBridgeIntentRef",
+        "scopeId"
+      ],
+      "properties": {
+        "bundleBridgeIntentRef": {
+          "type": "string"
+        },
+        "scopeId": {
+          "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "DeletePersistentTapRequest": {
+      "description": "See [`CreatePersistentTapRequest`] for the opaque-ID rationale; `DeletePersistentTap` follows the same contract, and the broker re-derives the ifname it removes rather than accepting one.",
+      "type": "object",
+      "required": [
+        "roleId",
+        "vmId"
+      ],
+      "properties": {
+        "roleId": {
+          "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vmId": {
+          "type": "string"
         }
       },
       "additionalProperties": false
@@ -6796,6 +6979,25 @@
         }
       },
       "additionalProperties": false
+    },
+    "NftablesProjectionAction": {
+      "description": "The action an [`ApplyNftablesProjectionRequest`] carries.\n\nClosed on purpose: the framework's own nftables op spells its two directions as a `destroy` boolean, which leaves \"neither\" and \"both\" expressible in a future field pair. A projection names exactly one of two directions and nothing else.",
+      "oneOf": [
+        {
+          "description": "Install the resolved projection.",
+          "type": "string",
+          "enum": [
+            "apply"
+          ]
+        },
+        {
+          "description": "Remove the resolved projection.",
+          "type": "string",
+          "enum": [
+            "remove"
+          ]
+        }
+      ]
     },
     "OpenCgroupDirRequest": {
       "type": "object",
