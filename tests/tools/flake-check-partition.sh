@@ -26,6 +26,17 @@ ROOT=${ROOT:-$(cd "$HERE/../.." && pwd)}
 
 cd "$ROOT"
 
+# Renders a rejected element for a log line. Every byte outside the safe name
+# charset becomes '?', and the result is length-bounded. The message exists to
+# let a contributor locate the offending element, and its shape and position do
+# that; the raw bytes must not reach a CI log, because this input is
+# PR-controlled and a control sequence there could rewrite surrounding output.
+# Truncating by parameter expansion rather than piping to head keeps a SIGPIPE
+# out of the pipeline under `pipefail`.
+render_rejected() {
+  printf '%s' "${1:0:64}" | tr -c 'A-Za-z0-9._-' '?'
+}
+
 all_json=$(bash "$ROOT/tests/test-flake-list.sh")
 
 # Read the names without a JSON parser. test-flake-list.sh emits a compact array
@@ -52,7 +63,7 @@ for token in $(printf '%s' "$inner" | tr ',' '\n'); do
   case "$token" in
     '"'?*'"') ;;
     *)
-      printf '%s\n' "flake-check-partition: enumeration element is not a quoted name" >&2
+      printf '%s\n' "flake-check-partition: enumeration element is not a quoted name: $(render_rejected "$token")" >&2
       exit 1
       ;;
   esac
@@ -60,7 +71,7 @@ for token in $(printf '%s' "$inner" | tr ',' '\n'); do
   name=${name%\"}
   case "$name" in
     *[!A-Za-z0-9._-]*)
-      printf '%s\n' "flake-check-partition: a check name is outside [A-Za-z0-9._-]" >&2
+      printf '%s\n' "flake-check-partition: a check name is outside [A-Za-z0-9._-]: $(render_rejected "$name")" >&2
       exit 1
       ;;
   esac
