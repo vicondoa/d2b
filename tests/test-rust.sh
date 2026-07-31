@@ -428,12 +428,16 @@ guest_shell_runner_gate() {
 }
 
 run_fixture_contract_tests() {
-  local eval_root
+  local eval_root system flake_ref
   eval_root=$(d2b_mktemp ".d2b-eval-fixtures.XXXXXX")
   bash "$ROOT/tests/tools/eval-fixtures.sh" "$eval_root" >/dev/null
-  contract_fixtures="$eval_root/minimal"
+  system=$(nix eval --raw --impure --expr builtins.currentSystem)
+  flake_ref=$(d2b_flake_ref "$ROOT")
+  log "--> nix build fixture-smoke (production-rendered minimal bundle)"
+  contract_fixtures=$(nix build --no-link --print-out-paths \
+    "${flake_ref}#checks.${system}.fixture-smoke")
   contract_fixtures_full="$eval_root/full"
-  log "--> cargo nextest run -p d2b-contract-tests (eval-only rendered artifacts)"
+  log "--> cargo nextest run -p d2b-contract-tests (realized minimal + eval-rendered full artifacts)"
   D2B_FIXTURES="$contract_fixtures" D2B_FIXTURES_FULL="$contract_fixtures_full" \
   CARGO_TARGET_DIR="$workspace_target_dir" \
     cargo nextest run --manifest-path "$manifest" -p d2b-contract-tests \
@@ -441,7 +445,7 @@ run_fixture_contract_tests() {
   D2B_FIXTURES="$contract_fixtures" D2B_FIXTURES_FULL="$contract_fixtures_full" \
   CARGO_TARGET_DIR="$workspace_target_dir" \
     run_nextest_companions "contract crate" "$manifest" -p d2b-contract-tests
-  ok "d2b-contract-tests (eval-only fixture-contract layer)"
+  ok "d2b-contract-tests (realized minimal + eval-rendered full fixture-contract layer)"
 }
 
 run_cli_contract_tests() {
@@ -477,12 +481,12 @@ run_cli_contract_tests() {
 
 if [ "$fixture_contracts_only" = 1 ]; then
   if ! command -v nix >/dev/null 2>&1; then
-    fail "D2B_ENABLE_FIXTURE_BUILD=1 requires nix to evaluate D2B_FIXTURES"
+    fail "D2B_ENABLE_FIXTURE_BUILD=1 requires nix to materialize D2B_FIXTURES"
     exit 1
   fi
   run_fixture_contract_tests
   run_cli_contract_tests "$contract_fixtures"
-  log "test-fixture-contracts OK (eval fixture + CLI-contract layers; duration: $((SECONDS - suite_started))s)"
+  log "test-fixture-contracts OK (realized minimal fixture + eval full fixture + CLI-contract layers; duration: $((SECONDS - suite_started))s)"
   exit 0
 fi
 

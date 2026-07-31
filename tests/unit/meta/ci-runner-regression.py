@@ -222,11 +222,13 @@ set -euo pipefail
         self.assertIn(".scratch/rust-test-cache", workflow)
         self.assertIn('prefix-key: "v2-rust-api-json"', workflow)
 
-    def test_fixture_lane_caches_no_realized_nix_store(self) -> None:
+    def test_fixture_lane_owns_the_only_bounded_nix_store_cache(self) -> None:
         workflow = load_layer1_jobs().render_workflow(load_layer1_jobs().load_manifest())
         fixture_job = workflow.split("  test-fixture-contracts:", 1)[1].split("\n  test-proofs:", 1)[0]
-        self.assertNotIn("Nix store cache", fixture_job)
-        self.assertNotIn("fixture derivation cache", fixture_job)
+        nix_unit_job = workflow.split("  nix-unit-shards:", 1)[1].split("\n  test-nix-unit:", 1)[0]
+        self.assertIn("Nix store cache", fixture_job)
+        self.assertIn("gc-max-store-size-linux: 4G", fixture_job)
+        self.assertNotIn("Nix store cache", nix_unit_job)
         self.assertNotIn("nix-store --import", fixture_job)
 
     def test_nix_unit_ci_uses_one_runner_per_discovered_shard(self) -> None:
@@ -265,13 +267,14 @@ set -euo pipefail
         self.assertIn('failures+=("$check")', driver)
         self.assertIn('nix build --no-link --print-out-paths', driver)
 
-    def test_fixture_driver_uses_eval_only_artifacts_and_excludes_real_binary_probe(self) -> None:
+    def test_fixture_driver_realizes_minimal_and_excludes_real_binary_probe(self) -> None:
         driver = (ROOT / "tests" / "test-rust.sh").read_text(encoding="utf-8")
         fixture_driver = (ROOT / "tests" / "tools" / "eval-fixtures.sh").read_text(
             encoding="utf-8"
         )
 
         self.assertIn('bash "$ROOT/tests/tools/eval-fixtures.sh"', driver)
+        self.assertIn("#checks.${system}.fixture-smoke", driver)
         self.assertIn("not binary(video_binary_contract)", driver)
         flake = (ROOT / "flake.nix").read_text(encoding="utf-8")
         self.assertIn("video-binary-contract =", flake)

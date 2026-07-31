@@ -39,7 +39,7 @@ golden="$ROOT/tests/golden/api-surface"
 case "${D2B_API_SURFACE_UPDATE:-0}" in
   0|1) ;;
   *)
-    fail "D2B_API_SURFACE_UPDATE must be 0 or 1"
+    fail "D2B_API_SURFACE_UPDATE must be 0 or 1" || true
     exit 2
     ;;
 esac
@@ -47,7 +47,7 @@ target_root=${D2B_API_SURFACE_TARGET_DIR:-$ROOT/.scratch/rust-test-cache/api-sur
 case "$target_root" in
   /*) ;;
   *)
-    fail "D2B_API_SURFACE_TARGET_DIR must be an absolute path"
+    fail "D2B_API_SURFACE_TARGET_DIR must be an absolute path" || true
     exit 2
     ;;
 esac
@@ -69,7 +69,7 @@ log "--> rustdoc JSON public workspace census ($pin)"
     cargo "+$pin" doc --locked --workspace --lib --no-deps \
       --target-dir "$public_target"
 )
-find "$public_target/doc" -maxdepth 1 -type f -name '*.json' -exec cp {} "$public_dir/" \;
+find "$public_target/doc" -maxdepth 1 -type f -name '*.json' -exec cp -t "$public_dir" -- {} +
 
 log "--> rustdoc JSON private + hidden workspace census ($pin)"
 (
@@ -82,7 +82,7 @@ log "--> rustdoc JSON private + hidden workspace census ($pin)"
     cargo "+$pin" doc --locked --workspace --lib --no-deps \
       --target-dir "$private_target"
 )
-find "$private_target/doc" -maxdepth 1 -type f -name '*.json' -exec cp {} "$private_dir/" \;
+find "$private_target/doc" -maxdepth 1 -type f -name '*.json' -exec cp -t "$private_dir" -- {} +
 
 bash "$ROOT/tests/tools/gen-api-surface-metadata.sh" \
   "$public_dir" "$private_dir" "$metadata"
@@ -105,7 +105,9 @@ cmp -s "$metadata" "$golden/workspace-metadata.json" || {
 mode=--check
 [ "${D2B_API_SURFACE_UPDATE:-0}" = 1 ] && mode=--write
 log "--> d2b-api-surface snapshot check"
-cargo run --quiet --locked --manifest-path "$ROOT/packages/Cargo.toml" \
+(
+cd "$ROOT/packages"
+cargo run --quiet --locked \
   -p d2b-api-surface --bin d2b-api-surface -- \
   --public-json-dir "$public_dir" \
   --private-json-dir "$private_dir" \
@@ -116,5 +118,6 @@ cargo run --quiet --locked --manifest-path "$ROOT/packages/Cargo.toml" \
   --hidden-public-api "$golden/hidden-public-api.txt" \
   --trait-impls "$golden/capability-trait-impls.txt" \
   "$mode"
+)
 
 ok "compiler-derived API and capability inventory"

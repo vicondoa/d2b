@@ -135,11 +135,11 @@ def ci_env_block(job: dict[str, Any], spaces: int) -> str:
 # with the rust-cache entries this gate also depends on. Caching /nix for all
 # twelve nix-using jobs would fan the key space out far past that total, and the
 # steady state would be everything evicting everything - worse than not caching.
-# So only the jobs that actually build derivations and take long enough for it
-# to matter get an entry: measured on this gate, test-fixture-contracts spent 40
-# minutes building 166 derivations and test-nix-unit ran 15 minutes, while the
-# flake-eval shards finish in under a minute and the lint/drift jobs only
-# evaluate.
+# So only the fixture-contract job gets an entry: it owns one bounded key and
+# the narrow realized video dependency. Per-shard Nix-unit caches multiply the
+# cap by the matrix width and exceed the repository budget even when each entry
+# is individually bounded. The flake-eval shards finish in under a minute and
+# the lint/drift jobs only evaluate.
 #
 # On sizing: gc-max-store-size-linux caps the UNCOMPRESSED /nix store before
 # save, which is not the size of the resulting cache entry - the entry is
@@ -148,7 +148,7 @@ def ci_env_block(job: dict[str, Any], spaces: int) -> str:
 # configuration is deliberately near enough to the cap that it should be
 # re-measured against the repository cache-usage page after a run rather than
 # assumed.
-NIX_CACHED_JOBS = frozenset({"nix-unit-shards"})
+NIX_CACHED_JOBS = frozenset({"test-fixture-contracts"})
 NIX_CACHE_MAX_STORE = "4G"
 NIX_CACHE_FORMAT = "v1"
 # Scope suffix for a matrix job, so shards do not share one key. Defined here

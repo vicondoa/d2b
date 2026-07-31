@@ -70,12 +70,20 @@ expected = {entry["private_json_file"] for entry in entries}
 if private_files != expected:
     raise SystemExit("api-surface metadata: private JSON file set differs")
 
+target_triples = {
+    blob["target"]["triple"]
+    for path in [*public_files, *(private_dir / name for name in sorted(private_files))]
+    for blob in [load(path)]
+}
+if len(target_triples) != 1:
+    raise SystemExit("api-surface metadata: rustdoc target triples differ")
+
 metadata = {
     "crates": entries,
     "nightly": "nightly-2026-02-16",
     "rustdoc_format_version": 57,
     "schema_version": 1,
-    "target_triple": "x86_64-unknown-linux-gnu",
+    "target_triple": target_triples.pop(),
 }
 output.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
