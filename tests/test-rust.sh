@@ -387,7 +387,8 @@ run_nextest_companions() {
 # streams stay serial by default because their tests manipulate process-global
 # signal/reap state; an explicit timing-only opt-in can use their separate target
 # directories. With sccache the shared crates are cache hits across all streams.
-# Each parallel stream logs to its own file and failures surface at reap.
+# Running serially in the foreground means a failing stream aborts the gate at
+# the point of failure, with its output already on the gate's own stream.
 #
 # These three streams deliberately stay on `cargo test` rather than moving to
 # cargo-nextest with the rest of the gate. The broker's tests are not
@@ -428,15 +429,27 @@ guest_shell_runner_gate() {
 }
 
 run_fixture_contract_tests() {
-  local eval_root system flake_ref
+  local eval_root system flake_ref eval_rc
   eval_root=$(d2b_mktemp ".d2b-eval-fixtures.XXXXXX")
-  bash "$ROOT/tests/tools/eval-fixtures.sh" "$eval_root" >/dev/null
+  # The feature-rich full fixture is graphics-gated to x86_64-linux, so
+  # eval-fixtures.sh exits 3 elsewhere. Leave D2B_FIXTURES_FULL empty there so
+  # the per-role minijail tests skip, instead of aborting the whole gate.
+  contract_fixtures_full=""
+  eval_rc=0
+  bash "$ROOT/tests/tools/eval-fixtures.sh" "$eval_root" >/dev/null || eval_rc=$?
+  case "$eval_rc" in
+    0) contract_fixtures_full="$eval_root/full" ;;
+    3) log "  SKIP: eval-rendered full fixture (x86_64-linux only)" ;;
+    *)
+      fail "eval-fixtures.sh failed (exit $eval_rc)" || true
+      exit "$eval_rc"
+      ;;
+  esac
   system=$(nix eval --raw --impure --expr builtins.currentSystem)
   flake_ref=$(d2b_flake_ref "$ROOT")
   log "--> nix build fixture-smoke (production-rendered minimal bundle)"
   contract_fixtures=$(nix build --no-link --print-out-paths \
     "${flake_ref}#checks.${system}.fixture-smoke")
-  contract_fixtures_full="$eval_root/full"
   log "--> cargo nextest run -p d2b-contract-tests (realized minimal + eval-rendered full artifacts)"
   D2B_FIXTURES="$contract_fixtures" D2B_FIXTURES_FULL="$contract_fixtures_full" \
   CARGO_TARGET_DIR="$workspace_target_dir" \

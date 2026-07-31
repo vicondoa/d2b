@@ -57,6 +57,7 @@ Rust tests (types 2-5: unit, integration, contract, policy-lint) live under
 | `make test-lint` | preflight + nix-parse + shellcheck | local + CI |
 | `make test-changelog` | require release notes for code changes and validate every changelog fragment | local + CI |
 | `make test-rust` | Rust gate (fmt, clippy, workspace tests, broker x3, deny/audit); explicitly excludes the fixture-dependent `d2b-contract-tests` crate | local + CI |
+| `make test-rust-main` / `make test-rust-remaining` | the two partitions CI runs as independent jobs behind the stable `test-rust` rollup context; `make test-rust` runs both exactly once | CI (local for a focused rerun) |
 | `make test-fixture-contracts` | enforcing eval-rendered lane: materializes `D2B_FIXTURES` from evaluated Nix artifact data, then runs `d2b-contract-tests` and the CLI-contract cases; both lanes set `D2B_ENABLE_FIXTURE_BUILD=1`, and invoking it without that variable fails rather than skipping | local + CI |
 | `make test-proofs` | standalone proofs/ crates | local + CI |
 | `make test-flake` | `nix flake check --no-build` (native system); `D2B_FLAKE_CHECK=<name>` instantiates one check, `D2B_FLAKE_OUTPUTS=1` sweeps non-`checks` outputs, `D2B_FLAKE_LOCAL_SHARDS=1` runs the local bounded shard fan-out | local + CI (x86 sharded per-check matrix; aarch64 PR job runs a lightweight smoke eval) |

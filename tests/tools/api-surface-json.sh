@@ -59,6 +59,10 @@ private_target="$target_root/private"
 rm -rf "$public_target/doc" "$private_target/doc"
 
 log "--> rustdoc JSON public workspace census ($pin)"
+# Raw cargo/rustdoc stderr names absolute scratch paths, source text, and
+# signature tokens, none of which this gate may emit. Capture it inside the
+# scratch root and report only a fixed label plus the exit status.
+public_rc=0
 (
   cd "$ROOT/packages"
   env \
@@ -68,10 +72,15 @@ log "--> rustdoc JSON public workspace census ($pin)"
     RUSTDOCFLAGS="-D warnings -Z unstable-options --output-format json" \
     cargo "+$pin" doc --locked --workspace --lib --no-deps \
       --target-dir "$public_target"
-)
+) >"$scratch/public-rustdoc.log" 2>&1 || public_rc=$?
+[ "$public_rc" = 0 ] || {
+  fail "api-surface public rustdoc JSON census failed (exit $public_rc); rerun 'make api-surface-pin' locally for compiler diagnostics" || true
+  exit 1
+}
 find "$public_target/doc" -maxdepth 1 -type f -name '*.json' -exec cp -t "$public_dir" -- {} +
 
 log "--> rustdoc JSON private + hidden workspace census ($pin)"
+private_rc=0
 (
   cd "$ROOT/packages"
   env \
@@ -81,7 +90,11 @@ log "--> rustdoc JSON private + hidden workspace census ($pin)"
     RUSTDOCFLAGS="-D warnings -Z unstable-options --output-format json --document-private-items --document-hidden-items" \
     cargo "+$pin" doc --locked --workspace --lib --no-deps \
       --target-dir "$private_target"
-)
+) >"$scratch/private-rustdoc.log" 2>&1 || private_rc=$?
+[ "$private_rc" = 0 ] || {
+  fail "api-surface private rustdoc JSON census failed (exit $private_rc); rerun 'make api-surface-pin' locally for compiler diagnostics" || true
+  exit 1
+}
 find "$private_target/doc" -maxdepth 1 -type f -name '*.json' -exec cp -t "$private_dir" -- {} +
 
 bash "$ROOT/tests/tools/gen-api-surface-metadata.sh" \
