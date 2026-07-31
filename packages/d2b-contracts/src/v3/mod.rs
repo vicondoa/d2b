@@ -105,4 +105,18 @@ pub use ifname::{
 // The `credential_controller` module's re-exports. Keep every
 // `pub use credential_controller::...` line inside this region so it stays one
 // contiguous block.
-// (empty until `ADR046-credential-006` lands)
+pub use credential_controller::{
+    CREDENTIAL_METRICS, CREDENTIAL_OBSERVE_INTERVAL_MS, CREDENTIAL_PROVIDER_REVOKE_FINALIZER,
+    CredentialAuditDigest, CredentialAuditOperation, CredentialAuditOutcome, CredentialAuditRecord,
+    CredentialControllerCall, CredentialControllerConditions, CredentialControllerDecision,
+    CredentialControllerDisposition, CredentialControllerError, CredentialControllerHandlers,
+    CredentialControllerHealth, CredentialControllerHealthState, CredentialControllerOutcome,
+    CredentialIdempotencyKey, CredentialLeaseAggregate, CredentialMetricDescriptor,
+    CredentialMetricKind, CredentialObservabilityError, CredentialObserveInput,
+    CredentialProviderKind, CredentialReconcileInput, CredentialRetryState,
+    CredentialRevocationInput, CredentialSingleFlight, CredentialSingleFlightGuard,
+    CredentialTelemetryField, CredentialTelemetryFrame, CredentialTelemetryOperation,
+    CredentialTelemetryOutcome, MAX_LOCAL_CREDENTIAL_LEASES, contains_sensitive_shape,
+    observe_credential, owner_delete_action, provider_generation_action, reconcile_credential,
+    revoke_credential,
+};

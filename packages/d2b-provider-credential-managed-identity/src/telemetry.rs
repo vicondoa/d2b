@@ -1,26 +1,19 @@
-//! Closed telemetry frames with no Credential identity labels.
+//! Managed identity Credential telemetry producer.
 
 use std::collections::BTreeMap;
 
 use d2b_contracts::v3::credential::PlacementBinding;
+use d2b_contracts::v3::credential_controller::{
+    CredentialObservabilityError, CredentialProviderKind, CredentialTelemetryField,
+    CredentialTelemetryFrame, CredentialTelemetryOperation, CredentialTelemetryOutcome,
+};
 
-const FORBIDDEN_KEYS: &[&str] = &[
-    "vm",
-    "zone",
-    "zone_id",
-    "zone_uid",
-    "credential_name",
-    "credential_ref",
-    "credential_uid",
-    "credential_digest",
-    "resource_name_digest",
-    "d2b.credential.name",
-    "d2b.credential.ref",
-    "d2b.credential.uid",
-    "d2b.credential.digest",
-];
+/// Exposed telemetry fields use the shared closed field shape.
+pub type TelemetryField = CredentialTelemetryField;
+/// Telemetry frame errors use the shared field-free error.
+pub type TelemetryFrameError = CredentialObservabilityError;
 
-/// Closed telemetry operations.
+/// Backward-compatible managed identity telemetry operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ManagedIdentityTelemetryOperation {
     /// Token acquisition.
@@ -35,19 +28,7 @@ pub enum ManagedIdentityTelemetryOperation {
     Reconcile,
 }
 
-impl ManagedIdentityTelemetryOperation {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::AcquireToken => "acquire-token",
-            Self::RefreshToken => "refresh-token",
-            Self::RevokeToken => "revoke-token",
-            Self::InspectMetadata => "inspect-metadata",
-            Self::Reconcile => "reconcile",
-        }
-    }
-}
-
-/// Closed telemetry outcomes.
+/// Backward-compatible managed identity telemetry outcome.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ManagedIdentityTelemetryOutcome {
     /// The operation completed.
@@ -56,209 +37,86 @@ pub enum ManagedIdentityTelemetryOutcome {
     ProviderUnavailable,
     /// Policy denied the operation.
     Denied,
-    /// The request violated a fixed invariant.
+    /// A fixed invariant rejected the result.
     InvariantFailure,
 }
 
-impl ManagedIdentityTelemetryOutcome {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Success => "success",
-            Self::ProviderUnavailable => "provider-unavailable",
-            Self::Denied => "denied",
-            Self::InvariantFailure => "invariant-failure",
-        }
-    }
-}
-
-/// One telemetry field exposed for structural conformance tests.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TelemetryField {
-    /// Closed field key.
-    pub key: &'static str,
-    /// Bounded field value validated against the field's closed domain.
-    pub value: String,
-}
-
-/// Telemetry frame rejected by the closed allowlist.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TelemetryFrameError {
-    /// A field used a non-allowlisted key or value.
-    ForbiddenField,
-}
-
-impl core::fmt::Display for TelemetryFrameError {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        formatter.write_str("credential telemetry frame is invalid")
-    }
-}
-
-impl std::error::Error for TelemetryFrameError {}
-
-/// Complete Resource, span, and metric frame using only closed low-cardinality
-/// operation fields.
-pub struct ManagedIdentityTelemetryFrame {
-    resource_attributes: Vec<TelemetryField>,
-    span_attributes: Vec<TelemetryField>,
-    metric_labels: Vec<TelemetryField>,
-}
+/// Compatibility wrapper over the shared closed Credential telemetry frame.
+pub struct ManagedIdentityTelemetryFrame(CredentialTelemetryFrame);
 
 impl ManagedIdentityTelemetryFrame {
-    /// Build the fixed frame. The Zone value is retained only as the generic
-    /// trusted-ingress Resource attribute.
+    /// Build the legacy frame shape through the shared validator.
     pub fn new(
         zone: impl Into<String>,
         operation: ManagedIdentityTelemetryOperation,
         outcome: ManagedIdentityTelemetryOutcome,
         placement: PlacementBinding,
     ) -> Self {
-        let operation = operation.as_str().to_owned();
-        let outcome = outcome.as_str().to_owned();
-        let placement = match placement {
-            PlacementBinding::HostSystem => "host-system",
-            PlacementBinding::GuestAgent => "guest-agent",
-            PlacementBinding::UserAgent => "user-agent",
-        }
-        .to_owned();
-        Self {
-            resource_attributes: vec![
-                TelemetryField {
-                    key: "d2b.zone",
-                    value: zone.into(),
-                },
-                TelemetryField {
-                    key: "d2b.provider",
-                    value: "credential-managed-identity".to_owned(),
-                },
-                TelemetryField {
-                    key: "d2b.component",
-                    value: "managed-identity-agent".to_owned(),
-                },
-                TelemetryField {
-                    key: "service.name",
-                    value: "d2b-managed-identity-agent".to_owned(),
-                },
-                TelemetryField {
-                    key: "service.namespace",
-                    value: "d2b".to_owned(),
-                },
-                TelemetryField {
-                    key: "service.version",
-                    value: env!("CARGO_PKG_VERSION").to_owned(),
-                },
-            ],
-            span_attributes: vec![
-                TelemetryField {
-                    key: "d2b.credential.provider",
-                    value: "credential-managed-identity".to_owned(),
-                },
-                TelemetryField {
-                    key: "d2b.credential.operation_class",
-                    value: operation.clone(),
-                },
-                TelemetryField {
-                    key: "d2b.credential.placement_binding",
-                    value: placement.clone(),
-                },
-                TelemetryField {
-                    key: "d2b.credential.outcome",
-                    value: outcome.clone(),
-                },
-            ],
-            metric_labels: vec![
-                TelemetryField {
-                    key: "operation_class",
-                    value: operation,
-                },
-                TelemetryField {
-                    key: "placement_binding",
-                    value: placement,
-                },
-                TelemetryField {
-                    key: "outcome",
-                    value: outcome,
-                },
-            ],
-        }
+        let operation = match operation {
+            ManagedIdentityTelemetryOperation::AcquireToken => {
+                CredentialTelemetryOperation::AcquireToken
+            }
+            ManagedIdentityTelemetryOperation::RefreshToken => {
+                CredentialTelemetryOperation::RefreshToken
+            }
+            ManagedIdentityTelemetryOperation::RevokeToken => {
+                CredentialTelemetryOperation::RevokeToken
+            }
+            ManagedIdentityTelemetryOperation::InspectMetadata => {
+                CredentialTelemetryOperation::InspectMetadata
+            }
+            ManagedIdentityTelemetryOperation::Reconcile => CredentialTelemetryOperation::Reconcile,
+        };
+        let outcome = match outcome {
+            ManagedIdentityTelemetryOutcome::Success => CredentialTelemetryOutcome::Success,
+            ManagedIdentityTelemetryOutcome::ProviderUnavailable => {
+                CredentialTelemetryOutcome::ProviderUnavailable
+            }
+            ManagedIdentityTelemetryOutcome::Denied => CredentialTelemetryOutcome::Denied,
+            ManagedIdentityTelemetryOutcome::InvariantFailure => {
+                CredentialTelemetryOutcome::InvariantFailure
+            }
+        };
+        Self(
+            credential_frame(&zone.into(), operation, outcome, placement, 1)
+                .expect("closed compatibility telemetry inputs are valid"),
+        )
     }
 
-    /// Borrow generic trusted-ingress Resource attributes.
+    /// Borrow generic Resource attributes.
     pub fn resource_attributes(&self) -> &[TelemetryField] {
-        &self.resource_attributes
+        self.0.resource_attributes()
     }
 
-    /// Borrow the closed span attributes.
+    /// Borrow closed span attributes.
     pub fn span_attributes(&self) -> &[TelemetryField] {
-        &self.span_attributes
+        self.0.span_attributes()
     }
 
-    /// Borrow the closed metric labels.
+    /// Borrow closed metric labels.
     pub fn metric_labels(&self) -> &[TelemetryField] {
-        &self.metric_labels
+        self.0.metric_labels()
     }
 
-    /// Validate a complete collector frame and reject the whole frame when a
-    /// non-allowlisted key or value is present.
+    /// Return every collector field.
+    pub fn all_fields(&self) -> Vec<TelemetryField> {
+        self.0.all_fields()
+    }
+
+    /// Validate a whole collector frame.
     pub fn validate_collector_fields(
         fields: impl IntoIterator<Item = TelemetryField>,
     ) -> Result<(), TelemetryFrameError> {
-        for field in fields {
-            if FORBIDDEN_KEYS.contains(&field.key) || !allowed_value(field.key, &field.value) {
-                return Err(TelemetryFrameError::ForbiddenField);
-            }
-        }
-        Ok(())
+        CredentialTelemetryFrame::validate_collector_fields(fields)
     }
 
-    /// Return all fields for collector validation.
-    pub fn all_fields(&self) -> Vec<TelemetryField> {
-        self.resource_attributes
-            .iter()
-            .chain(&self.span_attributes)
-            .chain(&self.metric_labels)
-            .cloned()
-            .collect()
-    }
-
-    /// Group metric values by their fixed key for descriptor inspection.
+    /// Group fixed metric labels by key.
     pub fn metric_map(&self) -> BTreeMap<&'static str, &str> {
-        self.metric_labels
+        self.metric_labels()
             .iter()
             .map(|field| (field.key, field.value.as_str()))
             .collect()
     }
-}
-
-fn allowed_value(key: &str, value: &str) -> bool {
-    match key {
-        "d2b.zone" => valid_zone_name(value),
-        "d2b.provider" | "d2b.credential.provider" => value == "credential-managed-identity",
-        "d2b.component" => value == "managed-identity-agent",
-        "service.name" => value == "d2b-managed-identity-agent",
-        "service.namespace" => value == "d2b",
-        "service.version" => value == env!("CARGO_PKG_VERSION"),
-        "d2b.credential.operation_class" | "operation_class" => matches!(
-            value,
-            "acquire-token" | "refresh-token" | "revoke-token" | "inspect-metadata" | "reconcile"
-        ),
-        "d2b.credential.placement_binding" | "placement_binding" => {
-            matches!(value, "host-system" | "guest-agent" | "user-agent")
-        }
-        "d2b.credential.outcome" | "outcome" => matches!(
-            value,
-            "success" | "provider-unavailable" | "denied" | "invariant-failure"
-        ),
-        _ => false,
-    }
-}
-
-fn valid_zone_name(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 63
-        && value.as_bytes()[0].is_ascii_lowercase()
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
 impl core::fmt::Debug for ManagedIdentityTelemetryFrame {
@@ -267,27 +125,46 @@ impl core::fmt::Debug for ManagedIdentityTelemetryFrame {
     }
 }
 
+pub(crate) fn credential_frame(
+    zone: &str,
+    operation: CredentialTelemetryOperation,
+    outcome: CredentialTelemetryOutcome,
+    placement: PlacementBinding,
+    rotation_generation: u64,
+) -> Result<CredentialTelemetryFrame, CredentialObservabilityError> {
+    CredentialTelemetryFrame::new(
+        CredentialProviderKind::ManagedIdentity,
+        zone,
+        operation,
+        outcome,
+        placement,
+        rotation_generation,
+        env!("CARGO_PKG_VERSION"),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn collector_allowlist_rejects_nonclosed_values_for_allowed_keys() {
-        let frame = ManagedIdentityTelemetryFrame::new(
-            "dev",
-            ManagedIdentityTelemetryOperation::AcquireToken,
-            ManagedIdentityTelemetryOutcome::Success,
-            PlacementBinding::GuestAgent,
-        );
+        let marker = format!("managed-identity-canary-{:x}", std::process::id());
         assert!(
-            ManagedIdentityTelemetryFrame::validate_collector_fields(frame.all_fields()).is_ok()
-        );
-        assert_eq!(
-            ManagedIdentityTelemetryFrame::validate_collector_fields([TelemetryField {
+            CredentialTelemetryFrame::validate_collector_fields([CredentialTelemetryField {
                 key: "outcome",
-                value: "credential-name-canary".to_owned(),
-            }]),
-            Err(TelemetryFrameError::ForbiddenField)
+                value: marker,
+            }])
+            .is_err()
         );
+        let frame = credential_frame(
+            "dev",
+            CredentialTelemetryOperation::AcquireToken,
+            CredentialTelemetryOutcome::Success,
+            PlacementBinding::GuestAgent,
+            1,
+        )
+        .unwrap();
+        assert!(CredentialTelemetryFrame::validate_collector_fields(frame.all_fields()).is_ok());
     }
 }

@@ -1,9 +1,22 @@
 //! Secret-free Entra controller projections.
 
+#[path = "audit.rs"]
+mod audit;
+#[path = "telemetry.rs"]
+mod telemetry;
+
 use d2b_contracts::v3::ResourceRef;
 use d2b_contracts::v3::credential::{
     CredentialInteractionState, CredentialLeaseStatus, CredentialMetadata, CredentialServiceError,
     CredentialServiceErrorCode, CredentialStatus,
+};
+use d2b_contracts::v3::credential_controller::{
+    CredentialAuditOutcome, CredentialAuditRecord, CredentialControllerDecision,
+    CredentialControllerError, CredentialControllerHandlers, CredentialControllerHealth,
+    CredentialObservabilityError, CredentialObserveInput, CredentialReconcileInput,
+    CredentialRevocationInput, CredentialSingleFlight, CredentialTelemetryFrame,
+    CredentialTelemetryOperation, CredentialTelemetryOutcome, observe_credential,
+    reconcile_credential, revoke_credential,
 };
 
 use crate::{EntraClientState, EntraPlacement, LOGIN_ENDPOINT_PURPOSE, PROVIDER_REF};
@@ -70,15 +83,18 @@ impl core::fmt::Debug for EntraStatusProjection {
 }
 
 /// Stateless status-first Entra controller.
-#[derive(Debug, Clone)]
 pub struct EntraController {
     placement: EntraPlacement,
+    single_flight: CredentialSingleFlight,
 }
 
 impl EntraController {
     /// Bind the controller to one identity-Guest placement.
-    pub const fn new(placement: EntraPlacement) -> Self {
-        Self { placement }
+    pub fn new(placement: EntraPlacement) -> Self {
+        Self {
+            placement,
+            single_flight: CredentialSingleFlight::new(),
+        }
     }
 
     /// Project bounded non-secret state.
@@ -113,6 +129,105 @@ impl EntraController {
             status,
             client_state,
         })
+    }
+
+    /// Build a caller-initiated audit record after the authorization decision.
+    #[allow(clippy::too_many_arguments)]
+    pub fn authorized_service_audit(
+        &self,
+        authorized: bool,
+        zone: &str,
+        subject_identity: &[u8],
+        credential_name: &[u8],
+        method: d2b_contracts::v3::credential::CredentialMethod,
+        outcome: CredentialAuditOutcome,
+        rotation_generation: u64,
+        idempotency_key: Option<&[u8]>,
+    ) -> Result<Option<CredentialAuditRecord>, CredentialObservabilityError> {
+        audit::authorized_service_record(
+            authorized,
+            zone,
+            subject_identity,
+            credential_name,
+            method,
+            outcome,
+            rotation_generation,
+            idempotency_key,
+        )
+    }
+
+    /// Build one complete closed Credential telemetry frame.
+    pub fn telemetry(
+        &self,
+        zone: &str,
+        operation: CredentialTelemetryOperation,
+        outcome: CredentialTelemetryOutcome,
+        rotation_generation: u64,
+    ) -> Result<CredentialTelemetryFrame, CredentialObservabilityError> {
+        telemetry::frame(
+            zone,
+            operation,
+            outcome,
+            self.placement.binding(),
+            rotation_generation,
+        )
+    }
+}
+
+impl core::fmt::Debug for EntraController {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("EntraController(<redacted>)")
+    }
+}
+
+impl CredentialControllerHandlers for EntraController {
+    fn reconcile_handler(
+        &self,
+        input: &CredentialReconcileInput,
+    ) -> Result<CredentialControllerDecision, CredentialControllerError> {
+        let _guard = self
+            .single_flight
+            .try_enter(input.credential_uid().clone())?;
+        reconcile_credential(input)
+    }
+
+    fn observe(
+        &self,
+        input: &CredentialObserveInput,
+    ) -> Result<CredentialControllerDecision, CredentialControllerError> {
+        let _guard = self
+            .single_flight
+            .try_enter(input.credential_uid().clone())?;
+        observe_credential(input)
+    }
+
+    fn finalize(
+        &self,
+        input: &CredentialRevocationInput,
+    ) -> Result<CredentialControllerDecision, CredentialControllerError> {
+        let _guard = self
+            .single_flight
+            .try_enter(input.credential_uid().clone())?;
+        revoke_credential(input)
+    }
+
+    fn drain(
+        &self,
+        input: &CredentialRevocationInput,
+    ) -> Result<CredentialControllerDecision, CredentialControllerError> {
+        let _guard = self
+            .single_flight
+            .try_enter(input.credential_uid().clone())?;
+        revoke_credential(input)
+    }
+
+    fn health(
+        &self,
+        provider_process_reachable: bool,
+        active_leases: u32,
+        locked_count: u32,
+    ) -> Result<CredentialControllerHealth, CredentialControllerError> {
+        CredentialControllerHealth::derive(provider_process_reachable, active_leases, locked_count)
     }
 }
 
