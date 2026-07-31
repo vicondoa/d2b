@@ -42,6 +42,7 @@ about to do, read that doc, then come back.
 | Write a changelog entry or commit message | [changelog-and-commits.md](./docs/contributing/changelog-and-commits.md) |
 | Add a per-VM feature, a unit, or a broker op | [architecture.md](./docs/contributing/architecture.md) and [ADR 0015](./docs/adr/0015-daemon-only-clean-break.md) |
 | Do anything security-relevant | "Don'ts" below - that section is exhaustive and binding |
+| Run an ADR, a panel round, or an autopilot wave | [copilot-agents.md](./docs/contributing/copilot-agents.md) - agents, skills, model binding, wave ids |
 
 Two rules that override everything else:
 

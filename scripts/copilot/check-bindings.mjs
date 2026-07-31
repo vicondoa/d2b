@@ -253,6 +253,44 @@ if (existsSync(repoSettings)) {
   }
 }
 
+// spec-kit coexistence. `specify init` REPLACES installed_integrations rather
+// than appending, so re-running it for Copilot silently drops the opencode
+// install the in-flight program uses. It also rewrites shared files under
+// .specify/scripts and .specify/templates, reintroducing banned dash
+// codepoints into tracked files; the tier0 dash scan catches that one, but
+// nothing catches this one.
+const integrationJson = join(root, ".specify", "integration.json");
+if (existsSync(integrationJson)) {
+  let state = null;
+  try {
+    state = JSON.parse(readFileSync(integrationJson, "utf8"));
+  } catch (e) {
+    fail(`.specify/integration.json is not valid JSON: ${e.message}`);
+  }
+  if (state) {
+    const installed = state.installed_integrations ?? [];
+    for (const required of ["copilot", "opencode"]) {
+      if (!installed.includes(required)) {
+        fail(
+          `.specify/integration.json no longer lists "${required}" in ` +
+          `installed_integrations. Both must remain until the cutover: "specify init" ` +
+          `replaces this array rather than appending to it, so this is the expected ` +
+          `shape of an accidental re-init.`,
+        );
+      }
+    }
+    for (const key of ["integration", "default_integration"]) {
+      if (state[key] !== "opencode") {
+        warn(
+          `.specify/integration.json ${key} is "${state[key]}", not "opencode". That ` +
+          `only selects the cosmetic invoke separator, but the standing overlap rule is ` +
+          `that the old path wins where the two disagree.`,
+        );
+      }
+    }
+  }
+}
+
 for (const w of warnings) console.warn(`warning: ${w}`);
 if (errors.length) {
   for (const e of errors) console.error(`error: ${e}`);

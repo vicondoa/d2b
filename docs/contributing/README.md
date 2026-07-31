@@ -18,6 +18,7 @@ code, the code wins.
 | [changelog-and-commits.md](./changelog-and-commits.md) | Changelog fragments, the auto-release path, the changelog lifecycle at a version cut, the process-marker ban and its ratchet, and the full commit trailing-tag grammar. |
 | [gates-and-lints.md](./gates-and-lints.md) | The heavy-lane semaphore, the spec-literal lint allowlist, and the D116 envelope negative-example marker. |
 | [critical-subsystems.md](./critical-subsystems.md) | Full invariants for every subsystem in the AGENTS.md critical index, plus the cgroup slice naming and ownership-marker conventions. |
+| [copilot-agents.md](./copilot-agents.md) | The Copilot agent and skill surface: the three role agents, the ten panel seats, the autopilot and memory skills, the measured model-binding substrate, qualified wave identifiers, and spec-kit coexistence. |
 | [architecture.md](./architecture.md) | Eval-time naming rules, what belongs in a sibling flake, the daemon-supervised VM lifecycle, and how to add per-VM behaviour. |
 
 These files are deliberately **not** listed as auto-loaded instruction files

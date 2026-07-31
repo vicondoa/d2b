@@ -11,3 +11,4 @@ owner will not be paid.
 
 | Wave | Category | Date | Shortcut | Cost if unpaid | Owner | Disposition |
 |---|---|---|---|---|---|---|
+| spec-copilot-w3 | build | 2026-07-31 | spec-kit artifacts imported by hand rather than by `specify init` | A spec-kit upgrade must repeat the import and the de-dash by hand | integrator | open |
