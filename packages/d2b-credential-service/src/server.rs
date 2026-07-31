@@ -2,17 +2,59 @@
 
 use crate::{
     CredentialMethod, CredentialRequest, CredentialResponse, CredentialServiceError,
-    CredentialServiceErrorCode, CredentialTransport,
+    CredentialServiceErrorCode, CredentialTransport, DeliverySessionParams,
 };
+
+/// Authorization result derived by the authenticated bus adapter.
+///
+/// For sensitive-output methods this carries the complete delivery binding
+/// constructed during route authorization. The Provider may use it but cannot
+/// replace any of its authority-bearing fields.
+#[derive(Clone, PartialEq, Eq)]
+pub struct CredentialAuthorization {
+    delivery_session_params: Option<DeliverySessionParams>,
+}
+
+impl CredentialAuthorization {
+    /// Construct an authorization result for one exact method.
+    pub fn new(
+        method: CredentialMethod,
+        delivery_session_params: Option<DeliverySessionParams>,
+    ) -> Result<Self, CredentialServiceError> {
+        if delivery_session_params.is_some() != method.requires_delivery()
+            || delivery_session_params
+                .as_ref()
+                .is_some_and(|params| params.operation_class() != method.operation_class())
+        {
+            return Err(CredentialServiceError::new(
+                CredentialServiceErrorCode::InvariantFailure,
+            ));
+        }
+        Ok(Self {
+            delivery_session_params,
+        })
+    }
+
+    /// Borrow the bus-authorized delivery binding, when the method needs one.
+    pub const fn delivery_session_params(&self) -> Option<&DeliverySessionParams> {
+        self.delivery_session_params.as_ref()
+    }
+}
+
+impl core::fmt::Debug for CredentialAuthorization {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("CredentialAuthorization(<redacted>)")
+    }
+}
 
 /// Trusted admission boundary implemented by an authenticated bus adapter.
 pub trait CredentialAdmission: Send + Sync {
-    /// Admit the exact method-derived operation before Provider dispatch.
+    /// Admit the exact method and derive its binding from authenticated evidence.
     fn authorize(
         &self,
         method: CredentialMethod,
         request: &CredentialRequest,
-    ) -> Result<(), CredentialServiceError>;
+    ) -> Result<CredentialAuthorization, CredentialServiceError>;
 }
 
 /// Provider-side implementation of the five service methods.
@@ -21,7 +63,8 @@ pub trait CredentialProvider: Send + Sync {
     fn dispatch(
         &self,
         method: CredentialMethod,
-        request: CredentialRequest,
+        request: &CredentialRequest,
+        authorization: &CredentialAuthorization,
     ) -> Result<CredentialResponse, CredentialServiceError>;
 }
 
@@ -49,13 +92,10 @@ where
         method: CredentialMethod,
         request: CredentialRequest,
     ) -> Result<CredentialResponse, CredentialServiceError> {
-        self.admission.authorize(method, &request)?;
-        let response = self.provider.dispatch(method, request)?;
+        let authorization = self.admission.authorize(method, &request)?;
+        let response = self.provider.dispatch(method, &request, &authorization)?;
         if response.method() != method
-            || response.delivery_session_params().is_some() != method.requires_delivery()
-            || response
-                .delivery_session_params()
-                .is_some_and(|params| params.operation_class() != method.operation_class())
+            || response.delivery_session_params() != authorization.delivery_session_params()
         {
             return Err(CredentialServiceError::new(
                 CredentialServiceErrorCode::InvariantFailure,

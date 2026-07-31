@@ -11,5 +11,7 @@ pub mod server;
 pub mod service;
 
 pub use client::{CredentialClient, CredentialTransport};
-pub use server::{CredentialAdmission, CredentialProvider, CredentialServer};
+pub use server::{
+    CredentialAdmission, CredentialAuthorization, CredentialProvider, CredentialServer,
+};
 pub use service::*;

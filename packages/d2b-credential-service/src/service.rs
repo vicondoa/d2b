@@ -177,6 +177,21 @@ pub enum CredentialServiceErrorCode {
     InvariantFailure,
 }
 
+impl CredentialServiceErrorCode {
+    /// Return the canonical wire-stable Credential error code.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Malformed | Self::Oversize => "credential-schema-invalid",
+            Self::DeadlineExceeded => "deadline-exceeded",
+            Self::OperationDenied => "credential-operation-denied",
+            Self::ProviderUnavailable => "credential-provider-unavailable",
+            Self::LeaseExpired => "credential-lease-expired",
+            Self::LeaseRevoked => "credential-lease-revoked",
+            Self::InvariantFailure => "credential-invariant-failure",
+        }
+    }
+}
+
 /// A field-free service error safe for errors, logs, and diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CredentialServiceError {
@@ -197,7 +212,7 @@ impl CredentialServiceError {
 
 impl fmt::Display for CredentialServiceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "credential-service-error code={:?}", self.code)
+        f.write_str(self.code.as_str())
     }
 }
 
@@ -435,6 +450,34 @@ impl fmt::Debug for DeliverySessionParams {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("DeliverySessionParams(<redacted>)")
     }
+}
+
+/// Provider and lease observations mapped to the stable service error set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CredentialFailureState {
+    /// The backing credential service is locked.
+    Locked,
+    /// The Provider process or backing service is unavailable.
+    Unavailable,
+    /// The authenticated caller was denied by policy.
+    Denied,
+    /// The lease is past its expiry.
+    Expired,
+    /// The lease was revoked.
+    Revoked,
+}
+
+/// Map one observed failure state to its canonical closed service error.
+pub const fn error_for_failure_state(state: CredentialFailureState) -> CredentialServiceError {
+    let code = match state {
+        CredentialFailureState::Locked | CredentialFailureState::Unavailable => {
+            CredentialServiceErrorCode::ProviderUnavailable
+        }
+        CredentialFailureState::Denied => CredentialServiceErrorCode::OperationDenied,
+        CredentialFailureState::Expired => CredentialServiceErrorCode::LeaseExpired,
+        CredentialFailureState::Revoked => CredentialServiceErrorCode::LeaseRevoked,
+    };
+    CredentialServiceError::new(code)
 }
 
 /// Full delivery-session binding after Noise handshake completion.

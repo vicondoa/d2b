@@ -4,9 +4,9 @@ use d2b_contracts::v3::credential::{
 };
 use d2b_contracts::v3::{ResourceGeneration, ResourceRef, ResourceUid};
 use d2b_credential_service::{
-    CredentialMetadata, CredentialOutcomeCode, CredentialRequest, CredentialServiceError,
-    CredentialServiceErrorCode, DeliveryResponse, DeliveryRouteDigest, DeliverySessionParams,
-    SensitiveDeliveryRecord, encode_outer,
+    encode_outer, CredentialAuthorization, CredentialMetadata, CredentialMethod,
+    CredentialOutcomeCode, CredentialRequest, CredentialServiceError, CredentialServiceErrorCode,
+    DeliveryResponse, DeliveryRouteDigest, DeliverySessionParams, SensitiveDeliveryRecord,
 };
 
 #[test]
@@ -23,6 +23,26 @@ fn process_unique_secret_canary_never_reaches_outer_or_diagnostic_surfaces() {
         1_500,
     )
     .unwrap();
+    let delivery_session_params = DeliverySessionParams::new(
+        ResourceRef::parse("Credential/work-entra").unwrap(),
+        ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+        ResourceGeneration::new(1).unwrap(),
+        ResourceRef::parse("Provider/display-wayland").unwrap(),
+        ResourceGeneration::new(1).unwrap(),
+        AudienceToken::parse("azure-resource-manager").unwrap(),
+        OperationClass::AcquireToken,
+        2_000,
+        1_500,
+        DeliveryRouteDigest::parse(format!("sha256:{}", "a".repeat(64))).unwrap(),
+        4_096,
+        1,
+    )
+    .unwrap();
+    let authorization = CredentialAuthorization::new(
+        CredentialMethod::AcquireToken,
+        Some(delivery_session_params.clone()),
+    )
+    .unwrap();
     let response = DeliveryResponse {
         metadata: CredentialMetadata {
             lease_handle: lease,
@@ -32,26 +52,13 @@ fn process_unique_secret_canary_never_reaches_outer_or_diagnostic_surfaces() {
             state: CredentialLeaseState::Active,
             outcome: CredentialOutcomeCode::Success,
         },
-        delivery_session_params: DeliverySessionParams::new(
-            ResourceRef::parse("Credential/work-entra").unwrap(),
-            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
-            ResourceGeneration::new(1).unwrap(),
-            ResourceRef::parse("Provider/display-wayland").unwrap(),
-            ResourceGeneration::new(1).unwrap(),
-            AudienceToken::parse("azure-resource-manager").unwrap(),
-            OperationClass::AcquireToken,
-            2_000,
-            1_500,
-            DeliveryRouteDigest::parse(format!("sha256:{}", "a".repeat(64))).unwrap(),
-            4_096,
-            1,
-        )
-        .unwrap(),
+        delivery_session_params,
     };
     let record = SensitiveDeliveryRecord::new(secret.as_bytes().to_vec(), 4_096).unwrap();
     let error = CredentialServiceError::new(CredentialServiceErrorCode::ProviderUnavailable);
     let surfaces = [
         format!("{request:?}"),
+        format!("{authorization:?}"),
         format!("{response:?}"),
         String::from_utf8_lossy(&encode_outer(&response).unwrap()).into_owned(),
         format!("{record:?}"),

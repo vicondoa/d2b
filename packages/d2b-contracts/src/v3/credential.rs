@@ -31,7 +31,7 @@ pub const MAX_AUDIENCE_BYTES: usize = 256;
 pub const MAX_PROACTIVE_WINDOW_MS: u64 = 1_800_000;
 /// Maximum Provider-granted lease lifetime in milliseconds.
 pub const MAX_PROVIDER_LEASE_LIFETIME_MS: u64 = 7 * 86_400_000;
-/// Maximum bytes accepted as an opaque cloud reference before one-way encoding.
+/// Maximum bytes accepted as an opaque non-secret cloud reference.
 pub const MAX_AZURE_REF_BYTES: usize = 128;
 /// Maximum bytes accepted as a Provider lease handle before one-way encoding.
 pub const MAX_CREDENTIAL_LEASE_HANDLE_BYTES: usize = 256;
@@ -190,12 +190,65 @@ macro_rules! opaque_credential_value {
     };
 }
 
-opaque_credential_value!(
-    OpaqueAzureRef,
-    MAX_AZURE_REF_BYTES,
-    b"d2b:v3:opaque-azure-ref",
-    "A one-way opaque cloud identifier that retains no recoverable source value."
-);
+/// A bounded non-secret cloud identifier whose diagnostics are always redacted.
+///
+/// Providers need the validated tenant, client, or region value when calling
+/// their backing service, so serialization preserves it instead of hashing it.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(transparent)]
+pub struct OpaqueAzureRef(String);
+
+impl OpaqueAzureRef {
+    /// Validate and preserve a bare non-secret cloud identifier.
+    pub fn parse(value: impl Into<String>) -> Result<Self, CredentialContractError> {
+        let value = value.into();
+        validate_opaque_source(&value, MAX_AZURE_REF_BYTES)?;
+        Ok(Self(value))
+    }
+
+    /// Borrow the validated identifier for Provider use.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl core::fmt::Debug for OpaqueAzureRef {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("OpaqueAzureRef(<redacted>)")
+    }
+}
+
+impl core::fmt::Display for OpaqueAzureRef {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("OpaqueAzureRef(<redacted>)")
+    }
+}
+
+impl<'de> Deserialize<'de> for OpaqueAzureRef {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Self::parse(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
+
+impl JsonSchema for OpaqueAzureRef {
+    fn schema_name() -> String {
+        "OpaqueAzureRef".to_owned()
+    }
+
+    fn json_schema(_gen: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
+        let mut schema = schemars::schema::SchemaObject {
+            instance_type: Some(schemars::schema::SingleOrVec::Single(Box::new(
+                schemars::schema::InstanceType::String,
+            ))),
+            ..Default::default()
+        };
+        schema.string().min_length = Some(1);
+        schema.string().max_length = Some(MAX_AZURE_REF_BYTES as u32);
+        schema.string().pattern = Some("^[A-Za-z0-9._-]+$".to_owned());
+        schemars::schema::Schema::Object(schema)
+    }
+}
+
 opaque_credential_value!(
     CredentialLeaseHandle,
     MAX_CREDENTIAL_LEASE_HANDLE_BYTES,
@@ -1058,20 +1111,23 @@ mod tests {
     }
 
     #[test]
-    fn opaque_cloud_reference_round_trips_without_retaining_the_source() {
+    fn opaque_cloud_reference_preserves_the_non_secret_value_with_redacted_diagnostics() {
         let marker = format!("cloud-ref-{:x}", std::process::id());
         let reference = OpaqueAzureRef::parse(&marker).unwrap();
         let encoded = serde_json::to_string(&reference).unwrap();
-        assert!(!encoded.contains(&marker));
-        assert!(encoded.contains(OPAQUE_DIGEST_PREFIX));
-        assert!(!reference.as_opaque_str().contains(&marker));
+        assert_eq!(reference.as_str(), marker);
+        assert_eq!(encoded, format!("\"{marker}\""));
+        assert!(!format!("{reference:?}").contains(&marker));
+        assert!(!reference.to_string().contains(&marker));
         assert_eq!(
             serde_json::from_str::<OpaqueAzureRef>(&encoded).unwrap(),
             reference
         );
         assert!(OpaqueAzureRef::parse("SharedAccessKey=abc/def+ghi==").is_err());
         assert!(OpaqueAzureRef::parse("x".repeat(MAX_AZURE_REF_BYTES + 1)).is_err());
-        assert!(serde_json::from_str::<OpaqueAzureRef>(&format!("\"{marker}\"")).is_err());
+        let schema = schemars::schema_for!(OpaqueAzureRef);
+        let schema_json = serde_json::to_string(&schema).unwrap();
+        assert!(schema_json.contains("^[A-Za-z0-9._-]+$"));
     }
 
     #[test]
