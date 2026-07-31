@@ -7,10 +7,14 @@
 
 #![deny(missing_docs)]
 
+pub mod artifact;
 pub mod bridge_port;
+pub mod controller;
 pub mod ifname;
 pub mod netlink;
 pub mod nftables;
+pub mod observe;
+pub mod plan;
 pub mod routes;
 
 pub use d2b_contracts::v3::network::{

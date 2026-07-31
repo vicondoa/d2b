@@ -22,24 +22,25 @@ command.
 
 ## Exported resource types
 
-The Provider implements `Network`. This crate currently supplies its reusable
-host-fabric policy layer: deterministic IfName admission, complete bridge-port
-defaults and readback, per-Network nftables projections, route and net-VM
-readiness checks, and ordered IPv6 suppression.
+The Provider implements `Network`. The crate supplies the asynchronous
+controller state machine, typed config Volume, Guest, guest-agent and mDNS
+child projections, deterministic IfName admission, complete bridge-port
+readback, projection-scoped nftables policy, route readiness, and ordered IPv6
+suppression.
 
 ## Controllers / services / workers / binaries
 
-The eventual `d2b-provider-network-local-ctrl` controller is Host-placed and
-uses these primitives through an injected network effect port. No controller
-binary, service, or worker is introduced by this library slice. In particular,
-this crate never invokes `nft`, netlink, or the privileged broker directly.
+The `d2b-provider-network-local-ctrl` controller is Host-placed and uses the
+library through injected resource and network effect ports. The net-VM
+guest-agent and optional mDNS workers run inside the owned Guest. The controller
+never invokes `nft`, netlink, or the privileged broker directly.
 
 ## Placement and dependencies
 
-The controller is placed on the configured Host. This crate depends only on the
-provider-neutral contracts. It has no dependency on
-the daemon, privileged broker, host implementation crate, resource store, bus,
-or another Provider implementation.
+The controller is placed on the configured Host and the guest-agent is placed
+inside the net VM. The crate depends only on provider-neutral contracts. It has
+no dependency on the daemon, privileged broker, host implementation crate,
+resource store, or another Provider implementation.
 
 ## RBAC requirements
 
@@ -62,22 +63,30 @@ and the broker authorization matrix.
   Host-global admission check and is rejected before any host effect.
 - IPv6 suppression runs before a new bridge is brought up and is re-applied on
   reconciliation as defense in depth.
+- The generic net-VM module force-neutralizes `10-eth-dhcp`, matches both NICs
+  by MAC, suppresses IPv6, and installs an IPv6 drop-all table. It contains no
+  per-Network DHCP, DNS, route, nftables, attachment, or mDNS desired data.
+- The guest-agent receives network capabilities only in the Guest network
+  namespace. The Host controller has no ambient network capabilities.
 
 ## State and telemetry
 
 The types that can contain an interface name, address, rule, marker, or table
 bytes implement redacted `Debug` and no value-bearing `Display`. Errors expose
 only closed reason codes. Firewall status stores a projection-only digest, not
-rules or device-owned marker churn. This layer owns no durable Provider state.
+rules or device-owned marker churn. Metric keys and values come from closed
+semantic sets and contain no Zone, Network, resource, VM, caller, address, path,
+or interface identity. This layer owns no durable Provider state.
 
 ## Build and test
 
 ```bash
 cd packages && cargo check -p d2b-provider-network-local
 cd packages && cargo test -p d2b-provider-network-local
+cd packages && cargo test -p d2b-provider-network-local --test '*'
 ```
 
-The declared container scenario under `integration/` becomes executable when
-the core adapter and the closed broker operations have production handlers.
-For future standalone-repository packaging, preserve the dependency direction,
-the four-path crate layout, and the same contract-crate revision as core.
+Run the declared provider-system scenarios only through the repository's
+`make test-integration` and `make test-host-integration` entrypoints. For future
+standalone-repository packaging, preserve the dependency direction, four-path
+crate layout, and same contract and controller-toolkit revisions as core.

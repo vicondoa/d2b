@@ -2518,23 +2518,166 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             response_fds.extend(outcome.extra_response_fds);
             Ok(DispatchResult::with_fds(response, response_fds))
         }
-        // Pre-existing typed-Unimplemented status.
-        RealBrokerRequest::ApplyNftablesProjection(_) => Err(BrokerError::Unimplemented {
-            operation: "ApplyNftablesProjection",
-            target_wave: "W4",
-        }),
-        RealBrokerRequest::CreateBridge(_) => Err(BrokerError::Unimplemented {
-            operation: "CreateBridge",
-            target_wave: "W4",
-        }),
-        RealBrokerRequest::DeleteBridge(_) => Err(BrokerError::Unimplemented {
-            operation: "DeleteBridge",
-            target_wave: "W4",
-        }),
-        RealBrokerRequest::DeletePersistentTap(_) => Err(BrokerError::Unimplemented {
-            operation: "DeletePersistentTap",
-            target_wave: "W4",
-        }),
+        RealBrokerRequest::ApplyNftablesProjection(req) => {
+            let resolver = require_resolver(resolver)?;
+            let intent = resolver
+                .find_nft_projection_intent(req.bundle_nft_projection_intent_ref.as_str())
+                .ok_or_else(|| BrokerError::BundleIntentMissing {
+                    kind: "nft-projection",
+                    intent_id: req.bundle_nft_projection_intent_ref.as_str().to_owned(),
+                })?;
+            let marker = resolver
+                .find_ownership_marker_intent(&intent.ownership_marker_intent_ref)
+                .ok_or_else(|| BrokerError::BundleIntentMissing {
+                    kind: "nft-ownership-marker",
+                    intent_id: intent.ownership_marker_intent_ref.clone(),
+                })?;
+            let installed =
+                resolver
+                    .installed_generation_identity()
+                    .ok_or(BrokerError::RequestValidation {
+                        operation: "ApplyNftablesProjection",
+                        reason: "installed-generation-unavailable",
+                    })?;
+            let exec = crate::ops::exec_reconcile::SystemReconcileExecutor;
+            let projection_digest = crate::ops::nft::apply_nftables_projection(
+                &exec,
+                &nft_binary_path(),
+                &intent.script_body,
+                &marker.marker,
+                &intent.desired_hash,
+                req.desired_hash.as_deref(),
+                req.expected_generation_id.as_str(),
+                installed.as_str(),
+                req.action,
+            )
+            .map(|result| result.projection_digest)
+            .map_err(|error| BrokerError::RequestValidation {
+                operation: "ApplyNftablesProjection",
+                reason: error.code(),
+            })?;
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "ApplyNftablesProjection",
+                req.bundle_nft_projection_intent_ref.as_str(),
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                intent.scope_label.as_str(),
+                req.scope_id.as_str(),
+                tracing_span_id_str(req.tracing_span_id.as_ref()),
+                OperationFields::ApplyNftablesProjection {
+                    projection_digest,
+                    expected_generation_id: req.expected_generation_id,
+                    action: req.action,
+                },
+            )?;
+            Ok(DispatchResult::no_fds(ack_response(
+                "ApplyNftablesProjection",
+            )))
+        }
+        RealBrokerRequest::CreateBridge(req) => {
+            let resolver = require_resolver(resolver)?;
+            let intent = resolver
+                .find_bridge_intent(req.bundle_bridge_intent_ref.as_str())
+                .ok_or_else(|| BrokerError::BundleIntentMissing {
+                    kind: "bridge",
+                    intent_id: req.bundle_bridge_intent_ref.as_str().to_owned(),
+                })?;
+            let bridge_intent_digest = crate::ops::network::create_bridge(
+                &crate::ops::network::SystemBridgeBackend,
+                intent,
+            )
+            .map_err(|error| BrokerError::RequestValidation {
+                operation: "CreateBridge",
+                reason: error.code(),
+            })?;
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "CreateBridge",
+                req.bundle_bridge_intent_ref.as_str(),
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                intent.scope_label.as_str(),
+                req.scope_id.as_str(),
+                tracing_span_id_str(req.tracing_span_id.as_ref()),
+                OperationFields::CreateBridge {
+                    bridge_intent_digest,
+                },
+            )?;
+            Ok(DispatchResult::no_fds(ack_response("CreateBridge")))
+        }
+        RealBrokerRequest::DeleteBridge(req) => {
+            let resolver = require_resolver(resolver)?;
+            let intent = resolver
+                .find_bridge_intent(req.bundle_bridge_intent_ref.as_str())
+                .ok_or_else(|| BrokerError::BundleIntentMissing {
+                    kind: "bridge",
+                    intent_id: req.bundle_bridge_intent_ref.as_str().to_owned(),
+                })?;
+            let bridge_intent_digest = crate::ops::network::delete_bridge(
+                &crate::ops::network::SystemBridgeBackend,
+                intent,
+            )
+            .map_err(|error| BrokerError::RequestValidation {
+                operation: "DeleteBridge",
+                reason: error.code(),
+            })?;
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "DeleteBridge",
+                req.bundle_bridge_intent_ref.as_str(),
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                intent.scope_label.as_str(),
+                req.scope_id.as_str(),
+                tracing_span_id_str(req.tracing_span_id.as_ref()),
+                OperationFields::DeleteBridge {
+                    bridge_intent_digest,
+                },
+            )?;
+            Ok(DispatchResult::no_fds(ack_response("DeleteBridge")))
+        }
+        RealBrokerRequest::DeletePersistentTap(req) => {
+            let realization =
+                crate::ops::network::load_persistent_tap_realization(&config.state_dir, &req)
+                    .map_err(|error| BrokerError::RequestValidation {
+                        operation: "DeletePersistentTap",
+                        reason: error.code(),
+                    })?;
+            let attachment_digest = crate::ops::network::delete_persistent_tap(
+                &crate::ops::network::SystemPersistentTapBackend,
+                &realization,
+                &req,
+            )
+            .map_err(|error| BrokerError::RequestValidation {
+                operation: "DeletePersistentTap",
+                reason: error.code(),
+            })?;
+            write_success_op_record!(
+                audit_log,
+                bundle_metadata,
+                "DeletePersistentTap",
+                &attachment_digest,
+                caller_uid,
+                caller_gid,
+                &caller_role,
+                "network-attachment",
+                "attachment",
+                tracing_span_id_str(req.tracing_span_id.as_ref()),
+                OperationFields::DeletePersistentTap {
+                    attachment_digest: attachment_digest.clone(),
+                    expected_network_generation: req.expected_network_generation,
+                    expected_attachment_generation: req.expected_attachment_generation,
+                },
+            )?;
+            Ok(DispatchResult::no_fds(ack_response("DeletePersistentTap")))
+        }
         RealBrokerRequest::BindUnixSocket(_) => Err(BrokerError::Unimplemented {
             operation: "BindUnixSocket",
             target_wave: "W5",

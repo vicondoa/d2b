@@ -30,6 +30,7 @@ pub mod swtpm_dir;
 pub mod sysctl;
 pub mod tap;
 // Nftables + USBIP firewall skeleton ops.
+pub mod network;
 pub mod nft;
 pub mod usbip_firewall;
 // Per-busid USBIP exclusivity lock helper.

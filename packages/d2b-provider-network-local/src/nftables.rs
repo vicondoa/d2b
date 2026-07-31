@@ -633,6 +633,11 @@ fn sha256(bytes: &[u8]) -> [u8; 32] {
     output
 }
 
+/// Compute SHA-256 for another provider-owned redacted digest surface.
+pub(crate) fn digest_bytes(bytes: &[u8]) -> [u8; 32] {
+    sha256(bytes)
+}
+
 /// Detected host firewall manager.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FirewallManager {
