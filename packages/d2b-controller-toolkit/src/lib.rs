@@ -36,3 +36,7 @@ pub use runner::{
     RunnerObservationReason, RunnerObserver, RunnerOutcome, RunnerReport, SourceError, WatchEvent,
     WatchFailure, WatchHint,
 };
+pub use state_migration::{
+    MigrationMember, MigrationPlan, MigrationPlanError, MigrationWorkerPhase,
+    plan as plan_state_migration,
+};
