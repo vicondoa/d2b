@@ -349,6 +349,18 @@ set -euo pipefail
         self.assertIn("enumeration element is not a quoted name", partition)
         self.assertIn("'\"'?*'\"') ;;", partition)
 
+        # The rejected element is named so a contributor can find it, but it is
+        # PR-controlled and goes to a public log, so it is rendered through the
+        # sanitiser rather than interpolated raw. Pin both the mitigation and
+        # its use: a future edit that drops either reintroduces log injection.
+        self.assertIn(
+            "render_rejected() {\n  printf '%s' \"${1:0:64}\" | tr -c 'A-Za-z0-9._-' '?'\n}",
+            partition,
+        )
+        self.assertEqual(partition.count('$(render_rejected "'), 2)
+        for raw in ('is not a quoted name: $token', '[A-Za-z0-9._-]: $name'):
+            self.assertNotIn(raw, partition)
+
         # Both discovery jobs read the same partition, so the names dropped
         # from the eval matrix are exactly the names the Nix-unit lane runs.
         self.assertEqual(workflow.count("partition=$(make -s test-flake-partition)"), 2)
