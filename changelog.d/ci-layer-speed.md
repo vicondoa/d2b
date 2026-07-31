@@ -6,4 +6,4 @@
 
 ### Fixed
 
-- Preserve the resource API's external capability seal when the warning-deny gate compiles its intentionally test-only dependency configuration, and make the vsock accept-deadline test deterministic under loaded parallel gates.
+- Preserve the resource API's external capability seal when the warning-deny gate compiles its intentionally test-only dependency configuration, and make timeout-sensitive transport tests deterministic under loaded parallel gates.
