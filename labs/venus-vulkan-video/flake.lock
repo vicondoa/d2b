@@ -97,11 +97,11 @@
     "virglrenderer-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1785511641,
-        "narHash": "sha256-xdbvml8iTenOun3NNH8l/oDyk73XN5Exg4yG19K7owA=",
+        "lastModified": 1785522846,
+        "narHash": "sha256-L3xtr1XCr/JMSdoT6dez9OFeNrEseEtXKz88rcGicj0=",
         "owner": "vicondoa",
         "repo": "virglrenderer-venus-vulkan-video",
-        "rev": "c93b82a1a67f566919c6fe49df976622843226bd",
+        "rev": "03e7a7b5835a2224e7bc1616794ab367a135f231",
         "type": "github"
       },
       "original": {
