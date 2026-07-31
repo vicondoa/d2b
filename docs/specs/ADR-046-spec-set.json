@@ -407,7 +407,7 @@
         "ADR-046-resource-reconciliation"
       ],
       "path" : "docs/specs/ADR-046-provider-model-and-packaging.md",
-      "sha256" : "fdd14dab04a6390675137d91426172e781c4ef7acd32a9e6d9eedd20ba4b088e",
+      "sha256" : "78a166a4f5655d608cbc462c77eb28b90d5644c4a490800fc0edadb2dee44b64",
       "specId" : "ADR-046-provider-model-and-packaging",
       "status" : "Accepted",
       "supersedes" : "Current direct Provider construction/composition",

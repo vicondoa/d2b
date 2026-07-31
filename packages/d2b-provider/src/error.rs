@@ -25,6 +25,18 @@ pub enum RegistryBuildError {
     EmptyRegistry,
     /// A previous step failed, so the whole build is abandoned.
     TransactionAborted,
+    /// The Provider resource row selects a different artifact than the
+    /// manifest supplied with it.
+    ArtifactSelectionMismatch,
+    /// The artifact failed production trust admission or the exact Provider
+    /// API compatibility check.
+    ArtifactNotAdmissible,
+    /// The registry descriptor publishes a method the signed component
+    /// graph does not export.
+    UnsignedPublishedMethod,
+    /// The Provider resource row has not reached Ready, so no `providerRef`
+    /// resolves to it.
+    ProviderNotReady,
 }
 
 impl fmt::Display for RegistryBuildError {
@@ -40,6 +52,14 @@ impl fmt::Display for RegistryBuildError {
             Self::BoundExceeded => "provider registry bound exceeded",
             Self::EmptyRegistry => "provider registry has no configured instances",
             Self::TransactionAborted => "provider registry transaction was aborted",
+            Self::ArtifactSelectionMismatch => {
+                "provider resource selects a different artifact than the manifest"
+            }
+            Self::ArtifactNotAdmissible => "provider artifact failed trust or compatibility",
+            Self::UnsignedPublishedMethod => {
+                "provider publishes a method its signed component graph does not export"
+            }
+            Self::ProviderNotReady => "provider resource is not Ready",
         })
     }
 }

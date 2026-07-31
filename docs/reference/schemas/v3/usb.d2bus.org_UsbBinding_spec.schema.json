@@ -1,0 +1,26 @@
+{
+  "$id": "https://d2bus.org/schemas/v3/usb.d2bus.org/UsbBinding/spec",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Frozen provider-neutral base spec layer. Every conformant implementation binds this exact version and fingerprint, accepts the canonical minimal base without spec.provider, and adds only its own strict extension schema.",
+  "properties": {
+    "accessPolicy": {},
+    "attachmentPolicy": {},
+    "guestRef": {},
+    "providerRef": {},
+    "serviceRef": {},
+    "updatePolicy": {}
+  },
+  "required": [
+    "accessPolicy",
+    "attachmentPolicy",
+    "guestRef",
+    "providerRef",
+    "serviceRef"
+  ],
+  "title": "usb.d2bus.org/UsbBinding/spec",
+  "type": "object",
+  "x-d2b-resource-type": "usb.d2bus.org.UsbBinding",
+  "x-d2b-schema-fingerprint": "sha256:faf26ee762b575f979785cd1cbc12533c9a21bd8c9655703f0f5ba9838165177",
+  "x-d2b-schema-version": "1.0"
+}

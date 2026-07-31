@@ -1,0 +1,25 @@
+{
+  "$id": "https://d2bus.org/schemas/v3/usb.d2bus.org/UsbService/spec",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Frozen provider-neutral base spec layer. Every conformant implementation binds this exact version and fingerprint, accepts the canonical minimal base without spec.provider, and adds only its own strict extension schema.",
+  "properties": {
+    "accessPolicy": {},
+    "backingAuthority": {},
+    "backingDeviceRef": {},
+    "mode": {},
+    "providerRef": {},
+    "sourceSchemaFingerprint": {},
+    "updatePolicy": {}
+  },
+  "required": [
+    "accessPolicy",
+    "mode",
+    "providerRef"
+  ],
+  "title": "usb.d2bus.org/UsbService/spec",
+  "type": "object",
+  "x-d2b-resource-type": "usb.d2bus.org.UsbService",
+  "x-d2b-schema-fingerprint": "sha256:6e60a334d5b696f14740006c5a56eb125f1fa5019d3fb8fa9656cc1c123c2f60",
+  "x-d2b-schema-version": "1.0"
+}

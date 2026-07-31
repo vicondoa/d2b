@@ -142,7 +142,7 @@ wave item to be `Merged` before `wave snapshot` will accept entry.
 
 **Requirements**: see spec-coverage.md traceability tables | **Story**: US1 | **Work items**: 4 | **Parallel groups**: 1
 
-- [ ] T030 [US1] W3 ENTRY - confirm every prior-wave work item is Merged, destinations uncontended, stack proposed against the exact parent commit, heavy-gate free, fast hermetic suite green
+- [ ] T030 [US1] W3 ENTRY - confirm every prior-wave work item is Merged, destinations uncontended, stack proposed against the exact parent commit, heavy-gate free, fast hermetic suite green. Note: under FR-057 and delivery contract §4, "every prior-wave work item is Merged" is **not** an entry criterion; it binds at the exit boundary - panel request, seal, and merge eligibility (T035)
 
 ### Group `wi:ADR-046-provider-model-and-packaging` (4 items)
 

@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Scope | Wave assignment of `packages/d2b-process/` and `packages/d2b-provider-supervisor/` |
+| Scope | Wave assignment of `packages/d2b-process/` and `packages/d2b-provider-supervisor/`; widened in section 6 to the W3 and W5 rows of the same table |
 | Raised under | FR-046 |
 | Affected member spec | `ADR-046-validation-and-delivery`, section 3.2 |
 | Affected manifests | `ADR-046-implementation-graph.json`, `ADR-046-work-items.json` |
@@ -116,3 +116,37 @@ two crates under W4 **as well**, qualified as "process effect ports". The row is
 therefore internally duplicative, not merely mismatched against the graph. The
 amendment should resolve the duplication in the same change rather than only
 deleting the W2 mention.
+
+## 6. Scope widened: section 3.2 carries a family of these drifts
+
+This document was opened for one row. The W3 wave found a second instance of
+exactly the same shape in the same table, recorded as the "W3 destination set
+disagrees with the section 3.2 wave table" bullet in section 5 of
+[`implementation-debt.md`](./implementation-debt.md):
+
+- section 3.2 gives W3's destinations as only `packages/d2b-provider/`,
+  `packages/d2b-provider-toolkit/` and a
+  `packages/d2b-provider-<base>-<implementation>/` skeleton generator, naming
+  neither `packages/d2b-contracts/src/v3/provider.rs` (destination of
+  `ADR046-provider-001`), nor `packages/d2b-contracts/src/v3/semantic_services/`
+  (destination of `ADR046-provider-004`), nor
+  `packages/d2b-provider-system-core/` (destination of `ADR046-provider-003`);
+- the same table lists `packages/d2b-provider-system-{core,systemd,minijail}/`
+  in its **W5** row, while `ADR046-provider-003` is a **W3** item in the
+  implementation graph.
+
+The resolution is identical to section 2: FR-046 makes the generated manifests
+authoritative, so implementers follow the graph and the section 3.2 W3 and W5
+rows are stale prose for those entries only.
+
+**This amendment absorbs that drift**, rather than a second amendment being
+opened for it. Both instances are the same table, the same member
+specification, and the same single re-opening of that spec's validation and
+panel evidence; splitting them would pay that cost twice for one edit. Any
+further section 3.2 wave-table drift found by a later wave should be appended
+here on the same reasoning.
+
+Note the boundary: this batching covers drifts **in the section 3.2 wave
+table**. It does not extend to frozen-contract amendments against other member
+specifications, which carry their own evidence and are filed separately - see
+[`amendment-frozen-cross-zone-contracts.md`](./amendment-frozen-cross-zone-contracts.md).

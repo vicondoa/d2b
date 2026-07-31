@@ -1225,6 +1225,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-provider-system-core"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "d2b-provider-system-minijail"
 version = "0.0.0-bootstrap"
 dependencies = [

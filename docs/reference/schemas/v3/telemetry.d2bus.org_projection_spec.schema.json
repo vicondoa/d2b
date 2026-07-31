@@ -1,0 +1,29 @@
+{
+  "$id": "https://d2bus.org/schemas/v3/telemetry.d2bus.org/projection/spec",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Strict deny-unknown semantic base schema for a Core-generated projection Service. It carries only providerRef, the semantic base and import fields, and ResourceImport ownership; spec.provider is forbidden.",
+  "properties": {
+    "policy": {},
+    "providerRef": {},
+    "quota": {},
+    "serviceRole": {},
+    "signals": {}
+  },
+  "required": [
+    "policy",
+    "providerRef",
+    "quota",
+    "serviceRole",
+    "signals"
+  ],
+  "title": "telemetry.d2bus.org/projection/spec",
+  "type": "object",
+  "x-d2b-allowed-backing-ref-types": [
+    "Endpoint"
+  ],
+  "x-d2b-binding-resource-type": "telemetry.d2bus.org.TelemetryBinding",
+  "x-d2b-factory-fingerprint": "sha256:de3ef22c8138fbe84c7905fa029d5b3c3f5bed364063b35affe8e0638ca26185",
+  "x-d2b-projection-schema-fingerprint": "sha256:3dcf48e504120108df3972f37f2f6a3a1a4239e78a23753a0942207b876c6ef9",
+  "x-d2b-resource-type": "telemetry.d2bus.org.TelemetryService"
+}

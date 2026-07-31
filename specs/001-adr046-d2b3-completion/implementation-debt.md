@@ -42,8 +42,28 @@ what to hold to a completion standard.
   process are not.
 
 Both are blocked on the same missing thing: a v3 Provider-method DTO catalogue
-that exists in no crate. That catalogue is this register's only entry with no
-owning wave, and it needs an integrator ruling rather than a schedule.
+that exists in no crate. That catalogue is now owned: **Wave 3, inside
+`ADR046-provider-001`**, whose destination already names
+`packages/d2b-contracts/src/v3/provider.rs`, `packages/d2b-provider/src/lib.rs`
+and `packages/d2b-provider-toolkit/` - exactly where the catalogue belongs. It
+is scoped into that existing item rather than raised as a fifth work item,
+because a fifth item would contradict `ADR-046-implementation-graph.json`,
+whose `.waves[]` entry for W3 pins `workItemCount: 4`.
+
+**That ruling is confirmed as to ownership and corrected as to expectation.**
+It was made on the expectation that Wave 3 could deliver the catalogue.
+Wave 3 delivered part of it and stopped, correctly, at the point where
+continuing would have meant inventing a wire contract. The ownership is still
+right and the item is still the right home; the remainder is not scheduling
+debt but a **specification hole**, and it cannot be discharged by any wave
+until that hole is filled. What is delivered and what is not is stated exactly
+in section 10.1; discharging the remainder still closes the Destination
+caveats recorded against `ADR046-routing-014` and `ADR046-routing-015` below,
+and nothing else in this register does.
+
+The Evidence rows for those two items in `docs/specs/ADR-046-zone-routing.md`
+are deliberately left alone: they record what Wave 2 actually delivered and are
+already panel-attested. This register is the forward-looking record.
 
 ## 1. Blocked and unlanded dependencies
 
@@ -54,10 +74,44 @@ hole. Each must be closed by the wave named.
 | --- | --- | --- |
 | `ADR046-routing-007` | CLOSED. The dependency declarations landed as integrator prep and the contract module landed first, on the reading that the recorded edge is inverted for the contract. | Closed in W2 |
 | `ADR046-routing-009` | Both landed, 009 first. The recorded edge remains wrong in the graph: it says 009 depends on 007, but 007 imports 009's contract. The manifest should be corrected as a separate amendment under the drift rule. | Amendment, not blocking |
-| `ADR046-routing-016` service | Still no handler for `zone-bootstrap` and `zone-enroll`, but the blocker moved: the session contract and enrollment machine now exist in the bus, so wiring the service to them is ordinary work rather than a missing contract. The four enrollment obligations are met in the bus session module, not in the service. | W3 |
+| `ADR046-routing-016` service | Still no handler for `zone-bootstrap` and `zone-enroll`, but the blocker moved: the session contract and enrollment machine now exist in the bus, so wiring the service to them is ordinary work rather than a missing contract. The four enrollment obligations are met in the bus session module, not in the service. **Not W3**: the destination is `packages/d2b-zone-routing/src/service.rs`, which no W3 work item owns. Every work item whose destination names `packages/d2b-zone-routing/` - `routing-002`, `routing-003`, `routing-006`, `routing-016` - is W2, so the artifacts name no later owning wave. **Ruled: W5, alongside `ADR046-store-004`.** See the ruling note below the table. | W5, `ADR046-store-004` |
 | `ADR046-primitives-002` providers | `ProcessLaunchEffectPort` has no production adapter, so both process Providers are complete but unwired. The adapter is `ADR046-process-001`, destination `packages/d2b-provider-supervisor/`. | W4 |
-| `ADR046-routing-014` | `ProviderInstance`'s eleven trait objects and the whole `RpcProviderProxy` family are not delivered. They are built on `d2b_contracts::v2_provider` types with no v3 replacement. Needs a v3 Provider-method DTO work item before it can be finished. | Needs an integrator ruling on which wave owns the v3 Provider DTO catalogue |
-| `ADR046-routing-015` | `GeneratedProviderServiceServer` ttrpc dispatch not implemented: no v3 Provider proto, no service-name freeze, no generated bindings exist. `ProviderAgentAdapter`, `register_exact_instances`, and `ProviderAgentProcess` all depend on routing-014 surfaces that are themselves incomplete. | Same ruling as above |
+| `ADR046-routing-014` | `ProviderInstance`'s eleven trait objects and the whole `RpcProviderProxy` family are not delivered. Wave 3 delivered the method catalogue only for the methods the specification actually names, so the registry stays generic over the runtime's own opaque instance handle. The remainder is blocked on absent specification content, not on scheduling; see section 10.1. | W3 ownership stands, but blocked on a specification hole |
+| `ADR046-routing-015` | `GeneratedProviderServiceServer` ttrpc dispatch not implemented: no v3 Provider proto, no service-name freeze, no generated bindings exist, and none can be written without a frozen service name and field numbering. `ProviderAgentAdapter`, `register_exact_instances`, and `ProviderAgentProcess` all depend on routing-014 surfaces that are themselves incomplete. | W3 ownership stands, but blocked on a specification hole |
+
+### Ruling: the bootstrap and enroll handler is W5 work
+
+The `ADR046-routing-016` row above had no natural owner, because every work
+item naming `packages/d2b-zone-routing/` sits in the sealed W2. It is assigned
+to **W5, alongside `ADR046-store-004`**, on a dependency rather than on a
+file-ownership argument.
+
+Two sibling rows in the wave-close table below - "Sealed enrollment record does
+not bind the child uid" and "No durable persistence for enrollment" - were
+already resolved to W5 `ADR046-store-004`, whose destination is
+`packages/d2b-resource-store-redb/src/{lib,actor,transaction}.rs`. A
+`zone-enroll` handler cannot be completed without the durable enrollment
+persistence those two rows describe, so scheduling the handler in any earlier
+wave would schedule work that cannot finish.
+
+That dependency was verified rather than assumed.
+`packages/d2b-bus/src/session/enrollment.rs` states in its own module
+documentation that the durable store transaction which seals or invalidates an
+enrollment is not part of the module, that recovery re-derives a restarting
+handler's state "from what the durable store holds" and "takes the persisted
+facts rather than a prior in-memory state", and that "the caller performs the
+single durable store transaction that seals the record". The enroll handler is
+that caller. Its correctness on the crash boundary is defined entirely in terms
+of a persisted record and a persisted invalidation marker, neither of which
+exists before `ADR046-store-004`.
+
+One correction to the shipped code's own account, recorded rather than
+silently reconciled: the `service.rs` module documentation still names the
+absent Zone session contract as the blocker and says
+`d2b_contracts::v3::zone_session` "is still empty". The session contract and
+the enrollment state machine have since landed in `packages/d2b-bus/src/session/`.
+The stale comment is not corrected here, because `service.rs` belongs to the
+sealed W2; the W5 slice that lands the handler should correct it.
 
 ## 2. Semantics inferred where the specification is silent
 
@@ -101,7 +155,7 @@ also invisible until wired, so it must not be mistaken for working behaviour.
 | Debt | Detail | Owner |
 | --- | --- | --- |
 | `flake.nix` zone-schema-drift check | The work item asks for `checks.<system>.zone-schema-drift` plus a matrix pin refresh. Not added. | W2 |
-| `public_mint_surface` runtime | Renders rustdoc for all 47 workspace members sequentially into isolated target dirs; roughly 30 minutes and growing with every crate added. The render phase is parallelizable; the dependency ordering is only needed for the analysis phase. | Integrator decision, standalone change |
+| `public_mint_surface` runtime | Renders rustdoc for every workspace member sequentially into isolated target dirs; roughly 30 minutes and growing with every crate added. Its earlier characterization here - that the render phase is parallelizable and the dependency ordering is only needed for the analysis phase - is corrected below; the ordering is needed by the render itself. | **Ruled: W3.** See section 9 |
 | Unknown-spec-field rejection | Cannot be enforced while the shared `spec` type injects execution-policy defaults into every resource. Needs the generated per-type submodule to replace the freeform type, which requires editing a file the generator slice does not own. `nix-unit: zone-link-closed-spec` cannot pass until then. | W2 |
 | Two engine refusal branches unreachable from outside | The contract constructors already reject the shapes that would trip them, so they guard only the deserialization path. Exercising them needs a deserialization-based vector, a different surface than the vector suite owns. | W2 panel to rule |
 | Enrollment validation obligations | Four obligations unmet, blocked on the session contract. | W2, with routing-007/009 |
@@ -139,6 +193,28 @@ and never corrected inside an implementation wave.
   fields. Not emitted.
 - **Frozen Provider method taxonomy** has no v3 re-freeze, so the capability
   set is a bounded token set rather than the specified taxonomy.
+- **W3 destination set disagrees with the section 3.2 wave table.**
+  `docs/specs/ADR-046-validation-and-delivery.md` section 3.2 gives W3's
+  destinations as only `packages/d2b-provider/`, `packages/d2b-provider-toolkit/`
+  and a `packages/d2b-provider-<base>-<implementation>/` skeleton generator. It
+  names neither `packages/d2b-contracts/src/v3/provider.rs` (destination of
+  `ADR046-provider-001`), nor
+  `packages/d2b-contracts/src/v3/semantic_services/` (destination of
+  `ADR046-provider-004`), nor `packages/d2b-provider-system-core/` (destination
+  of `ADR046-provider-003`). The same table lists
+  `packages/d2b-provider-system-{core,systemd,minijail}/` in its **W5** row,
+  while `ADR046-provider-003` is a W3 item in
+  `ADR-046-implementation-graph.json`. `ADR-046-work-items.json` is canon:
+  FR-046 makes the generated manifests authoritative over prose on wave
+  assignment, destination paths, and work-item identity, and `tasks.md` states
+  that each task is a pointer to a manifest entry and that those manifest
+  fields are the task. Implementers follow the manifest; the section 3.2 W3 and
+  W5 rows are treated as stale prose for those entries only. Not corrected in
+  place, per FR-046 - `ADR-046-validation-and-delivery.md` is untouched, and
+  this is the same shape as
+  [`amendment-w2-destination-drift.md`](./amendment-w2-destination-drift.md),
+  which should carry the prose change in its own amendment with its own
+  validation and panel round.
 - **Zone and Volume assertion messages rewritten for FR-017 actionability.**
   A panel finding established that the assertion messages pinned verbatim by
   the specification were not FR-017 compliant: each named the violated rule
@@ -181,16 +257,37 @@ New debt discovered while completing the wave's last five items.
 
 | Debt | Detail | Owning wave |
 | --- | --- | --- |
-| Appended Zone tags cannot reach the wire | The session contract appends six Zone members at new tags, but the canonical handshake offer encoder types its fields with the un-extended enums and lives in a file no W2 slice owned. Widening it in place would have invalidated the committed golden vectors. Enrolled links and bootstrap use preserved tags, so ZoneLink is unaffected; carrying an appended tag needs an owned decision on the offer encoding. | W3 |
+| Appended Zone tags cannot reach the wire | The session contract appends six Zone members at new tags, but the canonical handshake offer encoder types its fields with the un-extended enums and lives in a file no W2 slice owned. Widening it in place would have invalidated the committed golden vectors. Enrolled links and bootstrap use preserved tags, so ZoneLink is unaffected; carrying an appended tag needs an owned decision on the offer encoding. **Not W3**: the encoder is `packages/d2b-session/src/handshake.rs`, and no W3 work item names `packages/d2b-session/`. `ADR046-exec-018` (W5) owns the v3 session wire types and re-types `EndpointPolicy` - `encode_offer`'s sole input - onto v3 `ZoneId`/`ProviderId`, and `ADR046-reuse-001` (W5) owns the v3 contract extension to that crate. | W5, `ADR046-exec-018` |
 | Session tag values are an inference | No specification fixes the numeric tags for the six appended members, nor the ZoneLink service wire string. The scheme chosen is append-only, next unused tag, never renumber, with two tags permanently reserved rather than reused. These are wire-visible and need panel confirmation before anything depends on them. | W2 panel |
 | Subject-digest prologue field is a choice | The specs name no field for the subject-context digest. It is folded into the existing channel binding, which is already inside the canonical offer and therefore inside the handshake prologue, so no wire change was needed. Worth confirming. | W2 panel |
-| Sealed enrollment record does not bind the child uid | The spec says the record binds the child static key pin to the child Zone uid. The session module holds the fingerprint and an opaque allocator-binding digest; the uid binding belongs to the durable store transaction owned by the ZoneLink controller. | W3 |
-| No durable persistence for enrollment | Recovery takes the persisted facts as arguments. The store transaction that seals or invalidates a record is the controller's and is not implemented. | W3 |
+| Sealed enrollment record does not bind the child uid | The spec says the record binds the child static key pin to the child Zone uid. The session module holds the fingerprint and an opaque allocator-binding digest; the uid binding belongs to the durable store transaction owned by the ZoneLink controller. **Not W3**: no W3 work item owns `packages/d2b-session/` or `packages/d2b-core-controller/`. The transaction is `ADR046-store-004`, destination `packages/d2b-resource-store-redb/src/transaction.rs`, which the graph places in W5; the controller-side write lands in `zone_links.rs` behind it. | W5, `ADR046-store-004` |
+| No durable persistence for enrollment | Recovery takes the persisted facts as arguments. The store transaction that seals or invalidates a record is the controller's and is not implemented. **Not W3**: same determination as the row above - the durable store backend and its transaction module are `ADR046-store-004` in W5, and no W3 destination is a store or controller path. | W5, `ADR046-store-004` |
 | `component_session` runtime tests not duplicated | The bus re-exports the session runtime rather than forking it, so its 2,121 lines of tests were deliberately not copied; they run in the owning crate. The ported golden vectors are the port evidence. A scope judgement worth a reviewer's confirmation. | W2 panel |
-| Principal digest has no frozen domain tag | The cross-Zone idempotency key needs a subject digest, but the frozen digest-tag list has no principal or subject tag, so the digest is currently undomained. If a tag is later frozen, the computation changes. | W3 |
-| No closed reason for a multi-Zone batch | The routing reason enum has no variant for a batch spanning Zones, so a structural error is returned rather than misusing an unrelated routing reason. | W3 |
+| Principal digest has no frozen domain tag | The cross-Zone idempotency key needs a subject digest, but the frozen digest-tag list has no principal or subject tag, so the digest is currently undomained. If a tag is later frozen, the computation changes. **Not W3**: the digest site is `packages/d2b-bus/src/zone_route.rs` (`ADR046-routing-005`, W2) and the frozen tag list is decision D101, landed by `ADR046-object-001` in W0. Both waves are sealed, and no W3 destination is either file. **Ruled: amendment-shaped, batched with the row below.** | Amendment, not wave work: [`amendment-frozen-cross-zone-contracts.md`](./amendment-frozen-cross-zone-contracts.md), before W6 |
+| No closed reason for a multi-Zone batch | The routing reason enum has no variant for a batch spanning Zones, so a structural error is returned rather than misusing an unrelated routing reason. **Not W3**: `ZoneRouteFailClosedReason` lives in `packages/d2b-contracts/src/v3/zone_routing.rs`, whose sole owning item is `ADR046-routing-001` in the sealed W2, and the refusal site `ZoneRouteError` is in `packages/d2b-bus/src/zone_route.rs` (`ADR046-routing-005`, W2). No post-W2 item names either file. **Ruled: amendment-shaped, batched with the row above.** | Amendment, not wave work: [`amendment-frozen-cross-zone-contracts.md`](./amendment-frozen-cross-zone-contracts.md), before W6 |
 | Unix session tests delegated rather than ported | The manifest asked to port the unix session tests verbatim, but the integrator wired the owning crate as a dependency instead, so copying them would fork the audited substrate. Zone-level semantics were ported instead. Needs a ruling: accept delegation, or add the syscall dev-dependency and port literally. | W2 panel |
 | Listener portal transport variant | One spec describes a pre-bound socket handed over a portal call while another describes an inherited connected socket. Only the connected form is implemented; the portal wire contract belongs to a transport Provider crate and is unspecified for the bus. | W6 |
+
+## Wave 3 provider-crate layout and naming policy: scope and exemptions
+
+The Wave 3 crate-layout and naming policy - the mandatory `src/`, `tests/`,
+`integration/`, `README.md` shape and the naming rule that `ADR046-provider-002`
+carries - scopes to crates matching `d2b-provider-<base>-<implementation>`.
+
+Two existing crates are **exempt**:
+
+| Crate | Reason for exemption | Owner of retiring the exemption |
+| --- | --- | --- |
+| `packages/d2b-provider-aca` | Pre-ADR-046 crate. Its name carries a single segment after `d2b-provider-`, so it does not match `<base>-<implementation>` at all. `ADR-046-current-code-migration-map.md` dispositions `AcaWorkloadProvider` and its `GuestControlEndpointProvider` impl as REPLACE, superseded by `Provider/runtime-azure-container-apps`. Forcing it to conform in W3 would reshape a crate scheduled for deletion. | W6, `ADR046-aca-001`, whose removal proof is "`packages/d2b-provider-aca/` removed only after conformance suite green" |
+| `packages/d2b-provider-relay` | Pre-ADR-046 crate, same single-segment naming mismatch. The migration map dispositions `AzureRelayTransportProvider` as REPLACE, superseded by `Provider/transport-azure-relay`. | W6, `ADR046-aca-004`, whose removal proof is "`packages/d2b-provider-relay/` removed after `transport-azure-relay` Provider conformance". `ADR046-transport-relay-001` (also W6) retains the relay plumbing until ACA display migration completes, so the exemption cannot retire before both land |
+
+Every other `packages/d2b-provider-*` crate in the tree already matches the
+`<base>-<implementation>` form and is in scope:
+`d2b-provider-system-systemd`, `d2b-provider-system-minijail`,
+`d2b-provider-volume-local`, `d2b-provider-volume-virtiofs`.
+`packages/d2b-provider-toolkit` is the shared toolkit named by
+`ADR046-provider-001`, not a Provider crate, and is out of the naming rule's
+scope by construction.
 
 ## 7. Known flakes observed during Wave 2
 
@@ -302,3 +399,638 @@ allocator FD handoff and its no-socket-activation cell; `routing-009`
 (round-trip, canonical encoding stability, and closed-enum exhaustiveness);
 `routing-012`'s two drift obligations, which the drift gate now runs;
 and `routing-016` other than bootstrap and enroll.
+
+## 9. What implementation debt Wave 3 takes on, and what it does not
+
+Recorded before the wave's slices open, so its scope is settled rather than
+argued at review. Three items are in scope and one named group is explicitly
+not.
+
+### In scope
+
+**1. The v3 Provider-method DTO catalogue.** Already ruled as owned by
+`ADR046-provider-001` and stated in section 0. Discharging it closes the
+Destination caveats recorded against `ADR046-routing-014` and
+`ADR046-routing-015` in section 1, which are the two partial items in the
+Wave 2 delivery claim. Nothing else in the register turns those two rows from
+partial to complete.
+
+**2. The `public_mint_surface` gate runtime.** Wave 3 pays this rather than
+inheriting it, because Wave 3 is the wave that makes it worse. The gate's cost
+scales with workspace member count, and Wave 3 adds at least
+`packages/d2b-provider-system-core/` (destination of `ADR046-provider-003`,
+absent from `packages/Cargo.toml` today) and possibly several more through
+`ADR046-provider-002`'s skeleton generator, which emits one
+`packages/d2b-provider-<base>-<implementation>/` crate per Provider. A wave
+that adds crates to a per-crate-linear gate is the wave that should pay for the
+gate's shape.
+
+The register's earlier characterization was verified against
+`packages/d2b-bus/tests/public_mint_surface.rs` and is **partly wrong**, which
+matters because the wrong half was the argument that the fix is cheap:
+
+- Confirmed: `render_workspace_docs` loops over `dependency_order(packages)`
+  and runs one `cargo doc --no-deps -p <package>` per workspace member, in
+  sequence, into a per-crate isolated render directory.
+- Corrected: the dependency ordering is **not** needed only by the analysis
+  phase. Before rendering a package, the loop calls
+  `plant_dependency_doc_link` for every already-rendered crate
+  (`external_docs.iter().chain(docs.iter())`), symlinking those render roots
+  into the package's own doc root. A render therefore consumes the output of
+  the renders before it, and a flat parallel render would not have them.
+- Consequence for the fix: a render/analyze split is **not** available in the
+  form the register claimed. What is genuinely available is (a) hoisting the
+  pure source scans - `hidden_public_api` and
+  `source_capability_inventory_with_externals` - out of the render loop, since
+  neither reads rendered output, and (b) parallelising the render *within* each
+  level of the dependency order rather than across the whole workspace. Both
+  are real wins; neither is the flat parallelisation the old wording implied.
+  A Wave 3 slice must scope to the corrected shape.
+
+**3. A build-level determinism flake check for Wave 3's own generated Nix
+catalog.** Section 8 records that the flake-check layer - proving a generator
+emits identical output across two independent evaluations - is the one thing
+neither construction-time tests nor the drift gate cover. The drift gate
+compares a generator's output against the committed tree, which catches a
+generator that changed; it does not catch a generator that emits different
+bytes on two runs of the same input. Wave 3 ships a new generator
+(`ADR046-provider-002`'s Provider package and catalog emitter), so it must not
+repeat the gap it can see in the wave before it.
+
+### Not in scope
+
+**4. The missing nix-unit eval cases and host-integration checks recorded
+against `ADR046-routing-011`, `ADR046-routing-012`, `ADR046-routing-013` and
+`ADR046-primitives-003`.** These stay where section 8 puts them.
+
+Two reasons, and the first is sufficient on its own. Every one of those
+obligations is owed by a work item in the sealed Wave 2 and already carries a
+recorded owner; transcribing them into Wave 3 would give the same obligation
+two wave attributions and make the wave that discharges it ambiguous, for no
+gain in when it actually lands. Second, several cannot execute yet regardless
+of who owns them: section 3 records that `resources-volume.nix` and
+`options-zones.nix` are imported by no module, and section 8 records that the
+host-integration obligations need both those imports and a production store,
+all owned by later waves. Writing them in Wave 3 would produce checks that do
+not run.
+
+What Wave 3 does owe them is the pattern. Item 3 above establishes the
+build-level determinism flake check on Wave 3's own generator; the
+`ADR046-routing-012` determinism obligations follow that shape when their wave
+lands, rather than each wave re-deciding what a determinism check looks like.
+
+---
+
+## 10. Added at Wave 3 close
+
+Debt reported by the wave's three slices, each verified against the tree
+before it was recorded rather than transcribed from the slice's own account.
+Where verification disagreed with a slice, the tree is recorded and the
+disagreement is stated.
+
+The three categories the register already separates are kept apart here,
+because the distinction is what makes the entry actionable: an **unmet
+obligation** names work someone still owes, an **inference** names a reading a
+reviewer must confirm or correct, and a **specification correction** names a
+place where shipped code and written specification disagree and code was kept.
+
+### 10.1 Unmet obligations
+
+| Debt | Detail | Owning wave |
+| --- | --- | --- |
+| v3 Provider-method DTO catalogue, remainder | Partly delivered, and the rest is blocked on specification content that does not exist. Verified in `packages/d2b-contracts/src/v3/provider.rs`: method names exist for **one** of the eleven Provider families - the Transport triple `openTransport`/`closeTransport`/`observeTransport` and the controller currency triple `assessUpdate`/`planUpgrade`/`executeUpgrade` - and nothing is named for display, clipboard, notification, shell-terminal, credential, device, volume or network. **No request or response payload is written anywhere for any method**, including the six that are named: `openTransport` is described as returning an opaque handle and observations whose shape appears in no document. There is no proto, no frozen service name and no field numbering, which is exactly what `ADR046-routing-015` needs to freeze. Consequence, confirmed in the tree: `packages/d2b-provider/src/identity.rs` and `src/lib.rs` name the `ProviderInstance` sum type and the `RpcProviderProxy` payload only in prose, no such type exists, and the registry stays generic over the runtime's own opaque instance handle. | `ADR046-provider-001` retains ownership. **What would unblock it**: a specification amendment that (a) names the methods of the remaining ten families, (b) writes the request and response payload for every method including the six already named, and (c) freezes a service name and field numbering. Until that lands, no wave can discharge it, and scheduling it into a later wave would only move the same hole |
+| Catalog / Provider-manifest parity test | **DISCHARGED in `e15f88cc`, after this row was written.** The row's finding stands as history: the offline Nix catalog (`nixos-modules/generated/provider-catalog-shape.nix`, 25 fields) and the `ProviderManifest` DTO (`packages/d2b-contracts/src/v3/provider.rs`) described the same Provider facts in two places with nothing comparing them, and the packaging slice's deferral to "whichever lands second" was void because both landed inside Wave 3, in `56196815` and `753e1e63`. What discharges it: `the_catalog_shape_and_the_provider_contract_describe_the_same_fields` in `packages/xtask/src/provider_packaging.rs`, which compares the generated catalog's flattened field set against the fields the contract structs declare. `xtask` is a member of `packages/Cargo.toml`, so the test runs enforcing under `make test-rust`. The divergences it found are not resolved by its existence - they are pinned as exact data in the test and read out in section 12.4, so resolving any of them fails the test until the register entry is struck in the same change | Closed in W3, `ADR046-provider-002` |
+| Two conformance cells duplicated per Provider crate | `packages/d2b-provider-system-{systemd,minijail}/tests/execution_parents.rs` are near-identical files, differing only in the provider type and one test name. Two cells belong in the shared suite: execution-parent neutrality and the disagreeing wait owner. The slice named them `assert_execution_parent_is_neutral` and `assert_a_disagreeing_wait_owner_quarantines`; **those are proposed suite-helper names, not names in the tree** - the cells are currently spelled `a_non_host_execution_parent_yields_the_same_status_shape` and `a_candidate_whose_wait_owner_disagrees_is_quarantined` in both crates. The suite is `packages/d2b-process-conformance/src/suite.rs`, which no Wave 3 slice owned | The wave that next owns `packages/d2b-process-conformance/` |
+| No Provider dossier parity check | **DISCHARGED in `e15f88cc`.** See section 11; recorded there with the rest of the audit, and with exactly what discharges it | Closed in W3, `ADR046-provider-002` |
+| `d2b-provider-toolkit` has no `[dev-dependencies]` | Confirmed: its `Cargo.toml` declares one dependency and no dev-dependency table, so its integration tests cannot use `serde_json`. Malformed-wire rejection is therefore proved in the contracts module rather than against the toolkit's own fakes. Not wrong, but the coverage sits one crate away from the surface it describes | W3 or any later slice touching the toolkit; a two-line manifest change |
+| `SchemaVersion` has no component accessor | Confirmed: `packages/d2b-contracts/src/v3/resource_schema.rs` exposes no `major()` or `minor()`, so `schema_version_parts` in `provider.rs` renders the type's own canonical string and parses it back. The comment in that function states the reasoning, and it is sound - the canonical spelling is the contract's own round trip, so the parse is exact rather than lossy. It remains indirect, and a one-line accessor would remove the parse and its two `expect` calls | Cosmetic. Any later slice owning `resource_schema.rs` |
+
+### 10.2 Semantics inferred where the specification is silent
+
+| Where | Inference | Owning wave |
+| --- | --- | --- |
+| `v3/provider.rs` | The D089 standard capability matrix is modelled as a bounded token map (`StandardCapabilityMatrix(BTreeMap<BoundedToken, CapabilitySupport>)`) rather than a frozen enum, because the specification mandates the matrix and names the classes it covers but never enumerates the optional-capability identifiers. Absence fails closed: a capability the matrix does not list is unsupported rather than assumed. This is the same shape, and the same reason, as the v3 capability catalogue already recorded against `v3/zone_routing.rs` in section 2 | W3, before the Provider capability surface is treated as frozen |
+| `nixos-modules/generated/provider-catalog-shape.nix` | The catalog's **25 field names** are an inference. The specification's bullets name concepts, not identifiers, so the field **set** is the specification's and the **names** are not. The file records the concept-to-field mapping explicitly in its `fieldGroups`, which is the right shape for a later reviewer to check the inference rather than rediscover it | W3, confirmed by the parity test recorded in 10.1 |
+
+### 10.3 Specification drift found while implementing
+
+Recorded per the standing rule that drift is raised as a separate amendment
+and never corrected inside an implementation wave.
+
+- **Provider crate-layout policy file name and lane.**
+  `docs/specs/ADR-046-resources-zone-control.md` section 4.8.2, the
+  `ADR046-pkg-001` Destination, and the matching entries in
+  `ADR-046-work-items.json`, `ADR-046-implementation-graph.json` and
+  `docs/specs/providers/ADR-046-provider-activation-nixos.md` all name
+  `packages/d2b-contract-tests/tests/policy_provider_crate_layout.rs`, routed
+  through the **advisory** `test-fixture-contracts` lane. The slice shipped
+  `packages/d2b-contract-tests/tests/policy_provider_crates.rs`, wired into the
+  **enforcing** hermetic `test-policy` lane at `tests/test-policy.sh`. The
+  reasoning is sound and is kept: the check is filesystem-only and compiles
+  nothing, so it is hermetic, and a hermetic check belongs in an enforcing lane
+  rather than one that is advisory until fixture delivery is wired. Code is
+  canon. Not corrected in place, per FR-046; the prose change belongs in its
+  own amendment with its own validation and panel round, alongside the
+  destination drift already recorded in section 5.
+- **Two provider-level identity checks are unreachable through valid input.**
+  In `packages/d2b-provider-system-{systemd,minijail}/tests/execution_parents.rs`
+  the user-domain identity requirement cannot be reached through the provider,
+  because the launch ticket refuses to be constructed without an exact user
+  under a Host and under a Guest alike. The assertions are therefore pinned
+  where the rule is genuinely enforced, in the ticket constructor, and both
+  tests say so in their own comments: the controller's check is defence in
+  depth rather than the only guard. This is worth recording rather than
+  silently accepting, because the visible effect is a provider-level rule with
+  no provider-level test, which reads like missing coverage. Relaxing either
+  primitive now fails visibly instead of quietly removing a guarantee.
+
+### 10.4 Code that exists but is unreachable
+
+Extending section 3 rather than restating it.
+
+- `packages/d2b-provider-system-{core,systemd,minijail}` have **no production
+  caller**. Verified: no workspace `Cargo.toml` outside those three crates
+  depends on any of them, and no `nixos-modules/` file names them.
+- All three crates' `integration/` directories hold only a `README.md`. That is
+  deliberate, not an oversight: without the production launch adapter a fixture
+  written there could only drive a fake, which would assert nothing about a
+  real system while looking as though it did.
+- Everything the system Provider slice delivered is therefore **hermetic**. The
+  core's User reconciler is proven only over a scripted discovery port
+  (`ScriptedDiscoveryPort` in `src/testing.rs`), and both Process Providers only
+  over a scripted effect port. Specifically unproven: that a real NSS lookup
+  produces the bindings claimed; that a real transient unit's invocation-id,
+  cgroup, main-pid and start-time verification behaves as the profile assumes;
+  that a real pidfd spawn does; and that the pid-reuse guard fires against an
+  actually reused pid. **Owner: `ADR046-process-001`, which
+  `ADR-046-implementation-graph.json` places in `W4`** - read from that item's
+  node, whose `wave` field is `W4` and whose `exitGate` names the W4 exit
+  criteria. This agrees with the `ADR046-primitives-002` row already in
+  section 1.
+- `UserDiscoveryEffectPort` (`packages/d2b-provider-system-core/src/user.rs`) is
+  **new surface introduced by that crate**, not something the Provider
+  catalogue defined. If the catalogue later defines an equivalent discovery
+  port, it should supersede this one rather than sit beside it, or the same
+  concept acquires two incompatible spellings.
+
+### 10.5 Already recorded, verified not duplicated
+
+`packages/d2b-provider-aca` and `packages/d2b-provider-relay` remain
+non-conformant to the crate layout and exempt by name. This was already ruled
+and recorded above under "Wave 3 provider-crate layout and naming policy",
+with a retirement owner for each. Verified still accurate against
+`packages/d2b-contract-tests/tests/policy_provider_crates.rs`, whose
+`the_two_recorded_exemptions_are_exactly_the_naming_mismatches` case pins the
+exemption set to exactly those two. No new entry.
+
+### 10.6 One honest limit on the determinism check
+
+The build-level determinism check
+(`tests/unit/smoke/provider-catalog-determinism-eval.nix`) discharges item 3 of
+section 9, and its limit should be stated so a later reader does not
+overclaim it.
+
+Nix attribute sets are key-ordered by construction, so consumer authoring order
+could **not** have leaked through the `lib.attrNames` calls in
+`nixos-modules/provider-catalog.nix` even without the explicit `lib.sort`. The
+sort is correct and worth keeping as a statement of intent, but it is not what
+the check proves. What the check genuinely proves is that **nothing else
+evaluation-order-dependent reaches the bytes**: it compiles the catalog twice
+from separately constructed module lists that reach the same declared value by
+different routes, and its negative control requires a third, different
+evaluation to produce different bytes, so the comparison cannot have
+degenerated into comparing a constant with itself.
+
+## 11. Validation obligations not met by Wave 3
+
+Built the way section 8 was rebuilt: by reading the `validation` field of every
+one of the wave's four work items against the tests that actually exist, rather
+than by transcribing what a slice happened to report. Two obligations below
+were named by no slice.
+
+| Work item | Validation obligation | State | What would discharge it |
+| --- | --- | --- | --- |
+| `ADR046-provider-001` | Contract vectors | **Partial.** `provider.rs` carries `schema_vector_pins_the_minimal_provider_base_spec` and `manifest_vector_round_trips_through_canonical_bytes`, which pin the Provider base spec and the manifest. There is no vector for any Provider **method** DTO, because per 10.1 no method payload is specified | The specification amendment in 10.1, then one vector per method |
+| `ADR046-provider-001` | Fake / malicious Provider | **Met.** `packages/d2b-provider-toolkit/tests/{fake_provider,malicious_provider}.rs` | - |
+| `ADR046-provider-001` | One-crate / one-identity policy | **Met, but delivered outside this item's Destination.** The rule is enforced by `one_crate_is_exactly_one_provider_identity` in `policy_provider_crates.rs`, which the packaging slice owns. Recorded so a later reader does not look for it under `ADR046-provider-001`'s three destination paths and conclude it is missing | - |
+| `ADR046-provider-002` | Workspace **naming** policy | **Met.** `the_naming_convention_reads_base_before_implementation`, plus the pinned exemption case | - |
+| `ADR046-provider-002` | Workspace **dependency** policy | **Met.** `every_provider_crate_respects_the_dependency_direction`, with negative cases for the daemon, broker, store and a sibling Provider | - |
+| `ADR046-provider-002` | Workspace **output** policy | **Not met, but this row mislocates the obligation. Corrected in section 12.1; read that first.** The finding as originally written asserted that `nixos-modules/provider-catalog.nix` should have asserted something about a derivation's shape. It should not, and could not. What is genuinely unmet is the crate-to-package-output cardinality rule | Section 12.1 |
+| `ADR046-provider-002` | Workspace **dossier** parity policy | **Met, in `e15f88cc`, after this row first recorded it as unmet with no partial coverage at all.** Discharged by `check_dossier_parity` in `packages/d2b-contract-tests/tests/policy_provider_crates.rs`, driven on the real tree by `every_provider_crate_has_a_dossier_declaring_the_same_identity`. Three things about its shape are worth stating so a reader can verify it without re-deriving it. **Direction**: the check is crate-driven, and deliberately not symmetric. A dossier with no crate is legitimate, because the dossier set is the frozen initial Provider catalog and later waves implement against dossiers that already exist; a crate with no dossier is the failure. **Identity correspondence**: it does not merely pair a crate with a file. It resolves the crate name to the identity it denotes, requires `docs/specs/providers/ADR-046-provider-<identity>.md` to exist, and requires that dossier to carry exactly one `Spec ID` table row declaring that same identity - so a crate paired with the wrong dossier, a dossier with no `Spec ID` row, and a dossier with two are each rejected. **Anti-vacuity**: `a_dossier_without_a_crate_is_not_a_violation` asserts against the real tree that at least one crate-less dossier actually exists before it asserts that such dossiers are reported by nobody, so the asymmetry is proved over a populated case rather than over an empty one; `the_dossier_directory_holds_the_frozen_provider_catalog` separately pins that the directory the check reads is real and populated. The two recorded exemptions are unchanged and still pinned by `the_two_recorded_exemptions_are_exactly_the_naming_mismatches` | - |
+| `ADR046-provider-002` | **Catalog parity** policy | **Met, in `e15f88cc`, after this row first recorded it as unmet.** Discharged by `the_catalog_shape_and_the_provider_contract_describe_the_same_fields` in `packages/xtask/src/provider_packaging.rs`, an enforcing `make test-rust` surface. The obligation is to compare the two descriptions, and that is met; the divergences the comparison found are a separate open item, pinned as exact data in the test and recorded in 12.4 | - |
+| `ADR046-provider-003` | Shared conformance tests | **Met at the logic layer, unproven at every real boundary.** The shared suite in `packages/d2b-process-conformance/src/suite.rs` runs against both Providers, and two further cells are duplicated per crate rather than shared (10.1). Every cell runs over `ScriptedEffectPort` | `ADR046-process-001` in W4, then the same suite re-run against the production adapter |
+| `ADR046-provider-003` | Host / user / non-Host tests | **Met at the logic layer.** `tests/host_reconciliation.rs`, `tests/user_discovery.rs` and both `tests/execution_parents.rs` cover the three cases, over injected ports only | As above |
+| `ADR046-provider-004` | Shared semantic Service / Binding contract tests, and generated schema artifacts for the eight exact qualified ResourceTypes | **Audited in full; see section 13.** This row previously read "Not assessable here" and deferred to "the semantic-services slice's own audit". That deferral had no owner and nothing behind it, so it is retired rather than left standing. Summary of the result recorded in section 13: eleven of the sixteen enumerated obligations are met, four are met only at a weaker level than the phrase implies, one is met, and the item ships two live caveats - a telemetry Binding whose common status layer is empty and rejects everything, and a security-key family that cannot construct a signed projection factory at all - which were recorded only in Rust source comments and pinned by tests until now | Section 13, and the two amendments it names |
+
+Two further observations from the audit, neither of which is an obligation.
+
+The wave's four items are unusually asymmetric in how much their `validation`
+fields commit to. `ADR046-provider-003` names two things in six words;
+`ADR046-provider-004` enumerates around fourteen. A short validation field is
+not a weaker obligation - it is a less legible one, and 10.4 is what a
+six-word field looks like when it is discharged only over scripted ports and
+nothing in the field says it must not be.
+
+The single largest gap this wave leaves is not any one of the entries above.
+It is that **three crates, one Nix catalog and one Provider contract are all
+proven only against each other**. Every Wave 3 deliverable is hermetic by
+construction, every one is unwired, and the first evidence that any of it
+matches a real system arrives with `ADR046-process-001` in W4. That is the
+correct sequencing and it was chosen deliberately, but it means a green
+Wave 3 gate is evidence about internal consistency and not about behaviour.
+
+## 12. Corrections and new findings on the `ADR046-provider-002` output and parity obligations
+
+Section 11 audited `ADR046-provider-002`'s five-term validation phrase -
+"Workspace naming/dependency/output/dossier/catalog parity policy" - and got the
+**output** term wrong. The correction is recorded here rather than silently
+rewritten in place, because a mislocated obligation that is quietly moved leaves
+no trace that the earlier reading was ever held.
+
+### 12.1 Correction: the output obligation was located in the wrong actor
+
+**What section 11 claimed.** That the output term was unmet because
+`nixos-modules/provider-catalog.nix` "asserts nothing about that derivation's
+shape", and that discharging it needed "a check on the emitted Provider
+package's outputs".
+
+**Why that is wrong.** Two independent reasons, either sufficient.
+
+First, the sentence the term comes from is a **cardinality** rule, not a
+contents rule. The crate/package boundary section of
+`docs/specs/ADR-046-provider-model-and-packaging.md` reads
+`- has one Nix package/conformance output;` inside a bullet list whose other
+members map one-to-one onto the remaining four terms of the same validation
+phrase: `declares one Provider identity` (naming), `depends only on public
+neutral contracts/toolkit/SDK crates` and `does not import d2bd, broker,
+Zone-store, Nix-emitter, or another Provider's implementation internals`
+(dependency), `has one ADR-046-provider-<provider-name>.md dossier` (dossier),
+and the "Package catalog" section the same document carries (catalog parity).
+Every one of those four is a filesystem or manifest scan. Reading the fifth as a
+derivation-contents check makes it the only member of a homogeneous list that
+means something structurally different.
+
+Second, the derivation-contents requirement exists, but it is stated in a
+**different specification and assigned to a different actor**.
+`docs/specs/ADR-046-resources-zone-control.md` section 14.10, "Phase 2 - Nix
+build", carries the row:
+
+> Artifact catalog entry has required derivation outputs (manifest, config
+> schema, executable) - Provider only | Resource compiler | build failure
+
+The mechanism column names the **resource compiler**, and the phase is Nix
+**build**. `provider-catalog.nix` is Phase 1 NixOS eval. A pure eval cannot read
+the contents of a derivation it has only declared, so that check could never
+have lived there, and the section 11 remediation was unimplementable as written.
+
+**Where the derivation-contents rule actually belongs.** Work item
+**`ADR046-zone-control-015`**, wave **W5**. Determined by reading the manifests
+rather than inferring: the item's `destination` is
+`packages/d2b-resource-compiler/src/{main,bundle,schema,validator,digest,sort,secret_lint,generation}.rs`
+exposed as `pkgs.d2b-resource-compiler`; its `detailedDesign` opens "Implement
+all Phase 2 build-time checks (§14.10 Phase 2 table)" and states explicitly that
+for each `d2b.artifacts.*` entry the compiler must "extract and hash manifest and
+config schema files"; its `validation` field enumerates the section 15.8 Phase 2
+build tests. The wave is read from that item's node in
+`ADR-046-implementation-graph.json`, whose `wave` field is `W5`. The
+`implementationState` is `Planned` and no `packages/d2b-resource-compiler/`
+exists in the tree, so nothing about this obligation is discharged anywhere
+today.
+
+**What the output term therefore is, and its state.** A cardinality rule over
+the workspace: one Provider crate yields one Nix package output, not several.
+Its state is recorded in 12.2 immediately below, because attempting to check it
+is what exposed the gap.
+
+### 12.2 Specification gap: the required derivation outputs have no path, name, or layout
+
+**Unimplementable as specified.** The Phase 2 row above names three required
+derivation outputs - manifest, config schema, executable - and specifies no
+path, no filename, no Nix output name, and no directory layout for any of them.
+`docs/specs/` was searched for `manifest.json`, `provider-manifest`,
+`config-schema`, `$out` and `/bin/`; none appears in any Provider packaging
+context. Nor can "existing code is canon" resolve it: no Provider crate has a
+Nix package output at all (`packages.x86_64-linux` exposes thirteen attributes,
+none naming any of the nine `packages/d2b-provider*` crates), no Provider crate
+carries a `.nix` file, and nothing anywhere in this tree asserts a derivation's
+internal shape, so there is no precedent to follow either.
+
+Consequently an implementer of `ADR046-zone-control-015` cannot write that check
+without **inventing the layout contract every Provider package must satisfy**,
+and an invented layout would be indistinguishable from a specified one the moment
+it is committed and the first Provider package is built against it.
+
+**This needs a specification amendment, not a wave.** The amendment must fix,
+for a Provider derivation: the output name or names, the exact relative path of
+the signed manifest, the exact relative path of the root config JSON Schema, and
+how the executable set is located - which must be consistent with the artifact
+catalog's `executableDigests` being a `map[name]sha256` with one entry per built
+binary. Until it lands, `ADR046-zone-control-015` carries a hole in the middle of
+its own Phase 2 table.
+
+**Consequence for the output term, stated separately so the two are not
+conflated.** The cardinality rule of 12.1 is likewise not checkable from this
+source tree today, for a related but distinct reason: with zero Provider crates
+carrying any package output, there is no relation in the tree between a Provider
+crate and "its" Nix package output, so counting that relation would require
+inventing the naming convention that maps one to the other. No such check was
+written. Writing one against an invented mapping would encode a convention the
+tree does not hold, which is the same failure the dossier-parity work already
+declined when it chose the spec-id row over the owners row.
+
+One thing is worth recording so the term is not later read as wholly unaddressed.
+`nixos-modules/provider-catalog.nix` types `d2b.artifacts.<id>.package` as
+`types.package` - singular, one derivation per `artifactId`, and an `artifactId`
+selects exactly one Provider. That is the cardinality rule enforced structurally
+at the one point where a Provider derivation enters d2b, by the option type
+rather than by an assertion. This is an **inference**, not a discharge: it is a
+defensible reading that the option type already satisfies the bullet, and a
+reviewer should confirm or reject it. If confirmed, the output term is met and
+section 11's row closes; if rejected, the term stays open behind the amendment
+above.
+
+### 12.3 Specification gap: the required-outputs rule has no conformance scenario
+
+Smaller, and independent of whether 12.2 is amended.
+
+The Phase 2 build-test table gives a named conformance scenario for each of the
+two digest-mismatch rows - `nix-build-schema-digest-mismatch` and
+`nix-build-manifest-digest-mismatch` - but gives **no scenario at all** for the
+required-outputs-present row. Verified by reading the whole table: its fifteen
+entries are `nix-build-artifact-id-missing-from-catalog`,
+`nix-build-artifact-wrong-type-rejected`, `nix-build-duplicate-artifact-id`,
+`nix-build-artifact-store-path-absent-from-bundle`,
+`nix-build-artifact-store-path-absent-from-config`,
+`nix-build-config-schema-failure`, `nix-build-schema-digest-mismatch`,
+`nix-build-manifest-digest-mismatch`, `nix-build-resourcetype-collision`,
+`nix-build-bundle-sorted`, `nix-build-content-hash-stable`,
+`nix-build-artifact-catalog-digest-anchored`,
+`nix-build-credential-ref-survives-build`,
+`nix-build-inline-secret-lint-warning` and
+`nix-build-inline-secret-strict-failure`. None of them is an
+absent-required-output case.
+
+The effect is that the rule is stated once, in the section 14.10 Phase 2 table,
+and has **no conformance identity to cite**. `ADR046-zone-control-015`'s
+`validation` field enumerates those fifteen scenarios by name, so an
+implementation that omitted the required-outputs check entirely would satisfy
+its stated validation. The amendment of 12.2 should add the missing scenario in
+the same edit that fixes the layout, since a scenario cannot be written without
+one.
+
+**One correction to how this was reported to the register.** The finding reached
+here as "section 15.3's Phase 2 build-test table". Section 15.3 is
+"Provider tests"; the Phase 2 build-test table is in section **15.8**,
+"Configuration generation and cleanup tests", and both work items that cite it
+cite it as §15.8. The finding is correct; only the section number was wrong.
+
+### 12.4 The catalog/manifest parity divergences, now confirmed by a landed test
+
+Section 10.1 recorded the catalog/manifest parity test as owed. It landed in
+`e15f88cc`, and it found real divergence, which it pins as exact data so that
+resolving any of it fails the test and forces the entry to be struck in the same
+change. The findings are read out of
+`packages/xtask/src/provider_packaging.rs` and are recorded here so they are
+visible outside the test that holds them.
+
+**The digest disagreement.** Both artifacts declare exactly six digests and
+agree on four - package, executable, manifest and config. The catalog's other
+two follow the specification bullet
+`package/executable/manifest/component/descriptor/config digests` and name a
+**component** digest and a **descriptor** digest. `ArtifactDigestSet` in
+`packages/d2b-contracts/src/v3/provider.rs` instead names an **exported schema
+set** digest and an **exported service surface** digest. These are different
+facts, not two spellings of one fact, and the contract is the side that departed
+from the bullet's wording.
+
+*Does the specification settle which side is wrong?* **Partly, and not enough to
+act on.** It settles that the catalog's two names are attested concepts: the
+same packaging document names a "component schema digest" among a component's
+declared fields, and a Provider descriptor digest appears as a normative concept
+in several Provider dossiers. It also settles that the contract's two names are
+attested **nowhere**: `exported schema digest` and `exported service surface
+digest` appear in no document under `docs/specs/`. What it does **not** settle is
+whether `ArtifactDigestSet` is obliged to mirror the catalog bullet at all,
+because the one normative artifact-catalog field table - section 4.3.1 of
+`docs/specs/ADR-046-resources-zone-control.md` - enumerates only `digest`,
+`executableDigests`, `manifestDigest`, `configSchemaDigest` and
+`conformanceAttestationDigest`, and names **neither** pair. Two documents
+therefore give two different digest sets for the same artifact, and a third
+spelling sits in the contract.
+
+**Ruling needed**, and it is a three-way reconciliation rather than a choice
+between two: whether the artifact catalog carries six digests or the four-plus-
+attestation of section 4.3.1, and if six, whether the fifth and sixth are
+component/descriptor or schema/service. Recorded as needing a ruling; not
+resolved here, because picking a side would be exactly the invention this
+register exists to prevent.
+
+**Five catalog facts with no counterpart in the manifest at all.** Each is named
+by a specification bullet on the catalog side and absent from `ProviderManifest`:
+package name, version, systems, platform, and support contact. Pinned in the
+test as `CATALOG_FIELDS_WITHOUT_A_CONTRACT_FIELD` alongside the two disputed
+digests.
+
+**One contract-only field.** `TrustEvidence::publisher_trusted` - whether the
+publisher is in the Zone's trusted publisher set at the verified root epoch - has
+no catalog counterpart. Pinned as
+`CONTRACT_FIELDS_WITHOUT_A_CATALOG_FIELD` together with the two contract-side
+digests.
+
+| Finding | Class | Owning wave |
+| --- | --- | --- |
+| Output obligation mislocated to `provider-catalog.nix`; the derivation-contents rule is `ADR046-zone-control-015` | Correction to this register | Recorded, no wave work |
+| Required derivation outputs have no path, filename, output name, or layout | Specification gap | Amendment, before `ADR046-zone-control-015` in W5 |
+| Output cardinality not checkable: no Provider crate has a package output, so the crate-to-output relation does not exist in the tree | Unmet obligation, blocked | Behind the amendment above |
+| `d2b.artifacts.<id>.package` typed `types.package` already enforces the cardinality at the one entry point | Inference, needs confirm or reject | W3 panel |
+| Required-outputs row has no conformance scenario in the section 15.8 Phase 2 table | Specification gap | Same amendment |
+| Catalog names component and descriptor digests; contract names exported schema and service digests; section 4.3.1 names neither | Ruling needed, three-way | Amendment, before the Provider packaging surface is treated as frozen |
+| Five catalog facts absent from the manifest; one contract field absent from the catalog | Unmet obligation, pinned as data | `ADR046-provider-002`, closes when the ruling above lands |
+
+## 13. The `ADR046-provider-004` audit, performed
+
+Section 11's row for `ADR046-provider-004` was a placeholder. It said the
+common semantic Service and Binding catalog was "not assessable here" and
+deferred the assessment to "the semantic-services slice's own audit". No such
+audit was performed and the deferral named no owner, so for the interval
+between `70eb17a4` and this section the register carried a row that recorded
+neither a pass nor a failure for the largest validation field in the wave.
+That is worse than an unmet obligation, because a reader cannot tell from it
+whether anything is owed.
+
+This section performs that audit the same way sections 8 and 11 were built: by
+reading the item's `validation` field in `docs/specs/ADR-046-work-items.json`
+clause by clause against the tests and code that exist in
+`packages/d2b-contracts/src/v3/semantic_services/` and the generated artifacts
+in `docs/reference/schemas/v3/`, rather than by transcribing a slice's account
+of its own work.
+
+One note on method. The Provider-neutrality proof this item leans on was
+rewritten in `c4e89e26` after a panel reviewer found the original vacuous - two
+of its assertions compared a value with itself, a third compared a clone with
+its original, and its byte comparison built the schema contract once, outside
+the loop, with no Provider installed. Everything below audits the **current**
+test, not the one `70eb17a4` shipped.
+
+### 13.1 Obligation by obligation
+
+The `validation` field is one sentence with fourteen comma-separated clauses
+plus a closing sentence, and the item's `destination` carries a sixteenth
+obligation about generated artifacts. Each is taken separately.
+
+| # | Obligation, as the field words it | State | What discharges it, or which part is missing |
+| --- | --- | --- | --- |
+| 1 | Exact names | **Met.** | `the_catalog_names_exactly_the_eight_frozen_resource_types` in `mod.rs` pins the sorted list of all eight dot-qualified types against a literal. `schema_identities_use_the_slash_form_and_the_api_type_uses_the_dot_form` separately pins that the schema identity is `<namespace>/<Type>/{spec,status}` and asserts the dot-qualified infix is absent from it, so the two spellings cannot be conflated. Each family module repeats the pair in `the_pair_names_the_exact_frozen_resource_types` against its own `*_RESOURCE_TYPE` constant |
+| 2 | Strict serde / schema round trips | **Met for `spec`, absent for `status` and for the projection.** `assert_minimal_base_round_trips` serializes the minimal base `ResourceSpec`, deserializes it, compares canonical bytes, and re-validates the decoded value, and every one of the eight members runs it. Nothing round-trips a `status` layer or a projection spec through serde: the status layers are exercised only as field-name sets through `SemanticLayerSchema::validate_names`, and `validate_projection_spec` is driven with hand-built `ResourceSpec` values that are never encoded. The clause says "round trips" without restricting the layer | The two missing layers, or an explicit ruling that the spec layer is the whole obligation |
+| 3 | Common base discoverability without any Provider package | **Met.** | `every_base_contract_builds_with_no_provider_installed` builds `schema_contract(std::iter::empty())` for all eight members and asserts the resulting contract's ResourceType, a `sha256:`-prefixed fingerprint, and version `1.0`. The catalog is a `OnceLock` per family behind `pub fn contract()`, reachable from `d2b-contracts` with no Provider crate in the dependency graph, which is the structural half of the same claim |
+| 4 | Canonical minimal base acceptance without `spec.provider` | **Met.** | Each family's `the_canonical_minimal_base_is_accepted_without_a_provider_extension` runs `minimal_base_spec` for both members and asserts `spec.provider().is_none()` before `validate_minimal_base_spec` admits it. `minimal_base_spec` itself is the enforcing half: it rejects a fixture that supplies `provider`, `providerRef`, or `updatePolicy` (`MinimalBaseReservedField`) and rejects any fixture whose field set is not exactly the required set minus `providerRef` (`MinimalBaseFieldSetMismatch`), so the fixture cannot drift into being minimal in name only |
+| 5 | Same-Zone refs / targets | **Met only at the type half. The same-Zone half is not implemented and not tested.** | `admit_binding_refs` checks two things: that `serviceRef` names this pair's Service ResourceType, and that the target is in the family's closed `BindingTargetType` set. Its own doc comment states the rest plainly - "Both must be same-Zone, which the caller establishes by resolving them in the Binding's Zone before calling" - so the Zone predicate is delegated to a caller that does not exist yet. The one test, `binding_refs_and_targets_are_admitted_against_the_frozen_sets`, covers audio only, with one accepted target, one rejected target, and one foreign Service type; the other three families' target sets are unexercised. **This is the largest gap in the item and it is invisible from the test names**, because a test called "same-Zone refs and targets are admitted against the frozen sets" reads as though it checked Zones |
+| 6 | Owner versus projection discrimination | **Met.** | Structurally by `the_projection_field_set_is_a_strict_subset_of_the_service_base`, which asserts subset **and** strict inequality of cardinality for all four families, so a projection cannot silently become the owner base. Behaviourally by one negative case per family naming that family's owner-only fields: audio rejects `authority`, telemetry rejects `ingestEndpointRefs` and `authorityDescriptor`, USB rejects `backingDeviceRef` and `backingAuthority`, security-key rejects `authority` |
+| 7 | Core projection rejection of `spec.provider` | **Met.** | `validate_projection_spec` returns `ProjectionProviderExtensionForbidden` before any field-name work, and `a_core_projection_rejects_a_provider_extension` drives it with a real `ProviderSpecExtension`. The check is one shared code path, so exercising it on one family is exercising it on four |
+| 8 | Common fields only under `status.resource` | **Met at the registration boundary.** | `a_provider_status_extension_may_not_shadow_a_common_status_field` registers a USB Provider whose `status_details` declares `access`, which the USB Service common status layer already carries, and asserts `schema_contract` **fails**. The enforcement lives in `validate_provider_registration` in `resource_schema.rs`, which returns `ProviderFieldShadowsBase`. `a_pipewire_observation_is_not_a_common_status_field` adds the positive/negative pair on the audio Service layer |
+| 9 | Implementation observation only under `status.provider` | **Met at the same boundary, and only there.** | Same shadow rejection as obligation 8 read from the other side. No test in this module drives `ResourceSchemaContract::validate_envelope`, which is where the full three-layer `status.resource` / `status.provider` split is actually enforced, so the layering is proved over field-name sets and registration rather than over a populated envelope |
+| 10 | Status-only observations | **Met for two families, structurally impossible for a third, absent for the fourth.** | Security-key's `attachment_is_a_status_field_and_not_a_binding_spec_field` and USB's `the_attachment_phase_is_status_only` each assert the field is accepted by the status layer and rejected by the spec layer, which is the shape the clause wants. Audio has no such pair for its Binding. Telemetry cannot have one: its Binding common status layer is **empty**, so there is no observation to prove is status-only, and its test asserts exactly that instead. See 13.2 |
+| 11 | No Device / Endpoint / Binding projection | **Met, though one of its two tests is close to vacuous.** | The discriminating one is `an_export_targets_only_the_owner_service`: for every family it accepts a `ResourceExport.resourceRef` naming the Service and rejects `Device`, `Endpoint`, and that family's own `*Binding`. The other, `a_projection_is_the_same_qualified_service_type_and_never_another_type`, asserts among other things that `audio.d2bus.org.AudioService` is not the string `"Device"`, which cannot fail; its useful content is that the projection's service type equals the pair's Service type and differs from the Binding type |
+| 12 | Implementation-detail rejection | **Met.** | Catalog-wide by `an_implementation_detail_is_rejected_from_every_base_spec`, which pushes `pipeWireNodeAlias` at all eight members. Per family with details that family would plausibly have absorbed: audio `captureAlias`, telemetry `backend` / `ingestProtocol` / `backendEndpointRefs`, USB `busid` / `networkRef` / `relayEndpointRef` / `sysfsPath`, security-key `deviceRef` |
+| 13 | Semantic factory-fingerprint stability under Provider / adapter identity changes | **Met, by `assert_base_is_provider_neutral` and not by the test whose name claims it.** | `the_stored_factory_fingerprint_is_rederivable_from_the_public_inputs` recomputes `factory_fingerprint` from the identical inputs and asserts equality; that is a purity check on a pure function and it would pass however Provider-dependent the catalog were. What genuinely discharges the clause is `assert_base_is_provider_neutral`, run by all four families. It installs two **different** Provider extension registrations, each with its own settings field name, captures the whole Provider-observable surface under each - both schema identities, both versions, all four frozen field sets, both base fingerprints, the projection schema fingerprint, the recomputed factory fingerprint, the canonical bytes of the identical minimal fixture, and a probe map of the contract's enforced accept/reject outcome for every candidate field plus and every present field minus - and requires the two observations to be equal. It carries two negative controls: the two installed contracts must differ from each other, and both fingerprint functions must move when a declared input moves. Structurally, `factory_fingerprint` takes no Provider or adapter argument, which is why the equality holds |
+| 14 | Rejection of every implementation-qualified and former `*State` alias | **Met at a weaker level than "rejection".** | `no_implementation_qualified_or_state_alias_is_registered` builds the set of eight registered types and asserts nine aliases - `audio-pipewire.d2bus.org.AudioService`, `audio.d2bus.org.AudioState`, `device-security-key.*`, `observability-otel.*`, `device-usbip.*` and the rest - are not members. That proves **non-registration**, which is what the module can prove: there is no registry here to reject a lookup, and the module doc records that these eight types are deliberately absent from the closed standard ResourceType registry. An alias presented to a real resolver is rejected by nothing this item ships | The resolver-side rejection, whenever the Zone store admits installed Provider schemas |
+| 15 | Each initial and fake alternate Provider must pass the identical base conformance fixture | **Met.** | Each family runs `every_implementation_passes_the_identical_base_fixture` with its real initial Provider name and an invented alternate: `audio-pipewire` / `audio-alternate`, `device-security-key` / `security-key-alternate`, `observability-otel` / `telemetry-alternate`, `device-usbip` / `usb-alternate`. The fixture string is one constant passed to both, so "identical" is enforced by construction rather than by two fixtures that happen to agree |
+| 16 | Destination: generated schema artifacts for the eight exact qualified ResourceTypes | **Met, and over-delivered.** | `docs/reference/schemas/v3/` holds 20 semantic artifacts: `_spec` and `_status` for each of the eight types, plus one `_projection_spec` per family. They are generated by `packages/xtask/src/semantic_service_schemas.rs` from the catalog itself as single source, and regeneration is gated by `run_xtask gen-semantic-service-schemas` in `tests/unit/gates/drift-check.sh`, which is the **enforcing** `make test-drift` lane. Each carries `additionalProperties: false`, the frozen `properties`/`required` sets, and `x-d2b-*` extensions pinning the ResourceType, schema version and fingerprint; the projection artifacts additionally pin `x-d2b-allowed-backing-ref-types`, the Binding type, and both fingerprints |
+
+Counted as the field words them: eleven met, four met only at a weaker level
+than the clause states (2, 5, 9, 14), and one met for two of four families with
+a recorded reason for the other two (10). Nothing in the field is wholly unmet.
+
+### 13.2 Telemetry's Binding common status layer is empty and rejects everything
+
+Recorded here because it was visible only in a Rust module comment and pinned
+by a single test whose name states it, which is not where a reader of this
+register would look for it.
+
+**What the tree does.** `BINDING_STATUS_ALLOWED` in
+`packages/d2b-contracts/src/v3/semantic_services/telemetry.rs` is the empty
+slice. The layer's required set is empty too, so
+`contract().binding().status().validate_names([])` succeeds and every non-empty
+name set fails with `SemanticContractError::SchemaViolation`. The generated
+`telemetry.d2bus.org_TelemetryBinding_status.schema.json` says the same thing in
+the shipped artifact: `"properties": {}`, `"required": []`,
+`"additionalProperties": false`. `the_binding_common_status_layer_is_closed_pending_frozen_names`
+pins both halves, using `stamped` as the rejected probe.
+
+**The consequence, stated plainly.** A controller reconciling a telemetry
+Binding cannot write **any** common status field. Everything it observes has to
+go under `status.provider`, which means it is implementation-owned rather than
+provider-neutral, which is the opposite of what a common base exists for.
+
+**Why.** The telemetry dossier describes `TelemetryBinding.status.resource` in
+prose rather than as a member table. The module comment enumerates what is
+described but unnamed: the effective signal, quota and policy digests, the
+ingest and import readiness summaries, the producer counts, the queue and drop
+counters, and the Binding's observed generations, occupancy, and stamping flag.
+The Service side of the same family fared better only because two spellings -
+`serviceRole` and `serviceReadiness` - happen to be stated literally.
+
+**Class: specification gap.** Not an unmet obligation, because nothing in
+`ADR046-provider-004`'s validation field requires a non-empty status layer, and
+the slice's behaviour is the correct fail-closed reading of a document that does
+not name the fields. Not an inference either, because the catalog declined to
+infer - it froze nothing and rejects everything rather than choosing plausible
+names that would then bind every implementation. The gap is in the telemetry
+dossier, and it is discharged by amending that dossier to state the field-name
+table, not by any change here.
+
+### 13.3 Security-key cannot construct a signed projection factory at all
+
+**What the tree does.** `security_key.rs` declares
+`allowed_backing_ref_types: None`. `SemanticProjectionBinding::projection_factory`
+turns that into `Err(SemanticContractError::BackingRefTypesUndetermined)`,
+whose diagnostic label is `semantic-backing-ref-types-undetermined`.
+`the_backing_ref_set_is_undetermined_and_fails_closed` pins both the `None` and
+the error. The other three families return a factory: audio and telemetry back
+onto `Endpoint`, USB onto `Device`.
+
+**Why the failure is genuine rather than a missing line.** `ProjectionFactory::new`
+in `packages/d2b-contracts/src/v3/provider.rs` rejects an empty
+`allowed_backing_ref_types` with `ProviderContractError::BoundExceeded`, so
+there is no "empty means unconstrained" spelling available. The catalog cannot
+pass an empty set and cannot invent a non-empty one, so `None` and a typed
+error is the only honest option left.
+
+**Why the set is undetermined.** The security-key dossier places `deviceRef`
+and the relay Endpoint inside the implementation's strict `spec.provider`
+extension, not in the semantic base. No semantic base field of this family names
+a backing resource at all, so there is nothing to derive the closed set from.
+`Device` is the plausible guess and is exactly what the catalog refused to
+assume.
+
+**Consequence.** `ADR046-zone-control-019` and `-020` are documented in this
+item's `integration` field as using the factory metadata to admit an owner
+Service and core-create one same-type projection Service. For security-key,
+there is no factory to use. Whichever wave owns those items will find three of
+four families work and the fourth returns a typed error.
+
+**Class: specification gap, with an unmet-obligation consequence downstream.**
+The gap is the security-key dossier not stating a semantic backing set, and it
+is fixed by amendment - either by naming the closed set at the semantic level,
+or by ruling that a family with no semantic backing resource legitimately has no
+projection factory, in which case `ProjectionFactory`'s non-empty requirement is
+the thing that needs to change. The consequence for `ADR046-zone-control-019`
+and `-020` is a real unmet obligation, but it is theirs and it is blocked behind
+this amendment.
+
+### 13.4 The other underdetermined semantics this slice reported
+
+Checked against sections 2 and 10.2 first; none of the four was already
+recorded. All four are **inferences** rather than gaps in the sense of 13.2 and
+13.3, because in each case the catalog did choose something and a reviewer needs
+to confirm or correct that choice.
+
+| Where | Inference | Class | Owning wave |
+| --- | --- | --- | --- |
+| All four family modules | **Only the top-level field-name set of each layer is frozen.** The module doc states the rule and each family module names the interiors it declines to model: audio `grants` and `channels`, security-key `authority` / `target` / `policy`, telemetry `signals` / `quota` / `policy`, USB `accessPolicy` / `backingAuthority` / `attachmentPolicy`. The reason differs per case and is worth keeping distinct - some interiors are stated as prose, some appear only inside a dossier example, and audio's `grants` members and domains **are** stated but were still left unfrozen for consistency with the others. So this is not uniformly forced by the documents; part of it is a consistency choice. The effect either way is that two implementations of one family can disagree about an interior and both pass the common base | Inference | W3 panel, before the semantic bases are treated as frozen |
+| `security_key.rs`, `usb.rs` versus `audio.rs`, `telemetry.rs` | **The Service mode discriminant is spelled three ways and each family keeps its own.** Security-key and USB use a field named `mode`; audio and telemetry use `serviceRole`. The values diverge again inside that: telemetry's authority value is `"authority"` while audio's is `"owner"`, so the three live spellings are `mode: "authority"`, `serviceRole: "authority"`, and `serviceRole: "owner"`. Each is what its own dossier says, so per-family fidelity and cross-family uniformity are in direct conflict and the catalog chose fidelity. Recorded because a consumer writing one code path across the four families has to special-case it, and because a later decision to unify moves four frozen field sets and therefore four fingerprints | Inference | W3 panel; unification, if wanted, must precede the fingerprints being consumed |
+| `mod.rs`, `SEMANTIC_BASE_SCHEMA_MAJOR` / `_MINOR` | **No base schema version is stated for the semantic bases themselves, so `1.0` was chosen.** The constant's own doc says so. The value is not inert: it is an input to `layer_fingerprint` and therefore reaches every one of the sixteen base fingerprints and, through the projection schema fingerprint, all four factory fingerprints and the committed schema artifacts | Inference | W3 panel, before any Provider manifest pins a base fingerprint |
+| `mod.rs`, `SEMANTIC_PROJECTION_PROTOCOL_VERSION` | **The semantic projection-protocol version has no stated spelling, so `"1.0"` was chosen.** The specification requires the factory fingerprint to bind this value and to exclude Provider and adapter identity; it fixes neither the spelling nor the value. It is an input to `factory_fingerprint`, so all four committed `x-d2b-factory-fingerprint` values depend on a string nobody specified | Inference | Same as above |
+
+### 13.5 Where code and comment or register disagree
+
+Three, all small, all recorded rather than corrected in place.
+
+- **Section 11's row was stale in one further way it did not admit.** It said
+  `docs/reference/schemas/v3/` "now also holds the semantic-service artifacts,
+  four per domain across the four domains plus a `projection_spec` schema each".
+  That is right and the count is 20, but the row presented it as an inventory
+  observation while declining to assess it; the artifacts were already
+  drift-gated at the time the row was written, which is assessable evidence the
+  row had in hand and did not use.
+- **Two test names overstate what their bodies check**, both noted in 13.1.
+  `binding_refs_and_targets_are_admitted_against_the_frozen_sets` sits under a
+  doc comment headed "Same-Zone refs and targets" and checks no Zone;
+  `the_stored_factory_fingerprint_is_rederivable_from_the_public_inputs` checks a pure
+  function against itself and derives its force entirely from a different test.
+  Neither is wrong about the code's behaviour - the same-Zone predicate really is
+  the caller's, and the fingerprint really is Provider-independent - but a reader
+  auditing by test name would credit both with more than they carry.
+- **The catalog has no production caller.** Nothing outside
+  `packages/d2b-contracts/src/v3/mod.rs` and
+  `packages/xtask/src/semantic_service_schemas.rs` names `semantic_services`.
+  This extends section 10.4's observation about Wave 3 rather than contradicting
+  it: like the three system-Provider crates, the semantic catalog is proven only
+  against itself and its own generator, and the first evidence it matches a real
+  Zone store arrives with the zone-control items that consume the factory
+  metadata.
+
+### 13.6 Summary of what this section adds to the register
+
+| Finding | Class | Owning wave |
+| --- | --- | --- |
+| Telemetry Binding common status layer is empty, so no common status is writable for that type | Specification gap | Amendment to the telemetry dossier, before a telemetry controller is written |
+| Security-key names no semantic backing resource, so no signed projection factory can be built for that family | Specification gap | Amendment to the security-key dossier, before `ADR046-zone-control-019` / `-020` |
+| `ADR046-zone-control-019` / `-020` will find one of four families without factory metadata | Unmet obligation, blocked | Behind the amendment above |
+| Same-Zone half of the Binding ref/target rule is delegated to a caller that does not exist, and three of four families' target sets are untested | Unmet obligation | `ADR046-provider-004`, or the wave that first resolves refs in a Zone |
+| Serde round trip proved for the spec layer only, not status or projection | Unmet obligation, minor | Any later slice owning `semantic_services` |
+| Alias rejection proved as non-registration, not as resolver rejection | Unmet obligation, deferred by construction | The wave that admits installed Provider schemas into a resolver |
+| Only top-level field-name sets are frozen; every named interior is unmodelled, partly by necessity and partly by consistency choice | Inference | W3 panel |
+| Service mode discriminant has three live spellings across four families | Inference | W3 panel |
+| Semantic base schema version `1.0` chosen with none stated; it reaches every base fingerprint | Inference | W3 panel |
+| Semantic projection-protocol version `"1.0"` chosen with no stated spelling; it reaches every factory fingerprint | Inference | W3 panel |

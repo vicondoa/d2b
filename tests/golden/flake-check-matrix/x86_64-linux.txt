@@ -26,6 +26,7 @@ nix-unit-misc
 nix-unit-network
 nix-unit-runtime
 nix-unit-state
+provider-catalog-determinism
 rust-audit
 rust-build
 rust-clippy
