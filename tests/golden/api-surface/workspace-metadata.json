@@ -21,7 +21,7 @@
       "private_census": {
         "external_crates": 31,
         "index_items": 607,
-        "path_items": 3195
+        "path_items": 3196
       },
       "private_hidden_items": 13,
       "private_json_file": "d2b_api_surface.json",

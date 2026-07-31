@@ -928,20 +928,24 @@ fn resolve_id(
     resolve_summary_identity(crate_name, local_crate_id, krate, summary)
 }
 
+fn resolve_reference(
+    crate_name: &str,
+    local_crate_id: u32,
+    krate: &RustdocCrate,
+    id: Id,
+) -> Result<Option<Identity>> {
+    match resolve_id(crate_name, local_crate_id, krate, id) {
+        Ok(identity) => Ok(Some(identity)),
+        Err(_error) if !krate.index.contains_key(&id) && !krate.paths.contains_key(&id) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
 impl Workspace {
     fn crate_by_name(&self, name: &str) -> Result<&LoadedCrate> {
         self.crates
             .get(name)
             .ok_or_else(|| PolicyError::new(operation::POLICY_ANALYZE, error_label::ROOT_MISMATCH))
-    }
-
-    fn resolve_private_in(&self, loaded: &LoadedCrate, id: Id) -> Result<Identity> {
-        resolve_id(
-            &loaded.metadata.crate_name,
-            loaded.private_local_crate_id,
-            &loaded.private_krate,
-            id,
-        )
     }
 
     fn private_item_for_identity(&self, identity: &Identity) -> Result<(&LoadedCrate, &Item)> {
@@ -1039,12 +1043,13 @@ fn definition_reference_graph(
                 let mut ids = BTreeSet::new();
                 visit_item_signatures(&item.inner, &mut ids);
                 for reference in ids {
-                    match workspace.resolve_private_in(loaded, reference) {
-                        Ok(identity) => {
-                            references.insert(identity);
-                        }
-                        Err(_error) if !loaded.private_krate.index.contains_key(&reference) => {}
-                        Err(error) => return Err(error),
+                    if let Some(identity) = resolve_reference(
+                        &loaded.metadata.crate_name,
+                        loaded.private_local_crate_id,
+                        &loaded.private_krate,
+                        reference,
+                    )? {
+                        references.insert(identity);
                     }
                 }
                 for child in definition_children(&item.inner) {
@@ -1237,15 +1242,13 @@ fn capability_public_api(
         visit_item_signatures(&item.inner, &mut public_references);
         let mut signature_capability = false;
         for id in public_references {
-            match resolve_id(
+            if let Some(identity) = resolve_reference(
                 &loaded.metadata.crate_name,
                 loaded.public_local_crate_id,
                 &loaded.public_krate,
                 id,
-            ) {
-                Ok(identity) => signature_capability |= capability_types.contains(&identity),
-                Err(_error) if !loaded.public_krate.index.contains_key(&id) => {}
-                Err(error) => return Err(error),
+            )? {
+                signature_capability |= capability_types.contains(&identity);
             }
         }
         let own_capability = public_owner_identity(loaded, public)
@@ -1391,18 +1394,26 @@ fn trait_impl_inventory(
             let Some(self_id) = direct_resolved_path_id(&impl_.for_) else {
                 continue;
             };
-            let self_identity = match workspace.resolve_private_in(loaded, self_id) {
-                Ok(identity) => identity,
-                Err(_error) if !loaded.private_krate.index.contains_key(&self_id) => continue,
-                Err(error) => return Err(error),
+            let Some(self_identity) = resolve_reference(
+                &loaded.metadata.crate_name,
+                loaded.private_local_crate_id,
+                &loaded.private_krate,
+                self_id,
+            )?
+            else {
+                continue;
             };
             if !capability_types.contains(&self_identity) {
                 continue;
             }
-            let trait_identity = match workspace.resolve_private_in(loaded, trait_path.id) {
-                Ok(identity) => identity,
-                Err(_error) if !loaded.private_krate.index.contains_key(&trait_path.id) => continue,
-                Err(error) => return Err(error),
+            let Some(trait_identity) = resolve_reference(
+                &loaded.metadata.crate_name,
+                loaded.private_local_crate_id,
+                &loaded.private_krate,
+                trait_path.id,
+            )?
+            else {
+                continue;
             };
             let impl_identity = explicit_impl_identity(
                 &loaded.metadata.crate_name,
@@ -2042,6 +2053,41 @@ mod tests {
         let mut references = BTreeSet::new();
         visit_type(&type_, &mut references);
         assert_eq!(references, BTreeSet::from([Id(1), root, trait_id]));
+    }
+
+    #[test]
+    fn reference_resolution_skips_only_identities_absent_from_both_maps() {
+        let mut krate: RustdocCrate = minimal_crate("demo").into();
+        assert_eq!(resolve_reference("demo", 0, &krate, Id(99)).unwrap(), None);
+
+        krate.index.insert(
+            Id(99),
+            Item {
+                id: Id(99),
+                crate_id: 0,
+                name: Some("Broken".to_owned()),
+                span: None,
+                visibility: Visibility::Public,
+                docs: None,
+                links: HashMap::new(),
+                attrs: Vec::new(),
+                deprecation: None,
+                inner: ItemEnum::Struct(rustdoc_types::Struct {
+                    kind: StructKind::Unit,
+                    generics: Generics {
+                        params: Vec::new(),
+                        where_predicates: Vec::new(),
+                    },
+                    impls: Vec::new(),
+                }),
+            },
+        );
+        assert_eq!(
+            resolve_reference("demo", 0, &krate, Id(99))
+                .unwrap_err()
+                .label(),
+            error_label::UNRESOLVED_IDENTITY
+        );
     }
 
     #[test]
