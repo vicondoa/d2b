@@ -1,20 +1,29 @@
 # W6 - unmodified Firefox decodes H.264 on the host GPU through Venus
 
-> **CORRECTION - this document overstates the result.**
+> **CORRECTION - this document overstated the result when it was written.**
+> **The defect it describes has since been fixed.**
 >
 > The headline below says unmodified Firefox decodes H.264 through Venus. The
-> decode part is true and measured. What is NOT true is any implication that
-> playback works: the decoded frames never reach the screen, and the video area
-> renders as a flat dark green after about half a second.
+> decode part was true and measured. What was NOT true was any implication that
+> playback worked: at the time, the decoded frames never reached the screen and
+> the video area rendered as a flat dark green after about half a second.
 >
-> A single GL blit in Firefox's MediaPDMDecoder context fails with
-> `GL_INVALID_OPERATION`, virglrenderer marks the context as having submitted
-> an illegal command buffer, and all 11,270 subsequent submissions to it are
-> refused. Zero of those errors come from the Venus path.
+> A single GL blit in Firefox's MediaPDMDecoder context failed with
+> `GL_INVALID_OPERATION`, virglrenderer marked the context as having submitted
+> an illegal command buffer, and all 11,270 subsequent submissions to it were
+> refused. Zero of those errors came from the Venus path.
 >
-> See [`green-frame-finding.md`](./green-frame-finding.md). The evidence in
-> this document is correct about what it measured; it measured the wrong thing
-> to support the claim it made.
+> That is now resolved. The root cause was four interlocking defects in how a
+> decoded NV12 frame's second plane crossed the guest/host boundary - three in
+> guest Mesa's virgl winsys, one in virglrenderer - none of them in Venus and
+> none of them in Firefox. Playback is correct on a clean boot, with zero blit
+> failures and zero refused submissions.
+>
+> **Read [`../SOLUTION.md`](../SOLUTION.md) for the current account**;
+> [`green-frame-finding.md`](./green-frame-finding.md) is the contemporaneous
+> investigation log. The evidence in this document is correct about what it
+> measured; it measured the wrong thing to support the claim it made, and that
+> is the part worth keeping.
 
 **Result: it works, with a passing negative control.**
 

@@ -191,6 +191,13 @@
     grim                  # screenshot the cage output -- see below
     labFirefox
 
+    # vainfo: whether the guest's virtio_gpu VA driver advertises any decode
+    # profile. This distinguishes the two states that otherwise look identical
+    # from inside Firefox -- the driver loading and reporting nothing, versus
+    # the driver reporting H.264 -- and the first of those is what made a
+    # capability the guest genuinely lacked look like a host limitation.
+    libva-utils
+
     # Answers whether Venus can export a decode-output image as a DMA-BUF.
     #
     # Built here rather than compiled ad hoc and copied in, because it has to

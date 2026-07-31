@@ -35,8 +35,13 @@
       flake = false;
     };
 
+    # Temporarily on virgl-video-enable rather than vulkan-video. That branch
+    # is 335be0b7 (the revision v3 pins) plus the virgl-video enablement, and
+    # deliberately excludes add87c05: the blit change on vulkan-video is
+    # unproven, and compounding it with this would make a measurement of
+    # either one unattributable.
     virglrenderer-src = {
-      url = "github:vicondoa/virglrenderer-venus-vulkan-video/vulkan-video";
+      url = "github:vicondoa/virglrenderer-venus-vulkan-video/virgl-video-enable";
       flake = false;
     };
     mesa-src = {
@@ -147,46 +152,47 @@
       # cairo-gtk3-wayland. The only customization here is preferences, which
       # is explicitly allowed by the prototype's success criteria.
       #
-      # direct-export is ON: see the pref comment below. The GPU-copy path it
-      # replaces is the one that fails.
+      # direct-export is OFF: Firefox only ever requests the modifier-tiled
+      # export shape, and that exact query is refused by the host NVIDIA driver
+      # itself. See the pref comment below. Turning it off selects a non-export
+      # route; which of the two non-export routes Firefox then takes is decided
+      # separately, by whether zero-copy is configured.
       # WebM/VP9 is disabled so YouTube serves H.264 -- required permanently,
       # since no NVIDIA driver implements VK_KHR_video_decode_vp9 and Turing
       # has no AV1 engine.
       labFirefox = guestPkgs.wrapFirefox guestPkgs.firefox-unwrapped {
-        # Set as a real integer, which the policy engine cannot do here.
+        # gfx.blacklist.hardwarevideodecoding is deliberately NOT set here any
+        # more, and that is the point of the virgl-video work.
         #
-        # gfx.blacklist.hardwarevideodecoding has no default declaration, so
-        # the Preferences policy infers a boolean and creates a bool pref.
-        # GetPrefValueForFeature reads it with Preferences::GetInt, which fails
-        # on a bool and skips the override without saying so. A literal pref()
-        # line fixes the type.
+        # It used to be. gfxPlatformGtk's InitPlatformHardwareVideoConfig
+        # returns early unless HARDWARE_VIDEO_DECODING is enabled, and only
+        # past that early return is HW_DECODED_VIDEO_ZERO_COPY configured.
+        # With zero-copy unset, VideoFramePool::ShouldCopySurface returns true
+        # unconditionally and every frame takes the broken copy path. So the
+        # pref was set to 1 (FEATURE_STATUS_OK) to skip the VA-API probe that
+        # gates that feature.
         #
-        # What this buys, and why it is a diagnostic rather than a fix: it
-        # asserts a capability the guest does not have. gfxPlatformGtk's
-        # InitPlatformHardwareVideoConfig returns early unless
-        # HARDWARE_VIDEO_DECODING is enabled, and only past that early return
-        # is HW_DECODED_VIDEO_ZERO_COPY configured. With zero-copy unset,
-        # VideoFramePool::ShouldCopySurface returns true unconditionally, so
-        # every frame takes CopyYUVDataImpl and its per-plane GPU copy -- the
-        # copy that fails, because the chroma plane's imported texture is
-        # single-channel R8 while the destination is R8G8, and
-        # glCopyImageSubData compares underlying textures rather than views.
-        # Luma copies and chroma does not, which is the green cast.
+        # That was a diagnostic rather than a fix, and it was written down as
+        # one: it asserted a capability the guest did not have. The probe could
+        # not pass honestly, because the guest's virtio_gpu VA driver loaded
+        # and initialised and then advertised no H.264 profiles at all.
         #
-        # The probe cannot pass honestly here: the virtio-gpu VA driver loads
-        # and initialises but advertises no H.264 profiles, and
-        # media.hardware-video-decoding.force-enabled is outranked by gfxInfo's
-        # runtime ForceDisable. GfxInfoBase::GetFeatureStatus consults this
-        # pref and returns before GetFeatureStatusImpl, where the probe lives,
-        # so this skips the probe rather than satisfying it. 1 is
-        # FEATURE_STATUS_OK.
+        # It advertises them now. crosvm never passes VIRGL_RENDERER_USE_VIDEO,
+        # so virglrenderer never called virgl_video_init(), so va_dpy stayed
+        # NULL and the virgl2 capset reached the guest with num_video_caps = 0.
+        # With video initialised the guest reports H264 ConstrainedBaseline,
+        # Main and High, so Firefox reaches its own conclusion from what the
+        # driver reports instead of having the probe bypassed.
         #
-        # Decoding is unaffected: InitHWDecoderIfAllowed tries
-        # InitVulkanDecoder() before InitVAAPIDecoder(), so Vulkan still
-        # decodes and VA-API is never used for a frame.
-        extraPrefs = ''
-          pref("gfx.blacklist.hardwarevideodecoding", 1);
-        '';
+        # That advertisement has NOT been shown to be hardware backed. A guest
+        # VA-API decode was later measured against the same decode on the host:
+        # the host reached 94-98% NVDEC, the guest reached 0% on every sample
+        # while running 5.7x faster than the real decoder. So this removes a
+        # bypass rather than establishing a capability. See SOLUTION.md 6a.
+        #
+        # It does not affect what decodes. InitHWDecoderIfAllowed tries
+        # InitVulkanDecoder() before InitVAAPIDecoder(), so Vulkan Video decodes
+        # every frame and VA-API is never used for one.
         extraPolicies = {
           DisableTelemetry = true;
           DisableFirefoxStudies = true;
@@ -238,9 +244,14 @@
             # ffmpeg double-free in vulkan_map_to_drm's error path, which is
             # only reachable when the export fails.
             #
-            # The copy path this selects already decodes in hardware. Its own
-            # defect -- a GL blit that virgl rejects -- is in virglrenderer,
-            # which this lab forks, and is the remaining work.
+            # This selects a non-export route, not specifically the copy route.
+            # Firefox has two non-export routes and picks between them on
+            # whether HW_DECODED_VIDEO_ZERO_COPY is configured; the working
+            # configuration gets zero copy. The copy route is still broken, and
+            # separately so: its blit goes through the resource's own texture
+            # rather than a sampler view, so it never reaches the per-plane
+            # images that fix the chroma plane. That is in virglrenderer, which
+            # this lab forks, and is recorded in SOLUTION.md section 6.
             "media.hardware-video-decoding-vulkan.direct-export.enabled" =
               { Value = false; Status = "default"; };
             # Also NOT locked, for the same reason and a measured one.
@@ -258,12 +269,10 @@
             # preserves that; unlocking it lets the control actually control.
             "media.hardware-video-decoding.force-enabled" =
               { Value = true; Status = "default"; };
-            # NOTE: gfx.blacklist.hardwarevideodecoding is deliberately NOT set
-            # here. The policy engine has no default declaration to infer a
-            # type from and creates it as a boolean, while
-            # GetPrefValueForFeature reads it with Preferences::GetInt, which
-            # fails on a bool and silently skips the override. It is set as a
-            # real integer through extraPrefs below instead.
+            # NOTE: gfx.blacklist.hardwarevideodecoding is no longer set at all,
+            # here or through extraPrefs. It existed to skip a VA-API probe the
+            # guest could not pass; the guest passes it now. See the comment on
+            # labFirefox.
             #
             # Pin zero-copy on rather than leaving it to the blocklist.
             # 0 forces off, 1 forces on, anything else defers to gfxInfo.

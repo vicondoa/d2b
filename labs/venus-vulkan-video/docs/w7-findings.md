@@ -1,17 +1,26 @@
 # W7 - YouTube end to end
 
-> **CORRECTION - this document overstates the result.**
+> **CORRECTION - this document overstated the result when it was written.**
+> **The defect it describes has since been fixed.**
 >
 > YouTube loads, plays and drives real decode commands through Venus, and that
-> much is measured. But the frames do not reach the screen: playback shows
-> roughly half a second of video and then a flat dark green frame.
+> much was measured. But at the time the frames did not reach the screen:
+> playback showed roughly half a second of video and then a flat dark green
+> frame.
 >
-> The cause is a failing Vulkan-to-GL blit in Firefox's compositing path, not
-> anything in Venus. See [`green-frame-finding.md`](./green-frame-finding.md).
+> The cause was a failing Vulkan-to-GL blit in Firefox's compositing path, not
+> anything in Venus. It has since been root-caused to four interlocking defects
+> in how a decoded NV12 frame's second plane crossed the guest/host boundary,
+> and fixed in guest Mesa and virglrenderer. Firefox is still unpatched. See
+> [`../SOLUTION.md`](../SOLUTION.md) for the current account and
+> [`green-frame-finding.md`](./green-frame-finding.md) for the investigation
+> log.
 >
-> This also means the drop-rate numbers below measure a broken presentation
-> path and should not be read as decode performance at all -- a second reason,
-> beyond host contention, that they are not a benchmark.
+> The drop-rate numbers below were taken against that broken presentation path
+> and are not decode performance. They have not been re-measured since the fix,
+> so treat them as a record of what this wave saw rather than as a current
+> figure - a second reason, beyond host contention, that they are not a
+> benchmark.
 
 **Result: YouTube plays in unmodified Firefox with H.264 decoded on the host
 NVIDIA T1000 through Venus.** This is the prototype's stated goal.
@@ -77,11 +86,16 @@ next step is to re-run it on a quiet machine rather than to explain the number.
   decode utilisation, and the extra GPU-copy cost, compared against software
   decode. That pair is directly comparable because both run the same stock
   Firefox 153.
-- **The GPU-copy path is the target by design.** Direct DMA-BUF export stays
-  off for the whole plan (`direct-export.enabled = false`), so some copy cost is
-  expected and zero-copy is a follow-on rather than a success criterion. Whether
-  that copy is what costs 720p under load is exactly what the idle-host
-  measurement would separate.
+- **The GPU-copy path was the target when this was written, and is not the
+  path that shipped.** This wave assumed direct DMA-BUF export stays off
+  (`direct-export.enabled = false`, still true) and concluded that the copy
+  path was therefore the target, with zero-copy a follow-on rather than a
+  success criterion. That inference no longer holds: direct export and
+  Firefox's zero-copy surface handoff are separate decisions, and the working
+  configuration selects **zero copy**. The copy path remains genuinely broken,
+  because its blit goes through the resource's own texture rather than a
+  sampler view and so never reaches the per-plane images that fix the chroma
+  plane. See [`../SOLUTION.md`](../SOLUTION.md) section 6.
 - **The V4L2 comparison remains a legacy, non-comparable baseline.** It can
   only be measured with the Firefox 152 source fork, so it is a version *and*
   build-config difference. It is context, not a threshold.
