@@ -35,32 +35,39 @@ const here = fileURLToPath(new URL(".", import.meta.url));
 const root = join(here, "..", "..");
 
 // Everything check-bindings.mjs reads, as repo-relative paths. Keeping this
-// list explicit rather than copying the whole tree keeps a fixture build cheap
-// and makes a new input announce itself: add a *required* read to the gate
-// without adding it here and the baseline case fails.
+// list explicit rather than copying the whole tree keeps a fixture build cheap.
 //
-// That argument does not extend to a read the gate guards with `existsSync`.
-// An optional input omitted here is simply absent in the fixture, the gate
-// skips its block, and the baseline still passes while the fixture has
-// silently stopped matching the repo. So optional reads are listed separately
-// and copied when they exist, rather than being left out on the grounds that
-// they do not exist today.
+// The split is by how the gate behaves when the path is absent, which is the
+// only property that decides whether the fixture can safely omit it.
+//
+// REQUIRED is the set the gate hard-fails on: it either spawns the path, or
+// guards it with `existsSync` and calls `fail()`. Copy these unconditionally.
+// Add a read of this kind to the gate without listing it here and the baseline
+// case fails, so the omission announces itself.
+//
+// OPTIONAL is the set the gate guards with `existsSync` and then *skips*.
+// Omitting one of these does not fail the baseline; the gate simply does not
+// run that block, and the fixture silently stops matching the repo. Listing
+// them is therefore the only thing that keeps them covered. Copy these when
+// they exist, since they are permitted to be absent and an unconditional copy
+// would throw ENOENT.
+//
+// Classify by measuring the gate, not by reading one call site: the
+// `.github/skills` scan is itself skip-guarded, but the required record helper
+// lives inside that tree, so omitting the directory hard-fails after all.
 const REQUIRED_INPUTS = [
   "scripts/copilot/check-bindings.mjs",
   ".github/agents",
   ".github/skills",
-  ".specify/integration.json",
-  ".specify/memory",
   "packages/xtask/src/delivery/model.rs",
   "packages/xtask/src/delivery/panel.rs",
   "packages/xtask/src/delivery/mod.rs",
 ];
 
-// Guarded by `existsSync` in the gate. Absent from the repo today, which is
-// exactly why it needs to be here: the day someone adds it, the fixture has to
-// grow it too or the harness quietly stops testing the same thing.
 const OPTIONAL_INPUTS = [
   ".github/copilot/settings.json",
+  ".specify/integration.json",
+  ".specify/memory",
 ];
 
 const HELPER = ".github/skills/d2b-panel-round/scripts/make-records.mjs";
