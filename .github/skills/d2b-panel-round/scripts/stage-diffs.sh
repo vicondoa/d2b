@@ -35,12 +35,10 @@ mkdir -p "$out/verdicts"
 
 # Write-then-rename every artifact. A diff truncated by a signal or a full
 # disk would otherwise sit at its final path, and a reviewer would read a
-# partial delta as the whole change.
-# Write-then-rename every artifact. A diff truncated by a signal or a full
-# disk would otherwise sit at its final path, and a reviewer would read a
 # partial delta as the whole change. The temp name carries the pid so two
 # concurrent stagings cannot stomp each other, and a failed write is removed
-# rather than left as residue.
+# rather than left as residue - including a failed rename, which is the one
+# path that would otherwise exit under `set -e` with the temp still there.
 stage() {
   local dest="$1"
   shift
@@ -49,7 +47,10 @@ stage() {
     rm -f -- "$tmp"
     return 1
   fi
-  mv -f "$tmp" "$dest"
+  if ! mv -f "$tmp" "$dest"; then
+    rm -f -- "$tmp"
+    return 1
+  fi
 }
 
 stage "$out/delta.diff" git --no-pager diff "$prev_sha..$tip"

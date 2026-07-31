@@ -403,6 +403,29 @@ if (existsSync(integrationJson)) {
           );
         }
       }
+
+      // The seat roster is mirrored as an array rather than a scalar, so it
+      // needs its own comparison. A helper roster short of the sealed one
+      // writes an incomplete record set and the gate rejects the wave for a
+      // missing seat; a longer one writes a record for a seat that is not on
+      // the roster. Compare in order, because the two are in order today and
+      // a reordering is itself drift worth surfacing.
+      const rolesBlock = src.match(/const\s+ROLES\s*=\s*\[([\s\S]*?)\];/);
+      if (!rolesBlock) {
+        fail(
+          `make-records.mjs: cannot parse ROLES; the seat-roster drift check cannot run.`,
+        );
+      } else {
+        const mineRoles = [...rolesBlock[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+        if (mineRoles.join(",") !== policy.roles.join(",")) {
+          fail(
+            `make-records.mjs ROLES is [${mineRoles.join(", ")}] but model.rs ` +
+            `PANEL_ROLES is [${policy.roles.join(", ")}]. A drifted roster is only ` +
+            `discovered while sealing a wave, and it either drops a seat from the ` +
+            `record set or attests one the gate does not accept.`,
+          );
+        }
+      }
     }
 
     // The string ceilings need only be no looser than the Rust bound; a
