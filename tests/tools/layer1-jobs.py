@@ -24,7 +24,6 @@ SELF_TEST = ROOT / "tests" / "unit" / "meta" / "ci-runner-regression.py"
 CHECKOUT = "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5"
 INSTALL_NIX = "cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077"
 RUST_CACHE = "Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32"
-ACTIONS_CACHE = "actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830"
 # Caches /nix through the GitHub Actions cache. The developer host has a local
 # attic substituter, which is why a fixture build that costs half an hour in CI
 # completes in seconds there; runners cannot reach that endpoint, so without
@@ -149,7 +148,7 @@ def ci_env_block(job: dict[str, Any], spaces: int) -> str:
 # configuration is deliberately near enough to the cap that it should be
 # re-measured against the repository cache-usage page after a run rather than
 # assumed.
-NIX_CACHED_JOBS = frozenset({"test-fixture-contracts", "nix-unit-shards"})
+NIX_CACHED_JOBS = frozenset({"nix-unit-shards"})
 NIX_CACHE_MAX_STORE = "4G"
 NIX_CACHE_FORMAT = "v1"
 # Scope suffix for a matrix job, so shards do not share one key. Defined here
@@ -160,24 +159,8 @@ MATRIX_CHECK_SCOPE = "-${{ matrix.check }}"
 
 
 def nix_cache_hash_files(job: dict[str, Any]) -> str:
-    if job["ciJobId"] == "test-fixture-contracts":
-        # The fixture outputs depend on evaluated modules, source-built host and
-        # guest tools, patched VMM sources, and generated CLI shell artifacts.
-        # Keep this list explicit so a source-only change cannot hit an exact
-        # cache key created for different fixture derivations.
-        patterns = [
-            "flake.lock",
-            "**/*.nix",
-            "packages/**",
-            "pkgs/**",
-            "docs/manpages/**",
-            "docs/completions/**",
-            "tests/fixtures/guest-rust-workspace/**",
-            "tests/tools/fixture-cache-paths.sh",
-        ]
-    else:
-        patterns = ["flake.lock", "**/*.nix"]
-    return ", ".join(repr(pattern) for pattern in patterns)
+    del job
+    return ", ".join(repr(pattern) for pattern in ["flake.lock", "**/*.nix"])
 
 
 def nix_setup_step(job: dict[str, Any], scope_suffix: str = "") -> str:
@@ -301,45 +284,6 @@ def render_env(job: dict[str, Any]) -> str:
     return "\n".join(f'          {key}: "{value}"' for key, value in sorted(env.items()))
 
 
-def fixture_derivation_cache_steps(job: dict[str, Any]) -> tuple[str, str]:
-    if job["ciJobId"] != "test-fixture-contracts":
-        return "", ""
-    hash_files = nix_cache_hash_files(job)
-    key = (
-        f"fixture-derivations-v1-${{{{ runner.os }}}}-"
-        f"${{{{ hashFiles({hash_files}) }}}}"
-    )
-    directory = "${{ runner.temp }}/d2b-fixture-derivation-cache"
-    restore = f"""      - name: Restore fixture derivation cache
-        id: fixture-derivations
-        uses: {ACTIONS_CACHE}
-        with:
-          path: {directory}
-          key: {key}
-          restore-keys: |
-            fixture-derivations-v1-${{{{ runner.os }}}}-
-      - name: Import cached fixture derivations
-        run: |
-          cache="{directory}/closure.nar.zst"
-          if [ -s "$cache" ]; then
-            zstd -dc "$cache" | nix-store --import
-          fi
-"""
-    save = f"""      - name: Export expensive fixture derivations
-        run: |
-          cache_dir="{directory}"
-          mkdir -p "$cache_dir"
-          mapfile -t roots < <(bash tests/tools/fixture-cache-paths.sh)
-          [ "${{#roots[@]}}" -gt 0 ] || {{ echo "no fixture cache roots discovered" >&2; exit 1; }}
-          nix-store --query --requisites "${{roots[@]}}" \\
-            | LC_ALL=C sort -u \\
-            | xargs nix-store --export \\
-            | zstd -T0 -q -o "$cache_dir/closure.nar.zst"
-          du -h "$cache_dir/closure.nar.zst"
-"""
-    return restore, save
-
-
 def heavy_gate_step(job: dict[str, Any]) -> str:
     """Renders the heavy-gate provisioning step for jobs that need the gate.
 
@@ -357,7 +301,6 @@ def heavy_gate_step(job: dict[str, Any]) -> str:
 
 
 def rust_job(job: dict[str, Any]) -> str:
-    fixture_restore, fixture_save = fixture_derivation_cache_steps(job)
     return f"""  {job["ciJobId"]}:
 {needs_line(job)}    runs-on: {job["runsOn"]}
     # Warm (rust-cache hit): ~8-12 min. Cold (no cache): ~43 min.
@@ -388,7 +331,7 @@ def rust_job(job: dict[str, Any]) -> str:
           persist-credentials: false
           fetch-depth: 0
 {nix_setup_step(job)}
-{fixture_restore}      - name: Free runner disk for Rust gate
+      - name: Free runner disk for Rust gate
         run: |
           df -h
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL || true
@@ -439,7 +382,7 @@ def rust_job(job: dict[str, Any]) -> str:
         env:
 {render_env(job)}
         run: make {job["makeTarget"]}
-{fixture_save}"""
+"""
 
 
 def rust_rollup_job(job: dict[str, Any]) -> str:

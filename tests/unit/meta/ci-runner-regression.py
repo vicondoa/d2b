@@ -220,39 +220,17 @@ set -euo pipefail
         )
         self.assertEqual(manifest["ci"]["rollupNeeds"].count("test-rust"), 1)
 
-    def test_expensive_cache_surfaces_and_fixture_key_are_fail_closed(self) -> None:
-        layer1_jobs = load_layer1_jobs()
-        workflow = layer1_jobs.render_workflow(layer1_jobs.load_manifest())
-
+    def test_expensive_rust_cache_surface_is_present(self) -> None:
+        workflow = load_layer1_jobs().render_workflow(load_layer1_jobs().load_manifest())
         self.assertIn(".scratch/rust-test-cache", workflow)
-        self.assertIn("primary-key: nix-v1-", workflow)
-        self.assertIn("'**/*.nix'", workflow)
-        self.assertIn("'packages/**'", workflow)
-        self.assertIn("'pkgs/**'", workflow)
-        self.assertIn("'docs/manpages/**'", workflow)
-        self.assertIn("'docs/completions/**'", workflow)
-        self.assertIn("'tests/fixtures/guest-rust-workspace/**'", workflow)
-        self.assertIn("'tests/tools/fixture-cache-paths.sh'", workflow)
-        self.assertIn("Import cached fixture derivations", workflow)
-        self.assertIn("Export expensive fixture derivations", workflow)
-        self.assertIn("nix-store --import", workflow)
-        self.assertIn("nix-store --export", workflow)
+        self.assertIn('prefix-key: "v2-rust-api-json"', workflow)
 
-    def test_fixture_derivation_selector_is_narrow_and_fail_closed(self) -> None:
-        selector = (ROOT / "tests" / "tools" / "fixture-cache-paths.sh").read_text(
-            encoding="utf-8"
-        )
-
-        self.assertIn("checks.fixture-smoke", selector)
-        self.assertIn("checks.fixture-smoke-full", selector)
-        self.assertIn('missing processes.json', selector)
-        self.assertIn('missing required family', selector)
-        self.assertIn("cloud-hypervisor", selector)
-        self.assertIn("crosvm", selector)
-        self.assertIn("d2b-wayland-proxy", selector)
-        self.assertIn("d2b-guestd-static", selector)
-        self.assertIn("d2b-exec-runner-static", selector)
-        self.assertNotIn("nix-store --export", selector)
+    def test_fixture_lane_caches_no_realized_nix_store(self) -> None:
+        workflow = load_layer1_jobs().render_workflow(load_layer1_jobs().load_manifest())
+        fixture_job = workflow.split("  test-fixture-contracts:", 1)[1].split("\n  test-proofs:", 1)[0]
+        self.assertNotIn("Nix store cache", fixture_job)
+        self.assertNotIn("fixture derivation cache", fixture_job)
+        self.assertNotIn("nix-store --import", fixture_job)
 
     def test_nix_unit_ci_uses_one_runner_per_discovered_shard(self) -> None:
         layer1_jobs = load_layer1_jobs()
@@ -285,24 +263,19 @@ set -euo pipefail
         self.assertIn('failures+=("$check")', driver)
         self.assertIn('nix build --no-link --print-out-paths', driver)
 
-    def test_fixture_driver_roots_both_outputs_only_in_github_actions(self) -> None:
+    def test_fixture_driver_uses_eval_only_artifacts_and_excludes_real_binary_probe(self) -> None:
         driver = (ROOT / "tests" / "test-rust.sh").read_text(encoding="utf-8")
+        fixture_driver = (ROOT / "tests" / "tools" / "eval-fixtures.sh").read_text(
+            encoding="utf-8"
+        )
 
-        self.assertIn('if [ -n "${GITHUB_ACTIONS:-}" ]; then', driver)
-        self.assertIn('local runner_temp=${RUNNER_TEMP:?', driver)
-        self.assertIn(
-            'nix-store --add-root "$root_dir/$label" -r "$store_path"',
-            driver,
-        )
-        self.assertIn(
-            'retain_fixture_for_ci_cache fixture-smoke "$contract_fixtures"',
-            driver,
-        )
-        self.assertIn(
-            'retain_fixture_for_ci_cache fixture-smoke-full "$contract_fixtures_full"',
-            driver,
-        )
-        self.assertNotIn("nix-store --delete", driver)
+        self.assertIn('bash "$ROOT/tests/tools/eval-fixtures.sh"', driver)
+        self.assertIn("not binary(video_binary_contract)", driver)
+        flake = (ROOT / "flake.nix").read_text(encoding="utf-8")
+        self.assertIn("video-binary-contract = videoBinaryContract", flake)
+        self.assertNotIn("checks.${contract_system}.fixture-smoke", driver)
+        self.assertIn("nix eval", fixture_driver)
+        self.assertNotIn("nix build", fixture_driver)
 
     def test_api_surface_json_gate_is_enforcing_and_cacheable(self) -> None:
         driver = (ROOT / "tests" / "test-rust.sh").read_text(encoding="utf-8")

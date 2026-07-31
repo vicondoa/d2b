@@ -161,12 +161,13 @@ that variable on the runner, and then removing the advisory classification and
 reason from the manifest. The project does not currently have such a runner.
 
 The fixture-contract lane runs the fixture-dependent `d2b-contract-tests`
-crate and the CLI-contract cases against a built `D2B_FIXTURES` bundle. Both
-the local and continuous-integration lanes set `D2B_ENABLE_FIXTURE_BUILD=1`, so
-it executes and enforces; invoking it without that variable is a hard failure
-rather than a silent skip. It acquires the heavy-gate semaphore before doing
-Nix or Cargo work, and `packages/xtask/src/heavy_gate.rs` fails closed if that
-guard is ever removed. `test-rust` explicitly excludes the fixture-dependent
+crate and the CLI-contract cases against `D2B_FIXTURES` materialized directly
+from evaluated Nix artifact data. Both the local and continuous-integration
+lanes set `D2B_ENABLE_FIXTURE_BUILD=1`, so it executes and enforces; invoking it
+without that variable is a hard failure rather than a silent skip. The eval-only
+lane does not realize NixOS systems or patched VMM binaries. The separately
+pinned video binary command-surface contract remains the narrow realized check.
+`test-rust` explicitly excludes the fixture-dependent
 `d2b-contract-tests` crate, so a green `test-rust` does not validate that
 fixture-dependent contract and policy layer. Selected hermetic policy files
 may still have separate enforcing entrypoints such as `test-policy`; inspect

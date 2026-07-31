@@ -426,50 +426,21 @@ guest_shell_runner_gate() {
     "guest shell runner" "$guest_shell_runner_manifest" --workspace --features real-libshpool
 }
 
-retain_fixture_for_ci_cache() {
-  local label="$1" store_path="$2"
-  [ -n "$store_path" ] || return 0
-  if [ -n "${GITHUB_ACTIONS:-}" ]; then
-    local runner_temp=${RUNNER_TEMP:?GITHUB_ACTIONS requires RUNNER_TEMP for fixture cache roots}
-    local root_dir="$runner_temp/d2b-fixture-cache-roots"
-    mkdir -p "$root_dir"
-    rm -f -- "$root_dir/$label"
-    nix-store --add-root "$root_dir/$label" -r "$store_path" >/dev/null
-    nix-store --query --roots "$store_path" | grep -F "$root_dir/$label" >/dev/null || {
-      fail "fixture cache root $label was not registered under RUNNER_TEMP"
-      return 1
-    }
-    ok "fixture cache root $label retained through the CI cache post-step"
-  fi
-}
-
 run_fixture_contract_tests() {
-  contract_system=$(nix eval --extra-experimental-features 'nix-command flakes' \
-    --raw --impure --expr builtins.currentSystem 2>/dev/null || echo x86_64-linux)
-  contract_fixtures=$(nix build --extra-experimental-features 'nix-command flakes' \
-    --no-warn-dirty --no-link --print-out-paths "$ROOT#checks.${contract_system}.fixture-smoke")
-  # Feature-rich fixture (graphics+video+audio+tpm+usbip+observability) for the
-  # per-role minijail-validator contract tests - x86_64-linux only (graphics
-  # platform gate). On other systems D2B_FIXTURES_FULL stays unset and those
-  # tests skip.
-  contract_fixtures_full=""
-  if [ "$contract_system" = "x86_64-linux" ]; then
-    contract_fixtures_full=$(nix build --extra-experimental-features 'nix-command flakes' \
-      --no-warn-dirty --no-link --print-out-paths "$ROOT#checks.${contract_system}.fixture-smoke-full")
-  fi
-  # cache-nix-action runs `nix store gc` in its post-step. CI roots keep the
-  # just-built closures alive until that post-step saves /nix; local runs create
-  # no root and retain the repository's normal garbage-collection behaviour.
-  retain_fixture_for_ci_cache fixture-smoke "$contract_fixtures"
-  retain_fixture_for_ci_cache fixture-smoke-full "$contract_fixtures_full"
-  log "--> cargo nextest run -p d2b-contract-tests (D2B_FIXTURES = fixture-smoke)"
+  local eval_root
+  eval_root=$(d2b_mktemp ".d2b-eval-fixtures.XXXXXX")
+  bash "$ROOT/tests/tools/eval-fixtures.sh" "$eval_root" >/dev/null
+  contract_fixtures="$eval_root/minimal"
+  contract_fixtures_full="$eval_root/full"
+  log "--> cargo nextest run -p d2b-contract-tests (eval-only rendered artifacts)"
   D2B_FIXTURES="$contract_fixtures" D2B_FIXTURES_FULL="$contract_fixtures_full" \
   CARGO_TARGET_DIR="$workspace_target_dir" \
-    cargo nextest run --manifest-path "$manifest" -p d2b-contract-tests
+    cargo nextest run --manifest-path "$manifest" -p d2b-contract-tests \
+      -E 'not binary(video_binary_contract)'
   D2B_FIXTURES="$contract_fixtures" D2B_FIXTURES_FULL="$contract_fixtures_full" \
   CARGO_TARGET_DIR="$workspace_target_dir" \
     run_nextest_companions "contract crate" "$manifest" -p d2b-contract-tests
-  ok "d2b-contract-tests (fixture-contract layer)"
+  ok "d2b-contract-tests (eval-only fixture-contract layer)"
 }
 
 run_cli_contract_tests() {
@@ -505,12 +476,12 @@ run_cli_contract_tests() {
 
 if [ "$fixture_contracts_only" = 1 ]; then
   if ! command -v nix >/dev/null 2>&1; then
-    fail "D2B_ENABLE_FIXTURE_BUILD=1 requires nix to build D2B_FIXTURES"
+    fail "D2B_ENABLE_FIXTURE_BUILD=1 requires nix to evaluate D2B_FIXTURES"
     exit 1
   fi
   run_fixture_contract_tests
   run_cli_contract_tests "$contract_fixtures"
-  log "test-fixture-contracts OK (fixture and CLI-contract layers; duration: $((SECONDS - suite_started))s)"
+  log "test-fixture-contracts OK (eval fixture + CLI-contract layers; duration: $((SECONDS - suite_started))s)"
   exit 0
 fi
 

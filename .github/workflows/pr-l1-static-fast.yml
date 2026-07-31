@@ -310,38 +310,6 @@ jobs:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
-      - name: Nix store cache
-        # Without this the job rebuilds the Rust host-tool set from source,
-        # which is what makes the fixture-contract gate cost half an hour here
-        # while completing in seconds on a host with a substituter. Restore is
-        # best-effort: a cache miss is slow, never incorrect. See
-        # NIX_CACHED_JOBS for why only some jobs carry an entry.
-        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569
-        with:
-          # The format epoch rotates immutable Actions caches when retention
-          # semantics change. Fixture jobs use a source-complete hash; other
-          # cached Nix jobs hash the flake and Nix corpus they evaluate.
-          primary-key: nix-v1-${{ runner.os }}-test-fixture-contracts-${{ hashFiles('flake.lock', '**/*.nix', 'packages/**', 'pkgs/**', 'docs/manpages/**', 'docs/completions/**', 'tests/fixtures/guest-rust-workspace/**', 'tests/tools/fixture-cache-paths.sh') }}
-          restore-prefixes-first-match: nix-v1-${{ runner.os }}-test-fixture-contracts-
-          gc-max-store-size-linux: 4G
-          purge: true
-          purge-prefixes: nix-v1-${{ runner.os }}-test-fixture-contracts-
-          purge-created: 0
-          purge-primary-key: never
-      - name: Restore fixture derivation cache
-        id: fixture-derivations
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
-        with:
-          path: ${{ runner.temp }}/d2b-fixture-derivation-cache
-          key: fixture-derivations-v1-${{ runner.os }}-${{ hashFiles('flake.lock', '**/*.nix', 'packages/**', 'pkgs/**', 'docs/manpages/**', 'docs/completions/**', 'tests/fixtures/guest-rust-workspace/**', 'tests/tools/fixture-cache-paths.sh') }}
-          restore-keys: |
-            fixture-derivations-v1-${{ runner.os }}-
-      - name: Import cached fixture derivations
-        run: |
-          cache="${{ runner.temp }}/d2b-fixture-derivation-cache/closure.nar.zst"
-          if [ -s "$cache" ]; then
-            zstd -dc "$cache" | nix-store --import
-          fi
       - name: Free runner disk for Rust gate
         run: |
           df -h
@@ -389,23 +357,10 @@ jobs:
           # Every other Rust job restores the last complete entry. On a cold key
           # parallel shards may duplicate compilation, but only one entry wins.
           save-if: "false"
-      - name: Provision the heavy-gate runtime root
-        run: make heavy-gate-provision
       - name: Fixture-dependent Rust contract tests
         env:
           D2B_ENABLE_FIXTURE_BUILD: "1"
         run: make test-fixture-contracts
-      - name: Export expensive fixture derivations
-        run: |
-          cache_dir="${{ runner.temp }}/d2b-fixture-derivation-cache"
-          mkdir -p "$cache_dir"
-          mapfile -t roots < <(bash tests/tools/fixture-cache-paths.sh)
-          [ "${#roots[@]}" -gt 0 ] || { echo "no fixture cache roots discovered" >&2; exit 1; }
-          nix-store --query --requisites "${roots[@]}" \
-            | LC_ALL=C sort -u \
-            | xargs nix-store --export \
-            | zstd -T0 -q -o "$cache_dir/closure.nar.zst"
-          du -h "$cache_dir/closure.nar.zst"
 
 
   test-proofs:

@@ -117,7 +117,7 @@ test-rust-main:
 test-rust-remaining:
 	bash tests/test-rust.sh remaining-suite
 
-## test-fixture-contracts - enforcing fixture-backed contract and CLI layer.
+## test-fixture-contracts - enforcing eval-rendered contract and CLI layer.
 ## Layer-1 local and CI orchestration set D2B_ENABLE_FIXTURE_BUILD=1.
 test-fixture-contracts:
 	bash tests/test-rust.sh fixture-contracts

@@ -128,6 +128,14 @@ let
   # installation and tests that need the final bytes must use `path`.
   data = dataWithoutHash // { inherit bundleHash; artifactHashes = null; };
   jsonText = builtins.toJSON data;
+  evalArtifactHashes = lib.listToAttrs (map (row: {
+    name = row.key;
+    value = "sha256:${builtins.hashString "sha256" row.key}";
+  }) artifactHashInputs);
+  evalData = dataWithoutHash // {
+    inherit bundleHash;
+    artifactHashes = evalArtifactHashes;
+  };
   baseJsonFile = pkgs.writeText "d2b-bundle-base.json" jsonText;
   artifactHashInputsFile = pkgs.writeText "d2b-bundle-artifact-inputs.json"
     (builtins.toJSON artifactHashInputs);
@@ -161,6 +169,7 @@ in
   config = {
     d2b._bundle.bundle = {
       inherit data jsonText;
+      fixtureData = evalData;
       path = "${jsonFile}";
       installFileName = "bundle.json";
       classification = "contractPrivateNonSecret";
