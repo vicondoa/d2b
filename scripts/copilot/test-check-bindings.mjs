@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// Coverage for the seat-roster drift guard in check-bindings.mjs.
+// Coverage for the seat-roster drift guard in check-bindings.mjs, and for the
+// input classification this harness depends on.
 //
 //   node scripts/copilot/test-check-bindings.mjs
 //
@@ -17,10 +18,12 @@
 // case is load bearing for the same reason: without it, a fixture that failed
 // for an unrelated reason would satisfy every negative case vacuously.
 //
-// Scope. This covers the roster comparison only. The other mirrored constants
-// are scalars checked by a shared loop and are not parsed by their own regex;
-// extending the harness to them is recorded in .specify/memory/deferred-work.md
-// rather than done here, so this stays a test for the guard that was asked for.
+// Scope. The roster comparison, plus the required-versus-optional
+// classification of the gate's own inputs, which is what keeps the negative
+// cases from passing vacuously. The other mirrored constants are scalars
+// checked by a shared loop and are not parsed by their own regex; extending the
+// harness to them is recorded in .specify/memory/deferred-work.md rather than
+// done here, so this stays a test for the guard that was asked for.
 //
 // It is a plain node script with no test framework because the repository does
 // not add tooling for one gate. It runs from `make test-lint`.
@@ -54,7 +57,9 @@ const root = join(here, "..", "..");
 //
 // Classify by measuring the gate, not by reading one call site: the
 // `.github/skills` scan is itself skip-guarded, but the required record helper
-// lives inside that tree, so omitting the directory hard-fails after all.
+// lives inside that tree, so omitting the directory hard-fails after all. The
+// classification cases at the bottom of this file measure every entry, so a
+// misfiled path is a test failure rather than a stale comment.
 const REQUIRED_INPUTS = [
   "scripts/copilot/check-bindings.mjs",
   ".github/agents",
@@ -79,14 +84,18 @@ const ROLES_DECL = /const\s+ROLES\s*=\s*\[[\s\S]*?\];/;
 
 let failures = 0;
 
-function buildFixture() {
+// `omit` names one repo-relative input to leave out, which is how the
+// classification cases below measure the rule the two lists assert.
+function buildFixture(omit) {
   const dir = mkdtempSync(join(tmpdir(), "d2b-check-bindings-"));
   for (const rel of REQUIRED_INPUTS) {
+    if (rel === omit) continue;
     const dest = join(dir, rel);
     mkdirSync(dirname(dest), { recursive: true });
     cpSync(join(root, rel), dest, { recursive: true });
   }
   for (const rel of OPTIONAL_INPUTS) {
+    if (rel === omit) continue;
     if (!existsSync(join(root, rel))) continue;
     const dest = join(dir, rel);
     mkdirSync(dirname(dest), { recursive: true });
@@ -197,12 +206,66 @@ const CASES = [
   },
 ];
 
-for (const c of CASES) {
-  const dir = buildFixture();
+// Does the classification above match what the gate actually does?
+//
+// A comment is not a test. The gate could stop hard-failing on a required read,
+// or start hard-failing on an optional one, and the comment would keep reading
+// true while the list was wrong. Both directions are defects. A required entry
+// that has quietly become skippable makes every negative case above vacuous,
+// because the fixture is still built with it present. An optional entry listed
+// as required throws ENOENT the day the repo legitimately drops that path,
+// before a single case runs.
+//
+// So measure it rather than asserting it in prose. Omit exactly one input,
+// run the gate, and check the exit status the classification predicts. The
+// baseline case establishes that a complete fixture exits 0, so a nonzero exit
+// here is attributable to the omission and not to unrelated breakage.
+function classificationCases() {
+  const cases = [];
+  for (const rel of REQUIRED_INPUTS) {
+    cases.push({
+      name: `classification: omitting required ${rel} fails the gate`,
+      omit: rel,
+      expectNonZero: true,
+    });
+  }
+  for (const rel of OPTIONAL_INPUTS) {
+    if (!existsSync(join(root, rel))) {
+      // The repo does not ship this path, so the fixture never copies it and
+      // the baseline already runs the gate without it. There is nothing to omit,
+      // and reporting the skip keeps that visible rather than counting a case
+      // that measured nothing.
+      cases.push({ name: `classification: optional ${rel} is not in the repo`, skip: true });
+      continue;
+    }
+    cases.push({
+      name: `classification: omitting optional ${rel} still passes`,
+      omit: rel,
+      expectExit: 0,
+    });
+  }
+  return cases;
+}
+
+const ALL_CASES = [...CASES, ...classificationCases()];
+
+let ran = 0;
+
+for (const c of ALL_CASES) {
+  if (c.skip) {
+    console.log(`skip ${c.name}`);
+    continue;
+  }
+  const dir = buildFixture(c.omit);
   try {
-    c.mutate(dir);
+    if (c.mutate) c.mutate(dir);
     const { status, out } = run(dir);
-    if (status !== c.expectExit) {
+    ran += 1;
+    if (c.expectNonZero && status === 0) {
+      failures += 1;
+      console.error(`FAIL ${c.name}: expected a nonzero exit, got 0`);
+      console.error(out.split("\n").slice(0, 20).join("\n"));
+    } else if (!c.expectNonZero && status !== c.expectExit) {
       failures += 1;
       console.error(`FAIL ${c.name}: expected exit ${c.expectExit}, got ${status}`);
       console.error(out.split("\n").slice(0, 20).join("\n"));
@@ -222,7 +285,7 @@ for (const c of CASES) {
 }
 
 if (failures) {
-  console.error(`\ncheck-bindings roster guard: ${failures} of ${CASES.length} cases failed`);
+  console.error(`\ncheck-bindings guard: ${failures} of ${ran} cases failed`);
   process.exit(1);
 }
-console.log(`\ncheck-bindings roster guard: ${CASES.length} cases passed`);
+console.log(`\ncheck-bindings guard: ${ran} cases passed`);
