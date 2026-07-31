@@ -137,8 +137,17 @@ fn the_tpm_volume_is_secret_and_never_publishes_its_path() {
 }
 
 /// Fragments that must never appear in a public Volume status document.
-const FORBIDDEN_STATUS_FRAGMENTS: [&str; 10] = [
+const FORBIDDEN_STATUS_FRAGMENTS: [&str; 19] = [
+    "pid",
+    "pidfd",
+    "unit",
+    "invocation",
+    "cgroup",
     "path",
+    "argv",
+    "command",
+    "binary",
+    "env",
     "sourcepolicyid",
     "state-root",
     "uid",

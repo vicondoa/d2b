@@ -94,6 +94,27 @@ ID, ACL value, numeric UID or GID, or socket path is public. Audit and
 telemetry carry the same redaction: an entry is identified by digest and an
 outcome by a closed reason token, never by a path or a resolved root.
 
+Persistent and cache-class Volumes use an identity-bound marker under a
+broker-maintained root outside the Volume tree. If that marker survives while
+the Volume root is missing, startup fails closed with
+`previously-provisioned-volume-state-missing`; it does not create an empty
+replacement. A root with a different filesystem identity is rejected as
+replaced.
+
+Provider payload writes use canonical `StateEnvelope` documents, a soft quota
+check, and the durable temporary-write, file-sync, replace, parent-sync
+sequence. Payload digest validation currently fails closed until the shared v3
+contract freezes a Provider-state digest domain.
+
+Audit events use the closed `volume-*` event set and carry no content, path,
+credential, or process fields. Metrics are the six `d2b_volume_state_*`
+instruments and use only closed provider, schema-class, outcome, and trigger
+labels. Zone identity appears only as the `d2b.zone` OTEL Resource attribute.
+
+The Provider itself declares no payload state Volume. Its bounded controller
+observations remain in resource status and the core Operation ledger, avoiding
+a bootstrap storage cycle.
+
 ## Layout
 
 | Path | Contents |
@@ -108,3 +129,8 @@ outcome by a closed reason token, never by a path or a resolved root.
 cd packages && cargo test -p d2b-provider-volume-local
 cd packages && cargo clippy -p d2b-provider-volume-local --all-targets
 ```
+
+Host filesystem integration scenarios run through `make
+test-host-integration` once the core Volume effect adapter is wired. The
+Provider crate is intended to remain independently packageable; a standalone
+repository must supply the same v3 contracts and injected core effect adapter.
