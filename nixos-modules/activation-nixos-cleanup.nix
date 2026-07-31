@@ -47,7 +47,7 @@ let
         cleanupBlocksActivation = false;
         absentResourceAction = "delete";
         finalizersAreForceCleared = false;
-        pendingCondition = "pending-cleanup";
+        pendingCondition = "PendingCleanup";
         nameConflictCondition = "Degraded/name-conflict";
       };
     })

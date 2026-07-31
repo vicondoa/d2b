@@ -731,6 +731,7 @@
           ];
           nix-unit-network = [
             "bridge-ipv6-boot-sysctl.nix"
+            "generation-cleanup-absent-network.nix"
             "index.nix"
             "multi-env-daemon-backed.nix"
             "net-vm-network.nix"

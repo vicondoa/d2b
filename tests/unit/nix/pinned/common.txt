@@ -327,6 +327,7 @@ gateway-vm/reuses-standard-host-tool-package-plumbing
 gateway-vm/source-host-tools-opt-out-selects-source-daemon
 gateway-vm/transitional-host-relay-guard-defaults-off
 gateway-vm/waypipe-not-in-host-runner-dag
+generation-cleanup-absent-network/compiler-contract
 guest-config-containment/clean-no-failure
 guest-config-containment/imports-microvm-fires
 guest-config-containment/imports-microvm-names-mem

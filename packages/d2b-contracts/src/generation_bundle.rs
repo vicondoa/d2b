@@ -38,6 +38,8 @@ pub enum ZoneBundleError {
     IntegrityFailure,
     /// A string or dynamic spec value is outside the canonical JSON profile.
     CanonicalJson,
+    /// A bundled Provider schema digest does not match the installed artifact.
+    ProviderSchemaDigestMismatch,
 }
 
 impl ZoneBundleError {
@@ -50,6 +52,7 @@ impl ZoneBundleError {
             Self::ResourcesNotSorted => "bundle-resources-not-sorted",
             Self::IntegrityFailure => "bundle-integrity-failure",
             Self::CanonicalJson => "bundle-canonical-json-invalid",
+            Self::ProviderSchemaDigestMismatch => "bundle-provider-schema-digest-mismatch",
         }
     }
 }
@@ -173,7 +176,7 @@ impl<'de> Deserialize<'de> for BundleMetadata {
 /// `configurationGeneration` field. Those fields are store-owned metadata set
 /// by the configuration controller after activation commits.
 #[derive(Clone, PartialEq, Eq, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BundleResource {
     api_version: String,
     #[serde(rename = "type")]
@@ -182,7 +185,19 @@ pub struct BundleResource {
     spec: CanonicalJsonObject,
 }
 
+// Listing every field makes any addition to this input DTO a compile failure.
+// Store-owned metadata therefore cannot silently cross the bundle boundary.
+const _: fn(BundleResource) = |BundleResource {
+                                   api_version: _,
+                                   resource_type: _,
+                                   metadata: _,
+                                   spec: _,
+                               }| {};
+
 impl BundleResource {
+    /// Closed serialized field set for the authored input DTO.
+    pub const INPUT_FIELD_NAMES: [&'static str; 4] = ["apiVersion", "type", "metadata", "spec"];
+
     /// Construct one canonical bundle input resource.
     pub fn new(
         resource_type: ResourceTypeName,
@@ -269,6 +284,7 @@ impl ZoneBundle {
     ) -> Result<Self, ZoneBundleError> {
         resources.sort_by(resource_order);
         validate_resources(&zone, &resources)?;
+        canonical_json_bytes(&provider_schema_digests)?;
         let content_hash = Self::compute_content_hash(&resources)?;
         Ok(Self {
             schema_version: ZONE_BUNDLE_SCHEMA_VERSION,
@@ -301,6 +317,7 @@ impl ZoneBundle {
             return Err(ZoneBundleError::InvalidEnvelope);
         }
         validate_resources(&zone, &resources)?;
+        canonical_json_bytes(&provider_schema_digests)?;
         if !resources
             .windows(2)
             .all(|pair| resource_order(&pair[0], &pair[1]).is_le())
@@ -366,6 +383,25 @@ impl ZoneBundle {
     /// Borrow the Provider settings-schema digest map.
     pub const fn provider_schema_digests(&self) -> &BTreeMap<String, SchemaFingerprint> {
         &self.provider_schema_digests
+    }
+
+    /// Verify every bundled Provider schema digest against installed artifacts.
+    ///
+    /// Installed Providers not referenced by this bundle are permitted. Every
+    /// bundled entry must be present and equal before application proceeds.
+    pub fn verify_provider_schema_digests(
+        &self,
+        installed: &BTreeMap<String, SchemaFingerprint>,
+    ) -> Result<(), ZoneBundleError> {
+        if self
+            .provider_schema_digests
+            .iter()
+            .all(|(provider, digest)| installed.get(provider) == Some(digest))
+        {
+            Ok(())
+        } else {
+            Err(ZoneBundleError::ProviderSchemaDigestMismatch)
+        }
     }
 }
 
