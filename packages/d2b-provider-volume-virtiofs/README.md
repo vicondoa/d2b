@@ -4,17 +4,43 @@
 virtiofs. It reconciles `virtiofs.d2bus.org.Export` resources and never
 writes a Volume row.
 
-## Identity
+## Provider identity
 
 | Field | Value |
 | --- | --- |
 | Provider name | `volume-virtiofs` |
+| Publisher | first-party, `vicondoa/d2b` |
+| Version | tracks the workspace version of this crate |
+| Trust attestation | first-party admission; exact package digest resolved from the offline Nix artifact catalog |
+| Conformance attestation | the hermetic conformance suite under `tests/` |
 | ResourceTypes | `virtiofs.d2bus.org.Export`; read-only watch of `Volume` |
 | Attachment transport | `virtiofs` |
 | Worker template | `virtiofsd-worker` |
 | Finalizer | `volume-virtiofs/export`, on an Export and nothing else |
 
-## virtiofsd argv
+## Config schema
+
+| Field | Description | Default |
+| --- | --- | --- |
+| `threadPoolSize` | virtiofsd worker thread pool size. | the target vcpu count |
+| `cache` | virtiofsd cache mode; one of `auto`, `always`, `never`. | `auto` |
+
+There is no free-form extra-argument channel, and no config field carries a
+path, a socket, or a credential.
+
+## Exported resource types
+
+| ResourceType | Role |
+| --- | --- |
+| `virtiofs.d2bus.org.Export` | sole writer: export lifecycle, worker plan, drain |
+| `Volume` | read-only watch; never written |
+
+## Controllers / services / workers / binaries
+
+| Component | Type | Role |
+| --- | --- | --- |
+| `volume-virtiofs` controller | controller | reconciles `virtiofs.d2bus.org.Export` |
+| `virtiofsd-worker` | worker template | one virtiofsd process per admitted export |
 
 The flag envelope is adapted from the shipped host-side generator, with
 three differences the Volume spec freezes:
@@ -38,21 +64,42 @@ and there is no free-form extra-argument channel. The renderer is
 crate-private: it is the only place a resolved path is joined to the
 worker plan, and no public type carries one.
 
-## ADR 0021 invariant
+## Placement and dependencies
+
+The controller and every worker are Host-placed: virtiofsd runs beside the
+Volume root it serves. The Provider depends on `volume-local` only through
+the read-only `Volume` watch; that dependency is asynchronous and a missing
+Volume leaves the Export unadmitted rather than degrading the controller.
+
+## RBAC requirements
+
+The Provider requires a pre-installed Role granting write on
+`virtiofs.d2bus.org.Export` and read on `Volume`, bound to the Provider's own
+service identity. It requires no write grant on `Volume` and no wildcard
+permission.
+
+## Security posture
 
 Every worker declares zero host capabilities, does not start as root,
 runs a chroot sandbox with a read-only root, and receives its privileges
 only inside a user namespace the broker pre-establishes through the
 `process-principal-root` mapping class. A declared host capability, a
 root start, `--sandbox=namespace`, or a writable root is rejected before
-any launch is requested.
-
-## Socket path privacy
+any launch is requested. This is the ADR 0021 invariant, and it is asserted
+rather than assumed.
 
 The export socket path is generated and private. Only its opaque
 `SocketIdentity` is public. The path never appears in a spec field, a
 status field, an audit record, or CLI output, and two Exports of one
 Volume have distinct identities.
+
+## State and telemetry
+
+Export state is held in the Export resource and its status; the controller
+keeps no durable state of its own. Status, audit, and telemetry name an
+export by its opaque `SocketIdentity` and a closed outcome token. No socket
+path, shared directory, resolved Volume root, argv, or numeric identifier is
+emitted.
 
 ## Layout
 
@@ -62,7 +109,7 @@ Volume have distinct identities.
 | `tests/` | hermetic Export lifecycle, sandbox, drain, and privacy conformance |
 | `integration/` | virtiofsd launch and guest-mount fixtures |
 
-## Commands
+## Build and test
 
 ```bash
 cd packages && cargo test -p d2b-provider-volume-virtiofs

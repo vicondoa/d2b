@@ -1,0 +1,13 @@
+{
+  "$id": "https://d2bus.org/schemas/v3/telemetry.d2bus.org/TelemetryBinding/status",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Frozen provider-neutral common status layer, written under status.resource. Implementation observation belongs only under status.provider and may not duplicate a field here.",
+  "properties": {},
+  "required": [],
+  "title": "telemetry.d2bus.org/TelemetryBinding/status",
+  "type": "object",
+  "x-d2b-resource-type": "telemetry.d2bus.org.TelemetryBinding",
+  "x-d2b-schema-fingerprint": "sha256:439b10a2f6a06784e9f8e4a2d009796b387754e2832da18fbca1c81c22a0a6a1",
+  "x-d2b-schema-version": "1.0"
+}

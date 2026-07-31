@@ -1,0 +1,23 @@
+{
+  "$id": "https://d2bus.org/schemas/v3/security-key.d2bus.org/SecurityKeyBinding/spec",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Frozen provider-neutral base spec layer. Every conformant implementation binds this exact version and fingerprint, accepts the canonical minimal base without spec.provider, and adds only its own strict extension schema.",
+  "properties": {
+    "policy": {},
+    "providerRef": {},
+    "serviceRef": {},
+    "target": {},
+    "updatePolicy": {}
+  },
+  "required": [
+    "providerRef",
+    "serviceRef",
+    "target"
+  ],
+  "title": "security-key.d2bus.org/SecurityKeyBinding/spec",
+  "type": "object",
+  "x-d2b-resource-type": "security-key.d2bus.org.SecurityKeyBinding",
+  "x-d2b-schema-fingerprint": "sha256:00ecaca0230c146daf2d6ae174f84dfcc1f1f81e998f04d3124b2ef333da02c9",
+  "x-d2b-schema-version": "1.0"
+}

@@ -60,6 +60,8 @@ run_xtask spec-registry
 run_xtask implementation-graph
 run_xtask gen-zone-schemas
 run_xtask gen-zone-nix-options
+run_xtask gen-provider-packaging
+run_xtask gen-semantic-service-schemas
 run_xtask process-marker-pin
 
 drift_paths=(

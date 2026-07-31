@@ -680,6 +680,7 @@
             "examples-with-observability.nix"
             "ifname-nix-rust-parity.nix"
             "observability.nix"
+            "provider-catalog.nix"
             "readiness-waves.nix"
             "restart-policy.nix"
             "usb-security-key.nix"
@@ -1022,6 +1023,22 @@
           done
           mkdir -p "$out"
           echo ok > "$out/guest-static-elf"
+        '';
+
+        # Build-level determinism proof for the Provider package catalog
+        # emitter. The drift gate proves the generator's output matches what is
+        # committed; only this proves it emits the same bytes across two
+        # independent evaluations of the same input. The eval file throws on a
+        # mismatch, so `nix flake check --no-build` fails at evaluation rather
+        # than producing an unbuilt derivation.
+        provider-catalog-determinism = let
+          evidence = import ./tests/unit/smoke/provider-catalog-determinism-eval.nix {
+            inherit system pkgs;
+            flake = self;
+          };
+        in pkgs.runCommand "d2b-provider-catalog-determinism" { } ''
+          mkdir -p "$out"
+          printf '%s\n' '${evidence}' > "$out/provider-catalog-determinism.json"
         '';
 
         guest-static-consumption = let

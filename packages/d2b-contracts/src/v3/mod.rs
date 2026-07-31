@@ -11,10 +11,12 @@ pub mod identity;
 pub mod limits;
 pub mod network;
 pub mod process;
+pub mod provider;
 pub mod resource;
 pub mod resource_ref;
 pub mod resource_schema;
 pub mod resource_status;
+pub mod semantic_services;
 pub mod user;
 pub mod volume;
 pub mod zone_routing;
@@ -51,4 +53,30 @@ pub use resource_status::{
     ConditionState, ProviderStatusExtension, ResourceCondition, ResourceCurrencySet,
     ResourceOutcome, ResourcePhase, ResourceStatus, ResourceStatusError, ResourceUpdateStatus,
     StatusCode, StatusMessage, UpdateDisruption, UpdateReason, UpdateState,
+};
+
+// The `provider` module's re-exports. Keep every `pub use provider::...` line
+// inside this region so it stays one contiguous block.
+pub use provider::{
+    ArtifactDigest, ArtifactDigestSet, ArtifactId, BindingTargetType, CapabilitySupport,
+    CompatibilityRange, ComponentDescriptor, ComponentType, DependencyAlias, DependencyDeclaration,
+    Exportability, ExtensionSchemaRegistration, MAX_ARTIFACT_ID_BYTES,
+    MAX_CAPABILITY_MATRIX_ENTRIES, MAX_COMPONENT_METHODS, MAX_COMPONENT_RESOURCE_TYPES,
+    MAX_PROJECTION_FACTORIES, MAX_PROJECTION_REF_TYPES, MAX_PROVIDER_API_BINDINGS,
+    MAX_PROVIDER_COMPONENTS, MAX_PUBLISHER_ID_BYTES, PROVIDER_RESOURCE_TYPE, PolicyEvaluation,
+    ProjectionFactory, ProviderContractError, ProviderManifest, ProviderSpec, ResourceApiBinding,
+    RevocationState, SignatureState, SpecifiedProviderMethod, StandardCapabilityMatrix,
+    TrustEvidence, UNSUPPORTED_CAPABILITY_CODE, UpgradeDisposition,
+    UpgradePolicy as ProviderUpgradePolicy,
+};
+
+// The `semantic_services` module's re-exports. Keep every
+// `pub use semantic_services::...` line inside this region so it stays one
+// contiguous block.
+pub use semantic_services::{
+    PROVIDER_REF_FIELD, SEMANTIC_BASE_SCHEMA_MAJOR, SEMANTIC_BASE_SCHEMA_MINOR,
+    SEMANTIC_PROJECTION_PROTOCOL_VERSION, SemanticContractError, SemanticFamily, SemanticLayer,
+    SemanticLayerSchema, SemanticPairContract, SemanticProjectionBinding, SemanticRole,
+    SemanticSchemaId, SemanticTypeContract, UPDATE_POLICY_FIELD,
+    catalog as semantic_service_catalog,
 };

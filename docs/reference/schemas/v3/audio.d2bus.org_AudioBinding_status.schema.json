@@ -1,0 +1,19 @@
+{
+  "$id": "https://d2bus.org/schemas/v3/audio.d2bus.org/AudioBinding/status",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Frozen provider-neutral common status layer, written under status.resource. Implementation observation belongs only under status.provider and may not duplicate a field here.",
+  "properties": {
+    "channels": {},
+    "enforcementPosture": {},
+    "lastSetApplied": {},
+    "observedServiceRef": {},
+    "realizationRefs": {}
+  },
+  "required": [],
+  "title": "audio.d2bus.org/AudioBinding/status",
+  "type": "object",
+  "x-d2b-resource-type": "audio.d2bus.org.AudioBinding",
+  "x-d2b-schema-fingerprint": "sha256:9a90314fde7ee31cff3cdb62ff10eadc327f62c20230a9f52dae0db2711e38d7",
+  "x-d2b-schema-version": "1.0"
+}
