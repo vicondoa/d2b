@@ -1710,7 +1710,7 @@ on `packages/d2b-core/src/error.rs`, before any production caller uses
 | `ADR046-process-002` | **Blocked, with a destination defect.** The two Provider implementations have pre-existing hermetic conformance and adoption coverage, but no Round B production wiring or executable integration scenario exists. Section 16.1 records all three blockers and the amendment required. |
 | `ADR046-network-002` | **Behavior met at the hermetic Provider layer; pin clause not met and production integration deferred.** Equivalent bridge-port, nftables coexistence, route and IPv6 tests exist in `d2b-provider-network-local`. The validation field's literal statement that all named tests are pinned in `host-prepare-network.txt` and `net-canaries.txt` is false: those files still identify the old `d2b-host`/broker and IfName tests, the IPv6 sequence is pinned in `ipv6-off-readback.txt`, the old nftables matrix is pinned in `nft-coexistence.txt`, and no pin names the adapted Provider coexistence test. Section 16.2 records the real adapter gap. |
 | `ADR046-pstate-003` | **Partial.** Marker missing, replaced and mismatched states, cross-domain refusal, quota soft checks and the visible marker crash states are hermetically covered. A memory marker store does not prove crash behavior at each real filesystem provision step, a broker-maintained marker, cross-process isolation or real quota enforcement. The named host-integration file is non-executable. Section 16.2 records the W6 adapter owner. |
-| `ADR046-pstate-008` | **Validation met at the descriptor and golden-record layer; integration not met.** `audit_unit.rs` pins bounded audit records, forbidden payload-field classes, the closed metric labels and `d2b.zone` as a Resource attribute. Nothing outside `audit.rs` calls `emit_volume_event`, and no emitter exports `METRICS` to `observability-otel`. `ADR046-pstate-009` owns the live audit and OTEL fixtures; the lifecycle items that perform each transition must call the sink when they land. This production-wiring gap was not in the supplied list. |
+| `ADR046-pstate-008` | **Catalogue and hermetic validation met; production integration not met.** `audit.rs` now catalogues all 18 Provider lifecycle events and all six broker-owned operation event names from the volume-local specification. `otel.rs` defines all 15 metric descriptors. `audit_unit.rs` pins both catalogues, bounded audit fields, forbidden payload-field classes, exact descriptor labels, closed label value enums and `d2b.zone` as a Resource attribute. Nothing outside `audit.rs` calls `emit_volume_event`, and no emitter exports `METRICS` to `observability-otel`; the lifecycle items that perform each transition must call the sink when they land. `ADR046-pstate-009` owns the live audit and OTEL fixtures. |
 | `ADR046-credential-003` | **In progress.** The specified source and Cargo test files existed at the audit snapshot; its three Layer 2 fixtures were absent then and are being added concurrently. The full named command and repository lane executions have not been accepted as passing in this audit. Section 16.3 is the closure rule. |
 | `ADR046-credential-004` | **In progress.** Same status: source and six Cargo test files existed at the snapshot; the three Layer 2 fixtures are being added concurrently, and complete command/lane evidence is still owed. Section 16.3 is the closure rule. |
 | `ADR046-credential-005` | **In progress.** Source and six Cargo test files existed at the snapshot; a concurrent pass is adding the four Layer 2 fixtures and the separately specified controller/agent topology. Complete command/lane evidence is still owed. Section 16.3 is the closure rule. |
@@ -1726,8 +1726,9 @@ catalogue omission. The independent validation-field pass additionally found:
 
 - `ADR046-network-002`'s adapted Provider tests are not pinned as its validation
   field claims.
-- `ADR046-pstate-008` has complete hermetic record/label validation but no
-  transition calls, Zone audit emission or OTEL export.
+- `ADR046-pstate-008` has complete Provider and broker event catalogues and
+  metric descriptor/value validation, but no transition calls, Zone audit
+  emission or OTEL export.
 - `ADR046-pstate-010` says eight cleanup tests while its linked normative list
   contains nine, and several build, runtime, metric and independent-build
   obligations remain absent.
@@ -1736,3 +1737,28 @@ catalogue omission. The independent validation-field pass additionally found:
 - `ADR046-network-008` has logic-level bundle coverage but not its named Nix,
   Rust integration, Network-finalizer or host-integration scenarios; two owned
   modules remain explicit scaffolds.
+
+## 17. Credential Provider dependency-direction correction
+
+The three credential Provider crates depended directly on
+`d2b-credential-service`. That violated the enforcing Provider dependency
+allowlist, which admits only `d2b-contracts`, `d2b-controller-toolkit`,
+`d2b-core`, `d2b-process-conformance`, `d2b-provider` and
+`d2b-provider-toolkit`. The violation was not resolved by adding the service
+crate to the allowlist.
+
+The chosen disposition is the neutral-contract option. Provider-facing request
+and response DTOs, closed redacted errors, metadata, delivery binding shapes,
+the strict outer codec, `CredentialAuthorization`, `CredentialProvider` and the
+binding-preserving provider dispatch helper now live under
+`d2b-contracts::v3::credential`. `d2b-credential-service` re-exports that
+contract and retains the client transport, authenticated admission trait,
+RBAC authorization helpers and server composition. Its server still performs
+admission before dispatch and rejects a Provider response whose method or
+delivery binding differs from the authorization-owned value.
+
+This keeps Providers on the public neutral contract while preventing them from
+linking the crate that owns service admission and server wiring. Provider tests
+exercise their neutral dispatch contract directly. The service crate's own
+tests remain responsible for proving denial-before-dispatch and rejection of
+every altered delivery-binding field. No dependency allowlist was widened.
