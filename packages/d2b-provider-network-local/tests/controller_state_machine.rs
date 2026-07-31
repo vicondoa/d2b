@@ -1,7 +1,7 @@
 use std::{
     future::Future,
     sync::{Arc, Mutex},
-    task::{Context, Poll, Wake, Waker},
+    task::{Context, Poll, Waker},
 };
 
 use d2b_contracts::v3::{
@@ -56,13 +56,8 @@ impl FakePorts {
 }
 
 fn block_on<F: Future>(future: F) -> F::Output {
-    struct NoopWaker;
-    impl Wake for NoopWaker {
-        fn wake(self: Arc<Self>) {}
-    }
-
-    let waker = Waker::from(Arc::new(NoopWaker));
-    let mut context = Context::from_waker(&waker);
+    let waker = Waker::noop();
+    let mut context = Context::from_waker(waker);
     let mut future = Box::pin(future);
     loop {
         match future.as_mut().poll(&mut context) {
