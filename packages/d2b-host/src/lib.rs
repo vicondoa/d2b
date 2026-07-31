@@ -7,7 +7,7 @@
 //! | net   | [`ifname`], [`netlink`], [`routes`], [`bridge_port`]                  |
 //! | nft   | [`nftables`]                                                          |
 //! | host  | [`modules`], [`devices`], [`ioctl_policy`]                            |
-//! | tests | [`fake`] backends gated behind the `fake-backends` feature            |
+//! | tests | `fake` backends gated behind the `fake-backends` feature              |
 //!
 //! Crate-level invariants:
 //!

@@ -6,7 +6,7 @@
 //! Previously, foundational network sanity (each env's LAN bridge exists
 //! and is `up`) was asserted by a oneshot systemd singleton
 //! (`d2b-net-route-preflight.service` in
-//! [`nixos-modules/network.nix`]) that ran at boot, shelled out to
+//! `nixos-modules/network.nix`) that ran at boot, shelled out to
 //! `ip route get <env-lan-ip>` per env, and exited non-zero if any
 //! env's representative LAN IP did not resolve via its uplink bridge.
 //! Every `d2b@<vm>.service` carried `Requires=` on that unit, so

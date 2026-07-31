@@ -138,7 +138,7 @@ fn default_known_hosts_path() -> String {
     "/var/lib/d2b/known_hosts.d2b".to_owned()
 }
 
-/// Reference to a per-VM closure artifact under closures/<vm>.json.
+/// Reference to a per-VM closure artifact under `closures/<vm>.json`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BundleClosureRef {

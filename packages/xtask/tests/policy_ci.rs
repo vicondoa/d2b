@@ -25,6 +25,8 @@ const APPROVED_MAKE_TARGETS: &[&str] = &[
     "test-unit",
     "test-lint",
     "test-rust",
+    "test-rust-main",
+    "test-rust-remaining",
     "test-proofs",
     "test-drift",
     "test-flake",

@@ -68,8 +68,9 @@ pub trait SessionReaper: Send + Sync {
 /// A spawned PTY-backed interactive exec. Distinct from the
 /// [`crate::exec::SpawnedProcess`] (which only exposes stdout/stderr + killer +
 /// waiter): the PTY master is a single bidirectional fd surfaced as an
-/// independent merged-output [`AsyncRead`] half and a stdin-sink [`AsyncWrite`]
-/// half, plus a control handle (resize / foreground-PG signal), a `waiter` that
+/// independent merged-output [`tokio::io::AsyncRead`] half and a stdin-sink
+/// [`tokio::io::AsyncWrite`] half, plus a control handle (resize / foreground-PG
+/// signal), a `waiter` that
 /// reaps the direct child, and a `reaper` that SIGKILLs any process remaining in
 /// the helper-created TTY session on teardown.
 pub struct SpawnedPtyProcess {
@@ -108,10 +109,10 @@ enum WriteOp {
     },
 }
 
-/// Per-session interactive state, held by the owning [`crate::exec::ExecEntry`].
+/// Per-session interactive state, held by the owning `ExecEntry`.
 /// Mutable protocol state lives behind short, non-await std mutexes. The PTY
 /// master write half is owned by a dedicated, abortable **writer task** (not a
-/// handler-held lock): `WriteStdin`/`CloseStdin` submit a [`WriteOp`] over a
+/// handler-held lock): `WriteStdin`/`CloseStdin` submit a `WriteOp` over a
 /// bounded channel and await the result. This is the deadlock fix - a child that
 /// stops reading stdin can block the writer task on a full PTY, but teardown
 /// drops the master write clone by **aborting the writer task**, never by
@@ -296,7 +297,7 @@ impl TtyState {
     /// Write `data` to the master at `offset`, optionally injecting `VEOF`
     /// afterwards (`close_after`). The whole accept → write → advance runs in the
     /// session's writer task (serialized there), so this method never holds a
-    /// lock across the blocking PTY write: it submits a [`WriteOp`] and awaits
+    /// lock across the blocking PTY write: it submits a `WriteOp` and awaits
     /// the result. A closed channel or a dropped ack (teardown aborted the task)
     /// surfaces as `StdinClosed`, so no write is reported as applied after
     /// teardown.
@@ -368,7 +369,7 @@ impl TtyState {
 }
 
 /// The per-session writer task. Owns the PTY master write half and the stdin
-/// offset machine; processes one [`WriteOp`] at a time so admit → write →
+/// offset machine; processes one `WriteOp` at a time so admit → write →
 /// advance is serialized without a handler-held lock. Refuses any op once the
 /// session has left `Running` (so a write queued just before `Closing` cannot
 /// apply afterwards), and is dropped - abandoning any in-flight write and its
@@ -1026,7 +1027,7 @@ pub mod linux {
         }
     }
 
-    /// Map the allowlisted [`TtySignal`] to a rustix [`Signal`].
+    /// Map the allowlisted [`TtySignal`] to a rustix [`rustix::process::Signal`].
     fn rustix_signal(signal: TtySignal) -> Option<Signal> {
         Signal::from_raw(signal.raw())
     }

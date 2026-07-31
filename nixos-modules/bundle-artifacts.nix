@@ -22,6 +22,14 @@ let
         description = "Internal JSON rendering for this bundle artifact.";
       };
 
+      fixtureData = lib.mkOption {
+        type = types.attrsOf types.anything;
+        default = config.data;
+        internal = true;
+        visible = false;
+        description = "Internal eval-only contract fixture data.";
+      };
+
       path = lib.mkOption {
         type = types.nullOr (types.oneOf [ types.path types.str types.package ]);
         default =

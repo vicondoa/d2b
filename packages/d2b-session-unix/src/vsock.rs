@@ -558,7 +558,7 @@ mod tests {
         assert_eq!(dropped.load(Ordering::Acquire), 3);
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn foreign_peer_does_not_reset_original_accept_deadline() {
         let dropped = Arc::new(AtomicUsize::new(0));
         let mut acceptor = FakeAcceptor {

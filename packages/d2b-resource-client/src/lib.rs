@@ -34,7 +34,7 @@
 //! connector trait, no `ConnectedClient`, and no `Response` type yet: inventing
 //! one would fix a session contract this crate has no authority to define.
 //!
-//! The request-metadata bounds in [`call`] are carried over from the ADR45
+//! The request-metadata bounds in `call` are carried over from the ADR45
 //! client because the v3 session contract module does not publish them yet.
 //! They must be reconciled against that module once it lands.
 

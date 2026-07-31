@@ -158,6 +158,7 @@ set -euo pipefail
         self.assertEqual(calls, ["check-tier0", "test-ci-coverage"])
         self.assertIn("FAIL: test-ci-coverage", diagnostic)
         self.assertIn("Layer-1 job tier0", diagnostic)
+        self.assertIn("full retained log: <repo>/", diagnostic)
         self.assertNotIn(str(log_dir), diagnostic)
         self.assertNotIn(str(ROOT), diagnostic)
         self.assertNotIn(str(pathlib.Path.home()), diagnostic)
@@ -191,6 +192,121 @@ set -euo pipefail
             "test-performance-budgets",
             workflow,
         )
+
+    def test_manifest_rejects_expression_bearing_ci_job_ids(self) -> None:
+        layer1_jobs = load_layer1_jobs()
+        with self.assertRaises(SystemExit):
+            layer1_jobs.validate_job_id("bad-${{ github.token }}", "test")
+
+    def test_rust_gate_is_two_required_shards_with_one_stable_rollup(self) -> None:
+        layer1_jobs = load_layer1_jobs()
+        manifest = layer1_jobs.load_manifest()
+        workflow = layer1_jobs.render_workflow(manifest)
+
+        rust_rollup = manifest["jobs"]["test-rust"]
+        self.assertEqual(
+            rust_rollup["needs"],
+            ["test-rust-main", "test-rust-remaining"],
+        )
+        self.assertEqual(rust_rollup["ciKind"], "rust-rollup")
+        self.assertIn("run: make test-rust-main", workflow)
+        self.assertIn("run: make test-rust-remaining", workflow)
+        self.assertIn("test-rust-main=$result", workflow)
+        self.assertIn("test-rust-remaining=$result", workflow)
+        self.assertEqual(workflow.count('[ "$result" = success ] || failed=1'), 2)
+        self.assertIn('[ "$failed" -eq 0 ] || exit 1', workflow)
+        self.assertEqual(manifest["ci"]["rollupNeeds"].count("test-rust"), 1)
+
+    def test_expensive_rust_cache_surface_is_present(self) -> None:
+        workflow = load_layer1_jobs().render_workflow(load_layer1_jobs().load_manifest())
+        self.assertIn(".scratch/rust-test-cache", workflow)
+        self.assertIn('prefix-key: "v2-rust-api-json"', workflow)
+
+    def test_fixture_lane_owns_the_only_bounded_nix_store_cache(self) -> None:
+        workflow = load_layer1_jobs().render_workflow(load_layer1_jobs().load_manifest())
+        fixture_job = workflow.split("  test-fixture-contracts:", 1)[1].split("\n  test-proofs:", 1)[0]
+        nix_unit_job = workflow.split("  nix-unit-shards:", 1)[1].split("\n  test-nix-unit:", 1)[0]
+        self.assertIn("Nix store cache", fixture_job)
+        self.assertIn("gc-max-store-size-linux: 4G", fixture_job)
+        self.assertNotIn("Nix store cache", nix_unit_job)
+        self.assertNotIn("nix-store --import", fixture_job)
+
+    def test_nix_unit_ci_uses_one_runner_per_discovered_shard(self) -> None:
+        layer1_jobs = load_layer1_jobs()
+        manifest = layer1_jobs.load_manifest()
+        workflow = layer1_jobs.render_workflow(manifest)
+
+        self.assertEqual(
+            manifest["jobs"]["test-nix-unit"]["needs"],
+            ["nix-unit-discover", "nix-unit-shards"],
+        )
+        self.assertIn("matrix:", workflow)
+        self.assertIn(
+            "check: ${{ fromJSON(needs.nix-unit-discover.outputs.checks) }}",
+            workflow,
+        )
+        self.assertIn("D2B_NIX_UNIT_CHECK: ${{ matrix.check }}", workflow)
+        self.assertIn("          ') || exit 1\n          echo \"discovered nix-unit checks", workflow)
+        self.assertEqual(manifest["jobs"]["nix-unit-shards"]["maxParallel"], 4)
+        self.assertIn("      max-parallel: 4", workflow)
+        self.assertIn('D2B_NIX_UNIT_JOBS: "1"', workflow)
+        self.assertIn("Every discovered Nix-unit shard passed.", workflow)
+        self.assertNotIn("run: make test-nix-unit\n\n  flake-eval-discover", workflow)
+
+    def test_nix_unit_driver_is_bounded_and_waits_every_discovered_check(self) -> None:
+        driver = (ROOT / "tests" / "test-nix-unit.sh").read_text(encoding="utf-8")
+
+        self.assertIn('jobs=${D2B_NIX_UNIT_JOBS:-2}', driver)
+        self.assertIn('1|2|3|4) ;;', driver)
+        self.assertIn('D2B_NIX_UNIT_JOBS must be an integer from 1 through 4', driver)
+        self.assertNotIn('[ "$jobs" -gt 4 ]', driver)
+        self.assertIn('D2B_NIX_UNIT_CHECK', driver)
+        self.assertIn('for check in "${checks[@]}"; do', driver)
+        self.assertIn('while [ "$running" -ge "$jobs" ]; do', driver)
+        self.assertIn('while [ "$running" -gt 0 ]; do', driver)
+        self.assertIn('failures+=("$check")', driver)
+        self.assertIn('nix build --no-link --print-out-paths', driver)
+
+    def test_fixture_driver_realizes_minimal_and_excludes_real_binary_probe(self) -> None:
+        driver = (ROOT / "tests" / "test-rust.sh").read_text(encoding="utf-8")
+        fixture_driver = (ROOT / "tests" / "tools" / "eval-fixtures.sh").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn('bash "$ROOT/tests/tools/eval-fixtures.sh"', driver)
+        self.assertIn("#checks.${system}.fixture-smoke", driver)
+        self.assertIn("not binary(video_binary_contract)", driver)
+        flake = (ROOT / "flake.nix").read_text(encoding="utf-8")
+        self.assertIn("video-binary-contract =", flake)
+        self.assertIn('D2B_FLAKE_CHECK" = video-binary-contract', (ROOT / "tests" / "test-flake.sh").read_text(encoding="utf-8"))
+        self.assertIn('nix build --no-link --print-out-paths', (ROOT / "tests" / "test-flake.sh").read_text(encoding="utf-8"))
+        self.assertNotIn("checks.${contract_system}.fixture-smoke", driver)
+        self.assertIn("nix eval", fixture_driver)
+        self.assertNotIn("nix build", fixture_driver)
+
+    def test_api_surface_json_gate_is_enforcing_and_cacheable(self) -> None:
+        driver = (ROOT / "tests" / "test-rust.sh").read_text(encoding="utf-8")
+        api_driver = (ROOT / "tests" / "tools" / "api-surface-json.sh").read_text(
+            encoding="utf-8"
+        )
+        workflow = load_layer1_jobs().render_workflow(load_layer1_jobs().load_manifest())
+
+        self.assertIn('bash "$ROOT/tests/tools/api-surface-json.sh"', driver)
+        self.assertNotIn("D2B_SKIP_API_SURFACE", driver)
+        self.assertIn('export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-D warnings"', driver)
+        self.assertIn('export RUSTDOCFLAGS="${RUSTDOCFLAGS:+$RUSTDOCFLAGS }-D warnings"', driver)
+        self.assertIn("nightly-2026-02-16", api_driver)
+        self.assertEqual(api_driver.count('RUSTDOCFLAGS="-D warnings '), 2)
+        self.assertIn("--document-hidden-items", api_driver)
+        self.assertIn("--document-private-items", api_driver)
+        self.assertIn("--workspace --lib --no-deps", api_driver)
+        self.assertIn(".scratch/rust-test-cache/api-surface-", api_driver)
+        self.assertIn('D2B_API_SURFACE_TARGET_DIR must be an absolute path', api_driver)
+        self.assertIn('D2B_API_SURFACE_UPDATE must be 0 or 1', api_driver)
+        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+        self.assertIn("api-surface-pin:", makefile)
+        self.assertIn("D2B_API_SURFACE_UPDATE=1 bash tests/tools/api-surface-json.sh", makefile)
+        self.assertIn('prefix-key: "v2-rust-api-json"', workflow)
 
     def test_diagnostic_redaction_normalizes_ansi_before_matching(self) -> None:
         layer1_jobs = load_layer1_jobs()

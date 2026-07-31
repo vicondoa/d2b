@@ -1,0 +1,4 @@
+d2b_core::d2b_core::for_tests	function	function
+d2b_session::d2b_session::revoke_generation_writes	function	function
+d2b_session::d2b_session::transport::OwnedTransport::begin_write_batch	function	function
+d2b_session::d2b_session::transport::OwnedTransport::take_write_batch	function	function

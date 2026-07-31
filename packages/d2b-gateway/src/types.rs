@@ -25,7 +25,7 @@ pub struct DisplaySessionContext {
 
 /// An operator-supplied Wayland app command (`["foot", "--title=..."]`). The
 /// argv is bounded and **Debug-redacted** so it never leaks into a trace,
-/// error, or log; only the program name (argv[0]) is exposed for audit.
+/// error, or log; only the program name (`argv[0]`) is exposed for audit.
 #[derive(Clone, PartialEq, Eq)]
 pub struct AppCommand {
     argv: Vec<String>,
@@ -39,7 +39,7 @@ impl AppCommand {
         }
         Some(Self { argv })
     }
-    /// The program name (argv[0]).
+    /// The program name (`argv[0]`).
     pub fn program(&self) -> &str {
         &self.argv[0]
     }

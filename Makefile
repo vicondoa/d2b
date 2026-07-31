@@ -11,7 +11,8 @@ SHELL := $(CURDIR)/tests/tools/scrub-shell-environment
 .PHONY: pre-tag smoke-lite i3-check \
         check check-static check-ci check-all check-fast check-tier0 \
         test test-unit \
-        test-lint test-rust test-fixture-contracts test-proofs test-flake test-nix-unit \
+        test-lint test-rust test-rust-main test-rust-remaining \
+        test-fixture-contracts test-proofs test-flake test-nix-unit \
         test-performance-budgets test-adr-index-coverage test-ci-coverage \
         test-flake-list \
         test-drift test-policy test-integration test-host-integration test-hardware perf \
@@ -22,7 +23,7 @@ SHELL := $(CURDIR)/tests/tools/scrub-shell-environment
         heavy-test-integration heavy-test-host-integration heavy-test-hardware \
         layer1-workflow layer1-workflow-check \
         ledger-regen check-inventory pr-checklist-gate nix-unit-pin flake-matrix-pin \
-        runtime-ledger-pin
+        api-surface-pin runtime-ledger-pin
 
 # Current Nix system double, used to address per-system flake.checks attrs.
 # Falls back to x86_64-linux if `nix` is unavailable (e.g. a docs-only host).
@@ -108,7 +109,15 @@ test-lint:
 test-rust:
 	bash tests/test-rust.sh
 
-## test-fixture-contracts - enforcing fixture-backed contract and CLI layer.
+## test-rust-main / test-rust-remaining - CI shards of the comprehensive gate.
+## Local developers should run test-rust, which executes both once in order.
+test-rust-main:
+	bash tests/test-rust.sh main-workspace
+
+test-rust-remaining:
+	bash tests/test-rust.sh remaining-suite
+
+## test-fixture-contracts - enforcing eval-rendered contract and CLI layer.
 ## Layer-1 local and CI orchestration set D2B_ENABLE_FIXTURE_BUILD=1.
 test-fixture-contracts:
 	bash tests/test-rust.sh fixture-contracts
@@ -136,6 +145,10 @@ test-flake-list:
 ## Layer-1 evidence even though test-flake also evaluates the checks.
 test-nix-unit:
 	bash tests/test-nix-unit.sh
+
+## api-surface-pin - explicitly regenerate compiler-derived API snapshots.
+api-surface-pin:
+	D2B_API_SURFACE_UPDATE=1 bash tests/tools/api-surface-json.sh
 
 ## test-drift - generated-artifact drift gates (xtask gen-*, vms-json parity).
 test-drift:

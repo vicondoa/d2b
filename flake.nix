@@ -458,6 +458,27 @@
             d2b.site.usePrebuiltHostTools = lib.mkForce false;
           })
         ];
+        renderEvalFixture = evaluated: let
+          bundle = evaluated.config.d2b._bundle;
+          top = name: bundle.${name}.fixtureData;
+        in {
+          files = {
+            "privileges.json" = top "privilegesJson";
+            "host.json" = top "hostJson";
+            "processes.json" = top "processesJson";
+            "storage.json" = top "storageJson";
+            "sync.json" = top "syncJson";
+            "allocator.json" = top "allocatorJson";
+            "realm-controllers.json" = top "realmControllersJson";
+            "realm-identity.json" = top "realmIdentityJson";
+            "realm-workloads-launcher.json" = top "realmWorkloadsLauncherJson";
+            "realm-workloads-launcher-v2.json" = top "realmWorkloadsLauncherV2Json";
+            "unsafe-local-workloads.json" = top "unsafeLocalWorkloadsJson";
+            "bundle.json" = top "bundle";
+            "manifest.json" = evaluated.config.d2b._manifestData;
+          };
+          closures = pkgs.lib.mapAttrs (_: closure: closure.data) bundle.closures;
+        };
         smokeFixture = let
           bundle = smokeEval.config.d2b._bundle;
           manifestPkg = smokeEval.config.d2b._manifestPkg;
@@ -566,6 +587,28 @@
           ${nixpkgs.lib.concatStringsSep "\n" (nixpkgs.lib.mapAttrsToList
             (vm: c: "cp ${c.path} $out/closures/${vm}.json")
             fullEval.config.d2b._bundle.closures)}
+        '';
+        evalFixtureData = {
+          minimal = renderEvalFixture smokeEval;
+          full = renderEvalFixture fullEval;
+        };
+        fullProcessDags = fullEval.config.d2b._bundle.processesJson.data.vms;
+        fullCorpDag = pkgs.lib.findFirst (dag: dag.vm == "corp-full")
+          (throw "video binary contract: corp-full DAG missing") fullProcessDags;
+        fullVideoNode = pkgs.lib.findFirst (node: node.id == "video")
+          (throw "video binary contract: video node missing") fullCorpDag.nodes;
+        fullCloudHypervisorNode = pkgs.lib.findFirst (node: node.id == "cloud-hypervisor")
+          (throw "video binary contract: cloud-hypervisor node missing") fullCorpDag.nodes;
+        videoBinaryContract = pkgs.runCommand "d2b-video-binary-command-surface"
+          { nativeBuildInputs = [ pkgs.gnugrep ]; } ''
+          set -euo pipefail
+          test -x ${fullVideoNode.binaryPath}
+          test -x ${fullCloudHypervisorNode.binaryPath}
+          video_help=$(${fullVideoNode.binaryPath} device video-decoder --help 2>&1)
+          printf '%s\n' "$video_help" | grep -F -- --backend
+          vmm_help=$(${fullCloudHypervisorNode.binaryPath} --help 2>&1)
+          printf '%s\n' "$vmm_help" | grep -F -- --vhost-user-media
+          touch "$out"
         '';
         # Rust tests reach repo-level fixtures under tests/golden/
         # (compile-time
@@ -850,6 +893,24 @@
           (n: "MISSING PINNED CASE: ${n} (a pinned nix-unit case was deleted - restore it or run `make nix-unit-pin`)")
           nixUnitMissingPins;
       in {
+        eval-fixture-contracts =
+          if system == "x86_64-linux" then
+            (mkEvalOnlyCheck "eval-fixture-contracts" evalFixtureData) // {
+              fixtureData = evalFixtureData;
+            }
+          else
+            (pkgs.runCommand "d2b-eval-fixture-contracts-unsupported" { } ''
+              echo "eval-fixture-contracts is x86_64-linux only (graphics gate)" > $out
+            '') // {
+              fixtureData = { };
+            };
+        video-binary-contract =
+          if system == "x86_64-linux" then
+            videoBinaryContract
+          else
+            pkgs.runCommand "d2b-video-binary-contract-unsupported" { } ''
+              echo "video-binary-contract is x86_64-linux only (graphics gate)" > $out
+            '';
         fixture-smoke = smokeFixture;
 
         # Feature-rich fixture for the per-role minijail-validator contract
@@ -1276,7 +1337,9 @@
           (mkEval [ (import ./examples/graphics-workstation/configuration.nix) ]);
       });
 
-      lib = nixpkgs.lib.makeExtensible (_: { });
+      lib = nixpkgs.lib.makeExtensible (_: {
+        evalFixture = system: self.checks.${system}.eval-fixture-contracts.fixtureData;
+      });
 
       overlays.default = _final: _prev: { };
     };

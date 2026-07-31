@@ -16,7 +16,7 @@
 //!   `/dev` bind mounts.
 //!
 //! Byte-parity oracle:
-//! [`tests/golden/runner-shape/otel-host-bridge-argv-minimal.txt`].
+//! `tests/golden/runner-shape/otel-host-bridge-argv-minimal.txt`.
 //!
 //! Crate invariant `#![forbid(unsafe_code)]` is honoured.
 

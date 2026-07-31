@@ -4,7 +4,7 @@
 //!
 //! The registry is the guestd-side owner of every detached exec. It is generic
 //! over a fakeable [`SlotStore`] (the on-disk slot protocol), a
-//! [`TransientUnitManager`](crate::detached::TransientUnitManager) (systemd-run
+//! [`crate::detached::TransientUnitManager`] (systemd-run
 //! units), a [`WallClock`], and a [`Sleeper`] so the entire lifecycle matrix is
 //! unit-tested deterministically without spawning real processes or units.
 //!
@@ -798,7 +798,7 @@ impl DetachedRegistry {
     }
 
     /// Resolve one slot's unit liveness against systemd. A query error
-    /// becomes [`SlotLiveness::Unknown`] - never `Absent` - so a transient
+    /// becomes `SlotLiveness::Unknown` - never `Absent` - so a transient
     /// `systemctl` failure cannot drive destructive reconciliation.
     async fn unit_liveness(&self, slot: u32) -> SlotLiveness {
         match self.units.list_managed_units().await {

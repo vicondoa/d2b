@@ -64,7 +64,7 @@ pub enum W3BrokerOperation {
 
 impl W3BrokerOperation {
     /// Returns the on-wire enum tag (matching the
-    /// [`d2b_contracts::broker_wire::BrokerRequest`] discriminant) for
+    /// `d2b_contracts::broker_wire::BrokerRequest` discriminant for
     /// this operation.
     pub const fn wire_tag(self) -> &'static str {
         match self {

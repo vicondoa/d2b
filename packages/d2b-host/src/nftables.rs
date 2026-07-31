@@ -668,8 +668,8 @@ pub fn build_inet_d2b_chains() -> NftBatch {
     }
 }
 
-/// Inputs to [`detect_firewall_manager`]. Real callers pass
-/// [`DetectorProbe::live`]; tests pass a fake.
+/// Inputs to [`detect_firewall_manager`]. Real callers pass values
+/// populated by live probes; tests pass a fake.
 #[derive(Debug, Clone)]
 pub struct DetectorProbe {
     pub firewalld_active: bool,

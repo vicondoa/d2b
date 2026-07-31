@@ -607,8 +607,8 @@ pub struct ResolvedRoleDeviceClaim {
 /// it instead of recomputing.
 ///
 /// `HostRuntime` is the resolver-side type; the broker's live host-
-/// install path writes it out via
-/// [`crate::bundle_resolver::HostRuntimeArtifact::write`].
+/// install path writes the
+/// [`crate::bundle_resolver::HostRuntimeArtifact`] to disk.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HostRuntime {
@@ -730,8 +730,9 @@ fn lookup_group_gid(name: &str) -> Option<u32> {
 /// Open `path` with `O_NOFOLLOW | O_RDONLY`, verify ownership/mode,
 /// return the file's raw bytes.
 ///
-/// Returns [`Error::Bundle(BundleError::Tampered)`] with a short
-/// `reason` slug on any security check failure:
+/// Returns [`Error::Bundle`] wrapping
+/// [`crate::error::BundleError::Tampered`] with a short `reason` slug
+/// on any security check failure:
 /// - `"symlink"` - `open` returned `ELOOP` (path is a symlink).
 /// - `"not-regular-file"` - `fstat` shows it is not a regular file.
 /// - `"owner"` - `st_uid` ≠ `policy.required_uid` or
@@ -920,7 +921,7 @@ impl BundleResolver {
         Self::load_with_policy(bundle_path, &BundleVerifyPolicy::production())
     }
 
-    /// Like [`load`] but accepts an explicit [`BundleVerifyPolicy`].
+    /// Like [`Self::load`] but accepts an explicit [`BundleVerifyPolicy`].
     ///
     /// Tests supply a policy whose `required_uid`/`required_gid`/
     /// `required_mode` match the temp-dir files they create.
@@ -2832,8 +2833,8 @@ fn load_closure_metadata(
     Ok(closures)
 }
 
-/// Like [`load_closure_metadata`] but applies the tamper-resistance
-/// policy to every `closures/<vm>.json` artifact and verifies each
+/// Like `load_closure_metadata` but applies the tamper-resistance policy to
+/// every `closures/<vm>.json` artifact and verifies each
 /// file's SHA-256 against `bundle.artifact_hashes`.
 fn load_closure_metadata_verified(
     bundle: &Bundle,

@@ -33,6 +33,7 @@ const CAPABILITY_TYPE_IDENTITIES: &[&str] = &[
 const CLAIM_TYPE_IDENTITIES: &[&str] = &["ResourceRef", "ResourceUid"];
 
 #[test]
+#[ignore = "superseded by the enforcing compiler-derived d2b-api-surface snapshot gate"]
 fn public_api_has_only_the_approved_capability_mint_surface() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repository_root = crate_root.parent().unwrap().parent().unwrap();
@@ -52,7 +53,7 @@ fn public_api_has_only_the_approved_capability_mint_surface() {
     }
     let scratch = Scratch::cache(
         repository_root
-            .join(".scratch")
+            .join(".scratch/rust-test-cache")
             .join(format!("bus-public-api-{}", toolchain_cache_key())),
     );
     let temp = scratch.path().join("tmp");
@@ -142,6 +143,22 @@ fn public_api_has_only_the_approved_capability_mint_surface() {
     );
     assert_mutation_fixture(&workspace_docs);
     assert_partial_render_fails_closed(&workspace_docs);
+}
+
+#[test]
+fn internal_capability_mint_sites_remain_single_owner() {
+    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let router = fs::read_to_string(crate_root.join("src/router.rs")).expect("read router source");
+    assert_eq!(
+        source_occurrences(&router, "\n            ComponentSessionAdmission {"),
+        1,
+        "ComponentSessionAdmission must be constructed only by the approved registrar mint point"
+    );
+    assert_eq!(
+        source_occurrences(&router, "SessionAcceptor::from_verified_adapter("),
+        1,
+        "SessionAcceptor construction widened beyond the approved registrar mint point"
+    );
 }
 
 #[test]
@@ -1288,16 +1305,10 @@ fn toolchain_cache_key() -> String {
 ///   is reused between runs. Cargo owns staleness through its own fingerprints,
 ///   so a surviving build directory cannot make a changed crate look unchanged.
 ///
-/// * `renders/` holds rustdoc's HTML and mostly persists too, but
-///   [`render_workspace_docs`] discards the render of any package whose lib and
-///   bin targets collide on a single `doc/<crate>` directory. Cargo re-runs only
-///   the target it considers dirty, and that target overwrites the shared
-///   directory with its own pages alone; in the lib case the pages lost are
-///   exactly the private items `--document-private-items` exists to surface, so
-///   a cached render there can silently shrink the inventory this guard compares
-///   against. Discarding only the colliding packages (8 of 35 in this
-///   workspace) keeps the guard fail-closed while letting the rest stay cached,
-///   which is where most of the speedup comes from.
+/// * `renders/` holds rustdoc's HTML and persists too. The render command is
+///   library-only: binary target pages are irrelevant to a public library API
+///   inventory, and excluding them prevents lib/bin output collisions from
+///   forcing otherwise-fresh renders cold.
 ///
 /// Concurrency is delegated to Cargo's target-directory lock, which serializes
 /// concurrent `cargo doc` invocations against the same directory. The only
@@ -1512,16 +1523,6 @@ struct RenderPackage {
     dependency_features: BTreeSet<String>,
     external_crates: BTreeSet<String>,
     workspace_dependencies: BTreeSet<String>,
-    /// Whether this package has a binary target that rustdoc renders into the
-    /// same `doc/<crate>` directory as its library target.
-    ///
-    /// Such a package cannot reuse a cached render. Cargo re-runs only the
-    /// target it considers dirty, and that target then overwrites the shared
-    /// directory with its own pages alone - dropping, in the lib case, exactly
-    /// the private items `--document-private-items` exists to surface. Only
-    /// these packages need their render discarded before each run; the rest
-    /// reuse theirs, which is where the speedup comes from.
-    doc_name_collision: bool,
 }
 
 #[derive(Debug)]
@@ -1541,10 +1542,8 @@ fn render_workspace_docs(
     let packages = workspace_render_packages(manifest);
     let temp = scratch.join("tmp");
     fs::create_dir_all(&temp).expect("create rustdoc temporary directory");
-    // Compiled artifacts persist across runs. Renders persist too, except for
-    // the packages whose lib and bin collide on one output directory - those
-    // are discarded per run. See RenderPackage::doc_name_collision and the
-    // `Scratch` docs.
+    // Compiled artifacts and library-only renders persist across runs. See the
+    // `Scratch` docs for why binary targets are deliberately excluded.
     let build = scratch.join("build");
     let renders = scratch.join("renders");
     let mut docs = Vec::new();
@@ -1557,11 +1556,6 @@ fn render_workspace_docs(
             &package.external_crates,
         );
         let target = renders.join(&crate_name);
-        if package.doc_name_collision && target.exists() {
-            fs::remove_dir_all(&target).unwrap_or_else(|_| {
-                panic!("discard colliding rustdoc render for package {package_name}")
-            });
-        }
         let doc_root = target.join("doc");
         fs::create_dir_all(&doc_root).unwrap_or_else(|_| {
             panic!("create isolated rustdoc output for package {package_name}")
@@ -1587,7 +1581,12 @@ fn render_workspace_docs(
             ])
             .arg(manifest)
             .arg("-p")
-            .arg(&package_name);
+            .arg(&package_name)
+            // Inventory the library API only. Without --lib, packages that
+            // also ship binaries make Cargo run rustdoc for every bin even
+            // though this guard discards those pages. It also caused lib/bin
+            // output collisions and forced eight renders cold every run.
+            .arg("--lib");
         if !package.dependency_features.is_empty() {
             command.arg("--features").arg(
                 package
@@ -1634,6 +1633,20 @@ fn render_workspace_docs(
     }
     docs.sort_by(|left, right| left.crate_name.cmp(&right.crate_name));
     docs
+}
+
+#[test]
+fn rustdoc_inventory_is_library_only() {
+    let source = include_str!("public_mint_surface.rs");
+    assert!(
+        source.contains(".arg(\"--lib\")"),
+        "the public-API rustdoc inventory must not compile irrelevant binary targets"
+    );
+    let legacy_collision_identifier = ["doc", "name", "collision"].join("_");
+    assert!(
+        !source.contains(&legacy_collision_identifier),
+        "library-only rustdoc should make the old lib/bin collision workaround unnecessary"
+    );
 }
 
 fn workspace_render_packages(manifest: &Path) -> BTreeMap<String, RenderPackage> {
@@ -1710,27 +1723,6 @@ fn workspace_render_packages(manifest: &Path) -> BTreeMap<String, RenderPackage>
             });
         if let Some(library) = library {
             let crate_name = library["name"].as_str().expect("library target name");
-            // rustdoc derives a target's output directory from its crate name,
-            // so a binary whose name normalises to the library's name renders
-            // into the same directory. See RenderPackage::doc_name_collision.
-            let doc_name_collision = package["targets"]
-                .as_array()
-                .expect("package targets")
-                .iter()
-                .filter(|target| {
-                    target["kind"]
-                        .as_array()
-                        .expect("target kind")
-                        .iter()
-                        .any(|kind| kind == "bin")
-                })
-                .any(|target| {
-                    target["name"]
-                        .as_str()
-                        .expect("binary target name")
-                        .replace('-', "_")
-                        == crate_name.replace('-', "_")
-                });
             let mut dependency_features = BTreeSet::new();
             let mut external_crates = BTreeSet::new();
             let mut workspace_dependencies = BTreeSet::new();
@@ -1769,7 +1761,6 @@ fn workspace_render_packages(manifest: &Path) -> BTreeMap<String, RenderPackage>
                     dependency_features,
                     external_crates,
                     workspace_dependencies,
-                    doc_name_collision,
                 },
             );
         }

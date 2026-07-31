@@ -97,7 +97,7 @@ impl BuiltinModuleSet {
     ///
     /// We extract the unique set of module relpaths (anything ending
     /// in `.ko`, `.ko.xz`, `.ko.zst`, or `.ko.gz`) and reuse the
-    /// basename stemming pass from [`parse_modules_builtin`].
+    /// basename stemming pass from [`Self::parse_modules_builtin`].
     pub fn parse_modules_builtin_bin(bytes: &[u8]) -> Self {
         let mut names = BTreeSet::new();
         for record in bytes.split(|b| *b == 0) {
@@ -290,7 +290,7 @@ pub fn read_kernel_config_with_fallback_at(
 /// `/proc/config.gz` fallback. Strips the gzip header (magic +
 /// optional FEXTRA / FNAME / FCOMMENT) and the trailing 8-byte
 /// CRC32 + ISIZE, then hands the raw DEFLATE stream to
-/// [`miniz_oxide`]. Pure: callers feed a `&[u8]` so the test path
+/// `miniz_oxide`. Pure: callers feed a `&[u8]` so the test path
 /// drives both the success and the malformed-header branches.
 pub fn gunzip_inflate(bytes: &[u8]) -> Result<Vec<u8>, GzipError> {
     // RFC 1952 §2.3.1: minimum gzip stream is 10-byte fixed header

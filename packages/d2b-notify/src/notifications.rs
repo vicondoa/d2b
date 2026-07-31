@@ -61,7 +61,7 @@ pub struct Notification {
 /// Pluggable notification sink.
 ///
 /// Two implementations are provided here:
-/// - [`DesktopNotifier`]: logs to stderr (for test builds) or calls the real
+/// - `DesktopNotifier`: logs to stderr (for test builds) or calls the real
 ///   OS notification API.  Production callers that link `notify-rust` wire
 ///   this to D-Bus; minimal callers that do not want a D-Bus dependency can
 ///   shell out to `notify-send`.

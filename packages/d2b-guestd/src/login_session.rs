@@ -238,7 +238,7 @@ const SYSTEMCTL_KILL_RETRY_DELAY: Duration = Duration::from_millis(50);
 /// SIGKILLs the named unit's entire cgroup (`--kill-whom=all`).
 ///
 /// Bounded: a wedged PID 1 / D-Bus cannot hang teardown - the `systemctl` child
-/// is force-killed past [`SYSTEMCTL_KILL_TIMEOUT`]. Idempotent: a missing unit
+/// is force-killed past `SYSTEMCTL_KILL_TIMEOUT`. Idempotent: a missing unit
 /// is a no-op. Retries once after a non-success result to catch the startup
 /// race where the unit is not yet registered.
 ///

@@ -6,6 +6,7 @@ use std::process::Command;
 
 const CONTRACTS_CRATE: &str = "d2b-contracts";
 const EXCLUDED_WORKSPACES: &[&str] = &["d2b-priv-broker", "d2b-guest-shell-runner"];
+const API_SURFACE_CRATE: &str = "packages/d2b-api-surface";
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -82,6 +83,68 @@ fn stale_ipc_crate_name_is_absent_from_current_sources() {
         "stale contract crate references remain:\n{}",
         violations.join("\n")
     );
+}
+
+fn assert_fast_dev_profile(manifest: &str, workspace: &str) {
+    for required in [
+        "[profile.dev]",
+        "[profile.dev.package.\"*\"]",
+        "[profile.test]",
+        "[profile.test.package.\"*\"]",
+        "[profile.debugging]",
+        "inherits = \"dev\"",
+        "debug = \"line-tables-only\"",
+        "debug = false",
+        "debug = 2",
+    ] {
+        assert!(
+            manifest.contains(required),
+            "{workspace} must keep the measured fast-development profile and full-debug escape hatch: missing {required}"
+        );
+    }
+}
+
+#[test]
+fn every_tested_workspace_uses_fast_debug_profiles() {
+    assert_fast_dev_profile(&read_repo_file("packages/Cargo.toml"), "main workspace");
+    for workspace in EXCLUDED_WORKSPACES {
+        assert_fast_dev_profile(
+            &read_repo_file(&format!("packages/{workspace}/Cargo.toml")),
+            workspace,
+        );
+    }
+}
+
+#[test]
+fn compiler_derived_api_surface_is_pinned_and_enforcing() {
+    let root = repo_root();
+    let workspace = read_repo_file("packages/Cargo.toml");
+    let driver = read_repo_file("tests/test-rust.sh");
+    let api_driver = read_repo_file("tests/tools/api-surface-json.sh");
+    let policy_manifest = read_repo_file(&format!("{API_SURFACE_CRATE}/Cargo.toml"));
+    let toolchain = read_repo_file(&format!("{API_SURFACE_CRATE}/rust-toolchain.toml"));
+
+    assert!(workspace.contains("\"d2b-api-surface\""));
+    assert!(driver.contains("tests/tools/api-surface-json.sh"));
+    assert!(api_driver.contains("--document-private-items --document-hidden-items"));
+    assert!(api_driver.contains("--workspace --lib --no-deps"));
+    assert!(policy_manifest.contains("public-api = { version = \"=0.52.0\""));
+    assert!(policy_manifest.contains("rustdoc-types = \"=0.57.4\""));
+    assert!(toolchain.contains("nightly-2026-02-16"));
+    for required in [
+        "workspace-metadata.json",
+        "roots.json",
+        "public-api.txt",
+        "capability-api.txt",
+        "hidden-public-api.txt",
+        "capability-trait-impls.txt",
+    ] {
+        assert!(
+            root.join("tests/golden/api-surface")
+                .join(required)
+                .is_file()
+        );
+    }
 }
 
 #[test]

@@ -82,7 +82,7 @@ jobs:
       - name: Changelog policy gate
         run: make test-changelog
 
-  test-rust:
+  test-rust-main:
     needs: [tier0]
     runs-on: ubuntu-latest
     # Warm (rust-cache hit): ~8-12 min. Cold (no cache): ~43 min.
@@ -152,20 +152,132 @@ jobs:
             packages/d2b-priv-broker/target-layer1
             packages/d2b-priv-broker/target-fakebackends
             tests/tools/no-bash-ast-walker/target
-          prefix-key: "v0-rust"
+            .scratch/rust-test-cache
+          prefix-key: "v2-rust-api-json"
           shared-key: "test-rust-${{ runner.os }}"
+          # The repository-local trees are keyed on rustc -vV by their owning
+          # tests. Cargo fingerprints compiled inputs on restore, while failed
+          # compile units are never cached and still rerun on every gate.
           # A single writer keeps concurrent saves from racing one shared key.
-          # test-rust is that writer; the rest restore whatever the previous
-          # run left. Note test-fixture-contracts now starts alongside
-          # test-rust rather than after it, so on a cold key both compile the
-          # workspace and only one entry is kept - the wall-clock win from
-          # running them in parallel is worth more than the duplicated cold
-          # build.
+          # The main-workspace Rust shard is that writer; it produces both the
+          # common Cargo target and the slow compiler/rustdoc scratch trees.
+          # Every other Rust job restores the last complete entry. On a cold key
+          # parallel shards may duplicate compilation, but only one entry wins.
           save-if: "true"
-      - name: Rust workspace gate
+      - name: Rust main workspace gate
         env:
           D2B_SKIP_FIXTURE_BUILD: "1"
-        run: make test-rust
+        run: make test-rust-main
+
+
+  test-rust-remaining:
+    needs: [tier0]
+    runs-on: ubuntu-latest
+    # Warm (rust-cache hit): ~8-12 min. Cold (no cache): ~43 min.
+    timeout-minutes: 60
+    env:
+      # CI uses Swatinem/rust-cache (target-dir caching) and NOT sccache. That
+      # is not a preference - sccache is incompatible with this workspace's
+      # integration tests. Its server forwards only a whitelist of environment
+      # variables to rustc, and CARGO_BIN_EXE_<name>, which Cargo injects so an
+      # integration test can locate the binary it exercises, is not on it. Any
+      # test using env!("CARGO_BIN_EXE_...") then fails to compile with
+      # "environment variable ... not defined at compile time"; measured on this
+      # gate, d2b-exec-runner/tests/tty_pty_integration.rs fails exactly that
+      # way. It does not reproduce locally because CARGO_INCREMENTAL is on
+      # there, which makes sccache treat those compilations as non-cacheable and
+      # pass them through untouched.
+      #
+      # sccache remains enabled for local development, where the same shim is
+      # reached through packages/.cargo/config.toml. Only CI opts out.
+      #
+      # CARGO_INCREMENTAL=0 is still set: incremental compilation artifacts are
+      # non-deterministic and bloat the cache without benefit for CI (each PR
+      # run starts from a different commit).
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Free runner disk for Rust gate
+        run: |
+          df -h
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL || true
+          docker system prune -af || true
+          df -h
+      - name: Install pinned Rust toolchain + ripgrep + acl
+        # MUST run BEFORE Swatinem/rust-cache: the cache action reads
+        # `rustc --version` to compute its key hash, so the pinned
+        # toolchain must be the active default when the cache step runs.
+        # Without this, the runner's pre-installed 1.96.0 is hashed,
+        # and the cache is keyed on the wrong compiler version.
+        run: |
+          PINNED=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' packages/rust-toolchain.toml | head -1)
+          rustup toolchain install "$PINNED" --profile minimal --component rustfmt --component clippy
+          rustup default "$PINNED"
+          echo "Rust toolchain: $(rustc --version)"
+          sudo apt-get update && sudo apt-get install -y ripgrep acl
+      - name: Rust dependency cache (target dirs + cargo registry)
+        # Swatinem/rust-cache caches dependency artifacts in target dirs
+        # and the cargo registry. It performs all I/O in its own action
+        # process (JavaScript pre/post steps) via @actions/cache - no
+        # ACTIONS_RUNTIME_TOKEN or cache credentials are exposed to `run:`
+        # steps where untrusted crate code (build scripts, proc-macros,
+        # `cargo test`) executes.
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          workspaces: |
+            packages -> target
+            packages/d2b-priv-broker -> target
+            packages/d2b-guest-shell-runner -> target
+          cache-directories: |
+            packages/d2b-priv-broker/target-layer1
+            packages/d2b-priv-broker/target-fakebackends
+            tests/tools/no-bash-ast-walker/target
+            .scratch/rust-test-cache
+          prefix-key: "v2-rust-api-json"
+          shared-key: "test-rust-${{ runner.os }}"
+          # The repository-local trees are keyed on rustc -vV by their owning
+          # tests. Cargo fingerprints compiled inputs on restore, while failed
+          # compile units are never cached and still rerun on every gate.
+          # A single writer keeps concurrent saves from racing one shared key.
+          # The main-workspace Rust shard is that writer; it produces both the
+          # common Cargo target and the slow compiler/rustdoc scratch trees.
+          # Every other Rust job restores the last complete entry. On a cold key
+          # parallel shards may duplicate compilation, but only one entry wins.
+          save-if: "false"
+      - name: Rust remaining suites gate
+        env:
+          D2B_SKIP_FIXTURE_BUILD: "1"
+        run: make test-rust-remaining
+
+
+  test-rust:
+    needs: [test-rust-main, test-rust-remaining]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - name: Require both Rust gate shards to pass
+        run: |
+          failed=0
+          result='${{ needs.test-rust-main.result }}'
+          echo "test-rust-main=$result"
+          [ "$result" = success ] || failed=1
+          result='${{ needs.test-rust-remaining.result }}'
+          echo "test-rust-remaining=$result"
+          [ "$result" = success ] || failed=1
+          [ "$failed" -eq 0 ] || exit 1
+          echo "Both Rust gate shards passed."
 
   test-fixture-contracts:
     needs: [tier0]
@@ -210,11 +322,14 @@ jobs:
         # NIX_CACHED_JOBS for why only some jobs carry an entry.
         uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569
         with:
-          primary-key: nix-${{ runner.os }}-test-fixture-contracts-${{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}
-          restore-prefixes-first-match: nix-${{ runner.os }}-test-fixture-contracts-
+          # The format epoch rotates immutable Actions caches when retention
+          # semantics change. Fixture jobs use a source-complete hash; other
+          # cached Nix jobs hash the flake and Nix corpus they evaluate.
+          primary-key: nix-v1-${{ runner.os }}-test-fixture-contracts-${{ hashFiles('flake.lock', '**/*.nix') }}
+          restore-prefixes-first-match: nix-v1-${{ runner.os }}-test-fixture-contracts-
           gc-max-store-size-linux: 4G
           purge: true
-          purge-prefixes: nix-${{ runner.os }}-test-fixture-contracts-
+          purge-prefixes: nix-v1-${{ runner.os }}-test-fixture-contracts-
           purge-created: 0
           purge-primary-key: never
       - name: Free runner disk for Rust gate
@@ -252,22 +367,23 @@ jobs:
             packages/d2b-priv-broker/target-layer1
             packages/d2b-priv-broker/target-fakebackends
             tests/tools/no-bash-ast-walker/target
-          prefix-key: "v0-rust"
+            .scratch/rust-test-cache
+          prefix-key: "v2-rust-api-json"
           shared-key: "test-rust-${{ runner.os }}"
+          # The repository-local trees are keyed on rustc -vV by their owning
+          # tests. Cargo fingerprints compiled inputs on restore, while failed
+          # compile units are never cached and still rerun on every gate.
           # A single writer keeps concurrent saves from racing one shared key.
-          # test-rust is that writer; the rest restore whatever the previous
-          # run left. Note test-fixture-contracts now starts alongside
-          # test-rust rather than after it, so on a cold key both compile the
-          # workspace and only one entry is kept - the wall-clock win from
-          # running them in parallel is worth more than the duplicated cold
-          # build.
+          # The main-workspace Rust shard is that writer; it produces both the
+          # common Cargo target and the slow compiler/rustdoc scratch trees.
+          # Every other Rust job restores the last complete entry. On a cold key
+          # parallel shards may duplicate compilation, but only one entry wins.
           save-if: "false"
-      - name: Provision the heavy-gate runtime root
-        run: make heavy-gate-provision
       - name: Fixture-dependent Rust contract tests
         env:
           D2B_ENABLE_FIXTURE_BUILD: "1"
         run: make test-fixture-contracts
+
 
   test-proofs:
     needs: [tier0]
@@ -285,10 +401,12 @@ jobs:
       - name: Proof crates gate
         run: make test-proofs
 
-  test-nix-unit:
+  nix-unit-discover:
     needs: [tier0]
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10
+    outputs:
+      checks: ${{ steps.list.outputs.checks }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
@@ -298,23 +416,64 @@ jobs:
           nix_path: nixpkgs=channel:nixos-unstable
           extra_nix_config: |
             experimental-features = nix-command flakes
-      - name: Nix store cache
-        # Without this the job rebuilds the Rust host-tool set from source,
-        # which is what makes the fixture-contract gate cost half an hour here
-        # while completing in seconds on a host with a substituter. Restore is
-        # best-effort: a cache miss is slow, never incorrect. See
-        # NIX_CACHED_JOBS for why only some jobs carry an entry.
-        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569
+      - id: list
+        name: Enumerate Nix unit checks
+        run: |
+          checks=$(nix eval --json .#checks.x86_64-linux --apply '
+            cs: builtins.filter
+              (name: name == "nix-unit" || builtins.substring 0 9 name == "nix-unit-")
+              (builtins.sort builtins.lessThan (builtins.attrNames cs))
+          ') || exit 1
+          echo "discovered nix-unit checks: $checks"
+          echo "checks=$checks" >> "$GITHUB_OUTPUT"
+
+
+  nix-unit-shards:
+    needs: [nix-unit-discover]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        check: ${{ fromJSON(needs.nix-unit-discover.outputs.checks) }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
-          primary-key: nix-${{ runner.os }}-test-nix-unit-${{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}
-          restore-prefixes-first-match: nix-${{ runner.os }}-test-nix-unit-
-          gc-max-store-size-linux: 4G
-          purge: true
-          purge-prefixes: nix-${{ runner.os }}-test-nix-unit-
-          purge-created: 0
-          purge-primary-key: never
-      - name: Nix unit corpus gate
+          persist-credentials: false
+      - uses: cachix/install-nix-action@23cf0fec1d55e0b1f2631aedd2a610c21ef8b077
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Nix unit shard
+        env:
+          # The matrix value is data, not shell source. The driver validates it
+          # against both the safe-name grammar and the discovered check set.
+          D2B_NIX_UNIT_CHECK: ${{ matrix.check }}
+          D2B_NIX_UNIT_JOBS: "1"
         run: make test-nix-unit
+
+  test-nix-unit:
+    needs: [nix-unit-discover, nix-unit-shards]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+      - name: Require every Nix unit shard to pass
+        run: |
+          discover='${{ needs.nix-unit-discover.result }}'
+          shards='${{ needs.nix-unit-shards.result }}'
+          echo "nix-unit-discover=$discover  nix-unit-shards=$shards"
+          if [ "$discover" = success ] && [ "$shards" = success ]; then
+            echo "Every discovered Nix-unit shard passed."
+          else
+            echo "::error::Nix-unit gate failed (discover=$discover, shards=$shards)"
+            exit 1
+          fi
 
   flake-eval-discover:
     needs: [tier0]
@@ -525,20 +684,23 @@ jobs:
             packages/d2b-priv-broker/target-layer1
             packages/d2b-priv-broker/target-fakebackends
             tests/tools/no-bash-ast-walker/target
-          prefix-key: "v0-rust"
+            .scratch/rust-test-cache
+          prefix-key: "v2-rust-api-json"
           shared-key: "test-rust-${{ runner.os }}"
+          # The repository-local trees are keyed on rustc -vV by their owning
+          # tests. Cargo fingerprints compiled inputs on restore, while failed
+          # compile units are never cached and still rerun on every gate.
           # A single writer keeps concurrent saves from racing one shared key.
-          # test-rust is that writer; the rest restore whatever the previous
-          # run left. Note test-fixture-contracts now starts alongside
-          # test-rust rather than after it, so on a cold key both compile the
-          # workspace and only one entry is kept - the wall-clock win from
-          # running them in parallel is worth more than the duplicated cold
-          # build.
+          # The main-workspace Rust shard is that writer; it produces both the
+          # common Cargo target and the slow compiler/rustdoc scratch trees.
+          # Every other Rust job restores the last complete entry. On a cold key
+          # parallel shards may duplicate compilation, but only one entry wins.
           save-if: "false"
       - name: Policy meta-gates
         env:
           {}
         run: make test-policy
+
 
   test-runtime-ledger:
     needs: [tier0]
@@ -610,20 +772,23 @@ jobs:
             packages/d2b-priv-broker/target-layer1
             packages/d2b-priv-broker/target-fakebackends
             tests/tools/no-bash-ast-walker/target
-          prefix-key: "v0-rust"
+            .scratch/rust-test-cache
+          prefix-key: "v2-rust-api-json"
           shared-key: "test-rust-${{ runner.os }}"
+          # The repository-local trees are keyed on rustc -vV by their owning
+          # tests. Cargo fingerprints compiled inputs on restore, while failed
+          # compile units are never cached and still rerun on every gate.
           # A single writer keeps concurrent saves from racing one shared key.
-          # test-rust is that writer; the rest restore whatever the previous
-          # run left. Note test-fixture-contracts now starts alongside
-          # test-rust rather than after it, so on a cold key both compile the
-          # workspace and only one entry is kept - the wall-clock win from
-          # running them in parallel is worth more than the duplicated cold
-          # build.
+          # The main-workspace Rust shard is that writer; it produces both the
+          # common Cargo target and the slow compiler/rustdoc scratch trees.
+          # Every other Rust job restores the last complete entry. On a cold key
+          # parallel shards may duplicate compilation, but only one entry wins.
           save-if: "false"
       - name: Runtime execution-budget ledger gate
         env:
           {}
         run: make test-runtime-ledger
+
 
   check:
     needs: [tier0, check-inventory, test-performance-budgets, test-lint, test-changelog, test-rust, test-fixture-contracts, test-proofs, test-nix-unit, test-flake-x86, test-flake-aarch64, test-drift, test-policy, test-runtime-ledger]

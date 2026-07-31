@@ -821,6 +821,14 @@ in
     '';
   };
 
+  options.d2b._manifestData = lib.mkOption {
+    type = lib.types.attrsOf lib.types.anything;
+    default = { };
+    internal = true;
+    visible = false;
+    description = "Internal evaluated vms.json data for contract fixtures.";
+  };
+
   options.d2b._manifestJsonPath = lib.mkOption {
     type = lib.types.str;
     default = "";
@@ -847,6 +855,7 @@ in
 
   config = {
     d2b.manifest = computedManifest;
+    d2b._manifestData = manifestJson;
     d2b._manifestJsonPath = "${manifestPkg}/share/d2b/vms.json";
     d2b._manifestPkg = manifestPkg;
     environment.systemPackages = [ manifestPkg ];

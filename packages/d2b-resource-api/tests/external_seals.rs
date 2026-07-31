@@ -68,6 +68,12 @@ impl CompileFailHarness<'_> {
             ])
             .env("CARGO_TARGET_DIR", self.target)
             .env("D2B_CFG_TEST_MARKER", self.cfg_test_marker)
+            // The outer gate rejects warnings, but this fixture deliberately
+            // forces cfg(test) onto a dependency without building its unit-test
+            // harness. That makes the dependency's test helpers look unused.
+            // Cap lints for this diagnostic-only compile so those expected
+            // warnings cannot mask the privacy error the seal is asserting.
+            .env("CARGO_ENCODED_RUSTFLAGS", "--cap-lints\u{1f}allow")
             // This harness owns RUSTC_WRAPPER: it must be the selective
             // cfg(test) shim below, never the repository's caching wrapper,
             // whose client or server can exit nonzero under concurrent cargo

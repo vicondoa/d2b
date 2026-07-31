@@ -45,7 +45,7 @@
 //!   checks" because cross-fs hardlinks silently degrade to copy on
 //!   POSIX `link(2)`
 //!   (returns `EXDEV`).
-//! - [`activate_generation_marker`]: writes a per-generation
+//! - `activate_generation_marker`: writes a per-generation
 //!   `marker.json` recording closure hash + d2b version. The
 //!   activate path refuses to mutate any generation dir that lacks
 //!   the marker - protects against an operator hand-rolling a
@@ -80,7 +80,7 @@ const EXDEV: i32 = 18;
 /// `EMLINK` ("Too many links") errno. `link(2)` returns this when the
 /// source inode is already at the filesystem's maximum hardlink count
 /// (ext4 `EXT4_LINK_MAX` = 65000). Defined locally for the same reason
-/// as [`EXDEV`].
+/// as `EXDEV`.
 const EMLINK: i32 = 31;
 
 /// Errors the hardlink-farm primitives can return.
@@ -102,7 +102,7 @@ pub enum HardlinkFarmError {
     /// share the same `st_dev` - i.e. they are on the same underlying
     /// filesystem but in different *vfsmounts* (the canonical case is
     /// NixOS bind-mounting `/nix/store` read-only on top of itself).
-    /// Unlike [`DifferentFilesystem`] this is RECOVERABLE: building the
+    /// Unlike [`HardlinkFarmError::DifferentFilesystem`] this is RECOVERABLE: building the
     /// farm inside a private mount namespace where `/nix/store` is
     /// lazily detached makes the two paths share one mount and the
     /// hardlink succeeds.
@@ -407,7 +407,7 @@ pub fn generation_id(closure_paths: &[PathBuf], system_path: Option<&Path>) -> S
 
 /// Pick the system/toplevel store path from a closure for the `system`
 /// symlink and GC root: prefer the `nixos-system-*` basename, else the
-/// first path. Mirrors [`write_system_symlink`]'s selection so the
+/// first path. Mirrors `write_system_symlink`'s selection so the
 /// `generation_id`, the `state/generations/<id>/system` symlink, and the
 /// `gcroots/generation-<id>` root all reference the same store path.
 pub fn system_store_path(closure_paths: &[PathBuf]) -> Option<&Path> {
@@ -1305,7 +1305,7 @@ fn mirror_metadata(
     Ok(())
 }
 
-/// Classification of a `link(2)` failure, used by [`hardlink_tree`] to
+/// Classification of a `link(2)` failure, used by `hardlink_tree` to
 /// route the error. Kept as a pure function of `(errno, src_dev,
 /// dst_dev)` so the EXDEV-vs-EMLINK branching can be unit-tested without
 /// fabricating a cross-mount or a 65000-link inode.
@@ -1630,7 +1630,7 @@ pub fn reconcile_split_current_tmp(store_root: &Path) -> Result<(), HardlinkFarm
 /// ADR 0027: this is the LAST step of a publish - after `state/current`
 /// and `meta/current` are swapped - so the marker's existence implies a
 /// fully-published generation. Public wrapper over the private
-/// [`write_live_marker`] so the split-layout StoreSync caller can plant
+/// `write_live_marker` so the split-layout StoreSync caller can plant
 /// it explicitly (the legacy [`build_farm`] still plants it inline).
 pub fn plant_live_marker(store_root: &Path, vm: &str) -> Result<(), HardlinkFarmError> {
     let live = live_dir(store_root);

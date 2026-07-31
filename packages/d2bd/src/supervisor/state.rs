@@ -102,7 +102,7 @@ pub struct ReconciliationReport {
 }
 
 /// Abstraction over /proc reads so tests do not need /proc on disk.
-/// Production daemon: [`ProcReader::system`].
+/// Production daemon: [`SystemProcReader`].
 pub trait ProcReader: Send + Sync {
     /// Returns `Some(start_time_ticks)` if `/proc/<pid>/stat` could
     /// be read AND field 22 parsed; `Ok(None)` if `/proc/<pid>/` is
@@ -237,8 +237,7 @@ pub fn reconcile(
 /// snapshots or hand them to operator forensics.
 ///
 /// Pure-ish: takes an opener trait so tests can run without /proc
-/// or the SYS_pidfd_open syscall. Production daemon uses
-/// [`SystemPidfdOpener`] which calls
+/// or the SYS_pidfd_open syscall. The production opener calls
 /// `d2b_priv_broker::sys::pidfd_sys::pidfd_open` via a thin
 /// shim (the broker crate has the only `unsafe` quarantine).
 /// Abstraction over "open pidfd for this pid AND verify the resulting

@@ -237,6 +237,10 @@ pub mod daemon_audit;
 
 /// Accept-loop concurrency primitives: bounded in-flight admission
 /// semaphore + per-VM / global op locks.
+///
+/// The module provides [`concurrency::ConnSemaphore`],
+/// [`concurrency::ConnSemaphore::try_acquire`], [`concurrency::ConnPermit`],
+/// and [`concurrency::OpLockManager`].
 pub mod concurrency;
 
 // Host-side CTAPHID security-key proxy session management: CID
@@ -4637,7 +4641,7 @@ fn create_console_session_for_vm(
     }
 }
 
-/// Build a [`ConsoleReadOutputResult`] wire DTO from an optional ring read.
+/// Build a [`d2b_contracts::public_wire::ConsoleReadOutputResult`] wire DTO from an optional ring read.
 fn build_read_output_result(
     session: &str,
     stream: d2b_contracts::terminal_wire::TerminalStream,
@@ -12902,7 +12906,7 @@ fn wait_for_one_shot_exit(
     }
 }
 
-/// Parse /proc/<pid>/stat to extract the process-state field (field
+/// Parse `/proc/<pid>/stat` to extract the process-state field (field
 /// 3, single character). Uses `rfind(')')` to correctly handle
 /// comm fields containing `)` (the kernel emits `<pid> (<comm>)
 /// <state> ...` and the LAST `)` always closes the comm field).

@@ -837,7 +837,7 @@ pub struct LaunchMinijailChildRequest {
 }
 
 /// `module_name` stays as the (already-validated)
-/// [`ModuleName`] newtype because it is genuinely a public input -
+/// `ModuleName` newtype because it is genuinely a public input -
 /// the broker still looks it up in the trusted kernel-module
 /// matrix and refuses anything not in the allow list. The matrix
 /// itself never crosses the wire.

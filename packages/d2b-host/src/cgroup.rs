@@ -32,7 +32,7 @@
 //! The module is parameterised over a [`CgroupBackend`] trait so the
 //! production [`RealCgroupBackend`] (which uses `rustix`'s `openat2 +
 //! O_NOFOLLOW + RESOLVE_BENEATH` and fd-relative `fchown` / writes) and
-//! the in-memory [`fake::FakeCgroupBackend`] (gated behind
+//! the in-memory `fake::FakeCgroupBackend` (gated behind
 //! `cfg(any(test, feature = "fake-backends"))`) share the same algorithm.
 //! L1c canary tests drive the algorithm through the fake backend.
 

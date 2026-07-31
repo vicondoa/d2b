@@ -1,8 +1,8 @@
 //! Production wiring for the gateway composition root (ADR 0032, P0): a
 //! [`SystemClock`], a `/dev/urandom`-backed [`UrandomIds`] secret/id source, and
 //! [`production_deps`] which assembles a [`GatewayDeps`] from the real
-//! [`AcaGatewayWorkload`] + [`RelayDisplayListener`] adapters. This is what the
-//! gateway-mode daemon calls to obtain a fully-wired [`GatewayOrchestrator`].
+//! `AcaGatewayWorkload` + `RelayDisplayListener` adapters. This is what the
+//! gateway-mode daemon calls to obtain a fully-wired `GatewayOrchestrator`.
 
 use std::io::Read;
 use std::sync::Arc;
