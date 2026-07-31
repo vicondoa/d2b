@@ -27,18 +27,18 @@ rust_mode="${1:-all}"
 case "$rust_mode" in
   all)
     [ "$#" -eq 0 ] || {
-      fail "usage: tests/test-rust.sh [main-workspace|remaining-suite|fixture-contracts]"
+      fail "usage: tests/test-rust.sh [main-workspace|remaining-suite|fixture-contracts]" || true
       exit 2
     }
     ;;
   main-workspace|remaining-suite|fixture-contracts)
     [ "$#" -eq 1 ] || {
-      fail "usage: tests/test-rust.sh [main-workspace|remaining-suite|fixture-contracts]"
+      fail "usage: tests/test-rust.sh [main-workspace|remaining-suite|fixture-contracts]" || true
       exit 2
     }
     ;;
   *)
-    fail "usage: tests/test-rust.sh [main-workspace|remaining-suite|fixture-contracts]"
+    fail "usage: tests/test-rust.sh [main-workspace|remaining-suite|fixture-contracts]" || true
     exit 2
     ;;
 esac

@@ -134,6 +134,9 @@ let
   }) artifactHashInputs);
   evalData = dataWithoutHash // {
     inherit bundleHash;
+    # The eval-only fixture cannot read derivation bytes. These non-authoritative
+    # placeholders preserve the contract's exact hashed-key set; production
+    # integrity remains covered by the separately realized fixture.
     artifactHashes = evalArtifactHashes;
   };
   baseJsonFile = pkgs.writeText "d2b-bundle-base.json" jsonText;

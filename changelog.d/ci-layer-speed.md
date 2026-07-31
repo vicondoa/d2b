@@ -1,9 +1,8 @@
 ### Changed
 
-- Cut Rust build and test time by reducing development-profile debug data, retaining an explicit full-debug profile, running pull-request work as two required jobs, and replacing the serial HTML API inventory with one compiler-derived workspace rustdoc JSON census; the local comprehensive gate still runs every surface, all compiler and rustdoc warnings now fail the gate, and the dependency set no longer emits an allowed RustSec warning for `anyhow`.
-- Run the independent Nix unit shards with a hard four-worker ceiling and aggregate every shard failure without removing or skipping any case.
-- Materialize contract fixtures directly from `nix eval` output instead of realizing NixOS systems, patched virtual-machine monitors, and source-built guest tools; only the separately pinned video binary command-surface contract remains a realized check.
+- Preserve the full validation surface while reducing pull-request feedback time, enforce compiler and documentation warnings, limit concurrent Nix evaluation to four workers, and keep the patched video command-surface contract realized.
+- Materialize non-binary contract fixtures from evaluated configuration data while retaining production-shaped integrity semantics.
 
 ### Fixed
 
-- Preserve the resource API's external capability seal when the warning-deny gate compiles its intentionally test-only dependency configuration, make timeout-sensitive transport tests deterministic under loaded parallel gates, realize the retained video binary contract, and keep shard failures and API snapshot remediation visible.
+- Keep capability seals, timeout-sensitive transport coverage, shard failures, and API snapshot remediation reliable and visible under loaded validation runs.

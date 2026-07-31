@@ -1039,8 +1039,12 @@ fn definition_reference_graph(
                 let mut ids = BTreeSet::new();
                 visit_item_signatures(&item.inner, &mut ids);
                 for reference in ids {
-                    if let Ok(identity) = workspace.resolve_private_in(loaded, reference) {
-                        references.insert(identity);
+                    match workspace.resolve_private_in(loaded, reference) {
+                        Ok(identity) => {
+                            references.insert(identity);
+                        }
+                        Err(_error) if !loaded.private_krate.index.contains_key(&reference) => {}
+                        Err(error) => return Err(error),
                     }
                 }
                 for child in definition_children(&item.inner) {
@@ -1231,15 +1235,19 @@ fn capability_public_api(
             })?;
         let mut public_references = BTreeSet::new();
         visit_item_signatures(&item.inner, &mut public_references);
-        let signature_capability = public_references.into_iter().any(|id| {
-            resolve_id(
+        let mut signature_capability = false;
+        for id in public_references {
+            match resolve_id(
                 &loaded.metadata.crate_name,
                 loaded.public_local_crate_id,
                 &loaded.public_krate,
                 id,
-            )
-            .is_ok_and(|identity| capability_types.contains(&identity))
-        });
+            ) {
+                Ok(identity) => signature_capability |= capability_types.contains(&identity),
+                Err(_error) if !loaded.public_krate.index.contains_key(&id) => {}
+                Err(error) => return Err(error),
+            }
+        }
         let own_capability = public_owner_identity(loaded, public)
             .is_some_and(|identity| capability_types.contains(&identity));
         if signature_capability || own_capability {
@@ -1383,14 +1391,18 @@ fn trait_impl_inventory(
             let Some(self_id) = direct_resolved_path_id(&impl_.for_) else {
                 continue;
             };
-            let Ok(self_identity) = workspace.resolve_private_in(loaded, self_id) else {
-                continue;
+            let self_identity = match workspace.resolve_private_in(loaded, self_id) {
+                Ok(identity) => identity,
+                Err(_error) if !loaded.private_krate.index.contains_key(&self_id) => continue,
+                Err(error) => return Err(error),
             };
             if !capability_types.contains(&self_identity) {
                 continue;
             }
-            let Ok(trait_identity) = workspace.resolve_private_in(loaded, trait_path.id) else {
-                continue;
+            let trait_identity = match workspace.resolve_private_in(loaded, trait_path.id) {
+                Ok(identity) => identity,
+                Err(_error) if !loaded.private_krate.index.contains_key(&trait_path.id) => continue,
+                Err(error) => return Err(error),
             };
             let impl_identity = explicit_impl_identity(
                 &loaded.metadata.crate_name,

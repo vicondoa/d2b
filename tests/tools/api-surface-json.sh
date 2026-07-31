@@ -97,7 +97,7 @@ cmp -s "$metadata" "$golden/workspace-metadata.json" || {
       --label committed-workspace-metadata.json \
       --label generated-workspace-metadata.json \
       "$golden/workspace-metadata.json" "$metadata" || true
-    fail "api-surface workspace metadata census drifted"
+    fail "api-surface workspace metadata census drifted; regenerate with 'make api-surface-pin'"
     exit 1
   fi
 }

@@ -146,6 +146,22 @@ fn public_api_has_only_the_approved_capability_mint_surface() {
 }
 
 #[test]
+fn internal_capability_mint_sites_remain_single_owner() {
+    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let router = fs::read_to_string(crate_root.join("src/router.rs")).expect("read router source");
+    assert_eq!(
+        source_occurrences(&router, "\n            ComponentSessionAdmission {"),
+        1,
+        "ComponentSessionAdmission must be constructed only by the approved registrar mint point"
+    );
+    assert_eq!(
+        source_occurrences(&router, "SessionAcceptor::from_verified_adapter("),
+        1,
+        "SessionAcceptor construction widened beyond the approved registrar mint point"
+    );
+}
+
+#[test]
 fn capability_trait_source_mutations_fail_closed() {
     let approved = approved_entries(include_str!("approved-capability-trait-impls.txt"));
     assert_trait_impl_mutations(&approved);

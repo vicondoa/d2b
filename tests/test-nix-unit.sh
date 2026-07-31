@@ -79,6 +79,14 @@ failures=()
 next_to_wait=0
 running=0
 
+stop_running_checks() {
+  local pid
+  for pid in "${pids[@]:-}"; do
+    kill "$pid" 2>/dev/null || true
+  done
+}
+add_cleanup stop_running_checks
+
 launch_check() {
   local check="$1" ordinal=${#pids[@]}
   [[ "$check" =~ ^[A-Za-z0-9._-]+$ ]] || {

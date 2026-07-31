@@ -5699,6 +5699,7 @@ d2b_session	pub fn d2b_session::SessionAuthorizationRequest::eq(&self, &d2b_sess
 d2b_session	pub fn d2b_session::SessionAuthorizationRequest::new(d2b_resource_api::authz::SessionVerb, d2b_contracts::v3::identity::ServiceName, impl core::convert::Into<alloc::string::String>, d2b_contracts::v3::identity::ZoneId, core::option::Option<d2b_contracts::v3::resource_ref::ResourceRef>) -> d2b_session::Result<Self>
 d2b_session	pub fn d2b_session::SessionAuthorizationRequest::relay(d2b_contracts::v3::identity::ServiceName, impl core::convert::Into<alloc::string::String>, d2b_contracts::v3::identity::ZoneId, core::option::Option<d2b_contracts::v3::resource_ref::ResourceRef>, d2b_resource_api::authz::SessionVerb, d2b_contracts::v3::identity::ZoneId) -> d2b_session::Result<Self>
 d2b_session	pub fn d2b_session::SessionAuthorizationRequest::target(&self) -> core::option::Option<&d2b_contracts::v3::resource_ref::ResourceRef>
+d2b_session	pub fn d2b_session::SessionRegistrationCapability::consume(self, &R) -> core::result::Result<(), Self::Error>
 d2b_session	pub struct d2b_session::AdmittedBootstrapPsk
 d2b_session	pub struct d2b_session::AuthenticatedComponentSession<C>
 d2b_session	pub struct d2b_session::AuthenticatedSessionRouteBinding
@@ -5710,6 +5711,8 @@ d2b_session	pub struct d2b_session::SessionAcceptor<C>
 d2b_session	pub struct d2b_session::SessionAuthenticationBinding
 d2b_session	pub struct d2b_session::SessionAuthorizationRequest
 d2b_session	pub struct d2b_session::SessionEngine<T: d2b_session::OwnedTransport>
+d2b_session	pub trait d2b_session::SessionRegistrationCapability<R>
+d2b_session	pub type d2b_session::SessionRegistrationCapability::Error
 d2b_session_unix	impl core::fmt::Debug for d2b_session_unix::VerifiedUnixPeer
 d2b_session_unix	impl core::marker::Freeze for d2b_session_unix::VerifiedUnixPeer
 d2b_session_unix	impl core::marker::Send for d2b_session_unix::VerifiedUnixPeer

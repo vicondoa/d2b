@@ -7,6 +7,10 @@ out=${1:?usage: eval-fixtures.sh <output-root>}
 system=$(nix eval --raw --impure --expr builtins.currentSystem)
 
 mkdir -p "$out"
+if [ "$system" != x86_64-linux ]; then
+  printf '%s\n' "eval-fixtures: unavailable on $system (graphics fixture is x86_64-linux only)" >&2
+  exit 3
+fi
 for kind in minimal full; do
   json="$out/$kind.json"
   nix eval --quiet --no-warn-dirty --json --apply \
