@@ -104,10 +104,14 @@ const EXEMPT_CRATES: &[(&str, &str)] = &[
 /// Workspace members under `packages/` that carry the `d2b-provider-` prefix
 /// but are not Provider implementations.
 ///
-/// `d2b-provider` is the Provider SDK and `d2b-provider-toolkit` is the shared
-/// toolkit; neither names a `<base>-<implementation>` pair, and neither is a
-/// Provider.
-const NON_PROVIDER_PREFIXED: &[&str] = &["d2b-provider", "d2b-provider-toolkit"];
+/// `d2b-provider` is the Provider SDK, `d2b-provider-toolkit` is the shared
+/// toolkit, and `d2b-provider-supervisor` is the host-side supervisor a
+/// Provider process runs under. None names a `<base>-<implementation>` pair,
+/// and none is a Provider: the supervisor launches Providers rather than
+/// implementing one, so holding it to the Provider layout would assert a
+/// dossier and an identity it has no business declaring.
+const NON_PROVIDER_PREFIXED: &[&str] =
+    &["d2b-provider", "d2b-provider-supervisor", "d2b-provider-toolkit"];
 
 // ---------------------------------------------------------------------------
 // The checker, expressed over a crate directory so it can be driven by both the

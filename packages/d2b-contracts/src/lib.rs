@@ -6,6 +6,7 @@ use std::collections::BTreeSet;
 
 pub mod broker_wire;
 pub mod generated;
+pub mod generation_bundle;
 pub mod guest_auth;
 pub mod guest_proto {
     pub use crate::generated::guest_control::*;
@@ -571,3 +572,8 @@ pub mod v3;
 
 #[cfg(test)]
 mod resource_proto_formatting_tests;
+
+// The `generation_bundle` module's re-exports. Keep every
+// `pub use generation_bundle::...` line inside this region so it stays one
+// contiguous block.
+// (empty until `ADR046-network-008` lands)

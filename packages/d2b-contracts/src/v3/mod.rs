@@ -2,12 +2,14 @@
 
 pub mod component_session;
 pub mod credential;
+pub mod credential_controller;
 pub mod device;
 pub mod error;
 pub mod execution_policy;
 pub mod guest;
 pub mod host;
 pub mod identity;
+pub mod ifname;
 pub mod limits;
 pub mod network;
 pub mod process;
@@ -19,6 +21,7 @@ pub mod resource_status;
 pub mod semantic_services;
 pub mod user;
 pub mod volume;
+pub mod volume_state;
 pub mod zone_routing;
 pub mod zone_session;
 
@@ -80,3 +83,17 @@ pub use semantic_services::{
     SemanticSchemaId, SemanticTypeContract, UPDATE_POLICY_FIELD,
     catalog as semantic_service_catalog,
 };
+
+// The `volume_state` module's re-exports. Keep every
+// `pub use volume_state::...` line inside this region so it stays one
+// contiguous block.
+// (empty until `ADR046-pstate-001` lands)
+
+// The `ifname` module's re-exports. Keep every `pub use ifname::...` line
+// inside this region so it stays one contiguous block.
+// (empty until `ADR046-network-001` lands)
+
+// The `credential_controller` module's re-exports. Keep every
+// `pub use credential_controller::...` line inside this region so it stays one
+// contiguous block.
+// (empty until `ADR046-credential-006` lands)

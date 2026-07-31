@@ -1,11 +1,30 @@
 //! Core-side reconciliation indexes, hints, suppression, and admission.
 
+// `main.rs` is a library module here, not a binary crate root; the crate turns
+// off binary auto-discovery so cargo does not claim it as one. The lint that
+// warns about the name is emitted while modules are collected, so it can only
+// be allowed at the crate root.
+#![allow(special_module_name)]
+
+pub mod api_catalog;
+pub mod authority;
+pub mod authz;
+pub mod budgets;
+pub mod cleanup;
 pub mod configuration;
+pub mod controllers;
 pub mod dependencies;
 pub mod hints;
+pub mod main;
+pub mod optional_state_admission;
 pub mod owner_reconcile;
+pub mod ownership;
+pub mod providers;
 pub mod rbac;
+pub mod resource_store;
 pub mod runtime;
+pub mod store;
+pub mod watches;
 pub mod zone_links;
 
 pub use dependencies::{DependencyError, DependencyIndex, DependencyTrigger, UpgradeOrder};

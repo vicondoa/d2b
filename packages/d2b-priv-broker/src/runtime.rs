@@ -2519,6 +2519,22 @@ fn dispatch_request_with_backend<B: DispatchBackend>(
             Ok(DispatchResult::with_fds(response, response_fds))
         }
         // Pre-existing typed-Unimplemented status.
+        RealBrokerRequest::ApplyNftablesProjection(_) => Err(BrokerError::Unimplemented {
+            operation: "ApplyNftablesProjection",
+            target_wave: "W4",
+        }),
+        RealBrokerRequest::CreateBridge(_) => Err(BrokerError::Unimplemented {
+            operation: "CreateBridge",
+            target_wave: "W4",
+        }),
+        RealBrokerRequest::DeleteBridge(_) => Err(BrokerError::Unimplemented {
+            operation: "DeleteBridge",
+            target_wave: "W4",
+        }),
+        RealBrokerRequest::DeletePersistentTap(_) => Err(BrokerError::Unimplemented {
+            operation: "DeletePersistentTap",
+            target_wave: "W4",
+        }),
         RealBrokerRequest::BindUnixSocket(_) => Err(BrokerError::Unimplemented {
             operation: "BindUnixSocket",
             target_wave: "W5",

@@ -22,12 +22,43 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "kind", content = "payload")]
 pub enum BrokerRequest {
     ApplyNftables(ApplyNftablesRequest),
+    /// Apply or remove one Provider-owned nftables projection.
+    ///
+    /// Distinct from [`BrokerRequest::ApplyNftables`], which owns the
+    /// framework's own `inet d2b` table: this op carries a projection a
+    /// Provider owns, and its action is a closed enum rather than a
+    /// boolean, so a caller cannot express a third meaning.
+    ///
+    /// Currently a typed stub (`Unimplemented`) until the live handler is
+    /// wired.
+    ApplyNftablesProjection(ApplyNftablesProjectionRequest),
     ApplyNmUnmanaged(ApplyNmUnmanagedRequest),
     ApplyRoute(ApplyRouteRequest),
     ApplySysctl(ApplySysctlRequest),
     BindUnixSocket(BindUnixSocketRequest),
     CreateOrReconcileUsersGroups(CreateOrReconcileUsersGroupsRequest),
+    /// Create the bridge an environment's links attach to. The daemon
+    /// names only the opaque bundle intent ref and scope; the broker
+    /// derives the bridge ifname and its attributes from its own trusted
+    /// bundle copy.
+    ///
+    /// Currently a typed stub (`Unimplemented`) until the live handler is
+    /// wired.
+    CreateBridge(CreateBridgeRequest),
+    /// Delete a bridge this framework created. Follows the same
+    /// opaque-identifier contract as [`BrokerRequest::CreateBridge`].
+    ///
+    /// Currently a typed stub (`Unimplemented`) until the live handler is
+    /// wired.
+    DeleteBridge(DeleteBridgeRequest),
     CreatePersistentTap(CreatePersistentTapRequest),
+    /// Delete a persistent TAP this framework created. Follows the same
+    /// opaque-identifier contract as
+    /// [`BrokerRequest::CreatePersistentTap`].
+    ///
+    /// Currently a typed stub (`Unimplemented`) until the live handler is
+    /// wired.
+    DeletePersistentTap(DeletePersistentTapRequest),
     CreateTapFd(CreateTapFdRequest),
     DelegateCgroupV2(DelegateCgroupV2Request),
     ExportBrokerAudit(ExportBrokerAuditRequest),
@@ -236,12 +267,16 @@ impl BrokerRequest {
     pub fn op_name(&self) -> &'static str {
         match self {
             Self::ApplyNftables(_) => "ApplyNftables",
+            Self::ApplyNftablesProjection(_) => "ApplyNftablesProjection",
             Self::ApplyNmUnmanaged(_) => "ApplyNmUnmanaged",
             Self::ApplyRoute(_) => "ApplyRoute",
             Self::ApplySysctl(_) => "ApplySysctl",
             Self::BindUnixSocket(_) => "BindUnixSocket",
             Self::CreateOrReconcileUsersGroups(_) => "CreateOrReconcileUsersGroups",
+            Self::CreateBridge(_) => "CreateBridge",
+            Self::DeleteBridge(_) => "DeleteBridge",
             Self::CreatePersistentTap(_) => "CreatePersistentTap",
+            Self::DeletePersistentTap(_) => "DeletePersistentTap",
             Self::CreateTapFd(_) => "CreateTapFd",
             Self::DelegateCgroupV2(_) => "DelegateCgroupV2",
             Self::ExportBrokerAudit(_) => "ExportBrokerAudit",
@@ -604,6 +639,36 @@ pub struct ApplyNftablesRequest {
     pub tracing_span_id: Option<TracingSpanId>,
 }
 
+/// The action an [`ApplyNftablesProjectionRequest`] carries.
+///
+/// Closed on purpose: the framework's own nftables op spells its two
+/// directions as a `destroy` boolean, which leaves "neither" and "both"
+/// expressible in a future field pair. A projection names exactly one of
+/// two directions and nothing else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum NftablesProjectionAction {
+    /// Install the resolved projection.
+    Apply,
+    /// Remove the resolved projection.
+    Remove,
+}
+
+/// The broker re-derives the desired projection from
+/// `bundle_nft_projection_intent_ref`. As with
+/// [`ApplyNftablesRequest`], the daemon passes no inline rule text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ApplyNftablesProjectionRequest {
+    pub bundle_nft_projection_intent_ref: BundleOpId,
+    pub scope_id: ScopeId,
+    pub action: NftablesProjectionAction,
+    #[serde(default)]
+    pub desired_hash: Option<String>,
+    #[serde(default)]
+    pub tracing_span_id: Option<TracingSpanId>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ApplyNmUnmanagedRequest {
@@ -666,6 +731,42 @@ pub struct CreateOrReconcileUsersGroupsRequest {
 pub struct CreatePersistentTapRequest {
     pub role_id: RoleId,
     pub vm_id: VmId,
+    #[serde(default)]
+    pub tracing_span_id: Option<TracingSpanId>,
+}
+
+/// See [`CreatePersistentTapRequest`] for the opaque-ID rationale;
+/// `DeletePersistentTap` follows the same contract, and the broker
+/// re-derives the ifname it removes rather than accepting one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeletePersistentTapRequest {
+    pub role_id: RoleId,
+    pub vm_id: VmId,
+    #[serde(default)]
+    pub tracing_span_id: Option<TracingSpanId>,
+}
+
+/// The broker derives the bridge ifname and its attributes from the
+/// trusted bundle row anchored by `bundle_bridge_intent_ref` +
+/// `scope_id`. As with the TAP ops, no caller-supplied ifname crosses
+/// the wire; the observed ifname appears only in the audit record.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CreateBridgeRequest {
+    pub bundle_bridge_intent_ref: BundleOpId,
+    pub scope_id: ScopeId,
+    #[serde(default)]
+    pub tracing_span_id: Option<TracingSpanId>,
+}
+
+/// See [`CreateBridgeRequest`] for the opaque-ID rationale;
+/// `DeleteBridge` follows the same contract.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeleteBridgeRequest {
+    pub bundle_bridge_intent_ref: BundleOpId,
+    pub scope_id: ScopeId,
     #[serde(default)]
     pub tracing_span_id: Option<TracingSpanId>,
 }

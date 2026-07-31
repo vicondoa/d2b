@@ -6,6 +6,7 @@ pub mod owner_hints;
 pub mod queue;
 pub mod result;
 pub mod runner;
+pub mod state_migration;
 
 pub use context::{
     Cancellation, CommittedRevisionProof, ContextError, DependencySnapshot, EffectPermit,
