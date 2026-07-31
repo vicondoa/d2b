@@ -917,6 +917,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-api-surface"
+version = "0.1.0"
+dependencies = [
+ "public-api",
+ "rustdoc-types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "d2b-bus"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -1914,6 +1924,12 @@ name = "gimli"
 version = "0.32.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e629b9b98ef3dd8afe6ca2bd0f89306cec16d43d907889945bc5d6687f2f13c7"
+
+[[package]]
+name = "hashbag"
+version = "0.1.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7040a10f52cba493ddb09926e15d10a9d8a28043708a405931fe4c6f19fac064"
 
 [[package]]
 name = "hashbrown"
@@ -3129,6 +3145,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "public-api"
+version = "0.52.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "02f66902549074a24229cb6d3e5b69f823fa620ec527b6a10708c1798d31e273"
+dependencies = [
+ "hashbag",
+ "rustdoc-types",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "quick-xml"
 version = "0.39.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3476,6 +3505,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cfcb3a22ef46e85b45de6ee7e79d063319ebb6594faafcf1c225ea92ab6e9b92"
 dependencies = [
  "semver",
+]
+
+[[package]]
+name = "rustdoc-types"
+version = "0.57.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7be7e9f2ca82c1fcefb69332b82c289051edcd4a3245b1715f7756103918255"
+dependencies = [
+ "serde",
+ "serde_derive",
 ]
 
 [[package]]

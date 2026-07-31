@@ -304,6 +304,22 @@ set -euo pipefail
         )
         self.assertNotIn("nix-store --delete", driver)
 
+    def test_api_surface_json_gate_is_enforcing_and_cacheable(self) -> None:
+        driver = (ROOT / "tests" / "test-rust.sh").read_text(encoding="utf-8")
+        api_driver = (ROOT / "tests" / "tools" / "api-surface-json.sh").read_text(
+            encoding="utf-8"
+        )
+        workflow = load_layer1_jobs().render_workflow(load_layer1_jobs().load_manifest())
+
+        self.assertIn('bash "$ROOT/tests/tools/api-surface-json.sh"', driver)
+        self.assertNotIn("D2B_SKIP_API_SURFACE", driver)
+        self.assertIn("nightly-2026-02-16", api_driver)
+        self.assertIn("--document-hidden-items", api_driver)
+        self.assertIn("--document-private-items", api_driver)
+        self.assertIn("--workspace --lib --no-deps", api_driver)
+        self.assertIn(".scratch/rust-test-cache/api-surface-", api_driver)
+        self.assertIn('prefix-key: "v2-rust-api-json"', workflow)
+
     def test_diagnostic_redaction_normalizes_ansi_before_matching(self) -> None:
         layer1_jobs = load_layer1_jobs()
         diagnostic = f"error:\x1b[31m{ROOT}/private/output\x1b[0m"

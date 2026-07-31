@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "public_api_crate": "d2b_bus",
+  "capability_roots": [
+    {"origin_crate":"d2b_bus","path":["d2b_bus","router","ComponentSessionAdmission"],"kind":"struct"},
+    {"origin_crate":"d2b_session","path":["d2b_session","admission","AuthenticatedComponentSession"],"kind":"struct"},
+    {"origin_crate":"d2b_session","path":["d2b_session","admission","SessionAcceptor"],"kind":"struct"},
+    {"origin_crate":"d2b_session_unix","path":["d2b_session_unix","subject","VerifiedUnixPeer"],"kind":"struct"}
+  ],
+  "claim_roots": [
+    {"origin_crate":"d2b_contracts","path":["d2b_contracts","v3","resource_ref","ResourceRef"],"kind":"struct"},
+    {"origin_crate":"d2b_contracts","path":["d2b_contracts","v3","identity","ResourceUid"],"kind":"struct"}
+  ]
+}

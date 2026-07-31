@@ -424,7 +424,7 @@ def rust_job(job: dict[str, Any]) -> str:
             packages/d2b-priv-broker/target-fakebackends
             tests/tools/no-bash-ast-walker/target
             .scratch/rust-test-cache
-          prefix-key: "v1-rust"
+          prefix-key: "v2-rust-api-json"
           shared-key: "test-rust-${{{{ runner.os }}}}"
           # The repository-local trees are keyed on rustc -vV by their owning
           # tests. Cargo fingerprints compiled inputs on restore, while failed

@@ -519,6 +519,11 @@ run_main_workspace_gate() {
   cargo fmt --manifest-path "$manifest" --all --check
   ok "cargo fmt --check"
 
+  # One compiler-owned workspace build replaces the old test's serial
+  # package-by-package HTML rustdoc loop. This is enforcing and cannot skip.
+  log "--> compiler-derived API surface"
+  bash "$ROOT/tests/tools/api-surface-json.sh"
+
 # --locked so a stale committed Cargo.lock fails the gate instead of being
 # silently regenerated. flake.nix vendors the committed lockfile, so a lock
 # that cargo quietly rewrites here cannot be reproduced by a Nix build.

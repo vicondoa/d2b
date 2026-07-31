@@ -33,6 +33,7 @@ const CAPABILITY_TYPE_IDENTITIES: &[&str] = &[
 const CLAIM_TYPE_IDENTITIES: &[&str] = &["ResourceRef", "ResourceUid"];
 
 #[test]
+#[ignore = "superseded by the enforcing compiler-derived d2b-api-surface snapshot gate"]
 fn public_api_has_only_the_approved_capability_mint_surface() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repository_root = crate_root.parent().unwrap().parent().unwrap();
