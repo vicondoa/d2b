@@ -1427,3 +1427,146 @@ conformance scenario to cite. Both need a specification amendment before
 | `ADR046-process-001` closes Wave 3's largest gap: three crates with no production caller, proven only over scripted ports | Unmet obligation, in scope | W4 |
 | `public_mint_surface` runtime: hoist the two pure source scans out of the render loop and parallelise within each dependency level. Verified unpaid by Wave 3; the one commit touching the file added cross-run caching, not this | Unmet obligation, in scope | W4 |
 | `nixos-modules/resources-volume.nix` imported by nothing; one line in `index.nix`, which exactly one W4 item opens | Unmet obligation, in scope | W4, assigned to `ADR046-network-004`'s slice |
+
+## 15. Added after Wave 4 Round A
+
+This section is the Round A debt audit. It was built by reading the complete
+`validation` field for each of `ADR046-process-001`, `ADR046-core-001`,
+`ADR046-pstate-001`, `ADR046-pstate-002`, `ADR046-network-001`,
+`ADR046-credential-001` and `ADR046-credential-002`, then reading the tests and
+production wiring that actually exist. The eleven reported caveats were checked
+against the tree, but they were not used as the inventory.
+
+The distinction used by the rest of this register is preserved here:
+
+- An **unmet obligation** names behavior or evidence that the implementation
+  still owes.
+- An **inference** names a defensible choice made where the specification is
+  silent and which a reviewer must confirm or correct.
+- A **specification gap** names an obligation that cannot be implemented without
+  first adding or reconciling contract content.
+
+### 15.1 Independent validation audit by work item
+
+| Work item | Result of reading the complete validation field against the tree |
+| --- | --- |
+| `ADR046-process-001` | **Met at the hermetic adapter layer, not at the real system boundaries.** `production_adapter.rs` runs the shared suite through `ProviderSupervisor`, carries a deterministic fault matrix, tests a real seqpacket frame plus genuine pidfd transfer, and has a current-thread heartbeat latency test. The fix round additionally proves that a late successful launch is stopped before timeout is returned, or remains tracked if cleanup fails; terminal stops retire handles; pending observations are bounded; and the broker's actual pid-reuse diagnostic is classified as identity change. It does not prove privileged broker spawn with the real namespace/cgroup policy, real systemd units, real wait/reap, or real PID reuse. No production crate constructs the supervisor, and the three `integration/*.rs` files are declaration-only and run in no lane. The latency test is also weaker than the equal-or-stricter spike retirement condition: one 50 ms call with a 40 ms maximum heartbeat-gap assertion, rather than 200 concurrent calls and the 15 ms bound. |
+| `ADR046-core-001` | **Partial.** Every implemented Round A module has focused unit tests, including authorization refusals, catalog activation, handler health, budgets, ownership, provider lifecycle, store-operation admission and watch accounting. The tests are example based; no property or permutation corpus was found for the field's explicit property-test half. Multi-process startup/restart is absent. `Cargo.toml` has `autobins = false`; `main.rs` is a library coordinator over supplied booleans and snapshots because the production ResourceClient, authenticated session connector, operation ledger and watch dispatcher do not exist. `cleanup.rs` remains `UNIMPLEMENTED_SCAFFOLD` even though the work-item Destination names `cleanup`; its file comment instead assigns it to `ADR046-network-008`. |
+| `ADR046-pstate-001` | **Partial and fail-closed.** The schema and status golden vectors are real. The enum round-trip test covers `StateSchemaPhase`, `MarkerStatus` and `SealingStatus`. Its name says `phase_and_status_reason_tokens_round_trip`, but no reason type is present and its body round-trips no reason. StateEnvelope construction, next-generation bounds and redacted diagnostics are tested, but digest construction and verification now deliberately return `DigestDomainUnavailable`. `VolumeStateSchema` is consumed by the Provider component namespace, but `VolumeSpec` and `VolumeStateStatus` are not integrated: outside `volume_state.rs`, only `provider.rs` consumes `VolumeStateSchema`, and `volume.rs` consumes none of these types. |
+| `ADR046-pstate-002` | **Partial.** Descriptor bytes, the stateless round trip, missing namespace rejection, invalid kind, forbidden persistence, quota floor, host-custody refusal and guest-local-required refusal are covered. The named descriptor-Volume consistency property test is not: `descriptor_volume_projection_preserves_quota_source_and_exports` checks three example quotas against a four-field `ComponentStateVolumeProjection`; it constructs no `VolumeSpec`, creates no Volume or Export, and compares no schema, views, layout, ownership or attachment content. The custody check accepts a caller-supplied `StateSchemaCustodyClass`; no authoritative schema-id-to-custody mapping exists. Derivability rejection and placement-change version increment remain unimplementable with the current types. |
+| `ADR046-network-001` | **Partial.** The JSON spec/status vectors, CIDR examples, attachment-index uniqueness, host blocklist, IfName collision and deterministic repeated derivation, external-NIC cross-Zone refusal, and reserved User declaration/gate are covered. No CBOR codec or profile exists. The CIDR test is a fixed example table, not the requested property test. The User test constructs a contract value and calls a pure phase gate; no controller creates the User, waits on a watch, aborts a real config-Volume operation, or proves the status UID/GID is ignored by authorization and audit. Two written specifications disagree about who creates the User and whether an authored empty additive blocklist is valid. |
+| `ADR046-credential-001` | **Met except for one specification hole and one opacity limit.** The spec and status golden vectors, bounds, unknown-field rejection, `OpaqueAzureRef` preservation with redacted diagnostics, one-way lease/source wrappers, and status/error canaries are present. The reported claim that the interactive-login status field is absent is not true as written: `CredentialStatus` contains `interactionState`, `loginSessionGeneration` and `loginDeadline`. What is absent is the specified `challengeMetadata`, whose shape is never defined, and the placement of `BeginLogin`, `ObserveLogin` and `CancelLogin` conflicts with the frozen five-method service. The unkeyed lease/source digest also hides bytes but does not prevent offline guessing of low-entropy inputs; no keying authority is specified. |
+| `ADR046-credential-002` | **Met hermetically, unwired in production.** All five method vectors, strict malformed/duplicate/non-canonical/oversize rejection, the use/admin Role matrices, delivery binding round trip, non-delivery rejection, zeroizing record behavior and real state-to-error mapping tests exist. The fix round proves the Provider cannot replace any of the twelve authorization-derived delivery fields. Field numbers were assigned without a specification rule and are now pinned by vectors. `CredentialAdmission` remains an injected trait with no production implementation, the server is unregistered, and no bus route, Provider Process selection, delivery-route authorization or encrypted forwarding path invokes it. |
+
+### 15.2 Unmet obligations
+
+| Debt | What the tree proves and does not prove | Owner / closing condition |
+| --- | --- | --- |
+| Core production process and multi-process startup/restart | `CoreProcess` proves the in-process ordering policy over supplied readiness and recovery facts. There is no binary, ResourceClient, authenticated connector, accepted store/operation ledger, or real watch dispatcher, so no restart has re-established those facts across processes. | W5 production store/watch integration (`ADR046-store-004`, `ADR046-store-002`, `ADR046-reconcile-003`) plus the Zone-runtime connector that constructs the process |
+| Core property-test half | The nine Round A modules have example-based unit tests. No generated or permutation tests prove ordering independence, deterministic aggregation, or state-machine properties over a broad input space. Construction-time use of `BTreeMap` is not that evidence. | `ADR046-core-001`, before its validation field is called complete |
+| Core cleanup destination | `packages/d2b-core-controller/src/cleanup.rs` is still an explicit scaffold, while `CoreHandlerKind::Cleanup` is a live registry slot and the work-item Destination names `cleanup`. | Resolve the ownership conflict with `ADR046-network-008`, then implement and test the fixed cleanup handler |
+| Process real-boundary integration | The adapter and its policy are real Rust code, but its conformance/fault tests inject deterministic or scripted backends. Privileged spawn and namespace/cgroup placement, transient system/user units, parent-owned wait/reap and actual PID reuse remain unproved. | Container and host-integration scenarios wired through repository lanes; the declarations in `integration/` are not evidence |
+| Process production reachability | Only the supervisor crate and its tests construct `ProviderSupervisor`; no production crate depends on `d2b-provider-supervisor`. The prior absence of an adapter is closed, but the prior absence of a production caller is not. | Process controller/runtime integration, including `ADR046-reconcile-003` against the accepted store/watch backend |
+| Process blocking-adapter retirement proof | `blocking_effects_do_not_stall_the_async_executor` is useful but weaker than the recorded spike cleanup: it drives one delayed call and permits a 40 ms gap. It does not drive 200 concurrent calls or enforce the 15 ms gap bound. | `ADR046-process-001` for the Process adapter half; end-to-end commit-to-launch latency remains `ADR046-reconcile-003` |
+| Broker PID and start-time disclosure | `OperationFields::OpenPidfd` serializes raw `pid` and `expected_start_time_ticks`, and live error Display strings render PID plus expected/observed start times. The process adapter does not format these values, but the broker audit and journal paths do. | Broker audit hardening, no later than `ADR046-audit-001`'s `BrokerEffect` migration |
+| Provider-state types are not embedded in Volume | `VolumeStateSchema` reaches `ComponentStateNamespace`, but `VolumeSpec` has no state-schema extension and no Volume status layer consumes `VolumeStateStatus`. | W5 `ADR046-volume-001` plus the provider-state fast follow required by the shared-path ruling in validation/delivery section 7 |
+| Descriptor-Volume consistency property | The current projection helper returns source, byte/inode quota and an Export count. It neither constructs nor validates the actual source Volume and Export children, so equality of schema, views, ownership, layout, attachment and placement cannot regress visibly. | `ADR046-pstate-009` and production ProviderDeployment; use real typed Volume/Export objects rather than another projection-only assertion |
+| Network controller User lifecycle | The pure contract test proves the intended declaration and phase decision. It does not prove creation ownership, watch ordering, config-Volume suppression, the emitted `ConfigVolumeReady=False/user-not-ready` condition, or that diagnostic numeric identity is excluded from authz and audit decisions. | `ADR046-network-005`, whose validation field already names these controller cases |
+| Production Credential service path | The service has no authenticated bus adapter, exact Provider Process resolver, delivery-route authorizer, registered server or opaque encrypted record forwarder. A fake `CredentialAdmission` returning denial proves ordering after injection, not that production RBAC constructs the right result. | Credential/bus integration before any Credential Provider is production-reachable |
+| Broker runtime skew protection | `PROTOCOL_VERSION = 4` correctly describes the current operation catalogue, but `BrokerRequestEnvelope` carries no version. `HelloRequest` carries a semver-like string, the runtime ignores it, and `hello_ok_response` returns hard-coded selected/server strings. The compatibility tests prove serde behavior only. | Broker/daemon wire owner before mixed catalogue versions may coexist; either negotiate and reject skew or rename/document the constant solely as catalogue metadata |
+
+### 15.3 Specification gaps
+
+| Gap | Why implementation cannot close it | Exact amendment or ruling needed |
+| --- | --- | --- |
+| Network CBOR golden vector | `ADR046-network-001` requires JSON and CBOR vectors, but no permitted contract defines a CBOR profile, canonicalization rule or codec. Inventing bytes would make the test define the protocol it claims to test. | Define the Network CBOR profile and codec, or amend the validation field to the one canonical encoding the resource plane actually supports |
+| Network controller User ownership conflict | The resource specification/work item says the network-local controller creates and owns the User. The Provider dossier says Nix config publication declares it and the controller has read-only `get,watch`. | Choose one creator and align the resource specification, dossier, RBAC rows and lifecycle test |
+| Empty authored Network host blocklist conflict | The Provider dossier illustrates an empty additive list whose defaults are unioned later. The resource specification and contract reject an explicitly empty list as incomplete. | Choose authored-additive or authored-effective semantics and align the example, validator and error contract |
+| Provider-state reason round trip | The validation field requires `phase/reason` round trip, but no provider-state reason field, enum or closed token set is defined. The current test name overclaims a body that covers phase, marker status and sealing status only. | Define the bounded reason type and where it appears, then add its vector; or remove `reason` from the validation obligation |
+| Derivable-payload rejection | `ComponentStateNamespace` carries the asserted `StorageNeed` enum but no payload, status, ledger or external-observation evidence. The constructor can reject a missing assertion, not prove the assertion false. | Put authoritative derivability evidence at ProviderDeployment admission, as `ADR046-pstate-012` proposes, and define the evidence input; do not pretend the descriptor constructor can infer it |
+| Placement-change descriptor version increment | `ComponentDescriptor` has no descriptor-version field. Its config digest and the Provider compatibility fingerprint have different meanings. | Add and define an immutable component descriptor version and its comparison point, or remove the increment requirement in favor of an existing, correctly named generation contract |
+| Schema custody classification source | `validate_schema_custody` accepts a trusted `StateSchemaCustodyClass`, but no schema contract maps a schema ID or signed registration to that class. A caller can select `Ordinary` for a credential schema and bypass the intended refusal. | Freeze the custody-class field in the signed schema registration and define the authoritative lookup used by ProviderDeployment before `ADR046-pstate-009` and `ADR046-pstate-012` consume it |
+| Provider-state payload digest domain | D101 freezes the complete domain-tag set and contains no Provider-state payload domain. Accepting a caller tag would permit two domains for the same payload, so the helper now correctly fails closed. | **Amend D101 to freeze exactly the domain tag `d2b:v3:provider-state-payload` and define the StateEnvelope payload digest as `SHA-256(b"d2b:v3:provider-state-payload" || 0x00 || d2b-cjson/v1(payload))`, rendered in the D101 `sha256:<64 lowercase hex>` form.** Only then may `from_payload` and `validate_digest` succeed |
+| Credential interactive challenge metadata and method ownership | D093 names bounded non-secret challenge/progress metadata but defines no fields, enum, bounds or null rules. It also places `BeginLogin`, `ObserveLogin` and `CancelLogin` in the common Credential surface while `ADR046-credential-002` freezes exactly five service methods that omit them. | Define the challenge metadata schema and decide whether the three login operations extend `d2b.credential.v3` or live on a separate typed Endpoint service; then add the corresponding vectors |
+| Credential opaque-wrapper keying | Lease/source wrappers use domain-separated unkeyed SHA-256. The raw value is absent from output, but a low-entropy input remains guessable offline, and no keying authority or minimum-entropy contract exists. | Define a keyed opacity derivation and key owner/rotation contract, or explicitly classify these inputs as non-authorizing high-entropy values and enforce that at construction |
+| Core cleanup file ownership | `ADR046-core-001` names `cleanup` in its Destination while the landed scaffold assigns the same file to `ADR046-network-008`. The prep ruling resolved the configuration-module edit collision but did not resolve this ownership conflict. | Amend one Destination or record a single implementation owner before either item is marked complete |
+
+### 15.4 Inferences
+
+| Inference | Why it needs confirmation | Owner |
+| --- | --- | --- |
+| Credential protobuf field numbers | No specification assigns the numbers. Round A used dense first-version tags, kept required request fields in the one-byte tag range, and pinned every message by byte vector. This is a sound first-version choice, but the tests now freeze an implementer decision rather than a written contract. | Confirm or replace in the Credential protocol amendment before external clients ship |
+
+### 15.5 What the fix round actually established
+
+These are closed findings, not debt. They are stated so the open entries above
+do not erase real progress or cause a later reviewer to ask for the same fixes
+again.
+
+- **Credential delivery authority is no longer Provider-selected.** The
+  authenticated admission result owns all twelve binding fields. The Provider
+  receives that result read-only, and changing any one field in its response is
+  rejected. The denial path still runs before Provider dispatch.
+- **Credential failure-state coverage is no longer vacuous.** The test drives
+  the real state-to-error mapping for locked, unavailable, denied, expired and
+  revoked states. Service errors render the canonical codes. `OpaqueAzureRef`
+  again preserves its specified non-secret value while Debug and Display remain
+  redacted.
+- **A timed-out launch no longer silently orphans a late process.** A late
+  successful backend result is stopped and confirmed before timeout returns. If
+  that cleanup fails, the successful launch is returned and retained as tracked
+  authority instead of being discarded. Terminal stop retires retained handles,
+  and both observation maps are bounded and consumed.
+- **Broker PID-reuse diagnostics now enter the quarantine path.** The adapter
+  recognizes the broker's actual live-handler error spelling as an identity
+  change rather than an ordinary launch failure.
+- **Watch cursors now describe delivery, not the store tip.** A commit advances
+  the store revision only; a watcher advances only when it has credit and
+  receives the event. One watch cannot advance another, compaction cannot pass an
+  undelivered live cursor, and registration cannot claim unreceived history.
+- **An empty state-Volume declaration now fails closed.** A component that sets
+  the declaration flag but names no namespace is rejected by construction,
+  deserialization and manifest admission. This closes the fourth CRITICAL
+  finding; it does not close the separate derivability gap above.
+- **A static external IPv4 attachment now requires a gateway.** Construction and
+  deserialization both reject the unusable address-without-gateway shape.
+- **Provider-state digesting no longer accepts an invented caller domain.** It
+  fails with `DigestDomainUnavailable` until the exact D101 amendment above
+  lands.
+- **The broker catalogue change is accurately versioned and classified.** The
+  constant is four, the four new operations are in the current closed catalogue
+  rather than the legacy list, and their privilege metadata is explicit. The
+  tests prove old request decode and old-decoder rejection of new operations;
+  they do not claim runtime negotiation.
+
+### 15.6 Verification of the eleven reported caveats
+
+| # | Verification | Class |
+| --- | --- | --- |
+| 1 | **Held.** Core multi-process startup/restart, binary construction, production ResourceClient, authenticated connector and watch dispatcher are absent. | Unmet obligation |
+| 2 | **Held.** The real privileged/systemd/PID-reuse boundaries and production supervisor construction are absent, and all three scenario files are declaration-only. | Unmet obligation |
+| 3 | **Held.** Broker audit fields and live diagnostics expose PID/start time; the Round A adapter itself does not format them. | Unmet obligation, pre-existing |
+| 4 | **Held.** No CBOR profile or codec exists for the requested second Network vector. | Specification gap |
+| 5 | **Held.** The creator of `User/net-local-controller` and the empty additive blocklist have conflicting written answers; Round A followed the resource specification. | Specification gap |
+| 6 | **Held.** Credential proto field numbers are not specified; Round A assigned and pinned them. | Inference |
+| 7 | **Did not hold as worded; the underlying gap held after correction.** `interactionState`, login generation and deadline exist. `challengeMetadata` is absent because its shape is undefined, and the three login operations conflict with the five-method service catalogue. | Specification gap |
+| 8 | **Held.** Production bus routing, Process selection, route authorization and encrypted record forwarding are absent; the server is intentionally unregistered. | Unmet obligation |
+| 9 | **Held.** Derivability cannot be inferred from the enum-only descriptor, and no descriptor version exists for the placement-change check. | Two specification gaps |
+| 10 | **Held.** D101 has no Provider-state payload domain; digesting correctly fails closed. | Specification gap |
+| 11 | **Held.** Version four is catalogue metadata today, not runtime skew protection. | Unmet obligation |
+
+### 15.7 State of debt already recorded before Round A
+
+- **Closed in the narrow sense:** the missing `ProcessLaunchEffectPort`
+  production adapter recorded in sections 1, 8, 10.4 and 14.7 now exists, and
+  both Process Providers run their shared conformance suite through it. The
+  stronger Host/Guest/user and real-boundary obligations remain open as recorded
+  above. A production adapter and a production caller are different claims.
+- **Still open:** the `public_mint_surface` cold-run shape is unchanged.
+  `render_workspace_docs` still calls both pure source scans inside its sequential
+  package loop.
+- **Still open:** `nixos-modules/resources-volume.nix` is still imported by no
+  module; `nixos-modules/index.nix` contains no import for it.
+- **Still open:** the prior `ADR046-primitives-002` Host/Guest/user integration
+  obligation. The new adapter makes the test implementable; the hermetic
+  locality loop does not turn it into a real integration test.
