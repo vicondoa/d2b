@@ -269,6 +269,36 @@ const CASES = [
     expectExit: 1,
     expectText: "is not in the closed set",
   },
+  // A row narrower than its header was skipped outright by a bare width test,
+  // which bypassed every check in the loop rather than just the disposition
+  // one. The bogus disposition below is the visible consequence; the bogus
+  // wave and category in the same row went unchecked too.
+  {
+    name: "a row narrower than its header is rejected rather than skipped",
+    mutate: (dir) =>
+      appendRegisterRow(
+        dir,
+        "friction-log.md",
+        "| copilotw6 | test | notavocabularyterm |",
+      ),
+    expectExit: 1,
+    expectText: "do not line up",
+  },
+  // The other direction, and the more dangerous one. An unescaped pipe inside
+  // a cell adds a column, so the header's disposition index lands one cell to
+  // the left. Here it lands on a legal Recurrence value while the real
+  // disposition, one column further right, is never looked at.
+  {
+    name: "a row wider than its header is rejected rather than read off by one",
+    mutate: (dir) =>
+      appendRegisterRow(
+        dir,
+        "friction-log.md",
+        "| copilotw6 | test | 2026-07-31 | a | b | open | notavocabularyterm |",
+      ),
+    expectExit: 1,
+    expectText: "do not line up",
+  },
   // A data row with no header above it has no column to be validated against.
   // The ref below is a legal wave token, so a guard that falls back to the last
   // cell accepts the row and validates nothing.

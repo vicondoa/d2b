@@ -476,8 +476,10 @@ const ORIGIN_WAVE = /^(W[0-8]|[a-z][a-z0-9]{2,15}w[0-8])(fu[1-9][0-9]?)?$/;
 //
 // So walk the row rather than pattern-matching it. `\|` is a literal pipe, `\\`
 // is a literal backslash and does not protect the pipe after it, and any other
-// pipe is a separator. The leading and trailing empty cells around the outer
-// pipes are dropped, matching the shape the rest of the parser expects.
+// pipe is a separator. Only an EMPTY leading or trailing cell is dropped, since
+// those are the artefacts of the outer pipes. Dropping the last cell
+// unconditionally loses a real one when the trailing pipe is absent, which
+// Markdown permits.
 function splitRow(line) {
   const cells = [];
   let cur = "";
@@ -496,7 +498,9 @@ function splitRow(line) {
     cur += ch;
   }
   cells.push(cur.trim());
-  return cells.slice(1, -1);
+  if (cells.length && cells[0] === "") cells.shift();
+  if (cells.length && cells[cells.length - 1] === "") cells.pop();
+  return cells;
 }
 
 const memoryDir = join(root, ".specify", "memory");
@@ -515,15 +519,21 @@ for (const reg of ["friction-log.md", "deferred-work.md", "engineering-debt.md"]
   // first table's index into the second, and a data row that appears before any
   // header has no index at all. Both are rejected below rather than guessed at:
   // there is no fallback, because the fallback was the defect.
+  //
+  // The header's width is recorded with it. A data row of a different width is
+  // rejected rather than skipped: a width test that only skipped narrow rows
+  // let a row bypass every check in this loop, not merely the disposition one.
   let dispositionIdx = -1;
+  let headerWidth = -1;
   for (const [i, line] of lines.entries()) {
     if (!line.trim().startsWith("|")) {
       dispositionIdx = -1;
+      headerWidth = -1;
       continue;
     }
     const cells = splitRow(line);
-    if (cells.length < 4) continue;
-    if (/^-+$/.test(cells[0])) continue;
+    if (cells.length === 0) continue;
+    if (cells.every((c) => /^:?-+:?$/.test(c))) continue;
     if (cells[0].toLowerCase() === "wave") {
       dispositionIdx = cells.findIndex((c) => c.toLowerCase() === "disposition");
       if (dispositionIdx < 0) {
@@ -532,6 +542,26 @@ for (const reg of ["friction-log.md", "deferred-work.md", "engineering-debt.md"]
           `column, so no row in this register can be validated.`,
         );
       }
+      headerWidth = cells.length;
+      continue;
+    }
+    // No fallback. A data row the parser cannot address is rejected, because
+    // reading some other column instead is exactly how this guard passed rows
+    // it had never checked.
+    if (dispositionIdx < 0) {
+      fail(
+        `.specify/memory/${reg}:${i + 1}: this row precedes any header row, so ` +
+        `there is no Disposition column to validate it against.`,
+      );
+      continue;
+    }
+    if (cells.length !== headerWidth) {
+      fail(
+        `.specify/memory/${reg}:${i + 1}: this row has ${cells.length} cells and its ` +
+        `header has ${headerWidth}, so its columns do not line up with the ones ` +
+        `this register is validated against. Check for a missing outer pipe or an ` +
+        `unescaped pipe inside a cell.`,
+      );
       continue;
     }
     const wave = cells[0].replace(/`/g, "");
@@ -549,24 +579,6 @@ for (const reg of ["friction-log.md", "deferred-work.md", "engineering-debt.md"]
         `taxonomy (${MEMORY_CATEGORIES.join(", ")}). A near-miss spelling does not group ` +
         `with its siblings, so the three-wave escalation rule stops counting it.`,
       );
-    }
-    // No fallback. A data row the parser cannot address is rejected, because
-    // reading some other column instead is exactly how this guard passed rows
-    // it had never checked.
-    if (dispositionIdx < 0) {
-      fail(
-        `.specify/memory/${reg}:${i + 1}: this row precedes any header row, so ` +
-        `there is no Disposition column to validate it against.`,
-      );
-      continue;
-    }
-    if (dispositionIdx >= cells.length) {
-      fail(
-        `.specify/memory/${reg}:${i + 1}: this row has ${cells.length} cells and the ` +
-        `header names Disposition as column ${dispositionIdx + 1}, so the row has no ` +
-        `disposition to validate.`,
-      );
-      continue;
     }
     const disposition = cells[dispositionIdx].replace(/`/g, "");
     // A folded row records its target wave in the disposition column instead
