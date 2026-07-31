@@ -450,8 +450,8 @@ pre-start effects, fine-grained ACL/device policy, or restart semantics.
 | Data migration | Full reset; no role snapshot import |
 | Validation | Shared conformance/fault/latency tests |
 | Removal proof | Role/DAG path removed only per role disposition |
-| Implementation state | Planned |
-| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
+| Implementation state | Merged |
+| Evidence | `packages/d2b-process/src/{lib,backend}.rs` and `packages/d2b-provider-supervisor/src/{lib,adapter,broker,systemd}.rs` are present. `packages/d2b-provider-supervisor/tests/production_adapter.rs` runs both Process Providers through `ProviderSupervisor`, covers the shared conformance and deterministic fault matrices, systemd reuse and vanished-unit adoption, a real seqpacket `SpawnRunner` request with pidfd transfer, and a current-thread blocking-adapter latency check. Caveat: no production crate constructs `ProviderSupervisor`; `integration/broker_spawn.rs` and `integration/systemd_transient.rs` explicitly declare themselves non-executable scenario contracts. Real broker namespace/cgroup placement, transient system and user units, parent wait/reap, actual PID reuse, and Host/Guest/user integration remain unproved. The latency cell drives one delayed call and permits a 40 ms heartbeat gap, not the recorded 200-call and 15 ms retirement threshold. |
 
 ### ADR046-process-002
 
@@ -468,4 +468,4 @@ pre-start effects, fine-grained ACL/device policy, or restart semantics.
 | Validation | Identical schema/status conformance plus provider-specific adoption |
 | Removal proof | Old helpers retained until host/user/guest parity |
 | Implementation state | Planned |
-| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
+| Evidence | The two destination crates and their pre-existing hermetic schema, status, conformance, execution-parent, and adoption tests are present. This item is not delivered and remains `Planned`: Provider dependency policy forbids either Provider crate from depending on `d2b-provider-supervisor`, no production composition point constructs `ProviderSupervisor`, and the executable container and host-integration scenarios belong outside these destinations. It is deferred to W6, where `ADR046-systemd-001`, `ADR046-systemd-003`, `ADR046-minijail-002`, `ADR046-minijail-003`, `ADR046-minijail-004`, `ADR046-minijail-005`, and `ADR046-minijail-006` own the core/ProviderSupervisor adapters and repository Layer 2 acceptance. Marking this item Merged from the existing hermetic tests would be false. |
