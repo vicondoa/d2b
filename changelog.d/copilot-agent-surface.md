@@ -1,6 +1,6 @@
 ### Changed
 
-- Restructured `AGENTS.md` from a 122KB monolith into a ~35KB index that
+- Restructured `AGENTS.md` from a 122KB monolith into a ~38KB index that
   carries the binding rules and links to detail under `docs/contributing/`.
   No rule was removed; rationale and reference depth moved. Fixed the empty
   `## Development workflow` heading whose subsections were mis-nested under
@@ -42,7 +42,6 @@
 - Retired-surface policy scanning now also covers `docs/contributing/`, which
   keeps the ADR 0015 coverage that would otherwise have been lost when the
   prose moved out of `AGENTS.md`.
-
 - Delivery waves may now be addressed by a qualified lowercase token fusing
   program and wave, such as `spec001w1`. The delivery state layout does not
   carry the program as a path component, so two programs would otherwise share
