@@ -1179,6 +1179,31 @@ impl ExternalNicAuthorityStatus {
             update_currency,
         }
     }
+
+    /// Whether another compatible holder may currently be admitted.
+    pub const fn available(self) -> bool {
+        self.available
+    }
+
+    /// Return the bounded number of current holders.
+    pub const fn holder_count(self) -> u32 {
+        self.holder_count
+    }
+
+    /// Return the bounded number of queued claimants.
+    pub const fn queue_depth(self) -> u32 {
+        self.queue_depth
+    }
+
+    /// Return the active arbitration policy.
+    pub const fn arbitration(self) -> SharingPolicy {
+        self.arbitration
+    }
+
+    /// Return the authority realization's update currency.
+    pub const fn update_currency(self) -> UpdateState {
+        self.update_currency
+    }
 }
 
 /// Provider-neutral external attachment observation.
@@ -1376,6 +1401,21 @@ impl ExternalNicClaim {
             sharing_policy,
         }
     }
+
+    /// Borrow the Zone that defines this claim's isolation domain.
+    pub const fn zone_uid(&self) -> &ResourceUid {
+        &self.zone_uid
+    }
+
+    /// Return the requested macvtap mode.
+    pub const fn macvtap_mode(&self) -> MacvtapMode {
+        self.macvtap_mode
+    }
+
+    /// Return the explicitly authored sharing policy.
+    pub const fn sharing_policy(&self) -> SharingPolicy {
+        self.sharing_policy
+    }
 }
 
 redacted_debug!(ExternalNicClaim);
@@ -1416,11 +1456,12 @@ pub fn admit_external_nic_claims(
     claims: &[ExternalNicClaim],
     signed_max_holders: usize,
 ) -> Result<(), ExternalNicAdmissionError> {
-    if claims.len() > signed_max_holders {
-        return Err(ExternalNicAdmissionError::ExternalPhysicalNicConflict);
-    }
     if claims.len() <= 1 {
-        return Ok(());
+        return if claims.len() <= signed_max_holders {
+            Ok(())
+        } else {
+            Err(ExternalNicAdmissionError::ExternalPhysicalNicConflict)
+        };
     }
     if claims
         .iter()
@@ -1432,10 +1473,10 @@ pub fn admit_external_nic_claims(
     if claims.iter().any(|claim| &claim.zone_uid != zone) {
         return Err(ExternalNicAdmissionError::ExternalPhysicalNicCrossZoneL2);
     }
-    if claims
-        .iter()
-        .any(|claim| claim.sharing_policy != SharingPolicy::Multiplexed)
-        || claims.len() > signed_max_holders
+    if claims.len() > signed_max_holders
+        || claims
+            .iter()
+            .any(|claim| claim.sharing_policy != SharingPolicy::Multiplexed)
     {
         return Err(ExternalNicAdmissionError::ExternalPhysicalNicConflict);
     }
@@ -2001,6 +2042,20 @@ mod tests {
                     claim(personal, MacvtapMode::Bridge, SharingPolicy::Multiplexed),
                 ],
                 8,
+            ),
+            Err(ExternalNicAdmissionError::ExternalPhysicalNicCrossZoneL2)
+        );
+        assert_eq!(
+            admit_external_nic_claims(
+                &[
+                    claim(work.clone(), MacvtapMode::Bridge, SharingPolicy::Exclusive,),
+                    claim(
+                        ResourceUid::parse("223e4567-e89b-42d3-a456-426614174001").unwrap(),
+                        MacvtapMode::Bridge,
+                        SharingPolicy::Multiplexed,
+                    ),
+                ],
+                1,
             ),
             Err(ExternalNicAdmissionError::ExternalPhysicalNicCrossZoneL2)
         );

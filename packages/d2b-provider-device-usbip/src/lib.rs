@@ -1,18 +1,35 @@
-//! The `device-usbip` Provider.
+//! Semantic controller policy for `Provider/device-usbip`.
 //!
-//! This crate will own the USBIP Device Provider: its controller, its daemon Process, its bind and unbind ephemeral processes, and its firewall projection, named by work item
-//! `ADR046-usbip-004`.
-//!
-//! Nothing here is implemented yet. Nothing here is a design statement, and no
-//! consumer should read a shape from this file.
+//! The Provider owns USB Service and Binding reconciliation plus the lifecycle
+//! of its shared Host backend, per-Network relay, and per-Binding proxy. Every
+//! privileged mutation remains behind an injected [`UsbipEffectPort`]; this
+//! crate has no broker connection, host path, device identifier, bus id, or raw
+//! firewall representation.
 
 #![deny(missing_docs)]
 
-/// Marks this crate as scaffolding that no work item has filled yet.
-///
-/// The workspace capability-surface scan renders rustdoc for every member and
-/// fails closed when a crate advertises no public item, so an empty scaffold
-/// would break that gate for the whole workspace. This constant exists only to
-/// satisfy it and carries no design intent: the slice that implements
-/// `ADR046-usbip-004` should delete it rather than build on it.
-pub const UNIMPLEMENTED_SCAFFOLD: () = ();
+mod controller;
+mod firewall;
+mod workers;
+
+pub use controller::{
+    NetworkDependency, ScopedResourceUid, UsbipController, UsbipControllerError, UsbipMetricLabels,
+    UsbipOperation, UsbipOutcome, UsbipServicePhase,
+};
+pub use firewall::{
+    FirewallConfirmation, FirewallConfirmationKind, FirewallDigest, FirewallGenerationFence,
+    FirewallObservation, FirewallProjectionAction, FirewallProjectionIntent, FirewallToken,
+    RelayAuthorityLease, UsbipEffectError, UsbipEffectPort,
+};
+pub use workers::{
+    AttachmentActivation, AttachmentCommand, UsbipWorkerClass, UsbipWorkerDeclaration,
+};
+
+/// Provider resource reference used by descriptors and RBAC bindings.
+pub const PROVIDER_REF: &str = "Provider/device-usbip";
+/// Provider-neutral USB authority Service ResourceType.
+pub const USB_SERVICE_RESOURCE_TYPE: &str = "usb.d2bus.org.UsbService";
+/// Provider-neutral per-Guest USB Binding ResourceType.
+pub const USB_BINDING_RESOURCE_TYPE: &str = "usb.d2bus.org.UsbBinding";
+/// Conflict reason for a second relay owner on one Network.
+pub const USBIP_NETWORK_RELAY_AUTHORITY_CONFLICT: &str = "usbip-network-relay-authority-conflict";
