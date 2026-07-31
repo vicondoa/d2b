@@ -17,6 +17,7 @@
 #   D2B_AUTOPILOT_CONTINUES  continuation cap   (default 40)
 #   D2B_AUTOPILOT_CREDITS    AI credit ceiling  (default 200)
 #   D2B_AUTOPILOT_LOG_DIR    log directory      (default .scratch/autopilot/logs)
+#   D2B_AUTOPILOT_LOG_KEEP   run logs retained  (default 20, 0 disables pruning)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -49,7 +50,9 @@ while [ $# -gt 0 ]; do
       break
       ;;
     -h|--help)
-      sed -n '2,19p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+      # Print the header comment block, however long it grows. A pinned line
+      # range silently truncates the help the moment the header changes.
+      sed -n '2,${/^#/!q;p;}' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *)
@@ -84,6 +87,20 @@ done
 node scripts/copilot/check-bindings.mjs
 
 mkdir -p "$LOG_DIR"
+
+# Bound the log directory. A multi-day unattended run is the whole point of
+# this launcher, and an unbounded log directory inside the worktree is how
+# that run ends: not on a stopping condition, but on a full disk. Keeping a
+# fixed number of the most recent runs is enough to diagnose the last
+# failure, which is all these logs are for.
+LOG_KEEP="${D2B_AUTOPILOT_LOG_KEEP:-20}"
+if [ "$LOG_KEEP" -gt 0 ] 2>/dev/null; then
+  find "$LOG_DIR" -mindepth 1 -maxdepth 1 -printf '%T@ %p\n' 2>/dev/null \
+    | sort -rn \
+    | tail -n "+$((LOG_KEEP + 1))" \
+    | cut -d' ' -f2- \
+    | while IFS= read -r stale; do rm -rf -- "$stale"; done
+fi
 
 PROMPT="/d2b-autopilot"
 if [ "$AUTO_MERGE" -eq 1 ]; then

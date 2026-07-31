@@ -59,6 +59,27 @@ that relaxes the regex or the reserved set is a finding.
 changes rebuild the world for every consumer. A new overlay entry or a
 `nixpkgs.url` change needs an explicit justification in the diff.
 
+**Per-VM component gating that widens.** Several toggles are eval-time gates
+whose whole value is that they refuse rather than degrade:
+
+- **USBIP** attach is scoped to opted-in envs at eval time. A change that lets
+  a busid reach an env that did not opt in exposes a security key to the wrong
+  environment.
+- **Graphics and the video sidecar** are explicit opt-ins. `videoSidecar` must
+  keep its dedicated `d2b-<vm>-video` principal rather than borrowing the GPU
+  principal, and its device allowlist must stay closed. `virglVideo` is
+  experimental and default-off; a change that makes it look stable is a
+  finding.
+- **TPM** state is per-VM and persistent. Anything that could recreate an
+  empty state directory rather than failing closed is a finding, because to an
+  identity provider that is indistinguishable from device tampering.
+
+**Framework-owned files the consumer also touches.** The framework owns
+`${cfg.site.keysDir}/<vm>_ed25519` and must never write, move, or regenerate a
+consumer-supplied key. The UI color contract is another: compositor-specific
+settings belong only under the compositor's own namespace, and the generated
+color artifacts are presentation metadata, never an authz or policy input.
+
 ## What is not your seat
 
 Rust code, network policy semantics (that is `networking`), and syscall

@@ -33,14 +33,25 @@ prev_sha="$(git rev-parse "$prev")"
 out="$root/.scratch/panel/$round"
 mkdir -p "$out/verdicts"
 
-git --no-pager diff "$prev_sha..$tip" > "$out/delta.diff"
-git --no-pager diff "$base_sha..$tip" > "$out/full.diff"
-git --no-pager log --no-decorate --oneline "$base_sha..$tip" > "$out/commits.txt"
+# Write-then-rename every artifact. A diff truncated by a signal or a full
+# disk would otherwise sit at its final path, and a reviewer would read a
+# partial delta as the whole change.
+stage() {
+  local dest="$1"
+  shift
+  local tmp="$dest.tmp"
+  "$@" > "$tmp"
+  mv -f "$tmp" "$dest"
+}
+
+stage "$out/delta.diff" git --no-pager diff "$prev_sha..$tip"
+stage "$out/full.diff" git --no-pager diff "$base_sha..$tip"
+stage "$out/commits.txt" git --no-pager log --no-decorate --oneline "$base_sha..$tip"
 
 delta_sha="$(sha256sum "$out/delta.diff" | cut -d' ' -f1)"
 full_sha="$(sha256sum "$out/full.diff" | cut -d' ' -f1)"
 
-cat > "$out/address.json" <<JSON
+cat > "$out/address.json.tmp" <<JSON
 {
   "round": "$round",
   "base": "$base_sha",
@@ -50,6 +61,7 @@ cat > "$out/address.json" <<JSON
   "full_sha256": "$full_sha"
 }
 JSON
+mv -f "$out/address.json.tmp" "$out/address.json"
 
 if [ ! -f "$out/evidence.md" ]; then
   cat > "$out/evidence.md" <<'MD'

@@ -214,7 +214,27 @@ implementation; suffixed bookkeeping forms remain violations.
   shows the what.
 - **Traceability - canonical tag form (forward, W2fu4+).**
   Every commit subject MUST end with a trailing parenthesized
-  tag in one of these exact forms:
+  tag in one of these exact forms.
+
+  **New work uses the qualified form.** The wave token carries its own
+  program, so the tag is unambiguous once more than one program exists:
+
+  - `( <program>w<N> )` - implementer work, for example `( spec001w1 )`
+    or `( adr046w1 )`
+  - `( <program>w<N>fu<M> )` - follow-up round M integrator merge, for
+    example `( spec001w1fu2 )`
+  - `( <program>w<N>fu<M> <S><N> )` - single finding, for example
+    `( spec001w1fu2 H3 )`
+  - `( <program>w<N>fu<M> <S1><N1> <S2><N2> ... )` - multi-finding, same
+    batching rule as the legacy form below
+
+  The program component matches `[a-z][a-z0-9]*` (3 to 16 characters) and
+  the ordinal is `0` through `8`. The lowercase qualified spelling also
+  passes the process-marker scanner unaided, where a bare `W1` needs an
+  exemption.
+
+  **The legacy unqualified form stays valid** for the in-flight ADR-046
+  program and is not deprecated:
 
   - `( W<N> )` - wave-N implementer work (no finding ref)
   - `( W<N>fu<M> )` - wave-N follow-up round M integrator

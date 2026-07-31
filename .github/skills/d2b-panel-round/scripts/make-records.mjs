@@ -18,7 +18,7 @@
 // path that produces a plausible-looking artifact rather than an error.
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 // Mirrors packages/xtask/src/delivery/model.rs.
@@ -32,6 +32,10 @@ const EFFORT_POLICY = "high";
 const ARTIFACT_KIND = "d2b-delivery/panel-receipt";
 const SCHEMA_VERSION = 2;
 const MAX_RECOMMENDATIONS = 64;
+// Reviewer-authored free text is the only unbounded input on the sealing path.
+// `panel.rs` caps the array; these cap each element and the summary.
+const MAX_SUMMARY_CHARS = 4000;
+const MAX_RECOMMENDATION_CHARS = 4000;
 
 const errors = [];
 const fail = (m) => errors.push(m);
@@ -121,6 +125,26 @@ for (const role of ROLES) {
   if (typeof v.summary !== "string" || !v.summary.trim()) {
     fail(`verdict ${role}: summary is required`);
   }
+  // A record is a bounded structured artifact, not a place to spill a
+  // transcript. Capping the reviewer-authored strings keeps a verbose lane
+  // from producing an unbounded payload on the sealing path.
+  if (typeof v.summary === "string" && v.summary.length > MAX_SUMMARY_CHARS) {
+    fail(
+      `verdict ${role}: summary is ${v.summary.length} characters, over the ` +
+      `${MAX_SUMMARY_CHARS} ceiling. State the posture and the findings; the diff is ` +
+      `the evidence and does not belong in the record.`,
+    );
+  }
+  for (const [i, rec] of v.recommendations.entries()) {
+    const text = typeof rec === "string" ? rec : JSON.stringify(rec);
+    if (text.length > MAX_RECOMMENDATION_CHARS) {
+      fail(
+        `verdict ${role}: recommendation ${i} is ${text.length} characters, over the ` +
+        `${MAX_RECOMMENDATION_CHARS} ceiling. A finding names the defect, where it is, ` +
+        `and the fix; it does not quote the file.`,
+      );
+    }
+  }
 
   const o = observed[role];
   if (!o) {
@@ -193,8 +217,13 @@ if (errors.length) {
 
 const outDir = join(dir, "records");
 mkdirSync(outDir, { recursive: true });
+// Write-then-rename. A record truncated by a signal or a full disk would
+// otherwise sit at its final path and be consumed as a complete attestation.
 for (const r of records) {
-  writeFileSync(join(outDir, `${r.role}.json`), `${JSON.stringify(r, null, 2)}\n`);
+  const final = join(outDir, `${r.role}.json`);
+  const tmp = `${final}.tmp`;
+  writeFileSync(tmp, `${JSON.stringify(r, null, 2)}\n`);
+  renameSync(tmp, final);
 }
 
 const findings = records.filter((r) => !r.signoff);

@@ -92,4 +92,23 @@ else
   exit 1
 fi
 
+# --- panel record assembly ------------------------------------------------
+# make-records.mjs produces the artifacts that seal a wave. Its fail-closed
+# behaviour is the only thing standing between a lane that silently ran at
+# the wrong effort and a record attesting the policy level, so it gets real
+# coverage rather than being exercised only when a panel round happens to run.
+log "--> panel record assembly"
+if [ -f "$ROOT/scripts/copilot/test-make-records.mjs" ]; then
+  if command -v node >/dev/null 2>&1; then
+    node "$ROOT/scripts/copilot/test-make-records.mjs" >/dev/null
+    ok "panel record assembly"
+  else
+    fail "node not found; scripts/copilot/test-make-records.mjs cannot run"
+    exit 1
+  fi
+else
+  fail "required gate is missing: scripts/copilot/test-make-records.mjs"
+  exit 1
+fi
+
 log "test-lint OK (duration: $((SECONDS - suite_started))s)"

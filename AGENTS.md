@@ -322,28 +322,28 @@ is a warning, not the contract.
 | System | Where | Risk if broken |
 | --- | --- | --- |
 | [Net VM networking / firewall](docs/contributing/critical-subsystems.md#net-vm-networking-firewall) | `nixos-modules/net.nix` (the `lib.mkForce` neutralization of `base.nix`'s `10-eth-dhcp` | Net VM dual-stacks DHCP on its uplink, breaks NAT, or weakens same-env isolation unexpectedly. |
-| [Per-VM `/nix/store` hardlink farm](docs/contributing/critical-subsystems.md#per-vm-nixstore-hardlink-farm) | `nixos-modules/store.nix` | The guest's `/nix/store` MUST be the per-VM closure-only farm `/var/lib/d2b/vms/<vm>/store`, never the host's full `/nix/store`: virtiofsd-ro-store... |
+| [Per-VM `/nix/store` hardlink farm](docs/contributing/critical-subsystems.md#per-vm-nixstore-hardlink-farm) | `nixos-modules/store.nix` | The guest's `/nix/store` MUST be the per-VM closure-only farm `/var/lib/d2b/vms/<vm>/store`, never the host's full `/nix/store`. Serving the host store re-leaks it to every guest. Needs `/var/lib/d2b` and `/nix/store` on the same filesystem. |
 | [TPM persistence (per-VM swtpm)](docs/contributing/critical-subsystems.md#tpm-persistence-per-vm-swtpm) | `/var/lib/d2b/vms/<vm>/swtpm/` | Holds the per-VM TPM 2.0 NVRAM + EK seed. |
 | [USBIP passthrough](docs/contributing/critical-subsystems.md#usbip-passthrough) | `nixos-modules/components/usbip.nix` (eval-time gating) + broker `UsbipBindFirewallRule` + `SpawnRunner` (per-busid attach process supervised by `d2bd`) | Eval-time gating still scopes attach to opted-in envs (validated by `tests/unit/nix/cases/usbip-gating.nix`). |
 | [GPU sidecar (graphics VMs)](docs/contributing/critical-subsystems.md#gpu-sidecar-graphics-vms) | `nixos-modules/components/graphics.nix` + broker `SpawnRunner` for cloud-hypervisor on graphics VMs | Graphics VMs run cloud-hypervisor with the GPU device attached. |
-| [Video sidecar (graphics VMs)](docs/contributing/critical-subsystems.md#video-sidecar-graphics-vms) | `nixos-modules/components/video/guest.nix` | `graphics.videoSidecar = true` is an explicit opt-in H264 decode path: guest `virtio_media` + patched Cloud Hypervisor `--vhost-user-media` + patch... |
+| [Video sidecar (graphics VMs)](docs/contributing/critical-subsystems.md#video-sidecar-graphics-vms) | `nixos-modules/components/video/guest.nix` | `graphics.videoSidecar = true` is an explicit opt-in H264 decode path: guest `virtio_media` + patched Cloud Hypervisor and crosvm. Must use the `d2b-<vm>-video` principal, never `d2b-<vm>-gpu`. |
 | [UI color contract / niri backend](docs/contributing/critical-subsystems.md#ui-color-contract-niri-backend) | `nixos-modules/ui-colors.nix` | The compositor-agnostic `d2b.site.ui` / `d2b.envs.<env>.ui` / `d2b.vms.<vm>.ui` color model is the source of truth for host/env/VM/state colors. |
-| [ComponentSession capability boundary](docs/contributing/critical-subsystems.md#componentsession-capability-boundary) | `packages/d2b-contracts/src/v3/component_session.rs` | Authenticated transport evidence and attachment credits are consumed into a private single session owner; do not add a clone/accessor that lets cal... |
-| [Zone message bus boundary](docs/contributing/critical-subsystems.md#zone-message-bus-boundary) | `packages/d2b-bus/src/{router | Registration consumes the single-owner capability admission; comparing a clonable token is insufficient. |
-| [Authoritative subject resolution](docs/contributing/critical-subsystems.md#authoritative-subject-resolution) | `packages/d2b-bus/src/router.rs` (`ZoneRegistrar`) | `ZoneRegistrar` **exclusively owns and consumes** subject resolution: a peer is mapped to a subject from registrar-private state using verified pee... |
+| [ComponentSession capability boundary](docs/contributing/critical-subsystems.md#componentsession-capability-boundary) | `packages/d2b-contracts/src/v3/component_session.rs` | Authenticated transport evidence and attachment credits are consumed into a private single session owner; do not add a clone/accessor that lets callers reuse admission evidence. `SessionAuthority` is sealed and must stay sealed. |
+| [Zone message bus boundary](docs/contributing/critical-subsystems.md#zone-message-bus-boundary) | `packages/d2b-bus/src/{router,registry,authorization,streams,operations}.rs` | Registration consumes the single-owner capability admission; comparing a clonable token is insufficient. |
+| [Authoritative subject resolution](docs/contributing/critical-subsystems.md#authoritative-subject-resolution) | `packages/d2b-bus/src/router.rs` (`ZoneRegistrar`) | `ZoneRegistrar` **exclusively owns and consumes** subject resolution: a peer is mapped to a subject from registrar-private state using verified peer evidence. Never accept a caller-supplied subject. |
 | [Capability mint surface allowlist](docs/contributing/critical-subsystems.md#capability-mint-surface-allowlist) | `packages/d2b-bus/tests/public_mint_surface.rs` | The **enforcing compiler leg** uses stable trait-solver ambiguity assertions in the defining crates. |
-| [Resource controller effects boundary](docs/contributing/critical-subsystems.md#resource-controller-effects-boundary) | `packages/d2b-controller-toolkit/src/{runner | Controller and core-reconciliation engines are test-only and unwired from the absent production store/watch dispatcher. |
+| [Resource controller effects boundary](docs/contributing/critical-subsystems.md#resource-controller-effects-boundary) | `packages/d2b-controller-toolkit/src/` + `packages/d2b-core-controller/src/` | Controller and core-reconciliation engines are test-only and unwired from the absent production store/watch dispatcher. |
 | [Unsafe-local provider, launcher, and persistent-shell helper](docs/contributing/critical-subsystems.md#unsafe-local-provider-launcher-and-persistent-shell-helper) | `nixos-modules/options-realms-workloads.nix` | `unsafe-local` is explicit and default-denied. |
-| [Manifest contract](docs/contributing/critical-subsystems.md#manifest-contract) | `docs/reference/manifest-schema.{md | Version-pinned via `manifestVersion`. |
-| [Manifest bundle - private artifacts](docs/contributing/critical-subsystems.md#manifest-bundle---private-artifacts) | `docs/reference/manifest-bundle.md` + `docs/reference/schemas/v2/*.json` + `packages/d2b-core/src/{bundle | Sensitive bundle artifacts install at `root:d2bd` 0640 and ground every broker/sandbox/runner behaviour. |
-| [Control plane - `d2bd` + `d2b-priv-broker`](docs/contributing/critical-subsystems.md#control-plane---d2bd-d2b-priv-broker) | `packages/d2b-contracts/**` + `packages/d2b-core/**` + `packages/d2bd/**` + `packages/d2b-priv-broker/**` (sibling workspace | The **only** persistent root surfaces the framework declares. |
-| [Storage lifecycle / restart / synchronization](docs/contributing/critical-subsystems.md#storage-lifecycle-restart-synchronization) | Planned generated contracts in `d2b-core::{storage | Managed paths, restart adoption, locks, leases, cleanup, and degraded-state reporting are control-plane contracts. |
+| [Manifest contract](docs/contributing/critical-subsystems.md#manifest-contract) | `docs/reference/manifest-schema.{md,json}` + `nixos-modules/manifest.nix` | Version-pinned via `manifestVersion`. |
+| [Manifest bundle - private artifacts](docs/contributing/critical-subsystems.md#manifest-bundle---private-artifacts) | `docs/reference/manifest-bundle.md` + `docs/reference/schemas/v2/*.json` + `packages/d2b-core/src/` bundle DTOs + `nixos-modules/bundle*.nix` | Sensitive bundle artifacts install at `root:d2bd` 0640 and ground every broker/sandbox/runner behaviour. |
+| [Control plane - `d2bd` + `d2b-priv-broker`](docs/contributing/critical-subsystems.md#control-plane---d2bd-d2b-priv-broker) | `packages/d2b-contracts/**` + `packages/d2b-core/**` + `packages/d2bd/**` + `packages/d2b-priv-broker/**` (sibling workspace) | The **only** persistent root surfaces the framework declares. |
+| [Storage lifecycle / restart / synchronization](docs/contributing/critical-subsystems.md#storage-lifecycle-restart-synchronization) | Planned generated contracts in `d2b-core::{storage,process_restart,sync}` + broker storage/sync ops | Managed paths, restart adoption, locks, leases, cleanup, and degraded-state reporting are control-plane contracts. |
 | [Eval-time assertions](docs/contributing/critical-subsystems.md#eval-time-assertions) | `nixos-modules/assertions.nix` | These are the framework's contract with consumers. |
-| [Guest-control exec session table](docs/contributing/critical-subsystems.md#guest-control-exec-session-table) | `packages/d2bd/src/{exec_session | Arbitrary `d2b vm exec` is **admin-only**; configured `d2b launch` local-VM items may use the same detached guest-control backend with launcher aut... |
-| [Unsafe-local persistent shells](docs/contributing/critical-subsystems.md#unsafe-local-persistent-shells) | `packages/d2bd/src/{workload_dispatch | `d2b shell` remains **admin-only** for every provider. |
+| [Guest-control exec session table](docs/contributing/critical-subsystems.md#guest-control-exec-session-table) | `packages/d2bd/src/{exec_session,exec_session_real}.rs` | Arbitrary `d2b vm exec` is **admin-only**; configured `d2b launch` local-VM items may use the same backend with launcher authority. guestd runs every exec as the workload user, never root. |
+| [Unsafe-local persistent shells](docs/contributing/critical-subsystems.md#unsafe-local-persistent-shells) | `packages/d2bd/src/` shell dispatch + `packages/d2b-unsafe-local-helper/src/` | `d2b shell` remains **admin-only** for every provider. |
 | [Lifecycle permission group](docs/contributing/critical-subsystems.md#lifecycle-permission-group) | `nixos-modules/host-users.nix` | Membership in `d2b` + `SO_PEERCRED` at `public.sock` accept time is the **only** lifecycle authorisation surface. |
 | [SSH key generation / rotation](docs/contributing/critical-subsystems.md#ssh-key-generation-rotation) | `nixos-modules/host-keys.nix` | The framework owns `${cfg.site.keysDir}/<vm>_ed25519`. |
-| [virtiofsd sandbox model](docs/contributing/critical-subsystems.md#virtiofsd-sandbox-model) | `nixos-modules/minijail-profiles.nix` (virtiofsdProfiles) | virtiofsd profiles MUST declare zero host capabilities (`capabilities = []`), `requiresStartRoot = false`, and a `userNamespace` block mapping in-N... |
+| [virtiofsd sandbox model](docs/contributing/critical-subsystems.md#virtiofsd-sandbox-model) | `nixos-modules/minijail-profiles.nix` (virtiofsdProfiles) | virtiofsd profiles MUST declare zero host capabilities (`capabilities = []`), `requiresStartRoot = false`, and a `userNamespace` block mapping in-namespace root to the per-share principal (ADR 0021). |
 
 ## Don'ts (security-relevant)
 
@@ -437,6 +437,33 @@ is a warning, not the contract.
   path or lock surface must add or reuse a generated `storage.json` /
   `sync.json` row, name a single repair owner, and route repair through
   that owner rather than adding a second activation/broker/daemon fixer.
+- **Don't write a host mutation outside its ownership marker, and don't
+  proceed past a foreign one.** Every d2b host mutation is delimited so
+  foreign configuration can be preserved byte for byte: nftables rules and
+  chains in the `inet d2b` table carry
+  `comment "d2b managed: <ownership-id>"` and foreign tables are never
+  flushed; `/etc/hosts` and `/etc/NetworkManager/conf.d/00-d2b-unmanaged.conf`
+  are delimited by `# d2b-managed begin` / `# d2b-managed end`;
+  systemd-networkd is detection-only and d2b never writes it. Finding a
+  foreign marker where d2b expects its own is **fail-closed**
+  (`path-safety-violation`, `nm-managed-foreign-conflict`,
+  `foreign-nft-rule-preserved`), never a signal to overwrite. Full
+  conventions in
+  [critical-subsystems.md](./docs/contributing/critical-subsystems.md#cgroup-slice-naming-and-ownership-markers).
+- **Don't mutate a d2b cgroup outside the delegation contract.** One
+  canonical slice, `/sys/fs/cgroup/d2b.slice`, with per-VM directories at
+  `d2b.slice/<vm>/<role>/` and a process-free VM layer. Never write
+  `cpuset.cpus.partition` on a d2b-owned cgroup, never use threaded
+  cgroups, never `cgroup.kill` the slice or any ancestor of a daemon-owned
+  leaf, and never mutate the delegated subtree as uid 0 after privilege
+  drop. The host cgroup root is never chowned.
+- **Don't commit an unredacted screenshot or visual artifact.** Before a
+  screenshot is committed or attached to a PR or panel prompt, remove every
+  secret, credential, API key, and token; remove PII (real names, emails,
+  employee or user ids); and remove sensitive output such as host paths,
+  internal node names, and realm principals. Use the generic placeholder
+  names this file already requires. If it cannot be redacted without losing
+  what it demonstrates, describe it in text instead.
 
 ## Daemon-only end-state (P6 onward)
 

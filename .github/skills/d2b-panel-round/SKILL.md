@@ -106,18 +106,42 @@ summary omitted is exactly what a delta review exists to catch.
 ### 4. Collect and record
 
 Each lane returns one JSON verdict object. Write each to
-`.scratch/panel/<ROUND>/verdicts/<seat>.json`, then:
+`.scratch/panel/<ROUND>/verdicts/<seat>.json`.
+
+Then write `.scratch/panel/<ROUND>/observed.json`, recording what each lane
+**actually** ran at:
+
+```json
+{
+  "security": {
+    "model": "gemini-3.1-pro-preview",
+    "reasoning_effort": "high",
+    "run_id": "...",
+    "receipt_locator": "github-copilot://..."
+  }
+}
+```
+
+**Take these values from the harness, never from the reviewer.** The
+dispatch result reports the model the lane resolved to; that is the
+authoritative record. A reviewer's own statement about which model it is
+running is **confabulated and must not be used**: in the round that
+introduced this skill, five of ten seats named a model other than the one
+the harness reported for them, including two that named a different vendor
+entirely. Models cannot introspect their own binding. Asking them to is a
+plausible-looking source of exactly the false attestation the observed
+table exists to prevent.
 
 ```
 node .github/skills/d2b-panel-round/scripts/make-records.mjs .scratch/panel/<ROUND>
 ```
 
 That validates every verdict (`signoff` true iff `recommendations` empty,
-seat name in the closed roster, exactly one record per seat, all ten present)
-and joins it to the candidate address to produce attestable records. It takes
-the **observed** model and effort as input and fails closed rather than
-defaulting to the policy string, so a lane that ran at the wrong effort
-cannot be attested as if it had not.
+seat name in the closed roster, exactly one record per seat, all ten present,
+reviewer text within its length ceilings) and joins it to the candidate
+address to produce attestable records. It takes the **observed** model and
+effort as input and fails closed rather than defaulting to the policy string,
+so a lane that ran at the wrong effort cannot be attested as if it had not.
 
 ### 5. Report and route
 

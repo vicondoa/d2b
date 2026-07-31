@@ -57,6 +57,13 @@ which no fast test will catch.
 arithmetic that can leave its subnet, and a prefix that silently widens when
 a config value is absent.
 
+**A real address or hostname committed to the tree.** Docs, examples, tests,
+and comments use RFC1918 or RFC5737 ranges and generic names (`alice`,
+`corp-vm`, `work`). A real routable address, a real internal hostname, a real
+domain, or a real user identifier is a finding regardless of how harmless it
+looks, because it is an operator-identifying leak that survives in history
+even after it is removed.
+
 ## What is not your seat
 
 Broker authorization and audit (that is `security`), Rust API shape, and

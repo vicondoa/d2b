@@ -55,15 +55,31 @@ const warnings = [];
 const fail = (m) => errors.push(m);
 const warn = (m) => warnings.push(m);
 
+// Fails closed on every path. An unreadable or reshaped `model.rs` used to
+// warn and return null, and every downstream policy check was guarded by
+// `if (policy)`, so the gate reported success while enforcing nothing. A gate
+// that cannot read its own policy has not checked the binding; it has only
+// declined to look.
 function readPolicy() {
   if (!existsSync(modelRs)) {
-    warn(`cannot read policy constants: ${modelRs} not found`);
+    fail(
+      `cannot read policy constants: ${modelRs} not found. This gate attests that ` +
+      `panel rows match the sealed policy; without the policy it enforces nothing.`,
+    );
     return null;
   }
   const src = readFileSync(modelRs, "utf8");
   const pick = (name) => {
     const m = src.match(new RegExp(`${name}:\\s*&str\\s*=\\s*"([^"]+)"`));
-    return m ? m[1] : null;
+    if (!m) {
+      fail(
+        `${modelRs}: cannot parse "${name}". The constant was renamed or reshaped, ` +
+        `so this gate can no longer compare panel rows against it. Update the ` +
+        `pattern in check-bindings.mjs in the same change.`,
+      );
+      return null;
+    }
+    return m[1];
   };
   const roles = [];
   const rolesBlock = src.match(/PANEL_ROLES[^=]*=\s*\[([\s\S]*?)\];/);
@@ -71,6 +87,8 @@ function readPolicy() {
     for (const m of rolesBlock[1].matchAll(/PanelRole::(\w+)/g)) {
       roles.push(m[1].replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase());
     }
+  } else {
+    fail(`${modelRs}: cannot parse PANEL_ROLES; the seat roster cannot be checked`);
   }
   return {
     provider: pick("PANEL_PROVIDER_POLICY"),
@@ -135,7 +153,12 @@ if (!existsSync(agentsDir)) {
         `would run on the architect's model and be attested as Gemini.`,
       );
     } else if (!CAPABILITIES[fm.model]) {
-      warn(`${file}: model "${fm.model}" is not in the known capability table; effort cannot be checked`);
+      fail(
+        `${file}: model "${fm.model}" is not in the capability table, so its effort and ` +
+        `context tier cannot be checked. Either the model name is wrong, or the table ` +
+        `needs the new model added with its real effort and tier ceilings. Skipping the ` +
+        `check silently is how an illegal effort reaches a dispatch and downgrades.`,
+      );
     }
     if (name.startsWith("panel-")) {
       const tools = fm.tools ?? "";
@@ -195,7 +218,11 @@ for (const r of rows) {
   }
   const caps = CAPABILITIES[r.model];
   if (!caps) {
-    warn(`${r.skill}/SKILL.md: unknown model "${r.model}" for "${r.agent}"`);
+    fail(
+      `${r.skill}/SKILL.md: model "${r.model}" for "${r.agent}" is not in the capability ` +
+      `table, so its effort and context tier cannot be checked. Add the model with its ` +
+      `real ceilings rather than leaving the row unchecked.`,
+    );
     continue;
   }
   if (!caps.efforts.includes(r.effort)) {
@@ -287,6 +314,46 @@ if (existsSync(integrationJson)) {
           `that the old path wins where the two disagree.`,
         );
       }
+    }
+  }
+}
+
+// --- delivery memory taxonomy ---------------------------------------------
+//
+// The registers are a queryable classification surface, not prose. A
+// free-form category silently degrades that: "filed-guard" and "filed" do
+// not group, so the escalation rule ("a category recurring across three
+// waves becomes a task") stops counting correctly and the register becomes
+// the graveyard it exists to avoid. The vocabularies are closed in
+// .github/skills/d2b-memory/SKILL.md and pinned here.
+const MEMORY_CATEGORIES = ["signoff", "build", "test", "merge", "codegen", "disk"];
+const MEMORY_DISPOSITIONS = ["open", "folded", "filed", "resolved", "wontfix"];
+
+const memoryDir = join(root, ".specify", "memory");
+for (const reg of ["friction-log.md", "deferred-work.md", "engineering-debt.md"]) {
+  const path = join(memoryDir, reg);
+  if (!existsSync(path)) continue;
+  const lines = readFileSync(path, "utf8").split("\n");
+  for (const [i, line] of lines.entries()) {
+    if (!line.trim().startsWith("|")) continue;
+    const cells = line.split("|").slice(1, -1).map((c) => c.trim());
+    if (cells.length < 4) continue;
+    if (/^-+$/.test(cells[0]) || cells[0].toLowerCase() === "wave") continue;
+    const category = cells[1].replace(/`/g, "");
+    if (category && !MEMORY_CATEGORIES.includes(category)) {
+      fail(
+        `.specify/memory/${reg}:${i + 1}: category "${category}" is not in the closed ` +
+        `taxonomy (${MEMORY_CATEGORIES.join(", ")}). A near-miss spelling does not group ` +
+        `with its siblings, so the three-wave escalation rule stops counting it.`,
+      );
+    }
+    const disposition = cells[cells.length - 1].replace(/`/g, "");
+    const known = MEMORY_DISPOSITIONS.includes(disposition);
+    if (disposition && !known && !/^\S+w\d$/.test(disposition)) {
+      fail(
+        `.specify/memory/${reg}:${i + 1}: disposition "${disposition}" is not in the ` +
+        `closed set (${MEMORY_DISPOSITIONS.join(", ")}) and is not a target wave.`,
+      );
     }
   }
 }
