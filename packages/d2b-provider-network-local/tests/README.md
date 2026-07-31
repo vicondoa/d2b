@@ -1,5 +1,5 @@
 # `d2b-provider-network-local` hermetic tests
 
-Cargo integration, ResourceType and controller conformance, fault, redaction,
-schema, and fake-port tests live here. None is declared yet; the slice that
-fills this crate adds them.
+Hermetic tests here mirror the established IfName canaries, reject bridge-port
+drift, preserve foreign firewall ownership, prove cross-Zone L2 rejection, and
+pin the closed broker operation types consumed by the future core adapter.

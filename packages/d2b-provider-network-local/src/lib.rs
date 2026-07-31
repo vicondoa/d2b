@@ -1,18 +1,19 @@
-//! The `network-local` Provider.
+//! Host-network policy and observation primitives for `Provider/network-local`.
 //!
-//! This crate will own the local Network Provider: its reconciler, its plan computation, and its drift-detection observe loop, named by work item
-//! `ADR046-network-005`.
-//!
-//! Nothing here is implemented yet. Nothing here is a design statement, and no
-//! consumer should read a shape from this file.
+//! Kernel effects remain behind the injected network effect boundary. This
+//! crate computes desired bridge-port policy, validates observations, and
+//! produces ownership-scoped firewall projections. It does not open a broker
+//! socket or mutate host state directly.
 
 #![deny(missing_docs)]
 
-/// Marks this crate as scaffolding that no work item has filled yet.
-///
-/// The workspace capability-surface scan renders rustdoc for every member and
-/// fails closed when a crate advertises no public item, so an empty scaffold
-/// would break that gate for the whole workspace. This constant exists only to
-/// satisfy it and carries no design intent: the slice that implements
-/// `ADR046-network-005` should delete it rather than build on it.
-pub const UNIMPLEMENTED_SCAFFOLD: () = ();
+pub mod bridge_port;
+pub mod ifname;
+pub mod netlink;
+pub mod nftables;
+pub mod routes;
+
+pub use d2b_contracts::v3::network::{
+    ExternalNicAdmissionError, ExternalNicClaim, MacvtapMode, SharingPolicy,
+    admit_external_nic_claims,
+};
