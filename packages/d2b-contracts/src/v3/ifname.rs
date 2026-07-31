@@ -215,7 +215,7 @@ impl IfNameMapping {
         derived_ifname: IfName,
     ) -> Self {
         Self {
-            network_name: network_name.into(),
+            network_name,
             guest_name,
             role,
             derived_ifname,
