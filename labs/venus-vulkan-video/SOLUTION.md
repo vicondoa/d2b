@@ -506,9 +506,68 @@ Vulkan would select on an advertisement whose decode fails. It does not, because
 `InitHWDecoderIfAllowed()` tries `InitVulkanDecoder()` first.
 
 Making the advertisement honest means making `vaEndPicture` succeed on a
-non-Mesa driver, which is upstream work in virglrenderer's picture-parameter
-and slice-data construction, not configuration. It is not required for this
-prototype, whose decode path is Vulkan Video.
+non-Mesa driver. That is not configuration, and it is not a small fix.
+
+### Why, exactly
+
+The driver's own log names the failing call:
+
+```
+nvEndPicture cuvidDecodePicture failed: 1
+```
+
+`cuvidDecodePicture` is NVDEC's entry point and `1` is
+`CUDA_ERROR_INVALID_VALUE`. Surfaces are created without complaint
+(`nvCreateSurfaces2 Creating surface 1280x720, format 1`), so the rejection is
+the picture itself.
+
+virglrenderer's `h264_fill_slice_param()` sets two fields and leaves the rest
+commented out:
+
+```c
+//vasp->slice_data_size;
+//vasp->slice_data_offset;
+//vasp->slice_data_flag;
+//vasp->slice_data_bit_offset;
+//vasp->first_mb_in_slice;
+//vasp->slice_type;
+ITEM_SET(vasp, desc, num_ref_idx_l0_active_minus1);
+ITEM_SET(vasp, desc, num_ref_idx_l1_active_minus1);
+```
+
+That looks like laziness. It is not. **The data is not on the wire.** The
+protocol's `virgl_h264_picture_desc` carries exactly one slice-related field:
+
+```c
+uint32_t slice_count;
+```
+
+A count. No per-slice size, offset, type, or first-macroblock. So
+`h264_fill_slice_param()` cannot populate those fields, because the guest never
+sent them.
+
+### Why that is fine for Mesa and fatal for NVDEC
+
+The virgl video protocol was designed against Mesa's VA drivers, which hand the
+bitstream to hardware that parses slice headers itself. A driver that re-parses
+does not need per-slice VA parameters, so the protocol never carried them.
+
+NVDEC does not re-parse. `nvidia-vaapi-driver` builds `CUVIDPICPARAMS` from the
+VA slice parameters, gets zeros where offsets and sizes belong, and
+`cuvidDecodePicture` correctly rejects it.
+
+So the constraint is **architectural, not a bug**. Upstream's
+"only supports mesa va drivers now" is an accurate statement about what the
+protocol can express. Lifting it requires extending the virgl video wire format
+to carry per-slice parameters, across guest Mesa and virglrenderer, for every
+codec - a protocol change, not a patch.
+
+The lab's decision rule covers exactly this case: when forwarding is blocked by
+a fundamental limitation, stop and document the exact blocker rather than
+inventing a second architecture. This is that blocker, named to the field.
+
+None of it is required here. This prototype decodes through Vulkan Video, which
+is a different path with its own wire format, and which works.
 
 ---
 

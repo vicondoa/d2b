@@ -324,6 +324,13 @@ main() {
   # accepting a non-Mesa driver are different decisions, and separable knobs
   # are what make a later failure attributable to one of them.
   bw+=(--setenv VIRGL_VIDEO_ALLOW_ANY_VA_DRIVER "${VIRGL_VIDEO_ALLOW_ANY_VA_DRIVER:-1}")
+  # nvidia-vaapi-driver's own diagnostic channel.
+  #
+  # It rejects vaEndPicture with 0x17 (VA_STATUS_ERROR_DECODING_ERROR) for
+  # every frame virglrenderer submits. VA-API status codes carry no detail, so
+  # the driver's own log is the only place the reason exists. Off unless the
+  # caller asks, since it prints per frame.
+  [ -n "${NVD_LOG:-}" ] && bw+=(--setenv NVD_LOG "$NVD_LOG")
   # The broad /etc bind is needed for the Vulkan loader and NSS config, but it
   # would also expose /etc/d2b to the sidecar -- which the lab isolation
   # contract (AGENTS.md rule 3) forbids. Mask it with an empty tmpfs so the
