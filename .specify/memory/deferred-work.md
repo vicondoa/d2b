@@ -17,4 +17,4 @@ They are fixed in the round that raised them.
 
 | Wave | Category | Date | Statement | Disposition | Ref |
 |---|---|---|---|---|---|
-| spec-copilot-w3 | build | 2026-07-31 | `specify init` not run in-repo; skills imported additively instead, so a spec-kit upgrade needs the same manual import | open |  |
+| copilotw3 | build | 2026-07-31 | `specify init` not run in-repo; skills imported additively instead, so a spec-kit upgrade needs the same manual import | open |  |

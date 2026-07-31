@@ -18,7 +18,7 @@
 // path that produces a plausible-looking artifact rather than an error.
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 // Mirrors packages/xtask/src/delivery/model.rs.
@@ -221,9 +221,17 @@ mkdirSync(outDir, { recursive: true });
 // otherwise sit at its final path and be consumed as a complete attestation.
 for (const r of records) {
   const final = join(outDir, `${r.role}.json`);
-  const tmp = `${final}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(r, null, 2)}\n`);
-  renameSync(tmp, final);
+  // The temp name carries the pid so two concurrent rounds cannot stomp each
+  // other's partial write, and it is removed on the error path so a failure
+  // leaves no residue for a later reader to mistake for a record.
+  const tmp = `${final}.${process.pid}.tmp`;
+  try {
+    writeFileSync(tmp, `${JSON.stringify(r, null, 2)}\n`);
+    renameSync(tmp, final);
+  } catch (e) {
+    try { unlinkSync(tmp); } catch { /* the write itself failed; nothing to clean */ }
+    throw e;
+  }
 }
 
 const findings = records.filter((r) => !r.signoff);

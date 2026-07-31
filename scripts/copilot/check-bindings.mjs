@@ -318,8 +318,110 @@ if (existsSync(integrationJson)) {
   }
 }
 
-// --- delivery memory taxonomy ---------------------------------------------
+// --- record-helper constant drift -----------------------------------------
 //
+// make-records.mjs mirrors constants that are canonically defined in Rust. It
+// runs only during a live panel round, so a drifted copy would not surface
+// until the moment a wave is being sealed - the worst possible time and the
+// one place a wrong value becomes a false attestation. Pin them here, where
+// they are checked on every lint run.
+{
+  const helper = join(root, ".github", "skills", "d2b-panel-round", "scripts", "make-records.mjs");
+  const panelRs = join(root, "packages", "xtask", "src", "delivery", "panel.rs");
+  const modRs = join(root, "packages", "xtask", "src", "delivery", "mod.rs");
+
+  if (!existsSync(helper)) {
+    fail(`cannot read ${helper}; the panel record helper is required.`);
+  } else {
+    const src = readFileSync(helper, "utf8");
+    const num = (name) => {
+      const m = src.match(new RegExp(`const\\s+${name}\\s*=\\s*(\\d+)`));
+      if (!m) {
+        fail(`make-records.mjs: cannot parse ${name}; the drift check cannot verify it.`);
+        return null;
+      }
+      return Number(m[1]);
+    };
+    const str = (name) => {
+      const m = src.match(new RegExp(`const\\s+${name}\\s*=\\s*"([^"]+)"`));
+      if (!m) {
+        fail(`make-records.mjs: cannot parse ${name}; the drift check cannot verify it.`);
+        return null;
+      }
+      return m[1];
+    };
+    // Read each canonical value from the Rust file that actually defines it.
+    const rustStr = (file, label, name) => {
+      if (!existsSync(file)) { fail(`cannot read ${label}; drift check cannot run.`); return null; }
+      const m = readFileSync(file, "utf8").match(new RegExp(`${name}:\\s*&str\\s*=\\s*"([^"]+)"`));
+      if (!m) { fail(`${label}: cannot parse ${name}; drift check cannot run.`); return null; }
+      return m[1];
+    };
+    const rustNum = (file, label, name) => {
+      if (!existsSync(file)) { fail(`cannot read ${label}; drift check cannot run.`); return null; }
+      const m = readFileSync(file, "utf8").match(new RegExp(`${name}:\\s*(?:usize|u32)\\s*=\\s*([0-9*\\s]+);`));
+      if (!m) { fail(`${label}: cannot parse ${name}; drift check cannot run.`); return null; }
+      // Tolerate the `4 * 1024` spelling without evaluating arbitrary source.
+      const parts = m[1].split("*").map((p) => Number(p.trim()));
+      if (parts.some((p) => !Number.isFinite(p))) {
+        fail(`${label}: ${name} is not a simple integer product; drift check cannot run.`);
+        return null;
+      }
+      return parts.reduce((a, b) => a * b, 1);
+    };
+
+    const mirrors = [
+      ["ARTIFACT_KIND", str("ARTIFACT_KIND"), rustStr(modelRs, "model.rs", "PANEL_ATTESTATION_ARTIFACT_KIND")],
+      ["SCHEMA_VERSION", num("SCHEMA_VERSION"), rustNum(modRs, "mod.rs", "DELIVERY_SCHEMA_VERSION")],
+      ["MAX_RECOMMENDATIONS", num("MAX_RECOMMENDATIONS"), rustNum(panelRs, "panel.rs", "MAX_RECOMMENDATIONS")],
+    ];
+    for (const [name, mine, canonical] of mirrors) {
+      if (mine === null || canonical === null) continue;
+      if (String(mine) !== String(canonical)) {
+        fail(
+          `make-records.mjs ${name} is ${JSON.stringify(mine)} but the canonical Rust ` +
+          `value is ${JSON.stringify(canonical)}. A drifted copy is only discovered ` +
+          `while sealing a wave, which is exactly when a wrong value becomes a false ` +
+          `attestation.`,
+        );
+      }
+    }
+
+    // The panel policy strings the helper enforces must equal the sealed policy.
+    if (policy) {
+      const policyMirrors = [
+        ["PROVIDER_POLICY", str("PROVIDER_POLICY"), policy.provider],
+        ["MODEL_POLICY", str("MODEL_POLICY"), policy.model],
+        ["EFFORT_POLICY", str("EFFORT_POLICY"), policy.effort],
+      ];
+      for (const [name, mine, canonical] of policyMirrors) {
+        if (mine === null || canonical == null) continue;
+        if (mine !== canonical) {
+          fail(
+            `make-records.mjs ${name} is "${mine}" but model.rs pins "${canonical}". ` +
+            `The helper would attest a binding the gate does not accept.`,
+          );
+        }
+      }
+    }
+
+    // The string ceilings need only be no looser than the Rust bound; a
+    // stricter local cap is a deliberate choice, a looser one is a defect.
+    const rustMaxBytes = rustNum(modelRs, "model.rs", "MAX_STRING_BYTES");
+    for (const name of ["MAX_SUMMARY_CHARS", "MAX_RECOMMENDATION_CHARS"]) {
+      const mine = num(name);
+      if (mine === null || rustMaxBytes === null) continue;
+      if (mine > rustMaxBytes) {
+        fail(
+          `make-records.mjs ${name} is ${mine}, looser than model.rs MAX_STRING_BYTES ` +
+          `(${rustMaxBytes}). The helper would accept a value the sealing path rejects.`,
+        );
+      }
+    }
+  }
+}
+
+// --- delivery memory taxonomy ---------------------------------------------
 // The registers are a queryable classification surface, not prose. A
 // free-form category silently degrades that: "filed-guard" and "filed" do
 // not group, so the escalation rule ("a category recurring across three
@@ -328,6 +430,16 @@ if (existsSync(integrationJson)) {
 // .github/skills/d2b-memory/SKILL.md and pinned here.
 const MEMORY_CATEGORIES = ["signoff", "build", "test", "merge", "codegen", "disk"];
 const MEMORY_DISPOSITIONS = ["open", "folded", "filed", "resolved", "wontfix"];
+
+// The qualified wave grammar, as documented in docs/contributing/workflow.md
+// and enforced by validate_wave in packages/xtask/src/delivery/. The program
+// component carries no hyphen, which is the constraint most easily missed
+// when a branch name is reused as a wave token.
+const TARGET_WAVE = /^(W[0-8]|[a-z][a-z0-9]{2,15}w[0-8])$/;
+// A row records where the observation happened, so a follow-up round is a
+// legal origin. A fold target is a wave rather than a round, so the
+// disposition column keeps the stricter pattern above.
+const ORIGIN_WAVE = /^(W[0-8]|[a-z][a-z0-9]{2,15}w[0-8])(fu[1-9][0-9]?)?$/;
 
 const memoryDir = join(root, ".specify", "memory");
 for (const reg of ["friction-log.md", "deferred-work.md", "engineering-debt.md"]) {
@@ -339,6 +451,14 @@ for (const reg of ["friction-log.md", "deferred-work.md", "engineering-debt.md"]
     const cells = line.split("|").slice(1, -1).map((c) => c.trim());
     if (cells.length < 4) continue;
     if (/^-+$/.test(cells[0]) || cells[0].toLowerCase() === "wave") continue;
+    const wave = cells[0].replace(/`/g, "");
+    if (wave && !ORIGIN_WAVE.test(wave)) {
+      fail(
+        `.specify/memory/${reg}:${i + 1}: wave "${wave}" is not a legal wave token. ` +
+        `Use the legacy closed set W0..W8, or a qualified token whose program ` +
+        `component carries no hyphen (copilotw6, spec001w1, adr046w3fu2).`,
+      );
+    }
     const category = cells[1].replace(/`/g, "");
     if (category && !MEMORY_CATEGORIES.includes(category)) {
       fail(
@@ -348,11 +468,17 @@ for (const reg of ["friction-log.md", "deferred-work.md", "engineering-debt.md"]
       );
     }
     const disposition = cells[cells.length - 1].replace(/`/g, "");
+    // A folded row records its target wave in the disposition column instead
+    // of a vocabulary term. Both wave spellings are legal there: the legacy
+    // closed set W0..W8, and the qualified token this repo now prefers. The
+    // pattern is the grammar itself rather than a loose wildcard, so a
+    // malformed wave is still caught.
     const known = MEMORY_DISPOSITIONS.includes(disposition);
-    if (disposition && !known && !/^\S+w\d$/.test(disposition)) {
+    if (disposition && !known && !TARGET_WAVE.test(disposition)) {
       fail(
         `.specify/memory/${reg}:${i + 1}: disposition "${disposition}" is not in the ` +
-        `closed set (${MEMORY_DISPOSITIONS.join(", ")}) and is not a target wave.`,
+        `closed set (${MEMORY_DISPOSITIONS.join(", ")}) and is not a legal target wave ` +
+        `(W0..W8, or a qualified token such as spec001w1).`,
       );
     }
   }

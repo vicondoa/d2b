@@ -16,10 +16,13 @@ row lands, it gets promoted into the plan.
 
 | Wave | Category | Date | Statement | Recurrence | Disposition |
 |---|---|---|---|---|---|
-| spec-copilot-w3 | build | 2026-07-31 | `specify init` replaces `installed_integrations` rather than appending, silently dropping a coexisting install | 1 | resolved |
-| spec-copilot-w3 | build | 2026-07-31 | `specify init` rewrites shared `.specify/scripts` and `.specify/templates`, reintroducing banned dash codepoints into tracked files | 1 | open |
-| spec-copilot-w3 | codegen | 2026-07-31 | Shipped spec-kit skill text carries banned dash codepoints and must be de-dashed on every import | 1 | open |
-| spec-copilot-w3 | codegen | 2026-07-31 | Delivery help output is pinned by a wire-fingerprint golden, so even a documentation-only field needs a schema bump that would invalidate in-flight artifacts | 1 | resolved |
-| spec-copilot-w6 | signoff | 2026-07-31 | A reviewing lane's self-reported model is confabulated: five of ten seats named a model other than the one the harness dispatched, so a self-report tripwire cannot detect a mis-dispatch | 1 | resolved |
-| spec-copilot-w6 | test | 2026-07-31 | `make test-fixture-contracts` fails closed without `D2B_ENABLE_FIXTURE_BUILD=1`, which is set in the job manifest but not in the bare target, so a hand-run of the lane looks broken | 1 | open |
-| spec-copilot-w6 | build | 2026-07-31 | `make X 2>&1 \| tail` reports the pager's exit status, so a piped gate invocation can read as passing when it failed | 1 | open |
+| copilotw3 | build | 2026-07-31 | `specify init` replaces `installed_integrations` rather than appending, silently dropping a coexisting install | 1 | resolved |
+| copilotw3 | build | 2026-07-31 | `specify init` rewrites shared `.specify/scripts` and `.specify/templates`, reintroducing banned dash codepoints into tracked files | 1 | open |
+| copilotw3 | codegen | 2026-07-31 | Shipped spec-kit skill text carries banned dash codepoints and must be de-dashed on every import | 1 | open |
+| copilotw3 | codegen | 2026-07-31 | Delivery help output is pinned by a wire-fingerprint golden, so even a documentation-only field needs a schema bump that would invalidate in-flight artifacts | 1 | resolved |
+| copilotw6 | signoff | 2026-07-31 | A reviewing lane's self-reported model is confabulated: five of ten seats named a model other than the one the harness dispatched, so a self-report tripwire cannot detect a mis-dispatch | 1 | resolved |
+| copilotw6 | test | 2026-07-31 | `make test-fixture-contracts` fails closed without `D2B_ENABLE_FIXTURE_BUILD=1`, which is set in the job manifest but not in the bare target, so a hand-run of the lane looks broken | 1 | open |
+| copilotw6 | build | 2026-07-31 | `make X 2>&1 \| tail` reports the pager's exit status, so a piped gate invocation can read as passing when it failed | 1 | open |
+| copilotw6fu2 | test | 2026-07-31 | The qualified wave grammar was enforced for delivery state paths and fold targets but not for the memory registers' own wave column, so this branch wrote nine illegal hyphenated tokens into its own registers | 1 | resolved |
+| copilotw6fu2 | signoff | 2026-07-31 | A malformed commit trailing tag is detectable only by a reviewer, so correcting it needs a branch-wide history rewrite rather than one amend | 1 | open |
+| copilotw6fu2 | build | 2026-07-31 | A Layer-1 job killed by an external signal reports `exit -15` and fails the whole gate, and the phase summary does not distinguish that from a real defect without reading the retained tail | 1 | open |

@@ -95,11 +95,11 @@ mkdir -p "$LOG_DIR"
 # failure, which is all these logs are for.
 LOG_KEEP="${D2B_AUTOPILOT_LOG_KEEP:-20}"
 if [ "$LOG_KEEP" -gt 0 ] 2>/dev/null; then
-  find "$LOG_DIR" -mindepth 1 -maxdepth 1 -printf '%T@ %p\n' 2>/dev/null \
-    | sort -rn \
-    | tail -n "+$((LOG_KEEP + 1))" \
-    | cut -d' ' -f2- \
-    | while IFS= read -r stale; do rm -rf -- "$stale"; done
+  find "$LOG_DIR" -mindepth 1 -maxdepth 1 -printf '%T@\t%p\0' 2>/dev/null \
+    | sort -z -rn \
+    | tail -z -n "+$((LOG_KEEP + 1))" \
+    | cut -z -f2- \
+    | while IFS= read -r -d '' stale; do rm -rf -- "$stale"; done
 fi
 
 PROMPT="/d2b-autopilot"

@@ -36,11 +36,19 @@ mkdir -p "$out/verdicts"
 # Write-then-rename every artifact. A diff truncated by a signal or a full
 # disk would otherwise sit at its final path, and a reviewer would read a
 # partial delta as the whole change.
+# Write-then-rename every artifact. A diff truncated by a signal or a full
+# disk would otherwise sit at its final path, and a reviewer would read a
+# partial delta as the whole change. The temp name carries the pid so two
+# concurrent stagings cannot stomp each other, and a failed write is removed
+# rather than left as residue.
 stage() {
   local dest="$1"
   shift
-  local tmp="$dest.tmp"
-  "$@" > "$tmp"
+  local tmp="$dest.$$.tmp"
+  if ! "$@" > "$tmp"; then
+    rm -f -- "$tmp"
+    return 1
+  fi
   mv -f "$tmp" "$dest"
 }
 
@@ -51,7 +59,9 @@ stage "$out/commits.txt" git --no-pager log --no-decorate --oneline "$base_sha..
 delta_sha="$(sha256sum "$out/delta.diff" | cut -d' ' -f1)"
 full_sha="$(sha256sum "$out/full.diff" | cut -d' ' -f1)"
 
-cat > "$out/address.json.tmp" <<JSON
+addr_tmp="$out/address.json.$$.tmp"
+trap 'rm -f -- "$addr_tmp"' EXIT
+cat > "$addr_tmp" <<JSON
 {
   "round": "$round",
   "base": "$base_sha",
@@ -61,7 +71,8 @@ cat > "$out/address.json.tmp" <<JSON
   "full_sha256": "$full_sha"
 }
 JSON
-mv -f "$out/address.json.tmp" "$out/address.json"
+mv -f "$addr_tmp" "$out/address.json"
+trap - EXIT
 
 if [ ! -f "$out/evidence.md" ]; then
   cat > "$out/evidence.md" <<'MD'

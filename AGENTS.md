@@ -321,7 +321,7 @@ is a warning, not the contract.
 
 | System | Where | Risk if broken |
 | --- | --- | --- |
-| [Net VM networking / firewall](docs/contributing/critical-subsystems.md#net-vm-networking-firewall) | `nixos-modules/net.nix` (the `lib.mkForce` neutralization of `base.nix`'s `10-eth-dhcp` | Net VM dual-stacks DHCP on its uplink, breaks NAT, or weakens same-env isolation unexpectedly. |
+| [Net VM networking / firewall](docs/contributing/critical-subsystems.md#net-vm-networking-firewall) | `nixos-modules/net.nix` (the `lib.mkForce` neutralization of `base.nix`'s `10-eth-dhcp`, plus the per-env MTU/MSS and east-west wiring) | Net VM dual-stacks DHCP on its uplink, breaks NAT, or weakens same-env isolation unexpectedly. Validate with `tests/unit/nix/cases/net-vm-network.nix`. |
 | [Per-VM `/nix/store` hardlink farm](docs/contributing/critical-subsystems.md#per-vm-nixstore-hardlink-farm) | `nixos-modules/store.nix` | The guest's `/nix/store` MUST be the per-VM closure-only farm `/var/lib/d2b/vms/<vm>/store`, never the host's full `/nix/store`. Serving the host store re-leaks it to every guest. Needs `/var/lib/d2b` and `/nix/store` on the same filesystem. |
 | [TPM persistence (per-VM swtpm)](docs/contributing/critical-subsystems.md#tpm-persistence-per-vm-swtpm) | `/var/lib/d2b/vms/<vm>/swtpm/` | Holds the per-VM TPM 2.0 NVRAM + EK seed. |
 | [USBIP passthrough](docs/contributing/critical-subsystems.md#usbip-passthrough) | `nixos-modules/components/usbip.nix` (eval-time gating) + broker `UsbipBindFirewallRule` + `SpawnRunner` (per-busid attach process supervised by `d2bd`) | Eval-time gating still scopes attach to opted-in envs (validated by `tests/unit/nix/cases/usbip-gating.nix`). |
