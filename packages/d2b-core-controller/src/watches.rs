@@ -100,15 +100,12 @@ impl WatchHandler {
         })
     }
 
-    /// Observe a durable store commit. Revisions never regress.
+    /// Observe a durable store commit without claiming delivery to any watch.
     pub fn record_commit(&mut self, revision: ZoneRevision) -> Result<(), WatchError> {
         if revision.get() == 0 || revision <= self.current_revision {
             return Err(WatchError::RevisionRegression);
         }
         self.current_revision = revision;
-        for cursor in self.watches.values_mut() {
-            cursor.high_water = revision;
-        }
         Ok(())
     }
 
@@ -138,7 +135,7 @@ impl WatchHandler {
         self.watches.insert(
             id,
             WatchCursor {
-                high_water: self.current_revision,
+                high_water: after_revision,
                 checkpoint: after_revision,
                 credits,
             },
@@ -146,13 +143,20 @@ impl WatchHandler {
         Ok(id)
     }
 
-    /// Consume one reserved stream credit after dispatch.
-    pub fn consume_credit(&mut self, id: WatchId) -> Result<(), WatchError> {
+    /// Dispatch one committed revision after enforcing reserved stream credit.
+    pub fn dispatch(&mut self, id: WatchId, revision: ZoneRevision) -> Result<(), WatchError> {
+        if revision.get() == 0 || revision > self.current_revision {
+            return Err(WatchError::InvalidRevision);
+        }
         let cursor = self.watches.get_mut(&id).ok_or(WatchError::UnknownWatch)?;
         if cursor.credits == 0 {
             return Err(WatchError::CreditExhausted);
         }
+        if revision <= cursor.high_water {
+            return Err(WatchError::RevisionRegression);
+        }
         cursor.credits -= 1;
+        cursor.high_water = revision;
         self.allocated_credits -= 1;
         Ok(())
     }
@@ -211,11 +215,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn commit_advances_high_water_and_checkpoint_handoff_is_monotonic() {
+    fn dispatch_advances_high_water_and_checkpoint_handoff_is_monotonic() {
         let mut handler = WatchHandler::new(2, 4).unwrap();
         handler.record_commit(ZoneRevision::new(1)).unwrap();
         let watch = handler.register(ZoneRevision::new(1), 2).unwrap();
         handler.record_commit(ZoneRevision::new(2)).unwrap();
+        handler.dispatch(watch, ZoneRevision::new(2)).unwrap();
         handler.checkpoint(watch, ZoneRevision::new(2)).unwrap();
         assert_eq!(
             handler.cursor(watch).unwrap().high_water(),
@@ -224,6 +229,24 @@ mod tests {
         assert_eq!(
             handler.cursor(watch).unwrap().checkpoint(),
             ZoneRevision::new(2)
+        );
+    }
+
+    #[test]
+    fn registration_starts_at_the_acknowledged_cursor_not_the_store_tip() {
+        let mut handler = WatchHandler::new(1, 2).unwrap();
+        handler.record_commit(ZoneRevision::new(1)).unwrap();
+        handler.record_commit(ZoneRevision::new(2)).unwrap();
+
+        let watch = handler.register(ZoneRevision::new(1), 1).unwrap();
+
+        assert_eq!(
+            handler.cursor(watch).unwrap().high_water(),
+            ZoneRevision::new(1)
+        );
+        assert_eq!(
+            handler.checkpoint(watch, ZoneRevision::new(2)),
+            Err(WatchError::CheckpointAhead)
         );
     }
 
@@ -248,26 +271,77 @@ mod tests {
             handler.register(ZoneRevision::new(1), 1).unwrap_err(),
             WatchError::QuotaExceeded
         );
-        handler.consume_credit(watch).unwrap();
-        handler.consume_credit(watch).unwrap();
+        handler.record_commit(ZoneRevision::new(2)).unwrap();
+        handler.dispatch(watch, ZoneRevision::new(2)).unwrap();
+        handler.record_commit(ZoneRevision::new(3)).unwrap();
+        handler.dispatch(watch, ZoneRevision::new(3)).unwrap();
+        handler.record_commit(ZoneRevision::new(4)).unwrap();
         assert_eq!(
-            handler.consume_credit(watch),
+            handler.dispatch(watch, ZoneRevision::new(4)),
             Err(WatchError::CreditExhausted)
         );
     }
 
     #[test]
-    fn compaction_never_overtakes_the_slowest_checkpoint() {
-        let mut handler = WatchHandler::new(2, 4).unwrap();
+    fn watcher_with_no_credit_does_not_advance_on_commit() {
+        let mut handler = WatchHandler::new(1, 1).unwrap();
+        handler.record_commit(ZoneRevision::new(1)).unwrap();
+        handler.record_commit(ZoneRevision::new(2)).unwrap();
+        let watch = handler.register(ZoneRevision::new(1), 1).unwrap();
+        handler.dispatch(watch, ZoneRevision::new(2)).unwrap();
+        handler.record_commit(ZoneRevision::new(3)).unwrap();
+
+        assert_eq!(
+            handler.cursor(watch).unwrap().high_water(),
+            ZoneRevision::new(2)
+        );
+        assert_eq!(handler.cursor(watch).unwrap().credits(), 0);
+        assert_eq!(
+            handler.dispatch(watch, ZoneRevision::new(3)),
+            Err(WatchError::CreditExhausted)
+        );
+    }
+
+    #[test]
+    fn dispatch_to_one_watcher_does_not_advance_another() {
+        let mut handler = WatchHandler::new(2, 2).unwrap();
+        handler.record_commit(ZoneRevision::new(1)).unwrap();
+        let delivered = handler.register(ZoneRevision::new(1), 1).unwrap();
+        let waiting = handler.register(ZoneRevision::new(1), 1).unwrap();
+        handler.record_commit(ZoneRevision::new(2)).unwrap();
+
+        assert_eq!(
+            handler.cursor(waiting).unwrap().high_water(),
+            ZoneRevision::new(1)
+        );
+        handler.dispatch(delivered, ZoneRevision::new(2)).unwrap();
+        assert_eq!(
+            handler.cursor(delivered).unwrap().high_water(),
+            ZoneRevision::new(2)
+        );
+        assert_eq!(
+            handler.cursor(waiting).unwrap().high_water(),
+            ZoneRevision::new(1)
+        );
+    }
+
+    #[test]
+    fn compaction_refuses_a_revision_not_delivered_to_a_live_watcher() {
+        let mut handler = WatchHandler::new(2, 2).unwrap();
         handler.record_commit(ZoneRevision::new(1)).unwrap();
         let slow = handler.register(ZoneRevision::new(1), 1).unwrap();
         handler.record_commit(ZoneRevision::new(2)).unwrap();
         let fast = handler.register(ZoneRevision::new(2), 1).unwrap();
         handler.checkpoint(fast, ZoneRevision::new(2)).unwrap();
+
+        let slow_checkpoint = handler.checkpoint(slow, ZoneRevision::new(2));
+        let compacted = handler.compact_through(ZoneRevision::new(2)).unwrap();
         assert_eq!(
-            handler.compact_through(ZoneRevision::new(2)).unwrap(),
-            ZoneRevision::new(1)
+            (slow_checkpoint, compacted),
+            (Err(WatchError::CheckpointAhead), ZoneRevision::new(1))
         );
+
+        handler.dispatch(slow, ZoneRevision::new(2)).unwrap();
         handler.checkpoint(slow, ZoneRevision::new(2)).unwrap();
         assert_eq!(
             handler.compact_through(ZoneRevision::new(2)).unwrap(),
