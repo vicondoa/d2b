@@ -13,6 +13,7 @@ use d2b_provider_network_local::{
     netlink::{LinkKind, LinkSpec, NetlinkError},
     nftables::{
         NetworkNftProjection, NftablesError, SharedNftTable, SharedTableEntry, apply_projection,
+        read_projection_digest, remove_projection,
     },
     routes::{LinkClass, RoutePreflightError, RouteRow},
 };
@@ -68,6 +69,70 @@ fn firewall_target_marker_conflict_preserves_original_bytes() {
 }
 
 #[test]
+fn firewall_projection_apply_remove_preserve_sibling_and_foreign_bytes() {
+    let owner = uid("123e4567-e89b-42d3-a456-426614174000");
+    let sibling = uid("223e4567-e89b-42d3-a456-426614174001");
+    let sibling_projection = NetworkNftProjection::empty(sibling.clone());
+    let sibling_entry = apply_projection(&SharedNftTable::new(Vec::new()), &sibling_projection)
+        .unwrap()
+        .table()
+        .entries()[0]
+        .clone();
+    let sibling_bytes = sibling_entry.bytes().to_vec();
+    let usbip_bytes = b"device-usbip marker bytes".to_vec();
+    let foreign_bytes = b"foreign table bytes".to_vec();
+    let snapshot = SharedNftTable::new(vec![
+        sibling_entry,
+        SharedTableEntry::foreign(usbip_bytes.clone()),
+        SharedTableEntry::foreign(foreign_bytes.clone()),
+    ]);
+
+    let applied = apply_projection(&snapshot, &NetworkNftProjection::empty(owner.clone())).unwrap();
+    assert!(
+        read_projection_digest(applied.table(), &owner)
+            .unwrap()
+            .is_some()
+    );
+    assert_eq!(applied.table().entries()[0].bytes(), sibling_bytes);
+    assert_eq!(applied.table().entries()[1].bytes(), usbip_bytes);
+    assert_eq!(applied.table().entries()[2].bytes(), foreign_bytes);
+
+    let removed = remove_projection(applied.table(), &owner).unwrap();
+    assert!(
+        read_projection_digest(removed.table(), &owner)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(removed.table().entries()[0].bytes(), sibling_bytes);
+    assert_eq!(removed.table().entries()[1].bytes(), usbip_bytes);
+    assert_eq!(removed.table().entries()[2].bytes(), foreign_bytes);
+}
+
+#[test]
+fn firewall_projection_digest_excludes_sibling_and_usbip_churn() {
+    let owner = uid("123e4567-e89b-42d3-a456-426614174000");
+    let first = apply_projection(
+        &SharedNftTable::new(vec![SharedTableEntry::foreign(b"usbip-a".to_vec())]),
+        &NetworkNftProjection::empty(owner.clone()),
+    )
+    .unwrap();
+    let first_digest = read_projection_digest(first.table(), &owner)
+        .unwrap()
+        .unwrap()
+        .to_hex();
+    let second = apply_projection(
+        &SharedNftTable::new(vec![SharedTableEntry::foreign(b"usbip-b".to_vec())]),
+        &NetworkNftProjection::empty(owner.clone()),
+    )
+    .unwrap();
+    let second_digest = read_projection_digest(second.table(), &owner)
+        .unwrap()
+        .unwrap()
+        .to_hex();
+    assert_eq!(first_digest, second_digest);
+}
+
+#[test]
 fn cross_zone_bridge_multiplex_is_rejected_before_any_provider_effect() {
     let work = uid("123e4567-e89b-42d3-a456-426614174000");
     let personal = uid("223e4567-e89b-42d3-a456-426614174001");
@@ -79,6 +144,20 @@ fn cross_zone_bridge_multiplex_is_rejected_before_any_provider_effect() {
         admit_external_nic_claims(&claims, 2),
         Err(ExternalNicAdmissionError::ExternalPhysicalNicCrossZoneL2)
     );
+}
+
+#[test]
+fn same_zone_bridge_multiplex_is_admitted() {
+    let work = uid("123e4567-e89b-42d3-a456-426614174000");
+    let claims = [
+        ExternalNicClaim::new(
+            work.clone(),
+            MacvtapMode::Bridge,
+            SharingPolicy::Multiplexed,
+        ),
+        ExternalNicClaim::new(work, MacvtapMode::Bridge, SharingPolicy::Multiplexed),
+    ];
+    assert!(admit_external_nic_claims(&claims, 2).is_ok());
 }
 
 #[test]

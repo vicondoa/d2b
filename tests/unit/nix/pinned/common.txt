@@ -464,6 +464,16 @@ net-vm-network/safe-nft-work-lan-drop-before-egress-accept
 net-vm-network/safe-nft-work-lan-drop-present
 net-vm-network/safe-nft-work-uplink-drop-before-egress-accept
 net-vm-network/safe-nft-work-uplink-drop-present
+net-vm-network/v3-resource-bundle-omits-runtime-metadata
+net-vm-network/v3-resource-canonical-spec
+net-vm-network/v3-resource-cidr-overlap-rejected
+net-vm-network/v3-resource-cross-zone-bridge-multiplex-rejected
+net-vm-network/v3-resource-duplicate-attachment-index-rejected
+net-vm-network/v3-resource-port-forward-target-mutual-exclusion-rejected
+net-vm-network/v3-resource-provider-package-deployed
+net-vm-network/v3-resource-static-prerequisites-only
+net-vm-network/v3-resource-system-artifact-kind-admitted
+net-vm-network/v3-resource-system-artifact-type-rejected
 net-vm-network/work-lan-address
 net-vm-network/work-lan-bridge-east-west-unisolated
 net-vm-network/work-lan-mtu

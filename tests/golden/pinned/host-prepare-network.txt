@@ -6,7 +6,7 @@
 # `cargo test --workspace` host list and the broker default + layer1-bootstrap
 # lists, all gated by tests/tools/rust-workspace-checks.sh. Pinned fail-closed via
 # tests/tools/assert-pinned-tests.sh (which lists the broker workspace under
-# --features layer1-bootstrap; all 3 broker tests are present there).
+# --features layer1-bootstrap; all broker tests are present there).
 # The retired gate's trailing `ch-net-handoff-not-supported` docs-anchor grep
 # is independently guarded by packages/d2b/tests/cli_contract_coverage.rs
 # and the committed host-check goldens. One bare libtest path per line.
@@ -25,4 +25,21 @@ routes::tests::host_lan_cidr_ambiguous_for_vpn
 # d2b-priv-broker (broker-workspace cargo test --workspace [+ layer1-bootstrap]):
 ops::nm::tests::managed_foreign_conflict_detected
 ops::nm::tests::reload_command_select_by_version
+ops::nft::tests::projection_apply_preserves_sibling_and_usbip_entries
+ops::nft::tests::projection_digest_is_scoped_to_trusted_projection
+ops::nft::tests::projection_foreign_marker_fails_closed
+ops::nft::tests::projection_remove_deletes_only_owned_chains_and_keeps_table
+ops::nft::tests::projection_request_and_audit_digest_exclude_sensitive_values
+ops::nft::tests::projection_stale_generation_refuses_before_any_mutation
+ops::nft::tests::projection_validated_absence_is_idempotent
 ops::tap::tests::set_bridge_port_flags_readback_drift_fails_closed
+create_bridge_applies_ipv6_sysctl
+create_bridge_parameters_match_spec
+delete_bridge_is_idempotent
+delete_bridge_never_cascades_attached_tap
+delete_persistent_tap_absent_is_idempotent_after_ownership_validation
+delete_persistent_tap_foreign_marker_fails_closed
+delete_persistent_tap_pairs_with_create
+delete_persistent_tap_rejects_stale_attachment_generation
+delete_persistent_tap_rejects_stale_network_generation
+delete_persistent_tap_request_and_audit_have_no_ifname_or_path
