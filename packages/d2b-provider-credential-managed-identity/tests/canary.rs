@@ -7,6 +7,11 @@ use d2b_credential_service::{
     CredentialMethod, CredentialResponse, CredentialServer, CredentialServiceError,
     CredentialServiceErrorCode, CredentialTransport, encode_outer,
 };
+use d2b_provider_credential_managed_identity::{
+    ManagedIdentityAuditOperation, ManagedIdentityAuditOutcome, ManagedIdentityAuditRecord,
+    ManagedIdentityTelemetryFrame, ManagedIdentityTelemetryOperation,
+    ManagedIdentityTelemetryOutcome, TelemetryField,
+};
 
 use common::{admitted, request, setup};
 
@@ -52,6 +57,29 @@ fn process_unique_managed_identity_canaries_are_absent_from_rendered_surfaces() 
         "provider=credential-managed-identity operation=acquire-token resource_name_digest=sha256:{} outcome=success",
         "e".repeat(64)
     );
+    let typed_audit = ManagedIdentityAuditRecord::new(
+        format!("sha256:{}", "e".repeat(64)),
+        ManagedIdentityAuditOperation::AcquireToken,
+        ManagedIdentityAuditOutcome::Success,
+        1,
+    )
+    .unwrap();
+    let telemetry = ManagedIdentityTelemetryFrame::new(
+        "dev",
+        ManagedIdentityTelemetryOperation::AcquireToken,
+        ManagedIdentityTelemetryOutcome::Success,
+        PlacementBinding::GuestAgent,
+    );
+    assert!(
+        ManagedIdentityTelemetryFrame::validate_collector_fields(telemetry.all_fields()).is_ok()
+    );
+    assert!(
+        ManagedIdentityTelemetryFrame::validate_collector_fields([TelemetryField {
+            key: "d2b.credential.name",
+            value: credential_name.clone(),
+        }])
+        .is_err()
+    );
     let surfaces = [
         provider_debug,
         config_debug,
@@ -62,6 +90,12 @@ fn process_unique_managed_identity_canaries_are_absent_from_rendered_surfaces() 
         format!("{error:?}"),
         error.to_string(),
         authorized_audit,
+        format!("{typed_audit:?}"),
+        typed_audit.to_wire_record(),
+        format!("{telemetry:?}"),
+        format!("{:?}", telemetry.resource_attributes()),
+        format!("{:?}", telemetry.span_attributes()),
+        format!("{:?}", telemetry.metric_labels()),
         "provider=credential-managed-identity operation=acquire-token outcome=success".to_owned(),
         "d2b.credential.provider=credential-managed-identity operation_class=acquire-token outcome=success"
             .to_owned(),

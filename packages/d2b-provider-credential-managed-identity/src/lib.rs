@@ -7,8 +7,11 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+mod agent;
+mod audit;
 mod controller;
 mod service;
+mod telemetry;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -27,12 +30,46 @@ use d2b_credential_service::{
     CredentialMetadata, CredentialOutcomeCode, CredentialServiceError, CredentialServiceErrorCode,
 };
 
-pub use controller::{ManagedIdentityController, ManagedIdentityStatusProjection};
+pub use agent::ManagedIdentityAgent;
+pub use audit::{
+    ManagedIdentityAuditError, ManagedIdentityAuditOperation, ManagedIdentityAuditOutcome,
+    ManagedIdentityAuditRecord,
+};
+pub use controller::{
+    AgentProcessSpec, ManagedIdentityController, ManagedIdentityRoute,
+    ManagedIdentityStatusProjection, ManagedIdentityTeardownPlan,
+};
+pub use telemetry::{
+    ManagedIdentityTelemetryFrame, ManagedIdentityTelemetryOperation,
+    ManagedIdentityTelemetryOutcome, TelemetryField, TelemetryFrameError,
+};
 
 /// Canonical Provider reference.
 pub const PROVIDER_REF: &str = "Provider/credential-managed-identity";
 /// Maximum active leases per Provider instance.
 pub const MAX_LOCAL_LEASES: u32 = 256;
+/// Secret-free controller binary declared by the Provider dossier.
+pub const CONTROLLER_BINARY: &str = "d2b-managed-identity-controller";
+/// Co-located client-holding agent binary declared by the Provider dossier.
+pub const AGENT_BINARY: &str = "d2b-managed-identity-agent";
+/// Exit status used while production Zone runtime registration is unavailable.
+pub const RUNTIME_UNAVAILABLE_EXIT: i32 = 78;
+
+/// Enter the secret-free controller role.
+///
+/// Production registration is deliberately fail-closed until the authenticated
+/// Zone runtime supplies the controller adapter.
+pub const fn controller_binary_entrypoint() -> i32 {
+    RUNTIME_UNAVAILABLE_EXIT
+}
+
+/// Enter the client-holding agent role.
+///
+/// Production registration is deliberately fail-closed until an authenticated
+/// LaunchTicket supplies the explicit effect-port client.
+pub const fn agent_binary_entrypoint() -> i32 {
+    RUNTIME_UNAVAILABLE_EXIT
+}
 
 /// Boxed asynchronous result returned by the injected IMDS client.
 pub type ManagedIdentityFuture<'a, T> =

@@ -35,9 +35,11 @@ Volume and holds no IMDS client.
 
 ## Controllers / services / workers / binaries
 
-The `d2b-provider-credential-managed-identity` binary hosts the secret-free
-controller and service wiring. The injected `ManagedIdentityCredentialClient`
-is the sole IMDS boundary and is held only by the co-located service context.
+The Zone-wide `d2b-managed-identity-controller` binary is secret-free and
+creates one co-located agent Process per admitted Credential binding. The
+`d2b-managed-identity-agent` binary alone holds the injected
+`ManagedIdentityCredentialClient`, serves live lease operations, and terminates
+the sensitive delivery session. The controller has no client construction path.
 
 ## Placement and dependencies
 
@@ -79,7 +81,7 @@ enforces this.
 
 ```bash
 cd packages && cargo check -p d2b-provider-credential-managed-identity
-cd packages && cargo test -p d2b-provider-credential-managed-identity
+cd packages && cargo test -p d2b-provider-credential-managed-identity --lib --test lifecycle --test conformance --test faults --test canary --test delivery --test placement --test topology
 make test-integration
 make test-host-integration
 ```

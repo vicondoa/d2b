@@ -1,6 +1,6 @@
-//! Managed identity Provider binary entry point.
+//! Legacy autodiscovery path retained as a non-binary source file.
+//!
+//! Cargo autobin discovery is disabled. The Provider exposes only the named
+//! controller and agent binaries declared in `Cargo.toml`.
 
-fn main() {
-    eprintln!("credential Provider runtime wiring is unavailable");
-    std::process::exit(78);
-}
+fn main() {}

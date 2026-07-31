@@ -1,13 +1,81 @@
 //! Secret-free managed identity controller projections.
 
+use d2b_contracts::v3::ResourceRef;
 use d2b_contracts::v3::credential::{
     CredentialInteractionState, CredentialLeaseStatus, CredentialStatus,
 };
 use d2b_credential_service::{
-    CredentialMetadata, CredentialServiceError, CredentialServiceErrorCode,
+    CredentialMetadata, CredentialMethod, CredentialServiceError, CredentialServiceErrorCode,
 };
 
-use crate::{ManagedIdentityClientState, ManagedIdentityPlacement};
+use crate::{AGENT_BINARY, ManagedIdentityClientState, ManagedIdentityPlacement};
+
+/// Service route selected by the secret-free controller.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManagedIdentityRoute {
+    /// Use stored non-secret status without an IMDS call.
+    ControllerStoredMetadata,
+    /// Route the live operation to the co-located agent.
+    Agent,
+}
+
+/// Canonical controller-created agent Process projection.
+#[derive(Clone, PartialEq, Eq)]
+pub struct AgentProcessSpec {
+    owner_ref: ResourceRef,
+    execution_ref: ResourceRef,
+    placement: d2b_contracts::v3::credential::PlacementBinding,
+}
+
+impl AgentProcessSpec {
+    /// Return the fixed agent binary.
+    pub const fn binary(&self) -> &'static str {
+        AGENT_BINARY
+    }
+
+    /// Borrow the Credential owner reference.
+    pub const fn owner_ref(&self) -> &ResourceRef {
+        &self.owner_ref
+    }
+
+    /// Borrow the exact co-location target.
+    pub const fn execution_ref(&self) -> &ResourceRef {
+        &self.execution_ref
+    }
+
+    /// Return the machine placement.
+    pub const fn placement(&self) -> d2b_contracts::v3::credential::PlacementBinding {
+        self.placement
+    }
+
+    /// Agent network egress is always disabled; the injected effect port owns
+    /// endpoint access.
+    pub const fn allow_egress(&self) -> bool {
+        false
+    }
+
+    /// The agent requires an explicit client supplied through an effect port.
+    pub const fn requires_effect_port_client(&self) -> bool {
+        true
+    }
+}
+
+impl core::fmt::Debug for AgentProcessSpec {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("AgentProcessSpec(<redacted>)")
+    }
+}
+
+/// Ordered teardown effects owned by the controller.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ManagedIdentityTeardownPlan {
+    /// Whether the agent must first drain and stop.
+    pub stop_agent: bool,
+    /// Whether the controller may delete the agent Process.
+    pub delete_agent: bool,
+    /// Whether revocation and Process deletion permit finalizer release.
+    pub clear_provider_revoke: bool,
+}
 
 /// Common status plus closed client state.
 #[derive(Clone, PartialEq, Eq)]
@@ -34,6 +102,52 @@ impl ManagedIdentityController {
     /// Bind the secret-free controller to machine placement.
     pub const fn new(placement: ManagedIdentityPlacement) -> Self {
         Self { placement }
+    }
+
+    /// Route live client operations to the agent while permitting a stored
+    /// metadata projection at the controller.
+    pub const fn route(method: CredentialMethod, live: bool) -> ManagedIdentityRoute {
+        match (method, live) {
+            (CredentialMethod::InspectMetadata, false) => {
+                ManagedIdentityRoute::ControllerStoredMetadata
+            }
+            _ => ManagedIdentityRoute::Agent,
+        }
+    }
+
+    /// Create the agent projection only after admission and dependency
+    /// readiness. The controller receives no client while doing so.
+    pub fn plan_agent(
+        &self,
+        credential_ref: ResourceRef,
+        admitted: bool,
+        dependencies_ready: bool,
+    ) -> Result<Option<AgentProcessSpec>, CredentialServiceError> {
+        if credential_ref.resource_type().as_str() != "Credential" {
+            return Err(invariant());
+        }
+        if !admitted || !dependencies_ready {
+            return Ok(None);
+        }
+        Ok(Some(AgentProcessSpec {
+            owner_ref: credential_ref,
+            execution_ref: self.placement.execution_ref().clone(),
+            placement: self.placement.binding(),
+        }))
+    }
+
+    /// Preserve finalizer ordering: stop, delete, then clear only after the
+    /// revocation and Process-deletion observations both succeed.
+    pub const fn teardown_plan(
+        agent_running: bool,
+        revocation_confirmed: bool,
+        process_deleted: bool,
+    ) -> ManagedIdentityTeardownPlan {
+        ManagedIdentityTeardownPlan {
+            stop_agent: agent_running,
+            delete_agent: !agent_running && revocation_confirmed && !process_deleted,
+            clear_provider_revoke: revocation_confirmed && process_deleted,
+        }
     }
 
     /// Project bounded non-secret lease state.
@@ -75,7 +189,6 @@ fn invariant() -> CredentialServiceError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_contracts::v3::ResourceRef;
     use d2b_contracts::v3::credential::PlacementBinding;
 
     #[test]
@@ -101,5 +214,30 @@ mod tests {
                 .client_state,
             ManagedIdentityClientState::Unavailable
         );
+    }
+
+    #[test]
+    fn agent_is_planned_only_after_admission_and_dependency_readiness() {
+        let controller = ManagedIdentityController::new(
+            ManagedIdentityPlacement::new(
+                PlacementBinding::GuestAgent,
+                ResourceRef::parse("Guest/aca-sandbox").unwrap(),
+            )
+            .unwrap(),
+        );
+        let credential = ResourceRef::parse("Credential/aca-relay-mi").unwrap();
+        assert!(
+            controller
+                .plan_agent(credential.clone(), false, true)
+                .unwrap()
+                .is_none()
+        );
+        let agent = controller
+            .plan_agent(credential, true, true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(agent.binary(), AGENT_BINARY);
+        assert!(!agent.allow_egress());
+        assert!(agent.requires_effect_port_client());
     }
 }

@@ -1,6 +1,6 @@
 ### Added
 
-- Added Secret Service, Entra identity-Guest, and managed-identity Credential Providers with exact-consumer admission, immutable delivery bindings, opaque lease lifecycle handling, placement validation, and process-unique redaction canaries.
+- Added Secret Service, Entra identity-Guest, and managed-identity Credential Providers with exact-consumer admission, immutable delivery bindings, opaque lease lifecycle handling, placement validation, and process-unique redaction canaries. Managed identity uses separate secret-free controller and client-holding agent binaries.
 
 ### Security
 
