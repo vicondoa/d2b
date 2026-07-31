@@ -25,7 +25,7 @@
 // It is a plain node script with no test framework because the repository does
 // not add tooling for one gate. It runs from `make test-lint`.
 
-import { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -36,9 +36,16 @@ const root = join(here, "..", "..");
 
 // Everything check-bindings.mjs reads, as repo-relative paths. Keeping this
 // list explicit rather than copying the whole tree keeps a fixture build cheap
-// and makes a new input announce itself: add a read to the gate without adding
-// it here and the baseline case fails.
-const INPUTS = [
+// and makes a new input announce itself: add a *required* read to the gate
+// without adding it here and the baseline case fails.
+//
+// That argument does not extend to a read the gate guards with `existsSync`.
+// An optional input omitted here is simply absent in the fixture, the gate
+// skips its block, and the baseline still passes while the fixture has
+// silently stopped matching the repo. So optional reads are listed separately
+// and copied when they exist, rather than being left out on the grounds that
+// they do not exist today.
+const REQUIRED_INPUTS = [
   "scripts/copilot/check-bindings.mjs",
   ".github/agents",
   ".github/skills",
@@ -49,13 +56,31 @@ const INPUTS = [
   "packages/xtask/src/delivery/mod.rs",
 ];
 
+// Guarded by `existsSync` in the gate. Absent from the repo today, which is
+// exactly why it needs to be here: the day someone adds it, the fixture has to
+// grow it too or the harness quietly stops testing the same thing.
+const OPTIONAL_INPUTS = [
+  ".github/copilot/settings.json",
+];
+
 const HELPER = ".github/skills/d2b-panel-round/scripts/make-records.mjs";
+
+// The regex the gate itself uses to find the roster. Sharing the shape is
+// deliberate: if the gate can parse the declaration, so can the harness, and
+// if it cannot, both fail rather than one silently disagreeing.
+const ROLES_DECL = /const\s+ROLES\s*=\s*\[[\s\S]*?\];/;
 
 let failures = 0;
 
 function buildFixture() {
   const dir = mkdtempSync(join(tmpdir(), "d2b-check-bindings-"));
-  for (const rel of INPUTS) {
+  for (const rel of REQUIRED_INPUTS) {
+    const dest = join(dir, rel);
+    mkdirSync(dirname(dest), { recursive: true });
+    cpSync(join(root, rel), dest, { recursive: true });
+  }
+  for (const rel of OPTIONAL_INPUTS) {
+    if (!existsSync(join(root, rel))) continue;
     const dest = join(dir, rel);
     mkdirSync(dirname(dest), { recursive: true });
     cpSync(join(root, rel), dest, { recursive: true });
@@ -73,24 +98,54 @@ function run(dir) {
 // Replace the helper's ROLES declaration with arbitrary text. Taking the whole
 // declaration lets a case rewrite it into a shape the guard's regex cannot
 // parse, which is the drift a refactor actually produces.
+//
+// The rewrite must actually change the file. A mutation that silently produced
+// the original text would leave the fixture unmutated, the gate would exit 0,
+// and the case would report a failure whose stated cause is wrong. Assert it
+// instead, so a no-op mutation names itself.
 function setRolesBlock(dir, text) {
   const path = join(dir, HELPER);
   const src = readFileSync(path, "utf8");
-  const next = src.replace(/const\s+ROLES\s*=\s*\[[\s\S]*?\];/, text);
-  if (next === src) {
+  if (!ROLES_DECL.test(src)) {
     throw new Error("fixture: ROLES declaration not found in make-records.mjs");
   }
+  const next = src.replace(ROLES_DECL, text);
+  if (next === src) {
+    throw new Error("fixture: the mutation did not change make-records.mjs");
+  }
   writeFileSync(path, next);
+}
+
+// The roster the negative cases perturb is read out of the fixture rather than
+// written down here.
+//
+// An earlier revision hardcoded it, on the reasoning that the baseline case
+// would catch any divergence from the real roster. That reasoning was wrong,
+// and the rust seat was right to reject it: the baseline case mutates nothing,
+// so it never evaluates the hardcoded array at all. A stale copy would sail
+// past the baseline, and the negative cases would still pass, because
+// perturbing a stale roster also mismatches `model.rs`. The suite would stay
+// green while testing a roster the repo had stopped using.
+//
+// Deriving it removes the third copy entirely, which is the same drift class
+// the guard under test exists to prevent. Applying it to the harness rather
+// than only to the code under test is the point.
+function rosterFromFixture(dir) {
+  const src = readFileSync(join(dir, HELPER), "utf8");
+  const block = src.match(ROLES_DECL);
+  if (!block) {
+    throw new Error("fixture: cannot read the roster from make-records.mjs");
+  }
+  const roles = [...block[0].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+  if (roles.length < 2) {
+    throw new Error(`fixture: roster has ${roles.length} seats; cannot perturb it`);
+  }
+  return roles;
 }
 
 function rolesLiteral(roles) {
   return `const ROLES = [\n  ${roles.map((r) => `"${r}"`).join(", ")},\n];`;
 }
-
-const SEALED = [
-  "software", "test", "nixos", "networking", "security",
-  "rust", "product", "docs", "observability", "kernel",
-];
 
 // A negative case asserts both a nonzero exit and a substring from the roster
 // guard itself. Exit status alone would pass if the gate failed for some
@@ -103,20 +158,26 @@ const CASES = [
   },
   {
     name: "a dropped seat is rejected",
-    mutate: (dir) => setRolesBlock(dir, rolesLiteral(SEALED.filter((r) => r !== "kernel"))),
+    mutate: (dir) => {
+      const roster = rosterFromFixture(dir);
+      setRolesBlock(dir, rolesLiteral(roster.slice(0, -1)));
+    },
     expectExit: 1,
     expectText: "make-records.mjs ROLES is [",
   },
   {
     name: "an extra seat is rejected",
-    mutate: (dir) => setRolesBlock(dir, rolesLiteral([...SEALED, "performance"])),
+    mutate: (dir) => {
+      const roster = rosterFromFixture(dir);
+      setRolesBlock(dir, rolesLiteral([...roster, "performance"]));
+    },
     expectExit: 1,
     expectText: "make-records.mjs ROLES is [",
   },
   {
     name: "a reordered roster is rejected",
     mutate: (dir) => {
-      const swapped = [...SEALED];
+      const swapped = rosterFromFixture(dir);
       [swapped[0], swapped[1]] = [swapped[1], swapped[0]];
       setRolesBlock(dir, rolesLiteral(swapped));
     },
