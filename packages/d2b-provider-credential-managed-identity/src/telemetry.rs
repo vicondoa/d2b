@@ -76,14 +76,14 @@ impl ManagedIdentityTelemetryOutcome {
 pub struct TelemetryField {
     /// Closed field key.
     pub key: &'static str,
-    /// Bounded field value.
+    /// Bounded field value validated against the field's closed domain.
     pub value: String,
 }
 
 /// Telemetry frame rejected by the closed allowlist.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TelemetryFrameError {
-    /// A field used a Credential identity key or non-allowlisted key.
+    /// A field used a non-allowlisted key or value.
     ForbiddenField,
 }
 
@@ -198,31 +198,12 @@ impl ManagedIdentityTelemetryFrame {
     }
 
     /// Validate a complete collector frame and reject the whole frame when a
-    /// non-allowlisted or identity-bearing key is present.
+    /// non-allowlisted key or value is present.
     pub fn validate_collector_fields(
         fields: impl IntoIterator<Item = TelemetryField>,
     ) -> Result<(), TelemetryFrameError> {
-        let resource = [
-            "d2b.zone",
-            "d2b.provider",
-            "d2b.component",
-            "service.name",
-            "service.namespace",
-            "service.version",
-        ];
-        let span = [
-            "d2b.credential.provider",
-            "d2b.credential.operation_class",
-            "d2b.credential.placement_binding",
-            "d2b.credential.outcome",
-        ];
-        let metric = ["operation_class", "placement_binding", "outcome"];
         for field in fields {
-            if FORBIDDEN_KEYS.contains(&field.key)
-                || !(resource.contains(&field.key)
-                    || span.contains(&field.key)
-                    || metric.contains(&field.key))
-            {
+            if FORBIDDEN_KEYS.contains(&field.key) || !allowed_value(field.key, &field.value) {
                 return Err(TelemetryFrameError::ForbiddenField);
             }
         }
@@ -248,6 +229,38 @@ impl ManagedIdentityTelemetryFrame {
     }
 }
 
+fn allowed_value(key: &str, value: &str) -> bool {
+    match key {
+        "d2b.zone" => valid_zone_name(value),
+        "d2b.provider" | "d2b.credential.provider" => value == "credential-managed-identity",
+        "d2b.component" => value == "managed-identity-agent",
+        "service.name" => value == "d2b-managed-identity-agent",
+        "service.namespace" => value == "d2b",
+        "service.version" => value == env!("CARGO_PKG_VERSION"),
+        "d2b.credential.operation_class" | "operation_class" => matches!(
+            value,
+            "acquire-token" | "refresh-token" | "revoke-token" | "inspect-metadata" | "reconcile"
+        ),
+        "d2b.credential.placement_binding" | "placement_binding" => {
+            matches!(value, "host-system" | "guest-agent" | "user-agent")
+        }
+        "d2b.credential.outcome" | "outcome" => matches!(
+            value,
+            "success" | "provider-unavailable" | "denied" | "invariant-failure"
+        ),
+        _ => false,
+    }
+}
+
+fn valid_zone_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 63
+        && value.as_bytes()[0].is_ascii_lowercase()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
 impl core::fmt::Debug for ManagedIdentityTelemetryFrame {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("ManagedIdentityTelemetryFrame(<redacted>)")
@@ -259,7 +272,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn collector_allowlist_rejects_credential_identity_keys() {
+    fn collector_allowlist_rejects_nonclosed_values_for_allowed_keys() {
         let frame = ManagedIdentityTelemetryFrame::new(
             "dev",
             ManagedIdentityTelemetryOperation::AcquireToken,
@@ -271,8 +284,8 @@ mod tests {
         );
         assert_eq!(
             ManagedIdentityTelemetryFrame::validate_collector_fields([TelemetryField {
-                key: "d2b.credential.name",
-                value: "canary".to_owned(),
+                key: "outcome",
+                value: "credential-name-canary".to_owned(),
             }]),
             Err(TelemetryFrameError::ForbiddenField)
         );

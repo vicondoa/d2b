@@ -4,14 +4,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use d2b_contracts::v3::credential::{
-    AudienceToken, CredentialLeaseHandle, CredentialLeaseState, CredentialSourceVersion,
-    OperationClass, PlacementBinding,
+    AudienceToken, CredentialAuthorization, CredentialLeaseHandle, CredentialLeaseState,
+    CredentialMethod, CredentialProvider, CredentialRequest, CredentialResponse,
+    CredentialServiceError, CredentialSourceVersion, DeliveryRouteDigest, DeliverySessionParams,
+    OperationClass, PlacementBinding, dispatch_authorized_provider,
 };
 use d2b_contracts::v3::{ResourceGeneration, ResourceRef, ResourceUid};
-use d2b_credential_service::{
-    CredentialAdmission, CredentialAuthorization, CredentialMethod, CredentialRequest,
-    CredentialServiceError, DeliveryRouteDigest, DeliverySessionParams,
-};
 use d2b_provider_credential_secret_service::{
     LockPolicy, Oo7SecretServicePort, SecretServiceConfig, SecretServiceCredentialProvider,
     SecretServiceCredentialProviderFactory, SecretServiceFuture, SecretServiceLeaseGrant,
@@ -30,6 +28,7 @@ pub struct FakeOo7Port {
     pub refresh_calls: AtomicUsize,
     pub revoke_calls: AtomicUsize,
     pub issue_error: Mutex<Option<SecretServicePortError>>,
+    pub observed_request: Mutex<Option<(String, String, String)>>,
     pub credential_canary: String,
     pub object_path_canary: String,
 }
@@ -45,6 +44,7 @@ impl FakeOo7Port {
             refresh_calls: AtomicUsize::new(0),
             revoke_calls: AtomicUsize::new(0),
             issue_error: Mutex::new(None),
+            observed_request: Mutex::new(None),
             credential_canary: format!("secret-service-value-canary-{nonce}"),
             object_path_canary: format!("secret-service-object-path-canary-{nonce}"),
         }
@@ -66,16 +66,19 @@ impl Oo7SecretServicePort for FakeOo7Port {
         let expiry = request.requested_expiry_unix_ms();
         let secret = self.credential_canary.clone();
         let object_path = self.object_path_canary.clone();
+        *self.observed_request.lock().unwrap() = Some((
+            request.credential_ref().to_canonical_string(),
+            request.operation_id().to_owned(),
+            request.idempotency_key().to_owned(),
+        ));
         let inspection = &self.inspection;
         Box::pin(async move {
             if let Some(error) = error {
                 return Err(error);
             }
-            assert!(!secret.is_empty());
-            assert!(!object_path.is_empty());
             let grant = SecretServiceLeaseGrant {
-                lease_handle: CredentialLeaseHandle::parse("secret-service-lease").unwrap(),
-                source_version: CredentialSourceVersion::parse("secret-service-source-1").unwrap(),
+                lease_handle: CredentialLeaseHandle::parse(&secret).unwrap(),
+                source_version: CredentialSourceVersion::parse(&object_path).unwrap(),
                 rotation_generation: 1,
                 expires_at_unix_ms: expiry,
             };
@@ -183,7 +186,15 @@ pub fn delivery(method: CredentialMethod, sequence: u64) -> DeliverySessionParam
 #[derive(Clone)]
 pub struct Admission;
 
-impl CredentialAdmission for Admission {
+pub trait TestAdmission {
+    fn authorize(
+        &self,
+        method: CredentialMethod,
+        request: &CredentialRequest,
+    ) -> Result<CredentialAuthorization, CredentialServiceError>;
+}
+
+impl TestAdmission for Admission {
     fn authorize(
         &self,
         method: CredentialMethod,
@@ -195,6 +206,33 @@ impl CredentialAdmission for Admission {
             None
         };
         CredentialAuthorization::new(method, params)
+    }
+}
+
+pub struct ProviderHarness<P, A> {
+    provider: P,
+    admission: A,
+}
+
+impl<P, A> ProviderHarness<P, A>
+where
+    P: CredentialProvider,
+    A: TestAdmission,
+{
+    pub const fn new(provider: P, admission: A) -> Self {
+        Self {
+            provider,
+            admission,
+        }
+    }
+
+    pub fn call(
+        &self,
+        method: CredentialMethod,
+        request: CredentialRequest,
+    ) -> Result<CredentialResponse, CredentialServiceError> {
+        let authorization = self.admission.authorize(method, &request)?;
+        dispatch_authorized_provider(&self.provider, method, &request, &authorization)
     }
 }
 

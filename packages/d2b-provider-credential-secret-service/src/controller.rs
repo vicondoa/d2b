@@ -1,9 +1,9 @@
 //! Pure status and health projection for the Secret Service controller.
 
 use d2b_contracts::v3::credential::{
-    CredentialInteractionState, CredentialLeaseStatus, CredentialStatus, PlacementBinding,
+    CredentialInteractionState, CredentialLeaseStatus, CredentialMetadata, CredentialServiceError,
+    CredentialStatus, PlacementBinding,
 };
-use d2b_credential_service::{CredentialMetadata, CredentialServiceError};
 
 use crate::{LockPolicy, SecretServiceConfig, SecretServiceState};
 

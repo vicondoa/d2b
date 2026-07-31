@@ -2,10 +2,8 @@
 
 use d2b_contracts::v3::ResourceRef;
 use d2b_contracts::v3::credential::{
-    CredentialInteractionState, CredentialLeaseStatus, CredentialStatus,
-};
-use d2b_credential_service::{
-    CredentialMetadata, CredentialServiceError, CredentialServiceErrorCode,
+    CredentialInteractionState, CredentialLeaseStatus, CredentialMetadata, CredentialServiceError,
+    CredentialServiceErrorCode, CredentialStatus,
 };
 
 use crate::{EntraClientState, EntraPlacement, LOGIN_ENDPOINT_PURPOSE, PROVIDER_REF};

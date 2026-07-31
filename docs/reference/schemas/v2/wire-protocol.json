@@ -124,6 +124,7 @@
       "required": [
         "action",
         "bundleNftProjectionIntentRef",
+        "expectedGenerationId",
         "scopeId"
       ],
       "properties": {
@@ -138,6 +139,14 @@
           "type": [
             "string",
             "null"
+          ]
+        },
+        "expectedGenerationId": {
+          "description": "Immutable installed bundle generation the projection was resolved from.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResourceBundleGenerationId"
+            }
           ]
         },
         "scopeId": {
@@ -9008,6 +9017,12 @@
         }
       },
       "additionalProperties": false
+    },
+    "ResourceBundleGenerationId": {
+      "type": "string",
+      "maxLength": 71,
+      "minLength": 71,
+      "pattern": "^sha256:[0-9a-f]{64}$"
     },
     "RotateKnownHostRequest": {
       "description": "Common flags every mutating-verb request carries. The daemon rejects requests that set neither `dry_run` nor `apply`.",

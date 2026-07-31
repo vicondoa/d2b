@@ -3,14 +3,14 @@ mod common;
 #[path = "../../d2b-provider-toolkit/src/conformance.rs"]
 mod provider_conformance;
 
-use d2b_contracts::v3::credential::{AudienceToken, CredentialSpec, OperationClass};
+use d2b_contracts::v3::credential::{
+    AudienceToken, CredentialMethod, CredentialResourceVerb, CredentialSpec, OperationClass,
+    RolePermission, authorize_operation,
+};
 use d2b_contracts::v3::execution_policy::to_base_object;
 use d2b_contracts::v3::{
     BaseSchemaBinding, BaseSchemaIdentity, ObjectFieldSchema, ResourceSchemaContract, ResourceSpec,
     ResourceTypeName, SchemaFingerprint, SchemaVersion,
-};
-use d2b_credential_service::{
-    CredentialMethod, CredentialResourceVerb, RolePermission, authorize_operation,
 };
 use provider_conformance::{
     CapabilityMatrix, ConformanceError, ProviderResourceTypeBinding, check_descriptor_conformance,

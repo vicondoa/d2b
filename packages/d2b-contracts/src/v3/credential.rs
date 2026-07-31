@@ -23,6 +23,10 @@ use super::{
     },
 };
 
+pub mod service;
+
+pub use service::*;
+
 /// The canonical ResourceType name for this module.
 pub const CREDENTIAL_RESOURCE_TYPE: &str = "Credential";
 /// Maximum bytes in one audience token.

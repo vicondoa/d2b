@@ -2,10 +2,8 @@
 
 use d2b_contracts::v3::ResourceRef;
 use d2b_contracts::v3::credential::{
-    CredentialInteractionState, CredentialLeaseStatus, CredentialStatus,
-};
-use d2b_credential_service::{
-    CredentialMetadata, CredentialMethod, CredentialServiceError, CredentialServiceErrorCode,
+    CredentialInteractionState, CredentialLeaseStatus, CredentialMetadata, CredentialMethod,
+    CredentialServiceError, CredentialServiceErrorCode, CredentialStatus,
 };
 
 use crate::{AGENT_BINARY, ManagedIdentityClientState, ManagedIdentityPlacement};

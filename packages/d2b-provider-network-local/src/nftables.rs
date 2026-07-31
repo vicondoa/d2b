@@ -45,6 +45,10 @@ impl NetworkChainHook {
             Self::Prerouting | Self::Output | Self::Input => "accept",
         }
     }
+
+    fn scoped_name(self, owner: &ResourceUid) -> String {
+        format!("{}-{}", self.name(), owner.as_str())
+    }
 }
 
 /// A validated Network-owned nftables rule expression.
@@ -140,8 +144,8 @@ impl NetworkNftProjection {
         let mut rendered = String::new();
         for chain in &self.chains {
             rendered.push_str(&format!(
-                "chain {} {{ type filter hook {} priority {}; policy {}; comment \"{}\";\n",
-                chain.hook.name(),
+                "chain \"{}\" {{ type filter hook {} priority {}; policy {}; comment \"{}\";\n",
+                chain.hook.scoped_name(&self.owner),
                 chain.hook.name(),
                 chain.hook.priority(),
                 chain.hook.policy(),
@@ -443,6 +447,12 @@ fn has_exact_managed_markers(owner: &ResourceUid, bytes: &[u8]) -> bool {
     };
     let expected = format!("{OWNERSHIP_MARKER_PREFIX}{}", owner.as_str());
     let mut marker_count = 0;
+    let expected_chains = [
+        NetworkChainHook::Prerouting.scoped_name(owner),
+        NetworkChainHook::Forward.scoped_name(owner),
+        NetworkChainHook::Output.scoped_name(owner),
+        NetworkChainHook::Input.scoped_name(owner),
+    ];
     let mut chains = [false; 4];
     for line in text.lines().map(str::trim) {
         if line.is_empty() || line == "}" {
@@ -464,12 +474,14 @@ fn has_exact_managed_markers(owner: &ResourceUid, bytes: &[u8]) -> bool {
             let Some(name) = chain.split_whitespace().next() else {
                 return false;
             };
-            let index = match name {
-                "prerouting" => 0,
-                "forward" => 1,
-                "output" => 2,
-                "input" => 3,
-                _ => return false,
+            let Some(name) = name
+                .strip_prefix('"')
+                .and_then(|name| name.strip_suffix('"'))
+            else {
+                return false;
+            };
+            let Some(index) = expected_chains.iter().position(|expected| expected == name) else {
+                return false;
             };
             if chains[index] {
                 return false;
@@ -672,6 +684,8 @@ pub fn evaluate_coexistence_policy(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
 
     fn uid(value: &str) -> ResourceUid {
@@ -699,21 +713,94 @@ mod tests {
         SharedTableEntry::managed(owner, projection.render()).unwrap()
     }
 
+    fn parse_aggregate_chain_names(table: &SharedNftTable) -> Result<BTreeSet<String>, String> {
+        let mut aggregate = String::from("table inet d2b {\n");
+        for entry in table.entries() {
+            aggregate.push_str(core::str::from_utf8(entry.bytes()).map_err(|_| "non-UTF-8 entry")?);
+        }
+        aggregate.push_str("}\n");
+
+        let mut lines = aggregate.lines().map(str::trim);
+        if lines.next() != Some("table inet d2b {") {
+            return Err("missing aggregate table header".to_owned());
+        }
+        let mut names = BTreeSet::new();
+        let mut in_chain = false;
+        let mut saw_table_close = false;
+        for line in lines {
+            if saw_table_close {
+                return Err(format!("content after aggregate table close: {line}"));
+            }
+            if in_chain {
+                if line == "}" {
+                    in_chain = false;
+                } else if line.starts_with("chain ") {
+                    return Err(format!("nested chain declaration: {line}"));
+                }
+                continue;
+            }
+            if line == "}" {
+                saw_table_close = true;
+                continue;
+            }
+            let Some(declaration) = line.strip_prefix("chain ") else {
+                return Err(format!("unexpected aggregate table entry: {line}"));
+            };
+            let Some((name, _)) = declaration.split_once(" { ") else {
+                return Err(format!("malformed chain declaration: {line}"));
+            };
+            let name = if let Some(name) = name
+                .strip_prefix('"')
+                .and_then(|name| name.strip_suffix('"'))
+            {
+                name.to_owned()
+            } else if !name.contains('"') {
+                name.to_owned()
+            } else {
+                return Err(format!("malformed quoted chain name: {name}"));
+            };
+            if !names.insert(name.clone()) {
+                return Err(format!("duplicate chain declaration: {name}"));
+            }
+            in_chain = true;
+        }
+        if in_chain || !saw_table_close {
+            return Err("missing aggregate table close".to_owned());
+        }
+        Ok(names)
+    }
+
     #[test]
     fn projection_update_preserves_sibling_and_foreign_bytes() {
         let owner = uid("123e4567-e89b-42d3-a456-426614174000");
         let sibling = uid("223e4567-e89b-42d3-a456-426614174001");
-        let sibling_entry = managed_entry(sibling, None);
+        let sibling_entry = managed_entry(sibling.clone(), None);
         let sibling_bytes = sibling_entry.bytes().to_vec();
-        let foreign_bytes = b"foreign table state".to_vec();
+        let foreign_bytes =
+            b"chain foreign { type filter hook input priority 0; policy accept; comment \"foreign\";\n}\n"
+                .to_vec();
         let snapshot = SharedNftTable::new(vec![
             sibling_entry,
             SharedTableEntry::foreign(foreign_bytes.clone()),
         ]);
-        let update = apply_projection(&snapshot, &NetworkNftProjection::empty(owner)).unwrap();
+        let update =
+            apply_projection(&snapshot, &NetworkNftProjection::empty(owner.clone())).unwrap();
         assert_eq!(update.table().entries()[0].bytes(), sibling_bytes);
         assert_eq!(update.table().entries()[1].bytes(), foreign_bytes);
         assert!(update.digest().is_some());
+        let chain_names = parse_aggregate_chain_names(update.table()).unwrap();
+        let expected_chain_names = BTreeSet::from([
+            NetworkChainHook::Prerouting.scoped_name(&owner),
+            NetworkChainHook::Forward.scoped_name(&owner),
+            NetworkChainHook::Output.scoped_name(&owner),
+            NetworkChainHook::Input.scoped_name(&owner),
+            NetworkChainHook::Prerouting.scoped_name(&sibling),
+            NetworkChainHook::Forward.scoped_name(&sibling),
+            NetworkChainHook::Output.scoped_name(&sibling),
+            NetworkChainHook::Input.scoped_name(&sibling),
+            "foreign".to_owned(),
+        ]);
+        assert_eq!(chain_names, expected_chain_names);
     }
 
     #[test]

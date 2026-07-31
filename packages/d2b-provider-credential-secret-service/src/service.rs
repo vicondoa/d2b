@@ -1,10 +1,9 @@
 //! Credential service dispatch for Secret Service.
 
-use d2b_contracts::v3::credential::CredentialLeaseState;
-use d2b_credential_service::{
-    CredentialAuthorization, CredentialMethod, CredentialOutcomeCode, CredentialProvider,
-    CredentialRequest, CredentialResponse, CredentialServiceError, CredentialServiceErrorCode,
-    DeliveryResponse, MetadataResponse,
+use d2b_contracts::v3::credential::{
+    CredentialAuthorization, CredentialLeaseState, CredentialMethod, CredentialOutcomeCode,
+    CredentialProvider, CredentialRequest, CredentialResponse, CredentialServiceError,
+    CredentialServiceErrorCode, DeliveryResponse, MetadataResponse,
 };
 
 use crate::{
@@ -40,9 +39,12 @@ impl SecretServiceCredentialProvider {
             .delivery_session_params()
             .cloned()
             .ok_or_else(invariant)?;
+        let deadline = Self::operation_deadline(request.deadline_unix_ms())?;
+        let _mutation = self.mutation_guard()?;
         let key = request.credential_ref().to_canonical_string();
         {
-            let leases = self.leases.lock().map_err(|_| invariant())?;
+            let mut leases = self.leases.lock().map_err(|_| invariant())?;
+            leases.retain(|_, record| record.metadata.state == CredentialLeaseState::Active);
             if let Some(existing) = leases.get(&key) {
                 if existing.idempotency_key == request.idempotency_key() {
                     return Ok(CredentialResponse::AcquireToken(DeliveryResponse {
@@ -63,7 +65,7 @@ impl SecretServiceCredentialProvider {
             idempotency_key: request.idempotency_key().to_owned(),
             requested_expiry_unix_ms: request.requested_expiry_unix_ms(),
         };
-        let grant = Self::poll_port(self.port.issue_lease(&port_request))?;
+        let grant = Self::poll_port(self.port.issue_lease(&port_request), deadline)?;
         let metadata = Self::grant_metadata(grant, request.requested_expiry_unix_ms())?;
         self.leases.lock().map_err(|_| invariant())?.insert(
             key,
@@ -87,6 +89,8 @@ impl SecretServiceCredentialProvider {
             .delivery_session_params()
             .cloned()
             .ok_or_else(invariant)?;
+        let deadline = Self::operation_deadline(request.deadline_unix_ms())?;
+        let _mutation = self.mutation_guard()?;
         let key = request.credential_ref().to_canonical_string();
         let current = self
             .leases
@@ -102,13 +106,13 @@ impl SecretServiceCredentialProvider {
             credential_ref: request.credential_ref().clone(),
             metadata: current.metadata,
         };
-        let inspected = Self::poll_port(self.port.inspect_lease(&lease))?;
+        let inspected = Self::poll_port(self.port.inspect_lease(&lease), deadline)?;
         if inspected.state != CredentialLeaseState::Active
             || inspected.rotation_generation != lease.metadata.rotation_generation
         {
             return Err(invariant());
         }
-        let grant = Self::poll_port(self.port.refresh_lease(&lease))?;
+        let grant = Self::poll_port(self.port.refresh_lease(&lease), deadline)?;
         let metadata = Self::grant_metadata(grant, request.requested_expiry_unix_ms())?;
         self.leases.lock().map_err(|_| invariant())?.insert(
             key,
@@ -127,6 +131,8 @@ impl SecretServiceCredentialProvider {
         &self,
         request: &CredentialRequest,
     ) -> Result<CredentialResponse, CredentialServiceError> {
+        let deadline = Self::operation_deadline(request.deadline_unix_ms())?;
+        let _mutation = self.mutation_guard()?;
         let key = request.credential_ref().to_canonical_string();
         let mut leases = self.leases.lock().map_err(|_| invariant())?;
         let record = leases.get_mut(&key).ok_or_else(expired)?;
@@ -137,7 +143,7 @@ impl SecretServiceCredentialProvider {
                 credential_ref: request.credential_ref().clone(),
                 metadata: record.metadata.clone(),
             };
-            let result = Self::poll_port(self.port.revoke_lease(&lease))?;
+            let result = Self::poll_port(self.port.revoke_lease(&lease), deadline)?;
             record.metadata.state = CredentialLeaseState::Revoked;
             match result {
                 crate::SecretServiceLeaseRevocation::Revoked => CredentialOutcomeCode::Revoked,
@@ -156,6 +162,7 @@ impl SecretServiceCredentialProvider {
         &self,
         request: &CredentialRequest,
     ) -> Result<CredentialResponse, CredentialServiceError> {
+        let deadline = Self::operation_deadline(request.deadline_unix_ms())?;
         let key = request.credential_ref().to_canonical_string();
         let record = self
             .leases
@@ -168,7 +175,7 @@ impl SecretServiceCredentialProvider {
             credential_ref: request.credential_ref().clone(),
             metadata: record.metadata,
         };
-        let inspection = Self::poll_port(self.port.inspect_lease(&lease))?;
+        let inspection = Self::poll_port(self.port.inspect_lease(&lease), deadline)?;
         let mut metadata = lease.metadata;
         metadata.state = inspection.state;
         metadata.source_version = inspection.source_version;

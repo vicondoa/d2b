@@ -13,6 +13,7 @@ use crate::types::{
     BundleClosureRef, BundleOpId, MediaRef, PathClass, RoleId, ScopeId, SubjectId, TracingSpanId,
     VmId,
 };
+use crate::v3::ResourceBundleGenerationId;
 use d2b_core::host::IfName;
 use d2b_core::workload_identity::WorkloadIdentity;
 use schemars::JsonSchema;
@@ -663,6 +664,8 @@ pub struct ApplyNftablesProjectionRequest {
     pub bundle_nft_projection_intent_ref: BundleOpId,
     pub scope_id: ScopeId,
     pub action: NftablesProjectionAction,
+    /// Immutable installed bundle generation the projection was resolved from.
+    pub expected_generation_id: ResourceBundleGenerationId,
     #[serde(default)]
     pub desired_hash: Option<String>,
     #[serde(default)]
@@ -2517,6 +2520,27 @@ mod tests {
             }
             other => panic!("expected ApplyNftables, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn apply_nftables_projection_requires_installed_generation_fence() {
+        let generation_id = format!("sha256:{}", "1".repeat(64));
+        let mut payload = serde_json::json!({
+            "bundleNftProjectionIntentRef": "nft-projection:work",
+            "scopeId": "scope:work",
+            "action": "apply",
+            "expectedGenerationId": generation_id,
+        });
+        let request: ApplyNftablesProjectionRequest =
+            serde_json::from_value(payload.clone()).expect("valid fenced projection request");
+        let encoded = serde_json::to_value(request).expect("projection request serializes");
+        assert_eq!(encoded["expectedGenerationId"], generation_id);
+
+        payload
+            .as_object_mut()
+            .unwrap()
+            .remove("expectedGenerationId");
+        assert!(serde_json::from_value::<ApplyNftablesProjectionRequest>(payload).is_err());
     }
 
     #[test]

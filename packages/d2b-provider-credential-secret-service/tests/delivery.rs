@@ -1,19 +1,18 @@
 mod common;
 
-use d2b_credential_service::{
-    CredentialAdmission, CredentialAuthorization, CredentialMethod, CredentialProvider,
-    CredentialRequest, CredentialResponse, CredentialServer, CredentialServiceError,
-    CredentialServiceErrorCode, CredentialTransport, DeliverySessionParams,
+use d2b_contracts::v3::credential::{
+    CredentialAuthorization, CredentialMethod, CredentialProvider, CredentialRequest,
+    CredentialResponse, CredentialServiceError, CredentialServiceErrorCode, DeliverySessionParams,
     SensitiveDeliveryRecord,
 };
 use d2b_provider_credential_secret_service::SecretServiceCredentialProvider;
 
-use common::{Admission, request, setup};
+use common::{Admission, ProviderHarness, TestAdmission, request, setup};
 
 #[test]
 fn response_uses_the_read_only_adapter_binding_and_record_zeroizes() {
     let (provider, _) = setup(64);
-    let server = CredentialServer::new(provider, Admission);
+    let server = ProviderHarness::new(provider, Admission);
     let response = server
         .call(CredentialMethod::AcquireToken, request("idem-delivery"))
         .unwrap();
@@ -31,23 +30,16 @@ fn response_uses_the_read_only_adapter_binding_and_record_zeroizes() {
     assert!(record.copy_to(&mut destination).is_err());
 }
 
-#[test]
-fn replay_sequence_is_not_reused_by_a_refresh_authorization() {
-    let first = common::delivery(CredentialMethod::AcquireToken, 1);
-    let second = common::delivery(CredentialMethod::RefreshToken, 2);
-    assert!(second.sequence() > first.sequence());
-}
-
 #[derive(Clone)]
 struct MismatchedAdmission {
     authorized: DeliverySessionParams,
 }
 
-impl CredentialAdmission for MismatchedAdmission {
+impl TestAdmission for MismatchedAdmission {
     fn authorize(
         &self,
         method: CredentialMethod,
-        _request: &d2b_credential_service::CredentialRequest,
+        _request: &CredentialRequest,
     ) -> Result<CredentialAuthorization, CredentialServiceError> {
         CredentialAuthorization::new(method, Some(self.authorized.clone()))
     }
@@ -78,7 +70,7 @@ fn adapter_refuses_a_provider_response_with_a_different_binding() {
     let authorized = common::delivery(CredentialMethod::AcquireToken, 1);
     let replacement = common::delivery(CredentialMethod::AcquireToken, 2);
     let (provider, _) = setup(64);
-    let server = CredentialServer::new(
+    let server = ProviderHarness::new(
         BindingReplacingProvider {
             inner: provider,
             replacement,

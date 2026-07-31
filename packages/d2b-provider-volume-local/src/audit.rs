@@ -5,14 +5,17 @@
 //! cannot carry content bytes, paths, credentials, process identity, command
 //! data, or backend diagnostics.
 
-use std::fmt;
+use std::fmt::{self, Write as _};
 use std::future::Future;
 
+use d2b_contracts::v3::volume::EntryType;
 use d2b_contracts::v3::zone_routing::ZonePath;
 use d2b_contracts::v3::{
-    MigrationPolicy, PersistenceClass, ResourceRef, SchemaVersion, VolumeStateSchemaId,
+    MigrationPolicy, PersistenceClass, ResourceGeneration, ResourceRef, SchemaVersion,
+    VolumeStateSchemaId,
 };
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 
 /// Every Volume-state lifecycle audit event kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -20,6 +23,8 @@ use serde::Serialize;
 pub enum VolumeAuditKind {
     /// First provisioning completed.
     VolumeProvisioned,
+    /// A declared layout entry was repaired.
+    VolumeLayoutRepaired,
     /// A migration worker was requested.
     VolumeMigrationStart,
     /// A migration committed.
@@ -40,16 +45,25 @@ pub enum VolumeAuditKind {
     VolumeIncidentHoldCleared,
     /// Sealing rotation began.
     VolumeSealingRotationStart,
+    /// Sealing rotation failed terminally.
+    VolumeSealingRotationFailed,
     /// Sealing rotation committed.
     VolumeSealingRotationCommitted,
     /// Destruction completed.
     VolumeDestroyed,
+    /// A provisioning marker was checked.
+    VolumeMarkerCheck,
+    /// A write was rejected because its quota was exceeded.
+    VolumeQuotaExceeded,
+    /// A closure-only store-view synchronization completed.
+    VolumeStoreSyncComplete,
 }
 
 impl VolumeAuditKind {
     /// Every event kind in canonical order.
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 18] = [
         Self::VolumeProvisioned,
+        Self::VolumeLayoutRepaired,
         Self::VolumeMigrationStart,
         Self::VolumeMigrationCommitted,
         Self::VolumeMigrationFailed,
@@ -60,9 +74,57 @@ impl VolumeAuditKind {
         Self::VolumeIncidentHoldSet,
         Self::VolumeIncidentHoldCleared,
         Self::VolumeSealingRotationStart,
+        Self::VolumeSealingRotationFailed,
         Self::VolumeSealingRotationCommitted,
         Self::VolumeDestroyed,
+        Self::VolumeMarkerCheck,
+        Self::VolumeQuotaExceeded,
+        Self::VolumeStoreSyncComplete,
     ];
+}
+
+/// Broker-owned Volume operation audit kinds named by the provider contract.
+///
+/// These names are catalogued here for completeness, but their records remain
+/// owned and emitted by the privileged broker rather than by the Zone stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum VolumeBrokerAuditKind {
+    /// A TPM state directory was provisioned or reconciled.
+    PrepareSwtpmDir,
+    /// A declared layout entry was created.
+    ProvisionLayoutEntry,
+    /// A declared layout entry was repaired.
+    RepairLayoutEntry,
+    /// A declared layout entry was removed.
+    CleanupLayoutEntry,
+    /// A closure-only store-view synchronization completed.
+    StoreSyncComplete,
+    /// A sealing-key rotation committed or recovered.
+    RotateSealingKey,
+}
+
+impl VolumeBrokerAuditKind {
+    /// Every broker-owned kind in canonical order.
+    pub const ALL: [Self; 6] = [
+        Self::PrepareSwtpmDir,
+        Self::ProvisionLayoutEntry,
+        Self::RepairLayoutEntry,
+        Self::CleanupLayoutEntry,
+        Self::StoreSyncComplete,
+        Self::RotateSealingKey,
+    ];
+
+    /// Return the stable broker operation name.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::PrepareSwtpmDir => "PrepareSwtpmDir",
+            Self::ProvisionLayoutEntry => "ProvisionLayoutEntry",
+            Self::RepairLayoutEntry => "RepairLayoutEntry",
+            Self::CleanupLayoutEntry => "CleanupLayoutEntry",
+            Self::StoreSyncComplete => "StoreSyncComplete",
+            Self::RotateSealingKey => "RotateSealingKey",
+        }
+    }
 }
 
 /// Closed result of a lifecycle transition.
@@ -105,14 +167,80 @@ pub enum SnapshotTrigger {
     PreRelocation,
 }
 
-/// Closed actor class for incident-hold transitions.
+/// A fixed-size digest of audit identity that never exposes its input.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct VolumeAuditDigest([u8; 32]);
+
+impl VolumeAuditDigest {
+    /// Derive an actor digest for an incident-hold transition.
+    pub fn actor(value: &[u8]) -> Self {
+        Self::derive(b"d2b-volume-audit-actor-v1\0", value)
+    }
+
+    /// Derive an operation-ID digest for a sealing transition.
+    pub fn operation_id(value: &[u8]) -> Self {
+        Self::derive(b"d2b-volume-audit-operation-v1\0", value)
+    }
+
+    fn derive(domain: &[u8], value: &[u8]) -> Self {
+        let mut hasher = Sha256::new();
+        hasher.update(domain);
+        hasher.update(value);
+        Self(hasher.finalize().into())
+    }
+}
+
+impl Serialize for VolumeAuditDigest {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut rendered = String::with_capacity(71);
+        rendered.push_str("sha256:");
+        for byte in self.0 {
+            write!(&mut rendered, "{byte:02x}").expect("writing to a String cannot fail");
+        }
+        serializer.serialize_str(&rendered)
+    }
+}
+
+impl fmt::Debug for VolumeAuditDigest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("VolumeAuditDigest(<redacted>)")
+    }
+}
+
+impl fmt::Display for VolumeAuditDigest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("VolumeAuditDigest(<redacted>)")
+    }
+}
+
+/// Closed layout-repair action class.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum VolumeAuditActor {
-    /// An authorized Zone administrator.
-    Admin,
-    /// The installed incident controller.
-    IncidentController,
+pub enum VolumeRepairAction {
+    /// Reconcile owner or group identity.
+    Owner,
+    /// Reconcile mode bits.
+    Mode,
+    /// Reconcile the declared ACL.
+    Acl,
+    /// Reconcile more than one declared property.
+    Combined,
+}
+
+/// Closed result class used by marker and sealing audit events.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum VolumeAuditResultClass {
+    /// The checked state was valid.
+    Verified,
+    /// The checked state was missing.
+    Missing,
+    /// The checked state had been replaced.
+    Replaced,
+    /// A sealing transition committed normally.
+    Committed,
+    /// A sealing transition recovered an already-committed result.
+    Recovered,
 }
 
 /// One authorized Zone audit stream record.
@@ -146,7 +274,21 @@ pub struct VolumeAuditEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     to_execution_ref: Option<ResourceRef>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    actor: Option<VolumeAuditActor>,
+    actor_digest: Option<VolumeAuditDigest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    operation_id_digest: Option<VolumeAuditDigest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    entry_type: Option<EntryType>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    action_class: Option<VolumeRepairAction>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    result_class: Option<VolumeAuditResultClass>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    from_generation: Option<ResourceGeneration>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    to_generation: Option<ResourceGeneration>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    generation_number: Option<ResourceGeneration>,
 }
 
 impl VolumeAuditEvent {
@@ -173,7 +315,14 @@ impl VolumeAuditEvent {
             snapshot_id: None,
             from_execution_ref: None,
             to_execution_ref: None,
-            actor: None,
+            actor_digest: None,
+            operation_id_digest: None,
+            entry_type: None,
+            action_class: None,
+            result_class: None,
+            from_generation: None,
+            to_generation: None,
+            generation_number: None,
         }
     }
 
@@ -240,9 +389,49 @@ impl VolumeAuditEvent {
         self
     }
 
-    /// Attach the closed actor class for an incident-hold transition.
-    pub const fn with_actor(mut self, actor: VolumeAuditActor) -> Self {
-        self.actor = Some(actor);
+    /// Attach the fixed digest of an incident-hold actor.
+    pub const fn with_actor_digest(mut self, actor: VolumeAuditDigest) -> Self {
+        self.actor_digest = Some(actor);
+        self
+    }
+
+    /// Attach the fixed digest of a sealing operation ID.
+    pub const fn with_operation_id_digest(mut self, operation_id: VolumeAuditDigest) -> Self {
+        self.operation_id_digest = Some(operation_id);
+        self
+    }
+
+    /// Attach closed layout-repair details without an entry path or ACL value.
+    pub const fn with_layout_repair(
+        mut self,
+        entry_type: EntryType,
+        action: VolumeRepairAction,
+    ) -> Self {
+        self.entry_type = Some(entry_type);
+        self.action_class = Some(action);
+        self
+    }
+
+    /// Attach a closed marker or transition result class.
+    pub const fn with_result_class(mut self, result: VolumeAuditResultClass) -> Self {
+        self.result_class = Some(result);
+        self
+    }
+
+    /// Attach a sealing generation transition.
+    pub const fn with_generation_transition(
+        mut self,
+        from: ResourceGeneration,
+        to: ResourceGeneration,
+    ) -> Self {
+        self.from_generation = Some(from);
+        self.to_generation = Some(to);
+        self
+    }
+
+    /// Attach a completed store-view generation number.
+    pub const fn with_generation_number(mut self, generation: ResourceGeneration) -> Self {
+        self.generation_number = Some(generation);
         self
     }
 

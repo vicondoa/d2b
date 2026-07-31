@@ -1221,7 +1221,6 @@ name = "d2b-provider-credential-entra"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
- "d2b-credential-service",
  "serde_json",
 ]
 
@@ -1230,7 +1229,6 @@ name = "d2b-provider-credential-managed-identity"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
- "d2b-credential-service",
  "serde_json",
 ]
 
@@ -1239,7 +1237,6 @@ name = "d2b-provider-credential-secret-service"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
- "d2b-credential-service",
  "serde_json",
 ]
 

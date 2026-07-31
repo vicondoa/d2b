@@ -1,11 +1,10 @@
 mod common;
 
+use d2b_contracts::v3::ResourceRef;
 use d2b_contracts::v3::credential::{
-    CredentialInteractionState, CredentialLeaseStatus, CredentialStatus, PlacementBinding,
-};
-use d2b_credential_service::{
-    CredentialMethod, CredentialResponse, CredentialServer, CredentialServiceError,
-    CredentialServiceErrorCode, CredentialTransport, encode_outer,
+    CredentialInteractionState, CredentialLeaseHandle, CredentialLeaseStatus, CredentialMethod,
+    CredentialRequest, CredentialResponse, CredentialServiceErrorCode, CredentialSourceVersion,
+    CredentialStatus, PlacementBinding, encode_outer,
 };
 use d2b_provider_credential_managed_identity::{
     ManagedIdentityAuditOperation, ManagedIdentityAuditOutcome, ManagedIdentityAuditRecord,
@@ -13,7 +12,7 @@ use d2b_provider_credential_managed_identity::{
     ManagedIdentityTelemetryOutcome, TelemetryField,
 };
 
-use common::{admitted, request, setup};
+use common::{ProviderHarness, admitted, setup};
 
 #[test]
 fn process_unique_managed_identity_canaries_are_absent_from_rendered_surfaces() {
@@ -23,15 +22,42 @@ fn process_unique_managed_identity_canaries_are_absent_from_rendered_surfaces() 
     let credential_uid = format!("credential-uid-{nonce}");
     let credential_digest = format!("credential-digest-{nonce}");
     let (provider, client) = setup();
+    let operation_id = format!("{}-{credential_digest}", client.response_canary);
+    let idempotency_key = credential_uid.clone();
+    let request = CredentialRequest::new(
+        ResourceRef::parse(&credential_ref).unwrap(),
+        &operation_id,
+        &idempotency_key,
+        common::EXPIRY,
+        15_000,
+    )
+    .unwrap();
+    let request_debug = format!("{request:?}");
     let provider_debug = format!("{provider:?}");
     let config_debug = format!("{:?}", provider.config());
-    let server = CredentialServer::new(provider, admitted());
+    let server = ProviderHarness::new(provider, admitted());
     let response = server
-        .call(CredentialMethod::AcquireToken, request("idem-canary"))
+        .call(CredentialMethod::AcquireToken, request)
         .unwrap();
     let CredentialResponse::AcquireToken(delivery) = &response else {
         panic!("acquire response");
     };
+    assert_eq!(
+        delivery.metadata.lease_handle,
+        CredentialLeaseHandle::parse(&client.token_canary).unwrap()
+    );
+    assert_eq!(
+        delivery.metadata.source_version,
+        CredentialSourceVersion::parse(&client.endpoint_canary).unwrap()
+    );
+    assert_eq!(
+        client.observed_request.lock().unwrap().as_ref(),
+        Some(&(
+            credential_ref.clone(),
+            operation_id.clone(),
+            idempotency_key.clone(),
+        ))
+    );
     let status = CredentialStatus::new(
         CredentialInteractionState::NotRequired,
         None,
@@ -52,18 +78,49 @@ fn process_unique_managed_identity_canaries_are_absent_from_rendered_surfaces() 
         ),
     )
     .unwrap();
-    let error = CredentialServiceError::new(CredentialServiceErrorCode::ProviderUnavailable);
-    let authorized_audit = format!(
-        "provider=credential-managed-identity operation=acquire-token resource_name_digest=sha256:{} outcome=success",
-        "e".repeat(64)
+    let (error_provider, error_client) = setup();
+    *error_client.issue_error.lock().unwrap() =
+        Some(d2b_provider_credential_managed_identity::ManagedIdentityClientError::Unavailable);
+    let error = ProviderHarness::new(error_provider, admitted())
+        .call(
+            CredentialMethod::AcquireToken,
+            CredentialRequest::new(
+                ResourceRef::parse(&credential_ref).unwrap(),
+                &operation_id,
+                &idempotency_key,
+                common::EXPIRY,
+                15_000,
+            )
+            .unwrap(),
+        )
+        .unwrap_err();
+    assert_eq!(
+        error.code(),
+        CredentialServiceErrorCode::ProviderUnavailable
     );
+    assert_eq!(
+        error_client.observed_request.lock().unwrap().as_ref(),
+        Some(&(
+            credential_ref.clone(),
+            operation_id.clone(),
+            idempotency_key.clone(),
+        ))
+    );
+    let audit_digest = CredentialLeaseHandle::parse(&credential_digest).unwrap();
     let typed_audit = ManagedIdentityAuditRecord::new(
-        format!("sha256:{}", "e".repeat(64)),
+        audit_digest.as_opaque_str(),
         ManagedIdentityAuditOperation::AcquireToken,
         ManagedIdentityAuditOutcome::Success,
         1,
     )
     .unwrap();
+    let audit_error = ManagedIdentityAuditRecord::new(
+        &credential_ref,
+        ManagedIdentityAuditOperation::AcquireToken,
+        ManagedIdentityAuditOutcome::Success,
+        1,
+    )
+    .unwrap_err();
     let telemetry = ManagedIdentityTelemetryFrame::new(
         "dev",
         ManagedIdentityTelemetryOperation::AcquireToken,
@@ -73,32 +130,37 @@ fn process_unique_managed_identity_canaries_are_absent_from_rendered_surfaces() 
     assert!(
         ManagedIdentityTelemetryFrame::validate_collector_fields(telemetry.all_fields()).is_ok()
     );
-    assert!(
+    let telemetry_error =
         ManagedIdentityTelemetryFrame::validate_collector_fields([TelemetryField {
-            key: "d2b.credential.name",
+            key: "outcome",
             value: credential_name.clone(),
         }])
-        .is_err()
-    );
+        .unwrap_err();
     let surfaces = [
         provider_debug,
         config_debug,
+        request_debug,
         format!("{response:?}"),
         String::from_utf8_lossy(&encode_outer(delivery).unwrap()).into_owned(),
+        format!("{:?}", delivery.metadata.lease_handle),
+        delivery.metadata.lease_handle.to_string(),
+        format!("{:?}", delivery.metadata.source_version),
+        delivery.metadata.source_version.to_string(),
         format!("{status:?}"),
         serde_json::to_string(&status).unwrap(),
         format!("{error:?}"),
         error.to_string(),
-        authorized_audit,
         format!("{typed_audit:?}"),
         typed_audit.to_wire_record(),
+        format!("{audit_error:?}"),
+        audit_error.to_string(),
         format!("{telemetry:?}"),
         format!("{:?}", telemetry.resource_attributes()),
         format!("{:?}", telemetry.span_attributes()),
         format!("{:?}", telemetry.metric_labels()),
-        "provider=credential-managed-identity operation=acquire-token outcome=success".to_owned(),
-        "d2b.credential.provider=credential-managed-identity operation_class=acquire-token outcome=success"
-            .to_owned(),
+        format!("{:?}", telemetry.metric_map()),
+        format!("{telemetry_error:?}"),
+        telemetry_error.to_string(),
     ];
     let markers = [
         client.token_canary.as_str(),

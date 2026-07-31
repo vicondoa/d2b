@@ -1,6 +1,5 @@
 use d2b_contracts::v3::ResourceRef;
-use d2b_contracts::v3::credential::PlacementBinding;
-use d2b_credential_service::CredentialMethod;
+use d2b_contracts::v3::credential::{CredentialMethod, PlacementBinding};
 use d2b_provider_credential_managed_identity::{
     AGENT_BINARY, CONTROLLER_BINARY, ManagedIdentityController, ManagedIdentityPlacement,
     ManagedIdentityRoute, agent_binary_entrypoint, controller_binary_entrypoint,

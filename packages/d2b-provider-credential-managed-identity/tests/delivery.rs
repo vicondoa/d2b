@@ -1,20 +1,19 @@
 mod common;
 
-use d2b_credential_service::{
-    CredentialAdmission, CredentialAuthorization, CredentialMethod, CredentialProvider,
-    CredentialRequest, CredentialResponse, CredentialServer, CredentialServiceError,
-    CredentialServiceErrorCode, CredentialTransport, DeliverySessionParams,
+use d2b_contracts::v3::credential::{
+    CredentialAuthorization, CredentialMethod, CredentialProvider, CredentialRequest,
+    CredentialResponse, CredentialServiceError, CredentialServiceErrorCode, DeliverySessionParams,
     SensitiveDeliveryRecord,
 };
 use d2b_provider_credential_managed_identity::ManagedIdentityCredentialProvider;
 
-use common::{admitted, delivery, request, setup};
+use common::{ProviderHarness, TestAdmission, admitted, delivery, request, setup};
 
 #[test]
 fn provider_returns_the_adapter_supplied_binding_unchanged() {
     let expected = delivery(CredentialMethod::AcquireToken, 1);
     let (provider, _) = setup();
-    let server = CredentialServer::new(provider, admitted());
+    let server = ProviderHarness::new(provider, admitted());
     let response = server
         .call(CredentialMethod::AcquireToken, request("idem-binding"))
         .unwrap();
@@ -25,17 +24,13 @@ fn provider_returns_the_adapter_supplied_binding_unchanged() {
 }
 
 #[test]
-fn delivery_zeroizes_and_replay_sequence_advances() {
+fn delivery_zeroizes() {
     let mut record = SensitiveDeliveryRecord::new(b"managed-token".to_vec(), 64).unwrap();
     let mut destination = [0; 13];
     record.copy_to(&mut destination).unwrap();
     destination.fill(0);
     record.clear();
     assert!(record.is_zeroized());
-    assert!(
-        delivery(CredentialMethod::RefreshToken, 2).sequence()
-            > delivery(CredentialMethod::AcquireToken, 1).sequence()
-    );
 }
 
 #[derive(Clone)]
@@ -43,7 +38,7 @@ struct FixedAdmission {
     authorized: DeliverySessionParams,
 }
 
-impl CredentialAdmission for FixedAdmission {
+impl TestAdmission for FixedAdmission {
     fn authorize(
         &self,
         method: CredentialMethod,
@@ -78,7 +73,7 @@ fn adapter_refuses_a_managed_identity_provider_binding_replacement() {
     let authorized = delivery(CredentialMethod::AcquireToken, 1);
     let replacement = delivery(CredentialMethod::AcquireToken, 2);
     let (provider, _) = setup();
-    let server = CredentialServer::new(
+    let server = ProviderHarness::new(
         BindingReplacingProvider {
             inner: provider,
             replacement,

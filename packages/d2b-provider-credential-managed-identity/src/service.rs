@@ -1,10 +1,9 @@
 //! Credential service dispatch for the injected managed identity client.
 
-use d2b_contracts::v3::credential::CredentialLeaseState;
-use d2b_credential_service::{
-    CredentialAuthorization, CredentialMethod, CredentialOutcomeCode, CredentialProvider,
-    CredentialRequest, CredentialResponse, CredentialServiceError, CredentialServiceErrorCode,
-    DeliveryResponse, MetadataResponse,
+use d2b_contracts::v3::credential::{
+    CredentialAuthorization, CredentialLeaseState, CredentialMethod, CredentialOutcomeCode,
+    CredentialProvider, CredentialRequest, CredentialResponse, CredentialServiceError,
+    CredentialServiceErrorCode, DeliveryResponse, MetadataResponse,
 };
 
 use crate::{
@@ -41,9 +40,12 @@ impl ManagedIdentityCredentialProvider {
             .delivery_session_params()
             .cloned()
             .ok_or_else(invariant)?;
+        let deadline = Self::operation_deadline(request.deadline_unix_ms())?;
+        let _mutation = self.mutation_guard()?;
         let key = request.credential_ref().to_canonical_string();
         {
-            let leases = self.leases.lock().map_err(|_| invariant())?;
+            let mut leases = self.leases.lock().map_err(|_| invariant())?;
+            leases.retain(|_, record| record.metadata.state == CredentialLeaseState::Active);
             if let Some(existing) = leases.get(&key) {
                 if existing.idempotency_key == request.idempotency_key() {
                     return Ok(CredentialResponse::AcquireToken(DeliveryResponse {
@@ -64,7 +66,7 @@ impl ManagedIdentityCredentialProvider {
             idempotency_key: request.idempotency_key().to_owned(),
             requested_expiry_unix_ms: request.requested_expiry_unix_ms(),
         };
-        let grant = Self::poll_client(self.client.issue_lease(&client_request))?;
+        let grant = Self::poll_client(self.client.issue_lease(&client_request), deadline)?;
         let metadata = Self::grant_metadata(grant, request.requested_expiry_unix_ms())?;
         self.leases.lock().map_err(|_| invariant())?.insert(
             key,
@@ -88,6 +90,8 @@ impl ManagedIdentityCredentialProvider {
             .delivery_session_params()
             .cloned()
             .ok_or_else(invariant)?;
+        let deadline = Self::operation_deadline(request.deadline_unix_ms())?;
+        let _mutation = self.mutation_guard()?;
         let key = request.credential_ref().to_canonical_string();
         let record = self
             .leases
@@ -100,13 +104,13 @@ impl ManagedIdentityCredentialProvider {
             credential_ref: request.credential_ref().clone(),
             metadata: record.metadata,
         };
-        let inspection = Self::poll_client(self.client.inspect_lease(&lease))?;
+        let inspection = Self::poll_client(self.client.inspect_lease(&lease), deadline)?;
         if inspection.state != CredentialLeaseState::Active
             || inspection.rotation_generation != lease.metadata.rotation_generation
         {
             return Err(invariant());
         }
-        let grant = Self::poll_client(self.client.refresh_lease(&lease))?;
+        let grant = Self::poll_client(self.client.refresh_lease(&lease), deadline)?;
         let metadata = Self::grant_metadata(grant, request.requested_expiry_unix_ms())?;
         self.leases.lock().map_err(|_| invariant())?.insert(
             key,
@@ -125,6 +129,8 @@ impl ManagedIdentityCredentialProvider {
         &self,
         request: &CredentialRequest,
     ) -> Result<CredentialResponse, CredentialServiceError> {
+        let deadline = Self::operation_deadline(request.deadline_unix_ms())?;
+        let _mutation = self.mutation_guard()?;
         let key = request.credential_ref().to_canonical_string();
         let mut leases = self.leases.lock().map_err(|_| invariant())?;
         let record = leases.get_mut(&key).ok_or_else(expired)?;
@@ -135,7 +141,7 @@ impl ManagedIdentityCredentialProvider {
                 credential_ref: request.credential_ref().clone(),
                 metadata: record.metadata.clone(),
             };
-            let revocation = Self::poll_client(self.client.revoke_lease(&lease))?;
+            let revocation = Self::poll_client(self.client.revoke_lease(&lease), deadline)?;
             record.metadata.state = CredentialLeaseState::Revoked;
             match revocation {
                 crate::ManagedIdentityLeaseRevocation::Revoked => CredentialOutcomeCode::Revoked,
@@ -154,6 +160,7 @@ impl ManagedIdentityCredentialProvider {
         &self,
         request: &CredentialRequest,
     ) -> Result<CredentialResponse, CredentialServiceError> {
+        let deadline = Self::operation_deadline(request.deadline_unix_ms())?;
         let record = self
             .leases
             .lock()
@@ -165,7 +172,7 @@ impl ManagedIdentityCredentialProvider {
             credential_ref: request.credential_ref().clone(),
             metadata: record.metadata,
         };
-        let inspection = Self::poll_client(self.client.inspect_lease(&lease))?;
+        let inspection = Self::poll_client(self.client.inspect_lease(&lease), deadline)?;
         let mut metadata = lease.metadata;
         metadata.state = inspection.state;
         metadata.source_version = inspection.source_version;

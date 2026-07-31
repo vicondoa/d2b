@@ -4,14 +4,14 @@ mod common;
 mod provider_conformance;
 
 use d2b_contracts::v3::ResourceRef;
-use d2b_contracts::v3::credential::{AudienceToken, CredentialSpec, OperationClass};
+use d2b_contracts::v3::credential::{
+    AudienceToken, CredentialMethod, CredentialResourceVerb, CredentialSpec, OperationClass,
+    RolePermission, authorize_operation,
+};
 use d2b_contracts::v3::execution_policy::to_base_object;
 use d2b_contracts::v3::{
     BaseSchemaBinding, BaseSchemaIdentity, ObjectFieldSchema, ResourceSchemaContract, ResourceSpec,
     ResourceTypeName, SchemaFingerprint, SchemaVersion,
-};
-use d2b_credential_service::{
-    CredentialMethod, CredentialResourceVerb, RolePermission, authorize_operation,
 };
 use d2b_provider_credential_entra::{EntraEndpointPolicy, LOGIN_ENDPOINT_PURPOSE};
 use provider_conformance::{

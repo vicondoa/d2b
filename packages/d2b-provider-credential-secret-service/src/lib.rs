@@ -14,16 +14,15 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::task::{Context, Poll, Wake, Waker};
 use std::thread::{self, Thread};
+use std::time::{Duration, Instant};
 
 use d2b_contracts::v3::ResourceRef;
 use d2b_contracts::v3::credential::{
-    CredentialLeaseHandle, CredentialLeaseState, CredentialSourceVersion, PlacementBinding,
-};
-use d2b_credential_service::{
-    CredentialMetadata, CredentialOutcomeCode, CredentialServiceError, CredentialServiceErrorCode,
+    CredentialLeaseHandle, CredentialLeaseState, CredentialMetadata, CredentialOutcomeCode,
+    CredentialServiceError, CredentialServiceErrorCode, CredentialSourceVersion, PlacementBinding,
 };
 
 pub use controller::{
@@ -406,6 +405,7 @@ impl SecretServiceCredentialProviderFactory {
             consumer_ref: self.consumer_ref,
             port: self.port,
             leases: Mutex::new(BTreeMap::new()),
+            mutation_gate: Mutex::new(()),
         }
     }
 }
@@ -429,6 +429,7 @@ pub struct SecretServiceCredentialProvider {
     consumer_ref: Option<ResourceRef>,
     port: Arc<dyn Oo7SecretServicePort>,
     leases: Mutex<BTreeMap<String, LeaseRecord>>,
+    mutation_gate: Mutex<()>,
 }
 
 impl SecretServiceCredentialProvider {
@@ -467,8 +468,29 @@ impl SecretServiceCredentialProvider {
         CredentialServiceError::new(code)
     }
 
+    pub(crate) fn mutation_guard(&self) -> Result<MutexGuard<'_, ()>, CredentialServiceError> {
+        match self.mutation_gate.try_lock() {
+            Ok(guard) => Ok(guard),
+            Err(TryLockError::WouldBlock) => Err(CredentialServiceError::new(
+                CredentialServiceErrorCode::ProviderUnavailable,
+            )),
+            Err(TryLockError::Poisoned(_)) => Err(CredentialServiceError::new(
+                CredentialServiceErrorCode::InvariantFailure,
+            )),
+        }
+    }
+
+    pub(crate) fn operation_deadline(deadline_ms: u64) -> Result<Instant, CredentialServiceError> {
+        Instant::now()
+            .checked_add(Duration::from_millis(deadline_ms))
+            .ok_or_else(|| {
+                CredentialServiceError::new(CredentialServiceErrorCode::DeadlineExceeded)
+            })
+    }
+
     pub(crate) fn poll_port<T>(
         mut future: SecretServiceFuture<'_, T>,
+        deadline: Instant,
     ) -> Result<T, CredentialServiceError> {
         struct ThreadWake(Thread);
         impl Wake for ThreadWake {
@@ -483,9 +505,24 @@ impl SecretServiceCredentialProvider {
         let waker = Waker::from(Arc::new(ThreadWake(thread::current())));
         let mut context = Context::from_waker(&waker);
         loop {
+            if Instant::now() >= deadline {
+                return Err(CredentialServiceError::new(
+                    CredentialServiceErrorCode::DeadlineExceeded,
+                ));
+            }
             match future.as_mut().poll(&mut context) {
                 Poll::Ready(result) => return result.map_err(Self::map_port_error),
-                Poll::Pending => thread::park(),
+                Poll::Pending => {
+                    let remaining =
+                        deadline
+                            .checked_duration_since(Instant::now())
+                            .ok_or_else(|| {
+                                CredentialServiceError::new(
+                                    CredentialServiceErrorCode::DeadlineExceeded,
+                                )
+                            })?;
+                    thread::park_timeout(remaining);
+                }
             }
         }
     }

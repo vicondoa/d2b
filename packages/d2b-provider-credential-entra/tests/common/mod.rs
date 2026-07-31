@@ -4,14 +4,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use d2b_contracts::v3::credential::{
-    AudienceToken, CredentialLeaseHandle, CredentialLeaseState, CredentialSourceVersion,
-    PlacementBinding,
+    AudienceToken, CredentialAuthorization, CredentialLeaseHandle, CredentialLeaseState,
+    CredentialMethod, CredentialProvider, CredentialRequest, CredentialResponse,
+    CredentialServiceError, CredentialServiceErrorCode, CredentialSourceVersion,
+    DeliveryRouteDigest, DeliverySessionParams, PlacementBinding, dispatch_authorized_provider,
 };
 use d2b_contracts::v3::{ResourceGeneration, ResourceRef, ResourceUid};
-use d2b_credential_service::{
-    CredentialAdmission, CredentialAuthorization, CredentialMethod, CredentialRequest,
-    CredentialServiceError, DeliveryRouteDigest, DeliverySessionParams,
-};
 use d2b_provider_credential_entra::{
     EntraClientError, EntraClientState, EntraConfig, EntraCredentialClient,
     EntraCredentialProvider, EntraCredentialProviderFactory, EntraFuture, EntraLeaseGrant,
@@ -29,6 +27,7 @@ pub struct FakeEntraClient {
     pub refresh_calls: AtomicUsize,
     pub revoke_calls: AtomicUsize,
     pub issue_error: Mutex<Option<EntraClientError>>,
+    pub observed_request: Mutex<Option<(String, String, String)>>,
     pub token_canary: String,
     pub endpoint_canary: String,
     pub cookie_canary: String,
@@ -45,6 +44,7 @@ impl FakeEntraClient {
             refresh_calls: AtomicUsize::new(0),
             revoke_calls: AtomicUsize::new(0),
             issue_error: Mutex::new(None),
+            observed_request: Mutex::new(None),
             token_canary: format!("entra-token-canary-{nonce}"),
             endpoint_canary: format!("entra-endpoint-canary-{nonce}"),
             cookie_canary: format!("entra-cookie-canary-{nonce}"),
@@ -65,7 +65,11 @@ impl EntraCredentialClient for FakeEntraClient {
         let expiry = request.requested_expiry_unix_ms();
         let token = self.token_canary.clone();
         let endpoint = self.endpoint_canary.clone();
-        let cookie = self.cookie_canary.clone();
+        *self.observed_request.lock().unwrap() = Some((
+            request.credential_ref().to_canonical_string(),
+            request.operation_id().to_owned(),
+            request.idempotency_key().to_owned(),
+        ));
         let inspection = &self.inspection;
         Box::pin(async move {
             if state == EntraClientState::InteractionRequired {
@@ -74,10 +78,9 @@ impl EntraCredentialClient for FakeEntraClient {
             if let Some(error) = error {
                 return Err(error);
             }
-            assert!(!token.is_empty() && !endpoint.is_empty() && !cookie.is_empty());
             let grant = EntraLeaseGrant {
-                lease_handle: CredentialLeaseHandle::parse("entra-lease").unwrap(),
-                source_version: CredentialSourceVersion::parse("entra-source-1").unwrap(),
+                lease_handle: CredentialLeaseHandle::parse(&token).unwrap(),
+                source_version: CredentialSourceVersion::parse(&endpoint).unwrap(),
                 rotation_generation: 1,
                 expires_at_unix_ms: expiry,
             };
@@ -182,7 +185,15 @@ pub struct Admission {
     pub authenticated_consumer: ResourceRef,
 }
 
-impl CredentialAdmission for Admission {
+pub trait TestAdmission {
+    fn authorize(
+        &self,
+        method: CredentialMethod,
+        request: &CredentialRequest,
+    ) -> Result<CredentialAuthorization, CredentialServiceError>;
+}
+
+impl TestAdmission for Admission {
     fn authorize(
         &self,
         method: CredentialMethod,
@@ -192,13 +203,40 @@ impl CredentialAdmission for Admission {
             != ResourceRef::parse("Provider/runtime-azure-container-apps").unwrap()
         {
             return Err(CredentialServiceError::new(
-                d2b_credential_service::CredentialServiceErrorCode::OperationDenied,
+                CredentialServiceErrorCode::OperationDenied,
             ));
         }
         CredentialAuthorization::new(
             method,
             method.requires_delivery().then(|| delivery(method, 1)),
         )
+    }
+}
+
+pub struct ProviderHarness<P, A> {
+    provider: P,
+    admission: A,
+}
+
+impl<P, A> ProviderHarness<P, A>
+where
+    P: CredentialProvider,
+    A: TestAdmission,
+{
+    pub const fn new(provider: P, admission: A) -> Self {
+        Self {
+            provider,
+            admission,
+        }
+    }
+
+    pub fn call(
+        &self,
+        method: CredentialMethod,
+        request: CredentialRequest,
+    ) -> Result<CredentialResponse, CredentialServiceError> {
+        let authorization = self.admission.authorize(method, &request)?;
+        dispatch_authorized_provider(&self.provider, method, &request, &authorization)
     }
 }
 
