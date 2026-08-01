@@ -23,6 +23,14 @@
   the same errors slightly earlier at the cost of running the compiler twice.
   Measured cold, that is 153 s against 89 s for an identical result. The
   fake-backends pass never had one.
+- The gate's Nix-store cache entry can now be replaced when its key changes.
+  The job was already configured to purge the entry it supersedes, but the
+  workflow granted no permission to delete one, so the purge failed after the
+  replacement had been saved and the superseded entry stayed resident forever.
+  Two such entries were resident at roughly 1.25 GiB each against a hard
+  repository-wide budget, and overrunning that budget evicts entries other
+  jobs depend on. The permission is granted to that job alone, which is the
+  only one that deletes anything.
 - The resource API's external capability seal reuses its fixture build between
   runs, keyed on the compiler that produced it, rather than rebuilding roughly
   a gigabyte of dependencies every time. Measured locally at 40 s against 2 s.

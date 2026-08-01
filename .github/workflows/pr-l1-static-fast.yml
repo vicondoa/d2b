@@ -418,6 +418,9 @@ jobs:
   test-fixture-contracts:
     needs: [tier0]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
     # Warm (rust-cache hit): ~8-12 min. Cold (no cache): ~43 min.
     timeout-minutes: 60
     env:

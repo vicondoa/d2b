@@ -308,10 +308,34 @@ def heavy_gate_step(job: dict[str, Any]) -> str:
     )
 
 
+def job_permissions(job: dict[str, Any]) -> str:
+    """Per-job token scope, granted only where a step provably needs it.
+
+    The workflow default is `contents: read`, which is what almost every job
+    wants. A Nix-store entry is the exception: cache-nix-action's `purge`
+    replaces the previous entry for a key prefix, and deleting an Actions cache
+    goes through the REST API, which needs `actions: write`. Without it the
+    purge fails with "Resource not accessible by integration" - and it fails
+    after the new entry has already been saved, so every key change orphans the
+    entry it was meant to replace. Measured on v3, that left two
+    `nix-v1-Linux-test-fixture-contracts-` entries resident at about 1.25 GiB
+    each, one of them permanently unreachable, against a hard 10 GiB
+    repository-wide budget whose overrun evicts entries other jobs depend on.
+
+    Scoped to the job rather than the workflow: nothing else here deletes a
+    cache. Fork pull requests receive a read-only token regardless, so this
+    grants nothing across a trust boundary; it takes effect on same-repository
+    pushes, which is where the entry being replaced actually lives.
+    """
+    if job["ciJobId"] not in NIX_CACHED_JOBS:
+        return ""
+    return "    permissions:\n      contents: read\n      actions: write\n"
+
+
 def rust_job(job: dict[str, Any]) -> str:
     return f"""  {job["ciJobId"]}:
 {needs_line(job)}    runs-on: {job["runsOn"]}
-    # Warm (rust-cache hit): ~8-12 min. Cold (no cache): ~43 min.
+{job_permissions(job)}    # Warm (rust-cache hit): ~8-12 min. Cold (no cache): ~43 min.
     timeout-minutes: {job["timeoutMinutes"]}
     env:
       # CI uses Swatinem/rust-cache (target-dir caching) and NOT sccache. That
