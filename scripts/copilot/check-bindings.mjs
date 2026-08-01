@@ -583,7 +583,11 @@ for (const reg of ["friction-log.md", "deferred-work.md", "engineering-debt.md"]
     registerRows += 1;
     const wave = cells[0].replace(/`/g, "");
     if (!wave) {
-      fail(`.specify/memory/${reg}:${i + 1}: this row names no wave.`);
+      fail(
+        `.specify/memory/${reg}:${i + 1}: this row names no wave. Use the legacy ` +
+        `closed set W0..W8, or a qualified token whose program component carries ` +
+        `no hyphen (copilotw6, spec001w1, adr046w3fu2).`,
+      );
     } else if (!ORIGIN_WAVE.test(wave)) {
       fail(
         `.specify/memory/${reg}:${i + 1}: wave "${wave}" is not a legal wave token. ` +
@@ -595,7 +599,8 @@ for (const reg of ["friction-log.md", "deferred-work.md", "engineering-debt.md"]
     if (!category) {
       fail(
         `.specify/memory/${reg}:${i + 1}: this row names no category, so it groups ` +
-        `with nothing and the three-wave escalation rule cannot count it.`,
+        `with nothing and the three-wave escalation rule cannot count it. Use one of ` +
+        `${MEMORY_CATEGORIES.join(", ")}.`,
       );
     } else if (!MEMORY_CATEGORIES.includes(category)) {
       fail(
