@@ -592,7 +592,9 @@ def flake_x86_realized_job(job: dict[str, Any]) -> str:
     to be good enough for a useful hit rate, and restore-keys are safe.
     """
     cache_key = (
-        "d2b-realized-v1-${{ runner.os }}-${{ matrix.check }}-"
+        # v2 carries a path manifest alongside the binary cache; v1 entries
+        # have none and cannot be restored by the current importer.
+        "d2b-realized-v2-${{ runner.os }}-${{ matrix.check }}-"
         "${{ hashFiles('flake.lock', 'flake.nix', 'pkgs/**') }}"
     )
     return f"""  {job["ciJobId"]}:
@@ -614,7 +616,13 @@ def flake_x86_realized_job(job: dict[str, Any]) -> str:
           path: {REALIZED_CACHE_DIR}
           key: {cache_key}
           restore-keys: |
-            d2b-realized-v1-${{{{ runner.os }}}}-${{{{ matrix.check }}}}-
+            d2b-realized-v2-${{{{ runner.os }}}}-${{{{ matrix.check }}}}-
+      - name: Realized-check cache self-test
+        # Two seconds, and it runs where Nix is guaranteed. It pins the copy
+        # shape the restore depends on, whose last regression was invisible:
+        # the entry restored, the copy failed, the shard rebuilt from scratch,
+        # and the step still reported success.
+        run: bash tests/tools/realized-check-cache.sh self-test
       - name: Restore prebuilt check inputs
         # Best-effort: a miss costs the build this cache exists to avoid, and
         # can never produce a wrong result, so it must not fail the shard.

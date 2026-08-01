@@ -715,9 +715,15 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: ${{ runner.temp }}/d2b-realized-cache
-          key: d2b-realized-v1-${{ runner.os }}-${{ matrix.check }}-${{ hashFiles('flake.lock', 'flake.nix', 'pkgs/**') }}
+          key: d2b-realized-v2-${{ runner.os }}-${{ matrix.check }}-${{ hashFiles('flake.lock', 'flake.nix', 'pkgs/**') }}
           restore-keys: |
-            d2b-realized-v1-${{ runner.os }}-${{ matrix.check }}-
+            d2b-realized-v2-${{ runner.os }}-${{ matrix.check }}-
+      - name: Realized-check cache self-test
+        # Two seconds, and it runs where Nix is guaranteed. It pins the copy
+        # shape the restore depends on, whose last regression was invisible:
+        # the entry restored, the copy failed, the shard rebuilt from scratch,
+        # and the step still reported success.
+        run: bash tests/tools/realized-check-cache.sh self-test
       - name: Restore prebuilt check inputs
         # Best-effort: a miss costs the build this cache exists to avoid, and
         # can never produce a wrong result, so it must not fail the shard.

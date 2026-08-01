@@ -1208,9 +1208,24 @@ CI that shard carries its must-build inputs between runs through
 `cache.nixos.org` does not already serve - two packages, about 30 MB - rather
 than a whole-store cache. Keep it that size: the Actions cache is a hard
 repository-wide budget, and this shard is affordable precisely because it is a
-targeted entry. A carried entry can never produce a wrong result, since store
-paths are content-addressed and a changed derivation simply misses and builds,
-so the import is deliberately best-effort and must never fail the shard.
+targeted entry. Publish only each input's **default** output; a package built
+with separate debug info also declares a `debug` output that no `--help`
+assertion can need, and carrying those took the same entry to 175 MiB. A
+carried entry can never produce a wrong result, since store paths are
+content-addressed and a changed derivation simply misses and builds, so the
+import is deliberately best-effort and must never fail the shard.
+
+Two properties of that script are load-bearing and were each learned the
+expensive way, so do not "simplify" either. It resolves its paths with
+`nix-store --query` and restores them **by name from a manifest the export
+writes**, never with `nix derivation show`-plus-jq and never with
+`nix copy --all`. This tree evaluates under Lix and CI installs upstream Nix;
+both of those spellings work under Lix and fail under upstream Nix, and both
+fail as a silent empty result rather than as an error. Each one cost a full
+run whose only symptom was a lane that never got faster. `import` therefore
+decides success by re-querying the store rather than by trusting the copy's
+exit status, and the shard runs `realized-check-cache.sh self-test` - which
+fails closed on a reintroduced `--all` - before the restore.
 
 Do not resolve this by deleting the check. The `--backend` and
 `--vhost-user-media` flags are separately pinned in
