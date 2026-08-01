@@ -463,7 +463,8 @@ changelog-fold:
 ##   closed census (D2B_RUNTIME_CENSUS) of crates, warm-builds those census
 ##   crates with the same compiler flags and selectors used by measurement, then
 ##   collects repeated samples at two granularities: per-test libtest wall-clock
-##   values are advisory diagnostics, while each crate is enforced against the
+##   values are advisory diagnostics below the hard 60-second per-test ceiling,
+##   while each crate is enforced against the
 ##   process CPU consumed by its complete cargo test invocation (`time -p`
 ##   user+sys). CPU time excludes time descheduled behind unrelated machine
 ##   load, so concurrent work cannot manufacture a test regression. The
@@ -474,10 +475,11 @@ changelog-fold:
 ##   also runs the hermetic placement lint over integration tests.
 ##
 ##   This is an absolute aggregate CPU budget gate. It holds no baseline and
-##   makes no historical regression claim. Per-test wall-clock values never fail
-##   it; every per-test threshold breach is emitted to stderr as a non-failing
-##   advisory so CI and operators can enumerate likely contributors to a crate
-##   CPU increase. Libtest exposes per-test wall time, not per-test CPU time.
+##   makes no historical regression claim. A per-test sample above 60 seconds
+##   fails; lower per-test threshold breaches are emitted to stderr as
+##   non-failing advisories so CI and operators can enumerate likely
+##   contributors to a crate CPU increase. Libtest exposes per-test wall time,
+##   not per-test CPU time.
 ##   Measuring the latter would require a custom harness or one timed process per
 ##   test per repetition, whose startup cost and census-sized process fan-out
 ##   would materially change this gate.

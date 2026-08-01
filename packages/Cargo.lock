@@ -936,18 +936,13 @@ dependencies = [
  "d2b-resource-store",
  "d2b-session",
  "d2b-session-unix",
- "futures-util",
  "getrandom 0.3.4",
- "protobuf",
  "quote",
- "serde",
  "serde_json",
  "sha2",
  "snow",
  "syn 2.0.118",
  "tokio",
- "ttrpc",
- "zeroize",
 ]
 
 [[package]]
@@ -1177,7 +1172,6 @@ dependencies = [
 name = "d2b-process"
 version = "0.0.0-bootstrap"
 dependencies = [
- "d2b-contracts",
  "d2b-process-conformance",
 ]
 
@@ -1459,7 +1453,6 @@ dependencies = [
  "async-trait",
  "d2b-contracts",
  "d2b-resource-api",
- "d2b-resource-store",
  "futures-util",
  "protobuf",
  "sha2",
