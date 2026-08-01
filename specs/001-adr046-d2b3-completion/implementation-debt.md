@@ -2061,5 +2061,45 @@ their validation evidence rather than a criticism of it.
   runner can measure (19.6), and the standing debt table in 19.9.
 - Two **specification gaps** carried forward: derivation output layout (19.7) and
   the security-key backing set (19.8).
-- Two **inferences** a reviewer should confirm: per-round prep against the
+- Three **inferences** a reviewer should confirm: per-round prep against the
   one-snapshot requirement (19.1) and the `redb` dependency placement (19.4).
+
+### 19.11 The corrected RSS measurement of record is integrator work, not slice work
+
+**The ruling.** The `ADR046-store-004` slice implements the four corrections and
+may take a **provisional** RSS reading for its own feedback. The **measurement of
+record** is taken by the integrator, deliberately, on a quiet machine, and the
+machine state is recorded beside the number.
+
+**What went wrong first, recorded because the wave nearly shipped on it.** The
+slice was originally instructed to guard the measurement by checking
+`pgrep -a cargo` and to "wait and retry" if the machine was busy. That guard was
+wrong in three independent ways.
+
+1. **It watches the wrong processes.** `cargo` forks `rustc`, and the memory is
+   in the children, not the parent. At the moment this was caught the host was
+   running five `rustc` processes at 1.33 GB, 1.24 GB, 838 MB, 788 MB and 568 MB,
+   plus a `nix build` at **8.8 GB** resident and a separate `nix eval` at 3.0 GB.
+   None of those are named `cargo`. The check reported three processes and would
+   have read as near-idle.
+2. **The wait is unbounded and belongs to nobody.** The load came from unrelated
+   worktrees (`d2b-ci-gate-cost` running a full workspace `nextest`, and
+   `d2b-copilot` running a Nix eval). Those are the operator's, they run for
+   hours, and a slice agent has no authority to wait on them or standing to
+   decide when they are done.
+3. **The bias runs toward a false pass, which is the unsafe direction.** Under
+   memory pressure the kernel reclaims, so a whole-process **maximum** RSS
+   high-water mark reads *lower*, not higher. A measurement taken on a loaded
+   machine is therefore biased toward passing the 24,576 KiB gate. That gate is
+   what unblocks the wave's entire critical path, so a falsely-passing reading
+   would have been the most expensive possible defect to carry forward.
+
+**The precondition, stated so it is reproducible.** Before the measurement of
+record: no `rustc`, `cargo`, `nix build`, or `nix eval` process belonging to any
+worktree; `/proc/pressure/memory` `full avg300` at or near zero; and swap-in
+quiescent. Record `nproc`, load average, `free -m`, and the memory-pressure
+figures alongside the median and the full spread. State the machine was quiet as
+part of the evidence, not as an aside.
+
+**Class: unmet obligation** until the measurement of record is taken under that
+precondition. The provisional slice reading is explicitly not evidence.
