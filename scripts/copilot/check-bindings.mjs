@@ -63,7 +63,7 @@ function readPolicy() {
   if (!existsSync(modelRs)) {
     fail(
       `cannot read policy constants: ${modelRs} not found. This gate attests that ` +
-      `panel rows match the sealed policy; without the policy it enforces nothing.`,
+      `panel rows match the sealed policy; without the policy it enforces nothing. Restore \n      the file, or correct the path this gate reads.`,
     );
     return null;
   }
@@ -166,7 +166,7 @@ if (!existsSync(agentsDir)) {
         fail(
           `${file}: panel agents are read-only by construction. "tools:" must not grant ` +
           `${tools}. Reviewers read staged diffs; granting shell also puts ten lanes on ` +
-          `the shared Nix store and the heavy-gate semaphore.`,
+          `the shared Nix store and the heavy-gate semaphore. Remove those entries from \n          "tools:".`,
         );
       }
       if (!/\bview\b/.test(tools)) {
@@ -282,7 +282,7 @@ if (existsSync(repoSettings)) {
       fail(
         `.github/copilot/settings.json carries "${key}", which repo-scope settings do not ` +
         `honour. The CLI filters repo scope through a fixed allowlist that excludes it, so ` +
-        `this file would silently govern nothing.`,
+        `this file would silently govern nothing. Remove the key, and pin the binding at \n        dispatch in the skill table instead.`,
       );
     }
   }
@@ -462,6 +462,7 @@ if (existsSync(integrationJson)) {
 // .github/skills/d2b-memory/SKILL.md and pinned here.
 const MEMORY_CATEGORIES = ["signoff", "build", "test", "merge", "codegen", "disk"];
 const MEMORY_DISPOSITIONS = ["open", "folded", "filed", "resolved", "wontfix"];
+
 
 // The qualified wave grammar, as documented in docs/contributing/workflow.md
 // and enforced by validate_wave in packages/xtask/src/delivery/. The program
@@ -707,7 +708,7 @@ for (const reg of ["friction-log.md", "deferred-work.md", "engineering-debt.md"]
     fail(
       `.specify/memory/${reg}: no header row was found, so not one row in this ` +
       `register was validated. A register table needs a leading and a trailing ` +
-      `pipe on every row, including its header.`,
+      `pipe on every row, including its header. Add the header row.`,
     );
   } else if (rowsHere === 0) {
     fail(
