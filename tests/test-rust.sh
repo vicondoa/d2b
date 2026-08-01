@@ -404,14 +404,19 @@ run_nextest_companions() {
 # covers doctests and harness=false binaries without needing companions. Making
 # the broker process-per-test safe would mean reworking test setup inside a
 # critical, privileged, protected subsystem for no measurable gain.
+#
+# No stream runs `cargo check` before its `cargo test`. Check and test are
+# distinct compilation modes that share no artifacts, so a check ahead of a test
+# on the same target directory is time spent twice for one result. Measured cold
+# on the layer1 stream: 153 s with the check against 89 s without, for an
+# identical outcome and an unchanged test phase (85 s against 89 s). The
+# fake-backends stream never had one, which is why it was already the fastest.
 broker_stream_default() {
   cargo metadata --format-version 1 --manifest-path "$broker_manifest" >/dev/null
-  CARGO_TARGET_DIR="$broker_target_dir" cargo check --workspace --manifest-path "$broker_manifest"
   rm -f -- "$broker_target_dir"/debug/deps/socket_activation-* 2>/dev/null || true
   CARGO_TARGET_DIR="$broker_target_dir" cargo test --workspace --manifest-path "$broker_manifest"
 }
 broker_stream_layer1() {
-  CARGO_TARGET_DIR="$broker_layer1_target_dir" cargo check --workspace --manifest-path "$broker_manifest" --features layer1-bootstrap
   CARGO_TARGET_DIR="$broker_layer1_target_dir" cargo test --workspace --manifest-path "$broker_manifest" --features layer1-bootstrap
 }
 broker_stream_fakebackends() {
