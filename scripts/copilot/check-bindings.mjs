@@ -559,8 +559,8 @@ for (const reg of ["friction-log.md", "deferred-work.md", "engineering-debt.md"]
       fail(
         `.specify/memory/${reg}:${i + 1}: this row has ${cells.length} cells and its ` +
         `header has ${headerWidth}, so its columns do not line up with the ones ` +
-        `this register is validated against. Check for a missing outer pipe or an ` +
-        `unescaped pipe inside a cell.`,
+        `this register is validated against. Check for a column left out, a ` +
+        `missing outer pipe, or a pipe inside a cell that needs escaping as \\|.`,
       );
       continue;
     }
