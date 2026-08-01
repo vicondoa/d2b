@@ -33,6 +33,17 @@ use crate::{
 };
 
 /// Trusted envelope created only after ComponentSession authentication.
+///
+/// Its authenticated subject cannot be inspected or replaced by downstream
+/// callers:
+///
+/// ```compile_fail
+/// use d2b_resource_api::TrustedRequest;
+///
+/// fn forge<T>(request: &TrustedRequest<T>) {
+///     let _ = &request.subject;
+/// }
+/// ```
 #[derive(Clone)]
 pub struct TrustedRequest<T> {
     subject: Arc<AuthenticatedSubjectContext>,

@@ -194,13 +194,11 @@ are not portable across compiler versions. CI restores that directory as one
 cache surface. When adding such a test, key its subtree the same way and reuse
 the compilation but not any output whose freshness the test asserts on.
 
-One test is deliberately outside that surface. The `d2b-resource-api` external
-seal caches to `.scratch/resource-api-external-seals-<key>/`, keyed the same
-way but **not** under `rust-test-cache/`, because its tree is several hundred
-megabytes and the Actions cache is a hard repository-wide budget. It is a
-local-loop cache only, and CI pays its cold build every run by design. Put a
-new cargo-shelling test under `rust-test-cache/` unless its tree is large
-enough to make that trade, and say which trade you made.
+The resource API's former external seal harness was removed after its
+export/private-member cases became redundant with the compiler-derived rustdoc
+JSON API census. Keep new cargo-shelling tests under `rust-test-cache/` unless
+their tree is large enough to justify a different cache trade, and document
+that trade.
 
 When a failure reproduces only inside the gate's toolchain environment, use
 `tests/tools/repro-rust-gate-env.sh <command>` instead of re-running the whole
