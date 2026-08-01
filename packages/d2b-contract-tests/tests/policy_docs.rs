@@ -73,15 +73,27 @@ fn agents_md_reflects_daemon_only_end_state() {
     );
 
     // --- Negative invariants (per-line forbidden scan w/ allowed marker) --
-    //
-    // `forbidden_re` (grep -nE, case-sensitive) and `allowed_marker_re`
-    // (grep -qEi, case-insensitive) are ported verbatim from the bash gate.
-    // The forbidden alternation targets the canonical legacy-as-live shapes:
-    // d2b@<vm> / microvm@<vm> per-VM systemd templates, retired
-    // host-singleton framework services, microvms.target, the legacy bash-CLI
-    // opt-in knobs, and the "bash CLI" phrase. A line keeps its forbidden
-    // pattern only when it ALSO mentions a historical / migration / retired
-    // marker (it is describing the deletion itself).
+    let violations = scan_retired_surfaces(&agents, rel);
+
+    assert!(
+        violations.is_empty(),
+        "agents-md-rewrite-eval: {} line(s) describe retired surfaces as live; see ADR 0015:\n{}",
+        violations.len(),
+        violations.join("\n")
+    );
+}
+
+/// Per-line scan for retired surfaces described as live.
+///
+/// `forbidden_re` (grep -nE, case-sensitive) and `allowed_marker_re`
+/// (grep -qEi, case-insensitive) are ported verbatim from the bash gate.
+/// The forbidden alternation targets the canonical legacy-as-live shapes:
+/// d2b@<vm> / microvm@<vm> per-VM systemd templates, retired host-singleton
+/// framework services, microvms.target, the legacy bash-CLI opt-in knobs, and
+/// the "bash CLI" phrase. A line keeps its forbidden pattern only when it ALSO
+/// mentions a historical / migration / retired marker (it is describing the
+/// deletion itself).
+fn scan_retired_surfaces(content: &str, label: &str) -> Vec<String> {
     let forbidden_re = Regex::new(
         r"d2b@<vm>|d2b@\$\{name\}|d2b@sys-|microvm@<vm>|microvm-virtiofsd@|microvm-set-booted@|microvm-tap-interfaces@|microvm-macvtap-interfaces@|microvm-pci-devices@|d2b-<vm>-(gpu|snd|video|swtpm|store-sync)\.service|d2b-sys-<env>-usbipd|d2b-otel-relay@|d2b-known-hosts-refresh@|d2b-vfsd-watchdog@|d2b-ch-exporter\.service|d2b-otel-host-bridge\.service|d2b-net-route-preflight\.service|d2b-audit-check\.(service|timer)|microvms\.target|D2B_LEGACY_BASH_OPT_IN|D2B_LEGACY_CLI|\bbash CLI\b",
     )
@@ -92,7 +104,7 @@ fn agents_md_reflects_daemon_only_end_state() {
     .expect("valid allowed-marker regex");
 
     let mut violations: Vec<String> = Vec::new();
-    for (idx, line) in agents.lines().enumerate() {
+    for (idx, line) in content.lines().enumerate() {
         if !forbidden_re.is_match(line) {
             continue;
         }
@@ -100,16 +112,89 @@ fn agents_md_reflects_daemon_only_end_state() {
             continue;
         }
         violations.push(format!(
-            "AGENTS.md:{} describes a retired surface as live (no historical marker): {line}",
+            "{label}:{} describes a retired surface as live (no historical marker): {line}",
             idx + 1
         ));
+    }
+    violations
+}
+
+/// The contributor process docs under `docs/contributing/` hold prose moved out
+/// of AGENTS.md. Without this, the retired-surface scan above would keep
+/// passing while no longer scanning the text it was written to police.
+#[test]
+fn contributing_docs_reflect_daemon_only_end_state() {
+    let mut violations: Vec<String> = Vec::new();
+    for rel in contributing_docs() {
+        violations.extend(scan_retired_surfaces(&read_repo_file(&rel), &rel));
     }
 
     assert!(
         violations.is_empty(),
-        "agents-md-rewrite-eval: {} line(s) describe retired surfaces as live; see ADR 0015:\n{}",
+        "{} line(s) in docs/contributing/ describe retired surfaces as live; see ADR 0015:\n{}",
         violations.len(),
         violations.join("\n")
+    );
+}
+
+/// Repo-relative paths of every Markdown file under `docs/contributing/`.
+fn contributing_docs() -> Vec<String> {
+    let dir = d2b_contract_tests::repo_root().join("docs/contributing");
+    let mut out: Vec<String> = std::fs::read_dir(&dir)
+        .expect("docs/contributing must exist; AGENTS.md routes to it")
+        .filter_map(|entry| {
+            let name = entry.ok()?.file_name().to_string_lossy().into_owned();
+            name.ends_with(".md")
+                .then(|| format!("docs/contributing/{name}"))
+        })
+        .collect();
+    out.sort();
+    assert!(
+        !out.is_empty(),
+        "docs/contributing must contain the process docs AGENTS.md routes to"
+    );
+    out
+}
+
+/// AGENTS.md is injected into every agent session by every harness, so its size
+/// is a fixed cost paid before any work begins. It reached 122,662 bytes by
+/// accretion, because every change appended to it. This ratchet makes the next
+/// re-bloating append fail instead: put the detail in `docs/contributing/` and
+/// leave a rule and a link here.
+///
+/// Raising this budget is a deliberate decision, not a formality. Before you
+/// do, check that the content genuinely belongs in the always-loaded index
+/// rather than in a doc the agent opens when it needs it.
+#[test]
+fn agents_md_stays_within_its_context_budget() {
+    const BUDGET: usize = 40_000;
+    let bytes = read_repo_file("AGENTS.md").len();
+    assert!(
+        bytes <= BUDGET,
+        "AGENTS.md is {bytes} bytes, over its {BUDGET}-byte budget. It is loaded into every \
+         agent session on every turn. Move detail into docs/contributing/ and leave a rule \
+         plus a link, rather than raising the budget."
+    );
+}
+
+/// A router whose links rot is worse than the monolith it replaced: the rule
+/// looks documented while the detail is unreachable.
+#[test]
+fn agents_md_routes_to_paths_that_exist() {
+    let agents = read_repo_file("AGENTS.md");
+    let link_re = Regex::new(r"\]\((\./[^)#]+)").expect("valid link regex");
+    let mut missing: Vec<String> = Vec::new();
+    for caps in link_re.captures_iter(&agents) {
+        let rel = caps[1].trim_start_matches("./");
+        if !repo_path_exists(rel) {
+            missing.push(rel.to_string());
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "AGENTS.md links to {} path(s) that do not exist: {}",
+        missing.len(),
+        missing.join(", ")
     );
 }
 

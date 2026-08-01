@@ -58,7 +58,13 @@ if ! command -v shellcheck >/dev/null 2>&1; then
   fi
 fi
 mapfile -t sh_files < <(
-  find tests scripts harness/ubuntu -maxdepth 1 -name '*.sh' -type f 2>/dev/null | sort
+  {
+    find tests scripts harness/ubuntu -maxdepth 1 -name '*.sh' -type f 2>/dev/null
+    # The Copilot agent surface keeps its scripts one level deeper, under
+    # scripts/copilot/ and inside each skill directory, so the maxdepth-1
+    # sweep above does not reach them.
+    find scripts/copilot .github/skills -name '*.sh' -type f 2>/dev/null
+  } | sort -u
 )
 if [ "${#sh_files[@]}" -eq 0 ]; then
   fail "shellcheck: no .sh files found"
@@ -66,5 +72,62 @@ if [ "${#sh_files[@]}" -eq 0 ]; then
 fi
 shellcheck --severity=warning -x "${sh_files[@]}"
 ok "shellcheck (${#sh_files[@]} scripts)"
+
+# --- copilot agent bindings ----------------------------------------------
+# Reads committed files only. A panel lane dispatched without an explicit
+# reasoning effort silently runs at the model default while its record would
+# attest the policy level, so a mispinned table is a false attestation rather
+# than an error. This is the cheapest place to catch it.
+log "--> copilot agent binding tables"
+if [ -f "$ROOT/scripts/copilot/check-bindings.mjs" ]; then
+  if command -v node >/dev/null 2>&1; then
+    node "$ROOT/scripts/copilot/check-bindings.mjs"
+    ok "copilot agent binding tables"
+  else
+    fail "node not found; scripts/copilot/check-bindings.mjs cannot run"
+    exit 1
+  fi
+else
+  fail "required gate is missing: scripts/copilot/check-bindings.mjs"
+  exit 1
+fi
+
+# --- panel record assembly ------------------------------------------------
+# make-records.mjs produces the artifacts that seal a wave. Its fail-closed
+# behaviour is the only thing standing between a lane that silently ran at
+# the wrong effort and a record attesting the policy level, so it gets real
+# coverage rather than being exercised only when a panel round happens to run.
+log "--> panel record assembly"
+if [ -f "$ROOT/scripts/copilot/test-make-records.mjs" ]; then
+  if command -v node >/dev/null 2>&1; then
+    node "$ROOT/scripts/copilot/test-make-records.mjs" >/dev/null
+    ok "panel record assembly"
+  else
+    fail "node not found; scripts/copilot/test-make-records.mjs cannot run"
+    exit 1
+  fi
+else
+  fail "required gate is missing: scripts/copilot/test-make-records.mjs"
+  exit 1
+fi
+
+# --- binding gate self-coverage -------------------------------------------
+# The seat-roster comparison inside check-bindings.mjs is enforced by parsing
+# source with a regex, and a regex guard can stop matching without anything
+# else changing. A guard that no longer matches fails open in silence, so it
+# gets a negative test rather than being trusted because it once worked.
+log "--> copilot binding gate self-coverage"
+if [ -f "$ROOT/scripts/copilot/test-check-bindings.mjs" ]; then
+  if command -v node >/dev/null 2>&1; then
+    node "$ROOT/scripts/copilot/test-check-bindings.mjs" >/dev/null
+    ok "copilot binding gate self-coverage"
+  else
+    fail "node not found; scripts/copilot/test-check-bindings.mjs cannot run"
+    exit 1
+  fi
+else
+  fail "required gate is missing: scripts/copilot/test-check-bindings.mjs"
+  exit 1
+fi
 
 log "test-lint OK (duration: $((SECONDS - suite_started))s)"
