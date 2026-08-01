@@ -1608,6 +1608,16 @@ fields that request panel, agent, or model metadata.
   symlink) so the removal reclaims its multi-GiB build artifacts.
   Rebuilds in a fresh worktree stay cheap because sccache retains the
   compiled outputs.
+- `make clean` does that sweep for the current worktree: every cargo
+  target directory, the `.scratch/` tree, then `nix-collect-garbage`. It
+  keeps `$SCCACHE_DIR` for the reason above, and touches nothing outside
+  the worktree, because sibling worktrees own their artifacts and may
+  have work in flight. It removes a directory only when that directory
+  lies inside the worktree and holds no git-tracked file, so an
+  unexpected match fails closed instead of deleting committed content.
+  Use `D2B_CLEAN_DRY_RUN=1` to see the sweep first; `D2B_CLEAN_SKIP_GC=1`
+  and `D2B_CLEAN_KEEP_SCRATCH=1` narrow it. Collecting old *system*
+  generations still needs the operator-policy `sudo` form below.
 - `tests/tools/preflight-disk-space.sh` fails the wave when free disk under
   `$ROOT` drops below 10 GiB. Runs after the orphan reapers but BEFORE
   the rust toolchain bootstrap so the fail-closed guard cannot be

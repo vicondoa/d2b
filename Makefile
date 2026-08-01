@@ -23,7 +23,7 @@ SHELL := $(CURDIR)/tests/tools/scrub-shell-environment
         heavy-test-integration heavy-test-host-integration heavy-test-hardware \
         layer1-workflow layer1-workflow-check \
         ledger-regen check-inventory pr-checklist-gate nix-unit-pin flake-matrix-pin \
-        api-surface-pin runtime-ledger-pin
+        api-surface-pin runtime-ledger-pin clean
 
 # Current Nix system double, used to address per-system flake.checks attrs.
 # Falls back to x86_64-linux if `nix` is unavailable (e.g. a docs-only host).
@@ -628,3 +628,15 @@ test-runtime-ledger:
 	    --ledger "$$ledger" --expected-census "$$census" ); \
 	finished_at="$$(date +%s)"; \
 	echo "test-runtime-ledger: complete (duration: $$((finished_at - started_at))s)"
+
+# ===========================================================================
+# Disk hygiene.
+#
+#   make clean   Remove this worktree's cargo target directories and scratch
+#                tree, then collect unreferenced Nix store paths. The shared
+#                sccache directory is deliberately kept, so the next build
+#                re-links rather than recompiling from scratch.
+#
+# Knobs: D2B_CLEAN_DRY_RUN=1, D2B_CLEAN_SKIP_GC=1, D2B_CLEAN_KEEP_SCRATCH=1.
+clean:
+	bash tests/tools/clean-worktree.sh

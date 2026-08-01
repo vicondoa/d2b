@@ -40,3 +40,15 @@
   its dependencies stay warm, and it now discards the marker recording that
   compile at the start of every run - so if the forcing were ever to stop
   working the seal fails rather than passing without proof.
+
+### Added
+
+- `make clean` removes this worktree's cargo target directories and its
+  scratch tree, then collects unreferenced Nix store paths. The shared
+  sccache directory is kept deliberately, so the next build re-links instead
+  of recompiling from scratch. A directory is only removed when it lies
+  inside the worktree and holds no git-tracked file, so an unexpected match
+  fails closed rather than deleting committed content. `D2B_CLEAN_DRY_RUN=1`
+  reports what would go without removing it; `D2B_CLEAN_SKIP_GC=1` and
+  `D2B_CLEAN_KEEP_SCRATCH=1` narrow the sweep. Measured on a working
+  worktree: 63 GB reclaimed.
