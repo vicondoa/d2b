@@ -238,6 +238,7 @@ dependencies = [
  "d2b-contracts",
  "d2b-core-controller",
  "d2b-resource-store",
+ "d2b-resource-store-redb",
  "protobuf",
  "sha2",
  "tokio",
@@ -256,6 +257,21 @@ name = "d2b-resource-store"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
+]
+
+[[package]]
+name = "d2b-resource-store-redb"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "d2b-controller-toolkit",
+ "d2b-resource-store",
+ "redb",
+ "rustix 0.38.44",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
 ]
 
 [[package]]
@@ -619,6 +635,15 @@ name = "r-efi"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
+
+[[package]]
+name = "redb"
+version = "4.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e925444704b5f17d32bf42f5b6e2df050bceebc3dcd6e71cc73dafe8092e839"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "regex"

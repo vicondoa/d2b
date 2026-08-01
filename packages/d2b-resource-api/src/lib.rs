@@ -20,4 +20,4 @@ pub use admission::{AdmissionError, AdmittedMutation, PreparedStoreMutation, Ver
 pub use client::UnregisteredResourceClient;
 pub use identity::AuthenticatedSubjectContext;
 pub use service::ResourceService;
-pub use store::{ResourceStoreBackend, StoreBindingError};
+pub use store::{RedbBackend, ResourceStoreBackend, StoreBindingError};

@@ -57,6 +57,119 @@ pub trait ResourceStoreBackend: Send + Sync {
     ) -> impl Future<Output = Result<StoreCommitResult, StoreError>> + Send;
 }
 
+pub struct RedbBackend {
+    store: d2b_resource_store_redb::RedbResourceStore,
+    mutation_port: d2b_resource_store_redb::MutationPort,
+}
+
+impl core::fmt::Debug for RedbBackend {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("RedbBackend(<redacted>)")
+    }
+}
+
+impl RedbBackend {
+    pub const fn new(
+        store: d2b_resource_store_redb::RedbResourceStore,
+        mutation_port: d2b_resource_store_redb::MutationPort,
+    ) -> Self {
+        Self {
+            store,
+            mutation_port,
+        }
+    }
+}
+
+impl ResourceStoreBackend for RedbBackend {
+    async fn get(&self, request: StoreGetRequest) -> Result<StoredResource, StoreError> {
+        self.store.get(request).await
+    }
+
+    async fn list(&self, request: StoreListRequest) -> Result<StoreListResult, StoreError> {
+        self.store.list(request).await
+    }
+
+    async fn watch(&self, request: StoreWatchRequest) -> Result<StoreWatchReceipt, StoreError> {
+        self.store.watch(request).await
+    }
+
+    async fn resolve_ref(
+        &self,
+        request: StoreResolveRequest,
+    ) -> Result<StoreResolvedIdentity, StoreError> {
+        self.store.resolve_ref(request).await
+    }
+
+    async fn inspect_schema(
+        &self,
+        request: StoreInspectSchemaRequest,
+    ) -> Result<StoredSchema, StoreError> {
+        self.store.inspect_schema(request).await
+    }
+
+    async fn commit_verified(
+        &self,
+        mutation: VerifiedMutation,
+    ) -> Result<StoreCommitResult, StoreError> {
+        let checked = d2b_resource_store_redb::CheckedMutation::new(
+            &self.mutation_port,
+            mutation.authorization().clone(),
+            mutation.policy_snapshot(),
+            mutation.operation().clone(),
+            mutation
+                .mutations()
+                .iter()
+                .map(|prepared| {
+                    d2b_resource_store_redb::CheckedPreparedMutation::new(
+                        prepared.mutation().clone(),
+                        prepared.resource_uid().cloned(),
+                        prepared.payload_digest().map(str::to_owned),
+                    )
+                })
+                .collect(),
+        );
+        self.store.commit_checked(checked).await
+    }
+}
+
+#[cfg(test)]
+mod redb_tests {
+    use super::*;
+    use d2b_contracts::v3::{ConfigurationGeneration, ResourceUid, Timestamp, ZoneId};
+    use d2b_resource_store::PolicySnapshot;
+    use std::fs::OpenOptions;
+
+    #[tokio::test]
+    async fn concrete_redb_backend_implements_the_checked_api_seam() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .open(directory.path().join("store.redb"))
+            .unwrap();
+        let identity = d2b_resource_store_redb::StoreIdentity::new(
+            ResourceUid::parse("11111111-1111-4111-8111-111111111111").unwrap(),
+            ZoneId::parse("work").unwrap(),
+            ResourceUid::parse("22222222-2222-4222-8222-222222222222").unwrap(),
+            Timestamp::parse("2026-07-31T00:00:00.000Z").unwrap(),
+            PolicySnapshot {
+                policy_revision: 1,
+                api_catalog_revision: 1,
+                active_configuration_revision: ConfigurationGeneration::new(1).unwrap(),
+                controller_generation: None,
+            },
+        );
+        let (store, mutation_port) =
+            d2b_resource_store_redb::RedbResourceStore::open_owned(file, identity)
+                .await
+                .unwrap();
+        let backend = RedbBackend::new(store, mutation_port);
+        fn assert_backend<T: ResourceStoreBackend>(_: &T) {}
+        assert_backend(&backend);
+    }
+}
+
 /// A native authorizer has already been bound to a store backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StoreBindingError;

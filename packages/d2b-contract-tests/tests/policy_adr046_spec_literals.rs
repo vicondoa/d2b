@@ -2459,7 +2459,7 @@ fn global_spike_measurement_inventory_rejects_each_unregistered_class_copy() {
 }
 
 #[test]
-fn redb_dependency_is_isolated_to_the_proof_workspace() {
+fn redb_dependency_is_exact_and_isolated_to_the_proof_and_backend_crates() {
     let root = repo_root();
     let main_manifest =
         std::fs::read_to_string(root.join("packages/Cargo.toml")).expect("read main manifest");
@@ -2479,8 +2479,11 @@ fn redb_dependency_is_isolated_to_the_proof_workspace() {
             .expect("read proof lockfile");
 
     assert!(!main_manifest.contains("\nredb ="));
-    assert!(!main_lock.contains("\nname = \"redb\"\n"));
-    assert!(!contract_manifest.contains("\nredb"));
+    assert!(main_lock.contains("\nname = \"redb\"\nversion = \"4.1.0\"\n"));
+    assert!(contract_manifest.contains(
+        "redb = { version = \"=4.1.0\", default-features = false }"
+    ));
+    assert_eq!(contract_manifest.matches("\nredb =").count(), 1);
     assert!(!schema.contains("redb::"));
     assert!(!schema.contains("TableDefinition"));
     assert!(proof_manifest.contains("redb = { version = \"=4.1.0\""));
