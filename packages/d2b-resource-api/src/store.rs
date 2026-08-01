@@ -57,9 +57,19 @@ pub trait ResourceStoreBackend: Send + Sync {
     ) -> impl Future<Output = Result<StoreCommitResult, StoreError>> + Send;
 }
 
+/// API bridge that owns the concrete verified-mutation store binding.
+///
+/// A caller cannot reach the store or fabricate its required mutation type.
+///
+/// ```compile_fail
+/// use d2b_resource_api::{RedbBackend, VerifiedMutation};
+///
+/// fn bypass(backend: &RedbBackend, mutation: VerifiedMutation) {
+///     let _ = backend.store.commit_verified(mutation);
+/// }
+/// ```
 pub struct RedbBackend {
-    store: d2b_resource_store_redb::RedbResourceStore,
-    mutation_port: d2b_resource_store_redb::MutationPort,
+    store: d2b_resource_store_redb::RedbResourceStore<VerifiedMutation>,
 }
 
 impl core::fmt::Debug for RedbBackend {
@@ -69,14 +79,38 @@ impl core::fmt::Debug for RedbBackend {
 }
 
 impl RedbBackend {
-    pub const fn new(
-        store: d2b_resource_store_redb::RedbResourceStore,
-        mutation_port: d2b_resource_store_redb::MutationPort,
-    ) -> Self {
-        Self {
-            store,
-            mutation_port,
-        }
+    pub const fn new(store: d2b_resource_store_redb::RedbResourceStore<VerifiedMutation>) -> Self {
+        Self { store }
+    }
+}
+
+impl d2b_resource_store_redb::VerifiedPreparedMutationView for crate::PreparedStoreMutation {
+    fn mutation(&self) -> &d2b_resource_store::StoreMutation {
+        self.mutation()
+    }
+
+    fn resource_uid(&self) -> Option<&d2b_contracts::v3::ResourceUid> {
+        self.resource_uid()
+    }
+}
+
+impl d2b_resource_store_redb::VerifiedMutationView for VerifiedMutation {
+    type Prepared = crate::PreparedStoreMutation;
+
+    fn authorization(&self) -> &d2b_resource_store::AdmittedAuthorization {
+        self.authorization()
+    }
+
+    fn policy_snapshot(&self) -> d2b_resource_store::PolicySnapshot {
+        self.policy_snapshot()
+    }
+
+    fn operation(&self) -> &d2b_resource_store::StoreOperationContext {
+        self.operation()
+    }
+
+    fn mutations(&self) -> &[Self::Prepared] {
+        self.mutations()
     }
 }
 
@@ -111,62 +145,18 @@ impl ResourceStoreBackend for RedbBackend {
         &self,
         mutation: VerifiedMutation,
     ) -> Result<StoreCommitResult, StoreError> {
-        let checked = d2b_resource_store_redb::CheckedMutation::new(
-            &self.mutation_port,
-            mutation.authorization().clone(),
-            mutation.policy_snapshot(),
-            mutation.operation().clone(),
-            mutation
-                .mutations()
-                .iter()
-                .map(|prepared| {
-                    d2b_resource_store_redb::CheckedPreparedMutation::new(
-                        prepared.mutation().clone(),
-                        prepared.resource_uid().cloned(),
-                        prepared.payload_digest().map(str::to_owned),
-                    )
-                })
-                .collect(),
-        );
-        self.store.commit_checked(checked).await
+        self.store.commit_verified(mutation).await
     }
 }
 
 #[cfg(test)]
 mod redb_tests {
     use super::*;
-    use d2b_contracts::v3::{ConfigurationGeneration, ResourceUid, Timestamp, ZoneId};
-    use d2b_resource_store::PolicySnapshot;
-    use std::fs::OpenOptions;
 
-    #[tokio::test]
-    async fn concrete_redb_backend_implements_the_checked_api_seam() {
-        let directory = tempfile::tempdir().unwrap();
-        let file = OpenOptions::new()
-            .create_new(true)
-            .read(true)
-            .write(true)
-            .open(directory.path().join("store.redb"))
-            .unwrap();
-        let identity = d2b_resource_store_redb::StoreIdentity::new(
-            ResourceUid::parse("11111111-1111-4111-8111-111111111111").unwrap(),
-            ZoneId::parse("work").unwrap(),
-            ResourceUid::parse("22222222-2222-4222-8222-222222222222").unwrap(),
-            Timestamp::parse("2026-07-31T00:00:00.000Z").unwrap(),
-            PolicySnapshot {
-                policy_revision: 1,
-                api_catalog_revision: 1,
-                active_configuration_revision: ConfigurationGeneration::new(1).unwrap(),
-                controller_generation: None,
-            },
-        );
-        let (store, mutation_port) =
-            d2b_resource_store_redb::RedbResourceStore::open_owned(file, identity)
-                .await
-                .unwrap();
-        let backend = RedbBackend::new(store, mutation_port);
-        fn assert_backend<T: ResourceStoreBackend>(_: &T) {}
-        assert_backend(&backend);
+    #[test]
+    fn concrete_redb_backend_implements_the_checked_api_seam() {
+        fn assert_backend<T: ResourceStoreBackend>() {}
+        assert_backend::<RedbBackend>();
     }
 }
 

@@ -8,10 +8,12 @@ mod transaction;
 pub mod values;
 
 use std::fs::File;
+use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
+use std::marker::PhantomData;
 use std::os::fd::{AsFd, OwnedFd};
 use std::sync::Arc;
 
-use actor::{BackendWatch, ReadPool, SignalCounters, WriterHandle};
+use actor::{ReadPool, SignalCounters, WriterHandle};
 use d2b_contracts::v3::{ResourceUid, Timestamp, ZoneId};
 use d2b_resource_store::{
     AdmittedAuthorization, PolicySnapshot, StoreCommitResult, StoreError, StoreGetRequest,
@@ -37,7 +39,7 @@ pub use ownership::{
     ReverseOwnerEntry,
 };
 pub use schema::{TABLE_SCHEMAS, TableSchema};
-pub use transaction::{ChangeBatch, ChangeEntry};
+pub use transaction::{ChangeBatch, ChangeEntry, ChangeEvent};
 pub use values::{
     DecodedValue, EncodedValue, MAX_ENCODED_VALUE_BYTES, MAX_VALUE_PAYLOAD_BYTES, ValueCodecError,
     ValueKind, encode_value,
@@ -85,198 +87,125 @@ impl core::fmt::Debug for StoreIdentity {
     }
 }
 
-/// One concrete backend. The API trait is its only mutation surface.
-pub struct RedbResourceStore {
+/// One concrete backend whose mutation authority is instance-bound.
+pub struct RedbResourceStore<V> {
     identity: StoreIdentity,
-    mutation_authority: Arc<MutationAuthority>,
     recovered_after_crash: bool,
     writer: WriterHandle,
     reads: ReadPool,
     signals: Arc<SignalCounters>,
+    verified_mutation: PhantomData<fn(V)>,
 }
 
-struct MutationAuthority;
+/// Read-only view of one API-owned prepared mutation.
+pub trait VerifiedPreparedMutationView {
+    fn mutation(&self) -> &StoreMutation;
+    fn resource_uid(&self) -> Option<&ResourceUid>;
+}
 
-/// Single-owner backend commit capability for one concrete store instance.
+/// API-owned verified mutation required by this backend's only write method.
 ///
-/// This is a wiring capability. It must move directly into the API bridge and
-/// must never be exposed through a provider, controller, or public store client.
-pub struct MutationPort {
-    authority: Arc<MutationAuthority>,
+/// The API crate owns the concrete evidence type, so another crate can neither
+/// construct that type nor implement this trait for it.
+pub trait VerifiedMutationView: Send {
+    type Prepared: VerifiedPreparedMutationView;
+
+    fn authorization(&self) -> &AdmittedAuthorization;
+    fn policy_snapshot(&self) -> PolicySnapshot;
+    fn operation(&self) -> &StoreOperationContext;
+    fn mutations(&self) -> &[Self::Prepared];
 }
 
-impl core::fmt::Debug for MutationPort {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("MutationPort(<redacted>)")
-    }
-}
-
-/// Backend-ready checked mutation supplied by the API bridge.
-///
-/// External callers cannot construct a mutation without a store-issued port.
-///
-/// ```compile_fail
-/// use d2b_resource_store_redb::MutationPort;
-///
-/// let _forged = MutationPort {};
-/// ```
-pub struct CheckedMutation {
-    authority: Arc<MutationAuthority>,
-    authorization: AdmittedAuthorization,
-    policy_snapshot: PolicySnapshot,
-    operation: StoreOperationContext,
-    mutations: Vec<CheckedPreparedMutation>,
-}
-
-/// One prepared full-replacement mutation and its finalized identity.
-pub struct CheckedPreparedMutation {
-    mutation: StoreMutation,
-    resource_uid: Option<ResourceUid>,
-    payload_digest: Option<String>,
-}
-
-impl core::fmt::Debug for CheckedMutation {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("CheckedMutation(<redacted>)")
-    }
-}
-
-impl core::fmt::Debug for CheckedPreparedMutation {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("CheckedPreparedMutation")
-            .field("kind", &self.mutation.kind)
-            .field("has_resource_uid", &self.resource_uid.is_some())
-            .field("has_payload_digest", &self.payload_digest.is_some())
-            .finish()
-    }
-}
-
-impl CheckedMutation {
-    #[doc(hidden)]
-    pub fn new(
-        port: &MutationPort,
-        authorization: AdmittedAuthorization,
-        policy_snapshot: PolicySnapshot,
-        operation: StoreOperationContext,
-        mutations: Vec<CheckedPreparedMutation>,
-    ) -> Self {
-        Self {
-            authority: Arc::clone(&port.authority),
-            authorization,
-            policy_snapshot,
-            operation,
-            mutations,
-        }
-    }
-
-    pub const fn authorization(&self) -> &AdmittedAuthorization {
-        &self.authorization
-    }
-
-    pub fn mutations(&self) -> &[CheckedPreparedMutation] {
-        &self.mutations
-    }
-}
-
-impl CheckedPreparedMutation {
-    #[doc(hidden)]
-    pub fn new(
-        mutation: StoreMutation,
-        resource_uid: Option<ResourceUid>,
-        payload_digest: Option<String>,
-    ) -> Self {
-        Self {
-            mutation,
-            resource_uid,
-            payload_digest,
-        }
-    }
-
-    pub const fn mutation(&self) -> &StoreMutation {
-        &self.mutation
-    }
-
-    pub const fn resource_uid(&self) -> Option<&ResourceUid> {
-        self.resource_uid.as_ref()
-    }
-
-    pub fn payload_digest(&self) -> Option<&str> {
-        self.payload_digest.as_deref()
-    }
-}
-
-impl core::fmt::Debug for RedbResourceStore {
+impl<V> core::fmt::Debug for RedbResourceStore<V> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("RedbResourceStore(<redacted>)")
     }
 }
 
-impl RedbResourceStore {
-    /// Consume one owned regular database file with close-on-exec already set.
-    ///
-    /// An empty file is initialized. A nonempty file must match the supplied
-    /// immutable store identity and physical schema or opening fails closed.
-    pub async fn open_owned(
+impl<V> RedbResourceStore<V> {
+    /// Initialize one unpublished empty database after validating its durable marker.
+    pub async fn provision_owned(
         file: File,
+        mut marker: File,
         identity: StoreIdentity,
-    ) -> Result<(Self, MutationPort), StoreError> {
+    ) -> Result<Self, StoreError> {
         validate_owned_file(&file)?;
-        let initialize = file.metadata().map_err(transaction::integrity)?.len() == 0;
+        validate_owned_file(&marker)?;
+        if file.metadata().map_err(transaction::integrity)?.len() != 0 {
+            return Err(transaction::integrity("provision-database-not-empty"));
+        }
+        validate_provisioning_marker(&mut marker, &identity)?;
         let open_identity = identity.clone();
         let database = tokio::task::spawn_blocking(move || {
             let backend = FileBackend::new(file).map_err(transaction::integrity)?;
             let database = Database::builder()
                 .create_with_backend(backend)
                 .map_err(transaction::integrity)?;
-            let recovered_after_crash = if initialize {
-                transaction::initialize(&database, &open_identity)?;
-                false
-            } else {
-                let meta = transaction::validate_identity(&database, &open_identity)?;
-                transaction::validate_consistency(&database)?;
-                !meta.clean_shutdown
-            };
+            transaction::initialize(&database, &open_identity)?;
+            Ok::<_, StoreError>(database)
+        })
+        .await
+        .map_err(|_| transaction::integrity("database-provision-task-failed"))??;
+        Self::start(database, identity, false)
+    }
+
+    /// Consume an already-provisioned nonempty database file.
+    ///
+    /// Empty existing files are quarantined rather than initialized.
+    pub async fn open_owned(file: File, identity: StoreIdentity) -> Result<Self, StoreError> {
+        validate_owned_file(&file)?;
+        if file.metadata().map_err(transaction::integrity)?.len() == 0 {
+            return Err(transaction::quarantined_reason("provisioned-store-empty"));
+        }
+        let open_identity = identity.clone();
+        let database = tokio::task::spawn_blocking(move || {
+            let backend = FileBackend::new(file).map_err(transaction::integrity)?;
+            let database = Database::builder()
+                .create_with_backend(backend)
+                .map_err(transaction::integrity)?;
+            let meta = transaction::validate_identity(&database, &open_identity)?;
+            transaction::validate_consistency(&database)?;
+            let recovered_after_crash = !meta.clean_shutdown;
             Ok::<_, StoreError>((database, recovered_after_crash))
         })
         .await
         .map_err(|_| transaction::integrity("database-open-task-failed"))??;
         let (database, recovered_after_crash) = database;
-        let database = Arc::new(database);
-        let signals = Arc::new(SignalCounters::default());
-        let reads = ReadPool::start(Arc::clone(&database), identity.zone.clone());
-        let writer = WriterHandle::start(database, Arc::clone(&signals));
-        let mutation_authority = Arc::new(MutationAuthority);
-        let port = MutationPort {
-            authority: Arc::clone(&mutation_authority),
-        };
-        Ok((
-            Self {
-                identity,
-                mutation_authority,
-                recovered_after_crash,
-                writer,
-                reads,
-                signals,
-            },
-            port,
-        ))
+        Self::start(database, identity, recovered_after_crash)
     }
 
-    /// Backend-owned replay/live primitive consumed by the watch coordinator.
-    ///
-    /// Global admission and slow-watcher policy intentionally remain outside
-    /// this backend.
-    pub async fn watch_backend(
+    fn start(
+        database: Database,
+        identity: StoreIdentity,
+        recovered_after_crash: bool,
+    ) -> Result<Self, StoreError> {
+        let database = Arc::new(database);
+        let signals = Arc::new(SignalCounters::default());
+        let reads = ReadPool::start(Arc::clone(&database), identity.zone.clone())?;
+        let writer = WriterHandle::start(database, Arc::clone(&signals))?;
+        Ok(Self {
+            identity,
+            recovered_after_crash,
+            writer,
+            reads,
+            signals,
+            verified_mutation: PhantomData,
+        })
+    }
+
+    /// Policy-neutral replay/live primitive for a future watch coordinator.
+    pub async fn replay_backend(
         &self,
         after_revision: u64,
         resource_types: impl IntoIterator<Item = d2b_contracts::v3::ResourceTypeName>,
-    ) -> Result<BackendWatch, StoreError> {
+        visit: impl FnMut(SharedChangeBatch) -> Result<(), StoreError> + Send + 'static,
+    ) -> Result<d2b_contracts::v3::ZoneRevision, StoreError> {
         let meta = self.reads.meta().await?;
         if after_revision < meta.compaction_floor {
             return Err(transaction::revision_expired(meta.current_revision));
         }
         self.writer
-            .register_watch(after_revision, resource_types.into_iter().collect())
+            .replay(after_revision, resource_types.into_iter().collect(), visit)
             .await
     }
 
@@ -292,9 +221,15 @@ impl RedbResourceStore {
     pub const fn recovered_after_crash(&self) -> bool {
         self.recovered_after_crash
     }
+
+    /// Persist a clean-shutdown marker and join the owned worker threads.
+    pub async fn shutdown(mut self) -> Result<(), StoreError> {
+        self.reads.shutdown()?;
+        self.writer.shutdown().await
+    }
 }
 
-impl RedbResourceStore {
+impl<V> RedbResourceStore<V> {
     pub async fn get(&self, request: StoreGetRequest) -> Result<StoredResource, StoreError> {
         self.reads.get(request).await
     }
@@ -307,14 +242,7 @@ impl RedbResourceStore {
         if request.zone != self.identity.zone {
             return Err(transaction::integrity("request-zone-mismatch"));
         }
-        let after_revision = request.after_revision.get();
-        let watch = self
-            .watch_backend(after_revision, request.resource_types)
-            .await?;
-        Ok(StoreWatchReceipt {
-            stream_name: format!("redb-watch-{}", watch.id()),
-            snapshot_revision: watch.high_water(),
-        })
+        Err(transaction::unavailable("watch-coordinator-unavailable"))
     }
 
     pub async fn resolve_ref(
@@ -330,16 +258,61 @@ impl RedbResourceStore {
     ) -> Result<StoredSchema, StoreError> {
         self.reads.inspect_schema(request).await
     }
+}
 
-    pub async fn commit_checked(
-        &self,
-        mutation: CheckedMutation,
-    ) -> Result<StoreCommitResult, StoreError> {
-        if !Arc::ptr_eq(&self.mutation_authority, &mutation.authority) {
-            return Err(transaction::integrity("mutation-store-identity-mismatch"));
-        }
+impl<V> RedbResourceStore<V>
+where
+    V: VerifiedMutationView,
+{
+    /// Commit only the exact API-owned verified mutation type bound at open.
+    pub async fn commit_verified(&self, mutation: V) -> Result<StoreCommitResult, StoreError> {
         self.writer.commit(mutation).await
     }
+}
+
+/// Publish marker bytes for a storage owner before initial database creation.
+pub fn write_provisioning_marker(
+    marker: &mut File,
+    identity: &StoreIdentity,
+) -> Result<(), StoreError> {
+    validate_owned_file(marker)?;
+    if marker.metadata().map_err(transaction::integrity)?.len() != 0 {
+        return Err(transaction::integrity("provision-marker-not-empty"));
+    }
+    marker
+        .write_all(provisioning_marker_bytes(identity).as_bytes())
+        .and_then(|()| marker.sync_all())
+        .map_err(transaction::durability_failure)
+}
+
+fn validate_provisioning_marker(
+    marker: &mut File,
+    identity: &StoreIdentity,
+) -> Result<(), StoreError> {
+    marker
+        .seek(SeekFrom::Start(0))
+        .map_err(transaction::integrity)?;
+    let mut bytes = Vec::new();
+    marker
+        .take(4096)
+        .read_to_end(&mut bytes)
+        .map_err(transaction::integrity)?;
+    if bytes != provisioning_marker_bytes(identity).as_bytes() {
+        return Err(transaction::quarantined_reason(
+            "provision-marker-identity-mismatch",
+        ));
+    }
+    Ok(())
+}
+
+fn provisioning_marker_bytes(identity: &StoreIdentity) -> String {
+    format!(
+        "d2b-redb-store/v1\n{}\n{}\n{}\n{}\n",
+        identity.store_uuid,
+        identity.zone.as_str(),
+        identity.zone_uid.as_str(),
+        identity.created_at
+    )
 }
 
 fn validate_owned_file(file: &File) -> Result<(), StoreError> {

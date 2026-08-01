@@ -7,7 +7,10 @@ use std::sync::{Arc, Barrier};
 use d2b_contracts::v3::{
     ConfigurationGeneration, ResourceRef, ResourceTypeName, ResourceUid, Timestamp, ZoneId,
 };
-use d2b_resource_store::{PolicySnapshot, StoreGetRequest, StoreOperationContext, StoreProjection};
+use d2b_resource_store::{
+    PolicySnapshot, StoreGetRequest, StoreListRequest, StoreOperationContext, StoreProjection,
+    StoreWatchRequest,
+};
 use redb::{Database, Durability};
 use rustix::io::{FdFlags, fcntl_getfd, fcntl_setfd};
 use rustix::net::{
@@ -16,6 +19,8 @@ use rustix::net::{
 };
 
 use super::*;
+
+struct TestVerifiedMutation;
 
 fn identity() -> StoreIdentity {
     StoreIdentity::new(
@@ -42,6 +47,18 @@ fn owned_file() -> (tempfile::TempDir, File) {
         .unwrap();
     assert!(fcntl_getfd(&file).unwrap().contains(FdFlags::CLOEXEC));
     (directory, file)
+}
+
+fn provisioned_store() -> (tempfile::TempDir, File, File) {
+    let (directory, file) = owned_file();
+    let mut marker = OpenOptions::new()
+        .create_new(true)
+        .read(true)
+        .write(true)
+        .open(directory.path().join("store.marker"))
+        .unwrap();
+    write_provisioning_marker(&mut marker, &identity()).unwrap();
+    (directory, file, marker)
 }
 
 fn operation(id: &str) -> StoreOperationContext {
@@ -95,10 +112,7 @@ fn seed_host(directory: &tempfile::TempDir, name: &str) {
         &envelope.metadata().uid().as_str(),
     )
     .unwrap();
-    let batch = ChangeBatch {
-        revision: 1,
-        entries: Vec::new(),
-    };
+    let batch = ChangeBatch::new(d2b_contracts::v3::ZoneRevision::new(1), Vec::new()).unwrap();
     let batch_value = encode(ValueKind::ChangeBatch, &batch).unwrap();
     let mut meta = crate::transaction::current_meta(&database).unwrap();
     meta.current_revision = 1;
@@ -150,6 +164,79 @@ fn seed_host(directory: &tempfile::TempDir, name: &str) {
     write.commit().unwrap();
 }
 
+fn seed_two_hosts(directory: &tempfile::TempDir) {
+    seed_host(directory, "host-system");
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(directory.path().join("store.redb"))
+        .unwrap();
+    let backend = redb::backends::FileBackend::new(file).unwrap();
+    let database = Database::builder().create_with_backend(backend).unwrap();
+    let second = ResourceRef::parse("Host/host-worker").unwrap();
+    let canonical_json = String::from_utf8(stored_body("host-worker"))
+        .unwrap()
+        .replace(
+            "123e4567-e89b-42d3-a456-426614174000",
+            "123e4567-e89b-42d3-a456-426614174001",
+        )
+        .into_bytes();
+    let envelope = d2b_contracts::v3::ResourceEnvelope::from_json(&canonical_json).unwrap();
+    let record = crate::transaction::ResourceRecord {
+        canonical_json,
+        owner_uid: None,
+        controller_binding_id: "Provider/system-core".to_owned(),
+        payload_digest: envelope.digest().unwrap(),
+    };
+    let write = database.begin_write().unwrap();
+    let value = crate::transaction::encode(ValueKind::ResourceRecord, &record).unwrap();
+    write
+        .open_table(crate::transaction::RESOURCES)
+        .unwrap()
+        .insert(
+            crate::transaction::resource_key(&second)
+                .unwrap()
+                .as_slice(),
+            value.as_slice(),
+        )
+        .unwrap();
+    let type_value = crate::transaction::encode(
+        ValueKind::TypeIndexRecord,
+        &envelope.metadata().uid().as_str(),
+    )
+    .unwrap();
+    write
+        .open_table(crate::transaction::TYPE_INDEX)
+        .unwrap()
+        .insert(
+            crate::transaction::type_index_key(&second)
+                .unwrap()
+                .as_slice(),
+            type_value.as_slice(),
+        )
+        .unwrap();
+    let controller_key = crate::encode_key(
+        KeySpace::ControllerIndex,
+        &[
+            KeyComponent::Text("Provider/system-core"),
+            KeyComponent::Text("Host"),
+            KeyComponent::Text("host-worker"),
+        ],
+    )
+    .unwrap();
+    let controller_value = crate::transaction::encode(
+        ValueKind::ControllerIndexRecord,
+        &envelope.metadata().uid().as_str(),
+    )
+    .unwrap();
+    write
+        .open_table(crate::transaction::CONTROLLER_INDEX)
+        .unwrap()
+        .insert(controller_key.as_bytes(), controller_value.as_slice())
+        .unwrap();
+    write.commit().unwrap();
+}
+
 fn seed_replay_log(directory: &tempfile::TempDir, rows: u64) {
     use crate::transaction::{REVISION_LOG, STORE_META, encode, revision_key};
 
@@ -168,10 +255,9 @@ fn seed_replay_log(directory: &tempfile::TempDir, rows: u64) {
     {
         let mut revisions = write.open_table(REVISION_LOG).unwrap();
         for revision in 1..=rows {
-            let batch = ChangeBatch {
-                revision,
-                entries: Vec::new(),
-            };
+            let batch =
+                ChangeBatch::new(d2b_contracts::v3::ZoneRevision::new(revision), Vec::new())
+                    .unwrap();
             let value = encode(ValueKind::ChangeBatch, &batch).unwrap();
             revisions
                 .insert(revision_key(revision).unwrap().as_slice(), value.as_slice())
@@ -203,19 +289,20 @@ fn contract_constants_are_exact() {
 
 #[tokio::test]
 async fn owned_file_open_initializes_and_reopens_only_matching_identity() {
-    let (directory, file) = owned_file();
-    let (store, _) = RedbResourceStore::open_owned(file, identity())
-        .await
-        .unwrap();
+    let (directory, file, marker) = provisioned_store();
+    let store =
+        RedbResourceStore::<TestVerifiedMutation>::provision_owned(file, marker, identity())
+            .await
+            .unwrap();
     assert_eq!(store.identity().zone().as_str(), "work");
-    drop(store);
+    store.shutdown().await.unwrap();
 
     let file = OpenOptions::new()
         .read(true)
         .write(true)
         .open(directory.path().join("store.redb"))
         .unwrap();
-    RedbResourceStore::open_owned(file, identity())
+    RedbResourceStore::<TestVerifiedMutation>::open_owned(file, identity())
         .await
         .unwrap();
 
@@ -226,7 +313,7 @@ async fn owned_file_open_initializes_and_reopens_only_matching_identity() {
         .unwrap();
     let mut mismatch = identity();
     mismatch.zone = ZoneId::parse("personal").unwrap();
-    let error = RedbResourceStore::open_owned(file, mismatch)
+    let error = RedbResourceStore::<TestVerifiedMutation>::open_owned(file, mismatch)
         .await
         .unwrap_err();
     assert_eq!(
@@ -236,33 +323,16 @@ async fn owned_file_open_initializes_and_reopens_only_matching_identity() {
 }
 
 #[tokio::test]
-async fn checked_mutation_is_bound_to_the_store_that_issued_its_port() {
-    let (_first_directory, first_file) = owned_file();
-    let (first, first_port) = RedbResourceStore::open_owned(first_file, identity())
+async fn empty_existing_store_is_quarantined_without_publication_marker() {
+    let (_directory, file) = owned_file();
+    let error = RedbResourceStore::<TestVerifiedMutation>::open_owned(file, identity())
         .await
-        .unwrap();
-    let (_second_directory, second_file) = owned_file();
-    let (second, _) = RedbResourceStore::open_owned(second_file, identity())
-        .await
-        .unwrap();
-    let mutation = CheckedMutation::new(
-        &first_port,
-        d2b_resource_store::AdmittedAuthorization {
-            zone: ZoneId::parse("work").unwrap(),
-            subject_ref: ResourceRef::parse("Provider/system-core").unwrap(),
-            subject_uid: ResourceUid::parse("33333333-3333-4333-8333-333333333333").unwrap(),
-            targets: Vec::new(),
-        },
-        identity().revisions,
-        operation("cross-store"),
-        Vec::new(),
-    );
-    let error = second.commit_checked(mutation).await.unwrap_err();
+        .unwrap_err();
     assert_eq!(
         error.kind(),
-        d2b_resource_store::StoreErrorKind::StoreIntegrityFailure
+        d2b_resource_store::StoreErrorKind::StoreQuarantined
     );
-    drop(first);
+    assert_eq!(error.reason_code(), "provisioned-store-empty");
 }
 
 #[tokio::test]
@@ -278,18 +348,18 @@ async fn clean_drop_reopens_without_crash_recovery_and_dirty_open_is_reported() 
         .write(true)
         .open(directory.path().join("store.redb"))
         .unwrap();
-    let (store, _) = RedbResourceStore::open_owned(file, identity())
+    let store = RedbResourceStore::<TestVerifiedMutation>::open_owned(file, identity())
         .await
         .unwrap();
     assert!(store.recovered_after_crash());
-    drop(store);
+    store.shutdown().await.unwrap();
 
     let file = OpenOptions::new()
         .read(true)
         .write(true)
         .open(directory.path().join("store.redb"))
         .unwrap();
-    let (store, _) = RedbResourceStore::open_owned(file, identity())
+    let store = RedbResourceStore::<TestVerifiedMutation>::open_owned(file, identity())
         .await
         .unwrap();
     assert!(!store.recovered_after_crash());
@@ -299,7 +369,7 @@ async fn clean_drop_reopens_without_crash_recovery_and_dirty_open_is_reported() 
 async fn direct_owned_fd_without_cloexec_fails_closed() {
     let (_directory, file) = owned_file();
     fcntl_setfd(&file, FdFlags::empty()).unwrap();
-    let error = RedbResourceStore::open_owned(file, identity())
+    let error = RedbResourceStore::<TestVerifiedMutation>::open_owned(file, identity())
         .await
         .unwrap_err();
     assert_eq!(
@@ -312,7 +382,7 @@ async fn direct_owned_fd_without_cloexec_fails_closed() {
 async fn owned_open_rejects_a_non_regular_fd() {
     let pipe = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC).unwrap();
     let file = File::from(pipe.0);
-    let error = RedbResourceStore::open_owned(file, identity())
+    let error = RedbResourceStore::<TestVerifiedMutation>::open_owned(file, identity())
         .await
         .unwrap_err();
     assert_eq!(
@@ -437,10 +507,11 @@ fn scm_rights_receipt_racing_fork_exec_never_leaks_the_database_inode() {
 
 #[tokio::test(start_paused = true)]
 async fn read_lifetime_is_enforced_by_the_paused_clock() {
-    let (_directory, file) = owned_file();
-    let (store, _) = RedbResourceStore::open_owned(file, identity())
-        .await
-        .unwrap();
+    let (_directory, file, marker) = provisioned_store();
+    let store =
+        RedbResourceStore::<TestVerifiedMutation>::provision_owned(file, marker, identity())
+            .await
+            .unwrap();
     let store = Arc::new(store);
     let probe_store = Arc::clone(&store);
     let probe = tokio::spawn(async move { probe_store.reads.expiry_probe().await });
@@ -448,19 +519,29 @@ async fn read_lifetime_is_enforced_by_the_paused_clock() {
     tokio::time::advance(READ_LIFETIME + std::time::Duration::from_millis(1)).await;
     let error = probe.await.unwrap().unwrap_err();
     assert_eq!(error.kind(), d2b_resource_store::StoreErrorKind::Timeout);
+    assert_eq!(store.reads.available_permits(), MAX_CONCURRENT_READS - 1);
+    std::thread::sleep(READ_LIFETIME + std::time::Duration::from_millis(20));
+    assert_eq!(store.reads.available_permits(), MAX_CONCURRENT_READS);
 }
 
 #[tokio::test]
-async fn range_seek_skips_every_older_row_and_shared_live_fanout_reuses_arc() {
-    let (_directory, file) = owned_file();
-    let (store, _) = RedbResourceStore::open_owned(file, identity())
+async fn range_seek_skips_every_older_row() {
+    let (_directory, file, marker) = provisioned_store();
+    let store =
+        RedbResourceStore::<TestVerifiedMutation>::provision_owned(file, marker, identity())
+            .await
+            .unwrap();
+    let process = ResourceTypeName::parse("Process").unwrap();
+    let first = store
+        .replay_backend(0, [process.clone()], |_| Ok(()))
         .await
         .unwrap();
-    let process = ResourceTypeName::parse("Process").unwrap();
-    let first = store.watch_backend(0, [process.clone()]).await.unwrap();
-    let second = store.watch_backend(0, [process]).await.unwrap();
-    assert_eq!(first.high_water().get(), 0);
-    assert_eq!(second.high_water().get(), 0);
+    let second = store
+        .replay_backend(0, [process], |_| Ok(()))
+        .await
+        .unwrap();
+    assert_eq!(first.get(), 0);
+    assert_eq!(second.get(), 0);
     let signals = loop {
         let signals = store.signals();
         if signals.revision_range_seeks == 2 {
@@ -475,7 +556,7 @@ async fn range_seek_skips_every_older_row_and_shared_live_fanout_reuses_arc() {
 }
 
 #[tokio::test]
-async fn replay_larger_than_delivery_channel_returns_receiver_before_streaming() {
+async fn replay_primitive_scans_larger_history_without_a_backend_queue() {
     let (directory, file) = owned_file();
     drop(file);
     seed_replay_log(&directory, 300);
@@ -484,23 +565,19 @@ async fn replay_larger_than_delivery_channel_returns_receiver_before_streaming()
         .write(true)
         .open(directory.path().join("store.redb"))
         .unwrap();
-    let (store, _) = RedbResourceStore::open_owned(file, identity())
+    let store = RedbResourceStore::<TestVerifiedMutation>::open_owned(file, identity())
         .await
         .unwrap();
-    let mut watch = tokio::time::timeout(
-        std::time::Duration::from_secs(1),
-        store.watch_backend(0, [ResourceTypeName::parse("Process").unwrap()]),
-    )
-    .await
-    .expect("registration deadlocked behind its own replay channel")
-    .unwrap();
-    assert_eq!(watch.high_water().get(), 300);
-    for revision in 1..=300 {
-        let batch = tokio::time::timeout(std::time::Duration::from_secs(1), watch.recv())
-            .await
-            .expect("streaming replay stalled")
-            .expect("watch closed during replay");
-        assert_eq!(batch.revision, revision);
+    let high_water = store
+        .replay_backend(0, [ResourceTypeName::parse("Process").unwrap()], |_| Ok(()))
+        .await
+        .unwrap();
+    assert_eq!(high_water.get(), 300);
+    while {
+        let signals = store.signals();
+        signals.replay_rows_scanned < 300 || signals.replay_rows_decoded < 300
+    } {
+        tokio::task::yield_now().await;
     }
     let signals = store.signals();
     assert_eq!(signals.replay_rows_scanned, 300);
@@ -511,13 +588,13 @@ async fn replay_larger_than_delivery_channel_returns_receiver_before_streaming()
 async fn public_read_path_enforces_zone_and_projection() {
     let (directory, file) = owned_file();
     drop(file);
-    seed_host(&directory, "host-system");
+    seed_two_hosts(&directory);
     let file = OpenOptions::new()
         .read(true)
         .write(true)
         .open(directory.path().join("store.redb"))
         .unwrap();
-    let (store, _) = RedbResourceStore::open_owned(file, identity())
+    let store = RedbResourceStore::<TestVerifiedMutation>::open_owned(file, identity())
         .await
         .unwrap();
     let target = ResourceRef::parse("Host/host-system").unwrap();
@@ -562,6 +639,115 @@ async fn public_read_path_enforces_zone_and_projection() {
     );
 }
 
+#[tokio::test]
+async fn list_cursor_is_bound_to_snapshot_and_selector() {
+    let (directory, file) = owned_file();
+    drop(file);
+    seed_two_hosts(&directory);
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(directory.path().join("store.redb"))
+        .unwrap();
+    let store = RedbResourceStore::<TestVerifiedMutation>::open_owned(file, identity())
+        .await
+        .unwrap();
+    let request = |cursor, resource_types| StoreListRequest {
+        operation: operation("list-host"),
+        zone: ZoneId::parse("work").unwrap(),
+        resource_types,
+        resource_names: Vec::new(),
+        filters: Vec::new(),
+        page_size: 1,
+        cursor,
+        projection: StoreProjection::MetadataOnly,
+    };
+    let first = store.list(request(None, Vec::new())).await.unwrap();
+    assert!(first.truncated);
+    let cursor = first.next_cursor.unwrap();
+    let error = store
+        .list(request(
+            Some(cursor.clone()),
+            vec![ResourceTypeName::parse("Host").unwrap()],
+        ))
+        .await
+        .unwrap_err();
+    assert_eq!(error.reason_code(), "list-cursor-selector-mismatch");
+
+    let mut stale = cursor.split('.').map(str::to_owned).collect::<Vec<_>>();
+    stale[1] = "0".to_owned();
+    let error = store
+        .list(request(Some(stale.join(".")), Vec::new()))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.kind(),
+        d2b_resource_store::StoreErrorKind::RevisionExpired
+    );
+}
+
+#[tokio::test]
+async fn public_watch_fails_until_the_coordinator_owns_stream_registration() {
+    let (_directory, file, marker) = provisioned_store();
+    let store =
+        RedbResourceStore::<TestVerifiedMutation>::provision_owned(file, marker, identity())
+            .await
+            .unwrap();
+    let error = store
+        .watch(StoreWatchRequest {
+            operation: operation("watch-host"),
+            zone: ZoneId::parse("work").unwrap(),
+            resource_types: vec![ResourceTypeName::parse("Host").unwrap()],
+            resource_names: Vec::new(),
+            filters: Vec::new(),
+            after_revision: d2b_contracts::v3::ZoneRevision::new(0),
+            initial_credits: 1,
+            projection: StoreProjection::Full,
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.kind(),
+        d2b_resource_store::StoreErrorKind::ResourcePlaneUnavailable
+    );
+    assert_eq!(error.reason_code(), "watch-coordinator-unavailable");
+}
+
+#[test]
+fn persisted_dtos_reject_unknown_fields() {
+    let mut value = serde_json::to_value(crate::transaction::StoreMeta {
+        store_uuid: "11111111-1111-4111-8111-111111111111".to_owned(),
+        zone_name: "work".to_owned(),
+        zone_uid: "22222222-2222-4222-8222-222222222222".to_owned(),
+        created_at: "2026-07-31T00:00:00.000Z".to_owned(),
+        schema_version: 1,
+        current_revision: 0,
+        compaction_floor: 0,
+        active_configuration_revision: 9,
+        policy_revision: 7,
+        api_catalog_revision: 8,
+        controller_generation: None,
+        clean_shutdown: false,
+        backup_generation: 0,
+    })
+    .unwrap();
+    value
+        .as_object_mut()
+        .unwrap()
+        .insert("extra".to_owned(), serde_json::Value::Bool(true));
+    let canonical = d2b_contracts::v3::canonical_json_bytes(&value).unwrap();
+    let framed = encode_value(ValueKind::StoreMetaScalar, &canonical).unwrap();
+    let error = crate::transaction::decode::<crate::transaction::StoreMeta>(
+        ValueKind::StoreMetaScalar,
+        framed.as_bytes(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.kind(),
+        d2b_resource_store::StoreErrorKind::StoreIntegrityFailure
+    );
+}
+
 #[test]
 fn source_policy_pins_redb_features_and_forbids_reduced_durability_calls() {
     let manifest = include_str!("../Cargo.toml");
@@ -582,4 +768,14 @@ fn source_policy_pins_redb_features_and_forbids_reduced_durability_calls() {
             .count(),
         1
     );
+}
+
+#[test]
+fn checked_mutation_constructors_and_raw_commit_path_are_not_public() {
+    let source = include_str!("lib.rs");
+    assert!(!source.contains("pub struct CheckedMutation"));
+    assert!(!source.contains("pub struct CheckedPreparedMutation"));
+    assert!(!source.contains("pub async fn commit_checked"));
+    assert!(source.contains("RedbResourceStore<V>"));
+    assert!(source.contains("V: VerifiedMutationView"));
 }
