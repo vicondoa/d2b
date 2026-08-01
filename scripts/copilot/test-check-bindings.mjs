@@ -75,6 +75,19 @@ const REQUIRED_INPUTS = [
   ".specify/memory",
 ];
 
+// What the gate says when each required input is absent. A classification case
+// that checked only the exit status would score green on any hard failure,
+// including one with nothing to do with the omission, so each entry names the
+// diagnostic that ties the failure to the path that was left out.
+const REQUIRED_FAILURE_TEXT = {
+  ".github/agents": ".github/agents does not exist",
+  ".github/skills": "the panel record helper is required",
+  "packages/xtask/src/delivery/model.rs": "cannot read model.rs",
+  "packages/xtask/src/delivery/panel.rs": "cannot read panel.rs",
+  "packages/xtask/src/delivery/mod.rs": "cannot read mod.rs",
+  ".specify/memory": ".specify/memory/friction-log.md: this register is missing",
+};
+
 const OPTIONAL_INPUTS = [
   ".github/copilot/settings.json",
   ".specify/integration.json",
@@ -399,6 +412,19 @@ const CASES = [
     expectExit: 1,
     expectText: "names no Disposition",
   },
+  // The taxonomy is closed so the three-wave escalation rule can count a
+  // category's recurrences. A near-miss spelling groups with nothing.
+  {
+    name: "a category outside the closed taxonomy is rejected",
+    mutate: (dir) =>
+      appendRegisterRow(
+        dir,
+        "friction-log.md",
+        "| copilotw6 | testing | 2026-07-31 | fixture row | open | open |",
+      ),
+    expectExit: 1,
+    expectText: "is not in the closed taxonomy",
+  },
   // A row is found by its leading pipe, so a row that lost one reads as prose
   // and every column on it goes unvalidated. The disposition below is bogus:
   // if the line were read as a row at all, the gate would reject it for that
@@ -429,14 +455,24 @@ const CASES = [
 // So measure it rather than asserting it in prose. Omit exactly one input,
 // run the gate, and check the exit status the classification predicts. The
 // baseline case establishes that a complete fixture exits 0, so a nonzero exit
-// here is attributable to the omission and not to unrelated breakage.
+// here is attributable to the omission and not to unrelated breakage. A
+// required case additionally names the diagnostic it expects, so a gate that
+// hard-fails for some other reason cannot be read as evidence of this one.
 function classificationCases() {
   const cases = [];
   for (const rel of REQUIRED_INPUTS) {
+    if (!REQUIRED_FAILURE_TEXT[rel]) {
+      // Without this the case would fall back to a status-only assertion,
+      // which is the weaker check this table exists to replace.
+      console.error(`error: no expected diagnostic recorded for required input ${rel}`);
+      failures += 1;
+      continue;
+    }
     cases.push({
       name: `classification: omitting required ${rel} fails the gate`,
       omit: rel,
       expectNonZero: true,
+      expectText: REQUIRED_FAILURE_TEXT[rel],
     });
   }
   for (const rel of OPTIONAL_INPUTS) {
