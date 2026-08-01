@@ -105,11 +105,19 @@ Mark folded rows `folded` with the target wave in the disposition column.
 For a low-priority item that should leave the plan:
 
 ```
+gh label create delivery-memory --description "Raised by d2b delivery memory" --force
+gh label create "<category>" --description "d2b delivery memory category" --force
+
 gh issue create \
   --title "<category>: <one-line statement>" \
   --label "delivery-memory,<category>" \
   --body-file <rendered body>
 ```
+
+`gh issue create` fails outright when a named label does not exist, and neither
+`delivery-memory` nor the category labels are pre-created in this repo, so the
+two `gh label create --force` calls are required rather than defensive. `--force`
+makes them idempotent, so they are safe to run before every file.
 
 Body template:
 
