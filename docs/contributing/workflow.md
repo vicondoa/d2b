@@ -276,14 +276,49 @@ fields that request panel, agent, or model metadata.
   clear every wrapper spelling because a caching wrapper that exits nonzero
   under concurrent cargo invocations is indistinguishable from the fixture
   failing for the wrong reason.
+- **No linker and no alternative codegen backend are configured, and that is
+  a measured decision rather than an oversight.** Both were tried on this
+  tree and neither earned its place. mold, wired through
+  `target.<triple>.linker` and compared against separately warmed target
+  directories, came out at 6.3 s against 6.7 s on a relink-heavy incremental
+  build and 90 s against 93 s on a warm one - inside the run-to-run noise.
+  The reason is that `[profile.dev] debug = "line-tables-only"` already
+  removed the debug information that makes linking expensive, so the cost
+  mold targets has largely been paid already. Cranelift, over five
+  incremental pairs against a nightly LLVM control, ran 5.8 s against 7.0 s:
+  a real 17% but 1.2 s in absolute terms, and it cannot enter the gate at
+  all, because `packages/rust-toolchain.toml` pins an exact stable release
+  that `tests/test-rust.sh` enforces, so it would mean installing and
+  caching a second toolchain in every Rust job. Reopen either only with a
+  measurement, and note the trap: `tests/test-rust.sh` exports `RUSTFLAGS`,
+  and that environment variable **replaces** `build.rustflags` rather than
+  merging with it, so a linker configured through `rustflags` is silently
+  dead there.
 - Tests that shell out to `cargo` (the capability-seal guards in
-  `packages/d2b-bus/` and `packages/d2b-controller-toolkit/`) cache their
+  `packages/d2b-bus/`, `packages/d2b-controller-toolkit/` and
+  `packages/d2b-resource-api/`) cache their
   scratch trees between runs, keyed on a hash of `rustc -vV`. Compiled
   artifacts are not portable across compiler versions, and the gate's
   pinned toolchain routinely differs from a dev shell's, so an unkeyed
-  cache lets one poison the other. Those persistent caches live under
+  cache lets one poison the other. The first two live under
   `.scratch/rust-test-cache/`, which CI restores as one cache surface. They
   are several GB per worktree; delete that subtree to reclaim the space.
+- The `d2b-resource-api` seal instead caches to
+  `.scratch/resource-api-external-seals-<key>/`, deliberately outside that
+  restored surface. Its tree is 767 MB, and the Actions cache is a hard
+  repository-wide budget that is already fully subscribed, so carrying it
+  would evict entries whose cold rebuild costs far more than this fixture's
+  40 s. Do not move it under `rust-test-cache/` without first showing the
+  budget has room.
+- That seal proves the resource API compiled under forced `cfg(test)`, which
+  a warm tree would otherwise skip - so it discards that one crate's cargo
+  fingerprints before checking, keeping its dependencies warm. Both the
+  marker and the rustc wrapper live at fixed paths inside the tree: cargo
+  fingerprints `RUSTC_WRAPPER`, so a per-run wrapper path silently
+  invalidates everything and restores the cold build. The arrangement is
+  fail-closed - the marker is deleted at the start of every run, so if the
+  forcing ever stops working the marker is absent and the seal fails rather
+  than passing without proof.
 - The persistent-shell helper is intentionally excluded from the main
   Rust workspace at `packages/d2b-guest-shell-runner/`. Run it by
   manifest path (and with `--features real-libshpool` when checking the
@@ -330,6 +365,18 @@ fields that request panel, agent, or model metadata.
   symlink) so the removal reclaims its multi-GiB build artifacts.
   Rebuilds in a fresh worktree stay cheap because sccache retains the
   compiled outputs.
+- `make clean` does that sweep for the current worktree: every cargo
+  target directory, the `.scratch/` tree, then `nix-collect-garbage`. It
+  keeps `$SCCACHE_DIR` for the reason above, and deletes no file outside
+  the worktree, because sibling worktrees own their artifacts and may
+  have work in flight - the store collection is the one step with
+  user-wide reach, and it only reclaims paths nothing still references.
+  A directory is removed only when it lies inside the worktree and holds
+  no git-tracked file, so an unexpected match fails closed instead of
+  deleting committed content. Use `D2B_CLEAN_DRY_RUN=1` to see the sweep
+  first; `D2B_CLEAN_SKIP_GC=1` and `D2B_CLEAN_KEEP_SCRATCH=1` narrow it.
+  Collecting old *system* generations still needs the operator-policy
+  `sudo` form above.
 - `tests/tools/preflight-disk-space.sh` fails the wave when free disk under
   `$ROOT` drops below 10 GiB. Runs after the orphan reapers but BEFORE
   the rust toolchain bootstrap so the fail-closed guard cannot be

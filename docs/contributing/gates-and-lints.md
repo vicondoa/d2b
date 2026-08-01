@@ -108,6 +108,60 @@ fixture-dependent contract and policy layer. Selected hermetic policy files
 may still have separate enforcing entrypoints such as `test-policy`; inspect
 the target driver before claiming coverage.
 
+### The API census shard
+
+CI splits the Rust gate into three independent jobs, `make
+test-rust-api-surface`, `make test-rust-main` and `make test-rust-remaining`,
+behind the stable required `test-rust` rollup context. `make test-rust` still
+runs all three partitions exactly once, so it stays the local command; reach
+for a partition target only to rerun the part that failed.
+
+The API census is a separate shard because it shares nothing with the
+workspace build: it renders through the separately pinned nightly toolchain in
+`packages/d2b-api-surface/rust-toolchain.toml` into its own target directory
+under `.scratch/rust-test-cache/`, so it neither consumes nor produces
+artifacts that fmt, clippy or nextest use. Its cost is rustdoc rendering rather
+than dependency compilation, so it does not need a cache entry of its own; do
+not give it one. `test-rust-main` remains the single rust-cache writer.
+
+### The realized flake check and its cache
+
+A **realized** flake check (currently only `video-binary-contract`, listed in
+`D2B_FLAKE_REALIZED_CHECKS` in `tests/tools/flake-check-classes.sh`) is built
+rather than merely instantiated, so it compiles the patched VMM packages. In
+CI that shard carries its must-build inputs between runs through
+`tests/tools/realized-check-cache.sh`, which publishes only the outputs
+`cache.nixos.org` does not already serve - two packages, about 30 MB - rather
+than a whole-store cache. Keep it that size: the Actions cache is a hard
+repository-wide budget, and this shard is affordable precisely because it is a
+targeted entry. Publish only each input's **default** output; a package built
+with separate debug info also declares a `debug` output that no `--help`
+assertion can need, and carrying those took the same entry to 175 MiB. A
+carried entry can never produce a wrong result, since store paths are
+content-addressed and a changed derivation simply misses and builds, so the
+import is deliberately best-effort and must never fail the shard. Measured on
+the gate, a hit takes that shard from 1010 s to 33 s and builds neither
+package.
+
+Two properties of that script are load-bearing and were each learned the
+expensive way, so do not "simplify" either. It resolves its paths with
+`nix-store --query` and restores them **by name from a manifest the export
+writes**, never with `nix derivation show`-plus-jq and never with
+`nix copy --all`. This tree evaluates under Lix and CI installs upstream Nix;
+both of those spellings work under Lix and fail under upstream Nix, and both
+fail as a silent empty result rather than as an error. Each one cost a full
+run whose only symptom was a lane that never got faster. `import` therefore
+decides success by re-querying the store rather than by trusting the copy's
+exit status, and the shard runs `realized-check-cache.sh self-test` - which
+fails closed on a reintroduced `--all` - before the restore.
+
+Do not resolve this by deleting the check. The `--backend` and
+`--vhost-user-media` flags are separately pinned in
+`nixos-modules/processes-json.nix` and in the golden argv under
+`tests/golden/runner-shape/`, but those pin what d2b *emits*; the realized
+check pins what the binary *accepts*, which is what catches an upstream bump
+dropping a flag.
+
 Before opening an agent-owned PR, run the host/manual integration
 targets on the development host; do not rely on the PR pipeline for
 them:

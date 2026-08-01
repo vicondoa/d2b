@@ -114,11 +114,13 @@ implementation details unless a target or `tests/AGENTS.md` says otherwise.
 bootstrap a private toolchain when it is missing, so working inside the dev
 shell just skips that setup.
 
-CI splits the Rust gate into two independent jobs, `make test-rust-main` and
-`make test-rust-remaining`, behind the stable required `test-rust` rollup
-context. `make test-rust` still runs both partitions exactly once, so it stays
-the local command; reach for a partition target only to rerun the half that
-failed.
+CI splits the Rust gate into three independent jobs, `make
+test-rust-api-surface`, `make test-rust-main` and `make test-rust-remaining`,
+behind the stable required `test-rust` rollup context. `make test-rust` still
+runs all three partitions exactly once, so it stays the local command; reach
+for a partition target only to rerun the part that failed. The API census is a
+separate shard because it shares nothing with the workspace build; see
+[gates and lints](./docs/contributing/gates-and-lints.md).
 
 ```bash
 make check        # PR-equivalent Layer-1 gate; runs tests/layer1-jobs.json
