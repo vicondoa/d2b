@@ -1,5 +1,6 @@
 d2b_bus::ComponentSessionAdmission	impl SessionRegistrationCapability<ComponentSessionRegistrar> for ComponentSessionAdmission
 d2b_bus::ComponentSessionAdmission	impl core::fmt::Debug for ComponentSessionAdmission
+d2b_resource_api::NativeAuthorizer	impl core::fmt::Debug for NativeAuthorizer
 d2b_session::AuthenticatedComponentSession	impl<C> fmt::Debug for AuthenticatedComponentSession<C>
 d2b_session::SessionAcceptor	impl<C> fmt::Debug for SessionAcceptor<C>
 d2b_session_unix::VerifiedUnixPeer	impl fmt::Debug for VerifiedUnixPeer

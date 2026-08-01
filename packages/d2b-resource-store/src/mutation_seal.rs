@@ -137,6 +137,27 @@ impl MutationSealAcceptor {
     }
 }
 
+fn assert_mutation_seal_types_have_no_minting_traits() {
+    trait CapabilityMustNotImplementCloneCopyDefaultDebugOrFrom<A> {
+        fn some_item() {}
+    }
+    impl<T: ?Sized> CapabilityMustNotImplementCloneCopyDefaultDebugOrFrom<()> for T {}
+    impl<T: Clone> CapabilityMustNotImplementCloneCopyDefaultDebugOrFrom<u8> for T {}
+    impl<T: Copy> CapabilityMustNotImplementCloneCopyDefaultDebugOrFrom<u16> for T {}
+    impl<T: Default> CapabilityMustNotImplementCloneCopyDefaultDebugOrFrom<u32> for T {}
+    impl<T: core::fmt::Debug> CapabilityMustNotImplementCloneCopyDefaultDebugOrFrom<u64> for T {}
+    impl<T: From<()>> CapabilityMustNotImplementCloneCopyDefaultDebugOrFrom<u128> for T {}
+    let _ = <SealedMutation as CapabilityMustNotImplementCloneCopyDefaultDebugOrFrom<_>>::some_item;
+    let _ =
+        <MutationSealIssuer as CapabilityMustNotImplementCloneCopyDefaultDebugOrFrom<_>>::some_item;
+    let _ = <MutationSealAcceptor as CapabilityMustNotImplementCloneCopyDefaultDebugOrFrom<
+        _,
+    >>::some_item;
+    let _ = <OpenedMutation as CapabilityMustNotImplementCloneCopyDefaultDebugOrFrom<_>>::some_item;
+}
+
+const _: fn() = assert_mutation_seal_types_have_no_minting_traits;
+
 fn diagnose_identity(
     declared: &StoreSealIdentity,
     expected: &StoreSealIdentity,
