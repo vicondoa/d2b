@@ -28,6 +28,7 @@
       "test-performance-budgets",
       "test-lint",
       "test-changelog",
+      "test-rust-api-surface",
       "test-rust-main",
       "test-rust-remaining",
       "test-rust",
@@ -116,6 +117,19 @@
       "timeoutMinutes": 10,
       "runsOn": "ubuntu-latest"
     },
+    "test-rust-api-surface": {
+      "displayName": "Rust compiler-derived API census",
+      "makeTarget": "test-rust-api-surface",
+      "localEnv": {
+        "D2B_SKIP_FIXTURE_BUILD": "1"
+      },
+      "ciKind": "rust",
+      "ciJobId": "test-rust-api-surface",
+      "ciOnly": true,
+      "needs": ["tier0"],
+      "timeoutMinutes": 60,
+      "runsOn": "ubuntu-latest"
+    },
     "test-rust-main": {
       "displayName": "Rust main workspace gate",
       "makeTarget": "test-rust-main",
@@ -143,14 +157,14 @@
       "runsOn": "ubuntu-latest"
     },
     "test-rust": {
-      "displayName": "Require both Rust gate shards to pass",
+      "displayName": "Require every Rust gate shard to pass",
       "makeTarget": "test-rust",
       "localEnv": {
         "D2B_SKIP_FIXTURE_BUILD": "1"
       },
       "ciKind": "rust-rollup",
       "ciJobId": "test-rust",
-      "needs": ["test-rust-main", "test-rust-remaining"],
+      "needs": ["test-rust-api-surface", "test-rust-main", "test-rust-remaining"],
       "timeoutMinutes": 5,
       "runsOn": "ubuntu-latest"
     },

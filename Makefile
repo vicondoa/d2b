@@ -11,7 +11,7 @@ SHELL := $(CURDIR)/tests/tools/scrub-shell-environment
 .PHONY: pre-tag smoke-lite i3-check \
         check check-static check-ci check-all check-fast check-tier0 \
         test test-unit \
-        test-lint test-rust test-rust-main test-rust-remaining \
+        test-lint test-rust test-rust-api-surface test-rust-main test-rust-remaining \
         test-fixture-contracts test-proofs test-flake test-nix-unit \
         test-performance-budgets test-adr-index-coverage test-ci-coverage \
         test-flake-list test-flake-partition \
@@ -109,8 +109,12 @@ test-lint:
 test-rust:
 	bash tests/test-rust.sh
 
-## test-rust-main / test-rust-remaining - CI shards of the comprehensive gate.
-## Local developers should run test-rust, which executes both once in order.
+## test-rust-api-surface / test-rust-main / test-rust-remaining - CI shards of
+## the comprehensive gate. Local developers should run test-rust, which executes
+## all three once in order.
+test-rust-api-surface:
+	bash tests/test-rust.sh api-surface
+
 test-rust-main:
 	bash tests/test-rust.sh main-workspace
 
