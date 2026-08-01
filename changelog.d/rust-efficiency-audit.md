@@ -9,9 +9,12 @@
   unnecessary dependency resolution and compilation.
 - Consolidated pinned-test inventory discovery into one main-workspace Cargo
   listing, avoiding a duplicate contract-crate resolution pass.
-- Grouped compile-fail capability-seal mutations by owning type and compiled
-  resource API seal fixtures in one Cargo invocation, preserving diagnostics
-  while reducing repeated dependency setup.
+- Kept semantic compile-fail mutations independently attributable while
+  retaining cached fixture dependencies, and reduced the resource API seal to
+  its narrow forced-`cfg(test)` probe.
+- Added an absolute 60-second per-test wall-clock ceiling to the runtime
+  ledger; shorter timing thresholds remain advisory while aggregate crate CPU
+  budgets remain the regression gate.
 - Combined ADR-046 measurement policy checks so the documentation corpus is
   loaded once instead of once per test.
 - Cached workspace Rust source contents during the tracing-contract scan,
