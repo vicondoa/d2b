@@ -72,10 +72,9 @@ check_name_is_safe() {
 }
 
 # Keep only the paths that are valid in the local store. A derivation can
-# declare outputs that a given build never realizes - the two patched packages
-# each declare a `debug` output that is absent unless separateDebugInfo
-# produced one - and `nix copy` fails on a path it cannot read. Publishing is
-# best-effort over whatever this run actually produced.
+# declare an output that a given build never realizes, and `nix copy` fails on
+# a path it cannot read. Publishing is best-effort over whatever this run
+# actually produced.
 select_local_paths() {
   local path
   while read -r path; do
@@ -84,6 +83,47 @@ select_local_paths() {
       printf '%s\n' "$path"
     fi
   done
+}
+
+# Print the store path of a derivation's default output, or every output when
+# the default one cannot be identified.
+#
+# Nix names a derivation's default output after the derivation itself and
+# appends `-<outputName>` to each of the others, so the default output is the
+# one whose store-path name equals the derivation's name. Selecting it matters
+# because a package built with separate debug info also produces a `debug`
+# output, and nothing a realized check asserts can need one: measured on
+# `video-binary-contract`, whose two must-build inputs it selects only `out`
+# from, those two debug outputs were 145 of the entry's 175 MiB. Publishing
+# only the default outputs takes the same entry to 30 MB.
+#
+# A derivation whose `outputs` omit `out` names its default output
+# `<name>-<first>` instead, and then nothing matches. That case keeps every
+# output rather than none: omitting a needed path costs a full rebuild, while
+# carrying a few unneeded ones costs only bytes, so the ambiguous case errs
+# towards completeness.
+default_output_paths() {
+  local drv=$1 name outs kept out out_name
+  name=${drv##*/}
+  name=${name#*-}
+  name=${name%.drv}
+
+  outs=$(nix-store --query --outputs "$drv")
+  kept=""
+  for out in $outs; do
+    out_name=${out##*/}
+    out_name=${out_name#*-}
+    if [ "$out_name" = "$name" ]; then
+      kept=$out
+    fi
+  done
+
+  if [ -n "$kept" ]; then
+    printf '%s\n' "$kept"
+  else
+    # shellcheck disable=SC2086 # deliberate split: one output path per word
+    printf '%s\n' $outs
+  fi
 }
 
 # Print the output paths of a check's direct build inputs that the upstream
@@ -106,7 +146,7 @@ must_build_paths() {
     "${flake_ref}#checks.${native}.${check}.drvPath")
 
   for input in $(nix-store --query --references "$drv" | grep '\.drv$'); do
-    for out in $(nix-store --query --outputs "$input"); do
+    for out in $(default_output_paths "$input"); do
       # A path upstream already has is not worth a slot in our entry.
       if ! nix path-info --store "$UPSTREAM_SUBSTITUTER" "$out" >/dev/null 2>&1; then
         printf '%s\n' "$out"
