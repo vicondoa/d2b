@@ -148,25 +148,34 @@ mod authority {
     pub struct SealAuthority;
 }
 
-/// Declared identity of exactly one provisioned store.
+/// Declared identity of exactly one provisioned store, plus the bounded
+/// correlator an operator uses to find it in their configuration.
 ///
-/// Mirrors what `StoreIdentity` actually holds. The store UUID is the
-/// discriminator: two stores in one Zone share `zone` and `zone_uid` and
-/// differ only here, so keying on `zone_uid` would make the declared check a
-/// no-op for the most plausible multi-store case. Both fields are private and
-/// only the Zone is readable; section 2a says why.
-#[derive(Clone, PartialEq, Eq)]
+/// `zone` and `store_uuid` mirror what `StoreIdentity` actually holds and are
+/// the only two components compared. The store UUID is the discriminator:
+/// two stores in one Zone share `zone` and `zone_uid` and differ only here, so
+/// keying on `zone_uid` would make the declared check a no-op for the most
+/// plausible multi-store case. `slot` is section 2c's correlator; it is never
+/// compared, because it names a position in configuration and not a store.
+///
+/// This type implements no comparison trait. The one comparison lives in a
+/// private function that names `zone` and `store_uuid` and cannot silently
+/// acquire `slot`; section 2c says why that matters and section 6 seals it.
+#[derive(Clone)]
 pub struct StoreSealIdentity {
+    slot: StoreSlot,
     zone: ZoneId,
     store_uuid: ResourceUid,
 }
 
 impl StoreSealIdentity {
-    pub fn new(zone: ZoneId, store_uuid: ResourceUid) -> Self;
-    /// The only readable component. There is deliberately no `store_uuid`
-    /// accessor, matching `StoreIdentity`, which exposes `zone` and
-    /// `zone_uid` and has never exposed its UUID.
+    pub fn new(slot: StoreSlot, zone: ZoneId, store_uuid: ResourceUid) -> Self;
+    /// The only readable identity component. There is deliberately no
+    /// `store_uuid` accessor, matching `StoreIdentity`, which exposes `zone`
+    /// and `zone_uid` and has never exposed its UUID.
     pub const fn zone(&self) -> &ZoneId;
+    /// The authorized operator-facing correlator. Renderable; section 2c.
+    pub const fn slot(&self) -> StoreSlot;
 }
 
 /// Payload the verifier prepares. Data, not evidence.
@@ -204,9 +213,14 @@ impl MutationSealIssuer {
 }
 
 impl MutationSealAcceptor {
-    /// Field-wise comparison for the operator message and for the reason-code
-    /// selection in `open_owned`. Never an authorization gate on its own.
-    pub fn diagnose(&self, store: &StoreSealIdentity) -> SealIdentityMismatch;
+    /// Field-wise comparison of `zone` then `store_uuid`, never `slot`, for
+    /// the operator message and for the reason-code selection in
+    /// `open_owned`. Never an authorization gate on its own.
+    pub fn diagnose(&self, store: &StoreSealIdentity)
+        -> Result<(), SealIdentityMismatch>;
+    /// The slot this acceptor was minted for, so `open_owned` can refuse an
+    /// acceptor whose correlator disagrees with the store's. Section 2c.
+    pub const fn declared_slot(&self) -> StoreSlot;
     /// Consumes the evidence. Succeeds only for this acceptor's paired issuer.
     pub fn open(&self, sealed: SealedMutation) -> Result<OpenedMutation, StoreError>;
 }
@@ -273,9 +287,11 @@ production wiring with a different backend on the end, not a bypass of it.
 ### 2a. What the seal types must not implement
 
 No type declared in `mutation_seal.rs` implements `Debug`, `Display`,
-`Serialize`, `Deserialize`, or `JsonSchema`. That covers `SealedMutation`,
-`OpenedMutation`, `MutationSealIssuer`, `MutationSealAcceptor`,
-`MutationSealBody`, `StoreSealIdentity`, and `SealAuthority`. The approved
+`Serialize`, `Deserialize`, `JsonSchema`, `PartialEq`, or `Eq`. That covers
+`SealedMutation`, `OpenedMutation`, `MutationSealIssuer`,
+`MutationSealAcceptor`, `MutationSealBody`, `StoreSealIdentity`, and
+`SealAuthority`. The first five are this section's rule; the two comparison
+traits are section 2c's, and both are enforced by the same scan. The approved
 capability trait-impl allowlist at
 `packages/d2b-bus/tests/approved-capability-trait-impls.txt` therefore gains
 zero rows, not four.
@@ -317,27 +333,42 @@ pair of hand-written impls. Even a reintroduced derive could not print either
 value. The primary guard is still the absent impl, because the payload types a
 `SealedMutation` carries are not all so protected.
 
-The one thing a caller may learn about a mismatch is which declared component
-disagreed, expressed as booleans and never as values. That type lives in
+The one thing a caller may learn about the identities themselves is which
+declared component disagreed, named and never valued. That type lives in
 `packages/d2b-resource-store/src/error.rs` alongside `StoreError`, not in
 `mutation_seal.rs`, so the no-`Debug` rule for that file stays absolute:
 
 ```rust
-/// Which declared components of a seal identity disagreed. Booleans only;
-/// the values themselves are never rendered.
+/// Which declared component of a seal identity disagreed. Names the
+/// component; the values themselves are never rendered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SealIdentityMismatch {
-    pub zone_matches: bool,
-    pub store_uuid_matches: bool,
+pub enum SealIdentityMismatch {
+    /// The declared Zones disagree. Selected first, so a `Store` result
+    /// always means the Zones already agreed.
+    Zone,
+    /// The Zones agree and the declared store UUIDs disagree.
+    Store,
 }
 
 impl SealIdentityMismatch {
-    pub const fn is_match(self) -> bool;
-    /// The stable acceptor-install reason code this mismatch selects, or
-    /// `None` when the identities match.
-    pub const fn reason_code(self) -> Option<&'static str>;
+    /// The stable acceptor-install reason code this mismatch selects.
+    pub const fn reason_code(self) -> &'static str;
 }
 ```
+
+An earlier revision of this record made this a struct of two booleans,
+`zone_matches` and `store_uuid_matches`, with `is_match` and an
+`Option<&'static str>` reason code. Four representable states for a two-state
+domain: `(true, true)` duplicates the `Ok` arm that `diagnose` already
+expresses, and `(false, true)` claims two stores in different Zones collided on
+a UUIDv4, which is not a diagnosis anyone should be asked to read. `diagnose`
+therefore returns `Result<(), SealIdentityMismatch>` and the type carries only
+the two states that can actually occur. `Result` rather than `Option` because
+the caller's use is `map_err` onto the reason code, and because `Ok(())` reads
+as "the identities agree" where `None` reads as "nothing to say". The
+consequences are that `is_match` disappears into `Result::is_ok`, the reason
+code becomes total, and a future third identity component cannot be added
+without adding a variant here, which is the point.
 
 This is the shape the crate already uses to diagnose without disclosing:
 `AdmittedAuthorization`'s `Debug` prints `target_count` and nothing else, and
@@ -346,13 +377,14 @@ withholding `operation_id` and `correlation_id`, which are plausibly harmless
 and still withheld.
 
 Stated as a prohibition, because a future reader will look for one: the store
-UUID and the `SealAuthority` pointer value must never appear in an error
-message, a log line, a metric label, a span attribute, or an audit record.
-There is no authorized rendering surface for either.
+UUID, the `SealAuthority` pointer value, and the host database path must never
+appear in an error message, a log line, a metric label, a span attribute, or an
+audit record. There is no authorized rendering surface for any of the three.
 `ResourceUid::as_str` and `ResourceUid::to_canonical_string` are documented for
 "an authorized encoding or key surface"; a diagnostic is not one. The
-operator-actionable substitute is the reason code plus the boolean pair, and
-section 4 gives the remediation for each code.
+operator-actionable substitute is the reason code, the disagreeing component,
+and the bounded store slot that section 2c defines; section 4 gives the
+remediation for each code.
 
 ### 2b. What identifies a store
 
@@ -389,7 +421,124 @@ The three semantics an implementer needs, measured rather than described:
   comparison here would imply the UUID is a secret that gates the write, which
   is exactly the false belief this record exists to prevent.
 
+### 2c. What identifies a store to an operator
 
+Section 2a is right about every value it withholds and silent about what that
+leaves an operator holding. A daemon serving more than one Zone opens more than
+one store, and every refusal in section 4 denies with a stable reason code and
+no identity at all. In a single-store deployment that is complete. In a
+multi-store startup the operator learns that a store refused its acceptor and
+has no way to say which one: the store UUID is prohibited, the Zone renders as
+`ZoneId(<redacted>)`, and the database path falls under the same prohibition as
+the UUID. Redaction that is correct about identity leaves a multi-instance
+failure unlocatable unless a non-secret correlator is designed in beside it.
+
+The correlator is a bounded ordinal the composition root assigns. It lives in
+`packages/d2b-resource-store/src/error.rs` beside `SealIdentityMismatch`, for
+the same reason: it is renderable, and `mutation_seal.rs` renders nothing.
+
+```rust
+/// Upper bound on the stores one composition root may open.
+pub const MAX_STORE_SLOTS: usize = 64;
+
+/// Zero-based position of one store in the composition root's declared store
+/// list. A correlator, never an identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct StoreSlot(u8);
+
+impl StoreSlot {
+    pub fn new(index: u32) -> Result<Self, StoreSlotError>;
+    pub const fn get(self) -> u32;
+}
+
+/// Slot index exceeded the composition bound.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StoreSlotError;
+```
+
+`StoreSlot` implements `Display` as the decimal index and nothing else, and
+that is the whole of its authorized rendering. The shape is deliberately the
+mirror of `MutationOrdinal`, which the same file already uses to name the
+failing mutation in a bounded batch without disclosing the mutation:
+`MutationOrdinal::new` rejects at `MAX_BATCH_MUTATIONS`, `StoreSlot::new`
+rejects at `MAX_STORE_SLOTS`, and `StoreError`'s own doc comment already reads
+"only API-safe optional metadata". The problem section 2a leaves open is the
+problem this crate already solved one level down, so it gets the same answer
+rather than a new one. `MAX_STORE_SLOTS` lives in `d2b-resource-store` and not
+in `d2b-contracts` where `MAX_BATCH_MUTATIONS` lives, because a batch bound is
+a protocol bound a client must know and a composition bound is process-local
+with no wire form; section 1 rejected `d2b-contracts` on exactly that test.
+
+**Assignment.** The slot is the zero-based index of the store in the
+composition root's declared store list, under a total order fixed by the
+configuration itself: declaration order for a sequence, lexicographic order of
+the configuration key for a mapping, and nothing else. It is a pure function of
+the declared configuration, so it is stable across restarts and identical on
+two hosts given identical configuration. It is never derived from the store
+UUID, the database path, the `SealAuthority` address, a hash, or the order in
+which opens happen to complete. A configuration declaring more than
+`MAX_STORE_SLOTS` stores fails closed at assignment with `StoreSlotError` and
+the daemon does not start.
+
+**How an operator maps it back.** Slot `N` is the `N`-th entry, counting from
+zero, of the store list the operator wrote. There is no lookup table, no
+runtime registry, and deliberately no emitted mapping line: a mapping line
+would have to name the entry, and the entry's name is operator-authored text,
+which is the unrestricted label section 2a prohibits. Counting entries in one's
+own configuration is the entire mapping, and it works precisely because the
+operator is the only party who holds both halves.
+
+**What it discloses.** The position of the failing store, and an upper bound on
+how many stores the daemon was configured with. That is not nothing, and it is
+stated rather than implied. It discloses no Zone, no UUID, no path, no
+credential, and no operator-authored name; section 2a's prohibitions are
+extended by this section, never relaxed.
+
+**Where it is attached.** Three typed surfaces carry it, and no others:
+
+- `StoreSealIdentity` carries it, so a store that can be sealed has a slot by
+  construction. There is no constructor that omits one.
+- `StoreError` gains `store_slot: Option<StoreSlot>`, an accessor, and one more
+  row in its hand-written `Debug`, exactly as `mutation_ordinal` is carried
+  today. Both existing constructors set `None`, so no committed call site
+  changes; a new `const fn with_store_slot` sets it. The value is always the
+  slot of **the store that produced the error**, never a counterparty's.
+- `StoreSealHandoffError` carries it as a typed field on both variants and
+  renders it in the `Display` sentence, because a composition-time refusal that
+  names no store is the exact failure this section exists to close.
+
+**Telemetry.** These three crates emit nothing today, measured in section 2a,
+so this decision adds no log line, span, or metric. The obligation it creates
+binds the composition root that wires a store: every startup diagnostic emitted
+for a store carries `store_slot` with that store's value on every path,
+including the success path, so an operator correlating a refusal against the
+lines around it is reading one field and not two. `store_slot` is bounded at
+`MAX_STORE_SLOTS`, so it is safe as a span attribute, a log field, and a metric
+label if a later wave adds one. Nothing else from this decision may become any
+of the three.
+
+**What it is not.** A slot is never persisted. `StoreMeta` does not gain one,
+because a slot is a property of a composition and a durable record carrying it
+would be wrong the first time an operator reorders their configuration. It
+never appears on the wire, in a schema, or in an audit record. And it is never
+compared for identity: `diagnose` compares `zone`, then `store_uuid`, and
+stops.
+
+**The one guard the correlator needs.** `StoreSealIdentity::new` takes the slot
+from its caller, so an acceptor minted for the entry at slot 1 can be installed
+into the store at slot 3, after which every error that store produces names
+slot 1. A correlator that can name the wrong configuration entry is worse than
+none, because the operator then edits a store that was working. `open_owned`
+therefore compares `MutationSealAcceptor::declared_slot` against the store's
+own slot after it compares identity, and refuses a disagreement with
+`mutation-seal-acceptor-slot-mismatch`. This is not an authorization check and
+must never be described as one; it is what makes the slot that `open` reports
+provably the store's own, which is the property every message in section 4
+depends on. `declared_slot` is the one accessor the acceptor exposes beyond
+`diagnose` and `open`, and it exposes a correlator, not a component of the
+identity.
+
+### 3. How the direction works
 
 Unchanged edges: `d2b-resource-api` depends on `d2b-resource-store` and on
 `d2b-resource-store-redb`; `d2b-resource-store-redb` depends on
@@ -408,26 +557,29 @@ impl NativeAuthorizer {
     ) -> Result<MutationSealAcceptor, StoreSealHandoffError>;
 }
 
-/// Why a store-seal handoff was refused. Carries no store UUID and no
-/// authority value; see section 2a.
+/// Why a store-seal handoff was refused. Carries the bounded store slot from
+/// section 2c, no store UUID, and no authority value; see section 2a.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum StoreSealHandoffError {
     /// This authorizer already yielded its one acceptor.
-    AlreadyTaken { zone: ZoneId },
+    AlreadyTaken { slot: StoreSlot, zone: ZoneId },
     /// A previous handoff panicked and the seal state is unrecoverable.
-    AuthorizerUnavailable { zone: ZoneId },
+    AuthorizerUnavailable { slot: StoreSlot, zone: ZoneId },
 }
 ```
 
-The `Display` text is a fixed remediation sentence with no identity in it:
-`AlreadyTaken` renders "native authorizer already yielded its store-seal
-acceptor; construct one NativeAuthorizer per resource store", and
-`AuthorizerUnavailable` renders "native authorizer store-seal state is
-poisoned; this process must not continue serving the zone". The `zone` field
-is typed context for a composition root that has an authorized rendering
-surface, not message text: `ZoneId`'s own `Debug` and `Display` are redacted,
-so the derived `Debug` on this enum cannot disclose it either.
+The `Display` text is a fixed remediation sentence whose only identifier is the
+slot: `AlreadyTaken` renders "native authorizer already yielded its store-seal
+acceptor, refused for store slot {slot}; construct one NativeAuthorizer per
+resource store", and `AuthorizerUnavailable` renders "native authorizer
+store-seal state is poisoned at store slot {slot}; this process must not
+continue serving the zone". The slot is what makes both sentences actionable
+in a multi-store startup, and it is renderable because section 2c says it
+carries no identity. The `zone` field is typed context for a composition root
+that has an authorized rendering surface, not message text: `ZoneId`'s own
+`Debug` and `Display` are redacted, so the derived `Debug` on this enum
+discloses the slot and nothing else.
 
 This is a second entry in the committed `take_store_binding` pattern -
 `ResourceService::new` already calls it behind a `Mutex<Option<_>>` - but it
@@ -448,14 +600,26 @@ nothing to compare the requested `StoreSealIdentity` against. Identity
 mismatch is caught where the identity actually lives, at `open_owned` and at
 `open`, and section 4 gives both.
 
-Composition order becomes:
+Composition order becomes, once per declared store, with the slot taken from
+the enumeration and from nothing else:
 
 ```rust
-let authorizer = Arc::new(NativeAuthorizer::new(/* ... */));
-let acceptor = authorizer.take_store_seal(identity.seal_identity())?;
-let backend = RedbResourceStore::open_owned(file, identity, acceptor).await?;
-let service = ResourceService::new(Arc::new(RedbBackend::new(backend)), authorizer)?;
+for (index, declared) in stores.iter().enumerate() {
+    let slot = StoreSlot::new(u32::try_from(index)?)?;
+    let identity = StoreIdentity::new(slot, /* store_uuid, zone, ... */);
+    let authorizer = Arc::new(NativeAuthorizer::new(/* ... */));
+    let acceptor = authorizer.take_store_seal(identity.seal_identity())?;
+    let backend = RedbResourceStore::open_owned(file, identity, acceptor).await?;
+    let service = ResourceService::new(Arc::new(RedbBackend::new(backend)), authorizer)?;
+}
 ```
+
+One `NativeAuthorizer` per store is not incidental to the loop; section 4's
+third quiet failure is what happens when the authorizer is hoisted out of it.
+Every diagnostic this loop emits, on the success path as well as the four
+fallible ones, carries `store_slot = slot.get()`; that is the section 2c
+obligation, and it binds the wave that wires the resource plane into `d2bd`,
+which does not exist at this branch tip.
 
 `ResourceService::new` fails closed with `StoreBindingError` when the
 authorizer it is handed never issued a seal. That is a composition-time check
@@ -502,11 +666,14 @@ call site and has to be counted as one; see invariant 2 and section 6.
 
 **Store identity is bound twice.** `open` first compares
 `Arc::ptr_eq` on the private `SealAuthority`, which is the unforgeable check;
-it then compares the declared `StoreSealIdentity` for equality, which is the
-diagnosable one. `open_owned` additionally refuses an acceptor whose declared
-identity does not match the store it is being installed into, and splits that
-refusal by which component disagreed, because the two cases have different
-remediations. Four fail-closed points, each with a stable reason string:
+it then compares the two declared identity components field-wise through the
+private comparison that backs `diagnose`, which is the diagnosable one.
+`open_owned` additionally refuses an acceptor whose declared identity does not
+match the store it is being installed into, and splits that refusal by which
+component disagreed, because the two cases have different remediations; it
+then refuses a slot disagreement, per section 2c. Five fail-closed points, each
+with a stable reason string and each carrying the slot of the store that
+produced it:
 
 | Condition | Reason | Kind | Retry |
 | --- | --- | --- | --- |
@@ -514,14 +681,20 @@ remediations. Four fail-closed points, each with a stable reason string:
 | Evidence declares another store | `mutation-seal-store-identity-mismatch` | `InternalIntegrityFailure` | `Never` |
 | Acceptor installed cross-Zone | `mutation-seal-acceptor-zone-mismatch` | `InternalIntegrityFailure` | `Never` |
 | Acceptor installed into a sibling store | `mutation-seal-acceptor-store-mismatch` | `InternalIntegrityFailure` | `Never` |
+| Acceptor declares another composition slot | `mutation-seal-acceptor-slot-mismatch` | `InternalIntegrityFailure` | `Never` |
 
 `StoreError::reason_code` is already a `&'static str` chosen from a fixed set,
-so these four codes carry no caller data by construction. The split of the
-acceptor case is the whole operator-actionable payload: it is exactly the
-`SealIdentityMismatch` boolean pair from section 2a, projected onto a stable
-string, and it discloses only whether two values the operator supplied agreed.
+so these five codes carry no caller data by construction, and the only
+non-constant thing any of them carries is `store_slot`, which section 2c bounds
+at `MAX_STORE_SLOTS`. The split of the acceptor case is the operator-actionable
+payload: the first two acceptor codes are exactly `SealIdentityMismatch::Zone`
+and `SealIdentityMismatch::Store` from section 2a projected onto a stable
+string, and they disclose only which of two values the operator supplied
+disagreed, never either value.
 
-The remediation each code names:
+The remediation each code names. The reported slot is where an operator starts
+for the three that are composition faults, and is context rather than a
+starting point for the two that are code defects:
 
 - `mutation-seal-authority-mismatch`: a second `mutation_seal_pair` or a
   second `MutationSealIssuer::seal` call site exists. Find it; invariant 2
@@ -532,15 +705,20 @@ The remediation each code names:
   configuration error.
 - `mutation-seal-acceptor-zone-mismatch`: the acceptor came from the
   authorizer of a different Zone. One `NativeAuthorizer` serves one Zone;
-  check which authorizer the composition root passed.
+  check which authorizer the entry at the reported slot passed.
 - `mutation-seal-acceptor-store-mismatch`: right Zone, wrong store instance.
   The `StoreSealIdentity` handed to `take_store_seal` and the one the opened
-  database declares are different stores; check the database path against the
-  identity the caller built.
+  database declares are different stores; check the entry at the reported slot
+  for a store UUID or a database path taken from a neighbouring entry.
+- `mutation-seal-acceptor-slot-mismatch`: identity agrees and the correlator
+  does not, so the composition root built the identity for one entry and the
+  acceptor for another. Check that the slot, the identity, and the database
+  path in the loop body all come from the same iteration.
 
-None of those four messages, and no other message either method produces, may
-contain the store UUID, a rendered `SealAuthority`, or any value derived from
-them. `SealedMutation`, `MutationSealAcceptor`, and `StoreSealIdentity` cannot
+None of those five messages, and no other message either method produces, may
+contain the store UUID, a rendered `SealAuthority`, the database path, or any
+value derived from them; the bounded slot is the one identifier they carry.
+`SealedMutation`, `MutationSealAcceptor`, and `StoreSealIdentity` cannot
 be formatted at all, so a violation is a compile error rather than a review
 catch.
 
@@ -565,8 +743,9 @@ reports the acceptor refusal as a single boolean. It is left as measured rather
 than rewritten to match: the property it demonstrates is that `open_owned`
 refuses, which the split does not change. A rerun under the split shape
 distinguishes `mutation-seal-acceptor-zone-mismatch` from
-`mutation-seal-acceptor-store-mismatch`, and Wave A's two runtime negatives are
-what assert that, not this block.
+`mutation-seal-acceptor-store-mismatch` from
+`mutation-seal-acceptor-slot-mismatch`, and Wave A's three runtime negatives on
+`open_owned` are what assert that, not this block.
 
 ### 5. No named trait or port over the write path
 
@@ -627,6 +806,7 @@ against a reduction of the shape in section 2:
 | `name_seal_authority` | `error[E0603]` and `` module `authority` is private `` |
 | `debug_format_sealed_mutation` | `error[E0277]` and `` `SealedMutation` doesn't implement `Debug` `` |
 | `display_format_seal_identity` | `error[E0277]` and `` `StoreSealIdentity` doesn't implement `std::fmt::Display` `` |
+| `compare_seal_identities` | `error[E0369]` and `` binary operation `==` cannot be applied to type `StoreSealIdentity` `` |
 
 `forge_sealed_mutation` asserts a suffix rather than the whole line on purpose.
 The measured text is ``fields `authority` and `body` of struct
@@ -642,13 +822,16 @@ autoref resolves `.clone()` to `<&T as Clone>::clone`, which compiles and then
 fails the return type, so the test asserts a misleading `error[E0308]` instead
 of the absent-method error it means to prove. Measured both ways.
 
-The two formatting fixtures are the compile-fail half of section 2a. They are
-worth their build cost because the census cannot see them: absence of a trait
-impl is not a snapshot row, so nothing else in the harness would notice a
-`#[derive(Debug)]` appearing on `SealedMutation` in a later wave. Both were
-measured directly rather than inferred; the `Display` diagnostic in particular
-names `std::fmt::Display` rather than `Display`, and an assertion on the short
-form would not match.
+The three non-forgery fixtures are the compile-fail half of sections 2a and 2c.
+They are worth their build cost because the census cannot see them: absence of
+a trait impl is not a snapshot row, so nothing else in the harness would notice
+a `#[derive(Debug)]` appearing on `SealedMutation`, or a `#[derive(PartialEq)]`
+appearing on `StoreSealIdentity` and quietly folding the correlator into the
+identity comparison, in a later wave. All three were measured directly rather
+than inferred; the `Display` diagnostic in particular names `std::fmt::Display`
+rather than `Display`, and `compare_seal_identities` names the owned type
+`StoreSealIdentity` rather than `&StoreSealIdentity`, so an assertion on either
+short form would not match.
 
 API-surface census: `SealedMutation`, `MutationSealIssuer`,
 `MutationSealAcceptor`, and `OpenedMutation` are added to `capability_roots` in
@@ -663,9 +846,11 @@ from the diff. `capability_fixed_point` in
 referent**: an identity joins when its own definition references something
 already in the set. So the four new roots contribute no rows of their own, per
 section 2a they implement nothing, and `SealIdentityMismatch`,
-`StoreSealIdentity`, and `MutationSealBody` stay outside the closure entirely,
-because their definitions reference `bool`, `ZoneId`, `ResourceUid`, and the
-payload types, and none of those is a capability. What joins are the holders:
+`StoreSealIdentity`, `MutationSealBody`, and `StoreSlot` stay outside the
+closure entirely, because their definitions reference nothing at all in the
+mismatch enum's case and `u8`, `StoreSlot`, `ZoneId`, `ResourceUid`, and the
+payload types in the others, and none of those is a capability. What joins are
+the holders:
 `NativeAuthorizer`, `RedbResourceStore`, `ResourceStoreBackend`, `RedbBackend`,
 and `ResourceService`. Of those five, exactly one implements anything today -
 `NativeAuthorizer` has a hand-written `Debug` writing
@@ -690,7 +875,7 @@ later public constructor, public field, or extra trait implementation reachable
 from the capability closure then appears as a snapshot diff and fails
 `make test-rust-api-surface`.
 
-Two source-level properties a census cannot see are enforced by extending
+Four source-level properties a census cannot see are enforced by extending
 `packages/d2b-resource-store/tests/d106_policy.rs`, which already owns exactly
 this kind of assertion for the layer above (`admission.record_allow(` occurs
 once; `pub fn admission_pair` never appears):
@@ -703,23 +888,39 @@ once; `pub fn admission_pair` never appears):
   retained for the authorizer's lifetime, so a second `seal` call site is a
   write that no evaluation gated. This mirrors the committed
   `admission.record_allow(` count and exists for the same reason.
+- **Slots have at most one assigner.** `StoreSlot::new(` occurs in no more than
+  one non-test call site in the workspace. That count is zero at Wave B, because
+  nothing wires a resource store into `d2bd` yet, and becomes one when the
+  wiring wave lands; the bound is what matters, not the current value. Two
+  assigners means two stores can claim one slot, and every diagnostic naming a
+  slot becomes ambiguous without anything failing. The assertion is the only
+  mechanical hold this record has on section 2c's assignment rule, since the
+  determinism of the order itself is reviewable but not checkable from these
+  three crates.
 - **`mutation_seal.rs` contains no `cfg(test)` or `cfg(not(test))` token**, and
   it joins the existing `Role`/`RoleBinding` scan, whose `include_str!` set
   covers only `src/lib.rs` today and would otherwise leave the new file
   unscanned.
 - **`mutation_seal.rs` contains none of `Debug`, `Display`, `Serialize`,
-  `Deserialize`, `JsonSchema`, `as_str`, or `to_canonical_string`.** The first
-  five are section 2a's rule as a text assertion, which catches a hand-written
-  impl that the four-root ambiguity assertion does not cover because it applies
-  only to the four capability roots and not to `MutationSealBody`,
-  `StoreSealIdentity`, or `SealAuthority`. The last two catch the other way a
-  UUID escapes: rendering it inside the module rather than implementing a
-  formatter. The file needs neither, because `StoreSealIdentity` compares
-  through the derived `PartialEq` on `ResourceUid` and never converts one to
-  text.
+  `Deserialize`, `JsonSchema`, `PartialEq`, `Eq`, `as_str`, or
+  `to_canonical_string`.** The first five are section 2a's rule as a text
+  assertion, which catches a hand-written impl that the four-root ambiguity
+  assertion does not cover because it applies only to the four capability roots
+  and not to `MutationSealBody`, `StoreSealIdentity`, or `SealAuthority`.
+  `PartialEq` and `Eq` are section 2c's rule: a derive on `StoreSealIdentity`
+  would fold the correlator into the identity comparison silently, and the
+  `Eq` token subsumes `PartialEq` as a substring, so both are listed for
+  legibility rather than for coverage. The scan is case-sensitive, which is
+  what keeps `Arc::ptr_eq` - the one comparison in the file that must stay -
+  outside it. The last two catch the other way a UUID
+  escapes: rendering it inside the module rather than implementing a formatter.
+  The file needs none of them: the private comparison writes `==` on the two
+  identity fields, which reaches `ZoneId`'s and `ResourceUid`'s own derived
+  equality without naming the trait, and it never converts either to text.
 
-Both counts require walking the workspace, not an `include_str!` list: a closed
-list cannot see a call site added in a file nobody remembered to include. The
+The three counts require walking the workspace, not an `include_str!` list: a
+closed list cannot see a call site added in a file nobody remembered to
+include. The
 walk anchors on `env!("CARGO_MANIFEST_DIR")`, skips `target/` and `.scratch/`,
 and fails closed with a distinct message if the workspace root is not found,
 because a scan that silently examines nothing reports success. The three
@@ -736,13 +937,26 @@ Runtime negatives, all fail-closed on an exact reason string:
 - `open_owned_rejects_acceptor_bound_to_another_store_in_the_same_zone`,
   asserting `mutation-seal-acceptor-store-mismatch`, which is the case a
   single-Zone deployment actually hits
-- `diagnose_reports_the_disagreeing_component_without_rendering_it`, asserting
-  the `SealIdentityMismatch` boolean pair and the reason code it selects
+- `open_owned_rejects_acceptor_declaring_another_slot`, asserting
+  `mutation-seal-acceptor-slot-mismatch` for an acceptor whose Zone and store
+  UUID both agree, which is the only way the correlator could otherwise lie
+- `diagnose_names_the_disagreeing_component_without_rendering_it`, asserting
+  `Ok(())` on agreement, `Err(SealIdentityMismatch::Zone)` and
+  `Err(SealIdentityMismatch::Store)` on the two disagreements, and the reason
+  code each variant selects
+- `errors_from_a_multi_store_startup_carry_distinct_slots`, opening two stores
+  at slots 0 and 1, refusing both acceptors, and asserting the two `StoreError`
+  values differ in `store_slot` and nowhere else; this is the case section 2c
+  exists for and the one a single-store test cannot see
+- `store_slot_rejects_an_index_at_the_composition_bound`, asserting
+  `StoreSlotError` at `MAX_STORE_SLOTS`, mirroring the committed
+  `mutation_ordinal_is_zero_based_and_bounded_by_batch_limit`
 - `commit_rejects_seal_from_another_store`, end to end across two live redb
   databases
 - `take_store_seal_rejects_a_second_call`, asserting
   `StoreSealHandoffError::AlreadyTaken` by pattern rather than by `unwrap_err`,
-  since `MutationSealAcceptor` has no `Debug` for `unwrap_err` to use
+  since `MutationSealAcceptor` has no `Debug` for `unwrap_err` to use, and
+  asserting that the bound `slot` is the one the call passed
 - `service_new_rejects_an_authorizer_that_issued_no_seal`
 
 ### 7. Migration
@@ -751,7 +965,12 @@ Runtime negatives, all fail-closed on an exact reason string:
 `PreparedStoreMutation`, moved down from `d2b-resource-api` because it is now
 part of the sealed payload. It gains no dependency: its manifest lists
 `d2b-contracts` and nothing else, and `ResourceUid` comes from there. Its
-public surface grows by one module plus `SealIdentityMismatch` in `error.rs`.
+public surface grows by one module plus, in `error.rs`, `SealIdentityMismatch`,
+`StoreSlot`, `StoreSlotError`, `MAX_STORE_SLOTS`, and two more `StoreError`
+members. `StoreError` gains `store_slot: Option<StoreSlot>` with an accessor
+and a `with_store_slot` constructor; `StoreError::new` and
+`StoreError::batch_conflict` keep their signatures and set the field to `None`,
+so no committed call site changes and the hand-written `Debug` gains one row.
 
 That move is not purely mechanical, and the ADR names the cost rather than
 leaving it for the implementer to discover. `PreparedStoreMutation` has three
@@ -772,9 +991,20 @@ the snapshot re-pin is part of the same wave, not a later one.
 refuse a mismatched one. `commit_verified` becomes non-generic.
 `transaction::from_view` takes `&OpenedMutation` instead of a generic view, and
 `WriterHandle::commit` loses its `V` parameter with it.
-`StoreIdentity` gains `seal_identity()`, returning a `StoreSealIdentity` built
-from its `zone` and `store_uuid`. This is a breaking change to a crate with
+`StoreIdentity` gains a private `slot: StoreSlot` and a `slot()` accessor, and
+gains `seal_identity()`, returning a `StoreSealIdentity` built from its `slot`,
+`zone`, and `store_uuid`. This is a breaking change to a crate with
 exactly one consumer.
+
+`StoreIdentity::new` gains the slot as its first parameter, which is the one
+public signature this migration widens. The slot has to arrive here rather than
+at `open_owned` because a slot passed alongside an identity can disagree with
+it; a slot carried inside the identity is chosen once per composition entry and
+travels with everything derived from it. `provision_owned` and `open_owned`
+compare the acceptor's slot against the store's and refuse a disagreement with
+`mutation-seal-acceptor-slot-mismatch`, which is what closes the residual that
+`StoreIdentity::new` and `StoreSealIdentity::new` both take the slot from their
+caller.
 
 `StoreIdentity`'s private `store_uuid` field changes from `String` to
 `ResourceUid` so that `seal_identity()` is infallible. `StoreIdentity::new`
@@ -793,7 +1023,9 @@ foreign store into a decode error rather than the existing
 `store-identity-mismatch`, which is a worse diagnosis of the same fault. A
 non-canonical durable value therefore still fails the identity comparison and
 still denies, because the in-memory side is canonical by construction and the
-comparison is byte equality.
+comparison is byte equality. `StoreMeta` gains no slot field, for the reason
+section 2c gives: a slot describes one composition and a durable record
+carrying it would be stale the first time an operator reorders configuration.
 
 **`d2b-resource-api`** deletes `VerifiedMutation` and its public re-export,
 re-exports `PreparedStoreMutation` from `d2b-resource-store` for source
@@ -831,6 +1063,35 @@ duplicate `ResourceUid`'s validation, add a second UUID type to a crate that
 already names the first, and invite a `From` impl between them. Reusing
 `ResourceUid` costs no dependency because `d2b-contracts` is already the
 crate's only one.
+
+**A boolean pair for the identity mismatch.** The first revision of section 2a
+made `SealIdentityMismatch` a struct of `zone_matches` and
+`store_uuid_matches`, with `is_match` and an optional reason code. Four
+representable states for a two-state domain, one of which duplicates the `Ok`
+arm and one of which describes a UUIDv4 collision across Zones. The enum plus
+`Result<(), SealIdentityMismatch>` costs the same to construct, removes both
+unreachable states, and makes the reason code total. Rejected on the same
+ground the `type_name` guard was: a representation that admits states the
+domain excludes is a representation someone eventually reads wrong.
+
+**Reusing an existing identifier as the operator's correlator.** The store
+UUID, the Zone label, the database path, and an operator-authored store name
+were each considered and each rejected by section 2a's prohibition, which the
+round that produced section 2c did not relax. The name is the closest call,
+because it is the thing an operator actually recognises; it is rejected because
+it is unbounded operator-authored text, which makes it a poor metric label, a
+plausible carrier of tenant or host information, and a value the redaction rule
+would have to carve an exception for. A bounded ordinal over configuration
+order carries the same locating power for a startup diagnostic and needs no
+exception.
+
+**A per-store correlator the store generates for itself.** A random or
+monotonic id minted at open would need no composition-root discipline, and it
+is rejected because it is meaningless to the operator: nothing in their
+configuration carries it, so a refusal naming it is exactly as unlocatable as
+one naming nothing. A correlator only works if the party reading it already
+holds the other half, which is why the assignment has to come from
+configuration order and from nowhere else.
 
 **A sealed trait in `d2b-resource-store-redb`.** The standard private-supertrait
 seal requires the sealing crate to implement `Sealed` for each permitted type.
@@ -928,17 +1189,34 @@ extended.
 6. The external-seals rustc shim forces `--cfg test` on all three crates. A
    future crate joining this boundary joins the shim.
 7. No type declared in `mutation_seal.rs` implements `Debug`, `Display`,
-   `Serialize`, `Deserialize`, or `JsonSchema`, and the file renders no
-   identity to text. Adding any of them is a disclosure-boundary change
-   requiring a stated reason, not a convenience.
-8. The store UUID and the `SealAuthority` pointer value never appear in an
-   error message, a log line, a metric label, a span attribute, or an audit
-   record. What a caller may learn about a mismatch is the stable reason code
-   and the `SealIdentityMismatch` boolean pair, and nothing else.
+   `Serialize`, `Deserialize`, `JsonSchema`, `PartialEq`, or `Eq`, and the file
+   renders no identity to text. Adding a formatting or serialization impl is a
+   disclosure-boundary change; adding a comparison impl is a correlator-boundary
+   change, because a derived one on `StoreSealIdentity` would fold the store
+   slot into the identity comparison. Either requires a stated reason, not a
+   convenience.
+8. The store UUID, the `SealAuthority` pointer value, and the host database
+   path never appear in an error message, a log line, a metric label, a span
+   attribute, or an audit record. What a caller may learn about a mismatch is
+   the stable reason code, the `SealIdentityMismatch` variant, and the bounded
+   store slot, and nothing else.
 9. A store is identified by `ResourceUid`, not by `String`. Equality is byte
    equality over the single canonical form and is deliberately not
    constant-time, because it is the diagnosable check and never the
    authorization check.
+10. A store is located, as opposed to identified, by `StoreSlot`: a zero-based
+    index into the composition root's declared store list, bounded by
+    `MAX_STORE_SLOTS`, assigned by a deterministic total order over the
+    declared configuration and derived from no UUID, path, address, hash, or
+    completion order. It is the only operator-facing identifier any seal
+    diagnostic carries. It is never persisted, never serialized, never on the
+    wire, and never compared for identity. Every startup diagnostic a
+    composition root emits for a store carries it, on the success path as well
+    as the failing ones.
+11. `StoreSealIdentity` and `StoreIdentity` are constructed with a slot or not
+    at all, and `open_owned` refuses an acceptor whose slot disagrees with the
+    store's. Without that refusal the correlator can name a configuration entry
+    the operator did not misconfigure, which is worse than naming none.
 
 ## Consequences
 
@@ -987,7 +1265,10 @@ A third, quieter failure: `NativeAuthorizer::take_store_seal` is once-only, so
 a caller that constructs two stores against one authorizer gets an error rather
 than two stores sharing a mint. That error surfaces at composition time, in
 code that runs once at daemon start, so it must not be swallowed into a
-degraded start path.
+degraded start path. It is also the failure section 2c's slot is for: without a
+correlator, a daemon with six configured stores reports that one of them
+refused and does not say which, so the operator's only move is to bisect their
+own configuration.
 
 Downstream crates that today implement `VerifiedMutationView` do not exist;
 the trait shipped on an unmerged branch. There is no compatibility window to
@@ -1020,8 +1301,8 @@ those files, Wave A's own stopping condition could not be met. Wave A therefore
 re-pins the snapshots for the surface it deletes and re-homes, and nothing
 else; Wave B adds the new capability roots and re-pins again.
 
-Deliverable: sections 1 through 5 above, including 2a and 2b, and section 7,
-plus the eight runtime negatives in section 6.
+Deliverable: sections 1 through 5 above, including 2a, 2b, and 2c, and section
+7, plus the eleven runtime negatives in section 6.
 
 The critical-subsystem documentation lands in this wave, not earlier. A row
 describing `mutation_seal.rs` before that file exists would put
@@ -1031,7 +1312,7 @@ adds one row to the `AGENTS.md` critical-subsystem table and one matching
 section to `docs/contributing/critical-subsystems.md`, headed
 "Resource mutation seal", pointing at
 `packages/d2b-resource-store/src/mutation_seal.rs` and carrying invariants 1
-through 9 above.
+through 11 above.
 
 That row is the reason `make test-rust` is not a sufficient stopping condition
 for this wave, and the gap is measured, not hypothetical. `test-rust` excludes
@@ -1060,13 +1341,23 @@ rg -n 'VerifiedMutationView|VerifiedPreparedMutationView|MutationPort|type_name:
 rg -n 'd2b-resource-api' packages/d2b-resource-store/Cargo.toml \
    packages/d2b-resource-store-redb/Cargo.toml                                    # exit 1
 rg -n 'cfg\(test\)|cfg\(not\(test\)\)' packages/d2b-resource-store/src/mutation_seal.rs  # exit 1
-rg -n 'Debug|Display|Serialize|Deserialize|JsonSchema|as_str|to_canonical_string' \
+rg -n 'Debug|Display|Serialize|Deserialize|JsonSchema|PartialEq|Eq|as_str|to_canonical_string' \
    packages/d2b-resource-store/src/mutation_seal.rs                               # exit 1
 rg -n 'VerifiedMutation' tests/golden/api-surface packages/d2b-bus/tests           # exit 1
+rg -n 'StoreSlot' packages/d2b-contracts \
+   packages/d2b-resource-store-redb/src/keys.rs \
+   packages/d2b-resource-store-redb/src/values.rs \
+   packages/d2b-resource-store-redb/src/schema.rs                               # exit 1
 make api-surface-pin && git diff --exit-code tests/golden/api-surface/             # exit 0
 make test-rust                                                                     # exit 0
 D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts                             # exit 0
 ```
+
+The `StoreSlot` grep is invariant 10's "never serialized, never on the wire" as
+a stopping condition. `d2b-contracts` is the crate that has a wire form, and
+`keys.rs`, `values.rs`, and `schema.rs` are the whole durable key, value, and
+table encoding, so naming the correlator in any of the four is the first step
+of persisting a value that describes a composition and not a store.
 
 ### Wave B: the seals and the census
 
@@ -1076,10 +1367,10 @@ Two file-disjoint scopes, both opening against merged Wave A.
   This ownership begins from merged Wave A, which has already updated
   `external_seals.rs` and `forge_issuer.rs` to remove their references to
   `VerifiedMutation`. B1 then extends the fixture crate manifest and lock,
-  extends the rustc shim to the two additional crates, and adds the nine
+  extends the rustc shim to the two additional crates, and adds the ten
   fixtures in section 6 with their exact asserted diagnostics.
   Done when `cargo test -p d2b-resource-api --test external_seals` exits 0 and
-  the test asserts all nine.
+  the test asserts all ten.
 - **B2 census roots and mint policy.** Owns
   `tests/golden/api-surface/roots.json`, the four snapshots under
   `tests/golden/api-surface/`,
@@ -1090,7 +1381,7 @@ Two file-disjoint scopes, both opening against merged Wave A.
   `packages/d2b-resource-store/`.
   Adds the four capability roots, regenerates the snapshots, adds the
   in-crate trait-solver ambiguity assertions including the `Debug` arm, and
-  adds the two mint counts and the three `mutation_seal.rs` scans to
+  adds the three counts and the three `mutation_seal.rs` scans to
   `d106_policy.rs`. The approved trait-impl file gains only holder rows, per
   the closure analysis in section 6.
   Done when `make api-surface-pin` followed by
