@@ -487,6 +487,54 @@ const CASES = [
     expectExit: 0,
   },
   {
+    // A fence opened between two rows of a table swallows the rest of it. The
+    // gate reported nothing before: the rows vanished from the count and it
+    // exited 0.
+    name: "a fence opened inside a table is rejected rather than swallowing its rows",
+    mutate: (dir) => {
+      const path = join(dir, ".specify", "memory", "friction-log.md");
+      const src = readFileSync(path, "utf8").trimEnd().split("\n");
+      src.splice(src.length - 1, 0, "```", "swallowed", "```");
+      writeFileSync(path, `${src.join("\n")}\n`);
+    },
+    expectExit: 1,
+    expectText: "opens inside a table",
+  },
+  {
+    // A register emptied of every row still had a header, so it passed and the
+    // success count simply went down. Nothing compares that count to anything.
+    name: "a register with a header and no data rows is rejected",
+    mutate: (dir) => {
+      const path = join(dir, ".specify", "memory", "engineering-debt.md");
+      const src = readFileSync(path, "utf8").split("\n");
+      const kept = [];
+      let seen = 0;
+      for (const line of src) {
+        if (line.trim().startsWith("|")) {
+          seen += 1;
+          if (seen > 2) continue;
+        }
+        kept.push(line);
+      }
+      writeFileSync(path, kept.join("\n"));
+    },
+    expectExit: 1,
+    expectText: "not one data row",
+  },
+  {
+    // An unterminated fence swallows every line after it. A register whose
+    // table sits below one would be skipped entirely while an earlier table
+    // kept sawHeader true, so the gate has to notice the fence itself.
+    name: "an unterminated fence is rejected rather than swallowing the rest of the file",
+    mutate: (dir) => {
+      const path = join(dir, ".specify", "memory", "friction-log.md");
+      const src = readFileSync(path, "utf8");
+      writeFileSync(path, `${src.trimEnd()}\n\n\`\`\`\nstill open at EOF\n`);
+    },
+    expectExit: 1,
+    expectText: "never closed",
+  },
+  {
     // A register whose lines end with a lone CR used to parse as one line whose
     // first cell was a valid header, so the header check passed and every data
     // row beneath it went unread while the gate exited 0.

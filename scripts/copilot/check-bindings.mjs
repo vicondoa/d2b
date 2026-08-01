@@ -571,10 +571,20 @@ for (const reg of ["friction-log.md", "deferred-work.md", "engineering-debt.md"]
   let headerWidth = -1;
   let sawHeader = false;
   let inFence = false;
+  let rowsHere = 0;
   for (const [i, line] of lines.entries()) {
     // A table cannot span a fence, and a fenced example may legitimately hold
     // pipes, so a fence closes the table above it and its contents are skipped.
+    // Opening one mid-table is not that: it silently swallows the rows beneath
+    // it, so it is refused rather than skipped.
     if (/^\s*(```|~~~)/.test(line)) {
+      if (!inFence && dispositionIdx >= 0) {
+        fail(
+          `.specify/memory/${reg}:${i + 1}: a fenced block opens inside a table, so ` +
+          `every row it encloses is skipped unread. Close the table with a blank ` +
+          `line before the fence, or move the fence out of the table.`,
+        );
+      }
       inFence = !inFence;
       dispositionIdx = -1;
       headerWidth = -1;
@@ -633,6 +643,7 @@ for (const reg of ["friction-log.md", "deferred-work.md", "engineering-debt.md"]
       continue;
     }
     registerRows += 1;
+    rowsHere += 1;
     const wave = cells[0].replace(/`/g, "");
     if (!wave) {
       fail(
@@ -682,11 +693,24 @@ for (const reg of ["friction-log.md", "deferred-work.md", "engineering-debt.md"]
       );
     }
   }
+  if (inFence) {
+    fail(
+      `.specify/memory/${reg}: a fenced block is opened and never closed, so every ` +
+      `line after it was skipped and any table below it went unread. Close the fence.`,
+    );
+  }
   if (!sawHeader) {
     fail(
       `.specify/memory/${reg}: no header row was found, so not one row in this ` +
       `register was validated. A register table needs a leading and a trailing ` +
       `pipe on every row, including its header.`,
+    );
+  } else if (rowsHere === 0) {
+    fail(
+      `.specify/memory/${reg}: this register has a header and not one data row, so ` +
+      `the success line would report a row count with nothing behind it. There is no ` +
+      `baseline to compare against, so an emptied register is otherwise indistinguishable ` +
+      `from one that was never written. Restore the rows, or record why it is empty.`,
     );
   }
 }
