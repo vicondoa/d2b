@@ -299,6 +299,74 @@ const CASES = [
     expectExit: 1,
     expectText: "do not line up",
   },
+  // A register written without leading pipes is a valid Markdown table that
+  // this parser cannot see. Silently validating none of it is the worst
+  // outcome available, so the absence of a header is itself the failure.
+  {
+    name: "a register with no leading pipes is rejected rather than wholly skipped",
+    mutate: (dir) =>
+      writeRegister(
+        dir,
+        "deferred-work.md",
+        [
+          "Wave | Category | Date | Statement | Disposition | Ref",
+          "---|---|---|---|---|---",
+          "copilotw6 | test | 2026-07-31 | fixture row | notavocabularyterm | copilotw6",
+          "",
+        ].join("\n"),
+      ),
+    expectExit: 1,
+    expectText: "no header row was found",
+  },
+  // Only the first header of a table defines its shape. A later row whose
+  // first cell reads Wave is data, and taking it for a second header would
+  // skip it unvalidated and let it redefine the columns beneath it.
+  {
+    name: "a data row that looks like a header is validated, not treated as one",
+    mutate: (dir) =>
+      appendRegisterRow(
+        dir,
+        "friction-log.md",
+        "| Wave | test | 2026-07-31 | fixture row | open | notavocabularyterm |",
+      ),
+    expectExit: 1,
+    expectText: "is not a legal wave token",
+  },
+  // An empty cell is not a pass. Each of the three validated columns is
+  // mandatory, and a blank one used to short-circuit its own check.
+  {
+    name: "an empty disposition is rejected rather than skipped",
+    mutate: (dir) =>
+      appendRegisterRow(
+        dir,
+        "friction-log.md",
+        "| copilotw6 | test | 2026-07-31 | fixture row | open |  |",
+      ),
+    expectExit: 1,
+    expectText: "names no disposition",
+  },
+  {
+    name: "an empty category is rejected rather than skipped",
+    mutate: (dir) =>
+      appendRegisterRow(
+        dir,
+        "friction-log.md",
+        "| copilotw6 |  | 2026-07-31 | fixture row | open | open |",
+      ),
+    expectExit: 1,
+    expectText: "names no category",
+  },
+  {
+    name: "an empty wave is rejected rather than skipped",
+    mutate: (dir) =>
+      appendRegisterRow(
+        dir,
+        "friction-log.md",
+        "|  | test | 2026-07-31 | fixture row | open | open |",
+      ),
+    expectExit: 1,
+    expectText: "names no wave",
+  },
   // A data row with no header above it has no column to be validated against.
   // The ref below is a legal wave token, so a guard that falls back to the last
   // cell accepts the row and validates nothing.

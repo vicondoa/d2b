@@ -504,6 +504,7 @@ function splitRow(line) {
 }
 
 const memoryDir = join(root, ".specify", "memory");
+let registerRows = 0;
 for (const reg of ["friction-log.md", "deferred-work.md", "engineering-debt.md"]) {
   const path = join(memoryDir, reg);
   if (!existsSync(path)) continue;
@@ -525,6 +526,7 @@ for (const reg of ["friction-log.md", "deferred-work.md", "engineering-debt.md"]
   // let a row bypass every check in this loop, not merely the disposition one.
   let dispositionIdx = -1;
   let headerWidth = -1;
+  let sawHeader = false;
   for (const [i, line] of lines.entries()) {
     if (!line.trim().startsWith("|")) {
       dispositionIdx = -1;
@@ -534,7 +536,7 @@ for (const reg of ["friction-log.md", "deferred-work.md", "engineering-debt.md"]
     const cells = splitRow(line);
     if (cells.length === 0) continue;
     if (cells.every((c) => /^:?-+:?$/.test(c))) continue;
-    if (cells[0].toLowerCase() === "wave") {
+    if (dispositionIdx < 0 && cells[0].toLowerCase() === "wave") {
       dispositionIdx = cells.findIndex((c) => c.toLowerCase() === "disposition");
       if (dispositionIdx < 0) {
         fail(
@@ -543,11 +545,9 @@ for (const reg of ["friction-log.md", "deferred-work.md", "engineering-debt.md"]
         );
       }
       headerWidth = cells.length;
+      sawHeader = true;
       continue;
     }
-    // No fallback. A data row the parser cannot address is rejected, because
-    // reading some other column instead is exactly how this guard passed rows
-    // it had never checked.
     if (dispositionIdx < 0) {
       fail(
         `.specify/memory/${reg}:${i + 1}: this row precedes any header row, so ` +
@@ -564,8 +564,11 @@ for (const reg of ["friction-log.md", "deferred-work.md", "engineering-debt.md"]
       );
       continue;
     }
+    registerRows += 1;
     const wave = cells[0].replace(/`/g, "");
-    if (wave && !ORIGIN_WAVE.test(wave)) {
+    if (!wave) {
+      fail(`.specify/memory/${reg}:${i + 1}: this row names no wave.`);
+    } else if (!ORIGIN_WAVE.test(wave)) {
       fail(
         `.specify/memory/${reg}:${i + 1}: wave "${wave}" is not a legal wave token. ` +
         `Use the legacy closed set W0..W8, or a qualified token whose program ` +
@@ -573,7 +576,12 @@ for (const reg of ["friction-log.md", "deferred-work.md", "engineering-debt.md"]
       );
     }
     const category = cells[1].replace(/`/g, "");
-    if (category && !MEMORY_CATEGORIES.includes(category)) {
+    if (!category) {
+      fail(
+        `.specify/memory/${reg}:${i + 1}: this row names no category, so it groups ` +
+        `with nothing and the three-wave escalation rule cannot count it.`,
+      );
+    } else if (!MEMORY_CATEGORIES.includes(category)) {
       fail(
         `.specify/memory/${reg}:${i + 1}: category "${category}" is not in the closed ` +
         `taxonomy (${MEMORY_CATEGORIES.join(", ")}). A near-miss spelling does not group ` +
@@ -587,13 +595,25 @@ for (const reg of ["friction-log.md", "deferred-work.md", "engineering-debt.md"]
     // pattern is the grammar itself rather than a loose wildcard, so a
     // malformed wave is still caught.
     const known = MEMORY_DISPOSITIONS.includes(disposition);
-    if (disposition && !known && !TARGET_WAVE.test(disposition)) {
+    if (!disposition) {
+      fail(
+        `.specify/memory/${reg}:${i + 1}: this row names no disposition. Use ` +
+        `${MEMORY_DISPOSITIONS.join(", ")}, or the wave it was folded into.`,
+      );
+    } else if (!known && !TARGET_WAVE.test(disposition)) {
       fail(
         `.specify/memory/${reg}:${i + 1}: disposition "${disposition}" is not in the ` +
         `closed set (${MEMORY_DISPOSITIONS.join(", ")}) and is not a legal target wave ` +
         `(W0..W8, or a qualified token such as spec001w1).`,
       );
     }
+  }
+  if (!sawHeader) {
+    fail(
+      `.specify/memory/${reg}: no header row was found, so not one row in this ` +
+      `register was validated. A register table needs a leading and a trailing ` +
+      `pipe on every row, including its header.`,
+    );
   }
 }
 
