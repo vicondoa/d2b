@@ -39,6 +39,12 @@ pub const SCHEMA_VERSION: u32 = 2;
 /// Libtest reports wall-clock time, which varies with unrelated machine load,
 /// so this threshold ranks diagnostics but never fails the gate.
 pub const TEST_ADVISORY_THRESHOLD_MS: u64 = 50;
+/// Hard wall-clock ceiling for one libtest event in the CI runtime census.
+///
+/// This is intentionally independent of the advisory threshold and its
+/// per-test overrides: a single test taking longer than one minute is a
+/// latency regression that must fail loudly rather than become a diagnostic.
+pub const TEST_HARD_LIMIT_MS: u64 = 60_000;
 /// Enforced aggregate process-CPU budget for a Provider crate's hermetic suite.
 ///
 /// This is an absolute ceiling, not a regression anchor, so it must hold on the
@@ -405,13 +411,28 @@ pub struct Violation {
     pub detail: String,
 }
 
-/// Enforces the aggregate process-CPU crate budgets.
+/// Enforces aggregate crate budgets and the hard per-test wall-clock ceiling.
 ///
 /// This is a budget gate, not a regression gate: each recorded p95 is judged
 /// only against its frozen CPU budget, with no historical anchor. Per-test
-/// wall-clock samples are explicitly advisory and never produce a violation.
+/// wall-clock samples below the hard ceiling remain advisory; any individual
+/// sample above that ceiling produces a violation.
 pub fn check(ledger: &Ledger) -> Vec<Violation> {
     let mut violations = Vec::new();
+    for sample in &ledger.tests {
+        for duration in &sample.samples_ms {
+            if *duration > TEST_HARD_LIMIT_MS {
+                violations.push(Violation {
+                    scope: "test".to_string(),
+                    id: sample.id.clone(),
+                    detail: format!(
+                        "sample {} ms exceeds the {} ms hard wall-clock limit",
+                        duration, TEST_HARD_LIMIT_MS
+                    ),
+                });
+            }
+        }
+    }
     for sample in &ledger.crates {
         if sample.p95_ms > sample.threshold_ms {
             violations.push(Violation {
@@ -1147,6 +1168,21 @@ mod tests {
             check(&over).is_empty(),
             "per-test wall-clock contention must not fail a CPU budget gate"
         );
+    }
+
+    #[test]
+    fn an_individual_test_over_the_hard_limit_fails_the_gate() {
+        let over = ledger(vec![test_sample(
+            "slow::test",
+            TEST_ADVISORY_THRESHOLD_MS,
+            &[TEST_HARD_LIMIT_MS + 1],
+        )]);
+        let violations = check(&over);
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].scope, "test");
+        assert!(violations[0]
+            .detail
+            .contains("hard wall-clock limit"));
     }
 
     #[test]

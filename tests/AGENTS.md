@@ -219,6 +219,12 @@ JSON API census. Keep new cargo-shelling tests under `rust-test-cache/` unless
 their tree is large enough to justify a different cache trade, and document
 that trade.
 
+The runtime ledger's per-test wall-clock ceiling is 60 seconds. A test sample
+above that limit fails the CI gate; shorter advisory thresholds remain
+diagnostic only. Do not add an exception for a slow test without either
+removing the unnecessary work or documenting why the test cannot be split or
+made cheaper.
+
 When a failure reproduces only inside the gate's toolchain environment, use
 `tests/tools/repro-rust-gate-env.sh <command>` instead of re-running the whole
 gate.
