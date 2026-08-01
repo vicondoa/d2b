@@ -108,6 +108,11 @@ For a low-priority item that should leave the plan.
 of exactly `signoff`, `build`, `test`, `merge`, `codegen`, `disk`. Reject
 anything else rather than passing it through; it reaches a shell.
 
+**This operation mutates repository settings.** When a label is missing it
+creates it, which is a wider privilege than filing an issue. A caller without
+label-write permission cannot run it, and failing there is the correct outcome
+rather than something to work around.
+
 ```bash
 set -euo pipefail
 
@@ -123,50 +128,53 @@ ensure_label delivery-memory 5319E7 'Raised by d2b delivery memory'
 ensure_label '<category>'    BFD4F2 'd2b delivery memory category'
 
 gh issue create \
-  --title "<category>: <one-line statement>" \
+  --title '<category>: <one-line statement>' \
   --label 'delivery-memory,<category>' \
-  --body-file <rendered body>
+  --body-file '<rendered body>'
 ```
 
 `gh issue create` fails outright when a named label does not exist, so the labels
 have to be ensured before it runs rather than assumed.
 
-**The idempotency is mechanical, not instructional.** An earlier draft told the
-agent to run `gh label create` and continue only when the failure was the benign
-duplicate-name one. That was wrong twice over: an instruction is something an
-agent can decide to skip, and the alternative of suppressing the error with
-`2>/dev/null || true` would mask a permission denial and resurface it as a
-misleading "label not found" from `gh issue create` two commands later. Querying
-first removes the failure entirely instead of classifying it, so there is nothing
-to suppress and no error text to pattern-match.
+Five constraints on that block are load-bearing. Each one is here because
+removing it reintroduces a specific defect, so treat them as prohibitions rather
+than as style:
 
-Six details in that form are deliberate:
+- **Do not drop `set -euo pipefail`.** It is what makes an authorisation denial,
+  a rate limit, or a network error stop the run before `gh issue create` can
+  report a misleading cause.
+- **Do not guard the `gh label list` call.** It runs first and unguarded so that
+  a caller without repository read access fails there, with the real error,
+  rather than somewhere downstream. It is the authorisation probe.
+- **Do not suppress errors** with `2>/dev/null` or `|| true`, and do not replace
+  the query with an instruction to classify a failure. Suppression masks a
+  permission denial and resurfaces it as a misleading "label not found" two
+  commands later; an instruction is something an agent can skip. Querying first
+  removes the failure rather than classifying it, so nothing depends on matching
+  gh's error wording.
+- **Do not use `--force`.** It updates the color and description of a label that
+  already exists, so on a repository owning its own `test` or `build` label it
+  would silently overwrite that label. Skipping creation when the name is
+  present leaves it untouched.
+- **Do not unquote any substituted value**, including the path passed to
+  `--body-file`. Every placeholder above sits inside single quotes so that a
+  value which somehow escaped the closed-set check, arbitrary text carried by
+  the one-line statement, or a body path containing spaces cannot be expanded or
+  word-split by the shell. This matters more for the statement than for the
+  category: the category is drawn from a closed set of six words, while the
+  statement is free text from the row. Under double quotes a statement holding
+  `$PWD` would silently expand and publish a host path into a public issue
+  title, and one holding an unbound name would trip `set -u` and echo that name
+  into the transcript as the wrong error. The quotes belong to the command, not
+  to the placeholder: substitute the bare value inside them, so `test` becomes
+  `'test'` and never `''test''`. A statement containing a single quote must have
+  it written as `'\''`, or be reworded; the body carries the detail anyway and
+  reaches the command through `--body-file` rather than through an argument.
 
-- **`set -euo pipefail` is load-bearing**, not boilerplate. It is what makes an
-  authorisation denial, a rate limit, or a network error stop the run before
-  `gh issue create` can report a misleading cause.
-- **The `gh label list` call is the authorisation probe.** It runs first and it
-  is not guarded, so a caller without repository read access fails there, with
-  the real error, rather than somewhere downstream.
-- **This mutates repository settings** when a label is missing, which is a wider
-  privilege than filing an issue. It is the narrowest form that makes the file
-  work, and a caller without label-write permission failing here is the correct
-  outcome rather than something to work around.
-- **No `--force`.** `--force` updates the color and description of a label that
-  already exists, so on a repository that has its own `test` or `build` label it
-  would silently overwrite that label's description. Skipping creation entirely
-  when the name is present leaves an existing label untouched.
-- **Single quotes on the substituted category**, so a value that somehow escaped
-  the closed-set check above cannot be expanded by the shell. The quotes belong
-  to the command, not to the placeholder: substitute the bare category name
-  inside them, so `test` becomes `'test'` and never `''test''`.
-- **Explicit `--color`.** It is optional to `gh label create`, which picks a
-  random color when it is omitted. Giving it makes a first creation deterministic
-  rather than varying per repository.
-
-`--limit 500` must exceed the repository's label count. If it ever does not, a
-present label is read as absent, `gh label create` fails, and `set -e` stops the
-run: wrong, but loudly and without touching the existing label.
+`--color` is optional; gh picks a random color when it is omitted. It is given so
+a first creation is deterministic. `--limit 500` must exceed the repository's
+label count; if it ever does not, a present label reads as absent, the create
+fails, and `set -e` stops the run.
 
 Body template:
 
