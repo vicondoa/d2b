@@ -8,6 +8,9 @@ use std::{
 
 #[test]
 fn dependent_cannot_forge_registration_or_mint_admitted_session() {
+    // Keep this harness narrow: API visibility and public-member drift belong
+    // to the rustdoc JSON census, while these probes cover downstream semantic
+    // capability boundaries that the census cannot establish.
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repository_root = crate_root.parent().unwrap().parent().unwrap();
     let fixture = crate_root.join("tests/ui/external-seals");

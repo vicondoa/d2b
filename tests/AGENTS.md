@@ -194,6 +194,25 @@ are not portable across compiler versions. CI restores that directory as one
 cache surface. When adding such a test, key its subtree the same way and reuse
 the compilation but not any output whose freshness the test asserts on.
 
+### External compile-fail test policy
+
+External compile-fail tests are a high-latency exception, not a general API
+visibility test mechanism. Before adding one, first use the compiler-derived
+rustdoc JSON census and snapshots under `tests/golden/api-surface/`. That
+census owns unexpected exports, public members, hidden-public items, and
+approved capability trait implementations without launching one Cargo build
+per probe.
+
+Add an external compile-fail fixture only when it proves a downstream
+type-system or trust-boundary property that rustdoc JSON cannot prove, such as
+sealed-trait implementation rejection, authority fabrication, or a
+downstream conversion that must remain constrained. The test comment and
+changelog entry must state which semantic property requires a downstream
+crate. Do not add fixtures solely for private fields, private modules,
+constructors, missing re-exports, or absent methods; those belong in the API
+census or a small rustdoc `compile_fail` example when documentation of the
+boundary is useful.
+
 The resource API's former external seal harness was removed after its
 export/private-member cases became redundant with the compiler-derived rustdoc
 JSON API census. Keep new cargo-shelling tests under `rust-test-cache/` unless
