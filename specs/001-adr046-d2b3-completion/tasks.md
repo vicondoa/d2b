@@ -1002,8 +1002,9 @@ slices converge ──> integration tests ──┬──> reviewer Task ──�
 | reviewer Task | The implementation against `spec.md`, `plan.md`, `tasks.md`, and the constitution; constitution conflicts are automatically CRITICAL | The feature directory plus the converged wave tree |
 | rubber-duck Task | Code quality, tests, errors, types, comments, and simplification risks | The wave's diff only |
 
-Dispatch both lanes in a single Copilot Task call. Each lane is read-only and must carry the
-explicit binding `model: gpt-5.6-luna`, `reasoning_effort: max`, `context_tier: long_context`.
+Issue two separate native Copilot Task invocations together in one coordination cycle: one
+reviewer lane and one rubber-duck lane. Each invocation creates exactly one read-only lane and
+must carry the explicit binding `model: gpt-5.6-luna`, `reasoning_effort: max`, `context_tier: long_context`.
 The panel then runs through the real `/d2b-panel-round work` skill, whose ten read-only seats
 bind `github-copilot`, `gemini-3.1-pro-preview`, `high`, and `default` in its committed table.
 No dotted verification or review command is part of this repository's process.

@@ -89,8 +89,9 @@ BASE=$(git merge-base v3 adr046-w<N>-integrate)     # or the predecessor wave br
 git diff --name-only $BASE..adr046-w<N>-integrate
 ```
 
-Dispatch two native Copilot Task lanes **in parallel** before the panel: one
-reviewer lane and one rubber-duck lane. Bind each lane explicitly to
+Issue two separate native Copilot Task invocations **together in one
+coordination cycle** before the panel: one reviewer lane and one rubber-duck
+lane. Bind each lane explicitly to
 `gpt-5.6-luna`, reasoning effort `max`, and context tier `long_context`; give
 both the wave diff plus `spec.md`, `plan.md`, `tasks.md`, and the constitution,
 and require read-only findings. Then run the actual Copilot panel skill,

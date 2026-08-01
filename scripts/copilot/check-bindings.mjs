@@ -20,7 +20,7 @@
 // attestation rather than an error. This script is the cheap place to catch
 // the mistakes that lead there.
 
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -54,6 +54,7 @@ const COPILOT_INTEGRATION = "copilot";
 // Keep the retired integration token out of supported configuration while
 // still detecting it if a stale file brings it back.
 const RETIRED_INTEGRATION = ["open", "code"].join("");
+const EXPECTED_COPILOT_SKILL_PATH = /^\.github\/skills\/[^/]+\/SKILL\.md$/;
 
 const errors = [];
 const fail = (m) => errors.push(m);
@@ -379,6 +380,100 @@ if (existsSync(repoSettings)) {
         `honour. The CLI filters repo scope through a fixed allowlist that excludes it, so ` +
         `this file would silently govern nothing. Remove the key, and pin the binding at \n        dispatch in the skill table instead.`,
       );
+    }
+  }
+}
+
+function pathExists(path) {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (e) {
+    if (e.code === "ENOENT") return false;
+    fail(`cannot inspect ${path}: ${e.message}. The Copilot-only surface check cannot continue safely.`);
+    return false;
+  }
+}
+
+const retiredSurfacePaths = [
+  {
+    label: "retired integration directory",
+    path: join(root, `.${RETIRED_INTEGRATION}`),
+  },
+  {
+    label: "retired integration manifest",
+    path: join(root, ".specify", "integrations", `${RETIRED_INTEGRATION}.manifest.json`),
+  },
+];
+for (const { label, path } of retiredSurfacePaths) {
+  if (pathExists(path)) {
+    fail(`${label} is present at ${path}. Remove the retired surface; Copilot is the only supported integration.`);
+  }
+}
+
+const copilotManifestJson = join(root, ".specify", "integrations", "copilot.manifest.json");
+if (!pathExists(copilotManifestJson)) {
+  fail(
+    `.specify/integrations/copilot.manifest.json does not exist. The installed ` +
+    `Copilot skill surface cannot be checked without its manifest.`,
+  );
+} else {
+  let manifest = null;
+  let parsed = false;
+  try {
+    manifest = JSON.parse(readFileSync(copilotManifestJson, "utf8"));
+    parsed = true;
+  } catch (e) {
+    fail(
+      `.specify/integrations/copilot.manifest.json is not valid JSON: ${e.message}. ` +
+      `Repair the manifest before checking the installed Copilot skill surface.`,
+    );
+  }
+  if (parsed) {
+    if (typeof manifest !== "object" || Array.isArray(manifest)) {
+      fail(
+        `.specify/integrations/copilot.manifest.json must contain a JSON object ` +
+        `describing the installed Copilot skill surface.`,
+      );
+    } else {
+      if (manifest.integration !== COPILOT_INTEGRATION) {
+        fail(
+          `.specify/integrations/copilot.manifest.json integration must be ` +
+          `"${COPILOT_INTEGRATION}"; found ${JSON.stringify(manifest.integration)}.`,
+        );
+      }
+      const files = manifest.files;
+      if (!files || typeof files !== "object" || Array.isArray(files)) {
+        fail(
+          `.specify/integrations/copilot.manifest.json files must be an object ` +
+          `of required Copilot skill paths.`,
+        );
+      } else {
+        const declared = Object.keys(files);
+        if (declared.length === 0) {
+          fail(
+            `.specify/integrations/copilot.manifest.json declares no required ` +
+            `Copilot skill files.`,
+          );
+        }
+        for (const relativePath of declared) {
+          if (!EXPECTED_COPILOT_SKILL_PATH.test(relativePath)) {
+            fail(
+              `.specify/integrations/copilot.manifest.json declares "${relativePath}", ` +
+              `which is not an expected Copilot skill path; use ` +
+              `.github/skills/<name>/SKILL.md.`,
+            );
+            continue;
+          }
+          const skillPath = join(root, relativePath);
+          if (!pathExists(skillPath)) {
+            fail(
+              `.specify/integrations/copilot.manifest.json declares required Copilot ` +
+              `skill "${relativePath}", but that file does not exist.`,
+            );
+          }
+        }
+      }
     }
   }
 }

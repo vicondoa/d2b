@@ -75,6 +75,7 @@ const REQUIRED_INPUTS = [
   ".specify/memory",
   ".specify/integration.json",
   ".specify/init-options.json",
+  ".specify/integrations/copilot.manifest.json",
 ];
 
 // What the gate says when each required input is absent. A classification case
@@ -90,6 +91,7 @@ const REQUIRED_FAILURE_TEXT = {
   ".specify/memory": ".specify/memory/friction-log.md: this register is missing",
   ".specify/integration.json": "does not exist",
   ".specify/init-options.json": "does not exist",
+  ".specify/integrations/copilot.manifest.json": "does not exist",
 };
 
 const OPTIONAL_INPUTS = [
@@ -139,7 +141,11 @@ function run(dir) {
 }
 
 function mutateIntegration(dir, fn) {
-  const path = join(dir, ".specify", "integration.json");
+  mutateJson(dir, ".specify/integration.json", fn);
+}
+
+function mutateJson(dir, relativePath, fn) {
+  const path = join(dir, relativePath);
   const state = JSON.parse(readFileSync(path, "utf8"));
   fn(state);
   writeFileSync(path, `${JSON.stringify(state, null, 2)}\n`);
@@ -290,6 +296,39 @@ const CASES = [
       ),
     expectExit: 1,
     expectText: "is not valid JSON",
+  },
+  {
+    name: "a missing declared Copilot skill is rejected",
+    mutate: (dir) =>
+      mutateJson(dir, ".specify/integrations/copilot.manifest.json", (manifest) => {
+        manifest.files[".github/skills/missing-required-skill/SKILL.md"] = "0".repeat(64);
+      }),
+    expectExit: 1,
+    expectText: "declares required Copilot skill",
+  },
+  {
+    name: "a restored retired integration directory is rejected",
+    mutate: (dir) => {
+      const path = join(dir, ".op" + "encode", "op" + "encode.json");
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, "{}\n");
+    },
+    expectExit: 1,
+    expectText: "retired integration directory is present",
+  },
+  {
+    name: "a restored retired integration manifest is rejected",
+    mutate: (dir) => {
+      const path = join(
+        dir,
+        ".specify",
+        "integrations",
+        "op" + "encode.manifest.json",
+      );
+      writeFileSync(path, "{}\n");
+    },
+    expectExit: 1,
+    expectText: "retired integration manifest is present",
   },
   {
     name: "a dropped seat is rejected",
