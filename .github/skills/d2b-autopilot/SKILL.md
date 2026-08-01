@@ -26,8 +26,8 @@ inherit the session's effort.
 | Role | `agent_type` | `model` | `reasoning_effort` | `context_tier` |
 |---|---|---|---|---|
 | architect | `d2b-architect` | `claude-opus-5` | `xhigh` | `long_context` |
-| implementer | `d2b-implementer` | `gpt-5.6-sol` | `xhigh` | `long_context` |
-| integrator | `d2b-integrator` | `gpt-5.6-sol` | `xhigh` | `long_context` |
+| implementer | `d2b-implementer` | `gpt-5.6-luna` | `max` | `long_context` |
+| integrator | `d2b-integrator` | `gpt-5.6-luna` | `max` | `long_context` |
 
 The ten panel seats have their own table in `.github/skills/d2b-panel-round/SKILL.md`.
 `scripts/copilot/check-bindings.mjs` validates both against the agent files
