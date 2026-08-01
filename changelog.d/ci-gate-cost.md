@@ -51,4 +51,4 @@
   fails closed rather than deleting committed content. `D2B_CLEAN_DRY_RUN=1`
   reports what would go without removing it; `D2B_CLEAN_SKIP_GC=1` and
   `D2B_CLEAN_KEEP_SCRATCH=1` narrow the sweep. Measured on a working
-  worktree: 63 GB reclaimed.
+  worktree: 68 GB reclaimed.

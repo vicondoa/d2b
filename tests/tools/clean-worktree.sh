@@ -66,9 +66,15 @@ remove_path() {
 }
 
 log "clean: cargo target directories"
-# A directory named `target` counts as a cargo target directory when it sits
-# beside a Cargo.toml or carries cargo's own CACHEDIR.TAG marker. Nested
-# target directories are pruned: removing the outer one takes them with it.
+# A cargo target directory is one named `target` or `target-<suffix>` (the
+# broker workspace uses `target-layer1` and `target-fakebackends` for its
+# separate test passes) that either sits beside a Cargo.toml or carries
+# cargo's own CACHEDIR.TAG marker. Nested target directories are pruned:
+# removing the outer one takes them with it.
+#
+# The name match is deliberately broad and the validation narrow. A source
+# directory that happened to match would still have to clear the
+# tracked-file guard in assert_removable, which it cannot.
 #
 # .scratch is excluded here and handled as a single unit below. The warm test
 # caches under it are target directories, but they live and die with the
@@ -76,10 +82,10 @@ log "clean: cargo target directories"
 # removing them individually would gut the caches that
 # D2B_CLEAN_KEEP_SCRATCH exists to preserve.
 while IFS= read -r dir; do
-  [ -f "${dir%/target}/Cargo.toml" ] || [ -f "$dir/CACHEDIR.TAG" ] || continue
+  [ -f "$(dirname -- "$dir")/Cargo.toml" ] || [ -f "$dir/CACHEDIR.TAG" ] || continue
   remove_path "$dir"
 done < <(find . -type d \( -path ./.git -o -path ./.scratch \) -prune -o \
-  -type d -name target -prune -print | sort)
+  -type d \( -name target -o -name 'target-*' \) -prune -print | sort)
 
 if [ "${D2B_CLEAN_KEEP_SCRATCH:-0}" = "1" ]; then
   log "clean: keeping .scratch (D2B_CLEAN_KEEP_SCRATCH=1)"
