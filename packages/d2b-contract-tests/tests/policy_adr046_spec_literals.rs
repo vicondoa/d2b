@@ -49,6 +49,7 @@
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
+    process::Command,
 };
 
 use d2b_contract_tests::repo_root;
@@ -2478,11 +2479,58 @@ fn redb_dependency_is_exact_and_isolated_to_the_proof_and_backend_crates() {
         std::fs::read_to_string(root.join("proofs/redb-resource-store-spike/Cargo.lock"))
             .expect("read proof lockfile");
 
+    let metadata_output = Command::new(env!("CARGO"))
+        .args([
+            "metadata",
+            "--format-version",
+            "1",
+            "--locked",
+            "--no-deps",
+            "--manifest-path",
+        ])
+        .arg(root.join("packages/Cargo.toml"))
+        .output()
+        .expect("run cargo metadata for main workspace");
+    assert!(
+        metadata_output.status.success(),
+        "cargo metadata failed: {}",
+        String::from_utf8_lossy(&metadata_output.stderr)
+    );
+    let metadata: serde_json::Value =
+        serde_json::from_slice(&metadata_output.stdout).expect("parse cargo metadata");
+    let workspace_member_ids = metadata["workspace_members"]
+        .as_array()
+        .expect("workspace_members array");
+    let workspace_packages = metadata["packages"]
+        .as_array()
+        .expect("packages array")
+        .iter()
+        .filter(|package| workspace_member_ids.contains(&package["id"]))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        workspace_packages.len(),
+        workspace_member_ids.len(),
+        "cargo metadata must describe every workspace member"
+    );
+    let mut redb_members = workspace_packages
+        .iter()
+        .filter(|package| {
+            package["dependencies"]
+                .as_array()
+                .expect("dependencies array")
+                .iter()
+                .any(|dependency| dependency["name"] == "redb")
+        })
+        .map(|package| package["name"].as_str().expect("package name"))
+        .collect::<Vec<_>>();
+    redb_members.sort_unstable();
+
     assert!(!main_manifest.contains("\nredb ="));
     assert!(main_lock.contains("\nname = \"redb\"\nversion = \"4.1.0\"\n"));
-    assert!(contract_manifest.contains(
-        "redb = { version = \"=4.1.0\", default-features = false }"
-    ));
+    assert_eq!(redb_members, ["d2b-resource-store-redb"]);
+    assert!(
+        contract_manifest.contains("redb = { version = \"=4.1.0\", default-features = false }")
+    );
     assert_eq!(contract_manifest.matches("\nredb =").count(), 1);
     assert!(!schema.contains("redb::"));
     assert!(!schema.contains("TableDefinition"));
