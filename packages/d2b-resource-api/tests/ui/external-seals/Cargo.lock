@@ -250,6 +250,10 @@ name = "d2b-resource-api-external-seals"
 version = "0.0.0"
 dependencies = [
  "d2b-resource-api",
+ "d2b-resource-store",
+ "d2b-resource-store-redb",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
