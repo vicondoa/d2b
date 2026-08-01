@@ -20,7 +20,7 @@
 // attestation rather than an error. This script is the cheap place to catch
 // the mistakes that lead there.
 
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -535,7 +535,18 @@ for (const reg of ["friction-log.md", "deferred-work.md", "engineering-debt.md"]
     );
     continue;
   }
-  const lines = readFileSync(path, "utf8").split("\n");
+  if (!statSync(path).isFile()) {
+    fail(
+      `.specify/memory/${reg}: this path exists but is not a regular file, so its ` +
+      `rows cannot be read. Replace it with the register file.`,
+    );
+    continue;
+  }
+  // Lone CR is accepted as a line ending rather than silently swallowed: a file
+  // written that way would otherwise read as a single line whose first cell
+  // happens to be a valid header, and every data row beneath it would go
+  // unchecked while the gate exited 0.
+  const lines = readFileSync(path, "utf8").split(/\r\n|\r|\n/);
   // The registers do not share a shape, so the disposition column is located by
   // its header rather than by position: deferred-work.md carries a trailing Ref
   // column that the others do not.

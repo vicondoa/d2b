@@ -486,6 +486,33 @@ const CASES = [
     },
     expectExit: 0,
   },
+  {
+    // A register whose lines end with a lone CR used to parse as one line whose
+    // first cell was a valid header, so the header check passed and every data
+    // row beneath it went unread while the gate exited 0.
+    name: "a register written with lone CR line endings still has its rows read",
+    mutate: (dir) => {
+      const path = join(dir, ".specify", "memory", "friction-log.md");
+      const src = readFileSync(path, "utf8");
+      writeFileSync(
+        path,
+        `${src.trimEnd()}\n| copilotw6 | test | 2026-07-31 | x | 1 | bogus |\n`
+          .replace(/\n/g, "\r"),
+      );
+    },
+    expectExit: 1,
+    expectText: "bogus",
+  },
+  {
+    name: "a register path that is a directory fails cleanly rather than crashing",
+    mutate: (dir) => {
+      const path = join(dir, ".specify", "memory", "friction-log.md");
+      rmSync(path);
+      mkdirSync(path);
+    },
+    expectExit: 1,
+    expectText: "is not a regular file",
+  },
 ];
 
 // Does the classification above match what the gate actually does?
