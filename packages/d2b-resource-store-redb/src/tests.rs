@@ -658,11 +658,9 @@ fn scm_rights_receipt_is_atomic_cloexec_and_not_inherited_across_exec() {
     let received = receive_database_file(&receiver).unwrap();
     assert!(fcntl_getfd(&received).unwrap().contains(FdFlags::CLOEXEC));
     let fd = received.as_raw_fd();
-    let status = Command::new("sh")
-        .arg("-c")
-        .arg("test ! -e \"/proc/self/fd/$1\"")
-        .arg("sh")
-        .arg(fd.to_string())
+    let status = Command::new("test")
+        .args(["!", "-e"])
+        .arg(format!("/proc/self/fd/{fd}"))
         .status()
         .unwrap();
     assert!(status.success(), "database fd survived exec");
@@ -729,18 +727,16 @@ fn scm_rights_receipt_racing_fork_exec_never_leaks_the_database_inode() {
             receive_database_file(&receiver)
         });
         barrier.wait();
-        let status = Command::new("sh")
-            .env("DATABASE_INODE", inode)
-            .arg("-c")
-            .arg(
-                "for fd in /proc/self/fd/*; do test -e \"$fd\" || continue; \
-                 test \"$(stat -Lc %d:%i \"$fd\" 2>/dev/null)\" != \
-                 \"$DATABASE_INODE\" || exit 1; done",
-            )
-            .status()
-            .unwrap();
+        let mut child = Command::new("sleep").arg("1").spawn().unwrap();
+        let leaked = std::fs::read_dir(format!("/proc/{}/fd", child.id()))
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter_map(|entry| std::fs::metadata(entry.path()).ok())
+            .any(|metadata| format!("{}:{}", metadata.dev(), metadata.ino()) == inode);
         let received = receipt.join().unwrap().unwrap();
         assert!(fcntl_getfd(&received).unwrap().contains(FdFlags::CLOEXEC));
+        let status = child.wait().unwrap();
+        assert!(!leaked, "database inode survived racing exec");
         assert!(status.success(), "database inode survived racing exec");
     }
 }
