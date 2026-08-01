@@ -20,3 +20,4 @@ They are fixed in the round that raised them.
 | copilotw3 | build | 2026-07-31 | `specify init` not run in-repo; skills imported additively instead, so a spec-kit upgrade needs the same manual import | open |  |
 | copilotw6fu4 | test | 2026-07-31 | `test-check-bindings.mjs` covers the seat-roster guard only; the scalar constant mirrors share a loop and have no negative case | open |  |
 | copilotw6fu6 | test | 2026-07-31 | `REQUIRED_INPUTS` / `OPTIONAL_INPUTS` classification is asserted by comment only; the omit-each-input probe that verified it against the gate was run by hand and not committed | resolved | copilotw6fu7 |
+| copilotw6fu17 | test | 2026-07-31 | `v3` flipped the fixture-contract lane to enforcing in `AGENTS.md` but left 16 statements across 12 files in `docs/reference/` still calling that coverage advisory; those files are byte-identical to `origin/v3`, so the drift is inherited rather than introduced here | open |  |

@@ -36,9 +36,9 @@ about to do, read that doc, then come back.
 | Change any code | "Build and validate" below, then commit before validating |
 | Touch a **critical subsystem** | The index below, then [critical-subsystems.md](./docs/contributing/critical-subsystems.md) |
 | Add, move, or retire a test | [`tests/AGENTS.md`](./tests/AGENTS.md) - binding, read it before touching the test tree |
-| Run a heavy lane (Layer 2, host-integration, hardware, perf) | [gates-and-lints.md](./docs/contributing/gates-and-lints.md) - one semaphore, two slots |
+| Run a gate, a heavy lane, or a build that needs debug symbols | [gates-and-lints.md](./docs/contributing/gates-and-lints.md) - what each Layer-1 job covers, the heavy-lane semaphore, build profiles, spec-literal lints |
 | Run or respond to a panel round | "Panel review" below, then [panel-review.md](./docs/contributing/panel-review.md) |
-| Open a worktree or land a PR | [workflow.md](./docs/contributing/workflow.md) |
+| Open a worktree, land a PR, or reclaim disk | [workflow.md](./docs/contributing/workflow.md) - worktrees, stacked PRs, edit/commit/validate, disk and cache hygiene |
 | Write a changelog entry or commit message | [changelog-and-commits.md](./docs/contributing/changelog-and-commits.md) |
 | Add a per-VM feature, a unit, or a broker op | [architecture.md](./docs/contributing/architecture.md) and [ADR 0015](./docs/adr/0015-daemon-only-clean-break.md) |
 | Do anything security-relevant | "Don'ts" below - that section is exhaustive and binding |
@@ -337,7 +337,7 @@ is a warning, not the contract.
 | [ComponentSession capability boundary](docs/contributing/critical-subsystems.md#componentsession-capability-boundary) | `packages/d2b-contracts/src/v3/component_session.rs` | Authenticated transport evidence and attachment credits are consumed into a private single session owner; do not add a clone/accessor that lets callers reuse admission evidence. `SessionAuthority` is sealed and must stay sealed. |
 | [Zone message bus boundary](docs/contributing/critical-subsystems.md#zone-message-bus-boundary) | `packages/d2b-bus/src/{router,registry,authorization,streams,operations}.rs` | Registration consumes the single-owner capability admission; comparing a clonable token is insufficient. |
 | [Authoritative subject resolution](docs/contributing/critical-subsystems.md#authoritative-subject-resolution) | `packages/d2b-bus/src/router.rs` (`ZoneRegistrar`) | `ZoneRegistrar` **exclusively owns and consumes** subject resolution: a peer is mapped to a subject from registrar-private state using verified peer evidence. Never accept a caller-supplied subject. |
-| [Capability mint surface allowlist](docs/contributing/critical-subsystems.md#capability-mint-surface-allowlist) | `packages/d2b-bus/tests/public_mint_surface.rs` | The **enforcing compiler leg** uses stable trait-solver ambiguity assertions in the defining crates. |
+| [Capability mint surface allowlist](docs/contributing/critical-subsystems.md#capability-mint-surface-allowlist) | `packages/d2b-api-surface/`, `tests/golden/api-surface/`, `packages/d2b-bus/tests/public_mint_surface.rs` | The **enforcing compiler leg** uses stable trait-solver ambiguity assertions in the defining crates. |
 | [Resource controller effects boundary](docs/contributing/critical-subsystems.md#resource-controller-effects-boundary) | `packages/d2b-controller-toolkit/src/` + `packages/d2b-core-controller/src/` | Controller and core-reconciliation engines are test-only and unwired from the absent production store/watch dispatcher. |
 | [Unsafe-local provider, launcher, and persistent-shell helper](docs/contributing/critical-subsystems.md#unsafe-local-provider-launcher-and-persistent-shell-helper) | `nixos-modules/options-realms-workloads.nix` | `unsafe-local` is explicit and default-denied. |
 | [Manifest contract](docs/contributing/critical-subsystems.md#manifest-contract) | `docs/reference/manifest-schema.{md,json}` + `nixos-modules/manifest.nix` | Version-pinned via `manifestVersion`. |
