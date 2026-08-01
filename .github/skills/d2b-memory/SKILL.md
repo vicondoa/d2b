@@ -59,6 +59,21 @@ them.
 mechanism that lets a fix round stay scoped to the findings it answers without
 losing the defect.
 
+**A register never shrinks to nothing on its own.** Rows are dispositioned in
+place rather than deleted, so a register with no rows means history was lost,
+and `check-bindings.mjs` fails on it. If a register really is empty on purpose,
+say so with a line reading exactly:
+
+```
+<!-- d2b-register: intentionally empty -->
+```
+
+outside any fenced block. It excuses an absent row, never an absent table: a
+register with no header row still fails. Remove the marker when the first row
+returns, because the gate refuses a register that declares itself empty and has
+rows. That refusal is deliberate - a marker left behind would silently licence
+the next truncation.
+
 ## triage
 
 Read the open set and assign a disposition. Three rules decide it:

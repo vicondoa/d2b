@@ -18,7 +18,11 @@
 - `scripts/copilot/check-bindings.mjs`, which rejects an agent with no binding
   row, an effort a model does not support, a panel row disagreeing with the
   delivery policy constants, a panel agent granted write tools, and any effort
-  or context-tier key in agent frontmatter.
+  or context-tier key in agent frontmatter. It also reads the delivery-memory
+  registers, and refuses one whose rows it could not parse, so a truncated or
+  malformed register fails rather than passing as empty. A register that is
+  empty on purpose declares it with a marker line documented in the `d2b-memory`
+  skill.
 - Delivery memory registers under `.specify/memory/` for deferred work,
   engineering friction, and accepted debt.
 - spec-kit is installed for Copilot in skills mode alongside the existing
