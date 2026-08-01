@@ -487,6 +487,34 @@ const CASES = [
     expectExit: 0,
   },
   {
+    // The first arm of the predicate, exercised alone. A blank line closes the
+    // table above, so dispositionIdx is -1 and the second arm cannot fire. What
+    // is left is the shape of a register row: more than one unescaped pipe,
+    // ending in one.
+    name: "a row that lost its leading pipe is rejected even with no table open",
+    mutate: (dir) => {
+      const path = join(dir, ".specify", "memory", "friction-log.md");
+      const src = readFileSync(path, "utf8");
+      writeFileSync(
+        path,
+        `${src.trimEnd()}\n\ncopilotw6 | test | 2026-07-31 | x | 1 | open |\n`,
+      );
+    },
+    expectExit: 1,
+    expectText: "lost its leading pipe",
+  },
+  {
+    // The pipes > 1 boundary. One unescaped pipe, ending in it, with no table
+    // open: too few pipes for the first arm, no table for the second.
+    name: "a single trailing pipe with no table open is not read as a lost row",
+    mutate: (dir) => {
+      const path = join(dir, ".specify", "memory", "friction-log.md");
+      const src = readFileSync(path, "utf8");
+      writeFileSync(path, `${src.trimEnd()}\n\nSee the note below |\n`);
+    },
+    expectExit: 0,
+  },
+  {
     // A fence opened between two rows of a table swallows the rest of it. The
     // gate reported nothing before: the rows vanished from the count and it
     // exited 0.
