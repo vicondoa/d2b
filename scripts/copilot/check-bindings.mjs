@@ -55,11 +55,10 @@ const warnings = [];
 const fail = (m) => errors.push(m);
 const warn = (m) => warnings.push(m);
 
-// Fails closed on every path. An unreadable or reshaped `model.rs` used to
-// warn and return null, and every downstream policy check was guarded by
-// `if (policy)`, so the gate reported success while enforcing nothing. A gate
-// that cannot read its own policy has not checked the binding; it has only
-// declined to look.
+// Fails closed on every path. A gate that cannot read its own policy has not
+// checked the binding; it has only declined to look. So an unreadable or
+// reshaped `model.rs` is an error rather than a warning, and no downstream
+// check is guarded by the policy having been read.
 function readPolicy() {
   if (!existsSync(modelRs)) {
     fail(
@@ -466,20 +465,14 @@ const ORIGIN_WAVE = /^(W[0-8]|[a-z][a-z0-9]{2,15}w[0-8])(fu[1-9][0-9]?)?$/;
 
 // Split one Markdown table row into cells.
 //
-// A naive split on "|" is wrong in two directions and both fail open. A
-// statement legitimately quotes a shell pipeline as `\|`, which a naive split
-// reads as an extra cell, shifting every column after it. And a cell that ends
-// in a literal backslash is written `\\`, so a lookbehind for a single
-// backslash refuses to split at the separator that follows and fuses two cells
-// into one. Either way a later column is read in place of the one intended, and
-// a row short of the header index is skipped without being validated at all.
+// Cells may contain escapes, so the row is walked rather than pattern-matched:
+// `\|` is a literal pipe, `\\` is a literal backslash and does not protect the
+// pipe after it, and any other pipe is a separator. A statement quoting a
+// shell pipeline relies on the first of those.
 //
-// So walk the row rather than pattern-matching it. `\|` is a literal pipe, `\\`
-// is a literal backslash and does not protect the pipe after it, and any other
-// pipe is a separator. Only an EMPTY leading or trailing cell is dropped, since
-// those are the artefacts of the outer pipes. Dropping the last cell
-// unconditionally loses a real one when the trailing pipe is absent, which
-// Markdown permits.
+// Only an EMPTY leading or trailing cell is dropped, because those are the
+// artefacts of the outer pipes. Markdown does not require a trailing pipe, so
+// a non-empty last cell is real data and is kept.
 function splitRow(line) {
   const cells = [];
   let cur = "";
@@ -509,21 +502,16 @@ for (const reg of ["friction-log.md", "deferred-work.md", "engineering-debt.md"]
   const path = join(memoryDir, reg);
   if (!existsSync(path)) continue;
   const lines = readFileSync(path, "utf8").split("\n");
-  // Locate the disposition column by its header rather than assuming it is
-  // last. The registers do not share a shape: deferred-work.md carries a
-  // trailing Ref column, so reading the last cell read the ref, found it
-  // empty, and validated nothing. A guard that silently checks the wrong
-  // column is worse than no guard, because the register looks covered.
+  // The registers do not share a shape, so the disposition column is located by
+  // its header rather than by position: deferred-work.md carries a trailing Ref
+  // column that the others do not.
   //
-  // The index belongs to one table, so it resets at the first line that is not
-  // a row. A file with two tables of different shapes would otherwise carry the
-  // first table's index into the second, and a data row that appears before any
-  // header has no index at all. Both are rejected below rather than guessed at:
-  // there is no fallback, because the fallback was the defect.
-  //
-  // The header's width is recorded with it. A data row of a different width is
-  // rejected rather than skipped: a width test that only skipped narrow rows
-  // let a row bypass every check in this loop, not merely the disposition one.
+  // Both the column index and the header's width describe one table, so both
+  // reset at the first line that is not a row. Every row is then addressed
+  // against the header above it or refused: a row before any header, a row of a
+  // different width, and a file with no header at all are all rejected. There
+  // is no fallback to a positional read, because a row read against the wrong
+  // column is validated in appearance only.
   let dispositionIdx = -1;
   let headerWidth = -1;
   let sawHeader = false;
