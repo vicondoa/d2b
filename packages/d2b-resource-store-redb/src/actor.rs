@@ -20,7 +20,7 @@ use crate::transaction::{
     timeout,
 };
 use crate::{KeySpace, ValueKind};
-use crate::{VerifiedMutationView, VerifiedPreparedMutationView};
+use d2b_resource_store::mutation_seal::OpenedMutation;
 
 /// Bounded public writer admission queue.
 pub const WRITE_QUEUE_CAPACITY: usize = 256;
@@ -134,20 +134,17 @@ impl WriterHandle {
         })
     }
 
-    pub(crate) async fn commit<V>(
+    pub(crate) async fn commit(
         &self,
-        mutation: V,
-    ) -> Result<d2b_resource_store::StoreCommitResult, StoreError>
-    where
-        V: VerifiedMutationView,
-    {
+        opened: OpenedMutation,
+    ) -> Result<d2b_resource_store::StoreCommitResult, StoreError> {
         if self.quarantined.load(Ordering::Acquire) {
             return Err(crate::transaction::quarantined());
         }
-        if mutation.mutations().is_empty() {
+        if opened.body().mutations.is_empty() {
             return Err(crate::transaction::integrity("empty-verified-mutation"));
         }
-        if mutation.mutations().len() > d2b_contracts::v3::MAX_BATCH_MUTATIONS {
+        if opened.body().mutations.len() > d2b_contracts::v3::MAX_BATCH_MUTATIONS {
             return Err(crate::transaction::integrity(
                 "verified-mutation-over-limit",
             ));
@@ -160,9 +157,10 @@ impl WriterHandle {
             .try_acquire_owned()
             .map_err(|_| backpressure())?;
         let (response, receiver) = oneshot::channel();
-        let principal = mutation.authorization().subject_uid.as_str().to_owned();
-        let mut resources = mutation
-            .mutations()
+        let principal = opened.body().authorization.subject_uid.as_str().to_owned();
+        let mut resources = opened
+            .body()
+            .mutations
             .iter()
             .flat_map(|prepared| {
                 [
@@ -181,7 +179,7 @@ impl WriterHandle {
             sequence: 0,
             principal,
             resources,
-            mutation: VerifiedWrite::from_view(&mutation),
+            mutation: VerifiedWrite::from_opened(opened),
             queue_permit,
             response,
         }))) {

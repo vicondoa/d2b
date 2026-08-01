@@ -16,8 +16,10 @@ mod store;
 pub use adapter::{
     AdapterBindingError, RESOURCE_API_REACHABILITY, ResourceApiReachability, UnregisteredBusAdapter,
 };
-pub use admission::{AdmissionError, AdmittedMutation, PreparedStoreMutation, VerifiedMutation};
+pub use admission::{AdmissionError, AdmittedMutation};
+pub use authz::StoreSealHandoffError;
 pub use client::UnregisteredResourceClient;
+pub use d2b_resource_store::PreparedStoreMutation;
 pub use identity::AuthenticatedSubjectContext;
 pub use service::ResourceService;
 pub use store::{RedbBackend, ResourceStoreBackend, StoreBindingError};

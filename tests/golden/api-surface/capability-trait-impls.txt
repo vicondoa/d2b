@@ -1091,8 +1091,7 @@ d2b_resource_api::d2b_resource_api::adapter::UnregisteredBusAdapter	struct	core:
 d2b_resource_api::d2b_resource_api::adapter::UnregisteredBusAdapter	struct	d2b_resource_api::d2b_resource_api::generated::d2b_resource_v3_ttrpc::ResourceService	trait	impl<S, U> d2b_resource_api::generated::d2b_resource_v3_ttrpc::ResourceService for d2b_resource_api::adapter::UnregisteredBusAdapter<S, U> where S: d2b_resource_api::ResourceStoreBackend + 'static, U: d2b_resource_api::service::UpgradeDispatcher + 'static
 d2b_resource_api::d2b_resource_api::admission::AdmissionPermit	struct	core::core::fmt::Debug	trait	private explicit impl core::fmt::Debug for d2b_resource_api::admission::AdmissionPermit negative=false generic-params=0 where-predicates=0
 d2b_resource_api::d2b_resource_api::admission::AdmittedMutation	struct	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2b_resource_api::AdmittedMutation
-d2b_resource_api::d2b_resource_api::admission::PreparedStoreMutation	struct	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2b_resource_api::PreparedStoreMutation
-d2b_resource_api::d2b_resource_api::admission::VerifiedMutation	struct	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2b_resource_api::VerifiedMutation
+d2b_resource_api::d2b_resource_api::admission::StoreAdmissionBinding	struct	core::core::fmt::Debug	trait	private explicit impl core::fmt::Debug for d2b_resource_api::admission::StoreAdmissionBinding negative=false generic-params=0 where-predicates=0
 d2b_resource_api::d2b_resource_api::authz::AuthorizationGrant	struct	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2b_resource_api::authz::AuthorizationGrant
 d2b_resource_api::d2b_resource_api::authz::AuthorizationRequest	struct	core::core::clone::Clone	trait	impl core::clone::Clone for d2b_resource_api::authz::AuthorizationRequest
 d2b_resource_api::d2b_resource_api::authz::AuthorizationRequest	struct	core::core::cmp::Eq	trait	impl core::cmp::Eq for d2b_resource_api::authz::AuthorizationRequest
@@ -1171,6 +1170,8 @@ d2b_resource_api::d2b_resource_api::service::UpgradeResult	struct	core::core::cm
 d2b_resource_api::d2b_resource_api::service::UpgradeResult	struct	core::core::cmp::PartialEq	trait	impl core::cmp::PartialEq for d2b_resource_api::service::UpgradeResult
 d2b_resource_api::d2b_resource_api::service::UpgradeResult	struct	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2b_resource_api::service::UpgradeResult
 d2b_resource_api::d2b_resource_api::service::UpgradeResult	struct	core::core::marker::StructuralPartialEq	trait	impl core::marker::StructuralPartialEq for d2b_resource_api::service::UpgradeResult
+d2b_resource_api::d2b_resource_api::store::RedbBackend	struct	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2b_resource_api::RedbBackend
+d2b_resource_api::d2b_resource_api::store::RedbBackend	struct	d2b_resource_api::d2b_resource_api::store::ResourceStoreBackend	trait	impl d2b_resource_api::ResourceStoreBackend for d2b_resource_api::RedbBackend
 d2b_resource_store::d2b_resource_store::AdmittedAuthorization	struct	core::core::clone::Clone	trait	impl core::clone::Clone for d2b_resource_store::AdmittedAuthorization
 d2b_resource_store::d2b_resource_store::AdmittedAuthorization	struct	core::core::cmp::Eq	trait	impl core::cmp::Eq for d2b_resource_store::AdmittedAuthorization
 d2b_resource_store::d2b_resource_store::AdmittedAuthorization	struct	core::core::cmp::PartialEq	trait	impl core::cmp::PartialEq for d2b_resource_store::AdmittedAuthorization
@@ -1181,6 +1182,7 @@ d2b_resource_store::d2b_resource_store::AdmittedAuthorizationTarget	struct	core:
 d2b_resource_store::d2b_resource_store::AdmittedAuthorizationTarget	struct	core::core::cmp::PartialEq	trait	impl core::cmp::PartialEq for d2b_resource_store::AdmittedAuthorizationTarget
 d2b_resource_store::d2b_resource_store::AdmittedAuthorizationTarget	struct	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2b_resource_store::AdmittedAuthorizationTarget
 d2b_resource_store::d2b_resource_store::AdmittedAuthorizationTarget	struct	core::core::marker::StructuralPartialEq	trait	impl core::marker::StructuralPartialEq for d2b_resource_store::AdmittedAuthorizationTarget
+d2b_resource_store::d2b_resource_store::PreparedStoreMutation	struct	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2b_resource_store::PreparedStoreMutation
 d2b_resource_store::d2b_resource_store::StoreCommitResult	struct	core::core::clone::Clone	trait	impl core::clone::Clone for d2b_resource_store::StoreCommitResult
 d2b_resource_store::d2b_resource_store::StoreCommitResult	struct	core::core::cmp::Eq	trait	impl core::cmp::Eq for d2b_resource_store::StoreCommitResult
 d2b_resource_store::d2b_resource_store::StoreCommitResult	struct	core::core::cmp::PartialEq	trait	impl core::cmp::PartialEq for d2b_resource_store::StoreCommitResult
@@ -1216,6 +1218,18 @@ d2b_resource_store::d2b_resource_store::StoredResource	struct	core::core::cmp::E
 d2b_resource_store::d2b_resource_store::StoredResource	struct	core::core::cmp::PartialEq	trait	impl core::cmp::PartialEq for d2b_resource_store::StoredResource
 d2b_resource_store::d2b_resource_store::StoredResource	struct	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2b_resource_store::StoredResource
 d2b_resource_store::d2b_resource_store::StoredResource	struct	core::core::marker::StructuralPartialEq	trait	impl core::marker::StructuralPartialEq for d2b_resource_store::StoredResource
+d2b_resource_store::d2b_resource_store::mutation_seal::StoreSealIdentity	struct	core::core::clone::Clone	trait	impl core::clone::Clone for d2b_resource_store::mutation_seal::StoreSealIdentity
+d2b_resource_store_redb::d2b_resource_store_redb::RedbResourceStore	struct	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2b_resource_store_redb::RedbResourceStore
+d2b_resource_store_redb::d2b_resource_store_redb::StoreIdentity	struct	core::core::clone::Clone	trait	impl core::clone::Clone for d2b_resource_store_redb::StoreIdentity
+d2b_resource_store_redb::d2b_resource_store_redb::StoreIdentity	struct	core::core::cmp::Eq	trait	impl core::cmp::Eq for d2b_resource_store_redb::StoreIdentity
+d2b_resource_store_redb::d2b_resource_store_redb::StoreIdentity	struct	core::core::cmp::PartialEq	trait	impl core::cmp::PartialEq for d2b_resource_store_redb::StoreIdentity
+d2b_resource_store_redb::d2b_resource_store_redb::StoreIdentity	struct	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2b_resource_store_redb::StoreIdentity
+d2b_resource_store_redb::d2b_resource_store_redb::StoreIdentity	struct	core::core::marker::StructuralPartialEq	trait	impl core::marker::StructuralPartialEq for d2b_resource_store_redb::StoreIdentity
+d2b_resource_store_redb::d2b_resource_store_redb::actor::FairScheduler	struct	core::core::default::Default	trait	private explicit impl core::default::Default for d2b_resource_store_redb::actor::FairScheduler negative=false generic-params=0 where-predicates=0
+d2b_resource_store_redb::d2b_resource_store_redb::actor::ReadPool	struct	core::core::ops::drop::Drop	trait	private explicit impl core::ops::drop::Drop for d2b_resource_store_redb::actor::ReadPool negative=false generic-params=0 where-predicates=0
+d2b_resource_store_redb::d2b_resource_store_redb::actor::SharedChangeBatch	struct	core::core::clone::Clone	trait	impl core::clone::Clone for d2b_resource_store_redb::actor::SharedChangeBatch
+d2b_resource_store_redb::d2b_resource_store_redb::actor::SharedChangeBatch	struct	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2b_resource_store_redb::actor::SharedChangeBatch
+d2b_resource_store_redb::d2b_resource_store_redb::actor::WriterHandle	struct	core::core::ops::drop::Drop	trait	private explicit impl core::ops::drop::Drop for d2b_resource_store_redb::actor::WriterHandle negative=false generic-params=0 where-predicates=0
 d2b_resource_store_redb::d2b_resource_store_redb::ownership::OwnerBinding	struct	core::core::clone::Clone	trait	impl core::clone::Clone for d2b_resource_store_redb::ownership::OwnerBinding
 d2b_resource_store_redb::d2b_resource_store_redb::ownership::OwnerBinding	struct	core::core::cmp::Eq	trait	impl core::cmp::Eq for d2b_resource_store_redb::ownership::OwnerBinding
 d2b_resource_store_redb::d2b_resource_store_redb::ownership::OwnerBinding	struct	core::core::cmp::PartialEq	trait	impl core::cmp::PartialEq for d2b_resource_store_redb::ownership::OwnerBinding
@@ -1237,6 +1251,27 @@ d2b_resource_store_redb::d2b_resource_store_redb::ownership::ReverseOwnerEntry	s
 d2b_resource_store_redb::d2b_resource_store_redb::ownership::ReverseOwnerEntry	struct	core::core::cmp::PartialEq	trait	impl core::cmp::PartialEq for d2b_resource_store_redb::ownership::ReverseOwnerEntry
 d2b_resource_store_redb::d2b_resource_store_redb::ownership::ReverseOwnerEntry	struct	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2b_resource_store_redb::ownership::ReverseOwnerEntry
 d2b_resource_store_redb::d2b_resource_store_redb::ownership::ReverseOwnerEntry	struct	core::core::marker::StructuralPartialEq	trait	impl core::marker::StructuralPartialEq for d2b_resource_store_redb::ownership::ReverseOwnerEntry
+d2b_resource_store_redb::d2b_resource_store_redb::transaction::ChangeBatch	struct	core::core::clone::Clone	trait	impl core::clone::Clone for d2b_resource_store_redb::ChangeBatch
+d2b_resource_store_redb::d2b_resource_store_redb::transaction::ChangeBatch	struct	core::core::cmp::Eq	trait	impl core::cmp::Eq for d2b_resource_store_redb::ChangeBatch
+d2b_resource_store_redb::d2b_resource_store_redb::transaction::ChangeBatch	struct	core::core::cmp::PartialEq	trait	impl core::cmp::PartialEq for d2b_resource_store_redb::ChangeBatch
+d2b_resource_store_redb::d2b_resource_store_redb::transaction::ChangeBatch	struct	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2b_resource_store_redb::ChangeBatch
+d2b_resource_store_redb::d2b_resource_store_redb::transaction::ChangeBatch	struct	core::core::marker::StructuralPartialEq	trait	impl core::marker::StructuralPartialEq for d2b_resource_store_redb::ChangeBatch
+d2b_resource_store_redb::d2b_resource_store_redb::transaction::ChangeBatch	struct	serde_core::serde_core::de::Deserialize	trait	impl<'de> serde_core::de::Deserialize<'de> for d2b_resource_store_redb::ChangeBatch
+d2b_resource_store_redb::d2b_resource_store_redb::transaction::ChangeBatch	struct	serde_core::serde_core::ser::Serialize	trait	impl serde_core::ser::Serialize for d2b_resource_store_redb::ChangeBatch
+d2b_resource_store_redb::d2b_resource_store_redb::transaction::ChangeBatchWire	struct	serde_core::serde_core::de::Deserialize	trait	private explicit impl serde_core::de::Deserialize for d2b_resource_store_redb::transaction::ChangeBatchWire negative=false generic-params=1 where-predicates=0
+d2b_resource_store_redb::d2b_resource_store_redb::transaction::ChangeEntry	struct	core::core::clone::Clone	trait	impl core::clone::Clone for d2b_resource_store_redb::ChangeEntry
+d2b_resource_store_redb::d2b_resource_store_redb::transaction::ChangeEntry	struct	core::core::cmp::Eq	trait	impl core::cmp::Eq for d2b_resource_store_redb::ChangeEntry
+d2b_resource_store_redb::d2b_resource_store_redb::transaction::ChangeEntry	struct	core::core::cmp::PartialEq	trait	impl core::cmp::PartialEq for d2b_resource_store_redb::ChangeEntry
+d2b_resource_store_redb::d2b_resource_store_redb::transaction::ChangeEntry	struct	core::core::fmt::Debug	trait	impl core::fmt::Debug for d2b_resource_store_redb::ChangeEntry
+d2b_resource_store_redb::d2b_resource_store_redb::transaction::ChangeEntry	struct	core::core::marker::StructuralPartialEq	trait	impl core::marker::StructuralPartialEq for d2b_resource_store_redb::ChangeEntry
+d2b_resource_store_redb::d2b_resource_store_redb::transaction::ChangeEntry	struct	serde_core::serde_core::de::Deserialize	trait	impl<'de> serde_core::de::Deserialize<'de> for d2b_resource_store_redb::ChangeEntry
+d2b_resource_store_redb::d2b_resource_store_redb::transaction::ChangeEntry	struct	serde_core::serde_core::ser::Serialize	trait	impl serde_core::ser::Serialize for d2b_resource_store_redb::ChangeEntry
+d2b_resource_store_redb::d2b_resource_store_redb::transaction::ChangeEntryWire	struct	serde_core::serde_core::de::Deserialize	trait	private explicit impl serde_core::de::Deserialize for d2b_resource_store_redb::transaction::ChangeEntryWire negative=false generic-params=1 where-predicates=0
+d2b_resource_store_redb::d2b_resource_store_redb::transaction::CommittedGroup	struct	core::core::clone::Clone	trait	private explicit impl core::clone::Clone for d2b_resource_store_redb::transaction::CommittedGroup negative=false generic-params=0 where-predicates=0
+d2b_resource_store_redb::d2b_resource_store_redb::transaction::CommittedGroup	struct	core::core::cmp::Eq	trait	private explicit impl core::cmp::Eq for d2b_resource_store_redb::transaction::CommittedGroup negative=false generic-params=0 where-predicates=0
+d2b_resource_store_redb::d2b_resource_store_redb::transaction::CommittedGroup	struct	core::core::cmp::PartialEq	trait	private explicit impl core::cmp::PartialEq for d2b_resource_store_redb::transaction::CommittedGroup negative=false generic-params=0 where-predicates=0
+d2b_resource_store_redb::d2b_resource_store_redb::transaction::CommittedGroup	struct	core::core::fmt::Debug	trait	private explicit impl core::fmt::Debug for d2b_resource_store_redb::transaction::CommittedGroup negative=false generic-params=0 where-predicates=0
+d2b_resource_store_redb::d2b_resource_store_redb::transaction::CommittedGroup	struct	core::core::marker::StructuralPartialEq	trait	private explicit impl core::marker::StructuralPartialEq for d2b_resource_store_redb::transaction::CommittedGroup negative=false generic-params=0 where-predicates=0
 d2b_session::d2b_session::admission::AuthenticatedComponentSession	struct	core::core::fmt::Debug	trait	impl<C> core::fmt::Debug for d2b_session::AuthenticatedComponentSession<C>
 d2b_session::d2b_session::admission::AuthenticatedSessionRouteBinding	struct	core::core::clone::Clone	trait	impl core::clone::Clone for d2b_session::AuthenticatedSessionRouteBinding
 d2b_session::d2b_session::admission::AuthenticatedSessionRouteBinding	struct	core::core::cmp::Eq	trait	impl core::cmp::Eq for d2b_session::AuthenticatedSessionRouteBinding

@@ -7150,7 +7150,10 @@ d2b_provider_volume_virtiofs	pub struct d2b_provider_volume_virtiofs::ExportSpec
 d2b_provider_volume_virtiofs	pub struct d2b_provider_volume_virtiofs::ExportStatusReport
 d2b_provider_volume_virtiofs	pub struct d2b_provider_volume_virtiofs::LaunchedWorker
 d2b_provider_volume_virtiofs	pub trait d2b_provider_volume_virtiofs::VirtiofsExportEffectPort: core::marker::Send + core::marker::Sync
+d2b_resource_api	impl !core::marker::Freeze for d2b_resource_api::RedbBackend
 d2b_resource_api	impl !core::marker::Freeze for d2b_resource_api::authz::NativeAuthorizer
+d2b_resource_api	impl !core::panic::unwind_safe::RefUnwindSafe for d2b_resource_api::RedbBackend
+d2b_resource_api	impl !core::panic::unwind_safe::UnwindSafe for d2b_resource_api::RedbBackend
 d2b_resource_api	impl core::clone::Clone for d2b_resource_api::authz::AuthorizationRequest
 d2b_resource_api	impl core::clone::Clone for d2b_resource_api::authz::AuthorizationState
 d2b_resource_api	impl core::clone::Clone for d2b_resource_api::authz::AuthorizationTarget
@@ -7195,8 +7198,7 @@ d2b_resource_api	impl core::cmp::PartialOrd for d2b_resource_api::authz::BoundSu
 d2b_resource_api	impl core::default::Default for d2b_resource_api::authz::BindingScope
 d2b_resource_api	impl core::fmt::Debug for d2b_resource_api::AdmittedMutation
 d2b_resource_api	impl core::fmt::Debug for d2b_resource_api::AuthenticatedSubjectContext
-d2b_resource_api	impl core::fmt::Debug for d2b_resource_api::PreparedStoreMutation
-d2b_resource_api	impl core::fmt::Debug for d2b_resource_api::VerifiedMutation
+d2b_resource_api	impl core::fmt::Debug for d2b_resource_api::RedbBackend
 d2b_resource_api	impl core::fmt::Debug for d2b_resource_api::authz::AuthorizationGrant
 d2b_resource_api	impl core::fmt::Debug for d2b_resource_api::authz::AuthorizationRequest
 d2b_resource_api	impl core::fmt::Debug for d2b_resource_api::authz::AuthorizationState
@@ -7214,8 +7216,6 @@ d2b_resource_api	impl core::fmt::Debug for d2b_resource_api::service::Authorized
 d2b_resource_api	impl core::fmt::Debug for d2b_resource_api::service::UpgradeResult
 d2b_resource_api	impl core::marker::Freeze for d2b_resource_api::AdmittedMutation
 d2b_resource_api	impl core::marker::Freeze for d2b_resource_api::AuthenticatedSubjectContext
-d2b_resource_api	impl core::marker::Freeze for d2b_resource_api::PreparedStoreMutation
-d2b_resource_api	impl core::marker::Freeze for d2b_resource_api::VerifiedMutation
 d2b_resource_api	impl core::marker::Freeze for d2b_resource_api::authz::AuthorizationGrant
 d2b_resource_api	impl core::marker::Freeze for d2b_resource_api::authz::AuthorizationRequest
 d2b_resource_api	impl core::marker::Freeze for d2b_resource_api::authz::AuthorizationState
@@ -7232,8 +7232,7 @@ d2b_resource_api	impl core::marker::Freeze for d2b_resource_api::service::Author
 d2b_resource_api	impl core::marker::Freeze for d2b_resource_api::service::UpgradeResult
 d2b_resource_api	impl core::marker::Send for d2b_resource_api::AdmittedMutation
 d2b_resource_api	impl core::marker::Send for d2b_resource_api::AuthenticatedSubjectContext
-d2b_resource_api	impl core::marker::Send for d2b_resource_api::PreparedStoreMutation
-d2b_resource_api	impl core::marker::Send for d2b_resource_api::VerifiedMutation
+d2b_resource_api	impl core::marker::Send for d2b_resource_api::RedbBackend
 d2b_resource_api	impl core::marker::Send for d2b_resource_api::authz::AuthorizationGrant
 d2b_resource_api	impl core::marker::Send for d2b_resource_api::authz::AuthorizationRequest
 d2b_resource_api	impl core::marker::Send for d2b_resource_api::authz::AuthorizationState
@@ -7264,8 +7263,7 @@ d2b_resource_api	impl core::marker::StructuralPartialEq for d2b_resource_api::se
 d2b_resource_api	impl core::marker::StructuralPartialEq for d2b_resource_api::service::UpgradeResult
 d2b_resource_api	impl core::marker::Sync for d2b_resource_api::AdmittedMutation
 d2b_resource_api	impl core::marker::Sync for d2b_resource_api::AuthenticatedSubjectContext
-d2b_resource_api	impl core::marker::Sync for d2b_resource_api::PreparedStoreMutation
-d2b_resource_api	impl core::marker::Sync for d2b_resource_api::VerifiedMutation
+d2b_resource_api	impl core::marker::Sync for d2b_resource_api::RedbBackend
 d2b_resource_api	impl core::marker::Sync for d2b_resource_api::authz::AuthorizationGrant
 d2b_resource_api	impl core::marker::Sync for d2b_resource_api::authz::AuthorizationRequest
 d2b_resource_api	impl core::marker::Sync for d2b_resource_api::authz::AuthorizationState
@@ -7283,8 +7281,7 @@ d2b_resource_api	impl core::marker::Sync for d2b_resource_api::service::Authoriz
 d2b_resource_api	impl core::marker::Sync for d2b_resource_api::service::UpgradeResult
 d2b_resource_api	impl core::marker::Unpin for d2b_resource_api::AdmittedMutation
 d2b_resource_api	impl core::marker::Unpin for d2b_resource_api::AuthenticatedSubjectContext
-d2b_resource_api	impl core::marker::Unpin for d2b_resource_api::PreparedStoreMutation
-d2b_resource_api	impl core::marker::Unpin for d2b_resource_api::VerifiedMutation
+d2b_resource_api	impl core::marker::Unpin for d2b_resource_api::RedbBackend
 d2b_resource_api	impl core::marker::Unpin for d2b_resource_api::authz::AuthorizationGrant
 d2b_resource_api	impl core::marker::Unpin for d2b_resource_api::authz::AuthorizationRequest
 d2b_resource_api	impl core::marker::Unpin for d2b_resource_api::authz::AuthorizationState
@@ -7302,8 +7299,7 @@ d2b_resource_api	impl core::marker::Unpin for d2b_resource_api::service::Authori
 d2b_resource_api	impl core::marker::Unpin for d2b_resource_api::service::UpgradeResult
 d2b_resource_api	impl core::marker::UnsafeUnpin for d2b_resource_api::AdmittedMutation
 d2b_resource_api	impl core::marker::UnsafeUnpin for d2b_resource_api::AuthenticatedSubjectContext
-d2b_resource_api	impl core::marker::UnsafeUnpin for d2b_resource_api::PreparedStoreMutation
-d2b_resource_api	impl core::marker::UnsafeUnpin for d2b_resource_api::VerifiedMutation
+d2b_resource_api	impl core::marker::UnsafeUnpin for d2b_resource_api::RedbBackend
 d2b_resource_api	impl core::marker::UnsafeUnpin for d2b_resource_api::authz::AuthorizationGrant
 d2b_resource_api	impl core::marker::UnsafeUnpin for d2b_resource_api::authz::AuthorizationRequest
 d2b_resource_api	impl core::marker::UnsafeUnpin for d2b_resource_api::authz::AuthorizationState
@@ -7321,8 +7317,6 @@ d2b_resource_api	impl core::marker::UnsafeUnpin for d2b_resource_api::service::A
 d2b_resource_api	impl core::marker::UnsafeUnpin for d2b_resource_api::service::UpgradeResult
 d2b_resource_api	impl core::panic::unwind_safe::RefUnwindSafe for d2b_resource_api::AdmittedMutation
 d2b_resource_api	impl core::panic::unwind_safe::RefUnwindSafe for d2b_resource_api::AuthenticatedSubjectContext
-d2b_resource_api	impl core::panic::unwind_safe::RefUnwindSafe for d2b_resource_api::PreparedStoreMutation
-d2b_resource_api	impl core::panic::unwind_safe::RefUnwindSafe for d2b_resource_api::VerifiedMutation
 d2b_resource_api	impl core::panic::unwind_safe::RefUnwindSafe for d2b_resource_api::authz::AuthorizationGrant
 d2b_resource_api	impl core::panic::unwind_safe::RefUnwindSafe for d2b_resource_api::authz::AuthorizationRequest
 d2b_resource_api	impl core::panic::unwind_safe::RefUnwindSafe for d2b_resource_api::authz::AuthorizationState
@@ -7340,8 +7334,6 @@ d2b_resource_api	impl core::panic::unwind_safe::RefUnwindSafe for d2b_resource_a
 d2b_resource_api	impl core::panic::unwind_safe::RefUnwindSafe for d2b_resource_api::service::UpgradeResult
 d2b_resource_api	impl core::panic::unwind_safe::UnwindSafe for d2b_resource_api::AdmittedMutation
 d2b_resource_api	impl core::panic::unwind_safe::UnwindSafe for d2b_resource_api::AuthenticatedSubjectContext
-d2b_resource_api	impl core::panic::unwind_safe::UnwindSafe for d2b_resource_api::PreparedStoreMutation
-d2b_resource_api	impl core::panic::unwind_safe::UnwindSafe for d2b_resource_api::VerifiedMutation
 d2b_resource_api	impl core::panic::unwind_safe::UnwindSafe for d2b_resource_api::authz::AuthorizationGrant
 d2b_resource_api	impl core::panic::unwind_safe::UnwindSafe for d2b_resource_api::authz::AuthorizationRequest
 d2b_resource_api	impl core::panic::unwind_safe::UnwindSafe for d2b_resource_api::authz::AuthorizationState
@@ -7358,8 +7350,8 @@ d2b_resource_api	impl core::panic::unwind_safe::UnwindSafe for d2b_resource_api:
 d2b_resource_api	impl core::panic::unwind_safe::UnwindSafe for d2b_resource_api::service::AuthorizedUpgrade
 d2b_resource_api	impl core::panic::unwind_safe::UnwindSafe for d2b_resource_api::service::UpgradeResult
 d2b_resource_api	impl d2b_resource_api::AdmittedMutation
-d2b_resource_api	impl d2b_resource_api::PreparedStoreMutation
-d2b_resource_api	impl d2b_resource_api::VerifiedMutation
+d2b_resource_api	impl d2b_resource_api::RedbBackend
+d2b_resource_api	impl d2b_resource_api::ResourceStoreBackend for d2b_resource_api::RedbBackend
 d2b_resource_api	impl d2b_resource_api::authz::CompiledRole
 d2b_resource_api	impl d2b_resource_api::authz::CompiledRoleBinding
 d2b_resource_api	impl d2b_resource_api::authz::NativeAuthorizer
@@ -7399,8 +7391,7 @@ d2b_resource_api	impl<S, U> d2b_resource_api::service::ResourceService<S, U> whe
 d2b_resource_api	impl<S> d2b_resource_api::service::ResourceService<S, d2b_resource_api::service::UnavailableUpgradeDispatcher> where S: d2b_resource_api::ResourceStoreBackend
 d2b_resource_api	impl<T, U> core::convert::Into<U> for d2b_resource_api::AdmittedMutation where U: core::convert::From<T>
 d2b_resource_api	impl<T, U> core::convert::Into<U> for d2b_resource_api::AuthenticatedSubjectContext where U: core::convert::From<T>
-d2b_resource_api	impl<T, U> core::convert::Into<U> for d2b_resource_api::PreparedStoreMutation where U: core::convert::From<T>
-d2b_resource_api	impl<T, U> core::convert::Into<U> for d2b_resource_api::VerifiedMutation where U: core::convert::From<T>
+d2b_resource_api	impl<T, U> core::convert::Into<U> for d2b_resource_api::RedbBackend where U: core::convert::From<T>
 d2b_resource_api	impl<T, U> core::convert::Into<U> for d2b_resource_api::adapter::UnregisteredBusAdapter<S, U> where U: core::convert::From<T>
 d2b_resource_api	impl<T, U> core::convert::Into<U> for d2b_resource_api::authz::AuthorizationGrant where U: core::convert::From<T>
 d2b_resource_api	impl<T, U> core::convert::Into<U> for d2b_resource_api::authz::AuthorizationRequest where U: core::convert::From<T>
@@ -7422,8 +7413,7 @@ d2b_resource_api	impl<T, U> core::convert::Into<U> for d2b_resource_api::service
 d2b_resource_api	impl<T, U> core::convert::Into<U> for d2b_resource_api::service::UpgradeResult where U: core::convert::From<T>
 d2b_resource_api	impl<T, U> core::convert::TryFrom<U> for d2b_resource_api::AdmittedMutation where U: core::convert::Into<T>
 d2b_resource_api	impl<T, U> core::convert::TryFrom<U> for d2b_resource_api::AuthenticatedSubjectContext where U: core::convert::Into<T>
-d2b_resource_api	impl<T, U> core::convert::TryFrom<U> for d2b_resource_api::PreparedStoreMutation where U: core::convert::Into<T>
-d2b_resource_api	impl<T, U> core::convert::TryFrom<U> for d2b_resource_api::VerifiedMutation where U: core::convert::Into<T>
+d2b_resource_api	impl<T, U> core::convert::TryFrom<U> for d2b_resource_api::RedbBackend where U: core::convert::Into<T>
 d2b_resource_api	impl<T, U> core::convert::TryFrom<U> for d2b_resource_api::adapter::UnregisteredBusAdapter<S, U> where U: core::convert::Into<T>
 d2b_resource_api	impl<T, U> core::convert::TryFrom<U> for d2b_resource_api::authz::AuthorizationGrant where U: core::convert::Into<T>
 d2b_resource_api	impl<T, U> core::convert::TryFrom<U> for d2b_resource_api::authz::AuthorizationRequest where U: core::convert::Into<T>
@@ -7445,8 +7435,7 @@ d2b_resource_api	impl<T, U> core::convert::TryFrom<U> for d2b_resource_api::serv
 d2b_resource_api	impl<T, U> core::convert::TryFrom<U> for d2b_resource_api::service::UpgradeResult where U: core::convert::Into<T>
 d2b_resource_api	impl<T, U> core::convert::TryInto<U> for d2b_resource_api::AdmittedMutation where U: core::convert::TryFrom<T>
 d2b_resource_api	impl<T, U> core::convert::TryInto<U> for d2b_resource_api::AuthenticatedSubjectContext where U: core::convert::TryFrom<T>
-d2b_resource_api	impl<T, U> core::convert::TryInto<U> for d2b_resource_api::PreparedStoreMutation where U: core::convert::TryFrom<T>
-d2b_resource_api	impl<T, U> core::convert::TryInto<U> for d2b_resource_api::VerifiedMutation where U: core::convert::TryFrom<T>
+d2b_resource_api	impl<T, U> core::convert::TryInto<U> for d2b_resource_api::RedbBackend where U: core::convert::TryFrom<T>
 d2b_resource_api	impl<T, U> core::convert::TryInto<U> for d2b_resource_api::adapter::UnregisteredBusAdapter<S, U> where U: core::convert::TryFrom<T>
 d2b_resource_api	impl<T, U> core::convert::TryInto<U> for d2b_resource_api::authz::AuthorizationGrant where U: core::convert::TryFrom<T>
 d2b_resource_api	impl<T, U> core::convert::TryInto<U> for d2b_resource_api::authz::AuthorizationRequest where U: core::convert::TryFrom<T>
@@ -7483,8 +7472,7 @@ d2b_resource_api	impl<T> alloc::borrow::ToOwned for d2b_resource_api::service::T
 d2b_resource_api	impl<T> alloc::borrow::ToOwned for d2b_resource_api::service::UpgradeResult where T: core::clone::Clone
 d2b_resource_api	impl<T> core::any::Any for d2b_resource_api::AdmittedMutation where T: 'static + ?core::marker::Sized
 d2b_resource_api	impl<T> core::any::Any for d2b_resource_api::AuthenticatedSubjectContext where T: 'static + ?core::marker::Sized
-d2b_resource_api	impl<T> core::any::Any for d2b_resource_api::PreparedStoreMutation where T: 'static + ?core::marker::Sized
-d2b_resource_api	impl<T> core::any::Any for d2b_resource_api::VerifiedMutation where T: 'static + ?core::marker::Sized
+d2b_resource_api	impl<T> core::any::Any for d2b_resource_api::RedbBackend where T: 'static + ?core::marker::Sized
 d2b_resource_api	impl<T> core::any::Any for d2b_resource_api::adapter::UnregisteredBusAdapter<S, U> where T: 'static + ?core::marker::Sized
 d2b_resource_api	impl<T> core::any::Any for d2b_resource_api::authz::AuthorizationGrant where T: 'static + ?core::marker::Sized
 d2b_resource_api	impl<T> core::any::Any for d2b_resource_api::authz::AuthorizationRequest where T: 'static + ?core::marker::Sized
@@ -7506,8 +7494,7 @@ d2b_resource_api	impl<T> core::any::Any for d2b_resource_api::service::TrustedRe
 d2b_resource_api	impl<T> core::any::Any for d2b_resource_api::service::UpgradeResult where T: 'static + ?core::marker::Sized
 d2b_resource_api	impl<T> core::borrow::Borrow<T> for d2b_resource_api::AdmittedMutation where T: ?core::marker::Sized
 d2b_resource_api	impl<T> core::borrow::Borrow<T> for d2b_resource_api::AuthenticatedSubjectContext where T: ?core::marker::Sized
-d2b_resource_api	impl<T> core::borrow::Borrow<T> for d2b_resource_api::PreparedStoreMutation where T: ?core::marker::Sized
-d2b_resource_api	impl<T> core::borrow::Borrow<T> for d2b_resource_api::VerifiedMutation where T: ?core::marker::Sized
+d2b_resource_api	impl<T> core::borrow::Borrow<T> for d2b_resource_api::RedbBackend where T: ?core::marker::Sized
 d2b_resource_api	impl<T> core::borrow::Borrow<T> for d2b_resource_api::adapter::UnregisteredBusAdapter<S, U> where T: ?core::marker::Sized
 d2b_resource_api	impl<T> core::borrow::Borrow<T> for d2b_resource_api::authz::AuthorizationGrant where T: ?core::marker::Sized
 d2b_resource_api	impl<T> core::borrow::Borrow<T> for d2b_resource_api::authz::AuthorizationRequest where T: ?core::marker::Sized
@@ -7529,8 +7516,7 @@ d2b_resource_api	impl<T> core::borrow::Borrow<T> for d2b_resource_api::service::
 d2b_resource_api	impl<T> core::borrow::Borrow<T> for d2b_resource_api::service::UpgradeResult where T: ?core::marker::Sized
 d2b_resource_api	impl<T> core::borrow::BorrowMut<T> for d2b_resource_api::AdmittedMutation where T: ?core::marker::Sized
 d2b_resource_api	impl<T> core::borrow::BorrowMut<T> for d2b_resource_api::AuthenticatedSubjectContext where T: ?core::marker::Sized
-d2b_resource_api	impl<T> core::borrow::BorrowMut<T> for d2b_resource_api::PreparedStoreMutation where T: ?core::marker::Sized
-d2b_resource_api	impl<T> core::borrow::BorrowMut<T> for d2b_resource_api::VerifiedMutation where T: ?core::marker::Sized
+d2b_resource_api	impl<T> core::borrow::BorrowMut<T> for d2b_resource_api::RedbBackend where T: ?core::marker::Sized
 d2b_resource_api	impl<T> core::borrow::BorrowMut<T> for d2b_resource_api::adapter::UnregisteredBusAdapter<S, U> where T: ?core::marker::Sized
 d2b_resource_api	impl<T> core::borrow::BorrowMut<T> for d2b_resource_api::authz::AuthorizationGrant where T: ?core::marker::Sized
 d2b_resource_api	impl<T> core::borrow::BorrowMut<T> for d2b_resource_api::authz::AuthorizationRequest where T: ?core::marker::Sized
@@ -7566,8 +7552,7 @@ d2b_resource_api	impl<T> core::clone::CloneToUninit for d2b_resource_api::servic
 d2b_resource_api	impl<T> core::clone::CloneToUninit for d2b_resource_api::service::UpgradeResult where T: core::clone::Clone
 d2b_resource_api	impl<T> core::convert::From<T> for d2b_resource_api::AdmittedMutation
 d2b_resource_api	impl<T> core::convert::From<T> for d2b_resource_api::AuthenticatedSubjectContext
-d2b_resource_api	impl<T> core::convert::From<T> for d2b_resource_api::PreparedStoreMutation
-d2b_resource_api	impl<T> core::convert::From<T> for d2b_resource_api::VerifiedMutation
+d2b_resource_api	impl<T> core::convert::From<T> for d2b_resource_api::RedbBackend
 d2b_resource_api	impl<T> core::convert::From<T> for d2b_resource_api::adapter::UnregisteredBusAdapter<S, U>
 d2b_resource_api	impl<T> core::convert::From<T> for d2b_resource_api::authz::AuthorizationGrant
 d2b_resource_api	impl<T> core::convert::From<T> for d2b_resource_api::authz::AuthorizationRequest
@@ -7597,8 +7582,7 @@ d2b_resource_api	impl<T> core::panic::unwind_safe::RefUnwindSafe for d2b_resourc
 d2b_resource_api	impl<T> core::panic::unwind_safe::UnwindSafe for d2b_resource_api::service::TrustedRequest<T> where T: core::panic::unwind_safe::UnwindSafe
 d2b_resource_api	impl<T> crossbeam_epoch::atomic::Pointable for d2b_resource_api::AdmittedMutation
 d2b_resource_api	impl<T> crossbeam_epoch::atomic::Pointable for d2b_resource_api::AuthenticatedSubjectContext
-d2b_resource_api	impl<T> crossbeam_epoch::atomic::Pointable for d2b_resource_api::PreparedStoreMutation
-d2b_resource_api	impl<T> crossbeam_epoch::atomic::Pointable for d2b_resource_api::VerifiedMutation
+d2b_resource_api	impl<T> crossbeam_epoch::atomic::Pointable for d2b_resource_api::RedbBackend
 d2b_resource_api	impl<T> crossbeam_epoch::atomic::Pointable for d2b_resource_api::adapter::UnregisteredBusAdapter<S, U>
 d2b_resource_api	impl<T> crossbeam_epoch::atomic::Pointable for d2b_resource_api::authz::AuthorizationGrant
 d2b_resource_api	impl<T> crossbeam_epoch::atomic::Pointable for d2b_resource_api::authz::AuthorizationRequest
@@ -7635,8 +7619,7 @@ d2b_resource_api	impl<T> dyn_clone::DynClone for d2b_resource_api::service::Trus
 d2b_resource_api	impl<T> dyn_clone::DynClone for d2b_resource_api::service::UpgradeResult where T: core::clone::Clone
 d2b_resource_api	impl<T> typenum::type_operators::Same for d2b_resource_api::AdmittedMutation
 d2b_resource_api	impl<T> typenum::type_operators::Same for d2b_resource_api::AuthenticatedSubjectContext
-d2b_resource_api	impl<T> typenum::type_operators::Same for d2b_resource_api::PreparedStoreMutation
-d2b_resource_api	impl<T> typenum::type_operators::Same for d2b_resource_api::VerifiedMutation
+d2b_resource_api	impl<T> typenum::type_operators::Same for d2b_resource_api::RedbBackend
 d2b_resource_api	impl<T> typenum::type_operators::Same for d2b_resource_api::adapter::UnregisteredBusAdapter<S, U>
 d2b_resource_api	impl<T> typenum::type_operators::Same for d2b_resource_api::authz::AuthorizationGrant
 d2b_resource_api	impl<T> typenum::type_operators::Same for d2b_resource_api::authz::AuthorizationRequest
@@ -7656,6 +7639,10 @@ d2b_resource_api	impl<T> typenum::type_operators::Same for d2b_resource_api::ser
 d2b_resource_api	impl<T> typenum::type_operators::Same for d2b_resource_api::service::ResourceService<S, U>
 d2b_resource_api	impl<T> typenum::type_operators::Same for d2b_resource_api::service::TrustedRequest<T>
 d2b_resource_api	impl<T> typenum::type_operators::Same for d2b_resource_api::service::UpgradeResult
+d2b_resource_api	pub async fn d2b_resource_api::RedbBackend::commit_verified(&self, d2b_resource_store::mutation_seal::SealedMutation) -> core::result::Result<d2b_resource_store::StoreCommitResult, d2b_resource_store::error::StoreError>
+d2b_resource_api	pub async fn d2b_resource_api::RedbBackend::get(&self, d2b_resource_store::StoreGetRequest) -> core::result::Result<d2b_resource_store::StoredResource, d2b_resource_store::error::StoreError>
+d2b_resource_api	pub async fn d2b_resource_api::RedbBackend::list(&self, d2b_resource_store::StoreListRequest) -> core::result::Result<d2b_resource_store::StoreListResult, d2b_resource_store::error::StoreError>
+d2b_resource_api	pub async fn d2b_resource_api::RedbBackend::resolve_ref(&self, d2b_resource_store::StoreResolveRequest) -> core::result::Result<d2b_resource_store::StoreResolvedIdentity, d2b_resource_store::error::StoreError>
 d2b_resource_api	pub async fn d2b_resource_api::service::ResourceService<S, U>::commit_batch(&self, d2b_resource_api::service::TrustedRequest<d2b_contracts::generated::d2b_resource_v3::CommitBatchRequest>) -> d2b_contracts::generated::d2b_resource_v3::CommitBatchResponse
 d2b_resource_api	pub async fn d2b_resource_api::service::ResourceService<S, U>::create(&self, d2b_resource_api::service::TrustedRequest<d2b_contracts::generated::d2b_resource_v3::CreateRequest>) -> d2b_contracts::generated::d2b_resource_v3::CreateResponse
 d2b_resource_api	pub async fn d2b_resource_api::service::ResourceService<S, U>::delete(&self, d2b_resource_api::service::TrustedRequest<d2b_contracts::generated::d2b_resource_v3::DeleteRequest>) -> d2b_contracts::generated::d2b_resource_v3::DeleteResponse
@@ -7671,8 +7658,7 @@ d2b_resource_api	pub async fn d2b_resource_api::service::ResourceService<S, U>::
 d2b_resource_api	pub async fn d2b_resource_api::service::ResourceService<S, U>::watch(&self, d2b_resource_api::service::TrustedRequest<d2b_contracts::generated::d2b_resource_v3::WatchRequest>) -> d2b_contracts::generated::d2b_resource_v3::WatchResponse
 d2b_resource_api	pub async fn d2b_resource_api::service::UnavailableUpgradeDispatcher::dispatch(&self, d2b_resource_api::service::AuthorizedUpgrade) -> core::result::Result<d2b_resource_api::service::UpgradeResult, d2b_contracts::v3::error::ResourceError>
 d2b_resource_api	pub const fn d2b_resource_api::AdmittedMutation::authorization(&self) -> &d2b_resource_store::AdmittedAuthorization
-d2b_resource_api	pub const fn d2b_resource_api::PreparedStoreMutation::mutation(&self) -> &d2b_resource_store::StoreMutation
-d2b_resource_api	pub const fn d2b_resource_api::PreparedStoreMutation::resource_uid(&self) -> core::option::Option<&d2b_contracts::v3::identity::ResourceUid>
+d2b_resource_api	pub const fn d2b_resource_api::RedbBackend::new(d2b_resource_store_redb::RedbResourceStore) -> Self
 d2b_resource_api	pub d2b_resource_api::authz::AuthorizationRequest::method: d2b_resource_api::authz::ApiMethod
 d2b_resource_api	pub d2b_resource_api::authz::AuthorizationRequest::targets: alloc::vec::Vec<d2b_resource_api::authz::AuthorizationTarget>
 d2b_resource_api	pub d2b_resource_api::authz::AuthorizationRequest::zone: d2b_contracts::v3::identity::ZoneId
@@ -7721,14 +7707,12 @@ d2b_resource_api	pub d2b_resource_api::service::UpgradeResult::resource: d2b_res
 d2b_resource_api	pub d2b_resource_api::service::UpgradeResult::revision: d2b_contracts::v3::identity::ZoneRevision
 d2b_resource_api	pub enum d2b_resource_api::authz::BootstrapPhase
 d2b_resource_api	pub fn d2b_resource_api::AdmittedMutation::mutations(&self) -> &[d2b_resource_store::StoreMutation]
-d2b_resource_api	pub fn d2b_resource_api::ResourceStoreBackend::commit_verified(&self, d2b_resource_api::VerifiedMutation) -> impl core::future::future::Future<Output = core::result::Result<d2b_resource_store::StoreCommitResult, d2b_resource_store::error::StoreError>> + core::marker::Send
+d2b_resource_api	pub fn d2b_resource_api::ResourceStoreBackend::commit_verified(&self, d2b_resource_store::mutation_seal::SealedMutation) -> impl core::future::future::Future<Output = core::result::Result<d2b_resource_store::StoreCommitResult, d2b_resource_store::error::StoreError>> + core::marker::Send
 d2b_resource_api	pub fn d2b_resource_api::ResourceStoreBackend::get(&self, d2b_resource_store::StoreGetRequest) -> impl core::future::future::Future<Output = core::result::Result<d2b_resource_store::StoredResource, d2b_resource_store::error::StoreError>> + core::marker::Send
 d2b_resource_api	pub fn d2b_resource_api::ResourceStoreBackend::inspect_schema(&self, d2b_resource_store::StoreInspectSchemaRequest) -> impl core::future::future::Future<Output = core::result::Result<d2b_resource_store::StoredSchema, d2b_resource_store::error::StoreError>> + core::marker::Send
 d2b_resource_api	pub fn d2b_resource_api::ResourceStoreBackend::list(&self, d2b_resource_store::StoreListRequest) -> impl core::future::future::Future<Output = core::result::Result<d2b_resource_store::StoreListResult, d2b_resource_store::error::StoreError>> + core::marker::Send
 d2b_resource_api	pub fn d2b_resource_api::ResourceStoreBackend::resolve_ref(&self, d2b_resource_store::StoreResolveRequest) -> impl core::future::future::Future<Output = core::result::Result<d2b_resource_store::StoreResolvedIdentity, d2b_resource_store::error::StoreError>> + core::marker::Send
 d2b_resource_api	pub fn d2b_resource_api::ResourceStoreBackend::watch(&self, d2b_resource_store::StoreWatchRequest) -> impl core::future::future::Future<Output = core::result::Result<d2b_resource_store::StoreWatchReceipt, d2b_resource_store::error::StoreError>> + core::marker::Send
-d2b_resource_api	pub fn d2b_resource_api::VerifiedMutation::authorization(&self) -> &d2b_resource_store::AdmittedAuthorization
-d2b_resource_api	pub fn d2b_resource_api::VerifiedMutation::mutations(&self) -> &[d2b_resource_api::PreparedStoreMutation]
 d2b_resource_api	pub fn d2b_resource_api::adapter::UnregisteredBusAdapter<S, U>::bind_unregistered_session(alloc::sync::Arc<d2b_resource_api::service::ResourceService<S, U>>, d2b_resource_api::AuthenticatedSubjectContext) -> core::result::Result<Self, d2b_resource_api::adapter::AdapterBindingError>
 d2b_resource_api	pub fn d2b_resource_api::adapter::UnregisteredBusAdapter<S, U>::unregistered_client(&self) -> d2b_resource_api::client::UnregisteredResourceClient<S, U>
 d2b_resource_api	pub fn d2b_resource_api::authz::AuthorizationRequest::clone(&self) -> d2b_resource_api::authz::AuthorizationRequest
@@ -7756,6 +7740,7 @@ d2b_resource_api	pub fn d2b_resource_api::authz::NativeAuthorizer::authorize(&se
 d2b_resource_api	pub fn d2b_resource_api::authz::NativeAuthorizer::new(d2b_resource_api::authz::ApiCatalog, core::option::Option<d2b_resource_api::authz::PolicySet>) -> core::result::Result<Self, d2b_resource_api::authz::AuthorizationPolicyError>
 d2b_resource_api	pub fn d2b_resource_api::authz::NativeAuthorizer::positive_capabilities(&self, &d2b_contracts::v3::identity::AuthenticatedSubjectContext, &d2b_contracts::v3::identity::ZoneId, &d2b_resource_api::authz::AuthorizationState) -> core::result::Result<d2b_resource_api::authz::PositiveCapabilities, d2b_resource_api::authz::AuthorizationDenial>
 d2b_resource_api	pub fn d2b_resource_api::authz::NativeAuthorizer::replace_policy(&self, d2b_resource_api::authz::PolicySet, &d2b_resource_api::authz::AuthorizationState) -> core::result::Result<(), d2b_resource_api::authz::AuthorizationPolicyError>
+d2b_resource_api	pub fn d2b_resource_api::authz::NativeAuthorizer::take_store_seal(&self, d2b_resource_store::mutation_seal::StoreSealIdentity) -> core::result::Result<d2b_resource_store::mutation_seal::MutationSealAcceptor, d2b_resource_api::authz::StoreSealHandoffError>
 d2b_resource_api	pub fn d2b_resource_api::authz::PolicyRule::clone(&self) -> d2b_resource_api::authz::PolicyRule
 d2b_resource_api	pub fn d2b_resource_api::authz::PolicyRule::eq(&self, &d2b_resource_api::authz::PolicyRule) -> bool
 d2b_resource_api	pub fn d2b_resource_api::authz::PolicyRule::new(&d2b_resource_api::authz::ApiCatalog, impl core::iter::traits::collect::IntoIterator<Item = d2b_contracts::v3::identity::ResourceTypeName>, impl core::iter::traits::collect::IntoIterator<Item = d2b_resource_api::authz::ResourceVerb>, impl core::iter::traits::collect::IntoIterator<Item = d2b_resource_api::authz::SessionVerb>, impl core::iter::traits::collect::IntoIterator<Item = alloc::string::String>, impl core::iter::traits::collect::IntoIterator<Item = d2b_contracts::v3::identity::ResourceName>, impl core::iter::traits::collect::IntoIterator<Item = d2b_contracts::v3::identity::ZoneId>, impl core::iter::traits::collect::IntoIterator<Item = d2b_contracts::v3::resource_ref::ResourceRef>) -> core::result::Result<Self, d2b_resource_api::authz::AuthorizationPolicyError>
@@ -7774,11 +7759,10 @@ d2b_resource_api	pub fn d2b_resource_api::service::UpgradeResult::clone(&self) -
 d2b_resource_api	pub fn d2b_resource_api::service::UpgradeResult::eq(&self, &d2b_resource_api::service::UpgradeResult) -> bool
 d2b_resource_api	pub struct d2b_resource_api::AdmittedMutation
 d2b_resource_api	pub struct d2b_resource_api::AuthenticatedSubjectContext
-d2b_resource_api	pub struct d2b_resource_api::PreparedStoreMutation
+d2b_resource_api	pub struct d2b_resource_api::RedbBackend
 d2b_resource_api	pub struct d2b_resource_api::ResourceService<S, U>
 d2b_resource_api	pub struct d2b_resource_api::UnregisteredBusAdapter<S, U>
 d2b_resource_api	pub struct d2b_resource_api::UnregisteredResourceClient<S, U>
-d2b_resource_api	pub struct d2b_resource_api::VerifiedMutation
 d2b_resource_api	pub struct d2b_resource_api::adapter::UnregisteredBusAdapter<S, U>
 d2b_resource_api	pub struct d2b_resource_api::authz::AuthorizationGrant
 d2b_resource_api	pub struct d2b_resource_api::authz::AuthorizationRequest
@@ -7799,6 +7783,7 @@ d2b_resource_api	pub struct d2b_resource_api::service::TrustedRequest<T>
 d2b_resource_api	pub struct d2b_resource_api::service::UpgradeResult
 d2b_resource_api	pub trait d2b_resource_api::ResourceStoreBackend: core::marker::Send + core::marker::Sync
 d2b_resource_api	pub trait d2b_resource_api::service::UpgradeDispatcher: core::marker::Send + core::marker::Sync
+d2b_resource_api	pub use d2b_resource_api::PreparedStoreMutation
 d2b_resource_store	impl core::clone::Clone for d2b_resource_store::AdmittedAuthorization
 d2b_resource_store	impl core::clone::Clone for d2b_resource_store::AdmittedAuthorizationTarget
 d2b_resource_store	impl core::clone::Clone for d2b_resource_store::StoreCommitResult
@@ -7808,6 +7793,7 @@ d2b_resource_store	impl core::clone::Clone for d2b_resource_store::StoreMutation
 d2b_resource_store	impl core::clone::Clone for d2b_resource_store::StoreResolveRequest
 d2b_resource_store	impl core::clone::Clone for d2b_resource_store::StoreResolvedIdentity
 d2b_resource_store	impl core::clone::Clone for d2b_resource_store::StoredResource
+d2b_resource_store	impl core::clone::Clone for d2b_resource_store::mutation_seal::StoreSealIdentity
 d2b_resource_store	impl core::cmp::Eq for d2b_resource_store::AdmittedAuthorization
 d2b_resource_store	impl core::cmp::Eq for d2b_resource_store::AdmittedAuthorizationTarget
 d2b_resource_store	impl core::cmp::Eq for d2b_resource_store::StoreCommitResult
@@ -7828,6 +7814,7 @@ d2b_resource_store	impl core::cmp::PartialEq for d2b_resource_store::StoreResolv
 d2b_resource_store	impl core::cmp::PartialEq for d2b_resource_store::StoredResource
 d2b_resource_store	impl core::fmt::Debug for d2b_resource_store::AdmittedAuthorization
 d2b_resource_store	impl core::fmt::Debug for d2b_resource_store::AdmittedAuthorizationTarget
+d2b_resource_store	impl core::fmt::Debug for d2b_resource_store::PreparedStoreMutation
 d2b_resource_store	impl core::fmt::Debug for d2b_resource_store::StoreCommitResult
 d2b_resource_store	impl core::fmt::Debug for d2b_resource_store::StoreGetRequest
 d2b_resource_store	impl core::fmt::Debug for d2b_resource_store::StoreListResult
@@ -7837,6 +7824,7 @@ d2b_resource_store	impl core::fmt::Debug for d2b_resource_store::StoreResolvedId
 d2b_resource_store	impl core::fmt::Debug for d2b_resource_store::StoredResource
 d2b_resource_store	impl core::marker::Freeze for d2b_resource_store::AdmittedAuthorization
 d2b_resource_store	impl core::marker::Freeze for d2b_resource_store::AdmittedAuthorizationTarget
+d2b_resource_store	impl core::marker::Freeze for d2b_resource_store::PreparedStoreMutation
 d2b_resource_store	impl core::marker::Freeze for d2b_resource_store::StoreCommitResult
 d2b_resource_store	impl core::marker::Freeze for d2b_resource_store::StoreGetRequest
 d2b_resource_store	impl core::marker::Freeze for d2b_resource_store::StoreListResult
@@ -7844,8 +7832,15 @@ d2b_resource_store	impl core::marker::Freeze for d2b_resource_store::StoreMutati
 d2b_resource_store	impl core::marker::Freeze for d2b_resource_store::StoreResolveRequest
 d2b_resource_store	impl core::marker::Freeze for d2b_resource_store::StoreResolvedIdentity
 d2b_resource_store	impl core::marker::Freeze for d2b_resource_store::StoredResource
+d2b_resource_store	impl core::marker::Freeze for d2b_resource_store::mutation_seal::MutationSealAcceptor
+d2b_resource_store	impl core::marker::Freeze for d2b_resource_store::mutation_seal::MutationSealBody
+d2b_resource_store	impl core::marker::Freeze for d2b_resource_store::mutation_seal::MutationSealIssuer
+d2b_resource_store	impl core::marker::Freeze for d2b_resource_store::mutation_seal::OpenedMutation
+d2b_resource_store	impl core::marker::Freeze for d2b_resource_store::mutation_seal::SealedMutation
+d2b_resource_store	impl core::marker::Freeze for d2b_resource_store::mutation_seal::StoreSealIdentity
 d2b_resource_store	impl core::marker::Send for d2b_resource_store::AdmittedAuthorization
 d2b_resource_store	impl core::marker::Send for d2b_resource_store::AdmittedAuthorizationTarget
+d2b_resource_store	impl core::marker::Send for d2b_resource_store::PreparedStoreMutation
 d2b_resource_store	impl core::marker::Send for d2b_resource_store::StoreCommitResult
 d2b_resource_store	impl core::marker::Send for d2b_resource_store::StoreGetRequest
 d2b_resource_store	impl core::marker::Send for d2b_resource_store::StoreListResult
@@ -7853,6 +7848,12 @@ d2b_resource_store	impl core::marker::Send for d2b_resource_store::StoreMutation
 d2b_resource_store	impl core::marker::Send for d2b_resource_store::StoreResolveRequest
 d2b_resource_store	impl core::marker::Send for d2b_resource_store::StoreResolvedIdentity
 d2b_resource_store	impl core::marker::Send for d2b_resource_store::StoredResource
+d2b_resource_store	impl core::marker::Send for d2b_resource_store::mutation_seal::MutationSealAcceptor
+d2b_resource_store	impl core::marker::Send for d2b_resource_store::mutation_seal::MutationSealBody
+d2b_resource_store	impl core::marker::Send for d2b_resource_store::mutation_seal::MutationSealIssuer
+d2b_resource_store	impl core::marker::Send for d2b_resource_store::mutation_seal::OpenedMutation
+d2b_resource_store	impl core::marker::Send for d2b_resource_store::mutation_seal::SealedMutation
+d2b_resource_store	impl core::marker::Send for d2b_resource_store::mutation_seal::StoreSealIdentity
 d2b_resource_store	impl core::marker::StructuralPartialEq for d2b_resource_store::AdmittedAuthorization
 d2b_resource_store	impl core::marker::StructuralPartialEq for d2b_resource_store::AdmittedAuthorizationTarget
 d2b_resource_store	impl core::marker::StructuralPartialEq for d2b_resource_store::StoreCommitResult
@@ -7864,6 +7865,7 @@ d2b_resource_store	impl core::marker::StructuralPartialEq for d2b_resource_store
 d2b_resource_store	impl core::marker::StructuralPartialEq for d2b_resource_store::StoredResource
 d2b_resource_store	impl core::marker::Sync for d2b_resource_store::AdmittedAuthorization
 d2b_resource_store	impl core::marker::Sync for d2b_resource_store::AdmittedAuthorizationTarget
+d2b_resource_store	impl core::marker::Sync for d2b_resource_store::PreparedStoreMutation
 d2b_resource_store	impl core::marker::Sync for d2b_resource_store::StoreCommitResult
 d2b_resource_store	impl core::marker::Sync for d2b_resource_store::StoreGetRequest
 d2b_resource_store	impl core::marker::Sync for d2b_resource_store::StoreListResult
@@ -7871,8 +7873,15 @@ d2b_resource_store	impl core::marker::Sync for d2b_resource_store::StoreMutation
 d2b_resource_store	impl core::marker::Sync for d2b_resource_store::StoreResolveRequest
 d2b_resource_store	impl core::marker::Sync for d2b_resource_store::StoreResolvedIdentity
 d2b_resource_store	impl core::marker::Sync for d2b_resource_store::StoredResource
+d2b_resource_store	impl core::marker::Sync for d2b_resource_store::mutation_seal::MutationSealAcceptor
+d2b_resource_store	impl core::marker::Sync for d2b_resource_store::mutation_seal::MutationSealBody
+d2b_resource_store	impl core::marker::Sync for d2b_resource_store::mutation_seal::MutationSealIssuer
+d2b_resource_store	impl core::marker::Sync for d2b_resource_store::mutation_seal::OpenedMutation
+d2b_resource_store	impl core::marker::Sync for d2b_resource_store::mutation_seal::SealedMutation
+d2b_resource_store	impl core::marker::Sync for d2b_resource_store::mutation_seal::StoreSealIdentity
 d2b_resource_store	impl core::marker::Unpin for d2b_resource_store::AdmittedAuthorization
 d2b_resource_store	impl core::marker::Unpin for d2b_resource_store::AdmittedAuthorizationTarget
+d2b_resource_store	impl core::marker::Unpin for d2b_resource_store::PreparedStoreMutation
 d2b_resource_store	impl core::marker::Unpin for d2b_resource_store::StoreCommitResult
 d2b_resource_store	impl core::marker::Unpin for d2b_resource_store::StoreGetRequest
 d2b_resource_store	impl core::marker::Unpin for d2b_resource_store::StoreListResult
@@ -7880,8 +7889,15 @@ d2b_resource_store	impl core::marker::Unpin for d2b_resource_store::StoreMutatio
 d2b_resource_store	impl core::marker::Unpin for d2b_resource_store::StoreResolveRequest
 d2b_resource_store	impl core::marker::Unpin for d2b_resource_store::StoreResolvedIdentity
 d2b_resource_store	impl core::marker::Unpin for d2b_resource_store::StoredResource
+d2b_resource_store	impl core::marker::Unpin for d2b_resource_store::mutation_seal::MutationSealAcceptor
+d2b_resource_store	impl core::marker::Unpin for d2b_resource_store::mutation_seal::MutationSealBody
+d2b_resource_store	impl core::marker::Unpin for d2b_resource_store::mutation_seal::MutationSealIssuer
+d2b_resource_store	impl core::marker::Unpin for d2b_resource_store::mutation_seal::OpenedMutation
+d2b_resource_store	impl core::marker::Unpin for d2b_resource_store::mutation_seal::SealedMutation
+d2b_resource_store	impl core::marker::Unpin for d2b_resource_store::mutation_seal::StoreSealIdentity
 d2b_resource_store	impl core::marker::UnsafeUnpin for d2b_resource_store::AdmittedAuthorization
 d2b_resource_store	impl core::marker::UnsafeUnpin for d2b_resource_store::AdmittedAuthorizationTarget
+d2b_resource_store	impl core::marker::UnsafeUnpin for d2b_resource_store::PreparedStoreMutation
 d2b_resource_store	impl core::marker::UnsafeUnpin for d2b_resource_store::StoreCommitResult
 d2b_resource_store	impl core::marker::UnsafeUnpin for d2b_resource_store::StoreGetRequest
 d2b_resource_store	impl core::marker::UnsafeUnpin for d2b_resource_store::StoreListResult
@@ -7889,8 +7905,15 @@ d2b_resource_store	impl core::marker::UnsafeUnpin for d2b_resource_store::StoreM
 d2b_resource_store	impl core::marker::UnsafeUnpin for d2b_resource_store::StoreResolveRequest
 d2b_resource_store	impl core::marker::UnsafeUnpin for d2b_resource_store::StoreResolvedIdentity
 d2b_resource_store	impl core::marker::UnsafeUnpin for d2b_resource_store::StoredResource
+d2b_resource_store	impl core::marker::UnsafeUnpin for d2b_resource_store::mutation_seal::MutationSealAcceptor
+d2b_resource_store	impl core::marker::UnsafeUnpin for d2b_resource_store::mutation_seal::MutationSealBody
+d2b_resource_store	impl core::marker::UnsafeUnpin for d2b_resource_store::mutation_seal::MutationSealIssuer
+d2b_resource_store	impl core::marker::UnsafeUnpin for d2b_resource_store::mutation_seal::OpenedMutation
+d2b_resource_store	impl core::marker::UnsafeUnpin for d2b_resource_store::mutation_seal::SealedMutation
+d2b_resource_store	impl core::marker::UnsafeUnpin for d2b_resource_store::mutation_seal::StoreSealIdentity
 d2b_resource_store	impl core::panic::unwind_safe::RefUnwindSafe for d2b_resource_store::AdmittedAuthorization
 d2b_resource_store	impl core::panic::unwind_safe::RefUnwindSafe for d2b_resource_store::AdmittedAuthorizationTarget
+d2b_resource_store	impl core::panic::unwind_safe::RefUnwindSafe for d2b_resource_store::PreparedStoreMutation
 d2b_resource_store	impl core::panic::unwind_safe::RefUnwindSafe for d2b_resource_store::StoreCommitResult
 d2b_resource_store	impl core::panic::unwind_safe::RefUnwindSafe for d2b_resource_store::StoreGetRequest
 d2b_resource_store	impl core::panic::unwind_safe::RefUnwindSafe for d2b_resource_store::StoreListResult
@@ -7898,8 +7921,15 @@ d2b_resource_store	impl core::panic::unwind_safe::RefUnwindSafe for d2b_resource
 d2b_resource_store	impl core::panic::unwind_safe::RefUnwindSafe for d2b_resource_store::StoreResolveRequest
 d2b_resource_store	impl core::panic::unwind_safe::RefUnwindSafe for d2b_resource_store::StoreResolvedIdentity
 d2b_resource_store	impl core::panic::unwind_safe::RefUnwindSafe for d2b_resource_store::StoredResource
+d2b_resource_store	impl core::panic::unwind_safe::RefUnwindSafe for d2b_resource_store::mutation_seal::MutationSealAcceptor
+d2b_resource_store	impl core::panic::unwind_safe::RefUnwindSafe for d2b_resource_store::mutation_seal::MutationSealBody
+d2b_resource_store	impl core::panic::unwind_safe::RefUnwindSafe for d2b_resource_store::mutation_seal::MutationSealIssuer
+d2b_resource_store	impl core::panic::unwind_safe::RefUnwindSafe for d2b_resource_store::mutation_seal::OpenedMutation
+d2b_resource_store	impl core::panic::unwind_safe::RefUnwindSafe for d2b_resource_store::mutation_seal::SealedMutation
+d2b_resource_store	impl core::panic::unwind_safe::RefUnwindSafe for d2b_resource_store::mutation_seal::StoreSealIdentity
 d2b_resource_store	impl core::panic::unwind_safe::UnwindSafe for d2b_resource_store::AdmittedAuthorization
 d2b_resource_store	impl core::panic::unwind_safe::UnwindSafe for d2b_resource_store::AdmittedAuthorizationTarget
+d2b_resource_store	impl core::panic::unwind_safe::UnwindSafe for d2b_resource_store::PreparedStoreMutation
 d2b_resource_store	impl core::panic::unwind_safe::UnwindSafe for d2b_resource_store::StoreCommitResult
 d2b_resource_store	impl core::panic::unwind_safe::UnwindSafe for d2b_resource_store::StoreGetRequest
 d2b_resource_store	impl core::panic::unwind_safe::UnwindSafe for d2b_resource_store::StoreListResult
@@ -7907,8 +7937,20 @@ d2b_resource_store	impl core::panic::unwind_safe::UnwindSafe for d2b_resource_st
 d2b_resource_store	impl core::panic::unwind_safe::UnwindSafe for d2b_resource_store::StoreResolveRequest
 d2b_resource_store	impl core::panic::unwind_safe::UnwindSafe for d2b_resource_store::StoreResolvedIdentity
 d2b_resource_store	impl core::panic::unwind_safe::UnwindSafe for d2b_resource_store::StoredResource
+d2b_resource_store	impl core::panic::unwind_safe::UnwindSafe for d2b_resource_store::mutation_seal::MutationSealAcceptor
+d2b_resource_store	impl core::panic::unwind_safe::UnwindSafe for d2b_resource_store::mutation_seal::MutationSealBody
+d2b_resource_store	impl core::panic::unwind_safe::UnwindSafe for d2b_resource_store::mutation_seal::MutationSealIssuer
+d2b_resource_store	impl core::panic::unwind_safe::UnwindSafe for d2b_resource_store::mutation_seal::OpenedMutation
+d2b_resource_store	impl core::panic::unwind_safe::UnwindSafe for d2b_resource_store::mutation_seal::SealedMutation
+d2b_resource_store	impl core::panic::unwind_safe::UnwindSafe for d2b_resource_store::mutation_seal::StoreSealIdentity
+d2b_resource_store	impl d2b_resource_store::PreparedStoreMutation
+d2b_resource_store	impl d2b_resource_store::mutation_seal::MutationSealAcceptor
+d2b_resource_store	impl d2b_resource_store::mutation_seal::MutationSealIssuer
+d2b_resource_store	impl d2b_resource_store::mutation_seal::OpenedMutation
+d2b_resource_store	impl d2b_resource_store::mutation_seal::StoreSealIdentity
 d2b_resource_store	impl<T, U> core::convert::Into<U> for d2b_resource_store::AdmittedAuthorization where U: core::convert::From<T>
 d2b_resource_store	impl<T, U> core::convert::Into<U> for d2b_resource_store::AdmittedAuthorizationTarget where U: core::convert::From<T>
+d2b_resource_store	impl<T, U> core::convert::Into<U> for d2b_resource_store::PreparedStoreMutation where U: core::convert::From<T>
 d2b_resource_store	impl<T, U> core::convert::Into<U> for d2b_resource_store::StoreCommitResult where U: core::convert::From<T>
 d2b_resource_store	impl<T, U> core::convert::Into<U> for d2b_resource_store::StoreGetRequest where U: core::convert::From<T>
 d2b_resource_store	impl<T, U> core::convert::Into<U> for d2b_resource_store::StoreListResult where U: core::convert::From<T>
@@ -7916,8 +7958,15 @@ d2b_resource_store	impl<T, U> core::convert::Into<U> for d2b_resource_store::Sto
 d2b_resource_store	impl<T, U> core::convert::Into<U> for d2b_resource_store::StoreResolveRequest where U: core::convert::From<T>
 d2b_resource_store	impl<T, U> core::convert::Into<U> for d2b_resource_store::StoreResolvedIdentity where U: core::convert::From<T>
 d2b_resource_store	impl<T, U> core::convert::Into<U> for d2b_resource_store::StoredResource where U: core::convert::From<T>
+d2b_resource_store	impl<T, U> core::convert::Into<U> for d2b_resource_store::mutation_seal::MutationSealAcceptor where U: core::convert::From<T>
+d2b_resource_store	impl<T, U> core::convert::Into<U> for d2b_resource_store::mutation_seal::MutationSealBody where U: core::convert::From<T>
+d2b_resource_store	impl<T, U> core::convert::Into<U> for d2b_resource_store::mutation_seal::MutationSealIssuer where U: core::convert::From<T>
+d2b_resource_store	impl<T, U> core::convert::Into<U> for d2b_resource_store::mutation_seal::OpenedMutation where U: core::convert::From<T>
+d2b_resource_store	impl<T, U> core::convert::Into<U> for d2b_resource_store::mutation_seal::SealedMutation where U: core::convert::From<T>
+d2b_resource_store	impl<T, U> core::convert::Into<U> for d2b_resource_store::mutation_seal::StoreSealIdentity where U: core::convert::From<T>
 d2b_resource_store	impl<T, U> core::convert::TryFrom<U> for d2b_resource_store::AdmittedAuthorization where U: core::convert::Into<T>
 d2b_resource_store	impl<T, U> core::convert::TryFrom<U> for d2b_resource_store::AdmittedAuthorizationTarget where U: core::convert::Into<T>
+d2b_resource_store	impl<T, U> core::convert::TryFrom<U> for d2b_resource_store::PreparedStoreMutation where U: core::convert::Into<T>
 d2b_resource_store	impl<T, U> core::convert::TryFrom<U> for d2b_resource_store::StoreCommitResult where U: core::convert::Into<T>
 d2b_resource_store	impl<T, U> core::convert::TryFrom<U> for d2b_resource_store::StoreGetRequest where U: core::convert::Into<T>
 d2b_resource_store	impl<T, U> core::convert::TryFrom<U> for d2b_resource_store::StoreListResult where U: core::convert::Into<T>
@@ -7925,8 +7974,15 @@ d2b_resource_store	impl<T, U> core::convert::TryFrom<U> for d2b_resource_store::
 d2b_resource_store	impl<T, U> core::convert::TryFrom<U> for d2b_resource_store::StoreResolveRequest where U: core::convert::Into<T>
 d2b_resource_store	impl<T, U> core::convert::TryFrom<U> for d2b_resource_store::StoreResolvedIdentity where U: core::convert::Into<T>
 d2b_resource_store	impl<T, U> core::convert::TryFrom<U> for d2b_resource_store::StoredResource where U: core::convert::Into<T>
+d2b_resource_store	impl<T, U> core::convert::TryFrom<U> for d2b_resource_store::mutation_seal::MutationSealAcceptor where U: core::convert::Into<T>
+d2b_resource_store	impl<T, U> core::convert::TryFrom<U> for d2b_resource_store::mutation_seal::MutationSealBody where U: core::convert::Into<T>
+d2b_resource_store	impl<T, U> core::convert::TryFrom<U> for d2b_resource_store::mutation_seal::MutationSealIssuer where U: core::convert::Into<T>
+d2b_resource_store	impl<T, U> core::convert::TryFrom<U> for d2b_resource_store::mutation_seal::OpenedMutation where U: core::convert::Into<T>
+d2b_resource_store	impl<T, U> core::convert::TryFrom<U> for d2b_resource_store::mutation_seal::SealedMutation where U: core::convert::Into<T>
+d2b_resource_store	impl<T, U> core::convert::TryFrom<U> for d2b_resource_store::mutation_seal::StoreSealIdentity where U: core::convert::Into<T>
 d2b_resource_store	impl<T, U> core::convert::TryInto<U> for d2b_resource_store::AdmittedAuthorization where U: core::convert::TryFrom<T>
 d2b_resource_store	impl<T, U> core::convert::TryInto<U> for d2b_resource_store::AdmittedAuthorizationTarget where U: core::convert::TryFrom<T>
+d2b_resource_store	impl<T, U> core::convert::TryInto<U> for d2b_resource_store::PreparedStoreMutation where U: core::convert::TryFrom<T>
 d2b_resource_store	impl<T, U> core::convert::TryInto<U> for d2b_resource_store::StoreCommitResult where U: core::convert::TryFrom<T>
 d2b_resource_store	impl<T, U> core::convert::TryInto<U> for d2b_resource_store::StoreGetRequest where U: core::convert::TryFrom<T>
 d2b_resource_store	impl<T, U> core::convert::TryInto<U> for d2b_resource_store::StoreListResult where U: core::convert::TryFrom<T>
@@ -7934,6 +7990,12 @@ d2b_resource_store	impl<T, U> core::convert::TryInto<U> for d2b_resource_store::
 d2b_resource_store	impl<T, U> core::convert::TryInto<U> for d2b_resource_store::StoreResolveRequest where U: core::convert::TryFrom<T>
 d2b_resource_store	impl<T, U> core::convert::TryInto<U> for d2b_resource_store::StoreResolvedIdentity where U: core::convert::TryFrom<T>
 d2b_resource_store	impl<T, U> core::convert::TryInto<U> for d2b_resource_store::StoredResource where U: core::convert::TryFrom<T>
+d2b_resource_store	impl<T, U> core::convert::TryInto<U> for d2b_resource_store::mutation_seal::MutationSealAcceptor where U: core::convert::TryFrom<T>
+d2b_resource_store	impl<T, U> core::convert::TryInto<U> for d2b_resource_store::mutation_seal::MutationSealBody where U: core::convert::TryFrom<T>
+d2b_resource_store	impl<T, U> core::convert::TryInto<U> for d2b_resource_store::mutation_seal::MutationSealIssuer where U: core::convert::TryFrom<T>
+d2b_resource_store	impl<T, U> core::convert::TryInto<U> for d2b_resource_store::mutation_seal::OpenedMutation where U: core::convert::TryFrom<T>
+d2b_resource_store	impl<T, U> core::convert::TryInto<U> for d2b_resource_store::mutation_seal::SealedMutation where U: core::convert::TryFrom<T>
+d2b_resource_store	impl<T, U> core::convert::TryInto<U> for d2b_resource_store::mutation_seal::StoreSealIdentity where U: core::convert::TryFrom<T>
 d2b_resource_store	impl<T> alloc::borrow::ToOwned for d2b_resource_store::AdmittedAuthorization where T: core::clone::Clone
 d2b_resource_store	impl<T> alloc::borrow::ToOwned for d2b_resource_store::AdmittedAuthorizationTarget where T: core::clone::Clone
 d2b_resource_store	impl<T> alloc::borrow::ToOwned for d2b_resource_store::StoreCommitResult where T: core::clone::Clone
@@ -7943,8 +8005,10 @@ d2b_resource_store	impl<T> alloc::borrow::ToOwned for d2b_resource_store::StoreM
 d2b_resource_store	impl<T> alloc::borrow::ToOwned for d2b_resource_store::StoreResolveRequest where T: core::clone::Clone
 d2b_resource_store	impl<T> alloc::borrow::ToOwned for d2b_resource_store::StoreResolvedIdentity where T: core::clone::Clone
 d2b_resource_store	impl<T> alloc::borrow::ToOwned for d2b_resource_store::StoredResource where T: core::clone::Clone
+d2b_resource_store	impl<T> alloc::borrow::ToOwned for d2b_resource_store::mutation_seal::StoreSealIdentity where T: core::clone::Clone
 d2b_resource_store	impl<T> core::any::Any for d2b_resource_store::AdmittedAuthorization where T: 'static + ?core::marker::Sized
 d2b_resource_store	impl<T> core::any::Any for d2b_resource_store::AdmittedAuthorizationTarget where T: 'static + ?core::marker::Sized
+d2b_resource_store	impl<T> core::any::Any for d2b_resource_store::PreparedStoreMutation where T: 'static + ?core::marker::Sized
 d2b_resource_store	impl<T> core::any::Any for d2b_resource_store::StoreCommitResult where T: 'static + ?core::marker::Sized
 d2b_resource_store	impl<T> core::any::Any for d2b_resource_store::StoreGetRequest where T: 'static + ?core::marker::Sized
 d2b_resource_store	impl<T> core::any::Any for d2b_resource_store::StoreListResult where T: 'static + ?core::marker::Sized
@@ -7952,8 +8016,15 @@ d2b_resource_store	impl<T> core::any::Any for d2b_resource_store::StoreMutation 
 d2b_resource_store	impl<T> core::any::Any for d2b_resource_store::StoreResolveRequest where T: 'static + ?core::marker::Sized
 d2b_resource_store	impl<T> core::any::Any for d2b_resource_store::StoreResolvedIdentity where T: 'static + ?core::marker::Sized
 d2b_resource_store	impl<T> core::any::Any for d2b_resource_store::StoredResource where T: 'static + ?core::marker::Sized
+d2b_resource_store	impl<T> core::any::Any for d2b_resource_store::mutation_seal::MutationSealAcceptor where T: 'static + ?core::marker::Sized
+d2b_resource_store	impl<T> core::any::Any for d2b_resource_store::mutation_seal::MutationSealBody where T: 'static + ?core::marker::Sized
+d2b_resource_store	impl<T> core::any::Any for d2b_resource_store::mutation_seal::MutationSealIssuer where T: 'static + ?core::marker::Sized
+d2b_resource_store	impl<T> core::any::Any for d2b_resource_store::mutation_seal::OpenedMutation where T: 'static + ?core::marker::Sized
+d2b_resource_store	impl<T> core::any::Any for d2b_resource_store::mutation_seal::SealedMutation where T: 'static + ?core::marker::Sized
+d2b_resource_store	impl<T> core::any::Any for d2b_resource_store::mutation_seal::StoreSealIdentity where T: 'static + ?core::marker::Sized
 d2b_resource_store	impl<T> core::borrow::Borrow<T> for d2b_resource_store::AdmittedAuthorization where T: ?core::marker::Sized
 d2b_resource_store	impl<T> core::borrow::Borrow<T> for d2b_resource_store::AdmittedAuthorizationTarget where T: ?core::marker::Sized
+d2b_resource_store	impl<T> core::borrow::Borrow<T> for d2b_resource_store::PreparedStoreMutation where T: ?core::marker::Sized
 d2b_resource_store	impl<T> core::borrow::Borrow<T> for d2b_resource_store::StoreCommitResult where T: ?core::marker::Sized
 d2b_resource_store	impl<T> core::borrow::Borrow<T> for d2b_resource_store::StoreGetRequest where T: ?core::marker::Sized
 d2b_resource_store	impl<T> core::borrow::Borrow<T> for d2b_resource_store::StoreListResult where T: ?core::marker::Sized
@@ -7961,8 +8032,15 @@ d2b_resource_store	impl<T> core::borrow::Borrow<T> for d2b_resource_store::Store
 d2b_resource_store	impl<T> core::borrow::Borrow<T> for d2b_resource_store::StoreResolveRequest where T: ?core::marker::Sized
 d2b_resource_store	impl<T> core::borrow::Borrow<T> for d2b_resource_store::StoreResolvedIdentity where T: ?core::marker::Sized
 d2b_resource_store	impl<T> core::borrow::Borrow<T> for d2b_resource_store::StoredResource where T: ?core::marker::Sized
+d2b_resource_store	impl<T> core::borrow::Borrow<T> for d2b_resource_store::mutation_seal::MutationSealAcceptor where T: ?core::marker::Sized
+d2b_resource_store	impl<T> core::borrow::Borrow<T> for d2b_resource_store::mutation_seal::MutationSealBody where T: ?core::marker::Sized
+d2b_resource_store	impl<T> core::borrow::Borrow<T> for d2b_resource_store::mutation_seal::MutationSealIssuer where T: ?core::marker::Sized
+d2b_resource_store	impl<T> core::borrow::Borrow<T> for d2b_resource_store::mutation_seal::OpenedMutation where T: ?core::marker::Sized
+d2b_resource_store	impl<T> core::borrow::Borrow<T> for d2b_resource_store::mutation_seal::SealedMutation where T: ?core::marker::Sized
+d2b_resource_store	impl<T> core::borrow::Borrow<T> for d2b_resource_store::mutation_seal::StoreSealIdentity where T: ?core::marker::Sized
 d2b_resource_store	impl<T> core::borrow::BorrowMut<T> for d2b_resource_store::AdmittedAuthorization where T: ?core::marker::Sized
 d2b_resource_store	impl<T> core::borrow::BorrowMut<T> for d2b_resource_store::AdmittedAuthorizationTarget where T: ?core::marker::Sized
+d2b_resource_store	impl<T> core::borrow::BorrowMut<T> for d2b_resource_store::PreparedStoreMutation where T: ?core::marker::Sized
 d2b_resource_store	impl<T> core::borrow::BorrowMut<T> for d2b_resource_store::StoreCommitResult where T: ?core::marker::Sized
 d2b_resource_store	impl<T> core::borrow::BorrowMut<T> for d2b_resource_store::StoreGetRequest where T: ?core::marker::Sized
 d2b_resource_store	impl<T> core::borrow::BorrowMut<T> for d2b_resource_store::StoreListResult where T: ?core::marker::Sized
@@ -7970,6 +8048,12 @@ d2b_resource_store	impl<T> core::borrow::BorrowMut<T> for d2b_resource_store::St
 d2b_resource_store	impl<T> core::borrow::BorrowMut<T> for d2b_resource_store::StoreResolveRequest where T: ?core::marker::Sized
 d2b_resource_store	impl<T> core::borrow::BorrowMut<T> for d2b_resource_store::StoreResolvedIdentity where T: ?core::marker::Sized
 d2b_resource_store	impl<T> core::borrow::BorrowMut<T> for d2b_resource_store::StoredResource where T: ?core::marker::Sized
+d2b_resource_store	impl<T> core::borrow::BorrowMut<T> for d2b_resource_store::mutation_seal::MutationSealAcceptor where T: ?core::marker::Sized
+d2b_resource_store	impl<T> core::borrow::BorrowMut<T> for d2b_resource_store::mutation_seal::MutationSealBody where T: ?core::marker::Sized
+d2b_resource_store	impl<T> core::borrow::BorrowMut<T> for d2b_resource_store::mutation_seal::MutationSealIssuer where T: ?core::marker::Sized
+d2b_resource_store	impl<T> core::borrow::BorrowMut<T> for d2b_resource_store::mutation_seal::OpenedMutation where T: ?core::marker::Sized
+d2b_resource_store	impl<T> core::borrow::BorrowMut<T> for d2b_resource_store::mutation_seal::SealedMutation where T: ?core::marker::Sized
+d2b_resource_store	impl<T> core::borrow::BorrowMut<T> for d2b_resource_store::mutation_seal::StoreSealIdentity where T: ?core::marker::Sized
 d2b_resource_store	impl<T> core::clone::CloneToUninit for d2b_resource_store::AdmittedAuthorization where T: core::clone::Clone
 d2b_resource_store	impl<T> core::clone::CloneToUninit for d2b_resource_store::AdmittedAuthorizationTarget where T: core::clone::Clone
 d2b_resource_store	impl<T> core::clone::CloneToUninit for d2b_resource_store::StoreCommitResult where T: core::clone::Clone
@@ -7979,8 +8063,10 @@ d2b_resource_store	impl<T> core::clone::CloneToUninit for d2b_resource_store::St
 d2b_resource_store	impl<T> core::clone::CloneToUninit for d2b_resource_store::StoreResolveRequest where T: core::clone::Clone
 d2b_resource_store	impl<T> core::clone::CloneToUninit for d2b_resource_store::StoreResolvedIdentity where T: core::clone::Clone
 d2b_resource_store	impl<T> core::clone::CloneToUninit for d2b_resource_store::StoredResource where T: core::clone::Clone
+d2b_resource_store	impl<T> core::clone::CloneToUninit for d2b_resource_store::mutation_seal::StoreSealIdentity where T: core::clone::Clone
 d2b_resource_store	impl<T> core::convert::From<T> for d2b_resource_store::AdmittedAuthorization
 d2b_resource_store	impl<T> core::convert::From<T> for d2b_resource_store::AdmittedAuthorizationTarget
+d2b_resource_store	impl<T> core::convert::From<T> for d2b_resource_store::PreparedStoreMutation
 d2b_resource_store	impl<T> core::convert::From<T> for d2b_resource_store::StoreCommitResult
 d2b_resource_store	impl<T> core::convert::From<T> for d2b_resource_store::StoreGetRequest
 d2b_resource_store	impl<T> core::convert::From<T> for d2b_resource_store::StoreListResult
@@ -7988,6 +8074,12 @@ d2b_resource_store	impl<T> core::convert::From<T> for d2b_resource_store::StoreM
 d2b_resource_store	impl<T> core::convert::From<T> for d2b_resource_store::StoreResolveRequest
 d2b_resource_store	impl<T> core::convert::From<T> for d2b_resource_store::StoreResolvedIdentity
 d2b_resource_store	impl<T> core::convert::From<T> for d2b_resource_store::StoredResource
+d2b_resource_store	impl<T> core::convert::From<T> for d2b_resource_store::mutation_seal::MutationSealAcceptor
+d2b_resource_store	impl<T> core::convert::From<T> for d2b_resource_store::mutation_seal::MutationSealBody
+d2b_resource_store	impl<T> core::convert::From<T> for d2b_resource_store::mutation_seal::MutationSealIssuer
+d2b_resource_store	impl<T> core::convert::From<T> for d2b_resource_store::mutation_seal::OpenedMutation
+d2b_resource_store	impl<T> core::convert::From<T> for d2b_resource_store::mutation_seal::SealedMutation
+d2b_resource_store	impl<T> core::convert::From<T> for d2b_resource_store::mutation_seal::StoreSealIdentity
 d2b_resource_store	impl<T> dyn_clone::DynClone for d2b_resource_store::AdmittedAuthorization where T: core::clone::Clone
 d2b_resource_store	impl<T> dyn_clone::DynClone for d2b_resource_store::AdmittedAuthorizationTarget where T: core::clone::Clone
 d2b_resource_store	impl<T> dyn_clone::DynClone for d2b_resource_store::StoreCommitResult where T: core::clone::Clone
@@ -7997,8 +8089,10 @@ d2b_resource_store	impl<T> dyn_clone::DynClone for d2b_resource_store::StoreMuta
 d2b_resource_store	impl<T> dyn_clone::DynClone for d2b_resource_store::StoreResolveRequest where T: core::clone::Clone
 d2b_resource_store	impl<T> dyn_clone::DynClone for d2b_resource_store::StoreResolvedIdentity where T: core::clone::Clone
 d2b_resource_store	impl<T> dyn_clone::DynClone for d2b_resource_store::StoredResource where T: core::clone::Clone
+d2b_resource_store	impl<T> dyn_clone::DynClone for d2b_resource_store::mutation_seal::StoreSealIdentity where T: core::clone::Clone
 d2b_resource_store	impl<T> typenum::type_operators::Same for d2b_resource_store::AdmittedAuthorization
 d2b_resource_store	impl<T> typenum::type_operators::Same for d2b_resource_store::AdmittedAuthorizationTarget
+d2b_resource_store	impl<T> typenum::type_operators::Same for d2b_resource_store::PreparedStoreMutation
 d2b_resource_store	impl<T> typenum::type_operators::Same for d2b_resource_store::StoreCommitResult
 d2b_resource_store	impl<T> typenum::type_operators::Same for d2b_resource_store::StoreGetRequest
 d2b_resource_store	impl<T> typenum::type_operators::Same for d2b_resource_store::StoreListResult
@@ -8006,6 +8100,15 @@ d2b_resource_store	impl<T> typenum::type_operators::Same for d2b_resource_store:
 d2b_resource_store	impl<T> typenum::type_operators::Same for d2b_resource_store::StoreResolveRequest
 d2b_resource_store	impl<T> typenum::type_operators::Same for d2b_resource_store::StoreResolvedIdentity
 d2b_resource_store	impl<T> typenum::type_operators::Same for d2b_resource_store::StoredResource
+d2b_resource_store	impl<T> typenum::type_operators::Same for d2b_resource_store::mutation_seal::MutationSealAcceptor
+d2b_resource_store	impl<T> typenum::type_operators::Same for d2b_resource_store::mutation_seal::MutationSealBody
+d2b_resource_store	impl<T> typenum::type_operators::Same for d2b_resource_store::mutation_seal::MutationSealIssuer
+d2b_resource_store	impl<T> typenum::type_operators::Same for d2b_resource_store::mutation_seal::OpenedMutation
+d2b_resource_store	impl<T> typenum::type_operators::Same for d2b_resource_store::mutation_seal::SealedMutation
+d2b_resource_store	impl<T> typenum::type_operators::Same for d2b_resource_store::mutation_seal::StoreSealIdentity
+d2b_resource_store	pub const fn d2b_resource_store::PreparedStoreMutation::mutation(&self) -> &d2b_resource_store::StoreMutation
+d2b_resource_store	pub const fn d2b_resource_store::PreparedStoreMutation::new(d2b_resource_store::StoreMutation, core::option::Option<d2b_contracts::v3::identity::ResourceUid>, core::option::Option<alloc::string::String>) -> Self
+d2b_resource_store	pub const fn d2b_resource_store::PreparedStoreMutation::resource_uid(&self) -> core::option::Option<&d2b_contracts::v3::identity::ResourceUid>
 d2b_resource_store	pub d2b_resource_store::AdmittedAuthorization::subject_ref: d2b_contracts::v3::resource_ref::ResourceRef
 d2b_resource_store	pub d2b_resource_store::AdmittedAuthorization::subject_uid: d2b_contracts::v3::identity::ResourceUid
 d2b_resource_store	pub d2b_resource_store::AdmittedAuthorization::targets: alloc::vec::Vec<d2b_resource_store::AdmittedAuthorizationTarget>
@@ -8015,6 +8118,10 @@ d2b_resource_store	pub d2b_resource_store::AdmittedAuthorizationTarget::resource
 d2b_resource_store	pub d2b_resource_store::AdmittedAuthorizationTarget::resource_type: d2b_contracts::v3::identity::ResourceTypeName
 d2b_resource_store	pub d2b_resource_store::AdmittedAuthorizationTarget::subresource: core::option::Option<alloc::string::String>
 d2b_resource_store	pub d2b_resource_store::AdmittedAuthorizationTarget::verb: d2b_resource_store::AdmittedVerb
+d2b_resource_store	pub d2b_resource_store::MutationSealBody::authorization: d2b_resource_store::AdmittedAuthorization
+d2b_resource_store	pub d2b_resource_store::MutationSealBody::mutations: alloc::vec::Vec<d2b_resource_store::PreparedStoreMutation>
+d2b_resource_store	pub d2b_resource_store::MutationSealBody::operation: d2b_resource_store::StoreOperationContext
+d2b_resource_store	pub d2b_resource_store::MutationSealBody::policy_snapshot: d2b_resource_store::PolicySnapshot
 d2b_resource_store	pub d2b_resource_store::StoreCommitResult::resources: alloc::vec::Vec<d2b_resource_store::StoredResource>
 d2b_resource_store	pub d2b_resource_store::StoreCommitResult::revision: d2b_contracts::v3::identity::ZoneRevision
 d2b_resource_store	pub d2b_resource_store::StoreGetRequest::expected_uid: core::option::Option<d2b_contracts::v3::identity::ResourceUid>
@@ -8053,6 +8160,10 @@ d2b_resource_store	pub d2b_resource_store::StoredResource::resource_ref: d2b_con
 d2b_resource_store	pub d2b_resource_store::StoredResource::revision: d2b_contracts::v3::identity::ZoneRevision
 d2b_resource_store	pub d2b_resource_store::StoredResource::uid: d2b_contracts::v3::identity::ResourceUid
 d2b_resource_store	pub d2b_resource_store::StoredResource::zone: d2b_contracts::v3::identity::ZoneId
+d2b_resource_store	pub d2b_resource_store::mutation_seal::MutationSealBody::authorization: d2b_resource_store::AdmittedAuthorization
+d2b_resource_store	pub d2b_resource_store::mutation_seal::MutationSealBody::mutations: alloc::vec::Vec<d2b_resource_store::PreparedStoreMutation>
+d2b_resource_store	pub d2b_resource_store::mutation_seal::MutationSealBody::operation: d2b_resource_store::StoreOperationContext
+d2b_resource_store	pub d2b_resource_store::mutation_seal::MutationSealBody::policy_snapshot: d2b_resource_store::PolicySnapshot
 d2b_resource_store	pub fn d2b_resource_store::AdmittedAuthorization::clone(&self) -> d2b_resource_store::AdmittedAuthorization
 d2b_resource_store	pub fn d2b_resource_store::AdmittedAuthorization::eq(&self, &d2b_resource_store::AdmittedAuthorization) -> bool
 d2b_resource_store	pub fn d2b_resource_store::AdmittedAuthorizationTarget::clone(&self) -> d2b_resource_store::AdmittedAuthorizationTarget
@@ -8071,116 +8182,271 @@ d2b_resource_store	pub fn d2b_resource_store::StoreResolvedIdentity::clone(&self
 d2b_resource_store	pub fn d2b_resource_store::StoreResolvedIdentity::eq(&self, &d2b_resource_store::StoreResolvedIdentity) -> bool
 d2b_resource_store	pub fn d2b_resource_store::StoredResource::clone(&self) -> d2b_resource_store::StoredResource
 d2b_resource_store	pub fn d2b_resource_store::StoredResource::eq(&self, &d2b_resource_store::StoredResource) -> bool
+d2b_resource_store	pub fn d2b_resource_store::mutation_seal::MutationSealAcceptor::diagnose(&self, &d2b_resource_store::mutation_seal::StoreSealIdentity) -> core::result::Result<(), d2b_resource_store::error::SealIdentityMismatch>
+d2b_resource_store	pub fn d2b_resource_store::mutation_seal::MutationSealAcceptor::open(&self, d2b_resource_store::mutation_seal::SealedMutation) -> core::result::Result<d2b_resource_store::mutation_seal::OpenedMutation, d2b_resource_store::error::StoreError>
+d2b_resource_store	pub fn d2b_resource_store::mutation_seal::MutationSealIssuer::seal(&self, d2b_resource_store::mutation_seal::MutationSealBody) -> d2b_resource_store::mutation_seal::SealedMutation
+d2b_resource_store	pub fn d2b_resource_store::mutation_seal::OpenedMutation::body(&self) -> &d2b_resource_store::mutation_seal::MutationSealBody
+d2b_resource_store	pub fn d2b_resource_store::mutation_seal::OpenedMutation::into_body(self) -> d2b_resource_store::mutation_seal::MutationSealBody
+d2b_resource_store	pub fn d2b_resource_store::mutation_seal::StoreSealIdentity::clone(&self) -> d2b_resource_store::mutation_seal::StoreSealIdentity
+d2b_resource_store	pub fn d2b_resource_store::mutation_seal::StoreSealIdentity::new(d2b_resource_store::error::StoreSlot, d2b_contracts::v3::identity::ZoneId, d2b_contracts::v3::identity::ResourceUid) -> Self
+d2b_resource_store	pub fn d2b_resource_store::mutation_seal::mutation_seal_pair(d2b_resource_store::mutation_seal::StoreSealIdentity) -> (d2b_resource_store::mutation_seal::MutationSealIssuer, d2b_resource_store::mutation_seal::MutationSealAcceptor)
 d2b_resource_store	pub struct d2b_resource_store::AdmittedAuthorization
 d2b_resource_store	pub struct d2b_resource_store::AdmittedAuthorizationTarget
+d2b_resource_store	pub struct d2b_resource_store::MutationSealBody
+d2b_resource_store	pub struct d2b_resource_store::OpenedMutation
+d2b_resource_store	pub struct d2b_resource_store::PreparedStoreMutation
+d2b_resource_store	pub struct d2b_resource_store::SealedMutation
 d2b_resource_store	pub struct d2b_resource_store::StoreCommitResult
 d2b_resource_store	pub struct d2b_resource_store::StoreGetRequest
 d2b_resource_store	pub struct d2b_resource_store::StoreListResult
 d2b_resource_store	pub struct d2b_resource_store::StoreMutation
 d2b_resource_store	pub struct d2b_resource_store::StoreResolveRequest
 d2b_resource_store	pub struct d2b_resource_store::StoreResolvedIdentity
+d2b_resource_store	pub struct d2b_resource_store::StoreSealIdentity
 d2b_resource_store	pub struct d2b_resource_store::StoredResource
+d2b_resource_store	pub struct d2b_resource_store::mutation_seal::MutationSealAcceptor
+d2b_resource_store	pub struct d2b_resource_store::mutation_seal::MutationSealBody
+d2b_resource_store	pub struct d2b_resource_store::mutation_seal::MutationSealIssuer
+d2b_resource_store	pub struct d2b_resource_store::mutation_seal::OpenedMutation
+d2b_resource_store	pub struct d2b_resource_store::mutation_seal::SealedMutation
+d2b_resource_store	pub struct d2b_resource_store::mutation_seal::StoreSealIdentity
+d2b_resource_store_redb	impl !core::marker::Freeze for d2b_resource_store_redb::RedbResourceStore
+d2b_resource_store_redb	impl !core::panic::unwind_safe::RefUnwindSafe for d2b_resource_store_redb::RedbResourceStore
+d2b_resource_store_redb	impl !core::panic::unwind_safe::UnwindSafe for d2b_resource_store_redb::RedbResourceStore
+d2b_resource_store_redb	impl core::clone::Clone for d2b_resource_store_redb::ChangeBatch
+d2b_resource_store_redb	impl core::clone::Clone for d2b_resource_store_redb::ChangeEntry
+d2b_resource_store_redb	impl core::clone::Clone for d2b_resource_store_redb::StoreIdentity
+d2b_resource_store_redb	impl core::clone::Clone for d2b_resource_store_redb::actor::SharedChangeBatch
 d2b_resource_store_redb	impl core::clone::Clone for d2b_resource_store_redb::ownership::OwnerBinding
 d2b_resource_store_redb	impl core::clone::Clone for d2b_resource_store_redb::ownership::OwnerIndex
 d2b_resource_store_redb	impl core::clone::Clone for d2b_resource_store_redb::ownership::OwnerIndexMutation
 d2b_resource_store_redb	impl core::clone::Clone for d2b_resource_store_redb::ownership::ReverseOwnerEntry
+d2b_resource_store_redb	impl core::cmp::Eq for d2b_resource_store_redb::ChangeBatch
+d2b_resource_store_redb	impl core::cmp::Eq for d2b_resource_store_redb::ChangeEntry
+d2b_resource_store_redb	impl core::cmp::Eq for d2b_resource_store_redb::StoreIdentity
 d2b_resource_store_redb	impl core::cmp::Eq for d2b_resource_store_redb::ownership::OwnerBinding
 d2b_resource_store_redb	impl core::cmp::Eq for d2b_resource_store_redb::ownership::OwnerIndex
 d2b_resource_store_redb	impl core::cmp::Eq for d2b_resource_store_redb::ownership::OwnerIndexMutation
 d2b_resource_store_redb	impl core::cmp::Eq for d2b_resource_store_redb::ownership::ReverseOwnerEntry
+d2b_resource_store_redb	impl core::cmp::PartialEq for d2b_resource_store_redb::ChangeBatch
+d2b_resource_store_redb	impl core::cmp::PartialEq for d2b_resource_store_redb::ChangeEntry
+d2b_resource_store_redb	impl core::cmp::PartialEq for d2b_resource_store_redb::StoreIdentity
 d2b_resource_store_redb	impl core::cmp::PartialEq for d2b_resource_store_redb::ownership::OwnerBinding
 d2b_resource_store_redb	impl core::cmp::PartialEq for d2b_resource_store_redb::ownership::OwnerIndex
 d2b_resource_store_redb	impl core::cmp::PartialEq for d2b_resource_store_redb::ownership::OwnerIndexMutation
 d2b_resource_store_redb	impl core::cmp::PartialEq for d2b_resource_store_redb::ownership::ReverseOwnerEntry
 d2b_resource_store_redb	impl core::default::Default for d2b_resource_store_redb::ownership::OwnerIndex
+d2b_resource_store_redb	impl core::fmt::Debug for d2b_resource_store_redb::ChangeBatch
+d2b_resource_store_redb	impl core::fmt::Debug for d2b_resource_store_redb::ChangeEntry
+d2b_resource_store_redb	impl core::fmt::Debug for d2b_resource_store_redb::RedbResourceStore
+d2b_resource_store_redb	impl core::fmt::Debug for d2b_resource_store_redb::StoreIdentity
+d2b_resource_store_redb	impl core::fmt::Debug for d2b_resource_store_redb::actor::SharedChangeBatch
 d2b_resource_store_redb	impl core::fmt::Debug for d2b_resource_store_redb::ownership::OwnerBinding
 d2b_resource_store_redb	impl core::fmt::Debug for d2b_resource_store_redb::ownership::OwnerIndex
 d2b_resource_store_redb	impl core::fmt::Debug for d2b_resource_store_redb::ownership::OwnerIndexMutation
 d2b_resource_store_redb	impl core::fmt::Debug for d2b_resource_store_redb::ownership::ReverseOwnerEntry
+d2b_resource_store_redb	impl core::marker::Freeze for d2b_resource_store_redb::ChangeBatch
+d2b_resource_store_redb	impl core::marker::Freeze for d2b_resource_store_redb::ChangeEntry
+d2b_resource_store_redb	impl core::marker::Freeze for d2b_resource_store_redb::StoreIdentity
+d2b_resource_store_redb	impl core::marker::Freeze for d2b_resource_store_redb::actor::SharedChangeBatch
 d2b_resource_store_redb	impl core::marker::Freeze for d2b_resource_store_redb::ownership::OwnerBinding
 d2b_resource_store_redb	impl core::marker::Freeze for d2b_resource_store_redb::ownership::OwnerIndex
 d2b_resource_store_redb	impl core::marker::Freeze for d2b_resource_store_redb::ownership::OwnerIndexMutation
 d2b_resource_store_redb	impl core::marker::Freeze for d2b_resource_store_redb::ownership::ReverseOwnerEntry
+d2b_resource_store_redb	impl core::marker::Send for d2b_resource_store_redb::ChangeBatch
+d2b_resource_store_redb	impl core::marker::Send for d2b_resource_store_redb::ChangeEntry
+d2b_resource_store_redb	impl core::marker::Send for d2b_resource_store_redb::RedbResourceStore
+d2b_resource_store_redb	impl core::marker::Send for d2b_resource_store_redb::StoreIdentity
+d2b_resource_store_redb	impl core::marker::Send for d2b_resource_store_redb::actor::SharedChangeBatch
 d2b_resource_store_redb	impl core::marker::Send for d2b_resource_store_redb::ownership::OwnerBinding
 d2b_resource_store_redb	impl core::marker::Send for d2b_resource_store_redb::ownership::OwnerIndex
 d2b_resource_store_redb	impl core::marker::Send for d2b_resource_store_redb::ownership::OwnerIndexMutation
 d2b_resource_store_redb	impl core::marker::Send for d2b_resource_store_redb::ownership::ReverseOwnerEntry
+d2b_resource_store_redb	impl core::marker::StructuralPartialEq for d2b_resource_store_redb::ChangeBatch
+d2b_resource_store_redb	impl core::marker::StructuralPartialEq for d2b_resource_store_redb::ChangeEntry
+d2b_resource_store_redb	impl core::marker::StructuralPartialEq for d2b_resource_store_redb::StoreIdentity
 d2b_resource_store_redb	impl core::marker::StructuralPartialEq for d2b_resource_store_redb::ownership::OwnerBinding
 d2b_resource_store_redb	impl core::marker::StructuralPartialEq for d2b_resource_store_redb::ownership::OwnerIndex
 d2b_resource_store_redb	impl core::marker::StructuralPartialEq for d2b_resource_store_redb::ownership::OwnerIndexMutation
 d2b_resource_store_redb	impl core::marker::StructuralPartialEq for d2b_resource_store_redb::ownership::ReverseOwnerEntry
+d2b_resource_store_redb	impl core::marker::Sync for d2b_resource_store_redb::ChangeBatch
+d2b_resource_store_redb	impl core::marker::Sync for d2b_resource_store_redb::ChangeEntry
+d2b_resource_store_redb	impl core::marker::Sync for d2b_resource_store_redb::RedbResourceStore
+d2b_resource_store_redb	impl core::marker::Sync for d2b_resource_store_redb::StoreIdentity
+d2b_resource_store_redb	impl core::marker::Sync for d2b_resource_store_redb::actor::SharedChangeBatch
 d2b_resource_store_redb	impl core::marker::Sync for d2b_resource_store_redb::ownership::OwnerBinding
 d2b_resource_store_redb	impl core::marker::Sync for d2b_resource_store_redb::ownership::OwnerIndex
 d2b_resource_store_redb	impl core::marker::Sync for d2b_resource_store_redb::ownership::OwnerIndexMutation
 d2b_resource_store_redb	impl core::marker::Sync for d2b_resource_store_redb::ownership::ReverseOwnerEntry
+d2b_resource_store_redb	impl core::marker::Unpin for d2b_resource_store_redb::ChangeBatch
+d2b_resource_store_redb	impl core::marker::Unpin for d2b_resource_store_redb::ChangeEntry
+d2b_resource_store_redb	impl core::marker::Unpin for d2b_resource_store_redb::RedbResourceStore
+d2b_resource_store_redb	impl core::marker::Unpin for d2b_resource_store_redb::StoreIdentity
+d2b_resource_store_redb	impl core::marker::Unpin for d2b_resource_store_redb::actor::SharedChangeBatch
 d2b_resource_store_redb	impl core::marker::Unpin for d2b_resource_store_redb::ownership::OwnerBinding
 d2b_resource_store_redb	impl core::marker::Unpin for d2b_resource_store_redb::ownership::OwnerIndex
 d2b_resource_store_redb	impl core::marker::Unpin for d2b_resource_store_redb::ownership::OwnerIndexMutation
 d2b_resource_store_redb	impl core::marker::Unpin for d2b_resource_store_redb::ownership::ReverseOwnerEntry
+d2b_resource_store_redb	impl core::marker::UnsafeUnpin for d2b_resource_store_redb::ChangeBatch
+d2b_resource_store_redb	impl core::marker::UnsafeUnpin for d2b_resource_store_redb::ChangeEntry
+d2b_resource_store_redb	impl core::marker::UnsafeUnpin for d2b_resource_store_redb::RedbResourceStore
+d2b_resource_store_redb	impl core::marker::UnsafeUnpin for d2b_resource_store_redb::StoreIdentity
+d2b_resource_store_redb	impl core::marker::UnsafeUnpin for d2b_resource_store_redb::actor::SharedChangeBatch
 d2b_resource_store_redb	impl core::marker::UnsafeUnpin for d2b_resource_store_redb::ownership::OwnerBinding
 d2b_resource_store_redb	impl core::marker::UnsafeUnpin for d2b_resource_store_redb::ownership::OwnerIndex
 d2b_resource_store_redb	impl core::marker::UnsafeUnpin for d2b_resource_store_redb::ownership::OwnerIndexMutation
 d2b_resource_store_redb	impl core::marker::UnsafeUnpin for d2b_resource_store_redb::ownership::ReverseOwnerEntry
+d2b_resource_store_redb	impl core::panic::unwind_safe::RefUnwindSafe for d2b_resource_store_redb::ChangeBatch
+d2b_resource_store_redb	impl core::panic::unwind_safe::RefUnwindSafe for d2b_resource_store_redb::ChangeEntry
+d2b_resource_store_redb	impl core::panic::unwind_safe::RefUnwindSafe for d2b_resource_store_redb::StoreIdentity
+d2b_resource_store_redb	impl core::panic::unwind_safe::RefUnwindSafe for d2b_resource_store_redb::actor::SharedChangeBatch
 d2b_resource_store_redb	impl core::panic::unwind_safe::RefUnwindSafe for d2b_resource_store_redb::ownership::OwnerBinding
 d2b_resource_store_redb	impl core::panic::unwind_safe::RefUnwindSafe for d2b_resource_store_redb::ownership::OwnerIndex
 d2b_resource_store_redb	impl core::panic::unwind_safe::RefUnwindSafe for d2b_resource_store_redb::ownership::OwnerIndexMutation
 d2b_resource_store_redb	impl core::panic::unwind_safe::RefUnwindSafe for d2b_resource_store_redb::ownership::ReverseOwnerEntry
+d2b_resource_store_redb	impl core::panic::unwind_safe::UnwindSafe for d2b_resource_store_redb::ChangeBatch
+d2b_resource_store_redb	impl core::panic::unwind_safe::UnwindSafe for d2b_resource_store_redb::ChangeEntry
+d2b_resource_store_redb	impl core::panic::unwind_safe::UnwindSafe for d2b_resource_store_redb::StoreIdentity
+d2b_resource_store_redb	impl core::panic::unwind_safe::UnwindSafe for d2b_resource_store_redb::actor::SharedChangeBatch
 d2b_resource_store_redb	impl core::panic::unwind_safe::UnwindSafe for d2b_resource_store_redb::ownership::OwnerBinding
 d2b_resource_store_redb	impl core::panic::unwind_safe::UnwindSafe for d2b_resource_store_redb::ownership::OwnerIndex
 d2b_resource_store_redb	impl core::panic::unwind_safe::UnwindSafe for d2b_resource_store_redb::ownership::OwnerIndexMutation
 d2b_resource_store_redb	impl core::panic::unwind_safe::UnwindSafe for d2b_resource_store_redb::ownership::ReverseOwnerEntry
+d2b_resource_store_redb	impl d2b_resource_store_redb::ChangeBatch
+d2b_resource_store_redb	impl d2b_resource_store_redb::ChangeEntry
+d2b_resource_store_redb	impl d2b_resource_store_redb::RedbResourceStore
+d2b_resource_store_redb	impl d2b_resource_store_redb::StoreIdentity
+d2b_resource_store_redb	impl d2b_resource_store_redb::actor::SharedChangeBatch
 d2b_resource_store_redb	impl d2b_resource_store_redb::ownership::OwnerBinding
 d2b_resource_store_redb	impl d2b_resource_store_redb::ownership::OwnerIndex
 d2b_resource_store_redb	impl d2b_resource_store_redb::ownership::OwnerIndexMutation
 d2b_resource_store_redb	impl d2b_resource_store_redb::ownership::ReverseOwnerEntry
+d2b_resource_store_redb	impl serde_core::ser::Serialize for d2b_resource_store_redb::ChangeBatch
+d2b_resource_store_redb	impl serde_core::ser::Serialize for d2b_resource_store_redb::ChangeEntry
+d2b_resource_store_redb	impl<'de> serde_core::de::Deserialize<'de> for d2b_resource_store_redb::ChangeBatch
+d2b_resource_store_redb	impl<'de> serde_core::de::Deserialize<'de> for d2b_resource_store_redb::ChangeEntry
+d2b_resource_store_redb	impl<T, U> core::convert::Into<U> for d2b_resource_store_redb::ChangeBatch where U: core::convert::From<T>
+d2b_resource_store_redb	impl<T, U> core::convert::Into<U> for d2b_resource_store_redb::ChangeEntry where U: core::convert::From<T>
+d2b_resource_store_redb	impl<T, U> core::convert::Into<U> for d2b_resource_store_redb::RedbResourceStore where U: core::convert::From<T>
+d2b_resource_store_redb	impl<T, U> core::convert::Into<U> for d2b_resource_store_redb::StoreIdentity where U: core::convert::From<T>
+d2b_resource_store_redb	impl<T, U> core::convert::Into<U> for d2b_resource_store_redb::actor::SharedChangeBatch where U: core::convert::From<T>
 d2b_resource_store_redb	impl<T, U> core::convert::Into<U> for d2b_resource_store_redb::ownership::OwnerBinding where U: core::convert::From<T>
 d2b_resource_store_redb	impl<T, U> core::convert::Into<U> for d2b_resource_store_redb::ownership::OwnerIndex where U: core::convert::From<T>
 d2b_resource_store_redb	impl<T, U> core::convert::Into<U> for d2b_resource_store_redb::ownership::OwnerIndexMutation where U: core::convert::From<T>
 d2b_resource_store_redb	impl<T, U> core::convert::Into<U> for d2b_resource_store_redb::ownership::ReverseOwnerEntry where U: core::convert::From<T>
+d2b_resource_store_redb	impl<T, U> core::convert::TryFrom<U> for d2b_resource_store_redb::ChangeBatch where U: core::convert::Into<T>
+d2b_resource_store_redb	impl<T, U> core::convert::TryFrom<U> for d2b_resource_store_redb::ChangeEntry where U: core::convert::Into<T>
+d2b_resource_store_redb	impl<T, U> core::convert::TryFrom<U> for d2b_resource_store_redb::RedbResourceStore where U: core::convert::Into<T>
+d2b_resource_store_redb	impl<T, U> core::convert::TryFrom<U> for d2b_resource_store_redb::StoreIdentity where U: core::convert::Into<T>
+d2b_resource_store_redb	impl<T, U> core::convert::TryFrom<U> for d2b_resource_store_redb::actor::SharedChangeBatch where U: core::convert::Into<T>
 d2b_resource_store_redb	impl<T, U> core::convert::TryFrom<U> for d2b_resource_store_redb::ownership::OwnerBinding where U: core::convert::Into<T>
 d2b_resource_store_redb	impl<T, U> core::convert::TryFrom<U> for d2b_resource_store_redb::ownership::OwnerIndex where U: core::convert::Into<T>
 d2b_resource_store_redb	impl<T, U> core::convert::TryFrom<U> for d2b_resource_store_redb::ownership::OwnerIndexMutation where U: core::convert::Into<T>
 d2b_resource_store_redb	impl<T, U> core::convert::TryFrom<U> for d2b_resource_store_redb::ownership::ReverseOwnerEntry where U: core::convert::Into<T>
+d2b_resource_store_redb	impl<T, U> core::convert::TryInto<U> for d2b_resource_store_redb::ChangeBatch where U: core::convert::TryFrom<T>
+d2b_resource_store_redb	impl<T, U> core::convert::TryInto<U> for d2b_resource_store_redb::ChangeEntry where U: core::convert::TryFrom<T>
+d2b_resource_store_redb	impl<T, U> core::convert::TryInto<U> for d2b_resource_store_redb::RedbResourceStore where U: core::convert::TryFrom<T>
+d2b_resource_store_redb	impl<T, U> core::convert::TryInto<U> for d2b_resource_store_redb::StoreIdentity where U: core::convert::TryFrom<T>
+d2b_resource_store_redb	impl<T, U> core::convert::TryInto<U> for d2b_resource_store_redb::actor::SharedChangeBatch where U: core::convert::TryFrom<T>
 d2b_resource_store_redb	impl<T, U> core::convert::TryInto<U> for d2b_resource_store_redb::ownership::OwnerBinding where U: core::convert::TryFrom<T>
 d2b_resource_store_redb	impl<T, U> core::convert::TryInto<U> for d2b_resource_store_redb::ownership::OwnerIndex where U: core::convert::TryFrom<T>
 d2b_resource_store_redb	impl<T, U> core::convert::TryInto<U> for d2b_resource_store_redb::ownership::OwnerIndexMutation where U: core::convert::TryFrom<T>
 d2b_resource_store_redb	impl<T, U> core::convert::TryInto<U> for d2b_resource_store_redb::ownership::ReverseOwnerEntry where U: core::convert::TryFrom<T>
+d2b_resource_store_redb	impl<T> alloc::borrow::ToOwned for d2b_resource_store_redb::ChangeBatch where T: core::clone::Clone
+d2b_resource_store_redb	impl<T> alloc::borrow::ToOwned for d2b_resource_store_redb::ChangeEntry where T: core::clone::Clone
+d2b_resource_store_redb	impl<T> alloc::borrow::ToOwned for d2b_resource_store_redb::StoreIdentity where T: core::clone::Clone
+d2b_resource_store_redb	impl<T> alloc::borrow::ToOwned for d2b_resource_store_redb::actor::SharedChangeBatch where T: core::clone::Clone
 d2b_resource_store_redb	impl<T> alloc::borrow::ToOwned for d2b_resource_store_redb::ownership::OwnerBinding where T: core::clone::Clone
 d2b_resource_store_redb	impl<T> alloc::borrow::ToOwned for d2b_resource_store_redb::ownership::OwnerIndex where T: core::clone::Clone
 d2b_resource_store_redb	impl<T> alloc::borrow::ToOwned for d2b_resource_store_redb::ownership::OwnerIndexMutation where T: core::clone::Clone
 d2b_resource_store_redb	impl<T> alloc::borrow::ToOwned for d2b_resource_store_redb::ownership::ReverseOwnerEntry where T: core::clone::Clone
+d2b_resource_store_redb	impl<T> core::any::Any for d2b_resource_store_redb::ChangeBatch where T: 'static + ?core::marker::Sized
+d2b_resource_store_redb	impl<T> core::any::Any for d2b_resource_store_redb::ChangeEntry where T: 'static + ?core::marker::Sized
+d2b_resource_store_redb	impl<T> core::any::Any for d2b_resource_store_redb::RedbResourceStore where T: 'static + ?core::marker::Sized
+d2b_resource_store_redb	impl<T> core::any::Any for d2b_resource_store_redb::StoreIdentity where T: 'static + ?core::marker::Sized
+d2b_resource_store_redb	impl<T> core::any::Any for d2b_resource_store_redb::actor::SharedChangeBatch where T: 'static + ?core::marker::Sized
 d2b_resource_store_redb	impl<T> core::any::Any for d2b_resource_store_redb::ownership::OwnerBinding where T: 'static + ?core::marker::Sized
 d2b_resource_store_redb	impl<T> core::any::Any for d2b_resource_store_redb::ownership::OwnerIndex where T: 'static + ?core::marker::Sized
 d2b_resource_store_redb	impl<T> core::any::Any for d2b_resource_store_redb::ownership::OwnerIndexMutation where T: 'static + ?core::marker::Sized
 d2b_resource_store_redb	impl<T> core::any::Any for d2b_resource_store_redb::ownership::ReverseOwnerEntry where T: 'static + ?core::marker::Sized
+d2b_resource_store_redb	impl<T> core::borrow::Borrow<T> for d2b_resource_store_redb::ChangeBatch where T: ?core::marker::Sized
+d2b_resource_store_redb	impl<T> core::borrow::Borrow<T> for d2b_resource_store_redb::ChangeEntry where T: ?core::marker::Sized
+d2b_resource_store_redb	impl<T> core::borrow::Borrow<T> for d2b_resource_store_redb::RedbResourceStore where T: ?core::marker::Sized
+d2b_resource_store_redb	impl<T> core::borrow::Borrow<T> for d2b_resource_store_redb::StoreIdentity where T: ?core::marker::Sized
+d2b_resource_store_redb	impl<T> core::borrow::Borrow<T> for d2b_resource_store_redb::actor::SharedChangeBatch where T: ?core::marker::Sized
 d2b_resource_store_redb	impl<T> core::borrow::Borrow<T> for d2b_resource_store_redb::ownership::OwnerBinding where T: ?core::marker::Sized
 d2b_resource_store_redb	impl<T> core::borrow::Borrow<T> for d2b_resource_store_redb::ownership::OwnerIndex where T: ?core::marker::Sized
 d2b_resource_store_redb	impl<T> core::borrow::Borrow<T> for d2b_resource_store_redb::ownership::OwnerIndexMutation where T: ?core::marker::Sized
 d2b_resource_store_redb	impl<T> core::borrow::Borrow<T> for d2b_resource_store_redb::ownership::ReverseOwnerEntry where T: ?core::marker::Sized
+d2b_resource_store_redb	impl<T> core::borrow::BorrowMut<T> for d2b_resource_store_redb::ChangeBatch where T: ?core::marker::Sized
+d2b_resource_store_redb	impl<T> core::borrow::BorrowMut<T> for d2b_resource_store_redb::ChangeEntry where T: ?core::marker::Sized
+d2b_resource_store_redb	impl<T> core::borrow::BorrowMut<T> for d2b_resource_store_redb::RedbResourceStore where T: ?core::marker::Sized
+d2b_resource_store_redb	impl<T> core::borrow::BorrowMut<T> for d2b_resource_store_redb::StoreIdentity where T: ?core::marker::Sized
+d2b_resource_store_redb	impl<T> core::borrow::BorrowMut<T> for d2b_resource_store_redb::actor::SharedChangeBatch where T: ?core::marker::Sized
 d2b_resource_store_redb	impl<T> core::borrow::BorrowMut<T> for d2b_resource_store_redb::ownership::OwnerBinding where T: ?core::marker::Sized
 d2b_resource_store_redb	impl<T> core::borrow::BorrowMut<T> for d2b_resource_store_redb::ownership::OwnerIndex where T: ?core::marker::Sized
 d2b_resource_store_redb	impl<T> core::borrow::BorrowMut<T> for d2b_resource_store_redb::ownership::OwnerIndexMutation where T: ?core::marker::Sized
 d2b_resource_store_redb	impl<T> core::borrow::BorrowMut<T> for d2b_resource_store_redb::ownership::ReverseOwnerEntry where T: ?core::marker::Sized
+d2b_resource_store_redb	impl<T> core::clone::CloneToUninit for d2b_resource_store_redb::ChangeBatch where T: core::clone::Clone
+d2b_resource_store_redb	impl<T> core::clone::CloneToUninit for d2b_resource_store_redb::ChangeEntry where T: core::clone::Clone
+d2b_resource_store_redb	impl<T> core::clone::CloneToUninit for d2b_resource_store_redb::StoreIdentity where T: core::clone::Clone
+d2b_resource_store_redb	impl<T> core::clone::CloneToUninit for d2b_resource_store_redb::actor::SharedChangeBatch where T: core::clone::Clone
 d2b_resource_store_redb	impl<T> core::clone::CloneToUninit for d2b_resource_store_redb::ownership::OwnerBinding where T: core::clone::Clone
 d2b_resource_store_redb	impl<T> core::clone::CloneToUninit for d2b_resource_store_redb::ownership::OwnerIndex where T: core::clone::Clone
 d2b_resource_store_redb	impl<T> core::clone::CloneToUninit for d2b_resource_store_redb::ownership::OwnerIndexMutation where T: core::clone::Clone
 d2b_resource_store_redb	impl<T> core::clone::CloneToUninit for d2b_resource_store_redb::ownership::ReverseOwnerEntry where T: core::clone::Clone
+d2b_resource_store_redb	impl<T> core::convert::From<T> for d2b_resource_store_redb::ChangeBatch
+d2b_resource_store_redb	impl<T> core::convert::From<T> for d2b_resource_store_redb::ChangeEntry
+d2b_resource_store_redb	impl<T> core::convert::From<T> for d2b_resource_store_redb::RedbResourceStore
+d2b_resource_store_redb	impl<T> core::convert::From<T> for d2b_resource_store_redb::StoreIdentity
+d2b_resource_store_redb	impl<T> core::convert::From<T> for d2b_resource_store_redb::actor::SharedChangeBatch
 d2b_resource_store_redb	impl<T> core::convert::From<T> for d2b_resource_store_redb::ownership::OwnerBinding
 d2b_resource_store_redb	impl<T> core::convert::From<T> for d2b_resource_store_redb::ownership::OwnerIndex
 d2b_resource_store_redb	impl<T> core::convert::From<T> for d2b_resource_store_redb::ownership::OwnerIndexMutation
 d2b_resource_store_redb	impl<T> core::convert::From<T> for d2b_resource_store_redb::ownership::ReverseOwnerEntry
+d2b_resource_store_redb	impl<T> dyn_clone::DynClone for d2b_resource_store_redb::ChangeBatch where T: core::clone::Clone
+d2b_resource_store_redb	impl<T> dyn_clone::DynClone for d2b_resource_store_redb::ChangeEntry where T: core::clone::Clone
+d2b_resource_store_redb	impl<T> dyn_clone::DynClone for d2b_resource_store_redb::StoreIdentity where T: core::clone::Clone
+d2b_resource_store_redb	impl<T> dyn_clone::DynClone for d2b_resource_store_redb::actor::SharedChangeBatch where T: core::clone::Clone
 d2b_resource_store_redb	impl<T> dyn_clone::DynClone for d2b_resource_store_redb::ownership::OwnerBinding where T: core::clone::Clone
 d2b_resource_store_redb	impl<T> dyn_clone::DynClone for d2b_resource_store_redb::ownership::OwnerIndex where T: core::clone::Clone
 d2b_resource_store_redb	impl<T> dyn_clone::DynClone for d2b_resource_store_redb::ownership::OwnerIndexMutation where T: core::clone::Clone
 d2b_resource_store_redb	impl<T> dyn_clone::DynClone for d2b_resource_store_redb::ownership::ReverseOwnerEntry where T: core::clone::Clone
+d2b_resource_store_redb	impl<T> serde_core::de::DeserializeOwned for d2b_resource_store_redb::ChangeBatch where T: for<'de> serde_core::de::Deserialize<'de>
+d2b_resource_store_redb	impl<T> serde_core::de::DeserializeOwned for d2b_resource_store_redb::ChangeEntry where T: for<'de> serde_core::de::Deserialize<'de>
+d2b_resource_store_redb	impl<T> typenum::type_operators::Same for d2b_resource_store_redb::ChangeBatch
+d2b_resource_store_redb	impl<T> typenum::type_operators::Same for d2b_resource_store_redb::ChangeEntry
+d2b_resource_store_redb	impl<T> typenum::type_operators::Same for d2b_resource_store_redb::RedbResourceStore
+d2b_resource_store_redb	impl<T> typenum::type_operators::Same for d2b_resource_store_redb::StoreIdentity
+d2b_resource_store_redb	impl<T> typenum::type_operators::Same for d2b_resource_store_redb::actor::SharedChangeBatch
 d2b_resource_store_redb	impl<T> typenum::type_operators::Same for d2b_resource_store_redb::ownership::OwnerBinding
 d2b_resource_store_redb	impl<T> typenum::type_operators::Same for d2b_resource_store_redb::ownership::OwnerIndex
 d2b_resource_store_redb	impl<T> typenum::type_operators::Same for d2b_resource_store_redb::ownership::OwnerIndexMutation
 d2b_resource_store_redb	impl<T> typenum::type_operators::Same for d2b_resource_store_redb::ownership::ReverseOwnerEntry
+d2b_resource_store_redb	pub async fn d2b_resource_store_redb::RedbResourceStore::commit_verified(&self, d2b_resource_store::mutation_seal::SealedMutation) -> core::result::Result<d2b_resource_store::StoreCommitResult, d2b_resource_store::error::StoreError>
+d2b_resource_store_redb	pub async fn d2b_resource_store_redb::RedbResourceStore::get(&self, d2b_resource_store::StoreGetRequest) -> core::result::Result<d2b_resource_store::StoredResource, d2b_resource_store::error::StoreError>
+d2b_resource_store_redb	pub async fn d2b_resource_store_redb::RedbResourceStore::list(&self, d2b_resource_store::StoreListRequest) -> core::result::Result<d2b_resource_store::StoreListResult, d2b_resource_store::error::StoreError>
+d2b_resource_store_redb	pub async fn d2b_resource_store_redb::RedbResourceStore::open_owned(std::fs::File, d2b_resource_store_redb::StoreIdentity, d2b_resource_store::mutation_seal::MutationSealAcceptor) -> core::result::Result<Self, d2b_resource_store::error::StoreError>
+d2b_resource_store_redb	pub async fn d2b_resource_store_redb::RedbResourceStore::provision_owned(std::fs::File, std::fs::File, d2b_resource_store_redb::StoreIdentity, d2b_resource_store::mutation_seal::MutationSealAcceptor) -> core::result::Result<Self, d2b_resource_store::error::StoreError>
+d2b_resource_store_redb	pub async fn d2b_resource_store_redb::RedbResourceStore::replay_backend(&self, u64, impl core::iter::traits::collect::IntoIterator<Item = d2b_contracts::v3::identity::ResourceTypeName>, impl core::ops::function::FnMut(d2b_resource_store_redb::actor::SharedChangeBatch) -> core::result::Result<(), d2b_resource_store::error::StoreError> + core::marker::Send + 'static) -> core::result::Result<d2b_contracts::v3::identity::ZoneRevision, d2b_resource_store::error::StoreError>
+d2b_resource_store_redb	pub async fn d2b_resource_store_redb::RedbResourceStore::resolve_ref(&self, d2b_resource_store::StoreResolveRequest) -> core::result::Result<d2b_resource_store::StoreResolvedIdentity, d2b_resource_store::error::StoreError>
+d2b_resource_store_redb	pub const fn d2b_resource_store_redb::RedbResourceStore::identity(&self) -> &d2b_resource_store_redb::StoreIdentity
+d2b_resource_store_redb	pub const fn d2b_resource_store_redb::StoreIdentity::zone_uid(&self) -> &d2b_contracts::v3::identity::ResourceUid
 d2b_resource_store_redb	pub const fn d2b_resource_store_redb::ownership::OwnerBinding::owner_ref(&self) -> &d2b_contracts::v3::resource_ref::ResourceRef
 d2b_resource_store_redb	pub const fn d2b_resource_store_redb::ownership::OwnerBinding::owner_uid(&self) -> &d2b_contracts::v3::identity::ResourceUid
 d2b_resource_store_redb	pub const fn d2b_resource_store_redb::ownership::ReverseOwnerEntry::child_ref(&self) -> &d2b_contracts::v3::resource_ref::ResourceRef
 d2b_resource_store_redb	pub const fn d2b_resource_store_redb::ownership::ReverseOwnerEntry::child_uid(&self) -> &d2b_contracts::v3::identity::ResourceUid
+d2b_resource_store_redb	pub fn d2b_resource_store_redb::ChangeBatch::clone(&self) -> d2b_resource_store_redb::ChangeBatch
+d2b_resource_store_redb	pub fn d2b_resource_store_redb::ChangeBatch::entries(&self) -> &[d2b_resource_store_redb::ChangeEntry]
+d2b_resource_store_redb	pub fn d2b_resource_store_redb::ChangeBatch::eq(&self, &d2b_resource_store_redb::ChangeBatch) -> bool
+d2b_resource_store_redb	pub fn d2b_resource_store_redb::ChangeEntry::clone(&self) -> d2b_resource_store_redb::ChangeEntry
+d2b_resource_store_redb	pub fn d2b_resource_store_redb::ChangeEntry::eq(&self, &d2b_resource_store_redb::ChangeEntry) -> bool
+d2b_resource_store_redb	pub fn d2b_resource_store_redb::StoreIdentity::clone(&self) -> d2b_resource_store_redb::StoreIdentity
+d2b_resource_store_redb	pub fn d2b_resource_store_redb::StoreIdentity::eq(&self, &d2b_resource_store_redb::StoreIdentity) -> bool
+d2b_resource_store_redb	pub fn d2b_resource_store_redb::StoreIdentity::new(d2b_resource_store::error::StoreSlot, d2b_contracts::v3::identity::ResourceUid, d2b_contracts::v3::identity::ZoneId, d2b_contracts::v3::identity::ResourceUid, d2b_contracts::v3::identity::Timestamp, d2b_resource_store::PolicySnapshot) -> Self
+d2b_resource_store_redb	pub fn d2b_resource_store_redb::StoreIdentity::seal_identity(&self) -> d2b_resource_store::mutation_seal::StoreSealIdentity
+d2b_resource_store_redb	pub fn d2b_resource_store_redb::actor::SharedChangeBatch::clone(&self) -> d2b_resource_store_redb::actor::SharedChangeBatch
+d2b_resource_store_redb	pub fn d2b_resource_store_redb::actor::SharedChangeBatch::entries(&self) -> impl core::iter::traits::exact_size::ExactSizeIterator<Item = &d2b_resource_store_redb::ChangeEntry>
 d2b_resource_store_redb	pub fn d2b_resource_store_redb::ownership::OwnerBinding::clone(&self) -> d2b_resource_store_redb::ownership::OwnerBinding
 d2b_resource_store_redb	pub fn d2b_resource_store_redb::ownership::OwnerBinding::eq(&self, &d2b_resource_store_redb::ownership::OwnerBinding) -> bool
 d2b_resource_store_redb	pub fn d2b_resource_store_redb::ownership::OwnerIndex::bind_owner(&mut self, &d2b_contracts::v3::identity::ResourceUid, d2b_contracts::v3::resource_ref::ResourceRef, d2b_contracts::v3::identity::ZoneRevision, d2b_controller_toolkit::owner_hints::OwnerChangeEvent) -> core::result::Result<d2b_resource_store_redb::ownership::OwnerIndexMutation, d2b_resource_store_redb::ownership::OwnershipError>
@@ -8202,10 +8468,17 @@ d2b_resource_store_redb	pub fn d2b_resource_store_redb::ownership::OwnerIndexMut
 d2b_resource_store_redb	pub fn d2b_resource_store_redb::ownership::OwnerIndexMutation::previous_owner(&self) -> core::option::Option<&d2b_resource_store_redb::ownership::OwnerBinding>
 d2b_resource_store_redb	pub fn d2b_resource_store_redb::ownership::ReverseOwnerEntry::clone(&self) -> d2b_resource_store_redb::ownership::ReverseOwnerEntry
 d2b_resource_store_redb	pub fn d2b_resource_store_redb::ownership::ReverseOwnerEntry::eq(&self, &d2b_resource_store_redb::ownership::ReverseOwnerEntry) -> bool
+d2b_resource_store_redb	pub fn d2b_resource_store_redb::write_provisioning_marker(&mut std::fs::File, &d2b_resource_store_redb::StoreIdentity) -> core::result::Result<(), d2b_resource_store::error::StoreError>
+d2b_resource_store_redb	pub struct d2b_resource_store_redb::ChangeBatch
+d2b_resource_store_redb	pub struct d2b_resource_store_redb::ChangeEntry
 d2b_resource_store_redb	pub struct d2b_resource_store_redb::OwnerBinding
 d2b_resource_store_redb	pub struct d2b_resource_store_redb::OwnerIndex
 d2b_resource_store_redb	pub struct d2b_resource_store_redb::OwnerIndexMutation
+d2b_resource_store_redb	pub struct d2b_resource_store_redb::RedbResourceStore
 d2b_resource_store_redb	pub struct d2b_resource_store_redb::ReverseOwnerEntry
+d2b_resource_store_redb	pub struct d2b_resource_store_redb::SharedChangeBatch
+d2b_resource_store_redb	pub struct d2b_resource_store_redb::StoreIdentity
+d2b_resource_store_redb	pub struct d2b_resource_store_redb::actor::SharedChangeBatch
 d2b_resource_store_redb	pub struct d2b_resource_store_redb::ownership::OwnerBinding
 d2b_resource_store_redb	pub struct d2b_resource_store_redb::ownership::OwnerIndex
 d2b_resource_store_redb	pub struct d2b_resource_store_redb::ownership::OwnerIndexMutation

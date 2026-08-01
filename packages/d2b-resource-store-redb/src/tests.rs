@@ -7,9 +7,12 @@ use std::sync::{Arc, Barrier};
 use d2b_contracts::v3::{
     ConfigurationGeneration, ResourceRef, ResourceTypeName, ResourceUid, Timestamp, ZoneId,
 };
+use d2b_resource_store::mutation_seal::{
+    MutationSealAcceptor, MutationSealBody, mutation_seal_pair,
+};
 use d2b_resource_store::{
     PolicySnapshot, StoreGetRequest, StoreListRequest, StoreOperationContext, StoreProjection,
-    StoreWatchRequest,
+    StoreSlot, StoreWatchRequest,
 };
 use redb::{Database, Durability};
 use rustix::io::{FdFlags, fcntl_getfd, fcntl_setfd};
@@ -20,12 +23,19 @@ use rustix::net::{
 
 use super::*;
 
-struct TestVerifiedMutation;
-
 fn identity() -> StoreIdentity {
+    identity_for(
+        StoreSlot::new(0).unwrap(),
+        "work",
+        "11111111-1111-4111-8111-111111111111",
+    )
+}
+
+fn identity_for(slot: StoreSlot, zone: &str, store_uuid: &str) -> StoreIdentity {
     StoreIdentity::new(
-        ResourceUid::parse("11111111-1111-4111-8111-111111111111").unwrap(),
-        ZoneId::parse("work").unwrap(),
+        slot,
+        ResourceUid::parse(store_uuid).unwrap(),
+        ZoneId::parse(zone).unwrap(),
         ResourceUid::parse("22222222-2222-4222-8222-222222222222").unwrap(),
         Timestamp::parse("2026-07-31T00:00:00.000Z").unwrap(),
         PolicySnapshot {
@@ -35,6 +45,45 @@ fn identity() -> StoreIdentity {
             controller_generation: None,
         },
     )
+}
+
+fn acceptor(identity: &StoreIdentity) -> MutationSealAcceptor {
+    let (_, acceptor) = mutation_seal_pair(identity.seal_identity());
+    acceptor
+}
+
+async fn provision_store(
+    file: File,
+    marker: File,
+    identity: StoreIdentity,
+) -> Result<RedbResourceStore, d2b_resource_store::StoreError> {
+    RedbResourceStore::provision_owned(file, marker, identity.clone(), acceptor(&identity)).await
+}
+
+async fn open_store(
+    file: File,
+    identity: StoreIdentity,
+) -> Result<RedbResourceStore, d2b_resource_store::StoreError> {
+    RedbResourceStore::open_owned(file, identity.clone(), acceptor(&identity)).await
+}
+
+fn empty_seal_body() -> MutationSealBody {
+    MutationSealBody {
+        mutations: Vec::new(),
+        authorization: d2b_resource_store::AdmittedAuthorization {
+            zone: ZoneId::parse("work").unwrap(),
+            subject_ref: ResourceRef::parse("Provider/system-core").unwrap(),
+            subject_uid: ResourceUid::parse("33333333-3333-4333-8333-333333333333").unwrap(),
+            targets: Vec::new(),
+        },
+        policy_snapshot: PolicySnapshot {
+            policy_revision: 7,
+            api_catalog_revision: 8,
+            active_configuration_revision: ConfigurationGeneration::new(9).unwrap(),
+            controller_generation: None,
+        },
+        operation: operation("seal"),
+    }
 }
 
 fn owned_file() -> (tempfile::TempDir, File) {
@@ -287,13 +336,224 @@ fn contract_constants_are_exact() {
     assert_eq!(READ_LIFETIME, std::time::Duration::from_millis(250));
 }
 
+#[test]
+fn open_rejects_seal_from_a_foreign_pair() {
+    let first = identity();
+    let second = identity_for(
+        StoreSlot::new(1).unwrap(),
+        "work",
+        "33333333-3333-4333-8333-333333333333",
+    );
+    let (issuer, _) = mutation_seal_pair(first.seal_identity());
+    let (_, acceptor) = mutation_seal_pair(second.seal_identity());
+
+    let error = acceptor
+        .open(issuer.seal(empty_seal_body()))
+        .err()
+        .expect("a foreign seal must be refused");
+    assert_eq!(error.reason_code(), "mutation-seal-authority-mismatch");
+    assert_eq!(error.store_slot(), Some(StoreSlot::new(1).unwrap()));
+}
+
+#[test]
+fn open_rejects_seal_bound_to_another_store_identity() {
+    let first = identity();
+    let sibling = identity_for(
+        StoreSlot::new(0).unwrap(),
+        "work",
+        "44444444-4444-4444-8444-444444444444",
+    );
+    let (issuer, acceptor) = mutation_seal_pair(first.seal_identity());
+
+    assert_eq!(
+        acceptor.diagnose(&sibling.seal_identity()),
+        Err(d2b_resource_store::SealIdentityMismatch::Store)
+    );
+    let (_, sibling_acceptor) = mutation_seal_pair(sibling.seal_identity());
+    let error = sibling_acceptor
+        .open(issuer.seal(empty_seal_body()))
+        .err()
+        .expect("a seal for another store must be refused");
+    assert_eq!(error.reason_code(), "mutation-seal-authority-mismatch");
+}
+
+#[tokio::test]
+async fn open_owned_rejects_acceptor_bound_to_another_zone() {
+    let (_directory, file) = owned_file();
+    let expected = identity();
+    let foreign = identity_for(
+        StoreSlot::new(0).unwrap(),
+        "personal",
+        "11111111-1111-4111-8111-111111111111",
+    );
+    let (_, acceptor) = mutation_seal_pair(foreign.seal_identity());
+
+    let error = RedbResourceStore::open_owned(file, expected, acceptor)
+        .await
+        .err()
+        .expect("a cross-zone acceptor must be refused");
+    assert_eq!(error.reason_code(), "mutation-seal-acceptor-zone-mismatch");
+    assert_eq!(error.store_slot(), Some(StoreSlot::new(0).unwrap()));
+}
+
+#[tokio::test]
+async fn open_owned_rejects_acceptor_bound_to_another_store_in_the_same_zone() {
+    let (_directory, file) = owned_file();
+    let expected = identity();
+    let sibling = identity_for(
+        StoreSlot::new(0).unwrap(),
+        "work",
+        "44444444-4444-4444-8444-444444444444",
+    );
+    let (_, acceptor) = mutation_seal_pair(sibling.seal_identity());
+
+    let error = RedbResourceStore::open_owned(file, expected, acceptor)
+        .await
+        .err()
+        .expect("a sibling-store acceptor must be refused");
+    assert_eq!(error.reason_code(), "mutation-seal-acceptor-store-mismatch");
+    assert_eq!(error.store_slot(), Some(StoreSlot::new(0).unwrap()));
+}
+
+#[tokio::test]
+async fn open_owned_rejects_acceptor_declaring_another_slot() {
+    let (_directory, file) = owned_file();
+    let expected = identity();
+    let wrong_slot = identity_for(
+        StoreSlot::new(1).unwrap(),
+        "work",
+        "11111111-1111-4111-8111-111111111111",
+    );
+    let (_, acceptor) = mutation_seal_pair(wrong_slot.seal_identity());
+
+    let error = RedbResourceStore::open_owned(file, expected, acceptor)
+        .await
+        .err()
+        .expect("a wrong-slot acceptor must be refused");
+    assert_eq!(error.reason_code(), "mutation-seal-acceptor-slot-mismatch");
+    assert_eq!(error.store_slot(), Some(StoreSlot::new(0).unwrap()));
+}
+
+#[test]
+fn diagnose_names_the_disagreeing_component_without_rendering_it() {
+    let expected = identity();
+    let matching = mutation_seal_pair(expected.seal_identity()).1;
+    assert_eq!(matching.diagnose(&expected.seal_identity()), Ok(()));
+
+    let zone = identity_for(
+        StoreSlot::new(0).unwrap(),
+        "personal",
+        "11111111-1111-4111-8111-111111111111",
+    );
+    assert_eq!(
+        matching.diagnose(&zone.seal_identity()),
+        Err(d2b_resource_store::SealIdentityMismatch::Zone)
+    );
+
+    let store = identity_for(
+        StoreSlot::new(0).unwrap(),
+        "work",
+        "44444444-4444-4444-8444-444444444444",
+    );
+    assert_eq!(
+        matching.diagnose(&store.seal_identity()),
+        Err(d2b_resource_store::SealIdentityMismatch::Store)
+    );
+    assert_eq!(
+        d2b_resource_store::SealIdentityMismatch::Zone.reason_code(),
+        "mutation-seal-acceptor-zone-mismatch"
+    );
+    assert_eq!(
+        d2b_resource_store::SealIdentityMismatch::Store.reason_code(),
+        "mutation-seal-acceptor-store-mismatch"
+    );
+}
+
+#[tokio::test]
+async fn errors_from_a_multi_store_startup_carry_distinct_slots() {
+    let (_first_dir, first_file) = owned_file();
+    let (_second_dir, second_file) = owned_file();
+    let first = identity_for(
+        StoreSlot::new(0).unwrap(),
+        "work",
+        "11111111-1111-4111-8111-111111111111",
+    );
+    let second = identity_for(
+        StoreSlot::new(1).unwrap(),
+        "work",
+        "33333333-3333-4333-8333-333333333333",
+    );
+    let first_wrong = identity_for(
+        StoreSlot::new(0).unwrap(),
+        "personal",
+        "11111111-1111-4111-8111-111111111111",
+    );
+    let second_wrong = identity_for(
+        StoreSlot::new(1).unwrap(),
+        "personal",
+        "33333333-3333-4333-8333-333333333333",
+    );
+    let (_, first_acceptor) = mutation_seal_pair(first_wrong.seal_identity());
+    let (_, second_acceptor) = mutation_seal_pair(second_wrong.seal_identity());
+
+    let first_error = RedbResourceStore::open_owned(first_file, first, first_acceptor)
+        .await
+        .err()
+        .expect("slot zero startup must refuse its mismatched acceptor");
+    let second_error = RedbResourceStore::open_owned(second_file, second, second_acceptor)
+        .await
+        .err()
+        .expect("slot one startup must refuse its mismatched acceptor");
+
+    assert_eq!(first_error.store_slot(), Some(StoreSlot::new(0).unwrap()));
+    assert_eq!(second_error.store_slot(), Some(StoreSlot::new(1).unwrap()));
+    assert_eq!(
+        first_error
+            .clone()
+            .with_store_slot(StoreSlot::new(1).unwrap()),
+        second_error
+    );
+}
+
+#[tokio::test]
+async fn commit_rejects_seal_from_another_store() {
+    let (_first_dir, first_file, first_marker) = provisioned_store();
+    let first_identity = identity();
+    let first = provision_store(first_file, first_marker, first_identity.clone())
+        .await
+        .unwrap();
+
+    let second_identity = identity_for(
+        StoreSlot::new(1).unwrap(),
+        "work",
+        "33333333-3333-4333-8333-333333333333",
+    );
+    let (second_dir, second_file) = owned_file();
+    let mut second_marker = OpenOptions::new()
+        .create_new(true)
+        .read(true)
+        .write(true)
+        .open(second_dir.path().join("store.marker"))
+        .unwrap();
+    write_provisioning_marker(&mut second_marker, &second_identity).unwrap();
+    let _second = provision_store(second_file, second_marker, second_identity.clone())
+        .await
+        .unwrap();
+
+    let (issuer, _) = mutation_seal_pair(second_identity.seal_identity());
+    let error = first
+        .commit_verified(issuer.seal(empty_seal_body()))
+        .await
+        .err()
+        .expect("cross-store evidence must be refused");
+    assert_eq!(error.reason_code(), "mutation-seal-authority-mismatch");
+    assert_eq!(error.store_slot(), Some(first_identity.slot()));
+}
+
 #[tokio::test]
 async fn owned_file_open_initializes_and_reopens_only_matching_identity() {
     let (directory, file, marker) = provisioned_store();
-    let store =
-        RedbResourceStore::<TestVerifiedMutation>::provision_owned(file, marker, identity())
-            .await
-            .unwrap();
+    let store = provision_store(file, marker, identity()).await.unwrap();
     assert_eq!(store.identity().zone().as_str(), "work");
     store.shutdown().await.unwrap();
 
@@ -302,9 +562,7 @@ async fn owned_file_open_initializes_and_reopens_only_matching_identity() {
         .write(true)
         .open(directory.path().join("store.redb"))
         .unwrap();
-    RedbResourceStore::<TestVerifiedMutation>::open_owned(file, identity())
-        .await
-        .unwrap();
+    open_store(file, identity()).await.unwrap();
 
     let file = OpenOptions::new()
         .read(true)
@@ -313,9 +571,7 @@ async fn owned_file_open_initializes_and_reopens_only_matching_identity() {
         .unwrap();
     let mut mismatch = identity();
     mismatch.zone = ZoneId::parse("personal").unwrap();
-    let error = RedbResourceStore::<TestVerifiedMutation>::open_owned(file, mismatch)
-        .await
-        .unwrap_err();
+    let error = open_store(file, mismatch).await.unwrap_err();
     assert_eq!(
         error.kind(),
         d2b_resource_store::StoreErrorKind::StoreIntegrityFailure
@@ -325,9 +581,7 @@ async fn owned_file_open_initializes_and_reopens_only_matching_identity() {
 #[tokio::test]
 async fn empty_existing_store_is_quarantined_without_publication_marker() {
     let (_directory, file) = owned_file();
-    let error = RedbResourceStore::<TestVerifiedMutation>::open_owned(file, identity())
-        .await
-        .unwrap_err();
+    let error = open_store(file, identity()).await.unwrap_err();
     assert_eq!(
         error.kind(),
         d2b_resource_store::StoreErrorKind::StoreQuarantined
@@ -348,9 +602,7 @@ async fn clean_drop_reopens_without_crash_recovery_and_dirty_open_is_reported() 
         .write(true)
         .open(directory.path().join("store.redb"))
         .unwrap();
-    let store = RedbResourceStore::<TestVerifiedMutation>::open_owned(file, identity())
-        .await
-        .unwrap();
+    let store = open_store(file, identity()).await.unwrap();
     assert!(store.recovered_after_crash());
     store.shutdown().await.unwrap();
 
@@ -359,9 +611,7 @@ async fn clean_drop_reopens_without_crash_recovery_and_dirty_open_is_reported() 
         .write(true)
         .open(directory.path().join("store.redb"))
         .unwrap();
-    let store = RedbResourceStore::<TestVerifiedMutation>::open_owned(file, identity())
-        .await
-        .unwrap();
+    let store = open_store(file, identity()).await.unwrap();
     assert!(!store.recovered_after_crash());
 }
 
@@ -369,9 +619,7 @@ async fn clean_drop_reopens_without_crash_recovery_and_dirty_open_is_reported() 
 async fn direct_owned_fd_without_cloexec_fails_closed() {
     let (_directory, file) = owned_file();
     fcntl_setfd(&file, FdFlags::empty()).unwrap();
-    let error = RedbResourceStore::<TestVerifiedMutation>::open_owned(file, identity())
-        .await
-        .unwrap_err();
+    let error = open_store(file, identity()).await.unwrap_err();
     assert_eq!(
         error.kind(),
         d2b_resource_store::StoreErrorKind::StoreIntegrityFailure
@@ -382,9 +630,7 @@ async fn direct_owned_fd_without_cloexec_fails_closed() {
 async fn owned_open_rejects_a_non_regular_fd() {
     let pipe = rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC).unwrap();
     let file = File::from(pipe.0);
-    let error = RedbResourceStore::<TestVerifiedMutation>::open_owned(file, identity())
-        .await
-        .unwrap_err();
+    let error = open_store(file, identity()).await.unwrap_err();
     assert_eq!(
         error.kind(),
         d2b_resource_store::StoreErrorKind::StoreIntegrityFailure
@@ -508,10 +754,7 @@ fn scm_rights_receipt_racing_fork_exec_never_leaks_the_database_inode() {
 #[tokio::test(start_paused = true)]
 async fn read_lifetime_is_enforced_by_the_paused_clock() {
     let (_directory, file, marker) = provisioned_store();
-    let store =
-        RedbResourceStore::<TestVerifiedMutation>::provision_owned(file, marker, identity())
-            .await
-            .unwrap();
+    let store = provision_store(file, marker, identity()).await.unwrap();
     let store = Arc::new(store);
     let probe_store = Arc::clone(&store);
     let probe = tokio::spawn(async move { probe_store.reads.expiry_probe().await });
@@ -527,10 +770,7 @@ async fn read_lifetime_is_enforced_by_the_paused_clock() {
 #[tokio::test]
 async fn range_seek_skips_every_older_row() {
     let (_directory, file, marker) = provisioned_store();
-    let store =
-        RedbResourceStore::<TestVerifiedMutation>::provision_owned(file, marker, identity())
-            .await
-            .unwrap();
+    let store = provision_store(file, marker, identity()).await.unwrap();
     let process = ResourceTypeName::parse("Process").unwrap();
     let first = store
         .replay_backend(0, [process.clone()], |_| Ok(()))
@@ -565,9 +805,7 @@ async fn replay_primitive_scans_larger_history_without_a_backend_queue() {
         .write(true)
         .open(directory.path().join("store.redb"))
         .unwrap();
-    let store = RedbResourceStore::<TestVerifiedMutation>::open_owned(file, identity())
-        .await
-        .unwrap();
+    let store = open_store(file, identity()).await.unwrap();
     let high_water = store
         .replay_backend(0, [ResourceTypeName::parse("Process").unwrap()], |_| Ok(()))
         .await
@@ -594,9 +832,7 @@ async fn public_read_path_enforces_zone_and_projection() {
         .write(true)
         .open(directory.path().join("store.redb"))
         .unwrap();
-    let store = RedbResourceStore::<TestVerifiedMutation>::open_owned(file, identity())
-        .await
-        .unwrap();
+    let store = open_store(file, identity()).await.unwrap();
     let target = ResourceRef::parse("Host/host-system").unwrap();
     let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
     let request = |zone: &str, projection| StoreGetRequest {
@@ -649,9 +885,7 @@ async fn list_cursor_is_bound_to_snapshot_and_selector() {
         .write(true)
         .open(directory.path().join("store.redb"))
         .unwrap();
-    let store = RedbResourceStore::<TestVerifiedMutation>::open_owned(file, identity())
-        .await
-        .unwrap();
+    let store = open_store(file, identity()).await.unwrap();
     let request = |cursor, resource_types| StoreListRequest {
         operation: operation("list-host"),
         zone: ZoneId::parse("work").unwrap(),
@@ -689,10 +923,7 @@ async fn list_cursor_is_bound_to_snapshot_and_selector() {
 #[tokio::test]
 async fn public_watch_fails_until_the_coordinator_owns_stream_registration() {
     let (_directory, file, marker) = provisioned_store();
-    let store =
-        RedbResourceStore::<TestVerifiedMutation>::provision_owned(file, marker, identity())
-            .await
-            .unwrap();
+    let store = provision_store(file, marker, identity()).await.unwrap();
     let error = store
         .watch(StoreWatchRequest {
             operation: operation("watch-host"),
@@ -776,7 +1007,8 @@ fn checked_mutation_constructors_and_raw_commit_path_are_not_public() {
     assert!(!source.contains("pub struct CheckedMutation"));
     assert!(!source.contains("pub struct CheckedPreparedMutation"));
     assert!(!source.contains("pub async fn commit_checked"));
-    assert!(source.contains("RedbResourceStore<V>"));
-    assert!(source.contains("V: VerifiedMutationView"));
-    assert!(source.contains("d2b_resource_api::admission::VerifiedMutation"));
+    assert!(source.contains("pub struct RedbResourceStore"));
+    assert!(source.contains("SealedMutation"));
+    assert!(!source.contains("MutationView"));
+    assert!(!source.contains("type_name"));
 }

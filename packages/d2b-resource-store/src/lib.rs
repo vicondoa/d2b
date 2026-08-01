@@ -3,13 +3,18 @@
 //! This crate intentionally contains no database or executor dependency.
 
 pub mod error;
+pub mod mutation_seal;
 
 use d2b_contracts::v3::{
     ConfigurationGeneration, ControllerGeneration, FinalizerId, ResourceGeneration, ResourceName,
     ResourceRef, ResourceTypeName, ResourceUid, ZoneId, ZoneRevision,
 };
 
-pub use error::{MutationOrdinal, MutationOrdinalError, StoreError, StoreErrorKind};
+pub use error::{
+    MAX_STORE_SLOTS, MutationOrdinal, MutationOrdinalError, SealIdentityMismatch, StoreError,
+    StoreErrorKind, StoreSlot, StoreSlotError,
+};
+pub use mutation_seal::{MutationSealBody, OpenedMutation, SealedMutation, StoreSealIdentity};
 
 /// Exact optimistic precondition for a mutation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -274,6 +279,51 @@ impl core::fmt::Debug for StoreMutation {
                 "has_reconcile_deadline",
                 &self.reconcile_deadline_ms.is_some(),
             )
+            .finish()
+    }
+}
+
+/// Backend-ready mutation carrying the final canonical identity and digest.
+pub struct PreparedStoreMutation {
+    mutation: StoreMutation,
+    resource_uid: Option<ResourceUid>,
+    payload_digest: Option<String>,
+}
+
+impl PreparedStoreMutation {
+    pub const fn new(
+        mutation: StoreMutation,
+        resource_uid: Option<ResourceUid>,
+        payload_digest: Option<String>,
+    ) -> Self {
+        Self {
+            mutation,
+            resource_uid,
+            payload_digest,
+        }
+    }
+
+    pub const fn mutation(&self) -> &StoreMutation {
+        &self.mutation
+    }
+
+    /// Final UID used by the resource record and every UID-keyed index.
+    pub const fn resource_uid(&self) -> Option<&ResourceUid> {
+        self.resource_uid.as_ref()
+    }
+
+    /// Digest of the final canonical bytes persisted by the backend.
+    pub fn payload_digest(&self) -> Option<&str> {
+        self.payload_digest.as_deref()
+    }
+}
+
+impl core::fmt::Debug for PreparedStoreMutation {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("PreparedStoreMutation")
+            .field("kind", &self.mutation.kind)
+            .field("has_resource_uid", &self.resource_uid.is_some())
+            .field("has_payload_digest", &self.payload_digest.is_some())
             .finish()
     }
 }

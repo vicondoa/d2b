@@ -63,6 +63,39 @@ Authenticated transport evidence and attachment credits are consumed into a priv
 
 Registration consumes the single-owner capability admission; comparing a clonable token is insufficient. Every route is exact, subject-bound, revision-bound, and Zone-checked before minting authority. There is no wildcard pub/sub and no direct store handle. `UnregisteredBusAdapter` is a deliberate unreachable seam and must remain unregistered until authenticated ComponentSession, the Zone bus, and Zone registration land together.
 
+## Resource mutation seal
+
+**Where:** `packages/d2b-resource-store/src/mutation_seal.rs`, `packages/d2b-resource-store-redb/src/`, and `packages/d2b-resource-api/src/`
+
+The resource write boundary is a concrete, process-local capability. Its
+invariants are:
+
+1. `SealedMutation` has one constructor, `MutationSealIssuer::seal`.
+2. `mutation_seal_pair` and `MutationSealIssuer::seal` each have one
+   non-test call site in the resource API.
+3. The store and redb crates never depend on the resource API or import RBAC
+   evaluator types.
+4. `RedbResourceStore::commit_verified` is the only mutating backend method
+   and consumes `SealedMutation` by value.
+5. The seal module has no test-only or non-test-only configuration branch.
+6. The external seal harness forces the real resource boundary through the
+   compiled test configuration rather than opening a test escape hatch.
+7. Seal types do not implement formatting, serialization, or comparison
+   traits, and the module renders no identity.
+8. A UUID, authority address, or database path never appears in diagnostics,
+   telemetry, or audit data.
+9. A store UUID is the canonical `ResourceUid`; it is compared only as a
+   diagnosable identity component after the private authority check.
+10. `StoreSlot` is a bounded, deterministic composition correlator. It is
+    never persisted, serialized, placed on the wire, or compared as identity.
+11. Store opening checks Zone, store UUID, and slot agreement for the acceptor,
+    and every startup error carries the slot of the store producing it.
+
+The issuer is retained by the native authorizer and the acceptor crosses into
+the concrete backend by value. A downstream crate can construct an inert pair
+for a store it owns, but it cannot open evidence against a store instance
+whose acceptor it does not hold.
+
 ## Authoritative subject resolution
 
 **Where:** `packages/d2b-bus/src/router.rs` (`ZoneRegistrar`), `packages/d2b-session-unix/src/subject.rs`
@@ -195,4 +228,3 @@ is fail-closed (`path-safety-violation`,
 [`docs/explanation/host-prepare.md`](../explanation/host-prepare.md)
 § "NetworkManager / systemd-networkd coexistence" and ADR 0013 for
 the rationale.
-

@@ -13,10 +13,8 @@ use d2b_resource_store::{
 use redb::{Database, Durability, ReadableDatabase, ReadableTable, TableDefinition};
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    DecodedKey, KeyComponent, KeySpace, ValueKind, VerifiedMutationView,
-    VerifiedPreparedMutationView, encode_key, encode_value,
-};
+use crate::{DecodedKey, KeyComponent, KeySpace, ValueKind, encode_key, encode_value};
+use d2b_resource_store::mutation_seal::OpenedMutation;
 
 pub(crate) const STORE_META: TableDefinition<'static, &[u8], &[u8]> =
     TableDefinition::new("store_meta");
@@ -389,14 +387,15 @@ impl VerifiedPreparedMutation {
 }
 
 impl VerifiedWrite {
-    pub(crate) fn from_view<V: VerifiedMutationView>(verified: &V) -> Self {
+    pub(crate) fn from_opened(opened: OpenedMutation) -> Self {
+        let body = opened.into_body();
         Self {
-            authorization: verified.authorization().clone(),
-            policy_snapshot: verified.policy_snapshot(),
-            operation: verified.operation().clone(),
-            mutations: verified
-                .mutations()
-                .iter()
+            authorization: body.authorization,
+            policy_snapshot: body.policy_snapshot,
+            operation: body.operation,
+            mutations: body
+                .mutations
+                .into_iter()
                 .map(|prepared| VerifiedPreparedMutation {
                     mutation: prepared.mutation().clone(),
                     resource_uid: prepared.resource_uid().cloned(),
@@ -421,7 +420,7 @@ pub(crate) fn initialize(
         return Err(integrity("store-meta-already-exists"));
     }
     let record = StoreMeta {
-        store_uuid: identity.store_uuid.clone(),
+        store_uuid: identity.store_uuid.as_str().to_owned(),
         zone_name: identity.zone.as_str().to_owned(),
         zone_uid: identity.zone_uid.as_str().to_owned(),
         created_at: identity.created_at.clone(),
@@ -460,7 +459,7 @@ pub(crate) fn validate_identity(
         .ok_or_else(|| integrity("store-meta-missing"))?;
     let meta: StoreMeta = decode(ValueKind::StoreMetaScalar, bytes.value())?;
     if meta.schema_version != PHYSICAL_SCHEMA_VERSION
-        || meta.store_uuid != identity.store_uuid
+        || meta.store_uuid != identity.store_uuid.as_str()
         || meta.zone_name != identity.zone.as_str()
         || meta.zone_uid != identity.zone_uid.as_str()
         || meta.created_at != identity.created_at
@@ -2684,7 +2683,9 @@ fn error(
 mod tests {
     use super::*;
     use d2b_contracts::v3::{ConfigurationGeneration, ResourceTypeName, Timestamp};
-    use d2b_resource_store::{AdmittedAuthorizationTarget, AdmittedVerb, ResourceMutationKind};
+    use d2b_resource_store::{
+        AdmittedAuthorizationTarget, AdmittedVerb, ResourceMutationKind, StoreSlot,
+    };
     use redb::ReadableTableMetadata;
     use std::fs::OpenOptions;
 
@@ -2700,6 +2701,7 @@ mod tests {
             .unwrap();
         let database = Database::builder().create_file(file).unwrap();
         let identity = crate::StoreIdentity::new(
+            StoreSlot::new(0).unwrap(),
             ResourceUid::parse("11111111-1111-4111-8111-111111111111").unwrap(),
             ZoneId::parse("dev").unwrap(),
             ResourceUid::parse("22222222-2222-4222-8222-222222222222").unwrap(),

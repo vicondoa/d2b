@@ -226,14 +226,16 @@ mod tests {
         SessionBinding, SessionPurpose, TranscriptHash, TransportBinding, ZoneId, ZoneRevision,
         canonical_digest,
     };
+    use d2b_resource_store::mutation_seal::MutationSealAcceptor;
     use d2b_resource_store::{
         AdmittedVerb, PolicySnapshot, ResourceMutationKind, StoreCommitResult, StoreError,
         StoreGetRequest, StoreInspectSchemaRequest, StoreListRequest, StoreListResult,
-        StoreResolveRequest, StoreResolvedIdentity, StoreWatchReceipt, StoreWatchRequest,
-        StoredResource, StoredSchema,
+        StoreResolveRequest, StoreResolvedIdentity, StoreSealIdentity, StoreSlot,
+        StoreWatchReceipt, StoreWatchRequest, StoredResource, StoredSchema,
     };
     use protobuf::{EnumOrUnknown, MessageField};
 
+    use crate::ResourceStoreBackend;
     use crate::authz::{
         ApiCatalog, ApiMethod, AuthorizationState, BindingScope, BootstrapPhase, BoundSubject,
         CompiledRole, CompiledRoleBinding, NativeAuthorizer, PolicyRule, PolicySet,
@@ -241,7 +243,6 @@ mod tests {
     };
     use crate::identity::issue_test_subject;
     use crate::service::{AuthorizedUpgrade, UpgradeResult};
-    use crate::{ResourceStoreBackend, VerifiedMutation};
 
     const GOLDEN_HOST: &[u8] = br#"{"apiVersion":"resources.d2bus.org/v3","metadata":{"configurationGeneration":7,"createdAt":"2026-07-22T00:00:00.000Z","deletionRequestedAt":null,"finalizers":[],"generation":1,"managedBy":"configuration","name":"host-system","ownerRef":null,"revision":1,"uid":"123e4567-e89b-42d3-a456-426614174000","updatedAt":"2026-07-22T00:00:00.000Z","zone":"dev"},"spec":{"providerRef":"Provider/system-core","updatePolicy":{"disruptive":"manual","nonDisruptive":"automatic"}},"status":{"completedAt":null,"conditions":[],"lastReconciledAt":null,"observedGeneration":0,"outcome":null,"phase":"Pending","resource":{},"startedAt":null,"update":{"dependencies":{"count":0,"refs":[]},"disruption":"None","lastAssessedAt":null,"observedGeneration":0,"operationId":null,"owned":{"count":0,"refs":[]},"preserveState":true,"reasons":[],"state":"Unknown","targetGeneration":1}},"type":"Host"}"#;
 
@@ -254,6 +255,9 @@ mod tests {
             policy: Option<PolicySet>,
         ) -> (Arc<Self>, Arc<NativeAuthorizer>) {
             let authorizer = NativeAuthorizer::new(catalog, policy).unwrap();
+            authorizer
+                .take_store_seal(test_store_identity())
+                .expect("test authorizer receives a store seal");
             (Arc::new(Self), Arc::new(authorizer))
         }
     }
@@ -287,10 +291,18 @@ mod tests {
 
         async fn commit_verified(
             &self,
-            _: VerifiedMutation,
+            _: d2b_resource_store::SealedMutation,
         ) -> Result<StoreCommitResult, StoreError> {
             unreachable!("authorization must run before the store")
         }
+    }
+
+    fn test_store_identity() -> StoreSealIdentity {
+        StoreSealIdentity::new(
+            StoreSlot::new(0).unwrap(),
+            ZoneId::parse("dev").unwrap(),
+            ResourceUid::parse("11111111-1111-4111-8111-111111111111").unwrap(),
+        )
     }
 
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -333,14 +345,17 @@ mod tests {
         }
     }
 
-    #[derive(Debug)]
     struct RecordingStore {
         calls: Arc<Mutex<Vec<DispatchObservation>>>,
+        acceptor: MutationSealAcceptor,
     }
 
     impl RecordingStore {
-        fn new(calls: Arc<Mutex<Vec<DispatchObservation>>>) -> Arc<Self> {
-            Arc::new(Self { calls })
+        fn new(
+            calls: Arc<Mutex<Vec<DispatchObservation>>>,
+            acceptor: MutationSealAcceptor,
+        ) -> Arc<Self> {
+            Arc::new(Self { calls, acceptor })
         }
 
         fn record(&self, observation: DispatchObservation) {
@@ -452,11 +467,13 @@ mod tests {
 
         async fn commit_verified(
             &self,
-            mutation: VerifiedMutation,
+            mutation: d2b_resource_store::SealedMutation,
         ) -> Result<StoreCommitResult, StoreError> {
-            let operation_id = mutation.operation().operation_id.clone();
-            let authorization = mutation.authorization();
-            let mutations = mutation.mutations();
+            let opened = self.acceptor.open(mutation).unwrap();
+            let body = opened.into_body();
+            let operation_id = body.operation.operation_id;
+            let authorization = body.authorization;
+            let mutations = body.mutations;
             let (method, revision) = if mutations.len() > 1 {
                 (ApiMethod::CommitBatch, 110)
             } else {
@@ -676,7 +693,10 @@ mod tests {
         .unwrap();
         let policy = PolicySet::new(&catalog, 4, vec![role], vec![binding]).unwrap();
         let authorizer = NativeAuthorizer::new(catalog, Some(policy)).unwrap();
-        let store = RecordingStore::new(Arc::clone(&calls));
+        let acceptor = authorizer
+            .take_store_seal(test_store_identity())
+            .expect("recording store receives a seal acceptor");
+        let store = RecordingStore::new(Arc::clone(&calls), acceptor);
         let upgrade = Arc::new(RecordingUpgrade {
             calls: Arc::clone(&calls),
         });
