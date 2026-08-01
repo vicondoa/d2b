@@ -496,11 +496,32 @@ function splitRow(line) {
   return cells;
 }
 
+// A row is recognised by its leading pipe, so a row that lost one reads as
+// prose and would be skipped unread. Every pipe in these registers belongs to a
+// table, so a line carrying an unescaped pipe without a leading one is a
+// malformed row rather than prose. The escape rule is splitRow's: a backslash
+// protects the character after it.
+function carriesPipe(line) {
+  const text = line.trim();
+  for (let i = 0; i < text.length; i += 1) {
+    if (text[i] === "\\") { i += 1; continue; }
+    if (text[i] === "|") return true;
+  }
+  return false;
+}
+
 const memoryDir = join(root, ".specify", "memory");
 let registerRows = 0;
 for (const reg of ["friction-log.md", "deferred-work.md", "engineering-debt.md"]) {
   const path = join(memoryDir, reg);
-  if (!existsSync(path)) continue;
+  if (!existsSync(path)) {
+    fail(
+      `.specify/memory/${reg}: this register is missing. All three are the memory ` +
+      `this process runs on, so an absent one is an unrecorded gap rather than an ` +
+      `empty register. Restore it, or create it with its header row.`,
+    );
+    continue;
+  }
   const lines = readFileSync(path, "utf8").split("\n");
   // The registers do not share a shape, so the disposition column is located by
   // its header rather than by position: deferred-work.md carries a trailing Ref
@@ -517,6 +538,13 @@ for (const reg of ["friction-log.md", "deferred-work.md", "engineering-debt.md"]
   let sawHeader = false;
   for (const [i, line] of lines.entries()) {
     if (!line.trim().startsWith("|")) {
+      if (carriesPipe(line)) {
+        fail(
+          `.specify/memory/${reg}:${i + 1}: this line carries a pipe but does not ` +
+          `begin with one, so it reads as prose and no column on it is validated. ` +
+          `Add the leading pipe, or escape a pipe that is genuinely prose as \\|.`,
+        );
+      }
       dispositionIdx = -1;
       headerWidth = -1;
       continue;

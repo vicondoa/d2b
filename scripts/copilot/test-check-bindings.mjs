@@ -72,12 +72,12 @@ const REQUIRED_INPUTS = [
   "packages/xtask/src/delivery/model.rs",
   "packages/xtask/src/delivery/panel.rs",
   "packages/xtask/src/delivery/mod.rs",
+  ".specify/memory",
 ];
 
 const OPTIONAL_INPUTS = [
   ".github/copilot/settings.json",
   ".specify/integration.json",
-  ".specify/memory",
 ];
 
 const HELPER = ".github/skills/d2b-panel-round/scripts/make-records.mjs";
@@ -398,6 +398,21 @@ const CASES = [
       ),
     expectExit: 1,
     expectText: "names no Disposition",
+  },
+  // A row is found by its leading pipe, so a row that lost one reads as prose
+  // and every column on it goes unvalidated. The disposition below is bogus:
+  // if the line were read as a row at all, the gate would reject it for that
+  // instead, so the expected diagnostic distinguishes the two outcomes.
+  {
+    name: "a row that lost its leading pipe is rejected rather than read as prose",
+    mutate: (dir) =>
+      appendRegisterRow(
+        dir,
+        "friction-log.md",
+        " copilotw6 | test | 2026-07-31 | fixture row | open | notavocabularyterm |",
+      ),
+    expectExit: 1,
+    expectText: "carries a pipe but does not",
   },
 ];
 
