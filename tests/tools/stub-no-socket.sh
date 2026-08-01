@@ -146,7 +146,7 @@ run_stub() {
   local var_lib_list_before=""
   local xdg_before="" tmp_before=""
 
-  log "--> cargo run --bin $bin"
+  log "--> run $bin"
   run_list_before=$(snapshot_listdir /run/d2b)
   var_lib_list_before=$(snapshot_listdir /var/lib/d2b)
   if [ -n "${XDG_RUNTIME_DIR:-}" ]; then
@@ -156,9 +156,7 @@ run_stub() {
 
   set +e
   output=$(
-    cd "$ROOT/packages" && \
-      CARGO_TARGET_DIR="$workspace_target_dir" \
-      cargo run --manifest-path "$manifest" --quiet --bin "$bin" 2>&1
+    "$workspace_target_dir/debug/$bin" 2>&1
   )
   rc=$?
   set -e
@@ -172,6 +170,11 @@ run_stub() {
   assert_no_runtime_state "$bin" "$run_list_before" "$var_lib_list_before" \
     "$xdg_before" "$tmp_before"
 }
+
+log "--> cargo build --bins d2b,d2bd (stub smoke binaries)"
+(cd "$ROOT/packages" && \
+  CARGO_TARGET_DIR="$workspace_target_dir" \
+  cargo build --manifest-path "$manifest" --quiet --bin d2b --bin d2bd)
 
 run_stub d2b "d2b 0.0.0-bootstrap (bootstrap stub)"
 run_stub d2bd "d2bd 0.0.0-bootstrap (bootstrap stub)"
