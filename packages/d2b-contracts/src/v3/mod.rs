@@ -19,6 +19,7 @@ pub mod resource_ref;
 pub mod resource_schema;
 pub mod resource_status;
 pub mod semantic_services;
+pub mod storage;
 pub mod user;
 pub mod volume;
 pub mod volume_state;

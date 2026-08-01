@@ -61,6 +61,7 @@
     ./host-json.nix
     ./processes-json.nix
     ./storage-json.nix
+    ./zone-storage-json.nix
     ./sync-json.nix
     ./allocator-json.nix
     ./realm-controller-config-json.nix

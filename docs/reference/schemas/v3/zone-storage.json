@@ -1,0 +1,306 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ZoneStoreStorageRow",
+  "description": "Complete closed storage row for one Zone resource store.",
+  "type": "object",
+  "required": [
+    "filesystem",
+    "fsync",
+    "locking",
+    "marker",
+    "ownership",
+    "parentDirectoryId",
+    "publication",
+    "replacementDetection",
+    "storageOwnerPrincipal",
+    "zoneStoreId"
+  ],
+  "properties": {
+    "filesystem": {
+      "description": "Required filesystem capability and path-resolution posture.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/ZoneStoreFilesystemRequirement"
+        }
+      ]
+    },
+    "fsync": {
+      "description": "Required file and parent-directory durability.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/ZoneStoreFsyncRequirement"
+        }
+      ]
+    },
+    "locking": {
+      "description": "Required locking capability.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/ZoneStoreLockingRequirement"
+        }
+      ]
+    },
+    "marker": {
+      "description": "Required identity marker.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/ZoneStoreMarkerInvariant"
+        }
+      ]
+    },
+    "ownership": {
+      "description": "Required owner, group, mode, and link-count posture.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/ZoneStoreOwnershipInvariant"
+        }
+      ]
+    },
+    "parentDirectoryId": {
+      "description": "Opaque identifier for its broker-resolved parent directory.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/ZoneStoreParentDirectoryId"
+        }
+      ]
+    },
+    "publication": {
+      "description": "Required crash-safe publication behavior.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/ZoneStorePublicationInvariant"
+        }
+      ]
+    },
+    "replacementDetection": {
+      "description": "Required replacement-detection behavior.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/ZoneStoreReplacementDetection"
+        }
+      ]
+    },
+    "storageOwnerPrincipal": {
+      "description": "Principal with authority to provision, validate, and open the store.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/ZoneStorePrincipal"
+        }
+      ]
+    },
+    "zoneStoreId": {
+      "description": "Opaque identifier for the database file.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/ZoneStoreId"
+        }
+      ]
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "ZoneStoreDescriptorPublicationRequirement": {
+      "description": "Required descriptor publication posture.",
+      "oneOf": [
+        {
+          "description": "Publish only an owned descriptor verified close-on-exec before concurrency.",
+          "type": "string",
+          "enum": [
+            "owned-descriptor-close-on-exec-verified-before-concurrency"
+          ]
+        }
+      ]
+    },
+    "ZoneStoreFileMode": {
+      "type": "string",
+      "maxLength": 4,
+      "minLength": 4,
+      "pattern": "^0[0-7]{3}$"
+    },
+    "ZoneStoreFilesystemRequirement": {
+      "description": "Required filesystem posture for resolving and opening the database inode.",
+      "oneOf": [
+        {
+          "description": "Resolve beneath the anchored parent and open a regular file without following links.",
+          "type": "string",
+          "enum": [
+            "regular-file-anchored-fd-relative-no-follow"
+          ]
+        }
+      ]
+    },
+    "ZoneStoreFsyncRequirement": {
+      "description": "Required durability boundary for store creation and replacement.",
+      "oneOf": [
+        {
+          "description": "Fsync the database file and its anchored parent directory.",
+          "type": "string",
+          "enum": [
+            "database-and-parent-directory"
+          ]
+        }
+      ]
+    },
+    "ZoneStoreId": {
+      "description": "Opaque Zone store identifier resolved only by the storage owner.",
+      "type": "string",
+      "maxLength": 160,
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9-]{0,159}$"
+    },
+    "ZoneStoreIdentityMarkerId": {
+      "description": "Opaque identity-marker identifier resolved only by the storage owner.",
+      "type": "string",
+      "maxLength": 160,
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9-]{0,159}$"
+    },
+    "ZoneStoreLinkCount": {
+      "description": "Database inode link count, exactly one.",
+      "type": "integer",
+      "enum": [
+        1
+      ]
+    },
+    "ZoneStoreLockingRequirement": {
+      "description": "Required lock primitive and descriptor inheritance posture.",
+      "oneOf": [
+        {
+          "description": "Use an open-file-description lock whose descriptor is close-on-exec.",
+          "type": "string",
+          "enum": [
+            "ofd-close-on-exec"
+          ]
+        }
+      ]
+    },
+    "ZoneStoreMarkerInvariant": {
+      "description": "Identity marker required before a store descriptor may be published.",
+      "type": "object",
+      "required": [
+        "identityMarkerId"
+      ],
+      "properties": {
+        "identityMarkerId": {
+          "description": "Opaque broker-resolved identity marker.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ZoneStoreIdentityMarkerId"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ZoneStoreOwnershipInvariant": {
+      "description": "Exact database-inode ownership and metadata requirements.",
+      "type": "object",
+      "required": [
+        "group",
+        "linkCount",
+        "mode",
+        "owner"
+      ],
+      "properties": {
+        "group": {
+          "description": "Required database inode group.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ZoneStorePrincipal"
+            }
+          ]
+        },
+        "linkCount": {
+          "description": "Required database inode link count.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ZoneStoreLinkCount"
+            }
+          ]
+        },
+        "mode": {
+          "description": "Required database inode mode.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ZoneStoreFileMode"
+            }
+          ]
+        },
+        "owner": {
+          "description": "Required database inode owner.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ZoneStorePrincipal"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ZoneStoreParentDirectoryId": {
+      "description": "Opaque parent-directory identifier resolved by the broker through an anchored descriptor.",
+      "type": "string",
+      "maxLength": 160,
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9-]{0,159}$"
+    },
+    "ZoneStorePrincipal": {
+      "description": "Validated local storage-owner, file-owner, or file-group principal.",
+      "type": "string",
+      "maxLength": 160,
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9-]{0,159}$"
+    },
+    "ZoneStorePublicationInvariant": {
+      "description": "Complete publication requirements for initial open and staged replacement.",
+      "type": "object",
+      "required": [
+        "descriptor",
+        "replacement"
+      ],
+      "properties": {
+        "descriptor": {
+          "description": "Required descriptor ownership, inheritance, and concurrency boundary.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ZoneStoreDescriptorPublicationRequirement"
+            }
+          ]
+        },
+        "replacement": {
+          "description": "Required staged-replacement publication behavior.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ZoneStoreReplacementPublicationRequirement"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ZoneStoreReplacementDetection": {
+      "description": "Required response to missing, replaced, or identity-mismatched state.",
+      "oneOf": [
+        {
+          "description": "Refuse the open rather than silently creating a replacement store.",
+          "type": "string",
+          "enum": [
+            "fail-closed-on-missing-replaced-or-identity-mismatch"
+          ]
+        }
+      ]
+    },
+    "ZoneStoreReplacementPublicationRequirement": {
+      "description": "Required staged-replacement publication and ambiguous-recovery posture.",
+      "oneOf": [
+        {
+          "description": "Atomically rename, retain the prior store, and quarantine ambiguity.",
+          "type": "string",
+          "enum": [
+            "atomic-rename-retain-prior-quarantine-ambiguity"
+          ]
+        }
+      ]
+    }
+  }
+}
