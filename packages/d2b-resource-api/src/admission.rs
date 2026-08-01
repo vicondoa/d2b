@@ -565,10 +565,7 @@ mod tests {
     fn verifier_rejects_a_mismatched_store_identity() {
         let (issuer, first_store_binding) = admission_pair();
         let (_, second_store_binding) = admission_pair();
-        let StoreAdmissionBinding {
-            verifier,
-            ..
-        } = first_store_binding;
+        let StoreAdmissionBinding { verifier, .. } = first_store_binding;
         let StoreAdmissionBinding {
             verifier: _,
             store_identity,
