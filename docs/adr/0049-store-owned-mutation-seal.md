@@ -1396,6 +1396,7 @@ Two file-disjoint scopes, both opening against merged Wave A.
   Done when `make api-surface-pin` followed by
   `git diff --exit-code tests/golden/api-surface/` exits 0,
   `make test-rust-api-surface` exits 0,
+  `make test-rust` exits 0 so the compile-fail doctest seals run,
   `make test-policy` exits 0,
 
   ```bash
