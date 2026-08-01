@@ -228,7 +228,7 @@ impl ReadinessWaitConfig {
     ///
     /// In production builds this is identical to [`Self::from_env`].
     /// In `#[cfg(test)]` builds it first checks the
-    /// [`TEST_CONFIG_OVERRIDE`] cell so tests can inject a deterministic
+    /// `TEST_CONFIG_OVERRIDE` cell so tests can inject a deterministic
     /// config without mutating process-global env vars (which requires
     /// `unsafe` in Rust 1.81+).
     pub fn for_dispatch() -> Self {

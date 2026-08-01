@@ -18,7 +18,7 @@ const MAX_SYSTEMD_RUN_ARGS: usize = (MAX_ENV * 2) + MAX_ARGV + 32;
 /// The validated, sanitized command the runner supervises.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ExecSpec {
-    /// Guest command argv. argv[0] may be absolute, bare, or relative; the
+    /// Guest command argv. `argv[0]` may be absolute, bare, or relative; the
     /// workload user's login shell performs PATH lookup for bare commands.
     pub argv: Vec<String>,
     /// Validated absolute working directory (None => `/`).

@@ -4,7 +4,7 @@
 //! per-VM vsock transport: connect, run the authenticated handshake (reusing
 //! the [`crate::guest_control_bridge`] connect/probe path), gate on the
 //! guest's advertised exec capabilities, then issue `ExecCreate`. The
-//! returned [`RealExecClient`] proxies each subsequent exec op with a FRESH
+//! returned `RealExecClient` proxies each subsequent exec op with a FRESH
 //! per-op deadline (never the exhausted one-shot establishment budget).
 
 use std::path::PathBuf;

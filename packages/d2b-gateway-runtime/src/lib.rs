@@ -7,7 +7,7 @@
 //!   binding it received over the MI-authenticated ACA control plane; written
 //!   as the relay sender's prologue (the first bytes on the display channel).
 //! - [`make_prologue_verifier`] - the gateway-side
-//!   [`PrologueVerifier`](d2b_provider_relay::PrologueVerifier) the relay
+//!   [`d2b_provider_relay::PrologueVerifier`] the relay
 //!   listener runs **before bridging any byte**; it deserializes + verifies the
 //!   handshake (MAC, generation, expiry, field-equality, one-shot anti-replay).
 //!

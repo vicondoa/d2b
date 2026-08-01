@@ -281,8 +281,9 @@ fields that request panel, agent, or model metadata.
   scratch trees between runs, keyed on a hash of `rustc -vV`. Compiled
   artifacts are not portable across compiler versions, and the gate's
   pinned toolchain routinely differs from a dev shell's, so an unkeyed
-  cache lets one poison the other. Those caches live under `.scratch/` and
-  are several GB per worktree; delete that directory to reclaim the space.
+  cache lets one poison the other. Those persistent caches live under
+  `.scratch/rust-test-cache/`, which CI restores as one cache surface. They
+  are several GB per worktree; delete that subtree to reclaim the space.
 - The persistent-shell helper is intentionally excluded from the main
   Rust workspace at `packages/d2b-guest-shell-runner/`. Run it by
   manifest path (and with `--features real-libshpool` when checking the

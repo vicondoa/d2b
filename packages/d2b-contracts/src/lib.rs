@@ -6,6 +6,7 @@ use std::collections::BTreeSet;
 
 pub mod broker_wire;
 pub mod generated;
+pub mod generation_bundle;
 pub mod guest_auth;
 pub mod guest_proto {
     pub use crate::generated::guest_control::*;
@@ -29,22 +30,23 @@ pub const PUBLIC_SOCKET_PATH: &str = "/run/d2b/public.sock";
 pub const BROKER_SOCKET_PATH: &str = "/run/d2b/priv.sock";
 pub const UNSAFE_LOCAL_HELPER_SOCKET_PATH: &str = "/run/d2b/unsafe-local-helper.sock";
 
-/// Wire-protocol version. Earlier builds negotiated via [`SemverRange`];
-/// the current broker handshake layers an explicit `PROTOCOL_VERSION`
-/// constant on top so the `d2b-priv-broker`/`d2bd` skew gate can
-/// refuse strangers without a full version negotiation round-trip.
+/// Broker operation-catalogue protocol version. The daemon publishes this
+/// value in its version file and capability metadata. The production broker
+/// request envelope does not currently carry it, so the daemon and broker do
+/// not negotiate or reject version skew at runtime.
 ///
-/// This constant was bumped from 2 → 3 when mutating broker variants
+/// This constant was bumped from 2 to 3 when mutating broker variants
 /// became **opaque ID** only: the daemon no longer passes inline nft text,
 /// route specs, sysctl values, hosts entries, NM ifname sets, paths,
 /// uids/gids, argv, env, caps, or seccomp profiles across the wire. Legacy
-/// callers that send the old payload shape are refused with
-/// `wire-version-mismatch`.
-pub const PROTOCOL_VERSION: u32 = 3;
+/// callers cannot encode the current opaque-ID request shape.
+///
+/// Version 4 adds the `ApplyNftablesProjection`, `CreateBridge`,
+/// `DeleteBridge`, and `DeletePersistentTap` broker operations.
+pub const PROTOCOL_VERSION: u32 = 4;
 
-/// Broker operation capability set advertised at handshake time. The
-/// daemon and broker compare their respective sets and refuse operations
-/// with `wire-version-mismatch` when either side is older.
+/// Broker operation capability snapshot associated with the protocol version.
+/// This is contract metadata, not a runtime negotiation result.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BrokerCapabilities {
@@ -437,7 +439,7 @@ mod tests {
         let feature = FeatureFlag::new("unsafe-local-shell-v1").expect("valid feature");
         assert_eq!(feature.known(), Some(KnownFeatureFlag::UnsafeLocalShellV1));
         assert_eq!(KnownFeatureFlag::UnsafeLocalShellV1.wire_value(), feature);
-        assert_eq!(PROTOCOL_VERSION, 3);
+        assert_eq!(PROTOCOL_VERSION, 4);
 
         let unknown = FeatureFlag::new("unsafe-local-shell-v2").expect("valid future feature");
         assert_eq!(unknown.known(), None);
@@ -537,10 +539,23 @@ mod tests {
     }
 
     #[test]
-    fn protocol_version_is_w3_opaque_id_baseline() {
-        // This was bumped from 2 → 3 when the mutating broker variants
-        // became opaque-ID-only.
-        assert_eq!(PROTOCOL_VERSION, 3);
+    fn protocol_version_covers_current_broker_operation_catalogue() {
+        assert_eq!(PROTOCOL_VERSION, 4);
+        let capabilities = BrokerCapabilities::w3();
+        for operation in [
+            "ApplyNftablesProjection",
+            "CreateBridge",
+            "DeleteBridge",
+            "DeletePersistentTap",
+        ] {
+            assert!(
+                capabilities
+                    .broker_operations
+                    .iter()
+                    .any(|candidate| candidate == operation),
+                "capability set missing {operation}"
+            );
+        }
     }
 
     #[test]
@@ -571,3 +586,11 @@ pub mod v3;
 
 #[cfg(test)]
 mod resource_proto_formatting_tests;
+
+// The `generation_bundle` module's re-exports. Keep every
+// `pub use generation_bundle::...` line inside this region so it stays one
+// contiguous block.
+pub use generation_bundle::{
+    BundleMetadata, BundleResource, ZONE_BUNDLE_DOMAIN_TAG, ZONE_BUNDLE_GENERATED_AT,
+    ZONE_BUNDLE_SCHEMA_VERSION, ZONE_BUNDLE_VERSION, ZoneBundle, ZoneBundleError,
+};

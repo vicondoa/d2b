@@ -16,6 +16,16 @@ are a **closed set** - do not add a new `tests/*.sh`. If you think you need a
 shell gate, you almost certainly want a nix-unit case (type 1) or a Rust test
 (types 2-5) instead.
 
+That closed set covers *gates*. `tests/tools/` is the open home for the
+plumbing a gate or a CI job calls - enumerators, partitioners, generators,
+runners - and a new file may land there when it is genuinely plumbing and not a
+test case. The distinction is what fails: a gate asserts an invariant and
+belongs to the closed set; a tool produces or transforms data for something
+else to assert on, and is itself covered by whichever gate consumes it. The
+migration ledger inventories `tests/*.sh` only, so a tool needs no ledger row -
+which is exactly why it must not smuggle in assertions that would then go
+untracked.
+
 When in doubt, push the test *down* the tiers (toward type 1), not up.
 
 ## Taxonomy - name, definition, home, how it runs
@@ -38,9 +48,10 @@ files: **drift gates** (`tests/unit/gates/` - `xtask gen-* + git diff`) and
 Fixture-backed type 4 tests and fixture-dependent type 5 tests in
 `d2b-contract-tests` are routed through the manifest's
 `test-fixture-contracts` job. That job is enforcing: both the local and
-pull-request lanes set `D2B_ENABLE_FIXTURE_BUILD=1`, it builds `D2B_FIXTURES`
-and runs the crate together with the CLI-contract cases, and invoking it
-without that variable fails rather than skipping. `test-rust` excludes this
+pull-request lanes set `D2B_ENABLE_FIXTURE_BUILD=1`, it materializes
+`D2B_FIXTURES` from evaluated Nix artifact data and runs the crate together
+with the CLI-contract cases, and invoking it without that variable fails rather
+than skipping. `test-rust` excludes this
 fixture-dependent crate, so cite the fixture lane rather than `test-rust` when
 claiming this coverage ran. Selected hermetic policy files may
 also have explicit enforcing entrypoints under `test-policy`; check its driver
@@ -97,7 +108,9 @@ fails, since it walks the on-disk scripts and the Makefile.
    `D2B_FIXTURES`).
 5. **Asserting a generated artifact is up to date (docs/schemas/CLI)?** → it is
    already covered by a **drift gate**; regenerate with the matching
-   `cargo run -p xtask -- gen-*` and commit - do **not** add a new gate.
+   `cargo run -p xtask -- gen-*` and commit - do **not** add a new gate. The
+   compiler-derived capability API snapshots are regenerated explicitly with
+   `make api-surface-pin`.
 6. **Genuinely needs a foreign userland / real systemd boot / live host /
    device?** → the matching Layer-2 tier (9-12). Justify why Layer 1 cannot
    cover it; reach for the *lowest* tier that works (a native fd-passing test
@@ -175,10 +188,11 @@ The privileged broker workspace stays on `cargo test`. Its tests are not
 process-per-test safe, and it runs 528 tests in about 1.4 s, so nextest has
 nothing to win there.
 
-Tests that shell out to `cargo` cache their scratch trees between runs, keyed
-on `rustc --version`, because compiled artifacts are not portable across
-compiler versions. When adding such a test, key its cache the same way and
-reuse the compilation but not any output whose freshness the test asserts on.
+Tests that shell out to `cargo` cache their scratch trees between runs under
+`.scratch/rust-test-cache/`, keyed on `rustc -vV`, because compiled artifacts
+are not portable across compiler versions. CI restores that directory as one
+cache surface. When adding such a test, key its subtree the same way and reuse
+the compilation but not any output whose freshness the test asserts on.
 
 When a failure reproduces only inside the gate's toolchain environment, use
 `tests/tools/repro-rust-gate-env.sh <command>` instead of re-running the whole

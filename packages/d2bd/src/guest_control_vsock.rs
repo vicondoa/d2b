@@ -726,7 +726,11 @@ mod tests {
         let handle = fake_ch(&base, |stream| {
             stream.write_all(b"OK 99\n").expect("write ack");
         });
-        let result = connect(&base, root.path());
+        // This test asserts path selection rather than timeout behavior. Give
+        // the synthetic peer enough setup time to survive a loaded parallel
+        // gate; the deadline-specific cases above retain the tight bounds.
+        let result =
+            connect_guest_control_vsock_for_tests(&base, root.path(), Duration::from_secs(5));
         let _ = handle.join();
         assert!(matches!(
             result,

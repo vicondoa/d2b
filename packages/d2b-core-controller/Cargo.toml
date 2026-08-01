@@ -4,6 +4,10 @@ version = "0.0.0-bootstrap"
 edition = "2024"
 publish = false
 license.workspace = true
+# `src/main.rs` is a library module scaffold, not a binary target. Auto-discovery
+# is off so cargo does not claim it as one; the slice that turns it into the
+# fixed core-controller process declares the target it wants.
+autobins = false
 
 [lints]
 workspace = true

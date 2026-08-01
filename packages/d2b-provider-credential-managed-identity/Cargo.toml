@@ -1,0 +1,22 @@
+[package]
+name = "d2b-provider-credential-managed-identity"
+version = "0.0.0-bootstrap"
+edition = "2024"
+publish = false
+license.workspace = true
+autobins = false
+
+[lints]
+workspace = true
+
+[dependencies]
+d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
+serde_json = { workspace = true }
+
+[[bin]]
+name = "d2b-managed-identity-controller"
+path = "controller/main.rs"
+
+[[bin]]
+name = "d2b-managed-identity-agent"
+path = "agent/main.rs"

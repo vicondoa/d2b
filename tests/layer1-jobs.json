@@ -28,12 +28,17 @@
       "test-performance-budgets",
       "test-lint",
       "test-changelog",
+      "test-rust-main",
+      "test-rust-remaining",
       "test-rust",
       "test-fixture-contracts",
       "test-proofs",
+      "nix-unit-discover",
+      "nix-unit-shards",
       "test-nix-unit",
       "flake-eval-discover",
       "flake-eval-x86",
+      "flake-eval-x86-realized",
       "flake-eval-x86-outputs",
       "test-flake-x86",
       "test-flake-aarch64",
@@ -111,22 +116,47 @@
       "timeoutMinutes": 10,
       "runsOn": "ubuntu-latest"
     },
-    "test-rust": {
-      "displayName": "Rust workspace gate",
-      "makeTarget": "test-rust",
+    "test-rust-main": {
+      "displayName": "Rust main workspace gate",
+      "makeTarget": "test-rust-main",
       "localEnv": {
         "D2B_SKIP_FIXTURE_BUILD": "1"
       },
       "ciKind": "rust",
-      "ciJobId": "test-rust",
+      "ciJobId": "test-rust-main",
+      "ciOnly": true,
       "needs": ["tier0"],
       "timeoutMinutes": 60,
+      "runsOn": "ubuntu-latest"
+    },
+    "test-rust-remaining": {
+      "displayName": "Rust remaining suites gate",
+      "makeTarget": "test-rust-remaining",
+      "localEnv": {
+        "D2B_SKIP_FIXTURE_BUILD": "1"
+      },
+      "ciKind": "rust",
+      "ciJobId": "test-rust-remaining",
+      "ciOnly": true,
+      "needs": ["tier0"],
+      "timeoutMinutes": 60,
+      "runsOn": "ubuntu-latest"
+    },
+    "test-rust": {
+      "displayName": "Require both Rust gate shards to pass",
+      "makeTarget": "test-rust",
+      "localEnv": {
+        "D2B_SKIP_FIXTURE_BUILD": "1"
+      },
+      "ciKind": "rust-rollup",
+      "ciJobId": "test-rust",
+      "needs": ["test-rust-main", "test-rust-remaining"],
+      "timeoutMinutes": 5,
       "runsOn": "ubuntu-latest"
     },
     "test-fixture-contracts": {
       "displayName": "Fixture-dependent Rust contract tests",
       "makeTarget": "test-fixture-contracts",
-      "requiresHeavyGate": true,
       "localEnv": {
         "D2B_ENABLE_FIXTURE_BUILD": "1"
       },
@@ -156,13 +186,30 @@
         "D2B_FLAKE_LOCAL_SHARDS": "1"
       }
     },
-    "test-nix-unit": {
-      "displayName": "Nix unit corpus gate",
-      "makeTarget": "test-nix-unit",
-      "ciKind": "simple-nix",
-      "ciJobId": "test-nix-unit",
+    "nix-unit-discover": {
+      "displayName": "Enumerate Nix unit checks",
+      "ciKind": "nix-unit-discover",
+      "ciJobId": "nix-unit-discover",
       "needs": ["tier0"],
-      "timeoutMinutes": 30,
+      "timeoutMinutes": 10,
+      "runsOn": "ubuntu-latest"
+    },
+    "nix-unit-shards": {
+      "displayName": "Nix unit shard",
+      "ciKind": "nix-unit-shards",
+      "ciJobId": "nix-unit-shards",
+      "needs": ["nix-unit-discover"],
+      "timeoutMinutes": 20,
+      "runsOn": "ubuntu-latest",
+      "maxParallel": 4
+    },
+    "test-nix-unit": {
+      "displayName": "Require every Nix unit shard to pass",
+      "makeTarget": "test-nix-unit",
+      "ciKind": "nix-unit-rollup",
+      "ciJobId": "test-nix-unit",
+      "needs": ["nix-unit-discover", "nix-unit-shards"],
+      "timeoutMinutes": 5,
       "runsOn": "ubuntu-latest"
     },
     "flake-eval-discover": {
@@ -182,6 +229,15 @@
       "runsOn": "ubuntu-latest",
       "maxParallel": 4
     },
+    "flake-eval-x86-realized": {
+      "displayName": "Flake check shard (x86_64-linux, realized)",
+      "ciKind": "flake-x86-realized",
+      "ciJobId": "flake-eval-x86-realized",
+      "needs": ["flake-eval-discover"],
+      "timeoutMinutes": 60,
+      "runsOn": "ubuntu-latest",
+      "maxParallel": 2
+    },
     "flake-eval-x86-outputs": {
       "displayName": "Flake non-checks outputs (x86_64-linux)",
       "ciKind": "flake-x86-outputs",
@@ -194,7 +250,7 @@
       "displayName": "Require all x86 flake jobs to pass",
       "ciKind": "flake-x86-rollup",
       "ciJobId": "test-flake-x86",
-      "needs": ["flake-eval-discover", "flake-eval-x86", "flake-eval-x86-outputs"],
+      "needs": ["flake-eval-discover", "flake-eval-x86", "flake-eval-x86-realized", "flake-eval-x86-outputs"],
       "timeoutMinutes": 5,
       "runsOn": "ubuntu-latest"
     },

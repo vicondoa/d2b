@@ -13,7 +13,7 @@ fn dependent_cannot_forge_registration_or_mint_admitted_session() {
     let fixture = crate_root.join("tests/ui/external-seals");
     let scratch = Scratch::new(
         repository_root
-            .join(".scratch")
+            .join(".scratch/rust-test-cache")
             .join(format!("bus-external-seals-{}", toolchain_cache_key())),
     );
     let temp = scratch.path().join("tmp");
@@ -155,7 +155,9 @@ fn dependent_cannot_forge_registration_or_mint_admitted_session() {
             ])
             .env(
                 "CARGO_ENCODED_RUSTFLAGS",
-                format!("--cfg\u{1f}d2b_capability_trait_mutation=\"{mutation}\""),
+                format!(
+                    "-D\u{1f}warnings\u{1f}--cfg\u{1f}d2b_capability_trait_mutation=\"{mutation}\""
+                ),
             )
             .env("CARGO_TARGET_DIR", scratch.path().join("target"))
             .env("TMPDIR", &temp)

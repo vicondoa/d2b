@@ -425,7 +425,7 @@ mod tests {
 // ---------------------------------------------------------------------------
 
 /// Inputs for the per-env `usbipd` backend long-lived process. The
-/// backend binds 127.0.0.1:<port> via source-based iptables defence-
+/// backend binds `127.0.0.1:<port>` via source-based iptables defence-
 /// in-depth (usbipd has no `--host` flag - it always binds 0.0.0.0).
 /// The proxy unit is the user-facing listener; see
 /// [`UsbipdProxyArgvInput`].
@@ -435,7 +435,7 @@ pub struct UsbipdBackendArgvInput {
     /// Absolute store path to the `usbipd` binary.
     pub usbipd_binary_path: String,
     /// Env name owning this backend (e.g. `work`, `personal`,
-    /// `obs`). Used to render the argv[0] process title so journal /
+    /// `obs`). Used to render the `argv[0]` process title so journal /
     /// `ps` output identifies the env.
     pub env: String,
     /// Per-env loopback TCP port. The Nix module derives this as
@@ -455,7 +455,7 @@ pub struct UsbipdBackendArgvInput {
 pub struct UsbipdProxyArgvInput {
     /// Absolute store path to `socat`.
     pub socat_binary_path: String,
-    /// Env name owning this proxy. Renders the argv[0] process title.
+    /// Env name owning this proxy. Renders the `argv[0]` process title.
     pub env: String,
     /// Env host-uplink IP the proxy listens on. Wildcard, loopback, and
     /// multicast addresses are rejected so the proxy cannot accidentally expose
@@ -476,7 +476,7 @@ pub enum UsbipdPerEnvArgvError {
     /// Env name carries characters outside the manifest-validated
     /// regex `[a-z][a-z0-9-]*`. Surface fail-closed at the generator
     /// layer so a tampered bundle can't smuggle a backslash or a
-    /// space into the argv[0] process title.
+    /// space into the `argv[0]` process title.
     InvalidEnv {
         env: String,
     },

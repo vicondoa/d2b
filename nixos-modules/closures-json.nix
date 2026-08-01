@@ -91,6 +91,22 @@ let
       '';
     in {
       vm = name;
+      data = {
+        schemaVersion = "v2";
+        vm = name;
+        toplevel = top;
+        closurePaths = [ top ];
+        dbDumpPath = "${top}-registration";
+        declaredRunner = runner;
+        runnerParityPath = runner;
+        runnerParityOk = true;
+        generation = {
+          hostGeneration = 1;
+          vmGeneration = null;
+          sourceRevision = null;
+          generatedAt = null;
+        };
+      };
       path = file;
       classification = "contractPrivateNonSecret";
       sensitivity = "nonSecret";

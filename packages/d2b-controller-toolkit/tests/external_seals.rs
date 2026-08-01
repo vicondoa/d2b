@@ -70,10 +70,12 @@ fn foreign_source_cannot_mint_committed_decision() {
     let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let repository_root = crate_root.parent().unwrap().parent().unwrap();
     let fixture = crate_root.join("tests/ui/external-seals");
-    let scratch = repository_root.join(".scratch").join(format!(
-        "controller-toolkit-external-seals-{}",
-        toolchain_cache_key()
-    ));
+    let scratch = repository_root
+        .join(".scratch/rust-test-cache")
+        .join(format!(
+            "controller-toolkit-external-seals-{}",
+            toolchain_cache_key()
+        ));
     let scratch = Scratch::new(scratch);
     let temp = scratch.path().join("tmp");
     fs::create_dir_all(&temp).expect("create repository-local compiler scratch");

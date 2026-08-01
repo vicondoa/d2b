@@ -32,6 +32,17 @@ mod store_view;
 mod swtpm_volume;
 mod views;
 
+pub mod atomic;
+pub mod audit;
+pub mod effect_port;
+pub mod lock;
+pub mod marker;
+pub mod migration;
+pub mod otel;
+pub mod path;
+pub mod relocation;
+pub mod sealing;
+pub mod snapshot;
 pub mod testing;
 
 pub use controller::{VolumeLocalController, VolumeLocalProfile};

@@ -105,7 +105,7 @@ only prerequisite is `ADR046-W7`'s exit criteria (§4), and it runs that same
 | `ADR046-W3` | `ADR-046-provider-model-and-packaging` (single spec; strictly serial - every downstream Provider dossier depends on it) | `packages/d2b-provider/`; `packages/d2b-provider-toolkit/`; one `packages/d2b-provider-<base>-<implementation>/` skeleton generator |
 | `ADR046-W4` | `ADR-046-components-processes-and-sandbox` ‖ `ADR-046-core-controllers` ‖ `ADR-046-resources-network` ‖ `ADR-046-resources-credential` ‖ `ADR-046-provider-state` (five parallel specs) | `packages/d2b-process/`, `d2b-provider-supervisor/` (process effect ports); `packages/d2b-core-controller/`; `packages/d2b-provider-network-local/` schema half; `packages/d2b-provider-credential-*/` schema half; Volume `stateSchema`/`persistenceClass`/`sensitivityClass` extension |
 | `ADR046-W5` | `ADR046-store-004` → `ADR046-store-002` → `ADR046-reconcile-003`, with `ADR046-store-003` → `ADR046-store-005`, alongside `ADR-046-resources-zone-control` ‖ `ADR-046-resources-host-guest-process-user` ‖ `ADR-046-resources-volume` ‖ `ADR-046-resources-device` ‖ `ADR-046-telemetry-audit-and-support` ‖ `ADR-046-cli-and-operations` ‖ `ADR-046-nix-configuration` (production store/watch/reaction and storage integration plus seven parallel specs) | `packages/d2b-resource-store-redb/src/{actor,transaction,revision_log,backup,migration}.rs`; `packages/d2b-resource-api/src/watch.rs`; `packages/d2b-controller-toolkit/benches/reaction.rs`; Process Provider integration tests; `packages/d2b-contracts/src/v3/storage.rs`; `nixos-modules/zone-storage-json.nix`; `docs/reference/schemas/v3/zone-storage.json`; broker Zone-store operation/wire/test destinations; `packages/d2b-provider-system-{core,systemd,minijail}/`; `packages/d2b-provider-volume-{local,virtiofs}/` schema half; `packages/d2b-provider-device-*/` schema half; `packages/d2b-telemetry/`, `d2b-audit/`; `packages/d2b/` CLI; `nixos-modules/resources-*.nix` |
-| `ADR046-W6` | All 27 `ADR-046-provider-*` dossiers, grouped into five file-disjoint provider families (§3.3) | One `packages/d2b-provider-<base>-<implementation>/` per Provider (27 crates) |
+| `ADR046-W6` | All 27 `ADR-046-provider-*` dossiers, grouped into five file-disjoint provider families (§3.3), plus deferred `ADR046-process-002` integration against the systemd and minijail dossier destinations | One `packages/d2b-provider-<base>-<implementation>/` per Provider (27 crates); core/ProviderSupervisor composition and repository Layer 2 Process Provider scenarios |
 | `ADR046-W7` | `ADR-046-feasibility-and-spikes` (`ADR046-feasibility-002` through `ADR046-feasibility-011`) ‖ `ADR-046-reset-and-cutover` ‖ `ADR-046-security-and-threat-model` ‖ `ADR-046-streamline` ‖ `ADR-046-validation-and-delivery` | Cross-cutting spec-scoped friction fixes, reset/cutover mechanics, remaining feasibility closure, security closure, and the release-gate contract (§15, evaluated at `ADR046-W8` exit) |
 | `ADR046-W8` | None - no spec members (§3.1); the wave's contents are the tooling and process friction fixes accumulated across `ADR046-W0`-`ADR046-W7` (signoff, build, test, merge, codegen, disk), triaged at `ADR046-W7` close | `packages/xtask/`; `tests/tools/`; `packages/d2b-contract-tests/tests/`; `Makefile` |
 
@@ -130,6 +130,7 @@ default position:
 | `ADR046-store-003` | `ADR046-W5` | This is a generated storage-row integration contract, not an engine backend item; all Nix/schema/parity destinations are absent and belong with Nix and broker storage wiring. |
 | `ADR046-store-005` | `ADR046-W5` | Backup/migration and broker provisioning/fd-handoff destinations are absent; it follows the storage-row contract and production engine. |
 | `ADR046-reconcile-003` | `ADR046-W5` | The real-backend reaction benchmark and Process Provider integration tests are absent. It follows `ADR046-store-002`, keeping its latency and concurrency evidence on the accepted backend/watch path it measures. |
+| `ADR046-process-002` | `ADR046-W6` | The two Provider crates have hermetic conformance and adoption coverage, but dependency policy forbids them from depending on the host-side supervisor, no production composition point constructs that supervisor, and executable container and host-integration scenarios sit outside the item's original destination. W6 owns the systemd and minijail dossier work that names the core/ProviderSupervisor adapters and repository Layer 2 acceptance, so the item moves there instead of being falsely marked Merged in W4. |
 
 These assignments preserve the existing store dependency edges and add the
 explicit `ADR046-store-002` prerequisite for `ADR046-reconcile-003`. In
@@ -142,13 +143,16 @@ particular, the eight downstream consumers remain direct dependents of
 
 ### 3.3 Wave 6 provider families (file-disjoint parallel tracks)
 
-`ADR046-W6` is the largest wave (27 crates). Every dossier's `Depends on` list
-resolves to wave ≤5 prerequisites only (verified per-dossier against the
-metadata tables read directly from `docs/specs/providers/*.md`), so all 27
-are dependency-parallel. File-disjointness (one crate directory per Provider,
-per D012/`ADR-046-provider-model-and-packaging` crate boundary) makes them
-worktree-parallel too, grouped into five independently staffed tracks so no
-single agent/reviewer owns all 27 at once:
+`ADR046-W6` is the largest wave (27 crates plus the deferred Process Provider
+integration item). Every dossier's `Depends on` list other than the explicit
+`ADR046-process-002` integration dependency resolves to wave <=5 prerequisites
+(verified per-dossier against the metadata tables read directly from
+`docs/specs/providers/*.md`), so the 27 dossier items remain dependency-parallel.
+The deferred item closes through the systemd and minijail track after its core
+composition point and Layer 2 scenarios exist. File-disjointness (one crate
+directory per Provider, per D012/`ADR-046-provider-model-and-packaging` crate
+boundary) makes the dossier work worktree-parallel, grouped into five
+independently staffed tracks so no single agent/reviewer owns all 27 at once:
 
 | Track | Providers (crate `packages/d2b-provider-<base>-<implementation>/`) |
 | --- | --- |
@@ -747,7 +751,8 @@ Ported verbatim (per `ADR046-session-001/002`) from main's
   after unit start, no daemonizing/forking unit type, adoption revalidation
   of all stable identity before pidfd open.
 - Shared conformance suite run against both Providers asserting identical
-  ResourceType/status/error shape (`ADR046-process-002`).
+  ResourceType/status/error shape, then the W6 core composition and repository
+  Layer 2 integration required to close `ADR046-process-002`.
 - Restart/adoption integration: `d2bd`-successor restart while a Process
   Provider's children are running; pidfd re-adoption without kill (mirrors
   this repository's existing `KillMode=process` continuation-event

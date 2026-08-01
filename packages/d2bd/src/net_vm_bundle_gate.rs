@@ -31,7 +31,7 @@
 //! on-disk dnsmasq.conf at
 //! `${dnsmasq_dir}/<env>.conf` (default
 //! `/var/lib/d2b/dnsmasq/<env>.conf`). On mismatch the daemon
-//! refuses VM start with [`TypedError::BundleDnsmasqDrift`] (exit
+//! refuses VM start with [`crate::typed_error::TypedError::BundleDnsmasqDrift`] (exit
 //! code 63) and the operator-facing remediation is "re-render
 //! dnsmasq.conf, then retry".
 //!

@@ -800,7 +800,24 @@ let
   };
 in
 {
-  imports = [ ./options-zones.nix ];
+  imports = [
+    ./options-zones.nix
+
+    # Resource-emitter modules. Each region below holds the imports for one
+    # module scaffold, so the work item that fills a scaffold appends inside
+    # its own contiguous region and two items never edit the same lines.
+
+    # Region: per-Zone bundle emitter (ADR046-pstate-010).
+    ./zone-resources.nix
+
+    # Region: Network ResourceType emitter (ADR046-network-004).
+    ./resources-network.nix
+
+    # Region: generic schema-derived resource options and their activation
+    # cleanup (ADR046-credential-007).
+    ./options-resources.nix
+    ./activation-nixos-cleanup.nix
+  ];
 
   options.d2b._index = lib.mkOption {
     type = lib.types.attrs;

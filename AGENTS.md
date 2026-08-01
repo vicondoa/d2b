@@ -114,6 +114,12 @@ implementation details unless a target or `tests/AGENTS.md` says otherwise.
 bootstrap a private toolchain when it is missing, so working inside the dev
 shell just skips that setup.
 
+CI splits the Rust gate into two independent jobs, `make test-rust-main` and
+`make test-rust-remaining`, behind the stable required `test-rust` rollup
+context. `make test-rust` still runs both partitions exactly once, so it stays
+the local command; reach for a partition target only to rerun the half that
+failed.
+
 ```bash
 make check        # PR-equivalent Layer-1 gate; runs tests/layer1-jobs.json
 make test-unit    # Layer-1 development umbrella (skips the preflight phase)
@@ -498,7 +504,7 @@ contract:
 - The Rust CLI does not invoke bash. `tests/tools/no-bash-ast-walker`
   is the enforcing AST-level check in `test-rust`; the companion
   source policy in `packages/d2b-contract-tests/tests/policy_source.rs`
-  is advisory until the fixture lane is enabled
+  runs in the enforcing fixture-contract lane
   ([ADR 0017](./docs/adr/0017-no-bash-fallbacks-invariant.md)).
 
 ### Verification gates

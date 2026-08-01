@@ -327,6 +327,7 @@ gateway-vm/reuses-standard-host-tool-package-plumbing
 gateway-vm/source-host-tools-opt-out-selects-source-daemon
 gateway-vm/transitional-host-relay-guard-defaults-off
 gateway-vm/waypipe-not-in-host-runner-dag
+generation-cleanup-absent-network/compiler-contract
 guest-config-containment/clean-no-failure
 guest-config-containment/imports-microvm-fires
 guest-config-containment/imports-microvm-names-mem
@@ -464,6 +465,16 @@ net-vm-network/safe-nft-work-lan-drop-before-egress-accept
 net-vm-network/safe-nft-work-lan-drop-present
 net-vm-network/safe-nft-work-uplink-drop-before-egress-accept
 net-vm-network/safe-nft-work-uplink-drop-present
+net-vm-network/v3-resource-bundle-omits-runtime-metadata
+net-vm-network/v3-resource-canonical-spec
+net-vm-network/v3-resource-cidr-overlap-rejected
+net-vm-network/v3-resource-cross-zone-bridge-multiplex-rejected
+net-vm-network/v3-resource-duplicate-attachment-index-rejected
+net-vm-network/v3-resource-port-forward-target-mutual-exclusion-rejected
+net-vm-network/v3-resource-provider-package-deployed
+net-vm-network/v3-resource-static-prerequisites-only
+net-vm-network/v3-resource-system-artifact-kind-admitted
+net-vm-network/v3-resource-system-artifact-type-rejected
 net-vm-network/work-lan-address
 net-vm-network/work-lan-bridge-east-west-unisolated
 net-vm-network/work-lan-mtu
@@ -596,6 +607,9 @@ provider-catalog/resource-ref-shaped-id-rejected
 provider-catalog/single-artifact
 provider-catalog/sorted-by-artifact-id
 provider-catalog/unknown-field-rejected
+provider-catalog/zone-resource-bundle-credential-envelope-and-digest
+provider-catalog/zone-resource-credential-invalid-inputs-rejected
+provider-catalog/zone-resource-runtime-metadata-and-store-path-absent
 readiness-waves/daemon-auto-default
 readiness-waves/has-p0
 readiness-waves/has-p1

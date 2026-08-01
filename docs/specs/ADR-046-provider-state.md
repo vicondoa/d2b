@@ -1043,8 +1043,8 @@ Every `packages/d2b-provider-<base>-<implementation>/` crate created by this or 
 | Data migration | Full v3 reset; no v2 state schema import |
 | Validation | Schema golden vectors; phase/reason round-trip; StateEnvelope digest tests |
 | Removal proof | `d2b-core/src/storage.rs` StoragePathSpec/SensitivityClass removed only after all Provider descriptor consumers are on v3 Volume spec |
-| Implementation state | Planned |
-| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
+| Implementation state | Merged |
+| Evidence | `packages/d2b-contracts/src/v3/volume_state.rs` is present with canonical schema and status vectors, phase, marker, and sealing token round trips, StateEnvelope generation and redaction tests, and explicit fail-closed digest tests. Caveat: no provider-state reason type exists despite the named phase/reason obligation. D101 has no Provider-state payload digest domain, so `canonical_state_payload_digest`, `StateEnvelope::from_payload`, and `validate_digest` intentionally return `DigestDomainUnavailable`. `VolumeStateSchema` reaches Provider component namespaces, but `VolumeSpec` and the common Volume status do not yet embed these state types. |
 
 ### ADR046-pstate-002
 
@@ -1060,8 +1060,8 @@ Every `packages/d2b-provider-<base>-<implementation>/` crate created by this or 
 | Data migration | Full reset |
 | Validation | Descriptor schema golden vectors; descriptor-Volume consistency property test; stateless-component-declares-no-namespace round-trip; storage-need justification enforcement (namespace whose payload is derivable from spec/status/core ledger/external observation → `component-state-not-justified`); `kind != state` → `component-kind-invalid`; `persistenceClass: ephemeral` → `component-persistence-class-forbidden`; `quotaBytes: 0` or `1024` → `component-quota-too-small`; base `quota.maxBytes == quotaBytes` and `quota.maxInodes > 0`; Guest-targeted with `placementMode: guest-local` → source.executionRef=Guest; Guest-targeted with `host-backed-guest` + `hostCustodyPermitted: true` → source on Host, Export created; `host-backed-guest` without `hostCustodyPermitted: true` → `placement-host-custody-violation`; credential/audit schema with `host-backed-guest` → `guest-local-required`; `placementMode` change → descriptor version increment enforced |
 | Removal proof | Not applicable (new) |
-| Implementation state | Planned |
-| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
+| Implementation state | Merged |
+| Evidence | `packages/d2b-contracts/src/v3/provider.rs` contains `ComponentStateNamespace`, its strict serialized descriptor vector, stateless and empty-declaration checks, storage-need, kind, persistence, quota, placement, custody, source, and Export-count tests. Caveat: `descriptor_volume_projection_preserves_quota_source_and_exports` checks an example projection, not an actual `VolumeSpec` or Export child and not schema, views, layout, ownership, or attachments. Custody classification is caller-supplied because no signed schema-id mapping exists. Authoritative derivability evidence belongs at ProviderDeployment admission, and no component descriptor version exists from which to enforce a placement-change version increment. |
 
 ### ADR046-pstate-003
 
@@ -1078,8 +1078,8 @@ Every `packages/d2b-provider-<base>-<implementation>/` crate created by this or 
 | Data migration | New marker written for each Volume at v3 first-boot; TPM marker path adapted from current swtpm-markers root |
 | Validation | Marker missing/replaced/mismatch tests; domain-isolation rejection tests; quota enforcement tests; crash at every provision step |
 | Removal proof | `swtpm_dir.rs` marker implementation retired only after device-tpm Provider Volume is live and marker-check parity is confirmed |
-| Implementation state | Planned |
-| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
+| Implementation state | Merged |
+| Evidence | `packages/d2b-provider-volume-local/src/{atomic,path,lock,marker,effect_port}.rs`, `tests/volume_local.rs`, `integration/volume_local.rs`, and `README.md` are present. Hermetic tests cover missing, replaced, and mismatched markers, cross-domain refusal, quota soft checks, anchored paths, lock ordering, and fail-closed marker persistence. Caveat: `integration/volume_local.rs` explicitly remains non-executable. The neutral Volume effect contract, core/broker adapter, and closed operations are owned by later work, so no real Host filesystem provision, broker-maintained marker, cross-process isolation, hard quota, or crash-at-each-provision-step evidence exists. |
 
 ### ADR046-pstate-004
 
@@ -1096,8 +1096,8 @@ Every `packages/d2b-provider-<base>-<implementation>/` crate created by this or 
 | Data migration | None (new protocol) |
 | Validation | Migration with and without crash at each step; rollback after failed EphemeralProcess; roll-forward after interrupted commit; cross-component N-Volume coordination |
 | Removal proof | `StorageLifecycleReport` and storage contract validation in `d2b-core` removed only after v3 Volume migration path is live |
-| Implementation state | Planned |
-| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
+| Implementation state | Merged |
+| Evidence | `packages/d2b-provider-volume-local/src/migration.rs`, `tests/migration_unit.rs`, `integration/migration.rs`, and `packages/d2b-controller-toolkit/src/state_migration.rs` are present. Unit tests cover prepare, staging, worker success and failure, commit, rollback, restart roll-forward, marker refusal, and stable N-Volume coordination. Caveat: the toolkit and Provider tests are pure planners over supplied observations. `integration/migration.rs` explicitly says it is declaration-only because no production ResourceClient, store-watch dispatcher, signed migration worker dispatch, or Host crash-injection path is wired. |
 
 ### ADR046-pstate-005
 
@@ -1114,8 +1114,8 @@ Every `packages/d2b-provider-<base>-<implementation>/` crate created by this or 
 | Data migration | Sealed Volumes are new (no existing sealing to migrate) |
 | Validation | Seal/read/rotation tests; rotation interrupted at commit; credential revoked during runtime |
 | Removal proof | Not applicable (new) |
-| Implementation state | Planned |
-| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
+| Implementation state | Merged |
+| Evidence | `packages/d2b-provider-volume-local/src/sealing.rs`, `tests/sealing_unit.rs`, and `integration/sealing.rs` are present. Hermetic tests cover status-before-effect rotation, identical-request recovery after interrupted audit, revocation and terminal failure preserving the old generation, and fail-closed envelope validation. Caveat: D101 still lacks the payload digest domain, so an envelope cannot pass sealing validation. `integration/sealing.rs` is declaration-only; no live Credential lease, key-custody adapter, durable encrypted write, or interrupted real rotation is exercised. |
 
 ### ADR046-pstate-006
 
@@ -1132,8 +1132,8 @@ Every `packages/d2b-provider-<base>-<implementation>/` crate created by this or 
 | Data migration | No existing snapshots; new infrastructure only |
 | Validation | Create/read/expire/retention-limit tests; snapshot before interrupted migration; snapshot list in Volume status |
 | Removal proof | Not applicable (new) |
-| Implementation state | Planned |
-| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
+| Implementation state | Merged |
+| Evidence | `packages/d2b-provider-volume-local/src/snapshot.rs`, `tests/snapshot_unit.rs`, and `integration/snapshot.rs` are present. Unit tests cover trigger policy, retained-count and TTL expiry, status projection, duplicate identity, ambiguous retention order, and preservation of a pre-migration snapshot observation. Caveat: this is policy and status planning only. `integration/snapshot.rs` is declaration-only because no production worker dispatcher, real Host filesystem snapshot, status publisher, expiry effect, or interrupted-migration composition exists. |
 
 ### ADR046-pstate-007
 
@@ -1150,8 +1150,8 @@ Every `packages/d2b-provider-<base>-<implementation>/` crate created by this or 
 | Data migration | Not applicable |
 | Validation | Relocation with crash at copy midpoint; failed relocation source preservation; virtiofs source relocation test |
 | Removal proof | Not applicable (new) |
-| Implementation state | Planned |
-| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
+| Implementation state | Merged |
+| Evidence | `packages/d2b-provider-volume-local/src/relocation.rs`, `tests/relocation_unit.rs`, and `integration/relocation.rs` are present. Unit tests prove finalizer-first ordering, source preservation on midpoint failure, marker refusal, destination activation before source deletion, and virtiofs attachment re-point ordering in the state machine. Caveat: `integration/relocation.rs` is declaration-only; no two-Host anchored copy, real midpoint crash, destination activation, or volume-virtiofs Export re-point runs through production composition. |
 
 ### ADR046-pstate-008
 
@@ -1168,8 +1168,8 @@ Every `packages/d2b-provider-<base>-<implementation>/` crate created by this or 
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | Audit event golden records; no content/path/credential in audit payload; structural OTEL label-policy tests assert exact absence of `vm`, `zone`, `zone_id`, `zone_uid`, and resource-name-derived keys and preserve `d2b.zone` as a resource attribute |
 | Removal proof | Not applicable |
-| Implementation state | Planned |
-| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
+| Implementation state | Merged |
+| Evidence | `packages/d2b-provider-volume-local/src/{audit,otel}.rs` and `tests/audit_unit.rs` are present. The tests pin the 18 Provider event kinds, six broker operation kinds, bounded path-free audit records, all 15 metric descriptors, closed label keys and values, forbidden identity classes, and `d2b.zone` as a Resource attribute rather than a label. Caveat: no lifecycle implementation calls `emit_volume_event`, and no production emitter exports `METRICS` through the observability Provider. Live audit and OTEL acceptance therefore remains absent. |
 
 ### ADR046-pstate-009
 
@@ -1186,8 +1186,8 @@ Every `packages/d2b-provider-<base>-<implementation>/` crate created by this or 
 | Data migration | None - full d2b 3.0 reset; no prior state to migrate |
 | Validation | All ported tests pass under v3 contracts; test coverage includes every fault-injection scenario listed in d2b-state/tests/state.rs plus new provider-state cases; stateless-component-declares-no-Volume test passes; shared-Volume attempt rejected; `guest-local` Volume creation inside Guest domain (source.executionRef=Guest, no Export created, Host volume-local holds no dirfd/path); `host-backed-guest` Volume creation (source on Host, Export created, Export reaches Ready, Guest Process mounts source Volume view); `host-backed-guest` without `hostCustodyPermitted: true` → `placement-host-custody-violation`; credential/audit schema with `host-backed-guest` → `guest-local-required`; cross-domain isolation: Guest-local volume-local does not create or observe Host-domain Volumes |
 | Removal proof | `d2b-state` crate retired from workspace only after every caller migrates to v3 Volume state helpers and all ported tests pass |
-| Implementation state | Planned |
-| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
+| Implementation state | Merged |
+| Evidence | `packages/d2b-provider-volume-local/tests/{state,migration}.rs` and `integration/{provider_state,audit}.rs` are present. The hermetic suites cover atomic-write refusal before filesystem effects, marker persistence, lock and path policy, placement projections, shared-write rejection, migration, relocation, sealing, and status bounds. Caveat: both integration files explicitly declare themselves non-executable. No live daemon, real Host mount, cross-process worker subview, production ProviderDeployment, restart adoption, Zone audit stream, or OTEL export is exercised, and the later Volume effect adapter remains a prerequisite. |
 
 ### ADR046-pstate-010
 
@@ -1204,8 +1204,8 @@ Every `packages/d2b-provider-<base>-<implementation>/` crate created by this or 
 | Data migration | `nixos-modules/manifest.nix` provider-registration and storage-authority rows superseded by `zone-resources.nix`; prior `manifest.json` format retired after Zone daemon migration to bundle format |
 | Validation | All eight removed-resource cleanup tests enumerated in [Required tests for removed-resource cleanup](#required-tests-for-removed-resource-cleanup); eval credential-ref guard (test: raw value in `credentialRef` field → NixOS eval error, no bundle emitted); Provider schema conformance golden vector (test: unknown `config` key → build fails); `contentHash` determinism (test: two independent builds of identical Nix inputs produce byte-identical bundles) |
 | Removal proof | `nixos-modules/manifest.nix` provider-registration rows retired only after all Provider registrations use the bundle format and all consumers (broker, Zone daemon) complete bundle-format migration |
-| Implementation state | Planned |
-| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
+| Implementation state | Merged |
+| Evidence | The ruled bundle implementation is present at `nixos-modules/zone-resources.nix`, `packages/d2b-contracts/src/generation_bundle.rs`, and `packages/d2b-core-controller/src/configuration/{bundle_apply,generation_transition}.rs` plus `cleanup.rs`. `packages/d2b-core-controller/tests/{generation_transition,generation_cleanup,configuration_name_conflict}.rs`, `packages/d2b-contracts/tests/generation_bundle.rs`, and Nix generation cases cover canonical input, integrity, ownership, diff, conflict, retention, and cleanup policy. Caveat: the destination prose says eight cleanup tests while its normative list has nine. The named `tests/configuration.rs` and `integration/configuration.rs` do not exist; no real store/controller cleanup, Zone status or audit integration, generation metric canary, container activation, complete Provider-config schema build rejection, or two-independent-build determinism test exists. The production store/watch path is later work. |
 
 ### ADR046-pstate-011
 
@@ -1222,8 +1222,8 @@ Every `packages/d2b-provider-<base>-<implementation>/` crate created by this or 
 | Data migration | Not applicable |
 | Validation | Policy gate detects missing `src/` → error; missing `tests/` → error; missing `integration/` → error; missing `README.md` → error; empty `integration/` (no `.rs` files) → error; all four paths present and non-empty → pass; existing non-provider `d2b-*` crates not flagged; gate is idempotent across re-runs |
 | Removal proof | Not applicable (permanent gate) |
-| Implementation state | Planned |
-| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
+| Implementation state | Merged |
+| Evidence | `packages/xtask/src/provider_crate_policy.rs` is present and exposed as `check-provider-crate-layout`; its tests cover a conforming idempotent tree, missing integration README and Rust scenario, empty scope, non-Provider exclusion, and redacted malformed paths. The existing enforcing `policy_provider_crates.rs` separately checks the four top-level paths, README sections, scenario target declarations, naming, identity, dossier parity, and dependency direction. Caveat: the destination's new shell gate was deliberately not created because the repository gate set is closed. Several pre-existing crates remain on an exact README-only integration ratchet until executable scenarios land. |
 
 ### ADR046-pstate-012
 
@@ -1240,5 +1240,5 @@ Every `packages/d2b-provider-<base>-<implementation>/` crate created by this or 
 | Data migration | New; no prior bootstrap artifacts to migrate |
 | Validation | Stateless component → no Volume created; each `storageNeed` variant accepted with a declared Volume; unjustified namespace → `component-state-not-justified`; status-first restart: controller re-derives observed state and reverifies against external reality, never treating status as authority; oversize/over-detail/over-cardinality status write → typed rejection; status contains no secret/path/argv/PID/unit/stream/ring content |
 | Removal proof | Not applicable (permanent admission + status-bound enforcement) |
-| Implementation state | Planned |
-| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
+| Implementation state | Merged |
+| Evidence | `packages/d2b-core-controller/src/optional_state_admission.rs`, `packages/d2b-core-controller/tests/optional_state_admission.rs`, and `packages/d2b-provider-volume-local/tests/status_bounds.rs` are present. Tests cover stateless components, all four storage-need values, rejection of each derivable class and assessment-count mismatch, restart revalidation against external observation, total and provider-layer byte caps, condition and collection bounds, typed `status-oversize`, and forbidden status content classes. Caveat: this is pure policy over a trusted assessment array. No production actor derives that evidence, creates the admitted Volume, applies the check in a store write, or orders Volume creation before component launch. |

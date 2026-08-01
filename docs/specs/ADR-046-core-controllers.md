@@ -346,8 +346,8 @@ Keeping handlers in one process does not union arbitrary Provider privilege:
 | Data migration | Full reset |
 | Validation | Per-handler unit/property tests plus multi-process startup/restart |
 | Removal proof | Current daemon branches removed after handler/Provider parity |
-| Implementation state | Planned |
-| Evidence | The complete Destination and Validation obligations above have not both been verified in the indexed tree. |
+| Implementation state | Merged |
+| Evidence | `packages/d2b-core-controller/src/` contains the fixed-process coordinator and the listed catalog, authorization, Provider, controller, ownership, watch, cleanup, Zone-link, budget, and store modules; configuration is the ruled directory module `configuration/{mod,bundle_apply,generation_transition}.rs`. Inline tests and `tests/{generation_transition,generation_cleanup,resource_metadata,configuration_name_conflict,optional_state_admission}.rs` exercise focused ordering, authorization, lifecycle, cleanup, and generation policy. Caveat: `main.rs` is deliberately a library coordinator and `Cargo.toml` has `autobins = false`; the production ResourceClient, authenticated session connector, operation ledger, accepted store, and watch dispatcher are absent. Tests are example based rather than the required property corpus, multi-process startup/restart is absent, and store transactions, finalizer effects, watch delivery, and audit append remain unwired. |
 
 ### ADR046-core-002
 

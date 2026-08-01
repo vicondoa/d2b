@@ -10,15 +10,19 @@ side-effect audit operation that never reaches the wire dispatcher).
 | Variant | Disposition | Note | Target |
 | --- | --- | --- | --- |
 | ApplyNftables | promoted-live | Resolves the trusted bundle nftables intent and applies or destroys the managed nftables batch. | live in production broker |
+| ApplyNftablesProjection | promoted-live | Resolves the trusted bundle nftables projection intent and applies or removes only the ownership-scoped projection, refusing a stale installed-generation fence. | live in production broker |
 | ApplyNmUnmanaged | promoted-live | Resolves the trusted NetworkManager unmanaged intent and reconciles the managed config block. | live in production broker |
 | ApplyRoute | promoted-live | Resolves the trusted route intent and applies or removes the host route. | live in production broker |
 | ApplySysctl | promoted-live | Resolves the trusted sysctl intent and applies or removes the host sysctl value. | live in production broker |
 | BindMountFromHardlinkFarm | promoted-live | Resolves the per-VM store-view intent, records the hardlink-farm source, and acknowledges the daemon-owned bind-mount step. | live in production broker |
 | BindUnixSocket | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; sidecar socket binding is not implemented. | reserved |
 | CreateOrReconcileUsersGroups | stubbed-unimplemented | Returns `BrokerError::Unimplemented`; host account reconciliation is not implemented in the production dispatcher. | bootstrap-only |
+| CreateBridge | promoted-live | Resolves the trusted bundle bridge intent and creates the managed bridge with IPv6 suppressed before link-up. | live in production broker |
 | CreatePersistentTap | promoted-live | Creates or reconciles the VM TAP device through the live TAP handler and records the resulting ifnames. | live in production broker |
 | CreateTapFd | promoted-live | Opens a TAP fd through the live TAP handler and returns it over `SCM_RIGHTS`. | live in production broker |
 | DelegateCgroupV2 | promoted-live | Delegates the trusted cgroup v2 subtree and records the delegated scope. | live in production broker |
+| DeleteBridge | promoted-live | Resolves the trusted bundle bridge intent and removes the managed bridge after its TAP removals are confirmed. | live in production broker |
+| DeletePersistentTap | promoted-live | Resolves the trusted attachment identity and removes the persistent TAP once both generation fences match and the VMM descriptor is closed. | live in production broker |
 | DeregisterRunnerPidfd | promoted-live | Removes the runner pidfd registry entry idempotently and returns whether an entry was present. | live in production broker |
 | DiskInit | promoted-live | Resolves trusted disk-init plans for the VM and creates, validates, or safely repairs disk images before runner spawn; ambiguous existing data fails closed. | live in production broker |
 | ExportBrokerAudit | callable-read-only | Reads the append-only broker audit log, requires `caller_role: AdminUid { uid }`, and streams redacted lines back to `d2bd`. | live read-only callable |

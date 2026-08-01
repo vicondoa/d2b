@@ -118,6 +118,50 @@
       },
       "additionalProperties": false
     },
+    "ApplyNftablesProjectionRequest": {
+      "description": "The broker re-derives the desired projection from `bundle_nft_projection_intent_ref`. As with [`ApplyNftablesRequest`], the daemon passes no inline rule text.",
+      "type": "object",
+      "required": [
+        "action",
+        "bundleNftProjectionIntentRef",
+        "expectedGenerationId",
+        "scopeId"
+      ],
+      "properties": {
+        "action": {
+          "$ref": "#/definitions/NftablesProjectionAction"
+        },
+        "bundleNftProjectionIntentRef": {
+          "type": "string"
+        },
+        "desiredHash": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "expectedGenerationId": {
+          "description": "Immutable installed bundle generation the projection was resolved from.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ResourceBundleGenerationId"
+            }
+          ]
+        },
+        "scopeId": {
+          "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
     "ApplyNftablesRequest": {
       "description": "The broker re-derives the desired nft state from `bundle_nft_intent_ref`. The daemon does NOT pass inline rule text. `desired_hash` is a stable digest of the resolved intent, used for idempotent audit + drift detection.",
       "type": "object",
@@ -311,7 +355,7 @@
       ]
     },
     "AudioErrorKind": {
-      "description": "Low-cardinality error kind for a per-VM audio failure.\n\nUsed in [`AudioVmError`] and [`VmAudioErrorOutputV1`](crate::VmAudioErrorOutputV1) so that both the wire protocol and the generated CLI schema carry enum constraints rather than a free-form string.\n\nSerde names match the canonical wire strings exactly.",
+      "description": "Low-cardinality error kind for a per-VM audio failure.\n\nUsed in [`AudioVmError`] and [`VmAudioErrorOutputV1`](crate::cli_output::VmAudioErrorOutputV1) so that both the wire protocol and the generated CLI schema carry enum constraints rather than a free-form string.\n\nSerde names match the canonical wire strings exactly.",
       "oneOf": [
         {
           "description": "The provider is expected to expose a guestd-compatible agent but none was found; operator remediation is required.",
@@ -1065,6 +1109,25 @@
           }
         },
         {
+          "description": "Apply or remove one Provider-owned nftables projection.\n\nDistinct from [`BrokerRequest::ApplyNftables`], which owns the framework's own `inet d2b` table: this op carries a projection a Provider owns, and its action is a closed enum rather than a boolean, so a caller cannot express a third meaning.\n\nThe live handler refuses a request whose fence differs from the installed generation, mutating nothing and requeueing as stale.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "ApplyNftablesProjection"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/ApplyNftablesProjectionRequest"
+            }
+          }
+        },
+        {
           "type": "object",
           "required": [
             "kind",
@@ -1155,6 +1218,44 @@
           }
         },
         {
+          "description": "Create the bridge an environment's links attach to. The daemon names only the opaque bundle intent ref and scope; the broker derives the bridge ifname and its attributes from its own trusted bundle copy.\n\nThe live handler suppresses IPv6 on the link before bringing it up.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "CreateBridge"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/CreateBridgeRequest"
+            }
+          }
+        },
+        {
+          "description": "Delete a bridge this framework created. Follows the same opaque-identifier contract as [`BrokerRequest::CreateBridge`].\n\nThe live handler removes the bridge only after its TAP removals are confirmed.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "DeleteBridge"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/DeleteBridgeRequest"
+            }
+          }
+        },
+        {
           "type": "object",
           "required": [
             "kind",
@@ -1169,6 +1270,25 @@
             },
             "payload": {
               "$ref": "#/definitions/CreatePersistentTapRequest"
+            }
+          }
+        },
+        {
+          "description": "Delete a persistent TAP this framework created. Follows the same opaque-identifier contract as [`BrokerRequest::CreatePersistentTap`].\n\nThe live handler requires both generation fences to match and the VMM descriptor to be closed before removing the TAP.",
+          "type": "object",
+          "required": [
+            "kind",
+            "payload"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "DeletePersistentTap"
+              ]
+            },
+            "payload": {
+              "$ref": "#/definitions/DeletePersistentTapRequest"
             }
           }
         },
@@ -3606,6 +3726,30 @@
       "minLength": 1,
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$"
     },
+    "CreateBridgeRequest": {
+      "description": "The broker derives the bridge ifname and its attributes from the trusted bundle row anchored by `bundle_bridge_intent_ref` + `scope_id`. As with the TAP ops, no caller-supplied ifname crosses the wire; the observed ifname appears only in the audit record.",
+      "type": "object",
+      "required": [
+        "bundleBridgeIntentRef",
+        "scopeId"
+      ],
+      "properties": {
+        "bundleBridgeIntentRef": {
+          "type": "string"
+        },
+        "scopeId": {
+          "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
     "CreateOrReconcileUsersGroupsRequest": {
       "type": "object",
       "required": [
@@ -3685,6 +3829,58 @@
       "properties": {
         "scopeId": {
           "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "DeleteBridgeRequest": {
+      "description": "See [`CreateBridgeRequest`] for the opaque-ID rationale; `DeleteBridge` follows the same contract.",
+      "type": "object",
+      "required": [
+        "bundleBridgeIntentRef",
+        "scopeId"
+      ],
+      "properties": {
+        "bundleBridgeIntentRef": {
+          "type": "string"
+        },
+        "scopeId": {
+          "type": "string"
+        },
+        "tracingSpanId": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "DeletePersistentTapRequest": {
+      "description": "Delete one trusted attachment realization without accepting its ifname, path, or ownership marker from the caller.",
+      "type": "object",
+      "required": [
+        "attachmentId",
+        "expectedAttachmentGeneration",
+        "expectedNetworkGeneration"
+      ],
+      "properties": {
+        "attachmentId": {
+          "$ref": "#/definitions/ResourceUid"
+        },
+        "expectedAttachmentGeneration": {
+          "$ref": "#/definitions/ResourceGeneration"
+        },
+        "expectedNetworkGeneration": {
+          "$ref": "#/definitions/ResourceGeneration"
         },
         "tracingSpanId": {
           "default": null,
@@ -6725,7 +6921,7 @@
       "additionalProperties": false
     },
     "ModprobeIfAllowedRequest": {
-      "description": "`module_name` stays as the (already-validated) [`ModuleName`] newtype because it is genuinely a public input - the broker still looks it up in the trusted kernel-module matrix and refuses anything not in the allow list. The matrix itself never crosses the wire.",
+      "description": "`module_name` stays as the (already-validated) `ModuleName` newtype because it is genuinely a public input - the broker still looks it up in the trusted kernel-module matrix and refuses anything not in the allow list. The matrix itself never crosses the wire.",
       "type": "object",
       "required": [
         "moduleName"
@@ -6796,6 +6992,25 @@
         }
       },
       "additionalProperties": false
+    },
+    "NftablesProjectionAction": {
+      "description": "The action an [`ApplyNftablesProjectionRequest`] carries.\n\nClosed on purpose: the framework's own nftables op spells its two directions as a `destroy` boolean, which leaves \"neither\" and \"both\" expressible in a future field pair. A projection names exactly one of two directions and nothing else.",
+      "oneOf": [
+        {
+          "description": "Install the resolved projection.",
+          "type": "string",
+          "enum": [
+            "apply"
+          ]
+        },
+        {
+          "description": "Remove the resolved projection.",
+          "type": "string",
+          "enum": [
+            "remove"
+          ]
+        }
+      ]
     },
     "OpenCgroupDirRequest": {
       "type": "object",
@@ -8806,6 +9021,22 @@
         }
       },
       "additionalProperties": false
+    },
+    "ResourceBundleGenerationId": {
+      "type": "string",
+      "maxLength": 71,
+      "minLength": 71,
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "ResourceGeneration": {
+      "type": "integer",
+      "minimum": 1.0
+    },
+    "ResourceUid": {
+      "type": "string",
+      "maxLength": 36,
+      "minLength": 36,
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
     },
     "RotateKnownHostRequest": {
       "description": "Common flags every mutating-verb request carries. The daemon rejects requests that set neither `dry_run` nor `apply`.",

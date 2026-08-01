@@ -32,8 +32,8 @@
 //! this module's [`VmStarter`] trait is the seam between the
 //! orchestration logic here and that machinery. Tests instantiate a
 //! fake starter; production wires
-//! [`BrokerVmStarter`](super::BrokerVmStarter) which delegates back
-//! to `dispatch_broker_vm_start`.
+//! `BrokerVmStarter`, which delegates back to
+//! `dispatch_broker_vm_start`.
 
 use std::sync::Arc;
 
@@ -224,7 +224,7 @@ pub trait VmStarter: Send + Sync + 'static {
 ///    pin to their net VM's env in the plan.
 ///
 /// VMs that aren't autostart-eligible (today: VMs the manifest
-/// flags as graphics - see [`vm_is_autostart_eligible`]) appear in
+/// flags as graphics - see `vm_is_autostart_eligible`) appear in
 /// the plan with `autostart = false`. They are surfaced for
 /// observability but skipped by [`execute_autostart`].
 pub fn build_autostart_plan(resolver: &BundleResolver) -> AutostartPlan {

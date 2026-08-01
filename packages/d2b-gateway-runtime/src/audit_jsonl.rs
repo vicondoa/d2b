@@ -1,6 +1,6 @@
 //! Durable gateway audit JSONL sink.
 //!
-//! Records one redacted [`GatewayAuditEvent`](d2b_gateway::GatewayAuditEvent)
+//! Records one redacted [`d2b_gateway::GatewayAuditEvent`]
 //! per line. Each line carries `prev_hash` + `record_hash` (SHA-256 over the
 //! canonical JSON fields excluding `record_hash`) so truncation/reordering can
 //! be detected by the gateway daemon's reconciliation/audit tooling. The sink

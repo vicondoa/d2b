@@ -57,10 +57,12 @@ Rust tests (types 2-5: unit, integration, contract, policy-lint) live under
 | `make test-lint` | preflight + nix-parse + shellcheck | local + CI |
 | `make test-changelog` | require release notes for code changes and validate every changelog fragment | local + CI |
 | `make test-rust` | Rust gate (fmt, clippy, workspace tests, broker x3, deny/audit); explicitly excludes the fixture-dependent `d2b-contract-tests` crate | local + CI |
-| `make test-fixture-contracts` | enforcing fixture-backed lane: builds `D2B_FIXTURES`, runs `d2b-contract-tests` and the CLI-contract cases, and acquires the heavy-gate semaphore first; both lanes set `D2B_ENABLE_FIXTURE_BUILD=1`, and invoking it without that variable fails rather than skipping | local + CI |
+| `make test-rust-main` / `make test-rust-remaining` | the two partitions CI runs as independent jobs behind the stable `test-rust` rollup context; `make test-rust` runs both exactly once | CI (local for a focused rerun) |
+| `make test-fixture-contracts` | enforcing eval-rendered lane: materializes `D2B_FIXTURES` from evaluated Nix artifact data, then runs `d2b-contract-tests` and the CLI-contract cases; both lanes set `D2B_ENABLE_FIXTURE_BUILD=1`, and invoking it without that variable fails rather than skipping | local + CI |
 | `make test-proofs` | standalone proofs/ crates | local + CI |
 | `make test-flake` | `nix flake check --no-build` (native system); `D2B_FLAKE_CHECK=<name>` instantiates one check, `D2B_FLAKE_OUTPUTS=1` sweeps non-`checks` outputs, `D2B_FLAKE_LOCAL_SHARDS=1` runs the local bounded shard fan-out | local + CI (x86 sharded per-check matrix; aarch64 PR job runs a lightweight smoke eval) |
-| `make test-flake-list` | emit native-system flake check names as JSON (CI matrix plumbing) | CI (dynamic matrix) |
+| `make test-flake-list` | emit native-system flake check names as JSON; the partition tool below reads it | source helper |
+| `make test-flake-partition` | emit those names split into the eval, realized, and nix-unit dispatch classes (CI matrix plumbing) | CI (dynamic matrix) |
 | `make test-nix-unit` | sharded nix-unit corpus checks, retained as explicit evidence in the manifest-driven local and CI graph | local + CI |
 | `make test-drift` | drift-check + vms-json-parity + flake-check-matrix-sync | local + CI |
 | `make test-policy` | meta gates (ci-coverage, adr-index, deliverable inventory, etc.) | local + CI |
@@ -163,13 +165,10 @@ environment. Promotion to enforcing requires provisioning a pinned self-hosted
 runner, setting `D2B_PERF_STABLE=1` there, and removing the `enforcement` and
 `advisoryReason` fields from the job after that wiring lands.
 
-The fixture advisory exists because `test-fixture-contracts` exits successfully
-with `SKIP` unless `D2B_ENABLE_FIXTURE_BUILD=1`, and the sandbox does not yet
-receive `D2B_FIXTURES`. Promotion requires enabling that variable for the lane,
-delivering the fixture output to its sandbox, and then removing the
-`enforcement` and `advisoryReason` fields from the manifest. That delivery is
-tracked follow-up work. `test-rust` excludes `d2b-contract-tests`, so a green
-Rust job does not validate its fixture-dependent contract and policy layer.
+The fixture lane is enforcing. It fails when `D2B_ENABLE_FIXTURE_BUILD=1` is
+absent, evaluates both Nix configurations, materializes their artifact data, and
+runs the fixture-dependent contract and CLI tests. `test-rust` excludes
+`d2b-contract-tests`, so a green Rust job does not validate that layer.
 Selected hermetic policy files may have separate enforcing entrypoints under
 `test-policy`; inspect that target before citing one.
 
@@ -199,16 +198,26 @@ the current `Makefile` target or `tests/layer1-jobs.json`, treat those as
 authoritative and flag the drift for the integrator rather than hand-editing
 the census pin.
 
-The x86 `test-flake` leg is sharded one job per flake check (the matrix is
-enumerated at CI time by `make test-flake-list`; the `test-flake-x86` job is a
-stable aggregator over the shards + the non-`checks` outputs job). The aarch64
+The x86 `test-flake` leg is sharded one job per flake check (the classes are
+enumerated at CI time by `make test-flake-partition`; the `test-flake-x86` job
+is a stable aggregator over both shard lanes + the non-`checks` outputs job).
+That partition splits the checks three ways. Checks the driver must *build*
+rather than instantiate run in their own lane, because a build takes minutes
+where an instantiate takes seconds, and queueing one behind a bounded matrix of
+the latter sets the whole run's critical path. The nix-unit corpus checks are
+dropped, because the dedicated Nix-unit lane already builds exactly those and
+instantiating them again is redundant; that lane reads the same partition, so
+the names dropped here are the names it runs. Everything else instantiates in
+the bounded matrix. The tool fails closed if the partition is not total, if the
+enumeration is empty, or if a check named as realized is not in the flake. The
+aarch64
 leg runs only the lightweight `smoke-eval-aarch64.nix` expression. A fail-closed
 drift gate keeps the matrix and smoke wiring in sync with the flake (`make
 flake-matrix-pin` to update its pin). Locally, manifest-driven `make check`
 sets `D2B_FLAKE_LOCAL_SHARDS=1` for `make test-flake` and
 `D2B_SKIP_FIXTURE_BUILD=1` for `make test-rust`, matching the PR Rust job. The
-flake shards do not execute `d2b-contract-tests`; only the separate advisory
-fixture lane can do so, and it currently skips unless explicitly enabled. Tune
+flake shards do not execute `d2b-contract-tests`; the separate enforcing
+fixture-contract lane runs them with evaluated fixtures and fails rather than skipping. Tune
 `D2B_CHECK_JOBS` and `D2B_FLAKE_JOBS` for host capacity. Agent-owned PRs also run
 `make test-integration` and `make test-host-integration` on the host before the
 PR is opened; those manual integration tiers are not replaced by PR pipeline

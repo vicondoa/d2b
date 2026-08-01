@@ -2,12 +2,14 @@
 
 pub mod component_session;
 pub mod credential;
+pub mod credential_controller;
 pub mod device;
 pub mod error;
 pub mod execution_policy;
 pub mod guest;
 pub mod host;
 pub mod identity;
+pub mod ifname;
 pub mod limits;
 pub mod network;
 pub mod process;
@@ -19,6 +21,7 @@ pub mod resource_status;
 pub mod semantic_services;
 pub mod user;
 pub mod volume;
+pub mod volume_state;
 pub mod zone_routing;
 pub mod zone_session;
 
@@ -79,4 +82,41 @@ pub use semantic_services::{
     SemanticLayerSchema, SemanticPairContract, SemanticProjectionBinding, SemanticRole,
     SemanticSchemaId, SemanticTypeContract, UPDATE_POLICY_FIELD,
     catalog as semantic_service_catalog,
+};
+
+// The `volume_state` module's re-exports. Keep every
+// `pub use volume_state::...` line inside this region so it stays one
+// contiguous block.
+pub use volume_state::{
+    MAX_STATE_DOCUMENT_BYTES, MAX_STATE_GENERATION, MarkerStatus, MigrationPolicy,
+    PersistenceClass, QuotaUsage, SealingStatus, SensitivityClass, StateDigest, StateEnvelope,
+    StateSchemaPhase, VolumeStateError, VolumeStateSchema, VolumeStateSchemaId, VolumeStateStatus,
+    canonical_state_payload_bytes, canonical_state_payload_digest,
+};
+
+// The `ifname` module's re-exports. Keep every `pub use ifname::...` line
+// inside this region so it stays one contiguous block.
+pub use ifname::{
+    BRIDGE_TAG, DEFAULT_PREFIX, DerivedRole, HASH_SUFFIX_LEN, IfName, IfNameError, IfNameMapping,
+    MAX_IFNAME_BYTES, NetworkIfRole, TAP_TAG, derive_from_env_vm, derive_ifname, detect_collisions,
+    looks_d2b_owned, validate_prefix,
+};
+
+// The `credential_controller` module's re-exports. Keep every
+// `pub use credential_controller::...` line inside this region so it stays one
+// contiguous block.
+pub use credential_controller::{
+    CREDENTIAL_METRICS, CREDENTIAL_OBSERVE_INTERVAL_MS, CREDENTIAL_PROVIDER_REVOKE_FINALIZER,
+    CredentialAuditDigest, CredentialAuditOperation, CredentialAuditOutcome, CredentialAuditRecord,
+    CredentialControllerCall, CredentialControllerConditions, CredentialControllerDecision,
+    CredentialControllerDisposition, CredentialControllerError, CredentialControllerHandlers,
+    CredentialControllerHealth, CredentialControllerHealthState, CredentialControllerOutcome,
+    CredentialIdempotencyKey, CredentialLeaseAggregate, CredentialMetricDescriptor,
+    CredentialMetricKind, CredentialObservabilityError, CredentialObserveInput,
+    CredentialProviderKind, CredentialReconcileInput, CredentialRetryState,
+    CredentialRevocationInput, CredentialSingleFlight, CredentialSingleFlightGuard,
+    CredentialTelemetryField, CredentialTelemetryFrame, CredentialTelemetryOperation,
+    CredentialTelemetryOutcome, MAX_LOCAL_CREDENTIAL_LEASES, contains_sensitive_shape,
+    observe_credential, owner_delete_action, provider_generation_action, reconcile_credential,
+    revoke_credential,
 };

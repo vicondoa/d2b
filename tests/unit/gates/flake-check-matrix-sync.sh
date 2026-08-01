@@ -54,14 +54,19 @@ if [ ! -f "$wf" ]; then
   exit 1
 fi
 
-# discover job sources the names from the live flake via make test-flake-list
-assert_wf "discover enumerates via make test-flake-list" 'make -s test-flake-list'
-# matrix consumes the discovered JSON (not a hardcoded list)
-assert_wf "matrix sourced from discover output" 'fromJSON\(needs\.flake-eval-discover\.outputs\.checks\)'
+# discover job sources the names from the live flake via make test-flake-partition
+assert_wf "discover enumerates via make test-flake-partition" 'make -s test-flake-partition'
+# both shard lanes consume the discovered JSON (not a hardcoded list)
+assert_wf "eval matrix sourced from discover output" 'fromJSON\(needs\.flake-eval-discover\.outputs\.evalchecks\)'
+assert_wf "realized matrix sourced from discover output" 'fromJSON\(needs\.flake-eval-discover\.outputs\.realizedchecks\)'
+# the nix-unit lane is handed the class the eval matrix drops, from that same
+# partition, so the exclusion cannot silently drop a check from every lane
+assert_wf "nix-unit lane sourced from the same partition" 'checks:\s*\$\{\{\s*steps\.list\.outputs\.nixunitchecks'
 # each shard runs the make-routed single-check evaluation
 assert_wf "shard runs D2B_FLAKE_CHECK make test-flake" 'D2B_FLAKE_CHECK'
-# the required-context aggregator gates on the full shard matrix result
-assert_wf "aggregator needs the shard matrix" 'needs:\s*\[flake-eval-discover,\s*flake-eval-x86'
+# the required-context aggregator gates on both shard matrices
+assert_wf "aggregator needs the shard matrix" 'needs:\s*\[flake-eval-discover,\s*flake-eval-x86,\s*flake-eval-x86-realized'
+assert_wf "aggregator fails on a red realized lane" '\[ "\$realized" = success \]'
 # non-checks x86 outputs are still evaluated (packages, etc.)
 assert_wf "x86 non-checks outputs are evaluated" 'D2B_FLAKE_OUTPUTS'
 # aarch64 stays a lightweight smoke eval, not a full monolithic flake check.

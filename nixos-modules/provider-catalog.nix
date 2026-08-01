@@ -1,4 +1,4 @@
-# The offline Provider package catalog.
+# The offline artifact catalog.
 #
 # `ADR-046-provider-model-and-packaging`, "Package catalog": Nix authoring
 # declares each Provider derivation separately under `d2b.artifacts.<id>`, and
@@ -16,7 +16,8 @@
 #     resolution problem.
 #
 # `artifactId` is a plain bounded ID, not a ResourceRef, and Artifact is not a
-# ResourceType. The catalog may retain a store path for activation; the public
+# ResourceType. Provider packages and generic NixOS systems are distinct closed
+# artifact kinds. The catalog may retain a store path for activation; the public
 # projection strips it, because a resource spec, status, or audit record never
 # exposes one.
 
@@ -52,11 +53,12 @@ let
       };
 
       type = lib.mkOption {
-        type = types.enum [ "provider" ];
+        type = types.enum [ "provider" "nixos-system" ];
         default = "provider";
         description = ''
-          The artifact kind. Only `provider` is defined; the option is an enum
-          so a new kind is an explicit decision rather than a free string.
+          The artifact kind. Provider packages and generic NixOS systems are
+          separate closed kinds; the option is an enum so a new kind remains
+          an explicit decision rather than a free string.
         '';
       };
 
@@ -128,10 +130,11 @@ in
     type = types.attrsOf artifactModule;
     default = { };
     description = ''
-      Provider artifact declarations. Each entry names a derivation and its
-      catalog metadata; a Provider ResourceSpec selects one with
-      `artifactId = "<name>"`. There is no runtime discovery of any kind: an
-      artifact that is not declared here does not exist.
+      Artifact declarations. Each entry names a derivation, its closed kind,
+      and its catalog metadata. Provider ResourceSpecs select `provider`
+      entries with `artifactId`; Guest system fields select `nixos-system`
+      entries. There is no runtime discovery of any kind: an artifact that is
+      not declared here does not exist.
     '';
     example = lib.literalExpression ''
       {
@@ -153,7 +156,7 @@ in
       ids = artifactIds;
       shape = shape;
     };
-    description = "Internal compiled Provider package catalog.";
+    description = "Internal compiled artifact catalog.";
   };
 
   config.assertions =

@@ -42,6 +42,11 @@ ABSOLUTE_PATH = re.compile(
 )
 
 
+def validate_job_id(job_id: str, context: str) -> None:
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", job_id):
+        raise SystemExit(f"{MANIFEST}: invalid job id {job_id!r} in {context}")
+
+
 def load_manifest() -> dict[str, Any]:
     with MANIFEST.open(encoding="utf-8") as fh:
         manifest = json.load(fh)
@@ -50,24 +55,46 @@ def load_manifest() -> dict[str, Any]:
     jobs = manifest.get("jobs")
     if not isinstance(jobs, dict):
         raise SystemExit(f"{MANIFEST}: jobs must be an object")
+    for job_id, job in jobs.items():
+        validate_job_id(job_id, "jobs")
+        ci_job_id = job.get("ciJobId")
+        if ci_job_id is not None:
+            if not isinstance(ci_job_id, str):
+                raise SystemExit(f"{MANIFEST}: ciJobId for {job_id!r} must be a string")
+            validate_job_id(ci_job_id, f"jobs.{job_id}.ciJobId")
+
     local_job_ids: list[str] = []
     for phase in manifest.get("local", {}).get("phases", []):
         for job_id in phase.get("jobs", []):
+            validate_job_id(job_id, "local.phases")
             if job_id not in jobs:
                 raise SystemExit(f"{MANIFEST}: local phase references unknown job {job_id!r}")
             local_job_ids.append(job_id)
     local_jobs = set(local_job_ids)
     if len(local_jobs) != len(local_job_ids):
         raise SystemExit(f"{MANIFEST}: a job appears in more than one local phase")
+    ci_jobs = set(manifest.get("ci", {}).get("jobs", []))
     for job_id in manifest.get("ci", {}).get("jobs", []):
+        validate_job_id(job_id, "ci.jobs")
         if job_id not in jobs:
             raise SystemExit(f"{MANIFEST}: ci.jobs references unknown job {job_id!r}")
-        if jobs[job_id].get("makeTarget") and job_id not in local_jobs:
+        for need in jobs[job_id].get("needs", []):
+            validate_job_id(need, f"jobs.{job_id}.needs")
+            if need not in ci_jobs:
+                raise SystemExit(
+                    f"{MANIFEST}: CI job {job_id!r} needs unknown/non-CI job {need!r}"
+                )
+        if (
+            jobs[job_id].get("makeTarget")
+            and job_id not in local_jobs
+            and not jobs[job_id].get("ciOnly")
+        ):
             raise SystemExit(
                 f"{MANIFEST}: CI job {job_id!r} has a local make target but is absent "
-                "from local.phases"
+                "from local.phases and is not declared ciOnly"
             )
     for job_id in manifest.get("ci", {}).get("rollupNeeds", []):
+        validate_job_id(job_id, "ci.rollupNeeds")
         if job_id not in jobs:
             raise SystemExit(f"{MANIFEST}: ci.rollupNeeds references unknown job {job_id!r}")
     return manifest
@@ -108,11 +135,11 @@ def ci_env_block(job: dict[str, Any], spaces: int) -> str:
 # with the rust-cache entries this gate also depends on. Caching /nix for all
 # twelve nix-using jobs would fan the key space out far past that total, and the
 # steady state would be everything evicting everything - worse than not caching.
-# So only the jobs that actually build derivations and take long enough for it
-# to matter get an entry: measured on this gate, test-fixture-contracts spent 40
-# minutes building 166 derivations and test-nix-unit ran 15 minutes, while the
-# flake-eval shards finish in under a minute and the lint/drift jobs only
-# evaluate.
+# So only the fixture-contract job gets an entry: it owns one bounded key and
+# the narrow realized video dependency. Per-shard Nix-unit caches multiply the
+# cap by the matrix width and exceed the repository budget even when each entry
+# is individually bounded. The flake-eval shards finish in under a minute and
+# the lint/drift jobs only evaluate.
 #
 # On sizing: gc-max-store-size-linux caps the UNCOMPRESSED /nix store before
 # save, which is not the size of the resulting cache entry - the entry is
@@ -121,13 +148,19 @@ def ci_env_block(job: dict[str, Any], spaces: int) -> str:
 # configuration is deliberately near enough to the cap that it should be
 # re-measured against the repository cache-usage page after a run rather than
 # assumed.
-NIX_CACHED_JOBS = frozenset({"test-fixture-contracts", "test-nix-unit"})
+NIX_CACHED_JOBS = frozenset({"test-fixture-contracts"})
 NIX_CACHE_MAX_STORE = "4G"
+NIX_CACHE_FORMAT = "v1"
 # Scope suffix for a matrix job, so shards do not share one key. Defined here
 # rather than at the call site because a brace-doubled literal written inside an
 # f-string replacement field is ordinary Python source, not escaped f-string
 # text, and would emit four literal braces - an invalid GitHub expression.
 MATRIX_CHECK_SCOPE = "-${{ matrix.check }}"
+
+
+def nix_cache_hash_files(job: dict[str, Any]) -> str:
+    del job
+    return ", ".join(repr(pattern) for pattern in ["flake.lock", "**/*.nix"])
 
 
 def nix_setup_step(job: dict[str, Any], scope_suffix: str = "") -> str:
@@ -149,6 +182,7 @@ def nix_setup_step(job: dict[str, Any], scope_suffix: str = "") -> str:
     exists to prevent.
     """
     scope = job["ciJobId"] + scope_suffix
+    hash_files = nix_cache_hash_files(job)
     setup = f"""      - uses: {INSTALL_NIX}
         with:
           nix_path: nixpkgs=channel:nixos-unstable
@@ -167,11 +201,14 @@ def nix_setup_step(job: dict[str, Any], scope_suffix: str = "") -> str:
         # NIX_CACHED_JOBS for why only some jobs carry an entry.
         uses: {NIX_CACHE}
         with:
-          primary-key: nix-${{{{ runner.os }}}}-{scope}-${{{{ hashFiles('flake.lock', 'packages/Cargo.lock', 'packages/rust-toolchain.toml') }}}}
-          restore-prefixes-first-match: nix-${{{{ runner.os }}}}-{scope}-
+          # The format epoch rotates immutable Actions caches when retention
+          # semantics change. Fixture jobs use a source-complete hash; other
+          # cached Nix jobs hash the flake and Nix corpus they evaluate.
+          primary-key: nix-{NIX_CACHE_FORMAT}-${{{{ runner.os }}}}-{scope}-${{{{ hashFiles({hash_files}) }}}}
+          restore-prefixes-first-match: nix-{NIX_CACHE_FORMAT}-${{{{ runner.os }}}}-{scope}-
           gc-max-store-size-linux: {NIX_CACHE_MAX_STORE}
           purge: true
-          purge-prefixes: nix-${{{{ runner.os }}}}-{scope}-
+          purge-prefixes: nix-{NIX_CACHE_FORMAT}-${{{{ runner.os }}}}-{scope}-
           purge-created: 0
           purge-primary-key: never"""
     )
@@ -296,10 +333,25 @@ def rust_job(job: dict[str, Any]) -> str:
 {nix_setup_step(job)}
       - name: Free runner disk for Rust gate
         run: |
-          df -h
+          df -h /
+          avail_kib=$(df -Pk / | awk 'NR == 2 {{ print $4 }}')
+          # Reclaiming the preinstalled Android/dotnet/GHC trees and the Docker
+          # image cache costs real wall time - measured across this workflow's
+          # four Rust-profile jobs it ranged from 43 s to 3 min 48 s, the worst
+          # of which sat on the critical path - and buys about 22 GiB on a
+          # runner image that already arrives with 83-88 GiB free. Nothing in
+          # this gate approaches that, so only pay the cost when an image
+          # actually turns up short. This still fails safe: a fuller image
+          # reclaims exactly as before.
+          threshold_kib=$((70 * 1024 * 1024))
+          if [ "$avail_kib" -ge "$threshold_kib" ]; then
+            echo "free space $((avail_kib / 1024 / 1024)) GiB is at or above the $((threshold_kib / 1024 / 1024)) GiB threshold; skipping reclaim"
+            exit 0
+          fi
+          echo "free space $((avail_kib / 1024 / 1024)) GiB is below the $((threshold_kib / 1024 / 1024)) GiB threshold; reclaiming"
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL || true
           docker system prune -af || true
-          df -h
+          df -h /
       - name: Install pinned Rust toolchain + ripgrep + acl
         # MUST run BEFORE Swatinem/rust-cache: the cache action reads
         # `rustc --version` to compute its key hash, so the pinned
@@ -329,28 +381,56 @@ def rust_job(job: dict[str, Any]) -> str:
             packages/d2b-priv-broker/target-layer1
             packages/d2b-priv-broker/target-fakebackends
             tests/tools/no-bash-ast-walker/target
-          prefix-key: "v0-rust"
+            .scratch/rust-test-cache
+          prefix-key: "v2-rust-api-json"
           shared-key: "test-rust-${{{{ runner.os }}}}"
+          # The repository-local trees are keyed on rustc -vV by their owning
+          # tests. Cargo fingerprints compiled inputs on restore, while failed
+          # compile units are never cached and still rerun on every gate.
           # A single writer keeps concurrent saves from racing one shared key.
-          # test-rust is that writer; the rest restore whatever the previous
-          # run left. Note test-fixture-contracts now starts alongside
-          # test-rust rather than after it, so on a cold key both compile the
-          # workspace and only one entry is kept - the wall-clock win from
-          # running them in parallel is worth more than the duplicated cold
-          # build.
-          save-if: "{'true' if job["ciJobId"] == 'test-rust' else 'false'}"
+          # The main-workspace Rust shard is that writer; it produces both the
+          # common Cargo target and the slow compiler/rustdoc scratch trees.
+          # Every other Rust job restores the last complete entry. On a cold key
+          # parallel shards may duplicate compilation, but only one entry wins.
+          save-if: "{'true' if job["ciJobId"] == 'test-rust-main' else 'false'}"
 {heavy_gate_step(job)}      - name: {job["displayName"]}
         env:
 {render_env(job)}
-        run: make {job["makeTarget"]}"""
+        run: make {job["makeTarget"]}
+"""
 
 
-def flake_discover_job(job: dict[str, Any]) -> str:
+def rust_rollup_job(job: dict[str, Any]) -> str:
+    needs = job["needs"]
+    lines = [
+        f'  {job["ciJobId"]}:',
+        f'    needs: {yaml_list(needs)}',
+        '    if: always()',
+        f'    runs-on: {job["runsOn"]}',
+        f'    timeout-minutes: {job["timeoutMinutes"]}',
+        '    steps:',
+        f'      - uses: {CHECKOUT}',
+        '        with:',
+        '          persist-credentials: false',
+        f'      - name: {job["displayName"]}',
+        '        run: |',
+    ]
+    lines.append("          failed=0")
+    for need in needs:
+        lines.append(f"          result='${{{{ needs.{need}.result }}}}'")
+        lines.append(f'          echo "{need}=$result"')
+        lines.append(f'          [ "$result" = success ] || failed=1')
+    lines.append('          [ "$failed" -eq 0 ] || exit 1')
+    lines.append('          echo "Both Rust gate shards passed."')
+    return "\n".join(lines)
+
+
+def nix_unit_discover_job(job: dict[str, Any]) -> str:
     return f"""  {job["ciJobId"]}:
 {needs_line(job)}    runs-on: {job["runsOn"]}
     timeout-minutes: {job["timeoutMinutes"]}
     outputs:
-      checks: ${{{{ steps.list.outputs.checks }}}}
+      checks: ${{{{ steps.list.outputs.nixunitchecks }}}}
     steps:
       - uses: {CHECKOUT}
         with:
@@ -359,9 +439,82 @@ def flake_discover_job(job: dict[str, Any]) -> str:
       - id: list
         name: {job["displayName"]}
         run: |
-          checks=$(make -s test-flake-list)
-          echo "discovered checks: $checks"
-          echo "checks=$checks" >> "$GITHUB_OUTPUT"
+          # Same partition tool as flake-eval-discover, so this lane is handed
+          # exactly the names that lane drops from its instantiate-only matrix.
+          partition=$(make -s test-flake-partition)
+          echo "$partition"
+          echo "$partition" >> "$GITHUB_OUTPUT"
+"""
+
+
+def nix_unit_shards_job(job: dict[str, Any]) -> str:
+    return f"""  {job["ciJobId"]}:
+{needs_line(job)}    runs-on: {job["runsOn"]}
+    timeout-minutes: {job["timeoutMinutes"]}
+    strategy:
+      fail-fast: false
+      max-parallel: {job["maxParallel"]}
+      matrix:
+        check: ${{{{ fromJSON(needs.nix-unit-discover.outputs.checks) }}}}
+    steps:
+      - uses: {CHECKOUT}
+        with:
+          persist-credentials: false
+{nix_setup_step(job, MATRIX_CHECK_SCOPE)}
+      - name: {job["displayName"]}
+        env:
+          # The matrix value is data, not shell source. The driver validates it
+          # against both the safe-name grammar and the discovered check set.
+          D2B_NIX_UNIT_CHECK: ${{{{ matrix.check }}}}
+          D2B_NIX_UNIT_JOBS: "1"
+        run: make test-nix-unit"""
+
+
+def nix_unit_rollup_job(job: dict[str, Any]) -> str:
+    return f"""  {job["ciJobId"]}:
+    needs: {yaml_list(job["needs"])}
+    if: always()
+    runs-on: {job["runsOn"]}
+    timeout-minutes: {job["timeoutMinutes"]}
+    steps:
+      - uses: {CHECKOUT}
+        with:
+          persist-credentials: false
+      - name: {job["displayName"]}
+        run: |
+          discover='${{{{ needs.nix-unit-discover.result }}}}'
+          shards='${{{{ needs.nix-unit-shards.result }}}}'
+          echo "nix-unit-discover=$discover  nix-unit-shards=$shards"
+          if [ "$discover" = success ] && [ "$shards" = success ]; then
+            echo "Every discovered Nix-unit shard passed."
+          else
+            echo "::error::Nix-unit gate failed (discover=$discover, shards=$shards)"
+            exit 1
+          fi"""
+
+
+def flake_discover_job(job: dict[str, Any]) -> str:
+    return f"""  {job["ciJobId"]}:
+{needs_line(job)}    runs-on: {job["runsOn"]}
+    timeout-minutes: {job["timeoutMinutes"]}
+    outputs:
+      evalchecks: ${{{{ steps.list.outputs.evalchecks }}}}
+      realizedchecks: ${{{{ steps.list.outputs.realizedchecks }}}}
+    steps:
+      - uses: {CHECKOUT}
+        with:
+          persist-credentials: false
+{nix_setup_step(job)}
+      - id: list
+        name: {job["displayName"]}
+        run: |
+          # One enumeration produces every dispatch class, so the names dropped
+          # from the eval matrix are provably the names another lane realizes.
+          # The tool fails closed on an empty enumeration or a realized name
+          # that is not a discovered check.
+          partition=$(make -s test-flake-partition)
+          echo "$partition"
+          echo "$partition" >> "$GITHUB_OUTPUT"
 """
 
 
@@ -373,7 +526,7 @@ def flake_x86_shards_job(job: dict[str, Any]) -> str:
       fail-fast: false
       max-parallel: {job["maxParallel"]}
       matrix:
-        check: ${{{{ fromJSON(needs.flake-eval-discover.outputs.checks) }}}}
+        check: ${{{{ fromJSON(needs.flake-eval-discover.outputs.evalchecks) }}}}
     steps:
       - uses: {CHECKOUT}
         with:
@@ -393,6 +546,42 @@ def flake_x86_shards_job(job: dict[str, Any]) -> str:
 {nix_setup_step(job, MATRIX_CHECK_SCOPE)}
       - name: Install flake shard diagnostics
         run: sudo apt-get update && sudo apt-get install -y gdb
+      - name: {job["displayName"]}
+        # D2B_FLAKE_CHECK is passed via the step environment, NOT interpolated
+        # into the shell command: a flake check attr name is PR-controlled, so
+        # `D2B_FLAKE_CHECK='${{{{ matrix.check }}}}' ...` would be a shell-injection
+        # vector. test-flake.sh additionally rejects names outside [A-Za-z0-9._-].
+        env:
+          D2B_FLAKE_CHECK: ${{{{ matrix.check }}}}
+        run: make test-flake"""
+
+
+def flake_x86_realized_job(job: dict[str, Any]) -> str:
+    """Renders the lane for flake checks whose shard builds rather than evaluates.
+
+    These are minutes-long where an instantiate-only shard is seconds, so they
+    get their own matrix instead of a slot in the bounded eval matrix. Measured
+    on the run that motivated this split: the single realized check ran 15.9
+    min but was dispatched last, so it did not start until 12.4 min into the
+    run and set a ~29 min critical path on its own.
+
+    No gdb step here. The eval lane installs it for the segfault retry path in
+    test-flake.sh, and that path is unreachable for a realized shard - those
+    fail hard on any nonzero status instead of retrying.
+    """
+    return f"""  {job["ciJobId"]}:
+{needs_line(job)}    runs-on: {job["runsOn"]}
+    timeout-minutes: {job["timeoutMinutes"]}
+    strategy:
+      fail-fast: false
+      max-parallel: {job["maxParallel"]}
+      matrix:
+        check: ${{{{ fromJSON(needs.flake-eval-discover.outputs.realizedchecks) }}}}
+    steps:
+      - uses: {CHECKOUT}
+        with:
+          persist-credentials: false
+{nix_setup_step(job, MATRIX_CHECK_SCOPE)}
       - name: {job["displayName"]}
         # D2B_FLAKE_CHECK is passed via the step environment, NOT interpolated
         # into the shell command: a flake check attr name is PR-controlled, so
@@ -432,12 +621,14 @@ def flake_x86_rollup_job(job: dict[str, Any]) -> str:
         run: |
           discover='${{{{ needs.flake-eval-discover.result }}}}'
           shards='${{{{ needs.flake-eval-x86.result }}}}'
+          realized='${{{{ needs.flake-eval-x86-realized.result }}}}'
           outputs='${{{{ needs.flake-eval-x86-outputs.result }}}}'
-          echo "flake-eval-discover=$discover  flake-eval-x86=$shards  flake-eval-x86-outputs=$outputs"
-          if [ "$discover" = success ] && [ "$shards" = success ] && [ "$outputs" = success ]; then
+          echo "flake-eval-discover=$discover  flake-eval-x86=$shards  flake-eval-x86-realized=$realized  flake-eval-x86-outputs=$outputs"
+          if [ "$discover" = success ] && [ "$shards" = success ] \\
+            && [ "$realized" = success ] && [ "$outputs" = success ]; then
             echo "All x86_64-linux flake checks + outputs passed."
           else
-            echo "::error::x86_64 flake gate failed (discover=$discover, shards=$shards, outputs=$outputs)"
+            echo "::error::x86_64 flake gate failed (discover=$discover, shards=$shards, realized=$realized, outputs=$outputs)"
             exit 1
           fi"""
 
@@ -541,8 +732,13 @@ RENDERERS = {
     "simple-nix": simple_nix_job,
     "changelog": changelog_job,
     "rust": rust_job,
+    "rust-rollup": rust_rollup_job,
+    "nix-unit-discover": nix_unit_discover_job,
+    "nix-unit-shards": nix_unit_shards_job,
+    "nix-unit-rollup": nix_unit_rollup_job,
     "flake-discover": flake_discover_job,
     "flake-x86-shards": flake_x86_shards_job,
+    "flake-x86-realized": flake_x86_realized_job,
     "flake-x86-outputs": flake_x86_outputs_job,
     "flake-x86-rollup": flake_x86_rollup_job,
     "flake-aarch64-smoke": flake_aarch64_smoke_job,
@@ -722,7 +918,8 @@ def run_job(job_id: str, job: dict[str, Any]) -> int:
     assert failed_target is not None
     print(
         f"FAIL: {failed_target} for Layer-1 job {job_id} "
-        f"(exit {returncode}); redacted retained tail:",
+        f"(exit {returncode}); full retained log: "
+        f"{redact_diagnostic_line(str(log_path))}; redacted retained tail:",
         file=sys.stderr,
         flush=True,
     )

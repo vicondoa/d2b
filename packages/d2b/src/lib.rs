@@ -2863,7 +2863,7 @@ struct ConfigStatusArgs {
 
 /// Base directory for host-side config staging. User-local by default
 /// (no privileged surface), from `XDG_STATE_HOME` (or `HOME`). Tests
-/// override it per-thread via [`set_test_staging_base`] rather than mutating
+/// override it per-thread via `set_test_staging_base` rather than mutating
 /// process-global env.
 fn config_staging_base() -> PathBuf {
     #[cfg(test)]
@@ -3251,7 +3251,7 @@ enum GuestConfigReadOutcome {
 /// Send an admin-only `readGuestConfig` request over the daemon public socket
 /// and return the raw reply frame. Connection failures collapse to
 /// `Unavailable`; any daemon reply (success or typed error) is returned verbatim
-/// for [`finish_config_sync_from_reply`] to interpret.
+/// for `finish_config_sync_from_reply` to interpret.
 fn read_guest_config_via_socket(
     context: &Context,
     vm: &str,
@@ -4505,8 +4505,9 @@ fn cmd_console(
     }
 }
 
-/// Encode and send a [`ConsoleOp`] on `socket`, then receive and parse the
-/// `consoleResponse` reply. Each call is a complete round-trip.
+/// Encode and send a [`d2b_contracts::public_wire::ConsoleOp`] on `socket`, then
+/// receive and parse the `consoleResponse` reply. Each call is a complete
+/// round-trip.
 fn console_round_trip(
     socket: &mut SeqpacketUnixSocket,
     op: &d2b_contracts::public_wire::ConsoleOp,
@@ -4521,7 +4522,8 @@ fn console_round_trip(
     parse_console_reply(&reply)
 }
 
-/// Encode a [`ConsoleOp`] as a JSON wire frame with `"type": "console"`.
+/// Encode a [`d2b_contracts::public_wire::ConsoleOp`] as a JSON wire frame with
+/// `"type": "console"`.
 fn encode_console_op_frame(
     op: &d2b_contracts::public_wire::ConsoleOp,
 ) -> Result<Vec<u8>, CliFailure> {
@@ -4581,8 +4583,8 @@ pub(crate) enum DetachScan {
 
 /// Scan `chunk` for the console detach character (`\x1d`, Ctrl-]).
 ///
-/// Returns [`DetachScan::Detach`] with the number of bytes that appear before
-/// the detach char so callers can forward them before closing.
+/// Returns `DetachScan::Detach` with the number of bytes that appear before the
+/// detach char so callers can forward them before closing.
 pub(crate) fn scan_chunk_for_detach(chunk: &[u8]) -> DetachScan {
     const DETACH: u8 = b'\x1d';
     match chunk.iter().position(|&b| b == DETACH) {
@@ -8405,7 +8407,7 @@ fn exec_json_attach_output(
 /// always `guest`; `guestExitCode`/`signal` disambiguate a code that collides
 /// with a reserved transport code. The FSM resolves only true guest
 /// `WIFEXITED`/`WIFSIGNALED` terminals as a success; abnormal terminal
-/// kinds surface through [`exec_terminate`] as transport/protocol failures.
+/// kinds surface through `exec_terminate` as transport/protocol failures.
 fn exec_json_success_value(
     args: &VmExecArgs,
     outcome: &exec_client::ExecOutcome,
@@ -10848,8 +10850,8 @@ fn stdout_is_tty() -> bool {
 // clap rejects fall through to the parse-error path. No bash exec
 // site survives in the binary crate.
 
-/// Daemon mutating-verb outcome from
-/// [`try_daemon_mutating_verb`]. The CLI uses this to decide whether
+/// Daemon mutating-verb outcome from `try_daemon_mutating_verb`. The CLI uses
+/// this to decide whether
 /// to (a) print the daemon's plan and exit, (b) surface a typed
 /// `not-yet-implemented` envelope (exit 78 per ADR 0015), or (c)
 /// surface a `daemon-down` envelope (exit 1).

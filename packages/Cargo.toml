@@ -23,6 +23,7 @@ members = [
     "d2b-sk-frontend",
     "d2b-contracts",
     "d2b-bus",
+    "d2b-api-surface",
     "d2b-zone-routing",
     "d2b-resource-client",
     "d2b-provider",
@@ -33,6 +34,14 @@ members = [
     "d2b-provider-system-minijail",
     "d2b-provider-volume-local",
     "d2b-provider-volume-virtiofs",
+    "d2b-provider-supervisor",
+    "d2b-provider-credential-secret-service",
+    "d2b-provider-credential-entra",
+    "d2b-provider-credential-managed-identity",
+    "d2b-provider-network-local",
+    "d2b-provider-device-usbip",
+    "d2b-process",
+    "d2b-credential-service",
     "d2b-session",
     "d2b-session-unix",
     "d2b-controller-toolkit",
@@ -51,6 +60,28 @@ members = [
 
 [workspace.package]
 license = "Apache-2.0"
+
+# Keep ordinary development/test builds useful for panic backtraces without
+# paying to generate and link full DWARF for the entire dependency graph.
+# `debugging` is the explicit full-debug escape hatch for debugger sessions.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
+[profile.test]
+debug = "line-tables-only"
+
+[profile.test.package."*"]
+debug = false
+
+[profile.debugging]
+inherits = "dev"
+debug = 2
+
+[profile.debugging.package."*"]
+debug = 2
 
 [workspace.lints.clippy]
 all = "warn"
