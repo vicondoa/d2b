@@ -463,6 +463,12 @@ if (existsSync(integrationJson)) {
 const MEMORY_CATEGORIES = ["signoff", "build", "test", "merge", "codegen", "disk"];
 const MEMORY_DISPOSITIONS = ["open", "folded", "filed", "resolved", "wontfix"];
 
+// A register with no rows is normally a register that lost them, so it fails.
+// A genuinely empty one is declared with this marker, which makes emptiness a
+// statement an author made rather than a state the gate cannot tell apart from
+// truncation. The marker is refused once the register has rows again, so it
+// cannot be left behind to license a later truncation.
+const EMPTY_MARKER = "<!-- d2b-register: intentionally empty -->";
 
 // The qualified wave grammar, as documented in docs/contributing/workflow.md
 // and enforced by validate_wave in packages/xtask/src/delivery/. The program
@@ -577,6 +583,8 @@ for (const reg of ["friction-log.md", "deferred-work.md", "engineering-debt.md"]
   let sawHeader = false;
   let inFence = false;
   let rowsHere = 0;
+  let fenceOpenedAt = -1;
+  let declaredEmpty = false;
   for (const [i, line] of lines.entries()) {
     // A table cannot span a fence, and a fenced example may legitimately hold
     // pipes, so a fence closes the table above it and its contents are skipped.
@@ -591,6 +599,7 @@ for (const reg of ["friction-log.md", "deferred-work.md", "engineering-debt.md"]
         );
       }
       inFence = !inFence;
+      fenceOpenedAt = inFence ? i + 1 : -1;
       dispositionIdx = -1;
       headerWidth = -1;
       continue;
@@ -599,6 +608,9 @@ for (const reg of ["friction-log.md", "deferred-work.md", "engineering-debt.md"]
       dispositionIdx = -1;
       headerWidth = -1;
       continue;
+    }
+    if (line.trim() === EMPTY_MARKER) {
+      declaredEmpty = true;
     }
     if (!line.trim().startsWith("|")) {
       const { pipes, endsWithPipe } = pipeShape(line);
@@ -700,8 +712,9 @@ for (const reg of ["friction-log.md", "deferred-work.md", "engineering-debt.md"]
   }
   if (inFence) {
     fail(
-      `.specify/memory/${reg}: a fenced block is opened and never closed, so every ` +
-      `line after it was skipped and any table below it went unread. Close the fence.`,
+      `.specify/memory/${reg}: the fenced block opened on line ${fenceOpenedAt} is never ` +
+      `closed, so every line after it was skipped and any table below it went unread. ` +
+      `Close the fence.`,
     );
   }
   if (!sawHeader) {
@@ -710,12 +723,18 @@ for (const reg of ["friction-log.md", "deferred-work.md", "engineering-debt.md"]
       `register was validated. A register table needs a leading and a trailing ` +
       `pipe on every row, including its header. Add the header row.`,
     );
-  } else if (rowsHere === 0) {
+  } else if (rowsHere === 0 && !declaredEmpty) {
     fail(
-      `.specify/memory/${reg}: this register has a header and not one data row, so ` +
-      `the success line would report a row count with nothing behind it. There is no ` +
-      `baseline to compare against, so an emptied register is otherwise indistinguishable ` +
-      `from one that was never written. Restore the rows, or record why it is empty.`,
+      `.specify/memory/${reg}: this register has a header and not one data row. Rows are ` +
+      `dispositioned in place rather than deleted, so an emptied register has lost history ` +
+      `the triage rules count. Restore the rows. If it is genuinely empty, say so with a ` +
+      `line reading exactly "${EMPTY_MARKER}".`,
+    );
+  } else if (rowsHere > 0 && declaredEmpty) {
+    fail(
+      `.specify/memory/${reg}: this register declares itself intentionally empty and has ` +
+      `${rowsHere} rows. Left in place the marker would license a later truncation. Remove ` +
+      `the "${EMPTY_MARKER}" line.`,
     );
   }
 }

@@ -550,6 +550,52 @@ const CASES = [
     expectText: "not one data row",
   },
   {
+    // Security and product both said the zero-rows message promised a remedy
+    // that did not work. The marker is that remedy, and it has to actually
+    // pass.
+    name: "a register declared intentionally empty passes with no rows",
+    mutate: (dir) => {
+      const path = join(dir, ".specify", "memory", "engineering-debt.md");
+      const src = readFileSync(path, "utf8").split("\n");
+      const kept = [];
+      let seen = 0;
+      for (const line of src) {
+        if (line.trim().startsWith("|")) {
+          seen += 1;
+          if (seen > 2) continue;
+        }
+        kept.push(line);
+      }
+      kept.push("", "<!-- d2b-register: intentionally empty -->", "");
+      writeFileSync(path, kept.join("\n"));
+    },
+    expectExit: 0,
+  },
+  {
+    // A marker left behind once rows return would licence the next truncation
+    // silently, so it is refused rather than ignored.
+    name: "a register that declares itself empty and has rows is rejected",
+    mutate: (dir) => {
+      const path = join(dir, ".specify", "memory", "engineering-debt.md");
+      const src = readFileSync(path, "utf8").trimEnd();
+      writeFileSync(path, `${src}\n\n<!-- d2b-register: intentionally empty -->\n`);
+    },
+    expectExit: 1,
+    expectText: "declares itself intentionally empty and has",
+  },
+  {
+    // An unterminated fence in a long register is hard to find without the
+    // line it opened on.
+    name: "an unterminated fence names the line it opened on",
+    mutate: (dir) => {
+      const path = join(dir, ".specify", "memory", "friction-log.md");
+      const src = readFileSync(path, "utf8");
+      writeFileSync(path, `${src.trimEnd()}\n\n\`\`\`\nstill open at EOF\n`);
+    },
+    expectExit: 1,
+    expectText: "opened on line",
+  },
+  {
     // An unterminated fence swallows every line after it. A register whose
     // table sits below one would be skipped entirely while an earlier table
     // kept sawHeader true, so the gate has to notice the fence itself.
