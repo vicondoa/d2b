@@ -10,11 +10,11 @@
   "agent": {
     "general": {
       "model": "github-copilot/gpt-5.6-luna",
-      "reasoningEffort": "xhigh"
+      "reasoningEffort": "max"
     },
     "explore": {
       "model": "github-copilot/gpt-5.6-luna",
-      "reasoningEffort": "xhigh"
+      "reasoningEffort": "max"
     },
     "panel": {
       "description": "Read-only ADR-046 binding panel reviewer. One lane per roster role, dispatched only at wave close against the wave's immutable snapshot.",

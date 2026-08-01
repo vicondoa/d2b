@@ -10,7 +10,7 @@ use serde::Deserialize;
 
 use super::{
     DeliveryError, Result,
-    model::{CandidateMaterial, RepositoryRecord},
+    model::{CandidateMaterial, MAX_WAVE_ORDINAL, RepositoryRecord, qualified_wave_parts},
     storage::MAX_JSON_BYTES,
 };
 
@@ -231,16 +231,54 @@ fn read_tree_file(
     Ok(Some(output.stdout))
 }
 
+/// Parses the wave ordinal from either wave form.
+///
+/// Ordering across waves is what enforces "wave N+1 cannot open a panel request
+/// until wave N has merged", so both the legacy bare `W<N>` form and the
+/// qualified `<program>w<N>` form must yield the same ordinal. The two forms
+/// are never compared against each other in practice, because a work-item graph
+/// belongs to one program, but the ordinal is the only thing this function
+/// promises either way.
 fn wave_number(wave: &str) -> Result<u8> {
+    if let Some((_, ordinal)) = qualified_wave_parts(wave) {
+        return Ok(ordinal);
+    }
     wave.strip_prefix('W')
         .and_then(|number| number.parse::<u8>().ok())
-        .filter(|number| *number <= 8)
+        .filter(|number| *number <= MAX_WAVE_ORDINAL)
         .ok_or_else(|| DeliveryError::new(format!("invalid delivery wave `{wave}`")))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Wave ordering is what enforces "wave N+1 waits for wave N to merge", so
+    /// both wave forms must yield the same ordinal. The legacy arm is asserted
+    /// explicitly because a program is running against it.
+    #[test]
+    fn both_wave_forms_yield_the_same_ordinal() {
+        for ordinal in 0u8..=8 {
+            assert_eq!(
+                wave_number(&format!("W{ordinal}")).expect("a legacy wave parses"),
+                ordinal
+            );
+            assert_eq!(
+                wave_number(&format!("adr046w{ordinal}")).expect("a qualified wave parses"),
+                ordinal
+            );
+            assert_eq!(
+                wave_number(&format!("spec001w{ordinal}")).expect("a qualified wave parses"),
+                ordinal
+            );
+        }
+        for wave in ["W9", "W10", "w1", "alice", "", "spec001w9", "spec001w10"] {
+            assert!(
+                wave_number(wave).is_err(),
+                "an out-of-range or name-like wave must not yield an ordinal: {wave:?}"
+            );
+        }
+    }
 
     fn graph() -> Vec<u8> {
         br#"{

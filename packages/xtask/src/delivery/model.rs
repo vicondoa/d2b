@@ -685,45 +685,131 @@ pub fn validate_identifier(value: &str, label: &str) -> Result<()> {
     Ok(())
 }
 
-/// The one delivery program this tooling serves: ADR 0046. Spec section 3.2
-/// (`docs/specs/ADR-046-validation-and-delivery.md`) defines a closed wave
-/// namespace `ADR046-W0`..`ADR046-W8`, split here into the fixed program
-/// component and the closed wave component.
+/// The delivery program the legacy wave namespace belongs to: ADR 0046. Spec
+/// section 3.2 (`docs/specs/ADR-046-validation-and-delivery.md`) defines a
+/// closed wave namespace `ADR046-W0`..`ADR046-W8`, split there into the fixed
+/// program component and the closed wave component.
 pub const ADR046_PROGRAM: &str = "ADR046";
 
-/// The closed set of ADR 0046 wave identifiers, `W0` through `W8`. There is no
-/// generic or operator-chosen wave: a value outside this set - a username, a
-/// branch name, or any free-form string - is rejected before it can name a
-/// state directory or be emitted in an artifact reference.
+/// The closed set of legacy ADR 0046 wave identifiers, `W0` through `W8`.
+///
+/// A bare wave in this set always means program [`ADR046_PROGRAM`] and always
+/// resolves to its existing `<state-root>/W<N>/...` directory. This form is not
+/// deprecated and is not on a timer: ADR 0046 runs to completion in it, because
+/// re-addressing a wave would invalidate the candidate digests binding its
+/// existing snapshots, seals, and panel records.
 pub const ADR046_WAVES: [&str; 9] = ["W0", "W1", "W2", "W3", "W4", "W5", "W6", "W7", "W8"];
 
-/// Rejects any wave outside the closed ADR 0046 namespace.
+/// Highest wave ordinal any program may use, matching the legacy closed set.
+pub const MAX_WAVE_ORDINAL: u8 = 8;
+
+/// Bounds on the program component of a qualified wave token.
+const MIN_QUALIFIED_PROGRAM_LEN: usize = 3;
+const MAX_QUALIFIED_PROGRAM_LEN: usize = 16;
+
+/// Splits a qualified wave token into its lowercase program component and its
+/// wave ordinal, or returns `None` if the token is not a qualified wave.
 ///
-/// The wave becomes a path component (`<state-root>/<wave>/<candidate>/...`)
-/// and is echoed verbatim in every stage's `artifact` reference, so allowing a
-/// free-form identifier would let a username or other operator string leak
-/// into structured output. Membership in the fixed [`ADR046_WAVES`] set is the
-/// only accepted form.
-pub fn validate_wave(wave: &str) -> Result<()> {
-    if !ADR046_WAVES.contains(&wave) {
-        return Err(DeliveryError::new(format!(
-            "delivery wave must be one of {} - the closed ADR 0046 wave namespace",
-            ADR046_WAVES.join(", ")
-        )));
+/// The canonical form fuses the program and the wave into a single lowercase
+/// token with no separator: `adr046w1`, `spec001w1`. Fusing them rather than
+/// adding a `<program>/<wave>` path component is deliberate. The delivery state
+/// layout is `<state-root>/<wave>/<candidate-id>/...`, in which the program is
+/// **not** a path component, so with two programs in flight a bare `W1` from
+/// each would name the same state directory. A fused token makes uniqueness
+/// intrinsic to the identifier, so it survives being copied into an artifact
+/// reference, a commit subject, a panel record, or a checkpoint, none of which
+/// have a path structure to lean on. It also requires no state-layout change,
+/// which is what keeps the in-flight program safe.
+///
+/// The accepted shape is `[a-z][a-z0-9]*` followed by `w` and a single ordinal
+/// digit `0`..=[`MAX_WAVE_ORDINAL`], with the program component bounded in
+/// length. The split is taken at the **final** `w`, so a program whose own name
+/// contains `w` or ends in a digit is still parsed correctly.
+pub fn qualified_wave_parts(wave: &str) -> Option<(&str, u8)> {
+    // Matched on bytes rather than by byte-offset slicing, because a
+    // byte-offset split of an arbitrary operator string can land inside a
+    // multi-byte character and panic. A slice pattern cannot.
+    let [program @ .., b'w', digit @ b'0'..=b'9'] = wave.as_bytes() else {
+        return None;
+    };
+    let ordinal = digit - b'0';
+    if ordinal > MAX_WAVE_ORDINAL {
+        return None;
     }
-    Ok(())
+    if !(MIN_QUALIFIED_PROGRAM_LEN..=MAX_QUALIFIED_PROGRAM_LEN).contains(&program.len()) {
+        return None;
+    }
+    let [first, rest @ ..] = program else {
+        return None;
+    };
+    if !first.is_ascii_lowercase() {
+        return None;
+    }
+    if !rest
+        .iter()
+        .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+    {
+        return None;
+    }
+    // Every accepted byte is ASCII, so the prefix is a character boundary.
+    Some((&wave[..program.len()], ordinal))
 }
 
-/// Rejects any program/wave pair outside the closed ADR 0046 namespace.
+/// Rejects any wave outside the legacy closed set and the qualified namespace.
 ///
-/// The program must be exactly [`ADR046_PROGRAM`] and the wave must be a member
-/// of [`ADR046_WAVES`]. This is the single gate every stage runs before it
-/// creates delivery state or emits an artifact reference, so no name-like value
-/// can reach a state directory name or structured stdout.
+/// The wave becomes a path component (`<state-root>/<wave>/<candidate>/...`)
+/// and is echoed verbatim in every stage's `artifact` reference, so a
+/// free-form identifier would let a username or other operator string leak into
+/// structured output. Two forms are accepted, and neither admits one:
+///
+/// * a member of the legacy [`ADR046_WAVES`] closed set, which continues to
+///   mean program [`ADR046_PROGRAM`]; or
+/// * a qualified token accepted by [`qualified_wave_parts`], which is a bounded
+///   lowercase ASCII alphanumeric string ending in `w` and one ordinal digit.
+///
+/// The legacy form keeps its closed-set guarantee exactly. The qualified form
+/// is a strict bounded pattern rather than a nine-element set, which is the one
+/// property that genuinely widens here: it still cannot express a path
+/// separator, a relative traversal, an absolute path, a control character,
+/// whitespace, uppercase, or an unbounded length, so the state path component
+/// remains a short lowercase alphanumeric token in every accepted case.
+pub fn validate_wave(wave: &str) -> Result<()> {
+    if ADR046_WAVES.contains(&wave) || qualified_wave_parts(wave).is_some() {
+        return Ok(());
+    }
+    Err(DeliveryError::new(format!(
+        "delivery wave must be one of {} - the closed ADR 0046 wave namespace - \
+         or a qualified lowercase token such as `spec001w1`",
+        ADR046_WAVES.join(", ")
+    )))
+}
+
+/// Rejects any program/wave pair the delivery namespace does not admit.
+///
+/// This is the single gate every stage runs before it creates delivery state or
+/// emits an artifact reference, so no name-like value can reach a state
+/// directory name or structured stdout. Three rules, in order:
+///
+/// * A legacy bare wave requires the program to be exactly [`ADR046_PROGRAM`].
+///   This is the pre-existing behaviour, unchanged.
+/// * A qualified wave requires its embedded program to equal the `--program`
+///   argument case-insensitively, so `--program SPEC001 --wave adr046w1` is
+///   rejected as the inconsistency it is rather than silently trusting one side.
+/// * Any other wave is rejected by [`validate_wave`].
 pub fn validate_program_wave(program: &str, wave: &str) -> Result<()> {
+    if let Some((qualified_program, _)) = qualified_wave_parts(wave) {
+        if !program.eq_ignore_ascii_case(qualified_program) {
+            return Err(DeliveryError::new(format!(
+                "delivery wave `{wave}` names program `{qualified_program}`, \
+                 which disagrees with the requested program `{program}`"
+            )));
+        }
+        return Ok(());
+    }
     if program != ADR046_PROGRAM {
         return Err(DeliveryError::new(format!(
-            "delivery program must be {ADR046_PROGRAM} - the only supported ADR 0046 program"
+            "delivery program must be {ADR046_PROGRAM} for a bare wave - \
+             a new program must use a qualified wave such as `spec001w1`"
         )));
     }
     validate_wave(wave)
@@ -1008,7 +1094,7 @@ mod tests {
     }
 
     #[test]
-    fn the_wave_namespace_is_the_closed_adr046_set() {
+    fn the_legacy_wave_namespace_is_unchanged() {
         // Every closed wave is accepted.
         for wave in ADR046_WAVES {
             validate_wave(wave).expect("a closed wave is accepted");
@@ -1034,12 +1120,102 @@ mod tests {
                 "the pair must be rejected for a name-like wave: {wave:?}"
             );
         }
-        // The program is fixed: a name-like program is rejected even with a
-        // valid wave.
+        // The program is fixed for a bare wave: a name-like program is rejected
+        // even with a valid wave.
         for program in ["alice", "adr046", "ADR-046", "ADR047", ""] {
             assert!(
                 validate_program_wave(program, "W0").is_err(),
                 "a program outside the closed namespace must be rejected: {program:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_qualified_wave_carries_its_own_program() {
+        for (wave, program, ordinal) in [
+            ("adr046w0", "adr046", 0u8),
+            ("adr046w1", "adr046", 1),
+            ("spec001w1", "spec001", 1),
+            ("spec001w8", "spec001", 8),
+            // A program whose own name contains `w` still splits at the final
+            // one, which is why the parser scans from the end.
+            ("workflow2w3", "workflow2", 3),
+        ] {
+            assert_eq!(
+                qualified_wave_parts(wave),
+                Some((program, ordinal)),
+                "a qualified wave must split into its program and ordinal: {wave:?}"
+            );
+            validate_wave(wave).expect("a qualified wave is accepted");
+            validate_program_wave(&program.to_ascii_uppercase(), wave)
+                .expect("a qualified wave agrees with its own program, spelled either case");
+            validate_program_wave(program, wave)
+                .expect("the comparison is case-insensitive in both directions");
+        }
+    }
+
+    #[test]
+    fn a_qualified_wave_is_rejected_when_it_could_name_a_path_or_a_free_form_string() {
+        for wave in [
+            // Separators, traversal, and absolute paths can never appear.
+            "spec/001w1",
+            "../w1",
+            "..w1",
+            "/etc/w1",
+            "spec.001w1",
+            "spec-001w1",
+            "spec_001w1",
+            // Case, whitespace, and control characters can never appear.
+            "SPEC001w1",
+            "spec001W1",
+            "spec 001w1",
+            "spec001w1\n",
+            "\tspec001w1",
+            // The ordinal stays bounded and single-digit.
+            "spec001w9",
+            "spec001w10",
+            "spec001w",
+            "spec001w-1",
+            // The program component stays bounded and starts with a letter.
+            "w1",
+            "0spec001w1",
+            "aw1",
+            "abw1",
+            "thisprogramnameisfartoolongw1",
+            // A multi-byte character must not panic the parser.
+            "spec001w\u{20ac}",
+            "\u{20ac}w1",
+            "spec\u{20ac}01w1",
+        ] {
+            assert!(
+                qualified_wave_parts(wave).is_none(),
+                "an unsafe qualified wave must not parse: {wave:?}"
+            );
+            assert!(
+                validate_wave(wave).is_err(),
+                "an unsafe qualified wave must be rejected: {wave:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_qualified_wave_disagreeing_with_its_program_is_rejected() {
+        // The inconsistency is caught rather than one side silently winning,
+        // because either choice would write state under an address the operator
+        // did not ask for.
+        for (program, wave) in [
+            ("SPEC001", "adr046w1"),
+            ("ADR046", "spec001w1"),
+            ("SPEC002", "spec001w1"),
+            ("", "spec001w1"),
+        ] {
+            let error = validate_program_wave(program, wave)
+                .expect_err("a disagreeing program and wave must be rejected");
+            assert!(
+                error
+                    .to_string()
+                    .contains("disagrees with the requested program"),
+                "the error must name the disagreement: {error}"
             );
         }
     }

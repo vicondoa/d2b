@@ -1380,6 +1380,7 @@ pub fn sha256_file(path: &Path) -> Result<String> {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use super::super::model::ADR046_WAVES;
     use super::*;
     use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -1423,6 +1424,51 @@ pub(crate) mod tests {
 
     fn other_candidate_id() -> CandidateId {
         CandidateId::parse("b".repeat(64)).expect("hex digest")
+    }
+
+    /// The single most important compatibility guarantee of the qualified wave
+    /// scheme: a legacy bare wave still addresses its existing directory, byte
+    /// for byte. A program is running against this state right now, and
+    /// re-addressing a wave would invalidate the candidate digests that bind
+    /// its existing snapshots, seals, and panel records.
+    #[test]
+    fn a_legacy_wave_addresses_its_existing_state_directory_unchanged() {
+        let scratch = Scratch::new("legacy-wave-path");
+        let state = scratch.path.join("state");
+        let root = StateRoot::for_tests(&state).expect("anchor root");
+        let id = candidate_id();
+        for wave in ADR046_WAVES {
+            let directory = root.candidate(wave, &id).expect("legacy candidate dir");
+            assert_eq!(
+                directory.path(),
+                state.join(wave).join(id.as_str()),
+                "a legacy wave must keep its verbatim state path: {wave:?}"
+            );
+        }
+    }
+
+    /// A qualified wave lands under its own token, so two programs can hold a
+    /// wave of the same ordinal without colliding. That collision is the reason
+    /// the scheme exists, since the program is not a path component.
+    #[test]
+    fn two_programs_with_the_same_ordinal_do_not_collide() {
+        let scratch = Scratch::new("qualified-wave-path");
+        let state = scratch.path.join("state");
+        let root = StateRoot::for_tests(&state).expect("anchor root");
+        let id = candidate_id();
+        let first = root
+            .candidate("adr046w1", &id)
+            .expect("first candidate dir");
+        let second = root
+            .candidate("spec001w1", &id)
+            .expect("second candidate dir");
+        assert_eq!(first.path(), state.join("adr046w1").join(id.as_str()));
+        assert_eq!(second.path(), state.join("spec001w1").join(id.as_str()));
+        assert_ne!(first.path(), second.path());
+        // And neither collides with the legacy address for the same ordinal.
+        let legacy = root.candidate("W1", &id).expect("legacy candidate dir");
+        assert_ne!(legacy.path(), first.path());
+        assert_ne!(legacy.path(), second.path());
     }
 
     #[test]
