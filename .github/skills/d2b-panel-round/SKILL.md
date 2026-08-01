@@ -93,6 +93,11 @@ parallel. Each lane's prompt carries:
   instruction that **the delta is what they review**, with the full branch for
   context only;
 - the phase deliverable, so findings stay confined to defects in the delta;
+- a restatement of the shared bar: a finding is a defect that would cause
+  incorrect behaviour, mask a regression, or weaken a stated invariant, and
+  everything else is a summary observation. Each seat carries this bar in its
+  own agent file, byte-identical and gate-enforced, but restating it in the
+  prompt costs one line and makes the threshold explicit for the round;
 - any integrator rebuttal of a prior finding, stated with its evidence, and an
   explicit statement that the reviewer may withdraw an incorrect finding and is
   not required to withdraw a correct one;

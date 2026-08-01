@@ -200,6 +200,27 @@ function writeRegister(dir, reg, text) {
   writeFileSync(join(dir, ".specify", "memory", reg), text);
 }
 
+// Rewrite one panel seat's shared finding-bar section inside the fixture. The
+// bar is what tells a seat which observations block the round and which belong
+// in the summary. The gate requires all ten to be byte-identical, because the
+// bar was originally restated per seat and silently diverged into ten
+// thresholds, three of which were absent entirely. Both mutations below are
+// that drift.
+function mutateBar(dir, seat, fn) {
+  const p = join(dir, ".github", "agents", `panel-${seat}.agent.md`);
+  const t = readFileSync(p, "utf8");
+  const s = t.indexOf("## The bar for a finding");
+  const e = t.indexOf("\n## Output\n", s);
+  if (s === -1 || e === -1) {
+    throw new Error(`fixture panel-${seat}: no bar section to mutate`);
+  }
+  const next = fn(t, s, e);
+  if (next === t) {
+    throw new Error(`fixture panel-${seat}: bar mutation was a no-op, so the case would assert a cause that never occurred`);
+  }
+  writeFileSync(p, next);
+}
+
 // A negative case asserts both a nonzero exit and a substring from the roster
 // guard itself. Exit status alone would pass if the gate failed for some
 // unrelated reason, which is precisely how a guard that no longer fires hides.
@@ -242,6 +263,23 @@ const CASES = [
     mutate: (dir) => setRolesBlock(dir, "const ROLES = PANEL_SEATS.slice();"),
     expectExit: 1,
     expectText: "cannot parse ROLES",
+  },
+  {
+    name: "a seat missing the shared finding bar is rejected",
+    mutate: (dir) => mutateBar(dir, "rust", (t, s, e) => t.slice(0, s) + t.slice(e + 1)),
+    expectExit: 1,
+    expectText: 'no "## The bar for a finding" section',
+  },
+  {
+    name: "a seat whose finding bar diverges from the others is rejected",
+    mutate: (dir) =>
+      mutateBar(
+        dir,
+        "rust",
+        (t, s, e) => `${t.slice(0, e)}\nUse whatever threshold you judge appropriate.\n${t.slice(e)}`,
+      ),
+    expectExit: 1,
+    expectText: "differs from",
   },
   // The registers do not share a column shape. deferred-work.md carries a
   // trailing Ref column, so a guard that reads the last cell reads the ref.

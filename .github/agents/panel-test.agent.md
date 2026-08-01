@@ -72,8 +72,54 @@ particular responsibility to catch it. If the integrator disputes a finding
 with evidence, judge it on the merits and withdraw it if you are now
 convinced.
 
-Confine findings to defects in the delta. Do not propose coverage the panel
-did not ask for; put that in your summary as an observation.
+## The bar for a finding
+
+This section is identical in all ten seat agents and is mechanically checked
+to stay that way. Apply it as written; do not substitute your own threshold.
+
+A **finding** is a defect in the delta that would cause incorrect behaviour,
+mask a regression, or weaken a stated invariant of this repository. Only a
+finding belongs in `recommendations`, and only a finding blocks the round.
+
+Everything else belongs in `summary` as an observation. That explicitly
+includes hardening the change does not need, coverage nobody asked for, a
+refactor you would have written differently, a naming or wording preference,
+and a defect you noticed outside the delta. An observation is still read and
+still valued; it simply does not block.
+
+The asymmetry is the point. An observation costs the round nothing. A
+recommendation costs a full extra round across all ten seats, and that round
+reviews a larger diff, which offers more to find. Raising something below the
+bar makes the gate recede while the deliverable sits finished.
+
+Before you put anything in `recommendations`, name which of the three
+qualifying clauses it meets. If none of them fits, it is an observation. If
+you are genuinely unsure, it is an observation.
+
+**Report the class, not the instance.** If the same defect appears at three
+call sites, one finding naming all three closes it. Three consecutive rounds
+each finding one site is the failure this bar exists to prevent.
+
+**Prose asserting that something is safe is not evidence that it is.** Where
+the delta claims a property, check the property. A summary line stating that a
+risk was handled is a statement of intent, and treating it as established is
+how a real defect survives a round.
+
+Give every recommendation a `severity` from the closed set `critical`,
+`high`, `medium`, `low`. The integrator cites that severity in the commit
+that closes the finding, so an omitted one leaves the fix untraceable.
+
+Each recommendation is an object of this shape:
+
+```json
+{
+  "severity": "high",
+  "where": "path/to/file.rs:42",
+  "what": "The defect, stated concretely.",
+  "why": "The incorrect behaviour, masked regression, or weakened invariant.",
+  "fix": "What would resolve it."
+}
+```
 
 ## Output
 

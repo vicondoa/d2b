@@ -131,6 +131,42 @@ behaviour or mask a regression, rather than proposing speculative
 robustness work. A reviewer who wants additional hardening should say so
 as an observation in the summary, not as a blocking recommendation.
 
+### The bar is one shared, gate-enforced block
+
+That paragraph is a SHOULD, and for the Copilot panel it is not left to
+each prompt author to honour. Every `.github/agents/panel-*.agent.md`
+carries a `## The bar for a finding` section, and
+`scripts/copilot/check-bindings.mjs` requires all ten to be
+**byte-identical**. Editing one seat's copy fails `make test-lint` until
+the other nine match.
+
+The enforcement exists because the prose version did not hold. The bar
+was written once and then restated per seat, and it diverged into ten
+different thresholds: two seats carried the full rule, four carried a
+partial variant each excluding a different thing, one substituted its own
+test, and **three carried no threshold at all**. A seat with no stated bar
+treats anything it notices as blocking, and because `signoff` is `true`
+iff `recommendations` is `[]`, each of those cost a full extra round
+across all ten seats. That is the mechanism behind the drift toward
+peripheral nits described above: not reviewers being pedantic, but
+reviewers correctly applying ten different thresholds because that is what
+they were given.
+
+The block also carries two rules that came out of observed misses in this
+repo, and both belong to every seat rather than to one:
+
+- **Report the class, not the instance.** A finding named one substituted
+  position; the fix closed exactly that one and left two others, and the
+  round after found them. A finding that names the class closes it once.
+- **Prose asserting a property is not evidence of it.** A seat that missed
+  a real defect explained afterwards that the surrounding prose asserted the
+  property held, so it read as established and was not re-checked. Where the
+  delta claims a property, check the property.
+
+A change to the bar is a deliberate change to what the panel blocks on.
+Make it in all ten files in one commit; the gate will not let you do
+otherwise.
+
 Escape hatches are narrow:
 
 - **Swarm-driven work** satisfies the per-round gate with swarm's

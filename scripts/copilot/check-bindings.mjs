@@ -173,7 +173,52 @@ if (!existsSync(agentsDir)) {
         fail(`${file}: panel agent needs "view" to read the staged diffs. Add view to its "tools:" list.`);
       }
     }
-    agents.set(name, { file, model: fm.model, tools: fm.tools ?? "" });
+    agents.set(name, { file, model: fm.model, tools: fm.tools ?? "", text });
+  }
+}
+
+// --- the shared finding bar -----------------------------------------------
+// Every panel seat must carry one byte-identical statement of what qualifies
+// as a blocking finding. This is checked mechanically because prose alone did
+// not hold: the bar was originally written once and restated per seat, and it
+// silently diverged into ten different thresholds. Three seats ended up with
+// no threshold at all, so anything they noticed became a blocking
+// recommendation, and since signoff is true iff recommendations is empty,
+// each one cost a full extra round across all ten seats.
+
+const BAR_HEADING = "## The bar for a finding";
+const panelAgents = [...agents.entries()].filter(([n]) => n.startsWith("panel-"));
+
+const bars = new Map();
+for (const [name, a] of panelAgents) {
+  const start = a.text.indexOf(BAR_HEADING);
+  if (start === -1) {
+    fail(
+      `${a.file}: no "${BAR_HEADING}" section. Every panel seat must carry the shared ` +
+      `bar verbatim, or that seat invents its own threshold and reports below it. ` +
+      `Copy the section from another panel agent without changing a word.`,
+    );
+    continue;
+  }
+  const end = a.text.indexOf("\n## ", start + BAR_HEADING.length);
+  if (end === -1) {
+    fail(`${a.file}: "${BAR_HEADING}" is not followed by another section, so its extent is undefined. Keep "## Output" after it.`);
+    continue;
+  }
+  bars.set(name, a.text.slice(start, end + 1));
+}
+
+if (bars.size > 1) {
+  const [refName, refBar] = [...bars.entries()][0];
+  for (const [name, bar] of bars) {
+    if (bar !== refBar) {
+      fail(
+        `${agents.get(name).file}: its "${BAR_HEADING}" section differs from ` +
+        `${agents.get(refName).file}. All ten seats must apply one identical bar; a ` +
+        `per-seat variant is how the panel starts returning findings at ten different ` +
+        `severities. Make them byte-identical.`,
+      );
+    }
   }
 }
 
