@@ -1382,8 +1382,11 @@ Two file-disjoint scopes, both opening against merged Wave A.
   Adds the four capability roots, regenerates the snapshots, adds the
   in-crate trait-solver ambiguity assertions including the `Debug` arm, and
   adds the three counts and the three `mutation_seal.rs` scans to
-  `d106_policy.rs`. The approved trait-impl file gains only holder rows, per
-  the closure analysis in section 6.
+  `d106_policy.rs`. It also moves Wave A's `StoreSlot` wire and durable
+  serialization grep into that policy test as a fail-closed workspace scan, so
+  invariant 10 remains enforced after the implementation branch closes. The
+  approved trait-impl file gains only holder rows, per the closure analysis in
+  section 6.
   Done when `make api-surface-pin` followed by
   `git diff --exit-code tests/golden/api-surface/` exits 0,
   `make test-rust-api-surface` exits 0,
