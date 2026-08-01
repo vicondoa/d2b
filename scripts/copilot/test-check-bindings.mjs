@@ -28,7 +28,7 @@
 // It is a plain node script with no test framework because the repository does
 // not add tooling for one gate. It runs from `make test-lint`.
 
-import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -305,6 +305,20 @@ const CASES = [
       }),
     expectExit: 1,
     expectText: "declares required Copilot skill",
+  },
+  {
+    name: "a dangling required Copilot skill symlink is rejected",
+    mutate: (dir) => {
+      const relativePath = ".github/skills/dangling-required-skill/SKILL.md";
+      const path = join(dir, relativePath);
+      mkdirSync(dirname(path), { recursive: true });
+      symlinkSync("missing-target.md", path);
+      mutateJson(dir, ".specify/integrations/copilot.manifest.json", (manifest) => {
+        manifest.files[relativePath] = "0".repeat(64);
+      });
+    },
+    expectExit: 1,
+    expectText: "does not resolve to a readable regular file",
   },
   {
     name: "a restored retired integration directory is rejected",

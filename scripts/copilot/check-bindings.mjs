@@ -384,7 +384,7 @@ if (existsSync(repoSettings)) {
   }
 }
 
-function pathExists(path) {
+function retiredPathExists(path) {
   try {
     lstatSync(path);
     return true;
@@ -406,13 +406,13 @@ const retiredSurfacePaths = [
   },
 ];
 for (const { label, path } of retiredSurfacePaths) {
-  if (pathExists(path)) {
+  if (retiredPathExists(path)) {
     fail(`${label} is present at ${path}. Remove the retired surface; Copilot is the only supported integration.`);
   }
 }
 
 const copilotManifestJson = join(root, ".specify", "integrations", "copilot.manifest.json");
-if (!pathExists(copilotManifestJson)) {
+if (!existsSync(copilotManifestJson)) {
   fail(
     `.specify/integrations/copilot.manifest.json does not exist. The installed ` +
     `Copilot skill surface cannot be checked without its manifest.`,
@@ -466,10 +466,30 @@ if (!pathExists(copilotManifestJson)) {
             continue;
           }
           const skillPath = join(root, relativePath);
-          if (!pathExists(skillPath)) {
+          let skillStat;
+          try {
+            skillStat = statSync(skillPath);
+          } catch (e) {
             fail(
               `.specify/integrations/copilot.manifest.json declares required Copilot ` +
-              `skill "${relativePath}", but that file does not exist.`,
+              `skill "${relativePath}", but the path does not resolve to a ` +
+              `readable regular file: ${e.message}.`,
+            );
+            continue;
+          }
+          if (!skillStat.isFile()) {
+            fail(
+              `.specify/integrations/copilot.manifest.json declares required Copilot ` +
+              `skill "${relativePath}", but the path is not a regular file.`,
+            );
+            continue;
+          }
+          try {
+            readFileSync(skillPath, "utf8");
+          } catch (e) {
+            fail(
+              `.specify/integrations/copilot.manifest.json declares required Copilot ` +
+              `skill "${relativePath}", but the file is not readable: ${e.message}.`,
             );
           }
         }
