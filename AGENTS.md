@@ -1503,13 +1503,30 @@ fields that request panel, agent, or model metadata.
   under concurrent cargo invocations is indistinguishable from the fixture
   failing for the wrong reason.
 - Tests that shell out to `cargo` (the capability-seal guards in
-  `packages/d2b-bus/` and `packages/d2b-controller-toolkit/`) cache their
+  `packages/d2b-bus/`, `packages/d2b-controller-toolkit/` and
+  `packages/d2b-resource-api/`) cache their
   scratch trees between runs, keyed on a hash of `rustc -vV`. Compiled
   artifacts are not portable across compiler versions, and the gate's
   pinned toolchain routinely differs from a dev shell's, so an unkeyed
-  cache lets one poison the other. Those persistent caches live under
+  cache lets one poison the other. The first two live under
   `.scratch/rust-test-cache/`, which CI restores as one cache surface. They
   are several GB per worktree; delete that subtree to reclaim the space.
+- The `d2b-resource-api` seal instead caches to
+  `.scratch/resource-api-external-seals-<key>/`, deliberately outside that
+  restored surface. Its tree is 767 MB, and the Actions cache is a hard
+  repository-wide budget that is already fully subscribed, so carrying it
+  would evict entries whose cold rebuild costs far more than this fixture's
+  40 s. Do not move it under `rust-test-cache/` without first showing the
+  budget has room.
+- That seal proves the resource API compiled under forced `cfg(test)`, which
+  a warm tree would otherwise skip - so it discards that one crate's cargo
+  fingerprints before checking, keeping its dependencies warm. Both the
+  marker and the rustc wrapper live at fixed paths inside the tree: cargo
+  fingerprints `RUSTC_WRAPPER`, so a per-run wrapper path silently
+  invalidates everything and restores the cold build. The arrangement is
+  fail-closed - the marker is deleted at the start of every run, so if the
+  forcing ever stops working the marker is absent and the seal fails rather
+  than passing without proof.
 - The persistent-shell helper is intentionally excluded from the main
   Rust workspace at `packages/d2b-guest-shell-runner/`. Run it by
   manifest path (and with `--features real-libshpool` when checking the

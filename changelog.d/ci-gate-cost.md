@@ -23,3 +23,11 @@
   the same errors slightly earlier at the cost of running the compiler twice.
   Measured cold, that is 153 s against 89 s for an identical result. The
   fake-backends pass never had one.
+- The resource API's external capability seal reuses its fixture build between
+  runs, keyed on the compiler that produced it, rather than rebuilding roughly
+  a gigabyte of dependencies every time. Measured locally at 40 s against 2 s.
+  The seal's proof is unchanged: it still demonstrates that the crate compiled
+  under forced `cfg(test)`, by discarding that one crate's fingerprints while
+  its dependencies stay warm, and it now discards the marker recording that
+  compile at the start of every run - so if the forcing were ever to stop
+  working the seal fails rather than passing without proof.
