@@ -318,7 +318,6 @@ dependencies = [
  "sha2",
  "snow",
  "tokio",
- "ttrpc",
 ]
 
 [[package]]

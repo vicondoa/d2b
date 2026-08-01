@@ -943,7 +943,6 @@ dependencies = [
  "snow",
  "syn 2.0.118",
  "tokio",
- "ttrpc",
 ]
 
 [[package]]
