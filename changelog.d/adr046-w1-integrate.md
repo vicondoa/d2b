@@ -7,8 +7,8 @@
   matches the existing rule that the binding panel runs once at wave close
   and never per implementation round. The binding panel is unchanged and
   remains the only authority for sealing a wave.
-- Contributor agent tooling is configured in-repo under `.opencode/`. The
-  reviewing roles are pinned to the model the binding panel requires, so a
-  silent model fallback can no longer produce a panel record that attestation
-  would reject, and irreversible operations stay behind an explicit
-  confirmation.
+- Contributor agent tooling is configured in-repo under `.github/`. The
+  reviewing roles are pinned to the model, effort, and context tier the
+  binding panel requires, so a silent model fallback can no longer produce a
+  panel record that attestation would reject, and irreversible operations stay
+  behind an explicit confirmation.
