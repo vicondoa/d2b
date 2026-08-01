@@ -455,9 +455,11 @@ const CASES = [
 // So measure it rather than asserting it in prose. Omit exactly one input,
 // run the gate, and check the exit status the classification predicts. The
 // baseline case establishes that a complete fixture exits 0, so a nonzero exit
-// here is attributable to the omission and not to unrelated breakage. A
-// required case additionally names the diagnostic it expects, so a gate that
-// hard-fails for some other reason cannot be read as evidence of this one.
+// here is caused by the omission rather than by the fixture being broken to
+// begin with. That is not the same as knowing which failure it is: the gate
+// has many, and any of them produces the same status. A required case
+// therefore also names the diagnostic it expects, so a gate that hard-fails
+// for some other reason cannot be read as evidence of this one.
 function classificationCases() {
   const cases = [];
   for (const rel of REQUIRED_INPUTS) {
