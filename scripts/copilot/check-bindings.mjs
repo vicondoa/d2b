@@ -87,7 +87,7 @@ function readPolicy() {
       roles.push(m[1].replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase());
     }
   } else {
-    fail(`${modelRs}: cannot parse PANEL_ROLES; the seat roster cannot be checked`);
+    fail(`${modelRs}: cannot parse PANEL_ROLES; the seat roster cannot be checked. Restore the PANEL_ROLES array, or update the pattern in check-bindings.mjs if it was reshaped deliberately.`);
   }
   return {
     provider: pick("PANEL_PROVIDER_POLICY"),
@@ -99,12 +99,12 @@ function readPolicy() {
 
 function parseFrontmatter(text, label) {
   if (!text.startsWith("---\n")) {
-    fail(`${label}: no YAML frontmatter`);
+    fail(`${label}: no YAML frontmatter. Begin the file with a "---" line, the name, description, model and tools keys, and a closing "---".`);
     return null;
   }
   const end = text.indexOf("\n---\n", 3);
   if (end === -1) {
-    fail(`${label}: unterminated frontmatter`);
+    fail(`${label}: unterminated frontmatter. Add the closing "---" line above the prompt body.`);
     return null;
   }
   const out = {};
@@ -121,7 +121,7 @@ function parseFrontmatter(text, label) {
 
 const agents = new Map();
 if (!existsSync(agentsDir)) {
-  fail(`${agentsDir} does not exist`);
+  fail(`${agentsDir} does not exist. Copilot discovers agents only there, so every role is unbound. Restore the directory.`);
 } else {
   for (const file of readdirSync(agentsDir).sort()) {
     if (!file.endsWith(".agent.md")) continue;
@@ -131,9 +131,9 @@ if (!existsSync(agentsDir)) {
     if (!fm) continue;
 
     if (fm.name !== name) {
-      fail(`${file}: frontmatter name "${fm.name}" does not match the file basename "${name}"`);
+      fail(`${file}: frontmatter name "${fm.name}" does not match the file basename "${name}". Change one to match the other; dispatch resolves the agent by basename.`);
     }
-    if (!fm.description) fail(`${file}: description is required for dispatch selection`);
+    if (!fm.description) fail(`${file}: description is required for dispatch selection. Add a "description:" line saying what this agent reviews or does.`);
 
     for (const key of FORBIDDEN_FRONTMATTER) {
       if (key in fm) {
@@ -149,7 +149,8 @@ if (!existsSync(agentsDir)) {
       fail(
         `${file}: no "model:" in frontmatter. An agent without one, invoked without ` +
         `dispatch parameters, inherits the PARENT session's model, so a panel seat ` +
-        `would run on the architect's model and be attested as Gemini.`,
+        `would run on the architect's model and be attested as Gemini. Add a ` +
+        `"model:" line naming the model this agent must run on.`,
       );
     } else if (!CAPABILITIES[fm.model]) {
       fail(
@@ -169,7 +170,7 @@ if (!existsSync(agentsDir)) {
         );
       }
       if (!/\bview\b/.test(tools)) {
-        fail(`${file}: panel agent needs "view" to read the staged diffs`);
+        fail(`${file}: panel agent needs "view" to read the staged diffs. Add view to its "tools:" list.`);
       }
     }
     agents.set(name, { file, model: fm.model, tools: fm.tools ?? "" });
@@ -200,7 +201,8 @@ for (const name of agents.keys()) {
     fail(
       `agent "${name}" has no binding row in any .github/skills/*/SKILL.md table. ` +
       `Every agent must be dispatched with an explicit model, reasoning_effort and ` +
-      `context_tier; an unbound agent will silently run at the model default effort.`,
+      `context_tier; an unbound agent will silently run at the model default effort. ` +
+      `Add a row for this agent to the dispatch table in the skill that dispatches it.`,
     );
   }
 }
@@ -212,7 +214,8 @@ for (const r of rows) {
   if (a.model && r.model !== a.model) {
     fail(
       `${r.skill}/SKILL.md: row for "${r.agent}" pins model "${r.model}" but ` +
-      `${a.file} frontmatter pins "${a.model}". These must agree.`,
+      `${a.file} frontmatter pins "${a.model}". These must agree. Change whichever ` +
+      `is wrong; the row is what the dispatch actually uses.`,
     );
   }
   const caps = CAPABILITIES[r.model];
@@ -228,23 +231,29 @@ for (const r of rows) {
     fail(
       `${r.skill}/SKILL.md: reasoning_effort "${r.effort}" is not valid for "${r.model}" ` +
       `(valid: ${caps.efforts.join(", ")}). The observed failure mode for an invalid ` +
-      `effort is a silent downgrade, not an error.`,
+      `effort is a silent downgrade, not an error. Change the row to one of the ` +
+      `valid levels.`,
     );
   }
   if (!caps.tiers.includes(r.tier)) {
-    fail(`${r.skill}/SKILL.md: context_tier "${r.tier}" is not valid for "${r.model}" (valid: ${caps.tiers.join(", ")})`);
+    fail(
+      `${r.skill}/SKILL.md: context_tier "${r.tier}" is not valid for "${r.model}" ` +
+      `(valid: ${caps.tiers.join(", ")}). Change the row to one of those tiers.`,
+    );
   }
   if (policy && r.agent.startsWith("panel-")) {
     if (policy.model && r.model !== policy.model) {
       fail(
         `${r.skill}/SKILL.md: panel row "${r.agent}" pins model "${r.model}" but ` +
-        `PANEL_MODEL_POLICY is "${policy.model}". panel-attest would reject those records.`,
+        `PANEL_MODEL_POLICY is "${policy.model}". panel-attest would reject those ` +
+        `records. Change the row to the policy model.`,
       );
     }
     if (policy.effort && r.effort !== policy.effort) {
       fail(
         `${r.skill}/SKILL.md: panel row "${r.agent}" pins effort "${r.effort}" but ` +
-        `PANEL_REASONING_EFFORT_POLICY is "${policy.effort}".`,
+        `PANEL_REASONING_EFFORT_POLICY is "${policy.effort}". Change the row to the ` +
+        `policy effort.`,
       );
     }
   }
@@ -254,12 +263,12 @@ for (const r of rows) {
 if (policy && policy.roles.length) {
   for (const role of policy.roles) {
     if (!agents.has(`panel-${role}`)) {
-      fail(`PANEL_ROLES names seat "${role}" but there is no .github/agents/panel-${role}.agent.md`);
+      fail(`PANEL_ROLES names seat "${role}" but there is no .github/agents/panel-${role}.agent.md. Add that agent, or remove the seat from PANEL_ROLES.`);
     }
   }
   for (const name of agents.keys()) {
     if (name.startsWith("panel-") && !policy.roles.includes(name.slice("panel-".length))) {
-      fail(`agent "${name}" is not a seat in PANEL_ROLES; the roster is closed`);
+      fail(`agent "${name}" is not a seat in PANEL_ROLES; the roster is closed. Remove the agent, or add the seat to PANEL_ROLES in the same change.`);
     }
   }
 }
@@ -291,7 +300,7 @@ if (existsSync(integrationJson)) {
   try {
     state = JSON.parse(readFileSync(integrationJson, "utf8"));
   } catch (e) {
-    fail(`.specify/integration.json is not valid JSON: ${e.message}`);
+    fail(`.specify/integration.json is not valid JSON: ${e.message}. Repair the file; the spec-kit coexistence check cannot run without it.`);
   }
   if (state) {
     const installed = state.installed_integrations ?? [];
@@ -301,7 +310,8 @@ if (existsSync(integrationJson)) {
           `.specify/integration.json no longer lists "${required}" in ` +
           `installed_integrations. Both must remain until the cutover: "specify init" ` +
           `replaces this array rather than appending to it, so this is the expected ` +
-          `shape of an accidental re-init.`,
+          `shape of an accidental re-init. Restore "${required}" to the ` +
+          `installed_integrations array.`,
         );
       }
     }
@@ -330,13 +340,13 @@ if (existsSync(integrationJson)) {
   const modRs = join(root, "packages", "xtask", "src", "delivery", "mod.rs");
 
   if (!existsSync(helper)) {
-    fail(`cannot read ${helper}; the panel record helper is required.`);
+    fail(`cannot read ${helper}; the panel record helper is required. Restore it; the drift pin cannot be checked without it.`);
   } else {
     const src = readFileSync(helper, "utf8");
     const num = (name) => {
       const m = src.match(new RegExp(`const\\s+${name}\\s*=\\s*(\\d+)`));
       if (!m) {
-        fail(`make-records.mjs: cannot parse ${name}; the drift check cannot verify it.`);
+        fail(`make-records.mjs: cannot parse ${name}; the drift check cannot verify it. Restore the constant, or update the pattern in check-bindings.mjs in the same change.`);
         return null;
       }
       return Number(m[1]);
@@ -344,26 +354,26 @@ if (existsSync(integrationJson)) {
     const str = (name) => {
       const m = src.match(new RegExp(`const\\s+${name}\\s*=\\s*"([^"]+)"`));
       if (!m) {
-        fail(`make-records.mjs: cannot parse ${name}; the drift check cannot verify it.`);
+        fail(`make-records.mjs: cannot parse ${name}; the drift check cannot verify it. Restore the constant, or update the pattern in check-bindings.mjs in the same change.`);
         return null;
       }
       return m[1];
     };
     // Read each canonical value from the Rust file that actually defines it.
     const rustStr = (file, label, name) => {
-      if (!existsSync(file)) { fail(`cannot read ${label}; drift check cannot run.`); return null; }
+      if (!existsSync(file)) { fail(`cannot read ${label}; drift check cannot run. Restore the file.`); return null; }
       const m = readFileSync(file, "utf8").match(new RegExp(`${name}:\\s*&str\\s*=\\s*"([^"]+)"`));
-      if (!m) { fail(`${label}: cannot parse ${name}; drift check cannot run.`); return null; }
+      if (!m) { fail(`${label}: cannot parse ${name}; drift check cannot run. Restore the constant, or update the pattern in check-bindings.mjs in the same change.`); return null; }
       return m[1];
     };
     const rustNum = (file, label, name) => {
-      if (!existsSync(file)) { fail(`cannot read ${label}; drift check cannot run.`); return null; }
+      if (!existsSync(file)) { fail(`cannot read ${label}; drift check cannot run. Restore the file.`); return null; }
       const m = readFileSync(file, "utf8").match(new RegExp(`${name}:\\s*(?:usize|u32)\\s*=\\s*([0-9*\\s]+);`));
-      if (!m) { fail(`${label}: cannot parse ${name}; drift check cannot run.`); return null; }
+      if (!m) { fail(`${label}: cannot parse ${name}; drift check cannot run. Restore the constant, or update the pattern in check-bindings.mjs in the same change.`); return null; }
       // Tolerate the `4 * 1024` spelling without evaluating arbitrary source.
       const parts = m[1].split("*").map((p) => Number(p.trim()));
       if (parts.some((p) => !Number.isFinite(p))) {
-        fail(`${label}: ${name} is not a simple integer product; drift check cannot run.`);
+        fail(`${label}: ${name} is not a simple integer product; drift check cannot run. Spell it as an integer or a product of integers, or teach check-bindings.mjs the new form.`);
         return null;
       }
       return parts.reduce((a, b) => a * b, 1);
@@ -381,7 +391,7 @@ if (existsSync(integrationJson)) {
           `make-records.mjs ${name} is ${JSON.stringify(mine)} but the canonical Rust ` +
           `value is ${JSON.stringify(canonical)}. A drifted copy is only discovered ` +
           `while sealing a wave, which is exactly when a wrong value becomes a false ` +
-          `attestation.`,
+          `attestation. Update make-records.mjs to the canonical value.`,
         );
       }
     }
@@ -398,7 +408,7 @@ if (existsSync(integrationJson)) {
         if (mine !== canonical) {
           fail(
             `make-records.mjs ${name} is "${mine}" but model.rs pins "${canonical}". ` +
-            `The helper would attest a binding the gate does not accept.`,
+            `The helper would attest a binding the gate does not accept. Update the helper constant.`,
           );
         }
       }
@@ -412,7 +422,7 @@ if (existsSync(integrationJson)) {
       const rolesBlock = src.match(/const\s+ROLES\s*=\s*\[([\s\S]*?)\];/);
       if (!rolesBlock) {
         fail(
-          `make-records.mjs: cannot parse ROLES; the seat-roster drift check cannot run.`,
+          `make-records.mjs: cannot parse ROLES; the seat-roster drift check cannot run. Restore the ROLES array, or update the pattern in check-bindings.mjs in the same change.`,
         );
       } else {
         const mineRoles = [...rolesBlock[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
@@ -421,7 +431,7 @@ if (existsSync(integrationJson)) {
             `make-records.mjs ROLES is [${mineRoles.join(", ")}] but model.rs ` +
             `PANEL_ROLES is [${policy.roles.join(", ")}]. A drifted roster is only ` +
             `discovered while sealing a wave, and it either drops a seat from the ` +
-            `record set or attests one the gate does not accept.`,
+            `record set or attests one the gate does not accept. Bring the helper roster back into the sealed order.`,
           );
         }
       }
@@ -436,7 +446,7 @@ if (existsSync(integrationJson)) {
       if (mine > rustMaxBytes) {
         fail(
           `make-records.mjs ${name} is ${mine}, looser than model.rs MAX_STRING_BYTES ` +
-          `(${rustMaxBytes}). The helper would accept a value the sealing path rejects.`,
+          `(${rustMaxBytes}). The helper would accept a value the sealing path rejects. Lower the helper cap to that bound or below.`,
         );
       }
     }
@@ -581,8 +591,8 @@ for (const reg of ["friction-log.md", "deferred-work.md", "engineering-debt.md"]
         fail(
           `.specify/memory/${reg}:${i + 1}: this line reads as a row that lost its ` +
           `leading pipe, so it is skipped as prose and no column on it is ` +
-          `validated. Add the leading pipe. If the line is genuinely prose, ` +
-          `move it clear of the table or put it in a fenced block.`,
+          `validated. Add the leading pipe. If the line is genuinely prose, separate ` +
+          `it from the table with a blank line.`,
         );
       }
       dispositionIdx = -1;
@@ -648,7 +658,8 @@ for (const reg of ["friction-log.md", "deferred-work.md", "engineering-debt.md"]
       fail(
         `.specify/memory/${reg}:${i + 1}: category "${category}" is not in the closed ` +
         `taxonomy (${MEMORY_CATEGORIES.join(", ")}). A near-miss spelling does not group ` +
-        `with its siblings, so the three-wave escalation rule stops counting it.`,
+        `with its siblings, so the three-wave escalation rule stops counting it. Change ` +
+        `it to one of those categories.`,
       );
     }
     const disposition = cells[dispositionIdx].replace(/`/g, "");
@@ -667,7 +678,7 @@ for (const reg of ["friction-log.md", "deferred-work.md", "engineering-debt.md"]
       fail(
         `.specify/memory/${reg}:${i + 1}: disposition "${disposition}" is not in the ` +
         `closed set (${MEMORY_DISPOSITIONS.join(", ")}) and is not a legal target wave ` +
-        `(W0..W8, or a qualified token such as spec001w1).`,
+        `(W0..W8, or a qualified token such as spec001w1). Change it to one of those.`,
       );
     }
   }
