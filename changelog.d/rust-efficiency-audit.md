@@ -11,5 +11,7 @@
   loaded once instead of once per test.
 - Cached workspace Rust source contents during the tracing-contract scan,
   avoiding repeated reads for each forbidden-attribute pattern.
+- Reused the enumerated and loaded source set across the CLI consumer policy's
+  multiple pattern scans.
 - Documented the Rust crate-graph audit and retained the current workspace
   boundaries where change-frequency data did not support a split.
