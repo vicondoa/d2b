@@ -426,11 +426,10 @@ impl WriterActor {
                         }
                         Err(error) => Err(error),
                     };
-                    if let Err(error) = &replayed {
-                        if error.kind() == d2b_resource_store::StoreErrorKind::StoreIntegrityFailure
-                        {
-                            self.quarantine(error.clone());
-                        }
+                    if let Err(error) = &replayed
+                        && error.kind() == d2b_resource_store::StoreErrorKind::StoreIntegrityFailure
+                    {
+                        self.quarantine(error.clone());
                     }
                     let _ = response.send(replayed);
                 }

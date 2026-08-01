@@ -1353,7 +1353,7 @@ fn apply_prepared(
     } else {
         previous_resource
             .as_ref()
-            .and_then(|_| previous.as_ref())
+            .and(previous.as_ref())
             .and_then(|record| ResourceEnvelope::from_json(&record.canonical_json).ok())
             .and_then(|envelope| envelope.metadata().owner_ref().cloned())
     };

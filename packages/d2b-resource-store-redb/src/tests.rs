@@ -390,8 +390,7 @@ async fn open_owned_rejects_acceptor_bound_to_another_zone() {
 
     let error = RedbResourceStore::open_owned(file, expected, acceptor)
         .await
-        .err()
-        .expect("a cross-zone acceptor must be refused");
+        .expect_err("a cross-zone acceptor must be refused");
     assert_eq!(error.reason_code(), "mutation-seal-acceptor-zone-mismatch");
     assert_eq!(error.store_slot(), Some(StoreSlot::new(0).unwrap()));
 }
@@ -409,8 +408,7 @@ async fn open_owned_rejects_acceptor_bound_to_another_store_in_the_same_zone() {
 
     let error = RedbResourceStore::open_owned(file, expected, acceptor)
         .await
-        .err()
-        .expect("a sibling-store acceptor must be refused");
+        .expect_err("a sibling-store acceptor must be refused");
     assert_eq!(error.reason_code(), "mutation-seal-acceptor-store-mismatch");
     assert_eq!(error.store_slot(), Some(StoreSlot::new(0).unwrap()));
 }
@@ -428,8 +426,7 @@ async fn open_owned_rejects_acceptor_declaring_another_slot() {
 
     let error = RedbResourceStore::open_owned(file, expected, acceptor)
         .await
-        .err()
-        .expect("a wrong-slot acceptor must be refused");
+        .expect_err("a wrong-slot acceptor must be refused");
     assert_eq!(error.reason_code(), "mutation-seal-acceptor-slot-mismatch");
     assert_eq!(error.store_slot(), Some(StoreSlot::new(0).unwrap()));
 }
@@ -498,12 +495,10 @@ async fn errors_from_a_multi_store_startup_carry_distinct_slots() {
 
     let first_error = RedbResourceStore::open_owned(first_file, first, first_acceptor)
         .await
-        .err()
-        .expect("slot zero startup must refuse its mismatched acceptor");
+        .expect_err("slot zero startup must refuse its mismatched acceptor");
     let second_error = RedbResourceStore::open_owned(second_file, second, second_acceptor)
         .await
-        .err()
-        .expect("slot one startup must refuse its mismatched acceptor");
+        .expect_err("slot one startup must refuse its mismatched acceptor");
 
     assert_eq!(first_error.store_slot(), Some(StoreSlot::new(0).unwrap()));
     assert_eq!(second_error.store_slot(), Some(StoreSlot::new(1).unwrap()));
@@ -544,8 +539,7 @@ async fn commit_rejects_seal_from_another_store() {
     let error = first
         .commit_verified(issuer.seal(empty_seal_body()))
         .await
-        .err()
-        .expect("cross-store evidence must be refused");
+        .expect_err("cross-store evidence must be refused");
     assert_eq!(error.reason_code(), "mutation-seal-authority-mismatch");
     assert_eq!(error.store_slot(), Some(first_identity.slot()));
 }

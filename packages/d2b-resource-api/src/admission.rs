@@ -567,7 +567,6 @@ mod tests {
         let (_, second_store_binding) = admission_pair();
         let StoreAdmissionBinding {
             verifier,
-            store_identity: _,
             ..
         } = first_store_binding;
         let StoreAdmissionBinding {
