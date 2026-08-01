@@ -102,22 +102,71 @@ Mark folded rows `folded` with the target wave in the disposition column.
 
 ## file-issue
 
-For a low-priority item that should leave the plan:
+For a low-priority item that should leave the plan.
 
-```
-gh label create delivery-memory --description "Raised by d2b delivery memory" --force
-gh label create "<category>" --description "d2b delivery memory category" --force
+`<category>` below is substituted from the row's category column and MUST be one
+of exactly `signoff`, `build`, `test`, `merge`, `codegen`, `disk`. Reject
+anything else rather than passing it through; it reaches a shell.
+
+```bash
+set -euo pipefail
+
+existing=$(gh label list --limit 500 --json name --jq '.[].name')
+
+ensure_label() {
+  if ! grep -qxF "$1" <<<"$existing"; then
+    gh label create "$1" --color "$2" --description "$3"
+  fi
+}
+
+ensure_label delivery-memory 5319E7 'Raised by d2b delivery memory'
+ensure_label '<category>'    BFD4F2 'd2b delivery memory category'
 
 gh issue create \
   --title "<category>: <one-line statement>" \
-  --label "delivery-memory,<category>" \
+  --label 'delivery-memory,<category>' \
   --body-file <rendered body>
 ```
 
-`gh issue create` fails outright when a named label does not exist, and neither
-`delivery-memory` nor the category labels are pre-created in this repo, so the
-two `gh label create --force` calls are required rather than defensive. `--force`
-makes them idempotent, so they are safe to run before every file.
+`gh issue create` fails outright when a named label does not exist, so the labels
+have to be ensured before it runs rather than assumed.
+
+**The idempotency is mechanical, not instructional.** An earlier draft told the
+agent to run `gh label create` and continue only when the failure was the benign
+duplicate-name one. That was wrong twice over: an instruction is something an
+agent can decide to skip, and the alternative of suppressing the error with
+`2>/dev/null || true` would mask a permission denial and resurface it as a
+misleading "label not found" from `gh issue create` two commands later. Querying
+first removes the failure entirely instead of classifying it, so there is nothing
+to suppress and no error text to pattern-match.
+
+Six details in that form are deliberate:
+
+- **`set -euo pipefail` is load-bearing**, not boilerplate. It is what makes an
+  authorisation denial, a rate limit, or a network error stop the run before
+  `gh issue create` can report a misleading cause.
+- **The `gh label list` call is the authorisation probe.** It runs first and it
+  is not guarded, so a caller without repository read access fails there, with
+  the real error, rather than somewhere downstream.
+- **This mutates repository settings** when a label is missing, which is a wider
+  privilege than filing an issue. It is the narrowest form that makes the file
+  work, and a caller without label-write permission failing here is the correct
+  outcome rather than something to work around.
+- **No `--force`.** `--force` updates the color and description of a label that
+  already exists, so on a repository that has its own `test` or `build` label it
+  would silently overwrite that label's description. Skipping creation entirely
+  when the name is present leaves an existing label untouched.
+- **Single quotes on the substituted category**, so a value that somehow escaped
+  the closed-set check above cannot be expanded by the shell. The quotes belong
+  to the command, not to the placeholder: substitute the bare category name
+  inside them, so `test` becomes `'test'` and never `''test''`.
+- **Explicit `--color`.** It is optional to `gh label create`, which picks a
+  random color when it is omitted. Giving it makes a first creation deterministic
+  rather than varying per repository.
+
+`--limit 500` must exceed the repository's label count. If it ever does not, a
+present label is read as absent, `gh label create` fails, and `set -e` stops the
+run: wrong, but loudly and without touching the existing label.
 
 Body template:
 
