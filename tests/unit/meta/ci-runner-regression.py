@@ -198,7 +198,7 @@ set -euo pipefail
         with self.assertRaises(SystemExit):
             layer1_jobs.validate_job_id("bad-${{ github.token }}", "test")
 
-    def test_rust_gate_is_two_required_shards_with_one_stable_rollup(self) -> None:
+    def test_rust_gate_is_three_required_shards_with_one_stable_rollup(self) -> None:
         layer1_jobs = load_layer1_jobs()
         manifest = layer1_jobs.load_manifest()
         workflow = layer1_jobs.render_workflow(manifest)
@@ -206,14 +206,16 @@ set -euo pipefail
         rust_rollup = manifest["jobs"]["test-rust"]
         self.assertEqual(
             rust_rollup["needs"],
-            ["test-rust-main", "test-rust-remaining"],
+            ["test-rust-api-surface", "test-rust-main", "test-rust-remaining"],
         )
         self.assertEqual(rust_rollup["ciKind"], "rust-rollup")
+        self.assertIn("run: make test-rust-api-surface", workflow)
         self.assertIn("run: make test-rust-main", workflow)
         self.assertIn("run: make test-rust-remaining", workflow)
+        self.assertIn("test-rust-api-surface=$result", workflow)
         self.assertIn("test-rust-main=$result", workflow)
         self.assertIn("test-rust-remaining=$result", workflow)
-        self.assertEqual(workflow.count('[ "$result" = success ] || failed=1'), 2)
+        self.assertEqual(workflow.count('[ "$result" = success ] || failed=1'), 3)
         self.assertIn('[ "$failed" -eq 0 ] || exit 1', workflow)
         self.assertEqual(manifest["ci"]["rollupNeeds"].count("test-rust"), 1)
 
