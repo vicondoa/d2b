@@ -84,7 +84,7 @@ these tasks land, every panel record is invalid and `seal` cannot succeed.
 - [X] T581 Amend `ADR-046-validation-and-delivery` §12.3 to bind the panel to `gemini-3.1-pro-preview`, updating the pinned provider/model/reasoning-effort triple and the 14-field record example. This is a member-spec amendment: it re-opens that spec's validation and panel evidence and re-triggers Gate 0 (FR-046)
 - [X] T582 Update the pinned constants in `packages/xtask/src/delivery/model.rs` (`PANEL_PROVIDER_POLICY`, `PANEL_MODEL_POLICY`, `PANEL_REASONING_EFFORT_POLICY`) and the unit test at the bottom of that file that asserts their exact values
 - [X] T583 Update the `ADR046-delivery-005` work item text, which explicitly says "adapt to bind the fixed `gpt-5.6-sol` model at reasoning effort `xhigh`", then regenerate the spec-set and work-item manifests and confirm `make test-drift` is clean
-- [X] T584 Add a read-only `panel` agent to `.opencode/opencode.json` pinned to the panel model, and correct the AGENTS.md panel-tooling wording, so panel lanes do not silently fall back to a model whose records `panel-attest` will reject. Spec correction: this task originally named `.opencode/opencode-swarm.json`, which does not exist in this repository and would not apply, because this program does not run swarm
+- [X] T584 Add the ten read-only Copilot panel agents and bind them through `.github/skills/d2b-panel-round/SKILL.md`, then correct the AGENTS.md panel-tooling wording so panel lanes do not silently fall back to a model whose records `panel-attest` will reject. The panel table explicitly binds `github-copilot` / `gemini-3.1-pro-preview` / `high` / `default`; the retired integration is not a supported path
 
 ### Pipelined-wave migration (BLOCKING - the pipeline is not executable until this lands)
 
@@ -131,7 +131,7 @@ wave item to be `Merged` before `wave snapshot` will accept entry.
 - [X] T026 [US1] `ADR046-routing-015` - `packages/d2b-provider-toolkit/src/` (adapted in place) (adapt)
 - [X] T027 [US1] `ADR046-routing-016` - `packages/d2b-zone-routing/src/service.rs` (adapt)
 
-- [ ] T028 [US1] W2 GATE - run `/speckit.verify.run` and `/speckit.review.run` in parallel against this wave scope FIRST and clear their CRITICAL findings; then snapshot, import validation evidence, panel-request (refused unless every prior-wave work item is Merged, per FR-057), panel-attest (10/10 unanimous), seal (every prior-wave item and every wave item Merged), merge-target, merge-eligibility. Also confirm for every item in this wave: reference docs landed with their behavior (FR-019), no change contradicts a decision in the register (FR-047), and every removal proof for a path retired in this wave passed (FR-023). From round 9, LOW/MEDIUM may be deferred to deferred-findings.md; CRITICAL/HIGH never (FR-051, FR-052). At wave close, review both registers and log this wave friction in friction-log.md (FR-053)
+- [ ] T028 [US1] W2 GATE - run the native Copilot pre-panel procedure below FIRST: dispatch a read-only reviewer Task lane and rubber-duck Task lane in parallel, each bound to `gpt-5.6-luna` / `max` / `long_context`, then run `/d2b-panel-round work`, whose ten seats bind `github-copilot` / `gemini-3.1-pro-preview` / `high` / `default`; clear every CRITICAL finding before snapshot, import validation evidence, panel-request (refused unless every prior-wave work item is Merged, per FR-057), panel-attest (10/10 unanimous), seal (every prior-wave item and every wave item Merged), merge-target, merge-eligibility. Also confirm for every item in this wave: reference docs landed with their behavior (FR-019), no change contradicts a decision in the register (FR-047), and every removal proof for a path retired in this wave passed (FR-023). From round 9, LOW/MEDIUM may be deferred to deferred-findings.md; CRITICAL/HIGH never (FR-051, FR-052). At wave close, review both registers and log this wave friction in friction-log.md (FR-053)
 - [ ] T029 [US1] W2 CONVERGE + MERGE - merge every slice branch into the wave integration branch; run integration tests, panel, and CI against the converged tree only; open one PR against `v3`; merge after eligibility; rebase the next wave onto the updated `v3`; fold changelog fragments; then clean up in order: delete each worktree packages/target, remove worktrees, delete local branches, delete remote branches, nix-collect-garbage, and audit `git worktree list` plus `git branch -a` for residue
 
 **Checkpoint**: W2 converged, panelled, sealed, merged to `v3`, rebased, and cleaned up. Successor entry criteria satisfied.
@@ -151,7 +151,7 @@ wave item to be `Merged` before `wave snapshot` will accept entry.
 - [ ] T033 [P] [US1] `ADR046-provider-003` - `packages/d2b-provider-system-core/` (adapt)
 - [ ] T034 [US1] `ADR046-provider-004` - `packages/d2b-contracts/src/v3/semantic_services/{mod (create)
 
-- [ ] T035 [US1] W3 GATE - run `/speckit.verify.run` and `/speckit.review.run` in parallel against this wave scope FIRST and clear their CRITICAL findings; then snapshot, import validation evidence, panel-request, panel-attest (10/10 unanimous), seal (every wave item Merged), merge-target, merge-eligibility. Also confirm for every item in this wave: reference docs landed with their behavior (FR-019), no change contradicts a decision in the register (FR-047), and every removal proof for a path retired in this wave passed (FR-023). From round 9, LOW/MEDIUM may be deferred to deferred-findings.md; CRITICAL/HIGH never (FR-051, FR-052). At wave close, review both registers and log this wave friction in friction-log.md (FR-053)
+- [ ] T035 [US1] W3 GATE - run the native Copilot pre-panel procedure below FIRST: dispatch a read-only reviewer Task lane and rubber-duck Task lane in parallel, each bound to `gpt-5.6-luna` / `max` / `long_context`, then run `/d2b-panel-round work`, whose ten seats bind `github-copilot` / `gemini-3.1-pro-preview` / `high` / `default`; clear every CRITICAL finding before snapshot, import validation evidence, panel-request, panel-attest (10/10 unanimous), seal (every wave item Merged), merge-target, and merge-eligibility. Also confirm for every item in this wave: reference docs landed with their behavior (FR-019), no change contradicts a decision in the register (FR-047), and every removal proof for a path retired in this wave passed (FR-023). From round 9, LOW/MEDIUM may be deferred to deferred-findings.md; CRITICAL/HIGH never (FR-051, FR-052). At wave close, review both registers and log this wave friction in friction-log.md (FR-053)
 - [ ] T036 [US1] W3 CONVERGE + MERGE - merge every slice branch into the wave integration branch; run integration tests, panel, and CI against the converged tree only; open one PR against `v3`; merge after eligibility; rebase the next wave onto the updated `v3`; fold changelog fragments; then clean up in order: delete each worktree packages/target, remove worktrees, delete local branches, delete remote branches, nix-collect-garbage, and audit `git worktree list` plus `git branch -a` for residue
 
 **Checkpoint**: W3 converged, panelled, sealed, merged to `v3`, rebased, and cleaned up. Successor entry criteria satisfied.
@@ -214,7 +214,7 @@ wave item to be `Merged` before `wave snapshot` will accept entry.
 
 - [x] T069 [US1] `ADR046-network-008` - `packages/d2b-core-controller/src/configuration.rs`: bundle application (create)
 
-- [ ] T070 [US1] W4 GATE - run `/speckit.verify.run` and `/speckit.review.run` in parallel against this wave scope FIRST and clear their CRITICAL findings; then snapshot, import validation evidence, panel-request, panel-attest (10/10 unanimous), seal (every wave item Merged), merge-target, merge-eligibility. Also confirm for every item in this wave: reference docs landed with their behavior (FR-019), no change contradicts a decision in the register (FR-047), and every removal proof for a path retired in this wave passed (FR-023). From round 9, LOW/MEDIUM may be deferred to deferred-findings.md; CRITICAL/HIGH never (FR-051, FR-052). At wave close, review both registers and log this wave friction in friction-log.md (FR-053)
+- [ ] T070 [US1] W4 GATE - run the native Copilot pre-panel procedure below FIRST: dispatch a read-only reviewer Task lane and rubber-duck Task lane in parallel, each bound to `gpt-5.6-luna` / `max` / `long_context`, then run `/d2b-panel-round work`, whose ten seats bind `github-copilot` / `gemini-3.1-pro-preview` / `high` / `default`; clear every CRITICAL finding before snapshot, import validation evidence, panel-request, panel-attest (10/10 unanimous), seal (every wave item Merged), merge-target, and merge-eligibility. Also confirm for every item in this wave: reference docs landed with their behavior (FR-019), no change contradicts a decision in the register (FR-047), and every removal proof for a path retired in this wave passed (FR-023). From round 9, LOW/MEDIUM may be deferred to deferred-findings.md; CRITICAL/HIGH never (FR-051, FR-052). At wave close, review both registers and log this wave friction in friction-log.md (FR-053)
 - [ ] T071 [US1] W4 CONVERGE + MERGE - merge every slice branch into the wave integration branch; run integration tests, panel, and CI against the converged tree only; open one PR against `v3`; merge after eligibility; rebase the next wave onto the updated `v3`; fold changelog fragments; then clean up in order: delete each worktree packages/target, remove worktrees, delete local branches, delete remote branches, nix-collect-garbage, and audit `git worktree list` plus `git branch -a` for residue
 
 **Checkpoint**: W4 converged, panelled, sealed, merged to `v3`, rebased, and cleaned up. Successor entry criteria satisfied.
@@ -413,7 +413,7 @@ wave item to be `Merged` before `wave snapshot` will accept entry.
 - [ ] T578 [US1] **Publish the replacement contracts the companions consume**, early enough for them to adapt given that no preview release may be published (contracts/companion-contracts.md CO-2, FR-045)
 - [ ] T579 [US1] **Resolve the FR-039 / FR-045 tension before these contracts publish** (CHK025). FR-039 blocks release on external repositories while FR-045 forbids the preview build they would adapt against. This is the last moment the choice is cheap: resolve it here or amend FR-045
 
-- [ ] T219 [US1] W5 GATE - run `/speckit.verify.run` and `/speckit.review.run` in parallel against this wave scope FIRST and clear their CRITICAL findings; then snapshot, import validation evidence, panel-request, panel-attest (10/10 unanimous), seal (every wave item Merged), merge-target, merge-eligibility. Also confirm for every item in this wave: reference docs landed with their behavior (FR-019), no change contradicts a decision in the register (FR-047), and every removal proof for a path retired in this wave passed (FR-023). From round 9, LOW/MEDIUM may be deferred to deferred-findings.md; CRITICAL/HIGH never (FR-051, FR-052). At wave close, review both registers and log this wave friction in friction-log.md (FR-053)
+- [ ] T219 [US1] W5 GATE - run the native Copilot pre-panel procedure below FIRST: dispatch a read-only reviewer Task lane and rubber-duck Task lane in parallel, each bound to `gpt-5.6-luna` / `max` / `long_context`, then run `/d2b-panel-round work`, whose ten seats bind `github-copilot` / `gemini-3.1-pro-preview` / `high` / `default`; clear every CRITICAL finding before snapshot, import validation evidence, panel-request, panel-attest (10/10 unanimous), seal (every wave item Merged), merge-target, and merge-eligibility. Also confirm for every item in this wave: reference docs landed with their behavior (FR-019), no change contradicts a decision in the register (FR-047), and every removal proof for a path retired in this wave passed (FR-023). From round 9, LOW/MEDIUM may be deferred to deferred-findings.md; CRITICAL/HIGH never (FR-051, FR-052). At wave close, review both registers and log this wave friction in friction-log.md (FR-053)
 - [ ] T220 [US1] W5 CONVERGE + MERGE - merge every slice branch into the wave integration branch; run integration tests, panel, and CI against the converged tree only; open one PR against `v3`; merge after eligibility; rebase the next wave onto the updated `v3`; fold changelog fragments; then clean up in order: delete each worktree packages/target, remove worktrees, delete local branches, delete remote branches, nix-collect-garbage, and audit `git worktree list` plus `git branch -a` for residue
 
 **Checkpoint**: W5 converged, panelled, sealed, merged to `v3`, rebased, and cleaned up. Successor entry criteria satisfied.
@@ -767,7 +767,7 @@ wave item to be `Merged` before `wave snapshot` will accept entry.
 
 - [ ] T478 [US2] `ADR046-core-002` - `packages/d2b-core-controller/tests/system_core_coordination.rs` (adapt)
 
-- [ ] T479 [US2] W6 GATE - run `/speckit.verify.run` and `/speckit.review.run` in parallel against this wave scope FIRST and clear their CRITICAL findings; then snapshot, import validation evidence, panel-request, panel-attest (10/10 unanimous), seal (every wave item Merged), merge-target, merge-eligibility. Also confirm for every item in this wave: reference docs landed with their behavior (FR-019), no change contradicts a decision in the register (FR-047), and every removal proof for a path retired in this wave passed (FR-023). From round 9, LOW/MEDIUM may be deferred to deferred-findings.md; CRITICAL/HIGH never (FR-051, FR-052). At wave close, review both registers and log this wave friction in friction-log.md (FR-053)
+- [ ] T479 [US2] W6 GATE - run the native Copilot pre-panel procedure below FIRST: dispatch a read-only reviewer Task lane and rubber-duck Task lane in parallel, each bound to `gpt-5.6-luna` / `max` / `long_context`, then run `/d2b-panel-round work`, whose ten seats bind `github-copilot` / `gemini-3.1-pro-preview` / `high` / `default`; clear every CRITICAL finding before snapshot, import validation evidence, panel-request, panel-attest (10/10 unanimous), seal (every wave item Merged), merge-target, and merge-eligibility. Also confirm for every item in this wave: reference docs landed with their behavior (FR-019), no change contradicts a decision in the register (FR-047), and every removal proof for a path retired in this wave passed (FR-023). From round 9, LOW/MEDIUM may be deferred to deferred-findings.md; CRITICAL/HIGH never (FR-051, FR-052). At wave close, review both registers and log this wave friction in friction-log.md (FR-053)
 - [ ] T480 [US2] W6 CONVERGE + MERGE - merge every slice branch into the wave integration branch; run integration tests, panel, and CI against the converged tree only; open one PR against `v3`; merge after eligibility; rebase the next wave onto the updated `v3`; fold changelog fragments; then clean up in order: delete each worktree packages/target, remove worktrees, delete local branches, delete remote branches, nix-collect-garbage, and audit `git worktree list` plus `git branch -a` for residue
 
 **Checkpoint**: W6 converged, panelled, sealed, merged to `v3`, rebased, and cleaned up. Successor entry criteria satisfied.
@@ -870,7 +870,7 @@ wave item to be `Merged` before `wave snapshot` will accept entry.
 
 - [ ] T580 [US3] **Implement the recovery-point attestation gate** (FR-043, SC-025): the cutover MUST refuse to execute any step past its rollback boundary until the operator has attested that a host recovery point exists, and every attestation MUST be recorded. **Tracked program-local, deliberately outside the work-item manifest** - FR-043 is stricter than `ADR-046-reset-and-cutover`, which permits proceeding without attestation. Consequence accepted: the W7 seal will NOT enforce this task, because seals check manifest items only. It is enforced by this task list and by the W7 MERGE review, not by the gate. Do not let a green W7 seal be read as evidence that FR-043 shipped
 
-- [ ] T555 [US3] W7 GATE - run `/speckit.verify.run` and `/speckit.review.run` in parallel against this wave scope FIRST and clear their CRITICAL findings; then snapshot, import validation evidence, panel-request, panel-attest (10/10 unanimous), seal (every wave item Merged), merge-target, merge-eligibility. Also confirm for every item in this wave: reference docs landed with their behavior (FR-019), no change contradicts a decision in the register (FR-047), and every removal proof for a path retired in this wave passed (FR-023). From round 9, LOW/MEDIUM may be deferred to deferred-findings.md; CRITICAL/HIGH never (FR-051, FR-052). At wave close, review both registers and log this wave friction in friction-log.md (FR-053)
+- [ ] T555 [US3] W7 GATE - run the native Copilot pre-panel procedure below FIRST: dispatch a read-only reviewer Task lane and rubber-duck Task lane in parallel, each bound to `gpt-5.6-luna` / `max` / `long_context`, then run `/d2b-panel-round work`, whose ten seats bind `github-copilot` / `gemini-3.1-pro-preview` / `high` / `default`; clear every CRITICAL finding before snapshot, import validation evidence, panel-request, panel-attest (10/10 unanimous), seal (every wave item Merged), merge-target, and merge-eligibility. Also confirm for every item in this wave: reference docs landed with their behavior (FR-019), no change contradicts a decision in the register (FR-047), and every removal proof for a path retired in this wave passed (FR-023). From round 9, LOW/MEDIUM may be deferred to deferred-findings.md; CRITICAL/HIGH never (FR-051, FR-052). At wave close, review both registers and log this wave friction in friction-log.md (FR-053)
 - [ ] T556 [US3] W7 CONVERGE + MERGE - merge every slice branch into the wave integration branch; run integration tests, panel, and CI against the converged tree only; open one PR against `v3`; merge after eligibility; rebase the next wave onto the updated `v3`; fold changelog fragments; then clean up in order: delete each worktree packages/target, remove worktrees, delete local branches, delete remote branches, nix-collect-garbage, and audit `git worktree list` plus `git branch -a` for residue
 
 **Checkpoint**: W7 converged, panelled, sealed, merged to `v3`, rebased, and cleaned up. Successor entry criteria satisfied.
@@ -935,12 +935,12 @@ still in review, but nothing about the review gate is weakened.
 ### The pipeline
 
 ```text
-W(N)   code ──> converge ──> integration tests ──> verify+review ──> panel (10 lanes) ──> seal 10/10 ──> merge to v3
+W(N)   code ──> converge ──> integration tests ──> native Task review + rubber-duck ──> panel (10 lanes) ──> seal 10/10 ──> merge to v3
                                     │                                                      │
                                     │ 5 of 10 panels back                                  │
                                     │ + integration green                                  │
                                     ▼                                                      ▼
-W(N+1)                            code ──> converge ──> integration tests ──> verify+review ──> rebase on v3 ──> panel ──> seal ──> merge
+W(N+1)                            code ──> converge ──> integration tests ──> native Task review + rubber-duck ──> rebase on v3 ──> panel ──> seal ──> merge
 ```
 
 ### The four conditions (all required)
@@ -965,7 +965,7 @@ built on unreviewed contracts.
 | Implementation coding | **Yes** - starts at 5 of 10 |
 | Slice convergence onto the wave branch | **Yes** |
 | Integration testing | **Yes**, subject to the 2-slot heavy-gate ceiling |
-| Pre-panel verify + review gates | **Yes** - read-only, no heavy-gate slot |
+| Pre-panel native Task review and rubber-duck lanes | **Yes** - read-only, no heavy-gate slot |
 | Panel request | **No** - strictly after predecessor seal + merge |
 | Seal | **No** - strictly ordered |
 | Merge to `v3` | **No** - strictly ordered |
@@ -987,41 +987,31 @@ is executable - see T585-T587.
 
 ---
 
-### Pre-panel verification gate
+### Pre-panel native review lanes
 
 After a wave's slices converge and integration tests pass, but **before** any panel lane is
-dispatched, the wave runs two read-only gates **in parallel**:
+dispatched, the wave runs two read-only Copilot Task lanes **in parallel**:
 
 ```text
-slices converge ──> integration tests ──┬──> /speckit.verify.run  ──┐
-                                        └──> /speckit.review.run ───┴──> panel (10 lanes) ──> seal
+slices converge ──> integration tests ──┬──> reviewer Task ────────┐
+                                        └──> rubber-duck Task ─────┴──> /d2b-panel-round work ──> seal
 ```
 
-Both are strictly read-only. Neither modifies files; each emits a report.
-
-| Gate | What it checks | Scope |
+| Lane | What it checks | Scope |
 | --- | --- | --- |
-| `/speckit.verify.run` | The wave's implementation against `spec.md`, `plan.md`, `tasks.md`, and the constitution. Constitution conflicts are automatically CRITICAL | The feature directory plus the converged wave tree |
-| `/speckit.review.run` | Code quality across six specialized aspects: `code`, `comments`, `tests`, `errors`, `types`, `simplify` | The wave's diff only - see the scoping warning below |
+| reviewer Task | The implementation against `spec.md`, `plan.md`, `tasks.md`, and the constitution; constitution conflicts are automatically CRITICAL | The feature directory plus the converged wave tree |
+| rubber-duck Task | Code quality, tests, errors, types, comments, and simplification risks | The wave's diff only |
 
-### Run them in parallel, and parallelize inside review
+Dispatch both lanes in a single Copilot Task call. Each lane is read-only and must carry the
+explicit binding `model: gpt-5.6-luna`, `reasoning_effort: max`, `context_tier: long_context`.
+The panel then runs through the real `/d2b-panel-round work` skill, whose ten read-only seats
+bind `github-copilot`, `gemini-3.1-pro-preview`, `high`, and `default` in its committed table.
+No dotted verification or review command is part of this repository's process.
 
-Dispatch both in a single message. Within `/speckit.review.run`, its six aspect agents are
-independent and read-only, so dispatch those in parallel too rather than sequentially. That is
-up to seven concurrent read-only lanes; none takes a heavy-gate slot.
+### Scoping the native lanes
 
-### Scoping warning: the review script targets the wrong branch by default
-
-`.specify/extensions/review/scripts/bash/detect-changed-files.sh` resolves the default branch
-from `git symbolic-ref refs/remotes/origin/HEAD`, which in this repository is **`main`**. The
-ADR-046 integration lineage is **`v3`**, and `v3` never merges to `main`.
-
-Left uncorrected, a wave review would diff the wave branch against `main` and treat the entire
-v3 divergence - every prior wave, tens of thousands of lines - as this wave's changed files.
-The review would be both unusably large and scoped to work that was already reviewed.
-
-**Always pass an explicit scope.** The review command honours a caller-supplied file list or
-retrieval instruction ahead of the script. Target the wave's own diff:
+The native lanes receive an explicit file list or retrieval instruction in their prompts.
+Target the wave's own diff:
 
 ```bash
 # The wave's changes only: integration branch vs its actual base
@@ -1033,17 +1023,17 @@ git diff --name-only adr046-w<N-1>-integrate..adr046-w<N>-integrate
 
 ### Why this runs before the panel, not after
 
-Both gates are cheap, automated, and read-only. The panel is ten reviewer lanes that commonly
-cost one to two times the coding duration. Sending a wave to panel with defects these gates
+Both lanes are cheap and read-only. The panel is ten reviewer lanes that commonly
+cost one to two times the coding duration. Sending a wave to panel with defects these lanes
 would have caught spends the most expensive review capacity on the cheapest findings, and a
 finding that arrives during panel forces a content change, which invalidates the snapshot and
 every validation and panel record bound to it.
 
 ### Disposition of findings
 
-- **verify.run CRITICAL** (including every constitution conflict) - fix before dispatching the
+- **Reviewer-lane CRITICAL** (including every constitution conflict) - fix before dispatching the
   panel. Do not carry it in.
-- **review.run findings** - fix, or record in the deferred-findings register with a stated
+- **Rubber-duck findings** - fix, or record in the deferred-findings register with a stated
   reason if genuinely LOW or MEDIUM. Note that the round-nine deferral rule governs *panel*
   rounds; these pre-panel gates have no round count and no deferral allowance of their own.
 - Anything either gate raises that is actually a process problem rather than a code problem

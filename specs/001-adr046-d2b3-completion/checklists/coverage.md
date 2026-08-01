@@ -110,7 +110,7 @@ Are requirements present for each scenario class, or explicitly excluded?
 
 ## Resolution log
 
-### Gate 1 - closed before `/speckit.tasks` (2026-07-29)
+### Gate 1 - closed before `/speckit-tasks` (2026-07-29)
 
 Six items resolved. These were blocking because an open defect here produces a *wrong task
 list*, not merely an incomplete one.
@@ -148,7 +148,7 @@ boundary without attestation.
 
 ### Analysis remediation (2026-07-29)
 
-`/speckit.analyze` found 16 issues across spec.md, plan.md, and tasks.md. Clear-cut fixes were
+`/speckit-analyze` found 16 issues across spec.md, plan.md, and tasks.md. Clear-cut fixes were
 applied; two ambiguous decisions were escalated. Three further checklist items closed as a
 side effect:
 

@@ -89,9 +89,14 @@ BASE=$(git merge-base v3 adr046-w<N>-integrate)     # or the predecessor wave br
 git diff --name-only $BASE..adr046-w<N>-integrate
 ```
 
-Dispatch `/speckit.verify.run` and `/speckit.review.run` **in parallel**, and
-parallelize review's six aspect agents too - up to 7 concurrent read-only lanes,
-none taking a heavy-gate slot.
+Dispatch two native Copilot Task lanes **in parallel** before the panel: one
+reviewer lane and one rubber-duck lane. Bind each lane explicitly to
+`gpt-5.6-luna`, reasoning effort `max`, and context tier `long_context`; give
+both the wave diff plus `spec.md`, `plan.md`, `tasks.md`, and the constitution,
+and require read-only findings. Then run the actual Copilot panel skill,
+`/d2b-panel-round work`, whose ten read-only seats are bound in its table to
+`gemini-3.1-pro-preview` at reasoning effort `high` and context tier `default`.
+There is no separate dotted verification or review command.
 
 Clear every verification CRITICAL, including constitution conflicts, before the panel.
 A defect that reaches panel forces a content change, which invalidates the snapshot and

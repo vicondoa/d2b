@@ -30,10 +30,10 @@
   skill.
 - Delivery memory registers under `.specify/memory/` for deferred work,
   engineering friction, and accepted debt.
-- spec-kit is installed for Copilot in skills mode alongside the existing
-  opencode integration, as `/speckit-<name>` commands under
-  `.github/skills/`. Both integrations are listed in `.specify/integration.json`,
-  and `check-bindings.mjs` fails if either is dropped.
+- spec-kit is installed only for Copilot in skills mode, with
+  `/speckit-<name>` commands under `.github/skills/`. The integration state
+  selects Copilot as the sole installed, current, and default integration,
+  and `check-bindings.mjs` fails closed on stale integration state.
 - `scripts/copilot/autopilot.sh` for unattended runs, pinning the session
   binding, continuation and credit ceilings, and log destination. It refuses a
   dirty worktree, refuses a protected branch, and validates the binding tables
@@ -41,7 +41,7 @@
 - ADR 0048 recording the measured Copilot substrate, the panel and autopilot
   design, and why the model binding is indirected through dispatch parameters.
 - `docs/contributing/copilot-agents.md` describing the agent and skill surface,
-  the authoring and execution sequences, and the spec-kit coexistence rules.
+  the authoring and execution sequences, and the Copilot-only spec-kit rules.
 - `docs/contributing/` with workflow, panel review, changelog and commit
   conventions, gates and lints, critical subsystems, and architecture
   conventions.

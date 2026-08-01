@@ -73,6 +73,8 @@ const REQUIRED_INPUTS = [
   "packages/xtask/src/delivery/panel.rs",
   "packages/xtask/src/delivery/mod.rs",
   ".specify/memory",
+  ".specify/integration.json",
+  ".specify/init-options.json",
 ];
 
 // What the gate says when each required input is absent. A classification case
@@ -86,11 +88,12 @@ const REQUIRED_FAILURE_TEXT = {
   "packages/xtask/src/delivery/panel.rs": "cannot read panel.rs",
   "packages/xtask/src/delivery/mod.rs": "cannot read mod.rs",
   ".specify/memory": ".specify/memory/friction-log.md: this register is missing",
+  ".specify/integration.json": "does not exist",
+  ".specify/init-options.json": "does not exist",
 };
 
 const OPTIONAL_INPUTS = [
   ".github/copilot/settings.json",
-  ".specify/integration.json",
 ];
 
 const HELPER = ".github/skills/d2b-panel-round/scripts/make-records.mjs";
@@ -133,6 +136,13 @@ function run(dir) {
     encoding: "utf8",
   });
   return { status: r.status, out: `${r.stdout || ""}${r.stderr || ""}` };
+}
+
+function mutateIntegration(dir, fn) {
+  const path = join(dir, ".specify", "integration.json");
+  const state = JSON.parse(readFileSync(path, "utf8"));
+  fn(state);
+  writeFileSync(path, `${JSON.stringify(state, null, 2)}\n`);
 }
 
 // Replace the helper's ROLES declaration with arbitrary text. Taking the whole
@@ -229,6 +239,57 @@ const CASES = [
     name: "baseline: an unmutated fixture passes",
     mutate: () => {},
     expectExit: 0,
+  },
+  {
+    name: "an additional installed integration is rejected",
+    mutate: (dir) =>
+      mutateIntegration(dir, (state) => {
+        state.installed_integrations = ["copilot", "other"];
+      }),
+    expectExit: 1,
+    expectText: 'installed_integrations must be exactly ["copilot"]',
+  },
+  {
+    name: "a non-Copilot current integration is rejected",
+    mutate: (dir) =>
+      mutateIntegration(dir, (state) => {
+        state.integration = "other";
+      }),
+    expectExit: 1,
+    expectText: 'integration must be "copilot"',
+  },
+  {
+    name: "a non-Copilot initialization integration is rejected",
+    mutate: (dir) => {
+      const path = join(dir, ".specify", "init-options.json");
+      const options = JSON.parse(readFileSync(path, "utf8"));
+      options.integration = "other";
+      writeFileSync(path, `${JSON.stringify(options, null, 2)}\n`);
+    },
+    expectExit: 1,
+    expectText: 'init-options.json integration must be "copilot"',
+  },
+  {
+    name: "a retired integration setting is rejected",
+    mutate: (dir) =>
+      mutateIntegration(dir, (state) => {
+        state.integration_settings[["open", "code"].join("")] = {
+          script: "sh",
+          invoke_separator: ".",
+        };
+      }),
+    expectExit: 1,
+    expectText: "contains the retired integration",
+  },
+  {
+    name: "malformed integration state is rejected",
+    mutate: (dir) =>
+      writeFileSync(
+        join(dir, ".specify", "integration.json"),
+        '{"integration":\n',
+      ),
+    expectExit: 1,
+    expectText: "is not valid JSON",
   },
   {
     name: "a dropped seat is rejected",

@@ -1,7 +1,7 @@
 # ADR 0048: Copilot-native agent, skill, and panel surface
 
 - Status: Accepted
-- Date: 2026-07-31
+- Date: 2026-08-01
 - Related: ADR 0046 (d2b 3.0 provider control plane), and the delivery
   tooling in `packages/xtask/src/delivery/` that ADR 0046 section 12.3
   binds the ten-role panel to
@@ -10,12 +10,16 @@
 
 This repository runs a heavyweight engineering process: ADR authoring,
 spec-kit feature specs, a ten-role panel review, and an attest/seal/
-merge-eligibility gate implemented in `packages/xtask/src/delivery/`. That
-process was wired for **opencode**: spec-kit was installed with
-`integration: opencode`, the panel existed as a single generic subagent in
-`.opencode/agents/panel.md` whose one prompt served all ten roles, and
+merge-eligibility gate implemented in `packages/xtask/src/delivery/`.
+
+### Historical state (retired)
+
+Before the immediate cutover recorded by this ADR, the process also had an
+OpenCode integration: spec-kit selected `integration: opencode`, the panel
+existed as a single generic subagent in `.opencode/agents/panel.md`, and
 `AGENTS.md` named `.opencode/opencode.json` as the reference implementation
-for panel behaviour.
+for panel behaviour. This paragraph records the former state only; those
+files and that integration are no longer installed, selected, or supported.
 
 The operator drives Copilot, frequently over ACP, where interactive commands
 such as `/model` are not reliably available. Model selection therefore has to
@@ -30,15 +34,16 @@ attest to it. A record that claims a binding the lane did not actually run at
 is therefore not a cosmetic error; it is a false attestation on the gate that
 seals a wave.
 
-A large ADR-046 program is running against the opencode path concurrently, so
-nothing here may change its behaviour.
+The cutover is immediate. Existing delivery records remain historical
+evidence, not an executable integration or an authority over the committed
+Copilot surface.
 
 ## Decision
 
-Make Copilot the canonical definition surface. Thirteen agents under
+Make Copilot the sole authoritative definition surface. Thirteen agents under
 `.github/agents/` and five d2b skills under `.github/skills/` define the
-process; `.opencode/` is frozen byte-identical and remains authoritative until
-an explicit cutover.
+process. The `.opencode/` integration surface is removed at this cutover and
+must not be recreated as a compatibility path.
 
 ### The binding mechanism
 
@@ -103,9 +108,9 @@ is why it gets three layers rather than one:
 
 ### Panel agents are read-only by construction
 
-Copilot agent frontmatter has no per-command permission allowlist, so
-opencode's "allow `git diff*`, deny the rest" does not translate. The ten panel
-agents instead declare `tools: [view, grep, glob]`, and the panel skill
+Copilot agent frontmatter has no per-command permission allowlist, so a legacy
+shell rule such as "allow `git diff*`, deny the rest" does not translate. The
+ten panel agents instead declare `tools: [view, grep, glob]`, and the panel skill
 pre-stages `delta.diff` and `full.diff` for them to read. This is stronger than
 granting a restricted shell: it is mechanical rather than prompt-enforced, it
 keeps ten lanes off the shared Nix store and the heavy-gate semaphore, and
@@ -163,6 +168,11 @@ artifact reference, a commit subject, a panel record, or a checkpoint, none of
 which have a path structure to lean on, and it requires no state-layout change.
 
 ## Consequences
+
+Copilot is the sole installed, selected, and authoritative integration.
+The immediate cutover removes `.opencode/`, its manifest, and its command
+surface; stale integration state fails closed rather than selecting a
+compatibility path. Historical records remain auditable data only.
 
 The legacy form is unaffected and stays valid indefinitely. `--program ADR046
 --wave W1` is not deprecated, not warned on, and not on a timer; every
