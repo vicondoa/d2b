@@ -120,6 +120,23 @@ surface while preserving the load-bearing contracts from earlier ADRs:
   migration/cutover tooling. This ADR deletes stale shims; it does not remove
   the framework's ability to ship deliberate migrations later.
 
+### Rust dependency and build-topology audit
+
+The July 2026 Rust audit found eight direct dependencies with no references
+from their owning crate's sources, tests, or build scripts. They were removed
+from `d2b-bus`, `d2b-process`, `d2b-session`, and the experimental
+`labs/wlattach` workspace. Their lockfile edges were removed as part of the
+same change.
+
+The current crate graph does not justify a broad workspace split. The highest
+change-frequency hubs are `d2bd`, `d2b-bus`, `d2b-contracts`, `d2b-core`, and
+`xtask`; splitting any of those would add interface and build-cache boundaries
+at the same points where changes most often cross. The existing boundaries
+around `d2b-contracts`, `d2b-core`, the broker workspace, and the guest-shell
+runner workspace remain the better rebuild strategy. Future restructuring
+should be driven by a measured hub that becomes stable enough to extract, not
+by crate count alone.
+
 The waves below are ordered to reduce future work first. Wave 0 creates
 measurement and starts compatibility deletion; Waves 1-4 remove duplicated
 infrastructure; Waves 5-8 reshape Rust/Nix boundaries and the explicitly

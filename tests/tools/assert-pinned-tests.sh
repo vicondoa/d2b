@@ -71,17 +71,13 @@ collect_present() {
     present["${line#* }"]=1
   done
 }
-# Main workspace (packages/Cargo.toml).
+# Main workspace (packages/Cargo.toml). Include d2b-contract-tests in this
+# single listing even though the ordinary test pass excludes it: the pinned
+# inventory only needs a superset of the tests that each lane executes, and
+# one workspace listing avoids a second Cargo resolution/build pass.
 collect_present < <(
   cd "$ROOT/packages"
-  cargo nextest list --workspace --exclude d2b-contract-tests --message-format oneline
-)
-# Fixture contract tests are excluded from the default workspace test pass, but
-# test-rust.sh runs them with D2B_FIXTURES. Include their nextest
-# listing so retired shell gates can pin rendered-artifact contract successors.
-collect_present < <(
-  cd "$ROOT/packages"
-  cargo nextest list -p d2b-contract-tests --message-format oneline
+  cargo nextest list --workspace --message-format oneline
 )
 # Broker workspace (packages/d2b-priv-broker/Cargo.toml) is a SEPARATE
 # cargo workspace, excluded from the main one. Retired canaries pinned

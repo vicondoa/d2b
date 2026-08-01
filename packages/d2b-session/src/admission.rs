@@ -371,6 +371,35 @@ impl fmt::Debug for VerifiedAdapterAuthority {
 }
 
 /// Single-use builder for an authenticated ComponentSession.
+///
+/// The authority implementation is private and sealed:
+///
+/// ```compile_fail
+/// use d2b_session::SessionAuthority;
+/// ```
+///
+/// The acceptor itself cannot be cloned, default-constructed, or created from
+/// caller input:
+///
+/// ```compile_fail
+/// use d2b_session::SessionAcceptor;
+///
+/// fn requires_clone<T: Clone>() {}
+/// requires_clone::<SessionAcceptor<()>>();
+/// ```
+///
+/// ```compile_fail
+/// use d2b_session::SessionAcceptor;
+///
+/// fn requires_default<T: Default>() {}
+/// requires_default::<SessionAcceptor<()>>();
+/// ```
+///
+/// ```compile_fail
+/// use d2b_session::SessionAcceptor;
+///
+/// let _: SessionAcceptor<()> = <() as Into<SessionAcceptor<()>>>::into(());
+/// ```
 pub struct SessionAcceptor<C> {
     policy: EndpointPolicy,
     expected_zone: ZoneId,
@@ -573,6 +602,29 @@ impl<C> fmt::Debug for SessionAcceptor<C> {
 ///
 /// This value is not a routing capability. A registrar must consume it and
 /// run native authorization before installing any routes.
+///
+/// It cannot be cloned, default-constructed, or created from caller input:
+///
+/// ```compile_fail
+/// use d2b_session::AuthenticatedComponentSession;
+///
+/// fn requires_clone<T: Clone>() {}
+/// requires_clone::<AuthenticatedComponentSession<()>>();
+/// ```
+///
+/// ```compile_fail
+/// use d2b_session::AuthenticatedComponentSession;
+///
+/// fn requires_default<T: Default>() {}
+/// requires_default::<AuthenticatedComponentSession<()>>();
+/// ```
+///
+/// ```compile_fail
+/// use d2b_session::AuthenticatedComponentSession;
+///
+/// let _: AuthenticatedComponentSession<()> =
+///     <() as Into<AuthenticatedComponentSession<()>>>::into(());
+/// ```
 pub struct AuthenticatedComponentSession<C> {
     registration_capability: C,
     expected_zone: ZoneId,

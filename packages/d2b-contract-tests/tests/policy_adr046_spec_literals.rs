@@ -2359,12 +2359,13 @@ fn docs_specs_use_the_frozen_retry_scalar() {
 }
 
 #[test]
-fn derived_spike_measurements_match_the_canonical_results() {
+fn spike_measurement_contracts_match_and_reject_mutations() {
     let root = repo_root();
     let results_path = root.join("proofs/redb-resource-store-spike/RESULTS.md");
     let results = std::fs::read_to_string(&results_path)
         .unwrap_or_else(|err| panic!("cannot read {}: {err}", rel_display(&results_path)));
-    let errors = validate_spike_measurements(&results, &measurement_documents());
+    let documents = measurement_documents();
+    let errors = validate_spike_measurements(&results, &documents);
     assert!(errors.is_empty(), "{}", errors.join("\n"));
 
     let feasibility =
@@ -2378,15 +2379,6 @@ fn derived_spike_measurements_match_the_canonical_results() {
         "time -v proofs/redb-resource-store-spike/target/release/rss-fixture \
          --resources 10000 --watches 100"
     ));
-}
-
-#[test]
-fn derived_spike_measurement_guard_rejects_each_class_mutation() {
-    let root = repo_root();
-    let results_path = root.join("proofs/redb-resource-store-spike/RESULTS.md");
-    let results = std::fs::read_to_string(&results_path)
-        .unwrap_or_else(|err| panic!("cannot read {}: {err}", rel_display(&results_path)));
-    let documents = measurement_documents();
 
     for spec in spike_measurement_specs() {
         let canonical = canonical_measurement(&results, spec.threshold)
@@ -2414,17 +2406,8 @@ fn derived_spike_measurement_guard_rejects_each_class_mutation() {
             spec.mutation_path
         );
     }
-}
 
-#[test]
-fn global_spike_measurement_inventory_rejects_each_unregistered_class_copy() {
     const UNREGISTERED_DOCUMENT: &str = "docs/explanation/unregistered-spike-copy.md";
-
-    let root = repo_root();
-    let results_path = root.join("proofs/redb-resource-store-spike/RESULTS.md");
-    let results = std::fs::read_to_string(&results_path)
-        .unwrap_or_else(|err| panic!("cannot read {}: {err}", rel_display(&results_path)));
-    let documents = measurement_documents();
     assert!(
         !documents.contains_key(UNREGISTERED_DOCUMENT),
         "plant path must not replace a real documentation file"

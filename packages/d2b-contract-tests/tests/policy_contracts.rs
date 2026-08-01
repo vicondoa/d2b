@@ -531,6 +531,10 @@ fn tracing_contract_lint() {
         !rust_files.is_empty(),
         "tracing-contract-lint: no Rust source files found under packages/ - wrong CWD?"
     );
+    let sources: Vec<(&str, String)> = rust_files
+        .iter()
+        .map(|rel| (rel.as_str(), read_repo_file(rel)))
+        .collect();
 
     let mut violations: Vec<String> = Vec::new();
 
@@ -664,8 +668,7 @@ fn tracing_contract_lint() {
     for (description, pattern) in scans {
         let re = Regex::new(pattern).expect("valid scan regex");
         let mut hits: Vec<String> = Vec::new();
-        for rel in &rust_files {
-            let content = read_repo_file(rel);
+        for (rel, content) in &sources {
             for (idx, line) in content.lines().enumerate() {
                 if re.is_match(line) {
                     hits.push(format!("{rel}:{}:{line}", idx + 1));
@@ -689,8 +692,7 @@ fn tracing_contract_lint() {
     // bash gate's `nix_store_hits` gate - the awk state machine only runs when
     // at least one non-comment literal exists.)
     let mut store_literals_present = false;
-    'outer: for rel in &rust_files {
-        let content = read_repo_file(rel);
+    'outer: for (_, content) in &sources {
         for line in content.lines() {
             if store_lit.is_match(line) && !comment_line_re.is_match(line) {
                 store_literals_present = true;
@@ -711,8 +713,7 @@ fn tracing_contract_lint() {
         let mut in_tracing = false;
         let mut depth: i64 = 0;
         let mut bad: Vec<String> = Vec::new();
-        for rel in &rust_files {
-            let content = read_repo_file(rel);
+        for (rel, content) in &sources {
             for (idx, line) in content.lines().enumerate() {
                 if tracing_start.is_match(line) {
                     in_tracing = true;

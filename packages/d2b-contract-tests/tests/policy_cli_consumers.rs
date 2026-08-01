@@ -78,15 +78,16 @@ fn strip_live_comments(line: &str) -> &str {
     line[..cut].trim_end()
 }
 
-fn live_consumer_violations(pattern: &Regex, allowed_files: &[&str]) -> Vec<String> {
+fn live_consumer_violations(
+    files: &[(String, String)],
+    pattern: &Regex,
+    allowed_files: &[&str],
+) -> Vec<String> {
     let mut violations = Vec::new();
-    for rel in source_files_with_extensions(&[".nix", ".sh", ".rs"]) {
+    for (rel, content) in files {
         if allowed_files.contains(&rel.as_str()) {
             continue;
         }
-        let Some(content) = read_repo_file_opt(&rel) else {
-            continue;
-        };
         for (idx, line) in content.lines().enumerate() {
             if pattern.is_match(strip_live_comments(line)) {
                 violations.push(format!("{rel}:{}:{line}", idx + 1));
@@ -98,6 +99,10 @@ fn live_consumer_violations(pattern: &Regex, allowed_files: &[&str]) -> Vec<Stri
 
 #[test]
 fn cli_nix_live_consumer_bindings_absent() {
+    let files = source_files_with_extensions(&[".nix", ".sh", ".rs"])
+        .into_iter()
+        .filter_map(|rel| read_repo_file_opt(&rel).map(|content| (rel, content)))
+        .collect::<Vec<_>>();
     let base_allowed = [CLI_NIX, RETIRED_GATE, THIS_TEST];
     for (name, pattern) in [
         ("d2b.cliBin", r"d2b\.cliBin"),
@@ -105,7 +110,7 @@ fn cli_nix_live_consumer_bindings_absent() {
         ("_desktopWrappers", r"_desktopWrappers"),
     ] {
         let re = Regex::new(pattern).expect("valid consumer regex");
-        let violations = live_consumer_violations(&re, &base_allowed);
+        let violations = live_consumer_violations(&files, &re, &base_allowed);
         assert!(
             violations.is_empty(),
             "cli-nix-consumers-eval: live {name} consumer(s) found outside \
@@ -118,7 +123,7 @@ fn cli_nix_live_consumer_bindings_absent() {
     let mut store_violations: BTreeSet<String> = BTreeSet::new();
     for pattern in [r"d2b\.store\.package", r"d2b\.store\.generations"] {
         let re = Regex::new(pattern).expect("valid store consumer regex");
-        store_violations.extend(live_consumer_violations(&re, &store_allowed));
+        store_violations.extend(live_consumer_violations(&files, &re, &store_allowed));
     }
     assert!(
         store_violations.is_empty(),

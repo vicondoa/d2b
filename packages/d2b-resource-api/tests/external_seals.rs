@@ -212,44 +212,6 @@ exec "$rustc" "$@"
         "forge_issuer",
         &["error[E0432]", "no `AdmissionIssuer` in the root"],
     );
-    harness.check_rejected(
-        "forge_permit",
-        &["error[E0432]", "no `AdmissionPermit` in the root"],
-    );
-    harness.check_rejected(
-        "forge_subject",
-        // rustc 1.97 rewords E0599 for an absent associated item from "no
-        // function or associated item named" to "no associated function or
-        // constant named". Match the shorter stable substring both spellings
-        // share, so the seal keeps asserting that `new` is unreachable without
-        // re-breaking on the next rewording.
-        &["error[E0599]", "named `new`"],
-    );
-    harness.check_rejected(
-        "private_admission_path",
-        &["error[E0603]", "module `admission` is private"],
-    );
-    harness.check_rejected(
-        "private_test_issuer",
-        &["error[E0603]", "module `identity` is private"],
-    );
-    harness.check_rejected(
-        "private_fields",
-        &[
-            "error[E0616]",
-            "field `mutations` of struct `AdmittedMutation` is private",
-            "field `claims` of struct `AuthenticatedSubjectContext` is private",
-            "field `subject` of struct `TrustedRequest` is private",
-        ],
-    );
-    harness.check_rejected(
-        "shared_store_tokens",
-        &[
-            "error[E0432]",
-            "no `AdmissionVerifier` in the root",
-            "no `StoreIdentity` in the root",
-        ],
-    );
     assert!(
         cfg_test_marker.is_file(),
         "the resource API was not compiled under forced cfg(test)"

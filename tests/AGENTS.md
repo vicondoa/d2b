@@ -194,13 +194,38 @@ are not portable across compiler versions. CI restores that directory as one
 cache surface. When adding such a test, key its subtree the same way and reuse
 the compilation but not any output whose freshness the test asserts on.
 
-One test is deliberately outside that surface. The `d2b-resource-api` external
-seal caches to `.scratch/resource-api-external-seals-<key>/`, keyed the same
-way but **not** under `rust-test-cache/`, because its tree is several hundred
-megabytes and the Actions cache is a hard repository-wide budget. It is a
-local-loop cache only, and CI pays its cold build every run by design. Put a
-new cargo-shelling test under `rust-test-cache/` unless its tree is large
-enough to make that trade, and say which trade you made.
+### External compile-fail test policy
+
+External compile-fail tests are a high-latency exception, not a general API
+visibility test mechanism. Before adding one, first use the compiler-derived
+rustdoc JSON census and snapshots under `tests/golden/api-surface/`. That
+census owns unexpected exports, public members, hidden-public items, and
+approved capability trait implementations without launching one Cargo build
+per probe.
+
+Add an external compile-fail fixture only when it proves a downstream
+type-system or trust-boundary property that rustdoc JSON and doctests cannot
+prove. The public capability types have explicit rustdoc `compile_fail`
+examples for every prohibited `Clone`, `Default`, and `From<()>` case, and the
+private `SessionAuthority` trait has an explicit doctest proving it is not
+available downstream. The test comment and changelog entry must state which
+semantic property requires a downstream crate. Do not add fixtures solely for
+private fields, private modules, constructors, sealed public traits, missing
+re-exports, or absent methods; those belong in the API census or a small
+rustdoc `compile_fail` example.
+
+The resource API external seal retains one forced-`cfg(test)` downstream probe
+because rustdoc JSON does not render test-configuration exports. Its redundant
+export/private-member probes were removed in favor of the compiler-derived API
+census and rustdoc examples. Keep new cargo-shelling tests under
+`rust-test-cache/` unless their tree is large enough to justify a different
+cache trade, and document that trade.
+
+The runtime ledger's per-test wall-clock ceiling is 60 seconds. A test sample
+above that limit fails the CI gate; shorter advisory thresholds remain
+diagnostic only. Do not add an exception for a slow test without either
+removing the unnecessary work or documenting why the test cannot be split or
+made cheaper.
 
 When a failure reproduces only inside the gate's toolchain environment, use
 `tests/tools/repro-rust-gate-env.sh <command>` instead of re-running the whole
