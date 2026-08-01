@@ -1502,6 +1502,24 @@ fields that request panel, agent, or model metadata.
   clear every wrapper spelling because a caching wrapper that exits nonzero
   under concurrent cargo invocations is indistinguishable from the fixture
   failing for the wrong reason.
+- **No linker and no alternative codegen backend are configured, and that is
+  a measured decision rather than an oversight.** Both were tried on this
+  tree and neither earned its place. mold, wired through
+  `target.<triple>.linker` and compared against separately warmed target
+  directories, came out at 6.3 s against 6.7 s on a relink-heavy incremental
+  build and 90 s against 93 s on a warm one - inside the run-to-run noise.
+  The reason is that `[profile.dev] debug = "line-tables-only"` already
+  removed the debug information that makes linking expensive, so the cost
+  mold targets has largely been paid already. Cranelift, over five
+  incremental pairs against a nightly LLVM control, ran 5.8 s against 7.0 s:
+  a real 17% but 1.2 s in absolute terms, and it cannot enter the gate at
+  all, because `packages/rust-toolchain.toml` pins an exact stable release
+  that `tests/test-rust.sh` enforces, so it would mean installing and
+  caching a second toolchain in every Rust job. Reopen either only with a
+  measurement, and note the trap: `tests/test-rust.sh` exports `RUSTFLAGS`,
+  and that environment variable **replaces** `build.rustflags` rather than
+  merging with it, so a linker configured through `rustflags` is silently
+  dead there.
 - Tests that shell out to `cargo` (the capability-seal guards in
   `packages/d2b-bus/`, `packages/d2b-controller-toolkit/` and
   `packages/d2b-resource-api/`) cache their
