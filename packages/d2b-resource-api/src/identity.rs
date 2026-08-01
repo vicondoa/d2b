@@ -7,6 +7,16 @@ use d2b_contracts::v3::AuthenticatedSubjectContext as SessionClaims;
 use crate::authz::AuthorizationState;
 
 /// Session claims and policy state issued only after transport authentication.
+///
+/// The private fields prevent downstream code from fabricating authentication:
+///
+/// ```compile_fail
+/// use d2b_resource_api::AuthenticatedSubjectContext;
+///
+/// let _forged = AuthenticatedSubjectContext {
+///     claims: vec![],
+/// };
+/// ```
 pub struct AuthenticatedSubjectContext {
     claims: Arc<SessionClaims>,
     authorization_state: AuthorizationState,

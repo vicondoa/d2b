@@ -1242,6 +1242,16 @@ struct ComponentSessionRegistrar {
 
 /// Single-use proof that a ComponentSession candidate was minted by one
 /// concrete Zone registrar.
+///
+/// Downstream code cannot fabricate the proof or clone it:
+///
+/// ```compile_fail
+/// use d2b_bus::ComponentSessionAdmission;
+///
+/// let _forged = ComponentSessionAdmission {
+///     identity: std::sync::Arc::new(()),
+/// };
+/// ```
 pub struct ComponentSessionAdmission {
     identity: Arc<ComponentSessionAdmissionIdentity>,
 }
