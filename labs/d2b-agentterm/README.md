@@ -239,8 +239,8 @@ visible)`.
 Worth noting what this does *not* cover: a cursor **blink** rendered by your
 real terminal emulator (a DECSCUSR blink style) produces no PTY output at all.
 It is a property of the display, not the application, so this tool cannot see it
-and does not need to - it can never cause a false "busy". Measured against
-opencode: 8 seconds of `outputBytes=0` with a static cursor at row 64, col 5.
+and does not need to - it can never cause a false "busy". Measured against an alternate-buffer application: 8 seconds of
+`outputBytes=0` with a static cursor at row 64, col 5.
 
 ## Bounded by construction
 
@@ -356,7 +356,7 @@ arrows appear to "not work" in a TUI.
 ### Scrolling
 
 `PageUp` / `PageDown` are sent to the **application**, which is correct for
-alternate-buffer TUIs that own their own scrollback (opencode, lazygit, `less`).
+alternate-buffer TUIs that own their own scrollback (lazygit, `less`).
 Verified end to end against `less`: `1 -> 20 -> 39 -> 20`.
 
 For an ordinary scrolling shell the real terminal handles scrollback locally and

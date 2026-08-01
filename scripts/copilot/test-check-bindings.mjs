@@ -28,7 +28,7 @@
 // It is a plain node script with no test framework because the repository does
 // not add tooling for one gate. It runs from `make test-lint`.
 
-import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -73,6 +73,9 @@ const REQUIRED_INPUTS = [
   "packages/xtask/src/delivery/panel.rs",
   "packages/xtask/src/delivery/mod.rs",
   ".specify/memory",
+  ".specify/integration.json",
+  ".specify/init-options.json",
+  ".specify/integrations/copilot.manifest.json",
 ];
 
 // What the gate says when each required input is absent. A classification case
@@ -86,11 +89,13 @@ const REQUIRED_FAILURE_TEXT = {
   "packages/xtask/src/delivery/panel.rs": "cannot read panel.rs",
   "packages/xtask/src/delivery/mod.rs": "cannot read mod.rs",
   ".specify/memory": ".specify/memory/friction-log.md: this register is missing",
+  ".specify/integration.json": "does not exist",
+  ".specify/init-options.json": "does not exist",
+  ".specify/integrations/copilot.manifest.json": "does not exist",
 };
 
 const OPTIONAL_INPUTS = [
   ".github/copilot/settings.json",
-  ".specify/integration.json",
 ];
 
 const HELPER = ".github/skills/d2b-panel-round/scripts/make-records.mjs";
@@ -133,6 +138,17 @@ function run(dir) {
     encoding: "utf8",
   });
   return { status: r.status, out: `${r.stdout || ""}${r.stderr || ""}` };
+}
+
+function mutateIntegration(dir, fn) {
+  mutateJson(dir, ".specify/integration.json", fn);
+}
+
+function mutateJson(dir, relativePath, fn) {
+  const path = join(dir, relativePath);
+  const state = JSON.parse(readFileSync(path, "utf8"));
+  fn(state);
+  writeFileSync(path, `${JSON.stringify(state, null, 2)}\n`);
 }
 
 // Replace the helper's ROLES declaration with arbitrary text. Taking the whole
@@ -229,6 +245,104 @@ const CASES = [
     name: "baseline: an unmutated fixture passes",
     mutate: () => {},
     expectExit: 0,
+  },
+  {
+    name: "an additional installed integration is rejected",
+    mutate: (dir) =>
+      mutateIntegration(dir, (state) => {
+        state.installed_integrations = ["copilot", "other"];
+      }),
+    expectExit: 1,
+    expectText: 'installed_integrations must be exactly ["copilot"]',
+  },
+  {
+    name: "a non-Copilot current integration is rejected",
+    mutate: (dir) =>
+      mutateIntegration(dir, (state) => {
+        state.integration = "other";
+      }),
+    expectExit: 1,
+    expectText: 'integration must be "copilot"',
+  },
+  {
+    name: "a non-Copilot initialization integration is rejected",
+    mutate: (dir) => {
+      const path = join(dir, ".specify", "init-options.json");
+      const options = JSON.parse(readFileSync(path, "utf8"));
+      options.integration = "other";
+      writeFileSync(path, `${JSON.stringify(options, null, 2)}\n`);
+    },
+    expectExit: 1,
+    expectText: 'init-options.json integration must be "copilot"',
+  },
+  {
+    name: "a retired integration setting is rejected",
+    mutate: (dir) =>
+      mutateIntegration(dir, (state) => {
+        state.integration_settings[["open", "code"].join("")] = {
+          script: "sh",
+          invoke_separator: ".",
+        };
+      }),
+    expectExit: 1,
+    expectText: "contains the retired integration",
+  },
+  {
+    name: "malformed integration state is rejected",
+    mutate: (dir) =>
+      writeFileSync(
+        join(dir, ".specify", "integration.json"),
+        '{"integration":\n',
+      ),
+    expectExit: 1,
+    expectText: "is not valid JSON",
+  },
+  {
+    name: "a missing declared Copilot skill is rejected",
+    mutate: (dir) =>
+      mutateJson(dir, ".specify/integrations/copilot.manifest.json", (manifest) => {
+        manifest.files[".github/skills/missing-required-skill/SKILL.md"] = "0".repeat(64);
+      }),
+    expectExit: 1,
+    expectText: "declares required Copilot skill",
+  },
+  {
+    name: "a dangling required Copilot skill symlink is rejected",
+    mutate: (dir) => {
+      const relativePath = ".github/skills/dangling-required-skill/SKILL.md";
+      const path = join(dir, relativePath);
+      mkdirSync(dirname(path), { recursive: true });
+      symlinkSync("missing-target.md", path);
+      mutateJson(dir, ".specify/integrations/copilot.manifest.json", (manifest) => {
+        manifest.files[relativePath] = "0".repeat(64);
+      });
+    },
+    expectExit: 1,
+    expectText: "does not resolve to a readable regular file",
+  },
+  {
+    name: "a restored retired integration directory is rejected",
+    mutate: (dir) => {
+      const path = join(dir, ".op" + "encode", "op" + "encode.json");
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, "{}\n");
+    },
+    expectExit: 1,
+    expectText: "retired integration directory is present",
+  },
+  {
+    name: "a restored retired integration manifest is rejected",
+    mutate: (dir) => {
+      const path = join(
+        dir,
+        ".specify",
+        "integrations",
+        "op" + "encode.manifest.json",
+      );
+      writeFileSync(path, "{}\n");
+    },
+    expectExit: 1,
+    expectText: "retired integration manifest is present",
   },
   {
     name: "a dropped seat is rejected",
