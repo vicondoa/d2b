@@ -1213,7 +1213,9 @@ with separate debug info also declares a `debug` output that no `--help`
 assertion can need, and carrying those took the same entry to 175 MiB. A
 carried entry can never produce a wrong result, since store paths are
 content-addressed and a changed derivation simply misses and builds, so the
-import is deliberately best-effort and must never fail the shard.
+import is deliberately best-effort and must never fail the shard. Measured on
+the gate, a hit takes that shard from 1010 s to 33 s and builds neither
+package.
 
 Two properties of that script are load-bearing and were each learned the
 expensive way, so do not "simplify" either. It resolves its paths with

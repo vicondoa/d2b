@@ -4,8 +4,9 @@
   cloud-hypervisor from source on every run in order to check two of their
   command-line flags. The two outputs those checks need are carried between
   runs instead, at 30 MB, so the shard that set the gate's wall time stops
-  doing so. A carried entry that no longer matches simply builds as before,
-  because store paths change with the derivation.
+  doing so. Measured on the gate: that shard falls from 1010 s to 33 s, with
+  no build of either package. A carried entry that no longer matches simply
+  builds as before, because store paths change with the derivation.
 - The compiler-derived API census runs as its own gate shard. It renders
   through a separately pinned toolchain into its own target directory and
   shares no artifacts with the workspace build it previously ran inside, so
