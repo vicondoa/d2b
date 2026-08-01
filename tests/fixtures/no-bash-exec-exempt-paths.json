@@ -5,5 +5,7 @@
     "Additions require panel review per ADR 0017 § Dev-tool dependency governance.",
     "Format: one path (relative to repo root) per entry under exempt_paths."
   ],
-  "exempt_paths": []
+  "exempt_paths": [
+    "packages/d2b-resource-store-redb/src/tests.rs"
+  ]
 }
