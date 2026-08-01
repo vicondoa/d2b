@@ -204,14 +204,15 @@ approved capability trait implementations without launching one Cargo build
 per probe.
 
 Add an external compile-fail fixture only when it proves a downstream
-type-system or trust-boundary property that rustdoc JSON cannot prove, such as
-sealed-trait implementation rejection, authority fabrication, or a
-downstream conversion that must remain constrained. The test comment and
-changelog entry must state which semantic property requires a downstream
-crate. Do not add fixtures solely for private fields, private modules,
-constructors, missing re-exports, or absent methods; those belong in the API
-census or a small rustdoc `compile_fail` example when documentation of the
-boundary is useful.
+type-system or trust-boundary property that rustdoc JSON and doctests cannot
+prove. The public capability types have explicit rustdoc `compile_fail`
+examples for every prohibited `Clone`, `Default`, and `From<()>` case, and the
+private `SessionAuthority` trait has an explicit doctest proving it is not
+available downstream. The test comment and changelog entry must state which
+semantic property requires a downstream crate. Do not add fixtures solely for
+private fields, private modules, constructors, sealed public traits, missing
+re-exports, or absent methods; those belong in the API census or a small
+rustdoc `compile_fail` example.
 
 The resource API external seal retains one forced-`cfg(test)` downstream probe
 because rustdoc JSON does not render test-configuration exports. Its redundant

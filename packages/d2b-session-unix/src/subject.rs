@@ -8,6 +8,29 @@ use d2b_session::{
 use crate::{PeerCredentials, SeqpacketSocket, StreamSocket, UnixSessionError};
 
 /// Kernel-verified Unix peer evidence without caller-authored subject claims.
+///
+/// This evidence is deliberately not cloneable, default-constructible, or
+/// convertible from caller input:
+///
+/// ```compile_fail
+/// use d2b_session_unix::VerifiedUnixPeer;
+///
+/// fn requires_clone<T: Clone>() {}
+/// requires_clone::<VerifiedUnixPeer>();
+/// ```
+///
+/// ```compile_fail
+/// use d2b_session_unix::VerifiedUnixPeer;
+///
+/// fn requires_default<T: Default>() {}
+/// requires_default::<VerifiedUnixPeer>();
+/// ```
+///
+/// ```compile_fail
+/// use d2b_session_unix::VerifiedUnixPeer;
+///
+/// let _: VerifiedUnixPeer = <() as Into<VerifiedUnixPeer>>::into(());
+/// ```
 pub struct VerifiedUnixPeer {
     observed_peer: PeerCredentials,
     transport_class: TransportClass,

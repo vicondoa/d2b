@@ -1252,6 +1252,28 @@ struct ComponentSessionRegistrar {
 ///     let _ = &value.identity;
 /// }
 /// ```
+///
+/// The capability must not acquire general construction traits:
+///
+/// ```compile_fail
+/// use d2b_bus::ComponentSessionAdmission;
+///
+/// fn requires_clone<T: Clone>() {}
+/// requires_clone::<ComponentSessionAdmission>();
+/// ```
+///
+/// ```compile_fail
+/// use d2b_bus::ComponentSessionAdmission;
+///
+/// fn requires_default<T: Default>() {}
+/// requires_default::<ComponentSessionAdmission>();
+/// ```
+///
+/// ```compile_fail
+/// use d2b_bus::ComponentSessionAdmission;
+///
+/// let _: ComponentSessionAdmission = <() as Into<ComponentSessionAdmission>>::into(());
+/// ```
 pub struct ComponentSessionAdmission {
     identity: Arc<ComponentSessionAdmissionIdentity>,
 }

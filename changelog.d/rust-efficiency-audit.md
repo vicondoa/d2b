@@ -9,9 +9,10 @@
   unnecessary dependency resolution and compilation.
 - Consolidated pinned-test inventory discovery into one main-workspace Cargo
   listing, avoiding a duplicate contract-crate resolution pass.
-- Kept semantic compile-fail mutations independently attributable while
-  retaining cached fixture dependencies, and reduced the resource API seal to
-  its narrow forced-`cfg(test)` probe.
+- Replaced the slow bus capability mutation and sealed-authority fixtures with
+  explicit rustdoc `compile_fail` coverage for every prohibited public trait
+  and the private authority trait, while retaining the resource API's narrow
+  forced-`cfg(test)` probe.
 - Added an absolute 60-second per-test wall-clock ceiling to the runtime
   ledger; shorter timing thresholds remain advisory while aggregate crate CPU
   budgets remain the regression gate.
