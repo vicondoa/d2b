@@ -143,7 +143,7 @@ must_build_paths() {
   flake_ref=$(d2b_flake_ref "$ROOT")
   native=$(nix eval --raw --impure --expr builtins.currentSystem)
 
-  drv=$(nix eval --raw --quiet --no-warn-dirty \
+  drv=$(nix eval --raw --impure --quiet --no-warn-dirty \
     "${flake_ref}#checks.${native}.${check}.drvPath")
 
   for input in $(nix-store --query --references "$drv" | grep '\.drv$'); do
@@ -168,7 +168,7 @@ cmd_plan() {
 MANIFEST_NAME=d2b-cached-paths
 
 cmd_import() {
-  local check=$1 dir=$2 manifest paths path want missing
+  local check=$1 dir=$2 manifest paths path needed missing
   : "$check"
   manifest="$dir/$MANIFEST_NAME"
 
@@ -178,6 +178,18 @@ cmd_import() {
   fi
 
   paths=$(tr '\n' ' ' <"$manifest")
+
+  # Count what the store lacks *before* copying. Only a path that is missing
+  # now can be restored by this copy, so this is the only baseline against
+  # which the copy can be said to have worked. Counting solely afterwards
+  # would report success whenever the paths happened to be present for some
+  # other reason, which is the same shape of false negative that let a broken
+  # restore run undetected for a full run.
+  needed=0
+  while read -r path; do
+    [ -n "$path" ] || continue
+    nix path-info "$path" >/dev/null 2>&1 || needed=$((needed + 1))
+  done <"$manifest"
 
   # Copy the manifest's paths by name rather than asking the source store to
   # enumerate itself. `nix copy --all` reads as the obvious spelling and works
@@ -199,25 +211,29 @@ cmd_import() {
   nix copy --no-check-sigs --from "file://$dir" $paths || true
 
   # Report on what the store actually holds now rather than on the copy's exit
-  # status. Whether the entry contributed is precisely the question of whether
-  # these paths are valid, and deciding it here means any future way for the
-  # restore to stop working - an unsupported operation, a corrupt entry, a
-  # path the export never published - surfaces as this one warning instead of
-  # as a lane that is mysteriously still slow.
-  want=0
+  # status, and against the pre-copy baseline rather than against the manifest.
+  # Whether the entry contributed is precisely the question of whether the
+  # paths it was supposed to supply became valid, and deciding it here means
+  # any future way for the restore to stop working - an unsupported operation,
+  # a corrupt entry, a path the export never published - surfaces as this one
+  # warning instead of as a lane that is mysteriously still slow.
   missing=0
   while read -r path; do
     [ -n "$path" ] || continue
-    want=$((want + 1))
     nix path-info "$path" >/dev/null 2>&1 || missing=$((missing + 1))
   done <"$manifest"
 
+  if [ "$needed" -eq 0 ]; then
+    log "  realized-check cache: every path already valid; nothing to restore"
+    return 0
+  fi
+
   if [ "$missing" -eq 0 ]; then
-    log "  realized-check cache: restored $want path(s) from $dir"
+    log "  realized-check cache: restored $needed path(s) from $dir"
   else
-    log "  realized-check cache: $missing of $want path(s) missing after restore; building normally"
+    log "  realized-check cache: $missing of $needed path(s) still missing after restore; building normally"
     printf '::warning::realized-check cache restored %s of %s path(s) for %s; this run rebuilds it\n' \
-      "$((want - missing))" "$want" "$check"
+      "$((needed - missing))" "$needed" "$check"
   fi
   return 0
 }
