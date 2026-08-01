@@ -445,10 +445,12 @@ function classificationCases() {
 const ALL_CASES = [...CASES, ...classificationCases()];
 
 let ran = 0;
+let skipped = 0;
 
 for (const c of ALL_CASES) {
   if (c.skip) {
     console.log(`skip ${c.name}`);
+    skipped += 1;
     continue;
   }
   const dir = buildFixture(c.omit);
@@ -479,8 +481,13 @@ for (const c of ALL_CASES) {
   }
 }
 
+// Report what did not run alongside what did. A case that stops running is
+// indistinguishable from one that passes if only the passing count is printed,
+// and a silently skipped check is the defect class this harness exists to
+// catch.
+const tally = `${ran} of ${ALL_CASES.length} cases, ${skipped} skipped`;
 if (failures) {
-  console.error(`\ncheck-bindings guard: ${failures} of ${ran} cases failed`);
+  console.error(`\ncheck-bindings guard: ${failures} failed (${tally})`);
   process.exit(1);
 }
-console.log(`\ncheck-bindings guard: ${ran} cases passed`);
+console.log(`\ncheck-bindings guard: ${tally}, all passed`);

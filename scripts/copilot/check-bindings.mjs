@@ -623,4 +623,7 @@ if (errors.length) {
   console.error(`\ncheck-bindings: ${errors.length} error(s)`);
   process.exit(1);
 }
-console.log(`check-bindings: ${agents.size} agents, ${rows.length} binding rows, all consistent`);
+console.log(
+  `check-bindings: ${agents.size} agents, ${rows.length} binding rows, ` +
+  `${registerRows} register rows, all consistent`,
+);
