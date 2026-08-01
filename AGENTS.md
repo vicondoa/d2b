@@ -1000,7 +1000,7 @@ lane contract above. A lane on any other model produces a record
 `panel-attest` will reject, so do not let model fallback silently
 downgrade a panel lane, and do not dispatch a panel lane through the
 `general` agent - that one is pinned to the coding model
-`github-copilot/gpt-5.6-sol` and its records are rejected by design.
+`github-copilot/gpt-5.6-luna` and its records are rejected by design.
 
 **The per-round council, and what it costs.**
 `submit_phase_council_verdicts` has a closed five-member roster

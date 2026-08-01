@@ -9,11 +9,11 @@
   ],
   "agent": {
     "general": {
-      "model": "github-copilot/gpt-5.6-sol",
+      "model": "github-copilot/gpt-5.6-luna",
       "reasoningEffort": "xhigh"
     },
     "explore": {
-      "model": "github-copilot/gpt-5.6-sol",
+      "model": "github-copilot/gpt-5.6-luna",
       "reasoningEffort": "xhigh"
     },
     "panel": {
