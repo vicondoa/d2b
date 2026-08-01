@@ -4,10 +4,9 @@ The canonical definition surface for this repository's ADR, panel, and
 delivery process. Everything here is committed, so a fresh clone behaves
 identically and nothing depends on an operator's local settings.
 
-The opencode surface under `.opencode/` is **frozen, not retired**. A program
-is running against it, and it stays byte-identical and authoritative until the
-cutover named at the end of this document. Where the two paths disagree during
-the overlap, the old path wins.
+Copilot is the sole supported and authoritative agent surface. The legacy
+integration was retired and its tracked files were removed; no second command
+path is preserved or selected by this repository.
 
 ## What is here
 
@@ -235,35 +234,28 @@ A defect discovered while fixing something else goes into a register, not into
 the current fix round. That is the mechanism that lets a fix round stay scoped
 to the findings it answers without losing the defect.
 
-## spec-kit coexistence
+## spec-kit on Copilot
 
-spec-kit 0.14.4 is installed for **both** integrations. The Copilot side uses
-skills mode, so commands are `/speckit-specify` with a hyphen; the opencode
-side keeps its dotted `/speckit.specify` commands under `.opencode/commands/`.
+spec-kit 0.14.4 is installed for Copilot in skills mode. Use the
+hyphenated skills such as `/speckit-specify`, `/speckit-plan`, and
+`/speckit-tasks`; dotted integration commands are not a repository command
+surface.
 
 **Do not run `specify init` in this repository.** It was trialled on a scratch
-copy, and it does three things that are unacceptable during the overlap:
+copy, and it can replace `installed_integrations` and rewrite shared files
+under `.specify/scripts/` and `.specify/templates/`. Those rewrites can
+silently change the selected integration or reintroduce banned dash codepoints,
+which fails `make check-tier0`. Keep the committed Copilot state and skills
+authoritative instead.
 
-1. It **replaces** `installed_integrations` rather than appending, silently
-   dropping the opencode install the running program uses.
-2. It rewrites shared files under `.specify/scripts/` and `.specify/templates/`,
-   **reintroducing banned dash codepoints** into tracked files. That fails
-   `make check-tier0`.
-3. It rewrites hardcoded command names in shared script error messages to one
-   separator, which then misdirects users of the other integration.
+`check-bindings.mjs` fails closed unless `.specify/integration.json` lists only
+Copilot and selects Copilot as both the current and default integration. It
+also rejects stale integration settings, malformed JSON, and any retired
+integration value.
 
-Import additively instead: copy the new `.github/skills/speckit-*/` directories
-and `.specify/integrations/copilot.manifest.json`, de-dash them, and hand-merge
-`integration.json` so both integrations are listed. `check-bindings.mjs` fails
-if either integration disappears from that array, which is the expected shape
-of an accidental re-init. `integration` and `default_integration` stay
-`opencode` during the overlap; they select only the cosmetic invoke separator,
-and the standing rule is that the old path wins.
+## Copilot-only cutover
 
-## Cutover
-
-The Copilot path becomes solely authoritative when **one complete wave has
-been sealed through it** with ten attested records and a passing
-`merge-eligibility`. Until then both are supported and opencode wins
-conflicts. At cutover, `.opencode/` is documented as retired rather than
-deleted, since the records it produced remain bound to their candidates.
+The cutover is immediate: Copilot is solely authoritative, and the legacy
+tracked surface is removed rather than retained as a compatibility path.
+Historical delivery records remain records only; they do not make a retired
+integration executable or authoritative.

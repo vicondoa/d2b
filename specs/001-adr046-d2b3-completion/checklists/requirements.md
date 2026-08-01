@@ -52,7 +52,7 @@ Final shape: 38 functional requirements, 23 success criteria, 4 prioritized user
 9 key entities, 12 assumptions, explicit Out of Scope. No bracketed placeholder tokens
 remain. Verified free of the non-ASCII dash codepoints the project constitution bans.
 
-Ready for `/speckit.plan`.
+Ready for `/speckit-plan`.
 
 **Iteration 3 (2026-07-29, post-clarify)** - all 16 items still passing after five
 clarifications were integrated. No regressions.
@@ -88,8 +88,8 @@ Revised shape: 45 functional requirements, 26 success criteria, 4 prioritized us
 duplicate requirement ids, placeholder tokens, banned dash codepoints, and statements
 contradicted by the clarifications.
 
-Ready for `/speckit.plan`.
+Ready for `/speckit-plan`.
 
 ## Notes
 
-- Items marked incomplete require spec updates before `/speckit.clarify` or `/speckit.plan`
+- Items marked incomplete require spec updates before `/speckit-clarify` or `/speckit-plan`

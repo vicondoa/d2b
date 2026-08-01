@@ -291,16 +291,13 @@ target directory, and heavy gate semaphore. Lane ids are free-form, so
 all 10 roles vote independently and each lane's verdict maps one-to-one
 onto a `panel-attest` record.
 
-To keep those records attestable, the reviewing agents must run on the
-pinned panel binding. The `panel` entry under `agent` in
-`.opencode/opencode.json` pins them to
-`github-copilot/gemini-3.1-pro-preview` at reasoning effort `high` and
-denies the write, edit, patch, and bash tools, matching the read-only
-lane contract above. A lane on any other model produces a record
-`panel-attest` will reject, so do not let model fallback silently
-downgrade a panel lane, and do not dispatch a panel lane through the
-`general` agent - that one is pinned to the coding model
-`github-copilot/gpt-5.6-luna` and its records are rejected by design.
+To keep those records attestable, the reviewing agents must use the binding
+table in `.github/skills/d2b-panel-round/SKILL.md`. It pins each read-only
+lane to provider `github-copilot`, model `gemini-3.1-pro-preview`, reasoning
+effort `high`, and context tier `default`; the panel agent frontmatter also
+restricts each seat to `view`, `grep`, and `glob`. A lane on any other
+binding produces a record `panel-attest` will reject, so do not let model or
+effort fallback silently downgrade a panel lane.
 
 **The per-round council, and what it costs.**
 `submit_phase_council_verdicts` has a closed five-member roster
@@ -439,13 +436,6 @@ agents and the delivery policy constants. See
 [copilot-agents.md](./copilot-agents.md). Change those files in the same
 commit as any change to this section.
 
-`.opencode/opencode.json` is the **frozen legacy binding**, retained
-byte-identical for the in-flight ADR 0046 program. Its `agent` table pins
-`panel` to the reviewing binding and `general`/`explore` to the coding
-binding. It is not modified during the overlap, and where the two surfaces
-disagree the legacy one wins until the cutover named in
-[copilot-agents.md](./copilot-agents.md).
-
 The ADR 0046 program does not run swarm. Where this section describes
 swarm's five-seat council, treat it as documenting an available harness
 rather than the configuration in use; the per-round gate is run
@@ -458,4 +448,3 @@ A second, host-local implementation lives in
 host-specific implementation, not an upstream d2b dependency. In it the
 roster is selected per plan via `ENGINEERS_FILE` and each engineer's
 focus file comes from `panel-roles/<engineer>.md`.
-

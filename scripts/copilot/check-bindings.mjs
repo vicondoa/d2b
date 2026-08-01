@@ -20,7 +20,7 @@
 // attestation rather than an error. This script is the cheap place to catch
 // the mistakes that lead there.
 
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -50,10 +50,14 @@ const FORBIDDEN_FRONTMATTER = [
   "contextTier", "context_tier",
 ];
 
+const COPILOT_INTEGRATION = "copilot";
+// Keep the retired integration token out of supported configuration while
+// still detecting it if a stale file brings it back.
+const RETIRED_INTEGRATION = ["open", "code"].join("");
+const EXPECTED_COPILOT_SKILL_PATH = /^\.github\/skills\/[^/]+\/SKILL\.md$/;
+
 const errors = [];
-const warnings = [];
 const fail = (m) => errors.push(m);
-const warn = (m) => warnings.push(m);
 
 // Fails closed on every path. A gate that cannot read its own policy has not
 // checked the binding; it has only declined to look. So an unreadable or
@@ -380,40 +384,249 @@ if (existsSync(repoSettings)) {
   }
 }
 
-// spec-kit coexistence. `specify init` REPLACES installed_integrations rather
-// than appending, so re-running it for Copilot silently drops the opencode
-// install the in-flight program uses. It also rewrites shared files under
-// .specify/scripts and .specify/templates, reintroducing banned dash
-// codepoints into tracked files; the tier0 dash scan catches that one, but
-// nothing catches this one.
-const integrationJson = join(root, ".specify", "integration.json");
-if (existsSync(integrationJson)) {
-  let state = null;
+function retiredPathExists(path) {
   try {
-    state = JSON.parse(readFileSync(integrationJson, "utf8"));
+    lstatSync(path);
+    return true;
   } catch (e) {
-    fail(`.specify/integration.json is not valid JSON: ${e.message}. Repair the file; the spec-kit coexistence check cannot run without it.`);
+    if (e.code === "ENOENT") return false;
+    fail(`cannot inspect ${path}: ${e.message}. The Copilot-only surface check cannot continue safely.`);
+    return false;
   }
-  if (state) {
-    const installed = state.installed_integrations ?? [];
-    for (const required of ["copilot", "opencode"]) {
-      if (!installed.includes(required)) {
+}
+
+const retiredSurfacePaths = [
+  {
+    label: "retired integration directory",
+    path: join(root, `.${RETIRED_INTEGRATION}`),
+  },
+  {
+    label: "retired integration manifest",
+    path: join(root, ".specify", "integrations", `${RETIRED_INTEGRATION}.manifest.json`),
+  },
+];
+for (const { label, path } of retiredSurfacePaths) {
+  if (retiredPathExists(path)) {
+    fail(`${label} is present at ${path}. Remove the retired surface; Copilot is the only supported integration.`);
+  }
+}
+
+const copilotManifestJson = join(root, ".specify", "integrations", "copilot.manifest.json");
+if (!existsSync(copilotManifestJson)) {
+  fail(
+    `.specify/integrations/copilot.manifest.json does not exist. The installed ` +
+    `Copilot skill surface cannot be checked without its manifest.`,
+  );
+} else {
+  let manifest = null;
+  let parsed = false;
+  try {
+    manifest = JSON.parse(readFileSync(copilotManifestJson, "utf8"));
+    parsed = true;
+  } catch (e) {
+    fail(
+      `.specify/integrations/copilot.manifest.json is not valid JSON: ${e.message}. ` +
+      `Repair the manifest before checking the installed Copilot skill surface.`,
+    );
+  }
+  if (parsed) {
+    if (typeof manifest !== "object" || Array.isArray(manifest)) {
+      fail(
+        `.specify/integrations/copilot.manifest.json must contain a JSON object ` +
+        `describing the installed Copilot skill surface.`,
+      );
+    } else {
+      if (manifest.integration !== COPILOT_INTEGRATION) {
         fail(
-          `.specify/integration.json no longer lists "${required}" in ` +
-          `installed_integrations. Both must remain until the cutover: "specify init" ` +
-          `replaces this array rather than appending to it, so this is the expected ` +
-          `shape of an accidental re-init. Restore "${required}" to the ` +
-          `installed_integrations array.`,
+          `.specify/integrations/copilot.manifest.json integration must be ` +
+          `"${COPILOT_INTEGRATION}"; found ${JSON.stringify(manifest.integration)}.`,
         );
       }
-    }
-    for (const key of ["integration", "default_integration"]) {
-      if (state[key] !== "opencode") {
-        warn(
-          `.specify/integration.json ${key} is "${state[key]}", not "opencode". That ` +
-          `only selects the cosmetic invoke separator, but the standing overlap rule is ` +
-          `that the old path wins where the two disagree.`,
+      const files = manifest.files;
+      if (!files || typeof files !== "object" || Array.isArray(files)) {
+        fail(
+          `.specify/integrations/copilot.manifest.json files must be an object ` +
+          `of required Copilot skill paths.`,
         );
+      } else {
+        const declared = Object.keys(files);
+        if (declared.length === 0) {
+          fail(
+            `.specify/integrations/copilot.manifest.json declares no required ` +
+            `Copilot skill files.`,
+          );
+        }
+        for (const relativePath of declared) {
+          if (!EXPECTED_COPILOT_SKILL_PATH.test(relativePath)) {
+            fail(
+              `.specify/integrations/copilot.manifest.json declares "${relativePath}", ` +
+              `which is not an expected Copilot skill path; use ` +
+              `.github/skills/<name>/SKILL.md.`,
+            );
+            continue;
+          }
+          const skillPath = join(root, relativePath);
+          let skillStat;
+          try {
+            skillStat = statSync(skillPath);
+          } catch (e) {
+            fail(
+              `.specify/integrations/copilot.manifest.json declares required Copilot ` +
+              `skill "${relativePath}", but the path does not resolve to a ` +
+              `readable regular file: ${e.message}.`,
+            );
+            continue;
+          }
+          if (!skillStat.isFile()) {
+            fail(
+              `.specify/integrations/copilot.manifest.json declares required Copilot ` +
+              `skill "${relativePath}", but the path is not a regular file.`,
+            );
+            continue;
+          }
+          try {
+            readFileSync(skillPath, "utf8");
+          } catch (e) {
+            fail(
+              `.specify/integrations/copilot.manifest.json declares required Copilot ` +
+              `skill "${relativePath}", but the file is not readable: ${e.message}.`,
+            );
+          }
+        }
+      }
+    }
+  }
+}
+
+// spec-kit integration state. `specify init` replaces installed_integrations
+// rather than appending, so a later initialization can silently select a
+// different integration. This repository is Copilot-only: the installed,
+// current, default, and configured integration must all resolve to Copilot.
+function findRetiredPaths(value, path = "$", paths = []) {
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => findRetiredPaths(item, `${path}[${index}]`, paths));
+    return paths;
+  }
+  if (value && typeof value === "object") {
+    for (const [key, item] of Object.entries(value)) {
+      const keyPath = `${path}.${key}`;
+      if (key.toLowerCase() === RETIRED_INTEGRATION) {
+        paths.push(`${keyPath} (key)`);
+      }
+      findRetiredPaths(item, keyPath, paths);
+    }
+    return paths;
+  }
+  if (typeof value === "string" && value.trim().toLowerCase() === RETIRED_INTEGRATION) {
+    paths.push(path);
+  }
+  return paths;
+}
+
+const integrationJson = join(root, ".specify", "integration.json");
+if (!existsSync(integrationJson)) {
+  fail(
+    `.specify/integration.json does not exist. Copilot is the only supported ` +
+    `integration, so the state file is required and cannot be skipped.`,
+  );
+} else {
+  let state = null;
+  let parsed = false;
+  try {
+    state = JSON.parse(readFileSync(integrationJson, "utf8"));
+    parsed = true;
+  } catch (e) {
+    fail(`.specify/integration.json is not valid JSON: ${e.message}. Repair the file; the Copilot-only integration check cannot run without it.`);
+  }
+  if (parsed) {
+    if (typeof state !== "object" || Array.isArray(state)) {
+      fail(
+        `.specify/integration.json must contain a JSON object describing the ` +
+        `Copilot integration state.`,
+      );
+    } else {
+      const retiredPaths = findRetiredPaths(state);
+      if (retiredPaths.length) {
+        fail(
+          `.specify/integration.json contains the retired integration at ` +
+          `${retiredPaths.join(", ")}. Remove it; Copilot is the sole supported ` +
+          `integration and stale integration state must fail closed.`,
+        );
+      }
+      const installed = state.installed_integrations;
+      if (
+        !Array.isArray(installed) ||
+        installed.length !== 1 ||
+        installed[0] !== COPILOT_INTEGRATION
+      ) {
+        fail(
+          `.specify/integration.json installed_integrations must be exactly ` +
+          `["${COPILOT_INTEGRATION}"]; found ${JSON.stringify(installed)}. ` +
+          `The repository has one supported integration.`,
+        );
+      }
+      const settings = state.integration_settings;
+      const settingKeys =
+        settings && typeof settings === "object" && !Array.isArray(settings)
+          ? Object.keys(settings)
+          : null;
+      if (
+        !settingKeys ||
+        settingKeys.length !== 1 ||
+        settingKeys[0] !== COPILOT_INTEGRATION
+      ) {
+        fail(
+          `.specify/integration.json integration_settings must contain only ` +
+          `"${COPILOT_INTEGRATION}"; found ${JSON.stringify(settingKeys)}. ` +
+          `Remove stale integration settings.`,
+        );
+      }
+      for (const key of ["integration", "default_integration"]) {
+        if (state[key] !== COPILOT_INTEGRATION) {
+          fail(
+            `.specify/integration.json ${key} must be "${COPILOT_INTEGRATION}"; ` +
+            `found ${JSON.stringify(state[key])}. The repository must resolve ` +
+            `current and default operations to Copilot.`,
+          );
+        }
+      }
+    }
+  }
+}
+
+const initOptionsJson = join(root, ".specify", "init-options.json");
+if (!existsSync(initOptionsJson)) {
+  fail(
+    `.specify/init-options.json does not exist. Copilot must remain the only ` +
+    `initialization and current integration.`,
+  );
+} else {
+  let options = null;
+  let parsed = false;
+  try {
+    options = JSON.parse(readFileSync(initOptionsJson, "utf8"));
+    parsed = true;
+  } catch (e) {
+    fail(`.specify/init-options.json is not valid JSON: ${e.message}. Repair the file before initialization can be checked.`);
+  }
+  if (parsed) {
+    if (typeof options !== "object" || Array.isArray(options)) {
+      fail(`.specify/init-options.json must contain a JSON object selecting Copilot.`);
+    } else {
+      const retiredPaths = findRetiredPaths(options);
+      if (retiredPaths.length) {
+        fail(
+          `.specify/init-options.json contains the retired integration at ` +
+          `${retiredPaths.join(", ")}. Remove it; initialization must select Copilot.`,
+        );
+      }
+      for (const key of ["ai", "integration"]) {
+        if (options[key] !== COPILOT_INTEGRATION) {
+          fail(
+            `.specify/init-options.json ${key} must be "${COPILOT_INTEGRATION}"; ` +
+            `found ${JSON.stringify(options[key])}.`,
+          );
+        }
       }
     }
   }
@@ -831,7 +1044,6 @@ for (const reg of ["friction-log.md", "deferred-work.md", "engineering-debt.md"]
   }
 }
 
-for (const w of warnings) console.warn(`warning: ${w}`);
 if (errors.length) {
   for (const e of errors) console.error(`error: ${e}`);
   console.error(`\ncheck-bindings: ${errors.length} error(s)`);
