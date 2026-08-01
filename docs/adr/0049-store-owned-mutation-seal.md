@@ -1002,6 +1002,8 @@ any parallel split would need a prep commit carrying most of the work.
 
 One scope, owning `packages/d2b-resource-store/src/**`,
 `packages/d2b-resource-store-redb/src/**`, `packages/d2b-resource-api/src/**`,
+`packages/d2b-resource-api/tests/external_seals.rs`,
+`packages/d2b-resource-api/tests/ui/external-seals/tests/forge_issuer.rs`,
 the three `Cargo.toml` files, the four census snapshots under
 `tests/golden/api-surface/`, the four `packages/d2b-bus/tests/approved-*.txt`
 snapshots, and the two documents named below.
@@ -1071,11 +1073,11 @@ D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts                          
 Two file-disjoint scopes, both opening against merged Wave A.
 
 - **B1 compile-fail seals.** Owns `packages/d2b-resource-api/tests/**`.
-  Extends the fixture crate manifest and lock, extends the rustc shim to the
-  two additional crates, and adds the nine fixtures in section 6 with their
-  exact asserted diagnostics. Measured safe to own: no file under that path
-  names `VerifiedMutation` or `PreparedStoreMutation` at `dc145025`, so Wave A
-  does not touch it.
+  This ownership begins from merged Wave A, which has already updated
+  `external_seals.rs` and `forge_issuer.rs` to remove their references to
+  `VerifiedMutation`. B1 then extends the fixture crate manifest and lock,
+  extends the rustc shim to the two additional crates, and adds the nine
+  fixtures in section 6 with their exact asserted diagnostics.
   Done when `cargo test -p d2b-resource-api --test external_seals` exits 0 and
   the test asserts all nine.
 - **B2 census roots and mint policy.** Owns
