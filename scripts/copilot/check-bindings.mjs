@@ -557,7 +557,8 @@ for (const reg of ["friction-log.md", "deferred-work.md", "engineering-debt.md"]
       if (dispositionIdx < 0) {
         fail(
           `.specify/memory/${reg}:${i + 1}: the header row names no Disposition ` +
-          `column, so no row in this register can be validated.`,
+          `column, so no row in this register can be validated. Add a Disposition ` +
+          `column to the header and a cell for it to every row beneath.`,
         );
       }
       headerWidth = cells.length;
@@ -567,7 +568,8 @@ for (const reg of ["friction-log.md", "deferred-work.md", "engineering-debt.md"]
     if (dispositionIdx < 0) {
       fail(
         `.specify/memory/${reg}:${i + 1}: this row precedes any header row, so ` +
-        `there is no Disposition column to validate it against.`,
+        `there is no Disposition column to validate it against. Move it below ` +
+        `the header, or add a header row above it.`,
       );
       continue;
     }
