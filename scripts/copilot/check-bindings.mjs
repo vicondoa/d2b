@@ -552,10 +552,14 @@ for (const reg of ["friction-log.md", "deferred-work.md", "engineering-debt.md"]
     );
     continue;
   }
-  // Lone CR is accepted as a line ending rather than silently swallowed: a file
-  // written that way would otherwise read as a single line whose first cell
-  // happens to be a valid header, and every data row beneath it would go
-  // unchecked while the gate exited 0.
+  // Lone CR is accepted as a line ending rather than silently swallowed. A file
+  // written that way collapses to a single line, so no row in it is read as a
+  // row. Today that is caught incidentally: these registers open with a
+  // markdown title, so the fused line does not start with a pipe and is either
+  // refused as a lost row or leaves sawHeader false. Neither check is aimed at
+  // this, and a register written without a leading title would fuse into a line
+  // whose first cell is a valid header and pass with nothing behind it. Read the
+  // lines correctly instead of relying on an incidental rejection.
   const lines = readFileSync(path, "utf8").split(/\r\n|\r|\n/);
   // The registers do not share a shape, so the disposition column is located by
   // its header rather than by position: deferred-work.md carries a trailing Ref

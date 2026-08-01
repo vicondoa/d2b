@@ -563,9 +563,9 @@ const CASES = [
     expectText: "never closed",
   },
   {
-    // A register whose lines end with a lone CR used to parse as one line whose
-    // first cell was a valid header, so the header check passed and every data
-    // row beneath it went unread while the gate exited 0.
+    // A register whose lines end with a lone CR collapses to one line, so not
+    // one row in it is read as a row. The count is what shows it: the rows are
+    // simply absent from the total.
     name: "a register written with lone CR line endings still has its rows read",
     mutate: (dir) => {
       const path = join(dir, ".specify", "memory", "friction-log.md");
