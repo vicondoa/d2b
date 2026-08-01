@@ -815,6 +815,9 @@ fn validate_active_schema(
     }
 
     let standard = validate_standard_base(envelope)?;
+    if !standard {
+        return Err(schema_invalid("resource-type-schema-not-installed"));
+    }
     let schemas = write.open_table(API_SCHEMAS).map_err(integrity)?;
     let key = encode_key(
         KeySpace::ApiSchemas,
@@ -822,9 +825,6 @@ fn validate_active_schema(
     )
     .map_err(integrity)?;
     let installed = schemas.get(key.as_bytes()).map_err(integrity)?;
-    if !standard && installed.is_none() {
-        return Err(schema_invalid("resource-type-schema-not-installed"));
-    }
     if let Some(value) = installed {
         let schema: ApiSchemaRecord = decode(ValueKind::ApiSchemaRecord, value.value())?;
         if schema.resource_type != *envelope.resource_type()
