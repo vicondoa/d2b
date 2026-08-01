@@ -11,7 +11,7 @@ SHELL := $(CURDIR)/tests/tools/scrub-shell-environment
 .PHONY: pre-tag smoke-lite i3-check \
         check check-static check-ci check-all check-fast check-tier0 \
         test test-unit \
-        test-lint test-rust test-rust-main test-rust-remaining \
+        test-lint test-rust test-rust-api-surface test-rust-main test-rust-remaining \
         test-fixture-contracts test-proofs test-flake test-nix-unit \
         test-performance-budgets test-adr-index-coverage test-ci-coverage \
         test-flake-list test-flake-partition \
@@ -23,7 +23,7 @@ SHELL := $(CURDIR)/tests/tools/scrub-shell-environment
         heavy-test-integration heavy-test-host-integration heavy-test-hardware \
         layer1-workflow layer1-workflow-check \
         ledger-regen check-inventory pr-checklist-gate nix-unit-pin flake-matrix-pin \
-        api-surface-pin runtime-ledger-pin
+        api-surface-pin runtime-ledger-pin clean
 
 # Current Nix system double, used to address per-system flake.checks attrs.
 # Falls back to x86_64-linux if `nix` is unavailable (e.g. a docs-only host).
@@ -109,8 +109,12 @@ test-lint:
 test-rust:
 	bash tests/test-rust.sh
 
-## test-rust-main / test-rust-remaining - CI shards of the comprehensive gate.
-## Local developers should run test-rust, which executes both once in order.
+## test-rust-api-surface / test-rust-main / test-rust-remaining - CI shards of
+## the comprehensive gate. Local developers should run test-rust, which executes
+## all three once in order.
+test-rust-api-surface:
+	bash tests/test-rust.sh api-surface
+
 test-rust-main:
 	bash tests/test-rust.sh main-workspace
 
@@ -632,3 +636,15 @@ test-runtime-ledger:
 	    --ledger "$$ledger" --expected-census "$$census" ); \
 	finished_at="$$(date +%s)"; \
 	echo "test-runtime-ledger: complete (duration: $$((finished_at - started_at))s)"
+
+# ===========================================================================
+# Disk hygiene.
+#
+#   make clean   Remove this worktree's cargo target directories and scratch
+#                tree, then collect unreferenced Nix store paths. The shared
+#                sccache directory is deliberately kept, so the next build
+#                re-links rather than recompiling from scratch.
+#
+# Knobs: D2B_CLEAN_DRY_RUN=1, D2B_CLEAN_SKIP_GC=1, D2B_CLEAN_KEEP_SCRATCH=1.
+clean:
+	bash tests/tools/clean-worktree.sh

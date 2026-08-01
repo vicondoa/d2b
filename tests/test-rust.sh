@@ -27,18 +27,18 @@ rust_mode="${1:-all}"
 case "$rust_mode" in
   all)
     [ "$#" -eq 0 ] || {
-      fail "usage: tests/test-rust.sh [main-workspace|remaining-suite|fixture-contracts]" || true
+      fail "usage: tests/test-rust.sh [api-surface|main-workspace|remaining-suite|fixture-contracts]" || true
       exit 2
     }
     ;;
-  main-workspace|remaining-suite|fixture-contracts)
+  api-surface|main-workspace|remaining-suite|fixture-contracts)
     [ "$#" -eq 1 ] || {
-      fail "usage: tests/test-rust.sh [main-workspace|remaining-suite|fixture-contracts]" || true
+      fail "usage: tests/test-rust.sh [api-surface|main-workspace|remaining-suite|fixture-contracts]" || true
       exit 2
     }
     ;;
   *)
-    fail "usage: tests/test-rust.sh [main-workspace|remaining-suite|fixture-contracts]" || true
+    fail "usage: tests/test-rust.sh [api-surface|main-workspace|remaining-suite|fixture-contracts]" || true
     exit 2
     ;;
 esac
@@ -404,14 +404,19 @@ run_nextest_companions() {
 # covers doctests and harness=false binaries without needing companions. Making
 # the broker process-per-test safe would mean reworking test setup inside a
 # critical, privileged, protected subsystem for no measurable gain.
+#
+# No stream runs `cargo check` before its `cargo test`. Check and test are
+# distinct compilation modes that share no artifacts, so a check ahead of a test
+# on the same target directory is time spent twice for one result. Measured cold
+# on the layer1 stream: 153 s with the check against 89 s without, for an
+# identical outcome and an unchanged test phase (85 s against 89 s). The
+# fake-backends stream never had one, which is why it was already the fastest.
 broker_stream_default() {
   cargo metadata --format-version 1 --manifest-path "$broker_manifest" >/dev/null
-  CARGO_TARGET_DIR="$broker_target_dir" cargo check --workspace --manifest-path "$broker_manifest"
   rm -f -- "$broker_target_dir"/debug/deps/socket_activation-* 2>/dev/null || true
   CARGO_TARGET_DIR="$broker_target_dir" cargo test --workspace --manifest-path "$broker_manifest"
 }
 broker_stream_layer1() {
-  CARGO_TARGET_DIR="$broker_layer1_target_dir" cargo check --workspace --manifest-path "$broker_manifest" --features layer1-bootstrap
   CARGO_TARGET_DIR="$broker_layer1_target_dir" cargo test --workspace --manifest-path "$broker_manifest" --features layer1-bootstrap
 }
 broker_stream_fakebackends() {
@@ -503,15 +508,28 @@ if [ "$fixture_contracts_only" = 1 ]; then
   exit 0
 fi
 
+# The compiler-derived API census. Its own CI shard, because it shares nothing
+# with the workspace build that would make serialising it behind one worthwhile:
+# it renders through a separately pinned nightly toolchain into its own target
+# directory, so it neither consumes nor produces artifacts that clippy and
+# nextest use. Measured on the pull-request gate it ran 209 s inside a 878 s
+# main shard whose peer shard finished 172 s earlier, so that 209 s sat directly
+# on the gate's critical path while a runner stood idle. Splitting it moves the
+# work sideways rather than removing it: total runner minutes barely change, the
+# longest path shortens by roughly the whole 209 s.
+#
+# One compiler-owned workspace build replaces the old test's serial
+# package-by-package HTML rustdoc loop. This is enforcing and cannot skip.
+run_api_surface_gate() {
+  log "--> compiler-derived API surface"
+  bash "$ROOT/tests/tools/api-surface-json.sh"
+  log "test-rust api-surface OK (duration: $((SECONDS - suite_started))s)"
+}
+
 run_main_workspace_gate() {
   log "--> cargo fmt --check"
   cargo fmt --manifest-path "$manifest" --all --check
   ok "cargo fmt --check"
-
-  # One compiler-owned workspace build replaces the old test's serial
-  # package-by-package HTML rustdoc loop. This is enforcing and cannot skip.
-  log "--> compiler-derived API surface"
-  bash "$ROOT/tests/tools/api-surface-json.sh"
 
 # --locked so a stale committed Cargo.lock fails the gate instead of being
 # silently regenerated. flake.nix vendors the committed lockfile, so a lock
@@ -713,6 +731,9 @@ ok "assert-pinned-tests"
 }
 
 case "$rust_mode" in
+  api-surface)
+    run_api_surface_gate
+    ;;
   main-workspace)
     run_main_workspace_gate
     ;;
@@ -720,6 +741,7 @@ case "$rust_mode" in
     run_remaining_suite_gate
     ;;
   all)
+    run_api_surface_gate
     run_main_workspace_gate
     run_remaining_suite_gate
     log "test-rust OK (duration: $((SECONDS - suite_started))s)"
