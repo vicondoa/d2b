@@ -3,7 +3,8 @@
 - Added rustdoc compile-fail examples documenting downstream fabrication
   barriers for authenticated capability types.
 - Removed redundant external seal fixtures whose export and private-member
-  checks are covered by the compiler-derived rustdoc JSON API census.
+  checks are covered by the compiler-derived rustdoc JSON API census while
+  retaining the forced-`cfg(test)` downstream trust-boundary probe.
 - Removed unused Rust dependencies and their lockfile edges, reducing
   unnecessary dependency resolution and compilation.
 - Consolidated pinned-test inventory discovery into one main-workspace Cargo

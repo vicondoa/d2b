@@ -1248,9 +1248,9 @@ struct ComponentSessionRegistrar {
 /// ```compile_fail
 /// use d2b_bus::ComponentSessionAdmission;
 ///
-/// let _forged = ComponentSessionAdmission {
-///     identity: std::sync::Arc::new(()),
-/// };
+/// fn inspect(value: &ComponentSessionAdmission) {
+///     let _ = &value.identity;
+/// }
 /// ```
 pub struct ComponentSessionAdmission {
     identity: Arc<ComponentSessionAdmissionIdentity>,

@@ -156,7 +156,7 @@ run_stub() {
 
   set +e
   output=$(
-    "$workspace_target_dir/debug/$bin" 2>&1
+    cd "$ROOT/packages" && "$workspace_target_dir/debug/$bin" 2>&1
   )
   rc=$?
   set -e
@@ -171,7 +171,7 @@ run_stub() {
     "$xdg_before" "$tmp_before"
 }
 
-log "--> cargo build --bins d2b,d2bd (stub smoke binaries)"
+log "--> cargo build --bin d2b --bin d2bd (stub smoke binaries)"
 (cd "$ROOT/packages" && \
   CARGO_TARGET_DIR="$workspace_target_dir" \
   cargo build --manifest-path "$manifest" --quiet --bin d2b --bin d2bd)

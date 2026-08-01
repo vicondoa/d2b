@@ -420,17 +420,24 @@ pub struct Violation {
 pub fn check(ledger: &Ledger) -> Vec<Violation> {
     let mut violations = Vec::new();
     for sample in &ledger.tests {
-        for duration in &sample.samples_ms {
-            if *duration > TEST_HARD_LIMIT_MS {
-                violations.push(Violation {
-                    scope: "test".to_string(),
-                    id: sample.id.clone(),
-                    detail: format!(
-                        "sample {} ms exceeds the {} ms hard wall-clock limit",
-                        duration, TEST_HARD_LIMIT_MS
-                    ),
-                });
-            }
+        let exceeded: Vec<u64> = sample
+            .samples_ms
+            .iter()
+            .copied()
+            .filter(|duration| *duration > TEST_HARD_LIMIT_MS)
+            .collect();
+        if let Some(max_duration) = exceeded.iter().copied().max() {
+            violations.push(Violation {
+                scope: "test".to_string(),
+                id: sample.id.clone(),
+                detail: format!(
+                    "maximum sample {} ms exceeds the {} ms hard wall-clock limit \
+                     ({} sample(s) exceeded)",
+                    max_duration,
+                    TEST_HARD_LIMIT_MS,
+                    exceeded.len()
+                ),
+            });
         }
     }
     for sample in &ledger.crates {
@@ -1072,7 +1079,11 @@ fn run_check(args: &[String]) -> Result<(), String> {
             violation.scope, violation.id, violation.detail
         );
     }
-    Err(format!("{} runtime budget violation(s)", violations.len()))
+    Err(format!(
+        "{} runtime budget violation(s) on runner `{}`",
+        violations.len(),
+        ledger.runner
+    ))
 }
 
 fn run_lint(args: &[String]) -> Result<(), String> {
@@ -1180,9 +1191,7 @@ mod tests {
         let violations = check(&over);
         assert_eq!(violations.len(), 1);
         assert_eq!(violations[0].scope, "test");
-        assert!(violations[0]
-            .detail
-            .contains("hard wall-clock limit"));
+        assert!(violations[0].detail.contains("hard wall-clock limit"));
     }
 
     #[test]

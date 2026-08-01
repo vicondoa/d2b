@@ -168,6 +168,16 @@ impl AdmissionPermit {
 ///
 /// let _forged = AdmittedMutation::new;
 /// ```
+///
+/// Its mutation payload is also inaccessible to downstream callers:
+///
+/// ```compile_fail
+/// use d2b_resource_api::AdmittedMutation;
+///
+/// fn inspect(value: &AdmittedMutation) {
+///     let _ = &value.mutations;
+/// }
+/// ```
 pub struct AdmittedMutation {
     mutations: Vec<StoreMutation>,
     authorization: AdmittedAuthorization,

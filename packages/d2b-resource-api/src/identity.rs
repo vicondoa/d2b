@@ -13,9 +13,9 @@ use crate::authz::AuthorizationState;
 /// ```compile_fail
 /// use d2b_resource_api::AuthenticatedSubjectContext;
 ///
-/// let _forged = AuthenticatedSubjectContext {
-///     claims: vec![],
-/// };
+/// fn inspect(value: &AuthenticatedSubjectContext) {
+///     let _ = &value.claims;
+/// }
 /// ```
 pub struct AuthenticatedSubjectContext {
     claims: Arc<SessionClaims>,

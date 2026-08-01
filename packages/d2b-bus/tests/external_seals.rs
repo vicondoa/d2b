@@ -52,48 +52,58 @@ fn dependent_cannot_forge_registration_or_mint_admitted_session() {
         output.status
     );
 
-    let mutation_groups: [&[(&str, &str)]; 4] = [
-        &[
-            (
-                "component-session-admission-clone",
-                "ComponentSessionAdmission",
-            ),
-            (
-                "component-session-admission-default",
-                "ComponentSessionAdmission",
-            ),
-            (
-                "component-session-admission-from-unit",
-                "ComponentSessionAdmission",
-            ),
-        ],
-        &[
-            ("verified-unix-peer-clone", "VerifiedUnixPeer"),
-            ("verified-unix-peer-default", "VerifiedUnixPeer"),
-            ("verified-unix-peer-from-unit", "VerifiedUnixPeer"),
-        ],
-        &[
-            ("session-acceptor-clone", "SessionAcceptor<C>"),
-            ("session-acceptor-default", "SessionAcceptor<C>"),
-        ],
-        &[
-            (
-                "authenticated-component-session-clone",
-                "AuthenticatedComponentSession<C>",
-            ),
-            (
-                "authenticated-component-session-default",
-                "AuthenticatedComponentSession<C>",
-            ),
-        ],
-    ];
-    for mutations in mutation_groups {
-        let mut rustflags = "-D\u{1f}warnings".to_owned();
-        for (mutation, _) in mutations {
-            rustflags.push_str(&format!(
-                "\u{1f}--cfg\u{1f}d2b_capability_trait_mutation=\"{mutation}\""
-            ));
-        }
+    let output = Command::new(env!("CARGO"))
+        .args([
+            "check",
+            "--quiet",
+            "--locked",
+            "--manifest-path",
+            fixture.join("Cargo.toml").to_str().unwrap(),
+            "--test",
+            "forge_admission",
+        ])
+        .env("CARGO_TARGET_DIR", scratch.path().join("target"))
+        .env("TMPDIR", &temp)
+        .env("RUSTC_WRAPPER", "")
+        .env("RUSTC_WORKSPACE_WRAPPER", "")
+        .env("CARGO_BUILD_RUSTC_WRAPPER", "")
+        .output()
+        .expect("run sealed SessionAuthority compile-fail fixture");
+    let stderr = String::from_utf8(output.stderr).expect("compiler diagnostics are UTF-8");
+    assert!(
+        !output.status.success()
+            && stderr.contains("error[E0432]")
+            && stderr.contains("no `SessionAuthority` in the root"),
+        "sealed SessionAuthority unexpectedly became available downstream"
+    );
+
+    for (mutation, expected_type) in [
+        (
+            "component-session-admission-clone",
+            "ComponentSessionAdmission",
+        ),
+        (
+            "component-session-admission-default",
+            "ComponentSessionAdmission",
+        ),
+        (
+            "component-session-admission-from-unit",
+            "ComponentSessionAdmission",
+        ),
+        ("verified-unix-peer-clone", "VerifiedUnixPeer"),
+        ("verified-unix-peer-default", "VerifiedUnixPeer"),
+        ("verified-unix-peer-from-unit", "VerifiedUnixPeer"),
+        ("session-acceptor-clone", "SessionAcceptor<C>"),
+        ("session-acceptor-default", "SessionAcceptor<C>"),
+        (
+            "authenticated-component-session-clone",
+            "AuthenticatedComponentSession<C>",
+        ),
+        (
+            "authenticated-component-session-default",
+            "AuthenticatedComponentSession<C>",
+        ),
+    ] {
         let output = Command::new(env!("CARGO"))
             .args([
                 "check",
@@ -104,7 +114,12 @@ fn dependent_cannot_forge_registration_or_mint_admitted_session() {
                 "--test",
                 "capability_trait_mutations",
             ])
-            .env("CARGO_ENCODED_RUSTFLAGS", rustflags)
+            .env(
+                "CARGO_ENCODED_RUSTFLAGS",
+                format!(
+                    "-D\u{1f}warnings\u{1f}--cfg\u{1f}d2b_capability_trait_mutation=\"{mutation}\""
+                ),
+            )
             .env("CARGO_TARGET_DIR", scratch.path().join("target"))
             .env("TMPDIR", &temp)
             // Compile fixtures without any rustc wrapper. The repository config sets a
@@ -118,25 +133,20 @@ fn dependent_cannot_forge_registration_or_mint_admitted_session() {
             .env("RUSTC_WORKSPACE_WRAPPER", "")
             .env("CARGO_BUILD_RUSTC_WRAPPER", "")
             .output()
-            .expect("run capability trait compile-fail mutations");
+            .expect("run capability trait compile-fail mutation");
         let stderr = String::from_utf8(output.stderr).expect("compiler diagnostics are UTF-8");
-        assert!(
-            !output.status.success(),
-            "capability trait mutations unexpectedly compiled"
-        );
-        for expected_type in mutations.iter().map(|(_, expected_type)| *expected_type) {
-            for diagnostic in [
-                "error[E0283]",
-                "multiple `impl`s satisfying",
-                expected_type,
-                "CapabilityMustNotImplementCloneCopyDefaultOrFrom",
-            ] {
-                assert!(
-                    stderr.contains(diagnostic),
-                    "capability mutation group did not produce required compiler diagnostic \
-                     {diagnostic:?}; raw Cargo stderr is redacted"
-                );
-            }
+        assert!(!output.status.success(), "{mutation} unexpectedly compiled");
+        for diagnostic in [
+            "error[E0283]",
+            "multiple `impl`s satisfying",
+            expected_type,
+            "CapabilityMustNotImplementCloneCopyDefaultOrFrom",
+        ] {
+            assert!(
+                stderr.contains(diagnostic),
+                "{mutation} did not produce required compiler diagnostic {diagnostic:?}; \
+                 raw Cargo stderr is redacted"
+            );
         }
     }
 }
