@@ -778,4 +778,5 @@ fn checked_mutation_constructors_and_raw_commit_path_are_not_public() {
     assert!(!source.contains("pub async fn commit_checked"));
     assert!(source.contains("RedbResourceStore<V>"));
     assert!(source.contains("V: VerifiedMutationView"));
+    assert!(source.contains("d2b_resource_api::admission::VerifiedMutation"));
 }

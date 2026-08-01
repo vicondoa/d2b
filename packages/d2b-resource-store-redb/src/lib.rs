@@ -122,7 +122,7 @@ impl<V> core::fmt::Debug for RedbResourceStore<V> {
     }
 }
 
-impl<V> RedbResourceStore<V> {
+impl<V: 'static> RedbResourceStore<V> {
     /// Initialize one unpublished empty database after validating its durable marker.
     pub async fn provision_owned(
         file: File,
@@ -179,6 +179,12 @@ impl<V> RedbResourceStore<V> {
         identity: StoreIdentity,
         recovered_after_crash: bool,
     ) -> Result<Self, StoreError> {
+        #[cfg(not(test))]
+        if std::any::type_name::<V>() != "d2b_resource_api::admission::VerifiedMutation" {
+            return Err(transaction::integrity(
+                "verified-mutation-type-binding-invalid",
+            ));
+        }
         let database = Arc::new(database);
         let signals = Arc::new(SignalCounters::default());
         let reads = ReadPool::start(Arc::clone(&database), identity.zone.clone())?;
@@ -229,7 +235,7 @@ impl<V> RedbResourceStore<V> {
     }
 }
 
-impl<V> RedbResourceStore<V> {
+impl<V: 'static> RedbResourceStore<V> {
     pub async fn get(&self, request: StoreGetRequest) -> Result<StoredResource, StoreError> {
         self.reads.get(request).await
     }
@@ -262,7 +268,7 @@ impl<V> RedbResourceStore<V> {
 
 impl<V> RedbResourceStore<V>
 where
-    V: VerifiedMutationView,
+    V: VerifiedMutationView + 'static,
 {
     /// Commit only the exact API-owned verified mutation type bound at open.
     pub async fn commit_verified(&self, mutation: V) -> Result<StoreCommitResult, StoreError> {
