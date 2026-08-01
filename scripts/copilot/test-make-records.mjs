@@ -128,6 +128,54 @@ console.log("make-records: the happy path");
   }
 }
 
+console.log("make-records: a structured finding reaches the seal as a string");
+{
+  // The shared finding bar asks each seat for an object. `PanelRecord` in
+  // packages/xtask/src/delivery/panel.rs is `Vec<String>`, so an object
+  // written through verbatim passes every check here and then fails
+  // deserialization at the seal. This case is the guard against that.
+  const dir = buildRound((s) => {
+    s.verdicts.rust.signoff = false;
+    s.verdicts.rust.recommendations = [{
+      severity: "critical",
+      where: "packages/d2b-core/src/lib.rs:1",
+      what: "the thing is wrong",
+      why: "it breaks the contract",
+      fix: "stop doing that",
+    }];
+  });
+  try {
+    const r = run(dir);
+    // Exit 3 is the designed non-unanimous verdict: the records are written,
+    // the round does not pass. The point of this case is the record contents.
+    check("a round carrying an object finding still writes records", r.code === 3, `exit ${r.code}: ${r.err}`);
+    const p = join(dir, "records", "rust.json");
+    if (existsSync(p)) {
+      const rec = JSON.parse(readFileSync(p, "utf8"));
+      const got = rec.recommendations[0];
+      check(
+        "an object finding is rendered to a string, not written through as an object",
+        typeof got === "string",
+        `recommendations[0] is ${typeof got}: ${JSON.stringify(got)}`,
+      );
+      check(
+        "the rendered finding keeps its severity",
+        typeof got === "string" && got.includes("critical"),
+        JSON.stringify(got),
+      );
+      check(
+        "the rendered finding keeps its location and fix",
+        typeof got === "string" && got.includes("lib.rs:1") && got.includes("stop doing that"),
+        JSON.stringify(got),
+      );
+    } else {
+      check("a record was written for the seat carrying the object finding", false, "records/rust.json missing");
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 console.log("make-records: attestation integrity, which is why this script exists");
 rejects(
   "a lane that ran at the wrong effort cannot be attested",

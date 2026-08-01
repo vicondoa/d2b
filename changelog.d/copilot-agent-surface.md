@@ -63,3 +63,12 @@
   exempt arm. Its `case` statement has no default arm, so the path would
   otherwise have been unclassified and exempt by accident rather than by
   decision.
+- The panel record helper renders a structured finding to a single string
+  before writing it into a record. Records are read by the delivery seal as a
+  list of strings, so an object written through verbatim passed every check in
+  the helper and then failed to deserialize at the seal.
+- The shared finding bar is now compared between its own heading and the
+  `Output` heading that must follow it, and a duplicate or an intervening
+  heading is rejected. Comparing up to whichever heading came next let a seat
+  keep extra instructions outside the compared text while still matching every
+  other seat exactly.

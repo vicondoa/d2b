@@ -142,9 +142,9 @@ the other nine match.
 
 The enforcement exists because the prose version did not hold. The bar
 was written once and then restated per seat, and it diverged into ten
-different thresholds: two seats carried the full rule, four carried a
+different thresholds: two seats carried the full rule, three carried a
 partial variant each excluding a different thing, one substituted its own
-test, and **three carried no threshold at all**. A seat with no stated bar
+test, and **four carried no threshold at all**. A seat with no stated bar
 treats anything it notices as blocking, and because `signoff` is `true`
 iff `recommendations` is `[]`, each of those cost a full extra round
 across all ten seats. That is the mechanism behind the drift toward

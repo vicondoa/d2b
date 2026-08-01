@@ -37,6 +37,29 @@ const MAX_RECOMMENDATIONS = 64;
 const MAX_SUMMARY_CHARS = 4000;
 const MAX_RECOMMENDATION_CHARS = 4000;
 
+// `PanelRecord.recommendations` in packages/xtask/src/delivery/panel.rs is a
+// `Vec<String>`, but the shared finding bar asks each seat for a structured
+// object. Rendering happens here, once, so a record never carries an object
+// into a string array: that shape passes every check in this script and then
+// fails deserialization at the seal, which is the one gate these records
+// exist to feed.
+//
+// A string passes through untouched. The structured shape is rendered in a
+// fixed field order, so the same finding always produces the same bytes and
+// `output_sha256` stays stable. Anything else falls back to JSON rather than
+// being dropped, because losing a finding is worse than an ugly record.
+function renderRecommendation(rec) {
+  if (typeof rec === "string") return rec;
+  if (rec && typeof rec === "object" && !Array.isArray(rec)) {
+    const { severity, where, what, why, fix } = rec;
+    const fields = [severity, where, what, why, fix];
+    if (fields.every((f) => typeof f === "string" && f.length > 0)) {
+      return `[${severity}] ${where}: ${what} Why: ${why} Fix: ${fix}`;
+    }
+  }
+  return JSON.stringify(rec);
+}
+
 const errors = [];
 const fail = (m) => errors.push(m);
 
@@ -135,8 +158,8 @@ for (const role of ROLES) {
       `the evidence and does not belong in the record.`,
     );
   }
-  for (const [i, rec] of v.recommendations.entries()) {
-    const text = typeof rec === "string" ? rec : JSON.stringify(rec);
+  const recommendations = v.recommendations.map(renderRecommendation);
+  for (const [i, text] of recommendations.entries()) {
     if (text.length > MAX_RECOMMENDATION_CHARS) {
       fail(
         `verdict ${role}: recommendation ${i} is ${text.length} characters, over the ` +
@@ -189,7 +212,7 @@ for (const role of ROLES) {
     engineer: role,
     signoff: v.signoff,
     summary: v.summary,
-    recommendations: v.recommendations,
+    recommendations,
   });
 
   records.push({
@@ -206,7 +229,7 @@ for (const role of ROLES) {
     receipt_locator: o.receipt_locator,
     output_sha256: createHash("sha256").update(verdictBody).digest("hex"),
     signoff: v.signoff,
-    recommendations: v.recommendations,
+    recommendations,
   });
 }
 

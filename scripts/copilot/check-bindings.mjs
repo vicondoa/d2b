@@ -187,12 +187,33 @@ if (!existsSync(agentsDir)) {
 // each one cost a full extra round across all ten seats.
 
 const BAR_HEADING = "## The bar for a finding";
+const BAR_NEXT_HEADING = "## Output";
+
+// The extent is pinned to exactly one following heading rather than "whatever
+// H2 comes next", and the start must be a unique heading on its own line.
+// A looser boundary fails OPEN, which is the one failure this gate cannot
+// have: a seat could inject its own section between the bar and `## Output`,
+// or embed an H2 inside the bar, and the compared slice would still match
+// every other seat byte for byte while that seat actually read a different
+// threshold. Matching a bare substring anywhere in the file has the same
+// shape, since a mention inside a fenced block would anchor the slice to the
+// wrong place and leave the real bar unchecked.
+const headingOffsets = (text, heading) => {
+  const literal = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`(^|\\r?\\n)(${literal})[ \\t]*(?=\\r?\\n|$)`, "g");
+  const offsets = [];
+  for (let m = re.exec(text); m !== null; m = re.exec(text)) {
+    offsets.push(m.index + m[1].length);
+  }
+  return offsets;
+};
+
 const panelAgents = [...agents.entries()].filter(([n]) => n.startsWith("panel-"));
 
 const bars = new Map();
 for (const [name, a] of panelAgents) {
-  const start = a.text.indexOf(BAR_HEADING);
-  if (start === -1) {
+  const starts = headingOffsets(a.text, BAR_HEADING);
+  if (starts.length === 0) {
     fail(
       `${a.file}: no "${BAR_HEADING}" section. Every panel seat must carry the shared ` +
       `bar verbatim, or that seat invents its own threshold and reports below it. ` +
@@ -200,12 +221,38 @@ for (const [name, a] of panelAgents) {
     );
     continue;
   }
-  const end = a.text.indexOf("\n## ", start + BAR_HEADING.length);
-  if (end === -1) {
-    fail(`${a.file}: "${BAR_HEADING}" is not followed by another section, so its extent is undefined. Keep "## Output" after it.`);
+  if (starts.length > 1) {
+    fail(
+      `${a.file}: ${starts.length} "${BAR_HEADING}" sections. Exactly one is allowed, ` +
+      `because only the first would be compared and a later one could state a ` +
+      `different threshold unchecked. Delete the duplicates.`,
+    );
     continue;
   }
-  bars.set(name, a.text.slice(start, end + 1));
+  const start = starts[0];
+  const end = headingOffsets(a.text, BAR_NEXT_HEADING).find((i) => i > start);
+  if (end === undefined) {
+    fail(
+      `${a.file}: "${BAR_HEADING}" is not followed by "${BAR_NEXT_HEADING}", so its ` +
+      `extent is undefined. The bar is compared up to that heading; without it there ` +
+      `is no agreed end and trailing text would go unchecked. Keep "${BAR_NEXT_HEADING}" after it.`,
+    );
+    continue;
+  }
+  const section = a.text.slice(start, end);
+  const inner = [...section.matchAll(/(?:^|\r?\n)(## [^\r\n]*)/g)]
+    .map((m) => m[1].trim())
+    .slice(1);
+  if (inner.length > 0) {
+    fail(
+      `${a.file}: unexpected section(s) between "${BAR_HEADING}" and ` +
+      `"${BAR_NEXT_HEADING}": ${inner.join(", ")}. Nothing may sit between them. An ` +
+      `injected heading ends the compared slice early, so the seat matches every ` +
+      `other seat while reading extra instructions the gate never saw.`,
+    );
+    continue;
+  }
+  bars.set(name, section);
 }
 
 if (bars.size > 1) {
