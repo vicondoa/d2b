@@ -158,6 +158,16 @@ rerun the smallest relevant validation, and run another round.
 including from seats the change did not touch. Those seats re-report, scoped
 to the delta, and may confirm briefly that their area is unaffected.
 
+**One carve-out, and it is what makes the gate terminate.** Appending the
+closing round's own outcome to `.specify/memory/*.md` does not invalidate that
+round. Without this the rule is non-terminating by construction: the last
+round's friction can only be written after it closes, writing it would reopen
+it, and the round after would have the same problem. The carve-out is narrow
+and mechanical. It covers appended rows in `.specify/memory/` only, describing
+a round that has already closed, in a commit that touches nothing else. Anything
+bundled with it is a content change and reopens the phase, so land the
+bookkeeping on its own.
+
 **A fix round addresses only the findings raised.** A genuine defect
 discovered while fixing something else is still out of scope for that round;
 record it in the memory register and land it separately. Otherwise every round
