@@ -1,6 +1,6 @@
 # ADR 0049: Store-owned mutation seal for verified-only resource writes
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-01
 - Related: [ADR 0046](0046-d2b-3-provider-control-plane.md) (d2b 3.0 provider
   control plane) and its normative decision D106 in
