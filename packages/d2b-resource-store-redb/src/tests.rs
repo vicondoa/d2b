@@ -5,8 +5,8 @@ use std::process::Command;
 use std::sync::{Arc, Barrier};
 
 use d2b_contracts::v3::{
-    ConfigurationGeneration, ResourceEnvelope, ResourceRef, ResourceTypeName, ResourceUid,
-    Timestamp, ZoneId,
+    CanonicalJsonValue, ConfigurationGeneration, RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceEnvelope,
+    ResourceRef, ResourceTypeName, ResourceUid, Timestamp, ZoneId, canonical_digest,
 };
 use d2b_resource_store::mutation_seal::{
     MutationSealAcceptor, MutationSealBody, mutation_seal_pair,
@@ -88,23 +88,13 @@ fn empty_seal_body() -> MutationSealBody {
     }
 }
 
-fn create_seal_body(
-    operation_id: &str,
-    name: &str,
-    uid: ResourceUid,
-    payload_digest: String,
-) -> MutationSealBody {
-    let canonical_resource = String::from_utf8(stored_body(name))
-        .unwrap()
-        .replace("123e4567-e89b-42d3-a456-426614174000", uid.as_str())
-        .into_bytes();
-    create_seal_body_with_resource(operation_id, name, uid, canonical_resource, payload_digest)
+fn create_seal_body(operation_id: &str, name: &str, payload_digest: String) -> MutationSealBody {
+    create_seal_body_with_resource(operation_id, name, create_body(name), payload_digest)
 }
 
 fn create_seal_body_with_resource(
     operation_id: &str,
     name: &str,
-    uid: ResourceUid,
     canonical_resource: Vec<u8>,
     payload_digest: String,
 ) -> MutationSealBody {
@@ -124,7 +114,7 @@ fn create_seal_body_with_resource(
                 wait_for_reconcile: false,
                 reconcile_deadline_ms: None,
             },
-            Some(uid),
+            None,
             Some(payload_digest),
         )],
         authorization: AdmittedAuthorization {
@@ -188,6 +178,18 @@ fn stored_body(name: &str) -> Vec<u8> {
         r#"{{"apiVersion":"resources.d2bus.org/v3","metadata":{{"configurationGeneration":7,"createdAt":"2026-07-22T00:00:00.000Z","deletionRequestedAt":null,"finalizers":[],"generation":1,"managedBy":"configuration","name":"{name}","ownerRef":null,"revision":1,"uid":"123e4567-e89b-42d3-a456-426614174000","updatedAt":"2026-07-22T00:00:00.000Z","zone":"work"}},"spec":{{"providerRef":"Provider/system-core","updatePolicy":{{"disruptive":"manual","nonDisruptive":"automatic"}}}},"status":{{"completedAt":null,"conditions":[],"lastReconciledAt":null,"observedGeneration":0,"outcome":null,"phase":"Pending","resource":{{}},"startedAt":null,"update":{{"dependencies":{{"count":0,"refs":[]}},"disruption":"None","lastAssessedAt":null,"observedGeneration":0,"operationId":null,"owned":{{"count":0,"refs":[]}},"preserveState":true,"reasons":[],"state":"Unknown","targetGeneration":1}}}},"type":"Host"}}"#
     )
     .into_bytes()
+}
+
+fn create_body(name: &str) -> Vec<u8> {
+    let mut value = CanonicalJsonValue::parse(&stored_body(name)).unwrap();
+    let CanonicalJsonValue::Object(root) = &mut value else {
+        unreachable!()
+    };
+    let CanonicalJsonValue::Object(metadata) = root.get_mut("metadata").unwrap() else {
+        unreachable!()
+    };
+    metadata.remove("uid");
+    value.to_canonical_bytes()
 }
 
 fn seed_host(directory: &tempfile::TempDir, name: &str) {
@@ -608,7 +610,7 @@ async fn commit_rejects_seal_from_another_store() {
 }
 
 #[tokio::test]
-async fn sealed_create_preserves_prepared_uid_and_binds_prepared_digest() {
+async fn sealed_create_mints_uid_in_the_store_and_replays_without_it() {
     let (_directory, file, marker) = provisioned_store();
     let store_identity = identity();
     let (issuer, acceptor) = mutation_seal_pair(store_identity.seal_identity());
@@ -616,28 +618,24 @@ async fn sealed_create_preserves_prepared_uid_and_binds_prepared_digest() {
         .await
         .unwrap();
     let name = "sealed-create";
-    let canonical = String::from_utf8(stored_body(name))
-        .unwrap()
-        .replace(
-            "123e4567-e89b-42d3-a456-426614174000",
-            "123e4567-e89b-42d3-a456-426614174099",
-        )
-        .into_bytes();
-    let payload_digest = ResourceEnvelope::from_json(&canonical)
-        .unwrap()
-        .digest()
-        .unwrap();
-    let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174099").unwrap();
+    let canonical = create_body(name);
+    assert!(!String::from_utf8_lossy(&canonical).contains("\"uid\""));
+    let payload_digest = canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical);
 
     let result = store
         .commit_verified(issuer.seal(create_seal_body(
             "sealed-create",
             name,
-            uid.clone(),
-            payload_digest,
+            payload_digest.clone(),
         )))
         .await
         .unwrap();
+    let uid = result.resources[0].uid.clone();
+    assert_eq!(uid.as_str().as_bytes()[14], b'4');
+    assert!(matches!(
+        uid.as_str().as_bytes()[19],
+        b'8' | b'9' | b'a' | b'b'
+    ));
     assert_eq!(result.resources[0].uid, uid);
     let final_digest = result.resources[0].payload_digest.clone();
     assert_eq!(
@@ -660,44 +658,30 @@ async fn sealed_create_preserves_prepared_uid_and_binds_prepared_digest() {
     assert_eq!(persisted.uid, uid);
     assert_eq!(persisted.payload_digest, final_digest);
 
-    let replay_uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174098").unwrap();
-    let replay_canonical = String::from_utf8(stored_body(name))
-        .unwrap()
-        .replace("123e4567-e89b-42d3-a456-426614174000", replay_uid.as_str())
-        .into_bytes();
-    let replay_payload_digest = ResourceEnvelope::from_json(&replay_canonical)
-        .unwrap()
-        .digest()
-        .unwrap();
     let replay = store
         .commit_verified(issuer.seal(create_seal_body_with_resource(
             "sealed-create",
             name,
-            replay_uid.clone(),
-            replay_canonical,
-            replay_payload_digest,
+            canonical.clone(),
+            payload_digest,
         )))
         .await
         .unwrap();
     assert_eq!(replay.resources[0].uid, uid);
     assert_eq!(replay.resources[0].payload_digest, final_digest);
 
-    let changed_canonical = String::from_utf8(canonical)
+    let changed_canonical = String::from_utf8(canonical.clone())
         .unwrap()
         .replace(
             "\"nonDisruptive\":\"automatic\"",
             "\"nonDisruptive\":\"manual\"",
         )
         .into_bytes();
-    let changed_payload_digest = ResourceEnvelope::from_json(&changed_canonical)
-        .unwrap()
-        .digest()
-        .unwrap();
+    let changed_payload_digest = canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &changed_canonical);
     let error = store
         .commit_verified(issuer.seal(create_seal_body_with_resource(
             "sealed-create",
             name,
-            replay_uid,
             changed_canonical,
             changed_payload_digest,
         )))
@@ -707,7 +691,7 @@ async fn sealed_create_preserves_prepared_uid_and_binds_prepared_digest() {
 
     let replacement = format!("sha256:{}", "f".repeat(64));
     let error = store
-        .commit_verified(issuer.seal(create_seal_body("sealed-create", name, uid, replacement)))
+        .commit_verified(issuer.seal(create_seal_body("sealed-create", name, replacement)))
         .await
         .unwrap_err();
     assert_eq!(error.reason_code(), "mutation-payload-digest-mismatch");

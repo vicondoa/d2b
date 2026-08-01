@@ -2277,7 +2277,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn store_mints_create_uid_and_updates_canonical_identity_digest_and_index() {
+    async fn store_receives_canonical_create_body_without_uid_or_fake_index_entry() {
         let store = Arc::new(FakeStore::new(CommitMode::Success));
         let service = checked_service(Arc::clone(&store), authorizer([ResourceVerb::Create]));
         let mut request = wire::CreateRequest::new();
@@ -2299,23 +2299,23 @@ mod tests {
             .unwrap()
             .clone()
             .expect("store received canonical bytes");
-        assert_ne!(stored, canonical_create);
-        let envelope = ResourceEnvelope::from_json(&stored).unwrap();
-        let uid = store
-            .last_resource_uid
-            .lock()
-            .unwrap()
-            .clone()
-            .expect("store minted a UID");
-        assert_eq!(envelope.metadata().uid(), &uid);
+        assert_eq!(stored, canonical_create);
+        let value = CanonicalJsonValue::parse(&stored).unwrap();
+        let CanonicalJsonValue::Object(root) = value else {
+            panic!("store received a non-object resource body");
+        };
+        let Some(CanonicalJsonValue::Object(metadata)) = root.get("metadata") else {
+            panic!("store received a resource body without metadata");
+        };
+        assert!(!metadata.contains_key("uid"));
+        assert!(store.last_resource_uid.lock().unwrap().is_none());
+        let expected_digest = canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical_create);
         assert_eq!(
             store.last_payload_digest.lock().unwrap().as_deref(),
-            Some(envelope.digest().unwrap().as_str())
+            Some(expected_digest.as_str())
         );
-        assert_eq!(
-            store.uid_index.lock().unwrap().get(&uid),
-            Some(&ResourceRef::parse("Host/host-system").unwrap())
-        );
+        assert!(store.uid_index.lock().unwrap().is_empty());
+        assert_eq!(store.commits.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

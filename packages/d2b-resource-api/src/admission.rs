@@ -1,7 +1,7 @@
 //! Instance-bound admission witnesses owned by the native evaluator.
 
 use d2b_contracts::v3::{
-    CanonicalJsonValue, RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceEnvelope, ResourceUid, RetryClass,
+    CanonicalJsonValue, RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceEnvelope, RetryClass,
     canonical_digest,
 };
 use d2b_resource_store::mutation_seal::MutationSealIssuer;
@@ -10,12 +10,7 @@ use d2b_resource_store::{
     PreparedStoreMutation, ResourceMutationKind, SealedMutation, StoreError, StoreErrorKind,
     StoreMutation, StoreOperationContext,
 };
-use std::{
-    fmt::Write as _,
-    fs::File,
-    io::Read,
-    sync::{Arc, Mutex},
-};
+use std::sync::{Arc, Mutex};
 
 #[derive(Debug)]
 struct AdmissionAuthority;
@@ -325,9 +320,9 @@ fn prepare_mutation(mut mutation: StoreMutation) -> Result<PreparedStoreMutation
                 .canonical_resource
                 .as_deref()
                 .ok_or_else(|| preparation_error("create-resource-body-missing"))?;
-            let (canonical, uid, digest) = finalize_create(source, &mutation)?;
+            let (canonical, digest) = validate_create(source, &mutation)?;
             mutation.canonical_resource = Some(canonical);
-            (Some(uid), Some(digest))
+            (None, Some(digest))
         }
         _ => match mutation.canonical_resource.as_deref() {
             Some(source) => {
@@ -352,12 +347,13 @@ fn prepare_mutation(mut mutation: StoreMutation) -> Result<PreparedStoreMutation
     ))
 }
 
-fn finalize_create(
+fn validate_create(
     source: &[u8],
     mutation: &StoreMutation,
-) -> Result<(Vec<u8>, ResourceUid, String), StoreError> {
+) -> Result<(Vec<u8>, String), StoreError> {
     let mut value = CanonicalJsonValue::parse(source)
         .map_err(|_| preparation_error("create-resource-body-invalid"))?;
+    let canonical = value.to_canonical_bytes();
     let CanonicalJsonValue::Object(root) = &mut value else {
         return Err(preparation_error("create-resource-body-invalid"));
     };
@@ -367,20 +363,15 @@ fn finalize_create(
     if metadata.contains_key("uid") {
         return Err(preparation_error("create-resource-uid-present"));
     }
-    let uid = mint_resource_uid()?;
     metadata.insert(
         "uid".to_owned(),
-        CanonicalJsonValue::String(uid.as_str().to_owned()),
+        CanonicalJsonValue::String("00000000-0000-4000-8000-000000000000".to_owned()),
     );
-    let canonical = value.to_canonical_bytes();
-    let envelope = ResourceEnvelope::from_json(&canonical)
+    let envelope = ResourceEnvelope::from_json(&value.to_canonical_bytes())
         .map_err(|_| preparation_error("create-resource-body-invalid"))?;
     validate_envelope_identity(&envelope, mutation)?;
-    if envelope.metadata().uid() != &uid {
-        return Err(preparation_error("create-resource-uid-mismatch"));
-    }
     let digest = canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical);
-    Ok((canonical, uid, digest))
+    Ok((canonical, digest))
 }
 
 fn validate_envelope_identity(
@@ -398,23 +389,6 @@ fn validate_envelope_identity(
         return Err(preparation_error("resource-envelope-identity-mismatch"));
     }
     Ok(())
-}
-
-fn mint_resource_uid() -> Result<ResourceUid, StoreError> {
-    let mut bytes = [0u8; 16];
-    File::open("/dev/urandom")
-        .and_then(|mut source| source.read_exact(&mut bytes))
-        .map_err(|_| preparation_error("resource-uid-entropy-unavailable"))?;
-    bytes[6] = (bytes[6] & 0x0f) | 0x40;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    let mut rendered = String::with_capacity(36);
-    for (index, byte) in bytes.into_iter().enumerate() {
-        if matches!(index, 4 | 6 | 8 | 10) {
-            rendered.push('-');
-        }
-        write!(&mut rendered, "{byte:02x}").expect("writing to a String cannot fail");
-    }
-    ResourceUid::parse(rendered).map_err(|_| preparation_error("resource-uid-mint-invalid"))
 }
 
 fn preparation_error(reason_code: &'static str) -> StoreError {
@@ -529,19 +503,6 @@ mod tests {
             .expect("rejected admission");
         assert_eq!(error.kind(), StoreErrorKind::ResourceSchemaInvalid);
         assert_eq!(error.reason_code(), "create-resource-uid-present");
-    }
-
-    #[test]
-    fn minted_resource_uids_are_canonical_uuid_v4_values() {
-        let first = mint_resource_uid().unwrap();
-        let second = mint_resource_uid().unwrap();
-
-        assert_ne!(first, second);
-        assert_eq!(first.as_str().as_bytes()[14], b'4');
-        assert!(matches!(
-            first.as_str().as_bytes()[19],
-            b'8' | b'9' | b'a' | b'b'
-        ));
     }
 
     #[test]
