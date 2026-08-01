@@ -89,6 +89,14 @@ select_local_paths() {
 # Print the output paths of a check's direct build inputs that the upstream
 # substituter does not already serve. Those are exactly the paths whose absence
 # forces a local compile.
+#
+# This deliberately uses `nix-store --query`, whose plain-text output has been
+# stable for years, rather than `nix derivation show` and jq. The JSON shape of
+# the latter differs between Nix implementations - this tree evaluates under
+# Lix while CI installs upstream Nix - and a shape mismatch there fails as an
+# empty result rather than as an error, which published an empty entry once
+# already. The references of a .drv are its input derivations and input
+# sources, so selecting the `.drv` ones gives exactly the direct build inputs.
 must_build_paths() {
   local check=$1 flake_ref native drv input out
   flake_ref=$(d2b_flake_ref "$ROOT")
@@ -97,8 +105,8 @@ must_build_paths() {
   drv=$(nix eval --raw --quiet --no-warn-dirty \
     "${flake_ref}#checks.${native}.${check}.drvPath")
 
-  for input in $(nix derivation show "$drv" | jq -r '.[].inputDrvs | keys[]'); do
-    for out in $(nix derivation show "$input" | jq -r '.[].outputs[].path'); do
+  for input in $(nix-store --query --references "$drv" | grep '\.drv$'); do
+    for out in $(nix-store --query --outputs "$input"); do
       # A path upstream already has is not worth a slot in our entry.
       if ! nix path-info --store "$UPSTREAM_SUBSTITUTER" "$out" >/dev/null 2>&1; then
         printf '%s\n' "$out"
@@ -138,7 +146,14 @@ cmd_export() {
 
   paths=$(must_build_paths "$check" | select_local_paths)
   if [ -z "$paths" ]; then
+    # Not fatal - publishing nothing costs a rebuild, never a wrong result, and
+    # failing here would turn a passing check red. But it means the next run
+    # pays the full build, so say so loudly enough to be noticed: this went
+    # unnoticed once, as a silent empty entry, and the only symptom was the
+    # lane never getting faster.
     log "  realized-check cache: nothing to publish for $check"
+    printf '::warning::realized-check cache published nothing for %s; the next run rebuilds it\n' \
+      "$check"
     return 0
   fi
 
