@@ -5,14 +5,16 @@ use std::process::Command;
 use std::sync::{Arc, Barrier};
 
 use d2b_contracts::v3::{
-    ConfigurationGeneration, ResourceRef, ResourceTypeName, ResourceUid, Timestamp, ZoneId,
+    ConfigurationGeneration, ResourceEnvelope, ResourceRef, ResourceTypeName, ResourceUid,
+    Timestamp, ZoneId,
 };
 use d2b_resource_store::mutation_seal::{
     MutationSealAcceptor, MutationSealBody, mutation_seal_pair,
 };
 use d2b_resource_store::{
-    PolicySnapshot, StoreGetRequest, StoreListRequest, StoreOperationContext, StoreProjection,
-    StoreSlot, StoreWatchRequest,
+    AdmittedAuthorization, AdmittedAuthorizationTarget, AdmittedVerb, ExpectedRevision,
+    PolicySnapshot, PreparedStoreMutation, ResourceMutationKind, StoreGetRequest, StoreListRequest,
+    StoreMutation, StoreOperationContext, StoreProjection, StoreSlot, StoreWatchRequest,
 };
 use redb::{Database, Durability};
 use rustix::io::{FdFlags, fcntl_getfd, fcntl_setfd};
@@ -83,6 +85,67 @@ fn empty_seal_body() -> MutationSealBody {
             controller_generation: None,
         },
         operation: operation("seal"),
+    }
+}
+
+fn create_seal_body(
+    operation_id: &str,
+    name: &str,
+    uid: ResourceUid,
+    payload_digest: String,
+) -> MutationSealBody {
+    let canonical_resource = String::from_utf8(stored_body(name))
+        .unwrap()
+        .replace("123e4567-e89b-42d3-a456-426614174000", uid.as_str())
+        .into_bytes();
+    create_seal_body_with_resource(operation_id, name, uid, canonical_resource, payload_digest)
+}
+
+fn create_seal_body_with_resource(
+    operation_id: &str,
+    name: &str,
+    uid: ResourceUid,
+    canonical_resource: Vec<u8>,
+    payload_digest: String,
+) -> MutationSealBody {
+    let target = ResourceRef::parse(&format!("Host/{name}")).unwrap();
+    MutationSealBody {
+        mutations: vec![PreparedStoreMutation::new(
+            StoreMutation {
+                kind: ResourceMutationKind::Create,
+                zone: ZoneId::parse("work").unwrap(),
+                target: target.clone(),
+                expected: ExpectedRevision::CreateAbsent,
+                expected_uid: None,
+                owner: None,
+                canonical_resource: Some(canonical_resource),
+                add_finalizers: Vec::new(),
+                remove_finalizers: Vec::new(),
+                wait_for_reconcile: false,
+                reconcile_deadline_ms: None,
+            },
+            Some(uid),
+            Some(payload_digest),
+        )],
+        authorization: AdmittedAuthorization {
+            zone: ZoneId::parse("work").unwrap(),
+            subject_ref: ResourceRef::parse("Provider/system-core").unwrap(),
+            subject_uid: ResourceUid::parse("33333333-3333-4333-8333-333333333333").unwrap(),
+            targets: vec![AdmittedAuthorizationTarget {
+                resource_type: ResourceTypeName::parse("Host").unwrap(),
+                resource_name: Some(target.name().clone()),
+                verb: AdmittedVerb::Create,
+                subresource: None,
+                execution_ref: None,
+            }],
+        },
+        policy_snapshot: PolicySnapshot {
+            policy_revision: 7,
+            api_catalog_revision: 8,
+            active_configuration_revision: ConfigurationGeneration::new(9).unwrap(),
+            controller_generation: None,
+        },
+        operation: operation(operation_id),
     }
 }
 
@@ -542,6 +605,112 @@ async fn commit_rejects_seal_from_another_store() {
         .expect_err("cross-store evidence must be refused");
     assert_eq!(error.reason_code(), "mutation-seal-authority-mismatch");
     assert_eq!(error.store_slot(), Some(first_identity.slot()));
+}
+
+#[tokio::test]
+async fn sealed_create_preserves_prepared_uid_and_binds_prepared_digest() {
+    let (_directory, file, marker) = provisioned_store();
+    let store_identity = identity();
+    let (issuer, acceptor) = mutation_seal_pair(store_identity.seal_identity());
+    let store = RedbResourceStore::provision_owned(file, marker, store_identity.clone(), acceptor)
+        .await
+        .unwrap();
+    let name = "sealed-create";
+    let canonical = String::from_utf8(stored_body(name))
+        .unwrap()
+        .replace(
+            "123e4567-e89b-42d3-a456-426614174000",
+            "123e4567-e89b-42d3-a456-426614174099",
+        )
+        .into_bytes();
+    let payload_digest = ResourceEnvelope::from_json(&canonical)
+        .unwrap()
+        .digest()
+        .unwrap();
+    let uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174099").unwrap();
+
+    let result = store
+        .commit_verified(issuer.seal(create_seal_body(
+            "sealed-create",
+            name,
+            uid.clone(),
+            payload_digest,
+        )))
+        .await
+        .unwrap();
+    assert_eq!(result.resources[0].uid, uid);
+    let final_digest = result.resources[0].payload_digest.clone();
+    assert_eq!(
+        ResourceEnvelope::from_json(&result.resources[0].canonical_json)
+            .unwrap()
+            .digest()
+            .unwrap(),
+        final_digest
+    );
+    let persisted = store
+        .get(StoreGetRequest {
+            operation: operation("read-sealed-create"),
+            zone: ZoneId::parse("work").unwrap(),
+            target: ResourceRef::parse("Host/sealed-create").unwrap(),
+            expected_uid: Some(uid.clone()),
+            projection: StoreProjection::Full,
+        })
+        .await
+        .unwrap();
+    assert_eq!(persisted.uid, uid);
+    assert_eq!(persisted.payload_digest, final_digest);
+
+    let replay_uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174098").unwrap();
+    let replay_canonical = String::from_utf8(stored_body(name))
+        .unwrap()
+        .replace("123e4567-e89b-42d3-a456-426614174000", replay_uid.as_str())
+        .into_bytes();
+    let replay_payload_digest = ResourceEnvelope::from_json(&replay_canonical)
+        .unwrap()
+        .digest()
+        .unwrap();
+    let replay = store
+        .commit_verified(issuer.seal(create_seal_body_with_resource(
+            "sealed-create",
+            name,
+            replay_uid.clone(),
+            replay_canonical,
+            replay_payload_digest,
+        )))
+        .await
+        .unwrap();
+    assert_eq!(replay.resources[0].uid, uid);
+    assert_eq!(replay.resources[0].payload_digest, final_digest);
+
+    let changed_canonical = String::from_utf8(canonical)
+        .unwrap()
+        .replace(
+            "\"nonDisruptive\":\"automatic\"",
+            "\"nonDisruptive\":\"manual\"",
+        )
+        .into_bytes();
+    let changed_payload_digest = ResourceEnvelope::from_json(&changed_canonical)
+        .unwrap()
+        .digest()
+        .unwrap();
+    let error = store
+        .commit_verified(issuer.seal(create_seal_body_with_resource(
+            "sealed-create",
+            name,
+            replay_uid,
+            changed_canonical,
+            changed_payload_digest,
+        )))
+        .await
+        .unwrap_err();
+    assert_eq!(error.reason_code(), "operation-id-reused");
+
+    let replacement = format!("sha256:{}", "f".repeat(64));
+    let error = store
+        .commit_verified(issuer.seal(create_seal_body("sealed-create", name, uid, replacement)))
+        .await
+        .unwrap_err();
+    assert_eq!(error.reason_code(), "mutation-payload-digest-mismatch");
 }
 
 #[tokio::test]

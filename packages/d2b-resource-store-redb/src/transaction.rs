@@ -334,6 +334,12 @@ pub(crate) struct VerifiedWrite {
 pub(crate) struct VerifiedPreparedMutation {
     mutation: StoreMutation,
     resource_uid: Option<ResourceUid>,
+    prepared_payload_digest: Option<String>,
+}
+
+struct FinalizedMutation {
+    canonical_json: Vec<u8>,
+    payload_digest: String,
 }
 
 #[cfg(test)]
@@ -384,6 +390,10 @@ impl VerifiedPreparedMutation {
     fn resource_uid(&self) -> Option<&ResourceUid> {
         self.resource_uid.as_ref()
     }
+
+    fn prepared_payload_digest(&self) -> Option<&str> {
+        self.prepared_payload_digest.as_deref()
+    }
 }
 
 impl VerifiedWrite {
@@ -399,6 +409,7 @@ impl VerifiedWrite {
                 .map(|prepared| VerifiedPreparedMutation {
                     mutation: prepared.mutation().clone(),
                     resource_uid: prepared.resource_uid().cloned(),
+                    prepared_payload_digest: prepared.payload_digest().map(str::to_owned),
                 })
                 .collect(),
         }
@@ -934,7 +945,7 @@ pub(crate) fn apply_group(
     let mut entries = Vec::new();
     let mut accepted_targets = std::collections::BTreeSet::new();
 
-    for mut verified in group {
+    for verified in group {
         let snapshot = verified.policy_snapshot;
         if verified.mutations.is_empty()
             || verified.mutations.len() > d2b_contracts::v3::MAX_BATCH_MUTATIONS
@@ -944,6 +955,10 @@ pub(crate) fn apply_group(
         }
         if !revisions_match(&meta, snapshot) {
             results.push(Err(authorization_denied(meta.current_revision)));
+            continue;
+        }
+        if let Err(error) = validate_prepared_payloads(&verified) {
+            results.push(Err(error));
             continue;
         }
         let operation_id = verified.operation.operation_id.clone();
@@ -977,19 +992,16 @@ pub(crate) fn apply_group(
             }
         }
 
-        for prepared in &mut verified.mutations {
-            if prepared.mutation.kind == ResourceMutationKind::Create {
-                prepared.resource_uid = Some(mint_resource_uid()?);
-            }
-        }
-
         let result_index = results.len();
         results.push(Err(integrity("unresolved-write-result")));
-        if let Err(error) = validate_verified_write(&write, &verified, revision, &accepted_targets)
-        {
-            results[result_index] = Err(error);
-            continue;
-        }
+        let finalized =
+            match validate_verified_write(&write, &verified, revision, &accepted_targets) {
+                Ok(finalized) => finalized,
+                Err(error) => {
+                    results[result_index] = Err(error);
+                    continue;
+                }
+            };
         let mut simulated = read_simulated_state(&write)?;
         if let Err(error) = validate_structural_group(&verified, &mut simulated) {
             results[result_index] = Err(error);
@@ -1001,6 +1013,10 @@ pub(crate) fn apply_group(
             let (resource, entry) = apply_prepared(
                 &write,
                 prepared,
+                finalized
+                    .get(ordinal)
+                    .ok_or_else(|| integrity("finalized-mutation-missing"))?
+                    .as_ref(),
                 revision,
                 u32::try_from(ordinal).map_err(integrity)?,
                 &operation_id,
@@ -1224,6 +1240,7 @@ fn operation_resource(record: &OperationResourceRecord) -> Result<StoredResource
 fn apply_prepared(
     write: &redb::WriteTransaction,
     prepared: &VerifiedPreparedMutation,
+    finalized: Option<&FinalizedMutation>,
     revision: u64,
     ordinal: u32,
     operation_id: &str,
@@ -1340,7 +1357,8 @@ fn apply_prepared(
         ));
     }
 
-    let canonical_json = merge_authorized_mutation(prepared, previous.as_ref(), revision)?;
+    let finalized = finalized.ok_or_else(|| integrity("finalized-mutation-missing"))?;
+    let canonical_json = finalized.canonical_json.clone();
     let envelope = ResourceEnvelope::from_json(&canonical_json)
         .map_err(|_| integrity("stored-resource-envelope-invalid"))?;
     validate_active_schema(write, &envelope)?;
@@ -1379,6 +1397,9 @@ fn apply_prepared(
         )?;
     }
     let payload_digest = envelope.digest().map_err(integrity)?;
+    if payload_digest != finalized.payload_digest {
+        return Err(integrity("finalized-payload-digest-mismatch"));
+    }
     let record = ResourceRecord {
         canonical_json: canonical_json.clone(),
         owner_uid: owner_uid.clone(),
@@ -1430,12 +1451,13 @@ fn validate_verified_write(
     verified: &VerifiedWrite,
     revision: u64,
     accepted_targets: &std::collections::BTreeSet<ResourceRef>,
-) -> Result<(), StoreError> {
+) -> Result<Vec<Option<FinalizedMutation>>, StoreError> {
     let meta = read_meta_in_write(write)?;
     if verified.authorization.zone.as_str() != meta.zone_name {
         return Err(integrity("mutation-zone-mismatch"));
     }
     let mut staged = std::collections::BTreeMap::<ResourceRef, Option<ResourceUid>>::new();
+    let mut finalized = Vec::with_capacity(verified.mutations.len());
     for (ordinal, prepared) in verified.mutations.iter().enumerate() {
         let mutation = prepared.mutation();
         let ordinal = u32::try_from(ordinal).map_err(integrity)?;
@@ -1489,6 +1511,23 @@ fn validate_verified_write(
                 "resource-uid-changed",
             ));
         }
+        if mutation.kind != ResourceMutationKind::Delete
+            && mutation.kind != ResourceMutationKind::Create
+        {
+            let prepared_uid = prepared
+                .resource_uid()
+                .ok_or_else(|| integrity("mutation-resource-uid-missing"))?;
+            if current
+                .as_ref()
+                .is_none_or(|(current_uid, _)| current_uid != prepared_uid)
+            {
+                return Err(conflict(
+                    current.as_ref().map_or(0, |(_, revision)| *revision),
+                    ordinal,
+                    "resource-uid-changed",
+                ));
+            }
+        }
 
         if mutation.kind == ResourceMutationKind::Delete {
             if current.is_none() {
@@ -1527,6 +1566,7 @@ fn validate_verified_write(
                 mutation.target.clone(),
                 current.as_ref().map(|(uid, _)| uid.clone()),
             );
+            finalized.push(None);
             continue;
         }
 
@@ -1545,6 +1585,13 @@ fn validate_verified_write(
                 .as_ref()
                 .map(|(uid, _)| uid.clone())
                 .ok_or_else(|| integrity("mutation-resource-uid-missing"))?;
+            let previous =
+                current_record_in_write(write, &mutation.target)?.map(|(record, _)| record);
+            finalized.push(Some(finalize_authorized_mutation(
+                prepared,
+                previous.as_ref(),
+                revision,
+            )?));
             staged.insert(mutation.target.clone(), Some(uid));
             continue;
         }
@@ -1561,25 +1608,17 @@ fn validate_verified_write(
         {
             return Err(integrity("mutation-resource-identity-mismatch"));
         }
-        let uid = if mutation.kind == ResourceMutationKind::Create {
-            prepared
-                .resource_uid()
-                .cloned()
-                .ok_or_else(|| integrity("mutation-resource-uid-missing"))?
-        } else {
-            current
-                .as_ref()
-                .map(|(uid, _)| uid.clone())
-                .ok_or_else(|| integrity("mutation-resource-uid-missing"))?
-        };
+        let uid = prepared
+            .resource_uid()
+            .cloned()
+            .ok_or_else(|| integrity("mutation-resource-uid-missing"))?;
+        if envelope.metadata().uid() != &uid {
+            return Err(integrity("mutation-resource-uid-mismatch"));
+        }
         if mutation
             .expected_uid
             .as_ref()
             .is_some_and(|expected| expected != &uid)
-            || (mutation.kind != ResourceMutationKind::Create
-                && current
-                    .as_ref()
-                    .is_some_and(|(current_uid, _)| current_uid != &uid))
         {
             return Err(conflict(
                 current.as_ref().map_or(0, |(_, revision)| *revision),
@@ -1619,7 +1658,43 @@ fn validate_verified_write(
                 ));
             }
         }
+        let previous = if mutation.kind == ResourceMutationKind::Create {
+            None
+        } else {
+            current_record_in_write(write, &mutation.target)?.map(|(record, _)| record)
+        };
+        finalized.push(Some(finalize_authorized_mutation(
+            prepared,
+            previous.as_ref(),
+            revision,
+        )?));
         staged.insert(mutation.target.clone(), Some(uid));
+    }
+    Ok(finalized)
+}
+
+fn validate_prepared_payloads(verified: &VerifiedWrite) -> Result<(), StoreError> {
+    for prepared in &verified.mutations {
+        validate_prepared_source_digest(prepared)?;
+    }
+    Ok(())
+}
+
+fn validate_prepared_source_digest(prepared: &VerifiedPreparedMutation) -> Result<(), StoreError> {
+    let mutation = prepared.mutation();
+    let Some(bytes) = mutation.canonical_resource.as_deref() else {
+        if prepared.prepared_payload_digest().is_some() {
+            return Err(integrity("mutation-payload-digest-without-body"));
+        }
+        return Ok(());
+    };
+    let expected = prepared
+        .prepared_payload_digest()
+        .ok_or_else(|| integrity("mutation-payload-digest-missing"))?;
+    let envelope = ResourceEnvelope::from_json(bytes)
+        .map_err(|_| integrity("stored-resource-envelope-invalid"))?;
+    if envelope.digest().map_err(integrity)? != expected {
+        return Err(integrity("mutation-payload-digest-mismatch"));
     }
     Ok(())
 }
@@ -1954,6 +2029,47 @@ fn owned_children_remain(
     Ok(false)
 }
 
+fn finalize_authorized_mutation(
+    prepared: &VerifiedPreparedMutation,
+    previous: Option<&ResourceRecord>,
+    revision: u64,
+) -> Result<FinalizedMutation, StoreError> {
+    let mutation = prepared.mutation();
+    let canonical_json = merge_authorized_mutation(prepared, previous, revision)?;
+    let envelope = ResourceEnvelope::from_json(&canonical_json)
+        .map_err(|_| integrity("stored-resource-envelope-invalid"))?;
+
+    let uid = prepared
+        .resource_uid()
+        .ok_or_else(|| integrity("mutation-resource-uid-missing"))?;
+    let effective_owner = if matches!(
+        mutation.kind,
+        ResourceMutationKind::Create | ResourceMutationKind::UpdateMetadata
+    ) {
+        mutation.owner.clone()
+    } else {
+        let previous = previous.ok_or_else(|| integrity("mutation-current-resource-missing"))?;
+        ResourceEnvelope::from_json(&previous.canonical_json)
+            .map_err(|_| integrity("stored-resource-envelope-invalid"))?
+            .metadata()
+            .owner_ref()
+            .cloned()
+    };
+    if envelope.resource_type() != mutation.target.resource_type()
+        || envelope.metadata().name() != mutation.target.name()
+        || envelope.metadata().zone() != &mutation.zone
+        || envelope.metadata().uid() != uid
+        || envelope.metadata().owner_ref() != effective_owner.as_ref()
+    {
+        return Err(integrity("mutation-resource-identity-mismatch"));
+    }
+
+    Ok(FinalizedMutation {
+        canonical_json,
+        payload_digest: envelope.digest().map_err(integrity)?,
+    })
+}
+
 fn merge_authorized_mutation(
     prepared: &VerifiedPreparedMutation,
     previous: Option<&ResourceRecord>,
@@ -2254,36 +2370,6 @@ fn parse_optional_uid(value: Option<&str>) -> Result<Option<ResourceUid>, StoreE
         .transpose()
 }
 
-fn mint_resource_uid() -> Result<ResourceUid, StoreError> {
-    use std::io::Read as _;
-    let mut bytes = [0_u8; 16];
-    std::fs::File::open("/dev/urandom")
-        .and_then(|mut source| source.read_exact(&mut bytes))
-        .map_err(|_| integrity("resource-uid-entropy-unavailable"))?;
-    bytes[6] = (bytes[6] & 0x0f) | 0x40;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    let rendered = format!(
-        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        bytes[0],
-        bytes[1],
-        bytes[2],
-        bytes[3],
-        bytes[4],
-        bytes[5],
-        bytes[6],
-        bytes[7],
-        bytes[8],
-        bytes[9],
-        bytes[10],
-        bytes[11],
-        bytes[12],
-        bytes[13],
-        bytes[14],
-        bytes[15]
-    );
-    ResourceUid::parse(rendered).map_err(|_| integrity("resource-uid-mint-invalid"))
-}
-
 fn canonical_timestamp() -> Result<String, StoreError> {
     use std::time::{SystemTime, UNIX_EPOCH};
     let elapsed = SystemTime::now()
@@ -2434,6 +2520,10 @@ fn operation_digest(verified: &VerifiedWrite) -> Result<String, StoreError> {
             digest_optional_field(
                 &mut digest,
                 mutation.resource_uid().map(|uid| uid.as_str().as_bytes()),
+            )?;
+            digest_optional_field(
+                &mut digest,
+                mutation.prepared_payload_digest().map(str::as_bytes),
             )?;
         }
     }
@@ -2726,6 +2816,12 @@ mod tests {
             ResourceMutationKind::UpdateFinalizers => AdmittedVerb::UpdateFinalizers,
             ResourceMutationKind::Delete => AdmittedVerb::Delete,
         };
+        let payload_digest = mutation.canonical_resource.as_deref().map(|bytes| {
+            ResourceEnvelope::from_json(bytes)
+                .unwrap()
+                .digest()
+                .unwrap()
+        });
         VerifiedWrite {
             authorization: AdmittedAuthorization {
                 zone: ZoneId::parse("dev").unwrap(),
@@ -2755,6 +2851,7 @@ mod tests {
             mutations: vec![VerifiedPreparedMutation {
                 mutation,
                 resource_uid: Some(uid),
+                prepared_payload_digest: payload_digest,
             }],
         }
     }
@@ -2773,6 +2870,17 @@ mod tests {
             wait_for_reconcile: false,
             reconcile_deadline_ms: None,
         }
+    }
+
+    fn create_mutation_with_uid(target: ResourceRef, uid: &ResourceUid) -> StoreMutation {
+        let mut mutation = create_mutation(target);
+        mutation.canonical_resource = Some(
+            String::from_utf8(RESOURCE.to_vec())
+                .unwrap()
+                .replace("123e4567-e89b-42d3-a456-426614174000", uid.as_str())
+                .into_bytes(),
+        );
+        mutation
     }
 
     fn stored_envelope(database: &Database, target: &ResourceRef) -> ResourceEnvelope {
@@ -2969,6 +3077,41 @@ mod tests {
     }
 
     #[test]
+    fn prepared_uid_mismatch_cannot_replace_an_existing_resource() {
+        let (_directory, database, _identity) = fixture();
+        let target = ResourceRef::parse("Host/host-system").unwrap();
+        let current_uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+        apply_group(
+            &database,
+            vec![verified(
+                "seed-host",
+                create_mutation(target.clone()),
+                current_uid.clone(),
+            )],
+        )
+        .unwrap();
+
+        let prepared_uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174099").unwrap();
+        let mut update = create_mutation_with_uid(target.clone(), &prepared_uid);
+        update.kind = ResourceMutationKind::UpdateSpec;
+        update.expected = ExpectedRevision::Exact(ZoneRevision::new(1));
+        update.expected_uid = Some(current_uid.clone());
+        let outcome = apply_group(
+            &database,
+            vec![verified("prepared-uid-mismatch", update, prepared_uid)],
+        )
+        .unwrap();
+        assert_eq!(
+            outcome.results[0].as_ref().unwrap_err().reason_code(),
+            "resource-uid-changed"
+        );
+        assert_eq!(
+            stored_envelope(&database, &target).metadata().uid(),
+            &current_uid
+        );
+    }
+
+    #[test]
     fn idempotent_replay_returns_the_original_committed_resources() {
         let (_directory, database, _identity) = fixture();
         let target = ResourceRef::parse("Host/host-system").unwrap();
@@ -2977,7 +3120,7 @@ mod tests {
             &database,
             vec![verified(
                 "idempotent-create",
-                create_mutation(target.clone()),
+                create_mutation_with_uid(target.clone(), &uid),
                 uid.clone(),
             )],
         )
@@ -2987,13 +3130,22 @@ mod tests {
             &database,
             vec![verified(
                 "idempotent-create",
-                create_mutation(target),
+                create_mutation_with_uid(target.clone(), &replay_uid),
                 replay_uid,
             )],
         )
         .unwrap();
         assert!(replay.batch.is_none());
         assert_eq!(replay.results[0], first.results[0]);
+        let persisted_digest = stored_envelope(&database, &target).digest().unwrap();
+        assert_eq!(
+            first.results[0].as_ref().unwrap().resources[0].payload_digest,
+            persisted_digest
+        );
+        assert_eq!(
+            replay.results[0].as_ref().unwrap().resources[0].payload_digest,
+            persisted_digest
+        );
         assert_eq!(current_meta(&database).unwrap().current_revision, 1);
     }
 
@@ -3167,6 +3319,43 @@ mod tests {
         assert_ne!(
             operation_digest(&first).unwrap(),
             operation_digest(&changed_delta).unwrap()
+        );
+    }
+
+    #[test]
+    fn create_operation_digest_ignores_sealed_uid_but_detects_caller_input_changes() {
+        let target = ResourceRef::parse("Host/host-system").unwrap();
+        let first_uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap();
+        let retry_uid = ResourceUid::parse("123e4567-e89b-42d3-a456-426614174099").unwrap();
+        let first = verified(
+            "same-create-operation",
+            create_mutation_with_uid(target.clone(), &first_uid),
+            first_uid,
+        );
+        let retry = verified(
+            "same-create-operation",
+            create_mutation_with_uid(target.clone(), &retry_uid),
+            retry_uid.clone(),
+        );
+        let mut changed_mutation = create_mutation_with_uid(target, &retry_uid);
+        changed_mutation.canonical_resource = Some(
+            String::from_utf8(changed_mutation.canonical_resource.take().unwrap())
+                .unwrap()
+                .replace(
+                    "\"nonDisruptive\":\"automatic\"",
+                    "\"nonDisruptive\":\"manual\"",
+                )
+                .into_bytes(),
+        );
+        let changed = verified("same-create-operation", changed_mutation, retry_uid);
+
+        assert_eq!(
+            operation_digest(&first).unwrap(),
+            operation_digest(&retry).unwrap()
+        );
+        assert_ne!(
+            operation_digest(&first).unwrap(),
+            operation_digest(&changed).unwrap()
         );
     }
 
