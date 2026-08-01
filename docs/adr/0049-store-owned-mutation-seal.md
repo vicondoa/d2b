@@ -698,7 +698,7 @@ starting point for the two that are code defects:
 
 - `mutation-seal-authority-mismatch`: a second `mutation_seal_pair` or a
   second `MutationSealIssuer::seal` call site exists. Find it; invariant 2
-  names both counts and `d106_policy.rs` enforces them.
+  names both counts and `policy_resource_mutation_seal.rs` enforces them.
 - `mutation-seal-store-identity-mismatch`: defence in depth, unreachable
   through the composition root because a matching authority implies a matching
   pair. Treat it as a code defect in `d2b-resource-store`, not as a
@@ -875,10 +875,13 @@ later public constructor, public field, or extra trait implementation reachable
 from the capability closure then appears as a snapshot diff and fails
 `make test-rust-api-surface`.
 
-Four source-level properties a census cannot see are enforced by extending
-`packages/d2b-resource-store/tests/d106_policy.rs`, which already owns exactly
-this kind of assertion for the layer above (`admission.record_allow(` occurs
-once; `pub fn admission_pair` never appears):
+Four source-level properties a census cannot see are enforced by a new
+tree-wide policy lint at
+`packages/d2b-contract-tests/tests/policy_resource_mutation_seal.rs`, wired
+explicitly into `tests/test-policy.sh`. The existing
+`packages/d2b-resource-store/tests/d106_policy.rs` is precedent for the
+assertions, but `tests/AGENTS.md` assigns new Rust scans of source and docs to
+the contract-test policy layer:
 
 - **Both mint symbols are counted, not just the pair.** `mutation_seal_pair(`
   occurs in exactly one non-test call site in the workspace, and
@@ -1258,7 +1261,8 @@ mints committable evidence over a hand-built `MutationSealBody` with no
 evaluation at all, because `seal` is public, the body's fields are public, and
 the authorizer retains the issuer for its whole life. Neither is visible to the
 API-surface census, because neither changes a public surface. Invariant 2 and
-the two counts in `packages/d2b-resource-store/tests/d106_policy.rs` exist for
+the two counts in
+`packages/d2b-contract-tests/tests/policy_resource_mutation_seal.rs` exist for
 exactly these two cases and nothing else.
 
 A third, quieter failure: `NativeAuthorizer::take_store_seal` is once-only, so
@@ -1375,22 +1379,24 @@ Two file-disjoint scopes, both opening against merged Wave A.
   `tests/golden/api-surface/roots.json`, the four snapshots under
   `tests/golden/api-surface/`,
   `packages/d2b-bus/tests/approved-capability-trait-impls.txt`,
-  `packages/d2b-resource-store/tests/d106_policy.rs`, and the "Capability mint
-  surface allowlist" rows in `AGENTS.md` and
+  `packages/d2b-contract-tests/tests/policy_resource_mutation_seal.rs`,
+  `tests/test-policy.sh`, and the "Capability mint surface allowlist" rows in
+  `AGENTS.md` and
   `docs/contributing/critical-subsystems.md`, whose crate lists gain
   `packages/d2b-resource-store/`.
   Adds the four capability roots, regenerates the snapshots, adds the
   in-crate trait-solver ambiguity assertions including the `Debug` arm, and
   adds the three counts and the three `mutation_seal.rs` scans to
-  `d106_policy.rs`. It also moves Wave A's `StoreSlot` wire and durable
-  serialization grep into that policy test as a fail-closed workspace scan, so
-  invariant 10 remains enforced after the implementation branch closes. The
-  approved trait-impl file gains only holder rows, per the closure analysis in
-  section 6.
+  `policy_resource_mutation_seal.rs`. It also moves Wave A's `StoreSlot` wire
+  and durable serialization grep into that policy lint as a fail-closed
+  workspace scan, and wires the lint into `test-policy`, so invariant 10
+  remains enforced after the implementation branch closes. The approved
+  trait-impl file gains only holder rows, per the closure analysis in section
+  6.
   Done when `make api-surface-pin` followed by
   `git diff --exit-code tests/golden/api-surface/` exits 0,
   `make test-rust-api-surface` exits 0,
-  `cargo test -p d2b-resource-store --test d106_policy` exits 0,
+  `make test-policy` exits 0,
 
   ```bash
   rg -n 'SealedMutation|MutationSealIssuer|MutationSealAcceptor|OpenedMutation' \
