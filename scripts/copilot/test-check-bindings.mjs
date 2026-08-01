@@ -438,7 +438,53 @@ const CASES = [
         " copilotw6 | test | 2026-07-31 | fixture row | open | notavocabularyterm |",
       ),
     expectExit: 1,
-    expectText: "carries a pipe but does not",
+    expectText: "lost its leading pipe",
+  },
+  // A row that lost both outer pipes is still a row when it sits between two
+  // rows of a table, because a line there is not prose. The disposition is
+  // bogus so a guard that read the line as a row would reject it for that.
+  {
+    name: "a row that lost both outer pipes inside a table is rejected",
+    mutate: (dir) => {
+      const path = join(dir, ".specify", "memory", "friction-log.md");
+      const src = readFileSync(path, "utf8").trimEnd().split("\n");
+      src.splice(
+        src.length - 1,
+        0,
+        "copilotw6 | test | 2026-07-31 | fixture row | open | notavocabularyterm",
+      );
+      writeFileSync(path, `${src.join("\n")}\n`);
+    },
+    expectExit: 1,
+    expectText: "lost its leading pipe",
+  },
+  // The counterpart: an ordinary pipe in prose is not a lost row. Escaping one
+  // to satisfy the gate would corrupt the text it appears in, so a sentence and
+  // a shell pipeline clear of the table must both pass.
+  {
+    name: "a pipe in prose clear of the table is not read as a lost row",
+    mutate: (dir) => {
+      const path = join(dir, ".specify", "memory", "friction-log.md");
+      const src = readFileSync(path, "utf8");
+      writeFileSync(
+        path,
+        `${src.trimEnd()}\n\nRun systemctl list-units | grep d2b | wc -l to count them.\n`,
+      );
+    },
+    expectExit: 0,
+  },
+  // A fenced example may hold anything, including a line shaped like a row.
+  {
+    name: "a fenced block holding a row-shaped line is not read as a lost row",
+    mutate: (dir) => {
+      const path = join(dir, ".specify", "memory", "friction-log.md");
+      const src = readFileSync(path, "utf8");
+      writeFileSync(
+        path,
+        `${src.trimEnd()}\n\n\`\`\`\ncopilotw6 | test | 2026-07-31 | x | open | bogus |\n\`\`\`\n`,
+      );
+    },
+    expectExit: 0,
   },
 ];
 

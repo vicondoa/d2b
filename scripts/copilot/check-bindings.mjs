@@ -497,17 +497,30 @@ function splitRow(line) {
 }
 
 // A row is recognised by its leading pipe, so a row that lost one reads as
-// prose and would be skipped unread. Every pipe in these registers belongs to a
-// table, so a line carrying an unescaped pipe without a leading one is a
-// malformed row rather than prose. The escape rule is splitRow's: a backslash
-// protects the character after it.
-function carriesPipe(line) {
+// prose and every column on it goes unvalidated. Two shapes identify such a
+// row without claiming an ordinary pipe in prose is one:
+//
+//   - it ends with an unescaped pipe and carries more than one, which is how
+//     every row in these registers is written; or
+//   - it carries an unescaped pipe while a table is open above it, since a
+//     line between two rows of a table is not prose.
+//
+// A pipe in a sentence or a shell pipeline matches neither, which matters
+// because escaping one to satisfy this gate would corrupt the text it appears
+// in. A table written with neither outer pipe, following a valid table, is not
+// distinguishable from prose here and is out of scope; every register in this
+// repo writes both.
+function pipeShape(line) {
   const text = line.trim();
+  let pipes = 0;
+  let endsWithPipe = false;
   for (let i = 0; i < text.length; i += 1) {
     if (text[i] === "\\") { i += 1; continue; }
-    if (text[i] === "|") return true;
+    if (text[i] !== "|") continue;
+    pipes += 1;
+    endsWithPipe = i === text.length - 1;
   }
-  return false;
+  return { pipes, endsWithPipe };
 }
 
 const memoryDir = join(root, ".specify", "memory");
@@ -536,13 +549,29 @@ for (const reg of ["friction-log.md", "deferred-work.md", "engineering-debt.md"]
   let dispositionIdx = -1;
   let headerWidth = -1;
   let sawHeader = false;
+  let inFence = false;
   for (const [i, line] of lines.entries()) {
+    // A table cannot span a fence, and a fenced example may legitimately hold
+    // pipes, so a fence closes the table above it and its contents are skipped.
+    if (/^\s*(```|~~~)/.test(line)) {
+      inFence = !inFence;
+      dispositionIdx = -1;
+      headerWidth = -1;
+      continue;
+    }
+    if (inFence) {
+      dispositionIdx = -1;
+      headerWidth = -1;
+      continue;
+    }
     if (!line.trim().startsWith("|")) {
-      if (carriesPipe(line)) {
+      const { pipes, endsWithPipe } = pipeShape(line);
+      if ((pipes > 1 && endsWithPipe) || (pipes > 0 && dispositionIdx >= 0)) {
         fail(
-          `.specify/memory/${reg}:${i + 1}: this line carries a pipe but does not ` +
-          `begin with one, so it reads as prose and no column on it is validated. ` +
-          `Add the leading pipe, or escape a pipe that is genuinely prose as \\|.`,
+          `.specify/memory/${reg}:${i + 1}: this line reads as a row that lost its ` +
+          `leading pipe, so it is skipped as prose and no column on it is ` +
+          `validated. Add the leading pipe. If the line is genuinely prose, ` +
+          `move it clear of the table or put it in a fenced block.`,
         );
       }
       dispositionIdx = -1;
