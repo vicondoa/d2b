@@ -95,6 +95,12 @@ const OPTIONAL_INPUTS = [
 
 const HELPER = ".github/skills/d2b-panel-round/scripts/make-records.mjs";
 
+// The marker a register uses to declare that it is empty on purpose. The gate
+// compares against its own copy, so spelling it once here means a case cannot
+// drift into asserting a string the gate never matches, which would look like
+// coverage while testing nothing.
+const EMPTY_MARKER = "<!-- d2b-register: intentionally empty -->";
+
 // The regex the gate itself uses to find the roster. Sharing the shape is
 // deliberate: if the gate can parse the declaration, so can the harness, and
 // if it cannot, both fail rather than one silently disagreeing.
@@ -566,7 +572,7 @@ const CASES = [
         }
         kept.push(line);
       }
-      kept.push("", "<!-- d2b-register: intentionally empty -->", "");
+      kept.push("", EMPTY_MARKER, "");
       writeFileSync(path, kept.join("\n"));
     },
     expectExit: 0,
@@ -578,22 +584,124 @@ const CASES = [
     mutate: (dir) => {
       const path = join(dir, ".specify", "memory", "engineering-debt.md");
       const src = readFileSync(path, "utf8").trimEnd();
-      writeFileSync(path, `${src}\n\n<!-- d2b-register: intentionally empty -->\n`);
+      writeFileSync(path, `${src}\n\n${EMPTY_MARKER}\n`);
     },
     expectExit: 1,
     expectText: "declares itself intentionally empty and has",
   },
   {
-    // An unterminated fence in a long register is hard to find without the
-    // line it opened on.
-    name: "an unterminated fence names the line it opened on",
+    // The marker is matched on a trimmed line, so an author who indents it or
+    // leaves trailing space still gets the behaviour the message describes.
+    // Without this, the marker would be usable only when written flush left,
+    // which the diagnostic does not say.
+    name: "an intentionally-empty marker is recognized around surrounding whitespace",
     mutate: (dir) => {
-      const path = join(dir, ".specify", "memory", "friction-log.md");
-      const src = readFileSync(path, "utf8");
-      writeFileSync(path, `${src.trimEnd()}\n\n\`\`\`\nstill open at EOF\n`);
+      const path = join(dir, ".specify", "memory", "engineering-debt.md");
+      const src = readFileSync(path, "utf8").split("\n");
+      const kept = [];
+      let seen = 0;
+      for (const line of src) {
+        if (line.trim().startsWith("|")) {
+          seen += 1;
+          if (seen > 2) continue;
+        }
+        kept.push(line);
+      }
+      kept.push("", `   ${EMPTY_MARKER}\t `, "");
+      writeRegister(dir, "engineering-debt.md", kept.join("\n"));
+    },
+    expectExit: 0,
+  },
+  {
+    // A fence suppresses every line inside it, and the marker must be no
+    // exception. If it were honoured inside a fence, a register could be
+    // emptied and excused by a marker sitting in an example block that the
+    // author never meant as a declaration.
+    name: "an intentionally-empty marker inside a fence does not excuse an empty register",
+    mutate: (dir) => {
+      const path = join(dir, ".specify", "memory", "engineering-debt.md");
+      const src = readFileSync(path, "utf8").split("\n");
+      const kept = [];
+      let seen = 0;
+      for (const line of src) {
+        if (line.trim().startsWith("|")) {
+          seen += 1;
+          if (seen > 2) continue;
+        }
+        kept.push(line);
+      }
+      kept.push("", "```", EMPTY_MARKER, "```", "");
+      writeRegister(dir, "engineering-debt.md", kept.join("\n"));
     },
     expectExit: 1,
-    expectText: "opened on line",
+    expectText: "not one data row",
+  },
+  {
+    // The marker excuses an absent row, never an absent table. A register with
+    // no header row cannot be validated at all, so the missing header is
+    // reported ahead of the row count and the marker does not reach it.
+    name: "an intentionally-empty marker does not excuse a register with no header",
+    mutate: (dir) => {
+      writeRegister(
+        dir,
+        "engineering-debt.md",
+        `# Engineering debt\n\n${EMPTY_MARKER}\n`,
+      );
+    },
+    expectExit: 1,
+    expectText: "no header row",
+  },
+  {
+    // Declaring the same thing twice is still declaring it once. A second
+    // marker is not an error, so an author who moves the marker rather than
+    // deleting the old one is not blocked by a diagnostic about a defect that
+    // does not exist.
+    name: "a repeated intentionally-empty marker is not itself an error",
+    mutate: (dir) => {
+      const path = join(dir, ".specify", "memory", "engineering-debt.md");
+      const src = readFileSync(path, "utf8").split("\n");
+      const kept = [];
+      let seen = 0;
+      for (const line of src) {
+        if (line.trim().startsWith("|")) {
+          seen += 1;
+          if (seen > 2) continue;
+        }
+        kept.push(line);
+      }
+      kept.push("", EMPTY_MARKER, "", EMPTY_MARKER, "");
+      writeRegister(dir, "engineering-debt.md", kept.join("\n"));
+    },
+    expectExit: 0,
+  },
+  {
+    // An unterminated fence in a long register is hard to find without the
+    // line it opened on. The register is written here rather than appended to
+    // the fixture's own, so the expected line number is a property of this
+    // case and not of however long the repository's register happens to be.
+    // Relaxing the assertion to just "opened on line" would still discriminate
+    // against the message that carried no number, but it would no longer catch
+    // the off-by-one this exists to pin.
+    name: "an unterminated fence names the line it opened on",
+    mutate: (dir) => {
+      writeRegister(
+        dir,
+        "friction-log.md",
+        [
+          "# Friction log", // 1
+          "", // 2
+          "| Wave | Category | Date | Statement | Recurrence | Disposition |", // 3
+          "|---|---|---|---|---|---|", // 4
+          "| copilotw6 | test | 2026-07-31 | placeholder | 1 | open |", // 5
+          "", // 6
+          "```", // 7
+          "still open at EOF", // 8
+          "",
+        ].join("\n"),
+      );
+    },
+    expectExit: 1,
+    expectText: "opened on line 7",
   },
   {
     // An unterminated fence swallows every line after it. A register whose
