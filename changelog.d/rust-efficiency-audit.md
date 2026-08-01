@@ -9,5 +9,7 @@
   while reducing repeated dependency setup.
 - Combined ADR-046 measurement policy checks so the documentation corpus is
   loaded once instead of once per test.
+- Cached workspace Rust source contents during the tracing-contract scan,
+  avoiding repeated reads for each forbidden-attribute pattern.
 - Documented the Rust crate-graph audit and retained the current workspace
   boundaries where change-frequency data did not support a split.
