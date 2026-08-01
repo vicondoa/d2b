@@ -268,4 +268,60 @@ mod tests {
         assert_eq!(error.kind(), ResourceErrorKind::ResourceConflict);
         assert_eq!(error.current_revision(), None);
     }
+
+    #[test]
+    fn authorization_denied_visible_revision_and_retry_survive_mapping() {
+        let error = map_store_error_with_revision_visibility(
+            StoreError::new(
+                StoreErrorKind::AuthorizationDenied,
+                Some(ZoneRevision::new(8)),
+                None,
+                RetryClass::Reauthorize,
+                "store-generation-recheck-failed",
+            ),
+            true,
+        );
+        assert_eq!(error.kind(), ResourceErrorKind::AuthorizationDenied);
+        assert_eq!(error.current_revision(), Some(ZoneRevision::new(8)));
+        assert_eq!(error.retry_class(), RetryClass::Reauthorize);
+
+        let wire = to_wire_error(&error);
+        assert_eq!(
+            wire.kind.enum_value().unwrap(),
+            wire::ResourceErrorKind::RESOURCE_ERROR_KIND_AUTHORIZATION_DENIED
+        );
+        assert_eq!(wire.current_revision, Some(8));
+        assert_eq!(
+            wire.retry_class.enum_value().unwrap(),
+            wire::RetryClass::RETRY_CLASS_REAUTHORIZE
+        );
+    }
+
+    #[test]
+    fn authorization_denied_revision_can_be_hidden_without_changing_kind_or_retry() {
+        let error = map_store_error_with_revision_visibility(
+            StoreError::new(
+                StoreErrorKind::AuthorizationDenied,
+                Some(ZoneRevision::new(8)),
+                None,
+                RetryClass::Reauthorize,
+                "store-generation-recheck-failed",
+            ),
+            false,
+        );
+        assert_eq!(error.kind(), ResourceErrorKind::AuthorizationDenied);
+        assert_eq!(error.current_revision(), None);
+        assert_eq!(error.retry_class(), RetryClass::Reauthorize);
+
+        let wire = to_wire_error(&error);
+        assert_eq!(
+            wire.kind.enum_value().unwrap(),
+            wire::ResourceErrorKind::RESOURCE_ERROR_KIND_AUTHORIZATION_DENIED
+        );
+        assert_eq!(wire.current_revision, None);
+        assert_eq!(
+            wire.retry_class.enum_value().unwrap(),
+            wire::RetryClass::RETRY_CLASS_REAUTHORIZE
+        );
+    }
 }

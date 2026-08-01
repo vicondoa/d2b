@@ -196,7 +196,9 @@ impl ResourceError {
         if current_revision.is_some()
             && !matches!(
                 kind,
-                ResourceErrorKind::ResourceConflict | ResourceErrorKind::RevisionExpired
+                ResourceErrorKind::ResourceConflict
+                    | ResourceErrorKind::AuthorizationDenied
+                    | ResourceErrorKind::RevisionExpired
             )
         {
             return Err(ResourceErrorValidation::RevisionNotAllowed);
@@ -342,9 +344,22 @@ mod tests {
     #[test]
     fn optional_error_fields_are_narrowed() {
         let reason = ResourceErrorReason::parse("current revision changed").unwrap();
+        let authorization_denied = ResourceError::new(
+            ResourceErrorKind::AuthorizationDenied,
+            Some(ZoneRevision::new(4)),
+            None,
+            RetryClass::Reauthorize,
+            reason.clone(),
+        )
+        .unwrap();
+        assert_eq!(
+            authorization_denied.current_revision(),
+            Some(ZoneRevision::new(4))
+        );
+        assert_eq!(authorization_denied.retry_class(), RetryClass::Reauthorize);
         assert_eq!(
             ResourceError::new(
-                ResourceErrorKind::AuthorizationDenied,
+                ResourceErrorKind::ResourceNotFound,
                 Some(ZoneRevision::new(4)),
                 None,
                 RetryClass::Never,
