@@ -1376,6 +1376,8 @@ Two file-disjoint scopes, both opening against merged Wave A.
   Done when `cargo test -p d2b-resource-api --test external_seals` exits 0 and
   the test asserts all ten.
 - **B2 census roots and mint policy.** Owns
+  `packages/d2b-resource-store/src/mutation_seal.rs` for the in-crate
+  trait-solver assertions,
   `tests/golden/api-surface/roots.json`, the four snapshots under
   `tests/golden/api-surface/`,
   `packages/d2b-bus/tests/approved-capability-trait-impls.txt`,
@@ -1396,7 +1398,8 @@ Two file-disjoint scopes, both opening against merged Wave A.
   Done when `make api-surface-pin` followed by
   `git diff --exit-code tests/golden/api-surface/` exits 0,
   `make test-rust-api-surface` exits 0,
-  `make test-rust` exits 0 so the compile-fail doctest seals run,
+  `make test-rust` exits 0 so the `d2b-resource-store` trait-solver seals
+  compile in their owning crate,
   `make test-policy` exits 0,
 
   ```bash
@@ -1406,9 +1409,12 @@ Two file-disjoint scopes, both opening against merged Wave A.
   ```
 
   The first condition is section 2a as a grep: no seal type may have acquired a
-  trait impl. The last is not decoration: B2 edits two `AGENTS.md` rows and
-  re-pins the golden census, and the crate that gates both is excluded from
-  `test-rust` for the same reason Wave A carries the same condition.
+  trait impl. `make test-rust` covers the compiled assertions in
+  `d2b-resource-store`; `make test-policy` covers the tree-wide lint in
+  `d2b-contract-tests`. The last condition is not decoration: B2 edits two
+  `AGENTS.md` rows and re-pins the golden census, and the crate that gates both
+  is excluded from `test-rust` for the same reason Wave A carries the same
+  condition.
 
 B1 and B2 are disjoint by path. They both open against Wave A, which has
 already landed every shared contract they read, so no separate integrator prep
