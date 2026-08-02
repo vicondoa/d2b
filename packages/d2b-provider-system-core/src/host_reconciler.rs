@@ -1,5 +1,7 @@
 //! Host posture decisions owned by the system-core reconciler.
 
+#![allow(dead_code)]
+
 use d2b_contracts::v3::host::{HostSpec, IsolationPosture};
 
 use crate::host_status::HostStatusProjection;
