@@ -184,7 +184,10 @@ fn resolve(
 fn endpoint_ref(name: &str) -> Result<d2b_contracts::v3::ResourceRef, CliFailure> {
     let resource_ref = parse_resource_ref(name, Some("Endpoint"))?;
     if resource_ref.resource_type().as_str() != "Endpoint" {
-        return Err(CliFailure::new(2, "ref-invalid: Endpoint reference required"));
+        return Err(CliFailure::new(
+            2,
+            "ref-invalid: Endpoint reference required",
+        ));
     }
     Ok(resource_ref)
 }
@@ -194,7 +197,10 @@ fn validate_endpoint_class(
     class: &str,
     mode: OutputMode,
 ) -> Result<(), CliFailure> {
-    if !matches!(class, "service" | "device" | "transport" | "control" | "data") {
+    if !matches!(
+        class,
+        "service" | "device" | "transport" | "control" | "data"
+    ) {
         return Err(context.failure(
             "ref-invalid",
             "endpoint class must be service, device, transport, control, or data",
@@ -275,7 +281,10 @@ fn find_forbidden_endpoint_key(value: &Value) -> Option<String> {
     match value {
         Value::Object(object) => object.iter().find_map(|(key, value)| {
             let lower = key.to_ascii_lowercase();
-            if FORBIDDEN.iter().any(|part| lower == *part || lower.contains(part)) {
+            if FORBIDDEN
+                .iter()
+                .any(|part| lower == *part || lower.contains(part))
+            {
                 Some(key.clone())
             } else {
                 find_forbidden_endpoint_key(value)

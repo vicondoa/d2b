@@ -5,9 +5,7 @@ use serde_json::{Value, json};
 
 use crate::{
     CliFailure,
-    context::{
-        OutputMode, RequestDeadline, ZoneContext, parse_resource_ref, read_spec,
-    },
+    context::{OutputMode, RequestDeadline, ZoneContext, parse_resource_ref, read_spec},
     dispatch::GenericGetArgs,
     resource,
 };
@@ -398,9 +396,22 @@ fn validate_share_spec(
         let owner = spec
             .get("resourceRef")
             .and_then(Value::as_str)
-            .ok_or_else(|| context.failure("resource-schema-invalid", "ResourceExport requires resourceRef", mode, 1))?;
-        let owner = parse_resource_ref(owner, None)
-            .map_err(|_| context.failure("resource-schema-invalid", "ResourceExport resourceRef is invalid", mode, 1))?;
+            .ok_or_else(|| {
+                context.failure(
+                    "resource-schema-invalid",
+                    "ResourceExport requires resourceRef",
+                    mode,
+                    1,
+                )
+            })?;
+        let owner = parse_resource_ref(owner, None).map_err(|_| {
+            context.failure(
+                "resource-schema-invalid",
+                "ResourceExport resourceRef is invalid",
+                mode,
+                1,
+            )
+        })?;
         if !owner.resource_type().as_str().contains("Service")
             || owner.resource_type().as_str().contains("Binding")
             || matches!(owner.resource_type().as_str(), "Device" | "Endpoint")
@@ -487,7 +498,11 @@ mod tests {
             "projection": {"remoteRef": "Zone/remote"},
             "graph": [{"ownerRef":"ResourceImport/mic"}]
         })));
-        assert!(!contains_forbidden_share_key(&json!({"status":{"phase":"Ready"}})));
-        assert!(contains_forbidden_share_key(&json!({"status":{"bytes":"opaque"}})));
+        assert!(!contains_forbidden_share_key(
+            &json!({"status":{"phase":"Ready"}})
+        ));
+        assert!(contains_forbidden_share_key(
+            &json!({"status":{"bytes":"opaque"}})
+        ));
     }
 }

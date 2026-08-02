@@ -48,24 +48,24 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-mod doctor;
-mod exec_client;
-mod host_validate;
-mod status_read_model;
-mod target_routing;
-mod terminal_client;
 mod activation;
 mod complete;
 mod context;
 mod dispatch;
+mod doctor;
 mod endpoint;
 mod exec;
+mod exec_client;
 mod guest;
 mod host;
+mod host_validate;
 mod provider;
 mod resource;
 mod share;
 mod shell;
+mod status_read_model;
+mod target_routing;
+mod terminal_client;
 mod zone;
 
 use status_read_model::{

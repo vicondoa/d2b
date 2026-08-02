@@ -4,7 +4,8 @@ use clap::{Args, Subcommand};
 use serde_json::{Value, json};
 
 use crate::{
-    CliFailure, context::{OutputMode, RequestDeadline, ZoneContext, parse_resource_ref},
+    CliFailure,
+    context::{OutputMode, RequestDeadline, ZoneContext, parse_resource_ref},
 };
 
 #[derive(Debug, Args, Clone)]
@@ -113,10 +114,7 @@ fn run_create(
     deadline: RequestDeadline,
 ) -> Result<i32, CliFailure> {
     let execution_ref = parse_resource_ref(&args.execution_ref, None)?;
-    if !matches!(
-        execution_ref.resource_type().as_str(),
-        "Host" | "Guest"
-    ) {
+    if !matches!(execution_ref.resource_type().as_str(), "Host" | "Guest") {
         return Err(context.failure(
             "ref-invalid",
             "exec executionRef must name a Host or Guest",
@@ -128,12 +126,7 @@ fn run_create(
     if let Some(domain) = args.domain.as_deref()
         && !matches!(domain, "system" | "user")
     {
-        return Err(context.failure(
-            "ref-invalid",
-            "exec domain must be system or user",
-            mode,
-            2,
-        ));
+        return Err(context.failure("ref-invalid", "exec domain must be system or user", mode, 2));
     }
     warn_unsafe_local(&execution_ref, mode);
     let value = context.invoke(
@@ -163,12 +156,7 @@ fn attach(
     deadline: RequestDeadline,
 ) -> Result<i32, CliFailure> {
     if args.tty && mode.is_json() {
-        return Err(context.failure(
-            "ref-invalid",
-            "--tty is incompatible with --json",
-            mode,
-            2,
-        ));
+        return Err(context.failure("ref-invalid", "--tty is incompatible with --json", mode, 2));
     }
     let resource_ref = parse_resource_ref(&args.resource_ref, None)?;
     if resource_ref.resource_type().as_str() != "EphemeralProcess" {
@@ -375,10 +363,7 @@ fn warn_unsafe_local(resource_ref: &d2b_contracts::v3::ResourceRef, mode: Output
     }
 }
 
-fn with_unsafe_posture(
-    mut value: Value,
-    resource_ref: &d2b_contracts::v3::ResourceRef,
-) -> Value {
+fn with_unsafe_posture(mut value: Value, resource_ref: &d2b_contracts::v3::ResourceRef) -> Value {
     if resource_ref.resource_type().as_str() == "Host"
         && let Value::Object(object) = &mut value
     {
@@ -389,4 +374,3 @@ fn with_unsafe_posture(
     }
     value
 }
-

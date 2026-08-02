@@ -2,18 +2,13 @@
 //! native CLI.
 
 use std::{
-    env,
-    fs,
-    io,
+    env, fs, io,
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
 };
 
-use d2b_contracts::v3::{
-    ResourceRef, ResourceTypeName, ZoneId,
-    identity::STANDARD_RESOURCE_TYPES,
-};
+use d2b_contracts::v3::{ResourceRef, ResourceTypeName, ZoneId, identity::STANDARD_RESOURCE_TYPES};
 use serde_json::{Value, json};
 
 use crate::{CliFailure, MAX_FRAME_BYTES, SeqpacketUnixSocket, print_stdout};
@@ -63,8 +58,7 @@ pub(crate) enum TransportError {
 /// pure response client without opening a host socket, while production uses
 /// the local ComponentSession endpoint.
 pub(crate) trait SessionClient: Send + Sync {
-    fn invoke(&self, request: &[u8], deadline: RequestDeadline)
-        -> Result<Vec<u8>, TransportError>;
+    fn invoke(&self, request: &[u8], deadline: RequestDeadline) -> Result<Vec<u8>, TransportError>;
 }
 
 #[derive(Debug)]
@@ -133,10 +127,7 @@ impl ZoneContext {
         let requested_zone = zone_arg
             .map(str::to_owned)
             .or_else(|| env::var("D2B_ZONE").ok());
-        let zone_name = requested_zone
-            .as_deref()
-            .unwrap_or("local-root")
-            .to_owned();
+        let zone_name = requested_zone.as_deref().unwrap_or("local-root").to_owned();
         validate_zone_name(&zone_name)?;
 
         let candidates = socket_candidates(requested_zone.as_deref());
@@ -230,7 +221,10 @@ impl ZoneContext {
                 ));
             }
         };
-        request.insert("type".to_owned(), Value::String("resourceRequest".to_owned()));
+        request.insert(
+            "type".to_owned(),
+            Value::String("resourceRequest".to_owned()),
+        );
         request.insert("method".to_owned(), Value::String(method.to_owned()));
         request.insert("zoneRef".to_owned(), Value::String(self.zone_ref()));
         request.insert(
@@ -267,12 +261,7 @@ impl ZoneContext {
                 .and_then(Value::as_str)
                 .or_else(|| value.get("message").and_then(Value::as_str))
                 .unwrap_or("Zone rejected the resource request");
-            return Err(self.failure(
-                "not-implemented",
-                &bounded_message(message),
-                mode,
-                78,
-            ));
+            return Err(self.failure("not-implemented", &bounded_message(message), mode, 78));
         }
         if value
             .get("ok")
@@ -292,13 +281,8 @@ impl ZoneContext {
             return Err(self.failure(class, &message, mode, error_exit_code(class)));
         }
         if let Value::Object(object) = &mut value {
-            object
-                .entry("ok".to_owned())
-                .or_insert(Value::Bool(true));
-            object.insert(
-                "zoneRef".to_owned(),
-                Value::String(self.zone_ref()),
-            );
+            object.entry("ok".to_owned()).or_insert(Value::Bool(true));
+            object.insert("zoneRef".to_owned(), Value::String(self.zone_ref()));
             object.insert(
                 "schemaVersion".to_owned(),
                 Value::Number(serde_json::Number::from(JSON_SCHEMA_VERSION)),
@@ -356,8 +340,9 @@ impl ZoneContext {
     pub(crate) fn emit(&self, value: &Value, mode: OutputMode) -> Result<(), CliFailure> {
         match mode {
             OutputMode::Json => {
-                let mut rendered = serde_json::to_string_pretty(value)
-                    .map_err(|_| self.failure("internal-error", "failed to render JSON", mode, 1))?;
+                let mut rendered = serde_json::to_string_pretty(value).map_err(|_| {
+                    self.failure("internal-error", "failed to render JSON", mode, 1)
+                })?;
                 rendered.push('\n');
                 print_stdout(&rendered);
             }
@@ -370,18 +355,9 @@ impl ZoneContext {
         Ok(())
     }
 
-    pub(crate) fn emit_stream(
-        &self,
-        value: &Value,
-        mode: OutputMode,
-    ) -> Result<(), CliFailure> {
+    pub(crate) fn emit_stream(&self, value: &Value, mode: OutputMode) -> Result<(), CliFailure> {
         if !mode.is_json() {
-            return Err(self.failure(
-                "ref-invalid",
-                "watch output is JSON-lines only",
-                mode,
-                2,
-            ));
+            return Err(self.failure("ref-invalid", "watch output is JSON-lines only", mode, 2));
         }
         let events = value
             .get("events")
@@ -389,8 +365,9 @@ impl ZoneContext {
             .cloned()
             .unwrap_or_else(|| vec![value.clone()]);
         for event in events {
-            let mut rendered = serde_json::to_string(&event)
-                .map_err(|_| self.failure("internal-error", "failed to render watch event", mode, 1))?;
+            let mut rendered = serde_json::to_string(&event).map_err(|_| {
+                self.failure("internal-error", "failed to render watch event", mode, 1)
+            })?;
             rendered.push('\n');
             print_stdout(&rendered);
         }
@@ -437,10 +414,7 @@ pub(crate) fn standard_resource_types() -> &'static [&'static str; 19] {
     &STANDARD_RESOURCE_TYPES
 }
 
-pub(crate) fn read_spec(
-    spec_file: Option<&Path>,
-    spec_stdin: bool,
-) -> Result<Value, CliFailure> {
+pub(crate) fn read_spec(spec_file: Option<&Path>, spec_stdin: bool) -> Result<Value, CliFailure> {
     if spec_file.is_some() == spec_stdin {
         return Err(CliFailure::new(
             2,
@@ -456,10 +430,7 @@ pub(crate) fn read_spec(
         bytes
     };
     if bytes.len() > MAX_SPEC_BYTES {
-        return Err(CliFailure::new(
-            2,
-            "resource spec exceeds the 64 KiB bound",
-        ));
+        return Err(CliFailure::new(2, "resource spec exceeds the 64 KiB bound"));
     }
     serde_json::from_slice(&bytes)
         .map_err(|_| CliFailure::new(2, "resource-schema-invalid: spec must be JSON"))
@@ -503,9 +474,12 @@ fn validate_zone_name(value: &str) -> Result<(), CliFailure> {
 }
 
 fn parse_duration(value: &str) -> Result<Duration, CliFailure> {
-    let (number, suffix) = value
-        .trim()
-        .split_at(value.trim().trim_end_matches(|character: char| character.is_ascii_alphabetic()).len());
+    let (number, suffix) = value.trim().split_at(
+        value
+            .trim()
+            .trim_end_matches(|character: char| character.is_ascii_alphabetic())
+            .len(),
+    );
     let amount: u64 = number
         .parse()
         .map_err(|_| CliFailure::new(2, "deadline must use a duration such as 30s or 5m"))?;
@@ -515,10 +489,7 @@ fn parse_duration(value: &str) -> Result<Duration, CliFailure> {
         "m" => amount.saturating_mul(60_000),
         "h" => amount.saturating_mul(3_600_000),
         _ => {
-            return Err(CliFailure::new(
-                2,
-                "deadline must use ms, s, m, or h",
-            ));
+            return Err(CliFailure::new(2, "deadline must use ms, s, m, or h"));
         }
     };
     Ok(Duration::from_millis(millis))
@@ -547,12 +518,12 @@ fn human_summary(value: &Value) -> String {
     if let Some(object) = value.as_object() {
         if let Some(resource_ref) = object.get("resourceRef").and_then(Value::as_str) {
             let phase = object
-            .get("status")
-            .and_then(Value::as_object)
-            .and_then(|status| status.get("phase"))
-            .and_then(Value::as_str)
-            .or_else(|| object.get("phase").and_then(Value::as_str))
-            .unwrap_or("unknown");
+                .get("status")
+                .and_then(Value::as_object)
+                .and_then(|status| status.get("phase"))
+                .and_then(Value::as_str)
+                .or_else(|| object.get("phase").and_then(Value::as_str))
+                .unwrap_or("unknown");
             return format!("{resource_ref}\t{phase}");
         }
         if let Some(items) = object.get("items").and_then(Value::as_array) {
@@ -564,7 +535,9 @@ fn human_summary(value: &Value) -> String {
                     .or_else(|| {
                         let resource_type = item.get("type").and_then(Value::as_str)?;
                         let name = item.pointer("/metadata/name").and_then(Value::as_str)?;
-                        Some(Box::leak(format!("{resource_type}/{name}").into_boxed_str()))
+                        Some(Box::leak(
+                            format!("{resource_type}/{name}").into_boxed_str(),
+                        ))
                     })
                     .unwrap_or("<unknown>");
                 let phase = item

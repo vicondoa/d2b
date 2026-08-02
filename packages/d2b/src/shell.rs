@@ -227,7 +227,10 @@ fn validate_session_ref(
 ) -> Result<d2b_contracts::v3::ResourceRef, CliFailure> {
     let resource_ref = parse_resource_ref(value, None)?;
     if resource_ref.resource_type().as_str() != "ShellSession"
-        && !resource_ref.resource_type().as_str().contains("ShellSession")
+        && !resource_ref
+            .resource_type()
+            .as_str()
+            .contains("ShellSession")
     {
         return Err(context.failure(
             "ref-invalid",
@@ -246,4 +249,3 @@ fn warn_unsafe_local(resource_ref: &d2b_contracts::v3::ResourceRef, mode: Output
         );
     }
 }
-

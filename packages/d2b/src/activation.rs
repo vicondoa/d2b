@@ -121,9 +121,7 @@ pub(crate) fn run(
         ActivationCommand::Switch(args) => target_call(context, "Switch", args, mode, deadline),
         ActivationCommand::Boot(args) => target_call(context, "Boot", args, mode, deadline),
         ActivationCommand::Test(args) => target_call(context, "Test", args, mode, deadline),
-        ActivationCommand::Rollback(args) => {
-            target_call(context, "Rollback", args, mode, deadline)
-        }
+        ActivationCommand::Rollback(args) => target_call(context, "Rollback", args, mode, deadline),
         ActivationCommand::Gc(args) => mutation_call(context, "Gc", args, mode, deadline),
         ActivationCommand::Migrate(args) => mutation_call(context, "Migrate", args, mode, deadline),
         ActivationCommand::Keys(args) => keys(context, args, mode, deadline),
@@ -315,4 +313,3 @@ fn parse_guest_ref(
     }
     Ok(resource_ref)
 }
-

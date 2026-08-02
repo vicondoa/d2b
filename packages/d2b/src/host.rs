@@ -6,9 +6,7 @@ use serde_json::json;
 use crate::{
     CliFailure,
     context::{OutputMode, RequestDeadline, ZoneContext},
-    dispatch::{
-        GenericGetArgs, GenericListArgs, GenericStatusArgs,
-    },
+    dispatch::{GenericGetArgs, GenericListArgs, GenericStatusArgs},
     resource,
 };
 
@@ -121,24 +119,7 @@ pub(crate) fn run(
             mode,
             deadline,
         ),
-        HostCommand::Check(args) => {
-            if args.strict && !args.read_only {
-                return Err(context.failure(
-                    "ref-invalid",
-                    "host check --strict requires --read-only",
-                    mode,
-                    3,
-                ));
-            }
-            let value = context.invoke(
-                "HostCheck",
-                json!({ "readOnly": args.read_only, "strict": args.strict }),
-                deadline,
-                mode,
-            )?;
-            context.emit(&value, mode)?;
-            Ok(0)
-        }
+        HostCommand::Check(args) => local_host_check(args, mode),
         HostCommand::Prepare(args) => mutation(context, "HostPrepare", args, mode, deadline),
         HostCommand::Destroy(args) => mutation(context, "HostDestroy", args, mode, deadline),
         HostCommand::Reconcile(args) => mutation(context, "HostReconcile", args, mode, deadline),
@@ -215,6 +196,25 @@ pub(crate) fn run(
     }
 }
 
+fn local_host_check(args: &HostCheckArgs, mode: OutputMode) -> Result<i32, CliFailure> {
+    if args.strict && !args.read_only {
+        return Err(CliFailure::new(
+            3,
+            "ref-invalid: host check --strict requires --read-only",
+        ));
+    }
+    let context = crate::Context::from_env()?;
+    crate::cmd_host_check(
+        &context,
+        &crate::HostCheckArgs {
+            read_only: args.read_only,
+            strict: args.strict,
+            json: mode.is_json(),
+            human: !mode.is_json(),
+        },
+    )
+}
+
 fn mutation(
     context: &ZoneContext,
     method: &str,
@@ -239,4 +239,3 @@ fn mutation(
     context.emit(&value, mode)?;
     Ok(0)
 }
-

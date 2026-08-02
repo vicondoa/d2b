@@ -51,7 +51,10 @@ pub(crate) fn render_completion(
     shell: CompletionShell,
     provider_commands: &[(&str, &[&str])],
 ) -> String {
-    let mut names: Vec<String> = BUILTIN_COMMANDS.iter().map(|name| (*name).to_owned()).collect();
+    let mut names: Vec<String> = BUILTIN_COMMANDS
+        .iter()
+        .map(|name| (*name).to_owned())
+        .collect();
     for (name, _) in provider_commands {
         if valid_command_name(name) && !BUILTIN_COMMANDS.contains(name) {
             names.push((*name).to_owned());
@@ -64,16 +67,18 @@ pub(crate) fn render_completion(
         CompletionShell::Bash => format!(
             "_d2b_complete() {{\n  local cur=\"${{COMP_WORDS[COMP_CWORD]}}\"\n  COMPREPLY=( $(compgen -W '{words}' -- \"$cur\") )\n}}\ncomplete -F _d2b_complete d2b\n"
         ),
-        CompletionShell::Zsh => format!(
-            "#compdef d2b\n_arguments '1:command:({words})'\n"
-        ),
-        CompletionShell::Fish => format!(
-            "complete -c d2b -f -a '{words}'\n"
-        ),
+        CompletionShell::Zsh => format!("#compdef d2b\n_arguments '1:command:({words})'\n"),
+        CompletionShell::Fish => format!("complete -c d2b -f -a '{words}'\n"),
     };
     output
         .chars()
-        .map(|character| if character == '\n' { character } else { character })
+        .map(|character| {
+            if character == '\n' {
+                character
+            } else {
+                character
+            }
+        })
         .collect()
 }
 

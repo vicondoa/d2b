@@ -124,8 +124,14 @@ pub(crate) fn validate_projection_value(
     value: &Value,
     mode: OutputMode,
 ) -> Result<(), CliFailure> {
-    let bytes = serde_json::to_vec(value)
-        .map_err(|_| context.failure("resource-schema-invalid", "invalid Provider projection", mode, 1))?;
+    let bytes = serde_json::to_vec(value).map_err(|_| {
+        context.failure(
+            "resource-schema-invalid",
+            "invalid Provider projection",
+            mode,
+            1,
+        )
+    })?;
     if bytes.len() > MAX_PROJECTION_BYTES {
         return Err(context.failure(
             "resource-schema-invalid",
@@ -145,9 +151,8 @@ pub(crate) fn validate_projection_value(
             1,
         ));
     };
-    validate_name(top_level, "top-level projection name").map_err(|message| {
-        context.failure("resource-schema-invalid", &message, mode, 1)
-    })?;
+    validate_name(top_level, "top-level projection name")
+        .map_err(|message| context.failure("resource-schema-invalid", &message, mode, 1))?;
     if BUILTIN_COMMANDS.contains(&top_level) {
         return Err(context.failure(
             "resource-schema-invalid",

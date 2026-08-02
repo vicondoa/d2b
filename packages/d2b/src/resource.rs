@@ -234,12 +234,7 @@ pub(crate) fn watch(
     deadline: RequestDeadline,
 ) -> Result<i32, CliFailure> {
     if !mode.is_json() {
-        return Err(context.failure(
-            "ref-invalid",
-            "watch output is JSON-lines only",
-            mode,
-            2,
-        ));
+        return Err(context.failure("ref-invalid", "watch output is JSON-lines only", mode, 2));
     }
     let resource_type = parse_resource_type(&args.resource_type)?;
     let payload = list_payload(

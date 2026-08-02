@@ -52,10 +52,7 @@ fn get(
     mode: OutputMode,
     deadline: RequestDeadline,
 ) -> Result<i32, CliFailure> {
-    let name = args
-        .name
-        .as_deref()
-        .unwrap_or_else(|| context.zone_name());
+    let name = args.name.as_deref().unwrap_or_else(|| context.zone_name());
     let resource_ref = parse_resource_ref(&format!("Zone/{name}"), None)?;
     let value = context.invoke(
         "ZoneGet",
@@ -88,10 +85,7 @@ fn status(
     mode: OutputMode,
     deadline: RequestDeadline,
 ) -> Result<i32, CliFailure> {
-    let name = args
-        .name
-        .as_deref()
-        .unwrap_or_else(|| context.zone_name());
+    let name = args.name.as_deref().unwrap_or_else(|| context.zone_name());
     let value = context.invoke(
         "ZoneStatus",
         json!({
@@ -152,11 +146,13 @@ mod tests {
 
     #[test]
     fn topology_projection_rejects_child_local_link_fields() {
-        assert!(contains_forbidden_topology_field(&json!({
-            "childZone":"dev",
-            "parentZone":"local-root",
-            "routeStatus":"ready"
-        }) ) == false);
+        assert!(
+            contains_forbidden_topology_field(&json!({
+                "childZone":"dev",
+                "parentZone":"local-root",
+                "routeStatus":"ready"
+            })) == false
+        );
         assert!(contains_forbidden_topology_field(&json!({
             "childZone":"dev",
             "zoneLinkRef":"ZoneLink/uplink"

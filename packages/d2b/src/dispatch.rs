@@ -2,12 +2,12 @@
 
 use std::{ffi::OsString, path::PathBuf};
 
-use clap::{Args, Parser, Subcommand};
-use crate::{
-    CliFailure,
-    activation, complete, endpoint, exec, guest, host, provider, resource, share, shell, zone,
-};
 use crate::context::{OutputMode, ZoneContext, output_mode};
+use crate::{
+    CliFailure, activation, complete, endpoint, exec, guest, host, provider, resource, share,
+    shell, zone,
+};
+use clap::{Args, Parser, Subcommand};
 
 /// The one built-in top-level command registry.
 ///
@@ -252,10 +252,7 @@ pub(crate) enum GenericAuthCommand {
     Status,
 }
 
-pub(crate) fn runtime_dispatch(
-    cli: &ModernCli,
-    context: &ZoneContext,
-) -> Result<i32, CliFailure> {
+pub(crate) fn runtime_dispatch(cli: &ModernCli, context: &ZoneContext) -> Result<i32, CliFailure> {
     let mode = output_mode(cli.json, cli.human)?;
     let deadline = if cli.no_deadline {
         ZoneContext::deadline(Some("900s"))?
