@@ -1129,7 +1129,24 @@ catalog:
   outside nextest, so this obligation carries that companion run.
 - `every_declared_backing_field_is_a_service_base_field` - decision 4's
   grounding invariant, which stays a runtime assertion because it relates two
-  declarations and cannot be encoded in a type.
+  declarations and cannot be encoded in a type. **Planted-violation control,
+  because this assertion is the one most able to pass vacuously.** It iterates
+  each family's `Constrained.fields` and checks membership in that family's
+  `service_spec_allowed`; security key is `NoBacking` and contributes no
+  iterations at all, so a structural mistake that emptied the iteration for the
+  other three would leave the test green over an empty universe and prove
+  nothing. The control constructs a local `Constrained` declaration whose
+  `fields` names a string absent from that family's `service_spec_allowed`, for
+  example `backingEndpointRef` against the USB family, and asserts the
+  assertion rejects it. Built from a `Constrained` family deliberately: a
+  control built from security key could not exercise a code path that only runs
+  for families with declared fields.
+
+  This is a third control and does not replace either existing one. Totality
+  catches an unclassified base field, disjointness catches a real backing field
+  classified as a non-reference, and this one catches a declared backing field
+  that names nothing in the base. The three failures are independent, and no
+  one control fires on the other two.
 - `no_family_admits_its_own_service_or_binding_type_as_backing` - decision 7.
 - `every_family_yields_a_projection_factory` - all four return `Ok`, replacing
   the current three-of-four state.
