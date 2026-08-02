@@ -474,9 +474,9 @@ fn journald_component_allowlist_and_pipeline_references() {
         "journald-policy: invented redact_journald component is forbidden"
     );
     for statement in [
-        r#"delete_key(log.body, "_CMDLINE")"#,
-        r#"delete_key(log.body, "INVOCATION_ID")"#,
-        r#"replace_pattern(log.body["MESSAGE"]"#,
+        r#"delete_key(log.body, \"_CMDLINE\")"#,
+        r#"delete_key(log.body, \"INVOCATION_ID\")"#,
+        r#"replace_pattern(log.body[\"MESSAGE\"]"#,
     ] {
         assert!(
             fragment.contains(statement),
