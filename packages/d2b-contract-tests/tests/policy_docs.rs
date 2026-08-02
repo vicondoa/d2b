@@ -202,7 +202,7 @@ fn agents_md_routes_to_paths_that_exist() {
 // Migrated from tests/manpage-completeness-eval.sh.
 //
 // Asserts that every top-level clap subcommand declared in
-// `packages/d2b/src/lib.rs` (`enum NativeCommand { ... }`) is documented as
+// `packages/d2b/src/dispatch.rs` (`enum ModernCommand { ... }`) is documented as
 // a section in the committed d2b(1) manpage at `docs/manpages/d2b.1`.
 // clap_mangen emits one `.TP` entry per subcommand under the SUBCOMMANDS block
 // (rendered as `d2b-<name>(1)`); a new verb that lands without rerunning
@@ -211,7 +211,7 @@ fn agents_md_routes_to_paths_that_exist() {
 // ---------------------------------------------------------------------------
 #[test]
 fn manpage_documents_every_top_level_subcommand() {
-    let cli_rel = "packages/d2b/src/lib.rs";
+    let cli_rel = "packages/d2b/src/dispatch.rs";
     let manpage_rel = "docs/manpages/d2b.1";
     assert!(
         repo_path_exists(cli_rel),
@@ -352,7 +352,7 @@ fn activation_docs_do_not_describe_host_side_guest_activation() {
     );
 }
 
-/// Faithful port of the bash gate's `awk` extraction of the `enum NativeCommand`
+/// Faithful port of the bash gate's `awk` extraction of the `enum ModernCommand`
 /// subcommand set. Two forms are recognised inside the enum block:
 ///   1. An explicit override `#[command(name = "...")]` on the line immediately
 ///      preceding a variant.
@@ -362,7 +362,10 @@ fn activation_docs_do_not_describe_host_side_guest_activation() {
 /// Only variants of the form `^<ws>Ident(` (a tuple-data variant) are detected,
 /// exactly as the bash awk parser did.
 fn expected_subcommands(cli_src: &str) -> BTreeSet<String> {
-    let enum_start = Regex::new(r"^enum NativeCommand[[:space:]]*\{").unwrap();
+    let enum_start = Regex::new(
+        r"^[[:space:]]*(?:pub(?:\([^)]*\))?[[:space:]]+)?enum ModernCommand[[:space:]]*\{",
+    )
+    .unwrap();
     let enum_end = Regex::new(r"^\}").unwrap();
     let override_re =
         Regex::new(r#"^[[:space:]]*#\[command\(name[[:space:]]*=[[:space:]]*"[^"]+"\)\]"#).unwrap();
