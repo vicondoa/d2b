@@ -359,7 +359,7 @@ sub drain_adopted_descendants {
                 next;
             }
             last if $reaped < 0 && $! == ECHILD;
-            last;
+            fatal("could not drain adopted scheduler descendants");
         }
         if ($! == EINTR) {
             ++$interrupt_retries;

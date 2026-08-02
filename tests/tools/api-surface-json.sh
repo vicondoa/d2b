@@ -30,6 +30,7 @@ fi
 rustup set profile minimal >/dev/null
 rustup toolchain install "$pin" >/dev/null
 
+mkdir -p "$ROOT/.scratch"
 scratch=$(d2b_mktemp ".scratch/.d2b-api-surface.XXXXXX")
 public_dir="$scratch/public"
 private_dir="$scratch/private"

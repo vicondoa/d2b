@@ -740,6 +740,10 @@ set -euo pipefail
             'd2b_mktemp ".scratch/.d2b-api-surface.XXXXXX"',
             api_driver,
         )
+        self.assertLess(
+            api_driver.index('mkdir -p "$ROOT/.scratch"'),
+            api_driver.index('d2b_mktemp ".scratch/.d2b-api-surface.XXXXXX"'),
+        )
         self.assertIn('public_target="$target_root/public-census"', api_driver)
         self.assertIn('private_target="$target_root/private-census"', api_driver)
         self.assertIn('checker_target="$target_root/checker"', api_driver)
@@ -1681,6 +1685,14 @@ set -euo pipefail
             "descendant reap exceeded the interrupt retry limit",
         ):
             self.assertIn(diagnostic, helper)
+        blocking_wait = helper.split(
+            "my $reaped = $process_control->{waitpid}->(-1, 0);",
+            1,
+        )[1][:600]
+        self.assertIn(
+            'fatal("could not drain adopted scheduler descendants")',
+            blocking_wait,
+        )
         self.assertGreaterEqual(helper.count("$! == EINTR"), 4)
         self.assertGreaterEqual(helper.count("$! == EAGAIN"), 3)
 
