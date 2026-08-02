@@ -21,7 +21,7 @@ let
 
   tokenPattern = "^[a-z][a-z0-9-]{0,62}$";
   modePattern = "^[0-7][0-7][0-7][0-7]$";
-  permissionsPattern = "^[rwx-]{0,3}$";
+  permissionsPattern = "^[rwx]{1,3}$";
   layoutKeys = [
     "path" "type" "ownerRef" "groupRef" "mode" "target"
     "accessAcl" "defaultAcl" "foreignChildPolicy" "noFollow"
@@ -77,7 +77,6 @@ let
     && !(lib.hasPrefix "/" value)
     && !(lib.hasInfix "\\" value)
     && !(lib.hasInfix "\0" value)
-    && !(lib.hasPrefix "." value && value != "")
     && !(lib.hasInfix ":" value)
     && !(builtins.elem ".." (lib.splitString "/" value))
     && (value == "" || lib.all
@@ -85,7 +84,7 @@ let
       (lib.splitString "/" value))
     && !(lib.any
       (separator: lib.hasInfix separator value)
-      [ "∕" "⁄" "⧸" "／" "＼" "﹨" "．" ]);
+      [ "⁄" "∕" "⧸" "⫸" "／" "＼" "﹨" "．" "․" ]);
 
   # A guest-side mount path is absolute and still carries no traversal.
   guestMountPath = value:
@@ -94,6 +93,9 @@ let
     && builtins.stringLength value <= maxLayoutPathBytes
     && !(lib.hasInfix "\\" value)
     && !(lib.hasInfix "\0" value)
+    && !(lib.any
+      (separator: lib.hasInfix separator value)
+      [ "⁄" "∕" "⧸" "⫸" "／" "＼" "﹨" "．" "․" ])
     && (value == "/" || lib.all
       (component: component != "" && component != "." && component != "..")
       (lib.tail (lib.splitString "/" value)));
@@ -112,7 +114,9 @@ let
       }
     ] ++ lib.flatten (lib.imap0
       (grantIndex: grant:
-        let where = "${path}.layout.${toString entryIndex}.${field}.${toString grantIndex}";
+        let
+          where = "${path}.layout.${toString entryIndex}.${field}.${toString grantIndex}";
+          permissionValue = attrOr grant "permissions" "";
         in [
           {
             assertion =
@@ -125,9 +129,8 @@ let
             message = "${where}.principal.ref must be a User in the same Zone; a numeric identity is not accepted.";
           }
           {
-            assertion =
-              builtins.match permissionsPattern (attrOr grant "permissions" "") != null
-              && (attrOr grant "permissions" "") != "";
+            assertion = builtins.isString permissionValue
+              && builtins.match permissionsPattern permissionValue != null;
             message = "${where}.permissions must be a POSIX rwx string.";
           }
         ])
@@ -159,6 +162,10 @@ let
           entryType = attrOr entry "type" null;
           target = attrOr entry "target" null;
           invariants = attrOr entry "invariants" [ ];
+          safeInvariants = if builtins.isList invariants then invariants else [ ];
+          recursiveValue = attrOr entry "recursive" false;
+          recursive = if builtins.isBool recursiveValue then recursiveValue else false;
+          modeValue = attrOr entry "mode" "";
         in
         [
           {
@@ -182,7 +189,8 @@ let
             message = "${where}.groupRef must resolve to a User in the same Zone.";
           }
           {
-            assertion = builtins.match modePattern (attrOr entry "mode" "") != null;
+            assertion = builtins.isString modeValue
+              && builtins.match modePattern modeValue != null;
             message = "${where}.mode must be a four-digit octal string.";
           }
           {
@@ -190,7 +198,8 @@ let
             message = "${where}.target is accepted only for a symlink entry. Remove target, or set ${where}.type to symlink.";
           }
           {
-            assertion = entryType == "symlink" -> (target != null && anchoredPath target);
+            assertion = entryType == "symlink"
+              -> (target != null && target != "" && anchoredPath target);
             message = "${where}.target is required for a symlink and must resolve inside the Volume root.";
           }
           {
@@ -286,7 +295,7 @@ let
           }
           {
             assertion = builtins.isList invariants
-              && lib.length (lib.unique invariants) == lib.length invariants;
+              && lib.length (lib.unique safeInvariants) == lib.length safeInvariants;
             message = "${where}.invariants must be a unique list.";
           }
           {
@@ -298,14 +307,24 @@ let
                   "broker-opaque-id-only" "root-owned-parent"
                   "scope-authorization-required"
                 ])
-                invariants;
+                safeInvariants;
             message = "${where}.invariants contains an unknown value.";
           }
           {
-            assertion = !attrOr entry "recursive" false
+            assertion = builtins.isBool recursiveValue;
+            message = "${where}.recursive must be boolean.";
+          }
+          {
+            assertion = !recursive
               || builtins.elem (attrOr entry "repairPolicy" "exact-owner")
                 [ "exact-owner" "fail-closed" "exact-owner-and-acl" ];
             message = "${where}.recursive requires exact-owner or fail-closed repair.";
+          }
+          {
+            assertion = !recursive
+              || !(builtins.elem "no-recursive-mutation" safeInvariants
+                || builtins.elem "hardlink-farm-no-recursion" safeInvariants);
+            message = "${where}.recursive conflicts with no-recursive-mutation or hardlink-farm-no-recursion.";
           }
         ]
         ++ aclAssertions path resources index "accessAcl" (attrOr entry "accessAcl" [ ])
@@ -330,7 +349,10 @@ let
     ]
     ++ lib.flatten (lib.mapAttrsToList
       (name: view:
-        let where = "${path}.views.${name}";
+        let
+          where = "${path}.views.${name}";
+          rightsValue = attrOr view "rights" [ ];
+          rights = if builtins.isList rightsValue then rightsValue else [ ];
         in [
           {
             assertion = exactKeys viewKeys view;
@@ -345,9 +367,8 @@ let
             message = "${where}.path must be anchored inside the Volume.";
           }
           {
-            assertion =
-              let rights = attrOr view "rights" [ ];
-              in rights != [ ]
+            assertion = builtins.isList rightsValue
+              && rights != [ ]
               && lib.length (lib.unique rights) == lib.length rights
               && lib.all
                 (right: builtins.elem right [ "read" "write" "create" "delete" "traverse" "execute" ])
@@ -389,9 +410,15 @@ let
           where = "${path}.attachments.${toString index}";
           view = attrOr attachment "view" null;
           access = attrOr attachment "access" "read-only";
-          rights = attrOr (attrOr safeViews view { }) "rights" [ ];
+          rightsValue = attrOr (attrOr safeViews view { }) "rights" [ ];
+          rights = if builtins.isList rightsValue then rightsValue else [ ];
           settings = attrOr attachment "settings" { };
+          posixAcl = attrOr settings "posixAcl" false;
+          xattr = attrOr settings "xattr" false;
+          cache = attrOr settings "cache" "auto";
+          inodeFileHandles = attrOr settings "inodeFileHandles" "never";
           threadPoolSize = attrOr settings "threadPoolSize" null;
+          socketGroup = attrOr settings "socketGroup" null;
         in
         [
           {
@@ -401,6 +428,22 @@ let
           {
             assertion = exactKeys attachmentSettingKeys settings;
             message = "${where}.settings contains an unsupported field.";
+          }
+          {
+            assertion = builtins.isBool posixAcl;
+            message = "${where}.settings.posixAcl must be boolean.";
+          }
+          {
+            assertion = builtins.isBool xattr;
+            message = "${where}.settings.xattr must be boolean.";
+          }
+          {
+            assertion = builtins.elem cache [ "auto" "always" "never" ];
+            message = "${where}.settings.cache must be auto, always, or never.";
+          }
+          {
+            assertion = builtins.elem inodeFileHandles [ "never" "prefer" "mandatory" ];
+            message = "${where}.settings.inodeFileHandles must be never, prefer, or mandatory.";
           }
           {
             assertion = isExecutionRef resources (attrOr attachment "executionRef" "");
@@ -436,7 +479,8 @@ let
             message = "${where}.access must be read-only, read-write, or shared-write.";
           }
           {
-            assertion = access == "read-only" || builtins.elem "write" rights;
+            assertion = access == "read-only"
+              || (builtins.isList rightsValue && builtins.elem "write" rights);
             message = "${where}.access requires the selected view to grant the write right. Add write to that view's rights under ${path}.views, or set ${where}.access to read-only.";
           }
           {
@@ -448,18 +492,23 @@ let
               || (builtins.isInt threadPoolSize && threadPoolSize >= 1 && threadPoolSize <= 256);
             message = "${where}.settings.threadPoolSize must be null or an integer from 1 to 256.";
           }
+          {
+            assertion = socketGroup == null
+              || (builtins.isString socketGroup && builtins.match tokenPattern socketGroup != null);
+            message = "${where}.settings.socketGroup must be null or a bounded token.";
+          }
         ])
       safeAttachments);
 
-  sourceAssertions = path: resources: source: quota: volumeKind:
+  sourceAssertions = path: resources: source: quota: volumeKind: layout:
     let
       safeSource = if builtins.isAttrs source then source else { };
       settings = attrOr source "settings" { };
       safeSettings = if builtins.isAttrs settings then settings else { };
-      kind = attrOr settings "kind" null;
-      policyId = attrOr settings "sourcePolicyId" null;
-      imageFormat = attrOr settings "imageFormat" null;
-      preallocate = attrOr settings "preallocate" false;
+      kind = attrOr safeSettings "kind" null;
+      policyId = attrOr safeSettings "sourcePolicyId" null;
+      imageFormat = attrOr safeSettings "imageFormat" null;
+      preallocate = attrOr safeSettings "preallocate" false;
       hostBacked = builtins.elem kind [ "local-path" "block-image" ];
       maxBytes = attrOr quota "maxBytes" null;
       maxInodes = attrOr quota "maxInodes" null;
@@ -495,11 +544,13 @@ let
         message = "${path}.source.settings.kind must be local-path, block-image, or tmpfs.";
       }
       {
-        assertion = !(builtins.hasAttr "path" settings) && !(builtins.hasAttr "hostPath" settings);
+        assertion = !(builtins.hasAttr "path" safeSettings)
+          && !(builtins.hasAttr "hostPath" safeSettings);
         message = "${path}.source.settings must not carry a host path; a Volume source is an opaque policy ID. Remove the path and hostPath keys and name the root through ${path}.source.settings.sourcePolicyId instead.";
       }
       {
-        assertion = hostBacked -> (policyId != null && builtins.match tokenPattern policyId != null);
+        assertion = hostBacked
+          -> (builtins.isString policyId && builtins.match tokenPattern policyId != null);
         message = "${path}.source.settings.sourcePolicyId is required for a host-backed source and must match ${tokenPattern}.";
       }
       {
@@ -559,7 +610,24 @@ let
           || (maxInodes == null || (builtins.isInt maxInodes && maxInodes > 0));
         message = "${path}.quota.maxInodes must be a positive integer when present.";
       }
-    ];
+    ]
+    ++ lib.flatten (lib.imap0
+      (index: entry:
+        let
+          where = "${path}.layout.${toString index}";
+          createPolicy = attrOr entry "createPolicy" "create-if-absent";
+          restartPolicy = attrOr entry "restartPolicy" "preserve-across-controller-restart";
+        in lib.optionals (kind == "tmpfs") [
+          {
+            assertion = createPolicy != "create-if-never-provisioned";
+            message = "${where}.createPolicy is not valid for a tmpfs source; readiness cannot depend on prior provisioning.";
+          }
+          {
+            assertion = restartPolicy != "preserve-across-controller-restart";
+            message = "${where}.restartPolicy is not valid for a tmpfs source; readiness cannot depend on controller restart persistence.";
+          }
+        ])
+      (if builtins.isList layout then layout else [ ]));
 
   volumeAssertions = zoneName: resourceName: resources: resource:
     let
@@ -606,7 +674,7 @@ let
       }
     ]
     ++ sourceAssertions "${path}.spec" resources (attrOr safeSpec "source" { }) (attrOr safeSpec "quota" { })
-      (attrOr safeSpec "kind" null)
+      (attrOr safeSpec "kind" null) (attrOr safeSpec "layout" [ ])
     ++ layoutAssertions "${path}.spec" resources (attrOr safeSpec "layout" [ ])
     ++ viewAssertions "${path}.spec" views
     ++ attachmentAssertions "${path}.spec" resources views

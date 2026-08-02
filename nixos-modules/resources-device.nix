@@ -12,7 +12,13 @@ let
   resourceRefPattern =
     "^([A-Z][A-Za-z0-9]{0,62}|[a-z][a-z0-9-]{0,62}\\.d2bus\\.org\\.[A-Z][A-Za-z0-9]{0,62})/[a-z][a-z0-9-]{0,62}$";
   hexIdPattern = "^[0-9a-f]{4}$";
-  pciSlotPattern = "^[A-Za-z0-9:._-]{1,31}$";
+  deviceFilterText = maxBytes: value:
+    builtins.isString value
+    && builtins.stringLength value >= 1
+    && builtins.stringLength value <= maxBytes
+    && builtins.match "^[!-~]+$" value != null
+    && !(lib.hasInfix "/" value)
+    && !(lib.hasInfix "\\" value);
   executionPolicyDefaultFields = [
     "defaultDomain"
     "allowedDomains"
@@ -124,11 +130,9 @@ let
     && (busClass == "usb" || busClass == "hidraw"
       -> (vendorId == null || (builtins.isString vendorId && builtins.match hexIdPattern vendorId != null))
       && (productId == null || (builtins.isString productId && builtins.match hexIdPattern productId != null))
-      && (serial == null || (builtins.isString serial && builtins.stringLength serial >= 1 && builtins.stringLength serial <= 128)))
-    && (busClass == "drm"
-      -> (pciSlot == null || (builtins.isString pciSlot && builtins.match pciSlotPattern pciSlot != null)))
-    && (busClass == "pci"
-      -> (slot == null || (builtins.isString slot && builtins.match pciSlotPattern slot != null)))
+      && (serial == null || deviceFilterText 128 serial))
+    && (busClass == "drm" -> (pciSlot == null || deviceFilterText 31 pciSlot))
+    && (busClass == "pci" -> (slot == null || deviceFilterText 31 slot))
     && (busClass == "tpm"
       -> builtins.isInt index && index >= 0 && index <= 255);
 
