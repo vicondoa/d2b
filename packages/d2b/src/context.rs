@@ -258,6 +258,22 @@ impl ZoneContext {
                 1,
             )
         })?;
+        if matches!(
+            value.get("type").and_then(Value::as_str),
+            Some("error" | "helloRejected")
+        ) {
+            let message = value
+                .pointer("/error/message")
+                .and_then(Value::as_str)
+                .or_else(|| value.get("message").and_then(Value::as_str))
+                .unwrap_or("Zone rejected the resource request");
+            return Err(self.failure(
+                "not-implemented",
+                &bounded_message(message),
+                mode,
+                78,
+            ));
+        }
         if value
             .get("ok")
             .and_then(Value::as_bool)
