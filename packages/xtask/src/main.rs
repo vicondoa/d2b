@@ -409,12 +409,13 @@ fn main() -> std::process::ExitCode {
         }),
         [command] if command == "process-marker-pin" => run_process_marker_pin(),
         [command] if command == "check-provider-crate-layout" => run_provider_crate_layout(),
+        [command] if command == "check-provider-layout" => run_provider_layout(),
         [command, rest @ ..] if command == "test-runtime-ledger" => {
             test_runtime_ledger::run_cli(rest)
         }
         _ => {
             eprintln!(
-                "usage: cargo run --manifest-path packages/Cargo.toml -p xtask -- <gen-schemas|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-error-codes|gen-provider-packaging|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|spec-registry|implementation-graph|process-marker-pin|check-provider-crate-layout|test-runtime-ledger <record|check|lint|help> [options]|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|panel-request|panel-attest|seal|merge-target|merge-eligibility|help> [options]|heavy-gate <-- <command> [args...] | verify-slot>>"
+                "usage: cargo run --manifest-path packages/Cargo.toml -p xtask -- <gen-schemas|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-error-codes|gen-provider-packaging|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|spec-registry|implementation-graph|process-marker-pin|check-provider-crate-layout|check-provider-layout|test-runtime-ledger <record|check|lint|help> [options]|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|panel-request|panel-attest|seal|merge-target|merge-eligibility|help> [options]|heavy-gate <-- <command> [args...] | verify-slot>>"
             );
             std::process::ExitCode::FAILURE
         }
@@ -444,6 +445,76 @@ fn run_provider_crate_layout() -> std::process::ExitCode {
             eprintln!("check-provider-crate-layout failed: {error}");
             std::process::ExitCode::FAILURE
         }
+    }
+}
+
+fn run_provider_layout() -> std::process::ExitCode {
+    let result = repo_root().and_then(|root| check_provider_layout(&root));
+    match result {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("check-provider-layout failed: {error}");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+/// Check the four required paths for every two-segment Provider workspace
+/// member. Generic helper crates such as `d2b-provider-toolkit` do not match
+/// the Provider crate naming shape and remain outside this check.
+fn check_provider_layout(repo_root: &Path) -> Result<(), String> {
+    let manifest = fs::read_to_string(repo_root.join("packages/Cargo.toml"))
+        .map_err(|_| "provider-layout-input-unreadable".to_owned())?;
+    let members_start = manifest
+        .find("members = [")
+        .ok_or_else(|| "provider-layout-members-missing".to_owned())?;
+    let members = &manifest[members_start..];
+    let members_end = members
+        .find(']')
+        .ok_or_else(|| "provider-layout-members-malformed".to_owned())?;
+    let mut violations = Vec::new();
+
+    for line in members[..members_end].lines().skip(1) {
+        let member = line.trim().trim_end_matches(',');
+        let Some(relative) = member
+            .strip_prefix('"')
+            .and_then(|value| value.strip_suffix('"'))
+        else {
+            continue;
+        };
+        let member_path = Path::new(relative);
+        let Some(crate_name) = member_path.file_name().and_then(|value| value.to_str()) else {
+            return Err("provider-layout-member-invalid".to_owned());
+        };
+        let Some(provider_suffix) = crate_name.strip_prefix("d2b-provider-") else {
+            continue;
+        };
+        if !provider_suffix.contains('-') {
+            continue;
+        }
+        let crate_dir = repo_root.join("packages").join(member_path);
+        let required = ["src", "tests", "integration", "README.md"];
+        let missing = required
+            .into_iter()
+            .filter(|path| !crate_dir.join(path).exists())
+            .collect::<Vec<_>>();
+        if !missing.is_empty() {
+            let missing = missing
+                .into_iter()
+                .map(|path| format!("\"{path}\""))
+                .collect::<Vec<_>>()
+                .join(",");
+            violations.push(format!(
+                "{{\"error\":\"missing-provider-layout\",\"crate\":\"{crate_name}\",\"missing\":[{missing}]}}"
+            ));
+        }
+    }
+
+    if violations.is_empty() {
+        Ok(())
+    } else {
+        violations.sort();
+        Err(violations.join("\n"))
     }
 }
 
