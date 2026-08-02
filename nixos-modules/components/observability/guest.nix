@@ -18,6 +18,9 @@ let
     enable = cfg.scrapeJournal;
   };
 
+  # The pinned collector's offline validator rejects the existing Unix OTLP
+  # exporter URL before it can inspect the pipeline, so validation stays in
+  # the hermetic deep-force and component-policy guards.
   collectorConfig = pkgs.writeText "d2b-guest-otel-collector.yaml" (
     lib.generators.toYAML { } {
       receivers = {
@@ -139,7 +142,9 @@ let
         pipelines.logs = {
           receivers = [ "otlp" ] ++ lib.optional cfg.scrapeJournal "journald";
           processors = [ "memory_limiter" "resource" ]
-            ++ lib.optional cfg.scrapeJournal "redact_journald"
+            ++ lib.optional cfg.scrapeJournal "filter/journald"
+            ++ lib.optional cfg.scrapeJournal "transform/journald"
+            ++ lib.optional cfg.scrapeJournal "attributes/journald"
             ++ [ "batch" ];
           exporters = [ "otlp" ];
         };

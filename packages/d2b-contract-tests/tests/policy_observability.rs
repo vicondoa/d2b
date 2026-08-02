@@ -32,6 +32,7 @@ fn any_line_matches(content: &str, pattern: &str) -> bool {
 const OBS_HOST: &str = "nixos-modules/components/observability/host.nix";
 const OBS_STACK: &str = "nixos-modules/components/observability/stack.nix";
 const OBS_GUEST: &str = "nixos-modules/components/observability/guest.nix";
+const OBS_JOURNALD: &str = "packages/d2b-provider-observability-otel/src/nix/journald.nix";
 
 #[test]
 fn startup_tracing_avoids_host_path_fields() {
@@ -361,10 +362,25 @@ fn tempo_guest_collector_shape() {
     // journald receiver is wired into the logs pipeline under scrapeJournal.
     assert!(
         guest.contains("lib.optionalAttrs cfg.scrapeJournal {")
-            && guest.contains("journald = {")
+            && guest.contains("journaldProviderConfig.receivers.journald")
             && guest.contains(r#"lib.optional cfg.scrapeJournal "journald""#),
         "tempo-budget-eval: guest collector must add the journald receiver to the logs \
          pipeline under scrapeJournal"
+    );
+
+    for component in [
+        "filter/journald",
+        "transform/journald",
+        "attributes/journald",
+    ] {
+        assert!(
+            guest.contains(&format!(r#"lib.optional cfg.scrapeJournal "{component}""#)),
+            "tempo-budget-eval: guest logs pipeline is missing journald processor {component}"
+        );
+    }
+    assert!(
+        !guest.contains("redact_journald"),
+        "tempo-budget-eval: guest logs pipeline must not reference the invented redact_journald processor"
     );
 
     // journald collection grants journal read access + journalctl on PATH.
@@ -392,6 +408,124 @@ fn tempo_guest_collector_shape() {
              bind+enable a file_storage cursor (missing: {token})"
         );
     }
+}
+
+/// Extract component keys from the deliberately small Nix fragment shape.
+///
+/// The four-space anchor excludes nested processor configuration keys while
+/// still covering the receiver and each processor declaration. An empty or
+/// malformed extraction is intentionally rejected by the caller.
+fn journald_component_ids(content: &str) -> BTreeSet<String> {
+    let re = Regex::new(r#"(?m)^    (?:"([^"]+)"|([A-Za-z0-9_-]+))\s*=\s*\{"#)
+        .expect("valid journald component regex");
+    re.captures_iter(content)
+        .map(|caps| {
+            caps.get(1)
+                .or_else(|| caps.get(2))
+                .expect("component capture")
+                .as_str()
+                .to_string()
+        })
+        .collect()
+}
+
+fn journald_pipeline_references(content: &str) -> BTreeSet<String> {
+    let re = Regex::new(r#"lib\.optional cfg\.scrapeJournal "([^"]+)""#)
+        .expect("valid journald pipeline reference regex");
+    re.captures_iter(content)
+        .map(|caps| caps[1].to_string())
+        .collect()
+}
+
+#[test]
+fn journald_component_allowlist_and_pipeline_references() {
+    assert!(
+        repo_path_exists(OBS_JOURNALD),
+        "journald-policy: missing file: {OBS_JOURNALD}"
+    );
+    assert!(
+        repo_path_exists(OBS_GUEST),
+        "journald-policy: missing file: {OBS_GUEST}"
+    );
+
+    let fragment = read_repo_file(OBS_JOURNALD);
+    let guest = read_repo_file(OBS_GUEST);
+    let allowed_ids: BTreeSet<String> = [
+        "journald",
+        "filter/journald",
+        "transform/journald",
+        "attributes/journald",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect();
+    let declared_ids = journald_component_ids(&fragment);
+
+    assert!(
+        !declared_ids.is_empty(),
+        "journald-policy: component extraction found no receiver or processor declarations"
+    );
+    assert_eq!(
+        declared_ids, allowed_ids,
+        "journald-policy: component IDs must stay within the real otelcol-contrib allowlist"
+    );
+    assert!(
+        !fragment.contains("redact_journald"),
+        "journald-policy: invented redact_journald component is forbidden"
+    );
+    for statement in [
+        r#"delete_key(log.body, "_CMDLINE")"#,
+        r#"delete_key(log.body, "INVOCATION_ID")"#,
+        r#"replace_pattern(log.body["MESSAGE"]"#,
+    ] {
+        assert!(
+            fragment.contains(statement),
+            "journald-policy: redaction fragment is missing {statement}"
+        );
+    }
+
+    let references = journald_pipeline_references(&guest);
+    assert!(
+        !references.is_empty(),
+        "journald-policy: failed to find scrapeJournal pipeline references"
+    );
+    assert!(
+        references.is_subset(&declared_ids),
+        "journald-policy: logs pipeline references an undeclared journald component"
+    );
+    for component in &references {
+        assert!(
+            allowed_ids.contains(component),
+            "journald-policy: pipeline component is outside the allowlist: {component}"
+        );
+    }
+
+    // Negative control: a renamed processor must not be accepted as a real
+    // component, even when the rest of the fragment remains unchanged.
+    let unknown_fragment =
+        fragment.replacen(r#""filter/journald" = {"#, r#""redact_journald" = {"#, 1);
+    let unknown_ids = journald_component_ids(&unknown_fragment);
+    assert_ne!(
+        unknown_ids, allowed_ids,
+        "journald-policy: negative component allowlist control did not change the parsed IDs"
+    );
+    assert!(
+        unknown_ids.contains("redact_journald"),
+        "journald-policy: negative component allowlist control was not exercised"
+    );
+
+    // Negative control: an undeclared pipeline reference must fail the same
+    // subset check used for the real guest source.
+    let unknown_guest = guest.replacen(
+        r#"lib.optional cfg.scrapeJournal "transform/journald""#,
+        r#"lib.optional cfg.scrapeJournal "transform/unknown""#,
+        1,
+    );
+    let unknown_references = journald_pipeline_references(&unknown_guest);
+    assert!(
+        !unknown_references.is_subset(&declared_ids),
+        "journald-policy: cross-reference guard accepted an undeclared processor"
+    );
 }
 
 // ===========================================================================

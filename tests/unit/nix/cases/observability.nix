@@ -436,6 +436,40 @@ let
       };
     };
 
+    obs-journal-execstart-enabled-deep-force = {
+      override = { ... }: {
+        d2b.observability.enable = true;
+        d2b.vms.corp-vm.observability = {
+          enable = true;
+          scrapeJournal = true;
+        };
+      };
+      extract = nixos:
+        let
+          execStart =
+            nixos.config.d2b._computed.corp-vm.config.systemd.services.d2b-otel-collector.serviceConfig.ExecStart;
+        in
+        builtins.deepSeq execStart (hasInfix "otelcol-contrib --config=file:" execStart);
+      expectedExtract = true;
+    };
+
+    obs-journal-execstart-disabled-deep-force = {
+      override = { ... }: {
+        d2b.observability.enable = true;
+        d2b.vms.corp-vm.observability = {
+          enable = true;
+          scrapeJournal = false;
+        };
+      };
+      extract = nixos:
+        let
+          execStart =
+            nixos.config.d2b._computed.corp-vm.config.systemd.services.d2b-otel-collector.serviceConfig.ExecStart;
+        in
+        builtins.deepSeq execStart (hasInfix "otelcol-contrib --config=file:" execStart);
+      expectedExtract = true;
+    };
+
     obs-audit-surface = {
       override = { ... }: {
         d2b.observability.enable = true;
