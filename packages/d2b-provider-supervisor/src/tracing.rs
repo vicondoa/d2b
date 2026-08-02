@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use d2b_telemetry::{
     BoundedEmitter, EmitOutcome, EmitterError, RedactionError, RedactionGuard, Signal,
-    TraceContext, encode_frame,
+    TraceContext, emitter::encode_frame,
 };
 
 /// Launch span.

@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use d2b_telemetry::{
     BoundedEmitter, EmitOutcome, IdentityCanaries, MetricDescriptor, MetricPolicyError, Signal,
-    TraceContext, encode_frame, meter_registry::label, validate_data_point,
+    TraceContext, emitter::encode_frame, meter_registry::label, validate_data_point,
 };
 
 /// Store metric names owned by this backend.

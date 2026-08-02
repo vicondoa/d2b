@@ -873,50 +873,50 @@ impl WriterActor {
                     }
                 }
             }
-
-            fn append_mutation_audits(&self, requests: &[WriteRequest]) -> Result<(), StoreError> {
-                let meta = current_meta(&self.database)?;
-                let resulting_revision = meta
-                    .current_revision
-                    .checked_add(1)
-                    .ok_or_else(|| crate::transaction::integrity("zone-revision-exhausted"))?;
-                let mut previous_hash = self
-                    .audit
-                    .previous_hash()
-                    .map_err(|_| crate::transaction::durability_failure("audit-unavailable"))?;
-                for request in requests {
-                    let Some(resource) = request.resources.first() else {
-                        return Err(crate::transaction::durability_failure(
-                            "audit-mutation-target-missing",
-                        ));
-                    };
-                    let record = resource_mutation_record(
-                        unix_timestamp_ms(),
-                        meta.zone_name.clone(),
-                        format!("writer-{}", request.sequence),
-                        format!("writer-correlation-{}", request.sequence),
-                        "resource-store",
-                        previous_hash,
-                        "update-spec",
-                        audit_resource_type(resource.resource_type().as_str()),
-                        opaque_digest(&resource.to_canonical_string()),
-                        0,
-                        meta.current_revision,
-                        resulting_revision,
-                        opaque_digest(&request.principal),
-                        meta.policy_revision,
-                        "ok",
-                        None,
-                    )
-                    .map_err(|_| crate::transaction::durability_failure("audit-record-invalid"))?;
-                    self.audit
-                        .append_before_commit(&record)
-                        .map_err(|_| crate::transaction::durability_failure("audit-unavailable"))?;
-                    previous_hash = record.record_hash().clone();
-                }
-                Ok(())
-            }
         }
+    }
+
+    fn append_mutation_audits(&self, requests: &[WriteRequest]) -> Result<(), StoreError> {
+        let meta = current_meta(&self.database)?;
+        let resulting_revision = meta
+            .current_revision
+            .checked_add(1)
+            .ok_or_else(|| crate::transaction::integrity("zone-revision-exhausted"))?;
+        let mut previous_hash = self
+            .audit
+            .previous_hash()
+            .map_err(|_| crate::transaction::durability_failure("audit-unavailable"))?;
+        for request in requests {
+            let Some(resource) = request.resources.first() else {
+                return Err(crate::transaction::durability_failure(
+                    "audit-mutation-target-missing",
+                ));
+            };
+            let record = resource_mutation_record(
+                unix_timestamp_ms(),
+                meta.zone_name.clone(),
+                format!("writer-{}", request.sequence),
+                format!("writer-correlation-{}", request.sequence),
+                "resource-store",
+                previous_hash,
+                "update-spec",
+                audit_resource_type(resource.resource_type().as_str()),
+                opaque_digest(&resource.to_canonical_string()),
+                0,
+                meta.current_revision,
+                resulting_revision,
+                opaque_digest(&request.principal),
+                meta.policy_revision,
+                "ok",
+                None,
+            )
+            .map_err(|_| crate::transaction::durability_failure("audit-record-invalid"))?;
+            self.audit
+                .append_before_commit(&record)
+                .map_err(|_| crate::transaction::durability_failure("audit-unavailable"))?;
+            previous_hash = record.record_hash().clone();
+        }
+        Ok(())
     }
 
     fn dispatch_live(&self, batch: ChangeBatch) -> Result<(), StoreError> {
@@ -1076,9 +1076,24 @@ fn commit_outcome(
 
 fn audit_resource_type(resource_type: &str) -> &'static str {
     match resource_type {
-        "Zone" | "ZoneLink" | "Provider" | "Role" | "RoleBinding" | "Quota" | "Host" | "Guest"
-        | "Process" | "EphemeralProcess" | "Volume" | "Network" | "Device" | "User"
-        | "Credential" | "Endpoint" | "ResourceExport" | "ResourceImport" => resource_type,
+        "Zone" => "Zone",
+        "ZoneLink" => "ZoneLink",
+        "Provider" => "Provider",
+        "Role" => "Role",
+        "RoleBinding" => "RoleBinding",
+        "Quota" => "Quota",
+        "Host" => "Host",
+        "Guest" => "Guest",
+        "Process" => "Process",
+        "EphemeralProcess" => "EphemeralProcess",
+        "Volume" => "Volume",
+        "Network" => "Network",
+        "Device" => "Device",
+        "User" => "User",
+        "Credential" => "Credential",
+        "Endpoint" => "Endpoint",
+        "ResourceExport" => "ResourceExport",
+        "ResourceImport" => "ResourceImport",
         _ => "vendor",
     }
 }
