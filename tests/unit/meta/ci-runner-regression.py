@@ -775,6 +775,12 @@ set -euo pipefail
             "broker should be allowed to overlap main after schema",
         )
 
+    def test_schema_leaf_uses_the_exported_cargo_job_budget_for_xtask(self) -> None:
+        driver = RUST_DRIVER.read_text(encoding="utf-8")
+        self.assertIn('export CARGO_BUILD_JOBS="$D2B_RUST_CARGO_JOBS"', driver)
+        self.assertEqual(driver.count("cargo xtask gen-schemas"), 2)
+        self.assertNotRegex(driver, r"cargo\s+--jobs\s+[^\n]*\sxtask\b")
+
     def test_rust_exit_cleanup_and_nix_reentry_are_executable_without_duplicate_fragments(self) -> None:
         tree = self.scratch / "rust-reentry-tree"
         for relative in (

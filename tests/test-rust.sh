@@ -725,9 +725,9 @@ snapshot_schema_out() {
 }
 
 log "--> schema generation reproducibility"
-(cd "$ROOT/packages" && cargo --jobs "$D2B_RUST_CARGO_JOBS" xtask gen-schemas)
+(cd "$ROOT/packages" && cargo xtask gen-schemas)
 schema_snapshot_1=$(snapshot_schema_out)
-(cd "$ROOT/packages" && cargo --jobs "$D2B_RUST_CARGO_JOBS" xtask gen-schemas)
+(cd "$ROOT/packages" && cargo xtask gen-schemas)
 schema_snapshot_2=$(snapshot_schema_out)
 if [ "$schema_snapshot_1" != "$schema_snapshot_2" ]; then
   fail "schema generation reproducibility: cargo xtask gen-schemas output is not reproducible"
