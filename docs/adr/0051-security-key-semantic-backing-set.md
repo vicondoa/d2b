@@ -490,21 +490,68 @@ pub struct ProjectionFactory {
 }
 ```
 
-It serializes as `projectionProtocolVersion`, is required, and is rejected by
-the existing `deny_unknown_fields` deserializer if absent. Decision 8 compares
-it first. A bounded parsed type rather than a bare `String` keeps an unbounded
-caller-supplied value off the struct.
+**A 1.0 descriptor has no such field, so the parse rule is load-bearing.** A
+required field would make every legacy descriptor fail at *deserialization*,
+with a serde error that never reaches decision 8 step 1 and therefore never
+produces the typed reason or the operator remedy that step exists to give. That
+would defeat the whole point of declaring the version. The field is defaulted,
+not required:
+
+```rust
+/// The protocol version a descriptor is assumed to declare when the field is
+/// absent. A descriptor written before the field existed is a 1.0 descriptor.
+/// This is a bounded constant, never caller text.
+pub const LEGACY_ABSENT_PROTOCOL_VERSION: &str = "1.0";
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct Wire {
+    // ...
+    #[serde(default = "legacy_absent_protocol_version")]
+    projection_protocol_version: SemanticProjectionProtocolVersion,
+    // ...
+}
+```
+
+`deny_unknown_fields` stays: the default covers a missing **known** field and
+never an unknown one. `SemanticProjectionProtocolVersion` parses a bounded
+`<major>.<minor>` grammar with one to three digits per component and a total
+length ceiling, so a present-but-malformed value is a parse failure at the type
+and never lands on the struct as free text. The three cases are distinct and
+each has its own outcome:
+
+| descriptor | deserialization | admission step 1 |
+| --- | --- | --- |
+| field absent | succeeds, value is `1.0` | `ProjectionProtocolVersionMismatch` with the operator remedy |
+| field present, well-formed, not the installed version | succeeds | `ProjectionProtocolVersionMismatch` with the operator remedy |
+| field present, malformed or over the ceiling | fails at the bounded type | not reached; the descriptor is malformed, which is a different class from skewed |
+
+**Defaulting is fail-closed, and one invariant keeps it that way.** The default
+can never manufacture a match, because the installed version is `1.1` and the
+legacy default is `1.0`. That holds only while the two differ, so it is asserted
+rather than assumed: `SEMANTIC_PROJECTION_PROTOCOL_VERSION` must never equal
+`LEGACY_ABSENT_PROTOCOL_VERSION`. If a future change ever set the installed
+version back to `1.0`, every field-absent descriptor would silently be admitted
+as current, which is the one way this default could become a hole. The assertion
+is the guard.
 
 ```rust
 // packages/d2b-contracts/src/v3/semantic_services/mod.rs
 pub const SEMANTIC_PROJECTION_PROTOCOL_VERSION: &str = "1.1"; // was "1.0"
 ```
 
-**Why minor and not major.** An old descriptor's non-empty set means exactly
-what it meant before, and every field keeps its type and name, so nothing that
-parsed before fails to parse now. What changes is the admitted value domain,
-which widens. A widening with unchanged meaning for existing values is a minor
-bump.
+**Why minor and not major, stated precisely about the right stage.** An old
+descriptor's non-empty set means exactly what it meant before, every field keeps
+its type and name, and with the default rule above a 1.0 descriptor still
+deserializes. It is then **rejected at admission**, with a typed reason and a
+remedy. Deserialization and admission are different stages and an earlier
+revision of this record conflated them, claiming both that the field was
+required and that nothing which parsed before fails to parse now; those cannot
+both be true. What the minor bump claims is the narrower and correct thing: no
+existing value changes meaning, and no descriptor becomes unparseable. Being
+refused by an updated Core is the intended behaviour, not a compatibility break,
+because that refusal is exactly what tells an operator to install a matching
+artifact.
 
 **Why not the base schema version.** `SEMANTIC_BASE_SCHEMA_MAJOR` and
 `SEMANTIC_BASE_SCHEMA_MINOR` stay at `1` and `0`. No base or projection field
@@ -554,19 +601,52 @@ examined, and the operator is told the protocol version differs rather than
 being shown two hashes. Leaving the other three unchanged would have made
 security key's move look like tampering and the others look fine.
 
+**The generated artifact must publish every declared field, not a subset.**
+Measured: `packages/xtask/src/semantic_service_schemas.rs` emits five extension
+keys on each `*_projection_spec.schema.json` today, and `exportability` and
+`allowedBindingTargetRefTypes` are not among them. Nix reads these artifacts to
+validate a Provider descriptor at build time, so any declared field the artifact
+omits is a field Nix cannot compare without recomputing a fingerprint, and
+`exportability` is not in any fingerprint at all. That is the same blind spot
+decision 8 step 2 closes at admission, left open one layer down. The generator
+publishes all seven:
+
+| key | source | in `factoryFingerprint`? |
+| --- | --- | --- |
+| `x-d2b-resource-type` | `serviceType` | yes |
+| `x-d2b-binding-resource-type` | `bindingType` | yes |
+| `x-d2b-projection-protocol-version` | `projectionProtocolVersion` | yes |
+| `x-d2b-allowed-backing-ref-types` | `allowedBackingRefTypes` | yes |
+| `x-d2b-allowed-binding-target-ref-types` | `allowedBindingTargetRefTypes` | yes |
+| `x-d2b-exportability` | `exportability` | **no** |
+| `x-d2b-projection-schema-fingerprint`, `x-d2b-factory-fingerprint` | both fingerprints | n/a |
+
+The `exportability` row is the one that matters: it is the only declared field a
+fingerprint comparison can never catch, at either layer. Publishing it is what
+lets Nix reject a descriptor advertising `explicit-export` for a capability the
+catalog declares `forbidden`.
+
 **Regeneration and migration.** Regeneration is
 `run_xtask gen-semantic-service-schemas`, gated by the enforcing `make
 test-drift` lane; all four `*_projection_spec.schema.json` artifacts are
-rewritten in one commit and each additionally publishes
-`x-d2b-projection-protocol-version`. **There is no migration, because there is
-no runtime consumer.** No Provider descriptor is signed, no `ResourceExport` or
-`ResourceImport` type exists yet (`packages/d2b-contracts/src/v3/` has no
-`resource_export.rs` or `resource_import.rs`; they are
-`ADR046-zone-control-019`'s destination), and every work item in this program
-carries `dataMigration: None; full reset`. The versioning is therefore explicit
-rather than load-bearing today, and it is recorded now so that the first signed
-descriptor is minted against a declared protocol version instead of an implicit
-one.
+rewritten in one commit with the seven keys above. **There is no migration,
+because there is no runtime consumer.** No Provider descriptor is signed, no
+`ResourceExport` or `ResourceImport` type exists yet
+(`packages/d2b-contracts/src/v3/` has no `resource_export.rs` or
+`resource_import.rs`; they are `ADR046-zone-control-019`'s destination), and
+every work item in this program carries `dataMigration: None; full reset`. The
+versioning is therefore explicit rather than load-bearing today, and it is
+recorded now so that the first signed descriptor is minted against a declared
+protocol version instead of an implicit one.
+
+**Adding artifact keys moves no fingerprint, and the reason is structural.**
+Measured from the two derivation functions: `layer_fingerprint` takes only the
+schema id, schema version, and the allowed and required field-name lists;
+`factory_fingerprint` takes only the two ResourceTypes, both reference sets, the
+projection schema fingerprint, and the protocol version. Neither reads the
+emitted file. The artifact is an output of the catalog, never an input to it, so
+no `x-d2b-*` key can feed back into a preimage. The four values pinned below are
+unchanged by this decision's artifact work.
 
 **The pinned values**, measured by re-deriving `factory_fingerprint` for every
 family at `projectionProtocolVersion` `"1.1"`, with security key's backing set
@@ -808,6 +888,30 @@ also silently reclassifies any future field the moment someone renames it. The
 explicit list costs thirteen strings and one totality assertion, and it fails
 loudly when a new field appears rather than guessing.
 
+**Make `projectionProtocolVersion` a required field.** This is what the record
+specified before this revision, and it is self-defeating. A 1.0 descriptor has
+no such field, so a required field means every legacy descriptor dies in serde
+with an untyped deserialization error, never reaching decision 8 step 1 and
+never producing the typed reason or the operator remedy that step exists to
+give. The record simultaneously claimed the field was required and that nothing
+which parsed before fails to parse now; both cannot hold. Rejected in favour of
+a defaulted field whose default is a bounded constant.
+
+**Make it `Option<SemanticProjectionProtocolVersion>` and treat `None` as
+"unknown".** Rejected. It reintroduces the three-state shape decision 3 spent a
+round removing, pushes a `None` case into every comparison site, and gains
+nothing: a descriptor without the field is not a descriptor of unknown protocol,
+it is a 1.0 descriptor, and saying so exactly is both truer and simpler than
+saying it might be anything.
+
+**Publish only the fingerprints in the generated artifact and let Nix
+recompute.** Rejected twice over. Nix would have to reimplement canonical JSON
+and the domain-separated digest to check anything, which duplicates a security
+primitive in a second language; and it would still not catch an `exportability`
+mismatch, because no fingerprint binds that field. Publishing the declared
+fields costs seven keys per artifact and makes the comparison a string equality
+Nix can actually perform.
+
 ## Normative amendments this decision requires
 
 These are the exact changes that consume the decision. They are drafted here and
@@ -934,7 +1038,27 @@ for its four base fields with an explicit line that none is a ResourceRef to a
 backing. This is what gives decision 4's classification a spec source instead of
 leaving the catalog as the only place the fact is written down.
 
-### G. `specs/001-adr046-d2b3-completion/implementation-debt.md`
+### G. `docs/specs/ADR-046-nix-configuration.md`
+
+The Nix build-time descriptor validation gains the two fields it could not
+compare before. Add to the Provider descriptor validation section:
+
+> Nix compares a Provider descriptor's projection factory against the committed
+> `docs/reference/schemas/v3/<namespace>_projection_spec.schema.json` artifact
+> for the declared `serviceType`. Every published `x-d2b-*` key is compared, not
+> only the fingerprints: `x-d2b-resource-type`,
+> `x-d2b-binding-resource-type`, `x-d2b-projection-protocol-version`,
+> `x-d2b-allowed-backing-ref-types`, `x-d2b-allowed-binding-target-ref-types`,
+> `x-d2b-exportability`, `x-d2b-projection-schema-fingerprint`, and
+> `x-d2b-factory-fingerprint`. `x-d2b-exportability` is compared explicitly
+> because no fingerprint binds it, so a descriptor advertising
+> `explicit-export` for a capability the catalog declares `forbidden` would
+> otherwise match on every hash and pass. A descriptor omitting
+> `projectionProtocolVersion` is read as declaring the legacy version and is
+> rejected against any newer installed version, with the operator remedy of
+> installing a Provider artifact built for the Core protocol in use.
+
+### H. `specs/001-adr046-d2b3-completion/implementation-debt.md`
 
 Both cited sections exist at this branch's base, verified against the committed
 blob rather than the working tree:
@@ -953,7 +1077,7 @@ record touches. `origin/v3` is `2c665603`, which is the merge commit for PR #368
 from `adr046-w5`, so the W5 work is merged into `v3` and is not an unmerged
 branch. Both citations stand. Each section gains a closing line naming this ADR
 and the amendment that discharges it. Ownership of that edit belongs to whichever
-wave lands amendments A to F, not to this record, because the debt register
+wave lands amendments A to G, not to this record, because the debt register
 describes the tree and the tree does not change until then.
 
 ## Tests required to consume this decision
@@ -1108,33 +1232,86 @@ In `packages/d2b-provider-toolkit/tests/malicious_provider.rs`:
   variant rather than accepting any error, so a regression that reorders the
   comparison is caught.
 
+For decision 9's legacy parse rule, in
+`packages/d2b-contracts/src/v3/provider.rs`:
+
+- `a_descriptor_without_the_version_field_parses_as_the_legacy_version` - a
+  descriptor JSON omitting `projectionProtocolVersion` deserializes, and the
+  parsed value equals `LEGACY_ABSENT_PROTOCOL_VERSION`. This is the test that
+  proves a 1.0 descriptor reaches admission rather than dying in serde.
+- `a_legacy_descriptor_is_refused_with_the_typed_version_reason` - that same
+  descriptor, passed to admission, returns `ProjectionProtocolVersionMismatch`
+  and not a deserialization failure, a `DescriptorFingerprintMismatch`, or a
+  generic `ProjectionFactoryInvalid`. The pair of tests together is the
+  obligation; either alone would pass while the path stayed broken.
+- `a_malformed_protocol_version_is_a_parse_failure_not_a_mismatch` - explicit
+  values `""`, `"1"`, `"1.x"`, `"1.2.3"`, `"01.0"`, a 64-byte digit run, and a
+  non-string JSON value each fail at the bounded type. Malformed and skewed are
+  different classes and must not collapse into one.
+- `a_well_formed_unsupported_version_is_a_mismatch_not_a_parse_failure` -
+  `"2.0"` and `"0.9"` parse and are then refused at step 1, the mirror of the
+  test above.
+- `the_legacy_default_can_never_equal_the_installed_version` - asserts
+  `SEMANTIC_PROJECTION_PROTOCOL_VERSION != LEGACY_ABSENT_PROTOCOL_VERSION`, so
+  the one way defaulting could become a hole fails a test rather than shipping.
+- `an_unknown_field_is_still_rejected` - the default covers a missing known
+  field only; `deny_unknown_fields` still refuses an unknown one, so the
+  defaulting change did not loosen the deserializer generally.
+
 Artifact and drift:
 
 - `run_xtask gen-semantic-service-schemas` regenerates all four
   `docs/reference/schemas/v3/*_projection_spec.schema.json` artifacts with the
-  `factoryFingerprint` values pinned in decision 9, each additionally publishing
-  `"x-d2b-projection-protocol-version": "1.1"`, and the security-key artifact
+  `factoryFingerprint` values pinned in decision 9, each publishing the seven
+  extension keys in decision 9's table, and the security-key artifact
   additionally with `"x-d2b-allowed-backing-ref-types": []`. Enforced by
   `make test-drift`.
+- `every_declared_factory_field_is_published_by_the_generator` - in
+  `packages/xtask/src/semantic_service_schemas.rs`, over all four families:
+  every field of `ProjectionFactory` other than the two fingerprints appears as
+  an `x-d2b-*` key with the matching value. This is the test that makes the
+  artifact's completeness structural rather than a list someone remembered to
+  extend, and it is the same exhaustiveness obligation decision 8 step 2 carries
+  one layer up.
+- `an_artifact_missing_exportability_is_rejected` - a planted control removing
+  `x-d2b-exportability` from a rendered artifact fails the assertion above, so
+  the completeness check cannot pass vacuously.
+
+Nix admission, owned by `ADR046-nix-configuration` and
+`ADR046-zone-control-019`:
+
+- `a_provider_descriptor_mismatching_any_published_field_is_rejected_at_eval` -
+  a nix-unit case under `tests/unit/nix/cases/` that compares a Provider
+  descriptor against the committed projection artifact and rejects a mismatch in
+  each of the seven published keys, one planted mismatch per key. The
+  `x-d2b-exportability` and `x-d2b-allowed-binding-target-ref-types` cases are
+  the two this decision adds; without the artifact keys they were not
+  expressible at eval time at all.
+- `a_descriptor_with_a_matching_fingerprint_but_a_wrong_exportability_is_rejected` -
+  the Nix-layer twin of the Rust step-2 test. The fingerprints match because no
+  fingerprint binds `exportability`, and eval must still fail. This is the case
+  that proves publishing the key bought something.
 
 API surface, for decision 6's mint-surface widening and the new error variants:
 
 - `admits_backing_ref` is a new public method on `ProjectionFactory`, a type
   already carried in `packages/d2b-bus/tests/approved-capability-api.txt`;
   `admits_export_target`'s signature changes; `ProjectionFactory` gains a
-  `projection_protocol_version` accessor; and `ProviderContractError` gains
-  `ImportOwnedOriginRejected` and `ProjectionProtocolVersionMismatch` while
-  `SemanticContractError` loses `BackingRefTypesUndetermined`. Every one of
-  those is a two-way census entry, and the removal is as census-visible as the
-  additions. The implementing wave runs `make api-surface-pin` to regenerate
-  `tests/golden/api-surface/` and the approved capability list, and
-  `make test-rust-api-surface` to prove the regenerated census matches. The
-  regeneration is a deliberate trust-boundary change whose stated reason is this
-  record; the census must not be pinned without citing it.
+  `projection_protocol_version` accessor; `SemanticProjectionProtocolVersion`
+  and `LEGACY_ABSENT_PROTOCOL_VERSION` are new public items; and
+  `ProviderContractError` gains `ImportOwnedOriginRejected` and
+  `ProjectionProtocolVersionMismatch` while `SemanticContractError` loses
+  `BackingRefTypesUndetermined`. Every one of those is a two-way census entry,
+  and the removal is as census-visible as the additions. The implementing wave
+  runs `make api-surface-pin` to regenerate `tests/golden/api-surface/` and the
+  approved capability list, and `make test-rust-api-surface` to prove the
+  regenerated census matches. The regeneration is a deliberate trust-boundary
+  change whose stated reason is this record; the census must not be pinned
+  without citing it.
 
 Lanes that must be green for the implementing wave: `make test-rust`,
 `make test-rust-api-surface`, `make test-drift`, `make test-fixture-contracts`,
-`make check-tier0`, `make test-policy`.
+`make test-nix-unit`, `make check-tier0`, `make test-policy`.
 
 ## Invariants this decision creates
 
@@ -1180,6 +1357,18 @@ Lanes that must be green for the implementing wave: `make test-rust`,
     operator remedy for a mismatch is to install a Provider artifact built for
     the Core protocol in use; an operator is never told to regenerate or re-sign
     a descriptor, because a descriptor is signed by its author.
-12. The security-key provider-neutral base continues to reject `deviceRef`,
+12. An absent `projectionProtocolVersion` deserializes as the bounded constant
+    `LEGACY_ABSENT_PROTOCOL_VERSION`, never as caller text and never as a
+    deserialization failure, so a legacy descriptor reaches admission and is
+    refused there with a typed reason. That constant is never equal to
+    `SEMANTIC_PROJECTION_PROTOCOL_VERSION`, so defaulting can never manufacture
+    a match. `deny_unknown_fields` is unchanged: the default covers a missing
+    known field only.
+13. Each generated `*_projection_spec.schema.json` publishes every declared
+    factory field as an `x-d2b-*` key, not only the fingerprints, so Nix can
+    compare `exportability` and `allowedBindingTargetRefTypes` at eval time.
+    `x-d2b-exportability` is the only published field no fingerprint binds, at
+    either the Rust or the Nix layer.
+14. The security-key provider-neutral base continues to reject `deviceRef`,
     `relayEndpointRef`, `authority` in a projection, and every physical
     selector.
