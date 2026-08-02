@@ -810,7 +810,9 @@ rust-inventory-and-stub:
 #[test]
 fn rust_runtime_frontier_quota_is_bounded_for_constrained_budgets() {
     let makefile = read_repo_file("Makefile");
-    let violations = runtime_frontier_quota_violations(&makefile);
+    let driver = read_repo_file(RUST_DRIVER);
+    let governed_source = format!("{makefile}\n{driver}");
+    let violations = runtime_frontier_quota_violations(&governed_source);
     assert!(
         violations.is_empty(),
         "Rust runtime quotas must bound every frontier, including budget 1:\n{}",
