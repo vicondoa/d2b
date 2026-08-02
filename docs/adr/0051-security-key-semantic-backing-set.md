@@ -162,19 +162,16 @@ field makes that family inert, which is a denial and not an escalation. There is
 no reading of an empty set under which a reference is admitted that a non-empty
 set would have refused.
 
-### 3. One enum replaces the two independently coupled declaration fields
+### 3. The backing declaration has two states, and absence is a construction error
 
-The backing declaration is a single three-state value, so a type set and the
-base fields it applies to cannot drift apart:
+The backing declaration is one value with exactly two states, so a type set and
+the base fields it applies to cannot drift apart:
 
 ```rust
 /// What a semantic family declares about its owner Service's same-Zone
-/// backing, as one value.
+/// backing, as one value. There is no "we do not know" state: a family whose
+/// dossier does not state its backing is not admitted to the catalog.
 pub(crate) enum SemanticBackingDeclaration {
-    /// The specification does not state this family's set. No factory is
-    /// derivable; this is the only state that yields
-    /// `BackingRefTypesUndetermined`.
-    Undetermined,
     /// The provider-neutral Service base names no backing resource, so the
     /// closed set is empty and admits nothing.
     NoBacking,
@@ -192,10 +189,20 @@ Per family: `Constrained { types: ["Endpoint"], fields: ["implementationEndpoint
 (telemetry), `Constrained { types: ["Device"], fields: ["backingDeviceRef"] }`
 (USB), and `NoBacking` (security key).
 
-**What this makes unrepresentable.** A type set with no field to apply it to,
-and a declared backing field with no type set, are both gone: neither has a
-spelling. There is no longer a pair of fields that a later edit can move
-independently, which was the exact defect the first draft carried.
+**No `Undetermined`, and no `BackingRefTypesUndetermined`.** Both are deleted.
+This catalog is a static, compile-time contract; a runtime "the specification
+does not say" state has no place in it. A family whose dossier does not state
+its backing set is not added to the catalog until it does, so the refusal
+happens at construction, before publication, and is a build failure rather than
+an error value a caller has to handle. Every catalog member therefore yields a
+projection factory, with no fallible backing path at all.
+
+**What this makes unrepresentable.** A type set with no field to apply it to, a
+declared backing field with no type set, and an undetermined family in a
+published catalog are all gone: none has a spelling. There is no longer a pair
+of fields that a later edit can move independently, which was the defect the
+first draft carried, and no runtime state that defers the question, which was
+the defect the second draft carried.
 
 **The one degenerate spelling that remains, and its guard.**
 `Constrained { types: &[], fields: &[] }` is still constructible by a careless
@@ -207,29 +214,65 @@ as a test failure rather than in production. Claiming the enum makes this state
 unrepresentable would overstate what Rust's slice types give us, so it is stated
 as what it is.
 
-**Grounding.** Every name in `Constrained.fields` is a member of that family's
-`service_spec_allowed`, asserted over the whole catalog. That catches a base
-field rename that forgets the declaration.
-
 The declaration is **not** a fingerprint input beyond the resolved type set that
 D096 already names. `fields` never reaches `factory_fingerprint`: D096 does not
 name it, and feeding it in would move fingerprints for a catalog-internal
 consistency record.
 
-### 4. `Undetermined` is the only state that fails closed as undetermined
+### 4. `NoBacking` is permitted only when every base field is a classified non-reference field
 
-`SemanticContractError::BackingRefTypesUndetermined` is returned for
-`Undetermined` and for nothing else. `NoBacking` yields a factory whose backing
-set is empty.
+Decision 3 makes the two halves of `Constrained` move together. It does not, by
+itself, stop an author from declaring `NoBacking` for a family whose base *does*
+name a backing resource. That coupling is restored here, mechanically.
 
-A future family whose dossier genuinely does not state its set must still fail
-closed with that typed error rather than default to `NoBacking`, because "we do
-not know" and "there is none" are different claims and only one of them is safe
-to sign. After this decision no shipped family is `Undetermined`; the state is
-retained for the next gap, not deleted as dead code.
+**There is no authoritative reference-field list in the specification set, and
+that is measured, not assumed.** Of the four families' backing fields, exactly
+one is stated in a typed table: `ADR-046-provider-observability-otel.md` carries
+`| ingestEndpointRefs | [ResourceRef] | authority only | ... |`. The audio and
+USBIP dossiers state `implementationEndpointRefs` and `backingDeviceRef` only in
+YAML examples and prose, with no type column. So a test cannot read an
+authoritative list from the specs today, and a `*Ref` suffix heuristic is
+rejected outright: it would classify `providerRef`, `serviceRef`,
+`authorityRef`, `producerRef`, and `guestRef` as backings, all of which are
+references to something other than a backing.
 
-Consequently `null` and `[]` remain distinct fingerprint inputs. They are
-distinct claims, so they must hash differently.
+**The catalog carries the classification explicitly, and it must be total.** One
+frozen catalog-level list names every Service base spec field that is *not* a
+backing reference:
+
+```rust
+/// Every Service base spec field name in the catalog that is not a backing
+/// reference. Total with the per-family `Constrained.fields` over the union
+/// of all four families' `service_spec_allowed`.
+const NON_BACKING_SERVICE_BASE_FIELDS: &[&str] = &[
+    "accessPolicy", "authority", "authorityDescriptor", "backingAuthority",
+    "mode", "operations", "policy", "providerRef", "quota", "serviceRole",
+    "signals", "sourceSchemaFingerprint", "updatePolicy",
+];
+```
+
+Three catalog-wide assertions:
+
+- **Totality.** For every family, `service_spec_allowed` is a subset of
+  `NON_BACKING_SERVICE_BASE_FIELDS` united with that family's declared backing
+  fields. A new base field with a new spelling fails this until someone
+  classifies it, so the classification cannot silently fall behind the field
+  sets.
+- **Disjointness.** No name appears in both `NON_BACKING_SERVICE_BASE_FIELDS`
+  and any family's `Constrained.fields`. A field cannot be classified both ways.
+- **Coupling.** A family declares `NoBacking` if and only if its
+  `service_spec_allowed` is a subset of `NON_BACKING_SERVICE_BASE_FIELDS`, and
+  declares `Constrained` if and only if it is not. This is the restored test:
+  `NoBacking` is permitted exactly when no base field is a backing reference.
+
+**Grounding.** Every name in `Constrained.fields` is a member of that family's
+`service_spec_allowed`, which catches a base field rename that forgets the
+declaration.
+
+The classification is a catalog-internal record and never a fingerprint input.
+Amendment F below adds the typed table rows to the three dossiers that lack
+them, so the catalog's classification has a spec source rather than being the
+only place the fact is written down.
 
 ### 5. `ProjectionFactory::new` accepts an empty backing set and keeps rejecting an empty target set
 
@@ -301,6 +344,26 @@ Denying an import-owned backing stops a remote imported projection from being
 presented as the local backing of a new authority claim, which would launder a
 leased capability into an owned one and defeat the D097 single-authority index.
 
+**The denial is its own typed error.** Both paths return a dedicated variant,
+not the generic `ProjectionFactoryInvalid` that a wrong ResourceType returns, so
+an operator and an audit record can tell "you named the wrong kind of thing"
+from "you named a thing this Zone only holds on lease":
+
+```rust
+/// The named resource is owned by a `ResourceImport`, so it is a projection
+/// of a capability this Zone holds on lease. It is never an export target
+/// and never a backing reference.
+ImportOwnedOriginRejected,
+```
+
+with the closed diagnostic label `provider-import-owned-origin-rejected`. The
+variant is a bare discriminant: it carries no resource name, no owner ref, no
+Zone, and no path, matching this enum's stated rule that a reason names the
+class and not the value. The remedy is a property of the class, not of the
+instance, so it belongs in `docs/reference/error-codes.md` and the CLI rendering
+rather than in the payload: export the capability from the Zone that owns its
+authority, or, for a backing, name a locally owned resource.
+
 **The residual, named.** This reads committed metadata, so it is exact for any
 row Core created correctly. A Core defect that created a projection without the
 `ResourceImport` ownerRef would pass. That is `ADR046-zone-control-020`'s stated
@@ -321,26 +384,73 @@ subsumes the other. D096's allowance of "qualified semantic backend types" in a
 backing set is preserved for a *different* family's type; only self-chaining is
 closed.
 
-### 8. Core admits a Provider-advertised factory only if it equals the catalog-derived factory
+### 8. Factory admission compares the protocol version first, then identity, then fingerprints
 
 For any `serviceType` in the D098 catalog, a Provider descriptor's
 `ProjectionFactory` is admitted at Provider install, Nix build, and API
-admission only when it is equal field for field, including
-`allowedBackingRefTypes`, `allowedBindingTargetRefTypes`,
-`projectionSchemaFingerprint`, and `factoryFingerprint`, to the factory derived
-from `d2b-contracts::v3::semantic_services`. A Provider cannot widen, narrow, or
-restate the semantic factory; it may only add its own strict extension schemas.
+admission only when it equals the factory derived from
+`d2b-contracts::v3::semantic_services` field for field. A Provider cannot widen,
+narrow, or restate the semantic factory; it may only add its own strict
+extension schemas.
+
+**The comparison order is normative, because it decides what the operator is
+told.** Fingerprints are the last thing compared, not the first:
+
+1. `projectionProtocolVersion` (decision 9). A mismatch returns
+   `ProjectionProtocolVersionMismatch`, label
+   `provider-projection-protocol-version-mismatch`. This is version skew and it
+   is diagnosed as version skew.
+2. `serviceType`, `bindingType`, `allowedBackingRefTypes`,
+   `allowedBindingTargetRefTypes`. A mismatch returns
+   `ProjectionFactoryInvalid`.
+3. `projectionSchemaFingerprint` and `factoryFingerprint`. A mismatch here, with
+   every declared field already equal, means the descriptor's bytes do not hash
+   to what it claims. Only then is `DescriptorFingerprintMismatch` the honest
+   answer.
+
+Without step 1 a descriptor built against protocol `1.0` fails at step 3 and
+reads as tampering, which is the failure mode round 2 named. With it, the
+operator is told the version differs and what to do about it. The remedy is
+class-level and stated in `docs/reference/error-codes.md`: regenerate the
+Provider descriptor against the installed semantic catalog with
+`run_xtask gen-semantic-service-schemas` and re-sign it. That message may name
+the **expected** version, which is a Core-side constant; it must not echo the
+received version, which is caller-supplied.
 
 This is what makes decision 1 safe independent of decision 2: a descriptor
 cannot reach the empty set for a family whose catalog entry is non-empty,
 because the whole factory has to match.
 
-### 9. The projection-protocol version bumps to 1.1, so downstream drift is version skew and not tamper
+### 9. The projection-protocol version is a declared descriptor field, and it bumps to 1.1
 
 The meaning of `allowedBackingRefTypes` changes: a value that was previously
 unrepresentable becomes representable, and its reading is fixed as deny-all.
-That is a change to the projection protocol, not to any schema's field set. So
-the versioned surface that moves is the protocol version, and only it:
+That is a change to the projection protocol, not to any schema's field set.
+
+**The version becomes a first-class field, not only a hash input.** Today
+`SEMANTIC_PROJECTION_PROTOCOL_VERSION` reaches the wire only through
+`factory_fingerprint`, so a version difference is observable only as a hash that
+does not match. That is the whole defect: a hidden input makes skew look like
+tampering. D096's factory table gains a row and `ProjectionFactory` gains a
+field:
+
+```rust
+pub struct ProjectionFactory {
+    service_type: ResourceTypeName,
+    binding_type: ResourceTypeName,
+    projection_protocol_version: SemanticProjectionProtocolVersion, // new, declared
+    allowed_backing_ref_types: BTreeSet<ResourceTypeName>,
+    allowed_binding_target_ref_types: BTreeSet<BindingTargetType>,
+    projection_schema_fingerprint: SchemaFingerprint,
+    factory_fingerprint: SchemaFingerprint,
+    exportability: Exportability,
+}
+```
+
+It serializes as `projectionProtocolVersion`, is required, and is rejected by
+the existing `deny_unknown_fields` deserializer if absent. Decision 8 compares
+it first. A bounded parsed type rather than a bare `String` keeps an unbounded
+caller-supplied value off the struct.
 
 ```rust
 // packages/d2b-contracts/src/v3/semantic_services/mod.rs
@@ -359,26 +469,35 @@ set changes, so moving them would move all sixteen base-layer fingerprints and
 all four projection-schema fingerprints for a change that touched none of those
 surfaces. The blast radius must match what actually moved.
 
+**Measured: promoting the version to a declared field moves no fingerprint.**
+The hashed declaration already carried `"projectionProtocolVersion"`, so adding
+the struct and wire field changes the descriptor's shape and not its hash input.
+Removing `Undetermined` likewise moves nothing, because `Some(x)` and a bare `x`
+serialize identically and no family was `None`. Re-derived with a non-optional
+backing set at protocol `"1.1"`, all four values are byte-identical to the
+values pinned below.
+
 **What the bump buys.** The protocol version is an input to
 `factory_fingerprint` and to nothing else, so bumping it moves **all four**
 families' factory fingerprints, not just security key. That is the point. A
-stale descriptor of any family now mismatches an updated Core's expectation, and
-the mismatch is attributable to a declared protocol version rather than
-presenting as a fingerprint that differs for no stated reason. Leaving the other
-three unchanged would have made security key's move look like tampering and the
-others look fine, which is precisely the failure mode this finding named.
+stale descriptor of any family now mismatches an updated Core, the mismatch is
+caught at decision 8's step 1 by declared-field comparison before any hash is
+examined, and the operator is told the protocol version differs rather than
+being shown two hashes. Leaving the other three unchanged would have made
+security key's move look like tampering and the others look fine.
 
 **Regeneration and migration.** Regeneration is
 `run_xtask gen-semantic-service-schemas`, gated by the enforcing `make
 test-drift` lane; all four `*_projection_spec.schema.json` artifacts are
-rewritten in one commit. **There is no migration, because there is no runtime
-consumer.** No Provider descriptor is signed, no `ResourceExport` or
+rewritten in one commit and each additionally publishes
+`x-d2b-projection-protocol-version`. **There is no migration, because there is
+no runtime consumer.** No Provider descriptor is signed, no `ResourceExport` or
 `ResourceImport` type exists yet (`packages/d2b-contracts/src/v3/` has no
 `resource_export.rs` or `resource_import.rs`; they are
 `ADR046-zone-control-019`'s destination), and every work item in this program
 carries `dataMigration: None; full reset`. The versioning is therefore explicit
 rather than load-bearing today, and it is recorded now so that the first signed
-descriptor is minted against a stated protocol version instead of an implicit
+descriptor is minted against a declared protocol version instead of an implicit
 one.
 
 **The pinned values**, measured by re-deriving `factory_fingerprint` for every
@@ -394,10 +513,9 @@ set moved from `null` to `[]`:
 
 Security key's `x-d2b-allowed-backing-ref-types` additionally moves from `null`
 to `[]`. Every `projectionSchemaFingerprint` is unchanged because no projection
-field set moves. Exactly one committed file pins any old value: the four
-generated artifacts themselves. The dossiers' Nix examples use placeholder
-tokens such as `sha256:<security-key-projection-factory>`, not literals, so no
-prose pins one.
+field set moves. The four generated artifacts are the only committed files that
+pin any old value. The dossiers' Nix examples use placeholder tokens such as
+`sha256:<security-key-projection-factory>`, not literals, so no prose pins one.
 
 ### 10. Where the physical-backing guarantee actually lives
 
@@ -444,16 +562,19 @@ than degrading it.
 
 Four guards, in order of strength. Decision 6 changes what admission is given,
 so both the export target and the backing are read from committed metadata and
-every import-owned row is denied at both ends of the path. Decision 6 also gives
+every import-owned row is denied at both ends of the path, with its own typed
+variant so the denial is legible in an audit record. Decision 6 also gives
 the membership test a typed method whose test is unconditional, so the branch
 above has nowhere to live. Decision 7 removes the family's own Service type from
 every backing set at declaration time, so the chain has no first link even if a
-row's ownership were somehow unreadable. Decision 3 stops a later author from
-resolving the oddity by inventing a non-empty set, because the type set and its
-base fields are now one value. The negative tests named below assert that the
-security-key factory rejects `Device/x`, `Endpoint/x`, and
+row's ownership were somehow unreadable. Decisions 3 and 4 stop a later author
+from resolving the oddity by inventing a non-empty set: the type set and its
+base fields are one value, and `NoBacking` is permitted only while every base
+field stays in the classified non-reference list. The negative tests named below
+assert that the security-key factory rejects `Device/x`, `Endpoint/x`, and
 `security-key.d2bus.org.SecurityKeyService/x`, and that an import-owned row of
-an otherwise-admissible type is denied for both export and backing.
+an otherwise-admissible type is denied for both export and backing with
+`ImportOwnedOriginRejected` specifically.
 
 **The second specific failure: a silent fingerprint move.** All four
 `factoryFingerprint` values change. Any Provider descriptor, fixture, or example
@@ -590,6 +711,34 @@ move sixteen base-layer fingerprints and four projection-schema fingerprints for
 a change that touched none of them. The version that moves must be the one whose
 contract moved.
 
+**Retain `Undetermined` and `BackingRefTypesUndetermined` for a future family
+whose dossier is silent.** This record argued for retention in its first
+revision and reverses that here, because the argument was wrong in a way worth
+recording. A silent dossier is not a state the catalog should be able to
+publish; it is a reason not to add the family yet. Keeping the state put a
+fallible path on every caller of `projection_factory()` in order to serve a
+family that does not exist, and left a runtime error as the guard for something
+a build refusal handles completely. The correct fail-closed behaviour for an
+unstated backing set is that the catalog does not compile with that family in
+it, which is strictly earlier and strictly louder than a typed error.
+
+**Keep the protocol version only inside `factoryFingerprint`.** This is what the
+record specified before this revision, on the reasoning that binding the version
+into the hash was sufficient to make skew detectable. It is not: detectable and
+diagnosable are different properties. A hash that does not match tells an
+operator that two byte strings differ and nothing about why, which is
+indistinguishable from tampering and points at no remedy. Rejected in favour of
+a declared field compared before any hash, which costs one descriptor field and
+buys an accurate diagnosis with an actionable remedy.
+
+**Classify backing fields by a `*Ref` suffix heuristic instead of an explicit
+list.** Rejected on the field names themselves. `providerRef`, `serviceRef`,
+`authorityRef`, `producerRef`, and `guestRef` are all references and none is a
+backing, so the heuristic misclassifies five of the names actually in play. It
+also silently reclassifies any future field the moment someone renames it. The
+explicit list costs thirteen strings and one totality assertion, and it fails
+loudly when a new field appears rather than guessing.
+
 ## Normative amendments this decision requires
 
 These are the exact changes that consume the decision. They are drafted here and
@@ -642,23 +791,28 @@ the `device-usbip` and `audio-pipewire` dossiers already use:
 
 ### B. `docs/specs/ADR-046-provider-model-and-packaging.md`
 
-Replace the `allowedBackingRefTypes` row of the D096 factory table:
+Replace the `allowedBackingRefTypes` row of the D096 factory table and add one
+row above it:
 
+> | `projectionProtocolVersion` | The semantic projection-protocol version this factory was minted against, declared explicitly. Compared before any other field, so a descriptor from an earlier protocol is diagnosed as version skew rather than as a fingerprint mismatch. Also bound into `factoryFingerprint`. |
 > | `allowedBackingRefTypes` | Closed set of same-Zone `Device`, `Endpoint`, or qualified semantic backend types the owner Service may reference **in its provider-neutral base**. Empty when the family's base declares no backing-reference field. The empty set denies every backing reference and is never read as unconstrained. It may not contain the factory's own `serviceType` or `bindingType`. |
 
 ### C. `docs/specs/ADR-046-resources-zone-control.md`
 
-Replace the `allowedBackingRefTypes` row of the 8A.1.1 factory table with the
-same text as amendment B; append to the paragraph beginning "Provider install,
-Nix build, and API admission verify this metadata":
+Add the same `projectionProtocolVersion` row and replace the
+`allowedBackingRefTypes` row of the 8A.1.1 factory table with the same text as
+amendment B; append to the paragraph beginning "Provider install, Nix build, and
+API admission verify this metadata":
 
 > For a `serviceType` in the D098 semantic catalog, the advertised factory is
-> admitted only when it equals the catalog-derived factory field for field,
-> including both reference sets and both fingerprints. A Provider adds strict
-> extension schemas; it never restates, widens, or narrows the semantic factory.
-> The `factoryFingerprint` binds the semantic projection-protocol version, so a
-> descriptor minted under an earlier protocol version mismatches by version skew
-> and not by tampering.
+> admitted only when it equals the catalog-derived factory field for field.
+> Comparison order is normative: `projectionProtocolVersion` first, then the
+> Service/Binding types and both reference sets, then both fingerprints. A
+> descriptor minted under an earlier protocol version is therefore rejected as
+> declared version skew, with the remedy being regeneration and re-signing
+> against the installed catalog, and never as a fingerprint mismatch that reads
+> as tampering. A Provider adds strict extension schemas; it never restates,
+> widens, or narrows the semantic factory.
 
 and add to 8A.2 (`ResourceExport`), in the `resourceRef` row's notes and as a
 normative sentence in 8A.2.1:
@@ -678,20 +832,56 @@ No amendment required, and this is deliberate. The D096 row already says
 "allowed backing/target refs" without stating a lower bound, so it is not
 contradicted, and it already says `ResourceExport.resourceRef` "names only the
 local owner Service", which amendment C makes mechanically checkable rather than
-changing. The normative readings land in the two specs and the dossier, which
+changing. The normative readings land in the two specs and the dossiers, which
 are the documents an implementer reads.
 
-### E. `specs/001-adr046-d2b3-completion/implementation-debt.md`
+### E. `docs/reference/error-codes.md`
 
-Verified by reading the file at this branch's base: the two sections are
-`### 13.3 Security-key cannot construct a signed projection factory at all`
-(line 942) and
-`### 19.8 The security-key semantic projection is not invented` (line 2019).
-Both exist, both record this gap as open, and both citations in this record are
-correct. Each gains a closing line naming this ADR and the amendment that
-discharges it. Ownership of that edit belongs to whichever wave lands amendments
-A to C, not to this record, because the debt register describes the tree and the
-tree does not change until then.
+Two closed variants gain rows, because both remedies are class-level and neither
+may be carried in an error payload:
+
+> | `provider-import-owned-origin-rejected` | The named resource is owned by a `ResourceImport`, so this Zone holds it on lease rather than owning its authority. Export the capability from the Zone that owns the authority Service; for a backing reference, name a locally owned resource. |
+> | `provider-projection-protocol-version-mismatch` | The Provider descriptor declares a semantic projection-protocol version other than the one this Core installs. Regenerate the descriptor against the installed semantic catalog with `run_xtask gen-semantic-service-schemas` and re-sign it. |
+
+The second message may name the expected version, which is a Core-side constant.
+Neither message echoes the received value.
+
+### F. Typed base-field rows in three dossiers
+
+Measured: of the four families' backing fields, only telemetry's is stated in a
+typed table (`ADR-046-provider-observability-otel.md`, `| ingestEndpointRefs |
+[ResourceRef] | authority only | ... |`). Audio's `implementationEndpointRefs`
+and USBIP's `backingDeviceRef` appear only in YAML examples and prose, and the
+security-key Service base has no backing field to state.
+
+`ADR-046-provider-audio-pipewire.md` and `ADR-046-provider-device-usbip.md`
+therefore gain a typed `Type` column for their Service base spec fields, matching
+telemetry's shape, and `ADR-046-provider-device-security-key.md` gains the same
+for its four base fields with an explicit line that none is a ResourceRef to a
+backing. This is what gives decision 4's classification a spec source instead of
+leaving the catalog as the only place the fact is written down.
+
+### G. `specs/001-adr046-d2b3-completion/implementation-debt.md`
+
+Both cited sections exist at this branch's base, verified against the committed
+blob rather than the working tree:
+
+```text
+$ git show origin/v3:specs/001-adr046-d2b3-completion/implementation-debt.md \
+    | grep -n '^### 13.3\|^### 19.8'
+942:### 13.3 Security-key cannot construct a signed projection factory at all
+2019:### 19.8 The security-key semantic projection is not invented
+```
+
+The blob hashes `19e969d0a5cfe4091c9a25172c449342cf668e01a91978933ed1339b7f16e6cd`,
+identical to the worktree copy, and this branch does not modify that file:
+`git diff --name-only origin/v3..HEAD` lists only the three `docs/` files this
+record touches. `origin/v3` is `2c665603`, which is the merge commit for PR #368
+from `adr046-w5`, so the W5 work is merged into `v3` and is not an unmerged
+branch. Both citations stand. Each section gains a closing line naming this ADR
+and the amendment that discharges it. Ownership of that edit belongs to whichever
+wave lands amendments A to F, not to this record, because the debt register
+describes the tree and the tree does not change until then.
 
 ## Tests required to consume this decision
 
@@ -717,19 +907,46 @@ catalog:
   build-time rejection of `Constrained` with either slice empty, exercised by
   constructing the degenerate declarations locally and asserting the contract
   build refuses each.
-- `every_declared_backing_field_is_a_service_base_field` - decision 3's
+- `every_declared_backing_field_is_a_service_base_field` - decision 4's
   grounding invariant.
 - `no_family_admits_its_own_service_or_binding_type_as_backing` - decision 7.
 - `every_family_yields_a_projection_factory` - all four return `Ok`, replacing
   the current three-of-four state.
-- `only_undetermined_fails_closed_as_undetermined` - a locally constructed
-  `Undetermined` declaration yields `BackingRefTypesUndetermined`, and no
-  shipped family does, so decision 4's retained state is exercised rather than
-  left as unreachable code.
+- `only_undetermined_fails_closed_as_undetermined` is **deleted**, along with
+  the state and the error variant it exercised. Its replacement is
+  `no_backing_declaration_state_is_undetermined`, a compile-visible assertion
+  that `SemanticBackingDeclaration` has exactly the two variants and that
+  `SemanticContractError` no longer carries `BackingRefTypesUndetermined`, so
+  reintroducing a runtime "we do not know" state fails a test rather than
+  passing quietly.
 - `the_factory_fingerprint_binds_the_projection_protocol_version` - re-deriving
   a family's factory fingerprint with a different protocol-version string
-  produces a different value, so decision 9's version is load-bearing rather
-  than decorative.
+  produces a different value, so decision 9's version is load-bearing in the
+  hash as well as declared on the descriptor.
+- `promoting_the_protocol_version_to_a_declared_field_moves_no_fingerprint` -
+  the four values pinned in decision 9 are reproduced from the public
+  accessors, so the claim that the descriptor gained a field without moving a
+  hash is asserted rather than asserted-about.
+
+For decision 4's restored coupling, over the whole catalog:
+
+- `every_service_base_field_is_classified_exactly_once` - totality and
+  disjointness. Each family's `service_spec_allowed` is a subset of
+  `NON_BACKING_SERVICE_BASE_FIELDS` united with its own declared backing
+  fields, and the two sets never intersect. Planted-violation control: adding an
+  unclassified field name to a local copy of a family's allowed set fails the
+  test, so the scan cannot pass vacuously on an empty universe.
+- `no_backing_is_declared_exactly_when_no_base_field_is_a_backing_reference` -
+  the coupling itself, both directions, over all four families. Positive
+  controls: security key is `NoBacking` and every one of its four base fields is
+  in the non-backing list; audio, telemetry, and USB are `Constrained` and each
+  has exactly one base field outside it. Negative controls: a local declaration
+  pairing security key's field set with `Constrained` is rejected, and one
+  pairing USB's field set with `NoBacking` is rejected.
+- `no_backing_classification_uses_a_ref_suffix_heuristic` - `providerRef`,
+  `serviceRef`, and `authorityRef` appear in `NON_BACKING_SERVICE_BASE_FIELDS`
+  or in no family's backing fields, proving the classification is explicit and
+  a `*Ref` suffix rule would have misclassified them.
 
 In `packages/d2b-contracts/src/v3/provider.rs`:
 
@@ -740,14 +957,30 @@ In `packages/d2b-contracts/src/v3/provider.rs`:
 - `an_import_owned_resource_is_never_an_export_target` - decision 6. Build one
   envelope of the family's Service type with `metadata.ownerRef` naming
   `ResourceImport/yubikey-primary` and one with no owner; assert the first is
-  rejected and the second admitted, for every family.
+  rejected with `ImportOwnedOriginRejected` specifically, not merely rejected,
+  and the second admitted, for every family.
 - `an_import_owned_resource_is_never_a_backing` - decision 6, same construction
   against `admits_backing_ref`, using a `Device` envelope for USB and an
   `Endpoint` envelope for audio and telemetry so the type is otherwise
-  admissible and ownership is the only thing under test.
-- Round-trip: a factory with `allowedBackingRefTypes: []` serializes and
-  deserializes without loss, and the deserializer still rejects an empty target
-  set.
+  admissible and ownership is the only thing under test. Asserts
+  `ImportOwnedOriginRejected` and not `ProjectionFactoryInvalid`, so the two
+  denial classes cannot collapse into one.
+- `a_wrong_type_and_an_import_owned_row_return_different_errors` - the
+  discrimination test for decision 6's typed error. A `Volume` envelope returns
+  `ProjectionFactoryInvalid`; an import-owned row of the right type returns
+  `ImportOwnedOriginRejected`.
+- `an_error_label_carries_no_caller_supplied_value` - both new variants render
+  to their fixed labels and their `Debug` and `Display` output contains no
+  resource name, owner ref, Zone, version string, or path.
+- `factory_admission_reports_version_skew_before_fingerprint_mismatch` -
+  decision 8's ordering. A descriptor equal in every field but declaring
+  protocol `1.0` returns `ProjectionProtocolVersionMismatch`, not
+  `DescriptorFingerprintMismatch`, even though its fingerprint also differs.
+  This is the test that would have failed under the round-2 shape.
+- Round-trip: a factory with `allowedBackingRefTypes: []` and
+  `projectionProtocolVersion: "1.1"` serializes and deserializes without loss;
+  the deserializer still rejects an empty target set and now also rejects an
+  absent `projectionProtocolVersion`.
 
 At the zone-control export admission layer, in
 `packages/d2b-core-controller/src/export_import.rs` and its test module, owned
@@ -756,18 +989,18 @@ by `ADR046-zone-control-019`:
 - `an_export_of_an_import_owned_projection_is_denied` - the caller-facing
   negative test. A consumer Zone holding a projection Service created by its
   `ResourceImport` attempts to declare a `ResourceExport` naming it; admission
-  denies it, so a grandchild Zone cannot obtain owner authority through a Zone
-  that held only a lease.
+  denies it with `ImportOwnedOriginRejected`, so a grandchild Zone cannot obtain
+  owner authority through a Zone that held only a lease.
 - `an_owner_service_may_not_name_an_import_owned_backing` - an owner Service
   naming an import-owned resource of an allowed backing type is denied, so a
   leased capability cannot be laundered into a local authority claim.
 - `an_empty_backing_set_denies_a_specified_backing` - the caller/export negative
-  test this finding requires, distinct from the unit test above because it runs
-  through admission rather than the factory directly. An owner
-  `SecurityKeyService` that names any backing reference at all is denied by an
-  empty-set factory. Negative control in the same test: the same call shape
-  against the USB factory with `Device/work-token` is admitted, so an
-  unconditionally denying admission path cannot pass this test vacuously.
+  test, distinct from the unit test above because it runs through admission
+  rather than the factory directly. An owner `SecurityKeyService` that names any
+  backing reference at all is denied by an empty-set factory. Negative control
+  in the same test: the same call shape against the USB factory with a locally
+  owned `Device/work-token` is admitted, so an unconditionally denying admission
+  path cannot pass this test vacuously.
 - `an_export_of_a_locally_owned_authority_is_admitted` - the positive control,
   so the three denials above are not satisfied by an admission path that denies
   everything.
@@ -775,23 +1008,32 @@ by `ADR046-zone-control-019`:
 In `packages/d2b-provider-toolkit/tests/malicious_provider.rs`:
 
 - A descriptor advertising a security-key factory with a non-empty backing set,
-  or with the catalog's set but a recomputed fingerprint, or minted under
-  projection-protocol version `1.0`, is rejected by decision 8's equality check.
+  or with the catalog's set but a recomputed fingerprint, is rejected by
+  decision 8 at step 2 or 3.
+- A descriptor minted under projection-protocol version `1.0` is rejected at
+  step 1 with `ProjectionProtocolVersionMismatch`, and the assertion names that
+  variant rather than accepting any error, so a regression that reorders the
+  comparison is caught.
 
 Artifact and drift:
 
 - `run_xtask gen-semantic-service-schemas` regenerates all four
   `docs/reference/schemas/v3/*_projection_spec.schema.json` artifacts with the
-  `factoryFingerprint` values pinned in decision 9, and the security-key
-  artifact additionally with `"x-d2b-allowed-backing-ref-types": []`. Enforced
-  by `make test-drift`.
+  `factoryFingerprint` values pinned in decision 9, each additionally publishing
+  `"x-d2b-projection-protocol-version": "1.1"`, and the security-key artifact
+  additionally with `"x-d2b-allowed-backing-ref-types": []`. Enforced by
+  `make test-drift`.
 
-API surface, for decision 6's mint-surface widening:
+API surface, for decision 6's mint-surface widening and the new error variants:
 
 - `admits_backing_ref` is a new public method on `ProjectionFactory`, a type
-  already carried in `packages/d2b-bus/tests/approved-capability-api.txt`, and
-  `admits_export_target`'s signature changes. Both are two-way census entries,
-  so the implementing wave runs `make api-surface-pin` to regenerate
+  already carried in `packages/d2b-bus/tests/approved-capability-api.txt`;
+  `admits_export_target`'s signature changes; `ProjectionFactory` gains a
+  `projection_protocol_version` accessor; and `ProviderContractError` gains
+  `ImportOwnedOriginRejected` and `ProjectionProtocolVersionMismatch` while
+  `SemanticContractError` loses `BackingRefTypesUndetermined`. Every one of
+  those is a two-way census entry, and the removal is as census-visible as the
+  additions. The implementing wave runs `make api-surface-pin` to regenerate
   `tests/golden/api-surface/` and the approved capability list, and
   `make test-rust-api-surface` to prove the regenerated census matches. The
   regeneration is a deliberate trust-boundary change whose stated reason is this
@@ -817,20 +1059,31 @@ Lanes that must be green for the implementing wave: `make test-rust`,
 5. A factory's backing set never contains its own `serviceType` or
    `bindingType`.
 6. `allowed_binding_target_ref_types` is always non-empty.
-7. `Undetermined` means "the specification does not state this set" and is the
-   only state that fails closed with `BackingRefTypesUndetermined`. It is never
-   a synonym for `NoBacking`, and `null` and `[]` hash differently.
-8. For a `serviceType` in the D098 catalog, an advertised `ProjectionFactory` is
-   admitted only when equal field for field to the catalog-derived factory.
-9. A resource is import-owned if and only if its `metadata.ownerRef` names
-   `ResourceImport/<name>`. An import-owned resource is never an export target
-   and is never a backing reference. Export and backing admission read the
-   stored resource; a bare `ResourceRef` is not sufficient evidence of origin,
-   and no caller-supplied mode or origin discriminant is accepted.
-10. `factoryFingerprint` binds the semantic projection-protocol version, so a
-    fingerprint mismatch across a protocol change is attributable version skew
-    rather than tampering. The version is `1.1`; the base schema version stays
-    `1.0` because no base or projection field set moved.
-11. The security-key provider-neutral base continues to reject `deviceRef`,
+7. There is no undetermined state and no `BackingRefTypesUndetermined` error.
+   Every catalog family declares `NoBacking` or `Constrained`; a family whose
+   dossier does not state its backing is refused at construction, before
+   publication, rather than carried as a runtime value.
+8. A family declares `NoBacking` if and only if every name in its
+   `service_spec_allowed` appears in `NON_BACKING_SERVICE_BASE_FIELDS`. That
+   classification is total and disjoint over the catalog's base field universe,
+   so an unclassified new base field fails a test rather than defaulting either
+   way.
+9. For a `serviceType` in the D098 catalog, an advertised `ProjectionFactory` is
+   admitted only when equal field for field to the catalog-derived factory, and
+   the comparison order is normative: declared protocol version, then identity
+   and reference sets, then fingerprints. A protocol difference is never
+   reported as a fingerprint mismatch.
+10. A resource is import-owned if and only if its `metadata.ownerRef` names
+    `ResourceImport/<name>`. An import-owned resource is never an export target
+    and is never a backing reference. Export and backing admission read the
+    stored resource; a bare `ResourceRef` is not sufficient evidence of origin,
+    and no caller-supplied mode or origin discriminant is accepted. The denial
+    has its own bounded, redacted variant, `ImportOwnedOriginRejected`, distinct
+    from a wrong-type denial.
+11. `projectionProtocolVersion` is a declared field of the signed factory
+    descriptor as well as a `factoryFingerprint` input, so version skew is
+    observable without recomputing a hash. The version is `1.1`; the base schema
+    version stays `1.0` because no base or projection field set moved.
+12. The security-key provider-neutral base continues to reject `deviceRef`,
     `relayEndpointRef`, `authority` in a projection, and every physical
     selector.
