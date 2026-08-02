@@ -472,6 +472,14 @@ set -euo pipefail
         self.assertEqual(workflow.count('[ "$result" = success ] || failed=1'), 8)
         self.assertIn('[ "$failed" -eq 0 ] || exit 1', workflow)
         self.assertIn('echo "All Rust gate shards passed."', workflow)
+        main_job = workflow.split("  test-rust-main:", 1)[1].split(
+            "\n  test-rust-broker:",
+            1,
+        )[0]
+        self.assertIn("Prune warm-local-only Rust cache trees", main_job)
+        self.assertIn("public-census", main_job)
+        self.assertIn("private-census", main_job)
+        self.assertEqual(workflow.count("Prune warm-local-only Rust cache trees"), 1)
         self.assertEqual(manifest["ci"]["rollupNeeds"].count("test-rust"), 1)
 
     def test_expensive_rust_cache_surface_is_present(self) -> None:
@@ -762,8 +770,8 @@ set -euo pipefail
         self.assertIn('private_target="$target_root/private-census"', api_driver)
         self.assertIn('public_target="$target_root/census"', api_driver)
         self.assertIn('private_target="$target_root/census"', api_driver)
-        self.assertNotIn('rm -rf "$target_root/census"', api_driver)
-        self.assertIn('${D2B_RUST_COLD_PROFILE:-0}', api_driver)
+        self.assertIn('rm -rf "$target_root/census"', api_driver)
+        self.assertNotIn('${D2B_RUST_COLD_PROFILE:-0}', api_driver)
         self.assertIn('if [ "$shared_census" = 1 ]', api_driver)
         self.assertIn('checker_target="$target_root/checker"', api_driver)
         self.assertIn(
@@ -1034,8 +1042,9 @@ esac
             makefile,
         )
         self.assertIn('fixture_target_dir="$workspace_target_dir"', driver)
-        self.assertIn('public_target="$target_root/census"', api_driver)
-        self.assertIn('if [ "$shared_census" = 1 ]', api_driver)
+        self.assertIn('public_target="$target_root/public-census"', api_driver)
+        self.assertIn('private_target="$target_root/private-census"', api_driver)
+        self.assertIn('rm -rf "$target_root/census"', api_driver)
 
     def test_rust_cold_frontier_fits_budgets_one_through_twelve(self) -> None:
         for budget in range(1, 13):

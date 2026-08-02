@@ -332,6 +332,17 @@ def job_permissions(job: dict[str, Any]) -> str:
     return "    permissions:\n      contents: read\n      actions: write\n"
 
 
+def rust_cache_prune_step(job: dict[str, Any]) -> str:
+    if job["ciJobId"] != "test-rust-main":
+        return ""
+    return """      - name: Prune warm-local-only Rust cache trees
+        run: |
+          rm -rf \
+            .scratch/rust-test-cache/api-surface-*/public-census \
+            .scratch/rust-test-cache/api-surface-*/private-census
+"""
+
+
 def rust_job(job: dict[str, Any]) -> str:
     return f"""  {job["ciJobId"]}:
 {needs_line(job)}    runs-on: {job["runsOn"]}
@@ -420,12 +431,13 @@ def rust_job(job: dict[str, Any]) -> str:
           # tests. Cargo fingerprints compiled inputs on restore, while failed
           # compile units are never cached and still rerun on every gate.
           # A single writer keeps concurrent saves from racing one shared key.
-          # The main-workspace Rust shard is that writer; it produces both the
-          # common Cargo target and the slow compiler/rustdoc scratch trees.
+          # The main-workspace Rust shard is that writer; it produces the common
+          # Cargo target and preserves the restored shared API census tree. It
+          # prunes warm-local-only split census trees before the post-job save.
           # Every other Rust job restores the last complete entry. On a cold key
           # parallel shards may duplicate compilation, but only one entry wins.
           save-if: "{'true' if job["ciJobId"] == 'test-rust-main' else 'false'}"
-{heavy_gate_step(job)}      - name: {job["displayName"]}
+{rust_cache_prune_step(job)}{heavy_gate_step(job)}      - name: {job["displayName"]}
         env:
 {render_env(job)}
         run: make {job["makeTarget"]}

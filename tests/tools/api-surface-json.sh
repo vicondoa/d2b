@@ -53,12 +53,11 @@ case "$target_root" in
     ;;
 esac
 # Public and private rustdoc renders use separate targets only for the warm
-# local aggregate, where their overlap is measured and accepted. CI and cold
-# local runs use the original shared target serially so dependency compilation
-# and cache footprint stay at the pre-change cost.
+# local aggregate, where their overlap is measured and accepted. Cold local
+# runs retain those same targets across `make clean`; CI alone uses the
+# original shared target serially so its cache footprint stays bounded.
 shared_census=0
-if [ -n "${CI:-}" ] || [ -n "${GITHUB_ACTIONS:-}" ] \
-  || [ "${D2B_RUST_COLD_PROFILE:-0}" = 1 ]; then
+if [ -n "${CI:-}" ] || [ -n "${GITHUB_ACTIONS:-}" ]; then
   shared_census=1
   public_target="$target_root/census"
   private_target="$target_root/census"
@@ -73,6 +72,8 @@ checker_target="$target_root/checker"
 rm -rf "$target_root/public" "$target_root/private"
 if [ "$shared_census" = 1 ]; then
   rm -rf "$target_root/public-census" "$target_root/private-census"
+else
+  rm -rf "$target_root/census"
 fi
 
 # Delete only rendered JSON. Cargo's compiled intermediate artifacts remain

@@ -142,7 +142,8 @@ duplicating them. Fixture and CLI work uses an isolated stable target below
 sharing mutable Cargo state.
 
 That isolated layout is warm-local only. Cold local runs restore shared
-workspace/API targets, overlap a bounded prebuild frontier, then run fixture,
-schema and inventory as a full-budget chain. CI runs API, main, broker, guest,
-no-bash, schema, inventory and supply chain as separate full-budget Make jobs,
-then joins them under the stable `test-rust` context.
+workspace targets and retain the split API census cache across `make clean`.
+They overlap a bounded prebuild frontier, then run fixture, schema and
+inventory as a full-budget chain. CI alone uses the shared API census target
+and runs API, main, broker, guest, no-bash, schema, inventory and supply chain
+as separate full-budget Make jobs before the stable `test-rust` join.

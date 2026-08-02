@@ -624,11 +624,12 @@ fn rust_profile_violations(makefile: &str, driver: &str, api_driver: &str) -> Ve
     {
         violations.push("fixture target does not restore the shared CI/cold target".to_owned());
     }
-    if !api_driver.contains("${D2B_RUST_COLD_PROFILE:-0}")
+    if !api_driver.contains("${CI:-}")
         || !api_driver.contains("shared_census=1")
         || !api_driver.contains("public_target=\"$target_root/census\"")
+        || !api_driver.contains("public_target=\"$target_root/public-census\"")
     {
-        violations.push("API census does not restore the shared CI/cold target".to_owned());
+        violations.push("API census does not separate CI and local targets".to_owned());
     }
     violations
 }
@@ -1017,9 +1018,10 @@ ${D2B_RUST_COLD_PROFILE:-0}
 fixture_target_dir="$workspace_target_dir"
 "#;
     let api_driver = r#"
-${D2B_RUST_COLD_PROFILE:-0}
+${CI:-}
 shared_census=1
 public_target="$target_root/census"
+public_target="$target_root/public-census"
 "#;
     assert!(
         rust_profile_violations(makefile, driver, api_driver).is_empty(),
