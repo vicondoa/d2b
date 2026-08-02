@@ -154,8 +154,8 @@ let
       renderNodeOnly = attrOr settings "renderNodeOnly" false;
       videoSidecar = attrOr settings "videoSidecar" false;
       virglVideo = attrOr settings "virglVideo" false;
-      contextTypes = attrOr settings "contextTypes" [ ];
-      displays = attrOr settings "displays" [ ];
+      contextTypes = attrOr settings "contextTypes" [ "virgl" "virgl2" "cross-domain" ];
+      displays = attrOr settings "displays" [ { hidden = true; } ];
     in
     builtins.isAttrs settings
     && exactKeys (providerSettingsFields name) settings
