@@ -810,6 +810,13 @@ set -euo pipefail
             "[build]\n",
             encoding="utf-8",
         )
+        for relative in (
+            "packages/d2b-priv-broker/.cargo/config.toml",
+            "packages/d2b-guest-shell-runner/.cargo/config.toml",
+        ):
+            config = tree / relative
+            config.parent.mkdir(parents=True, exist_ok=True)
+            config.write_text("[build]\n", encoding="utf-8")
         (tree / "packages/rust-toolchain.toml").write_text(
             '[toolchain]\nchannel = "1.97.0"\n',
             encoding="utf-8",
