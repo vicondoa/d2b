@@ -28,6 +28,7 @@ pub mod role_binding;
 pub mod semantic_services;
 pub mod services;
 pub mod storage;
+pub mod telemetry_policy;
 pub mod user;
 pub mod volume;
 pub mod volume_state;
@@ -132,6 +133,10 @@ pub use role_binding::{
 pub use services::{
     AuditSegment, ProviderMethod, ResourceMethod, ServiceDescriptor, ServiceDescriptorError,
     V3Service, ZoneMethod, missing_audit_segments,
+};
+pub use telemetry_policy::{
+    FORBIDDEN_LABEL_KEYS, FORBIDDEN_LABEL_SUFFIXES, METRIC_LABEL_POLICY, OTEL_RESOURCE_ATTRIBUTES,
+    allowed_values as telemetry_allowed_values,
 };
 pub use zone::{
     ZoneConditionType, ZoneHandlerName, ZoneHandlerPhase, ZoneHandlerStatus, ZoneSpec, ZoneStatus,

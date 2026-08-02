@@ -7,33 +7,10 @@ use std::{
 };
 
 use d2b_contract_tests::{read_repo_file, repo_path_exists, repo_root};
+use d2b_contracts::v3::telemetry_policy::{
+    FORBIDDEN_LABEL_KEYS, FORBIDDEN_LABEL_SUFFIXES, OTEL_RESOURCE_ATTRIBUTES,
+};
 use regex::Regex;
-
-const RESOURCE_ATTRIBUTES: &[&str] = &[
-    "deployment.environment",
-    "host.name",
-    "service.name",
-    "service.namespace",
-    "source",
-    "vm.env",
-    "vm.name",
-    "vm.role",
-    "d2b.zone",
-    "d2b.provider",
-    "d2b.component",
-    "service.version",
-];
-
-const FORBIDDEN_LABEL_KEYS: &[&str] = &[
-    "vm",
-    "zone",
-    "zone_id",
-    "zone_uid",
-    "credential_name",
-    "network",
-    "network_name",
-    "link_name_hash",
-];
 
 const FORBIDDEN_SPAN_FIELDS: &[&str] = &[
     "path",
@@ -593,35 +570,119 @@ fn startup_tracing_and_v3_sources_do_not_leak_forbidden_fields() {
 
 #[test]
 fn resource_attribute_allowlist_is_closed() {
-    let telemetry = read_repo_file("packages/d2b-telemetry/src/metric_label_policy.rs");
-    for attribute in RESOURCE_ATTRIBUTES {
+    let policy = read_repo_file("packages/d2b-contracts/src/v3/telemetry_policy.rs");
+    for attribute in OTEL_RESOURCE_ATTRIBUTES {
         assert!(
-            telemetry.contains(&format!("\"{attribute}\"")),
-            "telemetry resource-attribute allowlist is missing {attribute}"
+            policy.contains(&format!("\"{attribute}\"")),
+            "canonical telemetry resource-attribute allowlist is missing {attribute}"
         );
     }
-    assert!(!telemetry.contains("\"config_source\""));
+    assert!(!policy.contains("\"config_source\""));
 }
 
 #[test]
 fn metric_label_policy_rejects_identity_keys_and_suffixes() {
+    let policy = read_repo_file("packages/d2b-contracts/src/v3/telemetry_policy.rs");
     let telemetry = read_repo_file("packages/d2b-telemetry/src/metric_label_policy.rs");
     for key in FORBIDDEN_LABEL_KEYS {
         assert!(
-            telemetry.contains(&format!("\"{key}\"")),
-            "forbidden metric key {key} is not pinned"
+            policy.contains(&format!("\"{key}\"")),
+            "forbidden metric key {key} is not pinned in the canonical policy"
         );
     }
-    for suffix in ["_name", "_name_hash", "_name_digest", "_uid"] {
+    for suffix in FORBIDDEN_LABEL_SUFFIXES {
         assert!(
-            telemetry.contains(&format!("\"{suffix}\"")),
-            "forbidden metric suffix {suffix} is not pinned"
+            policy.contains(&format!("\"{suffix}\"")),
+            "forbidden metric suffix {suffix} is not pinned in the canonical policy"
         );
     }
+    assert!(
+        telemetry.contains("d2b_contracts::v3::telemetry_policy"),
+        "emitter policy must re-export the canonical contract"
+    );
     for key in ["vm", "zone", "zone_id", "zone_uid"] {
         assert!(
             !telemetry.contains(&format!("label(\"{key}\"")),
             "metric descriptor emits forbidden key {key}"
+        );
+    }
+}
+
+#[test]
+fn metric_policy_data_has_one_definition_and_denies_forks() {
+    const POLICY_FILES: &[&str] = &[
+        "packages/d2b-contracts/src/v3/telemetry_policy.rs",
+        "packages/d2b-telemetry/src/metric_label_policy.rs",
+        "packages/d2b-provider-observability-otel/src/metric_policy.rs",
+    ];
+    const POLICY_SYMBOLS: &[&str] = &[
+        "FORBIDDEN_LABEL_KEYS",
+        "FORBIDDEN_LABEL_SUFFIXES",
+        "OTEL_RESOURCE_ATTRIBUTES",
+        "METRIC_LABEL_POLICY",
+    ];
+
+    let sources = POLICY_FILES
+        .iter()
+        .map(|path| (*path, read_repo_file(path)))
+        .collect::<Vec<_>>();
+    let canonical = &sources
+        .iter()
+        .find(|(path, _)| *path == POLICY_FILES[0])
+        .expect("canonical telemetry policy source is present")
+        .1;
+    let consumers = sources.iter().skip(1).collect::<Vec<_>>();
+
+    for symbol in POLICY_SYMBOLS {
+        let definition = Regex::new(&format!(r"(?m)^\s*(?:pub\s+)?const\s+{symbol}\b"))
+            .expect("valid policy constant definition regex");
+        let definitions = sources
+            .iter()
+            .filter(|(_, source)| definition.is_match(source))
+            .count();
+        assert_eq!(
+            definitions, 1,
+            "{symbol} must have exactly one definition across the policy packages"
+        );
+        assert!(
+            definition.is_match(canonical),
+            "{symbol} must be defined by the neutral contract"
+        );
+    }
+
+    for (path, source) in &consumers {
+        assert!(
+            source.contains("pub use d2b_contracts::v3::telemetry_policy"),
+            "{path} must re-export policy data from d2b-contracts"
+        );
+        for symbol in POLICY_SYMBOLS {
+            let fork = Regex::new(&format!(r"(?m)^\s*(?:pub\s+)?const\s+{symbol}\b"))
+                .expect("valid policy fork regex");
+            assert!(
+                !fork.is_match(source),
+                "{path} must not define a fork of {symbol}"
+            );
+        }
+    }
+
+    let allowed_values = Regex::new(r"(?m)^\s*(?:pub\s+)?fn\s+allowed_values\b")
+        .expect("valid allowed-values definition regex");
+    assert_eq!(
+        sources
+            .iter()
+            .filter(|(_, source)| allowed_values.is_match(source))
+            .count(),
+        1,
+        "allowed_values must have exactly one definition across the policy packages"
+    );
+    assert!(
+        canonical.contains("pub fn allowed_values"),
+        "canonical telemetry policy must expose the closed value lookup"
+    );
+    for (path, source) in &consumers {
+        assert!(
+            source.contains("allowed_values"),
+            "{path} must re-export the canonical allowed value lookup"
         );
     }
 }
