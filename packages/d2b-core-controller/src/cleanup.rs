@@ -11,6 +11,7 @@ use d2b_contracts::v3::{
 };
 
 use crate::{
+    audit::AuditReason,
     configuration::{ResourceKey, RetainedGenerations},
     resource_store::{ManagedBy, PersistedResourceRecord},
 };
@@ -84,9 +85,30 @@ impl PendingCleanupCondition {
         "PendingCleanup"
     }
 
+    /// Return the v3 condition type used by Zone status.
+    ///
+    /// `name()` is retained as the historical Rust projection name.  The
+    /// wire-facing condition token is lower-case and hyphenated.
+    pub const fn condition_type(&self) -> &'static str {
+        "pending-cleanup"
+    }
+
     /// Return the condition state.
     pub const fn state(&self) -> PendingCleanupState {
         self.state
+    }
+
+    /// Return the wire-facing boolean condition value.
+    pub const fn status(&self) -> &'static str {
+        self.state.as_str()
+    }
+
+    /// Return the closed reason for the condition.
+    pub const fn reason(&self) -> &'static str {
+        match self.state {
+            PendingCleanupState::True => "ConfigRemoved",
+            PendingCleanupState::False => "CleanupComplete",
+        }
     }
 
     /// Return the cleanup-derived aggregate phase.
@@ -97,6 +119,44 @@ impl PendingCleanupCondition {
     /// Return the number of pending rows without exposing their identities.
     pub const fn pending_count(&self) -> usize {
         self.pending_count
+    }
+}
+
+/// Status projection for cleanup that exceeded its bounded stall threshold.
+///
+/// A stall is deliberately a Degraded condition, not a terminal failure:
+/// finalizers and owner controllers retain authority to complete their
+/// teardown, and configuration publication remains available for later
+/// generations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CleanupStallCondition {
+    reason: AuditReason,
+}
+
+impl CleanupStallCondition {
+    /// Construct a closed cleanup-stall condition.
+    pub(crate) const fn new(reason: AuditReason) -> Self {
+        Self { reason }
+    }
+
+    /// Return the v3 condition type.
+    pub const fn condition_type(self) -> &'static str {
+        "cleanup-stalled"
+    }
+
+    /// Return the condition status.
+    pub const fn status(self) -> &'static str {
+        "True"
+    }
+
+    /// Return the closed reason token.
+    pub const fn reason(self) -> &'static str {
+        self.reason.label()
+    }
+
+    /// Return the phase imposed by a cleanup stall.
+    pub const fn phase(self) -> CleanupZonePhase {
+        CleanupZonePhase::Degraded
     }
 }
 
@@ -192,6 +252,51 @@ pub const EPHEMERAL_PROCESS_SUCCESSFUL_TTL_MS_DEFAULT: u64 = 3_600_000;
 
 /// Default failed EphemeralProcess retention, in milliseconds.
 pub const EPHEMERAL_PROCESS_FAILED_TTL_MS_DEFAULT: u64 = 86_400_000;
+
+/// Default configuration-owned cleanup stall threshold, in milliseconds.
+pub const CONFIGURATION_CLEANUP_STALL_THRESHOLD_MS_DEFAULT: u64 = 600_000;
+
+/// Closed failure from cleanup-stall clock evaluation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CleanupStallError {
+    /// One of the supplied timestamps was not a canonical UTC timestamp.
+    InvalidTimestamp,
+}
+
+impl CleanupStallError {
+    /// Return the stable failure label.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::InvalidTimestamp => "cleanup-stall-timestamp-invalid",
+        }
+    }
+}
+
+impl core::fmt::Display for CleanupStallError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(self.label())
+    }
+}
+
+impl std::error::Error for CleanupStallError {}
+
+/// Return whether a pending configuration cleanup has crossed its stall bound.
+///
+/// The comparison is clock-injected and side-effect free.  Callers still
+/// decide when to emit the Degraded condition; a `true` result never clears a
+/// finalizer or removes a resource.
+pub fn cleanup_stall_due(
+    requested_at: &Timestamp,
+    now: &Timestamp,
+    threshold_ms: u64,
+) -> Result<bool, CleanupStallError> {
+    let requested = timestamp_millis(requested_at).ok_or(CleanupStallError::InvalidTimestamp)?;
+    let current = timestamp_millis(now).ok_or(CleanupStallError::InvalidTimestamp)?;
+    let deadline = requested
+        .checked_add(i128::from(threshold_ms))
+        .ok_or(CleanupStallError::InvalidTimestamp)?;
+    Ok(current >= deadline)
+}
 
 /// Closed terminal phases understood by the EphemeralProcess cleanup handler.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -734,6 +839,33 @@ mod ephemeral_cleanup_tests {
     }
 
     #[test]
+    fn failed_terminal_uses_the_24_hour_default_ttl() {
+        let completed = timestamp("2026-08-01T00:00:00.000Z");
+        let mut controller = EphemeralProcessCleanupController::default();
+        let observation = EphemeralProcessObservation::with_defaults(
+            key(),
+            EphemeralProcessPhase::Failed,
+            Some(completed),
+            false,
+            0,
+            false,
+            None,
+            ZoneRevision::new(10),
+        )
+        .unwrap();
+        assert_eq!(
+            controller
+                .reconcile(observation, &timestamp("2026-08-01T00:00:01.000Z"))
+                .unwrap(),
+            EphemeralCleanupDecision::UpdateStatus {
+                cleanup_eligible_at: timestamp("2026-08-02T00:00:00.000Z"),
+                incident_held: false,
+                expected_revision: ZoneRevision::new(10),
+            }
+        );
+    }
+
+    #[test]
     fn terminal_success_uses_one_hour_ttl_and_requeues_without_polling() {
         let completed = timestamp("2026-08-01T00:00:00.000Z");
         let mut controller = EphemeralProcessCleanupController::default();
@@ -951,5 +1083,26 @@ mod ephemeral_cleanup_tests {
                 ..
             } if cleanup_eligible_at.as_str() == "2026-02-01T00:30:00.000Z"
         ));
+    }
+
+    #[test]
+    fn configuration_stall_clock_is_bounded_and_clock_injected() {
+        let requested = timestamp("2026-08-01T00:00:00.000Z");
+        assert!(
+            !cleanup_stall_due(
+                &requested,
+                &timestamp("2026-08-01T00:09:59.999Z"),
+                CONFIGURATION_CLEANUP_STALL_THRESHOLD_MS_DEFAULT,
+            )
+            .unwrap()
+        );
+        assert!(
+            cleanup_stall_due(
+                &requested,
+                &timestamp("2026-08-01T00:10:00.000Z"),
+                CONFIGURATION_CLEANUP_STALL_THRESHOLD_MS_DEFAULT,
+            )
+            .unwrap()
+        );
     }
 }

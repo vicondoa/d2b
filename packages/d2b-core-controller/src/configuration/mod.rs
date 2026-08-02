@@ -65,7 +65,7 @@ use d2b_contracts::{
 
 use crate::{
     audit::{AuditError, AuditEvent, AuditLedger, AuditReason},
-    cleanup::PendingCleanupCondition,
+    cleanup::{CleanupStallCondition, PendingCleanupCondition},
 };
 
 /// Default number of retained prior generation bundles (D119).
@@ -443,6 +443,11 @@ impl StoredResource {
     pub const fn managed_by(&self) -> ManagementAgent {
         self.managed_by
     }
+
+    /// Borrow the configuration generation that stamped this resource.
+    pub const fn configuration_generation(&self) -> Option<&ResourceBundleGenerationId> {
+        self.configuration_generation.as_ref()
+    }
 }
 
 /// The durable per-Zone generation record (`generation.json`).
@@ -754,6 +759,7 @@ pub struct ConfigurationService {
     cleanup_open: BTreeSet<ResourceKey>,
     cleanup_sequence: u64,
     pending_cleanup_effects: BTreeMap<u64, (ResourceKey, CleanupStep, Vec<CleanupEffect>)>,
+    committed_cleanup_revisions: BTreeSet<u64>,
     appended_audits: BTreeSet<u64>,
     failed: bool,
 }
@@ -775,6 +781,7 @@ impl ConfigurationService {
             cleanup_open: BTreeSet::new(),
             cleanup_sequence: 0,
             pending_cleanup_effects: BTreeMap::new(),
+            committed_cleanup_revisions: BTreeSet::new(),
             appended_audits: BTreeSet::new(),
             failed: false,
         }
@@ -810,6 +817,7 @@ impl ConfigurationService {
             cleanup_open: BTreeSet::new(),
             cleanup_sequence: 0,
             pending_cleanup_effects: BTreeMap::new(),
+            committed_cleanup_revisions: BTreeSet::new(),
             appended_audits: BTreeSet::new(),
             failed: false,
         }
@@ -1096,7 +1104,18 @@ impl ConfigurationService {
         proof: CleanupCommitProof,
     ) -> Result<Vec<CleanupEffect>, ConfigurationError> {
         match self.pending_cleanup_effects.remove(&proof.sequence) {
-            Some((_, _, effects)) => Ok(effects),
+            Some((_, step, effects)) => {
+                if step == CleanupStep::CommitDeletion
+                    && let Some(revision) = effects.iter().find_map(|effect| match effect {
+                        CleanupEffect::AppendCleanupAudit(revision) => Some(revision.get()),
+                        CleanupEffect::NotifyFinalizerHolders
+                        | CleanupEffect::NotifyControllerCascade => None,
+                    })
+                {
+                    self.committed_cleanup_revisions.insert(revision);
+                }
+                Ok(effects)
+            }
             None => Err(ConfigurationError::StaleCommitProof),
         }
     }
@@ -1110,10 +1129,25 @@ impl ConfigurationService {
         &mut self,
         revision: ZoneRevision,
     ) -> Result<ConfigurationAuditKind, ConfigurationError> {
+        if !self.committed_cleanup_revisions.remove(&revision.get()) {
+            if self.appended_audits.contains(&revision.get()) {
+                return Err(ConfigurationError::AuditAlreadyAppended);
+            }
+            return Err(ConfigurationError::CleanupNotCompleted);
+        }
         if !self.appended_audits.insert(revision.get()) {
             return Err(ConfigurationError::AuditAlreadyAppended);
         }
         Ok(ConfigurationAuditKind::ResourceCleanup)
+    }
+
+    /// Return whether a committed deletion still needs its audit append.
+    ///
+    /// The store transaction and the authoritative audit append are separate
+    /// durability domains.  This marker lets recovery retry the append without
+    /// treating the already-removed resource as a fresh cleanup request.
+    pub fn cleanup_audit_pending(&self, revision: ZoneRevision) -> bool {
+        self.committed_cleanup_revisions.contains(&revision.get())
     }
 
     /// Record a permanent Delete failure for one resource.
@@ -1320,6 +1354,8 @@ pub enum ActivationError {
     BundleApply(bundle_apply::BundleApplyError),
     /// The audit sink rejected an event.
     Audit(AuditError),
+    /// The bundle was rejected by schema validation before any mutation.
+    SchemaValidationFailed,
 }
 
 impl ActivationError {
@@ -1334,6 +1370,7 @@ impl ActivationError {
             Self::Configuration(error) => error.label(),
             Self::BundleApply(error) => error.label(),
             Self::Audit(error) => error.label(),
+            Self::SchemaValidationFailed => "schema-validation-failed",
         }
     }
 }
@@ -1372,6 +1409,7 @@ pub struct BundleActivation {
     zone_uid: Option<ResourceUid>,
     artifact_catalog_digest: Option<SchemaFingerprint>,
     installed_provider_schema_digests: BTreeMap<String, SchemaFingerprint>,
+    schema_validation_failed: bool,
 }
 
 impl BundleActivation {
@@ -1384,6 +1422,7 @@ impl BundleActivation {
             zone_uid: None,
             artifact_catalog_digest: None,
             installed_provider_schema_digests: BTreeMap::new(),
+            schema_validation_failed: false,
         }
     }
 
@@ -1413,6 +1452,17 @@ impl BundleActivation {
         self
     }
 
+    /// Mark this candidate as rejected by the schema-validation boundary.
+    ///
+    /// The bundle remains available only as a redacted identity for the
+    /// rejection audit.  No resource mutation is released for this wrapper.
+    /// This models a parser/schema adapter that has decoded the candidate
+    /// identity but cannot admit its desired resource projection.
+    pub const fn with_schema_validation_failure(mut self) -> Self {
+        self.schema_validation_failed = true;
+        self
+    }
+
     /// Borrow the candidate bundle.
     pub const fn bundle(&self) -> &ZoneBundle {
         &self.bundle
@@ -1437,6 +1487,7 @@ impl core::fmt::Debug for BundleActivation {
                 "provider_schema_count",
                 &self.installed_provider_schema_digests.len(),
             )
+            .field("schema_validation_failed", &self.schema_validation_failed)
             .finish_non_exhaustive()
     }
 }
@@ -1768,6 +1819,7 @@ pub struct GenerationState {
     phase: GenerationPhase,
     pending_cleanup_count: u32,
     cleanup_failed: bool,
+    cleanup_stall_reason: Option<AuditReason>,
     last_activation_error: Option<ActivationError>,
 }
 
@@ -1782,6 +1834,7 @@ impl GenerationState {
             phase: GenerationPhase::Ready,
             pending_cleanup_count: 0,
             cleanup_failed: false,
+            cleanup_stall_reason: None,
             last_activation_error: None,
         }
     }
@@ -1819,6 +1872,14 @@ impl GenerationState {
     /// Whether the cleanup-failed condition is set.
     pub const fn cleanup_failed(&self) -> bool {
         self.cleanup_failed
+    }
+
+    /// Return the cleanup-stall condition, when a bounded stall was observed.
+    pub const fn cleanup_stall_condition(&self) -> Option<CleanupStallCondition> {
+        match self.cleanup_stall_reason {
+            Some(reason) => Some(CleanupStallCondition::new(reason)),
+            None => None,
+        }
     }
 
     /// Return the last activation refusal, if one was recorded.
@@ -2050,6 +2111,14 @@ impl ZoneConfigController {
         rollback: bool,
     ) -> Result<ActivationResult, ActivationError> {
         let bundle = candidate.bundle();
+        if candidate.schema_validation_failed {
+            return self.reject(
+                ActivationError::SchemaValidationFailed,
+                AuditReason::SchemaValidationFailed,
+                bundle,
+                now,
+            );
+        }
         if bundle.zone() != &self.zone {
             return self.reject(
                 ActivationError::ZoneMismatch,
@@ -2103,10 +2172,24 @@ impl ZoneConfigController {
         }
 
         let diff = GenerationDiff::compute(bundle, stored);
-        let outcome = if rollback {
-            bundle_apply::begin_bundle_rollback(&mut self.service, bundle, stored, now)?
+        let outcome_result = if rollback {
+            bundle_apply::begin_bundle_rollback(&mut self.service, bundle, stored, now)
         } else {
-            bundle_apply::begin_bundle_apply(&mut self.service, bundle, stored, now)?
+            bundle_apply::begin_bundle_apply(&mut self.service, bundle, stored, now)
+        };
+        let outcome = match outcome_result {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                if matches!(error, bundle_apply::BundleApplyError::CanonicalSpec) {
+                    return self.reject(
+                        ActivationError::SchemaValidationFailed,
+                        AuditReason::SchemaValidationFailed,
+                        bundle,
+                        now,
+                    );
+                }
+                return Err(ActivationError::from(error));
+            }
         };
         let plan = match outcome {
             bundle_apply::BundleApplyOutcome::Unchanged { .. } => {
@@ -2242,6 +2325,18 @@ impl ZoneConfigController {
         revision: ZoneRevision,
         now: &Timestamp,
     ) -> Result<CleanupOutcome, ActivationError> {
+        if self.pending_cleanup.contains_key(key) && self.cleanup_audit_present(key, revision) {
+            match self.service.record_cleanup_audit_appended(revision) {
+                Ok(_) | Err(ConfigurationError::AuditAlreadyAppended) => {}
+                // The audit is already durable; a restarted in-memory
+                // service may not retain the post-commit marker.
+                Err(ConfigurationError::CleanupNotCompleted) => {}
+                Err(error) => return Err(ActivationError::Configuration(error)),
+            }
+            self.pending_cleanup.remove(key);
+            self.sync_state(None);
+            return Ok(CleanupOutcome::Deleted);
+        }
         if !self.pending_cleanup.contains_key(key) {
             if self.cleanup_audit_present(key, revision) {
                 return Ok(CleanupOutcome::Deleted);
@@ -2257,24 +2352,22 @@ impl ZoneConfigController {
                 ConfigurationError::CleanupNotRequested,
             ))
             .map(|pending| (pending.prior_generation(), pending.active_generation()))?;
-        let pass = self
-            .service
-            .begin_cleanup(key, CleanupObservation::new(0, 0))?;
-        let proof = self.service.commit_cleanup(pass, revision)?;
-        let effects = self.service.release_cleanup_effects(proof)?;
-        if !effects.iter().any(|effect| {
-            matches!(
-                effect,
-                CleanupEffect::AppendCleanupAudit(candidate) if *candidate == revision
-            )
-        }) {
-            return Err(ActivationError::Configuration(
-                ConfigurationError::CleanupNotCompleted,
-            ));
-        }
-        match self.service.record_cleanup_audit_appended(revision) {
-            Ok(_) | Err(ConfigurationError::AuditAlreadyAppended) => {}
-            Err(error) => return Err(ActivationError::Configuration(error)),
+        if !self.service.cleanup_audit_pending(revision) {
+            let pass = self
+                .service
+                .begin_cleanup(key, CleanupObservation::new(0, 0))?;
+            let proof = self.service.commit_cleanup(pass, revision)?;
+            let effects = self.service.release_cleanup_effects(proof)?;
+            if !effects.iter().any(|effect| {
+                matches!(
+                    effect,
+                    CleanupEffect::AppendCleanupAudit(candidate) if *candidate == revision
+                )
+            }) {
+                return Err(ActivationError::Configuration(
+                    ConfigurationError::CleanupNotCompleted,
+                ));
+            }
         }
         let event = AuditEvent::resource_deleted(
             self.zone.clone(),
@@ -2288,6 +2381,10 @@ impl ZoneConfigController {
         match self.audit.append(event) {
             Ok(()) | Err(AuditError::AlreadyAppended) => {}
             Err(error) => return Err(ActivationError::Audit(error)),
+        }
+        match self.service.record_cleanup_audit_appended(revision) {
+            Ok(_) | Err(ConfigurationError::AuditAlreadyAppended) => {}
+            Err(error) => return Err(ActivationError::Configuration(error)),
         }
         if let Some(pending) = self.pending_cleanup.get_mut(key) {
             pending.phase = CleanupPhase::Deleted;
@@ -2340,6 +2437,7 @@ impl ZoneConfigController {
             Err(error) => return Err(ActivationError::Audit(error)),
         }
         self.state.cleanup_failed = true;
+        self.state.cleanup_stall_reason = Some(reason);
         self.sync_state(None);
         Ok(CleanupOutcome::Stalled)
     }
@@ -2387,6 +2485,7 @@ impl ZoneConfigController {
             u32::try_from(self.pending_cleanup.len()).unwrap_or(u32::MAX);
         if self.pending_cleanup.is_empty() {
             self.state.cleanup_failed = false;
+            self.state.cleanup_stall_reason = None;
         }
         self.state.phase = if !self.pending_cleanup.is_empty() {
             GenerationPhase::Degraded
