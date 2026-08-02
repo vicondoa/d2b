@@ -77,7 +77,6 @@ const NAMED_INVERSIONS: &[(&str, &str)] = &[
     ("d2b-bus", "the Zone message bus"),
     ("d2b-zone-routing", "the Zone routing plane"),
     ("d2b-host", "the host lifecycle primitives"),
-    ("d2b-daemon-access", "the daemon access layer"),
 ];
 
 /// Crates exempt from the naming rule and therefore from this whole policy,
