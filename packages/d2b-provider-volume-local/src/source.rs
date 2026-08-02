@@ -31,7 +31,7 @@ impl SourcePolicy {
         volume_kinds: impl IntoIterator<Item = VolumeKind>,
     ) -> Result<Self, VolumeLocalError> {
         let id = BoundedToken::parse(id.into()).map_err(|_| VolumeLocalError::InvalidSpec)?;
-        let volume_kinds = volume_kinds.into_iter().collect();
+        let volume_kinds: BTreeSet<VolumeKind> = volume_kinds.into_iter().collect();
         if volume_kinds.is_empty() {
             return Err(VolumeLocalError::InvalidSpec);
         }
@@ -105,12 +105,12 @@ impl SourcePolicyCatalog {
     }
 
     /// Return the number of policy entries.
-    pub const fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.policies.len()
     }
 
     /// Return whether the catalog contains no entries.
-    pub const fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.policies.is_empty()
     }
 }
