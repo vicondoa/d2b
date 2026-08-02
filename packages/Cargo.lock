@@ -1290,8 +1290,8 @@ dependencies = [
 name = "d2b-provider-observability-otel"
 version = "0.0.0-bootstrap"
 dependencies = [
- "d2b-audit",
- "d2b-telemetry",
+ "d2b-contracts",
+ "d2b-provider-toolkit",
  "serde",
  "serde_json",
 ]
