@@ -100,6 +100,11 @@ impl SecurityKeyLease {
         self.state
     }
 
+    /// Borrow the opaque holder identity.
+    pub const fn holder(&self) -> &ResourceUid {
+        &self.holder
+    }
+
     /// Borrow the active session ID, if present.
     pub const fn session(&self) -> Option<&SecurityKeySessionId> {
         self.session.as_ref()

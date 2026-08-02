@@ -14,8 +14,8 @@ mod process;
 mod session_ring;
 
 pub use authority::{
-    PhysicalUsbBackingClaim, PhysicalUsbBackingToken, SecurityKeyEffectError,
-    SecurityKeyEffectPort, SecurityKeyOpenIntent,
+    PhysicalAuthorityLease, PhysicalUsbBackingClaim, PhysicalUsbBackingToken, RelayLaunchTicket,
+    SecurityKeyEffectError, SecurityKeyEffectPort, SecurityKeyOpenIntent,
 };
 pub use cid::{CidTranslationError, GuestCid, RelayCid, SecurityKeyCidTranslator};
 pub use controller::{
