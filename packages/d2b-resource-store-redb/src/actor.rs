@@ -1916,4 +1916,75 @@ mod tests {
             d2b_resource_store::StoreErrorKind::StoreQuarantined
         );
     }
+
+    #[test]
+    fn durable_audit_failure_blocks_the_store_commit() {
+        struct RejectingAudit(AtomicU64);
+
+        impl DurableMutationAudit for RejectingAudit {
+            fn append_before_commit(
+                &self,
+                _record: &d2b_audit::AuditRecord,
+            ) -> Result<(), d2b_audit::AuditRecordError> {
+                self.0.fetch_add(1, Ordering::Relaxed);
+                Err(d2b_audit::AuditRecordError::Serialization)
+            }
+        }
+
+        let (_directory, database) = database("audit-before-commit");
+        let identity = crate::StoreIdentity::new(
+            d2b_resource_store::StoreSlot::new(0).unwrap(),
+            d2b_contracts::v3::ResourceUid::parse("11111111-1111-4111-8111-111111111111").unwrap(),
+            ZoneId::parse("work").unwrap(),
+            d2b_contracts::v3::ResourceUid::parse("22222222-2222-4222-8222-222222222222").unwrap(),
+            d2b_contracts::v3::Timestamp::parse("2026-07-31T00:00:00.000Z").unwrap(),
+            d2b_resource_store::PolicySnapshot {
+                policy_revision: 1,
+                api_catalog_revision: 1,
+                active_configuration_revision: d2b_contracts::v3::ConfigurationGeneration::new(1)
+                    .unwrap(),
+                controller_generation: None,
+            },
+        );
+        crate::transaction::initialize(&database, &identity).unwrap();
+
+        let (_command_sender, command_receiver) = mpsc::channel(1);
+        let signals = Arc::new(SignalCounters::default());
+        let quarantined = Arc::new(AtomicBool::new(false));
+        let permits = Arc::new(tokio::sync::Semaphore::new(1));
+        let request = crate::transaction::empty_write_request_for_test(
+            0,
+            "subject",
+            ResourceRef::parse("Process/first").unwrap(),
+            Arc::clone(&permits).try_acquire_owned().unwrap(),
+        );
+        let (response, result) = oneshot::channel();
+        let mut request = request;
+        request.response = response;
+        let audit = Arc::new(RejectingAudit(AtomicU64::new(0)));
+        let watch_coordinator = Arc::new(std::sync::Mutex::new(WatchCoordinator::default()));
+        let mut actor = WriterActor::new_with_ports(
+            database.clone(),
+            command_receiver,
+            signals,
+            quarantined,
+            watch_coordinator,
+            Arc::new(NoopStoreTelemetry),
+            audit.clone(),
+        );
+        actor.scheduler.push(request);
+        actor.flush();
+
+        assert_eq!(audit.0.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            crate::transaction::current_meta(&database)
+                .unwrap()
+                .current_revision,
+            0
+        );
+        assert_eq!(
+            result.blocking_recv().unwrap().unwrap_err().kind(),
+            d2b_resource_store::StoreErrorKind::StoreIntegrityFailure
+        );
+    }
 }
