@@ -204,6 +204,7 @@ impl LogicalBackup {
 
         let mut names = BTreeSet::new();
         let mut total_rows = 0_usize;
+        let mut total_row_bytes = 0_usize;
         for table in &self.tables {
             if !names.insert(table.name.as_str()) {
                 return Err(integrity("backup-table-duplicate"));
@@ -228,6 +229,13 @@ impl LogicalBackup {
             }
             let mut keys = BTreeSet::new();
             for row in &table.rows {
+                total_row_bytes = total_row_bytes
+                    .checked_add(row.key.len())
+                    .and_then(|bytes| bytes.checked_add(row.value.len()))
+                    .ok_or_else(|| integrity("backup-size-over-limit"))?;
+                if total_row_bytes > MAX_LOGICAL_BACKUP_BYTES {
+                    return Err(integrity("backup-size-over-limit"));
+                }
                 if !keys.insert(row.key.as_slice()) {
                     return Err(integrity("backup-table-key-duplicate"));
                 }
