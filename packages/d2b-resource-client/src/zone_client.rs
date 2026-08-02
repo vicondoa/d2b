@@ -124,6 +124,35 @@ pub trait ConnectedZoneSession: Send + Sync {
     ) -> impl Future<Output = Result<CanonicalJsonObject, ClientError>> + Send;
 }
 
+/// Options for one typed Resource call.
+///
+/// The payload and cancellation state travel with the attachment policy so
+/// [`ZoneClient::call_resource`] can keep its routing and retry inputs
+/// explicit without accepting an overly wide argument list.
+pub struct ResourceCallOptions<'a> {
+    /// Canonical request payload.
+    pub payload: CanonicalJsonObject,
+    /// Whether the call carries attachments and therefore cannot be retried.
+    pub has_attachments: bool,
+    /// Cooperative cancellation state for the call.
+    pub cancellation: &'a crate::CancellationToken,
+}
+
+impl<'a> ResourceCallOptions<'a> {
+    /// Assemble options for one typed Resource call.
+    pub const fn new(
+        payload: CanonicalJsonObject,
+        has_attachments: bool,
+        cancellation: &'a crate::CancellationToken,
+    ) -> Self {
+        Self {
+            payload,
+            has_attachments,
+            cancellation,
+        }
+    }
+}
+
 /// A named Resource Watch stream supplied by the authenticated session.
 pub trait ResourceWatchTransport: Send + Sync {
     /// Receive one bounded canonical event, or `None` after terminal close.
@@ -288,13 +317,16 @@ where
         verb: ResourceVerb,
         options: CallOptions,
         selection: TransportSelection,
-        payload: CanonicalJsonObject,
-        has_attachments: bool,
-        cancellation: &crate::CancellationToken,
+        request: ResourceCallOptions<'_>,
     ) -> Result<CanonicalJsonObject, ClientError>
     where
         C: ConnectedZoneSession,
     {
+        let ResourceCallOptions {
+            payload,
+            has_attachments,
+            cancellation,
+        } = request;
         let (_resolved, mut driver) =
             self.prepare_resource_call(target, verb, options, selection, has_attachments)?;
         let resource_target = target_resource_ref(target);
