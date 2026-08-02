@@ -1,7 +1,8 @@
 use std::fs::OpenOptions;
 use std::os::fd::{AsFd, AsRawFd};
 use std::os::unix::fs::MetadataExt;
-use std::process::Command;
+use std::os::unix::process::CommandExt;
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Barrier};
 
 use d2b_contracts::v3::{
@@ -849,7 +850,35 @@ fn scm_rights_receipt_rejects_multiple_descriptors() {
 }
 
 #[test]
+fn scm_rights_receipt_exec_status_helper() {
+    const HELPER_ENV: &str = "D2B_RESOURCE_STORE_EXEC_STATUS_HELPER";
+    const STATUS_DUP_MIN_FD: i32 = 10;
+
+    if std::env::var_os(HELPER_ENV).is_none() {
+        return;
+    }
+
+    // `Command::stderr` safely hands the status pipe to fd 2, but that dup
+    // clears CLOEXEC. Preserve the pipe on a high descriptor before replacing
+    // fd 2 with /dev/null, then let exec close the preserved descriptor.
+    let status = rustix::io::fcntl_dupfd_cloexec(rustix::stdio::stderr(), STATUS_DUP_MIN_FD)
+        .expect("duplicate exec status fd");
+    let error = Command::new("sleep")
+        .arg("1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .exec();
+    let _ = rustix::io::write(&status, &[1]);
+    eprintln!("exec status helper could not exec sleep: {error}");
+    std::process::exit(1);
+}
+
+#[test]
 fn scm_rights_receipt_racing_fork_exec_never_leaks_the_database_inode() {
+    const HELPER_ENV: &str = "D2B_RESOURCE_STORE_EXEC_STATUS_HELPER";
+    const HELPER_TEST: &str = "tests::scm_rights_receipt_exec_status_helper";
+
     for _ in 0..32 {
         let (_directory, file) = owned_file();
         let metadata = file.metadata().unwrap();
@@ -880,7 +909,27 @@ fn scm_rights_receipt_racing_fork_exec_never_leaks_the_database_inode() {
             receive_database_file(&receiver)
         });
         barrier.wait();
-        let mut child = Command::new("sleep").arg("1").spawn().unwrap();
+        let status_pipe =
+            rustix::pipe::pipe_with(rustix::pipe::PipeFlags::CLOEXEC).expect("exec status pipe");
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["--exact", HELPER_TEST])
+            .env(HELPER_ENV, "1")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::from(status_pipe.1));
+        let mut child = command.spawn().unwrap();
+        // `Command` retains its parent-side stdio descriptors after spawn.
+        // Release the status writer so EOF means the helper's exec completed.
+        drop(command);
+
+        let mut status_byte = [0_u8; 1];
+        let status_len = rustix::io::read(&status_pipe.0, &mut status_byte).unwrap();
+        assert_eq!(
+            status_len, 0,
+            "exec status helper reported failure byte {:?}",
+            status_byte[0]
+        );
         let leaked = std::fs::read_dir(format!("/proc/{}/fd", child.id()))
             .unwrap()
             .filter_map(Result::ok)
