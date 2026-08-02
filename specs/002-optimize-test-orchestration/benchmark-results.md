@@ -321,7 +321,7 @@ reference, not a passing implementation of the future manifest contract.
 ## Rust optimized result
 
 The accepted Rust implementation is commit
-`c8474cbff267d03600dcfa6dcb7ea83de01737ef`. GNU Make owns nine bounded
+`6d34ac9de7b99e8c5fb27207df3f5919ba817e43`. GNU Make owns nine bounded
 leaves, while `tests/test-rust.sh` owns only explicit leaf execution. The
 representative host calculated a 12-job budget and admitted at most nine
 lanes. Budgets through nine use one job per lane; the three surplus jobs on
@@ -345,21 +345,24 @@ The final hyperfine record is
 | Result | Seconds |
 | --- | ---: |
 | Baseline warm median | 324.763168 |
-| Optimized warm samples | 141.292295, 139.024788, 141.792091 |
-| Optimized warm median | **141.292295** |
-| Warm reduction | **56.494%** |
-| Slowest / median | 1.0035 |
+| Optimized warm samples | 123.777214, 144.993658, 131.097166 |
+| Optimized warm median | **131.097166** |
+| Warm reduction | **59.633%** |
+| Slowest / median | 1.1060 |
 
-The optimized median is 43.506% of baseline and therefore passes the
+The optimized median is 40.367% of baseline and therefore passes the
 50%-of-baseline ceiling of 162.381584 seconds. The slowest sample is less
-than 1% above the median, within the 20% stability limit. Because the Make
+than 11% above the median, within the 20% stability limit. Because the Make
 DAG met the hard target, the conditional mold experiment in T017 was not
 entered and no linker dependency was added.
 
 The final cold observation is
 `.scratch/test-speedup-optimized/test-rust-cold.json` at 1830.117173 seconds,
 compared with the 911.204650-second baseline cold median. This is a
-non-blocking regression. The warm design retains duplicate isolated rustdoc
+non-blocking regression. It was captured at `c8474cbf`, before the panel fixes
+that changed error handling, internal naming, policy placement, and transient
+scratch location but did not change the retained compiler target trees or cold
+quota allocation. The warm design retains duplicate isolated rustdoc
 target trees and assigns one job to non-API cold rebuild lanes; those choices
 remove target locking and satisfy the warm hard goal but increase cold
 compilation. The shared Nix store was not cleared. This tradeoff remains
@@ -370,7 +373,7 @@ reported as a warm result.
 
 The passing v1 manifest is
 `.scratch/test-speedup-optimized/test-rust-executed.json`, SHA-256
-`4966a79ff30a7c9e60dcf827681ce42bfcd3c97b8d761c4d645ae596d48c354f`.
+`8d93206ffd1cefccb9fd65a7040b9b540ee722538dc544136a88434a1819f47e`.
 It records `run_status = "passed"` and all 20 baseline leaf identifiers.
 Direct sorted comparison with the trace-derived baseline manifest has no
 missing or added leaf.
