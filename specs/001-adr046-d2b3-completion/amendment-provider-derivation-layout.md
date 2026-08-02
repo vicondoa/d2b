@@ -255,35 +255,62 @@ a Provider whose component is an interpreted program, so that the ELF rule of
 ```nix
 d2b.lib.buildProviderElfShim {
   inherit pkgs;
-  name        = "d2b-provider-foo-controller";    # the bin/ entry name
-  interpreter = "${pkgs.python3}/bin/python3";    # absolute store path
-  program     = ./controller.py;
-  extraArgs   = [ ];
+  name            = "d2b-provider-foo-controller";  # the bin/ entry name
+  interpreterPkg  = pkgs.python3;                   # the package output
+  interpreterPath = "bin/python3";                  # relative, inside that output
+  program         = ./controller.py;
+  extraArgs       = [ ];
 }
 ```
+
+The interpreter is supplied as **a package output plus a path relative to it**,
+never as one interpolated absolute string, because the output is the boundary the
+symlink walk of property 2 may not leave.
 
 The result is a derivation whose `$out/bin/<name>` is a compiled `ET_DYN` image,
 not a `#!` line and not a `makeWrapper` shell script.
 
 Seven properties are normative:
 
-1. the interpreter and the program are resolved to **canonical Nix store paths at
-   build time** and baked in as string literals, split into a directory and a
-   final component; the shim takes no argument and reads no environment variable
-   that selects what to execute;
-2. at build time the helper verifies each input is a **regular file and not a
-   symlink**, by `openat2` beneath the input's own store directory with
-   `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS` followed by
-   `fstat` for `S_ISREG`; a symlinked interpreter is refused at build;
-3. both inputs are **members of the shim derivation's runtime closure**, so Nix
-   guarantees their presence and the closure digest of 4.9.4 covers them;
-4. at runtime the shim resolves the interpreter with the **same anchored fd
-   discipline of 4.9.7**: the baked interpreter directory opened
+1. the interpreter and the program are resolved at build time and baked in as
+   string literals, split into a directory and a final component; the shim takes
+   no argument and reads no environment variable that selects what to execute;
+2. at build time the helper resolves the interpreter through a **bounded symlink
+   chain confined to the same store output**, requiring the chain to terminate at
+   a regular file whose leading octets are an `ET_EXEC` or `ET_DYN` ELF64 image.
+   Every link must be relative; an absolute target, any `..` component, a target
+   leaving the output, and a chain longer than 8 links are refused. The
+   **resolved** same-output relative path is what is baked.
+
+   This is required by the ecosystem rather than chosen for convenience:
+   `<python3-output>/bin/python3` is a relative same-output symlink to
+   `python3.13`, whose first octets are `7f 45 4c 46`, so a flat no-symlink rule
+   would reject the most common interpreter. Confining the walk to one immutable
+   output preserves the closure identity the shim depends on: nothing outside the
+   content-addressed path is consulted, and there is no `realpath` call and no
+   cross-store canonicalization.
+
+   **Wrapper-script interpreters are unsupported.** The same directory holds
+   entries such as `idle3.13` whose first octets are `23 21 2f 6e`, a `#!` line.
+   A chain ending at one fails the build, naming the entry and stating that a
+   shebang wrapper cannot serve as a shim interpreter; the remedy is to name the
+   real interpreter binary. This is a real limitation, stated rather than
+   elided: a wrapper would return the framework to the `execveat`-on-script
+   behaviour 4.9.3 exists to avoid;
+3. the program is verified to be a regular file by the same bounded walk, and is
+   not required to be ELF since the interpreter reads it; the resolved
+   interpreter and the program are **members of the shim derivation's runtime
+   closure**, so Nix guarantees their presence and the closure digest of 4.9.4
+   covers them;
+4. at runtime the shim resolves the baked interpreter path with the **same
+   anchored fd discipline of 4.9.7**: the baked directory opened
    `O_PATH | O_DIRECTORY | O_CLOEXEC`, the final component opened via `openat2`
    with `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS` and
    `O_PATH | O_CLOEXEC`, `fstat` for `S_ISREG`, then
    `execveat(fd, "", argv, envp, AT_EMPTY_PATH)`. There is **no `execve` on a
-   concatenated string**, no `PATH` search, no `execvp`, and no shell;
+   concatenated string**, no `PATH` search, no `execvp`, and no shell. Because
+   the baked path is the already-resolved target, no chain is walked at runtime
+   and `RESOLVE_NO_SYMLINKS` is the correct runtime posture;
 5. caller `argv[1..]` is forwarded after the fixed arguments and is never
    interpreted as a program;
 6. `name` is validated at eval against the 4.9.3 grammar, so the helper cannot
@@ -408,14 +435,25 @@ Two admission rules bound the bootstrap arm, both raising
 grammars coincide today, because they are three namespaces and syntactic
 coincidence is not a licence to substitute.
 
-The drift predates this amendment. It is carried as a W5 implementation
-obligation; until it lands, `nix-build-binary-ref-unresolved`,
-`nix-build-component-execution-invalid`, and
-`nix-build-manifest-binary-ref-wire-compatible` are blocked.
-`nix-build-elf-shim-satisfies-the-layout` is separately blocked until
-`d2b.lib.buildProviderElfShim` exists, since there is nothing to exercise before
-the helper lands. The other sixteen scenarios this amendment adds are
-independent of both obligations.
+The drift predates this amendment. Two obligations gate four scenarios, stated as
+explicit lists rather than totals because a count is what goes stale first:
+
+| Obligation | Gates exactly |
+| --- | --- |
+| `ComponentDescriptor` gains `ComponentExecution` with `BinaryRef`, the flat-wire parse boundary, and the validating `Deserialize` | `nix-build-binary-ref-unresolved`, `nix-build-component-execution-invalid`, `nix-build-manifest-binary-ref-wire-compatible` |
+| `d2b.lib.buildProviderElfShim` exists, per 4.9.3a | `nix-build-elf-shim-satisfies-the-layout` |
+
+The sixteen scenarios gated by neither, named so the list can be checked:
+`nix-eval-provider-output-ambiguous`,
+`nix-eval-provider-output-shape-accepted`,
+`nix-eval-provider-output-shape-unknown`, `nix-build-required-outputs-missing`,
+`nix-build-required-output-not-regular`, `nix-build-executable-not-elf`,
+`nix-build-manifest-signature-invalid`, `nix-build-manifest-not-canonical`,
+`nix-build-executable-set-mismatch`, `nix-build-executable-set-empty`,
+`nix-build-executable-name-invalid`, `nix-build-executable-not-regular-file`,
+`nix-build-executable-digest-mismatch`,
+`nix-build-catalog-manifest-disagreement`, `nix-build-provider-error-redaction`,
+and `nix-runtime-launcher-anchored-resolution`. Twenty in total.
 
 #### 4.9.4 Digest preimages
 
@@ -659,9 +697,15 @@ fact rather than a comment: `ProcessLauncher` accepts nothing readable, and
 
 The production implementation MUST be the only place in the workspace naming
 `openat2`, `execveat`, or `AT_EMPTY_PATH`. `LayoutError` carries the variants the
-kernel actually produces - `NotBeneath` (`EXDEV`), `SymlinkRefused` (`ELOOP`),
-`NotRegular` (from `fstat`), `NotElf` (from the prefix read), `Absent`
-(`ENOENT`) - so the mapping onto the 4.9.8 codes is a total match a test can
+kernel actually produces at resolution time - `NotBeneath` (`EXDEV`),
+`SymlinkRefused` (`ELOOP`), `NotRegular` (from `fstat`), `NotElf` (from the
+compiler's prefix read), `NoDevice` (`ENXIO`, which an `O_RDONLY` open of a
+socket returns), and `Absent` (`ENOENT` at open). `LaunchError` is a separate
+enum carrying `FormatRejected` (`ENOEXEC`) and `InterpreterUnresolvable`
+(`ENOENT` returned by `execveat` rather than by the open). Two enums rather than
+one is deliberate: an `ENOENT` at open and an `ENOENT` from exec mean different
+things and map to different 4.9.8 codes, and a single enum would let them
+collapse. The mapping onto the 4.9.8 codes is therefore a total match a test can
 exhaust. `read_to_digest` and `exec_from` take the file **by value**, the same
 single-use discipline ADR 0049 established for the mutation seal, so a verified
 descriptor cannot be reused after its verification result was discarded.
@@ -703,7 +747,8 @@ secret, credential, path, or process data.
 | `provider-manifest-not-canonical` | File octets are not their own canonical bytes | artifact ID, layout-relative path, byte offset of first divergence, expected and observed lengths, and the fixed remediation "re-emit with the toolkit canonical serializer; the usual cause is a trailing newline" |
 | `provider-executable-name-invalid` | A `bin/` entry violates the 4.9.3 grammar | artifact ID, the rejected entry, the grammar |
 | `provider-executable-set-empty` | `bin/` exists with no entries | artifact ID |
-| `provider-executable-not-elf` | A `bin/` entry is not an `ET_EXEC`/`ET_DYN` ELF64 image | artifact ID, the entry, first four octets as hex, and the `d2b.lib.buildProviderElfShim` remedy |
+| `provider-executable-not-elf` | **Phase 2 only.** A `bin/` entry is not an `ET_EXEC`/`ET_DYN` ELF64 image, established by the compiler reading a bounded prefix | artifact ID, the entry, first four octets as hex, and the `d2b.lib.buildProviderElfShim` remedy |
+| `provider-launch-format-rejected` | **Phase 3 only.** `execveat` refused the verified regular file: `ENOEXEC` for an invalid image, or `ENOENT` after a successful open, which can only be an unresolvable script interpreter | artifact ID, component ID, `binaryRef`, errno token. No content bytes are read, because the launcher holds `O_PATH` |
 | `provider-component-execution-invalid` | A non-bootstrap Provider omitted `binaryRef`, or the empty-`executableDigests` biconditional of §4.9.3 is violated | artifact ID, component ID |
 | `provider-executable-not-regular` | A `bin/` entry is not a regular file | artifact ID, entry, observed file type token |
 | `provider-executable-set-mismatch` | Key set and directory set differ | artifact ID, the symmetric difference and the side of each name |
@@ -776,7 +821,7 @@ section 4 below; it had none.
 
 ### Phase 1 - Nix eval tests: append
 
-> | `nix-eval-provider-output-ambiguous` | A `type = "provider"` artifact whose package is a multi-output derivation pinning its first output with no evidence of selection fails eval naming the artifact ID and the declared output names; the same package with an output selected (`pkgs.foo.out`, `pkgs.foo.dev`) evaluates, and so does a non-first output selected on a raw-primop derivation |
+> | `nix-eval-provider-output-ambiguous` | A `type = "provider"` artifact whose package is a multi-output derivation pinning its first output with no evidence of selection fails eval naming the artifact ID and the declared output names; the same package with an output selected (`pkgs.foo.out`, `pkgs.foo.dev`) evaluates, and so does a non-first output selected on a raw-primop derivation. The residual is asserted explicitly: a raw-primop derivation whose **first** output is explicitly selected is **rejected**, being indistinguishable from the whole derivation, and the test pins that as intended rather than leaving it to be rediscovered as a bug |
 > | `nix-eval-provider-output-shape-accepted` | A store-path-valued `types.package`, which `lib.types.package.check` accepts and the module system coerces to `outputs = ["out"]`, **evaluates successfully**; this pins the accepted behaviour so the predicate and the prose cannot drift apart again |
 > | `nix-eval-provider-output-shape-unknown` | A value whose `outputs` is present but is not a non-empty list of strings fails eval with a module assertion rather than an eval trace |
 
@@ -784,14 +829,14 @@ section 4 below; it had none.
 
 > | `nix-build-required-outputs-missing` | A Provider derivation missing any of `share/d2b/provider/provider-manifest.json`, `provider-manifest.json.sig`, or `config-schema.json` fails build naming the absent relative path |
 > | `nix-build-manifest-signature-invalid` | Four distinct cases fail with four distinct codes: unregistered publisher, unresolvable `signatureId`, a `.sig` that is not exactly 64 octets, and 64 well-formed octets that do not verify |
-> | `nix-build-required-output-not-regular` | Each of the three `share/d2b/provider/` paths, replaced in turn by a symlink (including one resolving inside the same output) and by a directory, fails build naming the path and the observed file type |
+> | `nix-build-required-output-not-regular` | Each of the three `share/d2b/provider/` paths, replaced in turn by a symlink (including one resolving inside the same output), a directory, a FIFO, a Unix socket, and a device node, fails build naming the path and the observed file type. The FIFO case must not hang, which is what `O_NONBLOCK` buys; the socket case is refused by `ENXIO` at open rather than by `fstat`, and both refusals are asserted distinctly |
 > | `nix-build-manifest-not-canonical` | A manifest or config schema whose octets are not their own `d2b-cjson/v1` canonical bytes fails build naming the file and the first divergent byte offset; a trailing newline alone is sufficient to fail |
 > | `nix-build-executable-set-mismatch` | `package.executableDigests` keys unequal to the `bin/` entry set fails build naming the symmetric difference |
 > | `nix-build-executable-set-empty` | A derivation with a `bin/` directory containing no entries fails build, and is distinguished from a Provider that legitimately declares an empty `package.executableDigests` and ships no `bin/` at all, which succeeds |
 > | `nix-build-executable-name-invalid` | A `bin/` entry whose name violates `^[a-z][a-z0-9-]*$`, exceeds 64 bytes, contains `/`, `.`, `..`, NUL, an ASCII control byte, or whitespace, begins with `-`, or is not valid UTF-8, fails build naming the entry; the name is checked as read from the directory, not only as declared in the manifest |
 > | `nix-build-executable-not-regular-file` | A `bin/` entry that is a symlink, directory, FIFO, socket, or device node fails build naming the entry |
 > | `nix-build-executable-not-elf` | A `bin/` entry that is a `#!` script, an empty file, a file shorter than the ELF header, an `ET_REL` object, or an `ET_CORE` image fails build naming the entry and the first four octets as hex, and the message names `d2b.lib.buildProviderElfShim` |
-> | `nix-build-elf-shim-satisfies-the-layout` | A Provider whose entry point is a script, packaged through `d2b.lib.buildProviderElfShim`, produces a `bin/` entry passing the ELF, regular-file and name checks and launching its interpreter. The helper fails at eval if `name` violates the §4.9.3 grammar; fails at build if its own output is not `ET_EXEC`/`ET_DYN`, or if the interpreter or program is a symlink or not a regular file; and the emitted shim, run with a symlink substituted at the baked interpreter path, refuses rather than following it |
+> | `nix-build-elf-shim-satisfies-the-layout` | A Provider whose entry point is a script, packaged through `d2b.lib.buildProviderElfShim`, produces a `bin/` entry passing the ELF, regular-file and name checks and launching its interpreter. The helper fails at eval if `name` violates the §4.9.3 grammar; fails at build if its own output is not `ET_EXEC`/`ET_DYN`, if the interpreter chain leaves the output, holds an absolute target or a `..` component, exceeds 8 links, or terminates at a `#!` wrapper script rather than an ELF image. A same-output relative chain (`bin/python3` to `bin/python3.13`) resolves and is baked in resolved form. The emitted shim, run with a symlink substituted at the baked interpreter path, refuses rather than following it, and every descriptor it opens carries `O_CLOEXEC` and is absent from the interpreter descriptor table |
 > | `nix-build-component-execution-invalid` | A non-bootstrap Provider whose component descriptor omits `binaryRef` fails build; a bootstrap-exception Provider omitting it succeeds; an empty `executableDigests` alongside a component naming a `binaryRef`, and the converse, both fail |
 > | `nix-build-manifest-binary-ref-wire-compatible` | A component descriptor authored with the flat `binaryRef` field of §4.3.3 parses unchanged, round-trips to identical bytes, and yields an unchanged `manifestDigest`; a `binaryRef` violating the §4.9.3 grammar is refused during deserialization rather than after |
 > | `nix-build-binary-ref-unresolved` | A component descriptor `binaryRef` absent from `package.executableDigests` fails build naming the component and the ref |
@@ -824,7 +869,7 @@ enumerating the whole table: its Phase 2 entries are
 
 Replace the Validation cell with:
 
-> | Validation | All Phase 2 build tests in §15.8 (`nix-build-artifact-id-missing-from-catalog`, `nix-build-artifact-wrong-type-rejected`, `nix-build-duplicate-artifact-id`, `nix-build-artifact-store-path-absent-from-bundle`, `nix-build-artifact-store-path-absent-from-config`, `nix-build-config-schema-failure`, `nix-build-schema-digest-mismatch`, `nix-build-manifest-digest-mismatch`, `nix-build-required-outputs-missing`, `nix-build-required-output-not-regular`, `nix-build-manifest-signature-invalid`, `nix-build-manifest-not-canonical`, `nix-build-executable-set-mismatch`, `nix-build-executable-set-empty`, `nix-build-executable-name-invalid`, `nix-build-executable-not-regular-file`, `nix-build-executable-not-elf`, `nix-build-elf-shim-satisfies-the-layout`, `nix-build-component-execution-invalid`, `nix-build-manifest-binary-ref-wire-compatible`, `nix-build-binary-ref-unresolved`, `nix-build-executable-digest-mismatch`, `nix-build-catalog-manifest-disagreement`, `nix-build-provider-error-redaction`, `nix-build-resourcetype-collision`, `nix-build-bundle-sorted`, `nix-build-content-hash-stable`, `nix-build-artifact-catalog-digest-anchored`, `nix-build-credential-ref-survives-build`, `nix-build-inline-secret-lint-warning`, `nix-build-inline-secret-strict-failure`) and the Phase 1 eval tests `nix-eval-provider-output-ambiguous`, `nix-eval-provider-output-shape-accepted`, and `nix-eval-provider-output-shape-unknown`. `nix-build-binary-ref-unresolved`, `nix-build-component-execution-invalid`, and `nix-build-manifest-binary-ref-wire-compatible` are blocked until `ComponentDescriptor` gains `ComponentExecution` with a validated `BinaryRef` and the flat-wire parse boundary (§4.9.3). `nix-build-elf-shim-satisfies-the-layout` is blocked until `d2b.lib.buildProviderElfShim` exists (§4.9.3a). The remaining sixteen are not |
+> | Validation | All Phase 2 build tests in §15.8 (`nix-build-artifact-id-missing-from-catalog`, `nix-build-artifact-wrong-type-rejected`, `nix-build-duplicate-artifact-id`, `nix-build-artifact-store-path-absent-from-bundle`, `nix-build-artifact-store-path-absent-from-config`, `nix-build-config-schema-failure`, `nix-build-schema-digest-mismatch`, `nix-build-manifest-digest-mismatch`, `nix-build-required-outputs-missing`, `nix-build-required-output-not-regular`, `nix-build-manifest-signature-invalid`, `nix-build-manifest-not-canonical`, `nix-build-executable-set-mismatch`, `nix-build-executable-set-empty`, `nix-build-executable-name-invalid`, `nix-build-executable-not-regular-file`, `nix-build-executable-not-elf`, `nix-build-elf-shim-satisfies-the-layout`, `nix-build-provider-error-redaction`, `nix-build-component-execution-invalid`, `nix-build-manifest-binary-ref-wire-compatible`, `nix-build-binary-ref-unresolved`, `nix-build-executable-digest-mismatch`, `nix-build-catalog-manifest-disagreement`, `nix-build-resourcetype-collision`, `nix-build-bundle-sorted`, `nix-build-content-hash-stable`, `nix-build-artifact-catalog-digest-anchored`, `nix-build-credential-ref-survives-build`, `nix-build-inline-secret-lint-warning`, `nix-build-inline-secret-strict-failure`) and the Phase 1 eval tests `nix-eval-provider-output-ambiguous`, `nix-eval-provider-output-shape-accepted`, and `nix-eval-provider-output-shape-unknown`. `nix-build-binary-ref-unresolved`, `nix-build-component-execution-invalid`, and `nix-build-manifest-binary-ref-wire-compatible` are blocked until `ComponentDescriptor` gains `ComponentExecution` with a validated `BinaryRef` and the flat-wire parse boundary (§4.9.3). `nix-build-elf-shim-satisfies-the-layout` is blocked until `d2b.lib.buildProviderElfShim` exists (§4.9.3a). The sixteen gated by neither are enumerated in §4.9.3 |
 
 Also append to its Detailed design cell, after "extract and hash manifest and
 config schema files":
@@ -850,7 +895,7 @@ sections 4.9.3 and 4.9.7 has no runtime conformance identity today, which is the
 same defect on the Phase 3 side that this amendment fixes on the Phase 2 side.
 Append to the §15.8 Phase 3 table:
 
-> | `nix-runtime-launcher-anchored-resolution` | The launcher resolves a component program only as `bin/<binaryRef>` beneath the anchored artifact dirfd. With the resolved entry replaced by a symlink (including one whose target is a valid ELF inside the same output), by a directory, and by a non-ELF regular file, each launch is refused before any process is created, with the §4.9.8 code for that case and with no fallback to `PATH` or to a manifest-supplied path. An artifact path outside the anchor is refused as `NotBeneath`. Descriptors opened during resolution carry `O_CLOEXEC` and do not appear in the launched process |
+> | `nix-runtime-launcher-anchored-resolution` | The launcher resolves a component program only as `bin/<binaryRef>` beneath the anchored artifact dirfd, with no fallback to `PATH` or to a manifest-supplied path. The resolved entry replaced by a symlink (including one whose target is a valid ELF inside the same output), a directory, a FIFO, a socket, and a device node is refused before any process is created, by `RESOLVE_NO_SYMLINKS` and by the `S_ISREG` check respectively. An artifact path outside the anchor is refused as `NotBeneath`. A regular file that is not a valid image is refused by the `execveat` result (`provider-launch-format-rejected`), never by inspecting content, because the launcher holds `O_PATH` and cannot read. Every descriptor opened during resolution carries `O_CLOEXEC` and is absent from the launched process descriptor table |
 
 It belongs to `016` rather than `015` because `015` is a build-time program and
 the launcher is runtime. The symlink case in particular cannot be discharged at
@@ -1053,7 +1098,7 @@ separately rather than as observed drift.
 
 | Obligation | Owner | Blocks |
 | --- | --- | --- |
-| `ComponentDescriptor` in `packages/d2b-contracts/src/v3/provider.rs` gains a `ComponentExecution` field carrying a validated `BinaryRef` newtype, with `Deserialize` routed through the validating parser and the flat `binaryRef` wire mapping of §4.9.3. Not `Option<BinaryRef>`: `None` would mean both "not launchable" and "launchable, field omitted". The shipped struct declares `component_id`, `component_type`, `exported_resource_types`, `exported_methods`, `allowed_domains`, `cardinality`, `config_digest`, `dependencies`, `declares_state_volume`, `state_namespaces` and no `binary_ref`, while §4.3.3 defines `binaryRef` three times as normative. The `InProcessBootstrap` arm is admissible only for the closed bootstrap-exception list, per §6.3 | W5, alongside `ADR046-zone-control-015` | `nix-build-binary-ref-unresolved`, `nix-build-component-execution-invalid`, and `nix-build-manifest-binary-ref-wire-compatible`; the other sixteen scenarios are independent of it |
+| `ComponentDescriptor` in `packages/d2b-contracts/src/v3/provider.rs` gains a `ComponentExecution` field carrying a validated `BinaryRef` newtype, with `Deserialize` routed through the validating parser and the flat `binaryRef` wire mapping of §4.9.3. Not `Option<BinaryRef>`: `None` would mean both "not launchable" and "launchable, field omitted". The shipped struct declares `component_id`, `component_type`, `exported_resource_types`, `exported_methods`, `allowed_domains`, `cardinality`, `config_digest`, `dependencies`, `declares_state_volume`, `state_namespaces` and no `binary_ref`, while §4.3.3 defines `binaryRef` three times as normative. The `InProcessBootstrap` arm is admissible only for the closed bootstrap-exception list, per §6.3 | W5, alongside `ADR046-zone-control-015` | `nix-build-binary-ref-unresolved`, `nix-build-component-execution-invalid`, and `nix-build-manifest-binary-ref-wire-compatible`; §4.9.3 enumerates the sixteen gated by neither obligation |
 | `d2b.lib.buildProviderElfShim` is implemented and exposed on the flake's existing `lib` output, per §4.9.3a. The flake already carries `lib = nixpkgs.lib.makeExtensible (_: { evalFixture = ...; })`, so this extends a surface rather than creating one. Framework-owned rather than a sibling flake because the framework is the party imposing the ELF rule | W5, alongside `ADR046-zone-control-015` | `nix-build-elf-shim-satisfies-the-layout`, which cannot be written before the helper exists; and it is what makes the ELF rule of §4.9.3 a supported path rather than only a prohibition |
 
 The `ComponentDescriptor` drift predates this amendment. Both are recorded as
