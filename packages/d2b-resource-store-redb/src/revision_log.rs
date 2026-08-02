@@ -619,6 +619,7 @@ where
 mod tests {
     use super::*;
     use d2b_contracts::v3::{ResourceGeneration, ResourceUid};
+    use std::fs::OpenOptions;
 
     fn batch(revision: u64) -> SharedChangeBatch {
         let entry = crate::transaction::ChangeEntry::new(
@@ -680,6 +681,80 @@ mod tests {
         assert_eq!(
             coordinator.resume_cursor(stream.id()),
             Some(ZoneRevision::new(1))
+        );
+    }
+
+    #[test]
+    fn compaction_advances_floor_in_bounded_steps() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .open(directory.path().join("store.redb"))
+            .unwrap();
+        let backend = redb::backends::FileBackend::new(file).unwrap();
+        let database = Database::builder().create_with_backend(backend).unwrap();
+        let identity = crate::StoreIdentity::new(
+            d2b_resource_store::StoreSlot::new(0).unwrap(),
+            ResourceUid::parse("11111111-1111-4111-8111-111111111111").unwrap(),
+            d2b_contracts::v3::ZoneId::parse("work").unwrap(),
+            ResourceUid::parse("22222222-2222-4222-8222-222222222222").unwrap(),
+            d2b_contracts::v3::Timestamp::parse("2026-07-31T00:00:00.000Z").unwrap(),
+            d2b_resource_store::PolicySnapshot {
+                policy_revision: 1,
+                api_catalog_revision: 1,
+                active_configuration_revision: d2b_contracts::v3::ConfigurationGeneration::new(1)
+                    .unwrap(),
+                controller_generation: None,
+            },
+        );
+        crate::transaction::initialize(&database, &identity).unwrap();
+
+        let mut meta = crate::transaction::current_meta(&database).unwrap();
+        meta.current_revision = 5;
+        let mut write = database.begin_write().unwrap();
+        crate::transaction::set_full_durability(&mut write).unwrap();
+        {
+            let mut revisions = write.open_table(REVISION_LOG).unwrap();
+            for revision in 1..=5 {
+                let value = crate::transaction::encode(
+                    crate::values::ValueKind::ChangeBatch,
+                    &ChangeBatch::new(ZoneRevision::new(revision), Vec::new()).unwrap(),
+                )
+                .unwrap();
+                revisions
+                    .insert(revision_key(revision).unwrap().as_slice(), value.as_slice())
+                    .unwrap();
+            }
+        }
+        let value =
+            crate::transaction::encode(crate::values::ValueKind::StoreMetaScalar, &meta).unwrap();
+        write
+            .open_table(crate::transaction::STORE_META)
+            .unwrap()
+            .insert(crate::transaction::meta_key().as_slice(), value.as_slice())
+            .unwrap();
+        write.commit().unwrap();
+
+        assert_eq!(
+            compact(&database, ZoneRevision::new(4), 2).unwrap(),
+            ZoneRevision::new(2)
+        );
+        assert_eq!(
+            compact(&database, ZoneRevision::new(6), 16).unwrap(),
+            ZoneRevision::new(5)
+        );
+        crate::transaction::validate_consistency(&database).unwrap();
+        assert_eq!(
+            database
+                .begin_read()
+                .unwrap()
+                .open_table(REVISION_LOG)
+                .unwrap()
+                .len()
+                .unwrap(),
+            0
         );
     }
 }
