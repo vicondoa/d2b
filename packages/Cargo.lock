@@ -1058,20 +1058,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "d2b-daemon-access"
-version = "0.0.0-bootstrap"
-dependencies = [
- "async-trait",
- "d2b-contracts",
- "d2b-realm-core",
- "d2b-realm-provider",
- "nix 0.29.0",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
 name = "d2b-exec-runner"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -1160,19 +1146,6 @@ name = "d2b-host-activation-helper"
 version = "0.0.0-bootstrap"
 dependencies = [
  "libc",
-]
-
-[[package]]
-name = "d2b-host-providers"
-version = "0.0.0-bootstrap"
-dependencies = [
- "async-trait",
- "d2b-core",
- "d2b-host",
- "d2b-realm-core",
- "d2b-realm-provider",
- "serde_json",
- "tokio",
 ]
 
 [[package]]
@@ -1583,13 +1556,6 @@ dependencies = [
  "socket2 0.5.10",
  "uzers",
  "zbus",
-]
-
-[[package]]
-name = "d2b-userd"
-version = "0.0.0-bootstrap"
-dependencies = [
- "d2b-contracts",
 ]
 
 [[package]]

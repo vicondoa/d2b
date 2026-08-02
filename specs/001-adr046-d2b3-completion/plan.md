@@ -249,6 +249,24 @@ corrected in the same pass to distinguish the table-driven four-variant test of 
 ingress gate, which is owed now, from live `otlp_unix` / `otlp_vsock` / `import_stream`
 adapters, which that item's own Removal proof sequences after the OTLP exporter.
 
+The W5 removal-proof inventory originally grouped eleven Rust crates together. The
+implementation graph and live dependency tree permit only three removals in W5:
+`d2b-daemon-access`, `d2b-host-providers` with its sole
+`d2b-host::runtime_provider` consumer, and the already-retired `d2b-userd` stub. The realm
+session crates are retained for the W7 Provider-session migration, `d2b-provider-aca` and
+`d2b-provider-relay` are W6 Provider surfaces, `d2b-unsafe-local-helper` is reused by W7, and
+`d2b-guestd` is the live guest-control service rather than a legacy stub. The work-item wave
+ownership and committed runtime wiring force this boundary; deleting the later-wave surfaces
+in W5 would remove their only current implementations.
+
+`ADR046-zone-control-001` authorizes removing the legacy `Realm` model but does not make the
+whole `d2b-realm-core` crate mechanically replaceable. In particular,
+`d2b-contracts::v3::resource_status::ResourceUpdateStatus` still uses the realm-core string
+`OperationId`, while the v3 ComponentSession contract owns a distinct fixed-width, redacted
+`OperationId`. Choosing the v3 status wire representation is an architectural decision and is
+not inferred by a removal slice. This blocks eventual realm-core retirement, not the three
+W5-owned stub removals above.
+
 ## Complexity Tracking
 
 | Violation | Why Needed | Simpler Alternative Rejected Because |
