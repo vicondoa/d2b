@@ -161,10 +161,9 @@ fn next_sequence(directory: &Path, timestamp_ms: u64) -> io::Result<u32> {
         if let Some(rest) = name
             .strip_prefix(&prefix)
             .and_then(|value| value.strip_suffix(".jsonl"))
+            && let Ok(sequence) = rest.parse::<u32>()
         {
-            if let Ok(sequence) = rest.parse::<u32>() {
-                max = max.max(sequence);
-            }
+            max = max.max(sequence);
         }
     }
     Ok(max)
