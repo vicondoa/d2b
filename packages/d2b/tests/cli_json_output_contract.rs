@@ -686,6 +686,24 @@ fn host_lifecycle_dry_run_outputs_match_goldens() {
 }
 
 #[test]
+fn host_install_help_builds_without_clap_assertion() {
+    let home = tempfile::tempdir().expect("create help HOME");
+    let runtime = tempfile::tempdir().expect("create help XDG_RUNTIME_DIR");
+    let out = base_command(&["host", "install", "--help"], home.path(), runtime.path())
+        .output()
+        .expect("spawn d2b host install --help");
+
+    assert_success(&out, "host install --help");
+    let help = String::from_utf8_lossy(&out.stdout);
+    for option in ["--dry-run", "--apply", "--enable", "--start", "--no-start"] {
+        assert!(
+            help.contains(option),
+            "host install help is missing {option}: {help}"
+        );
+    }
+}
+
+#[test]
 fn host_migrate_storage_dry_run_json_reports_checkpoint_and_rollback() {
     let Some(env) = FixtureEnv::new() else {
         return;
