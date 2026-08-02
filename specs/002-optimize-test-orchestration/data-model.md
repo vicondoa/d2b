@@ -85,9 +85,10 @@ repository merely made available for discovery.
   `F_OFD_SETLK` lock before invalidating prior evidence. The lockfile is never
   unlinked as part of manifest replacement.
 - Lock contention emits the fixed status code `manifest-lock-contended` for
-  telemetry. Console diagnostics MUST additionally name `<manifest>.lock` and
-  direct the operator to wait for the active run to finish; the path is never
-  used as a metric or span label.
+  telemetry. Console diagnostics MUST identify the semantic
+  `execution-manifest lock` and direct the operator to wait for the active run
+  to finish and retry. The filesystem path is never printed or used as a
+  metric, span, or log field.
 - Cleanup candidates use the same anchored no-symlink/no-magiclink and
   `O_CLOEXEC` open boundary. Fragment storage is created adjacent to the
   requested manifest on the same filesystem, with mode `0700` and the current

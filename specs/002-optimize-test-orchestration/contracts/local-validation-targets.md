@@ -27,9 +27,10 @@ All three commands:
   interruption. The binding schema is
   `docs/reference/schemas/test-execution-manifest-v1.json`.
 - If `<manifest>.lock` is held by another invocation, fail with an actionable
-  message naming the lock and directing the contributor to wait for the active
-  run to finish. Observability uses the fixed status code
-  `manifest-lock-contended`; the dynamic path remains console-only.
+  message identifying the execution-manifest lock and directing the
+  contributor to wait for the active run to finish and retry. Observability
+  uses the fixed status code `manifest-lock-contended`; the filesystem path is
+  not printed or logged.
 
 ## `make test-rust`
 

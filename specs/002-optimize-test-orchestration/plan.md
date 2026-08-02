@@ -432,6 +432,7 @@ This plan uses strict phase ordering rather than pipelined dispatch.
 | Lock and schema delivery | Plan panel round 11 | The persistent lock needed OFD and close-on-exec semantics, temp storage needed same-filesystem anchored resolution, and schema/docs/changelog had to ship with the first emitter commit. | Resolved |
 | Descriptor and release closure | Plan panel round 12 | Every evidence fd needed close-on-exec, parent anchoring had to precede relative lock creation, lock telemetry needed a closed code, and each emitter phase had to reconcile schema/docs/changelog. | Resolved |
 | Policy reconciliation | Plan panel round 13 | The lock remedy needed mandatory wording, and later Nix emitter commits needed to carry the schema/prose policy test with their reconciled artifacts. | Resolved |
+| Private actionable errors | Plan panel round 14 | Lock contention needed a mandatory remedy without printing host paths, and every emitter validation needed the fixture-contract lane that executes `policy_docs.rs`. | Resolved |
 
 ## Post-Design Constitution Check
 
