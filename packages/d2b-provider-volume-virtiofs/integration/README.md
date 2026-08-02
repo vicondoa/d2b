@@ -14,3 +14,7 @@ guest, so they cannot run at the hermetic layer that `tests/` occupies.
 
 No fixture is wired into an orchestrator yet: the effect adapter these
 fixtures would drive is owned by ProviderSupervisor and is not landed.
+
+The hermetic suite still covers the fixed argv envelope, private socket
+identity, store-view marker gating, guest-mount readiness classification,
+Export finalizer ordering, and ADR 0021 template/map-write invariants.

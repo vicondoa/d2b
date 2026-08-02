@@ -21,3 +21,8 @@ production-adapter prerequisite, but it is not executable yet: the effect
 adapter that these fixtures would drive is owned by ProviderSupervisor and is
 not landed. Driving a fake here would assert against a stub rather than the
 shipped path.
+
+The hermetic provider suite additionally covers source-policy matching,
+block-image and tmpfs admission, ACL repair decisions, deterministic Export
+intents, and store-view readiness posture. Those checks stay in `tests/` so
+they do not require a heavy lane.

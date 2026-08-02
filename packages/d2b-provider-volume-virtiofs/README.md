@@ -60,9 +60,10 @@ virtiofsd
 ```
 
 `--sandbox` is always `chroot`, `--inode-file-handles` is always `never`,
-and there is no free-form extra-argument channel. The renderer is
-crate-private: it is the only place a resolved path is joined to the
-worker plan, and no public type carries one.
+and there is no free-form extra-argument channel. The public argv input
+accepts only a private derived socket identity and an inherited Volume-view
+descriptor number; the renderer emits `/proc/self/fd/<N>` and never accepts
+`/nix/store` as a shared directory.
 
 ## Placement and dependencies
 
@@ -91,7 +92,9 @@ rather than assumed.
 The export socket path is generated and private. Only its opaque
 `SocketIdentity` is public. The path never appears in a spec field, a
 status field, an audit record, or CLI output, and two Exports of one
-Volume have distinct identities.
+Volume have distinct identities. Launch is gated by the store-view marker,
+and the user-namespace conformance kit checks the ADR 0021 map-write order
+without carrying host UID or GID values.
 
 ## State and telemetry
 
@@ -105,7 +108,7 @@ emitted.
 
 | Path | Contents |
 | --- | --- |
-| `src/` | Export controller, worker plan, argv renderer, effect port, colocated unit tests |
+| `src/` | Export controller, worker plan, FD-based argv renderer, private socket derivation, readiness and ADR 0021 checks, effect port, colocated unit tests |
 | `tests/` | hermetic Export lifecycle, sandbox, drain, and privacy conformance |
 | `integration/` | virtiofsd launch and guest-mount fixtures |
 
