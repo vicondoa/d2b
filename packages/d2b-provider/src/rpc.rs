@@ -9,7 +9,10 @@ use std::{fmt, future::Future};
 use d2b_contracts::v3::CanonicalJsonObject;
 
 use crate::{
-    context::OwnedOperationContext, error::ProviderRuntimeError, identity::ProviderMethodName,
+    context::OwnedOperationContext,
+    descriptor::ProviderDescriptor,
+    error::{ProviderRuntimeError, RegistryBuildError},
+    identity::ProviderMethodName,
 };
 
 /// Maximum bytes in one Provider RPC payload.
@@ -93,17 +96,50 @@ pub trait AuthenticatedProviderRpc: Send + Sync {
 /// Provider registry RPC proxy.
 pub struct RpcProviderProxy<T> {
     transport: T,
+    descriptor: Option<ProviderDescriptor>,
 }
 
 impl<T> RpcProviderProxy<T> {
     /// Build a proxy over the Zone runtime's authenticated transport.
     pub const fn new(transport: T) -> Self {
-        Self { transport }
+        Self {
+            transport,
+            descriptor: None,
+        }
+    }
+
+    /// Build a proxy bound to one exact Provider descriptor.
+    ///
+    /// The descriptor is the placement and capability anchor. The transport
+    /// remains injected and is never inferred from a request payload.
+    pub fn new_with_descriptor(
+        descriptor: ProviderDescriptor,
+        transport: T,
+    ) -> Result<Self, RegistryBuildError> {
+        descriptor.validate()?;
+        Ok(Self {
+            transport,
+            descriptor: Some(descriptor),
+        })
+    }
+
+    /// Build a proxy bound to one exact descriptor, with transport-first
+    /// argument order for callers that already constructed the transport.
+    pub fn with_descriptor(
+        transport: T,
+        descriptor: ProviderDescriptor,
+    ) -> Result<Self, RegistryBuildError> {
+        Self::new_with_descriptor(descriptor, transport)
     }
 
     /// Borrow the transport adapter.
     pub const fn transport(&self) -> &T {
         &self.transport
+    }
+
+    /// Borrow the descriptor binding, when this proxy is placement-bound.
+    pub const fn descriptor(&self) -> Option<&ProviderDescriptor> {
+        self.descriptor.as_ref()
     }
 }
 
@@ -111,12 +147,13 @@ impl<T> RpcProviderProxy<T>
 where
     T: AuthenticatedProviderRpc,
 {
-    /// Dispatch a typed canonical RPC.
-    pub async fn dispatch(
+    /// Validate cancellation, deadline, method, placement, and capability
+    /// before invoking the authenticated transport.
+    pub fn preflight(
         &self,
         context: &OwnedOperationContext,
-        request: RpcCall,
-    ) -> Result<RpcResponse, ProviderRuntimeError> {
+        request: &RpcCall,
+    ) -> Result<(), ProviderRuntimeError> {
         if context.is_cancelled() {
             return Err(ProviderRuntimeError::Cancelled);
         }
@@ -124,9 +161,34 @@ where
             return Err(ProviderRuntimeError::CapabilityDenied);
         }
         let _ = context.remaining()?;
+        if let Some(descriptor) = &self.descriptor {
+            context.identity().matches_descriptor(descriptor)?;
+            if !descriptor.capabilities().contains_method(request.method()) {
+                return Err(ProviderRuntimeError::CapabilityDenied);
+            }
+        }
+        Ok(())
+    }
+
+    /// Dispatch a typed canonical RPC.
+    pub async fn dispatch(
+        &self,
+        context: &OwnedOperationContext,
+        request: RpcCall,
+    ) -> Result<RpcResponse, ProviderRuntimeError> {
+        self.preflight(context, &request)?;
         let response = self.transport.call(context, request).await?;
         let _ = context.remaining()?;
         Ok(response)
+    }
+
+    /// Alias for callers using the generated-service call terminology.
+    pub async fn call(
+        &self,
+        context: &OwnedOperationContext,
+        request: RpcCall,
+    ) -> Result<RpcResponse, ProviderRuntimeError> {
+        self.dispatch(context, request).await
     }
 }
 
