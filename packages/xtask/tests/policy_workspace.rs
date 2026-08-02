@@ -438,7 +438,7 @@ fn rust_companion_violations(driver: &str, harness_targets: &[String]) -> Vec<St
         );
     }
     if non_comment_lines(driver).iter().any(|line| {
-        line.contains("cargo test") && line.contains("--test") && line.contains("--test-threads")
+        line.contains("cargo test") && line.contains(" --test ") && line.contains("--test-threads")
     }) {
         violations.push("harness=false binaries must not receive libtest arguments".to_owned());
     }
