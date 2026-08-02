@@ -78,6 +78,16 @@ let
                   digest.update(child.read_bytes())
           return "sha256:" + digest.hexdigest()
 
+      def size_path(path):
+          root = pathlib.Path(path)
+          if root.is_file():
+              return root.stat().st_size
+          return sum(
+              child.stat().st_size
+              for child in root.rglob("*")
+              if child.is_file()
+          )
+
       entries = []
       for row in rows:
           closure_paths = [
@@ -85,12 +95,7 @@ let
               for line in pathlib.Path(row["closureStorePaths"]).read_text().splitlines()
               if line.strip()
           ]
-          closure_size = sum(
-              path.stat().st_size
-              for root in closure_paths
-              for path in pathlib.Path(root).rglob("*")
-              if path.is_file()
-          )
+          closure_size = sum(size_path(root) for root in closure_paths)
           entries.append({
               "artifactId": row["artifactId"],
               "closureDigest": digest_path(row["closureRegistration"]),
