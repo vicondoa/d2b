@@ -50,26 +50,27 @@ fn d2b_clipd_exported_in_flake_nix() {
 /// (breaking the `d2b clipboard arm` operator path), this test fails.
 #[test]
 fn d2b_cli_has_clipboard_subcommand() {
-    let lib = read_repo_file("packages/d2b/src/lib.rs");
+    let legacy = read_repo_file("packages/d2b/src/legacy.rs");
 
     // The NativeCommand enum must have a Clipboard variant.
     assert!(
-        lib.contains("Clipboard(ClipboardArgs)") || lib.contains("Clipboard(clipboard_args"),
-        "packages/d2b/src/lib.rs must declare a `Clipboard(ClipboardArgs)` variant in \
+        legacy.contains("Clipboard(ClipboardArgs)")
+            || legacy.contains("Clipboard(clipboard_args"),
+        "packages/d2b/src/legacy.rs must declare a `Clipboard(ClipboardArgs)` variant in \
          the NativeCommand enum. ADR 0042 requires `d2b clipboard arm` as the \
          explicit picker-driven paste command."
     );
 
     // The dispatch block must handle the Clipboard arm.
     assert!(
-        lib.contains("NativeCommand::Clipboard"),
-        "packages/d2b/src/lib.rs must handle NativeCommand::Clipboard in the dispatch block."
+        legacy.contains("NativeCommand::Clipboard"),
+        "packages/d2b/src/legacy.rs must handle NativeCommand::Clipboard in the dispatch block."
     );
 
     // The command must have at least an Arm subverb.
     assert!(
-        lib.contains("ClipboardCommand::Arm") || lib.contains("clipboard arm"),
-        "packages/d2b/src/lib.rs must declare a ClipboardCommand::Arm subverb \
+        legacy.contains("ClipboardCommand::Arm") || legacy.contains("clipboard arm"),
+        "packages/d2b/src/legacy.rs must declare a ClipboardCommand::Arm subverb \
          for the explicit picker-driven paste workflow (ADR 0042 §fallback)."
     );
 }
