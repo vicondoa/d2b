@@ -45,6 +45,15 @@ use d2b_contracts::cli_output::{HostCheckOutputV2, HostCheckSeverityV2};
 
 use common::TestPeer;
 
+const OPERATOR_ERROR_KEYS: &[&str] = &[
+    "code",
+    "docsAnchor",
+    "kind",
+    "message",
+    "owningCommand",
+    "remediation",
+];
+
 /// The fixture-smoke output dir, or `None` when D2B_FIXTURES is unset.
 fn fixtures_dir() -> Option<String> {
     std::env::var("D2B_FIXTURES").ok()
@@ -279,14 +288,21 @@ fn parse_output(out: &Output) -> HostCheckOutputV2 {
     })
 }
 
-/// Parse the stderr operator-error envelope emitted for forced probe failures.
+/// Parse the stdout operator-error envelope emitted for forced probe failures.
 fn parse_error_envelope(out: &Output) -> Value {
-    serde_json::from_slice(&out.stderr).unwrap_or_else(|err| {
+    let value: Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|err| {
         panic!(
-            "host check error envelope was not valid JSON: {err}\nstderr:\n{}",
-            String::from_utf8_lossy(&out.stderr)
+            "host check error envelope was not valid JSON: {err}\nstdout:\n{}",
+            String::from_utf8_lossy(&out.stdout)
         )
-    })
+    });
+    serde_json::from_value::<d2b_core::error::Error>(value.clone()).unwrap_or_else(|err| {
+        panic!(
+            "host check error envelope did not match the typed operator schema: {err}\nstdout:\n{}",
+            String::from_utf8_lossy(&out.stdout)
+        )
+    });
+    value
 }
 
 // --- CLI-local cases -------------------------------------------------------
@@ -499,8 +515,9 @@ fn host_check_ufw_probe_error_envelope() {
 }
 
 /// Shared body for the three forced-probe-failure cases: the probe error must
-/// surface as exit 1 with the `internal-io` operator envelope on stderr
-/// (owningCommand "host check", code 50, message carrying the forced reason).
+/// surface as exit 1 with the typed `internal-io` operator envelope on the
+/// v3 JSON output stream (owningCommand "host check", code 50, message
+/// carrying the forced reason) and no host-check report body.
 fn assert_probe_error_envelope(
     fixture_name: &str,
     expected_reason: &str,
@@ -519,10 +536,24 @@ fn assert_probe_error_envelope(
         "forced probe failure surfaces as an internal error (exit 1)"
     );
     assert!(
-        out.stdout.is_empty(),
-        "a forced probe failure must not print a report body"
+        out.stderr.is_empty(),
+        "v3 JSON errors must stay on stdout; stderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
     );
     let envelope = parse_error_envelope(&out);
+    let object = envelope
+        .as_object()
+        .expect("typed operator error envelope must be a JSON object");
+    let mut keys: Vec<&str> = object.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys, OPERATOR_ERROR_KEYS,
+        "typed operator error envelope schema drifted: {envelope}"
+    );
+    assert!(
+        envelope.get("summary").is_none() && envelope.get("findings").is_none(),
+        "a forced probe failure must not print a host-check report body: {envelope}"
+    );
     assert_eq!(envelope["kind"], "internal-io");
     assert_eq!(envelope["owningCommand"], "host check");
     assert_eq!(envelope["code"], 50);
