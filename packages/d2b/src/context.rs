@@ -2,7 +2,8 @@
 //! native CLI.
 
 use std::{
-    env, fs, io,
+    env, fs,
+    io::{self, Read as _},
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -51,7 +52,6 @@ pub(crate) enum TransportError {
     Unavailable,
     InvalidResponse,
     OversizedResponse,
-    Io,
 }
 
 /// The transport boundary is deliberately injectable. Tests can provide a
@@ -426,7 +426,10 @@ pub(crate) fn read_spec(spec_file: Option<&Path>, spec_stdin: bool) -> Result<Va
         fs::read(path).map_err(|_| CliFailure::new(1, "failed to read resource spec"))?
     } else {
         let mut bytes = Vec::new();
-        io::Read::read_to_end(&mut io::stdin().lock(), &mut bytes)
+        io::stdin()
+            .lock()
+            .take((MAX_SPEC_BYTES + 1) as u64)
+            .read_to_end(&mut bytes)
             .map_err(|_| CliFailure::new(1, "failed to read resource spec from stdin"))?;
         bytes
     };
