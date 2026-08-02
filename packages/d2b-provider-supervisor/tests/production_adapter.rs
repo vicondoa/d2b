@@ -2,7 +2,10 @@
 
 use std::num::NonZeroU32;
 use std::os::fd::AsFd;
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicUsize, Ordering},
+};
 use std::time::{Duration, Instant};
 
 use d2b_process::{
@@ -626,4 +629,147 @@ async fn blocking_effects_do_not_stall_the_async_executor() {
         max_gap < Duration::from_millis(40),
         "blocking backend stalled the async executor"
     );
+}
+
+struct ParallelLaunchBackend {
+    started: Arc<Mutex<Vec<Instant>>>,
+    active: Arc<AtomicUsize>,
+    max_active: Arc<AtomicUsize>,
+    next_identity: AtomicUsize,
+    delay: Duration,
+}
+
+impl ParallelLaunchBackend {
+    fn new(delay: Duration) -> (Self, Arc<Mutex<Vec<Instant>>>, Arc<AtomicUsize>) {
+        let started = Arc::new(Mutex::new(Vec::new()));
+        let max_active = Arc::new(AtomicUsize::new(0));
+        (
+            Self {
+                started: Arc::clone(&started),
+                active: Arc::new(AtomicUsize::new(0)),
+                max_active: Arc::clone(&max_active),
+                next_identity: AtomicUsize::new(1),
+                delay,
+            },
+            started,
+            max_active,
+        )
+    }
+}
+
+impl ProcessEffectBackend for ParallelLaunchBackend {
+    type Handle = ();
+
+    fn launch(
+        &self,
+        _request: ProcessRequest,
+    ) -> Result<BackendLaunch<Self::Handle>, ProcessEffectError> {
+        let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+        self.max_active.fetch_max(active, Ordering::SeqCst);
+        self.started
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(Instant::now());
+        std::thread::sleep(self.delay);
+        self.active.fetch_sub(1, Ordering::SeqCst);
+
+        let identity_seed = self.next_identity.fetch_add(1, Ordering::Relaxed) as u8;
+        Ok(BackendLaunch::new(
+            BackendObservation::new(
+                ProcessIdentityDigest::from_bytes([identity_seed; 32]),
+                ObservedIdentity::from_verified(minijail_bindings()),
+                WaitReapOwner::Local,
+            ),
+            (),
+        ))
+    }
+
+    fn observe(
+        &self,
+        _request: ProcessRequest,
+    ) -> Result<Option<BackendObservation>, ProcessEffectError> {
+        Ok(None)
+    }
+
+    fn open_pidfd(
+        &self,
+        _observation: BackendObservation,
+    ) -> Result<Self::Handle, ProcessEffectError> {
+        Ok(())
+    }
+
+    fn stop(
+        &self,
+        _handle: &Self::Handle,
+        _class: ProcessStopClass,
+    ) -> Result<(), ProcessEffectError> {
+        Ok(())
+    }
+}
+
+fn parallel_ticket(index: usize) -> d2b_process::LaunchTicket {
+    use d2b_contracts::v3::execution_policy::{BoundedToken, ExecutionDomain};
+    use d2b_contracts::v3::{ControllerGeneration, ResourceGeneration, ResourceRef, ResourceUid};
+    use d2b_process::{LaunchTicket, OperationBinding};
+
+    let uid = ResourceUid::parse(format!("123e4567-e89b-42d3-a456-42661417{index:04x}"))
+        .expect("parallel fixture UID is valid");
+    LaunchTicket::new(
+        ResourceRef::parse(&format!("Process/parallel-{index}")).unwrap(),
+        uid.clone(),
+        ResourceGeneration::new(1).unwrap(),
+        ControllerGeneration::new(1).unwrap(),
+        BoundedToken::parse("system-minijail").unwrap(),
+        BoundedToken::parse("controller").unwrap(),
+        BoundedToken::parse("controller-main").unwrap(),
+        ResourceRef::parse("Host/host-system").unwrap(),
+        ExecutionDomain::System,
+        None,
+        BoundedToken::parse(MINIJAIL).unwrap(),
+        fixtures::compiled_digests(),
+        OperationBinding::new(uid, 30_000).unwrap(),
+        minijail_bindings().into_iter().collect(),
+    )
+    .unwrap()
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn ready_process_launches_reach_the_provider_adapter_in_parallel() {
+    use tokio::sync::Semaphore;
+
+    for count in [1_usize, 10, 100] {
+        let (backend, started, max_active) = ParallelLaunchBackend::new(Duration::from_millis(25));
+        let supervisor = ProviderSupervisor::with_limits(backend, 16, Duration::from_secs(2));
+        let provider = Arc::new(MinijailProcessProvider::new(supervisor));
+        let admission = Arc::new(Semaphore::new(16));
+        let mut launches = Vec::with_capacity(count);
+
+        for index in 0..count {
+            let provider = Arc::clone(&provider);
+            let admission = Arc::clone(&admission);
+            launches.push(tokio::spawn(async move {
+                let permit = admission.acquire_owned().await.unwrap();
+                let result = provider.launch(&parallel_ticket(index)).await;
+                drop(permit);
+                result
+            }));
+        }
+
+        for launch in launches {
+            launch.await.unwrap().unwrap();
+        }
+        assert_eq!(
+            started
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .len(),
+            count
+        );
+        if count > 1 {
+            assert!(
+                max_active.load(Ordering::SeqCst) >= 2,
+                "ready Process launches were serialized by the provider adapter"
+            );
+        }
+    }
 }
