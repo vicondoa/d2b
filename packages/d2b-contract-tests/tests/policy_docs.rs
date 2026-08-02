@@ -735,6 +735,7 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
     let helper = read_repo_file(helper_rel);
     let makefile = read_repo_file("Makefile");
     let rust_driver = read_repo_file("tests/test-rust.sh");
+    let api_driver = read_repo_file("tests/tools/api-surface-json.sh");
     assert_eq!(
         schema.get("$id").and_then(Value::as_str),
         Some("https://vicondoa.github.io/d2b/schemas/test-execution-manifest-v1.json"),
@@ -849,8 +850,19 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
         );
     }
     assert!(
-        makefile.contains("rust-fixture-contracts: rust-main-workspace"),
-        "execution-manifest-policy: fixture target is not ordered after the main target"
+        !makefile.contains("rust-fixture-contracts: rust-main-workspace"),
+        "execution-manifest-policy: isolated fixture target regained the main-workspace edge"
+    );
+    assert!(
+        rust_driver.contains(
+            "fixture_target_dir=\"$ROOT/.scratch/rust-test-cache/fixture-contracts\""
+        ),
+        "execution-manifest-policy: fixture target is not isolated under the Rust test cache"
+    );
+    assert!(
+        api_driver.contains("checker_target=\"$target_root/checker\"")
+            && api_driver.contains("CARGO_TARGET_DIR=\"$checker_target\" cargo run"),
+        "execution-manifest-policy: API checker is not isolated under the Rust test cache"
     );
     assert!(
         makefile.contains("rust-broker: rust-inventory-and-stub"),
