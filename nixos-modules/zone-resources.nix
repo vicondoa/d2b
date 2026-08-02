@@ -211,16 +211,10 @@ let
 in
 {
   config = lib.mkIf (cfg.zones != { }) {
-    # Keep the pre-cutover projection available as a compatibility fallback.
-    # bundle-zones.nix force-selects the coherent v3 table for installation.
-    d2b._bundle.zoneResourceBundlesCompatibility = zoneBundles;
-    d2b._bundle.zoneResourceBundles = lib.mkDefault zoneBundles;
-    d2b._bundle.extraArtifacts.artifactCatalog = lib.mkDefault {
-      data = artifactCatalogPreimage;
-      path = artifactCatalogPath;
-      installFileName = "artifact-catalog.json";
-      classification = "contractPrivateNonSecret";
-      sensitivity = "nonSecret";
-    };
+    # Keep only the old eval data for compatibility. Its legacy path and
+    # install metadata are deliberately not exposed to the bundle aggregator.
+    d2b._bundle.zoneResourceBundlesCompatibility = lib.mapAttrs
+      (_: bundle: { data = bundle.data; })
+      zoneBundles;
   };
 }

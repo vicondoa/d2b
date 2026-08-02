@@ -224,15 +224,14 @@ in
       installedSourceMatchesV3 = installedDigestBundle.source == digestBundle.path;
       shippedDataMatchesV3 = digestBundle.data == realisedDigestBundle;
       nonEmptyResources = digestBundle.data.resources != [ ];
-      legacyPathNotInstalled =
-        activeDigestBundle.path != compatibilityDigestBundle.path;
+      legacyPathNotExposed = !(compatibilityDigestBundle ? path);
     };
     expected = {
       activePathMatchesV3 = true;
       installedSourceMatchesV3 = true;
       shippedDataMatchesV3 = true;
       nonEmptyResources = true;
-      legacyPathNotInstalled = true;
+      legacyPathNotExposed = true;
     };
   };
 
