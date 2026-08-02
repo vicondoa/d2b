@@ -7,9 +7,10 @@
 # the duplicate/reserved/overlong/unsafe serial issue sets.
 #
 # The v3 cases below also evaluate the reachable Volume ResourceType module.
-# They deliberately inspect assertion messages rather than forcing a system
-# build, so malformed policy remains a reported assertion instead of becoming
-# an unrelated evaluation error.
+# They deliberately inspect the Volume module's canonical assertion records
+# rather than the aggregate system assertion list. The bundle integrity gate
+# separately rejects path-shaped ResourceSpec fields by throwing; reading the
+# module-local records keeps these policy vectors focused on the Volume rules.
 #
 # The "module callsites use the shared helpers" grep checks the bash gate
 # also carried are NOT value assertions; they migrate to the hermetic
@@ -116,10 +117,13 @@ let
 
   validVolume = (mkEval [ volumeBase ]).config;
 
+  volumeAssertionsOf = sys:
+    sys.config.d2b._resourceCompiler.volumeValidation;
+
   failures = sys:
     lib.filter (a: !a.assertion
       && lib.hasPrefix "d2b.zones.local-root.resources.state" a.message)
-      sys.config.assertions;
+      (volumeAssertionsOf sys);
 
   hasFailure = needle: sys:
     lib.any (a: lib.hasInfix needle a.message) (failures sys);

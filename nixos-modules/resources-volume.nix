@@ -691,5 +691,11 @@ let
     cfg.zones);
 in
 {
-  config.assertions = zoneVolumeAssertions;
+  config = {
+    assertions = zoneVolumeAssertions;
+    # Keep the Volume validator's canonical assertion records available to
+    # module-level consumers without forcing the bundle integrity gate. The
+    # latter deliberately rejects path-shaped Volume fields by throwing.
+    d2b._resourceCompiler.volumeValidation = zoneVolumeAssertions;
+  };
 }

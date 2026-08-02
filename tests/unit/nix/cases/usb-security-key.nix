@@ -6,8 +6,9 @@
 #      failures; option values are set as expected.
 #   B. The eval-time assertion fires correctly for each of the three
 #      assertion categories (checked here as boolean expressions over
-#      `config.assertions`, not via mkBatch - the batch evaluator in
-#      eval-cases/assertions.nix covers the failure-message surface).
+#      the module's canonical assertion records, not via mkBatch - the batch
+#      evaluator in eval-cases/assertions.nix covers the general failure
+#      message surface).
 #   C. Host-enabled with empty devices evaluates without error.
 #   D. The option defaults: host disabled, VM disabled.
 { mkEval, lib, pkgs, ... }:
@@ -171,15 +172,16 @@ let
   deviceEvalWith = overrides:
     mkEval ([ base deviceBase ] ++ overrides);
   deviceValid = deviceEvalWith [ ];
+  deviceAssertionsOf = sys: sys.config.d2b._resourceCompiler.deviceValidation;
   deviceFailures = sys:
     lib.filter
       (a: !a.assertion
         && lib.hasInfix "d2b.zones.local-root.resources.security-key" a.message)
-      sys.config.assertions;
+      (deviceAssertionsOf sys);
   deviceHasFailure = needle: sys:
     lib.any
       (a: !a.assertion && lib.hasInfix needle a.message)
-      sys.config.assertions;
+      (deviceAssertionsOf sys);
 
   assertionMessageContains = sys: needle:
     lib.any

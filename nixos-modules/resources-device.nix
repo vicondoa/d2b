@@ -523,6 +523,7 @@ let
         })
         duplicates)
     cfg.zones);
+  validationAssertions = deviceAssertions ++ duplicateLabelAssertions;
 in
 {
   options.d2b.zones = lib.mkOption {
@@ -534,7 +535,7 @@ in
   };
 
   config = lib.mkIf (devices != [ ]) {
-    assertions = deviceAssertions ++ duplicateLabelAssertions;
+    assertions = validationAssertions;
 
     d2b._index.devices = {
       list = devices;
@@ -546,5 +547,9 @@ in
       providerRefs = providerInstallRefs;
       providerInstallations = providerInstallations;
     };
+    # Keep the Device validator's canonical assertion records available to
+    # module-level consumers without forcing the bundle integrity gate. The
+    # latter deliberately rejects path-shaped provider settings by throwing.
+    d2b._resourceCompiler.deviceValidation = validationAssertions;
   };
 }
