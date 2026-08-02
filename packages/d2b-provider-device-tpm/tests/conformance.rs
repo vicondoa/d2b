@@ -1,4 +1,7 @@
-use d2b_provider_device_tpm::{SwtpmArgv, SwtpmArgvError, SwtpmSettings};
+use d2b_provider_device_tpm::{
+    StateDirIntent, StateDirectoryToken, StateOwnerToken, SwtpmArgv, SwtpmArgvError, SwtpmSettings,
+    TamperMarkerToken, TpmStateObservation, TpmStateObservationKind, TpmStateValidationError,
+};
 
 #[test]
 fn settings_are_strict_and_bounded() {
@@ -49,4 +52,23 @@ fn argv_shape_is_path_free_and_byte_stable() {
         SwtpmArgv::flush_args(),
         ["swtpm_ioctl", "-i", "--unix", "<ctrl-socket>"]
     );
+}
+
+#[test]
+fn missing_prior_marker_fails_closed() {
+    let intent = StateDirIntent::new(
+        StateDirectoryToken::from_core([1; 32]),
+        TamperMarkerToken::from_core([2; 32]),
+        StateOwnerToken::from_core([3; 16]),
+    );
+    let error = intent
+        .validate(&TpmStateObservation::from_core(
+            TpmStateObservationKind::MissingMarker,
+        ))
+        .unwrap_err();
+    assert_eq!(
+        error,
+        TpmStateValidationError::PreviouslyProvisionedStateMissing
+    );
+    assert_eq!(error.code(), "previously-provisioned-swtpm-state-missing");
 }

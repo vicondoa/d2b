@@ -1,8 +1,8 @@
 use d2b_contracts::v3::ResourceUid;
 use d2b_provider_device_security_key::{
-    LeaseState, PhysicalAuthorityLease, PhysicalUsbBackingClaim, PhysicalUsbBackingToken,
-    RelayLaunchTicket, SecurityKeyEffectError, SecurityKeyEffectPort, SecurityKeyLease,
-    SecurityKeyOpenIntent, SecurityKeySessionId,
+    GuestCid, LeaseState, PhysicalAuthorityLease, PhysicalUsbBackingClaim, PhysicalUsbBackingToken,
+    RelayLaunchTicket, SecurityKeyCidTranslator, SecurityKeyEffectError, SecurityKeyEffectPort,
+    SecurityKeyLease, SecurityKeyOpenIntent, SecurityKeySessionId,
 };
 
 struct FakePort {
@@ -65,4 +65,12 @@ fn acquire_complete_and_cancel_follow_closed_lease_transitions() {
     assert_eq!(lease.state(), LeaseState::Cancelled);
     assert_eq!(port.opens, 1);
     assert_eq!(port.releases, 1);
+}
+
+#[test]
+fn cid_translation_round_trips_without_exposing_session_material() {
+    let guest = GuestCid::new(0x0102_0304).unwrap();
+    let translator = SecurityKeyCidTranslator::from_core(0x1020_3040).unwrap();
+    let relay = translator.to_relay(guest);
+    assert_eq!(translator.to_guest(relay).unwrap(), guest);
 }
