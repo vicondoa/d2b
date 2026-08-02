@@ -251,27 +251,21 @@ lane_count=9; \
 active_lanes="$$effective_budget"; \
 [ "$$active_lanes" -le "$$lane_count" ] || active_lanes="$$lane_count"; \
 if [ "$$effective_budget" -eq 1 ]; then active_lanes=1; fi; \
-quota_for() { \
-  rank="$$1"; \
-  base=$$((runtime_budget / active_lanes)); \
-  remainder=$$((runtime_budget % active_lanes)); \
-  quota="$$base"; \
-  [ "$$rank" -le "$$remainder" ] && quota=$$((quota + 1)); \
-  [ "$$quota" -ge 1 ] || quota=1; \
-  printf '%s\n' "$$quota"; \
-}; \
-frontier_quota="$$(quota_for 1)"; \
+quota_api=1; \
+if [ "$$runtime_budget" -gt "$$lane_count" ]; then \
+  quota_api=$$((runtime_budget - lane_count + 1)); \
+fi; \
+quota_main=1; \
+quota_schema=1; \
+quota_inventory=1; \
+quota_fixture=1; \
+quota_broker=1; \
+quota_guest=1; \
+quota_ast=1; \
+quota_supply=1; \
+frontier_quota=$$((quota_api + active_lanes - 1)); \
 test "$$frontier_quota" -le "$$runtime_budget" || { echo "frontier quota exceeds runtime budget" >&2; exit 1; }; \
-quota_api="$$(quota_for 1)"; \
-quota_main="$$(quota_for 2)"; \
-quota_schema="$$(quota_for 3)"; \
-quota_inventory="$$(quota_for 4)"; \
-quota_fixture="$$(quota_for 5)"; \
-quota_broker="$$(quota_for 6)"; \
-quota_guest="$$(quota_for 7)"; \
-quota_ast="$$(quota_for 8)"; \
-quota_supply="$$(quota_for 9)"; \
-printf '%s\n' "Rust effective runtime budget: $$effective_budget lane(s); D2B_RUST_BUDGET is the requested upper-bound control."; \
+printf '%s\n' "Rust effective runtime budget: $$effective_budget job(s), $$active_lanes active lane(s); D2B_RUST_BUDGET is the requested upper-bound control."; \
 set +e; \
 if [ -n "$${D2B_EXECUTION_MANIFEST:-}" ]; then \
   perl tests/tools/execution-manifest.pl run \

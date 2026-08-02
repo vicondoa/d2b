@@ -197,7 +197,9 @@ sharing mutable Cargo state; `D2B_SKIP_FIXTURE_BUILD=1` omits them for the
 Layer-1 graph. The focused `make test-rust-main` retains the same conditional
 fixture behavior. The public and private rustdoc censuses use separate stable
 targets and overlap only when the API leaf has at least two admitted jobs,
-with split Cargo quotas bounded by that leaf's budget. Direct
+with split Cargo quotas bounded by that leaf's budget. Budgets through nine
+admit one job per active lane; surplus jobs above nine go to the measured API
+long pole while the full nine-lane frontier remains within budget. Direct
 `tests/test-rust.sh` calls require exactly one leaf mode and must not be used
 as an aggregate scheduler. The broker passes remain
 serial, and the main workspace, schema, and inventory leaves retain their

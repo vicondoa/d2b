@@ -1172,6 +1172,21 @@ set -euo pipefail
             r"(?is)(?:outside|out of).{0,100}(?:the )?constrained environment",
         )
 
+    def test_rust_runtime_frontier_fits_budgets_one_through_twelve(self) -> None:
+        makefile = MAKEFILE.read_text(encoding="utf-8")
+        self.assertIn("quota_api=$$((runtime_budget - lane_count + 1))", makefile)
+        self.assertIn("frontier_quota=$$((quota_api + active_lanes - 1))", makefile)
+        api_quotas = {}
+        for budget in range(1, 13):
+            active_lanes = min(budget, 9)
+            api_quota = budget - 8 if budget > 9 else 1
+            frontier = api_quota + active_lanes - 1
+            self.assertLessEqual(frontier, budget)
+            api_quotas[budget] = api_quota
+        self.assertEqual(api_quotas[1], 1)
+        self.assertEqual(api_quotas[9], 1)
+        self.assertEqual(api_quotas[12], 4)
+
     def test_rust_leaf_recipes_are_ordinary_and_drop_make_metadata_immediately(self) -> None:
         makefile = MAKEFILE.read_text(encoding="utf-8")
         for leaf in (
