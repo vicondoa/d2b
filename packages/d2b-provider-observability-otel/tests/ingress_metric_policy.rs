@@ -1,9 +1,10 @@
 use std::collections::BTreeMap;
 
+use d2b_provider_observability_otel::label;
 use d2b_provider_observability_otel::{
-    Ingress, IngressOutcome, IngressPolicyGate, MetricFrame, MetricPoint,
+    IdentityCanaries, Ingress, IngressOutcome, IngressPolicyGate, MetricDescriptor, MetricFrame,
+    MetricPoint,
 };
-use d2b_telemetry::{IdentityCanaries, MetricDescriptor, meter_registry::label};
 
 fn invalid_frame() -> MetricFrame {
     MetricFrame::new(

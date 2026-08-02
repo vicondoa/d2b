@@ -68,8 +68,7 @@ impl ProviderConfig {
                 }
                 object
                     .get("enable")
-                    .map(serde_json::Value::as_bool)
-                    .flatten()
+                    .and_then(serde_json::Value::as_bool)
                     .ok_or(ConfigError::Invalid)?
             }
         };

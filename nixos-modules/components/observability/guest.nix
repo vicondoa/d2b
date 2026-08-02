@@ -11,6 +11,12 @@ let
   guestOtlpSocket = "${otelRuntimeDir}/otlp.sock";
   guestOtlpEgressSocket = "${otelRuntimeDir}/otlp-egress.sock";
   auditEnabled = config.d2b.audit.enable or false;
+  journaldProviderConfig = import ../../../packages/d2b-provider-observability-otel/src/nix/journald.nix {
+    inherit lib;
+    zoneId = cfg.identity.vmName;
+    executionId = cfg.identity.envName;
+    enable = cfg.scrapeJournal;
+  };
 
   collectorConfig = pkgs.writeText "d2b-guest-otel-collector.yaml" (
     lib.generators.toYAML { } {
@@ -44,24 +50,16 @@ let
             processes = { };
           };
         };
-      } // lib.optionalAttrs cfg.scrapeJournal {
-        # Tail the guest's systemd journal via the contrib journald
-        # receiver (which execs `journalctl`). `start_at = "end"` keeps
-        # boot-time backlog out of the pipeline; the file_storage cursor
-        # below means a collector restart resumes where it left off
-        # instead of silently dropping entries written during downtime.
-        # The severity_parser maps the journal PRIORITY field onto OTel
-        # severity so logs are filterable by level in SigNoz.
-        journald = {
-          start_at = "end";
+      } // journaldProviderConfig.receivers // lib.optionalAttrs cfg.scrapeJournal {
+        journald = journaldProviderConfig.receivers.journald // {
+          # Persist the journald read cursor so a collector restart resumes
+          # from the last read entry instead of silently dropping entries.
           storage = "file_storage/journald";
           operators = [
             {
               type = "severity_parser";
               parse_from = "body.PRIORITY";
-              # overwrite_text replaces the raw PRIORITY digit with the
-              # canonical OTel severity text (INFO/WARN/ERROR/…) so SigNoz
-              # shows a readable level instead of "3"/"4"/"6".
+              # Replace the raw PRIORITY digit with canonical OTel severity.
               overwrite_text = true;
               mapping = {
                 fatal = [ "0" "1" "2" ];
@@ -95,7 +93,7 @@ let
           send_batch_size = 2048;
           timeout = "1s";
         };
-      };
+      } // journaldProviderConfig.processors;
       exporters.otlp = {
         endpoint = "unix://${guestOtlpEgressSocket}";
         compression = "none";
@@ -140,7 +138,9 @@ let
         };
         pipelines.logs = {
           receivers = [ "otlp" ] ++ lib.optional cfg.scrapeJournal "journald";
-          processors = [ "memory_limiter" "resource" "batch" ];
+          processors = [ "memory_limiter" "resource" ]
+            ++ lib.optional cfg.scrapeJournal "redact_journald"
+            ++ [ "batch" ];
           exporters = [ "otlp" ];
         };
       };

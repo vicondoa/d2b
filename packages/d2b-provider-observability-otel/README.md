@@ -1,50 +1,81 @@
-# d2b Provider observability OTEL
+# `d2b-provider-observability-otel`
 
 ## Provider identity
 
-This crate implements the optional `Provider/observability-otel` support
-surface. It is not a bootstrap dependency and does not own authoritative
-audit data.
+| Provider name | `observability-otel` |
+| --- | --- |
+| Resource reference | `Provider/observability-otel` |
+| Role | Optional, non-bootstrap telemetry ingestion and export |
+| Semantic services | `telemetry.d2bus.org.TelemetryService`, `telemetry.d2bus.org.TelemetryBinding` |
+
+The Provider is optional and ordinary. Zone startup and authoritative audit
+remain independent of its readiness.
 
 ## Config schema
 
-The installation-wide configuration accepts only `selfMetrics.enable`.
-Per-binding routing, quota, redaction, and transport settings belong to the
-resource contract rather than this root configuration.
+The installation-wide configuration accepts only the bounded boolean
+`selfMetrics.enable`. Per-binding routing, quota, redaction, and transport
+settings belong to the provider-neutral resource contract and its strict
+Provider extension rather than this root configuration. Unknown fields and
+non-boolean values are rejected.
 
 ## Exported resource types
 
-The Provider consumes the provider-neutral telemetry Service and Binding
-contracts. Transport Endpoints remain private implementation details.
+The Provider consumes the provider-neutral
+`telemetry.d2bus.org.TelemetryService` and
+`telemetry.d2bus.org.TelemetryBinding` contracts. Authority and projection
+services carry the same semantic identity; Endpoint resources and socket
+names remain private implementation details.
 
 ## Controllers / services / workers / binaries
 
-The source contains bounded emitter-socket, ingress-policy, Provider-agent,
-configuration, and self-metric projections. Full process launch remains owned
-by the Process Provider.
+The source contains the session-bound Provider agent, bounded emitter socket,
+structural metric ingress gate, strict configuration parser, and closed
+self-metric descriptors. Full collector and forwarder process launch remains
+owned by the Process Provider boundary.
 
 ## Placement and dependencies
 
-The Provider runs as an ordinary optional process. Its bounded support code
-depends only on the shared telemetry and audit contracts.
+The Provider runs as an ordinary optional process in its owning Zone. Its
+workspace dependencies are limited to `d2b-contracts` and
+`d2b-provider-toolkit`, the admitted neutral Provider boundaries. The toolkit
+supplies the diagnostic audit ring and session-facing values; authoritative
+audit durability and core telemetry emission stay outside this crate.
 
 ## RBAC requirements
 
-Resource admission and bus authorization remain core-owned. The Provider
-does not mint session authority or widen a caller's resource permissions.
+Resource admission, ComponentSession authority, bus authorization, and
+cross-Zone projection routing remain core-owned. The Provider accepts only
+already-admitted session context and never mints authority or widens a
+caller's resource permissions.
 
 ## Security posture
 
 Ingress validation is structural and occurs before capacity admission. Errors
 use closed classes and do not echo rejected labels, values, paths, or
-identities. OTEL telemetry never reads or writes the authoritative audit sink.
+identities. The metric policy rejects identity keys, identity suffixes, and
+trusted resource-identity canaries. OTEL telemetry never reads or writes the
+authoritative audit sink, and journald filtering is opt-in and redacts
+credential, secret, token, password, and path-shaped messages.
 
 ## State and telemetry
 
-Emitter and ingress state is bounded and in-memory. Export loss degrades
-telemetry only; it never blocks resource mutation or audit durability.
+Emitter, ingress, quarantine, and diagnostic audit state is bounded and
+in-memory. Export loss degrades telemetry only; it never blocks resource
+mutation or audit durability. Resource identity belongs in the closed OTEL
+resource-attribute set, never in metric dimensions.
 
 ## Build and test
 
-Run `cargo test --manifest-path packages/d2b-provider-observability-otel/Cargo.toml`
-for the standalone hermetic unit and ingress-policy tests.
+From `packages/`, run:
+
+```bash
+cargo nextest run -p d2b-provider-observability-otel --lib --tests
+cargo clippy -p d2b-provider-observability-otel --all-targets -- -D warnings
+cargo fmt --manifest-path d2b-provider-observability-otel/Cargo.toml -- --check
+```
+
+The crate's normal tests are hermetic. The scenario declarations in
+`integration/` are exercised by the existing container or host-integration
+lane once the production Provider supervisor, ComponentSession stream, OTLP
+exporter, and NixOS adapter are present.

@@ -1,6 +1,6 @@
 //! Observability Provider self-metric inventory.
 
-use d2b_telemetry::{MetricDescriptor, meter_registry::label};
+use crate::metric_policy::{MetricDescriptor, label};
 
 /// Provider self-metric names.
 pub const SELF_METRICS: &[&str] = &[
@@ -38,7 +38,7 @@ pub fn ingress_policy_descriptor() -> MetricDescriptor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_telemetry::validate_descriptor;
+    use crate::validate_descriptor;
 
     #[test]
     fn self_metric_descriptor_uses_closed_labels() {

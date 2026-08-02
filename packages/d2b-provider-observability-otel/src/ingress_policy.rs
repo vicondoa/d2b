@@ -2,8 +2,9 @@
 
 use std::collections::BTreeMap;
 
-use d2b_telemetry::{
-    IdentityCanaries, MetricDescriptor, MetricPolicyError, RedactionGuard, validate_data_point,
+use crate::metric_policy::{
+    IdentityCanaries, MetricDescriptor, MetricPolicyError, validate_data_point,
+    validate_resource_attributes,
 };
 
 /// Maximum frame bytes accepted before policy evaluation.
@@ -263,12 +264,7 @@ impl IngressPolicyGate {
 }
 
 fn valid_resource_attributes(attributes: &BTreeMap<String, String>) -> bool {
-    RedactionGuard::new(
-        attributes
-            .iter()
-            .map(|(key, value)| (key.clone(), value.clone())),
-    )
-    .is_ok()
+    validate_resource_attributes(attributes).is_ok()
 }
 
 fn map_policy_error(error: MetricPolicyError) -> IngressErrorClass {
@@ -287,7 +283,7 @@ fn map_policy_error(error: MetricPolicyError) -> IngressErrorClass {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use d2b_telemetry::meter_registry::label;
+    use crate::label;
 
     fn frame(key: &str, value: &str) -> MetricFrame {
         MetricFrame::new(
