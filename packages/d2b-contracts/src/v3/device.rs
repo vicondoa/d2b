@@ -1074,7 +1074,7 @@ impl DeviceMetricOutcome {
 /// Fixed Device metric labels. Zone, resource, UID, selector, and backing
 /// identity never occur in this struct; `d2b.zone` and `d2b.provider` belong
 /// only to the OTEL resource-attribute set.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
 pub struct DeviceMetricLabels {
     /// Fixed Provider family label.
     pub provider: &'static str,
