@@ -56,7 +56,7 @@ let
       passAsFile = [ "buildRowsJson" ];
     } ''
       set -euo pipefail
-      python3 "$buildRowsJsonPath" "$out" <<'PY'
+      python3 - "$buildRowsJsonPath" "$out" <<'PY'
       import hashlib
       import json
       import pathlib
