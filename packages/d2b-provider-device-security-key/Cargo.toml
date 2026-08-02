@@ -14,3 +14,7 @@ serde.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
+
+[[test]]
+name = "provider_lifecycle"
+path = "integration/provider_lifecycle.rs"
