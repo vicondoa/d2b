@@ -317,3 +317,95 @@ Each was followed by the three-run external hyperfine command recorded in its
 all source/trace digest checks returned 0. The baseline target set therefore
 has no enforcing blocker; it is intentionally a measured pre-optimization
 reference, not a passing implementation of the future manifest contract.
+
+## Rust optimized result
+
+The accepted Rust implementation is commit
+`c8474cbff267d03600dcfa6dcb7ea83de01737ef`. GNU Make owns nine bounded
+leaves, while `tests/test-rust.sh` owns only explicit leaf execution. The
+representative host calculated a 12-job budget and admitted at most nine
+lanes. Budgets through nine use one job per lane; the three surplus jobs on
+this host are assigned to the measured API long pole, so its two rustdoc
+passes receive two Cargo jobs each while the complete runnable frontier stays
+within 12.
+
+Two measured target-state changes removed the remaining warm critical path:
+
+* fixture/CLI work uses
+  `.scratch/rust-test-cache/fixture-contracts`, independent of
+  `packages/target`, so its Nix evaluation and Cargo work overlap the main
+  workspace without mutable target-directory sharing;
+* the public and private rustdoc JSON passes use separate stable census
+  targets, and the CPU-bound snapshot checker runs from Cargo's release
+  profile in its own stable target.
+
+The final hyperfine record is
+`.scratch/test-speedup-optimized/test-rust.json`:
+
+| Result | Seconds |
+| --- | ---: |
+| Baseline warm median | 324.763168 |
+| Optimized warm samples | 141.292295, 139.024788, 141.792091 |
+| Optimized warm median | **141.292295** |
+| Warm reduction | **56.494%** |
+| Slowest / median | 1.0035 |
+
+The optimized median is 43.506% of baseline and therefore passes the
+50%-of-baseline ceiling of 162.381584 seconds. The slowest sample is less
+than 1% above the median, within the 20% stability limit. Because the Make
+DAG met the hard target, the conditional mold experiment in T017 was not
+entered and no linker dependency was added.
+
+The final cold observation is
+`.scratch/test-speedup-optimized/test-rust-cold.json` at 1830.117173 seconds,
+compared with the 911.204650-second baseline cold median. This is a
+non-blocking regression. The warm design retains duplicate isolated rustdoc
+target trees and assigns one job to non-API cold rebuild lanes; those choices
+remove target locking and satisfy the warm hard goal but increase cold
+compilation. The shared Nix store was not cleared. This tradeoff remains
+visible for the later resource-tuning phase rather than being excluded or
+reported as a warm result.
+
+## Rust coverage evidence
+
+The passing v1 manifest is
+`.scratch/test-speedup-optimized/test-rust-executed.json`, SHA-256
+`4966a79ff30a7c9e60dcf827681ce42bfcd3c97b8d761c4d645ae596d48c354f`.
+It records `run_status = "passed"` and all 20 baseline leaf identifiers.
+Direct sorted comparison with the trace-derived baseline manifest has no
+missing or added leaf.
+
+The optimized source census is
+`.scratch/test-speedup-optimized/test-rust-inventory.txt`. Cargo doctest
+listing prints elapsed-time summary lines, so both source inventories were
+also normalized by removing only lines beginning `all doctests ran in `.
+The normalized optimized digest is
+`792e83e9dd295fa6262a766d4ca9a0a76090de460a400f1b9e3d7bba28ef4174`.
+The normalized comparison has no missing baseline test and 13 added tests:
+the execution-manifest documentation policy plus 12 Rust DAG, companion,
+quota, mutation, and excluded-workspace policy tests.
+
+## Rust validation evidence
+
+The final implementation passed:
+
+```text
+nix shell --inputs-from . nixpkgs#python3 --command \
+  python3 tests/unit/meta/ci-runner-regression.py
+bash tests/unit/gates/ci-rust-cache-sync.sh
+cd packages && cargo test -p xtask --test policy_workspace
+cargo test --manifest-path packages/d2b-contract-tests/Cargo.toml \
+  --test policy_docs
+make test-policy
+D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts
+D2B_EXECUTION_MANIFEST=.scratch/test-speedup-optimized/test-rust-executed.json \
+  make test-rust
+```
+
+The executable manifest regressions cover success, failure, lock contention,
+failed publication, handled TERM, shutdown-only subreaper activation,
+descendant draining, parent/path injection, cleanup chaining, Nix re-entry,
+status preservation, and descriptor closure. Targeted runs also exercised the
+schema/inventory dependency chain, isolated API leaf, isolated fixture leaf,
+PTY crate under the manifest helper, invalid budget exit 2, and Make dry runs
+with and without `D2B_SKIP_FIXTURE_BUILD=1`.
