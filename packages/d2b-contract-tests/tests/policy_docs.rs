@@ -854,9 +854,8 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
         "execution-manifest-policy: isolated fixture target regained the main-workspace edge"
     );
     assert!(
-        rust_driver.contains(
-            "fixture_target_dir=\"$ROOT/.scratch/rust-test-cache/fixture-contracts\""
-        ),
+        rust_driver
+            .contains("fixture_target_dir=\"$ROOT/.scratch/rust-test-cache/fixture-contracts\""),
         "execution-manifest-policy: fixture target is not isolated under the Rust test cache"
     );
     assert!(
