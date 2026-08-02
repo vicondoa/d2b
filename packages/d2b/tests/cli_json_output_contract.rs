@@ -467,16 +467,16 @@ fn host_check_and_auth_status_outputs_match_goldens() {
 
     for (args, envs, golden_name, label) in [
         (
-            &["auth", "status", "--test-uid", "1000", "--human"][..],
+            &["auth", "--test-uid", "1000", "status", "--human"][..],
             vec![("D2B_AUTH_STATUS_FIXTURE", env.auth_status.as_path())],
             "auth-status-human.golden",
-            "auth status --test-uid 1000 --human",
+            "auth --test-uid 1000 status --human",
         ),
         (
-            &["auth", "status", "--test-uid", "1000", "--json"][..],
+            &["auth", "--test-uid", "1000", "status", "--json"][..],
             vec![("D2B_AUTH_STATUS_FIXTURE", env.auth_status.as_path())],
             "auth-status-json.golden",
-            "auth status --test-uid 1000 --json",
+            "auth --test-uid 1000 status --json",
         ),
     ] {
         let mut cmd = base_command(args, &env.home, &env.runtime);
