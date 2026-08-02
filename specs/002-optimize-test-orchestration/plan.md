@@ -68,6 +68,18 @@ shards plus their integrity check, and the native-system flake check inventory.
 
 *GATE: Passed before research and passed again after design.*
 
+- **Delivery track**: **Track A**. The feature introduces a versioned
+  contract - the execution-manifest v1 JSON schema at
+  `docs/reference/schemas/test-execution-manifest-v1.json`, its prose reference
+  `docs/reference/test-execution-manifest.md`, and the schema/prose
+  version-agreement policy test - and a schema change is a Track A trigger on
+  its own. It also rewires CI manifest authority and the public local-target
+  knob surface, and it delivers five qualified waves, `spec002w1` through
+  `spec002w5`, each with its own panel gate and commit tag. Track B is
+  rejected: it permits one panel round on the finished diff and no wave seal,
+  which can express neither five sequentially gated waves nor a versioned
+  schema landing through the delivery tooling. Each wave therefore closes
+  through the delivery tooling, seal included.
 - **Test-Layer Discipline**: The change modifies existing Layer-1 plumbing and
   does not add a new gate or top-level `tests/*.sh` entrypoint.
 - **Existing code is canon**: Coverage is derived from the current committed
@@ -397,8 +409,11 @@ weakening an invariant.
 This plan uses strict phase ordering rather than pipelined dispatch.
 
 - Run the ten-seat plan panel before implementation begins.
-- After each integrated implementation phase, run a work panel and obtain
-  unanimous sign-off before starting the next phase.
+- After each integrated implementation phase, run a work panel, obtain
+  unanimous sign-off, then close that wave through the delivery tooling - PR,
+  merge, seal - before starting the next phase. Track A cannot defer merges:
+  the delivery gate refuses a wave's panel request while any prior wave is
+  unmerged, so one PR per wave is forced rather than chosen.
 - Use `( spec002w1 )` for Rust commits, `( spec002w2 )` for Nix unit commits,
   `( spec002w3 )` for flake commits, `( spec002w4 )` for resource-tuning
   commits, and `( spec002w5 )` for evidence and documentation commits.
