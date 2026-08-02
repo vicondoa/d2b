@@ -6,6 +6,7 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import io
+import json
 import os
 import pathlib
 import re
@@ -23,6 +24,187 @@ SCRATCH = ROOT / ".scratch"
 LAYER1_JOBS = ROOT / "tests" / "tools" / "layer1-jobs.py"
 MAKEFILE = ROOT / "Makefile"
 RUST_DRIVER = ROOT / "tests" / "test-rust.sh"
+EXECUTION_MANIFEST_HELPER = ROOT / "tests" / "tools" / "execution-manifest.pl"
+
+
+EXECUTION_MANIFEST_HARNESS = r"""
+use strict;
+use warnings;
+use Errno qw(ECHILD);
+use POSIX qw(WNOHANG);
+
+my ($helper, $scenario, $manifest) = @ARGV;
+
+sub fail {
+    print STDERR "manifest-harness: $_[0]\n";
+    exit 1;
+}
+
+fail("missing harness arguments")
+    unless defined($helper) && defined($scenario) && defined($manifest);
+require $helper;
+
+my $manifest_parent = $manifest;
+$manifest_parent =~ s{[^/]*\z}{};
+my $manifest_base = $manifest;
+$manifest_base =~ s{.*/}{};
+my $fragment_dir = $manifest_parent . ".$manifest_base.fragments";
+
+sub descriptor_snapshot {
+    opendir(my $dir, "/proc/$$/fd") or fail("could not inspect descriptors");
+    my @snapshot;
+    while (my $entry = readdir($dir)) {
+        next unless $entry =~ /\A\d+\z/;
+        my $target = readlink("/proc/$$/fd/$entry");
+        next unless defined($target);
+        push @snapshot, "$entry\0$target";
+    }
+    closedir($dir) or fail("could not close descriptor inspection");
+    return [sort @snapshot];
+}
+
+sub same_snapshot {
+    my ($left, $right) = @_;
+    return join("\n", @{$left}) eq join("\n", @{$right});
+}
+
+my $before = descriptor_snapshot();
+my $path_calls = 0;
+my $fork_calls = 0;
+my $subreaper_calls = 0;
+my $sleep_calls = 0;
+my $clock_calls = 0;
+my $active_child = 0;
+my @kills;
+my @waits;
+my @descendant_reaps = (9001, 9002, -1);
+my $scheduler_status = $scenario eq "failure-finalization" ? 37 : 0;
+my $path_boundary = sub {
+    my ($raw) = @_;
+    fail("path boundary received an unexpected path") unless $raw eq $manifest;
+    ++$path_calls;
+    return main::open_manifest_parent($raw);
+};
+
+my $clock = sub {
+    my @ticks = (0, 10);
+    my $value = $ticks[$clock_calls];
+    ++$clock_calls;
+    return defined($value) ? $value : 10;
+};
+
+my $process_control = {
+    fork => sub {
+        ++$fork_calls;
+        $active_child = 1;
+        if ($scenario eq "term") {
+            main::write_atomic_fragment($manifest, "rust-main-workspace", "passed");
+            $SIG{TERM}->();
+        } elsif ($scenario eq "success-finalization"
+            || $scenario eq "failure-finalization") {
+            main::write_atomic_fragment($manifest, "rust-main-workspace", "passed");
+            no warnings qw(once redefine);
+            *main::renameat_name = sub {
+                main::fatal("synthetic publication failure");
+            };
+        }
+        return 4242;
+    },
+    subreaper => sub {
+        ++$subreaper_calls;
+    },
+    kill => sub {
+        my ($signal, $group) = @_;
+        push @kills, [$signal, $group];
+        fail("unexpected process-control kill") unless $scenario eq "term";
+        return 1;
+    },
+    waitpid => sub {
+        my ($pid, $flags) = @_;
+        if ($pid == -1) {
+            push @waits, [$pid, $flags];
+            my $adopted = shift @descendant_reaps;
+            if ($adopted == -1) {
+                $! = ECHILD;
+            }
+            return $adopted;
+        }
+        push @waits, [$pid, $flags];
+        fail("unexpected process-control pid") unless $pid == 4242;
+        if ($scenario eq "term") {
+            fail("grace wait was not skipped") if $flags == WNOHANG;
+            $active_child = 0;
+            $? = 0;
+            return $pid;
+        }
+        $? = $scheduler_status << 8;
+        $active_child = 0;
+        return $pid;
+    },
+};
+
+my $sleep = sub {
+    ++$sleep_calls;
+    fail("real grace sleep was reached");
+};
+
+my $status = main::run_manifest_lifecycle(
+    command => [$^X, "-e", "exit 0"],
+    manifest => $manifest,
+    target => "test-rust",
+    commit => "injected-test",
+    path_boundary => $path_boundary,
+    clock => $clock,
+    sleep => $sleep,
+    process_control => $process_control,
+);
+
+fail("path boundary was not used exactly once") unless $path_calls == 1;
+fail("scheduler fork was not injected exactly once") unless $fork_calls == 1;
+fail("child subreaper setup was not injected exactly once")
+    unless $subreaper_calls == 1;
+fail("injected child survived") if $active_child;
+fail("evidence descriptor survived") unless same_snapshot($before, descriptor_snapshot());
+
+if ($scenario eq "success-finalization") {
+    fail("scheduler-success finalization did not return 74") unless $status == 74;
+    fail("scheduler-success finalization unexpectedly published evidence")
+        if -e $manifest;
+} elsif ($scenario eq "failure-finalization") {
+    fail("scheduler failure status was not preserved") unless $status == 37;
+    fail("scheduler-failure finalization unexpectedly published evidence")
+        if -e $manifest;
+} elsif ($scenario eq "term") {
+    fail("handled TERM did not preserve 143") unless $status == 143;
+    fail("TERM did not use the injected zero-grace clock")
+        unless $clock_calls == 2 && $sleep_calls == 0;
+    my @expected_kills = ([15, -4242], [0, -4242], [9, -4242]);
+    fail("TERM was not forwarded, escalated, and reaped")
+        unless @kills == @expected_kills
+            && !grep { $kills[$_][0] != $expected_kills[$_][0]
+                || $kills[$_][1] != $expected_kills[$_][1] } 0 .. $#kills;
+    fail("TERM did not perform the final reap")
+        unless @waits >= 4 && $waits[-4][0] == 4242 && $waits[-4][1] == 0;
+    my @expected_descendant_reaps = (
+        [-1, WNOHANG],
+        [-1, WNOHANG],
+        [-1, WNOHANG],
+    );
+    fail("TERM did not drain adopted descendants")
+        unless @waits >= 4
+            && !grep {
+                $waits[-3 + $_][0] != $expected_descendant_reaps[$_][0]
+                    || $waits[-3 + $_][1] != $expected_descendant_reaps[$_][1]
+            } 0 .. 2;
+    fail("interrupted evidence was not published") unless -f $manifest;
+    fail("interrupted fragment directory was not removed")
+        if -d $fragment_dir;
+} else {
+    fail("unknown harness scenario");
+}
+
+print "status=$status path_calls=$path_calls fork_calls=$fork_calls\n";
+"""
 
 
 def make_target_block(source: str, target: str) -> str:
@@ -76,6 +258,34 @@ class CiRunnerRegressionTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         shutil.rmtree(self.scratch)
+
+    def run_execution_manifest_harness(
+        self,
+        scenario: str,
+        manifest: pathlib.Path,
+    ) -> subprocess.CompletedProcess[str]:
+        perl = shutil.which("perl")
+        self.assertIsNotNone(perl, "Perl is required for execution-manifest coverage")
+        assert perl is not None
+        env = os.environ.copy()
+        env.pop("PERL5LIB", None)
+        env.pop("PERL5OPT", None)
+        return subprocess.run(
+            [
+                perl,
+                "-e",
+                EXECUTION_MANIFEST_HARNESS,
+                str(EXECUTION_MANIFEST_HELPER),
+                scenario,
+                str(manifest),
+            ],
+            cwd=ROOT,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
 
     def test_shell_bootstrap_rejects_bash_startup_poison(self) -> None:
         layer1_jobs = load_layer1_jobs()
@@ -450,6 +660,7 @@ set -euo pipefail
             "rust-main-workspace",
             "rust-schema-reproducibility",
             "rust-inventory-and-stub",
+            "rust-fixture-contracts",
             "rust-broker",
             "rust-guest-shell-runner",
             "rust-no-bash-ast",
@@ -460,6 +671,370 @@ set -euo pipefail
                 rf"(?m)^{re.escape(leaf)}\s*:",
                 msg=f"Rust DAG leaf {leaf} is not Make-owned",
             )
+
+    def test_rust_manifest_preserves_baseline_subsurfaces(self) -> None:
+        driver = RUST_DRIVER.read_text(encoding="utf-8")
+        baseline_leaves = (
+            "rust-api-surface",
+            "rust-main-format",
+            "rust-main-clippy",
+            "rust-main-workspace-tests",
+            "rust-contract-tests",
+            "rust-cli-contract-tests",
+            "rust-no-bash-ast",
+            "rust-broker-default",
+            "rust-broker-layer1",
+            "rust-broker-fakebackends",
+            "rust-guest-shell-runner",
+            "rust-schema-reproducibility",
+            "rust-deny-main",
+            "rust-deny-broker",
+            "rust-deny-guest",
+            "rust-audit-main",
+            "rust-audit-broker",
+            "rust-audit-guest",
+            "rust-stub-no-socket",
+            "rust-assert-pinned",
+        )
+        for leaf in baseline_leaves:
+            self.assertIn(leaf, driver, msg=f"missing Rust baseline leaf {leaf}")
+        self.assertNotIn(
+            '--leaf "$rust_mode"',
+            driver,
+            "manifest fragments must identify completed sub-surfaces, not leaf modes",
+        )
+        self.assertEqual(driver.count("rust_surface_success rust-contract-tests"), 1)
+        self.assertEqual(driver.count("rust_surface_success rust-cli-contract-tests"), 1)
+
+    def test_rust_fixture_surfaces_are_conditional_ordered_and_not_duplicated(self) -> None:
+        makefile = MAKEFILE.read_text(encoding="utf-8")
+        static = (ROOT / "tests" / "static.sh").read_text(encoding="utf-8")
+        aggregate = make_target_block(makefile, "test-rust")
+        focused = make_target_block(makefile, "test-rust-main")
+
+        self.assertIn("rust-fixture-contracts", aggregate)
+        self.assertIn(
+            "rust-fixture-contracts: rust-main-workspace",
+            makefile,
+        )
+        self.assertIn('if [ "$(D2B_SKIP_FIXTURE_BUILD)" = 1 ]', makefile)
+        self.assertIn("elif command -v nix", makefile)
+        self.assertIn("rust-fixture-contracts", focused)
+        self.assertIn("D2B_SKIP_FIXTURE_BUILD=1 make test-rust", static)
+
+        driver = RUST_DRIVER.read_text(encoding="utf-8")
+        self.assertEqual(driver.count("rust_surface_success rust-contract-tests"), 1)
+        self.assertEqual(driver.count("rust_surface_success rust-cli-contract-tests"), 1)
+        self.assertEqual(driver.count("run_fixture_contract_tests\n"), 1)
+        self.assertEqual(driver.count("run_cli_contract_tests \"$contract_fixtures\""), 1)
+
+    def test_rust_fixture_leaf_sets_internal_opt_in_but_public_target_stays_closed(self) -> None:
+        makefile = MAKEFILE.read_text(encoding="utf-8")
+        fixture_leaf = make_target_block(makefile, "rust-fixture-contracts")
+        public_target = make_target_block(makefile, "test-fixture-contracts")
+
+        self.assertIn(
+            "D2B_ENABLE_FIXTURE_BUILD=1",
+            fixture_leaf,
+            "the internal fixture leaf must explicitly opt into fixture materialisation",
+        )
+        self.assertIn(
+            'if [ "$(D2B_SKIP_FIXTURE_BUILD)" = 1 ]',
+            fixture_leaf,
+            "the internal fixture leaf must preserve the skip path",
+        )
+        self.assertNotIn(
+            "D2B_ENABLE_FIXTURE_BUILD=1 bash tests/test-rust.sh fixture-contracts",
+            public_target,
+            "the standalone fixture target must remain fail-closed",
+        )
+
+    def test_rust_inventory_precedes_broker_without_serializing_schema_and_main(self) -> None:
+        makefile = MAKEFILE.read_text(encoding="utf-8")
+        self.assertIn(
+            "rust-broker: rust-inventory-and-stub",
+            makefile,
+            "broker must wait for assert-pinned-tests lockfile enumeration",
+        )
+        self.assertIn(
+            "rust-schema-reproducibility: rust-inventory-and-stub",
+            makefile,
+        )
+        self.assertIn(
+            "rust-main-workspace: rust-schema-reproducibility",
+            makefile,
+        )
+        self.assertNotIn(
+            "rust-broker: rust-schema-reproducibility",
+            makefile,
+            "broker should be allowed to overlap schema after inventory",
+        )
+        self.assertNotIn(
+            "rust-broker: rust-main-workspace",
+            makefile,
+            "broker should be allowed to overlap main after schema",
+        )
+
+    def test_rust_exit_cleanup_and_nix_reentry_are_executable_without_duplicate_fragments(self) -> None:
+        tree = self.scratch / "rust-reentry-tree"
+        for relative in (
+            "tests/tools",
+            "packages/.cargo",
+        ):
+            (tree / relative).mkdir(parents=True, exist_ok=True)
+        for relative in (
+            "tests/test-rust.sh",
+            "tests/lib.sh",
+            "tests/tools/execution-manifest.pl",
+        ):
+            destination = tree / relative
+            shutil.copy2(ROOT / relative, destination)
+        (tree / "tests/test-rust.sh").chmod(0o755)
+        (tree / "tests/tools/execution-manifest.pl").chmod(0o755)
+
+        for relative in (
+            "packages/Cargo.toml",
+            "packages/Cargo.lock",
+            "packages/deny.toml",
+            "packages/d2b-priv-broker/Cargo.toml",
+            "packages/d2b-priv-broker/Cargo.lock",
+            "packages/d2b-priv-broker/deny.toml",
+            "packages/d2b-guest-shell-runner/Cargo.toml",
+            "packages/d2b-guest-shell-runner/Cargo.lock",
+            "packages/d2b-guest-shell-runner/deny.toml",
+        ):
+            path = tree / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch()
+        (tree / "packages/.cargo/config.toml").write_text(
+            "[build]\n",
+            encoding="utf-8",
+        )
+        (tree / "packages/rust-toolchain.toml").write_text(
+            '[toolchain]\nchannel = "1.97.0"\n',
+            encoding="utf-8",
+        )
+
+        api_surface = tree / "tests/tools/api-surface-json.sh"
+        api_surface.write_text(
+            "#!/usr/bin/env bash\n"
+            'exit "${D2B_TEST_RUST_PROBE_STATUS:?}"\n',
+            encoding="utf-8",
+        )
+        api_surface.chmod(0o755)
+
+        outer_bin = self.scratch / "rust-reentry-bin"
+        child_bin = self.scratch / "rust-reentry-child-bin"
+        outer_bin.mkdir()
+        child_bin.mkdir()
+        nix = outer_bin / "nix"
+        nix.write_text(
+            "#!/bin/sh\n"
+            'while [ "$#" -gt 0 ]; do\n'
+            '  if [ "$1" = "--command" ]; then\n'
+            "    shift\n"
+            '    export PATH="$D2B_TEST_RUST_CHILD_BIN:$PATH"\n'
+            "    unset D2B_CLEANUPS_FILE\n"
+            '    exec "$@"\n'
+            "  fi\n"
+            "  shift\n"
+            "done\n"
+            "exit 91\n",
+            encoding="utf-8",
+        )
+        nix.chmod(0o755)
+        rustup = child_bin / "rustup"
+        rustup.write_text(
+            "#!/bin/sh\n"
+            'if [ "$1" = "toolchain" ]; then exit 0; fi\n'
+            'if [ "$1" = "run" ] && [ "$3" = "cargo" ]; then\n'
+            '  printf "cargo 1.97.0\\n"\n'
+            "  exit 0\n"
+            "fi\n"
+            'if [ "$1" = "run" ] && [ "$3" = "rustc" ]; then\n'
+            '  printf "rustc 1.97.0\\n"\n'
+            "  exit 0\n"
+            "fi\n"
+            "exit 92\n",
+            encoding="utf-8",
+        )
+        rustup.chmod(0o755)
+
+        manifest = self.scratch / "rust-reentry-evidence.json"
+        fragment_dir = self.scratch / ".rust-reentry-evidence.json.fragments"
+        fragment_dir.mkdir(mode=0o700)
+        cleanup_file = self.scratch / "parent-cleanups"
+        cleanup_marker = self.scratch / "parent-cleanup-ran"
+        cleanup_file.write_text(
+            f'printf "%s" cleaned > "{cleanup_marker}"\n',
+            encoding="utf-8",
+        )
+
+        for probe_status, expected_status in ((0, 0), (37, 37)):
+            for fragment in fragment_dir.iterdir():
+                fragment.unlink()
+            cleanup_marker.unlink(missing_ok=True)
+            cleanup_file.write_text(
+                f'printf "%s" cleaned > "{cleanup_marker}"\n',
+                encoding="utf-8",
+            )
+            env = os.environ.copy()
+            env.update(
+                {
+                    "ROOT": str(tree),
+                    "PATH": f"{outer_bin}:/run/current-system/sw/bin:/usr/bin:/bin",
+                    "D2B_EXECUTION_MANIFEST": str(manifest),
+                    "D2B_CLEANUPS_FILE": str(cleanup_file),
+                    "D2B_TEST_RUST_CHILD_BIN": str(child_bin),
+                    "D2B_TEST_RUST_PROBE_STATUS": str(probe_status),
+                    "D2B_LOG": str(self.scratch / f"rust-reentry-{probe_status}.log"),
+                }
+            )
+            result = subprocess.run(
+                ["bash", str(tree / "tests/test-rust.sh"), "api-surface"],
+                cwd=tree,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(
+                result.returncode,
+                expected_status,
+                msg=(
+                    f"Rust re-entry probe status mismatch for {probe_status}\n"
+                    f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+                ),
+            )
+            self.assertTrue(
+                cleanup_marker.is_file(),
+                "the parent EXIT handler did not chain run_cleanups",
+            )
+            fragments = sorted(fragment_dir.glob("fragment.*"))
+            self.assertEqual(
+                len(fragments),
+                1,
+                "nested Rust invocation must be the sole fragment producer",
+            )
+            evidence = json.loads(fragments[0].read_text(encoding="utf-8"))
+            self.assertEqual(evidence["leaf"], "rust-api-surface")
+            self.assertEqual(
+                evidence["run_status"],
+                "passed" if probe_status == 0 else "failed",
+            )
+
+    def test_rust_exit_handler_disables_recursion_before_chaining_cleanup(self) -> None:
+        driver = RUST_DRIVER.read_text(encoding="utf-8")
+        handler = driver.split("rust_leaf_exit() {", 1)[1].split("trap rust_leaf_exit EXIT", 1)[0]
+        self.assertIn("trap - EXIT", handler)
+        self.assertIn("run_cleanups || true", handler)
+        self.assertLess(handler.index("local rc=$?"), handler.index("trap - EXIT"))
+        self.assertIn("exit \"$rc\"", handler)
+        self.assertIn("rust_manifest_exit_publication_enabled", handler)
+
+    def test_rust_manifest_emitter_errors_remain_visible_and_finalization_preserves_status(self) -> None:
+        driver = RUST_DRIVER.read_text(encoding="utf-8")
+        start = driver.index("publish_manifest_fragment()")
+        end = driver.index("rust_surface_start()", start)
+        emitter = driver[start:end]
+        self.assertNotIn(">/dev/null", emitter)
+        self.assertNotIn("|| true", emitter)
+        self.assertIn("required execution-manifest fragment publication failed", driver)
+        helper = (ROOT / "tests" / "tools" / "execution-manifest.pl").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("return 74", helper)
+        self.assertIn("finalization failed after scheduler success", helper)
+        self.assertIn("preserving the scheduler status", helper)
+
+    def test_execution_manifest_internal_errors_are_catchable_and_module_safe(self) -> None:
+        helper = EXECUTION_MANIFEST_HELPER.read_text(encoding="utf-8")
+        fatal_region = helper.split("sub fatal", 1)[1].split("sub close_handle", 1)[0]
+        self.assertIn("die", fatal_region)
+        self.assertNotIn("exit", fatal_region)
+        self.assertIn("ExecutionManifest::Fatal", helper)
+        self.assertIn("unless (caller)", helper)
+        self.assertIn("execution-manifest: operation failed", helper)
+        perl = shutil.which("perl")
+        self.assertIsNotNone(perl, "Perl is required for execution-manifest coverage")
+        assert perl is not None
+        with tempfile.TemporaryDirectory(prefix="execution-manifest-diagnostic.") as raw_dir:
+            invalid_manifest = pathlib.Path(raw_dir) / ".." / "not-written.json"
+            result = subprocess.run(
+                [
+                    perl,
+                    str(EXECUTION_MANIFEST_HELPER),
+                    "fragment",
+                    "--manifest",
+                    str(invalid_manifest),
+                    "--leaf",
+                    "probe",
+                    "--status",
+                    "passed",
+                ],
+                cwd=ROOT,
+                env={
+                    key: value
+                    for key, value in os.environ.items()
+                    if key not in {"PERL5LIB", "PERL5OPT"}
+                },
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.stderr, "execution-manifest: operation failed\n")
+            self.assertNotIn(str(raw_dir), result.stderr)
+
+    def test_execution_manifest_injected_lifecycle_boundaries_are_executable(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="execution-manifest-regression.") as raw_dir:
+            temp_dir = pathlib.Path(raw_dir)
+            scenarios = {
+                name: temp_dir / f"{name}.json"
+                for name in (
+                    "success-finalization",
+                    "failure-finalization",
+                    "term",
+                )
+            }
+            results = {
+                name: self.run_execution_manifest_harness(name, manifest)
+                for name, manifest in scenarios.items()
+            }
+
+            for name, result in results.items():
+                self.assertEqual(
+                    result.returncode,
+                    0,
+                    msg=(
+                        f"{name} harness failed with {result.returncode}\n"
+                        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+                    ),
+                )
+                self.assertNotIn(str(temp_dir), result.stdout)
+                self.assertNotIn(str(temp_dir), result.stderr)
+
+            self.assertIn(
+                "finalization failed after scheduler success",
+                results["success-finalization"].stderr,
+            )
+            self.assertEqual(results["success-finalization"].stderr.count("\n"), 1)
+            self.assertIn(
+                "preserving the scheduler status",
+                results["failure-finalization"].stderr,
+            )
+            self.assertEqual(results["failure-finalization"].stderr.count("\n"), 1)
+
+            interrupted_manifest = scenarios["term"]
+            evidence = json.loads(interrupted_manifest.read_text(encoding="utf-8"))
+            self.assertEqual(evidence["run_status"], "interrupted")
+            self.assertIn("rust-main-workspace", evidence["completed_leaves"])
+            self.assertIn("scheduler-interrupted", evidence["failed_surfaces"])
+            self.assertEqual(evidence["version"], 1)
+            self.assertTrue((temp_dir / "term.json.lock").is_file())
+            self.assertFalse((temp_dir / ".term.json.fragments").exists())
 
     def test_rust_budget_validation_is_actionable_static_and_redacted(self) -> None:
         source = "\n".join(
@@ -567,6 +1142,7 @@ set -euo pipefail
             "rust-main-workspace",
             "rust-schema-reproducibility",
             "rust-inventory-and-stub",
+            "rust-fixture-contracts",
             "rust-broker",
             "rust-guest-shell-runner",
             "rust-no-bash-ast",
@@ -851,7 +1427,7 @@ set -euo pipefail
         for status in ("passed", "failed", "interrupted"):
             self.assertRegex(
                 source,
-                rf"(?is)run_status.{0,100}(?:[\"'=])?{status}",
+                rf"(?is)run_status.{{0,100}}(?:[\"'=])?{status}",
                 msg=f"manifest has no {status} status",
             )
         for field in ("completed_leaves", "failed_surfaces", "partial", "stale"):
@@ -869,7 +1445,11 @@ set -euo pipefail
         )
 
     def test_manifest_shutdown_reaps_children_closes_fds_and_preserves_status(self) -> None:
-        source = manifest_source()
+        source = (
+            manifest_source()
+            + "\n"
+            + EXECUTION_MANIFEST_HELPER.read_text(encoding="utf-8")
+        )
         for marker in (
             "SIGTERM",
             "SIGKILL",
@@ -878,6 +1458,8 @@ set -euo pipefail
             "setsid",
             "O_CLOEXEC",
             "FD_CLOEXEC",
+            "PR_SET_CHILD_SUBREAPER",
+            "drain_adopted_descendants",
         ):
             self.assertIn(marker, source)
         shutdown_region = source_near(source, "SIGTERM", radius=3600)
@@ -892,7 +1474,7 @@ set -euo pipefail
         )
         self.assertRegex(
             source,
-            r"(?is)(?:original|saved|preserved)[-_ ]status.{0,1200}"
+            r"(?is)(?:original|saved|preserv\w*)[-_ ]status.{0,1200}"
             r"(?:finaliz|publish).{0,1200}(?:exit|return)",
         )
         self.assertRegex(
@@ -904,6 +1486,25 @@ set -euo pipefail
             source,
             r"(?is)(?:process group|kill\s+[-].*group|kill\s+--\s*-).{0,800}"
             r"(?:wait|reap)",
+        )
+
+    def test_manifest_subreaper_uses_supported_linux_prctl_numbers_and_fails_closed(self) -> None:
+        helper = EXECUTION_MANIFEST_HELPER.read_text(encoding="utf-8")
+        self.assertRegex(
+            helper,
+            r"(?s)syscall_number\(157,\s*167\).*sys_prctl",
+        )
+        self.assertIn("x86_64", helper)
+        self.assertIn("aarch64", helper)
+        self.assertRegex(
+            helper,
+            r"(?s)PR_SET_CHILD_SUBREAPER.*?syscall\(.*?sys_prctl\(\).*?"
+            r"fatal\(.*?child subreaper",
+        )
+        self.assertIn('subreaper => sub { establish_child_subreaper() }', helper)
+        self.assertRegex(
+            helper,
+            r"(?s)subreaper.*?fork.*?could not create the Rust scheduler process",
         )
 
     def test_diagnostic_redaction_normalizes_ansi_before_matching(self) -> None:

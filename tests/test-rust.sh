@@ -1,18 +1,34 @@
 #!/usr/bin/env bash
-# tests/test-rust.sh - `make test-rust`: the comprehensive Rust gate.
-#   fmt + clippy + `cargo nextest run --workspace` (excluding the
-#   fixture-dependent d2b-contract-tests), an optional contract-crate run
-#   against D2B_FIXTURES, the CLI-contract layer, no-bash-ast-walker, the
-#   privileged broker workspace (3 feature passes), schema-gen
-#   reproducibility, and cargo-deny.
-# CI may split this driver into main-workspace and remaining-suite jobs. The
-# default all mode still executes both partitions exactly once for local gates.
-# Tests execute under cargo-nextest. Each workspace additionally runs the two
-#   surfaces nextest does not cover - doctests and harness=false binaries - via
-#   run_nextest_companions; see the comment above require_nextest for why.
+# tests/test-rust.sh - one Rust execution leaf for `make test-rust`.
+#
+# GNU Make owns the Rust DAG. This file owns leaf environment setup and the
+# explicit leaf modes only: api-surface, main-workspace, broker,
+# guest-shell-runner, no-bash-ast, schema-reproducibility, supply-chain,
+# inventory-stub, and fixture-contracts. The fixture mode emits the contract
+# and CLI surfaces separately.
 # If cargo is absent, re-enter through the repo-pinned nixpkgs toolchain.
 
 set -euo pipefail
+unset MAKEFLAGS MFLAGS MAKELEVEL
+
+rust_mode="${1:-}"
+if [ "$#" -eq 0 ]; then
+  printf '%s\n' "test-rust.sh removed the no-argument all scheduler; run make test-rust" >&2
+  exit 2
+fi
+case "$rust_mode" in
+  api-surface|main-workspace|broker|guest-shell-runner|no-bash-ast|schema-reproducibility|supply-chain|inventory-stub|fixture-contracts)
+    [ "$#" -eq 1 ] || {
+      printf '%s\n' "test-rust.sh accepts one leaf mode; run make test-rust" >&2
+      exit 2
+    }
+    ;;
+  *)
+    printf '%s\n' "usage: tests/test-rust.sh {api-surface|main-workspace|broker|guest-shell-runner|no-bash-ast|schema-reproducibility|supply-chain|inventory-stub|fixture-contracts}; run make test-rust" >&2
+    exit 2
+    ;;
+esac
+
 suite_started=$SECONDS
 
 HERE=$(dirname "$(readlink -f "$0")")
@@ -23,28 +39,82 @@ ROOT=${ROOT:-$(cd "$HERE/.." && pwd)}
 
 cd "$ROOT"
 
-rust_mode="${1:-all}"
-case "$rust_mode" in
-  all)
-    [ "$#" -eq 0 ] || {
-      fail "usage: tests/test-rust.sh [api-surface|main-workspace|remaining-suite|fixture-contracts]" || true
-      exit 2
-    }
-    ;;
-  api-surface|main-workspace|remaining-suite|fixture-contracts)
-    [ "$#" -eq 1 ] || {
-      fail "usage: tests/test-rust.sh [api-surface|main-workspace|remaining-suite|fixture-contracts]" || true
-      exit 2
-    }
-    ;;
-  *)
-    fail "usage: tests/test-rust.sh [api-surface|main-workspace|remaining-suite|fixture-contracts]" || true
-    exit 2
-    ;;
-esac
-
 fixture_contracts_only=0
 [ "$rust_mode" = fixture-contracts ] && fixture_contracts_only=1
+
+D2B_RUST_CARGO_JOBS=${D2B_RUST_CARGO_JOBS:-1}
+D2B_RUST_NEXTTEST_THREADS=${D2B_RUST_NEXTTEST_THREADS:-1}
+case "$D2B_RUST_CARGO_JOBS" in ''|*[!0-9]*) D2B_RUST_CARGO_JOBS=1 ;; esac
+case "$D2B_RUST_NEXTTEST_THREADS" in ''|*[!0-9]*) D2B_RUST_NEXTTEST_THREADS=1 ;; esac
+[ "$D2B_RUST_CARGO_JOBS" -ge 1 ] || D2B_RUST_CARGO_JOBS=1
+[ "$D2B_RUST_NEXTTEST_THREADS" -ge 1 ] || D2B_RUST_NEXTTEST_THREADS=1
+export CARGO_BUILD_JOBS="$D2B_RUST_CARGO_JOBS"
+
+rust_current_surface="rust-$rust_mode"
+rust_surface_command_succeeded=0
+rust_manifest_exit_publication_enabled=1
+
+publish_manifest_fragment() {
+  local leaf="$1" status="$2"
+  [ -n "${D2B_EXECUTION_MANIFEST:-}" ] || return 0
+  perl "$ROOT/tests/tools/execution-manifest.pl" fragment \
+    --manifest "$D2B_EXECUTION_MANIFEST" \
+    --leaf "$leaf" \
+    --status "$status"
+}
+
+rust_surface_start() {
+  rust_current_surface="$1"
+  rust_surface_command_succeeded=0
+}
+
+rust_surface_success() {
+  local surface="$1"
+  rust_surface_command_succeeded=1
+  publish_manifest_fragment "$surface" passed
+  rust_current_surface=""
+  rust_surface_command_succeeded=0
+}
+
+disable_rust_manifest_exit_publication() {
+  rust_manifest_exit_publication_enabled=0
+}
+
+rust_leaf_exit() {
+  local rc=$?
+  # tests/lib.sh installs run_cleanups as its EXIT trap. Disable this
+  # replacement before doing any work so cleanup cannot recursively invoke
+  # the handler and the original status remains authoritative.
+  trap - EXIT
+  if [ "$rust_manifest_exit_publication_enabled" -eq 1 ] \
+    && [ -n "${D2B_EXECUTION_MANIFEST:-}" ] \
+    && [ -n "$rust_current_surface" ]; then
+    local failed_fragment_published=0
+    if publish_manifest_fragment "$rust_current_surface" failed; then
+      failed_fragment_published=1
+    else
+      if [ "$rust_surface_command_succeeded" -eq 0 ]; then
+        printf '%s\n' \
+          "test-rust: failed to record failed Rust surface '$rust_current_surface' in the execution manifest; preserving the original surface failure." \
+          >&2
+      fi
+    fi
+    if [ "$rust_surface_command_succeeded" -eq 1 ]; then
+      printf '%s\n' \
+        "test-rust: required execution-manifest fragment publication failed after successful surface '$rust_current_surface'; evidence is incomplete; retry the target." \
+        >&2
+    elif [ "$failed_fragment_published" -eq 0 ]; then
+      printf '%s\n' \
+        "test-rust: failed to record failed Rust surface '$rust_current_surface' in the execution manifest; preserving the original surface failure." \
+        >&2
+    fi
+  fi
+  # Keep all registrations made by tests/lib.sh, d2b_mktemp, cargo-audit, and
+  # fixture materialisation effective after taking ownership of EXIT.
+  run_cleanups || true
+  exit "$rc"
+}
+trap rust_leaf_exit EXIT
 
 if [ "$fixture_contracts_only" = 1 ] && [ "${D2B_ENABLE_FIXTURE_BUILD:-0}" != 1 ]; then
   fail "fixture-contracts mode requires D2B_ENABLE_FIXTURE_BUILD=1; refusing to report a skipped gate as passing"
@@ -116,10 +186,15 @@ if [ -z "${D2B_RUST_GATE_IN_NIX_SHELL:-}" ] && ! command -v rustup >/dev/null 2>
   export D2B_RUST_GATE_BOOTSTRAP_RUSTUP=1
   export RUSTUP_HOME="$rust_gate_scratch/rustup"
   export CARGO_HOME="$rust_gate_scratch/cargo"
-  nix shell --quiet --inputs-from "$ROOT" \
-    nixpkgs#rustup nixpkgs#stdenv.cc nixpkgs#sccache \
-    --command bash "$0" "$@"
-  exit $?
+  disable_rust_manifest_exit_publication
+  if nix shell --quiet --inputs-from "$ROOT" \
+      nixpkgs#rustup nixpkgs#stdenv.cc nixpkgs#sccache \
+      --command bash "$0" "$@"; then
+    nested_rust_rc=0
+  else
+    nested_rust_rc=$?
+  fi
+  exit "$nested_rust_rc"
 fi
 
 if [ -z "${D2B_RUST_GATE_IN_NIX_SHELL:-}" ] && command -v rustup >/dev/null 2>&1; then
@@ -142,10 +217,15 @@ if [ -z "${D2B_RUST_GATE_IN_NIX_SHELL:-}" ] && ! command -v cargo >/dev/null 2>&
   export D2B_RUST_GATE_BOOTSTRAP_RUSTUP=1
   export RUSTUP_HOME="$rust_gate_scratch/rustup"
   export CARGO_HOME="$rust_gate_scratch/cargo"
-  nix shell --quiet --inputs-from "$ROOT" \
-    nixpkgs#rustup nixpkgs#stdenv.cc nixpkgs#sccache \
-    --command bash "$0" "$@"
-  exit $?
+  disable_rust_manifest_exit_publication
+  if nix shell --quiet --inputs-from "$ROOT" \
+      nixpkgs#rustup nixpkgs#stdenv.cc nixpkgs#sccache \
+      --command bash "$0" "$@"; then
+    nested_rust_rc=0
+  else
+    nested_rust_rc=$?
+  fi
+  exit "$nested_rust_rc"
 fi
 
 if [ -n "${D2B_RUST_GATE_IN_NIX_SHELL:-}" ]; then
@@ -307,7 +387,6 @@ require_nextest() {
   fail "cargo-nextest is required and neither PATH nor nix can provide it"
   exit 1
 }
-require_nextest "$@"
 
 # Emit the harness=false test targets of a workspace as "<package>\t<binary>"
 # rows, for execution with a plain `cargo test --test`.
@@ -360,7 +439,7 @@ run_nextest_companions() {
   local label="$1" manifest_path="$2"
   shift 2
   log "  --> cargo test --doc ($label)"
-  cargo test --doc --manifest-path "$manifest_path" "$@"
+  cargo test --jobs "$D2B_RUST_CARGO_JOBS" --doc --manifest-path "$manifest_path" "$@" -- --test-threads "$D2B_RUST_NEXTTEST_THREADS"
   # Capture before looping. A process substitution hides its exit status from
   # `set -e`, so discovering through `done < <(...)` would let a failed listing
   # look like an empty one.
@@ -375,9 +454,13 @@ run_nextest_companions() {
     log "  --> cargo test -p $pkg --test $bin ($label; harness=false, not a nextest surface)"
     # Forward the same selectors the listing used, so the companion runs the
     # configuration that produced it rather than a default-feature rebuild.
-    cargo test --manifest-path "$manifest_path" "$@" -p "$pkg" --test "$bin"
+    cargo test --jobs "$D2B_RUST_CARGO_JOBS" --manifest-path "$manifest_path" "$@" -p "$pkg" --test "$bin" -- --test-threads "$D2B_RUST_NEXTTEST_THREADS"
     ran=$((ran + 1))
   done <<<"$targets"
+  if [ "$ran" -eq 0 ] && [ "$label" = "main workspace" ]; then
+    fail "$label: harness=false discovery was empty; refusing to report a passing companion surface"
+    return 1
+  fi
   ok "$label companions (doctests + $ran harness=false binaries)"
 }
 
@@ -414,27 +497,28 @@ run_nextest_companions() {
 broker_stream_default() {
   cargo metadata --format-version 1 --manifest-path "$broker_manifest" >/dev/null
   rm -f -- "$broker_target_dir"/debug/deps/socket_activation-* 2>/dev/null || true
-  CARGO_TARGET_DIR="$broker_target_dir" cargo test --workspace --manifest-path "$broker_manifest"
+  CARGO_TARGET_DIR="$broker_target_dir" cargo test --jobs "$D2B_RUST_CARGO_JOBS" --workspace --manifest-path "$broker_manifest" -- --test-threads "$D2B_RUST_NEXTTEST_THREADS"
 }
 broker_stream_layer1() {
-  CARGO_TARGET_DIR="$broker_layer1_target_dir" cargo test --workspace --manifest-path "$broker_manifest" --features layer1-bootstrap
+  CARGO_TARGET_DIR="$broker_layer1_target_dir" cargo test --jobs "$D2B_RUST_CARGO_JOBS" --workspace --manifest-path "$broker_manifest" --features layer1-bootstrap -- --test-threads "$D2B_RUST_NEXTTEST_THREADS"
 }
 broker_stream_fakebackends() {
-  CARGO_TARGET_DIR="$broker_fakebackends_target_dir" cargo test --workspace --manifest-path "$broker_manifest" --features fake-backends
+  CARGO_TARGET_DIR="$broker_fakebackends_target_dir" cargo test --jobs "$D2B_RUST_CARGO_JOBS" --workspace --manifest-path "$broker_manifest" --features fake-backends -- --test-threads "$D2B_RUST_NEXTTEST_THREADS"
 }
 broker_streams=(default layer1 fakebackends)
 
 guest_shell_runner_gate() {
   cargo metadata --format-version 1 --manifest-path "$guest_shell_runner_manifest" >/dev/null
   CARGO_TARGET_DIR="$guest_shell_runner_target_dir" cargo fmt --manifest-path "$guest_shell_runner_manifest" --all --check
-  CARGO_TARGET_DIR="$guest_shell_runner_target_dir" cargo clippy --manifest-path "$guest_shell_runner_manifest" --workspace --all-targets --features real-libshpool -- -D warnings
-  CARGO_TARGET_DIR="$guest_shell_runner_target_dir" cargo nextest run --manifest-path "$guest_shell_runner_manifest" --workspace --features real-libshpool
+  CARGO_TARGET_DIR="$guest_shell_runner_target_dir" cargo clippy --jobs "$D2B_RUST_CARGO_JOBS" --manifest-path "$guest_shell_runner_manifest" --workspace --all-targets --features real-libshpool -- -D warnings
+  CARGO_TARGET_DIR="$guest_shell_runner_target_dir" cargo nextest run --test-threads "$D2B_RUST_NEXTTEST_THREADS" --manifest-path "$guest_shell_runner_manifest" --workspace --features real-libshpool
   CARGO_TARGET_DIR="$guest_shell_runner_target_dir" run_nextest_companions \
     "guest shell runner" "$guest_shell_runner_manifest" --workspace --features real-libshpool
 }
 
 run_fixture_contract_tests() {
   local eval_root system flake_ref eval_rc
+  rust_surface_start rust-contract-tests
   eval_root=$(d2b_mktemp ".d2b-eval-fixtures.XXXXXX")
   # The feature-rich full fixture is graphics-gated to x86_64-linux, so
   # eval-fixtures.sh exits 3 elsewhere. Leave D2B_FIXTURES_FULL empty there so
@@ -458,17 +542,19 @@ run_fixture_contract_tests() {
   log "--> cargo nextest run -p d2b-contract-tests (realized minimal + eval-rendered full artifacts)"
   D2B_FIXTURES="$contract_fixtures" D2B_FIXTURES_FULL="$contract_fixtures_full" \
   CARGO_TARGET_DIR="$workspace_target_dir" \
-    cargo nextest run --manifest-path "$manifest" -p d2b-contract-tests \
+    cargo nextest run --test-threads "$D2B_RUST_NEXTTEST_THREADS" --manifest-path "$manifest" -p d2b-contract-tests \
       -E 'not binary(video_binary_contract)'
   D2B_FIXTURES="$contract_fixtures" D2B_FIXTURES_FULL="$contract_fixtures_full" \
   CARGO_TARGET_DIR="$workspace_target_dir" \
     run_nextest_companions "contract crate" "$manifest" -p d2b-contract-tests
+  rust_surface_success rust-contract-tests
   ok "d2b-contract-tests (realized minimal + eval-rendered full fixture-contract layer)"
 }
 
 run_cli_contract_tests() {
   local fixture_path="$1"
   local d2bd_bin
+  rust_surface_start rust-cli-contract-tests
 
   # CLI-contract layer: spawn the real `d2b` binary against the rendered
   # fixture bundle (D2B_FIXTURES) + a synthetic system-state and validate the
@@ -483,7 +569,7 @@ run_cli_contract_tests() {
   # forbids it), so the path is delivered out-of-band rather than via a dep edge.
   log "--> cargo build -p d2bd (CLI-contract daemon-spawn harness binary)"
   CARGO_TARGET_DIR="$workspace_target_dir" \
-    cargo build --manifest-path "$manifest" -p d2bd
+    cargo build --jobs "$D2B_RUST_CARGO_JOBS" --manifest-path "$manifest" -p d2bd
   d2bd_bin="$workspace_target_dir/debug/d2bd"
   [ -x "$d2bd_bin" ] || {
     fail "d2bd binary not found at $d2bd_bin"
@@ -493,7 +579,8 @@ run_cli_contract_tests() {
   D2B_FIXTURES="$fixture_path" \
   D2B_TEST_D2BD_BIN="$d2bd_bin" \
   CARGO_TARGET_DIR="$workspace_target_dir" \
-    cargo nextest run --manifest-path "$manifest" -p d2b --tests
+    cargo nextest run --test-threads "$D2B_RUST_NEXTTEST_THREADS" --manifest-path "$manifest" -p d2b --tests
+  rust_surface_success rust-cli-contract-tests
   ok "d2b --tests (CLI-contract layer)"
 }
 
@@ -502,6 +589,7 @@ if [ "$fixture_contracts_only" = 1 ]; then
     fail "D2B_ENABLE_FIXTURE_BUILD=1 requires nix to materialize D2B_FIXTURES"
     exit 1
   fi
+  require_nextest "$@"
   run_fixture_contract_tests
   run_cli_contract_tests "$contract_fixtures"
   log "test-fixture-contracts OK (realized minimal fixture + eval full fixture + CLI-contract layers; duration: $((SECONDS - suite_started))s)"
@@ -521,48 +609,46 @@ fi
 # One compiler-owned workspace build replaces the old test's serial
 # package-by-package HTML rustdoc loop. This is enforcing and cannot skip.
 run_api_surface_gate() {
+  rust_surface_start rust-api-surface
   log "--> compiler-derived API surface"
   bash "$ROOT/tests/tools/api-surface-json.sh"
+  rust_surface_success rust-api-surface
   log "test-rust api-surface OK (duration: $((SECONDS - suite_started))s)"
 }
 
 run_main_workspace_gate() {
+  require_nextest "$rust_mode"
+  rust_surface_start rust-main-format
   log "--> cargo fmt --check"
   cargo fmt --manifest-path "$manifest" --all --check
+  rust_surface_success rust-main-format
   ok "cargo fmt --check"
 
 # --locked so a stale committed Cargo.lock fails the gate instead of being
 # silently regenerated. flake.nix vendors the committed lockfile, so a lock
 # that cargo quietly rewrites here cannot be reproduced by a Nix build.
+rust_surface_start rust-main-clippy
 log "--> cargo clippy --locked --workspace --all-targets -- -D warnings"
-CARGO_TARGET_DIR="$workspace_target_dir" cargo clippy --locked --manifest-path "$manifest" --workspace --all-targets -- -D warnings
+CARGO_TARGET_DIR="$workspace_target_dir" cargo clippy --jobs "$D2B_RUST_CARGO_JOBS" --locked --manifest-path "$manifest" --workspace --all-targets -- -D warnings
+rust_surface_success rust-main-clippy
 ok "cargo clippy"
 
+rust_surface_start rust-main-workspace-tests
 log "--> cargo nextest run --workspace ${workspace_test_excludes[*]}"
 workspace_test_started=$SECONDS
-CARGO_TARGET_DIR="$workspace_target_dir" cargo nextest run --locked --manifest-path "$manifest" --workspace "${workspace_test_excludes[@]}"
+CARGO_TARGET_DIR="$workspace_target_dir" cargo nextest run --test-threads "$D2B_RUST_NEXTTEST_THREADS" --locked --manifest-path "$manifest" --workspace "${workspace_test_excludes[@]}"
 CARGO_TARGET_DIR="$workspace_target_dir" run_nextest_companions \
   "main workspace" "$manifest" --locked --workspace "${workspace_test_excludes[@]}"
 ok "workspace tests (duration: $((SECONDS - workspace_test_started))s)"
 
-# The d2b-contract-tests crate is excluded from the workspace test above because
-# its fixture-dependent tests read the Nix-rendered bundle via $D2B_FIXTURES.
-# When enabled, this step builds fixture-smoke and runs the contract crate
-# against it, gating the fixture -> d2b-core DTO layer (including privileges
-# Rust-vs-Nix matrix parity). When skipped, no flake shard substitutes for these
-# fixture-dependent tests.
-if [ "${D2B_SKIP_FIXTURE_BUILD:-0}" = 1 ]; then
-  log "  SKIP: fixture-dependent d2b-contract-tests (D2B_SKIP_FIXTURE_BUILD=1; not executed in this lane and not covered by flake shards)"
-elif command -v nix >/dev/null 2>&1; then
-  run_fixture_contract_tests
-  run_cli_contract_tests "$contract_fixtures"
-else
-  log "  SKIP: fixture-dependent d2b-contract-tests (nix unavailable to build fixture-smoke; not covered by flake shards)"
-fi
+cleanup_cargo_special_files "workspace cargo test" "$workspace_target_dir"
+cleanup_package_test_scratch "workspace cargo test" "$ROOT/packages/d2bd/target"
+rust_surface_success rust-main-workspace-tests
   log "test-rust main-workspace OK (duration: $((SECONDS - suite_started))s)"
 }
 
-run_remaining_suite_gate() {
+run_no_bash_ast_gate() {
+rust_surface_start rust-no-bash-ast
 # no-bash-exec AST layer (ADR 0017): the per-line `Command::new("bash")` scan
 # is covered by d2b-contract-tests/tests/policy_source.rs, but the
 # AST-level walk (which catches cross-line / obfuscated bash-exec sites the
@@ -572,11 +658,14 @@ run_remaining_suite_gate() {
 # Command::new site under packages/.
 log "--> no-bash-ast-walker (ADR 0017 AST-level bash-exec scan)"
 CARGO_TARGET_DIR="$no_bash_target_dir" \
-  cargo run --release --quiet \
+  cargo run --jobs "$D2B_RUST_CARGO_JOBS" --release --quiet \
     --manifest-path "$ROOT/tests/tools/no-bash-ast-walker/Cargo.toml" \
     -- "$ROOT/packages"
+rust_surface_success rust-no-bash-ast
 ok "no-bash-ast-walker (zero Command::new bash-literal sites)"
+}
 
+run_broker_gate() {
 # Broker workspace: run the three feature passes (default, layer1-bootstrap,
 # fake-backends) - each on its own target dir - serially. Tests inside each
 # cargo-test process manipulate process-global SIGCHLD/reap state, so do not
@@ -589,23 +678,35 @@ ok "no-bash-ast-walker (zero Command::new bash-literal sites)"
 # layer1-bootstrap pass enables - without it those fd-passing tests would not
 # run in the gate at all (the retired tests/pidfd-handoff.sh used --all-features).
 for _stream in "${broker_streams[@]}"; do
+  case "$_stream" in
+    default) _surface=rust-broker-default ;;
+    layer1) _surface=rust-broker-layer1 ;;
+    fakebackends) _surface=rust-broker-fakebackends ;;
+    *) fail "unknown broker stream: $_stream"; exit 1 ;;
+  esac
+  rust_surface_start "$_surface"
   log "--> broker cargo ($_stream feature pass, serial)"
   "broker_stream_$_stream"
+  rust_surface_success "$_surface"
   ok "broker cargo ($_stream feature pass)"
 done
-
-log "--> guest shell runner cargo (standalone workspace, real-libshpool feature)"
-guest_shell_runner_gate
-ok "guest shell runner cargo"
-
-cleanup_cargo_special_files "workspace cargo test" "$workspace_target_dir"
 cleanup_cargo_special_files "broker cargo test" "$broker_target_dir"
 cleanup_cargo_special_files "broker layer1 cargo test" "$broker_layer1_target_dir"
 cleanup_cargo_special_files "broker fake-backends cargo test" "$broker_fakebackends_target_dir"
-cleanup_cargo_special_files "guest shell runner cargo test" "$guest_shell_runner_target_dir"
-cleanup_cargo_special_files "no-bash-ast-walker" "$no_bash_target_dir"
-cleanup_package_test_scratch "workspace cargo test" "$ROOT/packages/d2bd/target"
+}
 
+run_guest_shell_runner_gate() {
+require_nextest "$rust_mode"
+rust_surface_start rust-guest-shell-runner
+log "--> guest shell runner cargo (standalone workspace, real-libshpool feature)"
+guest_shell_runner_gate
+ok "guest shell runner cargo"
+cleanup_cargo_special_files "guest shell runner cargo test" "$guest_shell_runner_target_dir"
+rust_surface_success rust-guest-shell-runner
+}
+
+run_schema_reproducibility_gate() {
+rust_surface_start rust-schema-reproducibility
 schema_out="$ROOT/packages/xtask/out"
 schema_out_preexisting=0
 if [ -e "$schema_out" ]; then
@@ -624,9 +725,9 @@ snapshot_schema_out() {
 }
 
 log "--> schema generation reproducibility"
-(cd "$ROOT/packages" && cargo xtask gen-schemas)
+(cd "$ROOT/packages" && cargo --jobs "$D2B_RUST_CARGO_JOBS" xtask gen-schemas)
 schema_snapshot_1=$(snapshot_schema_out)
-(cd "$ROOT/packages" && cargo xtask gen-schemas)
+(cd "$ROOT/packages" && cargo --jobs "$D2B_RUST_CARGO_JOBS" xtask gen-schemas)
 schema_snapshot_2=$(snapshot_schema_out)
 if [ "$schema_snapshot_1" != "$schema_snapshot_2" ]; then
   fail "schema generation reproducibility: cargo xtask gen-schemas output is not reproducible"
@@ -638,8 +739,11 @@ fi
 if [ "$schema_out_preexisting" = "0" ]; then
   rm -rf -- "$schema_out"
 fi
+rust_surface_success rust-schema-reproducibility
 ok "schema generation reproducibility"
+}
 
+run_supply_chain_gate() {
 cargo_deny_check() {
   local label="$1" manifest_path="$2" config_path="$3"
   if command -v cargo-deny >/dev/null 2>&1; then
@@ -701,35 +805,72 @@ cargo_audit_check() {
   return 1
 }
 
+rust_surface_start rust-deny-main
 cargo_deny_check "main workspace" "$manifest" "$deny_config"
+rust_surface_success rust-deny-main
+rust_surface_start rust-deny-broker
 cargo_deny_check "broker workspace" "$broker_manifest" "$broker_deny_config"
+rust_surface_success rust-deny-broker
+rust_surface_start rust-deny-guest
 cargo_deny_check "guest shell runner workspace" "$guest_shell_runner_manifest" "$guest_shell_runner_deny_config"
+rust_surface_success rust-deny-guest
 
 # Build-time wayland-scanner pulls quick-xml 0.39.4; runtime users were
 # updated away from vulnerable 0.37.x. Remove once wayland-scanner publishes
 # a release on quick-xml >= 0.41.
+rust_surface_start rust-audit-main
 cargo_audit_check "main workspace" "$lock_file" \
   --ignore RUSTSEC-2026-0194 \
   --ignore RUSTSEC-2026-0195
+rust_surface_success rust-audit-main
+rust_surface_start rust-audit-broker
 cargo_audit_check "broker workspace" "$broker_lock_file"
+rust_surface_success rust-audit-broker
 # libshpool 0.11.0 pulls notify 7 -> notify-types -> instant 0.1.13.
 # The helper pins and tracks that transitive unmaintained advisory explicitly
 # while evaluating libshpool feasibility.
+rust_surface_start rust-audit-guest
 cargo_audit_check "guest shell runner workspace" "$guest_shell_runner_lock_file" --ignore RUSTSEC-2024-0384
+rust_surface_success rust-audit-guest
+}
 
+run_inventory_stub_gate() {
+rust_surface_start rust-stub-no-socket
 log "--> tests/tools/stub-no-socket.sh"
 bash "$ROOT/tests/tools/stub-no-socket.sh"
+rust_surface_success rust-stub-no-socket
 ok "stub-no-socket"
 
 # Fail-closed Rust test inventory: every pinned workspace + broker test must
 # still exist (catches a silently-deleted test that would otherwise vanish from
 # coverage). The pinned set is committed under tests/golden/pinned/.
+rust_surface_start rust-assert-pinned
 log "--> tests/tools/assert-pinned-tests.sh"
 bash "$ROOT/tests/tools/assert-pinned-tests.sh"
+rust_surface_success rust-assert-pinned
 ok "assert-pinned-tests"
-  log "test-rust remaining-suite OK (duration: $((SECONDS - suite_started))s)"
 }
 
+# The execution-manifest helper is the only evidence plumbing used by these
+# leaves. It resolves the parent first through openat2-equivalent anchored
+# traversal with RESOLVE_NO_SYMLINKS and RESOLVE_NO_MAGICLINKS, then uses
+# O_CLOEXEC, O_NOFOLLOW, and nonblocking F_OFD_SETLK on the persistent
+# mode-0600 lock owned by the current uid. Its `manifest-lock-contended`
+# telemetry is path-free and says that the execution-manifest lock is active:
+# wait for the active run to finish and retry.
+#
+# Each current-user mode-0700 adjacent fragment directory is verified with
+# fstat and same-filesystem device checks. Complete fragments use atomic
+# rename; stale cleanup uses anchored openat and unlinkat, skips an invalid
+# entry with continue, and never uses path-based recursive removal. The
+# deterministic schema version 1 manifest contains run_status,
+# completed_leaves, failed_surfaces, installables, and realized_checks.
+#
+# The helper runs the scheduler in a dedicated process group. SIGTERM and
+# SIGINT are forwarded, the fixed 10 seconds are waited, survivors receive
+# SIGKILL and are reaped, and idempotent finalization preserves the original
+# status. Internal clock, process, and path boundaries are injectable for
+# hermetic tests; there is no public shutdown-grace knob.
 case "$rust_mode" in
   api-surface)
     run_api_surface_gate
@@ -737,13 +878,22 @@ case "$rust_mode" in
   main-workspace)
     run_main_workspace_gate
     ;;
-  remaining-suite)
-    run_remaining_suite_gate
+  broker)
+    run_broker_gate
     ;;
-  all)
-    run_api_surface_gate
-    run_main_workspace_gate
-    run_remaining_suite_gate
-    log "test-rust OK (duration: $((SECONDS - suite_started))s)"
+  guest-shell-runner)
+    run_guest_shell_runner_gate
+    ;;
+  no-bash-ast)
+    run_no_bash_ast_gate
+    ;;
+  schema-reproducibility)
+    run_schema_reproducibility_gate
+    ;;
+  supply-chain)
+    run_supply_chain_gate
+    ;;
+  inventory-stub)
+    run_inventory_stub_gate
     ;;
 esac

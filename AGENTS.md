@@ -143,9 +143,12 @@ is advisory.
 
 Two coverage traps worth knowing before you claim a change is validated:
 
-- **`test-rust` excludes `d2b-contract-tests`**, so a green `test-rust` does
-  not validate the fixture-dependent contract and policy layer. That runs in
-  `test-fixture-contracts`.
+- **Layer-1 Rust orchestration excludes `d2b-contract-tests` from its Rust
+  shards** by setting `D2B_SKIP_FIXTURE_BUILD=1`, then runs the enforcing
+  `test-fixture-contracts` lane separately. The direct local `make test-rust`
+  target includes the fixture and CLI contract surfaces when Nix is available.
+  Cite `test-fixture-contracts`, not a Rust shard, when claiming Layer-1
+  fixture-dependent coverage.
 - **Doctests and `harness = false` binaries are not nextest surfaces** and get
   explicit companion runs. Several `compile_fail` doctests are capability
   seals. Do not "simplify" them away.

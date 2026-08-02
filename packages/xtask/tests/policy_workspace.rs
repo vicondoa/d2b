@@ -19,6 +19,7 @@ const RUST_DAG_LEAVES: &[&str] = &[
 const RUST_SHARED_TARGET_EDGES: &[(&str, &str)] = &[
     ("rust-main-workspace", "rust-schema-reproducibility"),
     ("rust-schema-reproducibility", "rust-inventory-and-stub"),
+    ("rust-broker", "rust-inventory-and-stub"),
 ];
 const RUST_LEAF_MODES: &[&str] = &[
     "api-surface",
@@ -729,7 +730,7 @@ fn rust_dag_policy_rejects_a_missing_shared_target_edge_fixture() {
 test-rust: rust-api-surface rust-main-workspace rust-broker rust-guest-shell-runner rust-no-bash-ast rust-supply-chain
 rust-api-surface:
 rust-main-workspace: rust-schema-reproducibility
-rust-broker:
+rust-broker: rust-inventory-and-stub
 rust-guest-shell-runner:
 rust-no-bash-ast:
 rust-supply-chain:

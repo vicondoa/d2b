@@ -102,11 +102,13 @@ lanes set `D2B_ENABLE_FIXTURE_BUILD=1`, so it executes and enforces; invoking it
 without that variable is a hard failure rather than a silent skip. The eval-only
 lane does not realize NixOS systems or patched VMM binaries. The separately
 pinned video binary command-surface contract remains the narrow realized check.
-`test-rust` explicitly excludes the fixture-dependent
-`d2b-contract-tests` crate, so a green `test-rust` does not validate that
-fixture-dependent contract and policy layer. Selected hermetic policy files
-may still have separate enforcing entrypoints such as `test-policy`; inspect
-the target driver before claiming coverage.
+The default `test-rust` includes the fixture-dependent contract and CLI
+surfaces once when Nix is available. The Layer-1 graph sets
+`D2B_SKIP_FIXTURE_BUILD=1`, leaving those surfaces to the separate enforcing
+`D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts` lane; selected
+hermetic policy files may still have separate enforcing entrypoints such as
+`test-policy`. The focused `test-rust-main` target retains the same
+conditional fixture behavior.
 
 ### The API census shard
 
@@ -123,6 +125,40 @@ under `.scratch/rust-test-cache/`, so it neither consumes nor produces
 artifacts that fmt, clippy or nextest use. Its cost is rustdoc rendering rather
 than dependency compilation, so it does not need a cache entry of its own; do
 not give it one. `test-rust-main` remains the single rust-cache writer.
+
+### Rust budget and execution manifest
+
+The local Rust aggregate is the GNU Make DAG behind `make test-rust`. It uses
+`--keep-going` and `--output-sync=target`, keeps broker feature passes serial,
+and orders fixture/CLI leaves after the main workspace because they share
+`packages/target`. Direct calls to `tests/test-rust.sh` require one explicit
+leaf mode and are not aggregate schedulers. A passing Rust manifest retains
+the exact baseline sub-surface IDs documented in the execution-manifest
+reference; `D2B_SKIP_FIXTURE_BUILD=1` intentionally omits only the conditional
+fixture and CLI IDs.
+
+`D2B_RUST_BUDGET` is the supported local Rust control. It must be a positive
+integer when set and is only a requested upper bound. The automatic budget is
+the smaller of logical CPUs and a memory-derived cap. The memory calculation
+uses `MemAvailable` and the smaller remaining finite cgroup v2
+`memory.max`/`memory.high` allowance after subtracting reclaimable
+`inactive_file`, reserves 2 GiB for the host, and budgets 3 GiB per heavy job.
+If visible cgroup v2 controller state is unreadable, the target warns and
+fails closed to budget 1. Cargo `--jobs` and nextest `--test-threads` quotas
+are assigned so every active frontier remains within the effective budget,
+including budget 1. Top-level Make `-j` does not replace this control.
+
+`D2B_EXECUTION_MANIFEST=<path>` opts the Rust aggregate into the versioned
+execution evidence documented in
+[`../reference/test-execution-manifest.md`](../reference/test-execution-manifest.md).
+The parent is anchored before the persistent lock is opened, evidence
+descriptors use close-on-exec, and the lock is a current-user mode-0600
+nonblocking OFD lock. A fixed `manifest-lock-contended` result identifies the
+execution-manifest lock without printing its path and directs the operator to
+wait and retry. Adjacent mode-0700 fragments are same-filesystem and are
+atomically renamed. The prior manifest is removed before dispatch. Handled
+signals stop the dedicated process group with a fixed 10-second grace, then
+kill and reap survivors before idempotent partial finalization.
 
 ### The realized flake check and its cache
 
@@ -341,4 +377,3 @@ For where tests live, when to add or retire each kind of test, and
 which pins/ledgers to update, read [`tests/AGENTS.md`](../../tests/AGENTS.md).
 [`tests/README.md`](../../tests/README.md) is the human quick-start for the
 same test model.
-
