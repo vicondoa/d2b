@@ -237,13 +237,13 @@ per-workspace Cargo limits without making constrained hosts edit the DAG.
 Same-target leaves are dependency-ordered as shown above.
 
 Recursive Make recipe lines use `+$(MAKE)` so Make owns jobserver propagation.
-Immediately on leaf-dispatcher entry, before any setup subprocess is spawned,
-the dispatcher saves and parses `MAKEFLAGS`, closes numeric descriptors from
-`--jobserver-auth=R,W` or `--jobserver-fds=R,W`, and unsets `MAKEFLAGS`,
-`MFLAGS`, and `MAKELEVEL`. FIFO jobserver authentication has no numeric
-descriptors to close. Cargo and nextest therefore honor the explicit lane
-quota and do not leak jobserver descriptors into test binaries. Recursive Make
-calls retain the jobserver.
+GNU Make closes jobserver descriptors before starting ordinary non-submake
+recipes while stale descriptor numbers can remain in `MAKEFLAGS`. A Bash leaf
+must therefore never parse or close those ambiguous numbers, which may already
+have been reused for unrelated resources. At leaf entry, before any setup
+subprocess is spawned, the dispatcher unsets `MAKEFLAGS`, `MFLAGS`, and
+`MAKELEVEL`. Cargo and nextest therefore honor the explicit lane quota, and
+recursive Make calls retain the jobserver.
 
 `tests/test-rust.sh` becomes a leaf dispatcher and environment provider. Its
 serial `all` scheduler is removed. `tests/static.sh` and other callers use the
@@ -351,7 +351,14 @@ the baseline before proceeding. A target is accepted only when:
   leaf or Nix check class completed, so static discovery alone cannot mask a
   dropped lane;
 - failures from multiple independent lanes are visible in one invocation;
-- no lane causes out-of-memory termination or sustained oversubscription;
+- the target process tree consumes at least 80% of its effective CPU budget
+  over the CPU-heavy interval, measured from the first heavy leaf start through
+  the last heavy leaf completion, unless a measured non-CPU bottleneck remains
+  after viable concurrency is exhausted;
+- no active CPU-quota frontier exceeds the effective budget, worker counts
+  remain within their declared bounds, peak memory remains within the
+  calculated envelope, and no orchestration-attributable OOM, sustained
+  memory-pressure stall, or swap-thrashing event occurs;
 - cold-cache behavior is recorded and any regression is explained, although
   cold-cache reduction is not a merge blocker.
 
@@ -401,6 +408,8 @@ This plan uses strict phase ordering rather than pipelined dispatch.
 | Design | Plan panel round 2 | Cargo quota and Make jobserver ownership needed a second clarification pass to cover dynamic constrained-host budgets and cgroup memory limits. | Resolved |
 | Kernel semantics | Plan panel round 3 | The automatic Rust budget needed cache-aware cgroup accounting and explicit jobserver descriptor closure. | Resolved |
 | Interface semantics | Plan panel round 4 | GNU Make does not preserve a reliable numeric top-level `-jN` value for leaf parsing, so target-specific control was narrowed to the documented budget variable. | Resolved |
+| Descriptor ownership | Plan panel round 5 | Numeric jobserver values in `MAKEFLAGS` can be stale after Make closes the descriptors, so leaves must unset metadata without closing ambiguous descriptor numbers. | Resolved |
+| Migration UX | Plan panel round 5 | The changelog task needed to name `D2B_RUST_BUDGET` as the control when top-level Make `-j` does not cap inner Cargo concurrency. | Resolved |
 
 ## Post-Design Constitution Check
 

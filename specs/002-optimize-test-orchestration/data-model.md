@@ -135,6 +135,14 @@ Represents one timed command execution.
 | `host_fingerprint` | CPU count, memory, system, and tool versions |
 | `inventory_digest` | Coverage inventory used |
 | `external_contention` | Recorded invalidating contention, if any |
+| `effective_cpu_budget` | CPU concurrency available to the target after host and cgroup limits |
+| `heavy_interval_seconds` | Time from first CPU-heavy leaf start through last CPU-heavy leaf completion |
+| `process_cpu_seconds` | User plus system CPU time consumed by the target process tree during the heavy interval |
+| `cpu_budget_utilization` | `process_cpu_seconds / (heavy_interval_seconds * effective_cpu_budget)` |
+| `peak_memory_bytes` | Peak target process-tree or target-cgroup memory |
+| `peak_workers` | Maximum observed CPU-consuming workers |
+| `memory_events_delta` | Cgroup `high`, `oom`, and `oom_kill` deltas when available |
+| `pressure_and_swap` | Memory PSI stall and swap activity observations |
 
 ### State transitions
 
@@ -147,6 +155,13 @@ prepared -> running -> passed
 - `passed` samples contribute to the median.
 - `failed` samples prove failure behavior but do not contribute to performance.
 - `invalidated` samples are repeated and retain the invalidation reason.
+- A representative warm sample is not accepted when median CPU-budget
+  utilization over its heavy interval is below 80%, unless the evidence names
+  the non-CPU bottleneck and proves viable concurrency for that interval was
+  exhausted.
+- A sample fails resource acceptance on orchestration-attributable OOM,
+  sustained memory-pressure stalls, swap thrashing, workers beyond the
+  declared bound, or an active CPU-quota frontier above the effective budget.
 
 ## Performance Baseline
 

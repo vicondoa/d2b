@@ -139,6 +139,9 @@ As a maintainer, I can review reproducible before-and-after evidence showing whe
 - **FR-024**: The feature MUST distinguish performance improvements from skipped validation by comparing both the before-and-after source inventory and an executed-surface manifest produced by the actual aggregate target runs.
 - **FR-025**: The feature MUST record any required test surface that cannot participate in the consolidated execution and justify how it is scheduled without serializing unrelated work.
 - **FR-026**: The feature MUST not weaken failure handling, enforcement status, or coverage to meet the elapsed-time goal.
+- **FR-027**: Each optimized target MUST record process-tree CPU use, effective CPU budget, peak memory, cgroup memory events when available, and worker bounds during representative warm runs.
+- **FR-028**: During the interval from the first CPU-heavy leaf starting through the last CPU-heavy leaf completing, each optimized target MUST achieve at least 80% median utilization of its effective CPU budget unless the evidence identifies a narrower non-CPU bottleneck and the selected design has exhausted viable concurrency for that interval.
+- **FR-029**: Resource acceptance MUST fail on orchestration-attributable out-of-memory events, sustained memory-pressure stalls, swap thrashing, worker growth beyond the declared bound, or configured CPU-consuming quotas whose active frontier exceeds the effective CPU budget.
 
 ### Key Entities
 
@@ -164,6 +167,7 @@ As a maintainer, I can review reproducible before-and-after evidence showing whe
 - **SC-009**: The Nix unit and flake test targets realize no unrelated whole-project output solely to provide their required coverage.
 - **SC-010**: Maintainers can reproduce the before-and-after comparison using one documented procedure and can account for every removed, combined, or reused operation.
 - **SC-011**: The completed design introduces no new Bash or custom orchestration unless the planning evidence identifies a required surface unsupported by suitable established external approaches.
+- **SC-012**: Representative warm runs show at least 80% median effective-budget CPU utilization over the CPU-heavy interval, while active CPU quotas remain within budget, worker counts remain bounded, peak memory remains within the calculated envelope, and no orchestration-attributable OOM, sustained memory-pressure stall, or swap-thrashing event occurs.
 
 ## Assumptions
 

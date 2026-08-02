@@ -63,6 +63,9 @@ The stable `test-rust` CI context remains the rollup of those enforcing jobs.
   thread quota is computed from the runtime `D2B_RUST_BUDGET`. The active-lane
   limit and quotas MUST guarantee that every runnable frontier sums to no more
   than the runtime budget, including a budget of `1`.
+- Ordinary non-submake leaves rely on GNU Make to close its jobserver
+  descriptors and immediately remove `MAKEFLAGS`, `MFLAGS`, and `MAKELEVEL`;
+  they never close descriptor numbers parsed from stale Make metadata.
 - Invalid budget values return exit status `2` with a static message requiring
   a positive integer; untrusted environment content is not echoed.
 - If `/proc/self/cgroup` identifies a cgroup v2 membership but its memory
@@ -72,6 +75,15 @@ The stable `test-rust` CI context remains the rollup of those enforcing jobs.
 - Top-level Make `-j` flags govern the outer Make only. The target always logs
   its effective internal budget and directs contributors to
   `D2B_RUST_BUDGET` for target-specific control.
+- Representative warm evidence records the effective CPU budget, process-tree
+  CPU time over the CPU-heavy interval, peak workers and memory, cgroup memory
+  events when available, memory PSI, and swap activity.
+- Acceptance requires at least 80% median effective-budget CPU utilization
+  over the CPU-heavy interval unless a measured non-CPU bottleneck remains
+  after viable concurrency is exhausted. Active CPU quotas may not exceed the
+  budget, and resource evidence must show no worker-bound violation,
+  orchestration-attributable OOM, sustained memory-pressure stall, or swap
+  thrashing.
 
 ## `make test-nix-unit`
 

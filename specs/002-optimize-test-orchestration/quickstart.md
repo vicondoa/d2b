@@ -157,6 +157,30 @@ The optimized Layer-1 median must be no greater than half the legacy shard
 median. Compare the direct baseline and optimized direct measurements
 separately; the optimized direct path may regress by no more than 20%.
 
+## Resource utilization evidence
+
+For each representative warm run, sample the target process tree and available
+cgroup v2 counters at one-second intervals. Record the effective CPU budget,
+the interval from the first CPU-heavy leaf starting through the last
+CPU-heavy leaf completing, process-tree user plus system CPU time, peak
+CPU-consuming workers, peak memory, `memory.events` deltas, memory PSI, and
+swap activity in
+`.scratch/test-speedup-optimized/resource-stability.json`.
+
+Calculate CPU-budget utilization as:
+
+```text
+process CPU seconds / (CPU-heavy interval seconds * effective CPU budget)
+```
+
+The median representative warm run for each target must reach at least 80%.
+A lower value is acceptable only when the evidence identifies a non-CPU
+bottleneck and proves the selected candidate exhausted viable concurrency for
+that interval. Reject a run or candidate if an active CPU-quota frontier
+exceeds the budget, workers exceed the declared bound, peak memory exceeds the
+calculated envelope, or the target causes an OOM event, sustained
+memory-pressure stall, or swap thrashing.
+
 ## Cold-cache observation
 
 Cold results are best-effort and non-blocking. Do not clear the shared Nix
