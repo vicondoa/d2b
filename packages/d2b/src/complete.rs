@@ -189,6 +189,6 @@ mod tests {
 
     #[test]
     fn completion_deadline_is_not_longer_than_request_bound() {
-        assert!(MAX_PROVIDER_FETCH_MS < crate::context::MAX_REQUEST_LIFETIME_MS);
+        const _: () = assert!(MAX_PROVIDER_FETCH_MS < crate::context::MAX_REQUEST_LIFETIME_MS);
     }
 }
