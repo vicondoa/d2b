@@ -132,12 +132,23 @@ impl ZoneContext {
         validate_zone_name(&zone_name)?;
 
         let candidates = socket_candidates(requested_zone.as_deref());
-        let socket_path = candidates
-            .iter()
-            .find(|candidate| candidate.exists())
-            .cloned()
-            .or_else(|| candidates.first().cloned())
-            .ok_or_else(|| CliFailure::new(1, "zone-unavailable"))?;
+        let direct_override = env::var_os("D2B_PUBLIC_SOCKET").is_some();
+        let socket_path = if direct_override {
+            candidates.first().cloned()
+        } else {
+            candidates
+                .iter()
+                .find(|candidate| socket_reachable(candidate))
+                .cloned()
+                .or_else(|| {
+                    candidates
+                        .iter()
+                        .find(|candidate| candidate.exists())
+                        .cloned()
+                })
+        }
+        .or_else(|| candidates.first().cloned())
+        .ok_or_else(|| CliFailure::new(1, "zone-unavailable"))?;
 
         let selected_zone = requested_zone.unwrap_or_else(|| {
             socket_path
@@ -508,6 +519,10 @@ fn classify_transport_error(error: &io::Error) -> TransportError {
         | io::ErrorKind::BrokenPipe => TransportError::Unavailable,
         io::ErrorKind::InvalidData => TransportError::InvalidResponse,
         _ => TransportError::Io,
+    }
+
+    fn socket_reachable(path: &Path) -> bool {
+        SeqpacketUnixSocket::connect(path).is_ok()
     }
 }
 
