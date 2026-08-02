@@ -44,6 +44,13 @@ The contracts. Stable interfaces a consumer can depend on.
 - [`reference/cli-contract.md`](./reference/cli-contract.md) -
   the behavioural contract for any `d2b` CLI implementation
   (lifecycle FSM, signal semantics, exit codes, JSON vs human output).
+- [`reference/companion-contracts.md`](./reference/companion-contracts.md) -
+  complete desktop-companion inventory, consumed surfaces, and verification
+  status.
+- [`reference/zone-cli-contract.md`](./reference/zone-cli-contract.md) -
+  actionable v3 replacement contracts for desktop clients, including the
+  public socket, shell, launcher, UI, audio, security-key, and picker
+  boundaries.
 - [`reference/error-codes.md`](./reference/error-codes.md) - the
   stable public error/refusal catalog for daemon, broker, and CLI
   surfaces.
