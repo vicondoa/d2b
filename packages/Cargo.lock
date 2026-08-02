@@ -1321,7 +1321,7 @@ version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
  "d2b-process-conformance",
- "d2b-session",
+ "d2b-provider-toolkit",
 ]
 
 [[package]]
@@ -1329,7 +1329,9 @@ name = "d2b-provider-toolkit"
 version = "0.0.0-bootstrap"
 dependencies = [
  "d2b-contracts",
+ "d2b-provider",
  "d2b-session",
+ "tokio",
 ]
 
 [[package]]
