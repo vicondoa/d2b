@@ -9,7 +9,7 @@
 use std::{fmt, future::Future};
 
 use d2b_contracts::v3::{ResourceRef, execution_policy::BoundedToken};
-use d2b_session::{ComponentSessionDriver, StreamEvent, StreamId};
+use d2b_provider_toolkit::{ComponentSessionDriver, StreamEvent, StreamId};
 
 /// The retained failed-job TTL required for detached guest execution.
 pub const DETACHED_FAILED_TTL_MS: u64 = 24 * 60 * 60 * 1_000;
