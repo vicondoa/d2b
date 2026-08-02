@@ -569,6 +569,15 @@ impl WatchCoordinator {
     }
 }
 
+/// Compact the durable revision log from a serialized writer context.
+pub fn compact(
+    database: &Database,
+    retain_from: ZoneRevision,
+    max_rows: usize,
+) -> Result<ZoneRevision, StoreError> {
+    WatchCoordinator::compact(database, retain_from, max_rows)
+}
+
 /// Stream only rows after `after_revision` using the ordered revision key.
 ///
 /// The visitor receives one decoded row at a time.  Older rows are excluded

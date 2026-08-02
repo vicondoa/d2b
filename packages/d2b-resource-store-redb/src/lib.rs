@@ -48,7 +48,7 @@ pub use ownership::{
 pub use revision_log::{
     MAX_INITIAL_WATCH_CREDITS, MAX_RETAINED_RESUME_CURSORS, MAX_WATCH_REGISTRATIONS,
     WATCH_ADMISSION_CAPACITY, WatchCoordinator, WatchRegistrationId, WatchSelector, WatchSignals,
-    WatchStream,
+    WatchStream, compact,
 };
 pub use schema::{TABLE_SCHEMAS, TableSchema};
 pub use transaction::{ChangeBatch, ChangeEntry, ChangeEvent};
