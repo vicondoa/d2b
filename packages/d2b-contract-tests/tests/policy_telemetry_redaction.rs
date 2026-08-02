@@ -243,7 +243,7 @@ fn rust_files(root: &Path) -> Vec<PathBuf> {
 
 fn destination_sources() -> Vec<(String, String)> {
     SOURCE_ROOTS
-        .into_iter()
+        .iter()
         .filter(|root| repo_path_exists(root))
         .flat_map(|root| {
             rust_files(&repo_root().join(root))
