@@ -352,13 +352,19 @@ the baseline before proceeding. A target is accepted only when:
   dropped lane;
 - failures from multiple independent lanes are visible in one invocation;
 - the target process tree consumes at least 80% of its effective CPU budget
-  over the CPU-heavy interval, measured from the first heavy leaf start through
-  the last heavy leaf completion, unless a measured non-CPU bottleneck remains
-  after viable concurrency is exhausted;
+  over the CPU-heavy interval for Rust; Nix measurements include daemon work
+  through readable daemon-cgroup counters or baseline-adjusted host counters
+  from an externally idle run. The interval starts when the first nonzero-quota
+  leaf is admitted and ends when the last such leaf completes. A lower result
+  requires a measured non-CPU bottleneck after viable concurrency is
+  exhausted;
 - no active CPU-quota frontier exceeds the effective budget, worker counts
   remain within their declared bounds, peak memory remains within the
-  calculated envelope, and no orchestration-attributable OOM, sustained
-  memory-pressure stall, or swap-thrashing event occurs;
+  calculated envelope, and no orchestration-attributable OOM occurs. Memory
+  PSI `full total` may consume at most 1% of heavy-interval wall time. Swap
+  thrashing is a baseline-adjusted total above both 64 MiB and 1 MiB per
+  second. `memory.events` `max` or `high` deltas fail when paired with the
+  sustained-stall threshold;
 - cold-cache behavior is recorded and any regression is explained, although
   cold-cache reduction is not a merge blocker.
 
@@ -410,6 +416,9 @@ This plan uses strict phase ordering rather than pipelined dispatch.
 | Interface semantics | Plan panel round 4 | GNU Make does not preserve a reliable numeric top-level `-jN` value for leaf parsing, so target-specific control was narrowed to the documented budget variable. | Resolved |
 | Descriptor ownership | Plan panel round 5 | Numeric jobserver values in `MAKEFLAGS` can be stale after Make closes the descriptors, so leaves must unset metadata without closing ambiguous descriptor numbers. | Resolved |
 | Migration UX | Plan panel round 5 | The changelog task needed to name `D2B_RUST_BUDGET` as the control when top-level Make `-j` does not cap inner Cargo concurrency. | Resolved |
+| Measurement scope | Plan panel round 6 | Nix daemon work is outside the client process tree, so Nix resource evidence now uses daemon-cgroup or externally idle baseline-adjusted host counters. | Resolved |
+| Metric precision | Plan panel round 6 | CPU, PSI, swap, worker, and memory-event acceptance needed exact counters, thresholds, and safely mocked rejection cases. | Resolved |
+| Manifest atomicity | Plan panel round 6 | Concurrent leaves could corrupt or retain stale execution-manifest state, so each target now finalizes run-specific fragments through atomic replacement. | Resolved |
 
 ## Post-Design Constitution Check
 

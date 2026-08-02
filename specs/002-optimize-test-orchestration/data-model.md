@@ -71,6 +71,9 @@ repository merely made available for discovery.
 ### Validation rules
 
 - The manifest is deterministic after sorting.
+- The top-level target removes only its own prior temporary fragment directory
+  before dispatch. Concurrent leaves write one uniquely named fragment each;
+  a final step sorts and atomically replaces the requested manifest.
 - A required leaf is absent when its command did not complete successfully.
 - Every baseline execution leaf remains represented after optimization.
 - A source inventory comparison without an execution-manifest comparison is
@@ -137,12 +140,16 @@ Represents one timed command execution.
 | `external_contention` | Recorded invalidating contention, if any |
 | `effective_cpu_budget` | CPU concurrency available to the target after host and cgroup limits |
 | `heavy_interval_seconds` | Time from first CPU-heavy leaf start through last CPU-heavy leaf completion |
-| `process_cpu_seconds` | User plus system CPU time consumed by the target process tree during the heavy interval |
-| `cpu_budget_utilization` | `process_cpu_seconds / (heavy_interval_seconds * effective_cpu_budget)` |
-| `peak_memory_bytes` | Peak target process-tree or target-cgroup memory |
-| `peak_workers` | Maximum observed CPU-consuming workers |
-| `memory_events_delta` | Cgroup `high`, `oom`, and `oom_kill` deltas when available |
-| `pressure_and_swap` | Memory PSI stall and swap activity observations |
+| `measurement_scope` | Rust target cgroup/process accounting, Nix daemon cgroup, or baseline-adjusted host accounting |
+| `cpu_usage_delta_usec` | `cpu.stat usage_usec` delta for a cgroup scope, or equivalent user plus system CPU delta for the declared scope |
+| `cpu_budget_utilization` | `cpu_usage_delta_usec / (heavy_interval_usec * effective_cpu_budget)` |
+| `peak_memory_bytes` | Peak `memory.current` for the measured cgroup, or maximum baseline-adjusted reduction in host `MemAvailable` for an idle host-scoped Nix sample |
+| `peak_admitted_cpu_slots` | Maximum sum of scheduler-admitted CPU quotas in an active frontier |
+| `peak_scope_processes` | Maximum count from `cgroup.procs` or the declared process-scope equivalent |
+| `memory_events_delta` | Cgroup `high`, `max`, `oom`, `oom_kill`, and `oom_group_kill` deltas when available |
+| `memory_psi` | Deltas of `some total` and `full total` microseconds over the heavy interval |
+| `swap_io_bytes` | Baseline-adjusted `pswpin` plus `pswpout` page deltas converted with the host page size |
+| `external_contention` | Pre-run and concurrent activity that invalidates host-scoped attribution |
 
 ### State transitions
 
@@ -155,13 +162,27 @@ prepared -> running -> passed
 - `passed` samples contribute to the median.
 - `failed` samples prove failure behavior but do not contribute to performance.
 - `invalidated` samples are repeated and retain the invalidation reason.
-- A representative warm sample is not accepted when median CPU-budget
-  utilization over its heavy interval is below 80%, unless the evidence names
-  the non-CPU bottleneck and proves viable concurrency for that interval was
-  exhausted.
+- The median CPU-budget utilization of the three representative warm samples
+  is not accepted below 80%, unless the evidence names the non-CPU bottleneck
+  and proves viable concurrency for that interval was exhausted.
 - A sample fails resource acceptance on orchestration-attributable OOM,
   sustained memory-pressure stalls, swap thrashing, workers beyond the
   declared bound, or an active CPU-quota frontier above the effective budget.
+- A CPU-heavy leaf is one assigned a nonzero scheduler CPU quota. The heavy
+  interval starts when the first such leaf is admitted and ends when the last
+  such leaf completes.
+- A sustained memory-pressure stall means `memory.pressure` `full total`
+  increases by more than 1% of heavy-interval wall time. When only host PSI is
+  readable, the sample is valid only without external contention.
+- Swap thrashing means baseline-adjusted swap I/O exceeds both 64 MiB total and
+  1 MiB per second over the heavy interval. Any `oom`, `oom_kill`, or
+  `oom_group_kill` increase fails acceptance; a `max` or `high` increase is
+  reported and fails when accompanied by the sustained-stall threshold.
+- `peak_admitted_cpu_slots` MUST NOT exceed `effective_cpu_budget`.
+- Rust uses target-cgroup `cpu.stat` and memory counters when available. Nix
+  uses the Nix daemon cgroup when readable; otherwise it uses host CPU, PSI,
+  swap, and memory deltas after an idle baseline, and any concurrent external
+  activity invalidates and repeats the sample.
 
 ## Performance Baseline
 

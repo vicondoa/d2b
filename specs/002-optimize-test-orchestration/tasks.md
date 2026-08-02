@@ -64,14 +64,14 @@ passes, and achieve a warm median no greater than 50% of baseline.
 
 ### Tests for User Story 1
 
-- [ ] T008 [P] [US1] Add failing static contract assertions for the Make-owned Rust DAG, grouped keep-going execution, redacted actionable `D2B_RUST_BUDGET` validation, effective-budget logging, cache-aware cgroup default, unreadable-controller fallback to budget `1`, immediate Make metadata removal before setup spawns without closing stale descriptor numbers, execution-manifest output, and removal of the serial `all` scheduler in `tests/unit/meta/ci-runner-regression.py`
+- [ ] T008 [P] [US1] Add failing static contract assertions for the Make-owned Rust DAG, grouped keep-going execution, redacted actionable `D2B_RUST_BUDGET` validation, effective-budget logging, cache-aware cgroup default, unreadable-controller fallback to budget `1`, immediate Make metadata removal before setup spawns without closing stale descriptor numbers, per-leaf execution-manifest fragments with deterministic atomic finalization, and removal of the serial `all` scheduler in `tests/unit/meta/ci-runner-regression.py`
 - [ ] T009 [P] [US1] Add failing policy assertions for retained doctests, discovered `harness = false` binaries with explicit empty-discovery failure, serial broker feature passes, same-target dependency edges, runtime frontier quota bounds, leaf-only driver modes, and unchanged excluded workspaces in `packages/xtask/tests/policy_workspace.rs`
 
 ### Implementation for User Story 1
 
 - [ ] T010 [US1] Refactor `tests/test-rust.sh` into environment setup plus explicit leaf modes for API surface, main workspace, broker, guest shell runner, no-bash AST scan, schema reproducibility, supply-chain checks, and inventory/stub checks; remove the no-argument serial `all` scheduler
 - [ ] T011 [US1] Implement the bounded recursive GNU Make Rust DAG, cache-aware cgroup `D2B_RUST_BUDGET`, runtime active-lane and quota calculation valid down to budget `1`, effective-budget logging, grouped output, keep-going behavior, recursive-Make jobserver propagation, and stable public shard targets in `Makefile`
-- [ ] T012 [US1] On leaf-dispatcher entry, unset `MAKEFLAGS`, `MFLAGS`, and `MAKELEVEL` before any setup spawn without parsing or closing stale jobserver descriptor numbers; then pass each runtime quota through Cargo `--jobs` and nextest threads, dependency-order same-target operations, and write completed leaves to `D2B_EXECUTION_MANIFEST` in `tests/test-rust.sh`
+- [ ] T012 [US1] On leaf-dispatcher entry, unset `MAKEFLAGS`, `MFLAGS`, and `MAKELEVEL` before any setup spawn without parsing or closing stale jobserver descriptor numbers; then pass each runtime quota through Cargo `--jobs` and nextest threads, dependency-order same-target operations, write uniquely named completed-leaf fragments, and have the top-level target clear only its temporary fragment directory before dispatch then sort and atomically replace `D2B_EXECUTION_MANIFEST` in `Makefile` and `tests/test-rust.sh`
 - [ ] T013 [US1] Replace monolithic and background `tests/test-rust.sh` aggregate calls with `make test-rust` in `tests/static.sh`, and explicitly preserve the aggregate's existing fixture-dependent and policy coverage with the authoritative `make test-fixture-contracts` and `make test-policy` targets
 - [ ] T014 [US1] Update target-directory and cache synchronization assertions for the new Rust leaf layout in `tests/unit/gates/ci-rust-cache-sync.sh`; if Rust manifest wiring changes, update `tests/layer1-jobs.json` and regenerate `.github/workflows/pr-l1-static-fast.yml`
 - [ ] T015 [US1] Commit the Rust implementation and contract-test changes with tag `( spec002w1 )` in `Makefile`, `tests/test-rust.sh`, `tests/static.sh`, `tests/unit/meta/ci-runner-regression.py`, `tests/unit/gates/ci-rust-cache-sync.sh`, and `packages/xtask/tests/policy_workspace.rs` before running Nix-backed validation
@@ -99,7 +99,7 @@ median no greater than 50% of baseline.
 
 ### Tests for User Story 2
 
-- [ ] T019 [P] [US2] Add runner-neutral failing assertions for complete multi-failure reporting, execution-manifest output, retained `D2B_NIX_UNIT_CHECK`, explicit failure on empty discovery, bounded resource controls, actionable handling of any retired knob, and absence of any new repository-specific scheduler in `tests/unit/meta/ci-runner-regression.py`
+- [ ] T019 [P] [US2] Add runner-neutral failing assertions for complete multi-failure reporting, deterministic atomic execution-manifest replacement without stale prior entries, retained `D2B_NIX_UNIT_CHECK`, explicit failure on empty discovery, bounded resource controls, actionable handling of any retired knob, and absence of any new repository-specific scheduler in `tests/unit/meta/ci-runner-regression.py`
 - [ ] T020 [US2] Add failing Nix unit cases for shared-corpus missing-file, duplicate-name, shard-coverage, and pin-integrity behavior in `tests/unit/nix/cases/test-infrastructure.nix`
 
 ### Implementation for User Story 2
@@ -108,7 +108,7 @@ median no greater than 50% of baseline.
 - [ ] T022 [US2] Create isolated experiment branches or worktrees from one committed candidate base for the tuned current pool, pure-Nix aggregate, `lix-unit` flake adapter, bounded `nix-eval-jobs`, consolidated Lix flake check, and conditionally `nix-fast-build`; commit each candidate before evaluation
 - [ ] T023 [US2] Run the common candidate protocol from `research.md` for every viable design, including repeated refinement when results expose bottlenecks; store commands, tool versions, warm/cold timings, CPU/RSS, failure attribution, output scope, and dependency cost under `.scratch/test-speedup-nix-candidates/`
 - [ ] T024 [US2] Record the candidate comparison and selected design in `specs/002-optimize-test-orchestration/benchmark-results.md`; select only a design that meets the full contract and 50% warm target, or continue iterating without changing the public target
-- [ ] T025 [US2] Implement the selected runner/evaluator and only its measured supporting changes in `flake.nix`, `tests/unit/nix/`, `tests/test-nix-unit.sh`, and `tests/unit/meta/ci-runner-regression.py`, retaining CI shard selection and fail-closed pin/shard integrity
+- [ ] T025 [US2] Implement the selected runner/evaluator and only its measured supporting changes in `flake.nix`, `tests/unit/nix/`, `tests/test-nix-unit.sh`, and `tests/unit/meta/ci-runner-regression.py`, retaining CI shard selection and fail-closed pin/shard integrity while collecting run-specific execution entries and sorting them into an atomic replacement of `D2B_EXECUTION_MANIFEST`
 - [ ] T026 [US2] Commit the selected Nix unit implementation with tag `( spec002w2 )` before regenerating pins or running Nix acceptance validation
 - [ ] T027 [US2] Regenerate and commit Nix unit pins with tag `( spec002w2 )` only if the selected implementation changes case discovery after the infrastructure-case pins committed in T021
 - [ ] T028 [US2] Run the new infrastructure cases, including simultaneous multi-shard failure and empty-discovery probes, pin check, CI regression test, `make test-nix-unit`, source-inventory and executed-manifest baseline-subset comparisons, and added-test classification; record results in `specs/002-optimize-test-orchestration/benchmark-results.md`
@@ -136,12 +136,12 @@ regression.
 
 ### Tests for User Story 3
 
-- [ ] T030 [P] [US3] Add failing policy assertions for one local `nix flake check --no-build --keep-going`, retained CI shard/output selectors, execution-manifest output, and narrow realized-check execution in `packages/xtask/tests/policy_ci.rs`
+- [ ] T030 [P] [US3] Add failing policy assertions for one local `nix flake check --no-build --keep-going`, retained CI shard/output selectors, deterministic atomic execution-manifest replacement without stale prior entries, and narrow realized-check execution in `packages/xtask/tests/policy_ci.rs`
 - [ ] T031 [P] [US3] Replace local-shard scheduler expectations with failing assertions that the local manifest no longer sets `D2B_FLAKE_LOCAL_SHARDS`, retired local flake knobs fail with migration messages, and the realized video check remains enforced in `tests/unit/meta/ci-runner-regression.py`
 
 ### Implementation for User Story 3
 
-- [ ] T032 [US3] Remove the local process-per-check scheduler and implement one native flake check followed by one multi-installable realized-check build, write evaluated and realized classes to `D2B_EXECUTION_MANIFEST`, reject retired local flake knobs with migration messages, and preserve CI modes plus segfault diagnostics in `tests/test-flake.sh`
+- [ ] T032 [US3] Remove the local process-per-check scheduler and implement one native flake check followed by one multi-installable realized-check build, collect evaluated and realized classes in a run-specific temporary file then sort and atomically replace `D2B_EXECUTION_MANIFEST`, reject retired local flake knobs with migration messages, and preserve CI modes plus segfault diagnostics in `tests/test-flake.sh`
 - [ ] T033 [US3] Remove `D2B_FLAKE_LOCAL_SHARDS` from the local `test-flake` environment without changing CI matrix jobs or required contexts in `tests/layer1-jobs.json`
 - [ ] T034 [US3] Regenerate `.github/workflows/pr-l1-static-fast.yml` from `tests/layer1-jobs.json` using the existing Layer-1 workflow generator
 - [ ] T035 [US3] Update Make target documentation for the single-evaluator local contract and retained CI selectors in `Makefile`
@@ -170,7 +170,7 @@ recorded external contention.
 
 ### Tests for User Story 4
 
-- [ ] T039 [P] [US4] Add failing assertions for reclaimable-cache and unreadable cgroup behavior, grouped output, runtime frontier and worker bounds for budgets including `1`, resource-evidence fields, and actionable deprecation failures for obsolete local Nix worker knobs in `tests/unit/meta/ci-runner-regression.py`
+- [ ] T039 [P] [US4] Add failing assertions for reclaimable-cache and unreadable cgroup behavior, grouped output, runtime frontier and worker bounds for budgets including `1`, and actionable deprecation failures for obsolete local Nix worker knobs; add safely mocked resource-evidence fixtures proving rejection below 80% CPU utilization, above the quota frontier, above the 1% full-PSI threshold, above both swap-thrashing thresholds, and on OOM deltas in `tests/unit/meta/ci-runner-regression.py`
 - [ ] T040 [P] [US4] Add policy assertions that broker passes remain serial and same-target-directory Rust leaves cannot overlap in `packages/xtask/tests/policy_workspace.rs`
 
 ### Implementation for User Story 4
@@ -178,7 +178,7 @@ recorded external contention.
 - [ ] T041 [US4] Tune the aggregate Rust lane count and runtime per-lane Cargo/nextest quotas from CPU and the smaller of `MemAvailable` and cache-adjusted remaining cgroup v2 allowance; preserve `D2B_RUST_BUDGET` as an upper bound and prove every active frontier stays within budget in `Makefile` and `tests/test-rust.sh`
 - [ ] T042 [US4] Remove only scheduler variables made obsolete by the selected implementations from `tests/layer1-jobs.json` and `Makefile`; retain compatibility aliases or fail-fast migration checks in the drivers as recorded by the candidate decision, plus all CI selectors
 - [ ] T043 [US4] Commit the final resource-budget and policy changes with tag `( spec002w4 )` in `Makefile`, `tests/test-rust.sh`, `tests/test-nix-unit.sh`, `tests/test-flake.sh`, `tests/layer1-jobs.json`, `tests/unit/meta/ci-runner-regression.py`, and `packages/xtask/tests/policy_workspace.rs` before resource validation
-- [ ] T044 [US4] Run warm-cache default-budget and constrained-budget repetitions of all three targets; capture effective CPU budget, heavy-interval process CPU time, CPU-budget utilization, peak workers, peak memory, cgroup memory-event deltas, memory PSI, swap activity, exit status, and variance in `.scratch/test-speedup-optimized/resource-stability.json`; require at least 80% median CPU-budget utilization, no frontier or worker-bound violation, no orchestration-attributable OOM, sustained memory-pressure stall, or swap thrashing, and the slowest valid warm run within 20% of its median; record conclusions and any proven non-CPU bottleneck in `specs/002-optimize-test-orchestration/benchmark-results.md`
+- [ ] T044 [US4] Run warm-cache default-budget and constrained-budget repetitions of all three targets; use target-cgroup accounting for Rust and Nix-daemon-cgroup accounting when readable, otherwise invalidate externally contended host-scoped Nix samples; capture effective CPU budget, heavy-interval CPU delta, utilization, admitted slots, scope processes, peak memory, `high`/`max`/OOM event deltas, PSI total deltas, baseline-adjusted swap I/O, exit status, and variance in `.scratch/test-speedup-optimized/resource-stability.json`; enforce the thresholds defined in `data-model.md`, require the slowest valid warm run within 20% of its median, and record conclusions and any proven non-CPU bottleneck in `specs/002-optimize-test-orchestration/benchmark-results.md`
 
 **Checkpoint**: All targets remain stable under default and constrained
 capacity without uncontrolled oversubscription.

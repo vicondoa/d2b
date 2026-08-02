@@ -159,27 +159,35 @@ separately; the optimized direct path may regress by no more than 20%.
 
 ## Resource utilization evidence
 
-For each representative warm run, sample the target process tree and available
-cgroup v2 counters at one-second intervals. Record the effective CPU budget,
-the interval from the first CPU-heavy leaf starting through the last
-CPU-heavy leaf completing, process-tree user plus system CPU time, peak
-CPU-consuming workers, peak memory, `memory.events` deltas, memory PSI, and
-swap activity in
+For each representative warm run, sample available cgroup v2 and host counters
+at one-second intervals. Use the target cgroup for Rust. For Nix unit and flake
+runs, include work delegated outside the client process tree by using the Nix
+daemon cgroup when readable; otherwise take an idle host baseline and
+invalidate the sample if unrelated activity overlaps it. Record the effective
+CPU budget, the interval from the first nonzero-quota leaf admission through
+the last such leaf completing, `cpu.stat usage_usec` or the declared equivalent
+CPU delta, peak admitted CPU slots, peak scope process count, peak memory,
+`memory.events` `high`, `max`, and OOM deltas, memory PSI `some total` and
+`full total` deltas, and baseline-adjusted `pswpin` plus `pswpout` bytes in
 `.scratch/test-speedup-optimized/resource-stability.json`.
 
 Calculate CPU-budget utilization as:
 
 ```text
-process CPU seconds / (CPU-heavy interval seconds * effective CPU budget)
+CPU usage delta / (CPU-heavy interval * effective CPU budget)
 ```
 
 The median representative warm run for each target must reach at least 80%.
 A lower value is acceptable only when the evidence identifies a non-CPU
 bottleneck and proves the selected candidate exhausted viable concurrency for
 that interval. Reject a run or candidate if an active CPU-quota frontier
-exceeds the budget, workers exceed the declared bound, peak memory exceeds the
-calculated envelope, or the target causes an OOM event, sustained
-memory-pressure stall, or swap thrashing.
+exceeds the budget, admitted workers exceed the declared bound, peak memory
+exceeds the calculated envelope, or an OOM counter increases. A sustained
+memory-pressure stall is a `full total` delta above 1% of heavy-interval wall
+time. Swap thrashing requires baseline-adjusted swap I/O above both 64 MiB
+total and 1 MiB per second. A `memory.events` `max` or `high` increase fails
+when accompanied by the sustained-stall threshold. Use mocked evidence, never
+an intentional host OOM or swap storm, to prove rejection behavior.
 
 ## Cold-cache observation
 
