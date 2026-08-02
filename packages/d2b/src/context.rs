@@ -528,7 +528,16 @@ fn human_summary(value: &Value) -> String {
                 .and_then(Value::as_str)
                 .or_else(|| object.get("phase").and_then(Value::as_str))
                 .unwrap_or("unknown");
-            return format!("{resource_ref}\t{phase}");
+            let posture = object
+                .pointer("/status/isolationPosture")
+                .and_then(Value::as_str)
+                .or_else(|| object.get("isolationPosture").and_then(Value::as_str));
+            let posture = if posture == Some("none") {
+                " [no isolation]"
+            } else {
+                ""
+            };
+            return format!("{resource_ref}\t{phase}{posture}");
         }
         if let Some(items) = object.get("items").and_then(Value::as_array) {
             let mut output = String::from("RESOURCE\tPHASE");
@@ -547,7 +556,16 @@ fn human_summary(value: &Value) -> String {
                     .pointer("/status/phase")
                     .and_then(Value::as_str)
                     .unwrap_or("unknown");
-                output.push_str(&format!("\n{resource_ref}\t{phase}"));
+                let posture = item
+                    .pointer("/status/isolationPosture")
+                    .and_then(Value::as_str)
+                    .or_else(|| item.get("isolationPosture").and_then(Value::as_str));
+                let posture = if posture == Some("none") {
+                    " [no isolation]"
+                } else {
+                    ""
+                };
+                output.push_str(&format!("\n{resource_ref}\t{phase}{posture}"));
             }
             return output;
         }
@@ -660,5 +678,17 @@ mod tests {
             .filter(|parent| parent.parent().is_some_and(|root| root.ends_with("zones")))
             .and_then(Path::file_name);
         assert!(inferred.is_none());
+    }
+
+    #[test]
+    fn human_host_summary_marks_the_no_isolation_posture() {
+        let summary = human_summary(&json!({
+            "resourceRef": "Host/alice",
+            "status": {
+                "phase": "Ready",
+                "isolationPosture": "none"
+            }
+        }));
+        assert!(summary.contains("[no isolation]"));
     }
 }
