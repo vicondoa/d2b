@@ -1,6 +1,6 @@
-//! W5 v3 CLI documentation/parser contract coverage.
+//! v3 CLI documentation/parser contract coverage.
 //!
-//! The former W3 matrix read the retired `cli-contract.md` surface and
+//! The former compatibility matrix read the retired `cli-contract.md` surface and
 //! exercised commands that the v3 clean break deliberately removed. This
 //! test keeps the coverage closed by pinning the published v3 replacement
 //! reference, the complete ModernCli top-level registry, representative
