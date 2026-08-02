@@ -207,7 +207,7 @@ fn local_host_check(args: &HostCheckArgs, mode: OutputMode) -> Result<i32, CliFa
             "ref-invalid: host check --strict requires --read-only",
         ));
     }
-    let context = crate::Context::from_env()?;
+    let context = crate::LegacyContext::from_env()?;
     crate::cmd_host_check(
         &context,
         &crate::HostCheckArgs {

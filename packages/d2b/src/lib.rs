@@ -1204,7 +1204,7 @@ impl CliFailure {
 }
 
 #[derive(Debug, Clone)]
-struct Context {
+struct LegacyContext {
     manifest_path: PathBuf,
     bundle_path: PathBuf,
     public_socket: PathBuf,
@@ -1222,7 +1222,7 @@ struct Context {
     metrics_url: String,
 }
 
-impl Context {
+impl LegacyContext {
     fn from_env() -> Result<Self, CliFailure> {
         Ok(Self {
             manifest_path: env_path("D2B_MANIFEST_PATH", DEFAULT_MANIFEST_PATH),
@@ -1819,7 +1819,7 @@ fn gateway_shell_argv(args: &ShellArgs, action: ShellAction) -> Result<Vec<Strin
 }
 
 fn cmd_gateway_shell(
-    context: &Context,
+    context: &LegacyContext,
     args: &ShellArgs,
     action: ShellAction,
     realm: String,
@@ -1836,7 +1836,7 @@ fn cmd_gateway_shell(
     cmd_vm_exec(context, &exec_args)
 }
 
-fn cmd_shell(context: &Context, args: &ShellArgs) -> Result<i32, CliFailure> {
+fn cmd_shell(context: &LegacyContext, args: &ShellArgs) -> Result<i32, CliFailure> {
     let action = args.action.unwrap_or(ShellAction::Attach);
     if matches!(action, ShellAction::Attach) && (args.json || args.human) {
         return Err(CliFailure::new(
@@ -2014,7 +2014,7 @@ fn cmd_shell(context: &Context, args: &ShellArgs) -> Result<i32, CliFailure> {
 }
 
 fn cmd_shell_attach(
-    context: &Context,
+    context: &LegacyContext,
     vm: &str,
     name: Option<&str>,
     force: bool,
@@ -2093,7 +2093,7 @@ impl terminal_client::TerminalTransport for ShellOwnerTransport {
     }
 }
 
-fn shell_owner_transport(context: &Context) -> Result<ShellOwnerTransport, CliFailure> {
+fn shell_owner_transport(context: &LegacyContext) -> Result<ShellOwnerTransport, CliFailure> {
     if !context.public_socket.exists() {
         return Err(CliFailure::new(
             69,
@@ -2307,7 +2307,7 @@ where
     }
 }
 
-fn shell_round_trip(context: &Context, op: ShellOp) -> Result<ShellOpResponse, CliFailure> {
+fn shell_round_trip(context: &LegacyContext, op: ShellOp) -> Result<ShellOpResponse, CliFailure> {
     let request = encode_type_tagged_message("shell", &op, "shell request")?;
     match try_public_socket_request(context, &request, "shell")? {
         PublicSocketOutcome::Reply(response) => parse_shell_reply(&response),
@@ -2482,7 +2482,7 @@ fn parse_host_shutdown_hook_args(
 }
 
 fn dispatch(
-    context: &Context,
+    context: &LegacyContext,
     cli: &NativeCli,
     original_args: &[OsString],
 ) -> Result<i32, CliFailure> {
@@ -2576,7 +2576,7 @@ fn dispatch(
 // `d2b clipboard` - clipboard authority fallback arming
 // ============================================================
 
-fn cmd_clipboard_arm(_context: &Context, args: &ClipboardArmArgs) -> Result<i32, CliFailure> {
+fn cmd_clipboard_arm(_context: &LegacyContext, args: &ClipboardArmArgs) -> Result<i32, CliFailure> {
     use std::io::{Read, Write};
     use std::os::unix::net::UnixStream;
 
@@ -3075,7 +3075,7 @@ fn sha256_hex(data: &[u8]) -> String {
 /// the VM exposes the authenticated guest-control transport. Old or partial
 /// generations without the node return false and fall to the fail-closed
 /// old-generation path; there is no SSH fallback.
-fn vm_uses_guest_control(context: &Context, vm: &str) -> Result<bool, CliFailure> {
+fn vm_uses_guest_control(context: &LegacyContext, vm: &str) -> Result<bool, CliFailure> {
     let Some(bundle) = context.load_bundle_context()? else {
         return Ok(false);
     };
@@ -3213,7 +3213,7 @@ enum GuestConfigReadOutcome {
 /// `Unavailable`; any daemon reply (success or typed error) is returned verbatim
 /// for `finish_config_sync_from_reply` to interpret.
 fn read_guest_config_via_socket(
-    context: &Context,
+    context: &LegacyContext,
     vm: &str,
 ) -> Result<GuestConfigReadOutcome, CliFailure> {
     if !context.public_socket.exists() {
@@ -3330,7 +3330,7 @@ fn finish_config_sync_from_reply(
     }
 }
 
-fn cmd_config_sync(context: &Context, args: &ConfigSyncArgs) -> Result<i32, CliFailure> {
+fn cmd_config_sync(context: &LegacyContext, args: &ConfigSyncArgs) -> Result<i32, CliFailure> {
     config_validate_vm_name(&args.vm)?;
     require_known_vm(context, &args.vm, args.json)?;
 
@@ -3575,7 +3575,7 @@ fn cmd_config_status(args: &ConfigStatusArgs) -> Result<i32, CliFailure> {
     Ok(0)
 }
 
-fn cmd_launch(context: &Context, args: &LaunchArgs) -> Result<i32, CliFailure> {
+fn cmd_launch(context: &LegacyContext, args: &LaunchArgs) -> Result<i32, CliFailure> {
     use d2b_realm_core::{LauncherItemKind, ProtocolToken};
 
     if !context.public_socket.exists() {
@@ -3727,7 +3727,7 @@ fn require_unsafe_local_shell_feature(
 }
 
 fn try_resolve_direct_shell_target(
-    context: &Context,
+    context: &LegacyContext,
     requested: &str,
 ) -> Result<Option<String>, CliFailure> {
     if !requested.ends_with(".d2b") {
@@ -4066,7 +4066,7 @@ fn new_launch_operation_id() -> Result<d2b_realm_core::OperationId, CliFailure> 
         .map_err(|_| CliFailure::new(42, "failed to construct a launch operation id"))
 }
 
-fn cmd_list(context: &Context, args: &ListArgs) -> Result<i32, CliFailure> {
+fn cmd_list(context: &LegacyContext, args: &ListArgs) -> Result<i32, CliFailure> {
     let (output, read_model) = match try_list_via_socket(context)? {
         ListSocketOutcome::Entries(entries, rm) => {
             let bundle = context.load_bundle_context().ok().flatten();
@@ -4093,7 +4093,7 @@ fn cmd_list(context: &Context, args: &ListArgs) -> Result<i32, CliFailure> {
     Ok(0)
 }
 
-fn cmd_status(context: &Context, args: &StatusArgs) -> Result<i32, CliFailure> {
+fn cmd_status(context: &LegacyContext, args: &StatusArgs) -> Result<i32, CliFailure> {
     let manifest = context.load_manifest()?;
 
     if args.check_bridges {
@@ -4197,7 +4197,7 @@ fn cmd_status(context: &Context, args: &StatusArgs) -> Result<i32, CliFailure> {
 }
 
 fn cmd_audit(
-    context: &Context,
+    context: &LegacyContext,
     args: &AuditArgs,
     _original_args: &[OsString],
 ) -> Result<i32, CliFailure> {
@@ -4223,7 +4223,7 @@ fn cmd_audit(
 }
 
 fn cmd_console(
-    context: &Context,
+    context: &LegacyContext,
     args: &ConsoleArgs,
     _original_args: &[OsString],
 ) -> Result<i32, CliFailure> {
@@ -4554,7 +4554,7 @@ pub(crate) fn scan_chunk_for_detach(chunk: &[u8]) -> DetachScan {
 }
 
 fn cmd_audio(
-    context: &Context,
+    context: &LegacyContext,
     args: &AudioArgs,
     _original_args: &[OsString],
 ) -> Result<i32, CliFailure> {
@@ -4639,7 +4639,7 @@ fn cmd_audio(
 }
 
 fn audio_round_trip(
-    context: &Context,
+    context: &LegacyContext,
     op: d2b_contracts::public_wire::AudioOp,
 ) -> Result<d2b_contracts::public_wire::AudioOpResponse, CliFailure> {
     let request = encode_type_tagged_message("audio", &op, "audio request")?;
@@ -4688,7 +4688,7 @@ fn parse_audio_reply(
 }
 
 fn render_audio_response(
-    _context: &Context,
+    _context: &LegacyContext,
     response: &d2b_contracts::public_wire::AudioOpResponse,
     json: bool,
 ) -> Result<i32, CliFailure> {
@@ -4779,7 +4779,7 @@ fn format_channel(channel: &d2b_contracts::public_wire::AudioChannel) -> &'stati
     }
 }
 
-fn cmd_host_check(context: &Context, args: &HostCheckArgs) -> Result<i32, CliFailure> {
+fn cmd_host_check(context: &LegacyContext, args: &HostCheckArgs) -> Result<i32, CliFailure> {
     let bundle = context.load_bundle_context()?.ok_or_else(|| {
         CliFailure::new(
             1,
@@ -4948,7 +4948,7 @@ enum DeploymentShape {
     AllDaemon,
 }
 
-fn detect_deployment_shape(context: &Context) -> Result<DeploymentShape, CliFailure> {
+fn detect_deployment_shape(context: &LegacyContext) -> Result<DeploymentShape, CliFailure> {
     // Test override (used by goldens + cli-legacy-bash-dispatch).
     if let Ok(value) = env::var("D2B_TEST_DEPLOYMENT_SHAPE") {
         return Ok(match value.as_str() {
@@ -4976,7 +4976,7 @@ fn detect_deployment_shape(context: &Context) -> Result<DeploymentShape, CliFail
     Ok(DeploymentShape::AllDaemon)
 }
 
-fn cmd_host_prepare(context: &Context, args: &HostPrepareArgs) -> Result<i32, CliFailure> {
+fn cmd_host_prepare(context: &LegacyContext, args: &HostPrepareArgs) -> Result<i32, CliFailure> {
     let flags =
         require_explicit_mutation_flag("host prepare", args.dry_run, args.apply, args.json)?;
     let shape = detect_deployment_shape(context)?;
@@ -5057,7 +5057,7 @@ fn cmd_host_prepare(context: &Context, args: &HostPrepareArgs) -> Result<i32, Cl
     }
 }
 
-fn cmd_host_destroy(context: &Context, args: &HostDestroyArgs) -> Result<i32, CliFailure> {
+fn cmd_host_destroy(context: &LegacyContext, args: &HostDestroyArgs) -> Result<i32, CliFailure> {
     let flags =
         require_explicit_mutation_flag("host destroy", args.dry_run, args.apply, args.json)?;
     let shape = detect_deployment_shape(context)?;
@@ -5153,7 +5153,7 @@ fn render_host_shutdown_hook_plan(phases: &[Vec<String>], json: bool) -> Result<
 }
 
 fn cmd_host_shutdown_hook(
-    context: &Context,
+    context: &LegacyContext,
     args: &HostShutdownHookArgs,
 ) -> Result<i32, CliFailure> {
     let flags =
@@ -5260,7 +5260,7 @@ fn cmd_host_shutdown_hook(
     Ok(0)
 }
 
-fn cmd_host_doctor(context: &Context, args: &HostDoctorArgs) -> Result<i32, CliFailure> {
+fn cmd_host_doctor(context: &LegacyContext, args: &HostDoctorArgs) -> Result<i32, CliFailure> {
     if !args.read_only {
         return emit_host_error(
             &host_error_envelope(
@@ -5376,7 +5376,7 @@ fn build_storage_migration_plan(manifest: &ManifestDocument) -> StorageMigration
 }
 
 fn cmd_host_migrate_storage(
-    context: &Context,
+    context: &LegacyContext,
     args: &HostMigrateStorageArgs,
 ) -> Result<i32, CliFailure> {
     if args.rollback {
@@ -5449,7 +5449,7 @@ fn cmd_host_migrate_storage(
     Ok(0)
 }
 
-fn cmd_host_validate(_context: &Context, args: &HostValidateArgs) -> Result<i32, CliFailure> {
+fn cmd_host_validate(_context: &LegacyContext, args: &HostValidateArgs) -> Result<i32, CliFailure> {
     let flags =
         require_explicit_mutation_flag("host validate", args.dry_run, args.apply, args.json)?;
     let mode = if flags.apply {
@@ -5516,7 +5516,7 @@ fn cmd_host_validate(_context: &Context, args: &HostValidateArgs) -> Result<i32,
 }
 
 fn cmd_host_install(
-    context: &Context,
+    context: &LegacyContext,
     args: &HostInstallArgs,
     _original_args: &[OsString],
 ) -> Result<i32, CliFailure> {
@@ -5579,7 +5579,7 @@ fn cmd_host_install(
 }
 
 fn cmd_host_reconcile(
-    context: &Context,
+    context: &LegacyContext,
     args: &HostReconcileArgs,
     _original_args: &[OsString],
 ) -> Result<i32, CliFailure> {
@@ -5629,7 +5629,7 @@ fn cmd_host_reconcile(
     )
 }
 
-fn require_known_vm(context: &Context, vm: &str, json: bool) -> Result<(), CliFailure> {
+fn require_known_vm(context: &LegacyContext, vm: &str, json: bool) -> Result<(), CliFailure> {
     let manifest = context.load_manifest()?;
     if manifest.vms().iter().any(|v| v.name == vm) {
         return Ok(());
@@ -6024,7 +6024,11 @@ fn print_workload_migration_hint(hint: &target_routing::TargetMigrationHint, jso
     print_stderr(&format!("note: {hint}\n"));
 }
 
-fn route_vm_target(context: &Context, raw: &str, json: bool) -> Result<VmTargetRoute, CliFailure> {
+fn route_vm_target(
+    context: &LegacyContext,
+    raw: &str,
+    json: bool,
+) -> Result<VmTargetRoute, CliFailure> {
     // Fail-closed for old env-qualified targets missing the `.d2b` suffix.
     // E.g. `corp-vm.work` → error with suggestion `corp-vm.work.d2b`.
     if let Some(hint) = target_routing::detect_env_style_target(raw)
@@ -6049,7 +6053,7 @@ fn route_vm_target(context: &Context, raw: &str, json: bool) -> Result<VmTargetR
 }
 
 fn route_vm_target_with_table(
-    context: &Context,
+    context: &LegacyContext,
     raw: &str,
     json: bool,
     table: Option<d2b_realm_router::RealmEntrypointTable>,
@@ -6132,7 +6136,7 @@ fn route_vm_target_with_table(
 }
 
 fn resolve_realm_gateway(
-    context: &Context,
+    context: &LegacyContext,
     realm_raw: &str,
     json: bool,
 ) -> Result<ResolvedRealmGateway, CliFailure> {
@@ -6190,7 +6194,7 @@ fn resolve_realm_gateway(
 }
 
 fn gateway_lifecycle_state(
-    context: &Context,
+    context: &LegacyContext,
     gateway_vm: &str,
 ) -> Result<Option<IpcVmLifecycleState>, CliFailure> {
     match try_list_via_socket(context)? {
@@ -6202,7 +6206,9 @@ fn gateway_lifecycle_state(
     }
 }
 
-fn gateway_lifecycle_states(context: &Context) -> Result<BTreeMap<String, String>, CliFailure> {
+fn gateway_lifecycle_states(
+    context: &LegacyContext,
+) -> Result<BTreeMap<String, String>, CliFailure> {
     match try_list_via_socket(context)? {
         ListSocketOutcome::Entries(entries, _) => {
             let mut states = BTreeMap::new();
@@ -6238,7 +6244,7 @@ fn gateway_state_label(state: IpcVmLifecycleState) -> &'static str {
 }
 
 fn ensure_realm_gateway_running(
-    context: &Context,
+    context: &LegacyContext,
     realm: &str,
     gateway_vm: &str,
     json: bool,
@@ -6293,7 +6299,7 @@ fn realm_gateway_exec_args(
 }
 
 fn realm_policy_rows(
-    context: &Context,
+    context: &LegacyContext,
     json: bool,
 ) -> Result<Vec<RealmPolicyOutputV1>, CliFailure> {
     match realm_policy_rows_raw(context) {
@@ -6318,7 +6324,7 @@ fn realm_policy_rows(
     }
 }
 
-fn realm_policy_rows_raw(context: &Context) -> Result<Vec<RealmPolicyOutputV1>, CliFailure> {
+fn realm_policy_rows_raw(context: &LegacyContext) -> Result<Vec<RealmPolicyOutputV1>, CliFailure> {
     let entries =
         if let Some(doc) = load_realm_entrypoint_document_from_path(&realm_entrypoints_path())? {
             doc.entries
@@ -6331,7 +6337,7 @@ fn realm_policy_rows_raw(context: &Context) -> Result<Vec<RealmPolicyOutputV1>, 
 }
 
 fn realm_policy_rows_from_entries(
-    context: &Context,
+    context: &LegacyContext,
     entries: BTreeMap<String, RealmEntrypointConfig>,
 ) -> Result<Vec<RealmPolicyOutputV1>, CliFailure> {
     let gateway_states = gateway_lifecycle_states(context)?;
@@ -6450,7 +6456,7 @@ fn print_realm_inspect_human(row: &RealmPolicyOutputV1) {
     print_stdout(&format!("crossRealmPolicy: {}\n", row.cross_realm_policy));
 }
 
-fn cmd_realm_list(context: &Context, args: &RealmListArgs) -> Result<i32, CliFailure> {
+fn cmd_realm_list(context: &LegacyContext, args: &RealmListArgs) -> Result<i32, CliFailure> {
     let rows = realm_policy_rows(context, args.json)?;
     let output = RealmListOutputV1 {
         command: "realm list".to_owned(),
@@ -6466,7 +6472,7 @@ fn cmd_realm_list(context: &Context, args: &RealmListArgs) -> Result<i32, CliFai
     Ok(0)
 }
 
-fn cmd_realm_inspect(context: &Context, args: &RealmInspectArgs) -> Result<i32, CliFailure> {
+fn cmd_realm_inspect(context: &LegacyContext, args: &RealmInspectArgs) -> Result<i32, CliFailure> {
     let rows = realm_policy_rows(context, args.json)?;
     let output = realm_inspect_output(&args.realm, args.json, rows)?;
     if args.json {
@@ -6527,7 +6533,7 @@ fn op_inspect_trace(args: &OpInspectArgs) -> Result<Option<OpInspectTraceOutputV
 }
 
 fn op_inspect_output(
-    context: &Context,
+    context: &LegacyContext,
     args: &OpInspectArgs,
 ) -> Result<OpInspectOutputV1, CliFailure> {
     let trace = op_inspect_trace(args)?;
@@ -6606,7 +6612,7 @@ fn op_inspect_output_from_parts(
     }
 }
 
-fn cmd_op_inspect(context: &Context, args: &OpInspectArgs) -> Result<i32, CliFailure> {
+fn cmd_op_inspect(context: &LegacyContext, args: &OpInspectArgs) -> Result<i32, CliFailure> {
     let output = op_inspect_output(context, args)?;
     if args.json {
         print_json(&output)?;
@@ -6637,7 +6643,7 @@ fn cmd_op_inspect(context: &Context, args: &OpInspectArgs) -> Result<i32, CliFai
     Ok(0)
 }
 
-fn cmd_realm_enter(context: &Context, args: &RealmEnterArgs) -> Result<i32, CliFailure> {
+fn cmd_realm_enter(context: &LegacyContext, args: &RealmEnterArgs) -> Result<i32, CliFailure> {
     let gateway = resolve_realm_gateway(context, &args.realm, false)?;
     ensure_realm_gateway_running(context, &gateway.realm, &gateway.gateway_vm, false)?;
     let exec_args = realm_gateway_exec_args(
@@ -6651,7 +6657,7 @@ fn cmd_realm_enter(context: &Context, args: &RealmEnterArgs) -> Result<i32, CliF
     cmd_vm_exec(context, &exec_args)
 }
 
-fn cmd_realm_run(context: &Context, args: &RealmRunArgs) -> Result<i32, CliFailure> {
+fn cmd_realm_run(context: &LegacyContext, args: &RealmRunArgs) -> Result<i32, CliFailure> {
     let gateway = resolve_realm_gateway(context, &args.realm, args.json)?;
     ensure_realm_gateway_running(context, &gateway.realm, &gateway.gateway_vm, args.json)?;
     let exec_args = realm_gateway_exec_args(
@@ -6733,7 +6739,7 @@ fn gateway_principal() -> String {
 
 #[cfg(test)]
 fn gateway_target_from_manifest(
-    context: &Context,
+    context: &LegacyContext,
     raw: &str,
     json: bool,
 ) -> Result<Option<String>, CliFailure> {
@@ -6768,14 +6774,14 @@ fn gateway_display_frame(op: &public_wire::GatewayDisplayOp) -> Result<Vec<u8>, 
 }
 
 fn dispatch_gateway_display(
-    context: &Context,
+    context: &LegacyContext,
     op: public_wire::GatewayDisplayOp,
 ) -> Result<i32, CliFailure> {
     send_gateway_display(context, op).map(|_| 0)
 }
 
 fn send_gateway_display(
-    context: &Context,
+    context: &LegacyContext,
     op: public_wire::GatewayDisplayOp,
 ) -> Result<public_wire::GatewayDisplayOpResponse, CliFailure> {
     let frame = gateway_display_frame(&op)?;
@@ -6792,7 +6798,7 @@ fn send_gateway_display(
     }
 }
 
-fn cmd_gateway_vm_start(context: &Context, target: String) -> Result<i32, CliFailure> {
+fn cmd_gateway_vm_start(context: &LegacyContext, target: String) -> Result<i32, CliFailure> {
     dispatch_gateway_display(
         context,
         public_wire::GatewayDisplayOp::Start(public_wire::GatewayDisplayStartArgs {
@@ -6804,7 +6810,7 @@ fn cmd_gateway_vm_start(context: &Context, target: String) -> Result<i32, CliFai
     )
 }
 
-fn cmd_gateway_vm_stop(context: &Context, target: String) -> Result<i32, CliFailure> {
+fn cmd_gateway_vm_stop(context: &LegacyContext, target: String) -> Result<i32, CliFailure> {
     dispatch_gateway_display(
         context,
         public_wire::GatewayDisplayOp::Stop(public_wire::GatewayDisplayStopArgs {
@@ -6816,13 +6822,13 @@ fn cmd_gateway_vm_stop(context: &Context, target: String) -> Result<i32, CliFail
     )
 }
 
-fn cmd_gateway_vm_restart(context: &Context, target: String) -> Result<i32, CliFailure> {
+fn cmd_gateway_vm_restart(context: &LegacyContext, target: String) -> Result<i32, CliFailure> {
     cmd_gateway_vm_stop(context, target.clone())?;
     cmd_gateway_vm_start(context, target)
 }
 
 fn cmd_gateway_vm_exec(
-    context: &Context,
+    context: &LegacyContext,
     target: String,
     argv: Vec<String>,
 ) -> Result<i32, CliFailure> {
@@ -6838,14 +6844,17 @@ fn cmd_gateway_vm_exec(
     )
 }
 
-fn cmd_vm_display(context: &Context, args: &VmDisplayArgs) -> Result<i32, CliFailure> {
+fn cmd_vm_display(context: &LegacyContext, args: &VmDisplayArgs) -> Result<i32, CliFailure> {
     match &args.command {
         VmDisplayCommand::List(args) => cmd_vm_display_list(context, args),
         VmDisplayCommand::Close(args) => cmd_vm_display_close(context, args),
     }
 }
 
-fn cmd_vm_display_list(context: &Context, args: &VmDisplayListArgs) -> Result<i32, CliFailure> {
+fn cmd_vm_display_list(
+    context: &LegacyContext,
+    args: &VmDisplayListArgs,
+) -> Result<i32, CliFailure> {
     let response = send_gateway_display(
         context,
         public_wire::GatewayDisplayOp::ListDetailed(public_wire::GatewayDisplayListArgs {
@@ -6910,7 +6919,10 @@ fn vm_display_capability_preflight_satisfied() -> VmDisplayCapabilityPreflight {
     }
 }
 
-fn cmd_vm_display_close(context: &Context, args: &VmDisplayCloseArgs) -> Result<i32, CliFailure> {
+fn cmd_vm_display_close(
+    context: &LegacyContext,
+    args: &VmDisplayCloseArgs,
+) -> Result<i32, CliFailure> {
     let response = send_gateway_display(
         context,
         public_wire::GatewayDisplayOp::Close(public_wire::GatewayDisplayCloseArgs {
@@ -6944,7 +6956,7 @@ fn cmd_vm_display_close(context: &Context, args: &VmDisplayCloseArgs) -> Result<
     Ok(0)
 }
 
-fn vm_is_qemu_media_runtime(context: &Context, vm: &str) -> Result<bool, CliFailure> {
+fn vm_is_qemu_media_runtime(context: &LegacyContext, vm: &str) -> Result<bool, CliFailure> {
     let manifest = context.load_manifest()?;
     Ok(manifest
         .get_vm(vm)
@@ -7039,7 +7051,7 @@ struct VmLifecycleInvocation<'a> {
 }
 
 fn cmd_vm_lifecycle_verb(
-    context: &Context,
+    context: &LegacyContext,
     invocation: VmLifecycleInvocation<'_>,
 ) -> Result<i32, CliFailure> {
     let VmLifecycleInvocation {
@@ -7183,7 +7195,7 @@ fn cmd_vm_lifecycle_verb(
     Ok(0)
 }
 
-fn cmd_vm_start(context: &Context, args: &VmStartArgs) -> Result<i32, CliFailure> {
+fn cmd_vm_start(context: &LegacyContext, args: &VmStartArgs) -> Result<i32, CliFailure> {
     cmd_vm_lifecycle_verb(
         context,
         VmLifecycleInvocation {
@@ -7198,7 +7210,7 @@ fn cmd_vm_start(context: &Context, args: &VmStartArgs) -> Result<i32, CliFailure
     )
 }
 
-fn cmd_vm_stop(context: &Context, args: &VmStopArgs) -> Result<i32, CliFailure> {
+fn cmd_vm_stop(context: &LegacyContext, args: &VmStopArgs) -> Result<i32, CliFailure> {
     cmd_vm_lifecycle_verb(
         context,
         VmLifecycleInvocation {
@@ -7213,7 +7225,7 @@ fn cmd_vm_stop(context: &Context, args: &VmStopArgs) -> Result<i32, CliFailure> 
     )
 }
 
-fn cmd_vm_restart(context: &Context, args: &VmRestartArgs) -> Result<i32, CliFailure> {
+fn cmd_vm_restart(context: &LegacyContext, args: &VmRestartArgs) -> Result<i32, CliFailure> {
     cmd_vm_lifecycle_verb(
         context,
         VmLifecycleInvocation {
@@ -7228,7 +7240,7 @@ fn cmd_vm_restart(context: &Context, args: &VmRestartArgs) -> Result<i32, CliFai
     )
 }
 
-fn cmd_vm_list(context: &Context, args: &VmListArgs) -> Result<i32, CliFailure> {
+fn cmd_vm_list(context: &LegacyContext, args: &VmListArgs) -> Result<i32, CliFailure> {
     if let Some(realm) = args.realm.as_deref() {
         let gateway = resolve_realm_gateway(context, realm, args.json)?;
         ensure_realm_gateway_running(context, &gateway.realm, &gateway.gateway_vm, args.json)?;
@@ -7254,7 +7266,7 @@ fn cmd_vm_list(context: &Context, args: &VmListArgs) -> Result<i32, CliFailure> 
     cmd_vm_list_local(context, args)
 }
 
-fn cmd_vm_list_all(context: &Context, args: &VmListArgs) -> Result<i32, CliFailure> {
+fn cmd_vm_list_all(context: &LegacyContext, args: &VmListArgs) -> Result<i32, CliFailure> {
     let local_entries = match try_list_via_socket(context)? {
         ListSocketOutcome::Entries(entries, _) => entries,
         ListSocketOutcome::Unavailable => Vec::new(),
@@ -7321,7 +7333,7 @@ fn cmd_vm_list_all(context: &Context, args: &VmListArgs) -> Result<i32, CliFailu
     Ok(0)
 }
 
-fn cmd_vm_list_local(context: &Context, args: &VmListArgs) -> Result<i32, CliFailure> {
+fn cmd_vm_list_local(context: &LegacyContext, args: &VmListArgs) -> Result<i32, CliFailure> {
     match try_list_via_socket(context)? {
         ListSocketOutcome::Entries(entries, _) => {
             if args.json {
@@ -7376,7 +7388,7 @@ fn cmd_vm_list_local(context: &Context, args: &VmListArgs) -> Result<i32, CliFai
     Ok(0)
 }
 
-fn cmd_vm_status(context: &Context, args: &VmStatusArgs) -> Result<i32, CliFailure> {
+fn cmd_vm_status(context: &LegacyContext, args: &VmStatusArgs) -> Result<i32, CliFailure> {
     cmd_status(
         context,
         &StatusArgs {
@@ -7429,7 +7441,7 @@ fn exec_daemon_unavailable_error() -> exec_client::ExecClientError {
 }
 
 fn exec_owner_transport(
-    context: &Context,
+    context: &LegacyContext,
 ) -> Result<OwnerSocketTransport, exec_client::ExecClientError> {
     if !context.public_socket.exists() {
         return Err(exec_daemon_unavailable_error());
@@ -7674,7 +7686,7 @@ fn parse_vm_exec_u64_flag(flag: &str, value: &str) -> Result<u64, String> {
 /// daemon-held authenticated session over `public.sock` (admin-only), then
 /// multiplexes stdin/stdout/stderr/signals over one owner connection. The
 /// guest owns the PTY; the CLI only manages host terminal state.
-fn cmd_vm_exec(context: &Context, args: &VmExecArgs) -> Result<i32, CliFailure> {
+fn cmd_vm_exec(context: &LegacyContext, args: &VmExecArgs) -> Result<i32, CliFailure> {
     use d2b_contracts::public_wire::{ExecEnvVar, ExecOp, ExecStartArgs, ExecTermSize};
 
     // 1. Validate flags BEFORE touching host terminal state or the daemon.
@@ -7906,7 +7918,7 @@ fn cmd_vm_exec(context: &Context, args: &VmExecArgs) -> Result<i32, CliFailure> 
 }
 
 fn cmd_vm_exec_management(
-    context: &Context,
+    context: &LegacyContext,
     args: &VmExecArgs,
     management: &VmExecManagementCommand,
     vm: &str,
@@ -8002,7 +8014,7 @@ fn cmd_vm_exec_management(
 }
 
 fn exec_send_one_op(
-    context: &Context,
+    context: &LegacyContext,
     op: d2b_contracts::public_wire::ExecOp,
 ) -> Result<d2b_contracts::public_wire::ExecOpResponse, exec_client::ExecClientError> {
     let mut transport = exec_owner_transport(context)?;
@@ -8451,7 +8463,7 @@ fn w7_dry_run_summary(verb: &str, vm: Option<&str>) -> serde_json::Value {
     })
 }
 
-fn cmd_build(context: &Context, args: &BuildArgs) -> Result<i32, CliFailure> {
+fn cmd_build(context: &LegacyContext, args: &BuildArgs) -> Result<i32, CliFailure> {
     // build is non-destructive - always allowed; never returns
     // daemon-down. The non-destructive scope (build / generations
     // / richer status) ships dry-run-shaped output today even
@@ -8480,7 +8492,7 @@ fn cmd_build(context: &Context, args: &BuildArgs) -> Result<i32, CliFailure> {
     Ok(0)
 }
 
-fn cmd_generations(context: &Context, args: &GenerationsArgs) -> Result<i32, CliFailure> {
+fn cmd_generations(context: &LegacyContext, args: &GenerationsArgs) -> Result<i32, CliFailure> {
     require_known_vm(context, &args.vm, args.json)?;
     let manifest = context.load_manifest()?;
     let vm = manifest
@@ -8515,7 +8527,7 @@ fn cmd_generations(context: &Context, args: &GenerationsArgs) -> Result<i32, Cli
 }
 
 fn w7_mutating_verb(
-    context: &Context,
+    context: &LegacyContext,
     verb: &str,
     vm: &str,
     dry_run: bool,
@@ -8559,7 +8571,7 @@ fn w7_mutating_verb(
 }
 
 fn cmd_switch(
-    context: &Context,
+    context: &LegacyContext,
     args: &SwitchArgs,
     original_args: &[OsString],
 ) -> Result<i32, CliFailure> {
@@ -8575,7 +8587,7 @@ fn cmd_switch(
 }
 
 fn cmd_boot(
-    context: &Context,
+    context: &LegacyContext,
     args: &BootArgs,
     original_args: &[OsString],
 ) -> Result<i32, CliFailure> {
@@ -8591,7 +8603,7 @@ fn cmd_boot(
 }
 
 fn cmd_test(
-    context: &Context,
+    context: &LegacyContext,
     args: &TestArgs,
     original_args: &[OsString],
 ) -> Result<i32, CliFailure> {
@@ -8607,7 +8619,7 @@ fn cmd_test(
 }
 
 fn cmd_rollback(
-    context: &Context,
+    context: &LegacyContext,
     args: &RollbackArgs,
     original_args: &[OsString],
 ) -> Result<i32, CliFailure> {
@@ -8623,7 +8635,7 @@ fn cmd_rollback(
 }
 
 fn cmd_gc(
-    context: &Context,
+    context: &LegacyContext,
     args: &GcArgs,
     _original_args: &[OsString],
 ) -> Result<i32, CliFailure> {
@@ -8656,7 +8668,7 @@ fn cmd_gc(
     Ok(0)
 }
 
-fn cmd_store_verify(context: &Context, args: &StoreVerifyArgs) -> Result<i32, CliFailure> {
+fn cmd_store_verify(context: &LegacyContext, args: &StoreVerifyArgs) -> Result<i32, CliFailure> {
     let json_mode = if args.human { false } else { args.json };
     let manifest = context.load_manifest()?;
     if !manifest.vms().iter().any(|vm| vm.name == args.vm) {
@@ -8746,7 +8758,7 @@ fn usb_json_mode(json: bool, human: bool) -> bool {
     if human { false } else { json }
 }
 
-fn cmd_usb_attach(context: &Context, args: &UsbAttachArgs) -> Result<i32, CliFailure> {
+fn cmd_usb_attach(context: &LegacyContext, args: &UsbAttachArgs) -> Result<i32, CliFailure> {
     usb_mutating_verb(
         context,
         "usb attach",
@@ -8760,7 +8772,7 @@ fn cmd_usb_attach(context: &Context, args: &UsbAttachArgs) -> Result<i32, CliFai
     )
 }
 
-fn cmd_usb_detach(context: &Context, args: &UsbDetachArgs) -> Result<i32, CliFailure> {
+fn cmd_usb_detach(context: &LegacyContext, args: &UsbDetachArgs) -> Result<i32, CliFailure> {
     usb_mutating_verb(
         context,
         "usb detach",
@@ -8810,7 +8822,7 @@ fn removed_usb_enroll_failure(raw_args: &[OsString]) -> Option<CliFailure> {
 
 #[allow(clippy::too_many_arguments)]
 fn usb_mutating_verb(
-    context: &Context,
+    context: &LegacyContext,
     verb: &str,
     request_type: &str,
     vm: &str,
@@ -8934,7 +8946,7 @@ fn usb_mutating_verb(
     Ok(0)
 }
 
-fn cmd_usb_probe(context: &Context, args: &UsbProbeArgs) -> Result<i32, CliFailure> {
+fn cmd_usb_probe(context: &LegacyContext, args: &UsbProbeArgs) -> Result<i32, CliFailure> {
     let json_mode = usb_json_mode(args.json, args.human);
     match try_usb_probe_via_socket(context)? {
         UsbProbeSocketOutcome::Entries(entries) => {
@@ -9203,17 +9215,20 @@ fn usb_sk_not_yet_implemented_envelope(verb: &str) -> HostErrorEnvelope {
     )
 }
 
-fn cmd_usb_sk_status(_context: &Context, args: &UsbSkStatusArgs) -> Result<i32, CliFailure> {
+fn cmd_usb_sk_status(_context: &LegacyContext, args: &UsbSkStatusArgs) -> Result<i32, CliFailure> {
     let json_mode = usb_sk_json_mode(args.json, args.human);
     emit_host_error(&usb_sk_not_yet_implemented_envelope("status"), json_mode)
 }
 
-fn cmd_usb_sk_sessions(_context: &Context, args: &UsbSkSessionsArgs) -> Result<i32, CliFailure> {
+fn cmd_usb_sk_sessions(
+    _context: &LegacyContext,
+    args: &UsbSkSessionsArgs,
+) -> Result<i32, CliFailure> {
     let json_mode = usb_sk_json_mode(args.json, args.human);
     emit_host_error(&usb_sk_not_yet_implemented_envelope("sessions"), json_mode)
 }
 
-fn cmd_usb_sk_cancel(_context: &Context, args: &UsbSkCancelArgs) -> Result<i32, CliFailure> {
+fn cmd_usb_sk_cancel(_context: &LegacyContext, args: &UsbSkCancelArgs) -> Result<i32, CliFailure> {
     let json_mode = usb_sk_json_mode(args.json, args.human);
 
     // Require exactly one of: session_id (positional) or --current.
@@ -9267,7 +9282,7 @@ fn cmd_usb_sk_cancel(_context: &Context, args: &UsbSkCancelArgs) -> Result<i32, 
     Ok(0)
 }
 
-fn cmd_usb_sk_test(_context: &Context, args: &UsbSkTestArgs) -> Result<i32, CliFailure> {
+fn cmd_usb_sk_test(_context: &LegacyContext, args: &UsbSkTestArgs) -> Result<i32, CliFailure> {
     let json_mode = usb_sk_json_mode(args.json, args.human);
     let vm = &args.vm;
 
@@ -9304,7 +9319,7 @@ fn cmd_usb_sk_test(_context: &Context, args: &UsbSkTestArgs) -> Result<i32, CliF
 // ---- managed-keys + trust verbs ----
 
 fn cmd_keys_list(
-    context: &Context,
+    context: &LegacyContext,
     args: &KeysListArgs,
     _original_args: &[OsString],
 ) -> Result<i32, CliFailure> {
@@ -9356,7 +9371,7 @@ fn render_keys_list_human(entries: &[IpcKeyEntry]) -> String {
 }
 
 fn cmd_keys_show(
-    context: &Context,
+    context: &LegacyContext,
     args: &KeysShowArgs,
     original_args: &[OsString],
 ) -> Result<i32, CliFailure> {
@@ -9395,7 +9410,7 @@ fn cmd_keys_show(
 }
 
 fn w8_mutating_verb(
-    context: &Context,
+    context: &LegacyContext,
     verb: &str,
     vm: &str,
     dry_run: bool,
@@ -9444,7 +9459,7 @@ fn w8_mutating_verb(
 }
 
 fn cmd_keys_rotate(
-    context: &Context,
+    context: &LegacyContext,
     args: &KeysRotateArgs,
     original_args: &[OsString],
 ) -> Result<i32, CliFailure> {
@@ -9460,7 +9475,7 @@ fn cmd_keys_rotate(
 }
 
 fn cmd_keys_rotate_known_host(
-    context: &Context,
+    context: &LegacyContext,
     args: &KeysRotateKnownHostArgs,
     original_args: &[OsString],
 ) -> Result<i32, CliFailure> {
@@ -9476,7 +9491,7 @@ fn cmd_keys_rotate_known_host(
 }
 
 fn cmd_keys_trust(
-    context: &Context,
+    context: &LegacyContext,
     args: &KeysTrustArgs,
     original_args: &[OsString],
 ) -> Result<i32, CliFailure> {
@@ -9494,7 +9509,7 @@ fn cmd_keys_trust(
 // ---- d2b migrate ----
 
 fn cmd_migrate(
-    context: &Context,
+    context: &LegacyContext,
     args: &MigrateArgs,
     _original_args: &[OsString],
 ) -> Result<i32, CliFailure> {
@@ -9664,7 +9679,7 @@ fn require_mutation_flag_impl(
     ))
 }
 
-fn cmd_auth_status(context: &Context, args: &AuthStatusArgs) -> Result<i32, CliFailure> {
+fn cmd_auth_status(context: &LegacyContext, args: &AuthStatusArgs) -> Result<i32, CliFailure> {
     let uid = args.test_uid.unwrap_or_else(effective_uid);
     let launcher_uids = parse_uid_env("D2B_TEST_LAUNCHER_UIDS");
     let admin_uids = parse_uid_env("D2B_TEST_ADMIN_UIDS");
@@ -9737,7 +9752,10 @@ fn cmd_auth_status(context: &Context, args: &AuthStatusArgs) -> Result<i32, CliF
     Ok(0)
 }
 
-fn resolve_selected_vm(context: &Context, args: &StatusArgs) -> Result<Option<String>, CliFailure> {
+fn resolve_selected_vm(
+    context: &LegacyContext,
+    args: &StatusArgs,
+) -> Result<Option<String>, CliFailure> {
     let selected = match (&args.vm, &args.vm_flag) {
         (Some(positional), Some(flagged)) if positional != flagged => Err(CliFailure::new(
             2,
@@ -9811,7 +9829,7 @@ fn marker_status_for_integrity(store_root: &Path, vm: &str) -> Result<(), &'stat
 }
 
 fn read_live_pool_integrity(
-    context: &Context,
+    context: &LegacyContext,
     vm: &ManifestVm,
 ) -> Option<LivePoolIntegrityOutputV1> {
     let store_root = vm_state_dir(context, vm).join("store-view");
@@ -10222,7 +10240,7 @@ fn render_status_vm_human(
 fn render_status_inventory_human(
     output: &StatusInventoryOutputV2,
     manifest: &ManifestDocument,
-    context: &Context,
+    context: &LegacyContext,
     bundle: Option<&BundleContext>,
 ) -> String {
     let mut text = String::new();
@@ -10342,7 +10360,7 @@ fn render_auth_status_human(output: &AuthStatusOutputV2) -> String {
 }
 
 fn collect_bridge_rows(
-    context: &Context,
+    context: &LegacyContext,
     manifest: &ManifestDocument,
     bundle: Option<&BundleContext>,
 ) -> Vec<BridgeHealthRow> {
@@ -10374,7 +10392,7 @@ fn resolve_bridge_probe_name(bundle: Option<&BundleContext>, bridge: &str) -> St
 }
 
 fn bridge_health_row(
-    context: &Context,
+    context: &LegacyContext,
     bundle: Option<&BundleContext>,
     bridge: &str,
 ) -> BridgeHealthRow {
@@ -10438,7 +10456,7 @@ fn bridge_health_row(
     row
 }
 
-fn systemctl_state(context: &Context, unit: &str) -> String {
+fn systemctl_state(context: &LegacyContext, unit: &str) -> String {
     if let Some(state) = context
         .system_state_fixture
         .as_ref()
@@ -10655,7 +10673,7 @@ fn try_vm_for_canonical_target(bundle_path: &Path, raw_target: &str) -> Option<S
     None
 }
 
-fn resolve_vm_selector_from_bundle(context: &Context, selector: &str) -> String {
+fn resolve_vm_selector_from_bundle(context: &LegacyContext, selector: &str) -> String {
     try_vm_for_canonical_target(&context.bundle_path, selector)
         .unwrap_or_else(|| selector.to_owned())
 }
@@ -10885,7 +10903,7 @@ fn daemon_mutating_verb_frame(
 /// daemon's `dispatch_mutating_verb` validates the flag pair and
 /// dispatches the per-verb readiness row.
 fn try_daemon_mutating_verb(
-    context: &Context,
+    context: &LegacyContext,
     request_type: &str,
     extra_fields: serde_json::Value,
     dry_run: bool,
@@ -11233,7 +11251,7 @@ fn emit_daemon_mutating_outcome(outcome: DaemonVerbOutcome, json: bool) -> Resul
 /// Rust CLI dispatching through d2bd → broker is the only
 /// operator path - no bash fallback.
 fn dispatch_mutating_verb(
-    context: &Context,
+    context: &LegacyContext,
     request_type: &str,
     extra_fields: serde_json::Value,
     dry_run: bool,
@@ -11264,7 +11282,7 @@ fn probe_socket(path: &Path) -> Result<SocketProbe, CliFailure> {
 }
 
 fn try_audit_via_socket(
-    context: &Context,
+    context: &LegacyContext,
     json_mode: bool,
 ) -> Result<AuditSocketOutcome, CliFailure> {
     if !context.public_socket.exists() {
@@ -11301,7 +11319,7 @@ fn try_audit_via_socket(
     parse_audit_reply(&response).map(AuditSocketOutcome::Lines)
 }
 
-fn try_keys_list_via_socket(context: &Context) -> Result<KeysSocketOutcome, CliFailure> {
+fn try_keys_list_via_socket(context: &LegacyContext) -> Result<KeysSocketOutcome, CliFailure> {
     let request =
         encode_type_tagged_message("keysList", &serde_json::json!({}), "keysList request")?;
     match try_public_socket_request(context, &request, "keysList")? {
@@ -11314,7 +11332,10 @@ fn try_keys_list_via_socket(context: &Context) -> Result<KeysSocketOutcome, CliF
     }
 }
 
-fn try_keys_show_via_socket(context: &Context, vm: &str) -> Result<KeysSocketOutcome, CliFailure> {
+fn try_keys_show_via_socket(
+    context: &LegacyContext,
+    vm: &str,
+) -> Result<KeysSocketOutcome, CliFailure> {
     let request = encode_type_tagged_message(
         "keysShow",
         &IpcKeysShowRequest { vm: vm.to_owned() },
@@ -11330,7 +11351,7 @@ fn try_keys_show_via_socket(context: &Context, vm: &str) -> Result<KeysSocketOut
     }
 }
 
-fn try_list_via_socket(context: &Context) -> Result<ListSocketOutcome, CliFailure> {
+fn try_list_via_socket(context: &LegacyContext) -> Result<ListSocketOutcome, CliFailure> {
     let request = encode_type_tagged_message(
         "list",
         &IpcListRequest {
@@ -11350,7 +11371,7 @@ fn try_list_via_socket(context: &Context) -> Result<ListSocketOutcome, CliFailur
 }
 
 fn try_status_via_socket(
-    context: &Context,
+    context: &LegacyContext,
     vm: Option<&str>,
 ) -> Result<StatusSocketOutcome, CliFailure> {
     let request = encode_type_tagged_message(
@@ -11370,7 +11391,7 @@ fn try_status_via_socket(
     }
 }
 
-fn try_usb_probe_via_socket(context: &Context) -> Result<UsbProbeSocketOutcome, CliFailure> {
+fn try_usb_probe_via_socket(context: &LegacyContext) -> Result<UsbProbeSocketOutcome, CliFailure> {
     let request =
         encode_type_tagged_message("usbipProbe", &serde_json::json!({}), "usbipProbe request")?;
     match try_public_socket_request(context, &request, "usbipProbe")? {
@@ -11384,7 +11405,7 @@ fn try_usb_probe_via_socket(context: &Context) -> Result<UsbProbeSocketOutcome, 
 }
 
 fn try_store_verify_via_socket(
-    context: &Context,
+    context: &LegacyContext,
     vm: &str,
     repair: bool,
 ) -> Result<StoreVerifySocketOutcome, CliFailure> {
@@ -11407,7 +11428,7 @@ fn try_store_verify_via_socket(
 }
 
 fn try_public_socket_request(
-    context: &Context,
+    context: &LegacyContext,
     request: &[u8],
     request_label: &str,
 ) -> Result<PublicSocketOutcome, CliFailure> {
@@ -11693,16 +11714,17 @@ mod host_install_dispatch_tests {
     use serde_json::{Value, json};
 
     use super::{
-        AddressFamily, ApiReadySimple, ApiReadyStatusV1, Context, HostInstallArgs, IpcHelloOk,
-        IpcUsbProbeEntryKind, IpcUsbipProbeEntry, IpcUsbipProbeStatus, MAX_FRAME_BYTES,
-        ManifestDocument, ManifestVm, MediaRef, MsgFlags, NativeCli, NativeCommand, SockFlag,
-        SockType, StatusServicesOutputV2, UnixAddr, UsbAttachArgs, UsbDetachArgs, VmArgs,
-        VmCommand, VmExecArgs, VmRestartArgs, VmStartArgs, VmStopArgs, broker_error_envelope,
-        build_storage_migration_plan, cmd_host_install, cmd_vm_exec, cmd_vm_restart, cmd_vm_start,
-        cmd_vm_stop, daemon_supported_features, encode_type_tagged_message,
-        host_shutdown_vm_phases, is_host_shutdown_hook_invocation, nix_err_to_io,
-        output_service_capabilities, parse_host_shutdown_hook_args, parse_vm_exec_action,
-        public_wire, render_usb_probe_human, send, socket, storage_migration_checkpoint_id,
+        AddressFamily, ApiReadySimple, ApiReadyStatusV1, HostInstallArgs, IpcHelloOk,
+        IpcUsbProbeEntryKind, IpcUsbipProbeEntry, IpcUsbipProbeStatus, LegacyContext,
+        MAX_FRAME_BYTES, ManifestDocument, ManifestVm, MediaRef, MsgFlags, NativeCli,
+        NativeCommand, SockFlag, SockType, StatusServicesOutputV2, UnixAddr, UsbAttachArgs,
+        UsbDetachArgs, VmArgs, VmCommand, VmExecArgs, VmRestartArgs, VmStartArgs, VmStopArgs,
+        broker_error_envelope, build_storage_migration_plan, cmd_host_install, cmd_vm_exec,
+        cmd_vm_restart, cmd_vm_start, cmd_vm_stop, daemon_supported_features,
+        encode_type_tagged_message, host_shutdown_vm_phases, is_host_shutdown_hook_invocation,
+        nix_err_to_io, output_service_capabilities, parse_host_shutdown_hook_args,
+        parse_vm_exec_action, public_wire, render_usb_probe_human, send, socket,
+        storage_migration_checkpoint_id,
     };
     use d2b_contracts::Version;
 
@@ -11766,7 +11788,7 @@ mod host_install_dispatch_tests {
             std::fs::create_dir_all(parent).expect("manifest parent");
         }
         write_test_manifest(&manifest_path, "sys-work-gateway");
-        let context = Context {
+        let context = LegacyContext {
             manifest_path: manifest_path.clone(),
             bundle_path: manifest_path.with_extension("bundle.json"),
             public_socket: manifest_path.with_extension("sock"),
@@ -11817,7 +11839,7 @@ mod host_install_dispatch_tests {
             .expect("load entrypoint table")
             .expect("entrypoint table exists");
 
-        let context = Context {
+        let context = LegacyContext {
             manifest_path: manifest_path.clone(),
             bundle_path: manifest_path.with_extension("bundle.json"),
             public_socket: manifest_path.with_extension("sock"),
@@ -12010,7 +12032,7 @@ mod host_install_dispatch_tests {
             }
         });
 
-        let context = Context {
+        let context = LegacyContext {
             manifest_path: manifest_path.clone(),
             bundle_path: manifest_path.with_extension("bundle.json"),
             public_socket: socket_path.clone(),
@@ -12115,7 +12137,7 @@ mod host_install_dispatch_tests {
             send_test_frame(accepted, &response).unwrap();
             close(accepted).unwrap();
         });
-        let context = Context {
+        let context = LegacyContext {
             manifest_path: socket_path.with_extension("manifest.json"),
             bundle_path: socket_path.with_extension("bundle.json"),
             public_socket: socket_path.clone(),
@@ -12265,7 +12287,7 @@ mod host_install_dispatch_tests {
             std::fs::create_dir_all(parent).expect("manifest parent");
         }
         write_test_manifest(&manifest_path, "sys-work-gateway");
-        let context = Context {
+        let context = LegacyContext {
             manifest_path: manifest_path.clone(),
             bundle_path: manifest_path.with_extension("bundle.json"),
             public_socket: manifest_path.with_extension("sock"),
@@ -12891,7 +12913,7 @@ mod host_install_dispatch_tests {
             std::fs::create_dir_all(parent).expect("manifest parent");
         }
         write_test_manifest(&manifest_path, "sys-work-gateway");
-        let context = Context {
+        let context = LegacyContext {
             manifest_path: manifest_path.clone(),
             bundle_path: manifest_path.with_extension("bundle.json"),
             public_socket: manifest_path.with_extension("sock"),
@@ -12941,7 +12963,7 @@ mod host_install_dispatch_tests {
         let bundle_path = manifest_path.with_extension("bundle.json");
         write_bundle_with_realm_controllers(&bundle_path, "work-aad");
         rewrite_bundle_workload_identity(&bundle_path, "aad", "aad.work.d2b");
-        let context = Context {
+        let context = LegacyContext {
             manifest_path: manifest_path.clone(),
             bundle_path: bundle_path.clone(),
             public_socket: manifest_path.with_extension("sock"),
@@ -12975,7 +12997,7 @@ mod host_install_dispatch_tests {
         let bundle_path = manifest_path.with_extension("bundle.json");
         write_bundle_with_realm_controllers(&bundle_path, "work-aad");
         rewrite_bundle_workload_identity(&bundle_path, "aad", "aad.work.d2b");
-        let context = Context {
+        let context = LegacyContext {
             manifest_path: manifest_path.clone(),
             bundle_path: bundle_path.clone(),
             public_socket: manifest_path.with_extension("sock"),
@@ -13016,7 +13038,7 @@ mod host_install_dispatch_tests {
                 .unwrap(),
             d2b_realm_core::TargetName::parse("corp-gateway.local.d2b").unwrap(),
         );
-        let context = Context {
+        let context = LegacyContext {
             manifest_path: manifest_path.clone(),
             bundle_path: manifest_path.with_extension("bundle.json"),
             public_socket: manifest_path.with_extension("sock"),
@@ -13259,7 +13281,7 @@ mod host_install_dispatch_tests {
             std::fs::create_dir_all(parent).expect("manifest parent");
         }
         write_test_manifest(&manifest_path, "vm-a");
-        let context = Context {
+        let context = LegacyContext {
             manifest_path: manifest_path.clone(),
             bundle_path: manifest_path.with_extension("bundle.json"),
             public_socket: manifest_path.with_extension("sock"),
@@ -13631,8 +13653,8 @@ mod host_install_dispatch_tests {
         .expect("write manifest");
     }
 
-    fn test_context(manifest_path: PathBuf) -> Context {
-        Context {
+    fn test_context(manifest_path: PathBuf) -> LegacyContext {
+        LegacyContext {
             manifest_path: manifest_path.clone(),
             bundle_path: manifest_path.with_extension("bundle.json"),
             public_socket: manifest_path.with_extension("sock"),
@@ -13997,7 +14019,7 @@ mod host_install_dispatch_tests {
             exchange_result.expect("mock daemon exchange");
         });
 
-        let context = Context {
+        let context = LegacyContext {
             manifest_path: manifest_path.clone(),
             bundle_path: manifest_path.with_extension("bundle.json"),
             public_socket: socket_path.clone(),
@@ -14026,7 +14048,7 @@ mod host_install_dispatch_tests {
         command: F,
     ) -> (Result<i32, super::CliFailure>, Value, Vec<u8>)
     where
-        F: FnOnce(&Context) -> Result<i32, super::CliFailure>,
+        F: FnOnce(&LegacyContext) -> Result<i32, super::CliFailure>,
     {
         run_public_command_with_manifest(test_name, vm, response, write_test_manifest, command)
     }
@@ -14039,7 +14061,7 @@ mod host_install_dispatch_tests {
         command: F,
     ) -> (Result<i32, super::CliFailure>, Value, Vec<u8>)
     where
-        F: FnOnce(&Context) -> Result<i32, super::CliFailure>,
+        F: FnOnce(&LegacyContext) -> Result<i32, super::CliFailure>,
         W: FnOnce(&PathBuf, &str),
     {
         let socket_path = test_socket_path(test_name, ".sock");
@@ -14098,7 +14120,7 @@ mod host_install_dispatch_tests {
             exchange_result.expect("mock daemon exchange");
         });
 
-        let context = Context {
+        let context = LegacyContext {
             manifest_path: manifest_path.clone(),
             bundle_path: manifest_path.with_extension("bundle.json"),
             public_socket: socket_path.clone(),
@@ -14207,7 +14229,7 @@ mod host_install_dispatch_tests {
             exchange.expect("mock daemon exchange");
         });
 
-        let context = Context {
+        let context = LegacyContext {
             manifest_path: manifest_path.clone(),
             bundle_path: PathBuf::from("/dev/null"),
             public_socket: socket_path.clone(),
@@ -14245,9 +14267,9 @@ mod host_install_dispatch_tests {
         )
     }
 
-    fn missing_daemon_context() -> Context {
+    fn missing_daemon_context() -> LegacyContext {
         let missing_manifest = test_socket_path("missing-daemon", ".missing-manifest.json");
-        Context {
+        LegacyContext {
             manifest_path: missing_manifest,
             bundle_path: PathBuf::from("/dev/null"),
             public_socket: PathBuf::from("/dev/null"),
@@ -14347,7 +14369,7 @@ mod host_install_dispatch_tests {
         // or `TOKEN=hunter2`). The operator error must report the offending
         // position only - never the raw entry, key, or value.
         const SECRET: &str = "sentinel-env-secret-7f3a";
-        let context = Context {
+        let context = LegacyContext {
             manifest_path: PathBuf::from("/dev/null"),
             bundle_path: PathBuf::from("/dev/null"),
             public_socket: PathBuf::from("/dev/null"),
@@ -14425,7 +14447,7 @@ mod host_install_dispatch_tests {
         // usage envelope (source: cli, reason: usage, exit 2) and the human run
         // is a plain stderr usage failure - both matching error-codes.md and
         // cli-contract.md.
-        let context = Context {
+        let context = LegacyContext {
             manifest_path: PathBuf::from("/dev/null"),
             bundle_path: PathBuf::from("/dev/null"),
             public_socket: PathBuf::from("/dev/null"),
@@ -15400,7 +15422,7 @@ mod host_install_dispatch_tests {
             (join, request_rx)
         });
 
-        let context = Context {
+        let context = LegacyContext {
             manifest_path: manifest_path.clone(),
             bundle_path: bundle_path.clone(),
             public_socket: socket_path.clone(),
@@ -15584,7 +15606,7 @@ mod host_install_dispatch_tests {
             exchange_result.expect("mock daemon exchange");
         });
 
-        let context = Context {
+        let context = LegacyContext {
             manifest_path: PathBuf::from("/dev/null"),
             bundle_path: PathBuf::from("/dev/null"),
             public_socket: socket_path.clone(),
@@ -16115,7 +16137,7 @@ mod host_install_dispatch_tests {
             std::fs::create_dir_all(parent).expect("create test manifest dir");
         }
         write_qemu_media_manifest(&manifest_path, vm);
-        let context = Context {
+        let context = LegacyContext {
             manifest_path: manifest_path.clone(),
             bundle_path: manifest_path.with_extension("missing-bundle.json"),
             public_socket: test_socket_path("qemu-media-vm-dry-run", ".sock"),
@@ -16364,7 +16386,7 @@ mod host_install_dispatch_tests {
         write_test_manifest(&manifest_path, vm);
         let bundle_path = manifest_path.with_extension("bundle.json");
         write_bundle_with_realm_controllers(&bundle_path, vm);
-        let context = Context {
+        let context = LegacyContext {
             manifest_path: manifest_path.clone(),
             bundle_path: bundle_path.clone(),
             public_socket: manifest_path.with_extension("sock"),
@@ -16421,7 +16443,7 @@ mod host_install_dispatch_tests {
         // "sys-work-gateway" must be declared so the conventional gateway
         // route resolves rather than erroring with "missing realm entrypoint".
         write_test_manifest(&manifest_path, "sys-work-gateway");
-        let context = Context {
+        let context = LegacyContext {
             manifest_path: manifest_path.clone(),
             bundle_path: manifest_path.with_extension("missing-bundle.json"),
             public_socket: manifest_path.with_extension("sock"),
@@ -16463,7 +16485,7 @@ mod host_install_dispatch_tests {
             std::fs::create_dir_all(parent).expect("create test manifest dir");
         }
         write_qemu_media_manifest(&manifest_path, vm);
-        let context = Context {
+        let context = LegacyContext {
             manifest_path: manifest_path.clone(),
             bundle_path: manifest_path.with_extension("missing-bundle.json"),
             public_socket: test_socket_path("qemu-media-usb-dry-run", ".sock"),
@@ -16923,7 +16945,7 @@ mod host_install_dispatch_tests {
 
         let manifest_path = state_dir.join("vms.json");
         write_test_manifest(&manifest_path, "vm-a");
-        let context = Context {
+        let context = LegacyContext {
             manifest_path: manifest_path.clone(),
             bundle_path: manifest_path.with_extension("bundle.json"),
             public_socket: PathBuf::from("/dev/null"),
@@ -16989,7 +17011,7 @@ mod host_install_dispatch_tests {
             br#"{"generation_id":"g-test","state":"ok","repair_attempted":false}"#,
         )
         .expect("write integrity");
-        let context = Context {
+        let context = LegacyContext {
             manifest_path: manifest_path.clone(),
             bundle_path: manifest_path.with_extension("bundle.json"),
             public_socket: PathBuf::from("/dev/null"),
@@ -17122,7 +17144,7 @@ mod host_install_dispatch_tests {
             ]}"#,
         )
         .expect("write pidfd table");
-        let context = Context {
+        let context = LegacyContext {
             manifest_path: PathBuf::from("/dev/null"),
             bundle_path: PathBuf::from("/dev/null"),
             public_socket: PathBuf::from("/dev/null"),
@@ -17365,7 +17387,7 @@ mod host_install_dispatch_tests {
             _observability: None,
             entries: Default::default(),
         };
-        let context = Context {
+        let context = LegacyContext {
             manifest_path: PathBuf::from("/dev/null"),
             bundle_path: PathBuf::from("/dev/null"),
             public_socket: PathBuf::from("/dev/null"),
@@ -17385,7 +17407,7 @@ mod host_install_dispatch_tests {
     fn public_status_entry_drives_legacy_status_services_without_pidfd_read() {
         let root = test_socket_path("public-status-output", "");
         std::fs::create_dir_all(&root).expect("create status root");
-        let context = Context {
+        let context = LegacyContext {
             manifest_path: root.join("vms.json"),
             bundle_path: root.join("bundle.json"),
             public_socket: PathBuf::from("/dev/null"),
@@ -17846,7 +17868,7 @@ mod host_install_dispatch_tests {
 
     #[test]
     fn vm_list_human_unavailable_reports_socket_requirement() {
-        let context = Context {
+        let context = LegacyContext {
             manifest_path: PathBuf::from("/dev/null"),
             bundle_path: PathBuf::from("/dev/null"),
             public_socket: test_socket_path("vm-list-unavailable", ".sock"),
@@ -17890,7 +17912,7 @@ mod host_install_dispatch_tests {
         perms.set_mode(0o000);
         std::fs::set_permissions(&state_dir, perms).expect("make daemon state dir unreadable");
 
-        let context = Context {
+        let context = LegacyContext {
             manifest_path: PathBuf::from("/dev/null"),
             bundle_path: PathBuf::from("/dev/null"),
             public_socket: PathBuf::from("/dev/null"),
@@ -17930,7 +17952,7 @@ mod host_install_dispatch_tests {
         perms.set_mode(0o000);
         std::fs::set_permissions(&parent, perms).expect("make bundle parent unreadable");
 
-        let context = Context {
+        let context = LegacyContext {
             manifest_path: PathBuf::from("/dev/null"),
             bundle_path: parent.join("bundle.json"),
             public_socket: PathBuf::from("/dev/null"),
@@ -18521,7 +18543,7 @@ mod ssh_spawn_gate {
     use std::path::PathBuf;
 
     use super::{
-        Context, DEFAULT_GUEST_CONFIG_PATH, GuestConfigReadOutcome, cmd_config_sync,
+        DEFAULT_GUEST_CONFIG_PATH, GuestConfigReadOutcome, LegacyContext, cmd_config_sync,
         config_staging_path, finish_config_sync_from_reply, read_guest_config_via_socket,
     };
 
@@ -18609,7 +18631,7 @@ mod ssh_spawn_gate {
         let dir = scratch("config-no-spawn");
 
         // The connection branch with a missing socket must not spawn SSH.
-        let context = Context {
+        let context = LegacyContext {
             manifest_path: PathBuf::from("/dev/null"),
             bundle_path: PathBuf::from("/dev/null"),
             public_socket: dir.join("absent-public.sock"),
@@ -18739,7 +18761,7 @@ mod ssh_spawn_gate {
         write_known_vm_manifest(&manifest_path, vm);
         write_old_generation_bundle(&bundle_path, vm);
 
-        let context = Context {
+        let context = LegacyContext {
             manifest_path,
             bundle_path,
             // A deliberately ABSENT socket: if a regression let the command
@@ -18807,7 +18829,7 @@ mod console_fsm_tests {
     //! QEMU blank-console warning message content.
 
     use super::{
-        AddressFamily, Context, DetachScan, IpcHelloOk, MAX_FRAME_BYTES, MsgFlags, SockFlag,
+        AddressFamily, DetachScan, IpcHelloOk, LegacyContext, MAX_FRAME_BYTES, MsgFlags, SockFlag,
         SockType, UnixAddr, daemon_supported_features, encode_type_tagged_message, nix_err_to_io,
         scan_chunk_for_detach, send, socket,
     };
@@ -19046,7 +19068,7 @@ mod console_fsm_tests {
             exchange.expect("mock console daemon exchange");
         });
 
-        let context = Context {
+        let context = LegacyContext {
             manifest_path: PathBuf::from("/dev/null"),
             bundle_path: PathBuf::from("/dev/null"),
             public_socket: socket_path.clone(),
@@ -19180,7 +19202,7 @@ mod console_fsm_tests {
             exchange.expect("mock console daemon exchange");
         });
 
-        let context = Context {
+        let context = LegacyContext {
             manifest_path: PathBuf::from("/dev/null"),
             bundle_path: PathBuf::from("/dev/null"),
             public_socket: socket_path.clone(),
