@@ -16,6 +16,7 @@ d2b-resource-store = { path = "../d2b-resource-store", version = "0.0.0-bootstra
 d2b-resource-store-redb = { path = "../d2b-resource-store-redb", version = "0.0.0-bootstrap" }
 d2b-telemetry = { path = "../d2b-telemetry", version = "0.0.0-bootstrap" }
 protobuf = "3.7.2"
+serde_json.workspace = true
 sha2.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 ttrpc = { workspace = true, features = ["async"] }
