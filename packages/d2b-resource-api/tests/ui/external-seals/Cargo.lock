@@ -177,6 +177,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "d2b-audit"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-telemetry",
+ "libc",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "d2b-contracts"
 version = "0.0.0-bootstrap"
 dependencies = [
@@ -217,8 +227,12 @@ dependencies = [
 name = "d2b-core-controller"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "d2b-audit",
  "d2b-contracts",
  "d2b-controller-toolkit",
+ "d2b-telemetry",
+ "serde_json",
+ "sha2",
  "tokio",
 ]
 
@@ -239,7 +253,9 @@ dependencies = [
  "d2b-core-controller",
  "d2b-resource-store",
  "d2b-resource-store-redb",
+ "d2b-telemetry",
  "protobuf",
+ "serde_json",
  "sha2",
  "tokio",
  "ttrpc",
@@ -267,15 +283,27 @@ dependencies = [
 name = "d2b-resource-store-redb"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "d2b-audit",
  "d2b-contracts",
  "d2b-controller-toolkit",
  "d2b-resource-store",
+ "d2b-telemetry",
  "redb",
  "rustix 0.38.44",
  "serde",
  "serde_json",
  "sha2",
  "tokio",
+]
+
+[[package]]
+name = "d2b-telemetry"
+version = "0.0.0-bootstrap"
+dependencies = [
+ "d2b-contracts",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
