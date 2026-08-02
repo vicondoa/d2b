@@ -1222,6 +1222,10 @@ struct LegacyContext {
     metrics_url: String,
 }
 
+// The old helper modules still import this private alias for their pure
+// fixtures. Runtime command dispatch uses `context::ZoneContext`.
+type Context = LegacyContext;
+
 impl LegacyContext {
     fn from_env() -> Result<Self, CliFailure> {
         Ok(Self {
