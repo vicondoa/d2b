@@ -270,6 +270,7 @@ pub(crate) fn create(
     deadline: RequestDeadline,
 ) -> Result<i32, CliFailure> {
     let resource_type = parse_resource_type(&args.resource_type)?;
+    reject_endpoint_mutation(context, resource_type.as_str(), mode)?;
     let spec = read_spec(args.spec_file.as_deref(), args.spec_stdin)?;
     let value = context.invoke(
         "Create",
