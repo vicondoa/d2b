@@ -174,8 +174,9 @@ jobs:
           # tests. Cargo fingerprints compiled inputs on restore, while failed
           # compile units are never cached and still rerun on every gate.
           # A single writer keeps concurrent saves from racing one shared key.
-          # The main-workspace Rust shard is that writer; it produces both the
-          # common Cargo target and the slow compiler/rustdoc scratch trees.
+          # The main-workspace Rust shard is that writer; it produces the common
+          # Cargo target and preserves the restored shared API census tree. It
+          # prunes warm-local-only split census trees before the post-job save.
           # Every other Rust job restores the last complete entry. On a cold key
           # parallel shards may duplicate compilation, but only one entry wins.
           save-if: "false"
@@ -277,11 +278,15 @@ jobs:
           # tests. Cargo fingerprints compiled inputs on restore, while failed
           # compile units are never cached and still rerun on every gate.
           # A single writer keeps concurrent saves from racing one shared key.
-          # The main-workspace Rust shard is that writer; it produces both the
-          # common Cargo target and the slow compiler/rustdoc scratch trees.
+          # The main-workspace Rust shard is that writer; it produces the common
+          # Cargo target and preserves the restored shared API census tree. It
+          # prunes warm-local-only split census trees before the post-job save.
           # Every other Rust job restores the last complete entry. On a cold key
           # parallel shards may duplicate compilation, but only one entry wins.
           save-if: "true"
+      - name: Prune warm-local-only Rust cache trees
+        run: |
+          rm -rf             .scratch/rust-test-cache/api-surface-*/public-census             .scratch/rust-test-cache/api-surface-*/private-census
       - name: Rust main workspace gate
         env:
           D2B_SKIP_FIXTURE_BUILD: "1"
@@ -380,8 +385,9 @@ jobs:
           # tests. Cargo fingerprints compiled inputs on restore, while failed
           # compile units are never cached and still rerun on every gate.
           # A single writer keeps concurrent saves from racing one shared key.
-          # The main-workspace Rust shard is that writer; it produces both the
-          # common Cargo target and the slow compiler/rustdoc scratch trees.
+          # The main-workspace Rust shard is that writer; it produces the common
+          # Cargo target and preserves the restored shared API census tree. It
+          # prunes warm-local-only split census trees before the post-job save.
           # Every other Rust job restores the last complete entry. On a cold key
           # parallel shards may duplicate compilation, but only one entry wins.
           save-if: "false"
@@ -483,8 +489,9 @@ jobs:
           # tests. Cargo fingerprints compiled inputs on restore, while failed
           # compile units are never cached and still rerun on every gate.
           # A single writer keeps concurrent saves from racing one shared key.
-          # The main-workspace Rust shard is that writer; it produces both the
-          # common Cargo target and the slow compiler/rustdoc scratch trees.
+          # The main-workspace Rust shard is that writer; it produces the common
+          # Cargo target and preserves the restored shared API census tree. It
+          # prunes warm-local-only split census trees before the post-job save.
           # Every other Rust job restores the last complete entry. On a cold key
           # parallel shards may duplicate compilation, but only one entry wins.
           save-if: "false"
@@ -586,8 +593,9 @@ jobs:
           # tests. Cargo fingerprints compiled inputs on restore, while failed
           # compile units are never cached and still rerun on every gate.
           # A single writer keeps concurrent saves from racing one shared key.
-          # The main-workspace Rust shard is that writer; it produces both the
-          # common Cargo target and the slow compiler/rustdoc scratch trees.
+          # The main-workspace Rust shard is that writer; it produces the common
+          # Cargo target and preserves the restored shared API census tree. It
+          # prunes warm-local-only split census trees before the post-job save.
           # Every other Rust job restores the last complete entry. On a cold key
           # parallel shards may duplicate compilation, but only one entry wins.
           save-if: "false"
@@ -689,8 +697,9 @@ jobs:
           # tests. Cargo fingerprints compiled inputs on restore, while failed
           # compile units are never cached and still rerun on every gate.
           # A single writer keeps concurrent saves from racing one shared key.
-          # The main-workspace Rust shard is that writer; it produces both the
-          # common Cargo target and the slow compiler/rustdoc scratch trees.
+          # The main-workspace Rust shard is that writer; it produces the common
+          # Cargo target and preserves the restored shared API census tree. It
+          # prunes warm-local-only split census trees before the post-job save.
           # Every other Rust job restores the last complete entry. On a cold key
           # parallel shards may duplicate compilation, but only one entry wins.
           save-if: "false"
@@ -792,8 +801,9 @@ jobs:
           # tests. Cargo fingerprints compiled inputs on restore, while failed
           # compile units are never cached and still rerun on every gate.
           # A single writer keeps concurrent saves from racing one shared key.
-          # The main-workspace Rust shard is that writer; it produces both the
-          # common Cargo target and the slow compiler/rustdoc scratch trees.
+          # The main-workspace Rust shard is that writer; it produces the common
+          # Cargo target and preserves the restored shared API census tree. It
+          # prunes warm-local-only split census trees before the post-job save.
           # Every other Rust job restores the last complete entry. On a cold key
           # parallel shards may duplicate compilation, but only one entry wins.
           save-if: "false"
@@ -895,8 +905,9 @@ jobs:
           # tests. Cargo fingerprints compiled inputs on restore, while failed
           # compile units are never cached and still rerun on every gate.
           # A single writer keeps concurrent saves from racing one shared key.
-          # The main-workspace Rust shard is that writer; it produces both the
-          # common Cargo target and the slow compiler/rustdoc scratch trees.
+          # The main-workspace Rust shard is that writer; it produces the common
+          # Cargo target and preserves the restored shared API census tree. It
+          # prunes warm-local-only split census trees before the post-job save.
           # Every other Rust job restores the last complete entry. On a cold key
           # parallel shards may duplicate compilation, but only one entry wins.
           save-if: "false"
@@ -1058,8 +1069,9 @@ jobs:
           # tests. Cargo fingerprints compiled inputs on restore, while failed
           # compile units are never cached and still rerun on every gate.
           # A single writer keeps concurrent saves from racing one shared key.
-          # The main-workspace Rust shard is that writer; it produces both the
-          # common Cargo target and the slow compiler/rustdoc scratch trees.
+          # The main-workspace Rust shard is that writer; it produces the common
+          # Cargo target and preserves the restored shared API census tree. It
+          # prunes warm-local-only split census trees before the post-job save.
           # Every other Rust job restores the last complete entry. On a cold key
           # parallel shards may duplicate compilation, but only one entry wins.
           save-if: "false"
@@ -1445,8 +1457,9 @@ jobs:
           # tests. Cargo fingerprints compiled inputs on restore, while failed
           # compile units are never cached and still rerun on every gate.
           # A single writer keeps concurrent saves from racing one shared key.
-          # The main-workspace Rust shard is that writer; it produces both the
-          # common Cargo target and the slow compiler/rustdoc scratch trees.
+          # The main-workspace Rust shard is that writer; it produces the common
+          # Cargo target and preserves the restored shared API census tree. It
+          # prunes warm-local-only split census trees before the post-job save.
           # Every other Rust job restores the last complete entry. On a cold key
           # parallel shards may duplicate compilation, but only one entry wins.
           save-if: "false"
@@ -1548,8 +1561,9 @@ jobs:
           # tests. Cargo fingerprints compiled inputs on restore, while failed
           # compile units are never cached and still rerun on every gate.
           # A single writer keeps concurrent saves from racing one shared key.
-          # The main-workspace Rust shard is that writer; it produces both the
-          # common Cargo target and the slow compiler/rustdoc scratch trees.
+          # The main-workspace Rust shard is that writer; it produces the common
+          # Cargo target and preserves the restored shared API census tree. It
+          # prunes warm-local-only split census trees before the post-job save.
           # Every other Rust job restores the last complete entry. On a cold key
           # parallel shards may duplicate compilation, but only one entry wins.
           save-if: "false"
