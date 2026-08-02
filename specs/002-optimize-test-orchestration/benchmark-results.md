@@ -320,9 +320,12 @@ reference, not a passing implementation of the future manifest contract.
 
 ## Rust optimized result
 
-The accepted Rust implementation is commit
-`6d34ac9de7b99e8c5fb27207df3f5919ba817e43`. GNU Make owns nine bounded
-leaves, while `tests/test-rust.sh` owns only explicit leaf execution. The
+The accepted three-run Rust benchmark was captured at
+`6d34ac9de7b99e8c5fb27207df3f5919ba817e43`. The subsequent scoped panel fixes
+do not change the scheduling topology; final fix tip
+`16d3cfe43dcea65ca91b692391b5cd041dbeb7bf` passed the complete aggregate with
+exact evidence in 135 coarse seconds. GNU Make owns nine bounded leaves,
+while `tests/test-rust.sh` owns only explicit leaf execution. The
 representative host calculated a 12-job budget and admitted at most nine
 lanes. Budgets through nine use one job per lane; the three surplus jobs on
 this host are assigned to the measured API long pole, so its two rustdoc
@@ -373,7 +376,7 @@ reported as a warm result.
 
 The passing v1 manifest is
 `.scratch/test-speedup-optimized/test-rust-executed.json`, SHA-256
-`8d93206ffd1cefccb9fd65a7040b9b540ee722538dc544136a88434a1819f47e`.
+`f450e2e42b24a56b37708b9d6e3b9b9d7be0a3c29b09d41408a13750e751db1a`.
 It records `run_status = "passed"` and all 20 baseline leaf identifiers.
 Direct sorted comparison with the trace-derived baseline manifest has no
 missing or added leaf.
