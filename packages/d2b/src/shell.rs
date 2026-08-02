@@ -96,6 +96,16 @@ fn open(
             2,
         ));
     }
+    if let Some(name) = args.name.as_deref()
+        && !valid_session_name(name)
+    {
+        return Err(context.failure(
+            "ref-invalid",
+            "shell session name is outside its bounds",
+            mode,
+            2,
+        ));
+    }
     warn_unsafe_local(&execution_ref, mode);
     let value = context.invoke(
         "Create",
@@ -176,6 +186,18 @@ fn list(
     )?;
     context.emit(&value, mode)?;
     Ok(0)
+}
+
+fn valid_session_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 63
+        && value
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_lowercase())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
 }
 
 fn detach_or_kill(

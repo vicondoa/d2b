@@ -144,6 +144,14 @@ fn status(
     deadline: RequestDeadline,
 ) -> Result<i32, CliFailure> {
     let resource_ref = endpoint_ref(&args.name)?;
+    if args.watch && !mode.is_json() {
+        return Err(context.failure(
+            "ref-invalid",
+            "endpoint status --watch output is JSON-lines only",
+            mode,
+            2,
+        ));
+    }
     let value = context.invoke(
         "Status",
         json!({
@@ -299,10 +307,31 @@ fn redact_unknown_provider_details(value: &mut Value) {
     if let Some(provider) = value.pointer_mut("/status/provider")
         && let Value::Object(object) = provider
     {
-        if let Some(details) = object.get_mut("details")
-            && !details.is_object()
-        {
-            *details = Value::Object(Map::new());
+        const ALLOWED_PROVIDER_FIELDS: &[&str] = &[
+            "phase",
+            "generation",
+            "class",
+            "readiness",
+            "capabilities",
+            "locality",
+            "transportClass",
+            "observations",
+            "details",
+        ];
+        object.retain(|key, _| ALLOWED_PROVIDER_FIELDS.contains(&key.as_str()));
+        if let Some(details) = object.get_mut("details") {
+            if let Value::Object(details) = details {
+                const ALLOWED_DETAIL_FIELDS: &[&str] = &[
+                    "phase",
+                    "generation",
+                    "readiness",
+                    "capabilities",
+                    "locality",
+                ];
+                details.retain(|key, _| ALLOWED_DETAIL_FIELDS.contains(&key.as_str()));
+            } else {
+                *details = Value::Object(Map::new());
+            }
         }
     }
 }
@@ -343,5 +372,36 @@ mod tests {
     fn endpoint_output_rejects_raw_locator_keys() {
         assert!(find_forbidden_endpoint_key(&json!({"status":{"addressClass":"x"}})).is_some());
         assert!(find_forbidden_endpoint_key(&json!({"endpointClass":"service"})).is_none());
+    }
+
+    #[test]
+    fn unknown_provider_projection_details_are_redacted() {
+        let mut value = json!({
+            "status": {
+                "provider": {
+                    "phase": "Ready",
+                    "unknownImplementationField": "hidden",
+                    "details": {
+                        "readiness": "ready",
+                        "privateImplementationField": "hidden"
+                    }
+                }
+            }
+        });
+        redact_unknown_provider_details(&mut value);
+        assert!(
+            value
+                .pointer("/status/provider/unknownImplementationField")
+                .is_none()
+        );
+        assert!(
+            value
+                .pointer("/status/provider/details/privateImplementationField")
+                .is_none()
+        );
+        assert_eq!(
+            value.pointer("/status/provider/details/readiness"),
+            Some(&json!("ready"))
+        );
     }
 }

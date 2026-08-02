@@ -128,6 +128,40 @@ fn run_create(
     {
         return Err(context.failure("ref-invalid", "exec domain must be system or user", mode, 2));
     }
+    if let Some(user_ref) = args.user_ref.as_deref() {
+        let user_ref = parse_resource_ref(user_ref, Some("User"))?;
+        if user_ref.resource_type().as_str() != "User" {
+            return Err(context.failure(
+                "ref-invalid",
+                "exec --user must name a User ResourceRef",
+                mode,
+                2,
+            ));
+        }
+    }
+    if let Some(provider_ref) = args.provider.as_deref() {
+        let provider_ref = parse_resource_ref(provider_ref, Some("Provider"))?;
+        if provider_ref.resource_type().as_str() != "Provider" {
+            return Err(context.failure(
+                "ref-invalid",
+                "exec --provider must name a Provider ResourceRef",
+                mode,
+                2,
+            ));
+        }
+    }
+    if args
+        .cwd
+        .as_deref()
+        .is_some_and(|cwd| cwd.is_empty() || cwd.len() > 4096 || cwd.chars().any(char::is_control))
+    {
+        return Err(context.failure(
+            "ref-invalid",
+            "exec working directory is outside its bounds",
+            mode,
+            2,
+        ));
+    }
     warn_unsafe_local(&execution_ref, mode);
     let value = context.invoke(
         "Create",
@@ -220,6 +254,14 @@ fn status(
     deadline: RequestDeadline,
 ) -> Result<i32, CliFailure> {
     let resource_ref = validate_exec_ref(context, &args.resource_ref, mode)?;
+    if args.watch && !mode.is_json() {
+        return Err(context.failure(
+            "ref-invalid",
+            "exec status --watch output is JSON-lines only",
+            mode,
+            2,
+        ));
+    }
     let value = context.invoke(
         "Status",
         json!({
@@ -248,6 +290,16 @@ fn list(
         .as_deref()
         .map(|value| parse_resource_ref(value, None))
         .transpose()?;
+    if let Some(execution_ref) = &execution_ref
+        && !matches!(execution_ref.resource_type().as_str(), "Host" | "Guest")
+    {
+        return Err(context.failure(
+            "ref-invalid",
+            "exec list executionRef must name a Host or Guest",
+            mode,
+            2,
+        ));
+    }
     let value = context.invoke(
         "List",
         json!({

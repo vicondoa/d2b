@@ -36,6 +36,10 @@ pub(crate) enum TypedResourceCommand {
     Status(TypedStatusArgs),
     Upgrade(TypedUpgradeArgs),
     Reconcile(TypedReconcileArgs),
+    Verify(TypedVerifyArgs),
+    Usb(DeviceUsbArgs),
+    #[command(name = "security-key")]
+    SecurityKey(DeviceSecurityKeyArgs),
 }
 
 #[derive(Debug, Args, Clone)]
@@ -45,6 +49,10 @@ pub(crate) struct TypedNameArgs {
 
 #[derive(Debug, Args, Clone)]
 pub(crate) struct TypedListArgs {
+    #[arg(long = "execution-ref")]
+    pub(crate) execution_ref: Option<String>,
+    #[arg(long)]
+    pub(crate) domain: Option<String>,
     #[arg(long)]
     pub(crate) phase: Option<String>,
     #[arg(long = "label-selector")]
@@ -128,6 +136,78 @@ pub(crate) struct TypedReconcileArgs {
     pub(crate) name: String,
     #[arg(long = "reconcile-deadline")]
     pub(crate) reconcile_deadline: Option<String>,
+}
+
+#[derive(Debug, Args, Clone)]
+pub(crate) struct TypedVerifyArgs {
+    pub(crate) name: String,
+    #[arg(long)]
+    pub(crate) repair: bool,
+}
+
+#[derive(Debug, Args, Clone)]
+pub(crate) struct DeviceUsbArgs {
+    #[command(subcommand)]
+    pub(crate) command: DeviceUsbCommand,
+}
+
+#[derive(Debug, Subcommand, Clone)]
+pub(crate) enum DeviceUsbCommand {
+    Attach(DeviceUsbAttachArgs),
+    Detach(DeviceUsbDetachArgs),
+    Probe,
+}
+
+#[derive(Debug, Args, Clone)]
+pub(crate) struct DeviceUsbAttachArgs {
+    pub(crate) name: String,
+    pub(crate) busid: String,
+    #[arg(long, conflicts_with = "apply")]
+    pub(crate) dry_run: bool,
+    #[arg(long, conflicts_with = "dry_run")]
+    pub(crate) apply: bool,
+}
+
+#[derive(Debug, Args, Clone)]
+pub(crate) struct DeviceUsbDetachArgs {
+    pub(crate) name: String,
+    pub(crate) busid: String,
+    #[arg(long, conflicts_with = "apply")]
+    pub(crate) dry_run: bool,
+    #[arg(long, conflicts_with = "dry_run")]
+    pub(crate) apply: bool,
+}
+
+#[derive(Debug, Args, Clone)]
+pub(crate) struct DeviceSecurityKeyArgs {
+    #[command(subcommand)]
+    pub(crate) command: DeviceSecurityKeyCommand,
+}
+
+#[derive(Debug, Subcommand, Clone)]
+pub(crate) enum DeviceSecurityKeyCommand {
+    Status,
+    Sessions,
+    Cancel(DeviceSecurityKeyCancelArgs),
+    Test(DeviceSecurityKeyTestArgs),
+}
+
+#[derive(Debug, Args, Clone)]
+pub(crate) struct DeviceSecurityKeyCancelArgs {
+    pub(crate) session_id: Option<String>,
+    #[arg(long, conflicts_with = "session_id")]
+    pub(crate) current: bool,
+    #[arg(long, conflicts_with = "apply")]
+    pub(crate) dry_run: bool,
+    #[arg(long, conflicts_with = "dry_run")]
+    pub(crate) apply: bool,
+}
+
+#[derive(Debug, Args, Clone)]
+pub(crate) struct DeviceSecurityKeyTestArgs {
+    pub(crate) name: String,
+    #[arg(long)]
+    pub(crate) dry_run: bool,
 }
 
 /// The `d2b resource` namespace also carries the generic authority read
@@ -218,6 +298,8 @@ pub(crate) fn request_list(
     let resource_type = parse_resource_type(&args.resource_type)?;
     let payload = list_payload(
         resource_type.as_str(),
+        args.execution_ref.as_deref(),
+        args.domain.as_deref(),
         args.phase.as_deref(),
         args.label_selector.as_deref(),
         args.updates,
@@ -239,6 +321,8 @@ pub(crate) fn watch(
     let resource_type = parse_resource_type(&args.resource_type)?;
     let payload = list_payload(
         resource_type.as_str(),
+        None,
+        None,
         args.phase.as_deref(),
         args.label_selector.as_deref(),
         false,
@@ -272,13 +356,14 @@ pub(crate) fn create(
     let resource_type = parse_resource_type(&args.resource_type)?;
     reject_endpoint_mutation(context, resource_type.as_str(), mode)?;
     let spec = read_spec(args.spec_file.as_deref(), args.spec_stdin)?;
+    let reconcile_deadline = reconcile_deadline(context, args.reconcile_deadline.as_deref(), mode)?;
     let value = context.invoke(
         "Create",
         json!({
             "resourceType": resource_type.as_str(),
             "spec": spec,
             "waitForReconcile": args.wait_for_reconcile,
-            "reconcileDeadlineMs": args.reconcile_deadline.as_deref(),
+            "reconcileDeadlineMs": reconcile_deadline,
         }),
         deadline,
         mode,
@@ -296,6 +381,7 @@ pub(crate) fn update_spec(
     let resource_ref = parse_resource_ref(&args.resource_ref, None)?;
     reject_endpoint_mutation(context, resource_ref.resource_type().as_str(), mode)?;
     let spec = read_spec(args.spec_file.as_deref(), args.spec_stdin)?;
+    let reconcile_deadline = reconcile_deadline(context, args.reconcile_deadline.as_deref(), mode)?;
     let value = context.invoke(
         "UpdateSpec",
         json!({
@@ -303,7 +389,7 @@ pub(crate) fn update_spec(
             "expectedRevision": args.revision,
             "spec": spec,
             "waitForReconcile": args.wait_for_reconcile,
-            "reconcileDeadlineMs": args.reconcile_deadline.as_deref(),
+            "reconcileDeadlineMs": reconcile_deadline,
         }),
         deadline,
         mode,
@@ -320,13 +406,14 @@ pub(crate) fn delete(
 ) -> Result<i32, CliFailure> {
     let resource_ref = parse_resource_ref(&args.resource_ref, None)?;
     reject_endpoint_mutation(context, resource_ref.resource_type().as_str(), mode)?;
+    let reconcile_deadline = reconcile_deadline(context, args.reconcile_deadline.as_deref(), mode)?;
     let value = context.invoke(
         "Delete",
         json!({
             "resourceRef": resource_ref.to_canonical_string(),
             "expectedRevision": args.revision,
             "waitForReconcile": args.wait_for_reconcile,
-            "reconcileDeadlineMs": args.reconcile_deadline.as_deref(),
+            "reconcileDeadlineMs": reconcile_deadline,
         }),
         deadline,
         mode,
@@ -342,6 +429,14 @@ pub(crate) fn status(
     deadline: RequestDeadline,
 ) -> Result<i32, CliFailure> {
     let resource_ref = parse_resource_ref(&args.resource_ref, None)?;
+    if args.watch && !mode.is_json() {
+        return Err(context.failure(
+            "ref-invalid",
+            "status --watch output is JSON-lines only",
+            mode,
+            2,
+        ));
+    }
     let value = context.invoke(
         "Status",
         json!({
@@ -352,14 +447,6 @@ pub(crate) fn status(
         mode,
     )?;
     if args.watch {
-        if !mode.is_json() {
-            return Err(context.failure(
-                "ref-invalid",
-                "status --watch output is JSON-lines only",
-                mode,
-                2,
-            ));
-        }
         context.emit_stream(&value, mode)?;
     } else {
         context.emit(&value, mode)?;
@@ -374,13 +461,14 @@ pub(crate) fn upgrade(
     deadline: RequestDeadline,
 ) -> Result<i32, CliFailure> {
     let resource_ref = parse_resource_ref(&args.resource_ref, None)?;
+    let reconcile_deadline = reconcile_deadline(context, args.reconcile_deadline.as_deref(), mode)?;
     let value = context.invoke(
         "Upgrade",
         json!({
             "resourceRef": resource_ref.to_canonical_string(),
             "recursive": args.recursive,
             "apply": args.apply,
-            "reconcileDeadlineMs": args.reconcile_deadline.as_deref(),
+            "reconcileDeadlineMs": reconcile_deadline,
         }),
         deadline,
         mode,
@@ -396,11 +484,12 @@ pub(crate) fn reconcile(
     deadline: RequestDeadline,
 ) -> Result<i32, CliFailure> {
     let resource_ref = parse_resource_ref(&args.resource_ref, None)?;
+    let reconcile_deadline = reconcile_deadline(context, args.reconcile_deadline.as_deref(), mode)?;
     let value = context.invoke(
         "Reconcile",
         json!({
             "resourceRef": resource_ref.to_canonical_string(),
-            "reconcileDeadlineMs": args.reconcile_deadline.as_deref(),
+            "reconcileDeadlineMs": reconcile_deadline,
         }),
         deadline,
         mode,
@@ -426,6 +515,8 @@ pub(crate) fn typed(
         TypedResourceCommand::List(args) => {
             let generic = GenericListArgs {
                 resource_type: resource_type.to_owned(),
+                execution_ref: args.execution_ref.clone(),
+                domain: args.domain.clone(),
                 phase: args.phase.clone(),
                 label_selector: args.label_selector.clone(),
                 updates: args.updates,
@@ -512,6 +603,50 @@ pub(crate) fn typed(
             };
             reconcile(context, &generic, mode, deadline)
         }
+        TypedResourceCommand::Verify(args) => {
+            if resource_type != "Volume" {
+                return Err(context.failure(
+                    "ref-invalid",
+                    "verify is available only for Volume resources",
+                    mode,
+                    2,
+                ));
+            }
+            let resource_ref = parse_resource_ref(&format!("{resource_type}/{}", args.name), None)?;
+            let value = context.invoke(
+                "Verify",
+                json!({
+                    "resourceRef": resource_ref.to_canonical_string(),
+                    "repair": args.repair,
+                }),
+                deadline,
+                mode,
+            )?;
+            context.emit(&value, mode)?;
+            Ok(0)
+        }
+        TypedResourceCommand::Usb(args) => {
+            if resource_type != "Device" {
+                return Err(context.failure(
+                    "ref-invalid",
+                    "USB operations are available only for Device resources",
+                    mode,
+                    2,
+                ));
+            }
+            device_usb(context, args, mode, deadline)
+        }
+        TypedResourceCommand::SecurityKey(args) => {
+            if resource_type != "Device" {
+                return Err(context.failure(
+                    "ref-invalid",
+                    "security-key operations are available only for Device resources",
+                    mode,
+                    2,
+                ));
+            }
+            device_security_key(context, args, mode, deadline)
+        }
     }
 }
 
@@ -564,6 +699,8 @@ fn authorities(
 
 fn list_payload(
     resource_type: &str,
+    execution_ref: Option<&str>,
+    domain: Option<&str>,
     phase: Option<&str>,
     label_selector: Option<&str>,
     updates: bool,
@@ -574,21 +711,152 @@ fn list_payload(
         let (key, value) = selector
             .split_once('=')
             .ok_or_else(|| CliFailure::new(2, "label selector must use key=value"))?;
-        if key.is_empty() || value.is_empty() || key.len() > 64 || value.len() > 256 {
+        if key.is_empty()
+            || value.is_empty()
+            || key.len() > 64
+            || value.len() > 256
+            || key.chars().any(char::is_control)
+            || value.chars().any(char::is_control)
+        {
             return Err(CliFailure::new(2, "label selector is outside its bounds"));
         }
     }
-    if limit.is_some_and(|limit| limit == 0 || limit > 1024) {
-        return Err(CliFailure::new(2, "list limit must be between 1 and 1024"));
+    if limit.is_some_and(|limit| limit == 0 || limit > 500) {
+        return Err(CliFailure::new(2, "list limit must be between 1 and 500"));
     }
-    Ok(json!({
+    if page_token.is_some_and(|token| token.len() > 256 || token.chars().any(char::is_control)) {
+        return Err(CliFailure::new(2, "page token is outside its bounds"));
+    }
+    if let Some(domain) = domain
+        && !matches!(domain, "system" | "user")
+    {
+        return Err(CliFailure::new(2, "resource domain must be system or user"));
+    }
+    if let Some(execution_ref) = execution_ref {
+        let execution_ref = parse_resource_ref(execution_ref, None)?;
+        if !matches!(execution_ref.resource_type().as_str(), "Host" | "Guest") {
+            return Err(CliFailure::new(
+                2,
+                "execution-ref must name a Host or Guest",
+            ));
+        }
+    }
+    let mut payload = json!({
         "resourceType": resource_type,
         "phase": phase,
         "labelSelector": label_selector,
         "updates": updates,
         "pageToken": page_token,
         "limit": limit,
-    }))
+    });
+    if let Some(execution_ref) = execution_ref {
+        payload["executionRef"] = Value::String(execution_ref.to_owned());
+    }
+    if let Some(domain) = domain {
+        payload["domain"] = Value::String(domain.to_owned());
+    }
+    Ok(payload)
+}
+
+fn device_usb(
+    context: &ZoneContext,
+    args: &DeviceUsbArgs,
+    mode: OutputMode,
+    deadline: RequestDeadline,
+) -> Result<i32, CliFailure> {
+    let (method, payload) = match &args.command {
+        DeviceUsbCommand::Attach(args) => {
+            require_mutation_flags(context, "device usb attach", args.dry_run, args.apply, mode)?;
+            let resource_ref = parse_resource_ref(&args.name, Some("Device"))?;
+            (
+                "DeviceUsbAttach",
+                json!({
+                    "resourceRef": resource_ref.to_canonical_string(),
+                    "busid": args.busid,
+                    "dryRun": args.dry_run,
+                    "apply": args.apply,
+                }),
+            )
+        }
+        DeviceUsbCommand::Detach(args) => {
+            require_mutation_flags(context, "device usb detach", args.dry_run, args.apply, mode)?;
+            let resource_ref = parse_resource_ref(&args.name, Some("Device"))?;
+            (
+                "DeviceUsbDetach",
+                json!({
+                    "resourceRef": resource_ref.to_canonical_string(),
+                    "busid": args.busid,
+                    "dryRun": args.dry_run,
+                    "apply": args.apply,
+                }),
+            )
+        }
+        DeviceUsbCommand::Probe => ("DeviceUsbProbe", json!({})),
+    };
+    let value = context.invoke(method, payload, deadline, mode)?;
+    context.emit(&value, mode)?;
+    Ok(0)
+}
+
+fn device_security_key(
+    context: &ZoneContext,
+    args: &DeviceSecurityKeyArgs,
+    mode: OutputMode,
+    deadline: RequestDeadline,
+) -> Result<i32, CliFailure> {
+    let (method, payload) = match &args.command {
+        DeviceSecurityKeyCommand::Status => ("SecurityKeyStatus", json!({})),
+        DeviceSecurityKeyCommand::Sessions => ("SecurityKeySessions", json!({})),
+        DeviceSecurityKeyCommand::Cancel(args) => {
+            require_mutation_flags(
+                context,
+                "device security-key cancel",
+                args.dry_run,
+                args.apply,
+                mode,
+            )?;
+            (
+                "SecurityKeyCancel",
+                json!({
+                    "sessionId": args.session_id,
+                    "current": args.current,
+                    "dryRun": args.dry_run,
+                    "apply": args.apply,
+                }),
+            )
+        }
+        DeviceSecurityKeyCommand::Test(args) => {
+            let resource_ref = parse_resource_ref(&args.name, Some("Device"))?;
+            (
+                "SecurityKeyTest",
+                json!({
+                    "resourceRef": resource_ref.to_canonical_string(),
+                    "dryRun": args.dry_run,
+                }),
+            )
+        }
+    };
+    let value = context.invoke(method, payload, deadline, mode)?;
+    context.emit(&value, mode)?;
+    Ok(0)
+}
+
+fn require_mutation_flags(
+    context: &ZoneContext,
+    command: &str,
+    dry_run: bool,
+    apply: bool,
+    mode: OutputMode,
+) -> Result<(), CliFailure> {
+    if dry_run == apply {
+        return Err(context.failure(
+            "ref-invalid",
+            &format!("{command} requires exactly one of --dry-run or --apply"),
+            mode,
+            2,
+        ));
+    }
+    Ok(())
 }
 
 fn reject_endpoint_mutation(
@@ -607,14 +875,44 @@ fn reject_endpoint_mutation(
     Ok(())
 }
 
+fn reconcile_deadline(
+    context: &ZoneContext,
+    value: Option<&str>,
+    mode: OutputMode,
+) -> Result<Option<u64>, CliFailure> {
+    crate::context::ZoneContext::expedited_deadline(value).map_err(|error| {
+        context.failure(
+            "ref-invalid",
+            error
+                .message
+                .strip_prefix("ref-invalid: ")
+                .unwrap_or(&error.message),
+            mode,
+            error.exit_code,
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn list_limits_and_selectors_are_bounded() {
-        assert!(list_payload("Guest", None, Some("env=dev"), false, None, Some(1)).is_ok());
-        assert!(list_payload("Guest", None, Some("env"), false, None, None).is_err());
-        assert!(list_payload("Guest", None, None, false, None, Some(1025)).is_err());
+        assert!(
+            list_payload(
+                "Guest",
+                None,
+                None,
+                None,
+                Some("env=dev"),
+                false,
+                None,
+                Some(1)
+            )
+            .is_ok()
+        );
+        assert!(list_payload("Guest", None, None, None, Some("env"), false, None, None).is_err());
+        assert!(list_payload("Guest", None, None, None, None, false, None, Some(501)).is_err());
     }
 }

@@ -197,6 +197,7 @@ fn list(
     mode: OutputMode,
     deadline: RequestDeadline,
 ) -> Result<i32, CliFailure> {
+    validate_share_type_filter(context, &filters, mode)?;
     let mut payload = match filters {
         Value::Object(object) => object,
         _ => unreachable!("share filters are objects"),
@@ -226,6 +227,7 @@ fn watch(
             2,
         ));
     }
+    validate_share_type_filter(context, &filters, mode)?;
     let mut payload = match filters {
         Value::Object(object) => object,
         _ => unreachable!("share filters are objects"),
@@ -248,6 +250,14 @@ fn status(
     deadline: RequestDeadline,
 ) -> Result<i32, CliFailure> {
     let resource_ref = parse_resource_ref(&format!("{resource_type}/{}", args.name), None)?;
+    if args.watch && !mode.is_json() {
+        return Err(context.failure(
+            "ref-invalid",
+            "share status --watch output is JSON-lines only",
+            mode,
+            2,
+        ));
+    }
     let value = context.invoke(
         "Status",
         json!({
@@ -434,6 +444,44 @@ fn validate_share_spec(
                 1,
             ));
         }
+        let zone_link = parse_resource_ref(zone_link.unwrap_or_default(), None).map_err(|_| {
+            context.failure(
+                "resource-schema-invalid",
+                "ResourceImport.zoneLinkRef must be a local ZoneLink ResourceRef",
+                mode,
+                1,
+            )
+        })?;
+        if zone_link.resource_type().as_str() != "ZoneLink" {
+            return Err(context.failure(
+                "resource-schema-invalid",
+                "ResourceImport.zoneLinkRef must be a local ZoneLink ResourceRef",
+                mode,
+                1,
+            ));
+        }
+        let export_key = spec
+            .get("exportKey")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                context.failure(
+                    "resource-schema-invalid",
+                    "ResourceImport requires exportKey",
+                    mode,
+                    1,
+                )
+            })?;
+        if export_key.is_empty()
+            || export_key.len() > 256
+            || export_key.chars().any(char::is_control)
+        {
+            return Err(context.failure(
+                "resource-schema-invalid",
+                "ResourceImport.exportKey is outside its bounds",
+                mode,
+                1,
+            ));
+        }
         if spec.get("remoteRef").is_some() || spec.get("remoteZone").is_some() {
             return Err(context.failure(
                 "resource-schema-invalid",
@@ -442,6 +490,29 @@ fn validate_share_spec(
                 1,
             ));
         }
+    }
+    Ok(())
+}
+
+fn validate_share_type_filter(
+    context: &ZoneContext,
+    filters: &Value,
+    mode: OutputMode,
+) -> Result<(), CliFailure> {
+    let key = if filters.get("exportedType").is_some() {
+        "exportedType"
+    } else {
+        "expectedType"
+    };
+    if let Some(value) = filters.get(key).and_then(Value::as_str) {
+        crate::context::parse_resource_type(value).map_err(|_| {
+            context.failure(
+                "ref-invalid",
+                "share type filter must be a standard or qualified ResourceType",
+                mode,
+                2,
+            )
+        })?;
     }
     Ok(())
 }
@@ -480,7 +551,25 @@ fn contains_forbidden_share_key(value: &Value) -> bool {
     ];
     match value {
         Value::Object(object) => object.iter().any(|(key, value)| {
-            FORBIDDEN.iter().any(|forbidden| key == forbidden)
+            let lower = key.to_ascii_lowercase();
+            FORBIDDEN
+                .iter()
+                .any(|forbidden| lower == forbidden.to_ascii_lowercase())
+                || [
+                    "backing",
+                    "remote",
+                    "session",
+                    "stream",
+                    "socket",
+                    "locator",
+                    "path",
+                    "credential",
+                    "secret",
+                    "token",
+                    "bytes",
+                ]
+                .iter()
+                .any(|forbidden| lower.contains(forbidden))
                 || contains_forbidden_share_key(value)
         }),
         Value::Array(values) => values.iter().any(contains_forbidden_share_key),

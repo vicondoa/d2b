@@ -115,6 +115,9 @@ pub(crate) enum ModernCommand {
     Op(GenericOpArgs),
     Auth(GenericAuthArgs),
     Complete(complete::CompleteArgs),
+    Audio(ProjectionCommandArgs),
+    Clipboard(ProjectionCommandArgs),
+    Display(ProjectionCommandArgs),
 }
 
 #[derive(Debug, Args, Clone)]
@@ -125,6 +128,10 @@ pub(crate) struct GenericGetArgs {
 #[derive(Debug, Args, Clone)]
 pub(crate) struct GenericListArgs {
     pub(crate) resource_type: String,
+    #[arg(long = "execution-ref")]
+    pub(crate) execution_ref: Option<String>,
+    #[arg(long)]
+    pub(crate) domain: Option<String>,
     #[arg(long)]
     pub(crate) phase: Option<String>,
     #[arg(long = "label-selector")]
@@ -245,6 +252,16 @@ pub(crate) struct GenericOpInspectArgs {
 pub(crate) struct GenericAuthArgs {
     #[command(subcommand)]
     pub(crate) command: GenericAuthCommand,
+    /// Test-only identity override retained as a hidden fixture seam.
+    #[arg(long, hide = true)]
+    pub(crate) test_uid: Option<u32>,
+}
+
+#[derive(Debug, Args, Clone)]
+pub(crate) struct ProjectionCommandArgs {
+    pub(crate) verb: String,
+    #[arg(last = true, allow_hyphen_values = true)]
+    pub(crate) args: Vec<String>,
 }
 
 #[derive(Debug, Subcommand, Clone)]
@@ -293,55 +310,135 @@ pub(crate) fn runtime_dispatch(cli: &ModernCli, context: &ZoneContext) -> Result
             resource::typed(context, "EmergencyPolicy", args, mode, deadline)
         }
         ModernCommand::Activation(args) => activation::run(context, args, mode, deadline),
-        ModernCommand::Complete(args) => complete::run(args),
+        ModernCommand::Complete(args) => complete::run(args, Some(context), mode, deadline),
         ModernCommand::Audit(args) => audit(context, args, mode, deadline),
-        ModernCommand::Op(args) => unsupported(context, "op", &args.command, mode),
-        ModernCommand::Auth(args) => unsupported(context, "auth", &args.command, mode),
+        ModernCommand::Op(args) => operation_inspect(context, args, mode, deadline),
+        ModernCommand::Auth(args) => auth(context, args, mode),
+        ModernCommand::Audio(args) => provider_projection(context, "audio", args, mode, deadline),
+        ModernCommand::Clipboard(args) => {
+            provider_projection(context, "clipboard", args, mode, deadline)
+        }
+        ModernCommand::Display(args) => {
+            provider_projection(context, "display", args, mode, deadline)
+        }
     }
 }
 
 fn audit(
-    context: &ZoneContext,
+    _context: &ZoneContext,
     args: &GenericAuditArgs,
     mode: OutputMode,
-    deadline: crate::context::RequestDeadline,
+    _deadline: crate::context::RequestDeadline,
 ) -> Result<i32, CliFailure> {
-    match context.invoke(
-        "Audit",
-        serde_json::json!({
-            "strict": args.strict,
-            "format": if mode.is_json() { "json" } else { "human" },
-        }),
-        deadline,
-        mode,
-    ) {
-        Ok(value) => {
-            if mode.is_json() {
-                context.emit_stream(&value, mode)?;
-            } else {
-                context.emit(&value, mode)?;
-            }
-            Ok(0)
+    let legacy = crate::LegacyContext::from_env()?;
+    crate::cmd_audit(
+        &legacy,
+        &crate::AuditArgs {
+            strict: args.strict,
+            json: mode.is_json(),
+            human: !mode.is_json(),
+        },
+        &[],
+    )
+}
+
+fn auth(
+    context: &ZoneContext,
+    args: &GenericAuthArgs,
+    mode: OutputMode,
+) -> Result<i32, CliFailure> {
+    match &args.command {
+        GenericAuthCommand::Status => {
+            let legacy = crate::LegacyContext::from_env()?;
+            crate::cmd_auth_status(
+                &legacy,
+                &crate::AuthStatusArgs {
+                    json: mode.is_json(),
+                    human: !mode.is_json(),
+                    test_uid: args.test_uid,
+                },
+            )
+            .map_err(|error| {
+                if error.message.starts_with("zone-unavailable") {
+                    context.failure("zone-unavailable", "Zone runtime is unavailable", mode, 1)
+                } else {
+                    error
+                }
+            })
         }
-        Err(error) if error.message.starts_with("zone-unavailable") => {
-            Err(context.failure("zone-unavailable", "Zone runtime is unavailable", mode, 1))
-        }
-        Err(error) => Err(error),
     }
 }
 
-fn unsupported<T: std::fmt::Debug>(
+fn operation_inspect(
     context: &ZoneContext,
-    command: &str,
-    _details: T,
+    args: &GenericOpArgs,
     mode: OutputMode,
+    deadline: crate::context::RequestDeadline,
 ) -> Result<i32, CliFailure> {
-    Err(context.failure(
-        "not-implemented",
-        &format!("{command} is not available through this resource-plane build"),
+    let GenericOpCommand::Inspect(args) = &args.command;
+    for value in [&args.operation_id, &args.trace_id, &args.span_id]
+        .into_iter()
+        .flatten()
+    {
+        if value.is_empty() || value.len() > 128 || value.chars().any(char::is_control) {
+            return Err(context.failure(
+                "ref-invalid",
+                "operation inspection identifiers are outside their bounds",
+                mode,
+                2,
+            ));
+        }
+    }
+    let value = context.invoke(
+        "OperationInspect",
+        serde_json::json!({
+            "operationId": args.operation_id,
+            "traceId": args.trace_id,
+            "spanId": args.span_id,
+            "watch": args.watch,
+        }),
+        deadline,
         mode,
-        78,
-    ))
+    )?;
+    if args.watch {
+        context.emit_stream(&value, mode)?;
+    } else {
+        context.emit(&value, mode)?;
+    }
+    Ok(0)
+}
+
+fn provider_projection(
+    context: &ZoneContext,
+    top_level: &str,
+    args: &ProjectionCommandArgs,
+    mode: OutputMode,
+    deadline: crate::context::RequestDeadline,
+) -> Result<i32, CliFailure> {
+    if crate::dispatch::BUILTIN_COMMANDS.contains(&top_level) {
+        return Err(context.failure(
+            "resource-schema-invalid",
+            "Provider command collides with a built-in command",
+            mode,
+            1,
+        ));
+    }
+    provider::validate_name(top_level, "Provider command name")
+        .map_err(|message| context.failure("ref-invalid", &message, mode, 2))?;
+    provider::validate_name(&args.verb, "Provider projection verb")
+        .map_err(|message| context.failure("ref-invalid", &message, mode, 2))?;
+    let value = context.invoke(
+        "ProviderCommand",
+        serde_json::json!({
+            "topLevel": top_level,
+            "verb": &args.verb,
+            "args": &args.args,
+        }),
+        deadline,
+        mode,
+    )?;
+    context.emit(&value, mode)?;
+    Ok(0)
 }
 
 pub(crate) fn modern_run(raw_args: Vec<OsString>) -> i32 {
@@ -353,22 +450,129 @@ pub(crate) fn modern_run(raw_args: Vec<OsString>) -> i32 {
             return code;
         }
     };
-    let context = match ZoneContext::discover(cli.zone.as_deref()) {
-        Ok(context) => context,
-        Err(error) => return crate::report_failure(error),
+    if let ModernCommand::Complete(args) = &cli.command {
+        let mode = match output_mode(cli.json, cli.human) {
+            Ok(mode) => mode,
+            Err(error) => return crate::report_failure(error),
+        };
+        let deadline = match if cli.no_deadline {
+            ZoneContext::deadline(Some("900s"))
+        } else {
+            ZoneContext::deadline(cli.deadline.as_deref())
+        } {
+            Ok(deadline) => deadline,
+            Err(error) => return report_dispatch_failure(None, &cli, mode, error),
+        };
+        return match complete::run(args, None, mode, deadline) {
+            Ok(code) => code,
+            Err(error) => report_dispatch_failure(None, &cli, mode, error),
+        };
+    }
+    let local_host_command = matches!(
+        &cli.command,
+        ModernCommand::Host(host::HostArgs {
+            command: host::HostCommand::Check(_)
+                | host::HostCommand::Install(_)
+                | host::HostCommand::Reconcile(_)
+                | host::HostCommand::Validate(_)
+                | host::HostCommand::Doctor(_),
+        })
+    ) || matches!(&cli.command, ModernCommand::Auth(_));
+    let user_domain = raw_args
+        .windows(2)
+        .any(|window| window[0] == "--domain" && window[1] == "user")
+        || raw_args
+            .iter()
+            .any(|arg| arg.to_string_lossy() == "--domain=user");
+    let context = if local_host_command {
+        ZoneContext::local_only()
+    } else {
+        match ZoneContext::discover_for_domain(cli.zone.as_deref(), user_domain) {
+            Ok(context) => context,
+            Err(error) => {
+                let mode = output_mode(cli.json, cli.human).unwrap_or(OutputMode::Json);
+                return report_dispatch_failure(None, &cli, mode, error);
+            }
+        }
     };
     match runtime_dispatch(&cli, &context) {
         Ok(code) => code,
-        Err(error) => {
-            let exit_code = error.exit_code;
-            if let Some(rendered) = error.rendered_stderr {
-                crate::print_stdout(&rendered);
-                exit_code
+        Err(error) => report_dispatch_failure(
+            Some(&context),
+            &cli,
+            output_mode(cli.json, cli.human).unwrap_or(OutputMode::Json),
+            error,
+        ),
+    }
+}
+
+fn report_dispatch_failure(
+    context: Option<&ZoneContext>,
+    cli: &ModernCli,
+    mode: OutputMode,
+    error: CliFailure,
+) -> i32 {
+    let exit_code = error.exit_code;
+    if let Some(rendered) = error.rendered_stderr {
+        crate::print_stdout(&rendered);
+        return exit_code;
+    }
+    if mode.is_json() {
+        let (prefix, suffix) = error
+            .message
+            .split_once(':')
+            .unwrap_or(("", error.message.as_str()));
+        let class = if !prefix.is_empty()
+            && prefix
+                .chars()
+                .all(|character| character.is_ascii_lowercase() || character == '-')
+        {
+            prefix
+        } else if exit_code == 2 {
+            "ref-invalid"
+        } else {
+            "internal-error"
+        };
+        let detail = if suffix.trim().is_empty() {
+            error.message.as_str()
+        } else {
+            suffix.trim()
+        };
+        let message = crate::context::bounded_message(detail);
+        let failure = if let Some(context) = context {
+            context.failure(class, &message, mode, exit_code)
+        } else {
+            let requested_zone = cli
+                .zone
+                .clone()
+                .or_else(|| std::env::var("D2B_ZONE").ok())
+                .unwrap_or_else(|| "local-root".to_owned());
+            let zone = if d2b_contracts::v3::ZoneId::parse(requested_zone.clone()).is_ok() {
+                requested_zone
             } else {
-                crate::report_failure(error)
-            }
+                "local-root".to_owned()
+            };
+            let mut failure = CliFailure::new(exit_code, format!("{class}: {message}"));
+            let mut rendered = serde_json::to_string(&serde_json::json!({
+                "ok": false,
+                "zoneRef": format!("Zone/{zone}"),
+                "errorClass": class,
+                "message": message,
+                "schemaVersion": crate::context::JSON_SCHEMA_VERSION,
+            }))
+            .unwrap_or_else(|_| {
+                "{\"ok\":false,\"errorClass\":\"internal-error\",\"schemaVersion\":1}".to_owned()
+            });
+            rendered.push('\n');
+            failure.rendered_stderr = Some(rendered);
+            failure
+        };
+        if let Some(rendered) = failure.rendered_stderr {
+            crate::print_stdout(&rendered);
+            return failure.exit_code;
         }
     }
+    crate::report_failure(error)
 }
 
 #[cfg(test)]
@@ -392,6 +596,27 @@ mod tests {
         assert!(ModernCli::try_parse_from(["d2b", "up", "work"]).is_err());
         assert!(ModernCli::try_parse_from(["d2b", "vm", "start", "work"]).is_err());
         assert!(ModernCli::try_parse_from(["d2b", "realm", "list"]).is_err());
+        assert!(ModernCli::try_parse_from(["d2b", "unknown-provider-command"]).is_err());
+    }
+
+    #[test]
+    fn modern_parser_covers_manifest_owned_command_surfaces() {
+        for args in [
+            &["d2b", "device", "usb", "probe"][..],
+            &["d2b", "device", "security-key", "status"][..],
+            &["d2b", "volume", "verify", "state"][..],
+            &["d2b", "activation", "apply", "--dry-run"][..],
+            &["d2b", "endpoint", "resolve", "ready"][..],
+            &["d2b", "export", "list"][..],
+            &["d2b", "import", "graph", "microphone"][..],
+            &["d2b", "audio", "status"][..],
+            &["d2b", "clipboard", "arm"][..],
+            &["d2b", "display", "list"][..],
+        ] {
+            ModernCli::try_parse_from(args).unwrap_or_else(|error| {
+                panic!("manifest command surface did not parse: {args:?}: {error}")
+            });
+        }
     }
 
     #[test]

@@ -82,11 +82,16 @@ pub(crate) fn run_guest(
             let generic = GenericGetArgs {
                 resource_ref: format!("Guest/{}", args.name),
             };
-            resource::get(context, &generic, mode, deadline)
+            let value = resource::request_get(context, &generic, mode, deadline)?;
+            reject_unsafe_local(context, &value, mode)?;
+            context.emit(&value, mode)?;
+            Ok(0)
         }
         GuestCommand::List(args) => {
             let generic = GenericListArgs {
                 resource_type: "Guest".to_owned(),
+                execution_ref: None,
+                domain: None,
                 phase: args.phase.clone(),
                 label_selector: args.label_selector.clone(),
                 updates: args.updates,
@@ -103,11 +108,27 @@ pub(crate) fn run_guest(
                 resource_ref: format!("Guest/{}", args.name),
                 watch: args.watch,
             };
-            resource::status(context, &generic, mode, deadline)
+            let resource_ref = parse_resource_ref(&generic.resource_ref, None)?;
+            let value = context.invoke(
+                "Status",
+                json!({
+                    "resourceRef": resource_ref.to_canonical_string(),
+                    "watch": generic.watch,
+                }),
+                deadline,
+                mode,
+            )?;
+            reject_unsafe_local(context, &value, mode)?;
+            if generic.watch {
+                context.emit_stream(&value, mode)?;
+            } else {
+                context.emit(&value, mode)?;
+            }
+            Ok(0)
         }
-        GuestCommand::Start(args) => lifecycle(context, "start", args, mode, deadline),
-        GuestCommand::Stop(args) => lifecycle(context, "stop", args, mode, deadline),
-        GuestCommand::Restart(args) => lifecycle(context, "restart", args, mode, deadline),
+        GuestCommand::Start(args) => lifecycle(context, "Guest", "start", args, mode, deadline),
+        GuestCommand::Stop(args) => lifecycle(context, "Guest", "stop", args, mode, deadline),
+        GuestCommand::Restart(args) => lifecycle(context, "Guest", "restart", args, mode, deadline),
         GuestCommand::Create(args) => {
             let generic = GenericCreateArgs {
                 resource_type: "Guest".to_owned(),
@@ -168,6 +189,8 @@ pub(crate) fn run_process(
         ProcessCommand::List(args) => {
             let generic = GenericListArgs {
                 resource_type: "Process".to_owned(),
+                execution_ref: args.execution_ref.clone(),
+                domain: args.domain.clone(),
                 phase: args.phase.clone(),
                 label_selector: args.label_selector.clone(),
                 updates: args.updates,
@@ -183,8 +206,8 @@ pub(crate) fn run_process(
             };
             resource::status(context, &generic, mode, deadline)
         }
-        ProcessCommand::Start(args) => lifecycle(context, "start", args, mode, deadline),
-        ProcessCommand::Stop(args) => lifecycle(context, "stop", args, mode, deadline),
+        ProcessCommand::Start(args) => lifecycle(context, "Process", "start", args, mode, deadline),
+        ProcessCommand::Stop(args) => lifecycle(context, "Process", "stop", args, mode, deadline),
         ProcessCommand::Create(args) => {
             let generic = GenericCreateArgs {
                 resource_type: "Process".to_owned(),
@@ -220,6 +243,7 @@ pub(crate) fn run_process(
 
 fn lifecycle(
     context: &ZoneContext,
+    resource_type: &str,
     action: &str,
     args: &LifecycleArgs,
     mode: OutputMode,
@@ -233,7 +257,7 @@ fn lifecycle(
             2,
         ));
     }
-    let resource_ref = parse_resource_ref(&format!("Guest/{}", args.name), None)?;
+    let resource_ref = parse_resource_ref(&format!("{resource_type}/{}", args.name), None)?;
     let value = context.invoke(
         "UpdateSpec",
         json!({
@@ -262,10 +286,42 @@ fn filter_unsafe_local(mut value: Value) -> Value {
                 .pointer("/spec/providerRef")
                 .and_then(Value::as_str)
                 .or_else(|| item.get("providerRef").and_then(Value::as_str));
-            posture != Some("none") && provider != Some("Provider/unsafe-local")
+            let provider_kind = item
+                .pointer("/status/providerKind")
+                .and_then(Value::as_str)
+                .or_else(|| item.get("providerKind").and_then(Value::as_str));
+            !matches!(posture, Some("none" | "unsafe-local"))
+                && provider != Some("Provider/unsafe-local")
+                && provider_kind != Some("unsafe-local")
         });
     }
     value
+}
+
+fn reject_unsafe_local(
+    context: &ZoneContext,
+    value: &Value,
+    mode: OutputMode,
+) -> Result<(), CliFailure> {
+    let unsafe_local = value
+        .pointer("/status/isolationPosture")
+        .and_then(Value::as_str)
+        .or_else(|| value.get("isolationPosture").and_then(Value::as_str))
+        .is_some_and(|posture| matches!(posture, "none" | "unsafe-local"))
+        || value
+            .pointer("/spec/providerRef")
+            .and_then(Value::as_str)
+            .or_else(|| value.get("providerRef").and_then(Value::as_str))
+            == Some("Provider/unsafe-local");
+    if unsafe_local {
+        return Err(context.failure(
+            "resource-schema-invalid",
+            "unsafe-local workloads are Host resources, never Guest resources",
+            mode,
+            1,
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

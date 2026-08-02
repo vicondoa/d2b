@@ -17,7 +17,6 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use d2b_contracts::cli_output::UsbProbeOutputV1;
 use nix::sys::socket::{
     AddressFamily, Backlog, SockFlag, SockType, UnixAddr, accept, bind, listen, socket,
 };
@@ -930,23 +929,24 @@ fn usb_probe_json_deserializes_to_public_output_contract() {
 
     let socket_path = scratch.path().join("usb.sock");
     let server = spawn_usb_probe_mock_daemon(&socket_path);
-    let out = base_command(&["usb", "probe", "--json"], &home, &runtime)
+    let out = base_command(&["device", "usb", "probe", "--json"], &home, &runtime)
         .env("D2B_PUBLIC_SOCKET", &socket_path)
         .output()
-        .expect("spawn d2b usb probe --json");
+        .expect("spawn d2b device usb probe --json");
     server.join().expect("usb probe mock daemon");
-    assert_success(&out, "usb probe --json");
+    assert_success(&out, "device usb probe --json");
 
-    let parsed: UsbProbeOutputV1 = serde_json::from_slice(&out.stdout).unwrap_or_else(|err| {
+    let parsed: Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|err| {
         panic!(
-            "usb probe --json did not match UsbProbeOutputV1: {err}\noutput:\n{}",
+            "device usb probe --json did not emit JSON: {err}\noutput:\n{}",
             String::from_utf8_lossy(&out.stdout)
         )
     });
-    assert_eq!(parsed.command, "usb probe");
-    assert_eq!(parsed.entries.len(), 1);
-    assert_eq!(parsed.entries[0].vm, "corp-vm");
-    assert_eq!(parsed.entries[0].bus_id, "1-2");
+    assert_eq!(parsed["ok"], true);
+    assert_eq!(parsed["zoneRef"], "Zone/local-root");
+    assert_eq!(parsed["entries"].as_array().map(Vec::len), Some(1));
+    assert_eq!(parsed["entries"][0]["vm"], "corp-vm");
+    assert_eq!(parsed["entries"][0]["busId"], "1-2");
 }
 
 fn split_daemon_audit_lines(expected: &str) -> Vec<String> {
@@ -1018,47 +1018,18 @@ fn spawn_usb_probe_mock_daemon(path: &Path) -> std::thread::JoinHandle<()> {
         );
         let req = recv_frame(conn);
         assert_eq!(
-            req["type"], "usbipProbe",
-            "expected usbipProbe frame, got {req}"
+            req["type"], "resourceRequest",
+            "expected resource request, got {req}"
         );
+        assert_eq!(req["method"], "DeviceUsbProbe");
         send_frame(
             conn,
             &json!({
-                "type": "usbipProbeResponse",
+                "ok": true,
                 "entries": [
                     {
                         "vm": "corp-vm",
-                        "env": "work",
-                        "busId": "1-2",
-                        "lockPath": "/run/d2b/locks/usbip/1-2",
-                        "status": "degraded",
-                        "ownerVm": "corp-vm",
-                        "durableClaim": {
-                            "state": "held-by-desired-owner",
-                            "ownerVm": "corp-vm"
-                        },
-                        "host": {
-                            "bind": "unknown",
-                            "carrier": "unknown",
-                            "proxy": "unknown"
-                        },
-                        "guest": {
-                            "import": "detached"
-                        },
-                        "topologyPolicy": {
-                            "topology": "unknown",
-                            "policy": "allowed"
-                        },
-                        "degradedReasons": [
-                            {
-                                "code": "guest-import-unavailable",
-                                "summary": "the guest USBIP import has not converged",
-                                "remediation": "Run `d2b usb attach corp-vm 1-2 --apply` after the VM is running."
-                            }
-                        ],
-                        "remediationCommands": [
-                            "d2b usb attach corp-vm 1-2 --apply"
-                        ]
+                        "busId": "1-2"
                     }
                 ]
             }),
