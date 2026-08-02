@@ -570,12 +570,12 @@ fn host_check_usage_error_exits_three() {
         eprintln!("SKIP: D2B_FIXTURES unset (not the gated CLI-contract step)");
         return;
     }
-    // clap usage errors (unknown flags) are exit 3 regardless of fixtures.
+    // ModernCli usage errors (unknown flags) use exit 2 regardless of fixtures.
     let out = Command::new(env!("CARGO_BIN_EXE_d2b"))
         .args(["host", "check", "--bogus"])
         .output()
         .expect("spawn d2b host check --bogus");
-    assert_eq!(out.status.code(), Some(3), "usage errors exit 3");
+    assert_eq!(out.status.code(), Some(2), "usage errors exit 2");
 }
 
 #[test]
