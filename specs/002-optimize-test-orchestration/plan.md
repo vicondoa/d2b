@@ -386,7 +386,8 @@ weakening an invariant.
 - Flake graph: `make test-flake`, realized-check coverage, flake matrix drift,
   and the CI runner regression tests.
 - Generated CI: `make layer1-workflow-check` after manifest changes.
-- Fixture-dependent documentation policy: `make test-fixture-contracts`.
+- Fixture-dependent documentation policy:
+  `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts`.
 - Final acceptance: three warm samples for each target plus documented cold
   samples, followed by the smallest Layer-1 jobs covering all changed
   infrastructure.
@@ -433,6 +434,7 @@ This plan uses strict phase ordering rather than pipelined dispatch.
 | Descriptor and release closure | Plan panel round 12 | Every evidence fd needed close-on-exec, parent anchoring had to precede relative lock creation, lock telemetry needed a closed code, and each emitter phase had to reconcile schema/docs/changelog. | Resolved |
 | Policy reconciliation | Plan panel round 13 | The lock remedy needed mandatory wording, and later Nix emitter commits needed to carry the schema/prose policy test with their reconciled artifacts. | Resolved |
 | Private actionable errors | Plan panel round 14 | Lock contention needed a mandatory remedy without printing host paths, and every emitter validation needed the fixture-contract lane that executes `policy_docs.rs`. | Resolved |
+| Fixture lane invocation | Plan panel round 15 | Direct fixture-contract invocations needed the required `D2B_ENABLE_FIXTURE_BUILD=1` opt-in that the Layer-1 manifest normally injects. | Resolved |
 
 ## Post-Design Constitution Check
 

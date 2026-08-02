@@ -296,5 +296,5 @@ fixture lanes explicitly:
 
 ```bash
 make test-policy
-make test-fixture-contracts
+D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts
 ```
