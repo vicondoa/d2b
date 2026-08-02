@@ -237,13 +237,14 @@ per-workspace Cargo limits without making constrained hosts edit the DAG.
 Same-target leaves are dependency-ordered as shown above.
 
 Recursive Make recipe lines use `+$(MAKE)` so Make owns jobserver propagation.
-GNU Make closes jobserver descriptors before starting ordinary non-submake
-recipes while stale descriptor numbers can remain in `MAKEFLAGS`. A Bash leaf
-must therefore never parse or close those ambiguous numbers, which may already
-have been reused for unrelated resources. At leaf entry, before any setup
-subprocess is spawned, the dispatcher unsets `MAKEFLAGS`, `MFLAGS`, and
-`MAKELEVEL`. Cargo and nextest therefore honor the explicit lane quota, and
-recursive Make calls retain the jobserver.
+Leaf-dispatch recipe lines contain neither `$(MAKE)` nor the `+` prefix and are
+therefore ordinary non-submake recipes; GNU Make closes jobserver descriptors
+before executing them. Stale descriptor numbers can remain in `MAKEFLAGS`, so
+a Bash leaf does not parse or act on those numbers. At leaf entry, before any
+setup subprocess is spawned, the dispatcher unsets `MAKEFLAGS`, `MFLAGS`, and
+`MAKELEVEL`. Cargo and nextest therefore honor the explicit lane quota, no
+jobserver descriptor reaches their children, and recursive Make calls retain
+the jobserver.
 
 `tests/test-rust.sh` becomes a leaf dispatcher and environment provider. Its
 serial `all` scheduler is removed. `tests/static.sh` and other callers use the
@@ -427,6 +428,7 @@ This plan uses strict phase ordering rather than pipelined dispatch.
 | Failure evidence | Plan panel round 7 | A failed or interrupted run must remove the prior requested execution manifest before dispatch so stale success cannot survive. | Resolved |
 | Partial evidence | Plan panel round 8 | Failure paths needed atomic partial manifests, pre-evaluation invalidation, zero-interval handling, and explicit PSI composite rejection tests. | Resolved |
 | Signal lifecycle | Plan panel round 9 | Partial finalization needed bounded process-group shutdown, secure atomic fragments, temporary cleanup, schema versioning, and explicit interruption tests. | Resolved |
+| Evidence path safety | Plan panel round 10 | Manifest ownership needed a persistent lockfile, anchored fd-relative cleanup, Make-owned descriptor closure, injectable shutdown tests, and a binding JSON schema. | Resolved |
 
 ## Post-Design Constitution Check
 

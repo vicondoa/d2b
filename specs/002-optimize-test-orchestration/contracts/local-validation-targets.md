@@ -24,7 +24,8 @@ All three commands:
   at schema version `1` with the run status, completed leaves, observed failure
   surfaces, and closed contention status. Remove the prior manifest before work
   begins, and publish partial evidence atomically on failure or handled
-  interruption.
+  interruption. The binding schema is
+  `docs/reference/schemas/test-execution-manifest-v1.json`.
 
 ## `make test-rust`
 

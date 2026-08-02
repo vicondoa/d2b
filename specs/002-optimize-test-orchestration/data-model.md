@@ -75,10 +75,13 @@ repository merely made available for discovery.
 ### Validation rules
 
 - The manifest is deterministic after sorting.
-- A target acquires exclusive ownership of the requested manifest path before
-  invalidating prior evidence. Fragment storage is created with `mktemp -d`,
-  mode `0700`, and the current effective uid; the finalizer rejects symlinks,
-  owner mismatches, or broader permissions.
+- A target acquires an exclusive lock on a separate persistent
+  `<manifest>.lock` file before invalidating prior evidence. The lockfile is
+  mode `0600`, current-user-owned, opened without following symlinks, and is
+  never unlinked as part of manifest replacement.
+- Fragment storage is created with `mktemp -d`, mode `0700`, and the current
+  effective uid; the finalizer rejects symlinks, owner mismatches, or broader
+  permissions.
 - The top-level target removes the requested prior manifest and only its own
   prior temporary fragment directory before any evaluation or dispatch.
   Concurrent leaves write one uniquely named temporary fragment each and
@@ -91,14 +94,23 @@ repository merely made available for discovery.
   records `run_status`, atomically replaces the requested manifest, removes
   run-specific temporary state, and preserves the original exit status.
 - An uncatchable termination may leave no manifest, but the prior success
-  manifest has already been removed. A later invocation removes only stale
-  temporary state that passes the same type, ownership, and permission checks.
+  manifest has already been removed. Stale cleanup opens each candidate
+  directory first, verifies type, ownership, and permissions with `fstat`, and
+  removes entries through anchored fd-relative operations such as `unlinkat`;
+  it never uses a stat-then-path-unlink sequence.
+- The production shutdown grace is fixed at 10 seconds. The shutdown helper
+  accepts an internal clock and process-control boundary so hermetic tests can
+  inject a zero-duration grace and mocked children without exposing a public
+  timing knob.
 - A required leaf is absent when its command did not complete successfully.
 - A failed or interrupted manifest is diagnostic partial evidence and cannot
   satisfy coverage acceptance; acceptance requires `run_status = "passed"`.
 - Every baseline execution leaf remains represented after optimization.
 - A source inventory comparison without an execution-manifest comparison is
   insufficient acceptance evidence.
+- The binding JSON schema is
+  `docs/reference/schemas/test-execution-manifest-v1.json`; prose lives in
+  `docs/reference/test-execution-manifest.md`.
 
 ## Nix Candidate Run
 
