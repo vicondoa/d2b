@@ -137,5 +137,6 @@ fixture-dependent contract and CLI surfaces once when Nix is available.
 `D2B_SKIP_FIXTURE_BUILD=1` omits those two surfaces so the local or CI
 Layer-1 graph can run the separate enforcing
 `D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts` lane without
-duplicating them. Fixture and CLI work reuses `packages/target` only after the
-main workspace surface has completed.
+duplicating them. Fixture and CLI work uses an isolated stable target below
+`.scratch/rust-test-cache`, so it can overlap the main workspace without
+sharing mutable Cargo state.

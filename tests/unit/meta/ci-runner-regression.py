@@ -714,20 +714,28 @@ set -euo pipefail
         focused = make_target_block(makefile, "test-rust-main")
 
         self.assertIn("rust-fixture-contracts", aggregate)
-        self.assertIn(
-            "rust-fixture-contracts: rust-main-workspace",
-            makefile,
-        )
+        self.assertNotIn("rust-fixture-contracts: rust-main-workspace", makefile)
         self.assertIn('if [ "$(D2B_SKIP_FIXTURE_BUILD)" = 1 ]', makefile)
         self.assertIn("elif command -v nix", makefile)
         self.assertIn("rust-fixture-contracts", focused)
         self.assertIn("D2B_SKIP_FIXTURE_BUILD=1 make test-rust", static)
 
         driver = RUST_DRIVER.read_text(encoding="utf-8")
+        self.assertIn(
+            'fixture_target_dir="$ROOT/.scratch/rust-test-cache/fixture-contracts"',
+            driver,
+        )
+        self.assertGreaterEqual(driver.count('CARGO_TARGET_DIR="$fixture_target_dir"'), 4)
         self.assertEqual(driver.count("rust_surface_success rust-contract-tests"), 1)
         self.assertEqual(driver.count("rust_surface_success rust-cli-contract-tests"), 1)
         self.assertEqual(driver.count("run_fixture_contract_tests\n"), 1)
         self.assertEqual(driver.count("run_cli_contract_tests \"$contract_fixtures\""), 1)
+
+        api_driver = (ROOT / "tests" / "tools" / "api-surface-json.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('checker_target="$target_root/checker"', api_driver)
+        self.assertIn('CARGO_TARGET_DIR="$checker_target" cargo run', api_driver)
 
     def test_rust_fixture_leaf_sets_internal_opt_in_but_public_target_stays_closed(self) -> None:
         makefile = MAKEFILE.read_text(encoding="utf-8")

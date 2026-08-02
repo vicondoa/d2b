@@ -191,8 +191,9 @@ nothing to win there.
 `make test-rust` owns the bounded local GNU Make DAG. Its stable leaves cover
 the API, main format/clippy/workspace, conditional fixture/CLI, broker,
 guest-shell-runner, no-bash AST, schema, supply-chain, stub, and pinned-test
-surfaces. Fixture and CLI leaves run after the main workspace leaf because
-they reuse `packages/target`; `D2B_SKIP_FIXTURE_BUILD=1` omits them for the
+surfaces. Fixture and CLI leaves use an isolated stable target below
+`.scratch/rust-test-cache`, so they can overlap the main workspace without
+sharing mutable Cargo state; `D2B_SKIP_FIXTURE_BUILD=1` omits them for the
 Layer-1 graph. The focused `make test-rust-main` retains the same conditional
 fixture behavior. Direct `tests/test-rust.sh` calls require exactly one leaf
 mode and must not be used as an aggregate scheduler. The broker passes remain

@@ -98,8 +98,12 @@ if printf '%s\n' "$fragment_helper" | grep -qE '>/dev/null|\|\|[[:space:]]*true'
   log "FAIL: Rust execution-manifest fragment publication suppresses an emitter error"
   rc=1
 fi
-if ! grep -qF 'rust-fixture-contracts: rust-main-workspace' "$makefile"; then
-  log "FAIL: fixture/CLI target is not ordered after the main packages/target user"
+if ! grep -qF 'fixture_target_dir="$ROOT/.scratch/rust-test-cache/fixture-contracts"' "$test_script"; then
+  log "FAIL: fixture/CLI target does not use its isolated cached Cargo target"
+  rc=1
+fi
+if ! grep -qF 'checker_target="$target_root/checker"' "$ROOT/tests/tools/api-surface-json.sh"; then
+  log "FAIL: API snapshot checker does not use its isolated cached Cargo target"
   rc=1
 fi
 if ! grep -qF 'D2B_SKIP_FIXTURE_BUILD' "$makefile"; then

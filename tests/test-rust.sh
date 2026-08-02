@@ -147,6 +147,7 @@ fi
 export pinned_channel
 
 workspace_target_dir=$(d2b_cargo_target_dir workspace)
+fixture_target_dir="$ROOT/.scratch/rust-test-cache/fixture-contracts"
 # Separate target dirs for the broker's three concurrent feature passes so they
 # don't lock-contend. They are DETERMINISTIC siblings of the broker target dir
 # (not mktemp): sccache hashes the inherited CARGO_* environment, including
@@ -541,11 +542,11 @@ run_fixture_contract_tests() {
     "${flake_ref}#checks.${system}.fixture-smoke")
   log "--> cargo nextest run -p d2b-contract-tests (realized minimal + eval-rendered full artifacts)"
   D2B_FIXTURES="$contract_fixtures" D2B_FIXTURES_FULL="$contract_fixtures_full" \
-  CARGO_TARGET_DIR="$workspace_target_dir" \
+  CARGO_TARGET_DIR="$fixture_target_dir" \
     cargo nextest run --test-threads "$D2B_RUST_NEXTTEST_THREADS" --manifest-path "$manifest" -p d2b-contract-tests \
       -E 'not binary(video_binary_contract)'
   D2B_FIXTURES="$contract_fixtures" D2B_FIXTURES_FULL="$contract_fixtures_full" \
-  CARGO_TARGET_DIR="$workspace_target_dir" \
+  CARGO_TARGET_DIR="$fixture_target_dir" \
     run_nextest_companions "contract crate" "$manifest" -p d2b-contract-tests
   rust_surface_success rust-contract-tests
   ok "d2b-contract-tests (realized minimal + eval-rendered full fixture-contract layer)"
@@ -568,9 +569,9 @@ run_cli_contract_tests() {
   # does NOT depend on d2bd (the static-rust-dependency-direction gate
   # forbids it), so the path is delivered out-of-band rather than via a dep edge.
   log "--> cargo build -p d2bd (CLI-contract daemon-spawn harness binary)"
-  CARGO_TARGET_DIR="$workspace_target_dir" \
+  CARGO_TARGET_DIR="$fixture_target_dir" \
     cargo build --jobs "$D2B_RUST_CARGO_JOBS" --manifest-path "$manifest" -p d2bd
-  d2bd_bin="$workspace_target_dir/debug/d2bd"
+  d2bd_bin="$fixture_target_dir/debug/d2bd"
   [ -x "$d2bd_bin" ] || {
     fail "d2bd binary not found at $d2bd_bin"
     return 1
@@ -578,7 +579,7 @@ run_cli_contract_tests() {
   log "--> cargo nextest run -p d2b --tests (CLI-contract, D2B_FIXTURES = fixture-smoke)"
   D2B_FIXTURES="$fixture_path" \
   D2B_TEST_D2BD_BIN="$d2bd_bin" \
-  CARGO_TARGET_DIR="$workspace_target_dir" \
+  CARGO_TARGET_DIR="$fixture_target_dir" \
     cargo nextest run --test-threads "$D2B_RUST_NEXTTEST_THREADS" --manifest-path "$manifest" -p d2b --tests
   rust_surface_success rust-cli-contract-tests
   ok "d2b --tests (CLI-contract layer)"

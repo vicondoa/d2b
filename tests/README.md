@@ -179,8 +179,9 @@ one.
 `make test-rust` is the only aggregate Rust entrypoint. GNU Make schedules its
 explicit leaves with `--keep-going` and `--output-sync=target`, so independent
 leaves continue after a failure and each target's output remains grouped. The
-broker feature passes stay serial, and fixture/CLI leaves using
-`packages/target` wait for the main workspace leaf. Direct calls to
+broker feature passes stay serial. Fixture/CLI work and the API snapshot
+checker use isolated stable targets below `.scratch/rust-test-cache`, so they
+can overlap the main workspace without sharing mutable Cargo state. Direct calls to
 `tests/test-rust.sh` require one explicit leaf mode; callers that need the
 complete gate must use `make test-rust`. The focused `make test-rust-main`
 also retains conditional fixture/CLI coverage.

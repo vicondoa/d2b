@@ -350,9 +350,10 @@ rust-schema-reproducibility: rust-inventory-and-stub
 rust-inventory-and-stub:
 	@if [ "$(D2B_RUST_ROOT_PREREQS)" = 1 ]; then exit 0; fi; D2B_RUST_CARGO_JOBS="$(D2B_RUST_QUOTA_INVENTORY)" D2B_RUST_NEXTTEST_THREADS="$(D2B_RUST_QUOTA_INVENTORY)" bash tests/test-rust.sh inventory-stub
 
-## Fixture and CLI surfaces reuse packages/target and therefore follow the
-## main-workspace target, never running concurrently with it.
-rust-fixture-contracts: rust-main-workspace
+## Fixture and CLI surfaces use a stable isolated target directory under
+## .scratch/rust-test-cache, so their Nix and Cargo work can overlap the main
+## workspace without sharing mutable Cargo state.
+rust-fixture-contracts:
 	@if [ "$(D2B_RUST_ROOT_PREREQS)" = 1 ]; then exit 0; fi; \
 	if [ "$(D2B_SKIP_FIXTURE_BUILD)" = 1 ]; then \
 	  echo "Rust fixture/CLI surfaces skipped (D2B_SKIP_FIXTURE_BUILD=1; run the enforcing fixture lane separately)."; \

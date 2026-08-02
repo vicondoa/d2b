@@ -129,10 +129,12 @@ not give it one. `test-rust-main` remains the single rust-cache writer.
 ### Rust budget and execution manifest
 
 The local Rust aggregate is the GNU Make DAG behind `make test-rust`. It uses
-`--keep-going` and `--output-sync=target`, keeps broker feature passes serial,
-and orders fixture/CLI leaves after the main workspace because they share
-`packages/target`. Direct calls to `tests/test-rust.sh` require one explicit
-leaf mode and are not aggregate schedulers. A passing Rust manifest retains
+`--keep-going` and `--output-sync=target` and keeps broker feature passes
+serial. Fixture/CLI work and the API snapshot checker use isolated stable
+targets below `.scratch/rust-test-cache`, so they overlap the main workspace
+without sharing mutable Cargo state. Direct calls to `tests/test-rust.sh`
+require one explicit leaf mode and are not aggregate schedulers. A passing
+Rust manifest retains
 the exact baseline sub-surface IDs documented in the execution-manifest
 reference; `D2B_SKIP_FIXTURE_BUILD=1` intentionally omits only the conditional
 fixture and CLI IDs.

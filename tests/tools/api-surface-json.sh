@@ -61,6 +61,7 @@ esac
 # footprint in the repository-wide Actions cache budget that
 # .scratch/rust-test-cache is restored from.
 census_target="$target_root/census"
+checker_target="$target_root/checker"
 
 # Reclaim the pre-merge layout. A restored cache still carries these, and left
 # alone they would keep charging the cache budget for a tree nothing reads.
@@ -139,7 +140,7 @@ mode=--check
 log "--> d2b-api-surface snapshot check"
 (
 cd "$ROOT/packages"
-cargo run --quiet --locked \
+CARGO_TARGET_DIR="$checker_target" cargo run --quiet --locked \
   -p d2b-api-surface --bin d2b-api-surface -- \
   --public-json-dir "$public_dir" \
   --private-json-dir "$private_dir" \
