@@ -141,9 +141,10 @@ impl ZoneContext {
         let selected_zone = requested_zone.unwrap_or_else(|| {
             socket_path
                 .parent()
+                .filter(|parent| parent.parent().is_some_and(|root| root.ends_with("zones")))
                 .and_then(Path::file_name)
                 .and_then(|name| name.to_str())
-                .filter(|name| !name.is_empty() && *name != "d2b")
+                .filter(|name| !name.is_empty())
                 .unwrap_or("local-root")
                 .to_owned()
         });
@@ -641,5 +642,20 @@ mod tests {
         let request: Value = serde_json::from_slice(&request[0]).unwrap();
         assert_eq!(request["method"], "List");
         assert_eq!(request["zoneRef"], "Zone/dev");
+    }
+
+    #[test]
+    fn direct_socket_overrides_do_not_infer_a_zone_from_an_arbitrary_temp_path() {
+        let candidates = socket_candidates(Some("dev"));
+        assert_eq!(
+            candidates,
+            vec![PathBuf::from("/run/d2b/zones/dev/public.sock")]
+        );
+        let socket = PathBuf::from("/tmp/test-public.sock");
+        let inferred = socket
+            .parent()
+            .filter(|parent| parent.parent().is_some_and(|root| root.ends_with("zones")))
+            .and_then(Path::file_name);
+        assert!(inferred.is_none());
     }
 }
