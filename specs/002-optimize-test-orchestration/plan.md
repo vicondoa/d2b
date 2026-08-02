@@ -352,12 +352,13 @@ the baseline before proceeding. A target is accepted only when:
   dropped lane;
 - failures from multiple independent lanes are visible in one invocation;
 - the target process tree consumes at least 80% of its effective CPU budget
-  over the CPU-heavy interval for Rust; Nix measurements include daemon work
-  through readable daemon-cgroup counters or baseline-adjusted host counters
-  from an externally idle run. The interval starts when the first nonzero-quota
-  leaf is admitted and ends when the last such leaf completes. A lower result
-  requires a measured non-CPU bottleneck after viable concurrency is
-  exhausted;
+  over the CPU-heavy interval for Rust; Nix measurements combine client
+  evaluation and daemon-cgroup build counters, or use baseline-adjusted host
+  counters when daemon counters are unreadable. Both Nix modes require an
+  externally idle run and invalidate on unrelated daemon or host activity. The
+  interval starts when the first nonzero-quota leaf is admitted and ends when
+  the last such leaf completes. A lower result requires a measured non-CPU
+  bottleneck after viable concurrency is exhausted;
 - no active CPU-quota frontier exceeds the effective budget, worker counts
   remain within their declared bounds, peak memory remains within the
   calculated envelope, and no orchestration-attributable OOM occurs. Memory
@@ -419,6 +420,9 @@ This plan uses strict phase ordering rather than pipelined dispatch.
 | Measurement scope | Plan panel round 6 | Nix daemon work is outside the client process tree, so Nix resource evidence now uses daemon-cgroup or externally idle baseline-adjusted host counters. | Resolved |
 | Metric precision | Plan panel round 6 | CPU, PSI, swap, worker, and memory-event acceptance needed exact counters, thresholds, and safely mocked rejection cases. | Resolved |
 | Manifest atomicity | Plan panel round 6 | Concurrent leaves could corrupt or retain stale execution-manifest state, so each target now finalizes run-specific fragments through atomic replacement. | Resolved |
+| Nix attribution | Plan panel round 7 | Nix evaluation and daemon builds require combined accounting, and the shared daemon requires contention invalidation even when its cgroup is readable. | Resolved |
+| Counter semantics | Plan panel round 7 | CPU interval units and hierarchical task counts needed explicit microsecond and `pids.current` definitions. | Resolved |
+| Failure evidence | Plan panel round 7 | A failed or interrupted run must remove the prior requested execution manifest before dispatch so stale success cannot survive. | Resolved |
 
 ## Post-Design Constitution Check
 

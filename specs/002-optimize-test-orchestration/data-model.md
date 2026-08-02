@@ -71,9 +71,11 @@ repository merely made available for discovery.
 ### Validation rules
 
 - The manifest is deterministic after sorting.
-- The top-level target removes only its own prior temporary fragment directory
-  before dispatch. Concurrent leaves write one uniquely named fragment each;
-  a final step sorts and atomically replaces the requested manifest.
+- The top-level target removes the requested prior manifest and only its own
+  prior temporary fragment directory before dispatch. Concurrent leaves write
+  one uniquely named fragment each; a successful final step sorts and
+  atomically replaces the requested manifest. An interrupted or failed run
+  therefore leaves no stale success manifest.
 - A required leaf is absent when its command did not complete successfully.
 - Every baseline execution leaf remains represented after optimization.
 - A source inventory comparison without an execution-manifest comparison is
@@ -139,17 +141,17 @@ Represents one timed command execution.
 | `inventory_digest` | Coverage inventory used |
 | `external_contention` | Recorded invalidating contention, if any |
 | `effective_cpu_budget` | CPU concurrency available to the target after host and cgroup limits |
-| `heavy_interval_seconds` | Time from first CPU-heavy leaf start through last CPU-heavy leaf completion |
-| `measurement_scope` | Rust target cgroup/process accounting, Nix daemon cgroup, or baseline-adjusted host accounting |
-| `cpu_usage_delta_usec` | `cpu.stat usage_usec` delta for a cgroup scope, or equivalent user plus system CPU delta for the declared scope |
+| `heavy_interval_usec` | Microseconds from first CPU-heavy leaf start through last CPU-heavy leaf completion |
+| `measurement_scope` | Rust target accounting, combined Nix client plus daemon-cgroup accounting, or baseline-adjusted host accounting |
+| `cpu_usage_delta_usec` | `cpu.stat usage_usec` delta or equivalent user plus system CPU delta; combined Nix scope sums client and daemon deltas |
 | `cpu_budget_utilization` | `cpu_usage_delta_usec / (heavy_interval_usec * effective_cpu_budget)` |
-| `peak_memory_bytes` | Peak `memory.current` for the measured cgroup, or maximum baseline-adjusted reduction in host `MemAvailable` for an idle host-scoped Nix sample |
+| `peak_memory_bytes` | Peak sampled combined memory for the declared scope, or maximum baseline-adjusted reduction in host `MemAvailable` |
 | `peak_admitted_cpu_slots` | Maximum sum of scheduler-admitted CPU quotas in an active frontier |
-| `peak_scope_processes` | Maximum count from `cgroup.procs` or the declared process-scope equivalent |
+| `peak_scope_tasks` | Maximum hierarchical `pids.current` value for cgroup scopes, or recursive process/thread count for a declared fallback scope |
 | `memory_events_delta` | Cgroup `high`, `max`, `oom`, `oom_kill`, and `oom_group_kill` deltas when available |
 | `memory_psi` | Deltas of `some total` and `full total` microseconds over the heavy interval |
 | `swap_io_bytes` | Baseline-adjusted `pswpin` plus `pswpout` page deltas converted with the host page size |
-| `external_contention` | Pre-run and concurrent activity that invalidates host-scoped attribution |
+| `external_contention` | Closed reason code such as `none`, `nix-daemon-shared`, or `host-busy`; never free-form process data |
 
 ### State transitions
 
@@ -167,7 +169,8 @@ prepared -> running -> passed
   and proves viable concurrency for that interval was exhausted.
 - A sample fails resource acceptance on orchestration-attributable OOM,
   sustained memory-pressure stalls, swap thrashing, workers beyond the
-  declared bound, or an active CPU-quota frontier above the effective budget.
+  declared bound, peak memory beyond the calculated envelope, or an active
+  CPU-quota frontier above the effective budget.
 - A CPU-heavy leaf is one assigned a nonzero scheduler CPU quota. The heavy
   interval starts when the first such leaf is admitted and ends when the last
   such leaf completes.
@@ -179,10 +182,14 @@ prepared -> running -> passed
   `oom_group_kill` increase fails acceptance; a `max` or `high` increase is
   reported and fails when accompanied by the sustained-stall threshold.
 - `peak_admitted_cpu_slots` MUST NOT exceed `effective_cpu_budget`.
-- Rust uses target-cgroup `cpu.stat` and memory counters when available. Nix
-  uses the Nix daemon cgroup when readable; otherwise it uses host CPU, PSI,
-  swap, and memory deltas after an idle baseline, and any concurrent external
-  activity invalidates and repeats the sample.
+- Rust uses target-cgroup `cpu.stat`, hierarchical `pids.current`, and memory
+  counters when available. Nix combines client-scope evaluation with sampled
+  Nix-daemon-cgroup build activity when readable, including the sum of client
+  and daemon CPU deltas and the peak of their sampled combined memory. Because
+  the daemon is shared, unrelated daemon activity invalidates the sample.
+  When daemon counters are unreadable, Nix uses host CPU, PSI, swap, and memory
+  deltas after an idle baseline; any concurrent external activity invalidates
+  and repeats the sample.
 
 ## Performance Baseline
 

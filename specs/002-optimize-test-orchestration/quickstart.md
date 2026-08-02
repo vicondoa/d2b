@@ -161,12 +161,14 @@ separately; the optimized direct path may regress by no more than 20%.
 
 For each representative warm run, sample available cgroup v2 and host counters
 at one-second intervals. Use the target cgroup for Rust. For Nix unit and flake
-runs, include work delegated outside the client process tree by using the Nix
-daemon cgroup when readable; otherwise take an idle host baseline and
-invalidate the sample if unrelated activity overlaps it. Record the effective
-CPU budget, the interval from the first nonzero-quota leaf admission through
-the last such leaf completing, `cpu.stat usage_usec` or the declared equivalent
-CPU delta, peak admitted CPU slots, peak scope process count, peak memory,
+runs, sum the client-scope evaluation counters with work delegated to the Nix
+daemon cgroup when readable; otherwise take an idle host baseline. Because the
+daemon is shared, invalidate either Nix mode if unrelated daemon or host
+activity overlaps it. Record the effective CPU budget, the interval in
+microseconds from the first nonzero-quota leaf admission through the last such
+leaf completing, `cpu.stat usage_usec` or the declared equivalent CPU delta,
+peak admitted CPU slots, hierarchical `pids.current` task count, peak sampled
+combined memory,
 `memory.events` `high`, `max`, and OOM deltas, memory PSI `some total` and
 `full total` deltas, and baseline-adjusted `pswpin` plus `pswpout` bytes in
 `.scratch/test-speedup-optimized/resource-stability.json`.
@@ -174,7 +176,7 @@ CPU delta, peak admitted CPU slots, peak scope process count, peak memory,
 Calculate CPU-budget utilization as:
 
 ```text
-CPU usage delta / (CPU-heavy interval * effective CPU budget)
+CPU usage delta usec / (CPU-heavy interval usec * effective CPU budget)
 ```
 
 The median representative warm run for each target must reach at least 80%.
