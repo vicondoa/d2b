@@ -182,7 +182,11 @@ fn resolve(
 }
 
 fn endpoint_ref(name: &str) -> Result<d2b_contracts::v3::ResourceRef, CliFailure> {
-    parse_resource_ref(name, Some("Endpoint"))
+    let resource_ref = parse_resource_ref(name, Some("Endpoint"))?;
+    if resource_ref.resource_type().as_str() != "Endpoint" {
+        return Err(CliFailure::new(2, "ref-invalid: Endpoint reference required"));
+    }
+    Ok(resource_ref)
 }
 
 fn validate_endpoint_class(

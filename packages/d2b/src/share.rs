@@ -486,7 +486,7 @@ mod tests {
     #[test]
     fn share_output_never_leaks_private_shapes() {
         assert!(contains_forbidden_share_key(&json!({
-            "projection": {"resourceRef": "audio.d2bus.org.AudioService/mic"},
+            "projection": {"remoteRef": "Zone/remote"},
             "graph": [{"ownerRef":"ResourceImport/mic"}]
         })));
         assert!(contains_forbidden_share_key(&json!({"status":{"phase":"Ready"}})));
