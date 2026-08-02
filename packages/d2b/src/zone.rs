@@ -154,13 +154,11 @@ mod tests {
 
     #[test]
     fn topology_projection_rejects_child_local_link_fields() {
-        assert!(
-            contains_forbidden_topology_field(&json!({
-                "childZone":"dev",
-                "parentZone":"local-root",
-                "routeStatus":"ready"
-            })) == false
-        );
+        assert!(!contains_forbidden_topology_field(&json!({
+            "childZone":"dev",
+            "parentZone":"local-root",
+            "routeStatus":"ready"
+        })));
         assert!(contains_forbidden_topology_field(&json!({
             "childZone":"dev",
             "zoneLinkRef":"ZoneLink/uplink"
