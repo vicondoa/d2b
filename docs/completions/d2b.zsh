@@ -15,8 +15,13 @@ _d2b() {
 
     local context curcontext="$curcontext" state line
     _arguments "${_arguments_options[@]}" : \
-'-h[Print help (see more with '\''--help'\'')]' \
-'--help[Print help (see more with '\''--help'\'')]' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
 '-V[Print version]' \
 '--version[Print version]' \
 ":: :_d2b_commands" \
@@ -28,350 +33,148 @@ _d2b() {
         (( CURRENT += 1 ))
         curcontext="${curcontext%:*:*}:d2b-command-$line[1]:"
         case $line[1] in
-            (list)
+            (get)
 _arguments "${_arguments_options[@]}" : \
-'(--human)--json[]' \
-'(--json)--human[]' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
 '-h[Print help]' \
 '--help[Print help]' \
+':resource_ref:_default' \
+&& ret=0
+;;
+(list)
+_arguments "${_arguments_options[@]}" : \
+'--execution-ref=[]:EXECUTION_REF:_default' \
+'--domain=[]:DOMAIN:_default' \
+'--phase=[]:PHASE:_default' \
+'--label-selector=[]:LABEL_SELECTOR:_default' \
+'--page-token=[]:PAGE_TOKEN:_default' \
+'--limit=[]:LIMIT:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--updates[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':resource_type:_default' \
+&& ret=0
+;;
+(watch)
+_arguments "${_arguments_options[@]}" : \
+'--since-revision=[]:SINCE_REVISION:_default' \
+'--phase=[]:PHASE:_default' \
+'--label-selector=[]:LABEL_SELECTOR:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':resource_type:_default' \
+&& ret=0
+;;
+(create)
+_arguments "${_arguments_options[@]}" : \
+'(--spec-stdin)--spec-file=[]:SPEC_FILE:_files' \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--spec-file)--spec-stdin[]' \
+'--wait-for-reconcile[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':resource_type:_default' \
+&& ret=0
+;;
+(update-spec)
+_arguments "${_arguments_options[@]}" : \
+'--revision=[]:REVISION:_default' \
+'(--spec-stdin)--spec-file=[]:SPEC_FILE:_files' \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--spec-file)--spec-stdin[]' \
+'--wait-for-reconcile[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':resource_ref:_default' \
+&& ret=0
+;;
+(delete)
+_arguments "${_arguments_options[@]}" : \
+'--revision=[]:REVISION:_default' \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--wait-for-reconcile[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':resource_ref:_default' \
 && ret=0
 ;;
 (status)
 _arguments "${_arguments_options[@]}" : \
-'--vm=[]:VM_FLAG:_default' \
-'(--human)--json[]' \
-'(--json)--human[]' \
-'--check-bridges[]' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--watch[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
 '-h[Print help]' \
 '--help[Print help]' \
-'::vm:_default' \
+':resource_ref:_default' \
 && ret=0
 ;;
-(launch)
+(upgrade)
 _arguments "${_arguments_options[@]}" : \
-'--item=[Configured launcher item id. Omit to use the declared default or sole item]:ITEM:_default' \
-'(--human)--json[Emit a structured JSON result]' \
-'(--json)--human[Force human-readable output]' \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--recursive[]' \
+'--apply[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
 '-h[Print help]' \
 '--help[Print help]' \
-':target -- Canonical workload target or an unambiguous workload id:_default' \
+':resource_ref:_default' \
 && ret=0
 ;;
-(usb)
+(reconcile)
 _arguments "${_arguments_options[@]}" : \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
 '-h[Print help]' \
 '--help[Print help]' \
-":: :_d2b__subcmd__usb_commands" \
-"*::: :->usb" \
-&& ret=0
-
-    case $state in
-    (usb)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:d2b-usb-command-$line[1]:"
-        case $line[1] in
-            (attach)
-_arguments "${_arguments_options[@]}" : \
-'(--apply)--dry-run[]' \
-'(--dry-run)--apply[]' \
-'(--human)--json[]' \
-'(--json)--human[]' \
-'-h[Print help]' \
-'--help[Print help]' \
-':vm:_default' \
-':busid:_default' \
-&& ret=0
-;;
-(detach)
-_arguments "${_arguments_options[@]}" : \
-'(--apply)--dry-run[]' \
-'(--dry-run)--apply[]' \
-'(--human)--json[]' \
-'(--json)--human[]' \
-'-h[Print help]' \
-'--help[Print help]' \
-':vm:_default' \
-':busid:_default' \
-&& ret=0
-;;
-(probe)
-_arguments "${_arguments_options[@]}" : \
-'(--human)--json[]' \
-'(--json)--human[]' \
-'-h[Print help]' \
-'--help[Print help]' \
-&& ret=0
-;;
-(security-key)
-_arguments "${_arguments_options[@]}" : \
-'-h[Print help]' \
-'--help[Print help]' \
-":: :_d2b__subcmd__usb__subcmd__security-key_commands" \
-"*::: :->security-key" \
-&& ret=0
-
-    case $state in
-    (security-key)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:d2b-usb-security-key-command-$line[1]:"
-        case $line[1] in
-            (status)
-_arguments "${_arguments_options[@]}" : \
-'(--human)--json[]' \
-'(--json)--human[]' \
-'-h[Print help]' \
-'--help[Print help]' \
-&& ret=0
-;;
-(sessions)
-_arguments "${_arguments_options[@]}" : \
-'(--human)--json[]' \
-'(--json)--human[]' \
-'-h[Print help]' \
-'--help[Print help]' \
-&& ret=0
-;;
-(cancel)
-_arguments "${_arguments_options[@]}" : \
-'()--current[Cancel the currently active session]' \
-'(--apply)--dry-run[]' \
-'(--dry-run)--apply[]' \
-'(--human)--json[]' \
-'(--json)--human[]' \
-'-h[Print help]' \
-'--help[Print help]' \
-'::session_id -- Session ID to cancel. Mutually exclusive with `--current`:_default' \
-&& ret=0
-;;
-(test)
-_arguments "${_arguments_options[@]}" : \
-'--dry-run[]' \
-'(--human)--json[]' \
-'(--json)--human[]' \
-'-h[Print help]' \
-'--help[Print help]' \
-':vm:_default' \
-&& ret=0
-;;
-(help)
-_arguments "${_arguments_options[@]}" : \
-":: :_d2b__subcmd__usb__subcmd__security-key__subcmd__help_commands" \
-"*::: :->help" \
-&& ret=0
-
-    case $state in
-    (help)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:d2b-usb-security-key-help-command-$line[1]:"
-        case $line[1] in
-            (status)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(sessions)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(cancel)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(test)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(help)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-        esac
-    ;;
-esac
-;;
-        esac
-    ;;
-esac
-;;
-(help)
-_arguments "${_arguments_options[@]}" : \
-":: :_d2b__subcmd__usb__subcmd__help_commands" \
-"*::: :->help" \
-&& ret=0
-
-    case $state in
-    (help)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:d2b-usb-help-command-$line[1]:"
-        case $line[1] in
-            (attach)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(detach)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(probe)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(security-key)
-_arguments "${_arguments_options[@]}" : \
-":: :_d2b__subcmd__usb__subcmd__help__subcmd__security-key_commands" \
-"*::: :->security-key" \
-&& ret=0
-
-    case $state in
-    (security-key)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:d2b-usb-help-security-key-command-$line[1]:"
-        case $line[1] in
-            (status)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(sessions)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(cancel)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(test)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-        esac
-    ;;
-esac
-;;
-(help)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-        esac
-    ;;
-esac
-;;
-        esac
-    ;;
-esac
-;;
-(console)
-_arguments "${_arguments_options[@]}" : \
-'-h[Print help]' \
-'--help[Print help]' \
-':vm -- VM name whose foreground serial console should be attached:_default' \
-&& ret=0
-;;
-(audio)
-_arguments "${_arguments_options[@]}" : \
-'--json[Emit machine-readable JSON output]' \
-'-h[Print help]' \
-'--help[Print help]' \
-":: :_d2b__subcmd__audio_commands" \
-"*::: :->audio" \
-&& ret=0
-
-    case $state in
-    (audio)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:d2b-audio-command-$line[1]:"
-        case $line[1] in
-            (status)
-_arguments "${_arguments_options[@]}" : \
-'--json[Emit machine-readable JSON output]' \
-'-h[Print help]' \
-'--help[Print help]' \
-'::vm -- Optional VM name; omitted lists audio status for every audio-enabled VM:_default' \
-&& ret=0
-;;
-(mic)
-_arguments "${_arguments_options[@]}" : \
-'--json[Emit machine-readable JSON output]' \
-'-h[Print help (see more with '\''--help'\'')]' \
-'--help[Print help (see more with '\''--help'\'')]' \
-':state -- The new grant state to apply:((on\:"Enable the selected audio direction"
-off\:"Disable the selected audio direction"))' \
-':vm -- VM name whose audio grant should be changed:_default' \
-&& ret=0
-;;
-(speaker)
-_arguments "${_arguments_options[@]}" : \
-'--json[Emit machine-readable JSON output]' \
-'-h[Print help (see more with '\''--help'\'')]' \
-'--help[Print help (see more with '\''--help'\'')]' \
-':state -- The new grant state to apply:((on\:"Enable the selected audio direction"
-off\:"Disable the selected audio direction"))' \
-':vm -- VM name whose audio grant should be changed:_default' \
-&& ret=0
-;;
-(off)
-_arguments "${_arguments_options[@]}" : \
-'--json[Emit machine-readable JSON output]' \
-'-h[Print help]' \
-'--help[Print help]' \
-':vm -- VM name whose microphone and speaker grants should both be disabled:_default' \
-&& ret=0
-;;
-(help)
-_arguments "${_arguments_options[@]}" : \
-":: :_d2b__subcmd__audio__subcmd__help_commands" \
-"*::: :->help" \
-&& ret=0
-
-    case $state in
-    (help)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:d2b-audio-help-command-$line[1]:"
-        case $line[1] in
-            (status)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(mic)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(speaker)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(off)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(help)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-        esac
-    ;;
-esac
-;;
-        esac
-    ;;
-esac
-;;
-(audit)
-_arguments "${_arguments_options[@]}" : \
-'--strict[]' \
-'(--human)--json[]' \
-'(--json)--human[]' \
-'-h[Print help]' \
-'--help[Print help]' \
+':resource_ref:_default' \
 && ret=0
 ;;
 (host)
 _arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
 '-h[Print help]' \
 '--help[Print help]' \
 ":: :_d2b__subcmd__host_commands" \
@@ -384,285 +187,593 @@ _arguments "${_arguments_options[@]}" : \
         (( CURRENT += 1 ))
         curcontext="${curcontext%:*:*}:d2b-host-command-$line[1]:"
         case $line[1] in
-            (check)
+            (get)
 _arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(list)
+_arguments "${_arguments_options[@]}" : \
+'--execution-ref=[]:EXECUTION_REF:_default' \
+'--domain=[]:DOMAIN:_default' \
+'--phase=[]:PHASE:_default' \
+'--label-selector=[]:LABEL_SELECTOR:_default' \
+'--page-token=[]:PAGE_TOKEN:_default' \
+'--limit=[]:LIMIT:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--updates[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(status)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--watch[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(check)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
 '--read-only[]' \
 '--strict[]' \
-'(--human)--json[]' \
-'(--json)--human[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
 '-h[Print help]' \
 '--help[Print help]' \
 && ret=0
 ;;
 (prepare)
 _arguments "${_arguments_options[@]}" : \
-'(--apply)--dry-run[Plan the reconcile without mutating host state]' \
-'(--dry-run)--apply[Apply the reconcile (mutates host state)]' \
-'(--human)--json[]' \
-'(--json)--human[]' \
-'-h[Print help]' \
-'--help[Print help]' \
-&& ret=0
-;;
-(destroy)
-_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
 '(--apply)--dry-run[]' \
 '(--dry-run)--apply[]' \
-'(--human)--json[]' \
-'(--json)--human[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
 '-h[Print help]' \
 '--help[Print help]' \
-&& ret=0
-;;
-(doctor)
-_arguments "${_arguments_options[@]}" : \
-'--read-only[Mandatory\: doctor is read-only. Mutating forms are separate verbs]' \
-'(--human)--json[]' \
-'(--json)--human[]' \
-'-h[Print help]' \
-'--help[Print help]' \
-&& ret=0
-;;
-(migrate-storage)
-_arguments "${_arguments_options[@]}" : \
-'--from-checkpoint=[Checkpoint ID to roll back]:ID:_default' \
-'(--apply --rollback)--dry-run[Plan the storage cutover without mutating host state]' \
-'(--dry-run --rollback)--apply[Apply the storage cutover. Currently fails closed until broker support lands]' \
-'(--dry-run --apply)--rollback[Roll back from a named storage cutover checkpoint]' \
-'(--human)--json[]' \
-'(--json)--human[]' \
-'-h[Print help]' \
-'--help[Print help]' \
-&& ret=0
-;;
-(install)
-_arguments "${_arguments_options[@]}" : \
-'(--apply --enable --start --no-start)--dry-run[Report the planned install steps without mutating]' \
-'(--dry-run)--apply[Perform the install through the daemon → broker \`RunHostInstall\` path]' \
-'(--dry-run)--enable[After \`--apply\`, enable d2bd.service via systemctl]' \
-'(--dry-run --no-start)--start[After \`--apply --enable\`, start d2bd.service]' \
-'(--dry-run --start)--no-start[Explicitly do NOT start d2bd.service post-install]' \
-'(--human)--json[]' \
-'(--json)--human[]' \
-'-h[Print help]' \
-'--help[Print help]' \
-&& ret=0
-;;
-(reconcile)
-_arguments "${_arguments_options[@]}" : \
-'--network[Re-run the network slice of \`host prepare\` (bridge/route/nftables reconcile without starting any VM). Currently the only available scope]' \
-'(--apply)--dry-run[Plan the reconcile without mutating host state]' \
-'(--dry-run)--apply[Apply the reconcile (mutates host state)]' \
-'(--human)--json[]' \
-'(--json)--human[]' \
-'-h[Print help]' \
-'--help[Print help]' \
-&& ret=0
-;;
-(validate)
-_arguments "${_arguments_options[@]}" : \
-'--wave=[Restrict to a single wave. Other waves are reported as \`skipped\`]:WAVE:_default' \
-'--operator-signature=[Override the per-wave operator signature. When unset, the verb derives a deterministic sha256 signature from \`hostname|wave|scripts_dir|timestamp\`]:SIGNATURE:_default' \
-'--evidence-dir=[Override the evidence directory. Default\: \`/var/lib/d2b/validated\`]:PATH:_files' \
-'--scripts-dir=[Override the scripts directory. Default\: best-effort discovery of the installed \`tests/\` share, then \`./tests\`]:PATH:_files' \
-'(--apply)--dry-run[Plan\: report which readiness validators WOULD be attested. No evidence is written]' \
-'(--dry-run)--apply[Apply\: write \`/var/lib/d2b/validated/<wave>.json\` for every wave whose declared validators are present on disk]' \
-'(--human)--json[]' \
-'(--json)--human[]' \
-'-h[Print help]' \
-'--help[Print help]' \
-&& ret=0
-;;
-(help)
-_arguments "${_arguments_options[@]}" : \
-":: :_d2b__subcmd__host__subcmd__help_commands" \
-"*::: :->help" \
-&& ret=0
-
-    case $state in
-    (help)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:d2b-host-help-command-$line[1]:"
-        case $line[1] in
-            (check)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(prepare)
-_arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (destroy)
 _arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--apply)--dry-run[]' \
+'(--dry-run)--apply[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
 && ret=0
 ;;
 (doctor)
 _arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(migrate-storage)
-_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--read-only[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
 && ret=0
 ;;
 (install)
 _arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--apply --enable --start --no-start)--dry-run[]' \
+'(--dry-run)--apply[]' \
+'(--dry-run)--enable[]' \
+'(--dry-run --no-start)--start[]' \
+'(--dry-run --start)--no-start[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
 && ret=0
 ;;
 (reconcile)
 _arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--network[]' \
+'(--apply)--dry-run[]' \
+'(--dry-run)--apply[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
 && ret=0
 ;;
 (validate)
 _arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(help)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-        esac
-    ;;
-esac
-;;
-        esac
-    ;;
-esac
-;;
-(auth)
-_arguments "${_arguments_options[@]}" : \
+'--wave=[]:WAVE:_default' \
+'--evidence-dir=[]:EVIDENCE_DIR:_files' \
+'--scripts-dir=[]:SCRIPTS_DIR:_files' \
+'--operator-signature=[]:OPERATOR_SIGNATURE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--apply)--dry-run[]' \
+'(--dry-run)--apply[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
 '-h[Print help]' \
 '--help[Print help]' \
-":: :_d2b__subcmd__auth_commands" \
-"*::: :->auth" \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(guest)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_d2b__subcmd__guest_commands" \
+"*::: :->guest" \
 && ret=0
 
     case $state in
-    (auth)
+    (guest)
         words=($line[1] "${words[@]}")
         (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:d2b-auth-command-$line[1]:"
+        curcontext="${curcontext%:*:*}:d2b-guest-command-$line[1]:"
         case $line[1] in
-            (status)
+            (get)
 _arguments "${_arguments_options[@]}" : \
-'--test-uid=[]:TEST_UID:_default' \
-'(--human)--json[]' \
-'(--json)--human[]' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(list)
+_arguments "${_arguments_options[@]}" : \
+'--execution-ref=[]:EXECUTION_REF:_default' \
+'--domain=[]:DOMAIN:_default' \
+'--phase=[]:PHASE:_default' \
+'--label-selector=[]:LABEL_SELECTOR:_default' \
+'--page-token=[]:PAGE_TOKEN:_default' \
+'--limit=[]:LIMIT:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--updates[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
 '-h[Print help]' \
 '--help[Print help]' \
 && ret=0
 ;;
-(help)
+(status)
 _arguments "${_arguments_options[@]}" : \
-":: :_d2b__subcmd__auth__subcmd__help_commands" \
-"*::: :->help" \
-&& ret=0
-
-    case $state in
-    (help)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:d2b-auth-help-command-$line[1]:"
-        case $line[1] in
-            (status)
-_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--watch[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
 && ret=0
 ;;
-(help)
+(start)
 _arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--apply)--dry-run[]' \
+'(--dry-run)--apply[]' \
+'--no-wait-ready[]' \
+'-f[]' \
+'--force[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(stop)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--apply)--dry-run[]' \
+'(--dry-run)--apply[]' \
+'--no-wait-ready[]' \
+'-f[]' \
+'--force[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(restart)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--apply)--dry-run[]' \
+'(--dry-run)--apply[]' \
+'--no-wait-ready[]' \
+'-f[]' \
+'--force[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(create)
+_arguments "${_arguments_options[@]}" : \
+'(--spec-stdin)--spec-file=[]:SPEC_FILE:_files' \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--spec-file)--spec-stdin[]' \
+'--wait-for-reconcile[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(update-spec)
+_arguments "${_arguments_options[@]}" : \
+'--revision=[]:REVISION:_default' \
+'(--spec-stdin)--spec-file=[]:SPEC_FILE:_files' \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--spec-file)--spec-stdin[]' \
+'--wait-for-reconcile[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(delete)
+_arguments "${_arguments_options[@]}" : \
+'--revision=[]:REVISION:_default' \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--wait-for-reconcile[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(console)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
 && ret=0
 ;;
         esac
     ;;
 esac
 ;;
+(process)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_d2b__subcmd__process_commands" \
+"*::: :->process" \
+&& ret=0
+
+    case $state in
+    (process)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:d2b-process-command-$line[1]:"
+        case $line[1] in
+            (get)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(list)
+_arguments "${_arguments_options[@]}" : \
+'--execution-ref=[]:EXECUTION_REF:_default' \
+'--domain=[]:DOMAIN:_default' \
+'--phase=[]:PHASE:_default' \
+'--label-selector=[]:LABEL_SELECTOR:_default' \
+'--page-token=[]:PAGE_TOKEN:_default' \
+'--limit=[]:LIMIT:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--updates[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(status)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--watch[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(start)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--apply)--dry-run[]' \
+'(--dry-run)--apply[]' \
+'--no-wait-ready[]' \
+'-f[]' \
+'--force[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(stop)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--apply)--dry-run[]' \
+'(--dry-run)--apply[]' \
+'--no-wait-ready[]' \
+'-f[]' \
+'--force[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(create)
+_arguments "${_arguments_options[@]}" : \
+'(--spec-stdin)--spec-file=[]:SPEC_FILE:_files' \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--spec-file)--spec-stdin[]' \
+'--wait-for-reconcile[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(update-spec)
+_arguments "${_arguments_options[@]}" : \
+'--revision=[]:REVISION:_default' \
+'(--spec-stdin)--spec-file=[]:SPEC_FILE:_files' \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--spec-file)--spec-stdin[]' \
+'--wait-for-reconcile[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(delete)
+_arguments "${_arguments_options[@]}" : \
+'--revision=[]:REVISION:_default' \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--wait-for-reconcile[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
         esac
     ;;
 esac
 ;;
-(realm)
+(exec)
 _arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
 '-h[Print help]' \
 '--help[Print help]' \
-":: :_d2b__subcmd__realm_commands" \
-"*::: :->realm" \
+":: :_d2b__subcmd__exec_commands" \
+"*::: :->exec" \
 && ret=0
 
     case $state in
-    (realm)
+    (exec)
         words=($line[1] "${words[@]}")
         (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:d2b-realm-command-$line[1]:"
+        curcontext="${curcontext%:*:*}:d2b-exec-command-$line[1]:"
         case $line[1] in
-            (list)
+            (run)
 _arguments "${_arguments_options[@]}" : \
-'(--human)--json[]' \
-'(--json)--human[]' \
+'--name=[]:NAME:_default' \
+'--domain=[]:DOMAIN:_default' \
+'--user=[]:USER_REF:_default' \
+'--provider=[]:PROVIDER:_default' \
+'*--env=[]:KEY=VALUE:_default' \
+'--cwd=[]:CWD:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
 '-h[Print help]' \
 '--help[Print help]' \
+':execution_ref:_default' \
+'*::command:_default' \
 && ret=0
 ;;
-(inspect)
+(attach)
 _arguments "${_arguments_options[@]}" : \
-'(--human)--json[]' \
-'(--json)--human[]' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'-i[]' \
+'--interactive[]' \
+'-t[]' \
+'--tty[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
 '-h[Print help]' \
 '--help[Print help]' \
-':realm -- Realm path, e.g. `work` or `payments.work`:_default' \
+':resource_ref:_default' \
 && ret=0
 ;;
-(enter)
+(wait)
 _arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
 '-h[Print help]' \
 '--help[Print help]' \
-':realm -- Realm path, e.g. `work` or `payments.work`:_default' \
+':resource_ref:_default' \
 && ret=0
 ;;
-(run)
+(status)
 _arguments "${_arguments_options[@]}" : \
-'(--human)--json[Emit the outer \`vm exec\` result as JSON]' \
-'(--json)--human[Force human output]' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--watch[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
 '-h[Print help]' \
 '--help[Print help]' \
-':realm -- Realm path, e.g. `work` or `payments.work`:_default' \
-'*::argv -- Command to run in the gateway VM, after `--`:_default' \
+':resource_ref:_default' \
 && ret=0
 ;;
-(help)
+(list)
 _arguments "${_arguments_options[@]}" : \
-":: :_d2b__subcmd__realm__subcmd__help_commands" \
-"*::: :->help" \
-&& ret=0
-
-    case $state in
-    (help)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:d2b-realm-help-command-$line[1]:"
-        case $line[1] in
-            (list)
-_arguments "${_arguments_options[@]}" : \
+'--phase=[]:PHASE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+'::execution_ref:_default' \
 && ret=0
 ;;
-(inspect)
+(logs)
 _arguments "${_arguments_options[@]}" : \
+'--stdout-offset=[]:STDOUT_OFFSET:_default' \
+'--stderr-offset=[]:STDERR_OFFSET:_default' \
+'--max-len=[]:MAX_LEN:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':resource_ref:_default' \
 && ret=0
 ;;
-(enter)
+(kill)
 _arguments "${_arguments_options[@]}" : \
+'--signal=[]:SIGNAL:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':resource_ref:_default' \
 && ret=0
-;;
-(run)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(help)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-        esac
-    ;;
-esac
 ;;
         esac
     ;;
@@ -670,21 +781,3247 @@ esac
 ;;
 (shell)
 _arguments "${_arguments_options[@]}" : \
-'--name=[Persistent shell session name. Omit to use the target'\''s configured default]:NAME:_default' \
-'--force[Detach an existing attached client before attaching to this session]' \
-'(--human)--json[Render machine-readable JSON]' \
-'(--json)--human[Render human-readable output]' \
-'-h[Print help (see more with '\''--help'\'')]' \
-'--help[Print help (see more with '\''--help'\'')]' \
-':vm -- Target address. Local VMs use the fast path; gateway-backed targets route through the realm gateway where supported:_default' \
-'::action -- Shell action. Omit to attach to the configured default session:((attach\:"Attach to a persistent shell"
-list\:"List persistent shell sessions on a target"
-detach\:"Detach a persistent shell session without killing it"
-kill\:"Kill a persistent shell session by name"))' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_d2b__subcmd__shell_commands" \
+"*::: :->shell" \
+&& ret=0
+
+    case $state in
+    (shell)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:d2b-shell-command-$line[1]:"
+        case $line[1] in
+            (open)
+_arguments "${_arguments_options[@]}" : \
+'--name=[]:NAME:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--force[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':execution_ref:_default' \
+&& ret=0
+;;
+(attach)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--force[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':resource_ref:_default' \
+&& ret=0
+;;
+(list)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+'::execution_ref:_default' \
+&& ret=0
+;;
+(detach)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':resource_ref:_default' \
+&& ret=0
+;;
+(kill)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':resource_ref:_default' \
+&& ret=0
+;;
+(status)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--watch[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':resource_ref:_default' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(volume)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_d2b__subcmd__volume_commands" \
+"*::: :->volume" \
+&& ret=0
+
+    case $state in
+    (volume)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:d2b-volume-command-$line[1]:"
+        case $line[1] in
+            (get)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(list)
+_arguments "${_arguments_options[@]}" : \
+'--execution-ref=[]:EXECUTION_REF:_default' \
+'--domain=[]:DOMAIN:_default' \
+'--phase=[]:PHASE:_default' \
+'--label-selector=[]:LABEL_SELECTOR:_default' \
+'--page-token=[]:PAGE_TOKEN:_default' \
+'--limit=[]:LIMIT:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--updates[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(watch)
+_arguments "${_arguments_options[@]}" : \
+'--since-revision=[]:SINCE_REVISION:_default' \
+'--phase=[]:PHASE:_default' \
+'--label-selector=[]:LABEL_SELECTOR:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(create)
+_arguments "${_arguments_options[@]}" : \
+'(--spec-stdin)--spec-file=[]:SPEC_FILE:_files' \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--spec-file)--spec-stdin[]' \
+'--wait-for-reconcile[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(update-spec)
+_arguments "${_arguments_options[@]}" : \
+'--revision=[]:REVISION:_default' \
+'(--spec-stdin)--spec-file=[]:SPEC_FILE:_files' \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--spec-file)--spec-stdin[]' \
+'--wait-for-reconcile[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(delete)
+_arguments "${_arguments_options[@]}" : \
+'--revision=[]:REVISION:_default' \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--wait-for-reconcile[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(status)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--watch[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(upgrade)
+_arguments "${_arguments_options[@]}" : \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--recursive[]' \
+'--apply[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(reconcile)
+_arguments "${_arguments_options[@]}" : \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(verify)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--repair[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(usb)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_d2b__subcmd__volume__subcmd__usb_commands" \
+"*::: :->usb" \
+&& ret=0
+
+    case $state in
+    (usb)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:d2b-volume-usb-command-$line[1]:"
+        case $line[1] in
+            (attach)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--apply)--dry-run[]' \
+'(--dry-run)--apply[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+':busid:_default' \
+&& ret=0
+;;
+(detach)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--apply)--dry-run[]' \
+'(--dry-run)--apply[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+':busid:_default' \
+&& ret=0
+;;
+(probe)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(security-key)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_d2b__subcmd__volume__subcmd__security-key_commands" \
+"*::: :->security-key" \
+&& ret=0
+
+    case $state in
+    (security-key)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:d2b-volume-security-key-command-$line[1]:"
+        case $line[1] in
+            (status)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(sessions)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(cancel)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'()--current[]' \
+'(--apply)--dry-run[]' \
+'(--dry-run)--apply[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+'::session_id:_default' \
+&& ret=0
+;;
+(test)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--dry-run[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
+(network)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_d2b__subcmd__network_commands" \
+"*::: :->network" \
+&& ret=0
+
+    case $state in
+    (network)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:d2b-network-command-$line[1]:"
+        case $line[1] in
+            (get)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(list)
+_arguments "${_arguments_options[@]}" : \
+'--execution-ref=[]:EXECUTION_REF:_default' \
+'--domain=[]:DOMAIN:_default' \
+'--phase=[]:PHASE:_default' \
+'--label-selector=[]:LABEL_SELECTOR:_default' \
+'--page-token=[]:PAGE_TOKEN:_default' \
+'--limit=[]:LIMIT:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--updates[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(watch)
+_arguments "${_arguments_options[@]}" : \
+'--since-revision=[]:SINCE_REVISION:_default' \
+'--phase=[]:PHASE:_default' \
+'--label-selector=[]:LABEL_SELECTOR:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(create)
+_arguments "${_arguments_options[@]}" : \
+'(--spec-stdin)--spec-file=[]:SPEC_FILE:_files' \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--spec-file)--spec-stdin[]' \
+'--wait-for-reconcile[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(update-spec)
+_arguments "${_arguments_options[@]}" : \
+'--revision=[]:REVISION:_default' \
+'(--spec-stdin)--spec-file=[]:SPEC_FILE:_files' \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--spec-file)--spec-stdin[]' \
+'--wait-for-reconcile[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(delete)
+_arguments "${_arguments_options[@]}" : \
+'--revision=[]:REVISION:_default' \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--wait-for-reconcile[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(status)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--watch[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(upgrade)
+_arguments "${_arguments_options[@]}" : \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--recursive[]' \
+'--apply[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(reconcile)
+_arguments "${_arguments_options[@]}" : \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(verify)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--repair[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(usb)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_d2b__subcmd__network__subcmd__usb_commands" \
+"*::: :->usb" \
+&& ret=0
+
+    case $state in
+    (usb)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:d2b-network-usb-command-$line[1]:"
+        case $line[1] in
+            (attach)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--apply)--dry-run[]' \
+'(--dry-run)--apply[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+':busid:_default' \
+&& ret=0
+;;
+(detach)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--apply)--dry-run[]' \
+'(--dry-run)--apply[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+':busid:_default' \
+&& ret=0
+;;
+(probe)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(security-key)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_d2b__subcmd__network__subcmd__security-key_commands" \
+"*::: :->security-key" \
+&& ret=0
+
+    case $state in
+    (security-key)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:d2b-network-security-key-command-$line[1]:"
+        case $line[1] in
+            (status)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(sessions)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(cancel)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'()--current[]' \
+'(--apply)--dry-run[]' \
+'(--dry-run)--apply[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+'::session_id:_default' \
+&& ret=0
+;;
+(test)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--dry-run[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
+(device)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_d2b__subcmd__device_commands" \
+"*::: :->device" \
+&& ret=0
+
+    case $state in
+    (device)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:d2b-device-command-$line[1]:"
+        case $line[1] in
+            (get)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(list)
+_arguments "${_arguments_options[@]}" : \
+'--execution-ref=[]:EXECUTION_REF:_default' \
+'--domain=[]:DOMAIN:_default' \
+'--phase=[]:PHASE:_default' \
+'--label-selector=[]:LABEL_SELECTOR:_default' \
+'--page-token=[]:PAGE_TOKEN:_default' \
+'--limit=[]:LIMIT:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--updates[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(watch)
+_arguments "${_arguments_options[@]}" : \
+'--since-revision=[]:SINCE_REVISION:_default' \
+'--phase=[]:PHASE:_default' \
+'--label-selector=[]:LABEL_SELECTOR:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(create)
+_arguments "${_arguments_options[@]}" : \
+'(--spec-stdin)--spec-file=[]:SPEC_FILE:_files' \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--spec-file)--spec-stdin[]' \
+'--wait-for-reconcile[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(update-spec)
+_arguments "${_arguments_options[@]}" : \
+'--revision=[]:REVISION:_default' \
+'(--spec-stdin)--spec-file=[]:SPEC_FILE:_files' \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--spec-file)--spec-stdin[]' \
+'--wait-for-reconcile[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(delete)
+_arguments "${_arguments_options[@]}" : \
+'--revision=[]:REVISION:_default' \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--wait-for-reconcile[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(status)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--watch[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(upgrade)
+_arguments "${_arguments_options[@]}" : \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--recursive[]' \
+'--apply[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(reconcile)
+_arguments "${_arguments_options[@]}" : \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(verify)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--repair[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(usb)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_d2b__subcmd__device__subcmd__usb_commands" \
+"*::: :->usb" \
+&& ret=0
+
+    case $state in
+    (usb)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:d2b-device-usb-command-$line[1]:"
+        case $line[1] in
+            (attach)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--apply)--dry-run[]' \
+'(--dry-run)--apply[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+':busid:_default' \
+&& ret=0
+;;
+(detach)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--apply)--dry-run[]' \
+'(--dry-run)--apply[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+':busid:_default' \
+&& ret=0
+;;
+(probe)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(security-key)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_d2b__subcmd__device__subcmd__security-key_commands" \
+"*::: :->security-key" \
+&& ret=0
+
+    case $state in
+    (security-key)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:d2b-device-security-key-command-$line[1]:"
+        case $line[1] in
+            (status)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(sessions)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(cancel)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'()--current[]' \
+'(--apply)--dry-run[]' \
+'(--dry-run)--apply[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+'::session_id:_default' \
+&& ret=0
+;;
+(test)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--dry-run[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
+(endpoint)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_d2b__subcmd__endpoint_commands" \
+"*::: :->endpoint" \
+&& ret=0
+
+    case $state in
+    (endpoint)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:d2b-endpoint-command-$line[1]:"
+        case $line[1] in
+            (get)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(list)
+_arguments "${_arguments_options[@]}" : \
+'--endpoint-class=[]:ENDPOINT_CLASS:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--updates[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(watch)
+_arguments "${_arguments_options[@]}" : \
+'--endpoint-class=[]:ENDPOINT_CLASS:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(status)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--watch[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(resolve)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(export)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_d2b__subcmd__export_commands" \
+"*::: :->export" \
+&& ret=0
+
+    case $state in
+    (export)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:d2b-export-command-$line[1]:"
+        case $line[1] in
+            (get)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(list)
+_arguments "${_arguments_options[@]}" : \
+'--exported-type=[]:EXPORTED_TYPE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(watch)
+_arguments "${_arguments_options[@]}" : \
+'--exported-type=[]:EXPORTED_TYPE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(status)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--watch[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(create)
+_arguments "${_arguments_options[@]}" : \
+'(--spec-stdin)--spec-file=[]:SPEC_FILE:_files' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--spec-file)--spec-stdin[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(update-spec)
+_arguments "${_arguments_options[@]}" : \
+'--revision=[]:REVISION:_default' \
+'(--spec-stdin)--spec-file=[]:SPEC_FILE:_files' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--spec-file)--spec-stdin[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(delete)
+_arguments "${_arguments_options[@]}" : \
+'--revision=[]:REVISION:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(import)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_d2b__subcmd__import_commands" \
+"*::: :->import" \
+&& ret=0
+
+    case $state in
+    (import)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:d2b-import-command-$line[1]:"
+        case $line[1] in
+            (get)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(list)
+_arguments "${_arguments_options[@]}" : \
+'--expected-type=[]:EXPECTED_TYPE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(watch)
+_arguments "${_arguments_options[@]}" : \
+'--expected-type=[]:EXPECTED_TYPE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(status)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--watch[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(projection)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(graph)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(create)
+_arguments "${_arguments_options[@]}" : \
+'(--spec-stdin)--spec-file=[]:SPEC_FILE:_files' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--spec-file)--spec-stdin[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(update-spec)
+_arguments "${_arguments_options[@]}" : \
+'--revision=[]:REVISION:_default' \
+'(--spec-stdin)--spec-file=[]:SPEC_FILE:_files' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--spec-file)--spec-stdin[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(delete)
+_arguments "${_arguments_options[@]}" : \
+'--revision=[]:REVISION:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(resource)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_d2b__subcmd__resource_commands" \
+"*::: :->resource" \
+&& ret=0
+
+    case $state in
+    (resource)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:d2b-resource-command-$line[1]:"
+        case $line[1] in
+            (get)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':resource_ref:_default' \
+&& ret=0
+;;
+(list)
+_arguments "${_arguments_options[@]}" : \
+'--execution-ref=[]:EXECUTION_REF:_default' \
+'--domain=[]:DOMAIN:_default' \
+'--phase=[]:PHASE:_default' \
+'--label-selector=[]:LABEL_SELECTOR:_default' \
+'--page-token=[]:PAGE_TOKEN:_default' \
+'--limit=[]:LIMIT:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--updates[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':resource_type:_default' \
+&& ret=0
+;;
+(watch)
+_arguments "${_arguments_options[@]}" : \
+'--since-revision=[]:SINCE_REVISION:_default' \
+'--phase=[]:PHASE:_default' \
+'--label-selector=[]:LABEL_SELECTOR:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':resource_type:_default' \
+&& ret=0
+;;
+(create)
+_arguments "${_arguments_options[@]}" : \
+'(--spec-stdin)--spec-file=[]:SPEC_FILE:_files' \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--spec-file)--spec-stdin[]' \
+'--wait-for-reconcile[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':resource_type:_default' \
+&& ret=0
+;;
+(update-spec)
+_arguments "${_arguments_options[@]}" : \
+'--revision=[]:REVISION:_default' \
+'(--spec-stdin)--spec-file=[]:SPEC_FILE:_files' \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--spec-file)--spec-stdin[]' \
+'--wait-for-reconcile[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':resource_ref:_default' \
+&& ret=0
+;;
+(delete)
+_arguments "${_arguments_options[@]}" : \
+'--revision=[]:REVISION:_default' \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--wait-for-reconcile[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':resource_ref:_default' \
+&& ret=0
+;;
+(status)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--watch[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':resource_ref:_default' \
+&& ret=0
+;;
+(upgrade)
+_arguments "${_arguments_options[@]}" : \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--recursive[]' \
+'--apply[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':resource_ref:_default' \
+&& ret=0
+;;
+(reconcile)
+_arguments "${_arguments_options[@]}" : \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':resource_ref:_default' \
+&& ret=0
+;;
+(authorities)
+_arguments "${_arguments_options[@]}" : \
+'--scope=[]:SCOPE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_d2b__subcmd__resource__subcmd__authorities_commands" \
+"*::: :->authorities" \
+&& ret=0
+
+    case $state in
+    (authorities)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:d2b-resource-authorities-command-$line[1]:"
+        case $line[1] in
+            (holders)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':resource_ref:_default' \
+&& ret=0
+;;
+(conflict)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':resource_ref:_default' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
+(user)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_d2b__subcmd__user_commands" \
+"*::: :->user" \
+&& ret=0
+
+    case $state in
+    (user)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:d2b-user-command-$line[1]:"
+        case $line[1] in
+            (get)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(list)
+_arguments "${_arguments_options[@]}" : \
+'--execution-ref=[]:EXECUTION_REF:_default' \
+'--domain=[]:DOMAIN:_default' \
+'--phase=[]:PHASE:_default' \
+'--label-selector=[]:LABEL_SELECTOR:_default' \
+'--page-token=[]:PAGE_TOKEN:_default' \
+'--limit=[]:LIMIT:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--updates[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(watch)
+_arguments "${_arguments_options[@]}" : \
+'--since-revision=[]:SINCE_REVISION:_default' \
+'--phase=[]:PHASE:_default' \
+'--label-selector=[]:LABEL_SELECTOR:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(create)
+_arguments "${_arguments_options[@]}" : \
+'(--spec-stdin)--spec-file=[]:SPEC_FILE:_files' \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--spec-file)--spec-stdin[]' \
+'--wait-for-reconcile[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(update-spec)
+_arguments "${_arguments_options[@]}" : \
+'--revision=[]:REVISION:_default' \
+'(--spec-stdin)--spec-file=[]:SPEC_FILE:_files' \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--spec-file)--spec-stdin[]' \
+'--wait-for-reconcile[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(delete)
+_arguments "${_arguments_options[@]}" : \
+'--revision=[]:REVISION:_default' \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--wait-for-reconcile[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(status)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--watch[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(upgrade)
+_arguments "${_arguments_options[@]}" : \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--recursive[]' \
+'--apply[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(reconcile)
+_arguments "${_arguments_options[@]}" : \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(verify)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--repair[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(usb)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_d2b__subcmd__user__subcmd__usb_commands" \
+"*::: :->usb" \
+&& ret=0
+
+    case $state in
+    (usb)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:d2b-user-usb-command-$line[1]:"
+        case $line[1] in
+            (attach)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--apply)--dry-run[]' \
+'(--dry-run)--apply[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+':busid:_default' \
+&& ret=0
+;;
+(detach)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--apply)--dry-run[]' \
+'(--dry-run)--apply[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+':busid:_default' \
+&& ret=0
+;;
+(probe)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(security-key)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_d2b__subcmd__user__subcmd__security-key_commands" \
+"*::: :->security-key" \
+&& ret=0
+
+    case $state in
+    (security-key)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:d2b-user-security-key-command-$line[1]:"
+        case $line[1] in
+            (status)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(sessions)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(cancel)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'()--current[]' \
+'(--apply)--dry-run[]' \
+'(--dry-run)--apply[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+'::session_id:_default' \
+&& ret=0
+;;
+(test)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--dry-run[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
+(credential)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_d2b__subcmd__credential_commands" \
+"*::: :->credential" \
+&& ret=0
+
+    case $state in
+    (credential)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:d2b-credential-command-$line[1]:"
+        case $line[1] in
+            (get)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(list)
+_arguments "${_arguments_options[@]}" : \
+'--execution-ref=[]:EXECUTION_REF:_default' \
+'--domain=[]:DOMAIN:_default' \
+'--phase=[]:PHASE:_default' \
+'--label-selector=[]:LABEL_SELECTOR:_default' \
+'--page-token=[]:PAGE_TOKEN:_default' \
+'--limit=[]:LIMIT:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--updates[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(watch)
+_arguments "${_arguments_options[@]}" : \
+'--since-revision=[]:SINCE_REVISION:_default' \
+'--phase=[]:PHASE:_default' \
+'--label-selector=[]:LABEL_SELECTOR:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(create)
+_arguments "${_arguments_options[@]}" : \
+'(--spec-stdin)--spec-file=[]:SPEC_FILE:_files' \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--spec-file)--spec-stdin[]' \
+'--wait-for-reconcile[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(update-spec)
+_arguments "${_arguments_options[@]}" : \
+'--revision=[]:REVISION:_default' \
+'(--spec-stdin)--spec-file=[]:SPEC_FILE:_files' \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--spec-file)--spec-stdin[]' \
+'--wait-for-reconcile[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(delete)
+_arguments "${_arguments_options[@]}" : \
+'--revision=[]:REVISION:_default' \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--wait-for-reconcile[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(status)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--watch[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(upgrade)
+_arguments "${_arguments_options[@]}" : \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--recursive[]' \
+'--apply[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(reconcile)
+_arguments "${_arguments_options[@]}" : \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(verify)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--repair[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(usb)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_d2b__subcmd__credential__subcmd__usb_commands" \
+"*::: :->usb" \
+&& ret=0
+
+    case $state in
+    (usb)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:d2b-credential-usb-command-$line[1]:"
+        case $line[1] in
+            (attach)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--apply)--dry-run[]' \
+'(--dry-run)--apply[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+':busid:_default' \
+&& ret=0
+;;
+(detach)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--apply)--dry-run[]' \
+'(--dry-run)--apply[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+':busid:_default' \
+&& ret=0
+;;
+(probe)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(security-key)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_d2b__subcmd__credential__subcmd__security-key_commands" \
+"*::: :->security-key" \
+&& ret=0
+
+    case $state in
+    (security-key)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:d2b-credential-security-key-command-$line[1]:"
+        case $line[1] in
+            (status)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(sessions)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(cancel)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'()--current[]' \
+'(--apply)--dry-run[]' \
+'(--dry-run)--apply[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+'::session_id:_default' \
+&& ret=0
+;;
+(test)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--dry-run[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
+(provider)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_d2b__subcmd__provider_commands" \
+"*::: :->provider" \
+&& ret=0
+
+    case $state in
+    (provider)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:d2b-provider-command-$line[1]:"
+        case $line[1] in
+            (list)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--package-only[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(get)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(status)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--watch[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(inspect)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(zone)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_d2b__subcmd__zone_commands" \
+"*::: :->zone" \
+&& ret=0
+
+    case $state in
+    (zone)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:d2b-zone-command-$line[1]:"
+        case $line[1] in
+            (get)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+'::name:_default' \
+&& ret=0
+;;
+(list)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(status)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--watch[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+'::name:_default' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(quota)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_d2b__subcmd__quota_commands" \
+"*::: :->quota" \
+&& ret=0
+
+    case $state in
+    (quota)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:d2b-quota-command-$line[1]:"
+        case $line[1] in
+            (get)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(list)
+_arguments "${_arguments_options[@]}" : \
+'--execution-ref=[]:EXECUTION_REF:_default' \
+'--domain=[]:DOMAIN:_default' \
+'--phase=[]:PHASE:_default' \
+'--label-selector=[]:LABEL_SELECTOR:_default' \
+'--page-token=[]:PAGE_TOKEN:_default' \
+'--limit=[]:LIMIT:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--updates[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(watch)
+_arguments "${_arguments_options[@]}" : \
+'--since-revision=[]:SINCE_REVISION:_default' \
+'--phase=[]:PHASE:_default' \
+'--label-selector=[]:LABEL_SELECTOR:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(create)
+_arguments "${_arguments_options[@]}" : \
+'(--spec-stdin)--spec-file=[]:SPEC_FILE:_files' \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--spec-file)--spec-stdin[]' \
+'--wait-for-reconcile[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(update-spec)
+_arguments "${_arguments_options[@]}" : \
+'--revision=[]:REVISION:_default' \
+'(--spec-stdin)--spec-file=[]:SPEC_FILE:_files' \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--spec-file)--spec-stdin[]' \
+'--wait-for-reconcile[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(delete)
+_arguments "${_arguments_options[@]}" : \
+'--revision=[]:REVISION:_default' \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--wait-for-reconcile[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(status)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--watch[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(upgrade)
+_arguments "${_arguments_options[@]}" : \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--recursive[]' \
+'--apply[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(reconcile)
+_arguments "${_arguments_options[@]}" : \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(verify)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--repair[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(usb)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_d2b__subcmd__quota__subcmd__usb_commands" \
+"*::: :->usb" \
+&& ret=0
+
+    case $state in
+    (usb)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:d2b-quota-usb-command-$line[1]:"
+        case $line[1] in
+            (attach)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--apply)--dry-run[]' \
+'(--dry-run)--apply[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+':busid:_default' \
+&& ret=0
+;;
+(detach)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--apply)--dry-run[]' \
+'(--dry-run)--apply[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+':busid:_default' \
+&& ret=0
+;;
+(probe)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(security-key)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_d2b__subcmd__quota__subcmd__security-key_commands" \
+"*::: :->security-key" \
+&& ret=0
+
+    case $state in
+    (security-key)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:d2b-quota-security-key-command-$line[1]:"
+        case $line[1] in
+            (status)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(sessions)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(cancel)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'()--current[]' \
+'(--apply)--dry-run[]' \
+'(--dry-run)--apply[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+'::session_id:_default' \
+&& ret=0
+;;
+(test)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--dry-run[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
+(emergency-policy)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_d2b__subcmd__emergency-policy_commands" \
+"*::: :->emergency-policy" \
+&& ret=0
+
+    case $state in
+    (emergency-policy)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:d2b-emergency-policy-command-$line[1]:"
+        case $line[1] in
+            (get)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(list)
+_arguments "${_arguments_options[@]}" : \
+'--execution-ref=[]:EXECUTION_REF:_default' \
+'--domain=[]:DOMAIN:_default' \
+'--phase=[]:PHASE:_default' \
+'--label-selector=[]:LABEL_SELECTOR:_default' \
+'--page-token=[]:PAGE_TOKEN:_default' \
+'--limit=[]:LIMIT:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--updates[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(watch)
+_arguments "${_arguments_options[@]}" : \
+'--since-revision=[]:SINCE_REVISION:_default' \
+'--phase=[]:PHASE:_default' \
+'--label-selector=[]:LABEL_SELECTOR:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(create)
+_arguments "${_arguments_options[@]}" : \
+'(--spec-stdin)--spec-file=[]:SPEC_FILE:_files' \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--spec-file)--spec-stdin[]' \
+'--wait-for-reconcile[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(update-spec)
+_arguments "${_arguments_options[@]}" : \
+'--revision=[]:REVISION:_default' \
+'(--spec-stdin)--spec-file=[]:SPEC_FILE:_files' \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--spec-file)--spec-stdin[]' \
+'--wait-for-reconcile[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(delete)
+_arguments "${_arguments_options[@]}" : \
+'--revision=[]:REVISION:_default' \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--wait-for-reconcile[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(status)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--watch[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(upgrade)
+_arguments "${_arguments_options[@]}" : \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--recursive[]' \
+'--apply[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(reconcile)
+_arguments "${_arguments_options[@]}" : \
+'--reconcile-deadline=[]:RECONCILE_DEADLINE:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(verify)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--repair[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(usb)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_d2b__subcmd__emergency-policy__subcmd__usb_commands" \
+"*::: :->usb" \
+&& ret=0
+
+    case $state in
+    (usb)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:d2b-emergency-policy-usb-command-$line[1]:"
+        case $line[1] in
+            (attach)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--apply)--dry-run[]' \
+'(--dry-run)--apply[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+':busid:_default' \
+&& ret=0
+;;
+(detach)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--apply)--dry-run[]' \
+'(--dry-run)--apply[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+':busid:_default' \
+&& ret=0
+;;
+(probe)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(security-key)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_d2b__subcmd__emergency-policy__subcmd__security-key_commands" \
+"*::: :->security-key" \
+&& ret=0
+
+    case $state in
+    (security-key)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:d2b-emergency-policy-security-key-command-$line[1]:"
+        case $line[1] in
+            (status)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(sessions)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(cancel)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'()--current[]' \
+'(--apply)--dry-run[]' \
+'(--dry-run)--apply[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+'::session_id:_default' \
+&& ret=0
+;;
+(test)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--dry-run[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
+(activation)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_d2b__subcmd__activation_commands" \
+"*::: :->activation" \
+&& ret=0
+
+    case $state in
+    (activation)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:d2b-activation-command-$line[1]:"
+        case $line[1] in
+            (apply)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--dry-run[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(build)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':guest_ref:_default' \
+&& ret=0
+;;
+(generations)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':guest_ref:_default' \
+&& ret=0
+;;
+(switch)
+_arguments "${_arguments_options[@]}" : \
+'--to-generation=[]:TO_GENERATION:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--apply)--dry-run[]' \
+'(--dry-run)--apply[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':guest_ref:_default' \
+&& ret=0
+;;
+(boot)
+_arguments "${_arguments_options[@]}" : \
+'--to-generation=[]:TO_GENERATION:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--apply)--dry-run[]' \
+'(--dry-run)--apply[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':guest_ref:_default' \
+&& ret=0
+;;
+(test)
+_arguments "${_arguments_options[@]}" : \
+'--to-generation=[]:TO_GENERATION:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--apply)--dry-run[]' \
+'(--dry-run)--apply[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':guest_ref:_default' \
+&& ret=0
+;;
+(rollback)
+_arguments "${_arguments_options[@]}" : \
+'--to-generation=[]:TO_GENERATION:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--apply)--dry-run[]' \
+'(--dry-run)--apply[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':guest_ref:_default' \
+&& ret=0
+;;
+(gc)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--apply)--dry-run[]' \
+'(--dry-run)--apply[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(migrate)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--apply)--dry-run[]' \
+'(--dry-run)--apply[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(keys)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_d2b__subcmd__activation__subcmd__keys_commands" \
+"*::: :->keys" \
+&& ret=0
+
+    case $state in
+    (keys)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:d2b-activation-keys-command-$line[1]:"
+        case $line[1] in
+            (list)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(show)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(rotate)
+_arguments "${_arguments_options[@]}" : \
+'--to-generation=[]:TO_GENERATION:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--apply)--dry-run[]' \
+'(--dry-run)--apply[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':guest_ref:_default' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+(trust)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(rotate-known-host)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':name:_default' \
+&& ret=0
+;;
+(config)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_d2b__subcmd__activation__subcmd__config_commands" \
+"*::: :->config" \
+&& ret=0
+
+    case $state in
+    (config)
+        words=($line[1] "${words[@]}")
+        (( CURRENT += 1 ))
+        curcontext="${curcontext%:*:*}:d2b-activation-config-command-$line[1]:"
+        case $line[1] in
+            (sync)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--dry-run[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':guest_ref:_default' \
+&& ret=0
+;;
+(diff)
+_arguments "${_arguments_options[@]}" : \
+'--against=[]:AGAINST:_files' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':guest_ref:_default' \
+&& ret=0
+;;
+(approve)
+_arguments "${_arguments_options[@]}" : \
+'--to=[]:DESTINATION:_files' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':guest_ref:_default' \
+&& ret=0
+;;
+(reject)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--dry-run[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':guest_ref:_default' \
+&& ret=0
+;;
+(status)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--dry-run[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':guest_ref:_default' \
+&& ret=0
+;;
+        esac
+    ;;
+esac
+;;
+        esac
+    ;;
+esac
+;;
+(audit)
+_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--strict[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
 && ret=0
 ;;
 (op)
 _arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
 '-h[Print help]' \
 '--help[Print help]' \
 ":: :_d2b__subcmd__op_commands" \
@@ -699,862 +4036,17 @@ _arguments "${_arguments_options[@]}" : \
         case $line[1] in
             (inspect)
 _arguments "${_arguments_options[@]}" : \
-'--trace-id=[Optional trace id to include in the inspection envelope]:TRACE_ID:_default' \
-'--span-id=[Optional span id to include in the inspection envelope]:SPAN_ID:_default' \
-'(--human)--json[]' \
-'(--json)--human[]' \
+'--operation-id=[]:OPERATION_ID:_default' \
+'--trace-id=[]:TRACE_ID:_default' \
+'--span-id=[]:SPAN_ID:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--watch[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
 '-h[Print help]' \
 '--help[Print help]' \
-&& ret=0
-;;
-(help)
-_arguments "${_arguments_options[@]}" : \
-":: :_d2b__subcmd__op__subcmd__help_commands" \
-"*::: :->help" \
-&& ret=0
-
-    case $state in
-    (help)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:d2b-op-help-command-$line[1]:"
-        case $line[1] in
-            (inspect)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(help)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-        esac
-    ;;
-esac
-;;
-        esac
-    ;;
-esac
-;;
-(vm)
-_arguments "${_arguments_options[@]}" : \
-'-h[Print help]' \
-'--help[Print help]' \
-":: :_d2b__subcmd__vm_commands" \
-"*::: :->vm" \
-&& ret=0
-
-    case $state in
-    (vm)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:d2b-vm-command-$line[1]:"
-        case $line[1] in
-            (start)
-_arguments "${_arguments_options[@]}" : \
-'(--apply)--dry-run[Plan the DAG without spawning any role]' \
-'(--dry-run)--apply[Apply the DAG (drives the supervisor)]' \
-'--no-wait-api[Exit 0 on process-alive success without waiting for api-ready. Default behavior is --strict (wait for both process-alive and api-ready)]' \
-'(--human)--json[]' \
-'(--json)--human[]' \
-'-h[Print help]' \
-'--help[Print help]' \
-':vm -- VM name as declared in `d2b.vms.<name>`:_default' \
-&& ret=0
-;;
-(stop)
-_arguments "${_arguments_options[@]}" : \
-'(--apply)--dry-run[]' \
-'(--dry-run)--apply[]' \
-'-f[Skip provider graceful shutdown and use the forced cleanup path]' \
-'--force[Skip provider graceful shutdown and use the forced cleanup path]' \
-'(--human)--json[]' \
-'(--json)--human[]' \
-'-h[Print help]' \
-'--help[Print help]' \
-':vm:_default' \
-&& ret=0
-;;
-(restart)
-_arguments "${_arguments_options[@]}" : \
-'(--apply)--dry-run[]' \
-'(--dry-run)--apply[]' \
-'-f[Apply force only to the stop phase before starting again]' \
-'--force[Apply force only to the stop phase before starting again]' \
-'(--human)--json[]' \
-'(--json)--human[]' \
-'-h[Print help]' \
-'--help[Print help]' \
-':vm:_default' \
-&& ret=0
-;;
-(list)
-_arguments "${_arguments_options[@]}" : \
-'(--all)--realm=[Route list through a realm gateway VM]:REALM:_default' \
-'(--human)--json[]' \
-'(--json)--human[]' \
-'--all[Include configured realm gateway entrypoints in the list]' \
-'-h[Print help]' \
-'--help[Print help]' \
-&& ret=0
-;;
-(status)
-_arguments "${_arguments_options[@]}" : \
-'(--human)--json[]' \
-'(--json)--human[]' \
-'-h[Print help]' \
-'--help[Print help]' \
-':vm -- VM name:_default' \
-&& ret=0
-;;
-(exec)
-_arguments "${_arguments_options[@]}" : \
-'*--env=[Set an environment variable in the guest command (\`KEY=VALUE\`). Repeatable]:KEY=VALUE:_default' \
-'--cwd=[Working directory for the guest command]:DIR:_default' \
-'-d[Start the command detached and print its exec id. Incompatible with \`-i\`/\`-t\`; detached execs are managed with \`d2b vm exec <vm> {list|logs|status|kill}\`]' \
-'--detach[Start the command detached and print its exec id. Incompatible with \`-i\`/\`-t\`; detached execs are managed with \`d2b vm exec <vm> {list|logs|status|kill}\`]' \
-'-i[Forward host stdin into the guest command (\`-i\`). Requires \`-t\`/\`--tty\`; use \`-it\` for an interactive shell]' \
-'--interactive[Forward host stdin into the guest command (\`-i\`). Requires \`-t\`/\`--tty\`; use \`-it\` for an interactive shell]' \
-'-t[Allocate a PTY in the guest and put the host terminal in raw mode (\`-t\`). Implies stdin forwarding. Human-only (incompatible with \`--json\`)]' \
-'--tty[Allocate a PTY in the guest and put the host terminal in raw mode (\`-t\`). Implies stdin forwarding. Human-only (incompatible with \`--json\`)]' \
-'(--human)--json[Emit a single terminal JSON envelope (exit code + source/reason + bounded captured output). Non-interactive only]' \
-'(--json)--human[Force human output]' \
-'-h[Print help]' \
-'--help[Print help]' \
-':vm -- VM name as declared in `d2b.vms.<name>`:_default' \
-'*::management -- Optional detached exec management form\: `list`, `logs <id> \[--stdout-offset N|--stdout-offset=N\] \[--stderr-offset N|--stderr-offset=N\] \[--max-len N|--max-len=N\]`, `status <id>`, or `kill <id>`. Command execs never use this position\: pass a command after `--` instead:_default' \
-&& ret=0
-;;
-(display)
-_arguments "${_arguments_options[@]}" : \
-'-h[Print help]' \
-'--help[Print help]' \
-":: :_d2b__subcmd__vm__subcmd__display_commands" \
-"*::: :->display" \
-&& ret=0
-
-    case $state in
-    (display)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:d2b-vm-display-command-$line[1]:"
-        case $line[1] in
-            (list)
-_arguments "${_arguments_options[@]}" : \
-'--target=[Optional realm target to filter, for example \`demo.work.d2b\`]:TARGET:_default' \
-'(--human)--json[]' \
-'(--json)--human[]' \
-'-h[Print help]' \
-'--help[Print help]' \
-&& ret=0
-;;
-(close)
-_arguments "${_arguments_options[@]}" : \
-'(--human)--json[]' \
-'(--json)--human[]' \
-'-h[Print help]' \
-'--help[Print help]' \
-':session_id -- Display session id from `d2b vm display list`:_default' \
-&& ret=0
-;;
-(help)
-_arguments "${_arguments_options[@]}" : \
-":: :_d2b__subcmd__vm__subcmd__display__subcmd__help_commands" \
-"*::: :->help" \
-&& ret=0
-
-    case $state in
-    (help)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:d2b-vm-display-help-command-$line[1]:"
-        case $line[1] in
-            (list)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(close)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(help)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-        esac
-    ;;
-esac
-;;
-        esac
-    ;;
-esac
-;;
-(help)
-_arguments "${_arguments_options[@]}" : \
-":: :_d2b__subcmd__vm__subcmd__help_commands" \
-"*::: :->help" \
-&& ret=0
-
-    case $state in
-    (help)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:d2b-vm-help-command-$line[1]:"
-        case $line[1] in
-            (start)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(stop)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(restart)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(list)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(status)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(exec)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(display)
-_arguments "${_arguments_options[@]}" : \
-":: :_d2b__subcmd__vm__subcmd__help__subcmd__display_commands" \
-"*::: :->display" \
-&& ret=0
-
-    case $state in
-    (display)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:d2b-vm-help-display-command-$line[1]:"
-        case $line[1] in
-            (list)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(close)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-        esac
-    ;;
-esac
-;;
-(help)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-        esac
-    ;;
-esac
-;;
-        esac
-    ;;
-esac
-;;
-(up)
-_arguments "${_arguments_options[@]}" : \
-'(--apply)--dry-run[Plan the DAG without spawning any role]' \
-'(--dry-run)--apply[Apply the DAG (drives the supervisor)]' \
-'--no-wait-api[Exit 0 on process-alive success without waiting for api-ready. Default behavior is --strict (wait for both process-alive and api-ready)]' \
-'(--human)--json[]' \
-'(--json)--human[]' \
-'-h[Print help]' \
-'--help[Print help]' \
-':vm -- VM name as declared in `d2b.vms.<name>`:_default' \
-&& ret=0
-;;
-(down)
-_arguments "${_arguments_options[@]}" : \
-'(--apply)--dry-run[]' \
-'(--dry-run)--apply[]' \
-'-f[Skip provider graceful shutdown and use the forced cleanup path]' \
-'--force[Skip provider graceful shutdown and use the forced cleanup path]' \
-'(--human)--json[]' \
-'(--json)--human[]' \
-'-h[Print help]' \
-'--help[Print help]' \
-':vm:_default' \
-&& ret=0
-;;
-(restart)
-_arguments "${_arguments_options[@]}" : \
-'(--apply)--dry-run[]' \
-'(--dry-run)--apply[]' \
-'-f[Apply force only to the stop phase before starting again]' \
-'--force[Apply force only to the stop phase before starting again]' \
-'(--human)--json[]' \
-'(--json)--human[]' \
-'-h[Print help]' \
-'--help[Print help]' \
-':vm:_default' \
-&& ret=0
-;;
-(build)
-_arguments "${_arguments_options[@]}" : \
-'(--human)--json[]' \
-'(--json)--human[]' \
-'-h[Print help]' \
-'--help[Print help]' \
-':vm:_default' \
-&& ret=0
-;;
-(generations)
-_arguments "${_arguments_options[@]}" : \
-'(--human)--json[]' \
-'(--json)--human[]' \
-'-h[Print help]' \
-'--help[Print help]' \
-':vm:_default' \
-&& ret=0
-;;
-(switch)
-_arguments "${_arguments_options[@]}" : \
-'(--apply)--dry-run[]' \
-'(--dry-run)--apply[]' \
-'(--human)--json[]' \
-'(--json)--human[]' \
-'-h[Print help]' \
-'--help[Print help]' \
-':vm:_default' \
-&& ret=0
-;;
-(boot)
-_arguments "${_arguments_options[@]}" : \
-'(--apply)--dry-run[]' \
-'(--dry-run)--apply[]' \
-'(--human)--json[]' \
-'(--json)--human[]' \
-'-h[Print help]' \
-'--help[Print help]' \
-':vm:_default' \
-&& ret=0
-;;
-(test)
-_arguments "${_arguments_options[@]}" : \
-'(--apply)--dry-run[]' \
-'(--dry-run)--apply[]' \
-'(--human)--json[]' \
-'(--json)--human[]' \
-'-h[Print help]' \
-'--help[Print help]' \
-':vm:_default' \
-&& ret=0
-;;
-(rollback)
-_arguments "${_arguments_options[@]}" : \
-'(--apply)--dry-run[]' \
-'(--dry-run)--apply[]' \
-'(--human)--json[]' \
-'(--json)--human[]' \
-'-h[Print help]' \
-'--help[Print help]' \
-':vm:_default' \
-&& ret=0
-;;
-(gc)
-_arguments "${_arguments_options[@]}" : \
-'(--apply)--dry-run[]' \
-'(--dry-run)--apply[]' \
-'(--human)--json[]' \
-'(--json)--human[]' \
-'-h[Print help]' \
-'--help[Print help]' \
-&& ret=0
-;;
-(store)
-_arguments "${_arguments_options[@]}" : \
-'-h[Print help]' \
-'--help[Print help]' \
-":: :_d2b__subcmd__store_commands" \
-"*::: :->store" \
-&& ret=0
-
-    case $state in
-    (store)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:d2b-store-command-$line[1]:"
-        case $line[1] in
-            (verify)
-_arguments "${_arguments_options[@]}" : \
-'--repair[]' \
-'(--human)--json[]' \
-'(--json)--human[]' \
-'-h[Print help]' \
-'--help[Print help]' \
-':vm:_default' \
-&& ret=0
-;;
-(help)
-_arguments "${_arguments_options[@]}" : \
-":: :_d2b__subcmd__store__subcmd__help_commands" \
-"*::: :->help" \
-&& ret=0
-
-    case $state in
-    (help)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:d2b-store-help-command-$line[1]:"
-        case $line[1] in
-            (verify)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(help)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-        esac
-    ;;
-esac
-;;
-        esac
-    ;;
-esac
-;;
-(keys)
-_arguments "${_arguments_options[@]}" : \
-'-h[Print help]' \
-'--help[Print help]' \
-":: :_d2b__subcmd__keys_commands" \
-"*::: :->keys" \
-&& ret=0
-
-    case $state in
-    (keys)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:d2b-keys-command-$line[1]:"
-        case $line[1] in
-            (list)
-_arguments "${_arguments_options[@]}" : \
-'(--human)--json[]' \
-'(--json)--human[]' \
-'-h[Print help]' \
-'--help[Print help]' \
-&& ret=0
-;;
-(show)
-_arguments "${_arguments_options[@]}" : \
-'(--human)--json[]' \
-'(--json)--human[]' \
-'-h[Print help]' \
-'--help[Print help]' \
-':vm:_default' \
-&& ret=0
-;;
-(rotate)
-_arguments "${_arguments_options[@]}" : \
-'(--apply)--dry-run[]' \
-'(--dry-run)--apply[]' \
-'(--human)--json[]' \
-'(--json)--human[]' \
-'-h[Print help]' \
-'--help[Print help]' \
-':vm:_default' \
-&& ret=0
-;;
-(help)
-_arguments "${_arguments_options[@]}" : \
-":: :_d2b__subcmd__keys__subcmd__help_commands" \
-"*::: :->help" \
-&& ret=0
-
-    case $state in
-    (help)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:d2b-keys-help-command-$line[1]:"
-        case $line[1] in
-            (list)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(show)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(rotate)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(help)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-        esac
-    ;;
-esac
-;;
-        esac
-    ;;
-esac
-;;
-(trust)
-_arguments "${_arguments_options[@]}" : \
-'(--apply)--dry-run[]' \
-'(--dry-run)--apply[]' \
-'(--human)--json[]' \
-'(--json)--human[]' \
-'-h[Print help]' \
-'--help[Print help]' \
-':vm:_default' \
-&& ret=0
-;;
-(rotate-known-host)
-_arguments "${_arguments_options[@]}" : \
-'(--apply)--dry-run[]' \
-'(--dry-run)--apply[]' \
-'(--human)--json[]' \
-'(--json)--human[]' \
-'-h[Print help]' \
-'--help[Print help]' \
-':vm:_default' \
-&& ret=0
-;;
-(migrate)
-_arguments "${_arguments_options[@]}" : \
-'(--apply)--dry-run[]' \
-'(--dry-run)--apply[]' \
-'(--human)--json[]' \
-'(--json)--human[]' \
-'-h[Print help]' \
-'--help[Print help]' \
-&& ret=0
-;;
-(config)
-_arguments "${_arguments_options[@]}" : \
-'-h[Print help]' \
-'--help[Print help]' \
-":: :_d2b__subcmd__config_commands" \
-"*::: :->config" \
-&& ret=0
-
-    case $state in
-    (config)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:d2b-config-command-$line[1]:"
-        case $line[1] in
-            (sync)
-_arguments "${_arguments_options[@]}" : \
-'--guest-path=[Path of the editable guest config INSIDE the VM to pull. Honored only by the legacy operator SSH transport; on guest-control VMs the canonical guest config working copy is read by file id and this flag is rejected]:GUEST_PATH:_default' \
-'--host=[Override the SSH host (defaults to the manifest \`static_ip\`). SSH transport only; rejected on guest-control VMs]:HOST:_default' \
-'--user=[Override the SSH user (defaults to the manifest \`ssh_user\`). SSH transport only; rejected on guest-control VMs]:USER:_default' \
-'--key=[Override the SSH private key path. SSH transport only; rejected on guest-control VMs]:KEY:_files' \
-'--known-hosts=[known_hosts file used to verify the VM'\''s host key (defaults to the framework-managed \`/var/lib/d2b/known_hosts.d2b\`). SSH transport only; rejected on guest-control VMs]:KNOWN_HOSTS:_files' \
-'--dry-run[Print the planned action instead of running it]' \
-'--json[Emit a JSON envelope]' \
-'-h[Print help (see more with '\''--help'\'')]' \
-'--help[Print help (see more with '\''--help'\'')]' \
-':vm -- VM name (must match the static manifest):_default' \
-&& ret=0
-;;
-(diff)
-_arguments "${_arguments_options[@]}" : \
-'--against=[The live host-side guest config file to compare the staging against]:AGAINST:_files' \
-'--json[Emit a JSON envelope]' \
-'-h[Print help]' \
-'--help[Print help]' \
-':vm -- VM name (must match the static manifest):_default' \
-&& ret=0
-;;
-(approve)
-_arguments "${_arguments_options[@]}" : \
-'--to=[The host-side file to write the approved staging copy onto. The operator chooses this (typically their \`guestConfigFile\` path)]:TO:_files' \
-'--json[Emit a JSON envelope]' \
-'-h[Print help]' \
-'--help[Print help]' \
-':vm -- VM name (must match the static manifest):_default' \
-&& ret=0
-;;
-(reject)
-_arguments "${_arguments_options[@]}" : \
-'--json[Emit a JSON envelope]' \
-'-h[Print help]' \
-'--help[Print help]' \
-':vm -- VM name (must match the static manifest):_default' \
-&& ret=0
-;;
-(status)
-_arguments "${_arguments_options[@]}" : \
-'--all[Report every VM that currently has a pending staging file]' \
-'--json[Emit a JSON envelope]' \
-'-h[Print help]' \
-'--help[Print help]' \
-'::vm -- VM name; omit together with `--all` to report every staged VM:_default' \
-&& ret=0
-;;
-(help)
-_arguments "${_arguments_options[@]}" : \
-":: :_d2b__subcmd__config__subcmd__help_commands" \
-"*::: :->help" \
-&& ret=0
-
-    case $state in
-    (help)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:d2b-config-help-command-$line[1]:"
-        case $line[1] in
-            (sync)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(diff)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(approve)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(reject)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(status)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(help)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-        esac
-    ;;
-esac
-;;
-        esac
-    ;;
-esac
-;;
-(clipboard)
-_arguments "${_arguments_options[@]}" : \
-'-h[Print help]' \
-'--help[Print help]' \
-":: :_d2b__subcmd__clipboard_commands" \
-"*::: :->clipboard" \
-&& ret=0
-
-    case $state in
-    (clipboard)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:d2b-clipboard-command-$line[1]:"
-        case $line[1] in
-            (arm)
-_arguments "${_arguments_options[@]}" : \
-'(--human)--json[Emit a structured JSON envelope]' \
-'(--json)--human[Emit a human-readable status line]' \
-'-h[Print help (see more with '\''--help'\'')]' \
-'--help[Print help (see more with '\''--help'\'')]' \
-&& ret=0
-;;
-(help)
-_arguments "${_arguments_options[@]}" : \
-":: :_d2b__subcmd__clipboard__subcmd__help_commands" \
-"*::: :->help" \
-&& ret=0
-
-    case $state in
-    (help)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:d2b-clipboard-help-command-$line[1]:"
-        case $line[1] in
-            (arm)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(help)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-        esac
-    ;;
-esac
-;;
-        esac
-    ;;
-esac
-;;
-(help)
-_arguments "${_arguments_options[@]}" : \
-":: :_d2b__subcmd__help_commands" \
-"*::: :->help" \
-&& ret=0
-
-    case $state in
-    (help)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:d2b-help-command-$line[1]:"
-        case $line[1] in
-            (list)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(status)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(launch)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(usb)
-_arguments "${_arguments_options[@]}" : \
-":: :_d2b__subcmd__help__subcmd__usb_commands" \
-"*::: :->usb" \
-&& ret=0
-
-    case $state in
-    (usb)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:d2b-help-usb-command-$line[1]:"
-        case $line[1] in
-            (attach)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(detach)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(probe)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(security-key)
-_arguments "${_arguments_options[@]}" : \
-":: :_d2b__subcmd__help__subcmd__usb__subcmd__security-key_commands" \
-"*::: :->security-key" \
-&& ret=0
-
-    case $state in
-    (security-key)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:d2b-help-usb-security-key-command-$line[1]:"
-        case $line[1] in
-            (status)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(sessions)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(cancel)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(test)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-        esac
-    ;;
-esac
-;;
-        esac
-    ;;
-esac
-;;
-(console)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(audio)
-_arguments "${_arguments_options[@]}" : \
-":: :_d2b__subcmd__help__subcmd__audio_commands" \
-"*::: :->audio" \
-&& ret=0
-
-    case $state in
-    (audio)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:d2b-help-audio-command-$line[1]:"
-        case $line[1] in
-            (status)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(mic)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(speaker)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(off)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-        esac
-    ;;
-esac
-;;
-(audit)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(host)
-_arguments "${_arguments_options[@]}" : \
-":: :_d2b__subcmd__help__subcmd__host_commands" \
-"*::: :->host" \
-&& ret=0
-
-    case $state in
-    (host)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:d2b-help-host-command-$line[1]:"
-        case $line[1] in
-            (check)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(prepare)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(destroy)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(doctor)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(migrate-storage)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(install)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(reconcile)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(validate)
-_arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
         esac
@@ -1563,7 +4055,15 @@ esac
 ;;
 (auth)
 _arguments "${_arguments_options[@]}" : \
-":: :_d2b__subcmd__help__subcmd__auth_commands" \
+'--test-uid=[Test-only identity override retained as a hidden fixture seam]:TEST_UID:_default' \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+":: :_d2b__subcmd__auth_commands" \
 "*::: :->auth" \
 && ret=0
 
@@ -1571,299 +4071,74 @@ _arguments "${_arguments_options[@]}" : \
     (auth)
         words=($line[1] "${words[@]}")
         (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:d2b-help-auth-command-$line[1]:"
+        curcontext="${curcontext%:*:*}:d2b-auth-command-$line[1]:"
         case $line[1] in
             (status)
 _arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
 && ret=0
 ;;
         esac
     ;;
 esac
 ;;
-(realm)
+(complete)
 _arguments "${_arguments_options[@]}" : \
-":: :_d2b__subcmd__help__subcmd__realm_commands" \
-"*::: :->realm" \
-&& ret=0
-
-    case $state in
-    (realm)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:d2b-help-realm-command-$line[1]:"
-        case $line[1] in
-            (list)
-_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'--list-commands[]' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+'::shell:(bash zsh fish)' \
 && ret=0
 ;;
-(inspect)
+(audio)
 _arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':verb:_default' \
+'*::args:_default' \
 && ret=0
 ;;
-(enter)
+(clipboard)
 _arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(run)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-        esac
-    ;;
-esac
-;;
-(shell)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(op)
-_arguments "${_arguments_options[@]}" : \
-":: :_d2b__subcmd__help__subcmd__op_commands" \
-"*::: :->op" \
-&& ret=0
-
-    case $state in
-    (op)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:d2b-help-op-command-$line[1]:"
-        case $line[1] in
-            (inspect)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-        esac
-    ;;
-esac
-;;
-(vm)
-_arguments "${_arguments_options[@]}" : \
-":: :_d2b__subcmd__help__subcmd__vm_commands" \
-"*::: :->vm" \
-&& ret=0
-
-    case $state in
-    (vm)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:d2b-help-vm-command-$line[1]:"
-        case $line[1] in
-            (start)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(stop)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(restart)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(list)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(status)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(exec)
-_arguments "${_arguments_options[@]}" : \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':verb:_default' \
+'*::args:_default' \
 && ret=0
 ;;
 (display)
 _arguments "${_arguments_options[@]}" : \
-":: :_d2b__subcmd__help__subcmd__vm__subcmd__display_commands" \
-"*::: :->display" \
+'--zone=[Address a declared Zone. Without this flag the nearest local runtime is selected]:ZONE:_default' \
+'--deadline=[Bound all Zone requests and streams]:DURATION:_default' \
+'(--human)--json[Emit the stable JSON envelope]' \
+'(--json)--human[Force human-readable terminal output]' \
+'(--deadline)--no-deadline[Suppress the command default deadline]' \
+'-h[Print help]' \
+'--help[Print help]' \
+':verb:_default' \
+'*::args:_default' \
 && ret=0
-
-    case $state in
-    (display)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:d2b-help-vm-display-command-$line[1]:"
-        case $line[1] in
-            (list)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(close)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-        esac
-    ;;
-esac
-;;
-        esac
-    ;;
-esac
-;;
-(up)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(down)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(restart)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(build)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(generations)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(switch)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(boot)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(test)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(rollback)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(gc)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(store)
-_arguments "${_arguments_options[@]}" : \
-":: :_d2b__subcmd__help__subcmd__store_commands" \
-"*::: :->store" \
-&& ret=0
-
-    case $state in
-    (store)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:d2b-help-store-command-$line[1]:"
-        case $line[1] in
-            (verify)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-        esac
-    ;;
-esac
-;;
-(keys)
-_arguments "${_arguments_options[@]}" : \
-":: :_d2b__subcmd__help__subcmd__keys_commands" \
-"*::: :->keys" \
-&& ret=0
-
-    case $state in
-    (keys)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:d2b-help-keys-command-$line[1]:"
-        case $line[1] in
-            (list)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(show)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(rotate)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-        esac
-    ;;
-esac
-;;
-(trust)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(rotate-known-host)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(migrate)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(config)
-_arguments "${_arguments_options[@]}" : \
-":: :_d2b__subcmd__help__subcmd__config_commands" \
-"*::: :->config" \
-&& ret=0
-
-    case $state in
-    (config)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:d2b-help-config-command-$line[1]:"
-        case $line[1] in
-            (sync)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(diff)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(approve)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(reject)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-(status)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-        esac
-    ;;
-esac
-;;
-(clipboard)
-_arguments "${_arguments_options[@]}" : \
-":: :_d2b__subcmd__help__subcmd__clipboard_commands" \
-"*::: :->clipboard" \
-&& ret=0
-
-    case $state in
-    (clipboard)
-        words=($line[1] "${words[@]}")
-        (( CURRENT += 1 ))
-        curcontext="${curcontext%:*:*}:d2b-help-clipboard-command-$line[1]:"
-        case $line[1] in
-            (arm)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-        esac
-    ;;
-esac
-;;
-(help)
-_arguments "${_arguments_options[@]}" : \
-&& ret=0
-;;
-        esac
-    ;;
-esac
 ;;
         esac
     ;;
@@ -1873,106 +4148,182 @@ esac
 (( $+functions[_d2b_commands] )) ||
 _d2b_commands() {
     local commands; commands=(
-'list:List declared VMs with daemon runtime state when d2bd is reachable' \
-'status:Show per-VM runtime status plus bridge health' \
-'launch:Launch a trusted configured workload item through its runtime provider' \
-'usb:USB attach / detach / probe' \
-'console:Foreground serial console bridge for headless VMs' \
-'audio:Per-VM audio status and grant controls' \
-'audit:Tail the broker audit log' \
-'host:Host-side preflight, install, doctor, and reconcile verbs' \
-'auth:Authorisation introspection' \
-'realm:Low-level realm gateway helpers' \
-'shell:Attach to or manage persistent named guest shells' \
-'op:Inspect current constellation operation and trace state' \
-'vm:Per-VM lifecycle verbs (start / stop / restart / list / status) plus the admin-only guest-control sub-verb \`exec\`, which runs commands or an interactive session inside a VM over the authenticated guest-control transport (no SSH)' \
-'up:Alias for \`vm start <vm>\`' \
-'down:Alias for \`vm stop <vm>\`' \
-'restart:Alias for \`vm restart <vm>\`' \
-'build:Non-destructive eval + build of the per-VM toplevel' \
-'generations:List current / booted / numbered generations for a VM' \
-'switch:Atomically activate a new per-VM closure' \
-'boot:Stage a per-VM closure for the next boot only' \
-'test:Activate a per-VM closure with rollback on reboot' \
-'rollback:Roll a VM back to its previous generation' \
-'gc:Garbage-collect the per-VM /nix/store hardlink farm' \
-'store:Store-view maintenance and verification' \
-'keys:Managed-key lifecycle (list / show / rotate)' \
-'trust:Trust a VM'\''s host key on first use (TOFU)' \
-'rotate-known-host:Rotate the consumer'\''s recorded known-host entry for a VM' \
-'migrate:Analyse the host config and emit a migration plan' \
-'config:Sync / review / approve a VM'\''s guest-editable config (\`guestConfigFile\`)\: pull the operator'\''s in-VM edits to a host-side staging file, diff them, and approve them' \
-'clipboard:Clipboard authority operations (picker-driven paste replay via d2b-clipd)' \
-'help:Print this message or the help of the given subcommand(s)' \
+'get:' \
+'list:' \
+'watch:' \
+'create:' \
+'update-spec:' \
+'delete:' \
+'status:' \
+'upgrade:' \
+'reconcile:' \
+'host:' \
+'guest:' \
+'process:' \
+'exec:' \
+'shell:' \
+'volume:Typed noun commands reuse the generic resource verbs while documenting the noun'\''s default ResourceType in clap help' \
+'network:Typed noun commands reuse the generic resource verbs while documenting the noun'\''s default ResourceType in clap help' \
+'device:Typed noun commands reuse the generic resource verbs while documenting the noun'\''s default ResourceType in clap help' \
+'endpoint:' \
+'export:' \
+'import:' \
+'resource:The \`d2b resource\` namespace also carries the generic authority read projection. It never creates or mutates an authority' \
+'user:Typed noun commands reuse the generic resource verbs while documenting the noun'\''s default ResourceType in clap help' \
+'credential:Typed noun commands reuse the generic resource verbs while documenting the noun'\''s default ResourceType in clap help' \
+'provider:' \
+'zone:' \
+'quota:Typed noun commands reuse the generic resource verbs while documenting the noun'\''s default ResourceType in clap help' \
+'emergency-policy:Typed noun commands reuse the generic resource verbs while documenting the noun'\''s default ResourceType in clap help' \
+'activation:' \
+'audit:' \
+'op:' \
+'auth:' \
+'complete:' \
+'audio:' \
+'clipboard:' \
+'display:' \
     )
     _describe -t commands 'd2b commands' commands "$@"
 }
+(( $+functions[_d2b__subcmd__activation_commands] )) ||
+_d2b__subcmd__activation_commands() {
+    local commands; commands=(
+'apply:' \
+'build:' \
+'generations:' \
+'switch:' \
+'boot:' \
+'test:' \
+'rollback:' \
+'gc:' \
+'migrate:' \
+'keys:' \
+'trust:' \
+'rotate-known-host:' \
+'config:' \
+    )
+    _describe -t commands 'd2b activation commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__activation__subcmd__apply_commands] )) ||
+_d2b__subcmd__activation__subcmd__apply_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b activation apply commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__activation__subcmd__boot_commands] )) ||
+_d2b__subcmd__activation__subcmd__boot_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b activation boot commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__activation__subcmd__build_commands] )) ||
+_d2b__subcmd__activation__subcmd__build_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b activation build commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__activation__subcmd__config_commands] )) ||
+_d2b__subcmd__activation__subcmd__config_commands() {
+    local commands; commands=(
+'sync:' \
+'diff:' \
+'approve:' \
+'reject:' \
+'status:' \
+    )
+    _describe -t commands 'd2b activation config commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__activation__subcmd__config__subcmd__approve_commands] )) ||
+_d2b__subcmd__activation__subcmd__config__subcmd__approve_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b activation config approve commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__activation__subcmd__config__subcmd__diff_commands] )) ||
+_d2b__subcmd__activation__subcmd__config__subcmd__diff_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b activation config diff commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__activation__subcmd__config__subcmd__reject_commands] )) ||
+_d2b__subcmd__activation__subcmd__config__subcmd__reject_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b activation config reject commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__activation__subcmd__config__subcmd__status_commands] )) ||
+_d2b__subcmd__activation__subcmd__config__subcmd__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b activation config status commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__activation__subcmd__config__subcmd__sync_commands] )) ||
+_d2b__subcmd__activation__subcmd__config__subcmd__sync_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b activation config sync commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__activation__subcmd__gc_commands] )) ||
+_d2b__subcmd__activation__subcmd__gc_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b activation gc commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__activation__subcmd__generations_commands] )) ||
+_d2b__subcmd__activation__subcmd__generations_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b activation generations commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__activation__subcmd__keys_commands] )) ||
+_d2b__subcmd__activation__subcmd__keys_commands() {
+    local commands; commands=(
+'list:' \
+'show:' \
+'rotate:' \
+    )
+    _describe -t commands 'd2b activation keys commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__activation__subcmd__keys__subcmd__list_commands] )) ||
+_d2b__subcmd__activation__subcmd__keys__subcmd__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b activation keys list commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__activation__subcmd__keys__subcmd__rotate_commands] )) ||
+_d2b__subcmd__activation__subcmd__keys__subcmd__rotate_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b activation keys rotate commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__activation__subcmd__keys__subcmd__show_commands] )) ||
+_d2b__subcmd__activation__subcmd__keys__subcmd__show_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b activation keys show commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__activation__subcmd__migrate_commands] )) ||
+_d2b__subcmd__activation__subcmd__migrate_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b activation migrate commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__activation__subcmd__rollback_commands] )) ||
+_d2b__subcmd__activation__subcmd__rollback_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b activation rollback commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__activation__subcmd__rotate-known-host_commands] )) ||
+_d2b__subcmd__activation__subcmd__rotate-known-host_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b activation rotate-known-host commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__activation__subcmd__switch_commands] )) ||
+_d2b__subcmd__activation__subcmd__switch_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b activation switch commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__activation__subcmd__test_commands] )) ||
+_d2b__subcmd__activation__subcmd__test_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b activation test commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__activation__subcmd__trust_commands] )) ||
+_d2b__subcmd__activation__subcmd__trust_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b activation trust commands' commands "$@"
+}
 (( $+functions[_d2b__subcmd__audio_commands] )) ||
 _d2b__subcmd__audio_commands() {
-    local commands; commands=(
-'status:Show current grant state. With no VM, lists every audio-enabled VM' \
-'mic:Grant or revoke microphone access' \
-'speaker:Grant or revoke speaker access' \
-'off:Revoke both mic and speaker access' \
-'help:Print this message or the help of the given subcommand(s)' \
-    )
+    local commands; commands=()
     _describe -t commands 'd2b audio commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__audio__subcmd__help_commands] )) ||
-_d2b__subcmd__audio__subcmd__help_commands() {
-    local commands; commands=(
-'status:Show current grant state. With no VM, lists every audio-enabled VM' \
-'mic:Grant or revoke microphone access' \
-'speaker:Grant or revoke speaker access' \
-'off:Revoke both mic and speaker access' \
-'help:Print this message or the help of the given subcommand(s)' \
-    )
-    _describe -t commands 'd2b audio help commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__audio__subcmd__help__subcmd__help_commands] )) ||
-_d2b__subcmd__audio__subcmd__help__subcmd__help_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b audio help help commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__audio__subcmd__help__subcmd__mic_commands] )) ||
-_d2b__subcmd__audio__subcmd__help__subcmd__mic_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b audio help mic commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__audio__subcmd__help__subcmd__off_commands] )) ||
-_d2b__subcmd__audio__subcmd__help__subcmd__off_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b audio help off commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__audio__subcmd__help__subcmd__speaker_commands] )) ||
-_d2b__subcmd__audio__subcmd__help__subcmd__speaker_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b audio help speaker commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__audio__subcmd__help__subcmd__status_commands] )) ||
-_d2b__subcmd__audio__subcmd__help__subcmd__status_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b audio help status commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__audio__subcmd__mic_commands] )) ||
-_d2b__subcmd__audio__subcmd__mic_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b audio mic commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__audio__subcmd__off_commands] )) ||
-_d2b__subcmd__audio__subcmd__off_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b audio off commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__audio__subcmd__speaker_commands] )) ||
-_d2b__subcmd__audio__subcmd__speaker_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b audio speaker commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__audio__subcmd__status_commands] )) ||
-_d2b__subcmd__audio__subcmd__status_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b audio status commands' commands "$@"
 }
 (( $+functions[_d2b__subcmd__audit_commands] )) ||
 _d2b__subcmd__audit_commands() {
@@ -1983,660 +4334,621 @@ _d2b__subcmd__audit_commands() {
 _d2b__subcmd__auth_commands() {
     local commands; commands=(
 'status:' \
-'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'd2b auth commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__auth__subcmd__help_commands] )) ||
-_d2b__subcmd__auth__subcmd__help_commands() {
-    local commands; commands=(
-'status:' \
-'help:Print this message or the help of the given subcommand(s)' \
-    )
-    _describe -t commands 'd2b auth help commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__auth__subcmd__help__subcmd__help_commands] )) ||
-_d2b__subcmd__auth__subcmd__help__subcmd__help_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b auth help help commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__auth__subcmd__help__subcmd__status_commands] )) ||
-_d2b__subcmd__auth__subcmd__help__subcmd__status_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b auth help status commands' commands "$@"
 }
 (( $+functions[_d2b__subcmd__auth__subcmd__status_commands] )) ||
 _d2b__subcmd__auth__subcmd__status_commands() {
     local commands; commands=()
     _describe -t commands 'd2b auth status commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__boot_commands] )) ||
-_d2b__subcmd__boot_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b boot commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__build_commands] )) ||
-_d2b__subcmd__build_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b build commands' commands "$@"
-}
 (( $+functions[_d2b__subcmd__clipboard_commands] )) ||
 _d2b__subcmd__clipboard_commands() {
-    local commands; commands=(
-'arm:Open the picker and request paste replay for the focused target' \
-'help:Print this message or the help of the given subcommand(s)' \
-    )
+    local commands; commands=()
     _describe -t commands 'd2b clipboard commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__clipboard__subcmd__arm_commands] )) ||
-_d2b__subcmd__clipboard__subcmd__arm_commands() {
+(( $+functions[_d2b__subcmd__complete_commands] )) ||
+_d2b__subcmd__complete_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b clipboard arm commands' commands "$@"
+    _describe -t commands 'd2b complete commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__clipboard__subcmd__help_commands] )) ||
-_d2b__subcmd__clipboard__subcmd__help_commands() {
+(( $+functions[_d2b__subcmd__create_commands] )) ||
+_d2b__subcmd__create_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b create commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__credential_commands] )) ||
+_d2b__subcmd__credential_commands() {
     local commands; commands=(
-'arm:Open the picker and request paste replay for the focused target' \
-'help:Print this message or the help of the given subcommand(s)' \
+'get:' \
+'list:' \
+'watch:' \
+'create:' \
+'update-spec:' \
+'delete:' \
+'status:' \
+'upgrade:' \
+'reconcile:' \
+'verify:' \
+'usb:' \
+'security-key:' \
     )
-    _describe -t commands 'd2b clipboard help commands' commands "$@"
+    _describe -t commands 'd2b credential commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__clipboard__subcmd__help__subcmd__arm_commands] )) ||
-_d2b__subcmd__clipboard__subcmd__help__subcmd__arm_commands() {
+(( $+functions[_d2b__subcmd__credential__subcmd__create_commands] )) ||
+_d2b__subcmd__credential__subcmd__create_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b clipboard help arm commands' commands "$@"
+    _describe -t commands 'd2b credential create commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__clipboard__subcmd__help__subcmd__help_commands] )) ||
-_d2b__subcmd__clipboard__subcmd__help__subcmd__help_commands() {
+(( $+functions[_d2b__subcmd__credential__subcmd__delete_commands] )) ||
+_d2b__subcmd__credential__subcmd__delete_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b clipboard help help commands' commands "$@"
+    _describe -t commands 'd2b credential delete commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__config_commands] )) ||
-_d2b__subcmd__config_commands() {
-    local commands; commands=(
-'sync:Pull the VM'\''s in-guest edited config into a host-side staging file' \
-'diff:Diff the staged guest config against a live host-side file' \
-'approve:Approve the staged guest config by writing it to a target file' \
-'reject:Discard the staged guest config' \
-'status:Report whether a VM has a pending (un-approved) staged config' \
-'help:Print this message or the help of the given subcommand(s)' \
-    )
-    _describe -t commands 'd2b config commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__config__subcmd__approve_commands] )) ||
-_d2b__subcmd__config__subcmd__approve_commands() {
+(( $+functions[_d2b__subcmd__credential__subcmd__get_commands] )) ||
+_d2b__subcmd__credential__subcmd__get_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b config approve commands' commands "$@"
+    _describe -t commands 'd2b credential get commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__config__subcmd__diff_commands] )) ||
-_d2b__subcmd__config__subcmd__diff_commands() {
+(( $+functions[_d2b__subcmd__credential__subcmd__list_commands] )) ||
+_d2b__subcmd__credential__subcmd__list_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b config diff commands' commands "$@"
+    _describe -t commands 'd2b credential list commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__config__subcmd__help_commands] )) ||
-_d2b__subcmd__config__subcmd__help_commands() {
-    local commands; commands=(
-'sync:Pull the VM'\''s in-guest edited config into a host-side staging file' \
-'diff:Diff the staged guest config against a live host-side file' \
-'approve:Approve the staged guest config by writing it to a target file' \
-'reject:Discard the staged guest config' \
-'status:Report whether a VM has a pending (un-approved) staged config' \
-'help:Print this message or the help of the given subcommand(s)' \
-    )
-    _describe -t commands 'd2b config help commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__config__subcmd__help__subcmd__approve_commands] )) ||
-_d2b__subcmd__config__subcmd__help__subcmd__approve_commands() {
+(( $+functions[_d2b__subcmd__credential__subcmd__reconcile_commands] )) ||
+_d2b__subcmd__credential__subcmd__reconcile_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b config help approve commands' commands "$@"
+    _describe -t commands 'd2b credential reconcile commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__config__subcmd__help__subcmd__diff_commands] )) ||
-_d2b__subcmd__config__subcmd__help__subcmd__diff_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b config help diff commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__config__subcmd__help__subcmd__help_commands] )) ||
-_d2b__subcmd__config__subcmd__help__subcmd__help_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b config help help commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__config__subcmd__help__subcmd__reject_commands] )) ||
-_d2b__subcmd__config__subcmd__help__subcmd__reject_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b config help reject commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__config__subcmd__help__subcmd__status_commands] )) ||
-_d2b__subcmd__config__subcmd__help__subcmd__status_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b config help status commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__config__subcmd__help__subcmd__sync_commands] )) ||
-_d2b__subcmd__config__subcmd__help__subcmd__sync_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b config help sync commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__config__subcmd__reject_commands] )) ||
-_d2b__subcmd__config__subcmd__reject_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b config reject commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__config__subcmd__status_commands] )) ||
-_d2b__subcmd__config__subcmd__status_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b config status commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__config__subcmd__sync_commands] )) ||
-_d2b__subcmd__config__subcmd__sync_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b config sync commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__console_commands] )) ||
-_d2b__subcmd__console_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b console commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__down_commands] )) ||
-_d2b__subcmd__down_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b down commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__gc_commands] )) ||
-_d2b__subcmd__gc_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b gc commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__generations_commands] )) ||
-_d2b__subcmd__generations_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b generations commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__help_commands] )) ||
-_d2b__subcmd__help_commands() {
-    local commands; commands=(
-'list:List declared VMs with daemon runtime state when d2bd is reachable' \
-'status:Show per-VM runtime status plus bridge health' \
-'launch:Launch a trusted configured workload item through its runtime provider' \
-'usb:USB attach / detach / probe' \
-'console:Foreground serial console bridge for headless VMs' \
-'audio:Per-VM audio status and grant controls' \
-'audit:Tail the broker audit log' \
-'host:Host-side preflight, install, doctor, and reconcile verbs' \
-'auth:Authorisation introspection' \
-'realm:Low-level realm gateway helpers' \
-'shell:Attach to or manage persistent named guest shells' \
-'op:Inspect current constellation operation and trace state' \
-'vm:Per-VM lifecycle verbs (start / stop / restart / list / status) plus the admin-only guest-control sub-verb \`exec\`, which runs commands or an interactive session inside a VM over the authenticated guest-control transport (no SSH)' \
-'up:Alias for \`vm start <vm>\`' \
-'down:Alias for \`vm stop <vm>\`' \
-'restart:Alias for \`vm restart <vm>\`' \
-'build:Non-destructive eval + build of the per-VM toplevel' \
-'generations:List current / booted / numbered generations for a VM' \
-'switch:Atomically activate a new per-VM closure' \
-'boot:Stage a per-VM closure for the next boot only' \
-'test:Activate a per-VM closure with rollback on reboot' \
-'rollback:Roll a VM back to its previous generation' \
-'gc:Garbage-collect the per-VM /nix/store hardlink farm' \
-'store:Store-view maintenance and verification' \
-'keys:Managed-key lifecycle (list / show / rotate)' \
-'trust:Trust a VM'\''s host key on first use (TOFU)' \
-'rotate-known-host:Rotate the consumer'\''s recorded known-host entry for a VM' \
-'migrate:Analyse the host config and emit a migration plan' \
-'config:Sync / review / approve a VM'\''s guest-editable config (\`guestConfigFile\`)\: pull the operator'\''s in-VM edits to a host-side staging file, diff them, and approve them' \
-'clipboard:Clipboard authority operations (picker-driven paste replay via d2b-clipd)' \
-'help:Print this message or the help of the given subcommand(s)' \
-    )
-    _describe -t commands 'd2b help commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__help__subcmd__audio_commands] )) ||
-_d2b__subcmd__help__subcmd__audio_commands() {
-    local commands; commands=(
-'status:Show current grant state. With no VM, lists every audio-enabled VM' \
-'mic:Grant or revoke microphone access' \
-'speaker:Grant or revoke speaker access' \
-'off:Revoke both mic and speaker access' \
-    )
-    _describe -t commands 'd2b help audio commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__help__subcmd__audio__subcmd__mic_commands] )) ||
-_d2b__subcmd__help__subcmd__audio__subcmd__mic_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b help audio mic commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__help__subcmd__audio__subcmd__off_commands] )) ||
-_d2b__subcmd__help__subcmd__audio__subcmd__off_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b help audio off commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__help__subcmd__audio__subcmd__speaker_commands] )) ||
-_d2b__subcmd__help__subcmd__audio__subcmd__speaker_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b help audio speaker commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__help__subcmd__audio__subcmd__status_commands] )) ||
-_d2b__subcmd__help__subcmd__audio__subcmd__status_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b help audio status commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__help__subcmd__audit_commands] )) ||
-_d2b__subcmd__help__subcmd__audit_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b help audit commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__help__subcmd__auth_commands] )) ||
-_d2b__subcmd__help__subcmd__auth_commands() {
+(( $+functions[_d2b__subcmd__credential__subcmd__security-key_commands] )) ||
+_d2b__subcmd__credential__subcmd__security-key_commands() {
     local commands; commands=(
 'status:' \
+'sessions:' \
+'cancel:' \
+'test:' \
     )
-    _describe -t commands 'd2b help auth commands' commands "$@"
+    _describe -t commands 'd2b credential security-key commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__auth__subcmd__status_commands] )) ||
-_d2b__subcmd__help__subcmd__auth__subcmd__status_commands() {
+(( $+functions[_d2b__subcmd__credential__subcmd__security-key__subcmd__cancel_commands] )) ||
+_d2b__subcmd__credential__subcmd__security-key__subcmd__cancel_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help auth status commands' commands "$@"
+    _describe -t commands 'd2b credential security-key cancel commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__boot_commands] )) ||
-_d2b__subcmd__help__subcmd__boot_commands() {
+(( $+functions[_d2b__subcmd__credential__subcmd__security-key__subcmd__sessions_commands] )) ||
+_d2b__subcmd__credential__subcmd__security-key__subcmd__sessions_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help boot commands' commands "$@"
+    _describe -t commands 'd2b credential security-key sessions commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__build_commands] )) ||
-_d2b__subcmd__help__subcmd__build_commands() {
+(( $+functions[_d2b__subcmd__credential__subcmd__security-key__subcmd__status_commands] )) ||
+_d2b__subcmd__credential__subcmd__security-key__subcmd__status_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help build commands' commands "$@"
+    _describe -t commands 'd2b credential security-key status commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__clipboard_commands] )) ||
-_d2b__subcmd__help__subcmd__clipboard_commands() {
+(( $+functions[_d2b__subcmd__credential__subcmd__security-key__subcmd__test_commands] )) ||
+_d2b__subcmd__credential__subcmd__security-key__subcmd__test_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b credential security-key test commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__credential__subcmd__status_commands] )) ||
+_d2b__subcmd__credential__subcmd__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b credential status commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__credential__subcmd__update-spec_commands] )) ||
+_d2b__subcmd__credential__subcmd__update-spec_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b credential update-spec commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__credential__subcmd__upgrade_commands] )) ||
+_d2b__subcmd__credential__subcmd__upgrade_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b credential upgrade commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__credential__subcmd__usb_commands] )) ||
+_d2b__subcmd__credential__subcmd__usb_commands() {
     local commands; commands=(
-'arm:Open the picker and request paste replay for the focused target' \
+'attach:' \
+'detach:' \
+'probe:' \
     )
-    _describe -t commands 'd2b help clipboard commands' commands "$@"
+    _describe -t commands 'd2b credential usb commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__clipboard__subcmd__arm_commands] )) ||
-_d2b__subcmd__help__subcmd__clipboard__subcmd__arm_commands() {
+(( $+functions[_d2b__subcmd__credential__subcmd__usb__subcmd__attach_commands] )) ||
+_d2b__subcmd__credential__subcmd__usb__subcmd__attach_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help clipboard arm commands' commands "$@"
+    _describe -t commands 'd2b credential usb attach commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__config_commands] )) ||
-_d2b__subcmd__help__subcmd__config_commands() {
+(( $+functions[_d2b__subcmd__credential__subcmd__usb__subcmd__detach_commands] )) ||
+_d2b__subcmd__credential__subcmd__usb__subcmd__detach_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b credential usb detach commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__credential__subcmd__usb__subcmd__probe_commands] )) ||
+_d2b__subcmd__credential__subcmd__usb__subcmd__probe_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b credential usb probe commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__credential__subcmd__verify_commands] )) ||
+_d2b__subcmd__credential__subcmd__verify_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b credential verify commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__credential__subcmd__watch_commands] )) ||
+_d2b__subcmd__credential__subcmd__watch_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b credential watch commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__delete_commands] )) ||
+_d2b__subcmd__delete_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b delete commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__device_commands] )) ||
+_d2b__subcmd__device_commands() {
     local commands; commands=(
-'sync:Pull the VM'\''s in-guest edited config into a host-side staging file' \
-'diff:Diff the staged guest config against a live host-side file' \
-'approve:Approve the staged guest config by writing it to a target file' \
-'reject:Discard the staged guest config' \
-'status:Report whether a VM has a pending (un-approved) staged config' \
+'get:' \
+'list:' \
+'watch:' \
+'create:' \
+'update-spec:' \
+'delete:' \
+'status:' \
+'upgrade:' \
+'reconcile:' \
+'verify:' \
+'usb:' \
+'security-key:' \
     )
-    _describe -t commands 'd2b help config commands' commands "$@"
+    _describe -t commands 'd2b device commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__config__subcmd__approve_commands] )) ||
-_d2b__subcmd__help__subcmd__config__subcmd__approve_commands() {
+(( $+functions[_d2b__subcmd__device__subcmd__create_commands] )) ||
+_d2b__subcmd__device__subcmd__create_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help config approve commands' commands "$@"
+    _describe -t commands 'd2b device create commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__config__subcmd__diff_commands] )) ||
-_d2b__subcmd__help__subcmd__config__subcmd__diff_commands() {
+(( $+functions[_d2b__subcmd__device__subcmd__delete_commands] )) ||
+_d2b__subcmd__device__subcmd__delete_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help config diff commands' commands "$@"
+    _describe -t commands 'd2b device delete commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__config__subcmd__reject_commands] )) ||
-_d2b__subcmd__help__subcmd__config__subcmd__reject_commands() {
+(( $+functions[_d2b__subcmd__device__subcmd__get_commands] )) ||
+_d2b__subcmd__device__subcmd__get_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help config reject commands' commands "$@"
+    _describe -t commands 'd2b device get commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__config__subcmd__status_commands] )) ||
-_d2b__subcmd__help__subcmd__config__subcmd__status_commands() {
+(( $+functions[_d2b__subcmd__device__subcmd__list_commands] )) ||
+_d2b__subcmd__device__subcmd__list_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help config status commands' commands "$@"
+    _describe -t commands 'd2b device list commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__config__subcmd__sync_commands] )) ||
-_d2b__subcmd__help__subcmd__config__subcmd__sync_commands() {
+(( $+functions[_d2b__subcmd__device__subcmd__reconcile_commands] )) ||
+_d2b__subcmd__device__subcmd__reconcile_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help config sync commands' commands "$@"
+    _describe -t commands 'd2b device reconcile commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__console_commands] )) ||
-_d2b__subcmd__help__subcmd__console_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b help console commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__help__subcmd__down_commands] )) ||
-_d2b__subcmd__help__subcmd__down_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b help down commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__help__subcmd__gc_commands] )) ||
-_d2b__subcmd__help__subcmd__gc_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b help gc commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__help__subcmd__generations_commands] )) ||
-_d2b__subcmd__help__subcmd__generations_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b help generations commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__help__subcmd__help_commands] )) ||
-_d2b__subcmd__help__subcmd__help_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b help help commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__help__subcmd__host_commands] )) ||
-_d2b__subcmd__help__subcmd__host_commands() {
+(( $+functions[_d2b__subcmd__device__subcmd__security-key_commands] )) ||
+_d2b__subcmd__device__subcmd__security-key_commands() {
     local commands; commands=(
-'check:Read-only preflight\: inventories host posture without mutation' \
-'prepare:Reconcile host-side state (bridges, nftables, sysctls). --apply mutates' \
-'destroy:Tear down host-side state owned by d2b. --apply mutates' \
-'doctor:Read-only deep diagnostics for the daemon + broker state' \
-'migrate-storage:Plan the one-time storage layout cutover. --apply is fail-closed until broker support lands' \
-'install:Install d2bd + broker units onto the host. --apply mutates' \
-'reconcile:Reconcile host network state (re-run bridge/route/nftables reconcile without starting any VM)' \
-'validate:Run the host-side validator suite and write evidence records' \
+'status:' \
+'sessions:' \
+'cancel:' \
+'test:' \
     )
-    _describe -t commands 'd2b help host commands' commands "$@"
+    _describe -t commands 'd2b device security-key commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__host__subcmd__check_commands] )) ||
-_d2b__subcmd__help__subcmd__host__subcmd__check_commands() {
+(( $+functions[_d2b__subcmd__device__subcmd__security-key__subcmd__cancel_commands] )) ||
+_d2b__subcmd__device__subcmd__security-key__subcmd__cancel_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help host check commands' commands "$@"
+    _describe -t commands 'd2b device security-key cancel commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__host__subcmd__destroy_commands] )) ||
-_d2b__subcmd__help__subcmd__host__subcmd__destroy_commands() {
+(( $+functions[_d2b__subcmd__device__subcmd__security-key__subcmd__sessions_commands] )) ||
+_d2b__subcmd__device__subcmd__security-key__subcmd__sessions_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help host destroy commands' commands "$@"
+    _describe -t commands 'd2b device security-key sessions commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__host__subcmd__doctor_commands] )) ||
-_d2b__subcmd__help__subcmd__host__subcmd__doctor_commands() {
+(( $+functions[_d2b__subcmd__device__subcmd__security-key__subcmd__status_commands] )) ||
+_d2b__subcmd__device__subcmd__security-key__subcmd__status_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help host doctor commands' commands "$@"
+    _describe -t commands 'd2b device security-key status commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__host__subcmd__install_commands] )) ||
-_d2b__subcmd__help__subcmd__host__subcmd__install_commands() {
+(( $+functions[_d2b__subcmd__device__subcmd__security-key__subcmd__test_commands] )) ||
+_d2b__subcmd__device__subcmd__security-key__subcmd__test_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help host install commands' commands "$@"
+    _describe -t commands 'd2b device security-key test commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__host__subcmd__migrate-storage_commands] )) ||
-_d2b__subcmd__help__subcmd__host__subcmd__migrate-storage_commands() {
+(( $+functions[_d2b__subcmd__device__subcmd__status_commands] )) ||
+_d2b__subcmd__device__subcmd__status_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help host migrate-storage commands' commands "$@"
+    _describe -t commands 'd2b device status commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__host__subcmd__prepare_commands] )) ||
-_d2b__subcmd__help__subcmd__host__subcmd__prepare_commands() {
+(( $+functions[_d2b__subcmd__device__subcmd__update-spec_commands] )) ||
+_d2b__subcmd__device__subcmd__update-spec_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help host prepare commands' commands "$@"
+    _describe -t commands 'd2b device update-spec commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__host__subcmd__reconcile_commands] )) ||
-_d2b__subcmd__help__subcmd__host__subcmd__reconcile_commands() {
+(( $+functions[_d2b__subcmd__device__subcmd__upgrade_commands] )) ||
+_d2b__subcmd__device__subcmd__upgrade_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help host reconcile commands' commands "$@"
+    _describe -t commands 'd2b device upgrade commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__host__subcmd__validate_commands] )) ||
-_d2b__subcmd__help__subcmd__host__subcmd__validate_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b help host validate commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__help__subcmd__keys_commands] )) ||
-_d2b__subcmd__help__subcmd__keys_commands() {
+(( $+functions[_d2b__subcmd__device__subcmd__usb_commands] )) ||
+_d2b__subcmd__device__subcmd__usb_commands() {
     local commands; commands=(
-'list:List managed keys (per-VM SSH keypair fingerprints)' \
-'show:Show details for a specific VM'\''s managed key' \
-'rotate:Rotate the framework-managed per-VM SSH keypair. --apply mutates' \
+'attach:' \
+'detach:' \
+'probe:' \
     )
-    _describe -t commands 'd2b help keys commands' commands "$@"
+    _describe -t commands 'd2b device usb commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__keys__subcmd__list_commands] )) ||
-_d2b__subcmd__help__subcmd__keys__subcmd__list_commands() {
+(( $+functions[_d2b__subcmd__device__subcmd__usb__subcmd__attach_commands] )) ||
+_d2b__subcmd__device__subcmd__usb__subcmd__attach_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help keys list commands' commands "$@"
+    _describe -t commands 'd2b device usb attach commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__keys__subcmd__rotate_commands] )) ||
-_d2b__subcmd__help__subcmd__keys__subcmd__rotate_commands() {
+(( $+functions[_d2b__subcmd__device__subcmd__usb__subcmd__detach_commands] )) ||
+_d2b__subcmd__device__subcmd__usb__subcmd__detach_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help keys rotate commands' commands "$@"
+    _describe -t commands 'd2b device usb detach commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__keys__subcmd__show_commands] )) ||
-_d2b__subcmd__help__subcmd__keys__subcmd__show_commands() {
+(( $+functions[_d2b__subcmd__device__subcmd__usb__subcmd__probe_commands] )) ||
+_d2b__subcmd__device__subcmd__usb__subcmd__probe_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help keys show commands' commands "$@"
+    _describe -t commands 'd2b device usb probe commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__launch_commands] )) ||
-_d2b__subcmd__help__subcmd__launch_commands() {
+(( $+functions[_d2b__subcmd__device__subcmd__verify_commands] )) ||
+_d2b__subcmd__device__subcmd__verify_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help launch commands' commands "$@"
+    _describe -t commands 'd2b device verify commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__list_commands] )) ||
-_d2b__subcmd__help__subcmd__list_commands() {
+(( $+functions[_d2b__subcmd__device__subcmd__watch_commands] )) ||
+_d2b__subcmd__device__subcmd__watch_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help list commands' commands "$@"
+    _describe -t commands 'd2b device watch commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__migrate_commands] )) ||
-_d2b__subcmd__help__subcmd__migrate_commands() {
+(( $+functions[_d2b__subcmd__display_commands] )) ||
+_d2b__subcmd__display_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help migrate commands' commands "$@"
+    _describe -t commands 'd2b display commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__op_commands] )) ||
-_d2b__subcmd__help__subcmd__op_commands() {
+(( $+functions[_d2b__subcmd__emergency-policy_commands] )) ||
+_d2b__subcmd__emergency-policy_commands() {
     local commands; commands=(
-'inspect:Inspect current operation/trace state with bounded partial results' \
+'get:' \
+'list:' \
+'watch:' \
+'create:' \
+'update-spec:' \
+'delete:' \
+'status:' \
+'upgrade:' \
+'reconcile:' \
+'verify:' \
+'usb:' \
+'security-key:' \
     )
-    _describe -t commands 'd2b help op commands' commands "$@"
+    _describe -t commands 'd2b emergency-policy commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__op__subcmd__inspect_commands] )) ||
-_d2b__subcmd__help__subcmd__op__subcmd__inspect_commands() {
+(( $+functions[_d2b__subcmd__emergency-policy__subcmd__create_commands] )) ||
+_d2b__subcmd__emergency-policy__subcmd__create_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help op inspect commands' commands "$@"
+    _describe -t commands 'd2b emergency-policy create commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__realm_commands] )) ||
-_d2b__subcmd__help__subcmd__realm_commands() {
+(( $+functions[_d2b__subcmd__emergency-policy__subcmd__delete_commands] )) ||
+_d2b__subcmd__emergency-policy__subcmd__delete_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b emergency-policy delete commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__emergency-policy__subcmd__get_commands] )) ||
+_d2b__subcmd__emergency-policy__subcmd__get_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b emergency-policy get commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__emergency-policy__subcmd__list_commands] )) ||
+_d2b__subcmd__emergency-policy__subcmd__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b emergency-policy list commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__emergency-policy__subcmd__reconcile_commands] )) ||
+_d2b__subcmd__emergency-policy__subcmd__reconcile_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b emergency-policy reconcile commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__emergency-policy__subcmd__security-key_commands] )) ||
+_d2b__subcmd__emergency-policy__subcmd__security-key_commands() {
     local commands; commands=(
-'list:List local realm policy entrypoints' \
-'inspect:Inspect one local realm policy entrypoint' \
-'enter:Open an interactive shell inside the realm gateway VM' \
-'run:Run a one-shot command inside the realm gateway VM' \
+'status:' \
+'sessions:' \
+'cancel:' \
+'test:' \
     )
-    _describe -t commands 'd2b help realm commands' commands "$@"
+    _describe -t commands 'd2b emergency-policy security-key commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__realm__subcmd__enter_commands] )) ||
-_d2b__subcmd__help__subcmd__realm__subcmd__enter_commands() {
+(( $+functions[_d2b__subcmd__emergency-policy__subcmd__security-key__subcmd__cancel_commands] )) ||
+_d2b__subcmd__emergency-policy__subcmd__security-key__subcmd__cancel_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help realm enter commands' commands "$@"
+    _describe -t commands 'd2b emergency-policy security-key cancel commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__realm__subcmd__inspect_commands] )) ||
-_d2b__subcmd__help__subcmd__realm__subcmd__inspect_commands() {
+(( $+functions[_d2b__subcmd__emergency-policy__subcmd__security-key__subcmd__sessions_commands] )) ||
+_d2b__subcmd__emergency-policy__subcmd__security-key__subcmd__sessions_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help realm inspect commands' commands "$@"
+    _describe -t commands 'd2b emergency-policy security-key sessions commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__realm__subcmd__list_commands] )) ||
-_d2b__subcmd__help__subcmd__realm__subcmd__list_commands() {
+(( $+functions[_d2b__subcmd__emergency-policy__subcmd__security-key__subcmd__status_commands] )) ||
+_d2b__subcmd__emergency-policy__subcmd__security-key__subcmd__status_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help realm list commands' commands "$@"
+    _describe -t commands 'd2b emergency-policy security-key status commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__realm__subcmd__run_commands] )) ||
-_d2b__subcmd__help__subcmd__realm__subcmd__run_commands() {
+(( $+functions[_d2b__subcmd__emergency-policy__subcmd__security-key__subcmd__test_commands] )) ||
+_d2b__subcmd__emergency-policy__subcmd__security-key__subcmd__test_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help realm run commands' commands "$@"
+    _describe -t commands 'd2b emergency-policy security-key test commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__restart_commands] )) ||
-_d2b__subcmd__help__subcmd__restart_commands() {
+(( $+functions[_d2b__subcmd__emergency-policy__subcmd__status_commands] )) ||
+_d2b__subcmd__emergency-policy__subcmd__status_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help restart commands' commands "$@"
+    _describe -t commands 'd2b emergency-policy status commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__rollback_commands] )) ||
-_d2b__subcmd__help__subcmd__rollback_commands() {
+(( $+functions[_d2b__subcmd__emergency-policy__subcmd__update-spec_commands] )) ||
+_d2b__subcmd__emergency-policy__subcmd__update-spec_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help rollback commands' commands "$@"
+    _describe -t commands 'd2b emergency-policy update-spec commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__rotate-known-host_commands] )) ||
-_d2b__subcmd__help__subcmd__rotate-known-host_commands() {
+(( $+functions[_d2b__subcmd__emergency-policy__subcmd__upgrade_commands] )) ||
+_d2b__subcmd__emergency-policy__subcmd__upgrade_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help rotate-known-host commands' commands "$@"
+    _describe -t commands 'd2b emergency-policy upgrade commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__shell_commands] )) ||
-_d2b__subcmd__help__subcmd__shell_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b help shell commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__help__subcmd__status_commands] )) ||
-_d2b__subcmd__help__subcmd__status_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b help status commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__help__subcmd__store_commands] )) ||
-_d2b__subcmd__help__subcmd__store_commands() {
+(( $+functions[_d2b__subcmd__emergency-policy__subcmd__usb_commands] )) ||
+_d2b__subcmd__emergency-policy__subcmd__usb_commands() {
     local commands; commands=(
-'verify:Verify a VM'\''s hardlink-backed live store-view' \
+'attach:' \
+'detach:' \
+'probe:' \
     )
-    _describe -t commands 'd2b help store commands' commands "$@"
+    _describe -t commands 'd2b emergency-policy usb commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__store__subcmd__verify_commands] )) ||
-_d2b__subcmd__help__subcmd__store__subcmd__verify_commands() {
+(( $+functions[_d2b__subcmd__emergency-policy__subcmd__usb__subcmd__attach_commands] )) ||
+_d2b__subcmd__emergency-policy__subcmd__usb__subcmd__attach_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help store verify commands' commands "$@"
+    _describe -t commands 'd2b emergency-policy usb attach commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__switch_commands] )) ||
-_d2b__subcmd__help__subcmd__switch_commands() {
+(( $+functions[_d2b__subcmd__emergency-policy__subcmd__usb__subcmd__detach_commands] )) ||
+_d2b__subcmd__emergency-policy__subcmd__usb__subcmd__detach_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help switch commands' commands "$@"
+    _describe -t commands 'd2b emergency-policy usb detach commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__test_commands] )) ||
-_d2b__subcmd__help__subcmd__test_commands() {
+(( $+functions[_d2b__subcmd__emergency-policy__subcmd__usb__subcmd__probe_commands] )) ||
+_d2b__subcmd__emergency-policy__subcmd__usb__subcmd__probe_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help test commands' commands "$@"
+    _describe -t commands 'd2b emergency-policy usb probe commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__trust_commands] )) ||
-_d2b__subcmd__help__subcmd__trust_commands() {
+(( $+functions[_d2b__subcmd__emergency-policy__subcmd__verify_commands] )) ||
+_d2b__subcmd__emergency-policy__subcmd__verify_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help trust commands' commands "$@"
+    _describe -t commands 'd2b emergency-policy verify commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__up_commands] )) ||
-_d2b__subcmd__help__subcmd__up_commands() {
+(( $+functions[_d2b__subcmd__emergency-policy__subcmd__watch_commands] )) ||
+_d2b__subcmd__emergency-policy__subcmd__watch_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help up commands' commands "$@"
+    _describe -t commands 'd2b emergency-policy watch commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__usb_commands] )) ||
-_d2b__subcmd__help__subcmd__usb_commands() {
+(( $+functions[_d2b__subcmd__endpoint_commands] )) ||
+_d2b__subcmd__endpoint_commands() {
     local commands; commands=(
-'attach:Bind a host USB busid to a VM via the native daemon path' \
-'detach:Unbind a host USB busid from a VM via the native daemon path' \
-'probe:List daemon-declared USBIP session claims and qemu-media USB candidates' \
-'security-key:CTAP/WebAuthn security-key proxy status, sessions, and diagnostics' \
+'get:' \
+'list:' \
+'watch:' \
+'status:' \
+'resolve:' \
     )
-    _describe -t commands 'd2b help usb commands' commands "$@"
+    _describe -t commands 'd2b endpoint commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__usb__subcmd__attach_commands] )) ||
-_d2b__subcmd__help__subcmd__usb__subcmd__attach_commands() {
+(( $+functions[_d2b__subcmd__endpoint__subcmd__get_commands] )) ||
+_d2b__subcmd__endpoint__subcmd__get_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help usb attach commands' commands "$@"
+    _describe -t commands 'd2b endpoint get commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__usb__subcmd__detach_commands] )) ||
-_d2b__subcmd__help__subcmd__usb__subcmd__detach_commands() {
+(( $+functions[_d2b__subcmd__endpoint__subcmd__list_commands] )) ||
+_d2b__subcmd__endpoint__subcmd__list_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help usb detach commands' commands "$@"
+    _describe -t commands 'd2b endpoint list commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__usb__subcmd__probe_commands] )) ||
-_d2b__subcmd__help__subcmd__usb__subcmd__probe_commands() {
+(( $+functions[_d2b__subcmd__endpoint__subcmd__resolve_commands] )) ||
+_d2b__subcmd__endpoint__subcmd__resolve_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help usb probe commands' commands "$@"
+    _describe -t commands 'd2b endpoint resolve commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__usb__subcmd__security-key_commands] )) ||
-_d2b__subcmd__help__subcmd__usb__subcmd__security-key_commands() {
+(( $+functions[_d2b__subcmd__endpoint__subcmd__status_commands] )) ||
+_d2b__subcmd__endpoint__subcmd__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b endpoint status commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__endpoint__subcmd__watch_commands] )) ||
+_d2b__subcmd__endpoint__subcmd__watch_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b endpoint watch commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__exec_commands] )) ||
+_d2b__subcmd__exec_commands() {
     local commands; commands=(
-'status:Show security-key proxy health, configured keys, and current lease' \
-'sessions:Show recent and active security-key request sessions' \
-'cancel:Cancel a security-key request session' \
-'test:Smoke-check that a VM'\''s virtual security-key device and host broker are healthy' \
+'run:' \
+'attach:' \
+'wait:' \
+'status:' \
+'list:' \
+'logs:' \
+'kill:' \
     )
-    _describe -t commands 'd2b help usb security-key commands' commands "$@"
+    _describe -t commands 'd2b exec commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__usb__subcmd__security-key__subcmd__cancel_commands] )) ||
-_d2b__subcmd__help__subcmd__usb__subcmd__security-key__subcmd__cancel_commands() {
+(( $+functions[_d2b__subcmd__exec__subcmd__attach_commands] )) ||
+_d2b__subcmd__exec__subcmd__attach_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help usb security-key cancel commands' commands "$@"
+    _describe -t commands 'd2b exec attach commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__usb__subcmd__security-key__subcmd__sessions_commands] )) ||
-_d2b__subcmd__help__subcmd__usb__subcmd__security-key__subcmd__sessions_commands() {
+(( $+functions[_d2b__subcmd__exec__subcmd__kill_commands] )) ||
+_d2b__subcmd__exec__subcmd__kill_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help usb security-key sessions commands' commands "$@"
+    _describe -t commands 'd2b exec kill commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__usb__subcmd__security-key__subcmd__status_commands] )) ||
-_d2b__subcmd__help__subcmd__usb__subcmd__security-key__subcmd__status_commands() {
+(( $+functions[_d2b__subcmd__exec__subcmd__list_commands] )) ||
+_d2b__subcmd__exec__subcmd__list_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help usb security-key status commands' commands "$@"
+    _describe -t commands 'd2b exec list commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__usb__subcmd__security-key__subcmd__test_commands] )) ||
-_d2b__subcmd__help__subcmd__usb__subcmd__security-key__subcmd__test_commands() {
+(( $+functions[_d2b__subcmd__exec__subcmd__logs_commands] )) ||
+_d2b__subcmd__exec__subcmd__logs_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help usb security-key test commands' commands "$@"
+    _describe -t commands 'd2b exec logs commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__vm_commands] )) ||
-_d2b__subcmd__help__subcmd__vm_commands() {
+(( $+functions[_d2b__subcmd__exec__subcmd__run_commands] )) ||
+_d2b__subcmd__exec__subcmd__run_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b exec run commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__exec__subcmd__status_commands] )) ||
+_d2b__subcmd__exec__subcmd__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b exec status commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__exec__subcmd__wait_commands] )) ||
+_d2b__subcmd__exec__subcmd__wait_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b exec wait commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__export_commands] )) ||
+_d2b__subcmd__export_commands() {
     local commands; commands=(
-'start:Start the per-VM DAG (virtiofsd → CH → readiness probes)' \
-'stop:Stop the per-VM DAG in reverse topo order' \
-'restart:Stop then start; same envelope contract as start' \
-'list:Daemon-side runtime inventory from d2bd'\''s public socket' \
-'status:Daemon-side readiness state for a VM (api-ready phase)' \
-'exec:Run or manage commands inside a running VM. Use \`d2b vm exec <vm> -- <cmd...>\` for a non-interactive command, \`d2b vm exec -it <vm> -- bash\` for an interactive shell, \`-d\` for a detached command, and \`d2b vm exec <vm> {list|logs|status|kill}\` to manage detached execs' \
-'display:Manage gateway display sessions for provider-backed targets' \
+'get:' \
+'list:' \
+'watch:' \
+'status:' \
+'create:' \
+'update-spec:' \
+'delete:' \
     )
-    _describe -t commands 'd2b help vm commands' commands "$@"
+    _describe -t commands 'd2b export commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__vm__subcmd__display_commands] )) ||
-_d2b__subcmd__help__subcmd__vm__subcmd__display_commands() {
+(( $+functions[_d2b__subcmd__export__subcmd__create_commands] )) ||
+_d2b__subcmd__export__subcmd__create_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b export create commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__export__subcmd__delete_commands] )) ||
+_d2b__subcmd__export__subcmd__delete_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b export delete commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__export__subcmd__get_commands] )) ||
+_d2b__subcmd__export__subcmd__get_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b export get commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__export__subcmd__list_commands] )) ||
+_d2b__subcmd__export__subcmd__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b export list commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__export__subcmd__status_commands] )) ||
+_d2b__subcmd__export__subcmd__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b export status commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__export__subcmd__update-spec_commands] )) ||
+_d2b__subcmd__export__subcmd__update-spec_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b export update-spec commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__export__subcmd__watch_commands] )) ||
+_d2b__subcmd__export__subcmd__watch_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b export watch commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__get_commands] )) ||
+_d2b__subcmd__get_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b get commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__guest_commands] )) ||
+_d2b__subcmd__guest_commands() {
     local commands; commands=(
-'list:List active gateway display sessions' \
-'close:Close a gateway display session by id' \
+'get:' \
+'list:' \
+'status:' \
+'start:' \
+'stop:' \
+'restart:' \
+'create:' \
+'update-spec:' \
+'delete:' \
+'console:' \
     )
-    _describe -t commands 'd2b help vm display commands' commands "$@"
+    _describe -t commands 'd2b guest commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__vm__subcmd__display__subcmd__close_commands] )) ||
-_d2b__subcmd__help__subcmd__vm__subcmd__display__subcmd__close_commands() {
+(( $+functions[_d2b__subcmd__guest__subcmd__console_commands] )) ||
+_d2b__subcmd__guest__subcmd__console_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help vm display close commands' commands "$@"
+    _describe -t commands 'd2b guest console commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__vm__subcmd__display__subcmd__list_commands] )) ||
-_d2b__subcmd__help__subcmd__vm__subcmd__display__subcmd__list_commands() {
+(( $+functions[_d2b__subcmd__guest__subcmd__create_commands] )) ||
+_d2b__subcmd__guest__subcmd__create_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help vm display list commands' commands "$@"
+    _describe -t commands 'd2b guest create commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__vm__subcmd__exec_commands] )) ||
-_d2b__subcmd__help__subcmd__vm__subcmd__exec_commands() {
+(( $+functions[_d2b__subcmd__guest__subcmd__delete_commands] )) ||
+_d2b__subcmd__guest__subcmd__delete_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help vm exec commands' commands "$@"
+    _describe -t commands 'd2b guest delete commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__vm__subcmd__list_commands] )) ||
-_d2b__subcmd__help__subcmd__vm__subcmd__list_commands() {
+(( $+functions[_d2b__subcmd__guest__subcmd__get_commands] )) ||
+_d2b__subcmd__guest__subcmd__get_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help vm list commands' commands "$@"
+    _describe -t commands 'd2b guest get commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__vm__subcmd__restart_commands] )) ||
-_d2b__subcmd__help__subcmd__vm__subcmd__restart_commands() {
+(( $+functions[_d2b__subcmd__guest__subcmd__list_commands] )) ||
+_d2b__subcmd__guest__subcmd__list_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help vm restart commands' commands "$@"
+    _describe -t commands 'd2b guest list commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__vm__subcmd__start_commands] )) ||
-_d2b__subcmd__help__subcmd__vm__subcmd__start_commands() {
+(( $+functions[_d2b__subcmd__guest__subcmd__restart_commands] )) ||
+_d2b__subcmd__guest__subcmd__restart_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help vm start commands' commands "$@"
+    _describe -t commands 'd2b guest restart commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__vm__subcmd__status_commands] )) ||
-_d2b__subcmd__help__subcmd__vm__subcmd__status_commands() {
+(( $+functions[_d2b__subcmd__guest__subcmd__start_commands] )) ||
+_d2b__subcmd__guest__subcmd__start_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help vm status commands' commands "$@"
+    _describe -t commands 'd2b guest start commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__help__subcmd__vm__subcmd__stop_commands] )) ||
-_d2b__subcmd__help__subcmd__vm__subcmd__stop_commands() {
+(( $+functions[_d2b__subcmd__guest__subcmd__status_commands] )) ||
+_d2b__subcmd__guest__subcmd__status_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b help vm stop commands' commands "$@"
+    _describe -t commands 'd2b guest status commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__guest__subcmd__stop_commands] )) ||
+_d2b__subcmd__guest__subcmd__stop_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b guest stop commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__guest__subcmd__update-spec_commands] )) ||
+_d2b__subcmd__guest__subcmd__update-spec_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b guest update-spec commands' commands "$@"
 }
 (( $+functions[_d2b__subcmd__host_commands] )) ||
 _d2b__subcmd__host_commands() {
     local commands; commands=(
-'check:Read-only preflight\: inventories host posture without mutation' \
-'prepare:Reconcile host-side state (bridges, nftables, sysctls). --apply mutates' \
-'destroy:Tear down host-side state owned by d2b. --apply mutates' \
-'doctor:Read-only deep diagnostics for the daemon + broker state' \
-'migrate-storage:Plan the one-time storage layout cutover. --apply is fail-closed until broker support lands' \
-'install:Install d2bd + broker units onto the host. --apply mutates' \
-'reconcile:Reconcile host network state (re-run bridge/route/nftables reconcile without starting any VM)' \
-'validate:Run the host-side validator suite and write evidence records' \
-'help:Print this message or the help of the given subcommand(s)' \
+'get:' \
+'list:' \
+'status:' \
+'check:' \
+'prepare:' \
+'destroy:' \
+'doctor:' \
+'install:' \
+'reconcile:' \
+'validate:' \
     )
     _describe -t commands 'd2b host commands' commands "$@"
 }
@@ -2655,75 +4967,20 @@ _d2b__subcmd__host__subcmd__doctor_commands() {
     local commands; commands=()
     _describe -t commands 'd2b host doctor commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__host__subcmd__help_commands] )) ||
-_d2b__subcmd__host__subcmd__help_commands() {
-    local commands; commands=(
-'check:Read-only preflight\: inventories host posture without mutation' \
-'prepare:Reconcile host-side state (bridges, nftables, sysctls). --apply mutates' \
-'destroy:Tear down host-side state owned by d2b. --apply mutates' \
-'doctor:Read-only deep diagnostics for the daemon + broker state' \
-'migrate-storage:Plan the one-time storage layout cutover. --apply is fail-closed until broker support lands' \
-'install:Install d2bd + broker units onto the host. --apply mutates' \
-'reconcile:Reconcile host network state (re-run bridge/route/nftables reconcile without starting any VM)' \
-'validate:Run the host-side validator suite and write evidence records' \
-'help:Print this message or the help of the given subcommand(s)' \
-    )
-    _describe -t commands 'd2b host help commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__host__subcmd__help__subcmd__check_commands] )) ||
-_d2b__subcmd__host__subcmd__help__subcmd__check_commands() {
+(( $+functions[_d2b__subcmd__host__subcmd__get_commands] )) ||
+_d2b__subcmd__host__subcmd__get_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b host help check commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__host__subcmd__help__subcmd__destroy_commands] )) ||
-_d2b__subcmd__host__subcmd__help__subcmd__destroy_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b host help destroy commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__host__subcmd__help__subcmd__doctor_commands] )) ||
-_d2b__subcmd__host__subcmd__help__subcmd__doctor_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b host help doctor commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__host__subcmd__help__subcmd__help_commands] )) ||
-_d2b__subcmd__host__subcmd__help__subcmd__help_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b host help help commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__host__subcmd__help__subcmd__install_commands] )) ||
-_d2b__subcmd__host__subcmd__help__subcmd__install_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b host help install commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__host__subcmd__help__subcmd__migrate-storage_commands] )) ||
-_d2b__subcmd__host__subcmd__help__subcmd__migrate-storage_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b host help migrate-storage commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__host__subcmd__help__subcmd__prepare_commands] )) ||
-_d2b__subcmd__host__subcmd__help__subcmd__prepare_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b host help prepare commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__host__subcmd__help__subcmd__reconcile_commands] )) ||
-_d2b__subcmd__host__subcmd__help__subcmd__reconcile_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b host help reconcile commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__host__subcmd__help__subcmd__validate_commands] )) ||
-_d2b__subcmd__host__subcmd__help__subcmd__validate_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b host help validate commands' commands "$@"
+    _describe -t commands 'd2b host get commands' commands "$@"
 }
 (( $+functions[_d2b__subcmd__host__subcmd__install_commands] )) ||
 _d2b__subcmd__host__subcmd__install_commands() {
     local commands; commands=()
     _describe -t commands 'd2b host install commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__host__subcmd__migrate-storage_commands] )) ||
-_d2b__subcmd__host__subcmd__migrate-storage_commands() {
+(( $+functions[_d2b__subcmd__host__subcmd__list_commands] )) ||
+_d2b__subcmd__host__subcmd__list_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b host migrate-storage commands' commands "$@"
+    _describe -t commands 'd2b host list commands' commands "$@"
 }
 (( $+functions[_d2b__subcmd__host__subcmd__prepare_commands] )) ||
 _d2b__subcmd__host__subcmd__prepare_commands() {
@@ -2735,562 +4992,834 @@ _d2b__subcmd__host__subcmd__reconcile_commands() {
     local commands; commands=()
     _describe -t commands 'd2b host reconcile commands' commands "$@"
 }
+(( $+functions[_d2b__subcmd__host__subcmd__status_commands] )) ||
+_d2b__subcmd__host__subcmd__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b host status commands' commands "$@"
+}
 (( $+functions[_d2b__subcmd__host__subcmd__validate_commands] )) ||
 _d2b__subcmd__host__subcmd__validate_commands() {
     local commands; commands=()
     _describe -t commands 'd2b host validate commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__keys_commands] )) ||
-_d2b__subcmd__keys_commands() {
+(( $+functions[_d2b__subcmd__import_commands] )) ||
+_d2b__subcmd__import_commands() {
     local commands; commands=(
-'list:List managed keys (per-VM SSH keypair fingerprints)' \
-'show:Show details for a specific VM'\''s managed key' \
-'rotate:Rotate the framework-managed per-VM SSH keypair. --apply mutates' \
-'help:Print this message or the help of the given subcommand(s)' \
+'get:' \
+'list:' \
+'watch:' \
+'status:' \
+'projection:' \
+'graph:' \
+'create:' \
+'update-spec:' \
+'delete:' \
     )
-    _describe -t commands 'd2b keys commands' commands "$@"
+    _describe -t commands 'd2b import commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__keys__subcmd__help_commands] )) ||
-_d2b__subcmd__keys__subcmd__help_commands() {
-    local commands; commands=(
-'list:List managed keys (per-VM SSH keypair fingerprints)' \
-'show:Show details for a specific VM'\''s managed key' \
-'rotate:Rotate the framework-managed per-VM SSH keypair. --apply mutates' \
-'help:Print this message or the help of the given subcommand(s)' \
-    )
-    _describe -t commands 'd2b keys help commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__keys__subcmd__help__subcmd__help_commands] )) ||
-_d2b__subcmd__keys__subcmd__help__subcmd__help_commands() {
+(( $+functions[_d2b__subcmd__import__subcmd__create_commands] )) ||
+_d2b__subcmd__import__subcmd__create_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b keys help help commands' commands "$@"
+    _describe -t commands 'd2b import create commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__keys__subcmd__help__subcmd__list_commands] )) ||
-_d2b__subcmd__keys__subcmd__help__subcmd__list_commands() {
+(( $+functions[_d2b__subcmd__import__subcmd__delete_commands] )) ||
+_d2b__subcmd__import__subcmd__delete_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b keys help list commands' commands "$@"
+    _describe -t commands 'd2b import delete commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__keys__subcmd__help__subcmd__rotate_commands] )) ||
-_d2b__subcmd__keys__subcmd__help__subcmd__rotate_commands() {
+(( $+functions[_d2b__subcmd__import__subcmd__get_commands] )) ||
+_d2b__subcmd__import__subcmd__get_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b keys help rotate commands' commands "$@"
+    _describe -t commands 'd2b import get commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__keys__subcmd__help__subcmd__show_commands] )) ||
-_d2b__subcmd__keys__subcmd__help__subcmd__show_commands() {
+(( $+functions[_d2b__subcmd__import__subcmd__graph_commands] )) ||
+_d2b__subcmd__import__subcmd__graph_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b keys help show commands' commands "$@"
+    _describe -t commands 'd2b import graph commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__keys__subcmd__list_commands] )) ||
-_d2b__subcmd__keys__subcmd__list_commands() {
+(( $+functions[_d2b__subcmd__import__subcmd__list_commands] )) ||
+_d2b__subcmd__import__subcmd__list_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b keys list commands' commands "$@"
+    _describe -t commands 'd2b import list commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__keys__subcmd__rotate_commands] )) ||
-_d2b__subcmd__keys__subcmd__rotate_commands() {
+(( $+functions[_d2b__subcmd__import__subcmd__projection_commands] )) ||
+_d2b__subcmd__import__subcmd__projection_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b keys rotate commands' commands "$@"
+    _describe -t commands 'd2b import projection commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__keys__subcmd__show_commands] )) ||
-_d2b__subcmd__keys__subcmd__show_commands() {
+(( $+functions[_d2b__subcmd__import__subcmd__status_commands] )) ||
+_d2b__subcmd__import__subcmd__status_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b keys show commands' commands "$@"
+    _describe -t commands 'd2b import status commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__launch_commands] )) ||
-_d2b__subcmd__launch_commands() {
+(( $+functions[_d2b__subcmd__import__subcmd__update-spec_commands] )) ||
+_d2b__subcmd__import__subcmd__update-spec_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b launch commands' commands "$@"
+    _describe -t commands 'd2b import update-spec commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__import__subcmd__watch_commands] )) ||
+_d2b__subcmd__import__subcmd__watch_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b import watch commands' commands "$@"
 }
 (( $+functions[_d2b__subcmd__list_commands] )) ||
 _d2b__subcmd__list_commands() {
     local commands; commands=()
     _describe -t commands 'd2b list commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__migrate_commands] )) ||
-_d2b__subcmd__migrate_commands() {
+(( $+functions[_d2b__subcmd__network_commands] )) ||
+_d2b__subcmd__network_commands() {
+    local commands; commands=(
+'get:' \
+'list:' \
+'watch:' \
+'create:' \
+'update-spec:' \
+'delete:' \
+'status:' \
+'upgrade:' \
+'reconcile:' \
+'verify:' \
+'usb:' \
+'security-key:' \
+    )
+    _describe -t commands 'd2b network commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__network__subcmd__create_commands] )) ||
+_d2b__subcmd__network__subcmd__create_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b migrate commands' commands "$@"
+    _describe -t commands 'd2b network create commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__network__subcmd__delete_commands] )) ||
+_d2b__subcmd__network__subcmd__delete_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b network delete commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__network__subcmd__get_commands] )) ||
+_d2b__subcmd__network__subcmd__get_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b network get commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__network__subcmd__list_commands] )) ||
+_d2b__subcmd__network__subcmd__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b network list commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__network__subcmd__reconcile_commands] )) ||
+_d2b__subcmd__network__subcmd__reconcile_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b network reconcile commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__network__subcmd__security-key_commands] )) ||
+_d2b__subcmd__network__subcmd__security-key_commands() {
+    local commands; commands=(
+'status:' \
+'sessions:' \
+'cancel:' \
+'test:' \
+    )
+    _describe -t commands 'd2b network security-key commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__network__subcmd__security-key__subcmd__cancel_commands] )) ||
+_d2b__subcmd__network__subcmd__security-key__subcmd__cancel_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b network security-key cancel commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__network__subcmd__security-key__subcmd__sessions_commands] )) ||
+_d2b__subcmd__network__subcmd__security-key__subcmd__sessions_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b network security-key sessions commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__network__subcmd__security-key__subcmd__status_commands] )) ||
+_d2b__subcmd__network__subcmd__security-key__subcmd__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b network security-key status commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__network__subcmd__security-key__subcmd__test_commands] )) ||
+_d2b__subcmd__network__subcmd__security-key__subcmd__test_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b network security-key test commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__network__subcmd__status_commands] )) ||
+_d2b__subcmd__network__subcmd__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b network status commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__network__subcmd__update-spec_commands] )) ||
+_d2b__subcmd__network__subcmd__update-spec_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b network update-spec commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__network__subcmd__upgrade_commands] )) ||
+_d2b__subcmd__network__subcmd__upgrade_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b network upgrade commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__network__subcmd__usb_commands] )) ||
+_d2b__subcmd__network__subcmd__usb_commands() {
+    local commands; commands=(
+'attach:' \
+'detach:' \
+'probe:' \
+    )
+    _describe -t commands 'd2b network usb commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__network__subcmd__usb__subcmd__attach_commands] )) ||
+_d2b__subcmd__network__subcmd__usb__subcmd__attach_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b network usb attach commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__network__subcmd__usb__subcmd__detach_commands] )) ||
+_d2b__subcmd__network__subcmd__usb__subcmd__detach_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b network usb detach commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__network__subcmd__usb__subcmd__probe_commands] )) ||
+_d2b__subcmd__network__subcmd__usb__subcmd__probe_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b network usb probe commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__network__subcmd__verify_commands] )) ||
+_d2b__subcmd__network__subcmd__verify_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b network verify commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__network__subcmd__watch_commands] )) ||
+_d2b__subcmd__network__subcmd__watch_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b network watch commands' commands "$@"
 }
 (( $+functions[_d2b__subcmd__op_commands] )) ||
 _d2b__subcmd__op_commands() {
     local commands; commands=(
-'inspect:Inspect current operation/trace state with bounded partial results' \
-'help:Print this message or the help of the given subcommand(s)' \
+'inspect:' \
     )
     _describe -t commands 'd2b op commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__op__subcmd__help_commands] )) ||
-_d2b__subcmd__op__subcmd__help_commands() {
-    local commands; commands=(
-'inspect:Inspect current operation/trace state with bounded partial results' \
-'help:Print this message or the help of the given subcommand(s)' \
-    )
-    _describe -t commands 'd2b op help commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__op__subcmd__help__subcmd__help_commands] )) ||
-_d2b__subcmd__op__subcmd__help__subcmd__help_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b op help help commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__op__subcmd__help__subcmd__inspect_commands] )) ||
-_d2b__subcmd__op__subcmd__help__subcmd__inspect_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b op help inspect commands' commands "$@"
 }
 (( $+functions[_d2b__subcmd__op__subcmd__inspect_commands] )) ||
 _d2b__subcmd__op__subcmd__inspect_commands() {
     local commands; commands=()
     _describe -t commands 'd2b op inspect commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__realm_commands] )) ||
-_d2b__subcmd__realm_commands() {
+(( $+functions[_d2b__subcmd__process_commands] )) ||
+_d2b__subcmd__process_commands() {
     local commands; commands=(
-'list:List local realm policy entrypoints' \
-'inspect:Inspect one local realm policy entrypoint' \
-'enter:Open an interactive shell inside the realm gateway VM' \
-'run:Run a one-shot command inside the realm gateway VM' \
-'help:Print this message or the help of the given subcommand(s)' \
+'get:' \
+'list:' \
+'status:' \
+'start:' \
+'stop:' \
+'create:' \
+'update-spec:' \
+'delete:' \
     )
-    _describe -t commands 'd2b realm commands' commands "$@"
+    _describe -t commands 'd2b process commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__realm__subcmd__enter_commands] )) ||
-_d2b__subcmd__realm__subcmd__enter_commands() {
+(( $+functions[_d2b__subcmd__process__subcmd__create_commands] )) ||
+_d2b__subcmd__process__subcmd__create_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b realm enter commands' commands "$@"
+    _describe -t commands 'd2b process create commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__realm__subcmd__help_commands] )) ||
-_d2b__subcmd__realm__subcmd__help_commands() {
+(( $+functions[_d2b__subcmd__process__subcmd__delete_commands] )) ||
+_d2b__subcmd__process__subcmd__delete_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b process delete commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__process__subcmd__get_commands] )) ||
+_d2b__subcmd__process__subcmd__get_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b process get commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__process__subcmd__list_commands] )) ||
+_d2b__subcmd__process__subcmd__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b process list commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__process__subcmd__start_commands] )) ||
+_d2b__subcmd__process__subcmd__start_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b process start commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__process__subcmd__status_commands] )) ||
+_d2b__subcmd__process__subcmd__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b process status commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__process__subcmd__stop_commands] )) ||
+_d2b__subcmd__process__subcmd__stop_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b process stop commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__process__subcmd__update-spec_commands] )) ||
+_d2b__subcmd__process__subcmd__update-spec_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b process update-spec commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__provider_commands] )) ||
+_d2b__subcmd__provider_commands() {
     local commands; commands=(
-'list:List local realm policy entrypoints' \
-'inspect:Inspect one local realm policy entrypoint' \
-'enter:Open an interactive shell inside the realm gateway VM' \
-'run:Run a one-shot command inside the realm gateway VM' \
-'help:Print this message or the help of the given subcommand(s)' \
+'list:' \
+'get:' \
+'status:' \
+'inspect:' \
     )
-    _describe -t commands 'd2b realm help commands' commands "$@"
+    _describe -t commands 'd2b provider commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__realm__subcmd__help__subcmd__enter_commands] )) ||
-_d2b__subcmd__realm__subcmd__help__subcmd__enter_commands() {
+(( $+functions[_d2b__subcmd__provider__subcmd__get_commands] )) ||
+_d2b__subcmd__provider__subcmd__get_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b realm help enter commands' commands "$@"
+    _describe -t commands 'd2b provider get commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__realm__subcmd__help__subcmd__help_commands] )) ||
-_d2b__subcmd__realm__subcmd__help__subcmd__help_commands() {
+(( $+functions[_d2b__subcmd__provider__subcmd__inspect_commands] )) ||
+_d2b__subcmd__provider__subcmd__inspect_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b realm help help commands' commands "$@"
+    _describe -t commands 'd2b provider inspect commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__realm__subcmd__help__subcmd__inspect_commands] )) ||
-_d2b__subcmd__realm__subcmd__help__subcmd__inspect_commands() {
+(( $+functions[_d2b__subcmd__provider__subcmd__list_commands] )) ||
+_d2b__subcmd__provider__subcmd__list_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b realm help inspect commands' commands "$@"
+    _describe -t commands 'd2b provider list commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__realm__subcmd__help__subcmd__list_commands] )) ||
-_d2b__subcmd__realm__subcmd__help__subcmd__list_commands() {
+(( $+functions[_d2b__subcmd__provider__subcmd__status_commands] )) ||
+_d2b__subcmd__provider__subcmd__status_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b realm help list commands' commands "$@"
+    _describe -t commands 'd2b provider status commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__realm__subcmd__help__subcmd__run_commands] )) ||
-_d2b__subcmd__realm__subcmd__help__subcmd__run_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b realm help run commands' commands "$@"
+(( $+functions[_d2b__subcmd__quota_commands] )) ||
+_d2b__subcmd__quota_commands() {
+    local commands; commands=(
+'get:' \
+'list:' \
+'watch:' \
+'create:' \
+'update-spec:' \
+'delete:' \
+'status:' \
+'upgrade:' \
+'reconcile:' \
+'verify:' \
+'usb:' \
+'security-key:' \
+    )
+    _describe -t commands 'd2b quota commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__realm__subcmd__inspect_commands] )) ||
-_d2b__subcmd__realm__subcmd__inspect_commands() {
+(( $+functions[_d2b__subcmd__quota__subcmd__create_commands] )) ||
+_d2b__subcmd__quota__subcmd__create_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b realm inspect commands' commands "$@"
+    _describe -t commands 'd2b quota create commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__realm__subcmd__list_commands] )) ||
-_d2b__subcmd__realm__subcmd__list_commands() {
+(( $+functions[_d2b__subcmd__quota__subcmd__delete_commands] )) ||
+_d2b__subcmd__quota__subcmd__delete_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b realm list commands' commands "$@"
+    _describe -t commands 'd2b quota delete commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__realm__subcmd__run_commands] )) ||
-_d2b__subcmd__realm__subcmd__run_commands() {
+(( $+functions[_d2b__subcmd__quota__subcmd__get_commands] )) ||
+_d2b__subcmd__quota__subcmd__get_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b realm run commands' commands "$@"
+    _describe -t commands 'd2b quota get commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__restart_commands] )) ||
-_d2b__subcmd__restart_commands() {
+(( $+functions[_d2b__subcmd__quota__subcmd__list_commands] )) ||
+_d2b__subcmd__quota__subcmd__list_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b restart commands' commands "$@"
+    _describe -t commands 'd2b quota list commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__rollback_commands] )) ||
-_d2b__subcmd__rollback_commands() {
+(( $+functions[_d2b__subcmd__quota__subcmd__reconcile_commands] )) ||
+_d2b__subcmd__quota__subcmd__reconcile_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b rollback commands' commands "$@"
+    _describe -t commands 'd2b quota reconcile commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__rotate-known-host_commands] )) ||
-_d2b__subcmd__rotate-known-host_commands() {
+(( $+functions[_d2b__subcmd__quota__subcmd__security-key_commands] )) ||
+_d2b__subcmd__quota__subcmd__security-key_commands() {
+    local commands; commands=(
+'status:' \
+'sessions:' \
+'cancel:' \
+'test:' \
+    )
+    _describe -t commands 'd2b quota security-key commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__quota__subcmd__security-key__subcmd__cancel_commands] )) ||
+_d2b__subcmd__quota__subcmd__security-key__subcmd__cancel_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b rotate-known-host commands' commands "$@"
+    _describe -t commands 'd2b quota security-key cancel commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__quota__subcmd__security-key__subcmd__sessions_commands] )) ||
+_d2b__subcmd__quota__subcmd__security-key__subcmd__sessions_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b quota security-key sessions commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__quota__subcmd__security-key__subcmd__status_commands] )) ||
+_d2b__subcmd__quota__subcmd__security-key__subcmd__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b quota security-key status commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__quota__subcmd__security-key__subcmd__test_commands] )) ||
+_d2b__subcmd__quota__subcmd__security-key__subcmd__test_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b quota security-key test commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__quota__subcmd__status_commands] )) ||
+_d2b__subcmd__quota__subcmd__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b quota status commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__quota__subcmd__update-spec_commands] )) ||
+_d2b__subcmd__quota__subcmd__update-spec_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b quota update-spec commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__quota__subcmd__upgrade_commands] )) ||
+_d2b__subcmd__quota__subcmd__upgrade_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b quota upgrade commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__quota__subcmd__usb_commands] )) ||
+_d2b__subcmd__quota__subcmd__usb_commands() {
+    local commands; commands=(
+'attach:' \
+'detach:' \
+'probe:' \
+    )
+    _describe -t commands 'd2b quota usb commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__quota__subcmd__usb__subcmd__attach_commands] )) ||
+_d2b__subcmd__quota__subcmd__usb__subcmd__attach_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b quota usb attach commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__quota__subcmd__usb__subcmd__detach_commands] )) ||
+_d2b__subcmd__quota__subcmd__usb__subcmd__detach_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b quota usb detach commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__quota__subcmd__usb__subcmd__probe_commands] )) ||
+_d2b__subcmd__quota__subcmd__usb__subcmd__probe_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b quota usb probe commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__quota__subcmd__verify_commands] )) ||
+_d2b__subcmd__quota__subcmd__verify_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b quota verify commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__quota__subcmd__watch_commands] )) ||
+_d2b__subcmd__quota__subcmd__watch_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b quota watch commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__reconcile_commands] )) ||
+_d2b__subcmd__reconcile_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b reconcile commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__resource_commands] )) ||
+_d2b__subcmd__resource_commands() {
+    local commands; commands=(
+'get:' \
+'list:' \
+'watch:' \
+'create:' \
+'update-spec:' \
+'delete:' \
+'status:' \
+'upgrade:' \
+'reconcile:' \
+'authorities:' \
+    )
+    _describe -t commands 'd2b resource commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__resource__subcmd__authorities_commands] )) ||
+_d2b__subcmd__resource__subcmd__authorities_commands() {
+    local commands; commands=(
+'holders:' \
+'conflict:' \
+    )
+    _describe -t commands 'd2b resource authorities commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__resource__subcmd__authorities__subcmd__conflict_commands] )) ||
+_d2b__subcmd__resource__subcmd__authorities__subcmd__conflict_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b resource authorities conflict commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__resource__subcmd__authorities__subcmd__holders_commands] )) ||
+_d2b__subcmd__resource__subcmd__authorities__subcmd__holders_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b resource authorities holders commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__resource__subcmd__create_commands] )) ||
+_d2b__subcmd__resource__subcmd__create_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b resource create commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__resource__subcmd__delete_commands] )) ||
+_d2b__subcmd__resource__subcmd__delete_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b resource delete commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__resource__subcmd__get_commands] )) ||
+_d2b__subcmd__resource__subcmd__get_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b resource get commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__resource__subcmd__list_commands] )) ||
+_d2b__subcmd__resource__subcmd__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b resource list commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__resource__subcmd__reconcile_commands] )) ||
+_d2b__subcmd__resource__subcmd__reconcile_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b resource reconcile commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__resource__subcmd__status_commands] )) ||
+_d2b__subcmd__resource__subcmd__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b resource status commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__resource__subcmd__update-spec_commands] )) ||
+_d2b__subcmd__resource__subcmd__update-spec_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b resource update-spec commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__resource__subcmd__upgrade_commands] )) ||
+_d2b__subcmd__resource__subcmd__upgrade_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b resource upgrade commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__resource__subcmd__watch_commands] )) ||
+_d2b__subcmd__resource__subcmd__watch_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b resource watch commands' commands "$@"
 }
 (( $+functions[_d2b__subcmd__shell_commands] )) ||
 _d2b__subcmd__shell_commands() {
-    local commands; commands=()
+    local commands; commands=(
+'open:' \
+'attach:' \
+'list:' \
+'detach:' \
+'kill:' \
+'status:' \
+    )
     _describe -t commands 'd2b shell commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__shell__subcmd__attach_commands] )) ||
+_d2b__subcmd__shell__subcmd__attach_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b shell attach commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__shell__subcmd__detach_commands] )) ||
+_d2b__subcmd__shell__subcmd__detach_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b shell detach commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__shell__subcmd__kill_commands] )) ||
+_d2b__subcmd__shell__subcmd__kill_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b shell kill commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__shell__subcmd__list_commands] )) ||
+_d2b__subcmd__shell__subcmd__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b shell list commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__shell__subcmd__open_commands] )) ||
+_d2b__subcmd__shell__subcmd__open_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b shell open commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__shell__subcmd__status_commands] )) ||
+_d2b__subcmd__shell__subcmd__status_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b shell status commands' commands "$@"
 }
 (( $+functions[_d2b__subcmd__status_commands] )) ||
 _d2b__subcmd__status_commands() {
     local commands; commands=()
     _describe -t commands 'd2b status commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__store_commands] )) ||
-_d2b__subcmd__store_commands() {
+(( $+functions[_d2b__subcmd__update-spec_commands] )) ||
+_d2b__subcmd__update-spec_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b update-spec commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__upgrade_commands] )) ||
+_d2b__subcmd__upgrade_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b upgrade commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__user_commands] )) ||
+_d2b__subcmd__user_commands() {
     local commands; commands=(
-'verify:Verify a VM'\''s hardlink-backed live store-view' \
-'help:Print this message or the help of the given subcommand(s)' \
+'get:' \
+'list:' \
+'watch:' \
+'create:' \
+'update-spec:' \
+'delete:' \
+'status:' \
+'upgrade:' \
+'reconcile:' \
+'verify:' \
+'usb:' \
+'security-key:' \
     )
-    _describe -t commands 'd2b store commands' commands "$@"
+    _describe -t commands 'd2b user commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__store__subcmd__help_commands] )) ||
-_d2b__subcmd__store__subcmd__help_commands() {
+(( $+functions[_d2b__subcmd__user__subcmd__create_commands] )) ||
+_d2b__subcmd__user__subcmd__create_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b user create commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__user__subcmd__delete_commands] )) ||
+_d2b__subcmd__user__subcmd__delete_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b user delete commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__user__subcmd__get_commands] )) ||
+_d2b__subcmd__user__subcmd__get_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b user get commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__user__subcmd__list_commands] )) ||
+_d2b__subcmd__user__subcmd__list_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b user list commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__user__subcmd__reconcile_commands] )) ||
+_d2b__subcmd__user__subcmd__reconcile_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b user reconcile commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__user__subcmd__security-key_commands] )) ||
+_d2b__subcmd__user__subcmd__security-key_commands() {
     local commands; commands=(
-'verify:Verify a VM'\''s hardlink-backed live store-view' \
-'help:Print this message or the help of the given subcommand(s)' \
+'status:' \
+'sessions:' \
+'cancel:' \
+'test:' \
     )
-    _describe -t commands 'd2b store help commands' commands "$@"
+    _describe -t commands 'd2b user security-key commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__store__subcmd__help__subcmd__help_commands] )) ||
-_d2b__subcmd__store__subcmd__help__subcmd__help_commands() {
+(( $+functions[_d2b__subcmd__user__subcmd__security-key__subcmd__cancel_commands] )) ||
+_d2b__subcmd__user__subcmd__security-key__subcmd__cancel_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b store help help commands' commands "$@"
+    _describe -t commands 'd2b user security-key cancel commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__store__subcmd__help__subcmd__verify_commands] )) ||
-_d2b__subcmd__store__subcmd__help__subcmd__verify_commands() {
+(( $+functions[_d2b__subcmd__user__subcmd__security-key__subcmd__sessions_commands] )) ||
+_d2b__subcmd__user__subcmd__security-key__subcmd__sessions_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b store help verify commands' commands "$@"
+    _describe -t commands 'd2b user security-key sessions commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__store__subcmd__verify_commands] )) ||
-_d2b__subcmd__store__subcmd__verify_commands() {
+(( $+functions[_d2b__subcmd__user__subcmd__security-key__subcmd__status_commands] )) ||
+_d2b__subcmd__user__subcmd__security-key__subcmd__status_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b store verify commands' commands "$@"
+    _describe -t commands 'd2b user security-key status commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__switch_commands] )) ||
-_d2b__subcmd__switch_commands() {
+(( $+functions[_d2b__subcmd__user__subcmd__security-key__subcmd__test_commands] )) ||
+_d2b__subcmd__user__subcmd__security-key__subcmd__test_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b switch commands' commands "$@"
+    _describe -t commands 'd2b user security-key test commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__test_commands] )) ||
-_d2b__subcmd__test_commands() {
+(( $+functions[_d2b__subcmd__user__subcmd__status_commands] )) ||
+_d2b__subcmd__user__subcmd__status_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b test commands' commands "$@"
+    _describe -t commands 'd2b user status commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__trust_commands] )) ||
-_d2b__subcmd__trust_commands() {
+(( $+functions[_d2b__subcmd__user__subcmd__update-spec_commands] )) ||
+_d2b__subcmd__user__subcmd__update-spec_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b trust commands' commands "$@"
+    _describe -t commands 'd2b user update-spec commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__up_commands] )) ||
-_d2b__subcmd__up_commands() {
+(( $+functions[_d2b__subcmd__user__subcmd__upgrade_commands] )) ||
+_d2b__subcmd__user__subcmd__upgrade_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b up commands' commands "$@"
+    _describe -t commands 'd2b user upgrade commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__usb_commands] )) ||
-_d2b__subcmd__usb_commands() {
+(( $+functions[_d2b__subcmd__user__subcmd__usb_commands] )) ||
+_d2b__subcmd__user__subcmd__usb_commands() {
     local commands; commands=(
-'attach:Bind a host USB busid to a VM via the native daemon path' \
-'detach:Unbind a host USB busid from a VM via the native daemon path' \
-'probe:List daemon-declared USBIP session claims and qemu-media USB candidates' \
-'security-key:CTAP/WebAuthn security-key proxy status, sessions, and diagnostics' \
-'help:Print this message or the help of the given subcommand(s)' \
+'attach:' \
+'detach:' \
+'probe:' \
     )
-    _describe -t commands 'd2b usb commands' commands "$@"
+    _describe -t commands 'd2b user usb commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__usb__subcmd__attach_commands] )) ||
-_d2b__subcmd__usb__subcmd__attach_commands() {
+(( $+functions[_d2b__subcmd__user__subcmd__usb__subcmd__attach_commands] )) ||
+_d2b__subcmd__user__subcmd__usb__subcmd__attach_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b usb attach commands' commands "$@"
+    _describe -t commands 'd2b user usb attach commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__usb__subcmd__detach_commands] )) ||
-_d2b__subcmd__usb__subcmd__detach_commands() {
+(( $+functions[_d2b__subcmd__user__subcmd__usb__subcmd__detach_commands] )) ||
+_d2b__subcmd__user__subcmd__usb__subcmd__detach_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b usb detach commands' commands "$@"
+    _describe -t commands 'd2b user usb detach commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__usb__subcmd__help_commands] )) ||
-_d2b__subcmd__usb__subcmd__help_commands() {
+(( $+functions[_d2b__subcmd__user__subcmd__usb__subcmd__probe_commands] )) ||
+_d2b__subcmd__user__subcmd__usb__subcmd__probe_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b user usb probe commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__user__subcmd__verify_commands] )) ||
+_d2b__subcmd__user__subcmd__verify_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b user verify commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__user__subcmd__watch_commands] )) ||
+_d2b__subcmd__user__subcmd__watch_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b user watch commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__volume_commands] )) ||
+_d2b__subcmd__volume_commands() {
     local commands; commands=(
-'attach:Bind a host USB busid to a VM via the native daemon path' \
-'detach:Unbind a host USB busid from a VM via the native daemon path' \
-'probe:List daemon-declared USBIP session claims and qemu-media USB candidates' \
-'security-key:CTAP/WebAuthn security-key proxy status, sessions, and diagnostics' \
-'help:Print this message or the help of the given subcommand(s)' \
+'get:' \
+'list:' \
+'watch:' \
+'create:' \
+'update-spec:' \
+'delete:' \
+'status:' \
+'upgrade:' \
+'reconcile:' \
+'verify:' \
+'usb:' \
+'security-key:' \
     )
-    _describe -t commands 'd2b usb help commands' commands "$@"
+    _describe -t commands 'd2b volume commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__usb__subcmd__help__subcmd__attach_commands] )) ||
-_d2b__subcmd__usb__subcmd__help__subcmd__attach_commands() {
+(( $+functions[_d2b__subcmd__volume__subcmd__create_commands] )) ||
+_d2b__subcmd__volume__subcmd__create_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b usb help attach commands' commands "$@"
+    _describe -t commands 'd2b volume create commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__usb__subcmd__help__subcmd__detach_commands] )) ||
-_d2b__subcmd__usb__subcmd__help__subcmd__detach_commands() {
+(( $+functions[_d2b__subcmd__volume__subcmd__delete_commands] )) ||
+_d2b__subcmd__volume__subcmd__delete_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b usb help detach commands' commands "$@"
+    _describe -t commands 'd2b volume delete commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__usb__subcmd__help__subcmd__help_commands] )) ||
-_d2b__subcmd__usb__subcmd__help__subcmd__help_commands() {
+(( $+functions[_d2b__subcmd__volume__subcmd__get_commands] )) ||
+_d2b__subcmd__volume__subcmd__get_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b usb help help commands' commands "$@"
+    _describe -t commands 'd2b volume get commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__usb__subcmd__help__subcmd__probe_commands] )) ||
-_d2b__subcmd__usb__subcmd__help__subcmd__probe_commands() {
+(( $+functions[_d2b__subcmd__volume__subcmd__list_commands] )) ||
+_d2b__subcmd__volume__subcmd__list_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b usb help probe commands' commands "$@"
+    _describe -t commands 'd2b volume list commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__usb__subcmd__help__subcmd__security-key_commands] )) ||
-_d2b__subcmd__usb__subcmd__help__subcmd__security-key_commands() {
+(( $+functions[_d2b__subcmd__volume__subcmd__reconcile_commands] )) ||
+_d2b__subcmd__volume__subcmd__reconcile_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b volume reconcile commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__volume__subcmd__security-key_commands] )) ||
+_d2b__subcmd__volume__subcmd__security-key_commands() {
     local commands; commands=(
-'status:Show security-key proxy health, configured keys, and current lease' \
-'sessions:Show recent and active security-key request sessions' \
-'cancel:Cancel a security-key request session' \
-'test:Smoke-check that a VM'\''s virtual security-key device and host broker are healthy' \
+'status:' \
+'sessions:' \
+'cancel:' \
+'test:' \
     )
-    _describe -t commands 'd2b usb help security-key commands' commands "$@"
+    _describe -t commands 'd2b volume security-key commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__usb__subcmd__help__subcmd__security-key__subcmd__cancel_commands] )) ||
-_d2b__subcmd__usb__subcmd__help__subcmd__security-key__subcmd__cancel_commands() {
+(( $+functions[_d2b__subcmd__volume__subcmd__security-key__subcmd__cancel_commands] )) ||
+_d2b__subcmd__volume__subcmd__security-key__subcmd__cancel_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b usb help security-key cancel commands' commands "$@"
+    _describe -t commands 'd2b volume security-key cancel commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__usb__subcmd__help__subcmd__security-key__subcmd__sessions_commands] )) ||
-_d2b__subcmd__usb__subcmd__help__subcmd__security-key__subcmd__sessions_commands() {
+(( $+functions[_d2b__subcmd__volume__subcmd__security-key__subcmd__sessions_commands] )) ||
+_d2b__subcmd__volume__subcmd__security-key__subcmd__sessions_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b usb help security-key sessions commands' commands "$@"
+    _describe -t commands 'd2b volume security-key sessions commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__usb__subcmd__help__subcmd__security-key__subcmd__status_commands] )) ||
-_d2b__subcmd__usb__subcmd__help__subcmd__security-key__subcmd__status_commands() {
+(( $+functions[_d2b__subcmd__volume__subcmd__security-key__subcmd__status_commands] )) ||
+_d2b__subcmd__volume__subcmd__security-key__subcmd__status_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b usb help security-key status commands' commands "$@"
+    _describe -t commands 'd2b volume security-key status commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__usb__subcmd__help__subcmd__security-key__subcmd__test_commands] )) ||
-_d2b__subcmd__usb__subcmd__help__subcmd__security-key__subcmd__test_commands() {
+(( $+functions[_d2b__subcmd__volume__subcmd__security-key__subcmd__test_commands] )) ||
+_d2b__subcmd__volume__subcmd__security-key__subcmd__test_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b usb help security-key test commands' commands "$@"
+    _describe -t commands 'd2b volume security-key test commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__usb__subcmd__probe_commands] )) ||
-_d2b__subcmd__usb__subcmd__probe_commands() {
+(( $+functions[_d2b__subcmd__volume__subcmd__status_commands] )) ||
+_d2b__subcmd__volume__subcmd__status_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b usb probe commands' commands "$@"
+    _describe -t commands 'd2b volume status commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__usb__subcmd__security-key_commands] )) ||
-_d2b__subcmd__usb__subcmd__security-key_commands() {
+(( $+functions[_d2b__subcmd__volume__subcmd__update-spec_commands] )) ||
+_d2b__subcmd__volume__subcmd__update-spec_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b volume update-spec commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__volume__subcmd__upgrade_commands] )) ||
+_d2b__subcmd__volume__subcmd__upgrade_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b volume upgrade commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__volume__subcmd__usb_commands] )) ||
+_d2b__subcmd__volume__subcmd__usb_commands() {
     local commands; commands=(
-'status:Show security-key proxy health, configured keys, and current lease' \
-'sessions:Show recent and active security-key request sessions' \
-'cancel:Cancel a security-key request session' \
-'test:Smoke-check that a VM'\''s virtual security-key device and host broker are healthy' \
-'help:Print this message or the help of the given subcommand(s)' \
+'attach:' \
+'detach:' \
+'probe:' \
     )
-    _describe -t commands 'd2b usb security-key commands' commands "$@"
+    _describe -t commands 'd2b volume usb commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__usb__subcmd__security-key__subcmd__cancel_commands] )) ||
-_d2b__subcmd__usb__subcmd__security-key__subcmd__cancel_commands() {
+(( $+functions[_d2b__subcmd__volume__subcmd__usb__subcmd__attach_commands] )) ||
+_d2b__subcmd__volume__subcmd__usb__subcmd__attach_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b usb security-key cancel commands' commands "$@"
+    _describe -t commands 'd2b volume usb attach commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__usb__subcmd__security-key__subcmd__help_commands] )) ||
-_d2b__subcmd__usb__subcmd__security-key__subcmd__help_commands() {
+(( $+functions[_d2b__subcmd__volume__subcmd__usb__subcmd__detach_commands] )) ||
+_d2b__subcmd__volume__subcmd__usb__subcmd__detach_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b volume usb detach commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__volume__subcmd__usb__subcmd__probe_commands] )) ||
+_d2b__subcmd__volume__subcmd__usb__subcmd__probe_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b volume usb probe commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__volume__subcmd__verify_commands] )) ||
+_d2b__subcmd__volume__subcmd__verify_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b volume verify commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__volume__subcmd__watch_commands] )) ||
+_d2b__subcmd__volume__subcmd__watch_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b volume watch commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__watch_commands] )) ||
+_d2b__subcmd__watch_commands() {
+    local commands; commands=()
+    _describe -t commands 'd2b watch commands' commands "$@"
+}
+(( $+functions[_d2b__subcmd__zone_commands] )) ||
+_d2b__subcmd__zone_commands() {
     local commands; commands=(
-'status:Show security-key proxy health, configured keys, and current lease' \
-'sessions:Show recent and active security-key request sessions' \
-'cancel:Cancel a security-key request session' \
-'test:Smoke-check that a VM'\''s virtual security-key device and host broker are healthy' \
-'help:Print this message or the help of the given subcommand(s)' \
+'get:' \
+'list:' \
+'status:' \
     )
-    _describe -t commands 'd2b usb security-key help commands' commands "$@"
+    _describe -t commands 'd2b zone commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__usb__subcmd__security-key__subcmd__help__subcmd__cancel_commands] )) ||
-_d2b__subcmd__usb__subcmd__security-key__subcmd__help__subcmd__cancel_commands() {
+(( $+functions[_d2b__subcmd__zone__subcmd__get_commands] )) ||
+_d2b__subcmd__zone__subcmd__get_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b usb security-key help cancel commands' commands "$@"
+    _describe -t commands 'd2b zone get commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__usb__subcmd__security-key__subcmd__help__subcmd__help_commands] )) ||
-_d2b__subcmd__usb__subcmd__security-key__subcmd__help__subcmd__help_commands() {
+(( $+functions[_d2b__subcmd__zone__subcmd__list_commands] )) ||
+_d2b__subcmd__zone__subcmd__list_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b usb security-key help help commands' commands "$@"
+    _describe -t commands 'd2b zone list commands' commands "$@"
 }
-(( $+functions[_d2b__subcmd__usb__subcmd__security-key__subcmd__help__subcmd__sessions_commands] )) ||
-_d2b__subcmd__usb__subcmd__security-key__subcmd__help__subcmd__sessions_commands() {
+(( $+functions[_d2b__subcmd__zone__subcmd__status_commands] )) ||
+_d2b__subcmd__zone__subcmd__status_commands() {
     local commands; commands=()
-    _describe -t commands 'd2b usb security-key help sessions commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__usb__subcmd__security-key__subcmd__help__subcmd__status_commands] )) ||
-_d2b__subcmd__usb__subcmd__security-key__subcmd__help__subcmd__status_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b usb security-key help status commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__usb__subcmd__security-key__subcmd__help__subcmd__test_commands] )) ||
-_d2b__subcmd__usb__subcmd__security-key__subcmd__help__subcmd__test_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b usb security-key help test commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__usb__subcmd__security-key__subcmd__sessions_commands] )) ||
-_d2b__subcmd__usb__subcmd__security-key__subcmd__sessions_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b usb security-key sessions commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__usb__subcmd__security-key__subcmd__status_commands] )) ||
-_d2b__subcmd__usb__subcmd__security-key__subcmd__status_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b usb security-key status commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__usb__subcmd__security-key__subcmd__test_commands] )) ||
-_d2b__subcmd__usb__subcmd__security-key__subcmd__test_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b usb security-key test commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__vm_commands] )) ||
-_d2b__subcmd__vm_commands() {
-    local commands; commands=(
-'start:Start the per-VM DAG (virtiofsd → CH → readiness probes)' \
-'stop:Stop the per-VM DAG in reverse topo order' \
-'restart:Stop then start; same envelope contract as start' \
-'list:Daemon-side runtime inventory from d2bd'\''s public socket' \
-'status:Daemon-side readiness state for a VM (api-ready phase)' \
-'exec:Run or manage commands inside a running VM. Use \`d2b vm exec <vm> -- <cmd...>\` for a non-interactive command, \`d2b vm exec -it <vm> -- bash\` for an interactive shell, \`-d\` for a detached command, and \`d2b vm exec <vm> {list|logs|status|kill}\` to manage detached execs' \
-'display:Manage gateway display sessions for provider-backed targets' \
-'help:Print this message or the help of the given subcommand(s)' \
-    )
-    _describe -t commands 'd2b vm commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__vm__subcmd__display_commands] )) ||
-_d2b__subcmd__vm__subcmd__display_commands() {
-    local commands; commands=(
-'list:List active gateway display sessions' \
-'close:Close a gateway display session by id' \
-'help:Print this message or the help of the given subcommand(s)' \
-    )
-    _describe -t commands 'd2b vm display commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__vm__subcmd__display__subcmd__close_commands] )) ||
-_d2b__subcmd__vm__subcmd__display__subcmd__close_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b vm display close commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__vm__subcmd__display__subcmd__help_commands] )) ||
-_d2b__subcmd__vm__subcmd__display__subcmd__help_commands() {
-    local commands; commands=(
-'list:List active gateway display sessions' \
-'close:Close a gateway display session by id' \
-'help:Print this message or the help of the given subcommand(s)' \
-    )
-    _describe -t commands 'd2b vm display help commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__vm__subcmd__display__subcmd__help__subcmd__close_commands] )) ||
-_d2b__subcmd__vm__subcmd__display__subcmd__help__subcmd__close_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b vm display help close commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__vm__subcmd__display__subcmd__help__subcmd__help_commands] )) ||
-_d2b__subcmd__vm__subcmd__display__subcmd__help__subcmd__help_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b vm display help help commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__vm__subcmd__display__subcmd__help__subcmd__list_commands] )) ||
-_d2b__subcmd__vm__subcmd__display__subcmd__help__subcmd__list_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b vm display help list commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__vm__subcmd__display__subcmd__list_commands] )) ||
-_d2b__subcmd__vm__subcmd__display__subcmd__list_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b vm display list commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__vm__subcmd__exec_commands] )) ||
-_d2b__subcmd__vm__subcmd__exec_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b vm exec commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__vm__subcmd__help_commands] )) ||
-_d2b__subcmd__vm__subcmd__help_commands() {
-    local commands; commands=(
-'start:Start the per-VM DAG (virtiofsd → CH → readiness probes)' \
-'stop:Stop the per-VM DAG in reverse topo order' \
-'restart:Stop then start; same envelope contract as start' \
-'list:Daemon-side runtime inventory from d2bd'\''s public socket' \
-'status:Daemon-side readiness state for a VM (api-ready phase)' \
-'exec:Run or manage commands inside a running VM. Use \`d2b vm exec <vm> -- <cmd...>\` for a non-interactive command, \`d2b vm exec -it <vm> -- bash\` for an interactive shell, \`-d\` for a detached command, and \`d2b vm exec <vm> {list|logs|status|kill}\` to manage detached execs' \
-'display:Manage gateway display sessions for provider-backed targets' \
-'help:Print this message or the help of the given subcommand(s)' \
-    )
-    _describe -t commands 'd2b vm help commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__vm__subcmd__help__subcmd__display_commands] )) ||
-_d2b__subcmd__vm__subcmd__help__subcmd__display_commands() {
-    local commands; commands=(
-'list:List active gateway display sessions' \
-'close:Close a gateway display session by id' \
-    )
-    _describe -t commands 'd2b vm help display commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__vm__subcmd__help__subcmd__display__subcmd__close_commands] )) ||
-_d2b__subcmd__vm__subcmd__help__subcmd__display__subcmd__close_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b vm help display close commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__vm__subcmd__help__subcmd__display__subcmd__list_commands] )) ||
-_d2b__subcmd__vm__subcmd__help__subcmd__display__subcmd__list_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b vm help display list commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__vm__subcmd__help__subcmd__exec_commands] )) ||
-_d2b__subcmd__vm__subcmd__help__subcmd__exec_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b vm help exec commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__vm__subcmd__help__subcmd__help_commands] )) ||
-_d2b__subcmd__vm__subcmd__help__subcmd__help_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b vm help help commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__vm__subcmd__help__subcmd__list_commands] )) ||
-_d2b__subcmd__vm__subcmd__help__subcmd__list_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b vm help list commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__vm__subcmd__help__subcmd__restart_commands] )) ||
-_d2b__subcmd__vm__subcmd__help__subcmd__restart_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b vm help restart commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__vm__subcmd__help__subcmd__start_commands] )) ||
-_d2b__subcmd__vm__subcmd__help__subcmd__start_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b vm help start commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__vm__subcmd__help__subcmd__status_commands] )) ||
-_d2b__subcmd__vm__subcmd__help__subcmd__status_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b vm help status commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__vm__subcmd__help__subcmd__stop_commands] )) ||
-_d2b__subcmd__vm__subcmd__help__subcmd__stop_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b vm help stop commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__vm__subcmd__list_commands] )) ||
-_d2b__subcmd__vm__subcmd__list_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b vm list commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__vm__subcmd__restart_commands] )) ||
-_d2b__subcmd__vm__subcmd__restart_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b vm restart commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__vm__subcmd__start_commands] )) ||
-_d2b__subcmd__vm__subcmd__start_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b vm start commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__vm__subcmd__status_commands] )) ||
-_d2b__subcmd__vm__subcmd__status_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b vm status commands' commands "$@"
-}
-(( $+functions[_d2b__subcmd__vm__subcmd__stop_commands] )) ||
-_d2b__subcmd__vm__subcmd__stop_commands() {
-    local commands; commands=()
-    _describe -t commands 'd2b vm stop commands' commands "$@"
+    _describe -t commands 'd2b zone status commands' commands "$@"
 }
 
 if [ "$funcstack[1]" = "_d2b" ]; then
