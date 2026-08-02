@@ -17,7 +17,7 @@ pub use controller::{
 };
 pub use runner::{
     BinaryKind, FlushLaunchTicket, SignedBinaryRef, SwtpmArgv, SwtpmArgvError, SwtpmSettings,
-    SwtpmStartLaunchTicket,
+    SwtpmStartLaunchTicket, validate_start_ticket,
 };
 pub use state::{
     StateDirIntent, StateDirectoryToken, StateOwnerToken, TamperMarkerToken, TpmStateObservation,
