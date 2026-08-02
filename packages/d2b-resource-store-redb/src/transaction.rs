@@ -1844,7 +1844,7 @@ fn revisions_match(meta: &StoreMeta, snapshot: PolicySnapshot) -> bool {
                 .map(ControllerGeneration::get)
 }
 
-fn read_meta_in_write(write: &redb::WriteTransaction) -> Result<StoreMeta, StoreError> {
+pub(crate) fn read_meta_in_write(write: &redb::WriteTransaction) -> Result<StoreMeta, StoreError> {
     let table = write.open_table(STORE_META).map_err(integrity)?;
     let bytes = table
         .get(meta_key().as_slice())
@@ -2729,7 +2729,7 @@ fn operation_key(operation_id: &str) -> Result<Vec<u8>, StoreError> {
         .map_err(integrity)
 }
 
-fn meta_key() -> Vec<u8> {
+pub(crate) fn meta_key() -> Vec<u8> {
     encode_key(KeySpace::StoreMeta, &[KeyComponent::Text("store")])
         .expect("the fixed store-meta key is valid")
         .into_bytes()
@@ -2784,7 +2784,7 @@ pub(crate) fn unavailable(reason: &'static str) -> StoreError {
     error(StoreErrorKind::ResourcePlaneUnavailable, None, reason)
 }
 
-fn set_full_durability(write: &mut redb::WriteTransaction) -> Result<(), StoreError> {
+pub(crate) fn set_full_durability(write: &mut redb::WriteTransaction) -> Result<(), StoreError> {
     write
         .set_durability(Durability::Immediate)
         .map_err(integrity)

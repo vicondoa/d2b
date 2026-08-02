@@ -15,7 +15,10 @@ use redb::{Database, ReadableDatabase};
 use tokio::sync::mpsc;
 
 use crate::actor::{SharedChangeBatch, filter_batch_with};
-use crate::transaction::{ChangeBatch, REVISION_LOG, decode, revision_key};
+use crate::transaction::{
+    ChangeBatch, REVISION_LOG, decode, read_meta, revision_key, set_full_durability,
+};
+use crate::{DecodedKey, DecodedKeyComponent};
 
 /// One global bounded admission budget for queued watch deliveries.
 pub const WATCH_ADMISSION_CAPACITY: usize = 1024;
@@ -348,6 +351,93 @@ impl WatchCoordinator {
             slow_watcher_evictions: self.slow_watcher_evictions,
             replay_work: self.replay_work,
         }
+    }
+
+    /// Delete replay rows older than `retain_from`, in bounded transactions.
+    ///
+    /// The caller must invoke this from the serialized writer context.  The
+    /// returned revision is the durable compaction floor after this bounded
+    /// step; a later call may advance it further.
+    pub fn compact(
+        database: &Database,
+        retain_from: ZoneRevision,
+        max_rows: usize,
+    ) -> Result<ZoneRevision, StoreError> {
+        if max_rows == 0 {
+            return Err(crate::transaction::integrity("compaction-bound-invalid"));
+        }
+        let read = database
+            .begin_read()
+            .map_err(crate::transaction::integrity)?;
+        let meta = read_meta(&read)?;
+        let target_floor = retain_from
+            .get()
+            .saturating_sub(1)
+            .min(meta.current_revision);
+        if target_floor <= meta.compaction_floor {
+            return Ok(ZoneRevision::new(meta.compaction_floor));
+        }
+        let table = read
+            .open_table(REVISION_LOG)
+            .map_err(crate::transaction::integrity)?;
+        let upper = revision_key(target_floor.saturating_add(1))?;
+        let mut keys = Vec::new();
+        let mut last_revision = meta.compaction_floor;
+        for row in table
+            .range(..upper.as_slice())
+            .map_err(crate::transaction::integrity)?
+        {
+            let (key, _) = row.map_err(crate::transaction::integrity)?;
+            let decoded = DecodedKey::decode(key.value()).map_err(crate::transaction::integrity)?;
+            let [DecodedKeyComponent::U64(revision)] = decoded.components() else {
+                return Err(crate::transaction::integrity("revision-key-shape-invalid"));
+            };
+            if *revision <= meta.compaction_floor || *revision > target_floor {
+                continue;
+            }
+            keys.push(key.value().to_vec());
+            last_revision = *revision;
+            if keys.len() >= max_rows {
+                break;
+            }
+        }
+        drop(table);
+        drop(read);
+        if keys.is_empty() {
+            return Ok(ZoneRevision::new(meta.compaction_floor));
+        }
+
+        let mut write = database
+            .begin_write()
+            .map_err(crate::transaction::integrity)?;
+        set_full_durability(&mut write)?;
+        {
+            let mut revisions = write
+                .open_table(REVISION_LOG)
+                .map_err(crate::transaction::integrity)?;
+            for key in &keys {
+                revisions
+                    .remove(key.as_slice())
+                    .map_err(crate::transaction::integrity)?;
+            }
+        }
+        let mut current = crate::transaction::read_meta_in_write(&write)?;
+        if current.compaction_floor != meta.compaction_floor
+            || current.current_revision != meta.current_revision
+        {
+            write.abort().map_err(crate::transaction::integrity)?;
+            return Err(crate::transaction::integrity("compaction-state-changed"));
+        }
+        current.compaction_floor = last_revision;
+        let value =
+            crate::transaction::encode(crate::values::ValueKind::StoreMetaScalar, &current)?;
+        write
+            .open_table(crate::transaction::STORE_META)
+            .map_err(crate::transaction::integrity)?
+            .insert(crate::transaction::meta_key().as_slice(), value.as_slice())
+            .map_err(crate::transaction::integrity)?;
+        write.commit().map_err(crate::transaction::integrity)?;
+        Ok(ZoneRevision::new(last_revision))
     }
 
     /// Register and replay under a writer-owned ordering boundary.
