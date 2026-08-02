@@ -503,6 +503,15 @@ not required:
 /// This is a bounded constant, never caller text.
 pub const LEGACY_ABSENT_PROTOCOL_VERSION: &str = "1.0";
 
+/// The serde default. `#[serde(default = "...")]` names a **zero-argument
+/// function path**, not a constant, and the function must return the field's
+/// type. Naming `LEGACY_ABSENT_PROTOCOL_VERSION` there would not compile: it
+/// is a `&str`, not a nullary fn, and not the field's type.
+fn legacy_absent_protocol_version() -> SemanticProjectionProtocolVersion {
+    SemanticProjectionProtocolVersion::parse(LEGACY_ABSENT_PROTOCOL_VERSION)
+        .expect("the legacy protocol version constant is a valid bounded version")
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Wire {
@@ -512,6 +521,12 @@ struct Wire {
     // ...
 }
 ```
+
+The default is therefore the **parsed** constant, produced by the same bounded
+parser every wire value goes through, so the defaulted value and a value the
+caller supplied as `"1.0"` are the same object and cannot diverge. The `expect`
+is on a compile-time constant that the test below pins, so it is a build-time
+obligation rather than a runtime failure mode.
 
 `deny_unknown_fields` stays: the default covers a missing **known** field and
 never an unknown one. `SemanticProjectionProtocolVersion` parses a bounded
@@ -609,7 +624,7 @@ validate a Provider descriptor at build time, so any declared field the artifact
 omits is a field Nix cannot compare without recomputing a fingerprint, and
 `exportability` is not in any fingerprint at all. That is the same blind spot
 decision 8 step 2 closes at admission, left open one layer down. The generator
-publishes all seven:
+publishes all eight:
 
 | key | source | in `factoryFingerprint`? |
 | --- | --- | --- |
@@ -619,7 +634,8 @@ publishes all seven:
 | `x-d2b-allowed-backing-ref-types` | `allowedBackingRefTypes` | yes |
 | `x-d2b-allowed-binding-target-ref-types` | `allowedBindingTargetRefTypes` | yes |
 | `x-d2b-exportability` | `exportability` | **no** |
-| `x-d2b-projection-schema-fingerprint`, `x-d2b-factory-fingerprint` | both fingerprints | n/a |
+| `x-d2b-projection-schema-fingerprint` | `projectionSchemaFingerprint` | n/a |
+| `x-d2b-factory-fingerprint` | `factoryFingerprint` | n/a |
 
 The `exportability` row is the one that matters: it is the only declared field a
 fingerprint comparison can never catch, at either layer. Publishing it is what
@@ -629,7 +645,7 @@ catalog declares `forbidden`.
 **Regeneration and migration.** Regeneration is
 `run_xtask gen-semantic-service-schemas`, gated by the enforcing `make
 test-drift` lane; all four `*_projection_spec.schema.json` artifacts are
-rewritten in one commit with the seven keys above. **There is no migration,
+rewritten in one commit with the eight keys above. **There is no migration,
 because there is no runtime consumer.** No Provider descriptor is signed, no
 `ResourceExport` or `ResourceImport` type exists yet
 (`packages/d2b-contracts/src/v3/` has no `resource_export.rs` or
@@ -909,13 +925,16 @@ recompute.** Rejected twice over. Nix would have to reimplement canonical JSON
 and the domain-separated digest to check anything, which duplicates a security
 primitive in a second language; and it would still not catch an `exportability`
 mismatch, because no fingerprint binds that field. Publishing the declared
-fields costs seven keys per artifact and makes the comparison a string equality
+fields costs eight keys per artifact and makes the comparison a string equality
 Nix can actually perform.
 
 ## Normative amendments this decision requires
 
-These are the exact changes that consume the decision. They are drafted here and
-land with the implementing wave, not with this record.
+These are the exact changes that consume the decision. They are **drafted here
+and applied by the implementing wave, not by this record's PR.** Per the ADR
+workflow this record lands as settled context; W5 consumes the amendments
+afterward, citing this number. Nothing in this section is edited into
+`docs/specs/` or `docs/reference/` by the commit that lands ADR 0051.
 
 ### A. `docs/specs/providers/ADR-046-provider-device-security-key.md`
 
@@ -1262,7 +1281,7 @@ Artifact and drift:
 
 - `run_xtask gen-semantic-service-schemas` regenerates all four
   `docs/reference/schemas/v3/*_projection_spec.schema.json` artifacts with the
-  `factoryFingerprint` values pinned in decision 9, each publishing the seven
+  `factoryFingerprint` values pinned in decision 9, each publishing the eight
   extension keys in decision 9's table, and the security-key artifact
   additionally with `"x-d2b-allowed-backing-ref-types": []`. Enforced by
   `make test-drift`.
@@ -1283,7 +1302,7 @@ Nix admission, owned by `ADR046-nix-configuration` and
 - `a_provider_descriptor_mismatching_any_published_field_is_rejected_at_eval` -
   a nix-unit case under `tests/unit/nix/cases/` that compares a Provider
   descriptor against the committed projection artifact and rejects a mismatch in
-  each of the seven published keys, one planted mismatch per key. The
+  each of the eight published keys, one planted mismatch per key. The
   `x-d2b-exportability` and `x-d2b-allowed-binding-target-ref-types` cases are
   the two this decision adds; without the artifact keys they were not
   expressible at eval time at all.
@@ -1291,6 +1310,12 @@ Nix admission, owned by `ADR046-nix-configuration` and
   the Nix-layer twin of the Rust step-2 test. The fingerprints match because no
   fingerprint binds `exportability`, and eval must still fail. This is the case
   that proves publishing the key bought something.
+- Both cases are new files under `tests/unit/nix/cases/`, which is an
+  auto-discovered corpus with a fail-closed presence pin. The implementing wave
+  runs **`make nix-unit-pin`** in the same commit that adds them and commits the
+  regenerated pins; `make test-nix-unit` fails until it does. Adding a case
+  without repinning is the standard way this corpus regresses, so it is named
+  here rather than left to the wave to rediscover.
 
 API surface, for decision 6's mint-surface widening and the new error variants:
 
@@ -1311,7 +1336,10 @@ API surface, for decision 6's mint-surface widening and the new error variants:
 
 Lanes that must be green for the implementing wave: `make test-rust`,
 `make test-rust-api-surface`, `make test-drift`, `make test-fixture-contracts`,
-`make test-nix-unit`, `make check-tier0`, `make test-policy`.
+`make test-nix-unit`, `make check-tier0`, `make test-policy`. Two regeneration
+commands run in the same commits as the changes that require them:
+`make api-surface-pin` for the census delta above, and `make nix-unit-pin` for
+the two new nix-unit cases.
 
 ## Invariants this decision creates
 
