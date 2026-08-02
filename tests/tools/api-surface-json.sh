@@ -52,19 +52,30 @@ case "$target_root" in
     exit 2
     ;;
 esac
-# Public and private rustdoc renders are independent but fingerprint different
-# rustdoc units. Isolated stable targets let them overlap on warm local runs.
-# Their Cargo job shares are split below so the pair never exceeds the API
-# leaf's admitted quota. The duplicated cold dependency footprint is retained
-# only because the measured warm hard gate cannot be met by serial renders;
-# cold performance remains diagnostic and non-blocking.
-public_target="$target_root/public-census"
-private_target="$target_root/private-census"
+# Public and private rustdoc renders use separate targets only for the warm
+# local aggregate, where their overlap is measured and accepted. CI and cold
+# local runs use the original shared target serially so dependency compilation
+# and cache footprint stay at the pre-change cost.
+shared_census=0
+if [ -n "${CI:-}" ] || [ -n "${GITHUB_ACTIONS:-}" ] \
+  || [ "${D2B_RUST_COLD_PROFILE:-0}" = 1 ]; then
+  shared_census=1
+  public_target="$target_root/census"
+  private_target="$target_root/census"
+else
+  public_target="$target_root/public-census"
+  private_target="$target_root/private-census"
+fi
 checker_target="$target_root/checker"
 
 # Reclaim the pre-merge layout. A restored cache still carries these, and left
 # alone they would keep charging the cache budget for a tree nothing reads.
-rm -rf "$target_root/public" "$target_root/private" "$target_root/census"
+rm -rf "$target_root/public" "$target_root/private"
+if [ "$shared_census" = 1 ]; then
+  rm -rf "$target_root/public-census" "$target_root/private-census"
+else
+  rm -rf "$target_root/census"
+fi
 
 # Delete only rendered JSON. Cargo's compiled intermediate artifacts remain
 # reusable, but a stale or extra blob cannot satisfy the exact metadata census.
@@ -76,9 +87,14 @@ case "$api_jobs" in
   ''|*[!0-9]*) api_jobs=1 ;;
 esac
 [ "$api_jobs" -ge 1 ] || api_jobs=1
-private_jobs=$((api_jobs / 2))
-public_jobs=$((api_jobs - private_jobs))
-[ "$private_jobs" -ge 1 ] || private_jobs=1
+if [ "$shared_census" = 1 ]; then
+  public_jobs="$api_jobs"
+  private_jobs="$api_jobs"
+else
+  private_jobs=$((api_jobs / 2))
+  public_jobs=$((api_jobs - private_jobs))
+  [ "$private_jobs" -ge 1 ] || private_jobs=1
+fi
 
 run_public_census() {
   local rc=0
@@ -118,7 +134,13 @@ run_private_census() {
 
 public_rc=0
 private_rc=0
-if [ "$api_jobs" -ge 2 ]; then
+if [ "$shared_census" = 1 ]; then
+  run_public_census || public_rc=$?
+  if [ "$public_rc" = 0 ]; then
+    rm -rf "$public_target/doc"
+    run_private_census || private_rc=$?
+  fi
+elif [ "$api_jobs" -ge 2 ]; then
   run_public_census &
   public_pid=$!
   run_private_census &

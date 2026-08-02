@@ -850,17 +850,21 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
         );
     }
     assert!(
-        !makefile.contains("rust-fixture-contracts: rust-main-workspace"),
+        !makefile.contains("test-rust-leaf-fixture-contracts: test-rust-leaf-main-workspace"),
         "execution-manifest-policy: isolated fixture target regained the main-workspace edge"
     );
     assert!(
         rust_driver
-            .contains("fixture_target_dir=\"$ROOT/.scratch/rust-test-cache/fixture-contracts\""),
-        "execution-manifest-policy: fixture target is not isolated under the Rust test cache"
+            .contains("fixture_target_dir=\"$ROOT/.scratch/rust-test-cache/fixture-contracts\"")
+            && rust_driver.contains("fixture_target_dir=\"$workspace_target_dir\"")
+            && rust_driver.contains("${D2B_RUST_COLD_PROFILE:-0}"),
+        "execution-manifest-policy: fixture warm/shared target selection drifted"
     );
     assert!(
         api_driver.contains("public_target=\"$target_root/public-census\"")
             && api_driver.contains("private_target=\"$target_root/private-census\"")
+            && api_driver.contains("public_target=\"$target_root/census\"")
+            && api_driver.contains("shared_census=1")
             && api_driver.contains("checker_target=\"$target_root/checker\"")
             && api_driver.contains("CARGO_BUILD_JOBS=\"$public_jobs\"")
             && api_driver.contains("CARGO_BUILD_JOBS=\"$private_jobs\"")
@@ -870,7 +874,8 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
         "execution-manifest-policy: API census targets or split quotas drifted"
     );
     assert!(
-        makefile.contains("rust-broker: rust-inventory-and-stub"),
+        makefile.contains("D2B_RUST_BROKER_PREREQS_aggregate := test-rust-leaf-inventory")
+            && makefile.contains("test-rust-leaf-broker: $(D2B_RUST_BROKER_PREREQS)"),
         "execution-manifest-policy: broker target must wait for inventory before lockfile enumeration"
     );
     assert!(
@@ -878,7 +883,9 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
         "execution-manifest-policy: Rust aggregate lost the conditional fixture skip"
     );
     assert!(
-        makefile.contains("test-rust-main:\n\t+@$(call D2B_RUST_DISPATCH,rust-main-workspace rust-fixture-contracts)"),
+        makefile.contains(
+            "test-rust-main:\n\t+@$(call D2B_RUST_DISPATCH,$(D2B_RUST_MAIN_LEAVES),main)"
+        ),
         "execution-manifest-policy: focused main target lost conditional fixture coverage"
     );
     let emitter_region = rust_driver

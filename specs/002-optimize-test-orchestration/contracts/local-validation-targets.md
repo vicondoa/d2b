@@ -51,10 +51,16 @@ CI may continue invoking:
 ```bash
 make test-rust-api-surface
 make test-rust-main
-make test-rust-remaining
+make test-rust-broker
+make test-rust-guest-shell-runner
+make test-rust-no-bash-ast
+make test-rust-schema
+make test-rust-inventory
+make test-rust-supply-chain
 ```
 
 The stable `test-rust` CI context remains the rollup of those enforcing jobs.
+Each CI target receives the full effective runner budget.
 
 ### Configuration
 

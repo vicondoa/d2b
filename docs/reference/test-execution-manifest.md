@@ -140,3 +140,8 @@ Layer-1 graph can run the separate enforcing
 duplicating them. Fixture and CLI work uses an isolated stable target below
 `.scratch/rust-test-cache`, so it can overlap the main workspace without
 sharing mutable Cargo state.
+
+That isolated layout is warm-local only. Cold local runs restore serial
+full-budget leaves and shared workspace/API targets. CI runs API, main,
+broker, guest, no-bash, schema, inventory and supply chain as separate
+full-budget Make jobs, then joins them under the stable `test-rust` context.

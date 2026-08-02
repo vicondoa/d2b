@@ -369,7 +369,7 @@ def rust_job(job: dict[str, Any]) -> str:
           avail_kib=$(df -Pk / | awk 'NR == 2 {{ print $4 }}')
           # Reclaiming the preinstalled Android/dotnet/GHC trees and the Docker
           # image cache costs real wall time - measured across this workflow's
-          # four Rust-profile jobs it ranged from 43 s to 3 min 48 s, the worst
+          # Rust-profile jobs it ranged from 43 s to 3 min 48 s, the worst
           # of which sat on the critical path - and buys about 22 GiB on a
           # runner image that already arrives with 83-88 GiB free. Nothing in
           # this gate approaches that, so only pay the cost when an image
@@ -453,7 +453,7 @@ def rust_rollup_job(job: dict[str, Any]) -> str:
         lines.append(f'          echo "{need}=$result"')
         lines.append(f'          [ "$result" = success ] || failed=1')
     lines.append('          [ "$failed" -eq 0 ] || exit 1')
-    lines.append('          echo "Both Rust gate shards passed."')
+    lines.append('          echo "All Rust gate shards passed."')
     return "\n".join(lines)
 
 

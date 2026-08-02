@@ -450,19 +450,28 @@ set -euo pipefail
         workflow = layer1_jobs.render_workflow(manifest)
 
         rust_rollup = manifest["jobs"]["test-rust"]
+        rust_shards = [
+            "test-rust-api-surface",
+            "test-rust-main",
+            "test-rust-broker",
+            "test-rust-guest-shell-runner",
+            "test-rust-no-bash-ast",
+            "test-rust-schema",
+            "test-rust-inventory",
+            "test-rust-supply-chain",
+        ]
         self.assertEqual(
             rust_rollup["needs"],
-            ["test-rust-api-surface", "test-rust-main", "test-rust-remaining"],
+            rust_shards,
         )
         self.assertEqual(rust_rollup["ciKind"], "rust-rollup")
-        self.assertIn("run: make test-rust-api-surface", workflow)
-        self.assertIn("run: make test-rust-main", workflow)
-        self.assertIn("run: make test-rust-remaining", workflow)
-        self.assertIn("test-rust-api-surface=$result", workflow)
-        self.assertIn("test-rust-main=$result", workflow)
-        self.assertIn("test-rust-remaining=$result", workflow)
-        self.assertEqual(workflow.count('[ "$result" = success ] || failed=1'), 3)
+        for shard in rust_shards:
+            self.assertIn(f"run: make {shard}", workflow)
+            self.assertIn(f"{shard}=$result", workflow)
+        self.assertNotIn("  test-rust-remaining:", workflow)
+        self.assertEqual(workflow.count('[ "$result" = success ] || failed=1'), 8)
         self.assertIn('[ "$failed" -eq 0 ] || exit 1', workflow)
+        self.assertIn('echo "All Rust gate shards passed."', workflow)
         self.assertEqual(manifest["ci"]["rollupNeeds"].count("test-rust"), 1)
 
     def test_expensive_rust_cache_surface_is_present(self) -> None:
@@ -659,15 +668,15 @@ set -euo pipefail
         self.assertIn("--keep-going", aggregate)
         self.assertIn("--output-sync=target", aggregate)
         for leaf in (
-            "rust-api-surface",
-            "rust-main-workspace",
-            "rust-schema-reproducibility",
-            "rust-inventory-and-stub",
-            "rust-fixture-contracts",
-            "rust-broker",
-            "rust-guest-shell-runner",
-            "rust-no-bash-ast",
-            "rust-supply-chain",
+            "test-rust-leaf-api-surface",
+            "test-rust-leaf-main-workspace",
+            "test-rust-leaf-schema",
+            "test-rust-leaf-inventory",
+            "test-rust-leaf-fixture-contracts",
+            "test-rust-leaf-broker",
+            "test-rust-leaf-guest-shell-runner",
+            "test-rust-leaf-no-bash-ast",
+            "test-rust-leaf-supply-chain",
         ):
             self.assertRegex(
                 makefile,
@@ -715,18 +724,23 @@ set -euo pipefail
         aggregate = make_target_block(makefile, "test-rust")
         focused = make_target_block(makefile, "test-rust-main")
 
-        self.assertIn("rust-fixture-contracts", aggregate)
-        self.assertNotIn("rust-fixture-contracts: rust-main-workspace", makefile)
+        self.assertIn("test-rust-leaf-fixture-contracts", aggregate)
+        self.assertNotIn(
+            "test-rust-leaf-fixture-contracts: test-rust-leaf-main-workspace",
+            makefile,
+        )
         self.assertIn('if [ "$(D2B_SKIP_FIXTURE_BUILD)" = 1 ]', makefile)
         self.assertIn("elif command -v nix", makefile)
-        self.assertIn("rust-fixture-contracts", focused)
+        self.assertIn("D2B_RUST_MAIN_LEAVES", focused)
         self.assertIn("D2B_SKIP_FIXTURE_BUILD=1 make test-rust", static)
 
         driver = RUST_DRIVER.read_text(encoding="utf-8")
+        self.assertIn('fixture_target_dir="$workspace_target_dir"', driver)
         self.assertIn(
             'fixture_target_dir="$ROOT/.scratch/rust-test-cache/fixture-contracts"',
             driver,
         )
+        self.assertIn('${D2B_RUST_COLD_PROFILE:-0}', driver)
         self.assertGreaterEqual(driver.count('CARGO_TARGET_DIR="$fixture_target_dir"'), 4)
         self.assertEqual(driver.count("rust_surface_success rust-contract-tests"), 1)
         self.assertEqual(driver.count("rust_surface_success rust-cli-contract-tests"), 1)
@@ -746,6 +760,10 @@ set -euo pipefail
         )
         self.assertIn('public_target="$target_root/public-census"', api_driver)
         self.assertIn('private_target="$target_root/private-census"', api_driver)
+        self.assertIn('public_target="$target_root/census"', api_driver)
+        self.assertIn('private_target="$target_root/census"', api_driver)
+        self.assertIn('${D2B_RUST_COLD_PROFILE:-0}', api_driver)
+        self.assertIn('if [ "$shared_census" = 1 ]', api_driver)
         self.assertIn('checker_target="$target_root/checker"', api_driver)
         self.assertIn(
             'CARGO_TARGET_DIR="$checker_target" cargo run --quiet --release --locked',
@@ -791,7 +809,7 @@ esac
 
     def test_rust_fixture_leaf_sets_internal_opt_in_but_public_target_stays_closed(self) -> None:
         makefile = MAKEFILE.read_text(encoding="utf-8")
-        fixture_leaf = make_target_block(makefile, "rust-fixture-contracts")
+        fixture_leaf = make_target_block(makefile, "test-rust-leaf-fixture-contracts")
         public_target = make_target_block(makefile, "test-fixture-contracts")
 
         self.assertIn(
@@ -813,28 +831,174 @@ esac
     def test_rust_inventory_precedes_broker_without_serializing_schema_and_main(self) -> None:
         makefile = MAKEFILE.read_text(encoding="utf-8")
         self.assertIn(
-            "rust-broker: rust-inventory-and-stub",
+            "D2B_RUST_BROKER_PREREQS_aggregate := test-rust-leaf-inventory",
             makefile,
             "broker must wait for assert-pinned-tests lockfile enumeration",
         )
         self.assertIn(
-            "rust-schema-reproducibility: rust-inventory-and-stub",
+            "D2B_RUST_SCHEMA_PREREQS_aggregate := test-rust-leaf-inventory",
             makefile,
         )
         self.assertIn(
-            "rust-main-workspace: rust-schema-reproducibility",
+            "D2B_RUST_MAIN_PREREQS_aggregate := test-rust-leaf-schema",
+            makefile,
+        )
+        self.assertIn("D2B_RUST_MAIN_PREREQS_main :=", makefile)
+        self.assertIn(
+            "test-rust-leaf-main-workspace: $(D2B_RUST_MAIN_PREREQS)",
+            makefile,
+        )
+        self.assertIn("D2B_RUST_BROKER_PREREQS_broker :=", makefile)
+        self.assertIn("D2B_RUST_SCHEMA_PREREQS_schema :=", makefile)
+        self.assertIn(
+            "test-rust-leaf-broker: $(D2B_RUST_BROKER_PREREQS)",
+            makefile,
+        )
+        self.assertIn(
+            "test-rust-leaf-schema: $(D2B_RUST_SCHEMA_PREREQS)",
             makefile,
         )
         self.assertNotIn(
-            "rust-broker: rust-schema-reproducibility",
+            "test-rust-leaf-broker: test-rust-leaf-schema",
             makefile,
             "broker should be allowed to overlap schema after inventory",
         )
         self.assertNotIn(
-            "rust-broker: rust-main-workspace",
+            "test-rust-leaf-broker: test-rust-leaf-main-workspace",
             makefile,
             "broker should be allowed to overlap main after schema",
         )
+
+    def test_rust_ci_profiles_use_full_runner_budgets_without_duplicate_leaves(self) -> None:
+        cases = (
+            (
+                "test-rust-api-surface",
+                {"D2B_RUST_BUDGET": "4"},
+                (
+                    "D2B_RUST_PROFILE=api",
+                    "D2B_RUST_ACTIVE_LANES=1",
+                    "D2B_RUST_QUOTA_API=4",
+                ),
+                (),
+            ),
+            (
+                "test-rust-main",
+                {
+                    "D2B_RUST_BUDGET": "4",
+                    "D2B_SKIP_FIXTURE_BUILD": "1",
+                },
+                (
+                    "D2B_RUST_PROFILE=main",
+                    "D2B_RUST_ACTIVE_LANES=1",
+                    "D2B_RUST_QUOTA_MAIN=4",
+                    "bash tests/test-rust.sh main-workspace",
+                ),
+                (
+                    "bash tests/test-rust.sh schema-reproducibility",
+                    "bash tests/test-rust.sh inventory-stub",
+                    "bash tests/test-rust.sh fixture-contracts",
+                ),
+            ),
+            (
+                "test-rust-broker",
+                {"D2B_RUST_BUDGET": "4"},
+                (
+                    "D2B_RUST_PROFILE=broker",
+                    "D2B_RUST_ACTIVE_LANES=1",
+                    "D2B_RUST_QUOTA_BROKER=4",
+                    "bash tests/test-rust.sh broker",
+                ),
+                ("bash tests/test-rust.sh inventory-stub",),
+            ),
+            (
+                "test-rust-guest-shell-runner",
+                {"D2B_RUST_BUDGET": "4"},
+                (
+                    "D2B_RUST_PROFILE=guest",
+                    "D2B_RUST_QUOTA_GUEST=4",
+                ),
+                (),
+            ),
+            (
+                "test-rust-no-bash-ast",
+                {"D2B_RUST_BUDGET": "4"},
+                (
+                    "D2B_RUST_PROFILE=no-bash",
+                    "D2B_RUST_QUOTA_AST=4",
+                ),
+                (),
+            ),
+            (
+                "test-rust-schema",
+                {"D2B_RUST_BUDGET": "4"},
+                (
+                    "D2B_RUST_PROFILE=schema",
+                    "D2B_RUST_QUOTA_SCHEMA=4",
+                    "bash tests/test-rust.sh schema-reproducibility",
+                ),
+                ("bash tests/test-rust.sh inventory-stub",),
+            ),
+            (
+                "test-rust-inventory",
+                {"D2B_RUST_BUDGET": "4"},
+                (
+                    "D2B_RUST_PROFILE=inventory",
+                    "D2B_RUST_QUOTA_INVENTORY=4",
+                ),
+                (),
+            ),
+            (
+                "test-rust-supply-chain",
+                {"D2B_RUST_BUDGET": "4"},
+                (
+                    "D2B_RUST_PROFILE=supply",
+                    "D2B_RUST_QUOTA_SUPPLY=4",
+                ),
+                (),
+            ),
+        )
+        for target, overrides, required, forbidden in cases:
+            env = os.environ.copy()
+            env.update(overrides)
+            result = subprocess.run(
+                ["make", "-n", target],
+                cwd=ROOT,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(
+                result.returncode,
+                0,
+                msg=f"{target} dry run failed\n{result.stdout}\n{result.stderr}",
+            )
+            output = result.stdout + result.stderr
+            for marker in required:
+                self.assertIn(marker, output, msg=f"{target} missing {marker}")
+            for marker in forbidden:
+                self.assertNotIn(marker, output, msg=f"{target} duplicated {marker}")
+
+    def test_rust_cold_profile_restores_serial_full_budget_execution(self) -> None:
+        makefile = MAKEFILE.read_text(encoding="utf-8")
+        driver = RUST_DRIVER.read_text(encoding="utf-8")
+        api_driver = (ROOT / "tests/tools/api-surface-json.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            'if [ "$$profile" = aggregate ] && [ ! -d packages/target ]',
+            makefile,
+        )
+        self.assertRegex(
+            makefile,
+            r"(?s)cold\).*?active_lanes=1;.*?quota_main=\"\\$\\$runtime_budget\";"
+            r".*?quota_broker=\"\\$\\$runtime_budget\";",
+        )
+        self.assertIn('"D2B_RUST_COLD_PROFILE=$$cold_profile"', makefile)
+        self.assertIn('fixture_target_dir="$workspace_target_dir"', driver)
+        self.assertIn('public_target="$target_root/census"', api_driver)
+        self.assertIn('if [ "$shared_census" = 1 ]', api_driver)
 
     def test_schema_leaf_uses_the_exported_cargo_job_budget_for_xtask(self) -> None:
         driver = RUST_DRIVER.read_text(encoding="utf-8")
@@ -1334,15 +1498,15 @@ esac
     def test_rust_leaf_recipes_are_ordinary_and_drop_make_metadata_immediately(self) -> None:
         makefile = MAKEFILE.read_text(encoding="utf-8")
         for leaf in (
-            "rust-api-surface",
-            "rust-main-workspace",
-            "rust-schema-reproducibility",
-            "rust-inventory-and-stub",
-            "rust-fixture-contracts",
-            "rust-broker",
-            "rust-guest-shell-runner",
-            "rust-no-bash-ast",
-            "rust-supply-chain",
+            "test-rust-leaf-api-surface",
+            "test-rust-leaf-main-workspace",
+            "test-rust-leaf-schema",
+            "test-rust-leaf-inventory",
+            "test-rust-leaf-fixture-contracts",
+            "test-rust-leaf-broker",
+            "test-rust-leaf-guest-shell-runner",
+            "test-rust-leaf-no-bash-ast",
+            "test-rust-leaf-supply-chain",
         ):
             block = make_target_block(makefile, leaf)
             recipes = [

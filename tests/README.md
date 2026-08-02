@@ -57,7 +57,7 @@ Rust tests (types 2-5: unit, integration, contract, policy-lint) live under
 | `make test-lint` | preflight + nix-parse + shellcheck | local + CI |
 | `make test-changelog` | require release notes for code changes and validate every changelog fragment | local + CI |
 | `make test-rust` | bounded Make DAG for the Rust leaves (API, fmt, clippy, workspace tests, conditional fixture/CLI, broker x3, deny/audit, schema, inventory, and no-bash); fixture/CLI are included once when Nix is available | local + CI |
-| `make test-rust-api-surface` / `make test-rust-main` / `make test-rust-remaining` | stable CI partitions behind the `test-rust` rollup context; `make test-rust` schedules every required leaf exactly once | CI (local for a focused rerun) |
+| `make test-rust-<leaf>` | eight CI leaf targets (API, main, broker, guest shell runner, no-bash AST, schema, inventory, supply chain) behind the stable `test-rust` rollup; each receives the full runner budget | CI (local for a focused rerun) |
 | `make test-fixture-contracts` | enforcing eval-rendered lane: materializes `D2B_FIXTURES` from evaluated Nix artifact data, then runs `d2b-contract-tests` and the CLI-contract cases; both lanes set `D2B_ENABLE_FIXTURE_BUILD=1`, and invoking it without that variable fails rather than skipping | local + CI |
 | `make test-proofs` | standalone proofs/ crates | local + CI |
 | `make test-flake` | `nix flake check --no-build` (native system); `D2B_FLAKE_CHECK=<name>` instantiates one check, `D2B_FLAKE_OUTPUTS=1` sweeps non-`checks` outputs, `D2B_FLAKE_LOCAL_SHARDS=1` runs the local bounded shard fan-out | local + CI (x86 sharded per-check matrix; aarch64 PR job runs a lightweight smoke eval) |
@@ -190,6 +190,13 @@ to the measured API long pole while the complete frontier stays bounded.
 Direct calls to `tests/test-rust.sh` require one explicit leaf mode; callers
 that need the complete gate must use `make test-rust`. The focused
 `make test-rust-main` also retains conditional fixture/CLI coverage.
+
+CI invokes one Make target per Rust leaf, so local-only dependency edges do
+not repeat schema or inventory work in the main and broker jobs. A cold local
+aggregate (detected when `packages/target` is absent) runs leaves serially with
+the full budget and restores the shared workspace/API target layout used
+before this optimization. Warm local runs retain the parallel isolated-target
+profile.
 
 Use `D2B_RUST_BUDGET=<positive-integer>` to request a Rust budget. It is an
 upper bound, not a host-capacity bypass. The default is the smaller of logical

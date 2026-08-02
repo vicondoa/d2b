@@ -11,10 +11,14 @@ SHELL := $(CURDIR)/tests/tools/scrub-shell-environment
 .PHONY: pre-tag smoke-lite i3-check \
         check check-static check-ci check-all check-fast check-tier0 \
         test test-unit \
-        test-lint test-rust test-rust-api-surface test-rust-main test-rust-remaining \
-        rust-api-surface rust-main-workspace rust-schema-reproducibility \
-        rust-inventory-and-stub rust-fixture-contracts rust-broker rust-guest-shell-runner \
-        rust-no-bash-ast rust-supply-chain \
+        test-lint test-rust test-rust-api-surface test-rust-main \
+        test-rust-broker test-rust-guest-shell-runner test-rust-no-bash-ast \
+        test-rust-schema test-rust-inventory test-rust-supply-chain \
+        test-rust-leaf-api-surface test-rust-leaf-main-workspace \
+        test-rust-leaf-schema test-rust-leaf-inventory \
+        test-rust-leaf-fixture-contracts test-rust-leaf-broker \
+        test-rust-leaf-guest-shell-runner test-rust-leaf-no-bash-ast \
+        test-rust-leaf-supply-chain \
         test-fixture-contracts test-proofs test-flake test-nix-unit \
         test-performance-budgets test-adr-index-coverage test-ci-coverage \
         test-flake-list test-flake-partition \
@@ -137,6 +141,30 @@ D2B_RUST_QUOTA_BROKER ?= 1
 D2B_RUST_QUOTA_GUEST ?= 1
 D2B_RUST_QUOTA_AST ?= 1
 D2B_RUST_QUOTA_SUPPLY ?= 1
+D2B_RUST_PROFILE ?= aggregate
+D2B_RUST_MAIN_PREREQS_aggregate := test-rust-leaf-schema
+D2B_RUST_MAIN_PREREQS_cold := test-rust-leaf-schema
+D2B_RUST_MAIN_PREREQS_api :=
+D2B_RUST_MAIN_PREREQS_main :=
+D2B_RUST_MAIN_PREREQS_remaining :=
+D2B_RUST_MAIN_PREREQS := $(D2B_RUST_MAIN_PREREQS_$(D2B_RUST_PROFILE))
+D2B_RUST_SCHEMA_PREREQS_aggregate := test-rust-leaf-inventory
+D2B_RUST_SCHEMA_PREREQS_cold := test-rust-leaf-inventory
+D2B_RUST_SCHEMA_PREREQS_remaining := test-rust-leaf-inventory
+D2B_RUST_SCHEMA_PREREQS_schema :=
+D2B_RUST_SCHEMA_PREREQS := $(D2B_RUST_SCHEMA_PREREQS_$(D2B_RUST_PROFILE))
+D2B_RUST_BROKER_PREREQS_aggregate := test-rust-leaf-inventory
+D2B_RUST_BROKER_PREREQS_cold := test-rust-leaf-inventory
+D2B_RUST_BROKER_PREREQS_remaining := test-rust-leaf-inventory
+D2B_RUST_BROKER_PREREQS_broker :=
+D2B_RUST_BROKER_PREREQS := $(D2B_RUST_BROKER_PREREQS_$(D2B_RUST_PROFILE))
+
+ifeq ($(D2B_SKIP_FIXTURE_BUILD),1)
+D2B_RUST_MAIN_LEAVES := test-rust-leaf-main-workspace
+else
+D2B_RUST_MAIN_LEAVES := test-rust-leaf-main-workspace test-rust-leaf-fixture-contracts
+endif
+
 # Execution-manifest v1 evidence is opt-in and starts before the recursive
 # scheduler. The helper anchors the manifest parent first with openat2
 # RESOLVE_NO_SYMLINKS and RESOLVE_NO_MAGICLINKS, then opens the persistent
@@ -244,14 +272,13 @@ else \
 fi; \
 [ "$$effective_budget" -ge 1 ] || effective_budget=1; \
 runtime_budget="$$effective_budget"; \
-lane_count=9; \
-active_lanes="$$effective_budget"; \
-[ "$$active_lanes" -le "$$lane_count" ] || active_lanes="$$lane_count"; \
-if [ "$$effective_budget" -eq 1 ]; then active_lanes=1; fi; \
-quota_api=1; \
-if [ "$$runtime_budget" -gt "$$lane_count" ]; then \
-  quota_api=$$((runtime_budget - lane_count + 1)); \
+profile='$(2)'; \
+cold_profile=0; \
+if [ "$$profile" = aggregate ] && [ ! -d packages/target ]; then \
+  profile=cold; \
+  cold_profile=1; \
 fi; \
+quota_api=1; \
 quota_main=1; \
 quota_schema=1; \
 quota_inventory=1; \
@@ -260,9 +287,97 @@ quota_broker=1; \
 quota_guest=1; \
 quota_ast=1; \
 quota_supply=1; \
-frontier_quota=$$((quota_api + active_lanes - 1)); \
+case "$$profile" in \
+  aggregate) \
+    lane_count=9; \
+    active_lanes="$$runtime_budget"; \
+    [ "$$active_lanes" -le "$$lane_count" ] || active_lanes="$$lane_count"; \
+    if [ "$$runtime_budget" -gt "$$lane_count" ]; then \
+      quota_api=$$((runtime_budget - lane_count + 1)); \
+    fi; \
+    frontier_quota=$$((quota_api + active_lanes - 1)); \
+    ;; \
+  cold) \
+    active_lanes=1; \
+    quota_api="$$runtime_budget"; \
+    quota_main="$$runtime_budget"; \
+    quota_schema="$$runtime_budget"; \
+    quota_inventory="$$runtime_budget"; \
+    quota_fixture="$$runtime_budget"; \
+    quota_broker="$$runtime_budget"; \
+    quota_guest="$$runtime_budget"; \
+    quota_ast="$$runtime_budget"; \
+    quota_supply="$$runtime_budget"; \
+    frontier_quota="$$runtime_budget"; \
+    ;; \
+  api) \
+    active_lanes=1; \
+    quota_api="$$runtime_budget"; \
+    frontier_quota="$$quota_api"; \
+    ;; \
+  main) \
+    if [ "$${D2B_SKIP_FIXTURE_BUILD:-0}" = 1 ]; then \
+      active_lanes=1; \
+      quota_main="$$runtime_budget"; \
+      frontier_quota="$$quota_main"; \
+    else \
+      active_lanes=2; \
+      [ "$$active_lanes" -le "$$runtime_budget" ] || active_lanes="$$runtime_budget"; \
+      if [ "$$runtime_budget" -eq 1 ]; then \
+        quota_main=1; \
+        quota_fixture=1; \
+        frontier_quota=1; \
+      else \
+        quota_fixture=$$((runtime_budget / 2)); \
+        quota_main=$$((runtime_budget - quota_fixture)); \
+        frontier_quota=$$((quota_main + quota_fixture)); \
+      fi; \
+    fi; \
+    ;; \
+  remaining) \
+    active_lanes=1; \
+    quota_schema="$$runtime_budget"; \
+    quota_inventory="$$runtime_budget"; \
+    quota_broker="$$runtime_budget"; \
+    quota_guest="$$runtime_budget"; \
+    quota_ast="$$runtime_budget"; \
+    quota_supply="$$runtime_budget"; \
+    frontier_quota="$$runtime_budget"; \
+    ;; \
+  broker) \
+    active_lanes=1; \
+    quota_broker="$$runtime_budget"; \
+    frontier_quota="$$quota_broker"; \
+    ;; \
+  guest) \
+    active_lanes=1; \
+    quota_guest="$$runtime_budget"; \
+    frontier_quota="$$quota_guest"; \
+    ;; \
+  no-bash) \
+    active_lanes=1; \
+    quota_ast="$$runtime_budget"; \
+    frontier_quota="$$quota_ast"; \
+    ;; \
+  schema) \
+    active_lanes=1; \
+    quota_schema="$$runtime_budget"; \
+    frontier_quota="$$quota_schema"; \
+    ;; \
+  inventory) \
+    active_lanes=1; \
+    quota_inventory="$$runtime_budget"; \
+    frontier_quota="$$quota_inventory"; \
+    ;; \
+  supply) \
+    active_lanes=1; \
+    quota_supply="$$runtime_budget"; \
+    frontier_quota="$$quota_supply"; \
+    ;; \
+  *) echo "internal Rust profile is invalid" >&2; exit 2 ;; \
+esac; \
 test "$$frontier_quota" -le "$$runtime_budget" || { echo "frontier quota exceeds runtime budget" >&2; exit 1; }; \
-printf '%s\n' "Rust effective runtime budget: $$effective_budget job(s), $$active_lanes active lane(s); D2B_RUST_BUDGET is the requested upper-bound control."; \
+printf '%s\n' "Rust effective runtime budget: $$effective_budget job(s), $$active_lanes active lane(s), $$profile profile; D2B_RUST_BUDGET is the requested upper-bound control."; \
 set +e; \
 if [ -n "$${D2B_EXECUTION_MANIFEST:-}" ]; then \
   perl tests/tools/execution-manifest.pl run \
@@ -271,6 +386,8 @@ if [ -n "$${D2B_EXECUTION_MANIFEST:-}" ]; then \
     --commit "$$(git rev-parse --verify HEAD 2>/dev/null || printf '%s' unknown)" \
     -- "$(MAKE)" --keep-going --output-sync=target --no-print-directory -j "$$active_lanes" \
       "D2B_RUST_ROOT_PREREQS=0" \
+      "D2B_RUST_PROFILE=$$profile" \
+      "D2B_RUST_COLD_PROFILE=$$cold_profile" \
       "D2B_RUST_EFFECTIVE_BUDGET=$$effective_budget" \
       "D2B_RUST_ACTIVE_LANES=$$active_lanes" \
       "D2B_RUST_QUOTA_API=$$quota_api" \
@@ -287,6 +404,8 @@ if [ -n "$${D2B_EXECUTION_MANIFEST:-}" ]; then \
 else \
   "$(MAKE)" --keep-going --output-sync=target --no-print-directory -j "$$active_lanes" \
     "D2B_RUST_ROOT_PREREQS=0" \
+    "D2B_RUST_PROFILE=$$profile" \
+    "D2B_RUST_COLD_PROFILE=$$cold_profile" \
     "D2B_RUST_EFFECTIVE_BUDGET=$$effective_budget" \
     "D2B_RUST_ACTIVE_LANES=$$active_lanes" \
     "D2B_RUST_QUOTA_API=$$quota_api" \
@@ -309,42 +428,57 @@ endef
 ## explicit for policy and inventory checks; its recipes are discovery no-ops
 ## while the recursive scheduler runs the same graph with the calculated
 ## budget. This keeps one scheduler in charge of the real leaves.
-test-rust: rust-api-surface rust-main-workspace rust-schema-reproducibility rust-inventory-and-stub rust-fixture-contracts rust-broker rust-guest-shell-runner rust-no-bash-ast rust-supply-chain
+test-rust: test-rust-leaf-api-surface test-rust-leaf-main-workspace test-rust-leaf-schema test-rust-leaf-inventory test-rust-leaf-fixture-contracts test-rust-leaf-broker test-rust-leaf-guest-shell-runner test-rust-leaf-no-bash-ast test-rust-leaf-supply-chain
 	@# D2B_EXECUTION_MANIFEST is removed by the lifecycle helper before dispatch.
 	@# The recursive scheduler invokes +$(MAKE) --keep-going --output-sync=target.
-	+@$(call D2B_RUST_DISPATCH,rust-api-surface rust-main-workspace rust-broker rust-guest-shell-runner rust-no-bash-ast rust-schema-reproducibility rust-inventory-and-stub rust-fixture-contracts rust-supply-chain)
+	+@$(call D2B_RUST_DISPATCH,test-rust-leaf-api-surface test-rust-leaf-main-workspace test-rust-leaf-broker test-rust-leaf-guest-shell-runner test-rust-leaf-no-bash-ast test-rust-leaf-schema test-rust-leaf-inventory test-rust-leaf-fixture-contracts test-rust-leaf-supply-chain,aggregate)
 
 test-rust: D2B_RUST_ROOT_PREREQS := 1
 
 ## Stable CI shard targets. Local callers should prefer make test-rust.
 test-rust-api-surface:
-	+@$(call D2B_RUST_DISPATCH,rust-api-surface)
+	+@$(call D2B_RUST_DISPATCH,test-rust-leaf-api-surface,api)
 
 test-rust-main:
-	+@$(call D2B_RUST_DISPATCH,rust-main-workspace rust-fixture-contracts)
+	+@$(call D2B_RUST_DISPATCH,$(D2B_RUST_MAIN_LEAVES),main)
 
-test-rust-remaining:
-	+@$(call D2B_RUST_DISPATCH,rust-broker rust-guest-shell-runner rust-no-bash-ast rust-schema-reproducibility rust-inventory-and-stub rust-supply-chain)
+test-rust-broker:
+	+@$(call D2B_RUST_DISPATCH,test-rust-leaf-broker,broker)
+
+test-rust-guest-shell-runner:
+	+@$(call D2B_RUST_DISPATCH,test-rust-leaf-guest-shell-runner,guest)
+
+test-rust-no-bash-ast:
+	+@$(call D2B_RUST_DISPATCH,test-rust-leaf-no-bash-ast,no-bash)
+
+test-rust-schema:
+	+@$(call D2B_RUST_DISPATCH,test-rust-leaf-schema,schema)
+
+test-rust-inventory:
+	+@$(call D2B_RUST_DISPATCH,test-rust-leaf-inventory,inventory)
+
+test-rust-supply-chain:
+	+@$(call D2B_RUST_DISPATCH,test-rust-leaf-supply-chain,supply)
 
 ## Leaf recipes are ordinary non-submake recipes. When they are seen as
 ## prerequisites of the outer test-rust declaration they intentionally do no
 ## work; the recursive child owns the real leaf dispatch.
-rust-api-surface:
+test-rust-leaf-api-surface:
 	@if [ "$(D2B_RUST_ROOT_PREREQS)" = 1 ]; then exit 0; fi; D2B_RUST_CARGO_JOBS="$(D2B_RUST_QUOTA_API)" D2B_RUST_NEXTEST_THREADS="$(D2B_RUST_QUOTA_API)" bash tests/test-rust.sh api-surface
 
-rust-main-workspace: rust-schema-reproducibility
+test-rust-leaf-main-workspace: $(D2B_RUST_MAIN_PREREQS)
 	@if [ "$(D2B_RUST_ROOT_PREREQS)" = 1 ]; then exit 0; fi; D2B_RUST_CARGO_JOBS="$(D2B_RUST_QUOTA_MAIN)" D2B_RUST_NEXTEST_THREADS="$(D2B_RUST_QUOTA_MAIN)" bash tests/test-rust.sh main-workspace
 
-rust-schema-reproducibility: rust-inventory-and-stub
+test-rust-leaf-schema: $(D2B_RUST_SCHEMA_PREREQS)
 	@if [ "$(D2B_RUST_ROOT_PREREQS)" = 1 ]; then exit 0; fi; D2B_RUST_CARGO_JOBS="$(D2B_RUST_QUOTA_SCHEMA)" D2B_RUST_NEXTEST_THREADS="$(D2B_RUST_QUOTA_SCHEMA)" bash tests/test-rust.sh schema-reproducibility
 
-rust-inventory-and-stub:
+test-rust-leaf-inventory:
 	@if [ "$(D2B_RUST_ROOT_PREREQS)" = 1 ]; then exit 0; fi; D2B_RUST_CARGO_JOBS="$(D2B_RUST_QUOTA_INVENTORY)" D2B_RUST_NEXTEST_THREADS="$(D2B_RUST_QUOTA_INVENTORY)" bash tests/test-rust.sh inventory-stub
 
 ## Fixture and CLI surfaces use a stable isolated target directory under
 ## .scratch/rust-test-cache, so their Nix and Cargo work can overlap the main
 ## workspace without sharing mutable Cargo state.
-rust-fixture-contracts:
+test-rust-leaf-fixture-contracts:
 	@if [ "$(D2B_RUST_ROOT_PREREQS)" = 1 ]; then exit 0; fi; \
 	if [ "$(D2B_SKIP_FIXTURE_BUILD)" = 1 ]; then \
 	  echo "Rust fixture/CLI surfaces skipped (D2B_SKIP_FIXTURE_BUILD=1; run the enforcing fixture lane separately)."; \
@@ -354,16 +488,16 @@ rust-fixture-contracts:
 	  echo "Rust fixture/CLI surfaces skipped (nix unavailable)."; \
 	fi
 
-rust-broker: rust-inventory-and-stub
+test-rust-leaf-broker: $(D2B_RUST_BROKER_PREREQS)
 	@if [ "$(D2B_RUST_ROOT_PREREQS)" = 1 ]; then exit 0; fi; D2B_RUST_CARGO_JOBS="$(D2B_RUST_QUOTA_BROKER)" D2B_RUST_NEXTEST_THREADS="$(D2B_RUST_QUOTA_BROKER)" bash tests/test-rust.sh broker
 
-rust-guest-shell-runner:
+test-rust-leaf-guest-shell-runner:
 	@if [ "$(D2B_RUST_ROOT_PREREQS)" = 1 ]; then exit 0; fi; D2B_RUST_CARGO_JOBS="$(D2B_RUST_QUOTA_GUEST)" D2B_RUST_NEXTEST_THREADS="$(D2B_RUST_QUOTA_GUEST)" bash tests/test-rust.sh guest-shell-runner
 
-rust-no-bash-ast:
+test-rust-leaf-no-bash-ast:
 	@if [ "$(D2B_RUST_ROOT_PREREQS)" = 1 ]; then exit 0; fi; D2B_RUST_CARGO_JOBS="$(D2B_RUST_QUOTA_AST)" D2B_RUST_NEXTEST_THREADS="$(D2B_RUST_QUOTA_AST)" bash tests/test-rust.sh no-bash-ast
 
-rust-supply-chain:
+test-rust-leaf-supply-chain:
 	@if [ "$(D2B_RUST_ROOT_PREREQS)" = 1 ]; then exit 0; fi; D2B_RUST_CARGO_JOBS="$(D2B_RUST_QUOTA_SUPPLY)" D2B_RUST_NEXTEST_THREADS="$(D2B_RUST_QUOTA_SUPPLY)" bash tests/test-rust.sh supply-chain
 
 

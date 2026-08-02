@@ -112,11 +112,11 @@ conditional fixture behavior.
 
 ### The API census shard
 
-CI splits the Rust gate into three independent jobs, `make
-test-rust-api-surface`, `make test-rust-main` and `make test-rust-remaining`,
-behind the stable required `test-rust` rollup context. `make test-rust` still
-runs all three partitions exactly once, so it stays the local command; reach
-for a partition target only to rerun the part that failed.
+CI runs eight independent Rust leaf jobs behind the stable required
+`test-rust` rollup context: API, main workspace, broker, guest shell runner,
+no-bash AST, schema, inventory and supply chain. Each focused target receives
+the full runner budget and drops local-only dependency edges, so a shard does
+not repeat another shard's work. `make test-rust` remains the local aggregate.
 
 The API census is a separate shard because it shares nothing with the
 workspace build: it renders through the separately pinned nightly toolchain in
@@ -145,6 +145,12 @@ schedulers. A passing Rust manifest retains
 the exact baseline sub-surface IDs documented in the execution-manifest
 reference; `D2B_SKIP_FIXTURE_BUILD=1` intentionally omits only the conditional
 fixture and CLI IDs.
+
+The local warm aggregate keeps that parallel profile. When its normal Cargo
+target is absent, it selects a cold profile that runs one leaf at a time with
+the full budget, reuses the workspace target for fixture/CLI work and uses one
+shared serial API census target. CI uses the same shared-target behavior, but
+dispatches each Rust leaf as its own job.
 
 `D2B_RUST_BUDGET` is the supported local Rust control. It must be a positive
 integer when set and is only a requested upper bound. The automatic budget is

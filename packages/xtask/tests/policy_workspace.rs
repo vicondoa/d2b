@@ -9,18 +9,14 @@ const EXCLUDED_WORKSPACES: &[&str] = &["d2b-priv-broker", "d2b-guest-shell-runne
 const API_SURFACE_CRATE: &str = "packages/d2b-api-surface";
 const RUST_DRIVER: &str = "tests/test-rust.sh";
 const RUST_DAG_LEAVES: &[&str] = &[
-    "rust-api-surface",
-    "rust-main-workspace",
-    "rust-broker",
-    "rust-guest-shell-runner",
-    "rust-no-bash-ast",
-    "rust-supply-chain",
+    "test-rust-leaf-api-surface",
+    "test-rust-leaf-main-workspace",
+    "test-rust-leaf-broker",
+    "test-rust-leaf-guest-shell-runner",
+    "test-rust-leaf-no-bash-ast",
+    "test-rust-leaf-supply-chain",
 ];
-const RUST_SHARED_TARGET_EDGES: &[(&str, &str)] = &[
-    ("rust-main-workspace", "rust-schema-reproducibility"),
-    ("rust-schema-reproducibility", "rust-inventory-and-stub"),
-    ("rust-broker", "rust-inventory-and-stub"),
-];
+const RUST_SHARED_TARGET_EDGES: &[(&str, &str)] = &[];
 const RUST_LEAF_MODES: &[&str] = &[
     "api-surface",
     "main-workspace",
@@ -368,6 +364,28 @@ fn rust_dag_violations(makefile: &str) -> Vec<String> {
             ));
         }
     }
+    for required in [
+        "D2B_RUST_MAIN_PREREQS_aggregate := test-rust-leaf-schema",
+        "D2B_RUST_MAIN_PREREQS_cold := test-rust-leaf-schema",
+        "D2B_RUST_MAIN_PREREQS_main :=",
+        "test-rust-leaf-main-workspace: $(D2B_RUST_MAIN_PREREQS)",
+        "D2B_RUST_SCHEMA_PREREQS_aggregate := test-rust-leaf-inventory",
+        "D2B_RUST_SCHEMA_PREREQS_cold := test-rust-leaf-inventory",
+        "D2B_RUST_SCHEMA_PREREQS_remaining := test-rust-leaf-inventory",
+        "D2B_RUST_SCHEMA_PREREQS_schema :=",
+        "test-rust-leaf-schema: $(D2B_RUST_SCHEMA_PREREQS)",
+        "D2B_RUST_BROKER_PREREQS_aggregate := test-rust-leaf-inventory",
+        "D2B_RUST_BROKER_PREREQS_cold := test-rust-leaf-inventory",
+        "D2B_RUST_BROKER_PREREQS_remaining := test-rust-leaf-inventory",
+        "D2B_RUST_BROKER_PREREQS_broker :=",
+        "test-rust-leaf-broker: $(D2B_RUST_BROKER_PREREQS)",
+    ] {
+        if !makefile.contains(required) {
+            violations.push(format!(
+                "profile-aware main-workspace dependency contract is missing `{required}`"
+            ));
+        }
+    }
     violations
 }
 
@@ -561,6 +579,50 @@ fn rust_manifest_policy_violations(makefile: &str, driver: &str) -> Vec<String> 
     }
     if !makefile.contains("D2B_SKIP_FIXTURE_BUILD") {
         violations.push("Rust aggregate lost its conditional fixture behavior".to_owned());
+    }
+    violations
+}
+
+fn rust_profile_violations(makefile: &str, driver: &str, api_driver: &str) -> Vec<String> {
+    let mut violations = Vec::new();
+    for profile in [
+        "aggregate",
+        "api",
+        "main",
+        "remaining",
+        "broker",
+        "guest",
+        "no-bash",
+        "schema",
+        "inventory",
+        "supply",
+    ] {
+        if !makefile.contains(&format!(",{profile})")) {
+            violations.push(format!(
+                "Rust Make target does not select `{profile}` profile"
+            ));
+        }
+    }
+    for required in [
+        "profile=cold",
+        "D2B_RUST_COLD_PROFILE=$$cold_profile",
+        "D2B_RUST_QUOTA_MAIN=$$quota_main",
+        "D2B_RUST_QUOTA_BROKER=$$quota_broker",
+    ] {
+        if !makefile.contains(required) {
+            violations.push(format!("Rust profile contract is missing `{required}`"));
+        }
+    }
+    if !driver.contains("${D2B_RUST_COLD_PROFILE:-0}")
+        || !driver.contains("fixture_target_dir=\"$workspace_target_dir\"")
+    {
+        violations.push("fixture target does not restore the shared CI/cold target".to_owned());
+    }
+    if !api_driver.contains("${D2B_RUST_COLD_PROFILE:-0}")
+        || !api_driver.contains("shared_census=1")
+        || !api_driver.contains("public_target=\"$target_root/census\"")
+    {
+        violations.push("API census does not restore the shared CI/cold target".to_owned());
     }
     violations
 }
@@ -779,31 +841,41 @@ fn rust_dag_orders_leaves_that_share_the_cargo_target_directory() {
 #[test]
 fn rust_dag_policy_rejects_a_missing_shared_target_edge_fixture() {
     let good = r#"
-test-rust: rust-api-surface rust-main-workspace rust-broker rust-guest-shell-runner rust-no-bash-ast rust-supply-chain
-rust-api-surface:
-rust-main-workspace: rust-schema-reproducibility
-rust-broker: rust-inventory-and-stub
-rust-guest-shell-runner:
-rust-no-bash-ast:
-rust-supply-chain:
-rust-schema-reproducibility: rust-inventory-and-stub
-rust-inventory-and-stub:
+test-rust: test-rust-leaf-api-surface test-rust-leaf-main-workspace test-rust-leaf-broker test-rust-leaf-guest-shell-runner test-rust-leaf-no-bash-ast test-rust-leaf-supply-chain
+test-rust-leaf-api-surface:
+D2B_RUST_MAIN_PREREQS_aggregate := test-rust-leaf-schema
+D2B_RUST_MAIN_PREREQS_cold := test-rust-leaf-schema
+D2B_RUST_MAIN_PREREQS_main :=
+test-rust-leaf-main-workspace: $(D2B_RUST_MAIN_PREREQS)
+D2B_RUST_BROKER_PREREQS_aggregate := test-rust-leaf-inventory
+D2B_RUST_BROKER_PREREQS_cold := test-rust-leaf-inventory
+D2B_RUST_BROKER_PREREQS_remaining := test-rust-leaf-inventory
+D2B_RUST_BROKER_PREREQS_broker :=
+test-rust-leaf-broker: $(D2B_RUST_BROKER_PREREQS)
+test-rust-leaf-guest-shell-runner:
+test-rust-leaf-no-bash-ast:
+test-rust-leaf-supply-chain:
+D2B_RUST_SCHEMA_PREREQS_aggregate := test-rust-leaf-inventory
+D2B_RUST_SCHEMA_PREREQS_cold := test-rust-leaf-inventory
+D2B_RUST_SCHEMA_PREREQS_remaining := test-rust-leaf-inventory
+D2B_RUST_SCHEMA_PREREQS_schema :=
+test-rust-leaf-schema: $(D2B_RUST_SCHEMA_PREREQS)
+test-rust-leaf-inventory:
 "#;
     assert!(
         rust_dag_violations(good).is_empty(),
         "the positive Rust DAG fixture must satisfy the policy"
     );
     let mutated = good.replace(
-        "rust-main-workspace: rust-schema-reproducibility",
-        "rust-main-workspace:",
+        "D2B_RUST_MAIN_PREREQS_aggregate := test-rust-leaf-schema",
+        "D2B_RUST_MAIN_PREREQS_aggregate :=",
     );
     let violations = rust_dag_violations(&mutated);
     assert!(
         violations
             .iter()
-            .any(|violation| violation
-                .contains("rust-main-workspace -> rust-schema-reproducibility")),
-        "removing a shared-target dependency edge must be rejected: {violations:?}"
+            .any(|violation| violation.contains("profile-aware main-workspace")),
+        "removing the aggregate-only dependency edge must be rejected: {violations:?}"
     );
 }
 
@@ -890,6 +962,60 @@ fn rust_execution_manifest_policy_rejects_negative_mutations() {
             "negative execution-manifest fixture did not reject {expected}: {violations:?}"
         );
     }
+}
+
+#[test]
+fn rust_local_ci_and_cold_profiles_are_explicit() {
+    let makefile = read_repo_file("Makefile");
+    let driver = read_repo_file(RUST_DRIVER);
+    let api_driver = read_repo_file("tests/tools/api-surface-json.sh");
+    let violations = rust_profile_violations(&makefile, &driver, &api_driver);
+    assert!(
+        violations.is_empty(),
+        "Rust local, CI, and cold profiles drifted:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn rust_profile_policy_rejects_a_missing_ci_profile() {
+    let makefile = r#"
+$(call D2B_RUST_DISPATCH,leaves,aggregate)
+$(call D2B_RUST_DISPATCH,leaves,api)
+$(call D2B_RUST_DISPATCH,leaves,main)
+$(call D2B_RUST_DISPATCH,leaves,remaining)
+$(call D2B_RUST_DISPATCH,leaves,broker)
+$(call D2B_RUST_DISPATCH,leaves,guest)
+$(call D2B_RUST_DISPATCH,leaves,no-bash)
+$(call D2B_RUST_DISPATCH,leaves,schema)
+$(call D2B_RUST_DISPATCH,leaves,inventory)
+$(call D2B_RUST_DISPATCH,leaves,supply)
+profile=cold
+D2B_RUST_COLD_PROFILE=$$cold_profile
+D2B_RUST_QUOTA_MAIN=$$quota_main
+D2B_RUST_QUOTA_BROKER=$$quota_broker
+"#;
+    let driver = r#"
+${D2B_RUST_COLD_PROFILE:-0}
+fixture_target_dir="$workspace_target_dir"
+"#;
+    let api_driver = r#"
+${D2B_RUST_COLD_PROFILE:-0}
+shared_census=1
+public_target="$target_root/census"
+"#;
+    assert!(
+        rust_profile_violations(makefile, driver, api_driver).is_empty(),
+        "positive Rust profile fixture must pass"
+    );
+    let mutated = makefile.replace(",main)", ")");
+    let violations = rust_profile_violations(&mutated, driver, api_driver);
+    assert!(
+        violations
+            .iter()
+            .any(|violation| violation.contains("`main` profile")),
+        "removing the main CI profile must fail: {violations:?}"
+    );
 }
 
 #[test]

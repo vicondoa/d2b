@@ -199,12 +199,18 @@ fixture behavior. The public and private rustdoc censuses use separate stable
 targets and overlap only when the API leaf has at least two admitted jobs,
 with split Cargo quotas bounded by that leaf's budget. The snapshot checker
 uses its release profile for the measured CPU-bound JSON pass. Budgets through
-nine admit one job per active lane; surplus jobs above nine go to the measured API
-long pole while the full nine-lane frontier remains within budget. Direct
+nine admit one job per active lane; surplus jobs above nine go to the measured
+API long pole while the full nine-lane frontier remains within budget. Direct
 `tests/test-rust.sh` calls require exactly one leaf mode and must not be used
 as an aggregate scheduler. The broker passes remain
 serial, and the main workspace, schema, and inventory leaves retain their
 dependency edges.
+
+Those dependency edges are local-profile only. CI dispatches API, main,
+broker, guest, no-bash, schema, inventory and supply-chain Make targets as
+eight separate jobs, each with the full runner budget. When a local aggregate
+starts without `packages/target`, its cold profile restores the old serial
+full-budget execution and shared workspace/API target layout.
 
 The local Rust budget control is `D2B_RUST_BUDGET`, a positive requested upper
 bound. Its automatic cap uses logical CPUs and cache-adjusted available memory,

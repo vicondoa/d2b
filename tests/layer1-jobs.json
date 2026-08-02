@@ -30,7 +30,12 @@
       "test-changelog",
       "test-rust-api-surface",
       "test-rust-main",
-      "test-rust-remaining",
+      "test-rust-broker",
+      "test-rust-guest-shell-runner",
+      "test-rust-no-bash-ast",
+      "test-rust-schema",
+      "test-rust-inventory",
+      "test-rust-supply-chain",
       "test-rust",
       "test-fixture-contracts",
       "test-proofs",
@@ -143,14 +148,79 @@
       "timeoutMinutes": 60,
       "runsOn": "ubuntu-latest"
     },
-    "test-rust-remaining": {
-      "displayName": "Rust remaining suites gate",
-      "makeTarget": "test-rust-remaining",
+    "test-rust-broker": {
+      "displayName": "Rust broker workspace gate",
+      "makeTarget": "test-rust-broker",
       "localEnv": {
         "D2B_SKIP_FIXTURE_BUILD": "1"
       },
       "ciKind": "rust",
-      "ciJobId": "test-rust-remaining",
+      "ciJobId": "test-rust-broker",
+      "ciOnly": true,
+      "needs": ["tier0"],
+      "timeoutMinutes": 60,
+      "runsOn": "ubuntu-latest"
+    },
+    "test-rust-guest-shell-runner": {
+      "displayName": "Rust guest shell runner gate",
+      "makeTarget": "test-rust-guest-shell-runner",
+      "localEnv": {
+        "D2B_SKIP_FIXTURE_BUILD": "1"
+      },
+      "ciKind": "rust",
+      "ciJobId": "test-rust-guest-shell-runner",
+      "ciOnly": true,
+      "needs": ["tier0"],
+      "timeoutMinutes": 60,
+      "runsOn": "ubuntu-latest"
+    },
+    "test-rust-no-bash-ast": {
+      "displayName": "Rust no-bash AST gate",
+      "makeTarget": "test-rust-no-bash-ast",
+      "localEnv": {
+        "D2B_SKIP_FIXTURE_BUILD": "1"
+      },
+      "ciKind": "rust",
+      "ciJobId": "test-rust-no-bash-ast",
+      "ciOnly": true,
+      "needs": ["tier0"],
+      "timeoutMinutes": 60,
+      "runsOn": "ubuntu-latest"
+    },
+    "test-rust-schema": {
+      "displayName": "Rust schema reproducibility gate",
+      "makeTarget": "test-rust-schema",
+      "localEnv": {
+        "D2B_SKIP_FIXTURE_BUILD": "1"
+      },
+      "ciKind": "rust",
+      "ciJobId": "test-rust-schema",
+      "ciOnly": true,
+      "needs": ["tier0"],
+      "timeoutMinutes": 60,
+      "runsOn": "ubuntu-latest"
+    },
+    "test-rust-inventory": {
+      "displayName": "Rust test inventory gate",
+      "makeTarget": "test-rust-inventory",
+      "localEnv": {
+        "D2B_SKIP_FIXTURE_BUILD": "1"
+      },
+      "ciKind": "rust",
+      "ciJobId": "test-rust-inventory",
+      "ciOnly": true,
+      "needs": ["tier0"],
+      "timeoutMinutes": 60,
+      "runsOn": "ubuntu-latest"
+    },
+    "test-rust-supply-chain": {
+      "displayName": "Rust supply-chain gate",
+      "makeTarget": "test-rust-supply-chain",
+      "localEnv": {
+        "D2B_SKIP_FIXTURE_BUILD": "1"
+      },
+      "ciKind": "rust",
+      "ciJobId": "test-rust-supply-chain",
       "ciOnly": true,
       "needs": ["tier0"],
       "timeoutMinutes": 60,
@@ -164,7 +234,16 @@
       },
       "ciKind": "rust-rollup",
       "ciJobId": "test-rust",
-      "needs": ["test-rust-api-surface", "test-rust-main", "test-rust-remaining"],
+      "needs": [
+        "test-rust-api-surface",
+        "test-rust-main",
+        "test-rust-broker",
+        "test-rust-guest-shell-runner",
+        "test-rust-no-bash-ast",
+        "test-rust-schema",
+        "test-rust-inventory",
+        "test-rust-supply-chain"
+      ],
       "timeoutMinutes": 5,
       "runsOn": "ubuntu-latest"
     },

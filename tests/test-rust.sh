@@ -147,7 +147,12 @@ fi
 export pinned_channel
 
 workspace_target_dir=$(d2b_cargo_target_dir workspace)
-fixture_target_dir="$ROOT/.scratch/rust-test-cache/fixture-contracts"
+if [ -n "${CI:-}" ] || [ -n "${GITHUB_ACTIONS:-}" ] \
+  || [ "${D2B_RUST_COLD_PROFILE:-0}" = 1 ]; then
+  fixture_target_dir="$workspace_target_dir"
+else
+  fixture_target_dir="$ROOT/.scratch/rust-test-cache/fixture-contracts"
+fi
 # Separate target dirs for the broker's three concurrent feature passes so they
 # don't lock-contend. They are DETERMINISTIC siblings of the broker target dir
 # (not mktemp): sccache hashes the inherited CARGO_* environment, including
