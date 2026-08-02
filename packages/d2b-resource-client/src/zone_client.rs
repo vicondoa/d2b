@@ -5,13 +5,19 @@
 //! This keeps peer identity pinning explicit without importing socket paths or
 //! file descriptors into the public client API.
 
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::{fmt, future::Future};
 
+use d2b_contracts::v3::RetryClass;
 use d2b_contracts::v3::{CanonicalJsonObject, ResourceRef, ZoneId};
 
 use crate::{
-    CallDriver, CallOptions, ClientError, MethodProfile, ResolvedTarget, ResourceClient,
-    SystemClock, TargetInput, TargetResolver, TransportSelection, WallClock, ZoneServiceKind,
+    AttemptDisposition, CallDriver, CallOptions, ClientError, MethodProfile, ResolvedTarget,
+    ResourceClient, SessionFailure, SystemClock, TargetInput, TargetResolver, TransportSelection,
+    WallClock, ZoneServiceKind,
 };
 
 /// The closed v3 Resource verb table.
@@ -97,6 +103,14 @@ impl ZoneSocketConnector {
     pub const fn expected_uid(self) -> u32 {
         self.expected_uid
     }
+
+    /// Return the endpoint identity pinned for the local Zone runtime.
+    ///
+    /// The returned value is still only transport evidence; it is not a
+    /// caller-selectable subject or authorization grant.
+    pub const fn local_daemon_endpoint_identity(self) -> ZonePeerIdentity {
+        ZonePeerIdentity::from_observed_uid(self.expected_uid)
+    }
 }
 
 /// One authenticated Zone session supplied by a connector.
@@ -108,6 +122,86 @@ pub trait ConnectedZoneSession: Send + Sync {
         target: Option<ResourceRef>,
         payload: CanonicalJsonObject,
     ) -> impl Future<Output = Result<CanonicalJsonObject, ClientError>> + Send;
+}
+
+/// A named Resource Watch stream supplied by the authenticated session.
+pub trait ResourceWatchTransport: Send + Sync {
+    /// Receive one bounded canonical event, or `None` after terminal close.
+    fn receive_watch_event(
+        &self,
+    ) -> impl Future<Output = Result<Option<CanonicalJsonObject>, ClientError>> + Send;
+
+    /// Close the server stream and release its session credits.
+    fn close_watch(&self) -> impl Future<Output = Result<(), ClientError>> + Send;
+}
+
+/// Client-side ownership of one Resource Watch stream.
+///
+/// Closing is idempotent. Dropping the wrapper cannot perform async I/O, so
+/// callers must call [`ResourceWatch::close`] when they stop consuming; the
+/// closed flag makes repeated teardown safe during cancellation races.
+pub struct ResourceWatch<S> {
+    transport: S,
+    closed: Arc<AtomicBool>,
+}
+
+impl<S> ResourceWatch<S> {
+    /// Bind a transport-owned named Watch stream.
+    pub fn new(transport: S) -> Self {
+        Self {
+            transport,
+            closed: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// Borrow the underlying stream adapter.
+    pub const fn transport(&self) -> &S {
+        &self.transport
+    }
+
+    /// Whether close has been requested.
+    pub fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::Acquire)
+    }
+}
+
+impl<S> fmt::Debug for ResourceWatch<S> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ResourceWatch")
+            .field("closed", &self.is_closed())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<S> ResourceWatch<S>
+where
+    S: ResourceWatchTransport,
+{
+    /// Receive one Watch event.
+    pub async fn next(&self) -> Result<Option<CanonicalJsonObject>, ClientError> {
+        if self.is_closed() {
+            return Ok(None);
+        }
+        let event = self.transport.receive_watch_event().await?;
+        if event.is_none() {
+            self.closed.store(true, Ordering::Release);
+        }
+        Ok(event)
+    }
+
+    /// Close the Watch stream exactly once.
+    pub async fn close(&self) -> Result<(), ClientError> {
+        if self
+            .closed
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            self.transport.close_watch().await
+        } else {
+            Ok(())
+        }
+    }
 }
 
 /// A ResourceClient facade that also binds a typed session connector.
@@ -183,6 +277,94 @@ where
             .resource
             .prepare_call(&resolved, profile, options, has_attachments)?;
         Ok((resolved, driver))
+    }
+
+    /// Execute one typed Resource call over an already-authenticated Zone
+    /// session, applying the bounded retry and cancellation policy.
+    pub async fn call_resource(
+        &self,
+        session: &C,
+        target: &TargetInput,
+        verb: ResourceVerb,
+        options: CallOptions,
+        selection: TransportSelection,
+        payload: CanonicalJsonObject,
+        has_attachments: bool,
+        cancellation: &crate::CancellationToken,
+    ) -> Result<CanonicalJsonObject, ClientError>
+    where
+        C: ConnectedZoneSession,
+    {
+        let (_resolved, mut driver) =
+            self.prepare_resource_call(target, verb, options, selection, has_attachments)?;
+        let resource_target = target_resource_ref(target);
+        loop {
+            let _attempt = driver.begin_attempt(cancellation)?;
+            match session
+                .call(verb, resource_target.clone(), payload.clone())
+                .await
+            {
+                Ok(response) => return Ok(response),
+                Err(error) => {
+                    let disposition = match error {
+                        ClientError::SessionLost => {
+                            driver.record_session_failure(SessionFailure::Disconnected)
+                        }
+                        ClientError::TransportFailed => {
+                            driver.record_session_failure(SessionFailure::Retryable)
+                        }
+                        ClientError::DeadlineExpired => {
+                            driver.record_session_failure(SessionFailure::Deadline)
+                        }
+                        ClientError::Cancelled => {
+                            driver.record_session_failure(SessionFailure::Cancelled)
+                        }
+                        ClientError::ContractViolation => {
+                            driver.record_session_failure(SessionFailure::Protocol)
+                        }
+                        ClientError::Remote {
+                            retry: RetryClass::Immediate,
+                            ..
+                        } => driver.record_session_failure(SessionFailure::Retryable),
+                        other => AttemptDisposition::Fail(other),
+                    };
+                    match disposition {
+                        AttemptDisposition::RetryNow => continue,
+                        AttemptDisposition::RetryAfterMs(delay) => {
+                            tokio::time::sleep(std::time::Duration::from_millis(u64::from(delay)))
+                                .await;
+                            continue;
+                        }
+                        AttemptDisposition::Fail(error) => return Err(error),
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn target_resource_ref(target: &TargetInput) -> Option<ResourceRef> {
+    match target {
+        TargetInput::Guest { guest, .. } => Some(ResourceRef::new(
+            d2b_contracts::v3::ResourceTypeName::parse("Guest").ok()?,
+            guest.clone(),
+        )),
+        TargetInput::Provider { provider, .. } => Some(ResourceRef::new(
+            d2b_contracts::v3::ResourceTypeName::parse("Provider").ok()?,
+            provider.clone(),
+        )),
+        TargetInput::Service { owner, .. } => match owner {
+            crate::ServiceOwner::Guest { guest, .. } => Some(ResourceRef::new(
+                d2b_contracts::v3::ResourceTypeName::parse("Guest").ok()?,
+                guest.clone(),
+            )),
+            crate::ServiceOwner::Provider { provider, .. } => Some(ResourceRef::new(
+                d2b_contracts::v3::ResourceTypeName::parse("Provider").ok()?,
+                provider.clone(),
+            )),
+            _ => None,
+        },
+        _ => None,
     }
 }
 

@@ -28,8 +28,8 @@
 //!   or effect. Authorization stays with ComponentSession admission and the
 //!   Zone RBAC binding.
 //! - It imports no daemon, broker, Zone-store, Nix-emitter, or Provider
-//!   implementation internals. Its only dependency is the shared v3
-//!   contract catalog.
+//!   implementation internals. It depends only on the shared v3 contract
+//!   catalog and the transport-agnostic ComponentSession driver.
 //!
 //! No file descriptor, numeric UID or GID, device node, store path, socket
 //! path, or host path appears in any type here. A bootstrap binding names a
@@ -51,7 +51,7 @@ pub mod testing;
 
 pub use agent::{
     GeneratedProviderServiceServer, ProviderAgentAdapter, ProviderAgentProcess, ProviderService,
-    validate_attachment_indexes,
+    ProviderFrameCodec, ProviderRequest, validate_attachment_indexes,
 };
 pub use audit::{
     DEFAULT_AUDIT_CAPACITY, ProviderAgentAuditEvent, ProviderAgentAuditLog,

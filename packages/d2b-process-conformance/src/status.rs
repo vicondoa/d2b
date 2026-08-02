@@ -97,8 +97,10 @@ pub enum AdoptionCondition {
 #[serde(rename_all = "camelCase")]
 pub struct ProcessStatusReport {
     /// The Process Provider implementation that owns this process.
+    #[serde(rename = "providerImplementation")]
     pub provider: BoundedToken,
     /// The opaque stable process identity.
+    #[serde(rename = "processIdentityDigest")]
     pub identity: ProcessIdentityDigest,
     /// Who calls `wait` and reaps.
     pub wait_reap_owner: WaitReapOwner,
@@ -138,6 +140,8 @@ impl Serialize for CompiledDigests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::identity::{ConfigurationDigest, ProcessIdentityDigest, WaitReapOwner};
+    use crate::testing::fixtures;
 
     #[test]
     fn exit_observations_never_encode_a_signal_in_the_exit_code() {
@@ -152,5 +156,30 @@ mod tests {
         assert_eq!(ExitObservation::from_exit_code(3).class, ExitClass::Failure);
         let rendered = serde_json::to_string(&ExitObservation::signaled()).unwrap();
         assert!(!rendered.contains("exitCode"));
+    }
+
+    #[test]
+    fn process_status_uses_the_v3_common_field_names() {
+        let ticket = fixtures::ticket_builder().build().unwrap();
+        let report = ProcessStatusReport {
+            provider: ticket.selected_provider().clone(),
+            identity: ProcessIdentityDigest::from_bytes([1; 32]),
+            wait_reap_owner: WaitReapOwner::Local,
+            execution_ref: ticket.execution_ref().clone(),
+            domain: ticket.domain(),
+            user_ref: None,
+            digests: *ticket.digests(),
+            phase: ProcessPhaseClass::Running,
+            last_exit: None,
+            adoption: AdoptionCondition::NotApplicable,
+        };
+        let value = serde_json::to_value(report).unwrap();
+        assert!(value.get("providerImplementation").is_some());
+        assert!(value.get("processIdentityDigest").is_some());
+        assert_eq!(value["waitReapOwner"], "d2b");
+        assert_eq!(
+            value["digests"]["sandbox"],
+            serde_json::json!(ConfigurationDigest::from_bytes([1; 32]).to_hex())
+        );
     }
 }

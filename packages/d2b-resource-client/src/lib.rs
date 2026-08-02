@@ -58,6 +58,6 @@ pub use target::{
     TransportKind, TransportSelection, ZoneServiceKind,
 };
 pub use zone_client::{
-    ConnectedZoneSession, LocalZoneSession, ResourceVerb, ZoneClient, ZonePeerIdentity,
-    ZoneSocketConnector,
+    ConnectedZoneSession, LocalZoneSession, ResourceVerb, ResourceWatch, ResourceWatchTransport,
+    ZoneClient, ZonePeerIdentity, ZoneSocketConnector,
 };

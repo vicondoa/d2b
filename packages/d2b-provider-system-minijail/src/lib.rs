@@ -36,7 +36,7 @@ use d2b_contracts::v3::execution_policy::{BoundedToken, ExecutionDomain};
 use d2b_process_conformance::{
     AdoptionCondition, AdoptionOutcome, CancellationBinding, IdentityBinding, LaunchTicket,
     ProcessConformanceError, ProcessIdentityDigest, ProcessLaunchEffectPort, ProcessPhaseClass,
-    ProcessProvider, ProcessProviderProfile, ProcessStatusReport, WaitReapOwner,
+    ProcessProvider, ProcessProviderProfile, ProcessStatusReport, StopClass, WaitReapOwner,
 };
 
 /// The Provider name this controller implements.
@@ -142,12 +142,7 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for MinijailProcessProvider<P> 
         if launched.wait_reap_owner != WaitReapOwner::Local {
             return Err(ProcessConformanceError::WaitOwnerMismatch);
         }
-        if !launched
-            .observed
-            .covers(self.profile.required_identity_bindings())
-        {
-            return Err(ProcessConformanceError::IdentityUnverified);
-        }
+        launched.validate(self.profile.required_identity_bindings())?;
         Ok(self.report(
             ticket,
             launched.identity,
@@ -166,8 +161,8 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for MinijailProcessProvider<P> 
         };
         let identity_ok = candidate.wait_reap_owner == WaitReapOwner::Local
             && candidate
-                .observed
-                .covers(self.profile.required_identity_bindings());
+                .validate(self.profile.required_identity_bindings())
+                .is_ok();
         if !identity_ok {
             return Ok(AdoptionOutcome::Quarantined(self.report(
                 ticket,
@@ -183,5 +178,13 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for MinijailProcessProvider<P> 
             ProcessPhaseClass::Running,
             AdoptionCondition::Adopted,
         )))
+    }
+
+    async fn stop(
+        &self,
+        identity: &ProcessIdentityDigest,
+        class: StopClass,
+    ) -> Result<(), ProcessConformanceError> {
+        self.port.stop(identity, class).await
     }
 }

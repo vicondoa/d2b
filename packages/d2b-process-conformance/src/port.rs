@@ -29,6 +29,22 @@ pub struct LaunchedProcess {
     pub wait_reap_owner: WaitReapOwner,
 }
 
+impl LaunchedProcess {
+    /// Validate the effect adapter's launch evidence.
+    pub fn validate(
+        &self,
+        required: &std::collections::BTreeSet<crate::identity::IdentityBinding>,
+    ) -> Result<(), ProcessConformanceError> {
+        if self.identity.is_zero() {
+            return Err(ProcessConformanceError::IdentityUnverified);
+        }
+        if !self.observed.covers(required) {
+            return Err(ProcessConformanceError::IdentityUnverified);
+        }
+        Ok(())
+    }
+}
+
 /// A process the adapter found still running for this ticket, before any
 /// pidfd is opened for it.
 ///
@@ -43,6 +59,22 @@ pub struct AdoptionCandidate {
     pub observed: ObservedIdentity,
     /// Who owns `wait` and reap for the candidate.
     pub wait_reap_owner: WaitReapOwner,
+}
+
+impl AdoptionCandidate {
+    /// Validate the candidate before a pidfd may be opened.
+    pub fn validate(
+        &self,
+        required: &std::collections::BTreeSet<crate::identity::IdentityBinding>,
+    ) -> Result<(), ProcessConformanceError> {
+        if self.identity.is_zero() {
+            return Err(ProcessConformanceError::IdentityUnverified);
+        }
+        if !self.observed.covers(required) {
+            return Err(ProcessConformanceError::IdentityUnverified);
+        }
+        Ok(())
+    }
 }
 
 /// How a stop request is delivered.

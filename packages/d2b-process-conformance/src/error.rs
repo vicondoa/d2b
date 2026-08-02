@@ -44,6 +44,8 @@ pub enum ProcessConformanceError {
     PlatformGateRejected,
     /// The launch operation was cancelled before the effect boundary.
     Cancelled,
+    /// The provider-specific stop effect was not available.
+    StopUnavailable,
 }
 
 impl ProcessConformanceError {
@@ -66,11 +68,12 @@ impl ProcessConformanceError {
             Self::StopProofMissing => "stop-proof-missing",
             Self::PlatformGateRejected => "platform-gate-rejected",
             Self::Cancelled => "cancelled",
+            Self::StopUnavailable => "stop-unavailable",
         }
     }
 
     /// The complete closed code set, for conformance assertions.
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 17] = [
         Self::InvalidTicket,
         Self::DomainNotSupported,
         Self::UserRefRequired,
@@ -87,6 +90,7 @@ impl ProcessConformanceError {
         Self::StopProofMissing,
         Self::PlatformGateRejected,
         Self::Cancelled,
+        Self::StopUnavailable,
     ];
 }
 

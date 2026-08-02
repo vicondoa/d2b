@@ -6,7 +6,7 @@
 //! policy cannot be replayed under a different local Zone name.
 
 use d2b_contracts::v3::{
-    ZoneId,
+    ResourceRef, ZoneId,
     component_session::{EndpointPolicyIdentity, LimitProfile},
     resource_schema::canonical_digest,
     zone_session,
@@ -31,13 +31,35 @@ pub use zone_session::{
 #[derive(Clone, PartialEq, Eq)]
 pub struct ZoneBoundPolicyIdentity {
     zone: ZoneId,
+    provider_ref: Option<ResourceRef>,
     policy: EndpointPolicyIdentity,
 }
 
 impl ZoneBoundPolicyIdentity {
     /// Construct a Zone-bound identity.
     pub fn new(zone: ZoneId, policy: EndpointPolicyIdentity) -> Self {
-        Self { zone, policy }
+        Self {
+            zone,
+            provider_ref: None,
+            policy,
+        }
+    }
+
+    /// Construct an identity additionally bound to one authenticated
+    /// Provider resource.
+    pub fn with_provider(
+        zone: ZoneId,
+        provider_ref: ResourceRef,
+        policy: EndpointPolicyIdentity,
+    ) -> Result<Self, &'static str> {
+        if provider_ref.resource_type().as_str() != "Provider" {
+            return Err("provider identity must name Provider");
+        }
+        Ok(Self {
+            zone,
+            provider_ref: Some(provider_ref),
+            policy,
+        })
     }
 
     /// Borrow the Zone identity.
@@ -50,12 +72,27 @@ impl ZoneBoundPolicyIdentity {
         &self.policy
     }
 
+    /// Borrow the optional Provider identity bound into this fingerprint.
+    pub const fn provider_ref(&self) -> Option<&ResourceRef> {
+        self.provider_ref.as_ref()
+    }
+
     /// Render the stable digest used in local policy comparison.
     pub fn digest(&self) -> Result<String, d2b_contracts::v3::component_session::BinaryError> {
         let encoded = self.policy.encode_canonical()?;
-        let mut bytes = Vec::with_capacity(self.zone.as_str().len() + encoded.len() + 1);
+        let provider = self
+            .provider_ref
+            .as_ref()
+            .map(ResourceRef::to_canonical_string);
+        let provider_len = provider.as_ref().map_or(0, String::len);
+        let mut bytes =
+            Vec::with_capacity(self.zone.as_str().len() + provider_len + encoded.len() + 2);
         bytes.extend_from_slice(self.zone.as_str().as_bytes());
         bytes.push(0);
+        if let Some(provider) = provider {
+            bytes.extend_from_slice(provider.as_bytes());
+            bytes.push(0);
+        }
         bytes.extend_from_slice(&encoded);
         Ok(canonical_digest("d2b:v3:zone-policy-identity", &bytes))
     }
@@ -124,5 +161,27 @@ mod tests {
         let second = ZoneBoundPolicyIdentity::new(ZoneId::parse("prod").unwrap(), identity());
         assert_ne!(first.digest().unwrap(), second.digest().unwrap());
         assert_eq!(format!("{first:?}"), "ZoneBoundPolicyIdentity(<redacted>)");
+    }
+
+    #[test]
+    fn provider_binding_changes_the_zone_policy_identity() {
+        let zone = ZoneId::parse("dev").unwrap();
+        let plain = ZoneBoundPolicyIdentity::new(zone.clone(), identity());
+        let bound = ZoneBoundPolicyIdentity::with_provider(
+            zone,
+            ResourceRef::parse("Provider/system-core").unwrap(),
+            identity(),
+        )
+        .unwrap();
+        assert_ne!(plain.digest().unwrap(), bound.digest().unwrap());
+        assert_eq!(
+            ZoneBoundPolicyIdentity::with_provider(
+                ZoneId::parse("dev").unwrap(),
+                ResourceRef::parse("User/alice").unwrap(),
+                identity(),
+            )
+            .unwrap_err(),
+            "provider identity must name Provider"
+        );
     }
 }

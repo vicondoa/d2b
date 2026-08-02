@@ -77,6 +77,26 @@ impl DedupKey {
     pub const fn principal(&self) -> &ResourceRef {
         &self.authenticated_principal
     }
+
+    /// Borrow the addressed ResourceType.
+    pub const fn resource_type(&self) -> &ResourceTypeName {
+        &self.resource_type
+    }
+
+    /// Borrow the optional addressed Resource name.
+    pub const fn resource_name(&self) -> Option<&ResourceName> {
+        self.resource_name.as_ref()
+    }
+
+    /// Return the mutation verb in this namespace.
+    pub const fn verb(&self) -> MutationVerb {
+        self.verb
+    }
+
+    /// Borrow the opaque idempotency key.
+    pub const fn idempotency_key(&self) -> &BoundedToken {
+        &self.idempotency_key
+    }
 }
 
 impl fmt::Debug for DedupKey {
@@ -103,6 +123,8 @@ pub enum DedupDecision {
         operation_id: ResourceUid,
         result: String,
     },
+    /// The same request is still executing under the original operation ID.
+    InFlight { operation_id: ResourceUid },
     /// The key is already bound to a different request or principal.
     Conflict,
     /// The key remains in its no-reuse tombstone period.
@@ -124,9 +146,15 @@ impl fmt::Debug for ZoneOperationRouter {
 impl ZoneOperationRouter {
     /// Build a router at the frozen row ceiling.
     pub fn new() -> Self {
+        Self::with_capacity(MAX_IDEMPOTENCY_ROWS)
+    }
+
+    /// Build a router with a test or Zone-policy capacity no larger than the
+    /// frozen maximum.
+    pub fn with_capacity(max_rows: usize) -> Self {
         Self {
             rows: Mutex::new(BTreeMap::new()),
-            max_rows: MAX_IDEMPOTENCY_ROWS,
+            max_rows: max_rows.min(MAX_IDEMPOTENCY_ROWS),
         }
     }
 
@@ -163,9 +191,8 @@ impl ZoneOperationRouter {
                     result: result.clone(),
                 });
             }
-            return Ok(DedupDecision::Replay {
+            return Ok(DedupDecision::InFlight {
                 operation_id: existing.operation_id.clone(),
-                result: String::new(),
             });
         }
         if rows.len() >= self.max_rows {
@@ -195,6 +222,9 @@ impl ZoneOperationRouter {
         let row = rows.get_mut(key).ok_or(RouterError::UnknownOperation)?;
         if &row.operation_id != operation_id {
             return Err(RouterError::OperationMismatch);
+        }
+        if row.result.is_some() {
+            return Err(RouterError::AlreadyComplete);
         }
         row.result = Some(result.into());
         Ok(())
@@ -251,7 +281,10 @@ impl DurableExecTable {
             return Err(RouterError::WrongExecutionType);
         }
         let mut rows = self.rows.lock().map_err(|_| RouterError::Poisoned)?;
-        if rows.len() >= self.capacity || rows.contains_key(&operation_id) {
+        if rows.contains_key(&operation_id) {
+            return Err(RouterError::DuplicateOperation);
+        }
+        if rows.len() >= self.capacity {
             return Err(RouterError::Capacity);
         }
         rows.insert(operation_id, process_ref);
@@ -300,6 +333,10 @@ pub enum RouterError {
     UnknownOperation,
     /// Operation ID did not match the row.
     OperationMismatch,
+    /// A completed operation cannot be completed a second time.
+    AlreadyComplete,
+    /// An operation ID is already present in the execution table.
+    DuplicateOperation,
     /// The execution table received a non-EphemeralProcess ref.
     WrongExecutionType,
     /// The internal mutex was poisoned.
@@ -315,6 +352,8 @@ impl fmt::Display for RouterError {
             Self::Capacity => "zone-router-capacity-exceeded",
             Self::UnknownOperation => "zone-router-operation-unknown",
             Self::OperationMismatch => "zone-router-operation-mismatch",
+            Self::AlreadyComplete => "zone-router-operation-already-complete",
+            Self::DuplicateOperation => "zone-router-operation-duplicate",
             Self::WrongExecutionType => "zone-router-execution-type-invalid",
             Self::Poisoned => "zone-router-state-poisoned",
         })
@@ -373,6 +412,40 @@ mod tests {
                 .begin(key(), "digest-b", operation(), 2, 100)
                 .unwrap(),
             DedupDecision::Conflict
+        );
+    }
+
+    #[test]
+    fn same_key_while_running_does_not_start_a_second_effect() {
+        let router = ZoneOperationRouter::new();
+        let operation = operation();
+        assert_eq!(
+            router
+                .begin(key(), "digest-a", operation.clone(), 1, 100)
+                .unwrap(),
+            DedupDecision::New(operation.clone())
+        );
+        assert_eq!(
+            router
+                .begin(key(), "digest-a", operation.clone(), 2, 100)
+                .unwrap(),
+            DedupDecision::InFlight {
+                operation_id: operation
+            }
+        );
+    }
+
+    #[test]
+    fn completion_is_exactly_once() {
+        let router = ZoneOperationRouter::new();
+        let operation = operation();
+        router
+            .begin(key(), "digest-a", operation.clone(), 1, 100)
+            .unwrap();
+        router.complete(&key(), &operation, "ok").unwrap();
+        assert_eq!(
+            router.complete(&key(), &operation, "again"),
+            Err(RouterError::AlreadyComplete)
         );
     }
 

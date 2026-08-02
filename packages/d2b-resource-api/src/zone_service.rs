@@ -4,9 +4,12 @@
 //! boundary.  It consumes the already-authenticated subject capability and
 //! never accepts a principal or Zone name from a request payload.
 
-use std::{fmt, future::Future};
+use std::{fmt, future::Future, str::FromStr};
 
-use d2b_contracts::v3::{CanonicalJsonObject, ResourceRef, ZoneId};
+use d2b_contracts::v3::{
+    CanonicalJsonObject, MAX_REQUEST_CANONICAL_BYTES, MAX_RESPONSE_CANONICAL_BYTES, ResourceRef,
+    ZoneId,
+};
 
 use crate::AuthenticatedSubjectContext;
 
@@ -17,6 +20,10 @@ pub enum ZoneServiceError {
     InvalidRequest,
     /// The authenticated subject cannot call this Zone.
     AuthorizationDenied,
+    /// The request or response exceeded the canonical carrier bound.
+    PayloadTooLarge,
+    /// The handler did not complete inside the authenticated deadline.
+    DeadlineExceeded,
 }
 
 impl fmt::Display for ZoneServiceError {
@@ -24,6 +31,8 @@ impl fmt::Display for ZoneServiceError {
         formatter.write_str(match self {
             Self::InvalidRequest => "zone-service-request-invalid",
             Self::AuthorizationDenied => "zone-service-authorization-denied",
+            Self::PayloadTooLarge => "zone-service-payload-too-large",
+            Self::DeadlineExceeded => "zone-service-deadline-exceeded",
         })
     }
 }
@@ -77,6 +86,22 @@ impl ZoneMethod {
         Self::ResourceDelete,
         Self::BusAttach,
     ];
+
+    /// Parse the canonical wire method name.
+    pub fn parse(value: &str) -> Result<Self, ZoneServiceError> {
+        Self::ALL
+            .into_iter()
+            .find(|method| method.as_str() == value)
+            .ok_or(ZoneServiceError::InvalidRequest)
+    }
+}
+
+impl FromStr for ZoneMethod {
+    type Err = ZoneServiceError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::parse(value)
+    }
 }
 
 /// Trusted call context derived from authenticated session evidence.
@@ -141,11 +166,19 @@ pub trait StrictWireMessage: Sized {
 
 impl StrictWireMessage for CanonicalJsonObject {
     fn decode_strict(payload: &[u8]) -> Result<Self, ZoneServiceError> {
+        if payload.len() > MAX_REQUEST_CANONICAL_BYTES {
+            return Err(ZoneServiceError::PayloadTooLarge);
+        }
         Self::parse(payload).map_err(|_| ZoneServiceError::InvalidRequest)
     }
 
     fn encode_strict(&self) -> Result<Vec<u8>, ZoneServiceError> {
-        Ok(self.to_canonical_bytes())
+        let bytes = self.to_canonical_bytes();
+        if bytes.len() > MAX_RESPONSE_CANONICAL_BYTES {
+            Err(ZoneServiceError::PayloadTooLarge)
+        } else {
+            Ok(bytes)
+        }
     }
 }
 
@@ -189,7 +222,12 @@ where
         payload: &[u8],
     ) -> Result<Vec<u8>, ZoneServiceError> {
         let payload = CanonicalJsonObject::decode_strict(payload)?;
-        let response = self.handler.dispatch(context, method, payload).await?;
+        let response = tokio::time::timeout(
+            std::time::Duration::from_millis(context.deadline_ms()),
+            self.handler.dispatch(context, method, payload),
+        )
+        .await
+        .map_err(|_| ZoneServiceError::DeadlineExceeded)??;
         response.encode_strict()
     }
 }
