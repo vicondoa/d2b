@@ -13,9 +13,8 @@ pub fn validate_candidate(
 ) -> Result<(), ProcessConformanceError> {
     if ticket.selected_provider().as_str() != PROVIDER_NAME
         || candidate.wait_reap_owner != d2b_process_conformance::WaitReapOwner::ServiceManager
-        || !candidate
-            .observed
-            .covers(&std::collections::BTreeSet::from([
+        || candidate
+            .validate(&std::collections::BTreeSet::from([
                 IdentityBinding::UnitInvocationId,
                 IdentityBinding::Cgroup,
                 IdentityBinding::UnitMainPid,
@@ -23,6 +22,7 @@ pub fn validate_candidate(
                 IdentityBinding::Template,
                 IdentityBinding::Generation,
             ]))
+            .is_err()
     {
         Err(ProcessConformanceError::IdentityUnverified)
     } else {

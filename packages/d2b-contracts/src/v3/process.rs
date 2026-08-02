@@ -12,6 +12,8 @@
 //! plain bounded ID resolved by the owning semantic Provider, not a
 //! ResourceRef.
 
+use std::collections::BTreeSet;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -689,6 +691,17 @@ impl ExecutionSpec {
         if mounts.len() > MAX_MOUNTS || device_usage.len() > MAX_DEVICE_USAGES {
             return Err(PrimitiveSpecError::TooManyEntries);
         }
+        let mount_paths: BTreeSet<_> = mounts.iter().map(MountSpec::mount_path).collect();
+        if mount_paths.len() != mounts.len() {
+            return Err(PrimitiveSpecError::DuplicateEntry);
+        }
+        let device_refs: BTreeSet<_> = device_usage
+            .iter()
+            .map(DeviceUsageSpec::device_ref)
+            .collect();
+        if device_refs.len() != device_usage.len() {
+            return Err(PrimitiveSpecError::DuplicateEntry);
+        }
         if domain == Some(ExecutionDomain::User) && sandbox.start_root() {
             return Err(PrimitiveSpecError::ConflictingFields);
         }
@@ -801,7 +814,7 @@ impl ExecutionSpec {
 redacted_debug!(ExecutionSpec);
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ExecutionWire {
     execution_ref: ResourceRef,
     #[serde(default)]
@@ -1710,6 +1723,47 @@ mod tests {
                 true,
             ),
             Err(PrimitiveSpecError::InvalidPath)
+        );
+    }
+
+    #[test]
+    fn direct_execution_spec_rejects_unknown_fields_and_duplicate_mounts() {
+        let unknown = br#"{"executionRef":"Host/host-system","processClass":"worker","template":"t","unknown":true}"#;
+        assert!(serde_json::from_slice::<ExecutionSpec>(unknown).is_err());
+
+        let first = MountSpec::new(
+            ResourceRef::parse("Volume/state").unwrap(),
+            BoundedToken::parse("state").unwrap(),
+            "/state",
+            MountAccess::ReadOnly,
+            true,
+        )
+        .unwrap();
+        let second = MountSpec::new(
+            ResourceRef::parse("Volume/other").unwrap(),
+            BoundedToken::parse("state").unwrap(),
+            "/state",
+            MountAccess::ReadOnly,
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            ExecutionSpec::new(
+                ResourceRef::parse("Host/host-system").unwrap(),
+                None,
+                None,
+                ProcessClass::Worker,
+                BoundedToken::parse("t").unwrap(),
+                None,
+                Vec::new(),
+                vec![first, second],
+                SandboxSpec::default(),
+                BudgetSpec::default(),
+                None,
+                Vec::new(),
+                TelemetrySpec::default(),
+            ),
+            Err(PrimitiveSpecError::DuplicateEntry)
         );
     }
 

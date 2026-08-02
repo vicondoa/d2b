@@ -30,13 +30,18 @@ pub mod guest_exec;
 pub mod launch;
 pub mod sandbox;
 
+pub use guest_exec::{
+    AttachRequest, ComponentSessionAttachment, GuestExecError, GuestExecPort, GuestExecRequest,
+    NamedAttachmentStream, TtySize,
+};
+
 use std::collections::BTreeSet;
 
 use d2b_contracts::v3::execution_policy::{BoundedToken, ExecutionDomain};
 use d2b_process_conformance::{
     AdoptionCondition, AdoptionOutcome, CancellationBinding, IdentityBinding, LaunchTicket,
-    ProcessConformanceError, ProcessLaunchEffectPort, ProcessPhaseClass, ProcessProvider,
-    ProcessProviderProfile, ProcessStatusReport, WaitReapOwner,
+    ProcessConformanceError, ProcessIdentityDigest, ProcessLaunchEffectPort, ProcessPhaseClass,
+    ProcessProvider, ProcessProviderProfile, ProcessStatusReport, StopClass, WaitReapOwner,
 };
 
 /// The Provider name this controller implements.
@@ -132,12 +137,7 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for SystemdProcessProvider<P> {
         if launched.wait_reap_owner != WaitReapOwner::ServiceManager {
             return Err(ProcessConformanceError::WaitOwnerMismatch);
         }
-        if !launched
-            .observed
-            .covers(self.profile.required_identity_bindings())
-        {
-            return Err(ProcessConformanceError::IdentityUnverified);
-        }
+        launched.validate(self.profile.required_identity_bindings())?;
         Ok(self.report(
             ticket,
             launched.identity,
@@ -158,8 +158,8 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for SystemdProcessProvider<P> {
         // opened. Ambiguity quarantines; it never broadly kills or reuses.
         let identity_ok = candidate.wait_reap_owner == WaitReapOwner::ServiceManager
             && candidate
-                .observed
-                .covers(self.profile.required_identity_bindings());
+                .validate(self.profile.required_identity_bindings())
+                .is_ok();
         if !identity_ok {
             return Ok(AdoptionOutcome::Quarantined(self.report(
                 ticket,
@@ -175,5 +175,13 @@ impl<P: ProcessLaunchEffectPort> ProcessProvider for SystemdProcessProvider<P> {
             ProcessPhaseClass::Running,
             AdoptionCondition::Adopted,
         )))
+    }
+
+    async fn stop(
+        &self,
+        identity: &ProcessIdentityDigest,
+        class: StopClass,
+    ) -> Result<(), ProcessConformanceError> {
+        self.port.stop(identity, class).await
     }
 }

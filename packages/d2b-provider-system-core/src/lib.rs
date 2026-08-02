@@ -46,10 +46,12 @@ pub use bootstrap::{BootstrapCapability, BootstrapError, BootstrapSequence, Boot
 pub use error::SystemCoreError;
 pub use host::{
     BudgetReservation, HostCapabilityClass, HostObservationReport, HostProbeEffectPort,
-    HostProbeSnapshot, HostReconciler, HostStatusReport, ISOLATION_POSTURE_MESSAGE,
-    MinijailPlatformGate, NO_ISOLATION_STATUS_FIELDS,
+    HostProbeMetadata, HostProbeSnapshot, HostReconciler, HostStatusReport,
+    ISOLATION_POSTURE_MESSAGE, MinijailPlatformGate, NO_ISOLATION_STATUS_FIELDS,
 };
-pub use nss::{NssUserEffectPort, NssUserReconciler, NssUserRecord, NssUserStatus};
+pub use nss::{
+    MAX_OBSERVED_GROUPS, NssUserEffectPort, NssUserReconciler, NssUserRecord, NssUserStatus,
+};
 pub use ownership::{DISOWNED_RESOURCE_TYPES, OWNED_RESOURCE_TYPES};
 pub use user::{
     DiscoveredUser, UserBinding, UserDiscoveryCondition, UserDiscoveryEffectPort,

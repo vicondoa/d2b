@@ -7,7 +7,7 @@ use d2b_contracts::v3::execution_policy::{BoundedToken, ExecutionDomain};
 use d2b_contracts::v3::{ControllerGeneration, ResourceGeneration, ResourceRef, ResourceUid};
 
 use crate::error::ProcessConformanceError;
-use crate::identity::{ConfigurationDigest, IdentityBinding};
+use crate::identity::{ConfigurationDigest, IdentityBinding, ProcessIdentityDigest};
 
 /// Maximum launch deadline, matching the frozen resource-API request
 /// lifetime ceiling of 900000 ms.
@@ -35,6 +35,32 @@ pub struct CompiledDigests {
     pub endpoints: ConfigurationDigest,
     /// Digest of the exact inherited FD table.
     pub fd_table: ConfigurationDigest,
+}
+
+impl CompiledDigests {
+    /// Validate that every compiled input is bound to a real plan.
+    ///
+    /// A zero digest is not an identity. Rejecting it at ticket creation
+    /// keeps a missing compiler output from becoming an apparently valid
+    /// launch that can later be adopted.
+    pub fn validate(&self) -> Result<(), ProcessConformanceError> {
+        if [
+            self.sandbox,
+            self.budget,
+            self.mounts,
+            self.devices,
+            self.network,
+            self.endpoints,
+            self.fd_table,
+        ]
+        .into_iter()
+        .any(ConfigurationDigest::is_zero)
+        {
+            Err(ProcessConformanceError::InvalidTicket)
+        } else {
+            Ok(())
+        }
+    }
 }
 
 /// Operation, deadline, and cancellation binding of one launch.
@@ -173,6 +199,7 @@ pub struct LaunchTicket {
     digests: CompiledDigests,
     operation: OperationBinding,
     expected_identity: BTreeSet<IdentityBinding>,
+    expected_identity_digest: Option<ProcessIdentityDigest>,
     readiness: ReadinessExpectation,
     inherited_fd_table: InheritedFdTable,
 }
@@ -219,9 +246,13 @@ impl LaunchTicket {
         if domain == ExecutionDomain::User && user_ref.is_none() {
             return Err(ProcessConformanceError::UserRefRequired);
         }
+        if domain == ExecutionDomain::System && user_ref.is_some() {
+            return Err(ProcessConformanceError::InvalidTicket);
+        }
         if expected_identity.is_empty() {
             return Err(ProcessConformanceError::InvalidTicket);
         }
+        digests.validate()?;
         let provider_ref = ResourceRef::parse(&format!("Provider/{}", selected_provider.as_str()))
             .map_err(|_| ProcessConformanceError::InvalidTicket)?;
         let inherited_fd_table = InheritedFdTable::new(digests.fd_table, 0)?;
@@ -241,6 +272,7 @@ impl LaunchTicket {
             digests,
             operation,
             expected_identity,
+            expected_identity_digest: None,
             readiness: ReadinessExpectation::None,
             inherited_fd_table,
         })
@@ -251,6 +283,24 @@ impl LaunchTicket {
     pub fn with_readiness(mut self, readiness: ReadinessExpectation) -> Self {
         self.readiness = readiness;
         self
+    }
+
+    /// Bind the ticket to an already recorded process identity digest.
+    ///
+    /// The digest is optional for a first launch. Adoption and terminal
+    /// relay callers should set it once the effect adapter has established
+    /// the process identity, so a result for another process cannot be
+    /// accepted under the same resource operation.
+    #[must_use]
+    pub fn with_expected_identity_digest(
+        mut self,
+        identity: ProcessIdentityDigest,
+    ) -> Result<Self, ProcessConformanceError> {
+        if identity.is_zero() {
+            return Err(ProcessConformanceError::InvalidTicket);
+        }
+        self.expected_identity_digest = Some(identity);
+        Ok(self)
     }
 
     /// Replace the inherited descriptor-table count after core has compiled
@@ -333,6 +383,11 @@ impl LaunchTicket {
     /// Borrow the identity bindings this launch is expected to establish.
     pub const fn expected_identity(&self) -> &BTreeSet<IdentityBinding> {
         &self.expected_identity
+    }
+
+    /// Borrow the optional expected process identity digest.
+    pub const fn expected_identity_digest(&self) -> Option<&ProcessIdentityDigest> {
+        self.expected_identity_digest.as_ref()
     }
 
     /// Return the readiness expectation.

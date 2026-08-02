@@ -23,7 +23,7 @@
 //! becomes the `defaultUserRef` requirement asserted below.
 
 use d2b_contracts::v3::ResourceRef;
-use std::{collections::BTreeSet, future::Future};
+use std::{collections::BTreeSet, future::Future, future::ready};
 
 use d2b_contracts::v3::execution_policy::{BudgetSpec, ExecutionDomain};
 use d2b_contracts::v3::host::{HOST_RESOURCE_TYPE, HostSpec, IsolationPosture};
@@ -71,6 +71,23 @@ pub enum HostCapabilityClass {
     Tpm2,
     /// USBIP support.
     Usbip,
+}
+
+impl HostCapabilityClass {
+    /// Every capability class the system-core probe may report.
+    pub const ALL: [Self; 11] = [
+        Self::Kvm,
+        Self::Pidfd,
+        Self::CgroupV2,
+        Self::UserNamespace,
+        Self::Virtiofs,
+        Self::AudioPipewire,
+        Self::Wayland,
+        Self::GpuRender,
+        Self::GpuDrm,
+        Self::Tpm2,
+        Self::Usbip,
+    ];
 }
 
 /// The mandatory system-minijail platform gate.
@@ -122,6 +139,33 @@ pub struct HostProbeSnapshot {
     active_process_count: u32,
 }
 
+/// Non-identity host observations returned by the probe adapter.
+///
+/// The adapter owns the bounded OS calls. The reconciler only receives these
+/// already-bounded values and never opens a host handle itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostProbeMetadata {
+    /// Bounded `uname -r` observation.
+    pub kernel_release: String,
+    /// Bounded operating-system name.
+    pub os_name: String,
+    /// Whether the fixed user supervisor is available.
+    pub user_manager_available: bool,
+    /// Number of non-terminal child processes observed.
+    pub active_process_count: u32,
+}
+
+impl Default for HostProbeMetadata {
+    fn default() -> Self {
+        Self {
+            kernel_release: String::new(),
+            os_name: String::new(),
+            user_manager_available: false,
+            active_process_count: 0,
+        }
+    }
+}
+
 impl HostProbeSnapshot {
     /// Construct a bounded probe result.
     pub fn new(
@@ -135,7 +179,11 @@ impl HostProbeSnapshot {
         let capabilities: BTreeSet<_> = capabilities.into_iter().collect();
         let kernel_release = kernel_release.into();
         let os_name = os_name.into();
-        if kernel_release.len() > 64 || os_name.len() > 128 {
+        if kernel_release.len() > 64
+            || os_name.len() > 128
+            || kernel_release.chars().any(char::is_control)
+            || os_name.chars().any(char::is_control)
+        {
             return Err(SystemCoreError::HostProbeFailed);
         }
         Ok(Self {
@@ -189,6 +237,15 @@ pub trait HostProbeEffectPort {
 
     /// Return kernel/platform evidence without exposing paths or handles.
     fn platform(&self) -> impl Future<Output = Result<MinijailPlatformGate, SystemCoreError>>;
+
+    /// Return bounded metadata for the same probe pass.
+    ///
+    /// The default keeps small hermetic fakes source-compatible; a production
+    /// adapter overrides it with bounded `uname`, os-release, and supervisor
+    /// observations.
+    fn metadata(&self) -> impl Future<Output = Result<HostProbeMetadata, SystemCoreError>> {
+        ready(Ok(HostProbeMetadata::default()))
+    }
 }
 
 /// Public Host observations produced after a probe.
@@ -345,7 +402,7 @@ impl HostReconciler {
         required_capabilities: &BTreeSet<HostCapabilityClass>,
         requires_minijail: bool,
     ) -> Result<HostObservationReport, SystemCoreError> {
-        let status = self.reconcile(host_ref, provider_ref, spec)?;
+        let mut status = self.reconcile(host_ref, provider_ref, spec)?;
         let mut required = required_capabilities.clone();
         if requires_minijail {
             required.insert(HostCapabilityClass::Pidfd);
@@ -359,8 +416,9 @@ impl HostReconciler {
         }
         if spec.policy().admits_user_domain() && !snapshot.user_manager_available() {
             // User-manager unavailability is a degraded observation, not a
-            // reason to misreport the Host as Ready.  Keep the existing
-            // compact status type stable and expose the richer result here.
+            // reason to claim a user-capable Host is Ready. System-only Hosts
+            // remain Ready when no user manager is required.
+            status.phase = ResourcePhase::Degraded;
         }
         Ok(HostObservationReport {
             status,
@@ -372,6 +430,46 @@ impl HostReconciler {
             minijail_ready: snapshot.minijail_gate().kernel_supported()
                 && snapshot.minijail_gate().cgroup_kill_writable,
         })
+    }
+
+    /// Run the bounded host probe adapter and reconcile its observations.
+    ///
+    /// Capability and platform calls are deliberately sequenced through the
+    /// injected port. This keeps the controller independent from NSS, D-Bus,
+    /// `/proc`, and cgroup paths while allowing a production adapter to put
+    /// its own per-call timeouts around each OS operation.
+    pub async fn reconcile_with_probe<P: HostProbeEffectPort>(
+        &self,
+        host_ref: &ResourceRef,
+        provider_ref: &ResourceRef,
+        spec: &HostSpec,
+        port: &P,
+        required_capabilities: &BTreeSet<HostCapabilityClass>,
+        requires_minijail: bool,
+    ) -> Result<HostObservationReport, SystemCoreError> {
+        let mut capabilities = BTreeSet::new();
+        for capability in HostCapabilityClass::ALL {
+            if port.probe(capability).await? {
+                capabilities.insert(capability);
+            }
+        }
+        let metadata = port.metadata().await?;
+        let snapshot = HostProbeSnapshot::new(
+            capabilities,
+            metadata.kernel_release,
+            metadata.os_name,
+            metadata.user_manager_available,
+            port.platform().await?,
+            metadata.active_process_count,
+        )?;
+        self.reconcile_observed(
+            host_ref,
+            provider_ref,
+            spec,
+            snapshot,
+            required_capabilities,
+            requires_minijail,
+        )
     }
 
     /// Reject an aggregate reservation that exceeds a Host budget.

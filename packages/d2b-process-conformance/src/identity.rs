@@ -11,9 +11,11 @@ use serde::Serialize;
 pub enum WaitReapOwner {
     /// d2b owns wait and reap; the process is a direct descendant of the
     /// local effect owner. This is the `system-minijail` posture.
+    #[serde(rename = "d2b")]
     Local,
     /// The service manager owns wait and reap; d2b holds only a verified
     /// pidfd. This is the `system-systemd` posture.
+    #[serde(rename = "systemd")]
     ServiceManager,
 }
 

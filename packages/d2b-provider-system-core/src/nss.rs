@@ -10,11 +10,14 @@ use std::{fmt, future::Future};
 use d2b_contracts::v3::{
     ResourceRef,
     resource_status::ResourcePhase,
-    user::{MAX_USER_GROUPS, OsGroupName, UserSpec},
+    user::{OsGroupName, UserSpec},
 };
 use serde::Serialize;
 
 use crate::{SystemCoreError, ownership};
+
+/// Maximum observed group names retained in one User status.
+pub const MAX_OBSERVED_GROUPS: usize = 256;
 
 /// A bounded NSS record returned by the fixed host effect adapter.
 #[derive(Clone, PartialEq, Eq)]
@@ -49,7 +52,7 @@ impl NssUserRecord {
         groups: Vec<OsGroupName>,
         session_manager_available: bool,
     ) -> Result<Self, SystemCoreError> {
-        if groups.len() > MAX_USER_GROUPS {
+        if groups.len() > MAX_OBSERVED_GROUPS {
             return Err(SystemCoreError::HostProbeFailed);
         }
         Ok(Self {

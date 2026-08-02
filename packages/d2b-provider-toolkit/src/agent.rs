@@ -8,8 +8,10 @@
 use std::sync::Mutex;
 
 use d2b_contracts::v3::{
-    CanonicalJsonObject, ResourceRef, execution_policy::BoundedToken, zone_routing::ZonePath,
+    CanonicalJsonObject, ResourceRef, component_session::RequestId, execution_policy::BoundedToken,
+    zone_routing::ZonePath,
 };
+use d2b_session::{Cancellation, ComponentSessionDriver};
 
 use crate::{
     DispatchLimiter, ProviderAgentAuditEvent, ProviderAgentAuditLog, ProviderAgentAuditOutcome,
@@ -24,6 +26,78 @@ pub trait ProviderService: Send + Sync {
         method: &BoundedToken,
         payload: &CanonicalJsonObject,
     ) -> Result<CanonicalJsonObject, ProviderToolkitError>;
+}
+
+/// One decoded request carried by an authenticated ComponentSession.
+pub struct ProviderRequest {
+    request_id: RequestId,
+    zone: ZonePath,
+    provider_ref: ResourceRef,
+    method: BoundedToken,
+    payload: CanonicalJsonObject,
+}
+
+impl ProviderRequest {
+    /// Build a decoded request after binding all routing identity locally.
+    pub fn new(
+        request_id: RequestId,
+        zone: ZonePath,
+        provider_ref: ResourceRef,
+        method: BoundedToken,
+        payload: CanonicalJsonObject,
+    ) -> Self {
+        Self {
+            request_id,
+            zone,
+            provider_ref,
+            method,
+            payload,
+        }
+    }
+
+    /// Borrow the authenticated request correlation.
+    pub const fn request_id(&self) -> &RequestId {
+        &self.request_id
+    }
+
+    /// Borrow the Zone routing identity.
+    pub const fn zone(&self) -> &ZonePath {
+        &self.zone
+    }
+
+    /// Borrow the Provider resource identity.
+    pub const fn provider_ref(&self) -> &ResourceRef {
+        &self.provider_ref
+    }
+
+    /// Borrow the method.
+    pub const fn method(&self) -> &BoundedToken {
+        &self.method
+    }
+
+    /// Borrow the canonical payload.
+    pub const fn payload(&self) -> &CanonicalJsonObject {
+        &self.payload
+    }
+}
+
+impl std::fmt::Debug for ProviderRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("ProviderRequest(<redacted>)")
+    }
+}
+
+/// Codec owned by generated v3 service bindings.
+pub trait ProviderFrameCodec: Send + Sync {
+    /// Decode one authenticated request frame.
+    fn decode_request(&self, frame: &[u8]) -> Result<ProviderRequest, ProviderToolkitError>;
+
+    /// Encode one response frame for the request correlation.
+    fn encode_response(
+        &self,
+        request_id: &RequestId,
+        payload: &CanonicalJsonObject,
+    ) -> Result<Vec<u8>, ProviderToolkitError>;
 }
 
 /// Bounded Provider-agent adapter.
@@ -91,6 +165,49 @@ where
         }
         result
     }
+
+    /// Serve decoded Provider RPC frames from one authenticated
+    /// ComponentSession until cancellation or transport close.
+    ///
+    /// Session authentication, generation binding, attachment policy, and
+    /// stream fairness remain owned by `d2b-session`; this loop only bridges
+    /// the generated frame codec to the bounded Provider service adapter.
+    pub async fn serve_component_session<D, C>(
+        &self,
+        driver: &D,
+        codec: &C,
+        cancellation: Cancellation,
+    ) -> Result<(), ProviderToolkitError>
+    where
+        D: ComponentSessionDriver,
+        C: ProviderFrameCodec,
+    {
+        loop {
+            if cancellation.is_cancelled() {
+                return Ok(());
+            }
+            let frame = driver
+                .receive_ttrpc()
+                .await
+                .map_err(|_| ProviderToolkitError::SessionClosed)?;
+            let request = codec
+                .decode_request(&frame)
+                .map_err(|_| ProviderToolkitError::WireInvalid)?;
+            let response = self.dispatch(
+                request.zone().clone(),
+                request.provider_ref().clone(),
+                request.method().clone(),
+                request.payload().clone(),
+            )?;
+            let encoded = codec
+                .encode_response(request.request_id(), &response)
+                .map_err(|_| ProviderToolkitError::WireInvalid)?;
+            driver
+                .send_ttrpc_cancellable(encoded, cancellation.clone())
+                .await
+                .map_err(|_| ProviderToolkitError::SessionClosed)?;
+        }
+    }
 }
 
 /// Generated-service registration facade over a Provider agent adapter.
@@ -109,6 +226,27 @@ impl<S> GeneratedProviderServiceServer<S> {
     /// Borrow the bounded adapter.
     pub const fn adapter(&self) -> &ProviderAgentAdapter<S> {
         &self.adapter
+    }
+}
+
+impl<S> GeneratedProviderServiceServer<S>
+where
+    S: ProviderService,
+{
+    /// Serve the generated service over an authenticated ComponentSession.
+    pub async fn serve_component_session<D, C>(
+        &self,
+        driver: &D,
+        codec: &C,
+        cancellation: Cancellation,
+    ) -> Result<(), ProviderToolkitError>
+    where
+        D: ComponentSessionDriver,
+        C: ProviderFrameCodec,
+    {
+        self.adapter
+            .serve_component_session(driver, codec, cancellation)
+            .await
     }
 }
 
@@ -137,6 +275,16 @@ impl ProviderAgentProcess {
     /// Request bounded shutdown.
     pub fn stop(&mut self) {
         self.stopping = true;
+    }
+
+    /// Complete the bounded shutdown transition.
+    ///
+    /// The transport owner performs the actual session close; this state
+    /// transition is deliberately synchronous and cannot outlive the fixed
+    /// deadline advertised by the process.
+    pub async fn shutdown(&mut self) -> Result<(), ProviderToolkitError> {
+        self.stop();
+        Ok(())
     }
 
     /// Whether shutdown has been requested.

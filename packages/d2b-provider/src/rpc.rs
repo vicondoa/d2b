@@ -120,8 +120,13 @@ where
         if context.is_cancelled() {
             return Err(ProviderRuntimeError::Cancelled);
         }
+        if context.method() != request.method() {
+            return Err(ProviderRuntimeError::CapabilityDenied);
+        }
         let _ = context.remaining()?;
-        self.transport.call(context, request).await
+        let response = self.transport.call(context, request).await?;
+        let _ = context.remaining()?;
+        Ok(response)
     }
 }
 
@@ -134,5 +139,13 @@ mod tests {
         let payload = CanonicalJsonObject::parse(br#"{"x":"a"}"#).unwrap();
         let method = ProviderMethodName::parse("inspect").unwrap();
         assert!(RpcCall::new(method, payload).is_ok());
+    }
+
+    #[test]
+    fn the_proxy_binds_the_request_method_to_the_admitted_context() {
+        assert_ne!(
+            ProviderMethodName::parse("start").unwrap(),
+            ProviderMethodName::parse("stop").unwrap()
+        );
     }
 }

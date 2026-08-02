@@ -23,7 +23,7 @@ pub fn validate_candidate(
     ]);
     if ticket.selected_provider().as_str() != PROVIDER_NAME
         || candidate.wait_reap_owner != WaitReapOwner::Local
-        || !candidate.observed.covers(&required)
+        || candidate.validate(&required).is_err()
     {
         Err(ProcessConformanceError::IdentityUnverified)
     } else {

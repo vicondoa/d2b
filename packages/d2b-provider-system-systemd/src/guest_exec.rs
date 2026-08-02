@@ -9,9 +9,12 @@
 use std::{fmt, future::Future};
 
 use d2b_contracts::v3::{ResourceRef, execution_policy::BoundedToken};
+use d2b_session::{ComponentSessionDriver, StreamEvent, StreamId};
 
 /// The retained failed-job TTL required for detached guest execution.
 pub const DETACHED_FAILED_TTL_MS: u64 = 24 * 60 * 60 * 1_000;
+/// Default per-direction named-stream credit for guest attachment.
+pub const GUEST_EXEC_STREAM_CREDIT: u32 = 256 * 1024;
 
 /// Bounded terminal geometry supplied to an attach operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -172,6 +175,80 @@ impl NamedAttachmentStream {
 impl fmt::Debug for NamedAttachmentStream {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("NamedAttachmentStream(<redacted>)")
+    }
+}
+
+/// An attached guest process stream backed by an authenticated
+/// ComponentSession named stream.
+pub struct ComponentSessionAttachment<D> {
+    driver: D,
+    stream: StreamId,
+    name: NamedAttachmentStream,
+}
+
+impl<D> fmt::Debug for ComponentSessionAttachment<D> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("ComponentSessionAttachment(<redacted>)")
+    }
+}
+
+impl<D> ComponentSessionAttachment<D>
+where
+    D: ComponentSessionDriver,
+{
+    /// Open one named stream after attach validation has succeeded.
+    pub async fn open(
+        driver: D,
+        stream_number: u16,
+        name: NamedAttachmentStream,
+    ) -> Result<Self, GuestExecError> {
+        let stream = StreamId::new(stream_number).map_err(|_| GuestExecError::StreamUnavailable)?;
+        driver
+            .open_named_stream(stream, GUEST_EXEC_STREAM_CREDIT, GUEST_EXEC_STREAM_CREDIT)
+            .await
+            .map_err(|_| GuestExecError::StreamUnavailable)?;
+        Ok(Self {
+            driver,
+            stream,
+            name,
+        })
+    }
+
+    /// Borrow the opaque stream name.
+    pub const fn name(&self) -> &NamedAttachmentStream {
+        &self.name
+    }
+
+    /// Send one bounded logical stream message.
+    pub async fn send(&self, bytes: Vec<u8>) -> Result<(), GuestExecError> {
+        self.driver
+            .send_named_stream(self.stream, bytes)
+            .await
+            .map_err(|_| GuestExecError::StreamUnavailable)
+    }
+
+    /// Receive the next typed stream event.
+    pub async fn receive(&self) -> Result<StreamEvent, GuestExecError> {
+        self.driver
+            .receive_named_stream()
+            .await
+            .map_err(|_| GuestExecError::StreamUnavailable)
+    }
+
+    /// Close this named stream.
+    pub async fn close(&self) -> Result<(), GuestExecError> {
+        self.driver
+            .close_named_stream(self.stream)
+            .await
+            .map_err(|_| GuestExecError::StreamUnavailable)
+    }
+
+    /// Reset this named stream after cancellation or protocol failure.
+    pub async fn reset(&self) -> Result<(), GuestExecError> {
+        self.driver
+            .reset_named_stream(self.stream)
+            .await
+            .map_err(|_| GuestExecError::StreamUnavailable)
     }
 }
 

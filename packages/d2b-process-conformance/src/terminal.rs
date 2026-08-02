@@ -10,7 +10,11 @@ use std::fmt;
 
 use d2b_contracts::v3::ResourceUid;
 
-use crate::{ProcessConformanceError, identity::ProcessIdentityDigest, ticket::LaunchTicket};
+use crate::{
+    ProcessConformanceError,
+    identity::{ProcessIdentityDigest, WaitReapOwner},
+    ticket::LaunchTicket,
+};
 
 /// Stable terminal classification used by Process and EphemeralProcess
 /// status projections.
@@ -62,11 +66,37 @@ impl ProcessOutcome {
         }
     }
 
+    /// Construct a crash result without encoding a signal as an exit code.
+    pub const fn crashed() -> Self {
+        Self {
+            exit_class: ExitClass::Crash,
+            exit_code: None,
+        }
+    }
+
     /// Construct a timeout result.
     pub const fn timed_out() -> Self {
         Self {
             exit_class: ExitClass::Timeout,
             exit_code: None,
+        }
+    }
+
+    /// Construct an intentionally unclassified terminal result.
+    pub const fn unknown() -> Self {
+        Self {
+            exit_class: ExitClass::Unknown,
+            exit_code: None,
+        }
+    }
+
+    /// Validate the relationship between terminal class and exit code.
+    pub const fn validate(self) -> Result<(), ProcessConformanceError> {
+        match (self.exit_class, self.exit_code) {
+            (ExitClass::CleanExit, Some(code)) if code >= 0 && code <= 255 => Ok(()),
+            (ExitClass::CleanExit, _) => Err(ProcessConformanceError::InvalidTerminalResult),
+            (_, None) => Ok(()),
+            (_, Some(_)) => Err(ProcessConformanceError::InvalidTerminalResult),
         }
     }
 }
@@ -76,17 +106,28 @@ impl ProcessOutcome {
 /// The readable-pidfd form is intentionally not representable.  A test or
 /// adapter may create this value only by passing a non-zero private token and
 /// the exact identity it observed; it still cannot name a PID, path, or fd.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(PartialEq, Eq)]
 pub struct ParentWaitEvidence {
     identity: ProcessIdentityDigest,
     operation_uid: ResourceUid,
     token: [u8; 32],
     reaped: bool,
+    owner: WaitReapOwner,
 }
 
 impl ParentWaitEvidence {
     /// Record a verified parent wait/reap proof.
     pub fn verified(
+        identity: ProcessIdentityDigest,
+        operation_uid: ResourceUid,
+        token: [u8; 32],
+    ) -> Result<Self, ProcessConformanceError> {
+        Self::verified_by(WaitReapOwner::Local, identity, operation_uid, token)
+    }
+
+    /// Record evidence from a named wait/reap owner.
+    pub fn verified_by(
+        owner: WaitReapOwner,
         identity: ProcessIdentityDigest,
         operation_uid: ResourceUid,
         token: [u8; 32],
@@ -99,6 +140,7 @@ impl ParentWaitEvidence {
             operation_uid,
             token,
             reaped: true,
+            owner,
         })
     }
 
@@ -133,11 +175,13 @@ impl BrokerTerminalResult {
         evidence: ParentWaitEvidence,
     ) -> Result<Self, ProcessConformanceError> {
         if !evidence.is_reaped()
+            || evidence.owner != WaitReapOwner::Local
             || evidence.identity != identity
             || evidence.operation_uid != operation_uid
         {
             return Err(ProcessConformanceError::TerminalEvidenceMismatch);
         }
+        outcome.validate()?;
         Ok(Self {
             process_uid,
             operation_uid,
@@ -173,9 +217,13 @@ impl BrokerTerminalResult {
             || ticket.process_uid() != &self.process_uid
             || ticket.operation().operation_uid() != &self.operation_uid
             || ticket.selected_provider().as_str() != "system-minijail"
+            || ticket
+                .expected_identity_digest()
+                .is_some_and(|expected| expected != &self.identity)
         {
             return Err(ProcessConformanceError::TerminalEvidenceMismatch);
         }
+        self.outcome.validate()?;
         Ok(self.outcome)
     }
 }
@@ -183,5 +231,76 @@ impl BrokerTerminalResult {
 impl fmt::Debug for BrokerTerminalResult {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("BrokerTerminalResult(<redacted>)")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testing::fixtures;
+
+    fn identity(seed: u8) -> ProcessIdentityDigest {
+        ProcessIdentityDigest::from_bytes([seed; 32])
+    }
+
+    #[test]
+    fn terminal_results_require_parent_reap_and_matching_operation_evidence() {
+        let ticket = fixtures::ticket_builder()
+            .selected_provider("system-minijail")
+            .expected_identity([
+                crate::identity::IdentityBinding::Pid,
+                crate::identity::IdentityBinding::ProcessStartTime,
+            ])
+            .build()
+            .unwrap();
+        let operation = ticket.operation().operation_uid().clone();
+        let process = ticket.process_uid().clone();
+        let evidence =
+            ParentWaitEvidence::verified(identity(1), operation.clone(), [2; 32]).unwrap();
+        let result = BrokerTerminalResult::from_parent(
+            process.clone(),
+            operation.clone(),
+            identity(1),
+            ProcessOutcome::exited(0).unwrap(),
+            evidence,
+        )
+        .unwrap();
+        assert_eq!(
+            result.relay(&ticket).unwrap(),
+            ProcessOutcome::exited(0).unwrap()
+        );
+
+        let wrong_owner = ParentWaitEvidence::verified_by(
+            WaitReapOwner::ServiceManager,
+            identity(1),
+            operation.clone(),
+            [2; 32],
+        )
+        .unwrap();
+        assert_eq!(
+            BrokerTerminalResult::from_parent(
+                process,
+                operation,
+                identity(1),
+                ProcessOutcome::exited(0).unwrap(),
+                wrong_owner,
+            )
+            .unwrap_err(),
+            ProcessConformanceError::TerminalEvidenceMismatch
+        );
+    }
+
+    #[test]
+    fn terminal_class_and_exit_code_are_bound_together() {
+        assert!(ProcessOutcome::crashed().validate().is_ok());
+        assert!(ProcessOutcome::unknown().validate().is_ok());
+        assert_eq!(
+            ProcessOutcome {
+                exit_class: ExitClass::Crash,
+                exit_code: Some(1),
+            }
+            .validate(),
+            Err(ProcessConformanceError::InvalidTerminalResult)
+        );
     }
 }

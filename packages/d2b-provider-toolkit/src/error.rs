@@ -31,6 +31,10 @@ pub enum ProviderToolkitError {
     /// No dispatch slot is available; the agent is already serving its
     /// frozen in-flight maximum.
     DispatchSaturated,
+    /// The authenticated ComponentSession closed while serving the agent.
+    SessionClosed,
+    /// A ComponentSession frame did not satisfy the Provider wire contract.
+    WireInvalid,
 }
 
 impl ProviderToolkitError {
@@ -44,11 +48,13 @@ impl ProviderToolkitError {
             Self::BootstrapLocalityRejected => "bootstrap-locality-rejected",
             Self::CapacityOutOfRange => "capacity-out-of-range",
             Self::DispatchSaturated => "dispatch-saturated",
+            Self::SessionClosed => "session-closed",
+            Self::WireInvalid => "wire-invalid",
         }
     }
 
     /// The complete closed code set, for conformance assertions.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 9] = [
         Self::BootstrapProviderMismatch,
         Self::BootstrapZoneMismatch,
         Self::BootstrapRefWrongType,
@@ -56,6 +62,8 @@ impl ProviderToolkitError {
         Self::BootstrapLocalityRejected,
         Self::CapacityOutOfRange,
         Self::DispatchSaturated,
+        Self::SessionClosed,
+        Self::WireInvalid,
     ];
 }
 
