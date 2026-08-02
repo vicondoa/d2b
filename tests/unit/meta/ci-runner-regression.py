@@ -757,6 +757,38 @@ set -euo pipefail
         self.assertIn("run_private_census &", api_driver)
         self.assertIn('if [ "$api_jobs" -ge 2 ]', api_driver)
 
+    def test_api_surface_scratch_creation_works_without_existing_parent(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="api-scratch-parent.") as raw_dir:
+            root = pathlib.Path(raw_dir) / "repo"
+            root.mkdir()
+            self.assertFalse((root / ".scratch").exists())
+            script = r"""
+set -euo pipefail
+ROOT="$1"
+export ROOT
+. "$2"
+mkdir -p "$ROOT/.scratch"
+scratch=$(d2b_mktemp ".scratch/.d2b-api-surface.XXXXXX")
+test -d "$scratch"
+case "$scratch" in
+  "$ROOT/.scratch/"*) ;;
+  *) exit 90 ;;
+esac
+"""
+            result = subprocess.run(
+                ["bash", "-c", script, "bash", str(root), str(ROOT / "tests/lib.sh")],
+                cwd=ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(
+                result.returncode,
+                0,
+                msg=f"scratch allocation failed\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}",
+            )
+
     def test_rust_fixture_leaf_sets_internal_opt_in_but_public_target_stays_closed(self) -> None:
         makefile = MAKEFILE.read_text(encoding="utf-8")
         fixture_leaf = make_target_block(makefile, "rust-fixture-contracts")
@@ -1695,6 +1727,46 @@ set -euo pipefail
         )
         self.assertGreaterEqual(helper.count("$! == EINTR"), 4)
         self.assertGreaterEqual(helper.count("$! == EAGAIN"), 3)
+
+    def test_manifest_unexpected_blocking_waitpid_error_fails_closed(self) -> None:
+        perl = shutil.which("perl")
+        self.assertIsNotNone(perl, "Perl is required for execution-manifest coverage")
+        assert perl is not None
+        harness = r"""
+use strict;
+use warnings;
+use Errno qw(EIO);
+require $ARGV[0];
+my $calls = 0;
+my $error;
+eval {
+    main::drain_adopted_descendants({
+        waitpid => sub {
+            ++$calls;
+            return 0 if $calls == 1;
+            $! = EIO;
+            return -1;
+        },
+    });
+    1;
+} or $error = $@;
+exit 91 unless ref($error) && $error->isa("ExecutionManifest::Fatal");
+exit 92 unless "$error" eq "could not drain adopted scheduler descendants (errno 5)";
+exit 0;
+"""
+        result = subprocess.run(
+            [perl, "-e", harness, str(EXECUTION_MANIFEST_HELPER)],
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(
+            result.returncode,
+            0,
+            msg=f"waitpid failure did not fail closed\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}",
+        )
 
     def test_diagnostic_redaction_normalizes_ansi_before_matching(self) -> None:
         layer1_jobs = load_layer1_jobs()
