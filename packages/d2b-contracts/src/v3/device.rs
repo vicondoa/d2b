@@ -484,6 +484,9 @@ impl DeviceSpec {
         if arbitration == DeviceArbitration::Exclusive && max_concurrent_claims != 1 {
             return Err(PrimitiveSpecError::ConflictingFields);
         }
+        if device_class == DeviceClass::Emulated && arbitration == DeviceArbitration::Shared {
+            return Err(PrimitiveSpecError::ConflictingFields);
+        }
         match (device_class, inventory.selector()) {
             (DeviceClass::Emulated, Some(_)) => return Err(PrimitiveSpecError::ConflictingFields),
             (DeviceClass::Physical, None) => {
@@ -937,6 +940,16 @@ impl DeviceEffectLimits {
         self.nftables_projection_batch_limit
     }
 
+    /// Maximum swtpm runner launches per Device/start cycle.
+    pub const fn spawn_runner_tpm_per_device(self) -> u16 {
+        self.spawn_runner_tpm_per_device
+    }
+
+    /// Maximum GPU/video worker-set launches per Device.
+    pub const fn spawn_runner_gpu_per_device(self) -> u16 {
+        self.spawn_runner_gpu_per_device
+    }
+
     /// Maximum GPU open-device fd quota per spawn.
     pub const fn open_device_gpu_fd_quota(self) -> u8 {
         self.open_device_gpu_fd_quota
@@ -1081,21 +1094,28 @@ mod tests {
         );
         assert_eq!(
             DeviceSpec::new(
-                DeviceClass::Emulated,
+                DeviceClass::Physical,
                 DeviceArbitration::Shared,
                 17,
                 InventorySpec::default(),
             ),
             Err(PrimitiveSpecError::OutOfRange)
         );
-        assert!(
+        let usb = InventorySpec::new(Some(InventorySelector::Usb {
+            label: BoundedToken::parse("shared-usb").unwrap(),
+            vendor_id: None,
+            product_id: None,
+            serial: None,
+        }));
+        assert!(DeviceSpec::new(DeviceClass::Physical, DeviceArbitration::Shared, 4, usb).is_ok());
+        assert_eq!(
             DeviceSpec::new(
                 DeviceClass::Emulated,
                 DeviceArbitration::Shared,
                 4,
                 InventorySpec::default(),
-            )
-            .is_ok()
+            ),
+            Err(PrimitiveSpecError::ConflictingFields)
         );
     }
 
