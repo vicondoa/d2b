@@ -291,7 +291,6 @@ impl LaunchTicket {
     /// relay callers should set it once the effect adapter has established
     /// the process identity, so a result for another process cannot be
     /// accepted under the same resource operation.
-    #[must_use]
     pub fn with_expected_identity_digest(
         mut self,
         identity: ProcessIdentityDigest,
