@@ -175,6 +175,7 @@ struct Registration {
 }
 
 /// Storage-side watch coordinator with one global queued-delivery budget.
+#[derive(Default)]
 pub struct WatchCoordinator {
     next_id: u64,
     registrations: BTreeMap<WatchRegistrationId, Registration>,
@@ -193,20 +194,6 @@ impl core::fmt::Debug for WatchCoordinator {
             .field("budget_used", &self.budget_used)
             .field("budget_capacity", &WATCH_ADMISSION_CAPACITY)
             .finish()
-    }
-}
-
-impl Default for WatchCoordinator {
-    fn default() -> Self {
-        Self {
-            next_id: 0,
-            registrations: BTreeMap::new(),
-            budget_used: 0,
-            admission_rejections: 0,
-            slow_watcher_evictions: 0,
-            replay_work: 0,
-            evicted_cursors: VecDeque::new(),
-        }
     }
 }
 
@@ -327,7 +314,7 @@ impl WatchCoordinator {
     /// Remove one registration without counting it as a slow watcher.
     pub fn unregister(&mut self, id: WatchRegistrationId) -> Option<ZoneRevision> {
         self.remove_registration(id, false)
-            .map(|cursor| ZoneRevision::new(cursor))
+            .map(ZoneRevision::new)
     }
 
     /// Return the last acknowledged cursor for an active or evicted watch.
