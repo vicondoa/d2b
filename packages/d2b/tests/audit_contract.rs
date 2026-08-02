@@ -26,6 +26,8 @@ use serde_json::Value;
 
 use common::{TestPeer, spawn_d2bd_once};
 
+const V3_ERROR_KEYS: &[&str] = &["errorClass", "message", "ok", "schemaVersion", "zoneRef"];
+
 /// Write a non-executable / `exit 99` poison-pill the CLI must never exec.
 fn write_poison_pill(dir: &Path) -> std::path::PathBuf {
     let p = dir.join("legacy-poison.sh");
@@ -179,18 +181,48 @@ fn audit_admin_rejected_against_live_daemon_without_fallback() {
         "launcher peer is denied audit (admin-only) with exit 32; stderr:\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("authz-audit-requires-admin"),
-        "audit authz rejection should name authz-audit-requires-admin; got:\n{stderr}"
+        out.stderr.is_empty(),
+        "ModernCli JSON errors must stay on stdout; stderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let envelope: Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|err| {
+        panic!(
+            "audit authorization rejection must be a v3 JSON envelope: {err}\nstdout:\n{}",
+            String::from_utf8_lossy(&out.stdout)
+        )
+    });
+    let object = envelope
+        .as_object()
+        .unwrap_or_else(|| panic!("audit rejection must be a JSON object: {envelope}"));
+    let mut keys: Vec<&str> = object.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys, V3_ERROR_KEYS,
+        "audit rejection must use the closed v3 error envelope"
+    );
+    assert_eq!(envelope["ok"], false);
+    assert_eq!(envelope["zoneRef"], "Zone/local-root");
+    assert_eq!(envelope["schemaVersion"], 1);
+    assert_eq!(envelope["errorClass"], "authz-audit-requires-admin");
+    let message = envelope["message"]
+        .as_str()
+        .expect("audit rejection envelope message");
+    assert!(
+        message.contains("audit requires an admin role"),
+        "audit authz rejection should describe the admin-only contract; got:\n{message}"
     );
     assert!(
-        !stderr.contains("daemon-down"),
+        !out.stdout
+            .windows("daemon-down".len())
+            .any(|window| { window == b"daemon-down" }),
         "a reachable daemon must not surface daemon-down"
     );
     assert!(
-        out.stdout.is_empty(),
-        "rejected audit must not print a body"
+        !out.stdout
+            .windows("auditResponse".len())
+            .any(|window| { window == b"auditResponse" }),
+        "rejected audit must not print an audit body"
     );
 }
 
