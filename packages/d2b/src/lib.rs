@@ -54,6 +54,19 @@ mod host_validate;
 mod status_read_model;
 mod target_routing;
 mod terminal_client;
+mod activation;
+mod complete;
+mod context;
+mod dispatch;
+mod endpoint;
+mod exec;
+mod guest;
+mod host;
+mod provider;
+mod resource;
+mod share;
+mod shell;
+mod zone;
 
 use status_read_model::{
     booted_symlink, build_vm_status_output, build_vm_status_output_from_public, current_symlink,
@@ -1165,10 +1178,10 @@ struct AuthStatusArgs {
 }
 
 #[derive(Debug)]
-struct CliFailure {
-    exit_code: i32,
-    message: String,
-    rendered_stderr: Option<String>,
+pub(crate) struct CliFailure {
+    pub(crate) exit_code: i32,
+    pub(crate) message: String,
+    pub(crate) rendered_stderr: Option<String>,
 }
 
 impl CliFailure {
@@ -2404,7 +2417,7 @@ fn shell_trailing_command_hint(raw_args: &[OsString]) -> Option<&'static str> {
 }
 
 pub fn cli_command() -> clap::Command {
-    let mut command = NativeCli::command();
+    let mut command = dispatch::ModernCli::command();
     command.set_bin_name("d2b");
     command
 }
@@ -2419,65 +2432,12 @@ where
     }
 
     if raw_args.len() == 1 {
-        print_stdout("d2b 0.0.0-bootstrap (bootstrap stub)\n");
-        print_stdout("Rust-native CLI shim active; run `d2b --help` for subcommands.\n");
+        print_stdout("d2b 0.0.0-bootstrap\n");
+        print_stdout("Run `d2b --help` for the typed Zone command surface.\n");
         return 0;
     }
 
-    if let Some(failure) = removed_usb_enroll_failure(&raw_args) {
-        return report_failure(failure);
-    }
-
-    if is_host_shutdown_hook_invocation(&raw_args) {
-        let context = match Context::from_env() {
-            Ok(context) => context,
-            Err(err) => return report_failure(err),
-        };
-        let args = match parse_host_shutdown_hook_args(&raw_args) {
-            Ok(args) => args,
-            Err(err) => return report_failure(err),
-        };
-        return match cmd_host_shutdown_hook(&context, &args) {
-            Ok(code) => code,
-            Err(err) => report_failure(err),
-        };
-    }
-
-    let cli = match NativeCli::try_parse_from(raw_args.clone()) {
-        Ok(cli) => cli,
-        Err(err) => {
-            let is_host_usage = raw_args
-                .get(1)
-                .and_then(|arg| arg.to_str())
-                .map(|arg| arg == "host")
-                .unwrap_or(false)
-                && raw_args
-                    .get(2)
-                    .and_then(|arg| arg.to_str())
-                    .map(|arg| arg == "check")
-                    .unwrap_or(false);
-            let _ = err.print();
-            if let Some(hint) = shell_trailing_command_hint(&raw_args) {
-                let _ = write_stderr_bytes(hint.as_bytes());
-            }
-            return if is_host_usage { 3 } else { err.exit_code() };
-        }
-    };
-    if raw_args.get(1).and_then(|arg| arg.to_str()) == Some("clipboard")
-        && raw_args.get(2).and_then(|arg| arg.to_str()) == Some("picker")
-    {
-        print_stderr("d2b: `d2b clipboard picker` is deprecated; use `d2b clipboard arm`.\n");
-    }
-
-    let context = match Context::from_env() {
-        Ok(context) => context,
-        Err(err) => return report_failure(err),
-    };
-
-    match dispatch(&context, &cli, &raw_args[1..]) {
-        Ok(code) => code,
-        Err(err) => report_failure(err),
-    }
+    dispatch::modern_run(raw_args)
 }
 
 fn is_host_shutdown_hook_invocation(raw_args: &[OsString]) -> bool {
@@ -11636,12 +11596,12 @@ fn parse_gateway_display_reply(
         .map_err(|err| CliFailure::new(1, format!("failed to decode gatewayDisplay reply: {err}")))
 }
 
-struct SeqpacketUnixSocket {
+pub(crate) struct SeqpacketUnixSocket {
     fd: OwnedFd,
 }
 
 impl SeqpacketUnixSocket {
-    fn connect(path: &Path) -> io::Result<Self> {
+    pub(crate) fn connect(path: &Path) -> io::Result<Self> {
         let fd = socket(
             AddressFamily::Unix,
             SockType::SeqPacket,
@@ -11654,7 +11614,7 @@ impl SeqpacketUnixSocket {
         Ok(Self { fd })
     }
 
-    fn send_frame(&mut self, payload: &[u8]) -> io::Result<()> {
+    pub(crate) fn send_frame(&mut self, payload: &[u8]) -> io::Result<()> {
         if payload.len() > MAX_FRAME_BYTES {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -11674,7 +11634,7 @@ impl SeqpacketUnixSocket {
         Ok(())
     }
 
-    fn recv_frame(&mut self) -> io::Result<Vec<u8>> {
+    pub(crate) fn recv_frame(&mut self) -> io::Result<Vec<u8>> {
         let mut buffer = vec![0_u8; MAX_FRAME_BYTES + 4];
         let received =
             recv(self.fd.as_raw_fd(), &mut buffer, MsgFlags::empty()).map_err(nix_err_to_io)?;
