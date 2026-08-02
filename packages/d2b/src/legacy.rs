@@ -6631,7 +6631,7 @@ pub(super) fn cmd_realm_run(
     cmd_vm_exec(context, &exec_args)
 }
 
-/// Route a `vm <verb> <target>` argument (ADR 0032, P0). A local VM name routes
+/// Route a legacy `vm <verb> <target>` argument. A local VM name routes
 /// to the existing host-daemon fast path (returns `Ok`); a realm/gateway target
 /// surfaces a typed, json-aware diagnostic and a non-zero exit - the host daemon
 /// holds no realm configuration and cannot dispatch into a realm. The realm's
@@ -7075,7 +7075,7 @@ pub(super) fn cmd_vm_lifecycle_verb(
                 "realm": realm,
                 "gateway": gateway,
                 "gatewayVm": gateway_vm,
-                "notes": "realm target would route through the configured gateway entrypoint; --apply preserves the P0 gatewayDisplay compatibility path while the guarded transition path exists.",
+                "notes": "realm target would route through the configured gateway entrypoint; --apply preserves the gatewayDisplay compatibility path while the guarded transition path exists.",
             });
             if json {
                 let mut rendered = serde_json::to_string_pretty(&summary).map_err(|err| {
@@ -16016,7 +16016,7 @@ mod host_install_dispatch_tests {
         let envelope = broker_error_envelope(
             "host install",
             Some("RunHostInstall failed"),
-            Some("W15"),
+            Some("legacy"),
             Some("Broker.ValidateBundleFailed"),
             Some("raw remediation should not win"),
         );
@@ -16040,7 +16040,7 @@ mod host_install_dispatch_tests {
         let envelope = broker_error_envelope(
             "host install",
             Some("RunHostInstall failed"),
-            Some("W15"),
+            Some("legacy"),
             None,
             Some("generic remediation"),
         );
@@ -16072,7 +16072,7 @@ mod host_install_dispatch_tests {
                 "type": "mutatingVerbResponse",
                 "verb": "host install",
                 "outcome": "broker-error",
-                "targetWave": "W15",
+                "targetWave": "legacy",
                 "summary": "RunHostInstall failed",
                 "remediation": "RunHostInstall failed at the broker live handler. Admin: inspect `journalctl -u d2b-priv-broker` for the underlying syscall/exit code.",
             }),
