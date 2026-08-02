@@ -51,6 +51,7 @@ pub mod testing;
 
 pub use agent::{
     GeneratedProviderServiceServer, ProviderAgentAdapter, ProviderAgentProcess, ProviderService,
+    validate_attachment_indexes,
 };
 pub use audit::{
     DEFAULT_AUDIT_CAPACITY, ProviderAgentAuditEvent, ProviderAgentAuditLog,

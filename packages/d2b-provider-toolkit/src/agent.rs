@@ -16,6 +16,19 @@ use crate::{
     ProviderToolkitError,
 };
 
+/// Validate the strict attachment-index sequence carried by a Provider
+/// adapter.  Descriptors are numbered from zero and may not repeat, reorder,
+/// or skip an index; rejecting before dispatch prevents an adapter from
+/// confusing a stale attachment with a current one.
+pub fn validate_attachment_indexes(indexes: &[u32]) -> Result<(), ProviderToolkitError> {
+    for (expected, observed) in indexes.iter().enumerate() {
+        if *observed != expected as u32 {
+            return Err(ProviderToolkitError::NonMonotoneAttachmentIndexes);
+        }
+    }
+    Ok(())
+}
+
 /// Provider-specific service implementation behind the generic adapter.
 pub trait ProviderService: Send + Sync {
     /// Dispatch one canonical method payload.
@@ -203,5 +216,18 @@ mod tests {
         let mut process = ProviderAgentProcess::new(5_000).unwrap();
         process.stop();
         assert!(process.stopping());
+    }
+
+    #[test]
+    fn attachment_indexes_are_strictly_monotone() {
+        assert!(validate_attachment_indexes(&[0, 1, 2]).is_ok());
+        assert_eq!(
+            validate_attachment_indexes(&[0, 2]),
+            Err(ProviderToolkitError::NonMonotoneAttachmentIndexes)
+        );
+        assert_eq!(
+            validate_attachment_indexes(&[1, 0]),
+            Err(ProviderToolkitError::NonMonotoneAttachmentIndexes)
+        );
     }
 }

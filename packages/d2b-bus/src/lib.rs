@@ -9,6 +9,10 @@ extern crate self as d2b_bus;
 
 pub mod audit;
 pub mod authorization;
+pub mod driver;
+pub mod engine;
+pub mod error;
+pub mod lifecycle;
 pub mod operations;
 pub mod registry;
 pub mod relay;

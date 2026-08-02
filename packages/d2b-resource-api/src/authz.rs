@@ -12,6 +12,7 @@ use d2b_contracts::v3::{
     MAX_ROLE_RULE_RESOURCE_TYPES, MAX_ROLE_RULE_VERBS, MAX_ROLE_RULES, ResourceErrorKind,
     ResourceName, ResourceRef, ResourceTypeName, ResourceUid, ZoneId, ZoneRevision,
 };
+use d2b_contracts::v3::{RoleBindingSpec, RoleResourceVerb, RoleRule, RoleSessionVerb, RoleSpec};
 use d2b_core_controller::rbac::{AuthorizationCacheKey, PolicyRevisionSet, PositiveDecisionCache};
 use d2b_resource_store::{
     AdmittedAuthorization, AdmittedAuthorizationTarget, AdmittedVerb, PolicySnapshot,
@@ -230,6 +231,93 @@ pub enum BootstrapPhase {
     Disabled,
 }
 
+/// Trusted store facts from which the one-way bootstrap phase is derived.
+///
+/// The Zone runtime obtains these values from the same redb read snapshot used
+/// for admission.  There is no constructor accepting Nix, environment,
+/// caller, or API policy input.
+#[derive(Clone, PartialEq, Eq)]
+pub struct BootstrapStoreFacts {
+    /// The store's self Zone name.
+    zone: ZoneId,
+    /// Durable `store_meta.policy_revision`.
+    policy_revision: u64,
+    /// Bootstrap Provider rows present in the `type_index`, by fixed name.
+    bootstrap_provider_uids: BTreeMap<ResourceName, ResourceUid>,
+    /// Current fixed core-controller generation.
+    controller_generation: ControllerGeneration,
+    /// Current bootstrap Provider generation.
+    provider_generation: d2b_contracts::v3::ResourceGeneration,
+}
+
+impl BootstrapStoreFacts {
+    /// Construct facts only at the trusted Zone-store adapter boundary.
+    #[allow(dead_code)]
+    pub(crate) fn from_trusted_store(
+        zone: ZoneId,
+        policy_revision: u64,
+        bootstrap_provider_uids: BTreeMap<ResourceName, ResourceUid>,
+        controller_generation: ControllerGeneration,
+        provider_generation: d2b_contracts::v3::ResourceGeneration,
+    ) -> Self {
+        Self {
+            zone,
+            policy_revision,
+            bootstrap_provider_uids,
+            controller_generation,
+            provider_generation,
+        }
+    }
+}
+
+impl core::fmt::Debug for BootstrapStoreFacts {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("BootstrapStoreFacts")
+            .field("policy_revision", &"<redacted>")
+            .field(
+                "bootstrap_provider_count",
+                &self.bootstrap_provider_uids.len(),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+/// Derive the bootstrap phase from trusted store state only.
+///
+/// A policy revision other than zero permanently disables bootstrap.  At
+/// revision zero, the presence of both fixed Provider rows selects the
+/// provisioned phase; a partial or empty index remains unprovisioned.
+pub fn derive_bootstrap_phase(facts: &BootstrapStoreFacts) -> BootstrapPhase {
+    if facts.policy_revision != 0 {
+        return BootstrapPhase::Disabled;
+    }
+    let core = ResourceName::parse("system-core").ok();
+    let minijail = ResourceName::parse("system-minijail").ok();
+    match (
+        core.and_then(|name| facts.bootstrap_provider_uids.get(&name)),
+        minijail.and_then(|name| facts.bootstrap_provider_uids.get(&name)),
+    ) {
+        (Some(system_core_uid), Some(system_minijail_uid)) => BootstrapPhase::Provisioned {
+            zone: facts.zone.clone(),
+            system_core_uid: system_core_uid.clone(),
+            system_minijail_uid: system_minijail_uid.clone(),
+            controller_generation: facts.controller_generation,
+            provider_generation: facts.provider_generation,
+        },
+        _ => BootstrapPhase::Unprovisioned {
+            zone: facts.zone.clone(),
+            controller_generation: facts.controller_generation,
+            provider_generation: facts.provider_generation,
+        },
+    }
+}
+
+/// The only allowed durable bootstrap publication transition.
+pub const fn bootstrap_policy_transition(old_revision: u64, new_revision: u64) -> bool {
+    old_revision == 0 && new_revision == 1
+}
+
 /// Exact subject binding compiled from one RoleBinding.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct BoundSubject {
@@ -432,6 +520,114 @@ impl PolicyRule {
                     .as_ref()
                     .is_some_and(|value| self.execution_refs.contains(value)))
     }
+
+    fn permits_session_target(
+        &self,
+        target: &AuthorizationTarget,
+        zone: &ZoneId,
+        verb: SessionVerb,
+    ) -> bool {
+        self.session_verbs.contains(&verb)
+            && (self.resource_types.is_empty()
+                || self.resource_types.contains(&target.resource_type))
+            && (self.zones.is_empty() || self.zones.contains(zone))
+            && (self.resource_names.is_empty()
+                || target
+                    .resource_name
+                    .as_ref()
+                    .is_some_and(|name| self.resource_names.contains(name)))
+            && (self.subresources.is_empty()
+                || target
+                    .subresource
+                    .as_ref()
+                    .is_some_and(|value| self.subresources.contains(value)))
+            && (self.execution_refs.is_empty()
+                || target
+                    .execution_ref
+                    .as_ref()
+                    .is_some_and(|value| self.execution_refs.contains(value)))
+    }
+
+    /// Compile one public Role rule into the evaluator's private projection.
+    ///
+    /// The conversion is intentionally one-way.  The evaluator never exposes
+    /// its internal sets as an alternate resource schema, and an explicit
+    /// reviewed wildcard is represented as an empty private name set only
+    /// after provenance has been checked by the caller.
+    pub fn from_role_rule(
+        catalog: &ApiCatalog,
+        rule: &RoleRule,
+        core_controller_generated: bool,
+    ) -> Result<Self, AuthorizationPolicyError> {
+        rule.validate_provenance(core_controller_generated)
+            .map_err(|_| AuthorizationPolicyError::RoleSchema)?;
+        let resource_names = if rule.resource_names().iter().any(|name| name == "*") {
+            if !core_controller_generated || rule.resource_names().len() != 1 {
+                return Err(AuthorizationPolicyError::WildcardRestricted);
+            }
+            Vec::new()
+        } else {
+            rule.resource_names()
+                .iter()
+                .map(|name| ResourceName::parse(name.clone()))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|_| AuthorizationPolicyError::RoleSchema)?
+        };
+        let resource_verbs = rule
+            .verbs()
+            .iter()
+            .copied()
+            .map(role_resource_verb)
+            .collect::<Vec<_>>();
+        let session_verbs = rule
+            .session_verbs()
+            .iter()
+            .copied()
+            .map(role_session_verb)
+            .collect::<Vec<_>>();
+        Self::new(
+            catalog,
+            rule.resource_types().iter().cloned(),
+            resource_verbs,
+            session_verbs,
+            rule.subresources()
+                .iter()
+                .map(|selector| selector.as_str().to_owned()),
+            resource_names,
+            rule.zones().iter().cloned(),
+            rule.execution_refs().iter().cloned(),
+        )
+    }
+}
+
+fn role_resource_verb(value: RoleResourceVerb) -> ResourceVerb {
+    match value {
+        RoleResourceVerb::Get => ResourceVerb::Get,
+        RoleResourceVerb::List => ResourceVerb::List,
+        RoleResourceVerb::Watch => ResourceVerb::Watch,
+        RoleResourceVerb::Create => ResourceVerb::Create,
+        RoleResourceVerb::UpdateSpec => ResourceVerb::UpdateSpec,
+        RoleResourceVerb::UpdateStatus => ResourceVerb::UpdateStatus,
+        RoleResourceVerb::UpdateMetadata => ResourceVerb::UpdateMetadata,
+        RoleResourceVerb::UpdateFinalizers => ResourceVerb::UpdateFinalizers,
+        RoleResourceVerb::Delete => ResourceVerb::Delete,
+        RoleResourceVerb::UseCredential => ResourceVerb::UseCredential,
+        RoleResourceVerb::AdminCredential => ResourceVerb::AdminCredential,
+    }
+}
+
+fn role_session_verb(value: RoleSessionVerb) -> SessionVerb {
+    match value {
+        RoleSessionVerb::Connect => SessionVerb::Connect,
+        RoleSessionVerb::Invoke => SessionVerb::Invoke,
+        RoleSessionVerb::OpenStream => SessionVerb::OpenStream,
+        RoleSessionVerb::Relay => SessionVerb::Relay,
+        RoleSessionVerb::Attach => SessionVerb::Attach,
+        RoleSessionVerb::Cancel => SessionVerb::Cancel,
+        RoleSessionVerb::Observe => SessionVerb::Observe,
+        RoleSessionVerb::AuditExport => SessionVerb::AuditExport,
+        RoleSessionVerb::SupportBundle => SessionVerb::SupportBundle,
+    }
 }
 
 /// Validated evaluator projection of one Role.
@@ -460,6 +656,21 @@ impl CompiledRole {
         }
         Ok(Self { role_ref, rules })
     }
+
+    /// Compile a public Role resource.
+    pub fn from_spec(
+        role_ref: ResourceRef,
+        spec: &RoleSpec,
+        catalog: &ApiCatalog,
+        core_controller_generated: bool,
+    ) -> Result<Self, AuthorizationPolicyError> {
+        let rules = spec
+            .rules()
+            .iter()
+            .map(|rule| PolicyRule::from_role_rule(catalog, rule, core_controller_generated))
+            .collect::<Result<Vec<_>, _>>()?;
+        Self::new(role_ref, rules)
+    }
 }
 
 /// Validated evaluator projection of one RoleBinding.
@@ -469,6 +680,7 @@ pub struct CompiledRoleBinding {
     pub subjects: BTreeSet<BoundSubject>,
     pub scope: BindingScope,
     pub relay_authority: RelayGrantAuthority,
+    narrowing: Option<Vec<PolicyRule>>,
 }
 
 impl core::fmt::Debug for CompiledRoleBinding {
@@ -512,6 +724,7 @@ impl CompiledRoleBinding {
             subjects,
             scope,
             relay_authority,
+            narrowing: None,
         })
     }
 
@@ -534,6 +747,77 @@ impl CompiledRoleBinding {
                     .execution_ref
                     .as_ref()
                     .is_some_and(|reference| self.scope.execution_refs.contains(reference)))
+    }
+
+    fn permits_narrowed_target(&self, target: &AuthorizationTarget, zone: &ZoneId) -> bool {
+        self.narrowing
+            .as_ref()
+            .is_none_or(|rules| rules.iter().any(|rule| rule.permits_target(target, zone)))
+    }
+
+    fn permits_narrowed_session(
+        &self,
+        target: &AuthorizationTarget,
+        zone: &ZoneId,
+        verb: SessionVerb,
+    ) -> bool {
+        self.narrowing.as_ref().is_none_or(|rules| {
+            rules
+                .iter()
+                .any(|rule| rule.permits_session_target(target, zone, verb))
+        })
+    }
+
+    /// Compile a public RoleBinding after resolving each local subject UID.
+    ///
+    /// The resolver is owned by the Zone store. A missing UID is a typed
+    /// refusal, never a name-only grant, so recreating a same-named subject
+    /// cannot inherit the old binding.
+    pub fn from_spec(
+        spec: &RoleBindingSpec,
+        subject_uids: impl Fn(&ResourceRef) -> Option<ResourceUid>,
+        relay_authority: RelayGrantAuthority,
+    ) -> Result<Self, AuthorizationPolicyError> {
+        let subjects = spec
+            .subjects()
+            .iter()
+            .map(|subject_ref| {
+                let subject_uid =
+                    subject_uids(subject_ref).ok_or(AuthorizationPolicyError::SubjectUnresolved)?;
+                Ok(BoundSubject {
+                    subject_ref: subject_ref.clone(),
+                    subject_uid,
+                })
+            })
+            .collect::<Result<Vec<_>, AuthorizationPolicyError>>()?;
+        let mut scope = BindingScope::default();
+        if let Some(narrowing) = spec.scope_narrowing() {
+            for rule in narrowing.rules() {
+                if rule.resource_names().iter().any(|name| name == "*") {
+                    return Err(AuthorizationPolicyError::ScopeNotSubset);
+                }
+                scope.zones.extend(rule.zones().iter().cloned());
+                for name in rule.resource_names() {
+                    scope.resource_names.insert(
+                        ResourceName::parse(name.clone())
+                            .map_err(|_| AuthorizationPolicyError::ScopeNotSubset)?,
+                    );
+                }
+                scope
+                    .execution_refs
+                    .extend(rule.execution_refs().iter().cloned());
+            }
+        }
+        let mut binding = Self::new(spec.role_ref().clone(), subjects, scope, relay_authority)?;
+        if let Some(narrowing) = spec.scope_narrowing() {
+            let rules = narrowing
+                .rules()
+                .iter()
+                .map(|rule| PolicyRule::from_role_rule(&ApiCatalog::standard(), rule, false))
+                .collect::<Result<Vec<_>, _>>()?;
+            binding.narrowing = Some(rules);
+        }
+        Ok(binding)
     }
 }
 
@@ -860,7 +1144,15 @@ impl NativeAuthorizer {
                 if !rule.zones.is_empty() && !rule.zones.contains(zone) {
                     continue;
                 }
-                session_verbs.extend(rule.session_verbs.iter().copied());
+                for verb in &rule.session_verbs {
+                    if binding.narrowing.as_ref().is_none_or(|narrowing| {
+                        narrowing
+                            .iter()
+                            .any(|narrowed| narrowed.session_verbs.contains(verb))
+                    }) {
+                        session_verbs.insert(*verb);
+                    }
+                }
                 for resource_type in &rule.resource_types {
                     for verb in &rule.resource_verbs {
                         if rule.resource_names.is_empty() {
@@ -871,7 +1163,9 @@ impl NativeAuthorizer {
                                 subresource: None,
                                 execution_ref: None,
                             };
-                            if binding.permits_scope(&target, zone) && !resources.contains(&target)
+                            if binding.permits_scope(&target, zone)
+                                && binding.permits_narrowed_target(&target, zone)
+                                && !resources.contains(&target)
                             {
                                 resources.push(target);
                             }
@@ -885,6 +1179,7 @@ impl NativeAuthorizer {
                                     execution_ref: None,
                                 };
                                 if binding.permits_scope(&target, zone)
+                                    && binding.permits_narrowed_target(&target, zone)
                                     && !resources.contains(&target)
                                 {
                                     resources.push(target);
@@ -946,9 +1241,20 @@ fn evaluate_policy(
                 binding.contains_subject(context)
                     && binding.relay_authority != RelayGrantAuthority::None
             })
-            .filter_map(|binding| policy.roles.get(&binding.role_ref))
-            .flat_map(|role| &role.rules)
-            .any(|rule| rule.session_verbs.contains(&SessionVerb::Relay));
+            .any(|binding| {
+                policy.roles.get(&binding.role_ref).is_some_and(|role| {
+                    role.rules.iter().any(|rule| {
+                        request.targets.iter().any(|target| {
+                            rule.permits_session_target(target, &request.zone, SessionVerb::Relay)
+                                && binding.permits_narrowed_session(
+                                    target,
+                                    &request.zone,
+                                    SessionVerb::Relay,
+                                )
+                        })
+                    })
+                })
+            });
         if !relay_allowed {
             return Err(AuthorizationDenial::RelayGrantMissing);
         }
@@ -961,9 +1267,14 @@ fn evaluate_policy(
             .filter(|binding| {
                 binding.contains_subject(context) && binding.permits_scope(target, &request.zone)
             })
-            .filter_map(|binding| policy.roles.get(&binding.role_ref))
-            .flat_map(|role| &role.rules)
-            .any(|rule| rule.permits_target(target, &request.zone));
+            .any(|binding| {
+                policy.roles.get(&binding.role_ref).is_some_and(|role| {
+                    role.rules.iter().any(|rule| {
+                        rule.permits_target(target, &request.zone)
+                            && binding.permits_narrowed_target(target, &request.zone)
+                    })
+                })
+            });
         if !allowed {
             return Err(if relay_hop {
                 AuthorizationDenial::RelayTargetGrantMissing
@@ -1384,10 +1695,7 @@ fn authorize_bootstrap(
                 .is_none_or(|name| matches!(name.as_str(), "system-core" | "system-minijail")),
             _ => true,
         };
-        let unprovisioned_create = !unprovisioned
-            || (request.method == ApiMethod::Create
-                && matches!(target.resource_type.as_str(), "Zone" | "Provider"));
-        if !compiled_name || !unprovisioned_create {
+        if !compiled_name {
             return Err(AuthorizationDenial::BootstrapDenied);
         }
     }
@@ -1409,6 +1717,14 @@ pub enum AuthorizationPolicyError {
     RelayGrantRestricted,
     PolicyRevisionZero,
     PolicyStateRevisionMismatch,
+    /// A public Role rule could not be represented by the private evaluator.
+    RoleSchema,
+    /// An explicit wildcard was not created by a fixed core controller role.
+    WildcardRestricted,
+    /// A RoleBinding subject did not resolve to an immutable UID.
+    SubjectUnresolved,
+    /// A scope narrowing would widen or ambiguously represent its Role.
+    ScopeNotSubset,
 }
 
 impl core::fmt::Display for AuthorizationPolicyError {
@@ -1428,6 +1744,10 @@ impl core::fmt::Display for AuthorizationPolicyError {
             Self::PolicyStateRevisionMismatch => {
                 "installed policy revision does not match trusted runtime state"
             }
+            Self::RoleSchema => "Role resource schema cannot be compiled",
+            Self::WildcardRestricted => "Role wildcard requires fixed core provenance",
+            Self::SubjectUnresolved => "RoleBinding subject is unresolved",
+            Self::ScopeNotSubset => "RoleBinding scope narrowing is not a subset",
         })
     }
 }
@@ -1545,6 +1865,47 @@ mod tests {
             bootstrap_phase: phase,
             now_tick: 1,
         }
+    }
+
+    #[test]
+    fn bootstrap_phase_is_derived_only_from_policy_revision_and_fixed_provider_rows() {
+        let zone = ZoneId::parse("dev").unwrap();
+        let controller_generation = ControllerGeneration::new(11).unwrap();
+        let provider_generation = ResourceGeneration::new(12).unwrap();
+        let facts = BootstrapStoreFacts {
+            zone: zone.clone(),
+            policy_revision: 0,
+            bootstrap_provider_uids: BTreeMap::new(),
+            controller_generation,
+            provider_generation,
+        };
+        assert!(matches!(
+            derive_bootstrap_phase(&facts),
+            BootstrapPhase::Unprovisioned { .. }
+        ));
+
+        let mut provisioned = facts.clone();
+        provisioned.bootstrap_provider_uids.insert(
+            ResourceName::parse("system-core").unwrap(),
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174000").unwrap(),
+        );
+        provisioned.bootstrap_provider_uids.insert(
+            ResourceName::parse("system-minijail").unwrap(),
+            ResourceUid::parse("123e4567-e89b-42d3-a456-426614174001").unwrap(),
+        );
+        assert!(matches!(
+            derive_bootstrap_phase(&provisioned),
+            BootstrapPhase::Provisioned { .. }
+        ));
+
+        provisioned.policy_revision = 1;
+        assert_eq!(
+            derive_bootstrap_phase(&provisioned),
+            BootstrapPhase::Disabled
+        );
+        assert!(bootstrap_policy_transition(0, 1));
+        assert!(!bootstrap_policy_transition(1, 2));
+        assert!(!bootstrap_policy_transition(0, 2));
     }
 
     fn bootstrap_target(resource_type: &str, verb: ResourceVerb) -> AuthorizationTarget {

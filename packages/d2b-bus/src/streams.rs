@@ -14,6 +14,11 @@ use crate::{
     router::{BusEvent, BusFailureReason, BusObserver},
 };
 
+// The bus owns addressing and admission, while the portable session crate
+// owns the protocol stream FSM.  Re-exporting that canonical FSM here keeps
+// callers from constructing a second half-close/reset implementation.
+pub use d2b_session::{NamedStreamMux, StreamEvent, StreamId, StreamPhase};
+
 /// Default maximum bytes credited to one stream.
 pub const DEFAULT_MAX_STREAM_CREDIT: usize = 256 * 1024;
 /// Default maximum queued bytes across the bus.

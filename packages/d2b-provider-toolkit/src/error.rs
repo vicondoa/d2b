@@ -31,6 +31,8 @@ pub enum ProviderToolkitError {
     /// No dispatch slot is available; the agent is already serving its
     /// frozen in-flight maximum.
     DispatchSaturated,
+    /// Attachment descriptor indexes were not strictly monotone.
+    NonMonotoneAttachmentIndexes,
 }
 
 impl ProviderToolkitError {
@@ -44,11 +46,12 @@ impl ProviderToolkitError {
             Self::BootstrapLocalityRejected => "bootstrap-locality-rejected",
             Self::CapacityOutOfRange => "capacity-out-of-range",
             Self::DispatchSaturated => "dispatch-saturated",
+            Self::NonMonotoneAttachmentIndexes => "non-monotone-attachment-indexes",
         }
     }
 
     /// The complete closed code set, for conformance assertions.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::BootstrapProviderMismatch,
         Self::BootstrapZoneMismatch,
         Self::BootstrapRefWrongType,
@@ -56,6 +59,7 @@ impl ProviderToolkitError {
         Self::BootstrapLocalityRejected,
         Self::CapacityOutOfRange,
         Self::DispatchSaturated,
+        Self::NonMonotoneAttachmentIndexes,
     ];
 }
 
