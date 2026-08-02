@@ -106,4 +106,88 @@ mod tests {
         drop(store);
         let _ = std::fs::remove_file(path);
     }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn live_fanout_shares_one_immutable_batch_for_identical_filters() {
+        let path = fixture_path("shared-live-fanout");
+        let store = Store::open(&path).await.unwrap();
+        let filter = BTreeSet::from(["Process".to_owned()]);
+        let mut first = store.watch(0, filter.clone()).await.unwrap();
+        let mut second = store.watch(0, filter).await.unwrap();
+
+        put_with_backpressure_retry(&store, "live", Mutation::create(synthetic_resource(0)))
+            .await
+            .unwrap();
+
+        let first_batch = first.recv().await.unwrap();
+        let second_batch = second.recv().await.unwrap();
+        assert!(
+            std::sync::Arc::ptr_eq(&first_batch, &second_batch),
+            "matching watchers must share one immutable ChangeBatch"
+        );
+        assert_eq!(first_batch.entries.len(), 1);
+        let stats = store.stats().await.unwrap();
+        assert_eq!(stats.shared_batches, 1);
+        assert_eq!(stats.shared_batch_fanout_refs, 2);
+        assert_eq!(stats.write_queue_capacity, 256);
+        assert_eq!(stats.write_queue_depth, 0);
+
+        drop(store);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn live_fanout_materializes_once_per_distinct_matching_filter() {
+        let path = fixture_path("shared-filtered-live-fanout");
+        let store = Store::open(&path).await.unwrap();
+        let process = BTreeSet::from(["Process".to_owned()]);
+        let device = BTreeSet::from(["Device".to_owned()]);
+        let mut first = store.watch(0, process.clone()).await.unwrap();
+        let mut second = store.watch(0, process).await.unwrap();
+        let mut nonmatching = store.watch(0, device).await.unwrap();
+
+        put_with_backpressure_retry(&store, "live", Mutation::create(synthetic_resource(0)))
+            .await
+            .unwrap();
+
+        let first_batch = first.recv().await.unwrap();
+        let second_batch = second.recv().await.unwrap();
+        assert!(std::sync::Arc::ptr_eq(&first_batch, &second_batch));
+        let nonmatching_batch = nonmatching.recv().await.unwrap();
+        assert!(nonmatching_batch.entries.is_empty());
+        let stats = store.stats().await.unwrap();
+        assert_eq!(stats.shared_batches, 2);
+        assert_eq!(stats.shared_batch_fanout_refs, 3);
+
+        drop(store);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn high_water_replay_seeks_without_scanning_or_decoding_older_rows() {
+        let path = fixture_path("high-water-range-seek");
+        let store = Store::open(&path).await.unwrap();
+        for index in 0..4 {
+            put_with_backpressure_retry(
+                &store,
+                "seed",
+                Mutation::create(synthetic_resource(index)),
+            )
+            .await
+            .unwrap();
+        }
+        let high_water = store.current_revision().await.unwrap();
+        let _watch = store
+            .watch(high_water, BTreeSet::from(["Process".to_owned()]))
+            .await
+            .unwrap();
+
+        let stats = store.stats().await.unwrap();
+        assert_eq!(stats.replay_range_seeks, 1);
+        assert_eq!(stats.replay_rows_scanned, 0);
+        assert_eq!(stats.replay_rows_decoded, 0);
+
+        drop(store);
+        let _ = std::fs::remove_file(path);
+    }
 }

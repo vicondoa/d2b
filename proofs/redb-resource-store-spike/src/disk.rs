@@ -1416,7 +1416,10 @@ mod tests {
     fn streaming_replay_after_max_revision_seeks_nothing_and_replays_nothing() {
         let path = crate::fixture_path("replay-max-revision-boundary");
         let store = DiskStore::open_or_create(&path).unwrap();
-        let created = apply_one(&store, Mutation::create(crate::model::synthetic_resource(1)));
+        let created = apply_one(
+            &store,
+            Mutation::create(crate::model::synthetic_resource(1)),
+        );
         assert!(created.revision > 0);
 
         let mut from_zero = ReplayScan::default();

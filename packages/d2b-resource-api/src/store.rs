@@ -3,25 +3,29 @@
 use std::{future::Future, sync::Arc};
 
 use d2b_resource_store::{
-    StoreCommitResult, StoreError, StoreGetRequest, StoreInspectSchemaRequest, StoreListRequest,
-    StoreListResult, StoreResolveRequest, StoreResolvedIdentity, StoreWatchReceipt,
-    StoreWatchRequest, StoredResource, StoredSchema,
+    SealedMutation, StoreCommitResult, StoreError, StoreGetRequest, StoreInspectSchemaRequest,
+    StoreListRequest, StoreListResult, StoreResolveRequest, StoreResolvedIdentity,
+    StoreWatchReceipt, StoreWatchRequest, StoredResource, StoredSchema,
 };
 
-use crate::admission::{AdmittedMutation, StoreAdmissionBinding, VerifiedMutation};
+use crate::admission::{AdmittedMutation, StoreAdmissionBinding};
 
 /// Trusted persistence seam reached only after instance-bound admission verification.
 ///
-/// The checked store guarantees that a caller cannot construct the
-/// [`VerifiedMutation`] passed to [`ResourceStoreBackend::commit_verified`]
-/// without a successful native authorization evaluation, and that the
-/// resulting evidence is verified against the identity of this store.
+/// A correctly wired production store accepts only evidence from its paired
+/// issuer. A caller can construct a locally paired seal for a store it owns,
+/// but foreign locally-paired seals are inert here: this store's acceptor
+/// rejects them before the evidence reaches
+/// [`ResourceStoreBackend::commit_verified`]. In production, the paired issuer
+/// is retained by the native authorization path, so accepted evidence follows
+/// a successful native authorization evaluation and is verified against this
+/// store's identity.
 ///
 /// This seal does not constrain the backend implementation. A backend could
 /// ignore a verified mutation, change storage through another path, or omit
 /// required transaction checks. Implementations are therefore part of the
 /// trusted computing base: they must mutate only from the supplied
-/// [`VerifiedMutation`], recheck its captured revisions in the write
+/// [`SealedMutation`], recheck its captured revisions in the write
 /// transaction, preserve the store's structural and atomicity invariants, and
 /// expose no independent mutation path. A production backend requires security
 /// review and conformance tests for these obligations before it is registered.
@@ -53,8 +57,84 @@ pub trait ResourceStoreBackend: Send + Sync {
 
     fn commit_verified(
         &self,
-        mutation: VerifiedMutation,
+        mutation: SealedMutation,
     ) -> impl Future<Output = Result<StoreCommitResult, StoreError>> + Send;
+}
+
+/// API bridge that owns the concrete mutation-seal store binding.
+///
+/// A caller can construct a locally paired seal, but foreign locally-paired
+/// seals are inert: a correctly wired production store accepts only evidence
+/// from the issuer paired with its own acceptor.
+///
+/// ```compile_fail
+/// use d2b_resource_api::RedbBackend;
+/// use d2b_resource_store::SealedMutation;
+///
+/// fn forge() -> SealedMutation {
+///     SealedMutation {}
+/// }
+/// ```
+pub struct RedbBackend {
+    store: d2b_resource_store_redb::RedbResourceStore,
+}
+
+impl core::fmt::Debug for RedbBackend {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("RedbBackend(<redacted>)")
+    }
+}
+
+impl RedbBackend {
+    pub const fn new(store: d2b_resource_store_redb::RedbResourceStore) -> Self {
+        Self { store }
+    }
+}
+
+impl ResourceStoreBackend for RedbBackend {
+    async fn get(&self, request: StoreGetRequest) -> Result<StoredResource, StoreError> {
+        self.store.get(request).await
+    }
+
+    async fn list(&self, request: StoreListRequest) -> Result<StoreListResult, StoreError> {
+        self.store.list(request).await
+    }
+
+    async fn watch(&self, request: StoreWatchRequest) -> Result<StoreWatchReceipt, StoreError> {
+        self.store.watch(request).await
+    }
+
+    async fn resolve_ref(
+        &self,
+        request: StoreResolveRequest,
+    ) -> Result<StoreResolvedIdentity, StoreError> {
+        self.store.resolve_ref(request).await
+    }
+
+    async fn inspect_schema(
+        &self,
+        request: StoreInspectSchemaRequest,
+    ) -> Result<StoredSchema, StoreError> {
+        self.store.inspect_schema(request).await
+    }
+
+    async fn commit_verified(
+        &self,
+        mutation: SealedMutation,
+    ) -> Result<StoreCommitResult, StoreError> {
+        self.store.commit_verified(mutation).await
+    }
+}
+
+#[cfg(test)]
+mod redb_tests {
+    use super::*;
+
+    #[test]
+    fn concrete_redb_backend_implements_the_checked_api_seam() {
+        fn assert_backend<T: ResourceStoreBackend>() {}
+        assert_backend::<RedbBackend>();
+    }
 }
 
 /// A native authorizer has already been bound to a store backend.
@@ -123,7 +203,10 @@ where
         &self,
         mutation: AdmittedMutation,
     ) -> impl Future<Output = Result<StoreCommitResult, StoreError>> + Send {
-        let verified = self.admission.verify(mutation);
-        async move { self.backend.commit_verified(verified?).await }
+        let sealed = self
+            .admission
+            .verify(mutation)
+            .and_then(|body| self.admission.seal(body));
+        async move { self.backend.commit_verified(sealed?).await }
     }
 }

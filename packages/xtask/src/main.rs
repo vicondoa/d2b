@@ -21,6 +21,7 @@ use d2b_contracts::{
         VmDisplayListOutputV1, VmExecCreateOutputV1, VmExecKillOutputV1, VmExecListOutputV1,
         VmExecLogsOutputV1, VmExecStatusOutputV1,
     },
+    v3::storage::ZoneStoreStorageRow,
 };
 use d2b_core::{
     allocator_config::AllocatorJson, audio_policy::AudioPolicyState, bundle::Bundle,
@@ -350,6 +351,9 @@ fn main() -> std::process::ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
     match args.as_slice() {
         [command] if command == "gen-schemas" => run_task("gen-schemas", gen_schemas),
+        [command] if command == "gen-zone-storage-schema" => {
+            run_task("gen-zone-storage-schema", gen_zone_storage_schema)
+        }
         [command] if command == "gen-cli-schemas" => run_task("gen-cli-schemas", gen_cli_schemas),
         [command] if command == "gen-zone-schemas" => run_task("gen-zone-schemas", || {
             zone_schema::gen_zone_schemas(repo_root()?)
@@ -410,7 +414,7 @@ fn main() -> std::process::ExitCode {
         }
         _ => {
             eprintln!(
-                "usage: cargo run --manifest-path packages/Cargo.toml -p xtask -- <gen-schemas|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-error-codes|gen-provider-packaging|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|spec-registry|implementation-graph|process-marker-pin|check-provider-crate-layout|test-runtime-ledger <record|check|lint|help> [options]|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|panel-request|panel-attest|seal|merge-target|merge-eligibility|help> [options]|heavy-gate <-- <command> [args...] | verify-slot>>"
+                "usage: cargo run --manifest-path packages/Cargo.toml -p xtask -- <gen-schemas|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-error-codes|gen-provider-packaging|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|spec-registry|implementation-graph|process-marker-pin|check-provider-crate-layout|test-runtime-ledger <record|check|lint|help> [options]|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|panel-request|panel-attest|seal|merge-target|merge-eligibility|help> [options]|heavy-gate <-- <command> [args...] | verify-slot>>"
             );
             std::process::ExitCode::FAILURE
         }
@@ -763,6 +767,18 @@ fn gen_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
     ];
 
     write_schemas(&out_dir, &schemas)
+}
+
+fn gen_zone_storage_schema() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
+    let out_dir = repo_root()?.join("docs/reference/schemas/v3");
+    fs::create_dir_all(&out_dir)?;
+    write_schemas(
+        &out_dir,
+        &[(
+            "zone-storage.json",
+            schemars::schema_for!(ZoneStoreStorageRow),
+        )],
+    )
 }
 
 fn gen_cli_schemas() -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {

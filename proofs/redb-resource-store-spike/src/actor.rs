@@ -541,16 +541,18 @@ impl Actor {
                 // backpressure case, where the counters are most diagnostic)
                 // still accumulates the partial signals.
                 let mut scan = crate::disk::ReplayScan::default();
-                let result =
-                    self.disk
-                        .stream_revision_batches_after(after_revision, &mut scan, |mut batch| {
-                            batch.entries.retain(|entry| {
-                                resource_types.contains(&entry.resource.key.resource_type)
-                            });
-                            sender
-                                .try_send(Arc::new(batch))
-                                .map_err(|_| StoreError::Backpressure)
+                let result = self.disk.stream_revision_batches_after(
+                    after_revision,
+                    &mut scan,
+                    |mut batch| {
+                        batch.entries.retain(|entry| {
+                            resource_types.contains(&entry.resource.key.resource_type)
                         });
+                        sender
+                            .try_send(Arc::new(batch))
+                            .map_err(|_| StoreError::Backpressure)
+                    },
+                );
                 self.stats.replay_range_seeks += scan.range_seeks;
                 self.stats.replay_rows_scanned += scan.rows_scanned;
                 self.stats.replay_rows_decoded += scan.rows_decoded;
@@ -586,7 +588,8 @@ impl Actor {
                 let _ = response.send(self.disk.current_revision());
             }
             Command::Stats { response } => {
-                self.stats.write_queue_depth = u64::try_from(self.scheduler.len).unwrap_or(u64::MAX);
+                self.stats.write_queue_depth =
+                    u64::try_from(self.scheduler.len).unwrap_or(u64::MAX);
                 self.stats.write_queue_capacity = WRITE_QUEUE_CAPACITY as u64;
                 let _ = response.send(self.stats);
             }

@@ -40,6 +40,35 @@ let
     d2b.daemonExperimental.enable = lib.mkForce false;
   }) ]).config;
 
+  zoneStorageCfg = (mkEval [ base ({ ... }: {
+    d2b.daemonExperimental.enable = true;
+    d2b.zones.local-root = { };
+  }) ]).config;
+  zoneStorageArtifact =
+    zoneStorageCfg.d2b._bundle.extraArtifacts."zoneStorage-local-root";
+  installedZoneStorage =
+    zoneStorageCfg.environment.etc."d2b/zones/local-root/storage.json";
+  expectedZoneStorageData = {
+    zoneStoreId = "zone-store-local-root";
+    storageOwnerPrincipal = "d2b-zonert";
+    parentDirectoryId = "zone-store-parent-local-root";
+    ownership = {
+      owner = "d2b-zonert";
+      group = "d2b-zonert";
+      mode = "0640";
+      linkCount = 1;
+    };
+    filesystem = "regular-file-anchored-fd-relative-no-follow";
+    locking = "ofd-close-on-exec";
+    marker.identityMarkerId = "zone-store-marker-local-root";
+    replacementDetection = "fail-closed-on-missing-replaced-or-identity-mismatch";
+    fsync = "database-and-parent-directory";
+    publication = {
+      descriptor = "owned-descriptor-close-on-exec-verified-before-concurrency";
+      replacement = "atomic-rename-retain-prior-quarantine-ambiguity";
+    };
+  };
+
   storePathString = path:
     builtins.unsafeDiscardStringContext (toString path);
 in
@@ -91,6 +120,31 @@ in
     expected = {
       sourceHasDefaultName = true;
       group = "d2bd";
+    };
+  };
+
+  "zone-storage-contract/rendered-artifact-and-etc-wiring" = {
+    expr = {
+      data = zoneStorageArtifact.data;
+      renderedData = builtins.fromJSON zoneStorageArtifact.jsonText;
+      installFileName = zoneStorageArtifact.installFileName;
+      classification = zoneStorageArtifact.classification;
+      etc = {
+        sourceMatches = installedZoneStorage.source == zoneStorageArtifact.path;
+        inherit (installedZoneStorage) mode user group;
+      };
+    };
+    expected = {
+      data = expectedZoneStorageData;
+      renderedData = expectedZoneStorageData;
+      installFileName = "zones/local-root/storage.json";
+      classification = "contractPrivateNonSecret";
+      etc = {
+        sourceMatches = true;
+        mode = "0640";
+        user = "root";
+        group = "d2bd";
+      };
     };
   };
 

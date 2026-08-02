@@ -1,14 +1,16 @@
 //! Instance-bound admission witnesses owned by the native evaluator.
 
 use d2b_contracts::v3::{
-    CanonicalJsonValue, RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceEnvelope, ResourceUid, RetryClass,
+    CanonicalJsonValue, RESOURCE_ENVELOPE_DOMAIN_TAG, ResourceEnvelope, RetryClass,
     canonical_digest,
 };
+use d2b_resource_store::mutation_seal::MutationSealIssuer;
 use d2b_resource_store::{
-    AdmittedAuthorization, ExpectedRevision, MutationOrdinal, PolicySnapshot, ResourceMutationKind,
-    StoreError, StoreErrorKind, StoreMutation, StoreOperationContext,
+    AdmittedAuthorization, ExpectedRevision, MutationOrdinal, MutationSealBody, PolicySnapshot,
+    PreparedStoreMutation, ResourceMutationKind, SealedMutation, StoreError, StoreErrorKind,
+    StoreMutation, StoreOperationContext,
 };
-use std::{fmt::Write as _, fs::File, io::Read, sync::Arc};
+use std::sync::{Arc, Mutex};
 
 #[derive(Debug)]
 struct AdmissionAuthority;
@@ -53,6 +55,7 @@ impl core::fmt::Debug for StoreIdentity {
 pub(super) struct StoreAdmissionBinding {
     verifier: AdmissionVerifier,
     store_identity: StoreIdentity,
+    seal_issuer: Arc<Mutex<Option<MutationSealIssuer>>>,
 }
 
 impl core::fmt::Debug for StoreAdmissionBinding {
@@ -65,6 +68,7 @@ impl core::fmt::Debug for StoreAdmissionBinding {
 pub(crate) fn admission_pair() -> (AdmissionIssuer, StoreAdmissionBinding) {
     let authority = Arc::new(AdmissionAuthority);
     let store_identity = Arc::new(StoreIdentityAuthority);
+    let seal_issuer = Arc::new(Mutex::new(None));
     (
         AdmissionIssuer {
             authority: Arc::clone(&authority),
@@ -75,6 +79,7 @@ pub(crate) fn admission_pair() -> (AdmissionIssuer, StoreAdmissionBinding) {
             store_identity: StoreIdentity {
                 authority: store_identity,
             },
+            seal_issuer,
         },
     )
 }
@@ -218,90 +223,68 @@ impl core::fmt::Debug for AdmittedMutation {
     }
 }
 
-/// Mutation whose admission authority was matched to the store instance.
-pub struct VerifiedMutation {
-    admitted: AdmittedMutation,
-    mutations: Vec<PreparedStoreMutation>,
-}
-
-/// Backend-ready mutation carrying the final canonical identity and digest.
-pub struct PreparedStoreMutation {
-    mutation: StoreMutation,
-    resource_uid: Option<ResourceUid>,
-    payload_digest: Option<String>,
-}
-
-impl PreparedStoreMutation {
-    pub const fn mutation(&self) -> &StoreMutation {
-        &self.mutation
-    }
-
-    /// Final UID used by the resource record and every UID-keyed index.
-    pub const fn resource_uid(&self) -> Option<&ResourceUid> {
-        self.resource_uid.as_ref()
-    }
-
-    /// Digest of the final canonical bytes persisted by the backend.
-    pub fn payload_digest(&self) -> Option<&str> {
-        self.payload_digest.as_deref()
-    }
-}
-
-impl core::fmt::Debug for PreparedStoreMutation {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("PreparedStoreMutation")
-            .field("kind", &self.mutation.kind)
-            .field("has_resource_uid", &self.resource_uid.is_some())
-            .field("has_payload_digest", &self.payload_digest.is_some())
-            .finish()
-    }
-}
-
-impl VerifiedMutation {
-    pub fn mutations(&self) -> &[PreparedStoreMutation] {
-        &self.mutations
-    }
-
-    pub fn authorization(&self) -> &AdmittedAuthorization {
-        self.admitted.authorization()
-    }
-
-    pub fn policy_snapshot(&self) -> PolicySnapshot {
-        self.admitted.policy_snapshot()
-    }
-
-    pub fn operation(&self) -> &StoreOperationContext {
-        self.admitted.operation()
-    }
-}
-
-impl core::fmt::Debug for VerifiedMutation {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.write_str("VerifiedMutation(<redacted>)")
-    }
-}
-
 impl StoreAdmissionBinding {
     pub(super) fn verify(
         &self,
         admitted: AdmittedMutation,
-    ) -> Result<VerifiedMutation, StoreError> {
+    ) -> Result<MutationSealBody, StoreError> {
         if !Arc::ptr_eq(&self.verifier.authority, &admitted.authority) {
             return Err(authority_mismatch());
         }
         if !Arc::ptr_eq(&self.store_identity.authority, &admitted.store_identity) {
             return Err(store_identity_mismatch());
         }
-        let mutations = admitted
-            .mutations
+        let AdmittedMutation {
+            mutations,
+            authorization,
+            policy_snapshot,
+            operation,
+            ..
+        } = admitted;
+        let mutations = mutations
             .iter()
             .cloned()
             .map(prepare_mutation)
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(VerifiedMutation {
-            admitted,
+        Ok(MutationSealBody {
             mutations,
+            authorization,
+            policy_snapshot,
+            operation,
         })
+    }
+
+    pub(super) fn seal(&self, body: MutationSealBody) -> Result<SealedMutation, StoreError> {
+        let issuer_guard = self.seal_issuer.lock().map_err(|_| {
+            StoreError::new(
+                StoreErrorKind::InternalIntegrityFailure,
+                None,
+                None,
+                RetryClass::Never,
+                "mutation-seal-authorizer-unavailable",
+            )
+        })?;
+        let issuer = issuer_guard.as_ref().ok_or_else(|| {
+            StoreError::new(
+                StoreErrorKind::InternalIntegrityFailure,
+                None,
+                None,
+                RetryClass::Never,
+                "mutation-seal-issuer-unavailable",
+            )
+        })?;
+        Ok(issuer.seal(body))
+    }
+
+    pub(super) fn has_seal_issuer(&self) -> bool {
+        self.seal_issuer
+            .lock()
+            .map(|issuer| issuer.is_some())
+            .unwrap_or(false)
+    }
+
+    pub(super) fn seal_issuer(&self) -> Arc<Mutex<Option<MutationSealIssuer>>> {
+        Arc::clone(&self.seal_issuer)
     }
 }
 
@@ -337,9 +320,9 @@ fn prepare_mutation(mut mutation: StoreMutation) -> Result<PreparedStoreMutation
                 .canonical_resource
                 .as_deref()
                 .ok_or_else(|| preparation_error("create-resource-body-missing"))?;
-            let (canonical, uid, digest) = finalize_create(source, &mutation)?;
+            let (canonical, digest) = validate_create(source, &mutation)?;
             mutation.canonical_resource = Some(canonical);
-            (Some(uid), Some(digest))
+            (None, Some(digest))
         }
         _ => match mutation.canonical_resource.as_deref() {
             Some(source) => {
@@ -357,19 +340,20 @@ fn prepare_mutation(mut mutation: StoreMutation) -> Result<PreparedStoreMutation
             None => (mutation.expected_uid.clone(), None),
         },
     };
-    Ok(PreparedStoreMutation {
+    Ok(PreparedStoreMutation::new(
         mutation,
         resource_uid,
         payload_digest,
-    })
+    ))
 }
 
-fn finalize_create(
+fn validate_create(
     source: &[u8],
     mutation: &StoreMutation,
-) -> Result<(Vec<u8>, ResourceUid, String), StoreError> {
+) -> Result<(Vec<u8>, String), StoreError> {
     let mut value = CanonicalJsonValue::parse(source)
         .map_err(|_| preparation_error("create-resource-body-invalid"))?;
+    let canonical = value.to_canonical_bytes();
     let CanonicalJsonValue::Object(root) = &mut value else {
         return Err(preparation_error("create-resource-body-invalid"));
     };
@@ -379,20 +363,15 @@ fn finalize_create(
     if metadata.contains_key("uid") {
         return Err(preparation_error("create-resource-uid-present"));
     }
-    let uid = mint_resource_uid()?;
     metadata.insert(
         "uid".to_owned(),
-        CanonicalJsonValue::String(uid.as_str().to_owned()),
+        CanonicalJsonValue::String("00000000-0000-4000-8000-000000000000".to_owned()),
     );
-    let canonical = value.to_canonical_bytes();
-    let envelope = ResourceEnvelope::from_json(&canonical)
+    let envelope = ResourceEnvelope::from_json(&value.to_canonical_bytes())
         .map_err(|_| preparation_error("create-resource-body-invalid"))?;
     validate_envelope_identity(&envelope, mutation)?;
-    if envelope.metadata().uid() != &uid {
-        return Err(preparation_error("create-resource-uid-mismatch"));
-    }
     let digest = canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical);
-    Ok((canonical, uid, digest))
+    Ok((canonical, digest))
 }
 
 fn validate_envelope_identity(
@@ -410,23 +389,6 @@ fn validate_envelope_identity(
         return Err(preparation_error("resource-envelope-identity-mismatch"));
     }
     Ok(())
-}
-
-fn mint_resource_uid() -> Result<ResourceUid, StoreError> {
-    let mut bytes = [0u8; 16];
-    File::open("/dev/urandom")
-        .and_then(|mut source| source.read_exact(&mut bytes))
-        .map_err(|_| preparation_error("resource-uid-entropy-unavailable"))?;
-    bytes[6] = (bytes[6] & 0x0f) | 0x40;
-    bytes[8] = (bytes[8] & 0x3f) | 0x80;
-    let mut rendered = String::with_capacity(36);
-    for (index, byte) in bytes.into_iter().enumerate() {
-        if matches!(index, 4 | 6 | 8 | 10) {
-            rendered.push('-');
-        }
-        write!(&mut rendered, "{byte:02x}").expect("writing to a String cannot fail");
-    }
-    ResourceUid::parse(rendered).map_err(|_| preparation_error("resource-uid-mint-invalid"))
 }
 
 fn preparation_error(reason_code: &'static str) -> StoreError {
@@ -506,8 +468,8 @@ mod tests {
             .expect("matching admission");
         let verified = store_binding.verify(admitted).expect("paired verifier");
 
-        assert!(verified.mutations().is_empty());
-        assert_eq!(verified.policy_snapshot().policy_revision, 1);
+        assert!(verified.mutations.is_empty());
+        assert_eq!(verified.policy_snapshot.policy_revision, 1);
     }
 
     #[test]
@@ -535,22 +497,12 @@ mod tests {
             .admit(vec![create], operation())
             .unwrap();
 
-        let error = store_binding.verify(admitted).unwrap_err();
+        let error = store_binding
+            .verify(admitted)
+            .err()
+            .expect("rejected admission");
         assert_eq!(error.kind(), StoreErrorKind::ResourceSchemaInvalid);
         assert_eq!(error.reason_code(), "create-resource-uid-present");
-    }
-
-    #[test]
-    fn minted_resource_uids_are_canonical_uuid_v4_values() {
-        let first = mint_resource_uid().unwrap();
-        let second = mint_resource_uid().unwrap();
-
-        assert_ne!(first, second);
-        assert_eq!(first.as_str().as_bytes()[14], b'4');
-        assert!(matches!(
-            first.as_str().as_bytes()[19],
-            b'8' | b'9' | b'a' | b'b'
-        ));
     }
 
     #[test]
@@ -562,7 +514,10 @@ mod tests {
             .admit(Vec::new(), operation())
             .unwrap();
 
-        let error = other_store_binding.verify(admitted).unwrap_err();
+        let error = other_store_binding
+            .verify(admitted)
+            .err()
+            .expect("rejected admission");
         assert_eq!(error.kind(), StoreErrorKind::InternalIntegrityFailure);
         assert_eq!(error.reason_code(), "admission-authority-mismatch");
     }
@@ -571,24 +526,26 @@ mod tests {
     fn verifier_rejects_a_mismatched_store_identity() {
         let (issuer, first_store_binding) = admission_pair();
         let (_, second_store_binding) = admission_pair();
-        let StoreAdmissionBinding {
-            verifier,
-            store_identity: _,
-        } = first_store_binding;
+        let StoreAdmissionBinding { verifier, .. } = first_store_binding;
         let StoreAdmissionBinding {
             verifier: _,
             store_identity,
+            ..
         } = second_store_binding;
         let mismatched_store_binding = StoreAdmissionBinding {
             verifier,
             store_identity,
+            seal_issuer: Arc::new(Mutex::new(None)),
         };
         let admitted = issuer
             .record_allow(authorization("work"), snapshot())
             .admit(Vec::new(), operation())
             .unwrap();
 
-        let error = mismatched_store_binding.verify(admitted).unwrap_err();
+        let error = mismatched_store_binding
+            .verify(admitted)
+            .err()
+            .expect("rejected admission");
         assert_eq!(error.kind(), StoreErrorKind::InternalIntegrityFailure);
         assert_eq!(error.reason_code(), "admission-store-identity-mismatch");
     }
@@ -602,7 +559,7 @@ mod tests {
             .unwrap();
         let verified = store_binding.verify(admitted).unwrap();
 
-        assert_eq!(verified.policy_snapshot(), snapshot());
+        assert_eq!(verified.policy_snapshot, snapshot());
     }
 
     #[test]
@@ -654,8 +611,7 @@ mod tests {
             .unwrap();
         let admitted_debug = format!("{admitted:?}");
         let verified = store_binding.verify(admitted).unwrap();
-        let prepared_debug = format!("{:?}", verified.mutations()[0]);
-        let verified_debug = format!("{verified:?}");
+        let prepared_debug = format!("{:?}", verified.mutations[0]);
 
         for rendered in [
             issuer_debug,
@@ -663,7 +619,6 @@ mod tests {
             permit_debug,
             admitted_debug,
             prepared_debug,
-            verified_debug,
         ] {
             for sentinel in [
                 ZONE_SENTINEL,

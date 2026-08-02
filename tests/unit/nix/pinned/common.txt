@@ -803,3 +803,4 @@ volume-mounts/issues-unsafe-equals
 volume-mounts/serial-null-defaults
 volume-mounts/serial-sanitizes-delimiters
 volume-mounts/size-bytes
+zone-storage-contract/rendered-artifact-and-etc-wiring

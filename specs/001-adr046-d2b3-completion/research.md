@@ -188,7 +188,7 @@ and process, not creation. Wave delivery can start immediately.
   `panel-attest`, `seal`, `merge-target`, `merge-eligibility`. `DELIVERY_SCHEMA_VERSION = 2`.
 - Panel policy constants are pinned in code: provider `github-copilot`, model
   `gemini-3.1-pro-preview`, reasoning effort `high`, and a closed 10-role roster asserted at
-  length 10. The coding model remains `gpt-5.6-sol`; the two are deliberately distinct so a
+  length 10. The coding model is `gpt-5.6-luna`; the two are deliberately distinct so a
   lane cannot both author a change and attest to it.
 - The heavy-gate semaphore, runtime ledger, spec-set generator, and implementation-graph
   generator are all landed and under `make test-drift`.

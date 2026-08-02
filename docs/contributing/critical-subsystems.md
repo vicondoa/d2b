@@ -63,6 +63,39 @@ Authenticated transport evidence and attachment credits are consumed into a priv
 
 Registration consumes the single-owner capability admission; comparing a clonable token is insufficient. Every route is exact, subject-bound, revision-bound, and Zone-checked before minting authority. There is no wildcard pub/sub and no direct store handle. `UnregisteredBusAdapter` is a deliberate unreachable seam and must remain unregistered until authenticated ComponentSession, the Zone bus, and Zone registration land together.
 
+## Resource mutation seal
+
+**Where:** `packages/d2b-resource-store/src/mutation_seal.rs`, `packages/d2b-resource-store-redb/src/`, and `packages/d2b-resource-api/src/`
+
+The resource write boundary is a concrete, process-local capability. Its
+invariants are:
+
+1. `SealedMutation` has one constructor, `MutationSealIssuer::seal`.
+2. `mutation_seal_pair` and `MutationSealIssuer::seal` each have one
+   non-test call site in the resource API.
+3. The store and redb crates never depend on the resource API or import RBAC
+   evaluator types.
+4. `RedbResourceStore::commit_verified` is the only mutating backend method
+   and consumes `SealedMutation` by value.
+5. The seal module has no test-only or non-test-only configuration branch.
+6. The external seal harness forces the real resource boundary through the
+   compiled test configuration rather than opening a test escape hatch.
+7. Seal types do not implement formatting, serialization, or comparison
+   traits, and the module renders no identity.
+8. A UUID, authority address, or database path never appears in diagnostics,
+   telemetry, or audit data.
+9. A store UUID is the canonical `ResourceUid`; it is compared only as a
+   diagnosable identity component after the private authority check.
+10. `StoreSlot` is a bounded, deterministic composition correlator. It is
+    never persisted, serialized, placed on the wire, or compared as identity.
+11. Store opening checks Zone, store UUID, and slot agreement for the acceptor,
+    and every startup error carries the slot of the store producing it.
+
+The issuer is retained by the native authorizer and the acceptor crosses into
+the concrete backend by value. A downstream crate can construct an inert pair
+for a store it owns, but it cannot open evidence against a store instance
+whose acceptor it does not hold.
+
 ## Authoritative subject resolution
 
 **Where:** `packages/d2b-bus/src/router.rs` (`ZoneRegistrar`), `packages/d2b-session-unix/src/subject.rs`
@@ -71,7 +104,7 @@ Registration consumes the single-owner capability admission; comparing a clonabl
 
 ## Capability mint surface allowlist
 
-**Where:** `packages/d2b-api-surface/`, `tests/tools/api-surface-json.sh`, `tests/golden/api-surface/`, the source/mutation checks in `packages/d2b-bus/tests/public_mint_surface.rs`, and the capability definitions in `packages/{d2b-bus,d2b-session,d2b-session-unix}/src/`
+**Where:** `packages/d2b-api-surface/`, `tests/tools/api-surface-json.sh`, `tests/golden/api-surface/`, the source/mutation checks in `packages/d2b-bus/tests/public_mint_surface.rs`, and the capability definitions in `packages/{d2b-bus,d2b-resource-store,d2b-session,d2b-session-unix}/src/`
 
 The **enforcing compiler leg** uses stable trait-solver ambiguity assertions in the defining crates. It rejects the enumerated `Clone`, `Copy`, `Default`, and `From` implementations for `ComponentSessionAdmission`, `VerifiedUnixPeer`, `SessionAcceptor<C>`, and `AuthenticatedComponentSession<C>` in every compiled configuration. Generic assertions catch unconditional blanket implementations; separate assertions cover `C = ()` and the workspace's `C = ComponentSessionAdmission` uses. They do not enumerate every bounded or downstream `From<X>` implementation, so private construction fields, sealed traits, instance identity, and consumed authority remain the primary boundary. The external-seals tests require `error[E0283]` plus `CapabilityMustNotImplementCloneCopyDefaultOrFrom`; fabrication fixtures require the construction diagnostic that proves private fields remain closed. The compiler-derived API leg builds one public and one private-plus-hidden rustdoc JSON census for the whole workspace under the pinned nightly, then validates exact public, capability-bearing, hidden-public, and explicit-impl snapshots through `d2b-api-surface`; this replaces the serial package-by-package HTML rustdoc loop. Regenerate those snapshots explicitly with `make api-surface-pin`. The **best-effort source leg** inventories explicit workspace impl and derive forms and compares them with `approved-capability-trait-impls.txt`. Module aliases and module-level globs resolve monotonically over a finite universe: parsed alias names form the binding universe, declared local module paths form the only target universe, explicit bindings shadow glob imports, conflicting glob results are ambiguous, and separate target/visibility and taint budgets bound the two fixed points. Capability propagation resolves every glob target through the completed module-alias fixed point, including renamed targets; a multiple-target result is ambiguous and fails closed. A target can never acquire a path outside that finite module set, so glob cycles cannot grow indefinitely. Capability relevance propagates through resolved aliases to every descendant module containing a discovered capability binding. Unknown glob destinations taint their importing module; that taint propagates through later glob re-exports and makes otherwise unclassified impl self types fail closed. Roots matching Cargo-declared dependency names are classified as external and import no local capability binding, so ordinary dependency globs remain accepted. Unresolved alias bindings imported by a glob remain tainted bindings and fail closed when used as an impl prefix. Block-local globs and impls carry lexical scope identities. The scanner accepts a same-scope direct module alias only when its target is resolved and no capability or tainted descendant is reachable; capability-relevant, ambiguous, unresolved, or otherwise unmodelled block-local glob aliases fail closed. This is intentionally not a claim of complete Rust glob resolution. Regression fixtures pin the terminating `a`/`b` glob cycle with explicit shadowing, nested re-export through glob, rejecting direct and grouped renamed glob targets, unresolved and two-hop glob taint, rejecting direct and grouped block-local capability globs, and accepting non-capability block-local and renamed-target globs. Existing direct, renamed, chained, cfg, raw-identifier, path-loaded, symlink, attribute, and duplicate-logical-module fixtures remain covered. The source leg also fails closed on generic or cfg-gated declared type aliases, cfg-gated renamed imports, unsupported aliases, lexically scoped capability aliases, unresolvable external modules, missing selected module files, and unrecognised module attributes. It does not perform general Rust name resolution, macro expansion, or `include!` expansion, and implementations outside the scanned workspace remain outside its claim. Approved snapshots retain rendered signatures for exact comparison; failure output uses fixed operation or syntax labels, package or crate identity, exit status, and crate-relative logical locations. Raw Cargo or rustdoc stderr, signature tokens, source text, attribute tokens, absolute scratch paths, and attacker-authored path literals are not emitted. The separate capability API inventory still propagates from fixed capability and claim identities through private field types. Widening any compiler seal or approved snapshot is a deliberate trust-boundary change requiring a stated reason.
 
@@ -195,4 +228,3 @@ is fail-closed (`path-safety-violation`,
 [`docs/explanation/host-prepare.md`](../explanation/host-prepare.md)
 § "NetworkManager / systemd-networkd coexistence" and ADR 0013 for
 the rationale.
-

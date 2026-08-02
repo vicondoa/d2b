@@ -3,6 +3,10 @@
   "public_api_crate": "d2b_bus",
   "capability_roots": [
     {"origin_crate":"d2b_bus","path":["d2b_bus","router","ComponentSessionAdmission"],"kind":"struct"},
+    {"origin_crate":"d2b_resource_store","path":["d2b_resource_store","mutation_seal","SealedMutation"],"kind":"struct"},
+    {"origin_crate":"d2b_resource_store","path":["d2b_resource_store","mutation_seal","MutationSealIssuer"],"kind":"struct"},
+    {"origin_crate":"d2b_resource_store","path":["d2b_resource_store","mutation_seal","MutationSealAcceptor"],"kind":"struct"},
+    {"origin_crate":"d2b_resource_store","path":["d2b_resource_store","mutation_seal","OpenedMutation"],"kind":"struct"},
     {"origin_crate":"d2b_session","path":["d2b_session","admission","AuthenticatedComponentSession"],"kind":"struct"},
     {"origin_crate":"d2b_session","path":["d2b_session","admission","SessionAcceptor"],"kind":"struct"},
     {"origin_crate":"d2b_session","path":["d2b_session","admission","SessionRegistrationCapability"],"kind":"trait"},

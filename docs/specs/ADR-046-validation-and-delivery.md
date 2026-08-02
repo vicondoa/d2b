@@ -1295,7 +1295,7 @@ reasoning_effort: high
 ```
 
 The panel model is deliberately **not** the model that writes the code. The
-implementation lanes for this program run on `gpt-5.6-sol`; binding the
+implementation lanes for this program run on `gpt-5.6-luna`; binding the
 reviewing roster to a different model means a lane cannot both author a change
 and attest to it, and `panel-attest` rejects any record carrying the coding
 model. Keep the two pins distinct when either is changed.

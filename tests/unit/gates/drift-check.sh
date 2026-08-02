@@ -48,6 +48,7 @@ run_xtask() {
 }
 
 run_xtask gen-schemas
+run_xtask gen-zone-storage-schema
 run_xtask gen-error-codes
 run_xtask gen-daemon-api
 run_xtask gen-cli-shell-artifacts

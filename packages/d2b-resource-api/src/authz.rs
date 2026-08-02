@@ -15,7 +15,7 @@ use d2b_contracts::v3::{
 use d2b_core_controller::rbac::{AuthorizationCacheKey, PolicyRevisionSet, PositiveDecisionCache};
 use d2b_resource_store::{
     AdmittedAuthorization, AdmittedAuthorizationTarget, AdmittedVerb, PolicySnapshot,
-    StoreMutation, StoreOperationContext,
+    StoreMutation, StoreOperationContext, StoreSealIdentity, StoreSlot,
 };
 use sha2::{Digest, Sha256};
 
@@ -24,6 +24,37 @@ use crate::admission::{
     admission_pair,
 };
 use crate::store::StoreBindingError;
+
+/// Why a native authorizer could not hand off its one store seal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum StoreSealHandoffError {
+    AlreadyTaken {
+        slot: StoreSlot,
+        zone: d2b_contracts::v3::ZoneId,
+    },
+    AuthorizerUnavailable {
+        slot: StoreSlot,
+        zone: d2b_contracts::v3::ZoneId,
+    },
+}
+
+impl core::fmt::Display for StoreSealHandoffError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::AlreadyTaken { slot, .. } => write!(
+                f,
+                "native authorizer already yielded its store-seal acceptor, refused for store slot {slot}; construct one NativeAuthorizer per resource store"
+            ),
+            Self::AuthorizerUnavailable { slot, .. } => write!(
+                f,
+                "native authorizer store-seal state is poisoned at store slot {slot}; this process must not continue serving the zone"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for StoreSealHandoffError {}
 
 const POSITIVE_CACHE_ENTRIES: usize = 4096;
 const POSITIVE_CACHE_TICKS: u64 = 30;
@@ -633,6 +664,8 @@ pub struct NativeAuthorizer {
     cache: PositiveDecisionCache,
     admission: AdmissionIssuer,
     store_binding: Mutex<Option<StoreAdmissionBinding>>,
+    store_seal:
+        std::sync::Arc<Mutex<Option<d2b_resource_store::mutation_seal::MutationSealIssuer>>>,
 }
 
 impl core::fmt::Debug for NativeAuthorizer {
@@ -677,16 +710,45 @@ impl NativeAuthorizer {
             policy: RwLock::new(policy.map(Arc::new)),
             cache: PositiveDecisionCache::new(POSITIVE_CACHE_ENTRIES),
             admission,
+            store_seal: store_binding
+                .as_ref()
+                .map(|binding| binding.seal_issuer())
+                .unwrap_or_else(|| std::sync::Arc::new(Mutex::new(None))),
             store_binding: Mutex::new(store_binding),
         })
     }
 
     pub(super) fn take_store_binding(&self) -> Result<StoreAdmissionBinding, StoreBindingError> {
-        self.store_binding
-            .lock()
-            .map_err(|_| StoreBindingError)?
-            .take()
-            .ok_or(StoreBindingError)
+        let mut binding = self.store_binding.lock().map_err(|_| StoreBindingError)?;
+        if !binding
+            .as_ref()
+            .is_some_and(StoreAdmissionBinding::has_seal_issuer)
+        {
+            return Err(StoreBindingError);
+        }
+        binding.take().ok_or(StoreBindingError)
+    }
+
+    pub fn take_store_seal(
+        &self,
+        store: StoreSealIdentity,
+    ) -> Result<d2b_resource_store::mutation_seal::MutationSealAcceptor, StoreSealHandoffError>
+    {
+        let slot = store.slot();
+        let zone = store.zone().clone();
+        let mut issuer =
+            self.store_seal
+                .lock()
+                .map_err(|_| StoreSealHandoffError::AuthorizerUnavailable {
+                    slot,
+                    zone: zone.clone(),
+                })?;
+        if issuer.is_some() {
+            return Err(StoreSealHandoffError::AlreadyTaken { slot, zone });
+        }
+        let (new_issuer, acceptor) = d2b_resource_store::mutation_seal::mutation_seal_pair(store);
+        *issuer = Some(new_issuer);
+        Ok(acceptor)
     }
 
     pub fn replace_policy(
@@ -1420,6 +1482,32 @@ mod tests {
             zone_policy_revision: ZoneRevision::new(revision),
             bootstrap_phase: BootstrapPhase::Disabled,
             now_tick: 1,
+        }
+    }
+
+    #[test]
+    fn take_store_seal_rejects_a_second_call() {
+        let authorizer = NativeAuthorizer::new(ApiCatalog::standard(), None).unwrap();
+        let identity = StoreSealIdentity::new(
+            StoreSlot::new(3).unwrap(),
+            ZoneId::parse("dev").unwrap(),
+            ResourceUid::parse("11111111-1111-4111-8111-111111111111").unwrap(),
+        );
+        authorizer
+            .take_store_seal(identity.clone())
+            .expect("first store-seal handoff");
+
+        let error = authorizer
+            .take_store_seal(identity)
+            .err()
+            .expect("second store-seal handoff must fail");
+        match error {
+            StoreSealHandoffError::AlreadyTaken { slot, .. } => {
+                assert_eq!(slot, StoreSlot::new(3).unwrap())
+            }
+            StoreSealHandoffError::AuthorizerUnavailable { .. } => {
+                panic!("a healthy authorizer reported poisoned seal state")
+            }
         }
     }
 
