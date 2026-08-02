@@ -27,9 +27,12 @@ mod error;
 mod identity;
 mod port;
 mod provider;
+mod sandbox;
 mod status;
+mod terminal;
 mod ticket;
 
+pub mod process_provider;
 pub mod suite;
 pub mod testing;
 
@@ -40,7 +43,15 @@ pub use identity::{
 };
 pub use port::{AdoptionCandidate, LaunchedProcess, ProcessLaunchEffectPort, StopClass};
 pub use provider::{AdoptionOutcome, ProcessProvider, ProcessProviderProfile};
+pub use sandbox::{CompiledSandbox, SandboxCompiler, StopProof, validate_stop_proof};
 pub use status::{
     AdoptionCondition, ExitClass, ExitObservation, ProcessPhaseClass, ProcessStatusReport,
 };
-pub use ticket::{CompiledDigests, LaunchTicket, OperationBinding};
+pub use terminal::ExitClass as ProcessExitClass;
+pub use terminal::{
+    BrokerTerminalResult, ExitClass as BrokerExitClass, ParentWaitEvidence, ProcessOutcome,
+};
+pub use ticket::{
+    CancellationBinding, CompiledDigests, InheritedFdTable, LaunchTicket, MAX_INHERITED_FDS,
+    MAX_LAUNCH_DEADLINE_MS, OperationBinding, ReadinessExpectation,
+};

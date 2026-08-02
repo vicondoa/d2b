@@ -161,6 +161,25 @@ let
           else lib.nameValuePair "Provider/${resourceName}" catalog.closureMetadata.configDigest)
       (emittedResources zone.resources)));
 
+  # ResourceType schema fingerprints are bundle-private integrity anchors.
+  # They are never copied into an individual resource envelope.
+  schemaFingerprints =
+    let
+      schemaNames = [
+        "Host"
+        "Guest"
+        "Process"
+        "EphemeralProcess"
+        "User"
+        "Endpoint"
+      ];
+    in
+      lib.listToAttrs (map
+        (name: lib.nameValuePair name
+          "sha256:${builtins.hashFile "sha256"
+            ../docs/reference/schemas/v3/${name}.schema.json}")
+        schemaNames);
+
   bundleData = zoneName: zone:
     let
       resources = zoneResourceList zoneName zone;
@@ -178,6 +197,7 @@ let
       inherit zoneName artifactCatalogPreimageJson;
       resourcesJson = builtins.toJSON data.resources;
       providerSchemaDigestsJson = builtins.toJSON data.providerSchemaDigests;
+      schemaFingerprintsJson = builtins.toJSON schemaFingerprints;
       zoneJson = builtins.toJSON zoneName;
     };
 

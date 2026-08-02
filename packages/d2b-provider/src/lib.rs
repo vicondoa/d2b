@@ -40,6 +40,9 @@ mod installation;
 mod registry;
 mod session;
 
+pub mod instance;
+pub mod rpc;
+
 pub use context::{CancellationToken, OwnedOperationContext};
 pub use descriptor::ProviderDescriptor;
 pub use error::{ProviderRuntimeError, RegistryBuildError};

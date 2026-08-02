@@ -12,6 +12,7 @@ pub mod generated;
 mod identity;
 pub mod service;
 mod store;
+pub mod zone_service;
 
 pub use adapter::{
     AdapterBindingError, RESOURCE_API_REACHABILITY, ResourceApiReachability, UnregisteredBusAdapter,
@@ -23,3 +24,7 @@ pub use d2b_resource_store::PreparedStoreMutation;
 pub use identity::AuthenticatedSubjectContext;
 pub use service::ResourceService;
 pub use store::{RedbBackend, ResourceStoreBackend, StoreBindingError};
+pub use zone_service::{
+    StrictWireMessage, ZoneCallContext, ZoneMethod, ZoneService, ZoneServiceError,
+    ZoneServiceHandler,
+};

@@ -24,13 +24,19 @@
 
 #![deny(missing_docs)]
 
+pub mod adoption;
+pub mod effect_port;
+pub mod guest_exec;
+pub mod launch;
+pub mod sandbox;
+
 use std::collections::BTreeSet;
 
 use d2b_contracts::v3::execution_policy::{BoundedToken, ExecutionDomain};
 use d2b_process_conformance::{
-    AdoptionCondition, AdoptionOutcome, IdentityBinding, LaunchTicket, ProcessConformanceError,
-    ProcessLaunchEffectPort, ProcessPhaseClass, ProcessProvider, ProcessProviderProfile,
-    ProcessStatusReport, WaitReapOwner,
+    AdoptionCondition, AdoptionOutcome, CancellationBinding, IdentityBinding, LaunchTicket,
+    ProcessConformanceError, ProcessLaunchEffectPort, ProcessPhaseClass, ProcessProvider,
+    ProcessProviderProfile, ProcessStatusReport, WaitReapOwner,
 };
 
 /// The Provider name this controller implements.
@@ -78,6 +84,9 @@ impl<P: ProcessLaunchEffectPort> SystemdProcessProvider<P> {
         }
         if !self.profile.supported_domains().contains(&ticket.domain()) {
             return Err(ProcessConformanceError::DomainNotSupported);
+        }
+        if ticket.operation().cancellation() == CancellationBinding::Cancelled {
+            return Err(ProcessConformanceError::Cancelled);
         }
         // A user-domain process runs in a verified transient user scope, so
         // the exact identity must already be resolved on the ticket.

@@ -43,6 +43,7 @@ mod client;
 mod dispatch;
 mod error;
 mod target;
+mod zone_client;
 
 pub use call::{
     CallOptions, CancellationToken, MAX_CORRELATION_ID_BYTES, MAX_IDEMPOTENCY_KEY_BYTES,
@@ -55,4 +56,8 @@ pub use error::ClientError;
 pub use target::{
     ResolvedTarget, RouteRecord, RouteTable, ServiceOwner, TargetInput, TargetResolver,
     TransportKind, TransportSelection, ZoneServiceKind,
+};
+pub use zone_client::{
+    ConnectedZoneSession, LocalZoneSession, ResourceVerb, ZoneClient, ZonePeerIdentity,
+    ZoneSocketConnector,
 };

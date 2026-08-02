@@ -12,6 +12,8 @@ use crate::identity::{ConfigurationDigest, IdentityBinding};
 /// Maximum launch deadline, matching the frozen resource-API request
 /// lifetime ceiling of 900000 ms.
 pub const MAX_LAUNCH_DEADLINE_MS: u32 = 900_000;
+/// Maximum inherited descriptors represented by one private launch table.
+pub const MAX_INHERITED_FDS: u16 = 256;
 
 /// The compiled configuration digests bound into one ticket.
 ///
@@ -40,6 +42,7 @@ pub struct CompiledDigests {
 pub struct OperationBinding {
     operation_uid: ResourceUid,
     deadline_ms: u32,
+    cancellation: CancellationBinding,
 }
 
 impl OperationBinding {
@@ -54,7 +57,18 @@ impl OperationBinding {
         Ok(Self {
             operation_uid,
             deadline_ms,
+            cancellation: CancellationBinding::Active,
         })
+    }
+
+    /// Bind a launch that has already been cancelled.
+    pub fn cancelled(
+        operation_uid: ResourceUid,
+        deadline_ms: u32,
+    ) -> Result<Self, ProcessConformanceError> {
+        let mut binding = Self::new(operation_uid, deadline_ms)?;
+        binding.cancellation = CancellationBinding::Cancelled;
+        Ok(binding)
     }
 
     /// Borrow the operation identity.
@@ -65,6 +79,72 @@ impl OperationBinding {
     /// Return the launch deadline in milliseconds.
     pub const fn deadline_ms(&self) -> u32 {
         self.deadline_ms
+    }
+
+    /// Return the cancellation state captured at admission.
+    pub const fn cancellation(&self) -> CancellationBinding {
+        self.cancellation
+    }
+}
+
+/// Cancellation state captured by a launch ticket.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum CancellationBinding {
+    /// The operation may proceed.
+    Active,
+    /// The operation was cancelled before the effect boundary.
+    Cancelled,
+}
+
+/// The expected readiness observation for a launched process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ReadinessExpectation {
+    /// No provider-defined readiness check is required.
+    None,
+    /// The provider must report readiness within this bounded interval.
+    Condition {
+        /// Maximum wait for the provider readiness observation.
+        timeout_ms: u32,
+    },
+}
+
+impl ReadinessExpectation {
+    /// Construct a bounded condition expectation.
+    pub fn condition(timeout_ms: u32) -> Result<Self, ProcessConformanceError> {
+        if timeout_ms == 0 || timeout_ms > MAX_LAUNCH_DEADLINE_MS {
+            return Err(ProcessConformanceError::InvalidTicket);
+        }
+        Ok(Self::Condition { timeout_ms })
+    }
+}
+
+/// The private inherited-fd table binding carried by a launch ticket.
+///
+/// Only the count and a digest cross the Provider seam.  Individual fd
+/// numbers and their object identities remain in the core effect adapter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InheritedFdTable {
+    digest: ConfigurationDigest,
+    count: u16,
+}
+
+impl InheritedFdTable {
+    /// Build a bounded private table binding.
+    pub fn new(digest: ConfigurationDigest, count: u16) -> Result<Self, ProcessConformanceError> {
+        if digest.is_zero() || count > MAX_INHERITED_FDS {
+            return Err(ProcessConformanceError::InvalidTicket);
+        }
+        Ok(Self { digest, count })
+    }
+
+    /// Borrow the table digest.
+    pub const fn digest(&self) -> ConfigurationDigest {
+        self.digest
+    }
+
+    /// Return the number of inherited descriptors.
+    pub const fn count(&self) -> u16 {
+        self.count
     }
 }
 
@@ -89,9 +169,12 @@ pub struct LaunchTicket {
     domain: ExecutionDomain,
     user_ref: Option<ResourceRef>,
     selected_provider: BoundedToken,
+    provider_ref: ResourceRef,
     digests: CompiledDigests,
     operation: OperationBinding,
     expected_identity: BTreeSet<IdentityBinding>,
+    readiness: ReadinessExpectation,
+    inherited_fd_table: InheritedFdTable,
 }
 
 impl LaunchTicket {
@@ -139,6 +222,9 @@ impl LaunchTicket {
         if expected_identity.is_empty() {
             return Err(ProcessConformanceError::InvalidTicket);
         }
+        let provider_ref = ResourceRef::parse(&format!("Provider/{}", selected_provider.as_str()))
+            .map_err(|_| ProcessConformanceError::InvalidTicket)?;
+        let inherited_fd_table = InheritedFdTable::new(digests.fd_table, 0)?;
         Ok(Self {
             process_ref,
             process_uid,
@@ -151,10 +237,27 @@ impl LaunchTicket {
             domain,
             user_ref,
             selected_provider,
+            provider_ref,
             digests,
             operation,
             expected_identity,
+            readiness: ReadinessExpectation::None,
+            inherited_fd_table,
         })
+    }
+
+    /// Attach a bounded readiness expectation.
+    #[must_use]
+    pub fn with_readiness(mut self, readiness: ReadinessExpectation) -> Self {
+        self.readiness = readiness;
+        self
+    }
+
+    /// Replace the inherited descriptor-table count after core has compiled
+    /// the table.
+    pub fn with_inherited_fd_count(mut self, count: u16) -> Result<Self, ProcessConformanceError> {
+        self.inherited_fd_table = InheritedFdTable::new(self.digests.fd_table, count)?;
+        Ok(self)
     }
 
     /// Borrow the Process or EphemeralProcess reference.
@@ -212,6 +315,11 @@ impl LaunchTicket {
         &self.selected_provider
     }
 
+    /// Borrow the selected Provider ResourceRef.
+    pub const fn provider_ref(&self) -> &ResourceRef {
+        &self.provider_ref
+    }
+
     /// Borrow the compiled configuration digests.
     pub const fn digests(&self) -> &CompiledDigests {
         &self.digests
@@ -225,6 +333,16 @@ impl LaunchTicket {
     /// Borrow the identity bindings this launch is expected to establish.
     pub const fn expected_identity(&self) -> &BTreeSet<IdentityBinding> {
         &self.expected_identity
+    }
+
+    /// Return the readiness expectation.
+    pub const fn readiness(&self) -> ReadinessExpectation {
+        self.readiness
+    }
+
+    /// Borrow the inherited descriptor-table binding.
+    pub const fn inherited_fd_table(&self) -> &InheritedFdTable {
+        &self.inherited_fd_table
     }
 }
 

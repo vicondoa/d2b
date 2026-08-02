@@ -23,13 +23,20 @@
 
 #![deny(missing_docs)]
 
+pub mod adoption;
+pub mod effect_port;
+pub mod effect_result;
+pub mod launch;
+pub mod sandbox_compiler;
+pub mod user_ns;
+
 use std::collections::BTreeSet;
 
 use d2b_contracts::v3::execution_policy::{BoundedToken, ExecutionDomain};
 use d2b_process_conformance::{
-    AdoptionCondition, AdoptionOutcome, IdentityBinding, LaunchTicket, ProcessConformanceError,
-    ProcessIdentityDigest, ProcessLaunchEffectPort, ProcessPhaseClass, ProcessProvider,
-    ProcessProviderProfile, ProcessStatusReport, WaitReapOwner,
+    AdoptionCondition, AdoptionOutcome, CancellationBinding, IdentityBinding, LaunchTicket,
+    ProcessConformanceError, ProcessIdentityDigest, ProcessLaunchEffectPort, ProcessPhaseClass,
+    ProcessProvider, ProcessProviderProfile, ProcessStatusReport, WaitReapOwner,
 };
 
 /// The Provider name this controller implements.
@@ -88,6 +95,9 @@ impl<P: ProcessLaunchEffectPort> MinijailProcessProvider<P> {
         }
         if !self.profile.supported_domains().contains(&ticket.domain()) {
             return Err(ProcessConformanceError::DomainNotSupported);
+        }
+        if ticket.operation().cancellation() == CancellationBinding::Cancelled {
+            return Err(ProcessConformanceError::Cancelled);
         }
         if ticket.domain() == ExecutionDomain::User && ticket.user_ref().is_none() {
             return Err(ProcessConformanceError::UserRefRequired);

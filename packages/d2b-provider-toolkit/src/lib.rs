@@ -38,6 +38,7 @@
 
 #![deny(missing_docs)]
 
+mod agent;
 mod audit;
 mod bootstrap;
 mod dispatch;
@@ -48,6 +49,9 @@ pub mod conformance;
 pub mod fakes;
 pub mod testing;
 
+pub use agent::{
+    GeneratedProviderServiceServer, ProviderAgentAdapter, ProviderAgentProcess, ProviderService,
+};
 pub use audit::{
     DEFAULT_AUDIT_CAPACITY, ProviderAgentAuditEvent, ProviderAgentAuditLog,
     ProviderAgentAuditOutcome,
