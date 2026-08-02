@@ -86,6 +86,14 @@ fn status(
     deadline: RequestDeadline,
 ) -> Result<i32, CliFailure> {
     let name = args.name.as_deref().unwrap_or_else(|| context.zone_name());
+    if args.watch && !mode.is_json() {
+        return Err(context.failure(
+            "ref-invalid",
+            "zone status --watch output is JSON-lines only",
+            mode,
+            2,
+        ));
+    }
     let value = context.invoke(
         "ZoneStatus",
         json!({

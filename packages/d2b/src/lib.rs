@@ -6,7 +6,7 @@ use std::{
     ffi::OsString,
     fmt::Write as _,
     fs,
-    io::{self, IsTerminal as _, Read as _, Write as _},
+    io::{self, IoSliceMut, IsTerminal as _, Read as _, Write as _},
     os::fd::{AsRawFd as _, OwnedFd},
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -43,9 +43,11 @@ use d2b_core::{
     realm_controller_config::RealmControllersJson,
 };
 use nix::sys::socket::{
-    AddressFamily, MsgFlags, SockFlag, SockType, UnixAddr, connect, recv, send, socket,
+    AddressFamily, MsgFlags, SockFlag, SockType, UnixAddr, connect, send, socket,
 };
 use nix::unistd::Uid;
+use rustix::net::sockopt::{Timeout as SocketTimeout, set_socket_timeout};
+use rustix::net::{RecvAncillaryBuffer, RecvFlags, recvmsg};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -11661,24 +11663,112 @@ impl SeqpacketUnixSocket {
         Ok(())
     }
 
+    pub(crate) fn set_io_timeout(&self, timeout: Duration) -> io::Result<()> {
+        set_socket_timeout(&self.fd, SocketTimeout::Recv, Some(timeout))
+            .map_err(io::Error::from)?;
+        set_socket_timeout(&self.fd, SocketTimeout::Send, Some(timeout))
+            .map_err(io::Error::from)?;
+        Ok(())
+    }
+
     pub(crate) fn recv_frame(&mut self) -> io::Result<Vec<u8>> {
         let mut buffer = vec![0_u8; MAX_FRAME_BYTES + 4];
-        let received =
-            recv(self.fd.as_raw_fd(), &mut buffer, MsgFlags::empty()).map_err(nix_err_to_io)?;
-        if received < 4 {
+        let mut iov = [IoSliceMut::new(&mut buffer)];
+        // The resource and legacy daemon protocols never carry descriptors.
+        // Allocate enough ancillary space to observe the bounded descriptor
+        // range, then reject every recognized control message instead of
+        // silently discarding it.
+        let mut ancillary_bytes = [0_u8; rustix::cmsg_space!(ScmRights(32))];
+        let mut ancillary = RecvAncillaryBuffer::new(&mut ancillary_bytes);
+        let received = recvmsg(&self.fd, &mut iov, &mut ancillary, RecvFlags::empty())
+            .map_err(io::Error::from)?;
+        if received.flags.contains(RecvFlags::TRUNC) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "oversized seqpacket frame",
+            ));
+        }
+        if received.bytes < 4 {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 "short frame from seqpacket socket",
             ));
         }
         let expected = u32::from_le_bytes(buffer[..4].try_into().expect("frame prefix")) as usize;
-        if expected > MAX_FRAME_BYTES || expected + 4 > received {
+        if expected > MAX_FRAME_BYTES || expected + 4 != received.bytes {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 "malformed seqpacket frame",
             ));
         }
+        if ancillary.drain().next().is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "ancillary data is not permitted on the CLI transport",
+            ));
+        }
         Ok(buffer[4..4 + expected].to_vec())
+    }
+}
+
+#[cfg(test)]
+mod cli_transport_contract_tests {
+    use super::{MAX_FRAME_BYTES, SeqpacketUnixSocket};
+    use nix::sys::socket::{AddressFamily, MsgFlags, SockFlag, SockType, send, socketpair};
+    use rustix::net::{SendAncillaryBuffer, SendAncillaryMessage, SendFlags, sendmsg};
+    use std::{
+        io::IoSlice,
+        os::fd::{AsFd as _, AsRawFd as _},
+    };
+
+    #[test]
+    fn legacy_seqpacket_client_rejects_oversized_declared_packets() {
+        let (client, server) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .expect("create seqpacket pair");
+        let mut socket = SeqpacketUnixSocket { fd: client };
+        let outbound = socket
+            .send_frame(&vec![0_u8; MAX_FRAME_BYTES + 1])
+            .expect_err("outbound oversized frame must fail closed");
+        assert_eq!(outbound.kind(), std::io::ErrorKind::InvalidInput);
+        let payload_len = MAX_FRAME_BYTES + 1;
+        let mut frame = Vec::with_capacity(4);
+        frame.extend_from_slice(&(payload_len as u32).to_le_bytes());
+        send(server.as_raw_fd(), &frame, MsgFlags::empty()).expect("send oversized declaration");
+        let error = socket
+            .recv_frame()
+            .expect_err("oversized declaration must fail closed");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("malformed"));
+    }
+
+    #[test]
+    fn legacy_seqpacket_client_rejects_ancillary_file_descriptors() {
+        let (client, server) = socketpair(
+            AddressFamily::Unix,
+            SockType::SeqPacket,
+            None,
+            SockFlag::SOCK_CLOEXEC,
+        )
+        .expect("create seqpacket pair");
+        let file = std::fs::File::open("/dev/null").expect("open descriptor fixture");
+        let rights = [file.as_fd()];
+        let mut control_bytes = [0_u8; rustix::cmsg_space!(ScmRights(1))];
+        let mut control = SendAncillaryBuffer::new(&mut control_bytes);
+        assert!(control.push(SendAncillaryMessage::ScmRights(&rights)));
+        let frame = 0_u32.to_le_bytes();
+        let iov = [IoSlice::new(&frame)];
+        sendmsg(&server, &iov, &mut control, SendFlags::empty()).expect("send ancillary frame");
+        let mut socket = SeqpacketUnixSocket { fd: client };
+        let error = socket
+            .recv_frame()
+            .expect_err("ancillary data must fail closed");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("ancillary"));
     }
 }
 
@@ -13559,7 +13649,7 @@ mod host_install_dispatch_tests {
 
     fn recv_test_frame_with_flags(fd: RawFd, flags: MsgFlags) -> io::Result<Vec<u8>> {
         let mut buffer = vec![0_u8; MAX_FRAME_BYTES + 4];
-        let received = super::recv(fd, &mut buffer, flags).map_err(nix_err_to_io)?;
+        let received = nix::sys::socket::recv(fd, &mut buffer, flags).map_err(nix_err_to_io)?;
         if received < 4 {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
@@ -18858,7 +18948,8 @@ mod console_fsm_tests {
 
     fn recv_test_frame(fd: std::os::fd::RawFd) -> io::Result<Vec<u8>> {
         let mut buffer = vec![0_u8; MAX_FRAME_BYTES + 4];
-        let received = super::recv(fd, &mut buffer, MsgFlags::empty()).map_err(nix_err_to_io)?;
+        let received =
+            nix::sys::socket::recv(fd, &mut buffer, MsgFlags::empty()).map_err(nix_err_to_io)?;
         if received < 4 {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,

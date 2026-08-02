@@ -16,6 +16,7 @@ pub(crate) struct ActivationArgs {
 
 #[derive(Debug, Subcommand, Clone)]
 pub(crate) enum ActivationCommand {
+    Apply(ActivationApplyArgs),
     Build(GuestRefArgs),
     Generations(GuestRefArgs),
     Switch(ActivationTargetArgs),
@@ -43,6 +44,14 @@ pub(crate) struct ActivationTargetArgs {
     pub(crate) dry_run: bool,
     #[arg(long, conflicts_with = "dry_run")]
     pub(crate) apply: bool,
+    #[arg(long = "to-generation")]
+    pub(crate) to_generation: Option<u64>,
+}
+
+#[derive(Debug, Args, Clone)]
+pub(crate) struct ActivationApplyArgs {
+    #[arg(long)]
+    pub(crate) dry_run: bool,
 }
 
 #[derive(Debug, Args, Clone)]
@@ -114,6 +123,12 @@ pub(crate) fn run(
     deadline: RequestDeadline,
 ) -> Result<i32, CliFailure> {
     match &args.command {
+        ActivationCommand::Apply(args) => {
+            let value =
+                context.invoke("Apply", json!({ "dryRun": args.dry_run }), deadline, mode)?;
+            context.emit(&value, mode)?;
+            Ok(0)
+        }
         ActivationCommand::Build(args) => guest_call(context, "Build", args, mode, deadline),
         ActivationCommand::Generations(args) => {
             guest_call(context, "Generations", args, mode, deadline)
@@ -173,6 +188,7 @@ fn target_call(
             "resourceRef": guest_ref.to_canonical_string(),
             "dryRun": args.dry_run,
             "apply": args.apply,
+            "toGeneration": args.to_generation,
         }),
         deadline,
         mode,
@@ -255,46 +271,58 @@ fn config(
     context: &ZoneContext,
     args: &ActivationConfigArgs,
     mode: OutputMode,
-    deadline: RequestDeadline,
+    _deadline: RequestDeadline,
 ) -> Result<i32, CliFailure> {
-    let (method, payload) = match &args.command {
-        ActivationConfigCommand::Sync(args) => (
-            "ConfigSync",
-            json!({
-                "guestRef": parse_guest_ref(context, &args.guest_ref, mode)?.to_canonical_string(),
-                "dryRun": args.dry_run,
-            }),
-        ),
-        ActivationConfigCommand::Diff(args) => (
-            "ConfigDiff",
-            json!({
-                "guestRef": parse_guest_ref(context, &args.guest_ref, mode)?.to_canonical_string(),
-                "against": "<configured>",
-            }),
-        ),
-        ActivationConfigCommand::Approve(args) => (
-            "ConfigApprove",
-            json!({
-                "guestRef": parse_guest_ref(context, &args.guest_ref, mode)?.to_canonical_string(),
-                "to": "<configured>",
-            }),
-        ),
-        ActivationConfigCommand::Reject(args) => (
-            "ConfigReject",
-            json!({
-                "guestRef": parse_guest_ref(context, &args.guest_ref, mode)?.to_canonical_string(),
-            }),
-        ),
-        ActivationConfigCommand::Status(args) => (
-            "ConfigStatus",
-            json!({
-                "guestRef": parse_guest_ref(context, &args.guest_ref, mode)?.to_canonical_string(),
-            }),
-        ),
-    };
-    let value = context.invoke(method, payload, deadline, mode)?;
-    context.emit(&value, mode)?;
-    Ok(0)
+    let legacy = crate::LegacyContext::from_env()?;
+    match &args.command {
+        ActivationConfigCommand::Sync(args) => {
+            let guest_ref = parse_guest_ref(context, &args.guest_ref, mode)?;
+            crate::cmd_config_sync(
+                &legacy,
+                &crate::ConfigSyncArgs {
+                    vm: guest_ref.name().as_str().to_owned(),
+                    guest_path: crate::DEFAULT_GUEST_CONFIG_PATH.to_owned(),
+                    host: None,
+                    user: None,
+                    key: None,
+                    known_hosts: None,
+                    dry_run: args.dry_run,
+                    json: mode.is_json(),
+                },
+            )
+        }
+        ActivationConfigCommand::Diff(args) => {
+            let guest_ref = parse_guest_ref(context, &args.guest_ref, mode)?;
+            crate::cmd_config_diff(&crate::ConfigDiffArgs {
+                vm: guest_ref.name().as_str().to_owned(),
+                against: args.against.clone(),
+                json: mode.is_json(),
+            })
+        }
+        ActivationConfigCommand::Approve(args) => {
+            let guest_ref = parse_guest_ref(context, &args.guest_ref, mode)?;
+            crate::cmd_config_approve(&crate::ConfigApproveArgs {
+                vm: guest_ref.name().as_str().to_owned(),
+                to: args.destination.clone(),
+                json: mode.is_json(),
+            })
+        }
+        ActivationConfigCommand::Reject(args) => {
+            let guest_ref = parse_guest_ref(context, &args.guest_ref, mode)?;
+            crate::cmd_config_reject(&crate::ConfigRejectArgs {
+                vm: guest_ref.name().as_str().to_owned(),
+                json: mode.is_json(),
+            })
+        }
+        ActivationConfigCommand::Status(args) => {
+            let guest_ref = parse_guest_ref(context, &args.guest_ref, mode)?;
+            crate::cmd_config_status(&crate::ConfigStatusArgs {
+                vm: Some(guest_ref.name().as_str().to_owned()),
+                all: false,
+                json: mode.is_json(),
+            })
+        }
+    }
 }
 
 fn parse_guest_ref(

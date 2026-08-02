@@ -18,8 +18,10 @@ use crate::{CliFailure, MAX_FRAME_BYTES, SeqpacketUnixSocket, print_stdout};
 pub(crate) const JSON_SCHEMA_VERSION: u8 = 1;
 /// The maximum lifetime admitted for a request or stream.
 pub(crate) const MAX_REQUEST_LIFETIME_MS: u64 = 900_000;
+pub(crate) const LOCAL_HANDSHAKE_DEADLINE_MS: u64 = 5_000;
 /// The default deadline for one resource request.
 pub(crate) const DEFAULT_REQUEST_LIFETIME_MS: u64 = 30_000;
+pub(crate) const MAX_EXPEDITED_DEADLINE_MS: u64 = 10_000;
 /// The maximum bytes accepted from a caller-provided resource spec.
 pub(crate) const MAX_SPEC_BYTES: usize = 64 * 1024;
 
@@ -52,6 +54,9 @@ pub(crate) enum TransportError {
     Unavailable,
     InvalidResponse,
     OversizedResponse,
+    AncillaryData,
+    DeadlineExceeded,
+    AuthRejected,
     Io,
 }
 
@@ -68,12 +73,11 @@ struct UnixSessionClient {
 }
 
 impl SessionClient for UnixSessionClient {
-    fn invoke(
-        &self,
-        request: &[u8],
-        _deadline: RequestDeadline,
-    ) -> Result<Vec<u8>, TransportError> {
+    fn invoke(&self, request: &[u8], deadline: RequestDeadline) -> Result<Vec<u8>, TransportError> {
         let mut socket = SeqpacketUnixSocket::connect(&self.socket_path)
+            .map_err(|error| classify_transport_error(&error))?;
+        socket
+            .set_io_timeout(deadline.duration())
             .map_err(|error| classify_transport_error(&error))?;
         let hello = crate::daemon_hello_frame("hello").map_err(|_| TransportError::Io)?;
         socket
@@ -87,7 +91,7 @@ impl SessionClient for UnixSessionClient {
             .and_then(|value| value.get("type").and_then(Value::as_str).map(str::to_owned));
         if hello_type.as_deref() != Some("helloOk") {
             return Err(if hello_type.as_deref() == Some("helloRejected") {
-                TransportError::Unavailable
+                TransportError::AuthRejected
             } else {
                 TransportError::InvalidResponse
             });
@@ -123,15 +127,34 @@ impl std::fmt::Debug for ZoneContext {
 }
 
 impl ZoneContext {
+    pub(crate) fn local_only() -> Self {
+        let socket_path = env::var_os("D2B_PUBLIC_SOCKET")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/run/d2b/public.sock"));
+        Self {
+            zone_name: "local-root".to_owned(),
+            socket_path: socket_path.clone(),
+            session_client: Arc::new(UnixSessionClient { socket_path }),
+        }
+    }
+
     /// Discover the nearest reachable Zone socket.
     pub(crate) fn discover(zone_arg: Option<&str>) -> Result<Self, CliFailure> {
+        Self::discover_for_domain(zone_arg, false)
+    }
+
+    /// Discover the nearest socket for either the system or user runtime.
+    pub(crate) fn discover_for_domain(
+        zone_arg: Option<&str>,
+        user_domain: bool,
+    ) -> Result<Self, CliFailure> {
         let requested_zone = zone_arg
             .map(str::to_owned)
             .or_else(|| env::var("D2B_ZONE").ok().filter(|value| !value.is_empty()));
         let zone_name = requested_zone.as_deref().unwrap_or("local-root").to_owned();
         validate_zone_name(&zone_name)?;
 
-        let candidates = socket_candidates(requested_zone.as_deref());
+        let candidates = socket_candidates_for_domain(requested_zone.as_deref(), user_domain);
         let direct_override = env::var_os("D2B_PUBLIC_SOCKET").is_some();
         let socket_path = if direct_override {
             candidates.first().cloned()
@@ -140,14 +163,7 @@ impl ZoneContext {
                 .iter()
                 .find(|candidate| socket_reachable(candidate))
                 .cloned()
-                .or_else(|| {
-                    candidates
-                        .iter()
-                        .find(|candidate| candidate.exists())
-                        .cloned()
-                })
         }
-        .or_else(|| candidates.first().cloned())
         .ok_or_else(|| CliFailure::new(1, "zone-unavailable"))?;
 
         let selected_zone = requested_zone.unwrap_or_else(|| {
@@ -215,6 +231,21 @@ impl ZoneContext {
         Ok(RequestDeadline(duration))
     }
 
+    pub(crate) fn expedited_deadline(value: Option<&str>) -> Result<Option<u64>, CliFailure> {
+        let Some(value) = value else {
+            return Ok(None);
+        };
+        let duration = parse_duration(value)?;
+        let millis = duration.as_millis();
+        if millis == 0 || millis > u128::from(MAX_EXPEDITED_DEADLINE_MS) {
+            return Err(CliFailure::new(
+                2,
+                "reconcile deadline must be greater than zero and no more than 10s",
+            ));
+        }
+        Ok(Some(millis as u64))
+    }
+
     /// Invoke one typed resource-plane method.
     pub(crate) fn invoke(
         &self,
@@ -265,16 +296,43 @@ impl ZoneContext {
                 1,
             )
         })?;
+        if !value.is_object() {
+            return Err(self.failure(
+                "resource-schema-invalid",
+                "Zone returned a non-object resource response",
+                mode,
+                1,
+            ));
+        }
         if matches!(
             value.get("type").and_then(Value::as_str),
             Some("error" | "helloRejected")
         ) {
+            let class = value
+                .pointer("/error/errorClass")
+                .and_then(Value::as_str)
+                .or_else(|| value.get("errorClass").and_then(Value::as_str))
+                .or_else(|| value.pointer("/error/kind").and_then(Value::as_str))
+                .or_else(|| value.get("kind").and_then(Value::as_str))
+                .unwrap_or_else(|| {
+                    if value.get("type").and_then(Value::as_str) == Some("helloRejected") {
+                        "exec-auth-error"
+                    } else {
+                        "internal-error"
+                    }
+                });
+            let class = stable_error_class(class);
             let message = value
                 .pointer("/error/message")
                 .and_then(Value::as_str)
                 .or_else(|| value.get("message").and_then(Value::as_str))
                 .unwrap_or("Zone rejected the resource request");
-            return Err(self.failure("not-implemented", &bounded_message(message), mode, 78));
+            return Err(self.failure(
+                class,
+                &bounded_message(message),
+                mode,
+                error_exit_code(class),
+            ));
         }
         if value
             .get("ok")
@@ -340,11 +398,23 @@ impl ZoneContext {
                 mode,
                 1,
             ),
-            TransportError::OversizedResponse => self.failure(
+            TransportError::OversizedResponse | TransportError::AncillaryData => self.failure(
                 "resource-schema-invalid",
                 "Zone response exceeded the bounded response size",
                 mode,
                 1,
+            ),
+            TransportError::DeadlineExceeded => self.failure(
+                "deadline-exceeded",
+                "Zone request exceeded its deadline",
+                mode,
+                1,
+            ),
+            TransportError::AuthRejected => self.failure(
+                "exec-auth-error",
+                "Zone session authentication was rejected",
+                mode,
+                77,
             ),
         }
     }
@@ -378,6 +448,7 @@ impl ZoneContext {
             .cloned()
             .unwrap_or_else(|| vec![value.clone()]);
         for event in events {
+            let event = self.decorate_envelope(event);
             let mut rendered = serde_json::to_string(&event).map_err(|_| {
                 self.failure("internal-error", "failed to render watch event", mode, 1)
             })?;
@@ -385,6 +456,19 @@ impl ZoneContext {
             print_stdout(&rendered);
         }
         Ok(())
+    }
+
+    fn decorate_envelope(&self, mut value: Value) -> Value {
+        if let Value::Object(object) = &mut value {
+            object.entry("ok".to_owned()).or_insert(Value::Bool(true));
+            object
+                .entry("zoneRef".to_owned())
+                .or_insert_with(|| Value::String(self.zone_ref()));
+            object
+                .entry("schemaVersion".to_owned())
+                .or_insert_with(|| Value::Number(serde_json::Number::from(JSON_SCHEMA_VERSION)));
+        }
+        value
     }
 }
 
@@ -435,7 +519,7 @@ pub(crate) fn read_spec(spec_file: Option<&Path>, spec_stdin: bool) -> Result<Va
         ));
     }
     let bytes = if let Some(path) = spec_file {
-        fs::read(path).map_err(|_| CliFailure::new(1, "failed to read resource spec"))?
+        read_bounded_file(path)?
     } else {
         let mut bytes = Vec::new();
         io::stdin()
@@ -452,25 +536,59 @@ pub(crate) fn read_spec(spec_file: Option<&Path>, spec_stdin: bool) -> Result<Va
         .map_err(|_| CliFailure::new(2, "resource-schema-invalid: spec must be JSON"))
 }
 
+fn read_bounded_file(path: &Path) -> Result<Vec<u8>, CliFailure> {
+    let file =
+        fs::File::open(path).map_err(|_| CliFailure::new(1, "failed to read resource spec"))?;
+    let mut bytes = Vec::new();
+    file.take((MAX_SPEC_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|_| CliFailure::new(1, "failed to read resource spec"))?;
+    if bytes.len() > MAX_SPEC_BYTES {
+        return Err(CliFailure::new(2, "resource spec exceeds the 64 KiB bound"));
+    }
+    Ok(bytes)
+}
+
 pub(crate) fn bounded_message(message: &str) -> String {
-    message
+    let mut bounded = String::new();
+    for character in message
         .chars()
         .filter(|character| !character.is_control() || matches!(character, '\n' | '\t'))
-        .take(4096)
-        .collect()
+    {
+        if bounded.len() + character.len_utf8() > 4096 {
+            break;
+        }
+        bounded.push(character);
+    }
+    bounded
 }
 
 fn socket_candidates(requested_zone: Option<&str>) -> Vec<PathBuf> {
+    socket_candidates_for_domain(requested_zone, false)
+}
+
+fn socket_candidates_for_domain(requested_zone: Option<&str>, user_domain: bool) -> Vec<PathBuf> {
     if let Some(path) = env::var_os("D2B_PUBLIC_SOCKET") {
         return vec![PathBuf::from(path)];
     }
 
+    let runtime_root = if user_domain {
+        env::var_os("XDG_RUNTIME_DIR")
+            .map(PathBuf::from)
+            .map(|path| path.join("d2b"))
+    } else {
+        Some(PathBuf::from("/run/d2b"))
+    };
+    let Some(runtime_root) = runtime_root else {
+        return socket_candidates_for_domain(requested_zone, false);
+    };
+
     if let Some(zone) = requested_zone {
-        return vec![PathBuf::from(format!("/run/d2b/zones/{zone}/public.sock"))];
+        return vec![runtime_root.join("zones").join(zone).join("public.sock")];
     }
 
     let mut candidates = Vec::new();
-    let zone_root = Path::new("/run/d2b/zones");
+    let zone_root = runtime_root.join("zones");
     if let Ok(entries) = fs::read_dir(zone_root) {
         let mut zone_paths: Vec<PathBuf> = entries
             .filter_map(Result::ok)
@@ -479,7 +597,7 @@ fn socket_candidates(requested_zone: Option<&str>) -> Vec<PathBuf> {
         zone_paths.sort();
         candidates.extend(zone_paths);
     }
-    candidates.push(PathBuf::from("/run/d2b/public.sock"));
+    candidates.push(runtime_root.join("public.sock"));
     candidates
 }
 
@@ -517,20 +635,83 @@ fn classify_transport_error(error: &io::Error) -> TransportError {
         | io::ErrorKind::ConnectionRefused
         | io::ErrorKind::ConnectionReset
         | io::ErrorKind::BrokenPipe => TransportError::Unavailable,
+        io::ErrorKind::InvalidData if error.to_string().contains("ancillary") => {
+            TransportError::AncillaryData
+        }
+        io::ErrorKind::InvalidData if error.to_string().contains("oversized") => {
+            TransportError::OversizedResponse
+        }
         io::ErrorKind::InvalidData => TransportError::InvalidResponse,
+        io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock => TransportError::DeadlineExceeded,
         _ => TransportError::Io,
     }
 }
 
 fn socket_reachable(path: &Path) -> bool {
-    SeqpacketUnixSocket::connect(path).is_ok()
+    let Ok(mut socket) = SeqpacketUnixSocket::connect(path) else {
+        return false;
+    };
+    let timeout = Duration::from_millis(LOCAL_HANDSHAKE_DEADLINE_MS);
+    if socket.set_io_timeout(timeout).is_err() {
+        return false;
+    }
+    let Ok(hello) = crate::daemon_hello_frame("hello") else {
+        return false;
+    };
+    if socket.send_frame(&hello).is_err() {
+        return false;
+    }
+    let Ok(reply) = socket.recv_frame() else {
+        return false;
+    };
+    serde_json::from_slice::<Value>(&reply)
+        .ok()
+        .and_then(|value| value.get("type").and_then(Value::as_str).map(str::to_owned))
+        .as_deref()
+        == Some("helloOk")
 }
 
 fn error_exit_code(class: &str) -> i32 {
     match class {
         "ref-invalid" | "resource-schema-invalid" => 2,
         "operation-cancelled" => 3,
+        "exec-internal-error" => 42,
+        "exec-transport-error" => 69,
+        "exec-old-generation" => 70,
+        "exec-capacity" => 75,
+        "exec-protocol-error" => 76,
+        "exec-auth-error" => 77,
+        "not-implemented" => 78,
         _ => 1,
+    }
+}
+
+fn stable_error_class(class: &str) -> &str {
+    match class {
+        "resource-not-found"
+        | "resource-already-exists"
+        | "resource-conflict"
+        | "resource-schema-invalid"
+        | "ref-invalid"
+        | "authorization-denied"
+        | "zone-unavailable"
+        | "deadline-exceeded"
+        | "operation-cancelled"
+        | "provider-unavailable"
+        | "exec-transport-error"
+        | "exec-old-generation"
+        | "exec-capacity"
+        | "exec-protocol-error"
+        | "exec-auth-error"
+        | "exec-internal-error"
+        | "shell-transport-error"
+        | "not-implemented"
+        | "internal-error"
+        | "bundle-integrity-failure"
+        | "bundle-generation-replay"
+        | "bundle-schema-mismatch"
+        | "resource-pending-cleanup" => class,
+        _ => "internal-error",
     }
 }
 
@@ -655,6 +836,37 @@ mod tests {
         assert!(ZoneContext::deadline(Some("901s")).is_err());
         assert!(ZoneContext::deadline(Some("0s")).is_err());
         assert!(ZoneContext::deadline(Some("30x")).is_err());
+    }
+
+    #[test]
+    fn expedited_deadlines_use_the_ten_second_reconcile_bound() {
+        assert_eq!(
+            ZoneContext::expedited_deadline(Some("10s")).unwrap(),
+            Some(10_000)
+        );
+        assert!(ZoneContext::expedited_deadline(Some("10.001s")).is_err());
+        assert!(ZoneContext::expedited_deadline(Some("11s")).is_err());
+    }
+
+    #[test]
+    fn bounded_messages_observe_a_utf8_byte_ceiling() {
+        let message = "é".repeat(4096);
+        assert!(bounded_message(&message).len() <= 4096);
+        assert!(bounded_message(&message).is_char_boundary(4096));
+    }
+
+    #[test]
+    fn resource_spec_files_are_bounded_before_json_parsing() {
+        let path = std::env::temp_dir().join(format!(
+            "d2b-resource-spec-{}-{}.json",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        fs::write(&path, vec![b'x'; MAX_SPEC_BYTES + 1]).expect("write oversized spec");
+        let error = read_spec(Some(&path), false).expect_err("oversized file must fail");
+        let _ = fs::remove_file(path);
+        assert_eq!(error.exit_code, 2);
+        assert!(error.message.contains("64 KiB"));
     }
 
     #[test]

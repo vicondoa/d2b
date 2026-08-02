@@ -56,6 +56,17 @@ pub(crate) fn run(
 ) -> Result<i32, CliFailure> {
     match &args.command {
         ProviderCommand::List(args) => {
+            if args.package_only {
+                let value = json!({
+                    "ok": true,
+                    "zoneRef": context.zone_ref(),
+                    "schemaVersion": crate::context::JSON_SCHEMA_VERSION,
+                    "source": "package-catalog",
+                    "items": [],
+                });
+                context.emit(&value, mode)?;
+                return Ok(0);
+            }
             let value = context.invoke(
                 "List",
                 json!({
@@ -172,6 +183,14 @@ pub(crate) fn validate_projection_value(
                 1,
             )
         })?;
+    if verbs.is_empty() {
+        return Err(context.failure(
+            "resource-schema-invalid",
+            "Provider CLI projection must declare at least one verb",
+            mode,
+            1,
+        ));
+    }
     if verbs.len() > MAX_PROJECTION_VERBS {
         return Err(context.failure(
             "resource-schema-invalid",
@@ -211,6 +230,40 @@ pub(crate) fn validate_projection_value(
                 1,
             ));
         }
+        if let Some(arguments) = verb.get("arguments").and_then(Value::as_array) {
+            for argument in arguments {
+                let name = argument
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        context.failure(
+                            "resource-schema-invalid",
+                            "Provider CLI projection argument has no name",
+                            mode,
+                            1,
+                        )
+                    })?;
+                validate_argument_name(name).map_err(|message| {
+                    context.failure("resource-schema-invalid", &message, mode, 1)
+                })?;
+            }
+        }
+    }
+
+    fn validate_argument_name(value: &str) -> Result<(), String> {
+        if value.is_empty()
+            || value.len() > 64
+            || !value
+                .bytes()
+                .next()
+                .is_some_and(|byte| byte.is_ascii_lowercase())
+            || !value
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        {
+            return Err("projection argument name is invalid".to_owned());
+        }
+        Ok(())
     }
     Ok(())
 }

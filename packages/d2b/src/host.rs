@@ -1,12 +1,12 @@
 //! Host ResourceType and host-maintenance commands.
 
 use clap::{Args, Subcommand};
-use serde_json::json;
+use serde_json::{Map, Value, json};
 
 use crate::{
     CliFailure,
     context::{OutputMode, RequestDeadline, ZoneContext},
-    dispatch::{GenericGetArgs, GenericListArgs, GenericStatusArgs},
+    dispatch::{GenericGetArgs, GenericListArgs},
     resource,
 };
 
@@ -26,7 +26,7 @@ pub(crate) enum HostCommand {
     Destroy(HostMutationArgs),
     Doctor(HostDoctorArgs),
     Install(HostInstallArgs),
-    Reconcile(HostMutationArgs),
+    Reconcile(HostReconcileArgs),
     Validate(HostValidateArgs),
 }
 
@@ -82,6 +82,16 @@ pub(crate) struct HostValidateArgs {
     pub(crate) operator_signature: Option<String>,
 }
 
+#[derive(Debug, Args, Clone)]
+pub(crate) struct HostReconcileArgs {
+    #[arg(long)]
+    pub(crate) network: bool,
+    #[arg(long, conflicts_with = "apply")]
+    pub(crate) dry_run: bool,
+    #[arg(long, conflicts_with = "dry_run")]
+    pub(crate) apply: bool,
+}
+
 pub(crate) fn run(
     context: &ZoneContext,
     args: &HostArgs,
@@ -89,59 +99,89 @@ pub(crate) fn run(
     deadline: RequestDeadline,
 ) -> Result<i32, CliFailure> {
     match &args.command {
-        HostCommand::Get(args) => resource::get(
-            context,
-            &GenericGetArgs {
-                resource_ref: format!("Host/{}", args.name),
-            },
-            mode,
-            deadline,
-        ),
-        HostCommand::List(args) => resource::list(
-            context,
-            &GenericListArgs {
-                resource_type: "Host".to_owned(),
-                phase: args.phase.clone(),
-                label_selector: args.label_selector.clone(),
-                updates: args.updates,
-                page_token: args.page_token.clone(),
-                limit: args.limit,
-            },
-            mode,
-            deadline,
-        ),
-        HostCommand::Status(args) => resource::status(
-            context,
-            &GenericStatusArgs {
-                resource_ref: format!("Host/{}", args.name),
-                watch: args.watch,
-            },
-            mode,
-            deadline,
-        ),
+        HostCommand::Get(args) => {
+            let value = resource::request_get(
+                context,
+                &GenericGetArgs {
+                    resource_ref: format!("Host/{}", args.name),
+                },
+                mode,
+                deadline,
+            )?;
+            context.emit(&ensure_host_posture(value), mode)?;
+            Ok(0)
+        }
+        HostCommand::List(args) => {
+            let value = resource::request_list(
+                context,
+                &GenericListArgs {
+                    resource_type: "Host".to_owned(),
+                    execution_ref: None,
+                    domain: None,
+                    phase: args.phase.clone(),
+                    label_selector: args.label_selector.clone(),
+                    updates: args.updates,
+                    page_token: args.page_token.clone(),
+                    limit: args.limit,
+                },
+                mode,
+                deadline,
+            )?;
+            context.emit(&ensure_host_posture(value), mode)?;
+            Ok(0)
+        }
+        HostCommand::Status(args) => {
+            if args.watch && !mode.is_json() {
+                return Err(context.failure(
+                    "ref-invalid",
+                    "host status --watch output is JSON-lines only",
+                    mode,
+                    2,
+                ));
+            }
+            let resource_ref =
+                crate::context::parse_resource_ref(&format!("Host/{}", args.name), None)?;
+            let value = context.invoke(
+                "Status",
+                json!({
+                    "resourceRef": resource_ref.to_canonical_string(),
+                    "watch": args.watch,
+                }),
+                deadline,
+                mode,
+            )?;
+            let value = ensure_host_posture(value);
+            if args.watch {
+                context.emit_stream(&value, mode)?;
+            } else {
+                context.emit(&value, mode)?;
+            }
+            Ok(0)
+        }
         HostCommand::Check(args) => local_host_check(args, mode),
-        HostCommand::Prepare(args) => mutation(context, "HostPrepare", args, mode, deadline),
-        HostCommand::Destroy(args) => mutation(context, "HostDestroy", args, mode, deadline),
-        HostCommand::Reconcile(args) => mutation(context, "HostReconcile", args, mode, deadline),
+        HostCommand::Prepare(args) => mutation(context, "prepare", args, mode, deadline),
+        HostCommand::Destroy(args) => mutation(context, "destroy", args, mode, deadline),
         HostCommand::Doctor(args) => {
+            if !args.read_only {
+                let legacy = crate::LegacyContext::from_env()?;
+                return crate::cmd_host_doctor(
+                    &legacy,
+                    &crate::HostDoctorArgs {
+                        read_only: false,
+                        json: mode.is_json(),
+                        human: !mode.is_json(),
+                    },
+                );
+            }
             let value = match context.invoke(
                 "HostDoctor",
                 json!({ "readOnly": args.read_only }),
-                deadline,
+                ZoneContext::deadline(Some("250ms"))?,
                 mode,
             ) {
                 Ok(value) => value,
-                Err(error)
-                    if error.exit_code == 1 && error.message.starts_with("zone-unavailable") =>
-                {
-                    json!({
-                        "ok": true,
-                        "zoneRef": context.zone_ref(),
-                        "schemaVersion": 1,
-                        "degraded": true,
-                        "source": "local-state",
-                        "message": "Zone runtime unavailable; local host diagnostics are incomplete"
-                    })
+                Err(error) if can_fallback_to_local_state(&error) => {
+                    return local_doctor(args, mode);
                 }
                 Err(error) => return Err(error),
             };
@@ -149,54 +189,138 @@ pub(crate) fn run(
             Ok(0)
         }
         HostCommand::Install(args) => {
-            if !args.dry_run && !args.apply {
-                return Err(context.failure(
-                    "ref-invalid",
-                    "host install requires --dry-run or --apply",
-                    mode,
-                    2,
-                ));
-            }
-            let value = context.invoke(
-                "HostInstall",
-                json!({
-                    "dryRun": args.dry_run,
-                    "apply": args.apply,
-                    "enable": args.enable,
-                    "start": args.start,
-                    "noStart": args.no_start,
-                }),
-                deadline,
-                mode,
-            )?;
-            context.emit(&value, mode)?;
-            Ok(0)
+            let legacy = crate::LegacyContext::from_env()?;
+            crate::cmd_host_install(
+                &legacy,
+                &crate::HostInstallArgs {
+                    dry_run: args.dry_run,
+                    apply: args.apply,
+                    enable: args.enable,
+                    start: args.start,
+                    no_start: args.no_start,
+                    json: mode.is_json(),
+                    human: !mode.is_json(),
+                },
+                &[],
+            )
         }
         HostCommand::Validate(args) => {
-            if !args.dry_run && !args.apply {
-                return Err(context.failure(
-                    "ref-invalid",
-                    "host validate requires --dry-run or --apply",
-                    mode,
-                    2,
-                ));
-            }
-            let value = context.invoke(
-                "HostValidate",
-                json!({
-                    "dryRun": args.dry_run,
-                    "apply": args.apply,
-                    "wave": args.wave,
-                    "evidenceDir": args.evidence_dir.as_ref().map(|_| "<configured>"),
-                    "scriptsDir": args.scripts_dir.as_ref().map(|_| "<configured>"),
-                    "operatorSignature": args.operator_signature.as_ref().map(|_| "<provided>"),
-                }),
-                deadline,
-                mode,
-            )?;
-            context.emit(&value, mode)?;
-            Ok(0)
+            let legacy = crate::LegacyContext::from_env()?;
+            crate::cmd_host_validate(
+                &legacy,
+                &crate::HostValidateArgs {
+                    dry_run: args.dry_run,
+                    apply: args.apply,
+                    wave: args.wave.clone(),
+                    operator_signature: args.operator_signature.clone(),
+                    evidence_dir: args.evidence_dir.clone(),
+                    scripts_dir: args.scripts_dir.clone(),
+                    json: mode.is_json(),
+                    human: !mode.is_json(),
+                },
+            )
         }
+        HostCommand::Reconcile(args) => {
+            let legacy = crate::LegacyContext::from_env()?;
+            crate::cmd_host_reconcile(
+                &legacy,
+                &crate::HostReconcileArgs {
+                    network: args.network,
+                    dry_run: args.dry_run,
+                    apply: args.apply,
+                    json: mode.is_json(),
+                    human: !mode.is_json(),
+                },
+                &[],
+            )
+        }
+    }
+}
+
+fn can_fallback_to_local_state(error: &CliFailure) -> bool {
+    matches!(
+        error.message.split(':').next(),
+        Some("zone-unavailable" | "deadline-exceeded" | "exec-protocol-error")
+    )
+}
+
+fn local_doctor(args: &HostDoctorArgs, mode: OutputMode) -> Result<i32, CliFailure> {
+    let context = crate::LegacyContext::from_env()?;
+    crate::cmd_host_doctor(
+        &context,
+        &crate::HostDoctorArgs {
+            read_only: args.read_only,
+            json: mode.is_json(),
+            human: !mode.is_json(),
+        },
+    )
+}
+
+fn ensure_host_posture(mut value: Value) -> Value {
+    if value.get("items").and_then(Value::as_array).is_some() {
+        if let Some(items) = value.get_mut("items").and_then(Value::as_array_mut) {
+            for item in items {
+                mark_unsafe_local_host(item);
+            }
+        }
+    } else {
+        mark_unsafe_local_host(&mut value);
+    }
+    value
+}
+
+fn mark_unsafe_local_host(value: &mut Value) {
+    let Value::Object(object) = value else {
+        return;
+    };
+    let resource_ref = object
+        .get("resourceRef")
+        .and_then(Value::as_str)
+        .or_else(|| object.get("type").and_then(Value::as_str));
+    let provider = object
+        .get("spec")
+        .and_then(Value::as_object)
+        .and_then(|spec| spec.get("providerRef"))
+        .and_then(Value::as_str)
+        .or_else(|| object.get("providerRef").and_then(Value::as_str))
+        .or_else(|| {
+            object
+                .get("status")
+                .and_then(Value::as_object)
+                .and_then(|status| status.get("providerRef"))
+                .and_then(Value::as_str)
+        });
+    let provider_kind = object
+        .get("status")
+        .and_then(Value::as_object)
+        .and_then(|status| status.get("providerKind"))
+        .and_then(Value::as_str)
+        .or_else(|| object.get("providerKind").and_then(Value::as_str));
+    let is_host = resource_ref.is_some_and(|value| value == "Host" || value.starts_with("Host/"));
+    let is_unsafe_local = provider == Some("Provider/unsafe-local")
+        || provider_kind == Some("unsafe-local")
+        || object
+            .get("status")
+            .and_then(Value::as_object)
+            .and_then(|status| status.get("isolationPosture"))
+            .and_then(Value::as_str)
+            .or_else(|| object.get("isolationPosture").and_then(Value::as_str))
+            .is_some_and(|value| matches!(value, "none" | "unsafe-local"));
+    if !(is_host && is_unsafe_local) {
+        return;
+    }
+    object.insert(
+        "isolationPosture".to_owned(),
+        Value::String("none".to_owned()),
+    );
+    let status = object
+        .entry("status".to_owned())
+        .or_insert_with(|| Value::Object(Map::new()));
+    if let Value::Object(status) = status {
+        status.insert(
+            "isolationPosture".to_owned(),
+            Value::String("none".to_owned()),
+        );
     }
 }
 
@@ -221,7 +345,7 @@ fn local_host_check(args: &HostCheckArgs, mode: OutputMode) -> Result<i32, CliFa
 
 fn mutation(
     context: &ZoneContext,
-    method: &str,
+    operation: &str,
     args: &HostMutationArgs,
     mode: OutputMode,
     deadline: RequestDeadline,
@@ -235,8 +359,13 @@ fn mutation(
         ));
     }
     let value = context.invoke(
-        method,
-        json!({ "dryRun": args.dry_run, "apply": args.apply }),
+        "Reconcile",
+        json!({
+            "resourceRef": "Host/system",
+            "operation": operation,
+            "dryRun": args.dry_run,
+            "apply": args.apply,
+        }),
         deadline,
         mode,
     )?;
