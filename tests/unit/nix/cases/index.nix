@@ -3,6 +3,7 @@
 let
   x86 = system == "x86_64-linux";
   resourceContracts = import ../../../../nixos-modules/resources.nix { inherit lib; };
+  resourceBundle = import ../../../../nixos-modules/resources-bundle.nix { inherit lib; };
 
   fixture = { lib, ... }: {
     boot.loader.grub.enable = false;
@@ -132,6 +133,10 @@ let
   }) ]).config;
   maxIdentity = "a${lib.concatStrings (lib.replicate 62 "b")}";
   tooLongIdentity = "${maxIdentity}c";
+  rejectedBundle = zoneName: resourceName:
+    resourceBundle.bundleForZone zoneName (lib.listToAttrs [
+      (lib.nameValuePair resourceName { type = "Provider"; })
+    ]);
   resourceFixture = {
     d2b.zones = {
       "${maxIdentity}".resources.${maxIdentity}.type = "Provider";
@@ -390,32 +395,25 @@ let
 in
 {
   "index/invalid-zone-name-rejected-at-eval" = {
-    # The Zone bundle compiler fail-closes before config.assertions can be
-    # inspected. Use the canonical expectedError case shape for that path.
-    expr = (mkEval [ fixture {
-      d2b.zones.${tooLongIdentity}.resources.provider.type = "Provider";
-    } ]).config.assertions;
+    # Force the canonical compiler rejection directly. Deep-forcing a full
+    # NixOS config would evaluate nixpkgs' fileSystems assertion message,
+    # whose no-cycle path references a missing `cycle` attribute.
+    expr = rejectedBundle tooLongIdentity "provider";
     expectedError = { };
   };
 
   "index/invalid-resource-name-rejected-at-eval" = {
-    expr = (mkEval [ fixture {
-      d2b.zones.work.resources.${tooLongIdentity}.type = "Provider";
-    } ]).config.assertions;
+    expr = rejectedBundle "work" tooLongIdentity;
     expectedError = { };
   };
 
   "index/empty-zone-name-rejected-at-eval" = {
-    expr = (mkEval [ fixture {
-      d2b.zones."".resources.provider.type = "Provider";
-    } ]).config.assertions;
+    expr = rejectedBundle "" "provider";
     expectedError = { };
   };
 
   "index/empty-resource-name-rejected-at-eval" = {
-    expr = (mkEval [ fixture {
-      d2b.zones.work.resources."".type = "Provider";
-    } ]).config.assertions;
+    expr = rejectedBundle "work" "";
     expectedError = { };
   };
 
