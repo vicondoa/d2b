@@ -2458,6 +2458,37 @@ let
   deviceSettings = row:
     zoneAttrOr (zoneAttrOr row.resource.spec "provider" { }) "settings" { };
 
+  deviceSelectorBusClass = row:
+    zoneAttrOr (deviceSelector row) "busClass" null;
+
+  deviceSelectorField = row: field:
+    zoneAttrOr (deviceSelector row) field null;
+
+  deviceSelectorValuesCompatible = left: right:
+    left == null || right == null || left == right;
+
+  # Nix can only reject selectors that are known to overlap. Core remains the
+  # authority for the opaque Host physical-backing key at runtime. USB and
+  # hidraw selectors with compatible vendor/product/serial filters are
+  # conservatively treated as one possible backing so a cross-Zone collision
+  # cannot be authored past activation.
+  devicePhysicalUsbSelectorsOverlap = left: right:
+    let
+      leftBus = deviceSelectorBusClass left;
+      rightBus = deviceSelectorBusClass right;
+    in
+    builtins.elem leftBus [ "usb" "hidraw" ]
+    && builtins.elem rightBus [ "usb" "hidraw" ]
+    && deviceSelectorValuesCompatible
+      (deviceSelectorField left "vendorId")
+      (deviceSelectorField right "vendorId")
+    && deviceSelectorValuesCompatible
+      (deviceSelectorField left "productId")
+      (deviceSelectorField right "productId")
+    && deviceSelectorValuesCompatible
+      (deviceSelectorField left "serial")
+      (deviceSelectorField right "serial");
+
   deviceUnorderedPairs = values:
     let count = lib.length values;
     in lib.concatMap
@@ -2472,33 +2503,31 @@ let
   deviceOwnerRefValid = row:
     let owner = zoneAttrOr row.resource.metadata "ownerRef" null;
         parsed = if builtins.isString owner then lib.splitString "/" owner else [ ];
-    in owner != null
-      && lib.length parsed == 2
-      && builtins.elem (builtins.elemAt parsed 0) [ "Guest" "Host" ]
-      && builtins.hasAttr (builtins.elemAt parsed 1) row.zone.resources
-      && row.zone.resources.${builtins.elemAt parsed 1}.type == builtins.elemAt parsed 0;
+    in owner == null
+      || (lib.length parsed == 2
+        && builtins.elem (builtins.elemAt parsed 0) [ "Guest" "Host" ]
+        && builtins.hasAttr (builtins.elemAt parsed 1) row.zone.resources
+        && row.zone.resources.${builtins.elemAt parsed 1}.type == builtins.elemAt parsed 0);
 
   deviceOwnerAssertions = map
     (row: {
       assertion = deviceOwnerRefValid row;
-      message = "${row.path}.metadata.ownerRef must resolve to a same-Zone Guest or Host (invalid-owner-ref).";
+      message = "${row.path}.metadata.ownerRef must be null or resolve to a same-Zone Guest or Host (invalid-owner-ref).";
     })
     deviceRows;
 
   deviceMutualExclusionPairs = lib.filter
     (pair:
-      pair.left.zoneName == pair.right.zoneName
-      && deviceSelectorLabel pair.left != null
-      && deviceSelectorLabel pair.left == deviceSelectorLabel pair.right
+      deviceProviderName pair.left != deviceProviderName pair.right
       && builtins.elem (deviceProviderName pair.left) [ "device-usbip" "device-security-key" ]
       && builtins.elem (deviceProviderName pair.right) [ "device-usbip" "device-security-key" ]
-      && deviceProviderName pair.left != deviceProviderName pair.right)
+      && devicePhysicalUsbSelectorsOverlap pair.left pair.right)
     (deviceUnorderedPairs deviceRows);
 
   deviceMutualExclusionAssertions = map
     (pair: {
       assertion = false;
-      message = "${pair.left.path} and ${pair.right.path}: usbip-sk-mutual-exclusion for one physical selector label (usbip-sk-mutual-exclusion).";
+      message = "${pair.left.path} and ${pair.right.path}: usbip-sk-mutual-exclusion for overlapping physical USB selectors (usbip-sk-mutual-exclusion).";
     })
     deviceMutualExclusionPairs;
 
@@ -2522,6 +2551,56 @@ let
           && zoneAttrOr settings "videoSidecar" false);
         message = "${row.path}: virglVideo and videoSidecar are mutually exclusive (gpu-video-modes-conflict).";
       })
+    deviceRows;
+
+  deviceProviderShapeAssertions = lib.concatMap
+    (row:
+      let
+        provider = deviceProviderName row;
+        spec = row.resource.spec;
+        deviceClass = zoneAttrOr spec "deviceClass" null;
+        arbitration = zoneAttrOr spec "arbitration" null;
+        busClass = deviceSelectorBusClass row;
+        settings = deviceSettings row;
+      in
+      [
+        {
+          assertion = provider != "device-tpm"
+            || (deviceClass == "emulated" && deviceSelector row == { });
+          message = "${row.path}: device-tpm requires an emulated Device with an empty inventory selector (tpm-device-shape-invalid).";
+        }
+        {
+          assertion = provider != "device-usbip"
+            || (deviceClass == "physical"
+              && arbitration == "exclusive"
+              && busClass == "usb");
+          message = "${row.path}: device-usbip requires an exclusive physical USB Device (usbip-device-shape-invalid).";
+        }
+        {
+          assertion = provider != "device-security-key"
+            || (deviceClass == "physical"
+              && arbitration == "exclusive"
+              && busClass == "hidraw");
+          message = "${row.path}: device-security-key requires an exclusive physical hidraw Device (security-key-device-shape-invalid).";
+        }
+        {
+          assertion = provider != "device-gpu"
+            || (deviceClass == "physical" && busClass == "drm");
+          message = "${row.path}: device-gpu requires a physical DRM Device (gpu-device-shape-invalid).";
+        }
+        {
+          assertion = !(provider == "device-tpm"
+            && builtins.isAttrs settings
+            && builtins.hasAttr "startupClear" settings);
+          message = "${row.path}.spec.provider.settings.startupClear is not supported; the TPM flush is mandatory (tpm-startup-clear-forbidden).";
+        }
+        {
+          assertion = !(provider == "device-gpu"
+            && zoneAttrOr settings "videoNvidiaDecode" false)
+            || zoneAttrOr settings "videoSidecar" false;
+          message = "${row.path}: videoNvidiaDecode requires videoSidecar = true (nvidia-decode-requires-video-sidecar).";
+        }
+      ])
     deviceRows;
 
   deviceSharedArbitrationAssertions = map
@@ -2555,6 +2634,7 @@ let
     ++ deviceMutualExclusionAssertions
     ++ deviceVideoSidecarAssertions
     ++ deviceVirglVideoAssertions
+    ++ deviceProviderShapeAssertions
     ++ deviceSharedArbitrationAssertions
     ++ deviceDuplicateLabelAssertions;
 in

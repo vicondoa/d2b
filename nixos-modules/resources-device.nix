@@ -128,7 +128,7 @@ let
 
   providerSettingsFields = provider:
     if provider == "device-tpm"
-    then [ "logLevel" "startupClear" ]
+    then [ "logLevel" "executionRef" ]
     else if provider == "device-usbip"
     then [ "env" ]
     else if provider == "device-security-key"
@@ -156,6 +156,7 @@ let
       virglVideo = attrOr settings "virglVideo" false;
       contextTypes = attrOr settings "contextTypes" [ "virgl" "virgl2" "cross-domain" ];
       displays = attrOr settings "displays" [ { hidden = true; } ];
+      executionRef = attrOr settings "executionRef" null;
     in
     builtins.isAttrs settings
     && exactKeys (providerSettingsFields name) settings
@@ -163,7 +164,7 @@ let
       || (builtins.isInt (attrOr settings "logLevel" 20)
         && attrOr settings "logLevel" 20 >= 1
         && attrOr settings "logLevel" 20 <= 20
-        && builtins.isBool (attrOr settings "startupClear" true)))
+        && (executionRef == null || resolvesAs device.zone.resources "Host" executionRef)))
     && (name != "device-usbip"
       || (builtins.isString (attrOr settings "env" "")
         && builtins.match tokenPattern (attrOr settings "env" "") != null))
@@ -221,7 +222,7 @@ let
       authored = providerSettings device;
       defaults =
         if name == "device-tpm"
-        then { logLevel = 20; startupClear = true; }
+        then { logLevel = 20; }
         else if name == "device-security-key"
         then { vsockPort = 14320; sessionRingSize = 32; leaseTimeoutSecs = 300; }
         else if name == "device-gpu"
@@ -307,6 +308,7 @@ let
         deviceClass = attrOr spec "deviceClass" null;
         maxClaims = attrOr spec "maxConcurrentClaims" 1;
         value = selector device;
+        busClass = attrOr value "busClass" null;
       in [
         {
           assertion = exactKeys [
@@ -375,6 +377,30 @@ let
           message = "${device.path}: physical Devices require a valid closed inventory selector (physical-missing-selector-label or unknown-bus-class).";
         }
         {
+          assertion = name != "device-tpm"
+            || (deviceClass == "emulated" && value == { });
+          message = "${device.path}: device-tpm requires an emulated Device with an empty inventory selector (tpm-device-shape-invalid).";
+        }
+        {
+          assertion = name != "device-usbip"
+            || (deviceClass == "physical"
+              && arbitration == "exclusive"
+              && busClass == "usb");
+          message = "${device.path}: device-usbip requires an exclusive physical USB Device (usbip-device-shape-invalid).";
+        }
+        {
+          assertion = name != "device-security-key"
+            || (deviceClass == "physical"
+              && arbitration == "exclusive"
+              && busClass == "hidraw");
+          message = "${device.path}: device-security-key requires an exclusive physical hidraw Device (security-key-device-shape-invalid).";
+        }
+        {
+          assertion = name != "device-gpu"
+            || (deviceClass == "physical" && busClass == "drm");
+          message = "${device.path}: device-gpu requires a physical DRM Device (gpu-device-shape-invalid).";
+        }
+        {
           assertion = extension == null
             || (builtins.isAttrs extension
               && exactKeys [ "schemaId" "schemaVersion" "settings" ] extension
@@ -393,6 +419,13 @@ let
           message = "${device.path}.spec.provider.settings is invalid for its signed Provider schema (invalid-provider-settings).";
         }
         {
+          assertion = extension == null
+            || !(name == "device-tpm"
+              && builtins.isAttrs settings
+              && builtins.hasAttr "startupClear" settings);
+          message = "${device.path}.spec.provider.settings.startupClear is not supported; the TPM flush is mandatory (tpm-startup-clear-forbidden).";
+        }
+        {
           assertion = extension == null || !settingsHasForbiddenArtifact settings;
           message = "${device.path}.spec.provider.settings must not carry artifactId or a store/path field (spec-provider-shadow).";
         }
@@ -409,6 +442,11 @@ let
           assertion = !(name == "device-gpu" && attrOr settings "videoSidecar" false)
             || !(attrOr settings "renderNodeOnly" false);
           message = "${device.path}: videoSidecar requires a full GPU Device.";
+        }
+        {
+          assertion = !(name == "device-gpu" && attrOr settings "videoNvidiaDecode" false)
+            || attrOr settings "videoSidecar" false;
+          message = "${device.path}: videoNvidiaDecode requires videoSidecar = true (nvidia-decode-requires-video-sidecar).";
         }
       ])
     devices);

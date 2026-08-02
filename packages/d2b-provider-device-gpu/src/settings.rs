@@ -74,6 +74,14 @@ impl GpuSettings {
         if self.context_types.is_empty() || self.context_types.len() > 3 {
             return Err(GpuSettingsError::ContextTypesOutOfRange);
         }
+        if self
+            .context_types
+            .iter()
+            .enumerate()
+            .any(|(index, context)| self.context_types[..index].contains(context))
+        {
+            return Err(GpuSettingsError::DuplicateContextType);
+        }
         if self.displays.len() > 8 {
             return Err(GpuSettingsError::DisplaysOutOfRange);
         }
@@ -82,6 +90,9 @@ impl GpuSettings {
         }
         if self.video_sidecar && self.render_node_only {
             return Err(GpuSettingsError::VideoRequiresFullGpu);
+        }
+        if self.video_nvidia_decode && !self.video_sidecar {
+            return Err(GpuSettingsError::NvidiaDecodeRequiresVideoSidecar);
         }
         if self.virgl_video && self.video_sidecar {
             return Err(GpuSettingsError::VideoModesConflict);
@@ -95,12 +106,16 @@ impl GpuSettings {
 pub enum GpuSettingsError {
     /// Context types are empty or exceed the closed set.
     ContextTypesOutOfRange,
+    /// A context type was requested more than once.
+    DuplicateContextType,
     /// More than eight displays were requested.
     DisplaysOutOfRange,
     /// Shared arbitration requires render-node-only mode.
     SharedRequiresRenderNodeOnly,
     /// The video sidecar requires a full GPU worker.
     VideoRequiresFullGpu,
+    /// NVIDIA decode devices are meaningful only for the video sidecar.
+    NvidiaDecodeRequiresVideoSidecar,
     /// The two video modes cannot be enabled together.
     VideoModesConflict,
 }
@@ -109,9 +124,11 @@ impl fmt::Display for GpuSettingsError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::ContextTypesOutOfRange => "gpu-context-types-out-of-range",
+            Self::DuplicateContextType => "gpu-duplicate-context-type",
             Self::DisplaysOutOfRange => "gpu-displays-out-of-range",
             Self::SharedRequiresRenderNodeOnly => "shared-arbitration-requires-render-node-only",
             Self::VideoRequiresFullGpu => "video-sidecar-requires-full-gpu",
+            Self::NvidiaDecodeRequiresVideoSidecar => "nvidia-decode-requires-video-sidecar",
             Self::VideoModesConflict => "gpu-video-modes-conflict",
         })
     }

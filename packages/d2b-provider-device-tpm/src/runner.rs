@@ -44,23 +44,20 @@ impl fmt::Debug for SignedBinaryRef {
     }
 }
 
-/// Device-tpm desired settings. There is no path or artifact field.
+/// Device-tpm desired settings. There is no path, artifact, or flush-toggle
+/// field. The pre-start flush is mandatory for every activation cycle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SwtpmSettings {
     /// swtpm `--log level` in the closed 1..=20 range.
     #[serde(default = "default_log_level")]
     pub log_level: u8,
-    /// Whether the pre-start flush is required.
-    #[serde(default = "default_startup_clear")]
-    pub startup_clear: bool,
 }
 
 impl Default for SwtpmSettings {
     fn default() -> Self {
         Self {
             log_level: default_log_level(),
-            startup_clear: default_startup_clear(),
         }
     }
 }
@@ -78,10 +75,6 @@ impl SwtpmSettings {
 
 fn default_log_level() -> u8 {
     20
-}
-
-fn default_startup_clear() -> bool {
-    true
 }
 
 /// Opaque ticket for the pre-start flush.
@@ -140,12 +133,10 @@ impl SwtpmArgv {
             "--server",
             "<server-socket>",
         ];
-        if settings.startup_clear {
-            args.extend(["--flags", "startup-clear"]);
-        }
+        args.extend(["--flags", "startup-clear"]);
         args.extend([
             "--log",
-            "<state-dir>/swtpm.log",
+            "file=<state-dir>/swtpm.log,level=<log-level>",
             "--pid",
             "<state-dir>/swtpm.pid",
         ]);
@@ -190,12 +181,15 @@ impl std::error::Error for SwtpmArgvError {}
 /// Validate that a Core-issued long-lived launch ticket is bound to the
 /// requested opaque state intent.
 pub fn validate_start_ticket(
-    _intent: &StateDirIntent,
-    _state_token: &StateDirectoryToken,
+    intent: &StateDirIntent,
+    state_token: &StateDirectoryToken,
     binary: &SignedBinaryRef,
 ) -> Result<(), SwtpmArgvError> {
     if binary.kind() != BinaryKind::Swtpm {
         return Err(SwtpmArgvError::WrongBinaryKind);
+    }
+    if intent.directory().as_bytes() != state_token.as_bytes() {
+        return Err(SwtpmArgvError::TicketIntentMismatch);
     }
     Ok(())
 }
