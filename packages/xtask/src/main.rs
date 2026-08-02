@@ -543,7 +543,7 @@ mod provider_layout_tests {
         fs::create_dir_all(crate_dir.join("integration")).unwrap();
         fs::write(
             root.join("packages/Cargo.toml"),
-            "[workspace]\nmembers = [\"d2b-provider-device-fixture\"]\n",
+            "[workspace]\nmembers = [\n    \"d2b-provider-device-fixture\",\n]\n",
         )
         .unwrap();
         fs::write(crate_dir.join("README.md"), "# fixture\n").unwrap();
