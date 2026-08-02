@@ -12,6 +12,15 @@ let
   rights = [ "read" "write" "create" "delete" "traverse" "execute" ];
   volumeKinds = [ "durable" "ephemeral" "state" "tmp" "cache" ];
   sourceKinds = [ "local-path" "block-image" "tmpfs" "nix-closure" ];
+  genericExecutionFields = [
+    "defaultDomain"
+    "allowedDomains"
+    "defaultUserRef"
+    "budget"
+    "networkAttachments"
+    "deviceAttachments"
+    "volumeAttachmentDefaults"
+  ];
 
   attrOr = attrs: name: fallback:
     if builtins.isAttrs attrs && builtins.hasAttr name attrs
@@ -53,6 +62,8 @@ let
   exactKeys = allowed: value:
     builtins.isAttrs value
     && lib.all (key: builtins.elem key allowed) (lib.attrNames value);
+
+  stripGeneric = spec: builtins.removeAttrs spec genericExecutionFields;
 
   artifactFor = artifactId:
     if builtins.isString artifactId && builtins.hasAttr artifactId (cfg.artifacts or { })
@@ -324,10 +335,11 @@ let
         message = "${row.path}.spec.kind must be durable, ephemeral, state, tmp, or cache.";
       }
       {
-        assertion = exactKeys [
-          "providerRef" "updatePolicy" "kind" "source" "layout" "views" "attachments"
-          "quota" "identityMarker" "stateSchema" "persistenceClass" "sensitivityClass"
-        ] spec;
+        assertion = exactKeys (
+          [
+            "providerRef" "updatePolicy" "kind" "source" "layout" "views" "attachments"
+            "quota" "identityMarker" "stateSchema" "persistenceClass" "sensitivityClass"
+          ] ++ genericExecutionFields) spec;
         message = "${row.path}.spec contains an unsupported Volume field.";
       }
     ]
@@ -338,7 +350,7 @@ let
 
   canonical = row:
     let
-      spec = row.spec;
+      spec = stripGeneric row.spec;
       source = spec.source or { };
       settings = source.settings or { };
       kind = settings.kind or source.kind or null;
