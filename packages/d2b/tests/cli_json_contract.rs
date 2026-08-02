@@ -1,7 +1,8 @@
 //! W3 CLI-contract integration test, migrated from tests/cli-json.sh.
 //!
 //! The retired bash gate built a synthetic `nixosSystem` fixture and asserted
-//! the machine-readable JSON contract for `list` / `status` / `keys` / `audit`.
+//! the machine-readable JSON contract for `list` / `status` / activation keys
+//! / `audit`.
 //! Its KEY-SET shape checks (the exact `keys | sort` jq assertions for `list`,
 //! `status`, `services`, `runnerParity`, `livePoolIntegrity`) are now covered by
 //! the strict `deny_unknown_fields` DTO deserializes in `cli_contract.rs` and
@@ -14,9 +15,8 @@
 //!     `status <vm> --json` reports `pendingRestart == true` with running
 //!     services and consistent `current`/`booted` (deserialized strictly into
 //!     `d2b_contracts::cli_output::{ListOutputV2, StatusVmOutputV2}`);
-//!   * `keys list --json` with no daemon: exit 1, empty stderr, and the
-//!     structured daemon-down envelope on stdout with
-//!     `kind == "d2b keys list requires d2bd"`;
+//!   * `activation keys list --json` with no Zone runtime: exit 1, empty
+//!     stderr, and the v3 `zone-unavailable` envelope on stdout;
 //!   * `audit --json` run under a PTY (a real TTY): stays JSON (not the human
 //!     stderr form) and returns the daemon-down envelope
 //!     `kind == "d2b audit requires d2bd"`, exit 1.
@@ -24,9 +24,9 @@
 //! The pending-restart cases reuse the rendered fixture-smoke bundle via
 //! `D2B_FIXTURES` (the same artifact dir cli_contract.rs / status_contract.rs
 //! consume); they skip cleanly when it is unset (the plain
-//! `cargo test --workspace` pass with no Nix sandbox). The daemon-down keys /
-//! audit cases need no fixture - they only point the public socket at a missing
-//! path - so they always run.
+//! `cargo test --workspace` pass with no Nix sandbox). The Zone-down keys /
+//! audit cases need no fixture - they only point the public socket at a
+//! missing path - so they always run.
 
 use std::io::Read;
 use std::os::fd::OwnedFd;
@@ -48,6 +48,9 @@ const ENVELOPE_KEYS: &[&str] = &[
     "remediation",
     "whatWasChecked",
 ];
+
+/// The closed v3 envelope emitted before a Zone context can be established.
+const ZONE_ERROR_KEYS: &[&str] = &["errorClass", "message", "ok", "schemaVersion", "zoneRef"];
 
 /// corp-vm's `current`/`booted` symlink targets are deliberately DIFFERENT
 /// store-path strings so `is_pending_restart` sees `current != booted`.
@@ -226,6 +229,31 @@ fn assert_daemon_down_envelope(value: &Value, verb: &str) {
     );
 }
 
+/// Assert the strict v3 transport envelope used when command dispatch cannot
+/// discover a Zone runtime. The missing socket path must not be reflected in
+/// the operator-facing JSON.
+fn assert_zone_unavailable_envelope(value: &Value, missing_socket: &Path) {
+    let obj = value
+        .as_object()
+        .unwrap_or_else(|| panic!("Zone error must be a JSON object, got: {value}"));
+    let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys, ZONE_ERROR_KEYS,
+        "Zone-unavailable envelope key set must stay closed"
+    );
+    assert_eq!(value["ok"], false);
+    assert_eq!(value["zoneRef"], "Zone/local-root");
+    assert_eq!(value["errorClass"], "zone-unavailable");
+    assert_eq!(value["message"], "Zone runtime is unavailable");
+    assert_eq!(value["schemaVersion"], 1);
+    let rendered = value.to_string();
+    assert!(
+        !rendered.contains(&missing_socket.display().to_string()),
+        "Zone-unavailable envelope must redact the missing socket path: {rendered}"
+    );
+}
+
 #[test]
 fn list_reports_pending_restart_when_booted_differs_and_active() {
     let Some(fixtures) = fixtures_dir() else {
@@ -304,37 +332,37 @@ fn status_reports_pending_restart_with_consistent_current_booted() {
 }
 
 #[test]
-fn keys_list_daemon_down_returns_structured_envelope() {
-    // No fixture needed: keys list connects straight to the public socket and
-    // never loads the manifest. Pointing it at a missing socket surfaces the
-    // daemon-down envelope.
+fn activation_keys_list_zone_down_returns_v3_envelope() {
+    // No fixture is needed: v3 activation keys first discovers a Zone runtime.
+    // Pointing the public socket at a missing path exercises the pre-dispatch
+    // zone-unavailable envelope rather than the retired daemon-down shape.
     let tmp = tempfile::tempdir().expect("tempdir");
     let missing = tmp.path().join("missing-public.sock");
     let out = Command::new(env!("CARGO_BIN_EXE_d2b"))
-        .args(["keys", "list", "--json"])
+        .args(["activation", "keys", "list", "--json"])
         .env("D2B_PUBLIC_SOCKET", &missing)
         .env("D2B_BROKER_SOCKET", tmp.path().join("missing-priv.sock"))
         .output()
-        .expect("spawn d2b keys list --json");
+        .expect("spawn d2b activation keys list --json");
 
     assert_eq!(
         out.status.code(),
         Some(1),
-        "keys list --json daemon-down exits 1; stderr:\n{}",
+        "activation keys list --json Zone-down exits 1; stderr:\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(
         out.stderr.is_empty(),
-        "keys list --json daemon-down: the envelope is on stdout, stderr is empty; got:\n{}",
+        "activation keys list --json Zone-down: the envelope is on stdout, stderr is empty; got:\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
     let envelope: Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|err| {
         panic!(
-            "keys list --json envelope: {err}\n{}",
+            "activation keys list --json envelope: {err}\n{}",
             String::from_utf8_lossy(&out.stdout)
         )
     });
-    assert_daemon_down_envelope(&envelope, "keys list");
+    assert_zone_unavailable_envelope(&envelope, &missing);
 }
 
 #[test]

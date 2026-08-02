@@ -1,303 +1,529 @@
-//! Rust successor for `tests/cli-contract-coverage.sh`.
+//! W5 v3 CLI documentation/parser contract coverage.
 //!
-//! This is intentionally a documentation/parser contract test, not a runtime
-//! CLI-output test. It keeps the retired shell gate's closed command/disposition
-//! scope, compares the documented flag tables with clap-rendered help for the
-//! selected parser surfaces, and preserves the host CLI error-golden closure.
+//! The former W3 matrix read the retired `cli-contract.md` surface and
+//! exercised commands that the v3 clean break deliberately removed. This
+//! test keeps the coverage closed by pinning the published v3 replacement
+//! reference, the complete ModernCli top-level registry, representative
+//! modern argument/flag probes, and explicit rejection of the retired
+//! namespaces. The host error-golden closure remains below.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use clap::error::ErrorKind;
 use serde_json::Value;
 
-const EXPECTED_DISPOSITION: &[(&str, &str)] = &[
-    ("list", "rust-native"),
-    ("vm start", "rust-native"),
-    ("vm stop", "rust-native"),
-    ("vm restart", "rust-native"),
-    ("vm exec", "rust-native"),
-    ("status", "rust-native"),
-    ("status --check-bridges", "rust-native"),
-    ("usb attach", "rust-native"),
-    ("usb detach", "rust-native"),
-    ("usb probe", "rust-native"),
-    ("console", "rust-native"),
-    ("audio status", "rust-native"),
-    ("audio mic", "rust-native"),
-    ("audio speaker", "rust-native"),
-    ("audio off", "rust-native"),
-    ("build", "rust-native"),
-    ("switch", "rust-native"),
-    ("boot", "rust-native"),
-    ("test", "rust-native"),
-    ("rollback", "rust-native"),
-    ("generations", "rust-native"),
-    ("gc", "rust-native"),
-    ("store verify", "rust-native"),
-    ("trust", "rust-native"),
-    ("rotate-known-host", "rust-native"),
-    ("keys list", "rust-native"),
-    ("keys show", "rust-native"),
-    ("keys rotate", "rust-native"),
-    ("audit", "rust-native"),
-    ("host check", "rust-native"),
-    ("host prepare", "rust-native"),
-    ("host destroy", "rust-native"),
-    ("host migrate-storage", "rust-native"),
-    ("auth status", "rust-native"),
+const V3_TOP_LEVEL_COMMANDS: &[&str] = &[
+    "get",
+    "list",
+    "watch",
+    "create",
+    "update-spec",
+    "delete",
+    "status",
+    "upgrade",
+    "reconcile",
+    "host",
+    "guest",
+    "process",
+    "exec",
+    "shell",
+    "volume",
+    "network",
+    "device",
+    "endpoint",
+    "export",
+    "import",
+    "resource",
+    "user",
+    "credential",
+    "provider",
+    "zone",
+    "quota",
+    "emergency-policy",
+    "activation",
+    "audit",
+    "op",
+    "auth",
+    "complete",
+    "audio",
+    "clipboard",
+    "display",
 ];
 
-const HELP_GROUPS: &[(&str, &[&str])] = &[
-    ("list", &["list"]),
-    ("status", &["status", "status --check-bridges"]),
-    ("vm exec", &["vm exec"]),
-    ("keys list", &["keys list"]),
-    ("keys show", &["keys show"]),
-    ("usb attach", &["usb attach"]),
-    ("usb detach", &["usb detach"]),
-    ("usb probe", &["usb probe"]),
-    ("store verify", &["store verify"]),
-    ("audit", &["audit"]),
-    ("host check", &["host check"]),
-    ("host migrate-storage", &["host migrate-storage"]),
-    ("auth status", &["auth status"]),
+const V3_GLOBAL_FLAGS: &[&str] = &[
+    "--zone",
+    "--json",
+    "--human",
+    "--deadline",
+    "--no-deadline",
+    "-V",
+    "--version",
 ];
 
-/// `(flag label, argv tokens)` for a single flag invocation under a command.
-type FlagInvocation = (&'static str, &'static [&'static str]);
-/// `(command label, [flag invocations])` - a command's flag-coverage matrix.
-type CommandFlagMatrix = (&'static str, &'static [FlagInvocation]);
+const V3_DOC_MARKERS: &[&str] = &[
+    "# v3 replacement contracts for desktop clients",
+    "**Contract version:** d2b 3.0 (v3) replacement surface.",
+    "The client must use the `selectedVersion` and returned feature list",
+    "d2b audio status --json",
+    "d2b usb security-key status",
+    "d2b usb security-key sessions",
+    "d2b usb security-key cancel",
+    "Persistent shell operations are admin-only.",
+    "open a hidraw device",
+    "It never contains",
+    "private proxy paths",
+    "must not open the private file directly",
+    "must not read private d2b state",
+    "normal `d2b vm stop --apply`",
+    "Closed DTOs are decoded with the documented version",
+];
 
-const FLAG_INVOCATIONS: &[CommandFlagMatrix] = &[
+/// Published examples use companion-facing nouns; these are the corresponding
+/// ModernCli parser paths after the v3 clean break.
+const V3_DOCUMENTED_REPLACEMENTS: &[(&str, &[&str])] = &[
+    ("d2b audio status --json", &["audio", "status", "--json"]),
     (
-        "list",
+        "d2b usb security-key status",
+        &["device", "security-key", "status", "--json"],
+    ),
+    (
+        "d2b usb security-key sessions",
+        &["device", "security-key", "sessions", "--json"],
+    ),
+    (
+        "d2b usb security-key cancel",
         &[
-            ("--json", &["list", "--json"]),
-            ("--human", &["list", "--human"]),
+            "device",
+            "security-key",
+            "cancel",
+            "--current",
+            "--dry-run",
+            "--json",
         ],
     ),
     (
-        "status",
+        "normal `d2b vm stop --apply`",
+        &["guest", "stop", "work", "--apply", "--json"],
+    ),
+];
+
+/// One parser probe per modern namespace, with representative nested flags.
+const V3_PARSER_PROBES: &[(&str, &[&str])] = &[
+    (
+        "generic get and global flags",
+        &["get", "Guest/work", "--zone", "dev", "--json"],
+    ),
+    (
+        "generic list filters",
         &[
-            ("--json", &["status", "--vm", "corp-vm", "--json"]),
-            ("--human", &["status", "--human"]),
-            ("--vm", &["status", "--vm", "corp-vm", "--human"]),
+            "list",
+            "Guest",
+            "--execution-ref",
+            "Host/launcher",
+            "--domain",
+            "user",
+            "--phase",
+            "Ready",
+            "--label-selector",
+            "owner=alice",
+            "--updates",
+            "--page-token",
+            "next",
+            "--limit",
+            "10",
+            "--human",
         ],
     ),
     (
-        "status --check-bridges",
-        &[("--check-bridges", &["status", "--check-bridges"])],
-    ),
-    (
-        "vm exec",
+        "generic watch and no-deadline",
         &[
-            ("-d", &["vm", "exec", "-d", "corp-vm", "--", "sleep", "60"]),
-            (
-                "--detach",
-                &["vm", "exec", "--detach", "corp-vm", "--", "sleep", "60"],
-            ),
-            ("-i", &["vm", "exec", "-i", "-t", "corp-vm", "--", "bash"]),
-            (
-                "--interactive",
-                &[
-                    "vm",
-                    "exec",
-                    "--interactive",
-                    "--tty",
-                    "corp-vm",
-                    "--",
-                    "bash",
-                ],
-            ),
-            ("-t", &["vm", "exec", "-t", "corp-vm", "--", "bash"]),
-            ("--tty", &["vm", "exec", "--tty", "corp-vm", "--", "bash"]),
-            (
-                "--env",
-                &["vm", "exec", "--env", "KEY=VALUE", "corp-vm", "--", "env"],
-            ),
-            (
-                "--cwd",
-                &["vm", "exec", "--cwd", "/home/alice", "corp-vm", "--", "pwd"],
-            ),
-            (
-                "--json",
-                &["vm", "exec", "corp-vm", "logs", "exec-1", "--json"],
-            ),
-            (
-                "--human",
-                &["vm", "exec", "corp-vm", "logs", "exec-1", "--human"],
-            ),
-            (
-                "--stdout-offset",
-                &[
-                    "vm",
-                    "exec",
-                    "corp-vm",
-                    "logs",
-                    "exec-1",
-                    "--stdout-offset=4",
-                ],
-            ),
-            (
-                "--stderr-offset",
-                &[
-                    "vm",
-                    "exec",
-                    "corp-vm",
-                    "logs",
-                    "exec-1",
-                    "--stderr-offset=8",
-                ],
-            ),
-            (
-                "--max-len",
-                &["vm", "exec", "corp-vm", "logs", "exec-1", "--max-len=4096"],
-            ),
+            "watch",
+            "Guest",
+            "--since-revision",
+            "7",
+            "--phase",
+            "Ready",
+            "--label-selector",
+            "owner=alice",
+            "--no-deadline",
+            "--json",
         ],
     ),
     (
-        "keys list",
+        "generic create",
         &[
-            ("--json", &["keys", "list", "--json"]),
-            ("--human", &["keys", "list", "--human"]),
+            "create",
+            "Guest",
+            "--spec-file",
+            "spec.json",
+            "--wait-for-reconcile",
+            "--reconcile-deadline",
+            "5s",
+            "--deadline",
+            "30s",
+            "--json",
         ],
     ),
     (
-        "keys show",
+        "generic update-spec",
         &[
-            ("--json", &["keys", "show", "corp-vm", "--json"]),
-            ("--human", &["keys", "show", "corp-vm", "--human"]),
+            "update-spec",
+            "Guest/work",
+            "--revision",
+            "7",
+            "--spec-file",
+            "spec.json",
+            "--wait-for-reconcile",
+            "--reconcile-deadline",
+            "5s",
+            "--json",
         ],
     ),
     (
-        "usb attach",
+        "generic delete",
         &[
-            (
-                "--dry-run",
-                &["usb", "attach", "corp-vm", "1-2", "--dry-run"],
-            ),
-            ("--apply", &["usb", "attach", "corp-vm", "1-2", "--apply"]),
-            (
-                "--json",
-                &["usb", "attach", "corp-vm", "1-2", "--dry-run", "--json"],
-            ),
-            (
-                "--human",
-                &["usb", "attach", "corp-vm", "1-2", "--dry-run", "--human"],
-            ),
+            "delete",
+            "Guest/work",
+            "--revision",
+            "7",
+            "--wait-for-reconcile",
+            "--reconcile-deadline",
+            "5s",
+            "--json",
         ],
     ),
     (
-        "usb detach",
+        "generic status",
+        &["status", "Guest/work", "--watch", "--json"],
+    ),
+    (
+        "generic upgrade",
         &[
-            (
-                "--dry-run",
-                &["usb", "detach", "corp-vm", "1-2", "--dry-run"],
-            ),
-            ("--apply", &["usb", "detach", "corp-vm", "1-2", "--apply"]),
-            (
-                "--json",
-                &["usb", "detach", "corp-vm", "1-2", "--dry-run", "--json"],
-            ),
-            (
-                "--human",
-                &["usb", "detach", "corp-vm", "1-2", "--dry-run", "--human"],
-            ),
+            "upgrade",
+            "Guest/work",
+            "--recursive",
+            "--apply",
+            "--reconcile-deadline",
+            "5s",
+            "--json",
         ],
     ),
     (
-        "usb probe",
+        "generic reconcile",
         &[
-            ("--json", &["usb", "probe", "--json"]),
-            ("--human", &["usb", "probe", "--human"]),
-        ],
-    ),
-    (
-        "store verify",
-        &[
-            (
-                "--repair",
-                &["store", "verify", "corp-vm", "--repair", "--json"],
-            ),
-            ("--json", &["store", "verify", "corp-vm", "--json"]),
-            ("--human", &["store", "verify", "corp-vm", "--human"]),
-        ],
-    ),
-    (
-        "audit",
-        &[
-            ("--strict", &["audit", "--strict", "--json"]),
-            ("--json", &["audit", "--json"]),
-            ("--human", &["audit", "--human"]),
+            "reconcile",
+            "Guest/work",
+            "--reconcile-deadline",
+            "5s",
+            "--json",
         ],
     ),
     (
         "host check",
+        &["host", "check", "--read-only", "--strict", "--json"],
+    ),
+    ("host prepare", &["host", "prepare", "--dry-run", "--json"]),
+    ("host destroy", &["host", "destroy", "--apply", "--json"]),
+    ("host doctor", &["host", "doctor", "--read-only", "--json"]),
+    (
+        "host install",
         &[
-            ("--read-only", &["host", "check", "--read-only", "--human"]),
-            (
-                "--strict",
-                &["host", "check", "--strict", "--read-only", "--human"],
-            ),
-            ("--json", &["host", "check", "--read-only", "--json"]),
-            ("--human", &["host", "check", "--read-only", "--human"]),
+            "host", "install", "--apply", "--enable", "--start", "--json",
         ],
     ),
     (
-        "host migrate-storage",
+        "host reconcile",
+        &["host", "reconcile", "--network", "--dry-run", "--json"],
+    ),
+    (
+        "host validate",
         &[
-            (
-                "--dry-run",
-                &["host", "migrate-storage", "--dry-run", "--human"],
-            ),
-            ("--apply", &["host", "migrate-storage", "--apply", "--json"]),
-            (
-                "--rollback",
-                &[
-                    "host",
-                    "migrate-storage",
-                    "--rollback",
-                    "--from-checkpoint",
-                    "storage-cutover-test",
-                    "--json",
-                ],
-            ),
-            (
-                "--from-checkpoint",
-                &[
-                    "host",
-                    "migrate-storage",
-                    "--rollback",
-                    "--from-checkpoint",
-                    "storage-cutover-test",
-                    "--json",
-                ],
-            ),
-            (
-                "--json",
-                &["host", "migrate-storage", "--dry-run", "--json"],
-            ),
-            (
-                "--human",
-                &["host", "migrate-storage", "--dry-run", "--human"],
-            ),
+            "host",
+            "validate",
+            "--dry-run",
+            "--wave",
+            "wave-5",
+            "--evidence-dir",
+            "evidence",
+            "--scripts-dir",
+            "scripts",
+            "--operator-signature",
+            "signature",
+            "--json",
+        ],
+    ),
+    ("guest get", &["guest", "get", "work", "--json"]),
+    (
+        "guest list",
+        &[
+            "guest",
+            "list",
+            "--phase",
+            "Ready",
+            "--updates",
+            "--limit",
+            "10",
+            "--json",
         ],
     ),
     (
-        "auth status",
+        "guest status",
+        &["guest", "status", "work", "--watch", "--json"],
+    ),
+    (
+        "guest start",
         &[
-            (
-                "--json",
-                &["auth", "status", "--test-uid", "1000", "--json"],
-            ),
-            (
-                "--human",
-                &["auth", "status", "--test-uid", "1000", "--human"],
-            ),
+            "guest",
+            "start",
+            "work",
+            "--apply",
+            "--no-wait-ready",
+            "--force",
+            "--json",
         ],
     ),
+    (
+        "guest stop",
+        &["guest", "stop", "work", "--apply", "--force", "--json"],
+    ),
+    (
+        "guest restart",
+        &["guest", "restart", "work", "--dry-run", "--json"],
+    ),
+    (
+        "guest create",
+        &["guest", "create", "--spec-file", "spec.json", "--json"],
+    ),
+    (
+        "guest update-spec",
+        &[
+            "guest",
+            "update-spec",
+            "work",
+            "--revision",
+            "7",
+            "--spec-file",
+            "spec.json",
+            "--json",
+        ],
+    ),
+    (
+        "guest delete",
+        &["guest", "delete", "work", "--revision", "7", "--json"],
+    ),
+    ("guest console", &["guest", "console", "work", "--json"]),
+    (
+        "process list",
+        &[
+            "process",
+            "list",
+            "--execution-ref",
+            "Guest/work",
+            "--domain",
+            "system",
+            "--phase",
+            "Ready",
+            "--limit",
+            "10",
+            "--json",
+        ],
+    ),
+    (
+        "exec run",
+        &[
+            "exec",
+            "run",
+            "Guest/work",
+            "--name",
+            "run-1",
+            "--domain",
+            "user",
+            "--user",
+            "User/alice",
+            "--provider",
+            "Provider/shell",
+            "--env",
+            "KEY=VALUE",
+            "--cwd",
+            "/home/alice",
+            "--",
+            "echo",
+            "ok",
+            "--json",
+        ],
+    ),
+    (
+        "exec attach",
+        &[
+            "exec",
+            "attach",
+            "EphemeralProcess/run-1",
+            "--interactive",
+            "--tty",
+            "--json",
+        ],
+    ),
+    (
+        "exec logs",
+        &[
+            "exec",
+            "logs",
+            "EphemeralProcess/run-1",
+            "--stdout-offset",
+            "4",
+            "--stderr-offset",
+            "8",
+            "--max-len",
+            "4096",
+            "--json",
+        ],
+    ),
+    (
+        "shell open",
+        &[
+            "shell",
+            "open",
+            "Guest/work",
+            "--name",
+            "main",
+            "--force",
+            "--json",
+        ],
+    ),
+    (
+        "shell status",
+        &["shell", "status", "ShellSession/main", "--watch", "--json"],
+    ),
+    (
+        "typed volume verify",
+        &["volume", "verify", "state", "--repair", "--json"],
+    ),
+    (
+        "typed network list",
+        &[
+            "network",
+            "list",
+            "--domain",
+            "system",
+            "--phase",
+            "Ready",
+            "--label-selector",
+            "owner=alice",
+            "--updates",
+            "--page-token",
+            "next",
+            "--limit",
+            "10",
+            "--json",
+        ],
+    ),
+    (
+        "device USB attach",
+        &[
+            "device",
+            "usb",
+            "attach",
+            "work",
+            "1-2",
+            "--dry-run",
+            "--json",
+        ],
+    ),
+    (
+        "device security key",
+        &["device", "security-key", "status", "--json"],
+    ),
+    (
+        "endpoint list",
+        &[
+            "endpoint",
+            "list",
+            "--endpoint-class",
+            "display",
+            "--updates",
+            "--json",
+        ],
+    ),
+    (
+        "export list",
+        &["export", "list", "--exported-type", "Credential", "--json"],
+    ),
+    ("import graph", &["import", "graph", "microphone", "--json"]),
+    (
+        "resource authorities",
+        &[
+            "resource",
+            "authorities",
+            "--scope",
+            "system",
+            "holders",
+            "Guest/work",
+            "--json",
+        ],
+    ),
+    ("user get", &["user", "get", "alice", "--json"]),
+    ("credential get", &["credential", "get", "token", "--json"]),
+    (
+        "provider list",
+        &["provider", "list", "--package-only", "--json"],
+    ),
+    (
+        "zone status",
+        &["zone", "status", "dev", "--watch", "--json"],
+    ),
+    ("quota list", &["quota", "list", "--json"]),
+    (
+        "emergency policy status",
+        &["emergency-policy", "status", "lockdown", "--json"],
+    ),
+    (
+        "activation keys list",
+        &["activation", "keys", "list", "--json"],
+    ),
+    ("audit", &["audit", "--strict", "--json"]),
+    (
+        "operation inspect",
+        &[
+            "op",
+            "inspect",
+            "--operation-id",
+            "op-1",
+            "--trace-id",
+            "trace-1",
+            "--span-id",
+            "span-1",
+            "--watch",
+            "--json",
+        ],
+    ),
+    (
+        "auth hidden fixture seam",
+        &["auth", "--test-uid", "1000", "status", "--json"],
+    ),
+    (
+        "completion command list",
+        &["complete", "--list-commands", "--json"],
+    ),
+    ("audio projection", &["audio", "status", "--json"]),
+    ("clipboard projection", &["clipboard", "arm", "--json"]),
+    ("display projection", &["display", "list", "--json"]),
+];
+
+const RETIRED_PARSER_PROBES: &[(&str, &[&str])] = &[
+    ("retired vm namespace", &["vm", "start", "work"]),
+    ("retired keys namespace", &["keys", "list"]),
+    ("retired usb namespace", &["usb", "probe"]),
+    ("retired realm namespace", &["realm", "list"]),
+    ("retired up alias", &["up", "work"]),
+    ("retired status VM flag", &["status", "--vm", "work"]),
+    ("retired bridge flag", &["status", "--check-bridges"]),
+    (
+        "retired auth test-uid placement",
+        &["auth", "status", "--test-uid", "1000"],
+    ),
+    ("retired list shape", &["list", "--json"]),
 ];
 
 const W3_ROWS: &[(&str, &str)] = &[
@@ -353,126 +579,74 @@ const W3_ROWS: &[(&str, &str)] = &[
 
 #[test]
 fn cli_contract_sections_and_help_flags_match_documented_surface() {
-    let doc = read_cli_contract();
-    let sections = parse_sections(&doc);
-    let dispatch_rows = parse_dispatch_rows(&doc);
+    let doc = read_zone_cli_contract();
     let mut violations = Vec::new();
 
-    for (command, disposition) in EXPECTED_DISPOSITION {
-        let Some(section) = sections.get(*command) else {
-            violations.push(format!("missing section: {command}"));
-            continue;
-        };
-
-        for label in [
-            "**Synopsis:**",
-            "**Flags**",
-            "**Arguments**",
-            "**Exit codes**",
-            "**Human example**",
-        ] {
-            if !section.contains(label) {
-                violations.push(format!("{command}: missing {label}"));
-            }
-        }
-
-        if let Some(actual) = disposition_value(section, "**W2 disposition:**") {
-            if actual != *disposition {
-                violations.push(format!("{command}: disposition mismatch"));
-            }
-        } else if !["**Status**", "**Native**", "**Bash**"]
-            .iter()
-            .all(|label| section.contains(label))
-        {
-            violations.push(format!("{command}: missing disposition taxonomy labels"));
-        }
-
-        match dispatch_rows.get(*command) {
-            Some(actual) if actual == disposition => {}
-            Some(actual) => violations.push(format!(
-                "dispatch table disposition mismatch for {command}: {actual}"
-            )),
-            None => violations.push(format!("dispatch table missing row: {command}")),
-        }
-
-        let exit_block = extract_block(section, "**Exit codes**", Some("**Human example**"));
-        if !has_numeric_code_row(exit_block) {
-            violations.push(format!("{command}: missing exit-code rows"));
-        }
-        if !has_fenced_block_after(section, "**Human example**", "text") {
-            violations.push(format!("{command}: missing human example code fence"));
-        }
-        for schema_name in json_schema_names(command) {
-            if !section.contains(schema_name) {
-                violations.push(format!("{command}: missing schema link {schema_name}"));
-            }
-            if !has_fenced_block_after(section, "**`--json` example**", "json") {
-                violations.push(format!("{command}: missing --json example block"));
-            }
+    for marker in V3_DOC_MARKERS {
+        if !doc.contains(marker) {
+            violations.push(format!("zone-cli-contract.md is missing marker: {marker}"));
         }
     }
 
-    for (help_group, grouped_commands) in HELP_GROUPS {
-        let mut documented_flags = BTreeSet::new();
-        for command in *grouped_commands {
-            let Some(section) = sections.get(*command) else {
+    for (documented, parser_args) in V3_DOCUMENTED_REPLACEMENTS {
+        if !doc.contains(documented) {
+            violations.push(format!(
+                "zone-cli-contract.md is missing documented surface: {documented}"
+            ));
+        }
+        if let Err(error) = clap_accepts(parser_args) {
+            violations.push(format!(
+                "ModernCli replacement for {documented} was rejected: {error}"
+            ));
+        }
+    }
+
+    let actual_commands: BTreeSet<String> = d2b::cli_command()
+        .get_subcommands()
+        .map(|command| command.get_name().to_owned())
+        .collect();
+    let expected_commands: BTreeSet<&str> = V3_TOP_LEVEL_COMMANDS.iter().copied().collect();
+    let actual_commands_as_refs: BTreeSet<&str> =
+        actual_commands.iter().map(String::as_str).collect();
+    if actual_commands_as_refs != expected_commands {
+        violations.push(format!(
+            "ModernCli top-level command set drifted: actual {actual_commands:?}, expected {expected_commands:?}"
+        ));
+    }
+
+    match render_clap_help("") {
+        Ok(help) => {
+            let actual_flags = parse_help_flags(&help);
+            let expected_flags: BTreeSet<String> = V3_GLOBAL_FLAGS
+                .iter()
+                .map(|flag| (*flag).to_owned())
+                .collect();
+            if actual_flags != expected_flags {
                 violations.push(format!(
-                    "{command}: missing section for help group {help_group}"
+                    "ModernCli global flag set drifted: actual {actual_flags:?}, expected {expected_flags:?}"
                 ));
-                continue;
-            };
-            documented_flags.extend(parse_doc_flags(section));
-        }
-
-        match render_clap_help(help_group) {
-            Ok(output) => {
-                if !output.contains("Usage:") {
-                    violations.push(format!("{help_group}: --help did not render usage text"));
-                    continue;
-                }
-                let mut actual_flags = parse_help_flags(&output);
-                if *help_group == "vm exec" {
-                    for token in ["--stdout-offset", "--stderr-offset", "--max-len"] {
-                        if output.contains(token) {
-                            actual_flags.insert(token.to_owned());
-                        }
-                    }
-                }
-                if actual_flags != documented_flags {
-                    violations.push(format!(
-                        "{help_group}: help flags {:?} != documented {:?}",
-                        actual_flags, documented_flags
-                    ));
-                }
             }
-            Err(err) => violations.push(format!("{help_group}: {err}")),
         }
+        Err(error) => violations.push(format!("ModernCli top-level help failed: {error}")),
     }
 
-    for (_, grouped_commands) in HELP_GROUPS {
-        for section_name in *grouped_commands {
-            let Some(section) = sections.get(*section_name) else {
-                continue;
-            };
-            for flag in parse_doc_flags(section) {
-                let Some(args) = invocation_for(section_name, &flag) else {
-                    violations.push(format!(
-                        "{section_name}: no acceptance probe configured for {flag}"
-                    ));
-                    continue;
-                };
-                if let Err(err) = clap_accepts(args) {
-                    violations.push(format!(
-                        "{section_name}: documented flag {flag} was rejected by clap: {err}"
-                    ));
-                }
-            }
+    for (label, args) in V3_PARSER_PROBES {
+        if let Err(error) = clap_accepts(args) {
+            violations.push(format!("modern parser probe {label} was rejected: {error}"));
+        }
+    }
+    for (label, args) in RETIRED_PARSER_PROBES {
+        if clap_accepts(args).is_ok() {
+            violations.push(format!(
+                "retired parser probe {label} unexpectedly parsed: d2b {}",
+                args.join(" ")
+            ));
         }
     }
 
     assert!(
         violations.is_empty(),
-        "cli-contract coverage drift:\n{}",
+        "v3 zone-cli contract/parser drift:\n{}",
         violations.join("\n")
     );
 }
@@ -596,172 +770,9 @@ fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
-fn read_cli_contract() -> String {
-    let path = repo_root().join("docs/reference/cli-contract.md");
+fn read_zone_cli_contract() -> String {
+    let path = repo_root().join("docs/reference/zone-cli-contract.md");
     fs::read_to_string(&path).unwrap_or_else(|err| panic!("read {}: {err}", path.display()))
-}
-
-fn parse_sections(doc: &str) -> BTreeMap<String, String> {
-    let mut sections = BTreeMap::new();
-    let mut current: Option<String> = None;
-    let mut body = String::new();
-
-    for line in doc.lines() {
-        if let Some(name) = heading_command(line) {
-            if let Some(previous) = current.replace(name) {
-                sections.insert(previous, std::mem::take(&mut body));
-            }
-            continue;
-        }
-        if line == "## Dispatch capability table" {
-            break;
-        }
-        if current.is_some() {
-            body.push_str(line);
-            body.push('\n');
-        }
-    }
-    if let Some(previous) = current {
-        sections.insert(previous, body);
-    }
-    sections
-}
-
-fn heading_command(line: &str) -> Option<String> {
-    let rest = line.strip_prefix("### `")?;
-    let end = rest.find('`')?;
-    Some(rest[..end].to_owned())
-}
-
-fn parse_dispatch_rows(doc: &str) -> BTreeMap<String, String> {
-    let Some((_, table)) = doc.split_once("## Dispatch capability table") else {
-        return BTreeMap::new();
-    };
-    let mut rows = BTreeMap::new();
-    for line in table.lines() {
-        let cells: Vec<&str> = line
-            .trim()
-            .trim_matches('|')
-            .split('|')
-            .map(str::trim)
-            .collect();
-        if cells.len() < 2 {
-            continue;
-        }
-        let Some(command) = single_backtick_value(cells[0]) else {
-            continue;
-        };
-        let Some(disposition) = single_backtick_value(cells[1]) else {
-            continue;
-        };
-        rows.insert(command, disposition);
-    }
-    rows
-}
-
-fn single_backtick_value(cell: &str) -> Option<String> {
-    let start = cell.find('`')? + 1;
-    let end = cell[start..].find('`')? + start;
-    Some(cell[start..end].to_owned())
-}
-
-fn disposition_value(section: &str, label: &str) -> Option<String> {
-    let after = section.split_once(label)?.1;
-    single_backtick_value(after)
-}
-
-fn extract_block<'a>(section: &'a str, start_label: &str, end_label: Option<&str>) -> &'a str {
-    let Some((_, after)) = section.split_once(start_label) else {
-        return "";
-    };
-    match end_label.and_then(|label| after.split_once(label).map(|(block, _)| block)) {
-        Some(block) => block,
-        None => after,
-    }
-}
-
-fn parse_doc_flags(section: &str) -> BTreeSet<String> {
-    let flags_block = extract_block(section, "**Flags**", Some("**Arguments**"));
-    let mut documented = BTreeSet::new();
-    for line in flags_block.lines() {
-        let stripped = line.trim();
-        if !stripped.starts_with('|') {
-            continue;
-        }
-        let cells: Vec<&str> = stripped
-            .trim_matches('|')
-            .split('|')
-            .map(str::trim)
-            .collect();
-        let Some(first) = cells.first() else {
-            continue;
-        };
-        if *first == "_(none)_" {
-            continue;
-        }
-        for token in backtick_values(first) {
-            if token.starts_with('-') {
-                documented.insert(token);
-            }
-        }
-    }
-    documented
-}
-
-fn backtick_values(cell: &str) -> Vec<String> {
-    let mut values = Vec::new();
-    let mut rest = cell;
-    while let Some(start) = rest.find('`') {
-        let after = &rest[start + 1..];
-        let Some(end) = after.find('`') else {
-            break;
-        };
-        values.push(after[..end].to_owned());
-        rest = &after[end + 1..];
-    }
-    values
-}
-
-fn has_numeric_code_row(block: &str) -> bool {
-    block.lines().any(|line| {
-        if !line.trim().starts_with('|') {
-            return false;
-        }
-        backtick_values(line)
-            .iter()
-            .any(|value| !value.is_empty() && value.chars().all(|c| c.is_ascii_digit()))
-    })
-}
-
-fn has_fenced_block_after(section: &str, label: &str, language: &str) -> bool {
-    let Some((_, after)) = section.split_once(label) else {
-        return false;
-    };
-    let fence = format!("```{language}\n");
-    let Some((_, after_fence)) = after.split_once(&fence) else {
-        return false;
-    };
-    after_fence.contains("\n```")
-}
-
-fn json_schema_names(command: &str) -> &'static [&'static str] {
-    match command {
-        "list" => &["list.schema.json"],
-        "status" => &["status.schema.json"],
-        "audit" => &["audit.schema.json"],
-        "host check" => &["host-check.schema.json"],
-        "auth status" => &["auth-status.schema.json"],
-        "store verify" => &["store-verify.schema.json"],
-        "usb probe" => &["usb-probe.schema.json"],
-        "vm exec" => &[
-            "vm-exec-create.schema.json",
-            "vm-exec-list.schema.json",
-            "vm-exec-status.schema.json",
-            "vm-exec-logs.schema.json",
-            "vm-exec-kill.schema.json",
-        ],
-        _ => &[],
-    }
 }
 
 fn render_clap_help(command_path: &str) -> Result<String, String> {
@@ -839,16 +850,6 @@ fn flag_tokens(line: &str) -> Vec<String> {
         None
     })
     .collect()
-}
-
-fn invocation_for(section_name: &str, flag: &str) -> Option<&'static [&'static str]> {
-    FLAG_INVOCATIONS
-        .iter()
-        .find(|(section, _)| *section == section_name)?
-        .1
-        .iter()
-        .find(|(candidate, _)| *candidate == flag)
-        .map(|(_, args)| *args)
 }
 
 fn clap_accepts(args: &[&str]) -> Result<(), String> {
