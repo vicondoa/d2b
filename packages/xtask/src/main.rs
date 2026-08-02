@@ -94,6 +94,7 @@ use schemars::schema::RootSchema;
 
 mod changelog;
 mod delivery;
+mod gen_resource_schemas;
 mod gen_spec_set;
 mod heavy_gate;
 mod implementation_graph;
@@ -361,6 +362,9 @@ fn main() -> std::process::ExitCode {
         [command] if command == "gen-zone-nix-options" => run_task("gen-zone-nix-options", || {
             zone_schema::gen_zone_nix_options(repo_root()?)
         }),
+        [command] if command == "gen-resource-schemas" => run_task("gen-resource-schemas", || {
+            gen_resource_schemas::generate(&repo_root()?)
+        }),
         [command] if command == "gen-error-codes" => run_task("gen-error-codes", gen_error_codes),
         [command] if command == "gen-provider-packaging" => {
             run_task("gen-provider-packaging", || {
@@ -415,7 +419,7 @@ fn main() -> std::process::ExitCode {
         }
         _ => {
             eprintln!(
-                "usage: cargo run --manifest-path packages/Cargo.toml -p xtask -- <gen-schemas|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-error-codes|gen-provider-packaging|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|spec-registry|implementation-graph|process-marker-pin|check-provider-crate-layout|check-provider-layout|test-runtime-ledger <record|check|lint|help> [options]|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|panel-request|panel-attest|seal|merge-target|merge-eligibility|help> [options]|heavy-gate <-- <command> [args...] | verify-slot>>"
+                "usage: cargo run --manifest-path packages/Cargo.toml -p xtask -- <gen-schemas|gen-zone-storage-schema|gen-cli-schemas|gen-zone-schemas|gen-zone-nix-options|gen-resource-schemas|gen-error-codes|gen-provider-packaging|gen-semantic-service-schemas|gen-cli-shell-artifacts|gen-guest-proto|gen-guest-ttrpc|gen-resource-proto|gen-resource-ttrpc|gen-daemon-api|release-notes <version>|adr0035-inventory [--output <path>]|changelog-fold [--check]|spec-registry|implementation-graph|process-marker-pin|check-provider-crate-layout|check-provider-layout|test-runtime-ledger <record|check|lint|help> [options]|redact-diagnostics --repo-root <path> [--home <path>] [--tail-lines <count>]|delivery wave <snapshot|validate-import|panel-request|panel-attest|seal|merge-target|merge-eligibility|help> [options]|heavy-gate <-- <command> [args...] | verify-slot>>"
             );
             std::process::ExitCode::FAILURE
         }

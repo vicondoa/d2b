@@ -409,8 +409,9 @@ let
         message = "${row.path}.spec.visibility must be owner, provider, or zone.";
       }
       {
-        assertion = operations == [ ] || lib.all (operation: operation == "resolve") operations;
-        message = "${row.path}.spec.consumerPolicy.allowedOperations must use the canonical resolve operation.";
+        assertion = operations == [ ]
+          || lib.all (operation: builtins.elem operation [ "resolve" "attach" "observe" ]) operations;
+        message = "${row.path}.spec.consumerPolicy.allowedOperations must use canonical endpoint operations.";
       }
     ];
 
@@ -517,7 +518,109 @@ let
     ++ endpointAssertions row
     ++ credentialAssertions row;
 
-  allAssertions = lib.concatMap resourceAssertions resourceRows;
+  # Provider-neutral primitive checks.  Provider-owned extension fields stay
+  # freeform here and are validated by the selected Provider schema.
+  quantityValue = value:
+    let
+      match = if builtins.isString value
+        then builtins.match "^([0-9]+)(m|B|KB|MB|GB|TB|KiB|MiB|GiB|TiB)$" value
+        else null;
+      multipliers = {
+        m = 1;
+        B = 1;
+        KB = 1000;
+        MB = 1000000;
+        GB = 1000000000;
+        TB = 1000000000000;
+        KiB = 1024;
+        MiB = 1048576;
+        GiB = 1073741824;
+        TiB = 1099511627776;
+      };
+    in
+      if match == null then null
+      else (lib.toInt (builtins.elemAt match 0)) * multipliers.${builtins.elemAt match 1};
+
+  requestNotAboveLimit = value:
+    let
+      request = quantityValue (value.request or null);
+      limit = quantityValue (value.limit or null);
+    in request == null || limit == null || request <= limit;
+
+  primitiveAssertions = row:
+    let
+      type = row.resource.type;
+      spec = row.spec;
+      posture = spec.isolationPosture or null;
+      userOnly = type == "Host"
+        && (spec.defaultDomain or null) == "user"
+        && (spec.allowedDomains or [ ]) == [ "user" ]
+        && (spec.defaultUserRef or null) != null;
+      budget = spec.budget or { };
+      mounts = spec.mounts or [ ];
+      mountPaths = map (mount: mount.mountPath or null) mounts;
+    in
+      lib.optionals (type == "User" && spec ? osUsername) [
+        {
+          assertion = builtins.isString spec.osUsername
+            && builtins.stringLength spec.osUsername >= 1
+            && builtins.stringLength spec.osUsername <= 255
+            && !(lib.hasInfix "/" spec.osUsername)
+            && !(lib.hasInfix "\\" spec.osUsername)
+            && !(lib.hasInfix (builtins.fromJSON "\"\\u0000\"") spec.osUsername);
+          message = "${row.path}.spec.osUsername must be a bounded OS username without NUL or path separators.";
+        }
+        {
+          assertion = lib.all
+            (group: builtins.isString group
+              && builtins.match "^[a-z_][a-z0-9_-]{0,62}$" group != null)
+            (spec.groups or [ ]);
+          message = "${row.path}.spec.groups must contain lower-case OS group names.";
+        }
+      ]
+      ++ lib.optionals (type == "Host") [
+        {
+          assertion = posture == null || posture == "none";
+          message = "${row.path}.spec.isolationPosture must be null or none.";
+        }
+        {
+          assertion = !userOnly || posture == "none";
+          message = "${row.path}.spec.isolationPosture=none is required for a user-only Host.";
+        }
+        {
+          assertion = posture != "none"
+            || ((spec.defaultDomain or null) == "user"
+              && (spec.allowedDomains or [ ]) == [ "user" ]
+              && (spec.defaultUserRef or null) != null);
+          message = "${row.path}.spec.isolationPosture=none requires a user-only Host.";
+        }
+      ]
+      ++ lib.optionals (builtins.elem type
+        [ "Host" "Guest" "Process" "EphemeralProcess" ]) [
+        {
+          assertion = requestNotAboveLimit (budget.cpu or { });
+          message = "${row.path}.spec.budget.cpu.request must not exceed limit.";
+        }
+        {
+          assertion = requestNotAboveLimit (budget.memory or { });
+          message = "${row.path}.spec.budget.memory.request must not exceed limit.";
+        }
+      ]
+      ++ lib.optionals (builtins.elem type [ "Process" "EphemeralProcess" ]) [
+        {
+          assertion = lib.length mountPaths == lib.length (lib.unique mountPaths);
+          message = "${row.path}.spec.mounts must not repeat mountPath.";
+        }
+        {
+          assertion = type != "EphemeralProcess"
+            || (spec.processClass or null) == "worker";
+          message = "${row.path}.spec.processClass must be worker for EphemeralProcess.";
+        }
+      ];
+
+  allAssertions = lib.concatMap
+    (row: resourceAssertions row ++ primitiveAssertions row)
+    resourceRows;
 in
 {
   options.d2b._resourceCompiler = lib.mkOption {

@@ -15,6 +15,7 @@ pub mod router;
 pub mod session;
 pub mod streams;
 pub mod transport;
+pub mod wire;
 pub mod zone_route;
 
 pub use authorization::{

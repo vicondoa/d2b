@@ -32,6 +32,18 @@ pub enum ProcessConformanceError {
     WaitOwnerMismatch,
     /// The launch did not complete inside the ticket deadline.
     DeadlineExceeded,
+    /// A terminal result was not bound to one process and operation.
+    TerminalEvidenceMismatch,
+    /// A terminal result carried an invalid exit status or identity.
+    InvalidTerminalResult,
+    /// The semantic sandbox plan is not admitted by the Provider.
+    SandboxRejected,
+    /// An intentional stop lacks one of its required terminal proofs.
+    StopProofMissing,
+    /// Linux/cgroup platform prerequisites are not satisfied.
+    PlatformGateRejected,
+    /// The launch operation was cancelled before the effect boundary.
+    Cancelled,
 }
 
 impl ProcessConformanceError {
@@ -48,11 +60,17 @@ impl ProcessConformanceError {
             Self::AdoptionAmbiguous => "adoption-ambiguous",
             Self::WaitOwnerMismatch => "wait-owner-mismatch",
             Self::DeadlineExceeded => "deadline-exceeded",
+            Self::TerminalEvidenceMismatch => "terminal-evidence-mismatch",
+            Self::InvalidTerminalResult => "invalid-terminal-result",
+            Self::SandboxRejected => "sandbox-rejected",
+            Self::StopProofMissing => "stop-proof-missing",
+            Self::PlatformGateRejected => "platform-gate-rejected",
+            Self::Cancelled => "cancelled",
         }
     }
 
     /// The complete closed code set, for conformance assertions.
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 16] = [
         Self::InvalidTicket,
         Self::DomainNotSupported,
         Self::UserRefRequired,
@@ -63,6 +81,12 @@ impl ProcessConformanceError {
         Self::AdoptionAmbiguous,
         Self::WaitOwnerMismatch,
         Self::DeadlineExceeded,
+        Self::TerminalEvidenceMismatch,
+        Self::InvalidTerminalResult,
+        Self::SandboxRejected,
+        Self::StopProofMissing,
+        Self::PlatformGateRejected,
+        Self::Cancelled,
     ];
 }
 

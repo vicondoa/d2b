@@ -13,6 +13,7 @@ use d2b_session::{
     TransportDescriptor, TransportError, TransportPacket, TransportReader, TransportWriter,
 };
 use rustix::fd::{AsFd, BorrowedFd, OwnedFd};
+use rustix::process::Uid;
 use std::{
     any::Any,
     collections::VecDeque,
@@ -92,6 +93,21 @@ impl PeerIdentityPolicy {
         Self::Pathname {
             verifier: Arc::new(move |socket| {
                 if socket.acceptor_peer_credentials()? == expected_peer {
+                    Ok(())
+                } else {
+                    Err(UnixSessionError::CredentialMismatch)
+                }
+            }),
+        }
+    }
+
+    /// Accept only the kernel-observed uid of the local `d2b-zonert`
+    /// runtime.  The caller supplies a trusted uid discovered from the
+    /// service manager; no pathname or caller-authored subject is accepted.
+    pub fn zone_runtime_uid(expected_uid: Uid) -> PeerIdentityPolicy {
+        PeerIdentityPolicy::Pathname {
+            verifier: Arc::new(move |socket| {
+                if socket.acceptor_peer_credentials()?.uid() == expected_uid {
                     Ok(())
                 } else {
                     Err(UnixSessionError::CredentialMismatch)

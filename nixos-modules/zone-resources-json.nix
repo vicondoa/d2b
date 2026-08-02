@@ -55,6 +55,7 @@ in
       zoneName,
       resourcesJson,
       providerSchemaDigestsJson,
+      schemaFingerprintsJson ? "{}",
       zoneJson,
       artifactCatalogPreimageJson,
     }:
@@ -63,12 +64,14 @@ in
         inherit
           resourcesJson
           providerSchemaDigestsJson
+          schemaFingerprintsJson
           zoneJson
           artifactCatalogPreimageJson
           ;
         passAsFile = [
           "resourcesJson"
           "providerSchemaDigestsJson"
+          "schemaFingerprintsJson"
           "artifactCatalogPreimageJson"
         ];
       }
@@ -89,6 +92,8 @@ in
           printf '%s' '","generatedAt":"1970-01-01T00:00:00.000Z"'
           printf '%s' ',"providerSchemaDigests":'
           cat "$providerSchemaDigestsJsonPath"
+          printf '%s' ',"schemaFingerprints":'
+          cat "$schemaFingerprintsJsonPath"
           printf '%s' ',"resources":'
           cat "$resourcesJsonPath"
           printf '%s' ',"schemaVersion":3,"zone":'

@@ -4,6 +4,7 @@ pub mod component_session;
 pub mod credential;
 pub mod credential_controller;
 pub mod device;
+pub mod endpoint;
 pub mod error;
 pub mod execution_policy;
 pub mod guest;
@@ -15,6 +16,7 @@ pub mod network;
 pub mod process;
 pub mod provider;
 pub mod resource;
+pub mod resource_bundle;
 pub mod resource_ref;
 pub mod resource_schema;
 pub mod resource_status;
@@ -26,10 +28,18 @@ pub mod volume_state;
 pub mod zone_routing;
 pub mod zone_session;
 
+pub use endpoint::{
+    ENDPOINT_RESOURCE_TYPE, EndpointAttachmentPolicy, EndpointClass, EndpointConsumerPolicy,
+    EndpointLifecyclePolicy, EndpointLocality, EndpointOperation, EndpointSpec, EndpointSpecError,
+    EndpointTransport, EndpointVisibility, MAX_ENDPOINT_ATTACHMENTS, MAX_ENDPOINT_CONSUMER_ENTRIES,
+    MAX_ENDPOINT_FINGERPRINT_BYTES, MAX_ENDPOINT_OPERATIONS, MAX_ENDPOINT_PROVIDER_COMPONENTS,
+};
 pub use error::{
     MAX_RESOURCE_ERROR_REASON_BYTES, MAX_RESOURCE_ERROR_RETRY_AFTER_MS, ResourceError,
     ResourceErrorKind, ResourceErrorReason, ResourceErrorValidation, RetryClass,
 };
+pub use guest::{GUEST_RESOURCE_TYPE, GuestSpec};
+pub use host::{HOST_PROVIDER_REF, HOST_RESOURCE_TYPE, HostSpec, IsolationPosture};
 pub use identity::{
     AuthenticatedSubjectContext, BindingDigest, ConfigurationGeneration, ControllerGeneration,
     EvidenceClass, IdentityError, Locality, ObservedGeneration,
@@ -39,10 +49,22 @@ pub use identity::{
     ZoneId, ZoneRevision,
 };
 pub use limits::*;
+pub use process::{
+    AdoptionPolicy, CapabilityClass, DesiredLifecycle, DeviceAccess, DeviceUsageSpec,
+    EnvironmentClass, EphemeralProcessSpec, ExecutionSpec, HealthCheckClass, HealthCheckSpec,
+    MappingClass, MountAccess, MountSpec, NamespaceClass, NetworkUsageSpec, PortProtocol, PortSpec,
+    ProcessClass, ProcessSpec, ReadinessClass, ReadinessSpec, RestartClass, RestartPolicySpec,
+    SandboxSpec, TelemetrySpec, UserNamespaceSpec,
+};
 pub use resource::{
     DisruptiveUpdateMode, FinalizerId, ManagedBy, NonDisruptiveUpdateMode, PresentationMetadata,
     ProviderSpecExtension, ResourceEnvelope, ResourceError as ResourceObjectError,
     ResourceMetadata, ResourceSpec, UpdatePolicy,
+};
+pub use resource_bundle::{
+    ARTIFACT_CATALOG_DOMAIN_TAG, BundleIntegrityPin, BundleResource, BundleResourceMetadata,
+    MAX_BUNDLE_FINGERPRINTS, MAX_BUNDLE_RESOURCES, RESOURCE_BUNDLE_CONTENT_DOMAIN_TAG,
+    ResourceBundle, ResourceBundleError,
 };
 pub use resource_ref::{ResourceRef, ResourceRefError};
 pub use resource_schema::{
@@ -57,6 +79,10 @@ pub use resource_status::{
     ConditionState, ProviderStatusExtension, ResourceCondition, ResourceCurrencySet,
     ResourceOutcome, ResourcePhase, ResourceStatus, ResourceStatusError, ResourceUpdateStatus,
     StatusCode, StatusMessage, UpdateDisruption, UpdateReason, UpdateState,
+};
+pub use user::{
+    MAX_OS_GROUP_BYTES, MAX_OS_USERNAME_BYTES, MAX_USER_GROUPS, OsGroupName, OsUsername,
+    USER_RESOURCE_TYPE, UserSpec,
 };
 
 // The `provider` module's re-exports. Keep every `pub use provider::...` line
