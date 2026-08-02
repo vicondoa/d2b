@@ -210,14 +210,86 @@ let
       };
     };
   };
+
+  # The telemetry/audit resource fields are kept in a small schema-shaped
+  # helper so bundle emitters and Nix-unit cases use the same bounds without
+  # duplicating them in a provider-specific module.
+  telemetryResourceSpecType = types.submodule {
+    freeformType = null;
+    options = {
+      telemetry = mkOption {
+        type = types.submodule {
+          freeformType = null;
+          options.emitter = mkOption {
+            type = types.submodule {
+              freeformType = null;
+              options.ringCapacityBytes = mkOption {
+                type = types.ints.between (64 * 1024) (64 * 1024 * 1024);
+                default = 2 * 1024 * 1024;
+              };
+            };
+            default = { };
+          };
+        };
+        default = { };
+      };
+      audit = mkOption {
+        type = types.submodule {
+          freeformType = null;
+          options = {
+            retentionDays = mkOption {
+              type = types.ints.between 1 3650;
+              default = 30;
+            };
+            maxSegmentBytes = mkOption {
+              type = types.ints.between (1024 * 1024) (1024 * 1024 * 1024);
+              default = 64 * 1024 * 1024;
+            };
+          };
+        };
+        default = { };
+      };
+    };
+  };
+
+  schemaAwareResourceModule = { ... }: {
+    freeformType = null;
+    options = {
+      type = mkOption {
+        type = resourceTypeNameType;
+      };
+      metadata = mkOption {
+        type = types.submodule {
+          freeformType = null;
+          options = {
+            ownerRef = mkOption {
+              type = types.nullOr resourceRefType;
+              default = null;
+            };
+            labels = mkOption {
+              type = types.attrsOf types.str;
+              default = { };
+            };
+          };
+        };
+        default = { };
+      };
+      spec = mkOption {
+        type = types.either telemetryResourceSpecType (types.attrsOf types.unspecified);
+        default = { };
+      };
+    };
+  };
 in
 {
   inherit
     resourceModule
+    schemaAwareResourceModule
     resourceRefPattern
     resourceRefType
     resourceTypeNameType
     standardResourceTypes
+    telemetryResourceSpecType
     validResourceRef
     validResourceType
     ;
