@@ -4,8 +4,8 @@
       "crate_name": "d2b",
       "private_census": {
         "external_crates": 94,
-        "index_items": 17630,
-        "path_items": 12884
+        "index_items": 17631,
+        "path_items": 12885
       },
       "private_hidden_items": 45,
       "private_json_file": "d2b.json",
