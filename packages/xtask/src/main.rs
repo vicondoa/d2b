@@ -449,7 +449,9 @@ fn run_provider_crate_layout() -> std::process::ExitCode {
 }
 
 fn run_provider_layout() -> std::process::ExitCode {
-    let result = repo_root().and_then(|root| check_provider_layout(&root));
+    let result = repo_root()
+        .map_err(|error| error.to_string())
+        .and_then(|root| check_provider_layout(&root));
     match result {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
