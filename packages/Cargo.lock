@@ -953,6 +953,7 @@ dependencies = [
  "sha2",
  "snow",
  "syn 2.0.118",
+ "tempfile",
  "tokio",
 ]
 
@@ -1039,8 +1040,12 @@ dependencies = [
 name = "d2b-core-controller"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "d2b-audit",
  "d2b-contracts",
  "d2b-controller-toolkit",
+ "d2b-telemetry",
+ "serde_json",
+ "sha2",
  "tokio",
 ]
 
@@ -1328,7 +1333,9 @@ dependencies = [
  "d2b-process-conformance",
  "d2b-provider-system-minijail",
  "d2b-provider-system-systemd",
+ "d2b-telemetry",
  "rustix 0.38.44",
+ "serde_json",
  "sha2",
  "socket2 0.5.10",
  "tempfile",
@@ -1461,7 +1468,9 @@ dependencies = [
  "d2b-core-controller",
  "d2b-resource-store",
  "d2b-resource-store-redb",
+ "d2b-telemetry",
  "protobuf",
+ "serde_json",
  "sha2",
  "tempfile",
  "tokio",
@@ -1487,9 +1496,11 @@ dependencies = [
 name = "d2b-resource-store-redb"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "d2b-audit",
  "d2b-contracts",
  "d2b-controller-toolkit",
  "d2b-resource-store",
+ "d2b-telemetry",
  "redb",
  "rustix 0.38.44",
  "serde",
