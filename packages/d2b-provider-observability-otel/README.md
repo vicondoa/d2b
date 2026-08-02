@@ -27,6 +27,10 @@ The Provider consumes the provider-neutral
 services carry the same semantic identity; Endpoint resources and socket
 names remain private implementation details.
 
+The closed metric-label and OTEL resource-attribute registry in `d2b-contracts`
+is the single-source contract for every telemetry ingress. This Provider
+consumes that registry rather than maintaining a parallel policy.
+
 ## Controllers / services / workers / binaries
 
 The source contains the session-bound Provider agent, bounded emitter socket,
@@ -41,6 +45,8 @@ workspace dependencies are limited to `d2b-contracts` and
 `d2b-provider-toolkit`, the admitted neutral Provider boundaries. The toolkit
 supplies the diagnostic audit ring and session-facing values; authoritative
 audit durability and core telemetry emission stay outside this crate.
+This Provider does not and must not depend directly on `d2b-audit` or
+`d2b-telemetry`; those ownership boundaries are deliberately refused.
 
 ## RBAC requirements
 
