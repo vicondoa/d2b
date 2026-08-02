@@ -80,6 +80,23 @@ impl SessionClient for UnixSessionClient {
     ) -> Result<Vec<u8>, TransportError> {
         let mut socket = SeqpacketUnixSocket::connect(&self.socket_path)
             .map_err(|error| classify_transport_error(&error))?;
+        let hello = crate::daemon_hello_frame("hello").map_err(|_| TransportError::Io)?;
+        socket
+            .send_frame(&hello)
+            .map_err(|error| classify_transport_error(&error))?;
+        let hello_reply = socket
+            .recv_frame()
+            .map_err(|error| classify_transport_error(&error))?;
+        let hello_type = serde_json::from_slice::<Value>(&hello_reply)
+            .ok()
+            .and_then(|value| value.get("type").and_then(Value::as_str).map(str::to_owned));
+        if hello_type.as_deref() != Some("helloOk") {
+            return Err(if hello_type.as_deref() == Some("helloRejected") {
+                TransportError::Unavailable
+            } else {
+                TransportError::InvalidResponse
+            });
+        }
         socket
             .send_frame(request)
             .map_err(|error| classify_transport_error(&error))?;
