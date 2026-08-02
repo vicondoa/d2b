@@ -275,10 +275,7 @@ impl LogicalBackup {
     }
 
     /// Validate the immutable store identity carried by a backup.
-    pub fn validate_for_identity(
-        &self,
-        identity: &StoreIdentity,
-    ) -> Result<(), crate::StoreError> {
+    pub fn validate_for_identity(&self, identity: &StoreIdentity) -> Result<(), crate::StoreError> {
         self.validate()?;
         if self.store_uuid != identity.store_uuid.as_str()
             || self.zone_name != identity.zone.as_str()
@@ -290,7 +287,10 @@ impl LogicalBackup {
             || self.policy_revision != identity.revisions.policy_revision
             || self.api_catalog_revision != identity.revisions.api_catalog_revision
             || self.controller_generation
-                != identity.revisions.controller_generation.map(|value| value.get())
+                != identity
+                    .revisions
+                    .controller_generation
+                    .map(|value| value.get())
         {
             return Err(integrity("backup-store-identity-mismatch"));
         }
@@ -343,10 +343,10 @@ impl LogicalBackup {
             .next()
             .is_some()
         {
-            return Err(crate::transaction::quarantined_reason(
-                "restore-target-not-empty",
-            )
-            .with_store_slot(identity.slot()));
+            return Err(
+                crate::transaction::quarantined_reason("restore-target-not-empty")
+                    .with_store_slot(identity.slot()),
+            );
         }
         drop(read);
 
@@ -376,10 +376,10 @@ impl LogicalBackup {
                     .map_err(|error| error.with_store_slot(identity.slot()))?
                     .is_some()
                 {
-                    return Err(crate::transaction::quarantined_reason(
-                        "restore-duplicate-key",
-                    )
-                    .with_store_slot(identity.slot()));
+                    return Err(
+                        crate::transaction::quarantined_reason("restore-duplicate-key")
+                            .with_store_slot(identity.slot()),
+                    );
                 }
             }
         }
@@ -411,10 +411,10 @@ impl LogicalBackup {
             .len()
             != 0
         {
-            return Err(crate::transaction::quarantined_reason(
-                "restore-target-not-empty",
-            )
-            .with_store_slot(identity.slot()));
+            return Err(
+                crate::transaction::quarantined_reason("restore-target-not-empty")
+                    .with_store_slot(identity.slot()),
+            );
         }
         let backend = redb::backends::FileBackend::new(file)
             .map_err(integrity)
@@ -442,7 +442,10 @@ fn validate_meta_identity(
         || meta.policy_revision != identity.revisions.policy_revision
         || meta.api_catalog_revision != identity.revisions.api_catalog_revision
         || meta.controller_generation
-            != identity.revisions.controller_generation.map(|value| value.get())
+            != identity
+                .revisions
+                .controller_generation
+                .map(|value| value.get())
     {
         return Err(integrity("backup-store-identity-mismatch"));
     }
@@ -519,7 +522,8 @@ pub fn publication_state(
     let staged = publication_entry(parent, staged_name)?;
     let active = publication_entry(parent, active_name)?;
     let prior = publication_entry(parent, prior_name)?;
-    let mask = u8::from(staged.is_some()) | (u8::from(active.is_some()) << 1)
+    let mask = u8::from(staged.is_some())
+        | (u8::from(active.is_some()) << 1)
         | (u8::from(prior.is_some()) << 2);
     Ok(match mask {
         0 => PublicationState::Empty,
@@ -536,15 +540,11 @@ pub fn publication_state(
 
 /// Fsync a staged database and its anchored parent directory.
 pub fn sync_staged_file(file: &File, parent: &File) -> Result<(), crate::StoreError> {
-    if !parent
-        .metadata()
-        .map_err(integrity)?
-        .file_type()
-        .is_dir()
-    {
+    if !parent.metadata().map_err(integrity)?.file_type().is_dir() {
         return Err(integrity("publication-parent-not-directory"));
     }
-    file.sync_all().map_err(crate::transaction::durability_failure)?;
+    file.sync_all()
+        .map_err(crate::transaction::durability_failure)?;
     fsync(parent)
         .map_err(crate::transaction::durability_failure)
         .map_err(|_| crate::transaction::quarantined_reason("publication-parent-fsync-failed"))
@@ -563,20 +563,12 @@ pub fn publish_staged(
     validate_publication_name(staged_name)?;
     validate_publication_name(active_name)?;
     validate_publication_name(prior_name)?;
-    if staged_name == active_name
-        || staged_name == prior_name
-        || active_name == prior_name
-    {
+    if staged_name == active_name || staged_name == prior_name || active_name == prior_name {
         return Err(crate::transaction::quarantined_reason(
             "publication-name-collision",
         ));
     }
-    if !parent
-        .metadata()
-        .map_err(integrity)?
-        .file_type()
-        .is_dir()
-    {
+    if !parent.metadata().map_err(integrity)?.file_type().is_dir() {
         return Err(integrity("publication-parent-not-directory"));
     }
     let state = publication_state(parent, staged_name, active_name, prior_name)?;
@@ -612,10 +604,14 @@ pub fn publish_staged(
         }
         renameat(parent, active_name, parent, prior_name)
             .map_err(crate::transaction::durability_failure)
-            .map_err(|_| crate::transaction::quarantined_reason("publication-prior-rename-failed"))?;
+            .map_err(|_| {
+                crate::transaction::quarantined_reason("publication-prior-rename-failed")
+            })?;
         fsync(parent)
             .map_err(crate::transaction::durability_failure)
-            .map_err(|_| crate::transaction::quarantined_reason("publication-parent-fsync-failed"))?;
+            .map_err(|_| {
+                crate::transaction::quarantined_reason("publication-parent-fsync-failed")
+            })?;
     }
     renameat(parent, staged_name, parent, active_name)
         .map_err(crate::transaction::durability_failure)
@@ -641,10 +637,7 @@ fn validate_publication_name(name: &str) -> Result<(), crate::StoreError> {
     Ok(())
 }
 
-fn publication_entry(
-    parent: &File,
-    name: &str,
-) -> Result<Option<FileType>, crate::StoreError> {
+fn publication_entry(parent: &File, name: &str) -> Result<Option<FileType>, crate::StoreError> {
     match statat(parent, name, AtFlags::SYMLINK_NOFOLLOW) {
         Ok(stat) => Ok(Some(FileType::from_raw_mode(stat.st_mode))),
         Err(error) if error == rustix::io::Errno::NOENT => Ok(None),
@@ -655,7 +648,62 @@ fn publication_entry(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use d2b_contracts::v3::{ConfigurationGeneration, ResourceUid, Timestamp, ZoneId};
+    use d2b_resource_store::PolicySnapshot;
     use std::fs::OpenOptions;
+
+    fn identity() -> StoreIdentity {
+        StoreIdentity::new(
+            d2b_resource_store::StoreSlot::new(0).unwrap(),
+            ResourceUid::parse("11111111-1111-4111-8111-111111111111").unwrap(),
+            ZoneId::parse("work").unwrap(),
+            ResourceUid::parse("22222222-2222-4222-8222-222222222222").unwrap(),
+            Timestamp::parse("2026-07-31T00:00:00.000Z").unwrap(),
+            PolicySnapshot {
+                policy_revision: 7,
+                api_catalog_revision: 8,
+                active_configuration_revision: ConfigurationGeneration::new(9).unwrap(),
+                controller_generation: None,
+            },
+        )
+    }
+
+    #[test]
+    fn logical_backup_round_trips_through_a_staged_descriptor() {
+        let source_dir = tempfile::tempdir().unwrap();
+        let source_file = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .open(source_dir.path().join("source.redb"))
+            .unwrap();
+        let source_backend = redb::backends::FileBackend::new(source_file).unwrap();
+        let source = Database::builder()
+            .create_with_backend(source_backend)
+            .unwrap();
+        let identity = identity();
+        crate::transaction::initialize(&source, &identity).unwrap();
+
+        let backup = LogicalBackup::from_database(&source, &identity).unwrap();
+        let encoded = backup.to_bytes().unwrap();
+        let decoded = LogicalBackup::from_bytes(&encoded).unwrap();
+        assert_eq!(decoded.digest().unwrap(), backup.digest().unwrap());
+
+        let staged_dir = tempfile::tempdir().unwrap();
+        let staged_file = OpenOptions::new()
+            .create_new(true)
+            .read(true)
+            .write(true)
+            .open(staged_dir.path().join("staged.redb"))
+            .unwrap();
+        let restored = decoded.restore_file(staged_file, &identity).unwrap();
+        assert_eq!(
+            crate::transaction::validate_identity(&restored, &identity)
+                .unwrap()
+                .current_revision,
+            0
+        );
+    }
 
     #[test]
     fn publication_names_reject_path_injection() {
