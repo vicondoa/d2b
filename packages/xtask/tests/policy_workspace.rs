@@ -16,7 +16,6 @@ const RUST_DAG_LEAVES: &[&str] = &[
     "test-rust-leaf-no-bash-ast",
     "test-rust-leaf-supply-chain",
 ];
-const RUST_SHARED_TARGET_EDGES: &[(&str, &str)] = &[];
 const RUST_LEAF_MODES: &[&str] = &[
     "api-surface",
     "main-workspace",
@@ -353,17 +352,6 @@ fn rust_dag_violations(makefile: &str) -> Vec<String> {
         }
     }
 
-    for (parent, child) in RUST_SHARED_TARGET_EDGES {
-        let Some(prerequisites) = make_rule_prerequisites(makefile, parent) else {
-            violations.push(format!("shared-target parent `{parent}` has no Make rule"));
-            continue;
-        };
-        if !prerequisites.contains(*child) {
-            violations.push(format!(
-                "shared-target edge `{parent} -> {child}` is missing"
-            ));
-        }
-    }
     for required in [
         "D2B_RUST_MAIN_PREREQS_aggregate := test-rust-leaf-schema",
         "D2B_RUST_MAIN_PREREQS_cold :=",
