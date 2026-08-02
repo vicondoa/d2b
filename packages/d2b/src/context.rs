@@ -52,6 +52,7 @@ pub(crate) enum TransportError {
     Unavailable,
     InvalidResponse,
     OversizedResponse,
+    Io,
 }
 
 /// The transport boundary is deliberately injectable. Tests can provide a
@@ -529,7 +530,9 @@ fn human_summary(value: &Value) -> String {
                 .or_else(|| object.get("phase").and_then(Value::as_str))
                 .unwrap_or("unknown");
             let posture = object
-                .pointer("/status/isolationPosture")
+                .get("status")
+                .and_then(Value::as_object)
+                .and_then(|status| status.get("isolationPosture"))
                 .and_then(Value::as_str)
                 .or_else(|| object.get("isolationPosture").and_then(Value::as_str));
             let posture = if posture == Some("none") {
