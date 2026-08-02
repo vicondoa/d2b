@@ -114,12 +114,88 @@ let
     };
 
   closures = lib.mapAttrs (name: _: closureArtifact name) normalNixosVms;
+
+  # v3 Guest closure view. The Guest names and system artifact IDs come only
+  # from authored Zone resources; there is no implicit VM or topology
+  # derivation here.
+  v3Guests = lib.concatMap
+    (zoneName:
+      let zone = cfg.zones.${zoneName};
+      in lib.mapAttrsToList
+        (resourceName: resource: {
+          inherit zoneName resourceName resource;
+          spec = resource.spec or { };
+        })
+        (lib.filterAttrs (_: resource: resource.type == "Guest") zone.resources))
+    (lib.sort lib.lessThan (lib.attrNames (cfg.zones or { })));
+
+  v3ClosureArtifact = guest:
+    let
+      artifactId = guest.spec.systemArtifactId or null;
+      artifact =
+        if artifactId != null && builtins.hasAttr artifactId (cfg.artifacts or { })
+        then cfg.artifacts.${artifactId}
+        else null;
+      closure =
+        if artifact == null
+        then null
+        else pkgs.closureInfo { rootPaths = [ artifact.package ]; };
+      relativePath = "closures/zones/${guest.zoneName}/${guest.resourceName}.json";
+      file =
+        if closure == null
+        then pkgs.writeText "d2b-${guest.resourceName}-closure-unresolved.json" "{}"
+        else pkgs.runCommand "d2b-${guest.resourceName}-v3-closure.json"
+          { nativeBuildInputs = [ pkgs.python3 ]; } ''
+            python3 - "$out" "${closure}/store-paths" <<'PY'
+            import json
+            import sys
+            out, store_paths = sys.argv[1:]
+            with open(store_paths, encoding="utf-8") as handle:
+                paths = sorted(line.strip() for line in handle if line.strip())
+            with open(out, "w", encoding="utf-8") as handle:
+                json.dump({
+                    "artifactId": "${artifactId}",
+                    "closurePaths": paths,
+                    "guest": "${guest.resourceName}",
+                    "schemaVersion": 3,
+                    "zone": "${guest.zoneName}",
+                }, handle, sort_keys=True, separators=(",", ":"))
+            PY
+          '';
+    in {
+      guest = guest.resourceName;
+      zone = guest.zoneName;
+      artifactId = artifactId;
+      storePath = if artifact == null then null else "${artifact.package}";
+      closurePaths = if artifact == null then [ ] else [ "${artifact.package}" ];
+      path = file;
+      relativePath = relativePath;
+    };
+  v3Closures = lib.listToAttrs (map
+    (guest: lib.nameValuePair "${guest.zoneName}/${guest.resourceName}"
+      (v3ClosureArtifact guest))
+    v3Guests);
 in
 {
+  options.d2b._bundle.closuresV3 = lib.mkOption {
+    type = lib.types.attrsOf lib.types.anything;
+    default = { };
+    internal = true;
+    visible = false;
+  };
+
   config = {
     d2b._bundle.closures = closures;
-    environment.etc = lib.mapAttrs'
-      (_: closure: lib.nameValuePair "d2b/${closure.relativePath}" (privateEtc closure.path))
-      closures;
+    d2b._bundle.closuresV3 = v3Closures;
+    environment.etc = lib.mkMerge [
+      (lib.mapAttrs'
+        (_: closure:
+          lib.nameValuePair "d2b/${closure.relativePath}" (privateEtc closure.path))
+        closures)
+      (lib.mapAttrs'
+        (_: closure:
+          lib.nameValuePair "d2b/${closure.relativePath}" (privateEtc closure.path))
+        v3Closures)
+    ];
   };
 }

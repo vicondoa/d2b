@@ -53,7 +53,12 @@ let
       };
 
       type = lib.mkOption {
-        type = types.enum [ "provider" "nixos-system" ];
+        type = types.enum [
+          "provider"
+          "nixos-system"
+          "nixos-module-set"
+          "config-bundle"
+        ];
         default = "provider";
         description = ''
           The artifact kind. Provider packages and generic NixOS systems are
@@ -63,8 +68,8 @@ let
       };
 
       catalog = lib.mkOption {
-        type = types.attrsOf types.anything;
-        default = { };
+        type = types.nullOr (types.attrsOf types.anything);
+        default = null;
         description = ''
           The catalog entry for this artifact: the frozen field set from the
           specification's "Package catalog" section. Every field in
@@ -96,7 +101,10 @@ let
         inherit id;
         inherit (artifact) type;
         storePath = "${artifact.package}";
-        entry = lib.filterAttrs (fieldName: _: lib.elem fieldName shape.fields) artifact.catalog;
+        entry =
+          if artifact.catalog == null
+          then { }
+          else lib.filterAttrs (fieldName: _: lib.elem fieldName shape.fields) artifact.catalog;
       })
     artifactIds;
 
@@ -111,14 +119,20 @@ let
   };
 
   missingFields = id:
-    lib.filter (field: !(artifacts.${id}.catalog ? ${field})) shape.fields;
+    if artifacts.${id}.catalog == null
+    then [ ]
+    else lib.filter (field: !(artifacts.${id}.catalog ? ${field})) shape.fields;
 
   unknownFields = id:
-    lib.filter (field: !(lib.elem field shape.fields))
+    if artifacts.${id}.catalog == null
+    then [ ]
+    else lib.filter (field: !(lib.elem field shape.fields))
       (lib.attrNames artifacts.${id}.catalog);
 
   badDigests = id:
-    lib.filter
+    if artifacts.${id}.catalog == null
+    then [ ]
+    else lib.filter
       (field:
         let value = artifacts.${id}.catalog.${field} or null;
         in value == null || builtins.match digestPattern (toString value) == null)

@@ -16,6 +16,14 @@ let
   # counting the Zone itself and the local root.
   maxAncestryNames = 16;
 
+  trustedPublisherType = lib.types.submodule {
+    freeformType = null;
+    options.signingKey = lib.mkOption {
+      type = lib.types.str;
+      description = "Publisher verification key used only by the Nix compiler.";
+    };
+  };
+
   # Parse a "Type/name" reference, or report that it is not one.
   #
   # The type and length checks are load-bearing, not defensive noise. These
@@ -168,6 +176,140 @@ let
       ]
       ++ resourceAssertions zoneName zone.resources)
     cfg.zones);
+  zoneLinks = zone:
+    lib.filterAttrs (_: resource: resource.type == "ZoneLink") zone.resources;
+
+  topologyEnabled =
+    builtins.hasAttr localRootZoneName cfg.zones
+    || lib.any (zone: zone.parentZone != null) (lib.attrValues cfg.zones);
+
+  parentWalk = current: seen:
+    if current == null then
+      {
+        cycle = false;
+        missing = false;
+        depthExceeded = false;
+        path = seen;
+      }
+    else if builtins.elem current seen then
+      {
+        cycle = true;
+        missing = false;
+        depthExceeded = false;
+        path = seen ++ [ current ];
+      }
+    else if !builtins.hasAttr current cfg.zones then
+      {
+        cycle = false;
+        missing = true;
+        depthExceeded = false;
+        path = seen ++ [ current ];
+      }
+    else if lib.length seen >= maxAncestryNames then
+      {
+        cycle = false;
+        missing = false;
+        depthExceeded = true;
+        path = seen;
+      }
+    else
+      parentWalk cfg.zones.${current}.parentZone (seen ++ [ current ]);
+
+  topologyAssertions =
+    if !topologyEnabled then
+      [ ]
+    else
+      lib.flatten (lib.mapAttrsToList
+        (zoneName: zone:
+          let walk = parentWalk zoneName [ ];
+          in [
+            {
+              assertion =
+                if zoneName == localRootZoneName
+                then zone.parentZone == null
+                else zone.parentZone != null;
+              message =
+                if zoneName == localRootZoneName
+                then "d2b.zones.${zoneName}.parentZone is forbidden on the local-root Zone."
+                else "d2b.zones.${zoneName}.parentZone is required for every non-root Zone.";
+            }
+            {
+              assertion =
+                zone.parentZone == null
+                || builtins.hasAttr zone.parentZone cfg.zones;
+              message = "d2b.zones.${zoneName}.parentZone must resolve to a declared Zone.";
+            }
+            {
+              assertion = zone.parentZone == null || zone.parentZone != zoneName;
+              message = "d2b.zones.${zoneName}.parentZone must not name itself.";
+            }
+            {
+              assertion = !walk.cycle;
+              message = "d2b.zones.${zoneName}.parentZone forms a cycle.";
+            }
+            {
+              assertion = !walk.depthExceeded;
+              message = "d2b.zones.${zoneName}.parentZone ancestry exceeds ${toString maxAncestryNames} Zone names.";
+            }
+          ])
+        cfg.zones);
+
+  zoneLinkAssertions = lib.flatten (lib.mapAttrsToList
+    (zoneName: zone:
+      let
+        links = zoneLinks zone;
+        path = "d2b.zones.${zoneName}.resources";
+      in
+      [
+        {
+          assertion = zoneName != localRootZoneName || links == { };
+          message = "${path}: local-root must not declare a ZoneLink resource.";
+        }
+        {
+          assertion = !topologyEnabled || zoneName == localRootZoneName || lib.length (lib.attrNames links) <= 1;
+          message = "${path}: a child Zone may declare at most one ZoneLink resource.";
+        }
+      ]
+      ++ lib.flatten (lib.mapAttrsToList
+        (resourceName: resource:
+          let
+            spec = resource.spec or { };
+            providerRef = spec.transportProviderRef or null;
+          in [
+            {
+              assertion = spec.childZoneName or null == zoneName;
+              message = "${path}.${resourceName}.spec.childZoneName must equal its enclosing Zone name.";
+            }
+            {
+              assertion = providerRef != null && resolvesAs zone.resources "Provider" providerRef;
+              message = "${path}.${resourceName}.spec.transportProviderRef must resolve to a Provider in Zone ${zoneName}.";
+            }
+          ])
+        links))
+    cfg.zones);
+
+  ownerCycleFor = zoneName: resources: resourceName:
+    let
+      walk = current: seen:
+        if !builtins.hasAttr current resources then false
+        else if builtins.elem current seen then true
+        else
+          let owner = resources.${current}.metadata.ownerRef or null;
+          in owner != null
+            && (let parsed = parseRef owner;
+                in parsed != null && walk parsed.name (seen ++ [ current ]));
+    in
+    walk resourceName [ ];
+
+  ownerCycleAssertions = lib.flatten (lib.mapAttrsToList
+    (zoneName: zone:
+      lib.mapAttrsToList
+        (resourceName: _resource: {
+          assertion = !ownerCycleFor zoneName zone.resources resourceName;
+          message = "d2b.zones.${zoneName}.resources.${resourceName}.metadata.ownerRef forms an owner cycle.";
+        })
+        zone.resources)
+    cfg.zones);
 in
 {
   options.d2b.zones = lib.mkOption {
@@ -191,6 +333,22 @@ in
           module merging.
         '';
       };
+      options.label = lib.mkOption {
+        type = lib.types.str;
+        default = "";
+        description = ''
+          Human-readable Zone label. This compiler setting is not part of the
+          runtime-created Zone self-resource spec.
+        '';
+      };
+      options.trustedPublishers = lib.mkOption {
+        type = lib.types.attrsOf trustedPublisherType;
+        default = { };
+        description = ''
+          Additional Provider publisher roots trusted for this Zone. Keys and
+          signing material are compiler inputs, never ResourceSpec fields.
+        '';
+      };
       options.resources = lib.mkOption {
         type = lib.types.attrsOf (lib.types.submodule resourceTypes.resourceModule);
         default = { };
@@ -205,5 +363,40 @@ in
     description = "Zone-local resource identity and authoring declarations.";
   };
 
-  config.assertions = zoneAssertions;
+  options.d2b._zoneCompiler = lib.mkOption {
+    type = lib.types.attrsOf lib.types.anything;
+    default = { };
+    internal = true;
+    visible = false;
+    description = "Internal v3 Zone topology/compiler projection.";
+  };
+
+  config = {
+    assertions = zoneAssertions ++ topologyAssertions ++ zoneLinkAssertions ++ ownerCycleAssertions;
+    d2b._zoneCompiler = {
+      localRoot = localRootZoneName;
+      maxAncestryNames = maxAncestryNames;
+      topology = lib.listToAttrs (lib.mapAttrsToList
+        (zoneName: zone:
+          lib.nameValuePair zoneName {
+            parentZone = zone.parentZone;
+            label = zone.label;
+            retainedGenerations = zone.retainedGenerations;
+            trustedPublishers = zone.trustedPublishers;
+            stateDir = "${toString cfg.site.stateDir}/zones/${zoneName}";
+          })
+        cfg.zones);
+      selfResources = lib.mapAttrs
+        (zoneName: _zone: {
+          apiVersion = "resources.d2bus.org/v3";
+          type = "Zone";
+          metadata = {
+            name = zoneName;
+            zone = zoneName;
+          };
+          spec = { };
+        })
+        cfg.zones;
+    };
+  };
 }
