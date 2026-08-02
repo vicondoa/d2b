@@ -14,7 +14,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use super::{
-    ResourceRef, ResourceUid, StatusMessage, Timestamp,
+    ResourceRef, StatusMessage, Timestamp,
     execution_policy::{
         BoundedToken, PrimitiveSpecError, parsed_deserialize, redacted_debug, string_schema,
     },
