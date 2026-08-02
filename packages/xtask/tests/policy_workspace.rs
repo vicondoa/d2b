@@ -366,15 +366,15 @@ fn rust_dag_violations(makefile: &str) -> Vec<String> {
     }
     for required in [
         "D2B_RUST_MAIN_PREREQS_aggregate := test-rust-leaf-schema",
-        "D2B_RUST_MAIN_PREREQS_cold := test-rust-leaf-schema",
+        "D2B_RUST_MAIN_PREREQS_cold :=",
         "D2B_RUST_MAIN_PREREQS_main :=",
         "test-rust-leaf-main-workspace: $(D2B_RUST_MAIN_PREREQS)",
         "D2B_RUST_SCHEMA_PREREQS_aggregate := test-rust-leaf-inventory",
-        "D2B_RUST_SCHEMA_PREREQS_cold := test-rust-leaf-inventory",
+        "D2B_RUST_SCHEMA_PREREQS_cold :=",
         "D2B_RUST_SCHEMA_PREREQS_schema :=",
         "test-rust-leaf-schema: $(D2B_RUST_SCHEMA_PREREQS)",
         "D2B_RUST_BROKER_PREREQS_aggregate := test-rust-leaf-inventory",
-        "D2B_RUST_BROKER_PREREQS_cold := test-rust-leaf-inventory",
+        "D2B_RUST_BROKER_PREREQS_cold :=",
         "D2B_RUST_BROKER_PREREQS_broker :=",
         "test-rust-leaf-broker: $(D2B_RUST_BROKER_PREREQS)",
     ] {
@@ -857,18 +857,18 @@ fn rust_dag_policy_rejects_a_missing_shared_target_edge_fixture() {
 test-rust: test-rust-leaf-api-surface test-rust-leaf-main-workspace test-rust-leaf-broker test-rust-leaf-guest-shell-runner test-rust-leaf-no-bash-ast test-rust-leaf-supply-chain
 test-rust-leaf-api-surface:
 D2B_RUST_MAIN_PREREQS_aggregate := test-rust-leaf-schema
-D2B_RUST_MAIN_PREREQS_cold := test-rust-leaf-schema
+D2B_RUST_MAIN_PREREQS_cold :=
 D2B_RUST_MAIN_PREREQS_main :=
 test-rust-leaf-main-workspace: $(D2B_RUST_MAIN_PREREQS)
 D2B_RUST_BROKER_PREREQS_aggregate := test-rust-leaf-inventory
-D2B_RUST_BROKER_PREREQS_cold := test-rust-leaf-inventory
+D2B_RUST_BROKER_PREREQS_cold :=
 D2B_RUST_BROKER_PREREQS_broker :=
 test-rust-leaf-broker: $(D2B_RUST_BROKER_PREREQS)
 test-rust-leaf-guest-shell-runner:
 test-rust-leaf-no-bash-ast:
 test-rust-leaf-supply-chain:
 D2B_RUST_SCHEMA_PREREQS_aggregate := test-rust-leaf-inventory
-D2B_RUST_SCHEMA_PREREQS_cold := test-rust-leaf-inventory
+D2B_RUST_SCHEMA_PREREQS_cold :=
 D2B_RUST_SCHEMA_PREREQS_schema :=
 test-rust-leaf-schema: $(D2B_RUST_SCHEMA_PREREQS)
 test-rust-leaf-inventory:

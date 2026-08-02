@@ -143,16 +143,16 @@ D2B_RUST_QUOTA_AST ?= 1
 D2B_RUST_QUOTA_SUPPLY ?= 1
 D2B_RUST_PROFILE ?= aggregate
 D2B_RUST_MAIN_PREREQS_aggregate := test-rust-leaf-schema
-D2B_RUST_MAIN_PREREQS_cold := test-rust-leaf-schema
+D2B_RUST_MAIN_PREREQS_cold :=
 D2B_RUST_MAIN_PREREQS_api :=
 D2B_RUST_MAIN_PREREQS_main :=
 D2B_RUST_MAIN_PREREQS := $(D2B_RUST_MAIN_PREREQS_$(D2B_RUST_PROFILE))
 D2B_RUST_SCHEMA_PREREQS_aggregate := test-rust-leaf-inventory
-D2B_RUST_SCHEMA_PREREQS_cold := test-rust-leaf-inventory
+D2B_RUST_SCHEMA_PREREQS_cold :=
 D2B_RUST_SCHEMA_PREREQS_schema :=
 D2B_RUST_SCHEMA_PREREQS := $(D2B_RUST_SCHEMA_PREREQS_$(D2B_RUST_PROFILE))
 D2B_RUST_BROKER_PREREQS_aggregate := test-rust-leaf-inventory
-D2B_RUST_BROKER_PREREQS_cold := test-rust-leaf-inventory
+D2B_RUST_BROKER_PREREQS_cold :=
 D2B_RUST_BROKER_PREREQS_broker :=
 D2B_RUST_BROKER_PREREQS := $(D2B_RUST_BROKER_PREREQS_$(D2B_RUST_PROFILE))
 
@@ -418,7 +418,7 @@ endef
 test-rust: test-rust-leaf-api-surface test-rust-leaf-main-workspace test-rust-leaf-schema test-rust-leaf-inventory test-rust-leaf-fixture-contracts test-rust-leaf-broker test-rust-leaf-guest-shell-runner test-rust-leaf-no-bash-ast test-rust-leaf-supply-chain
 	@# D2B_EXECUTION_MANIFEST is removed by the lifecycle helper before dispatch.
 	@# The recursive scheduler invokes +$(MAKE) --keep-going --output-sync=target.
-	+@$(call D2B_RUST_DISPATCH,test-rust-leaf-api-surface test-rust-leaf-main-workspace test-rust-leaf-broker test-rust-leaf-guest-shell-runner test-rust-leaf-no-bash-ast test-rust-leaf-schema test-rust-leaf-inventory test-rust-leaf-fixture-contracts test-rust-leaf-supply-chain,aggregate)
+	+@$(call D2B_RUST_DISPATCH,test-rust-leaf-api-surface test-rust-leaf-main-workspace test-rust-leaf-fixture-contracts test-rust-leaf-broker test-rust-leaf-guest-shell-runner test-rust-leaf-no-bash-ast test-rust-leaf-schema test-rust-leaf-supply-chain test-rust-leaf-inventory,aggregate)
 
 test-rust: D2B_RUST_ROOT_PREREQS := 1
 

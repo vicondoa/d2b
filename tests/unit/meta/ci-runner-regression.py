@@ -851,6 +851,9 @@ esac
         )
         self.assertIn("D2B_RUST_BROKER_PREREQS_broker :=", makefile)
         self.assertIn("D2B_RUST_SCHEMA_PREREQS_schema :=", makefile)
+        self.assertIn("D2B_RUST_MAIN_PREREQS_cold :=", makefile)
+        self.assertIn("D2B_RUST_BROKER_PREREQS_cold :=", makefile)
+        self.assertIn("D2B_RUST_SCHEMA_PREREQS_cold :=", makefile)
         self.assertIn(
             "test-rust-leaf-broker: $(D2B_RUST_BROKER_PREREQS)",
             makefile,
@@ -998,6 +1001,14 @@ esac
         self.assertIn('quota_main="$$runtime_budget";', cold_block)
         self.assertIn('quota_broker="$$runtime_budget";', cold_block)
         self.assertIn('"D2B_RUST_COLD_PROFILE=$$cold_profile"', makefile)
+        cold_order = (
+            "test-rust-leaf-api-surface test-rust-leaf-main-workspace "
+            "test-rust-leaf-fixture-contracts test-rust-leaf-broker "
+            "test-rust-leaf-guest-shell-runner test-rust-leaf-no-bash-ast "
+            "test-rust-leaf-schema test-rust-leaf-supply-chain "
+            "test-rust-leaf-inventory"
+        )
+        self.assertIn(cold_order, makefile)
         self.assertIn('fixture_target_dir="$workspace_target_dir"', driver)
         self.assertIn('public_target="$target_root/census"', api_driver)
         self.assertIn('if [ "$shared_census" = 1 ]', api_driver)

@@ -149,8 +149,10 @@ fixture and CLI IDs.
 The local warm aggregate keeps that parallel profile. When its normal Cargo
 target is absent, it selects a cold profile that runs one leaf at a time with
 the full budget, reuses the workspace target for fixture/CLI work and uses one
-shared serial API census target. CI uses the same shared-target behavior, but
-dispatches each Rust leaf as its own job.
+shared serial API census target. It restores the original leaf order and runs
+inventory after the main build, avoiding a duplicate cold workspace compile.
+CI uses the same shared-target behavior, but dispatches each Rust leaf as its
+own job.
 
 `D2B_RUST_BUDGET` is the supported local Rust control. It must be a positive
 integer when set and is only a requested upper bound. The automatic budget is

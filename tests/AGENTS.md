@@ -206,11 +206,12 @@ as an aggregate scheduler. The broker passes remain
 serial, and the main workspace, schema, and inventory leaves retain their
 dependency edges.
 
-Those dependency edges are local-profile only. CI dispatches API, main,
+Those dependency edges are warm-local-profile only. CI dispatches API, main,
 broker, guest, no-bash, schema, inventory and supply-chain Make targets as
 eight separate jobs, each with the full runner budget. When a local aggregate
 starts without `packages/target`, its cold profile restores the old serial
-full-budget execution and shared workspace/API target layout.
+full-budget execution, shared workspace/API target layout and original leaf
+order, with inventory last so discovery reuses the main build.
 
 The local Rust budget control is `D2B_RUST_BUDGET`, a positive requested upper
 bound. Its automatic cap uses logical CPUs and cache-adjusted available memory,
