@@ -14,7 +14,7 @@
 //! be silently disabled there.
 
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Output};
 
 use serde_json::Value;
 
@@ -48,6 +48,14 @@ fn assert_zone_unavailable_envelope(value: &Value, missing_socket: &Path) {
             .contains(&missing_socket.display().to_string()),
         "Zone-unavailable envelope must redact the missing socket path: {value}"
     );
+}
+
+fn run_with_missing_socket(args: &[&str], missing_socket: &Path) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_d2b"))
+        .args(args)
+        .env("D2B_PUBLIC_SOCKET", missing_socket)
+        .output()
+        .unwrap_or_else(|error| panic!("spawn d2b {args:?}: {error}"))
 }
 
 #[test]
@@ -96,4 +104,124 @@ fn list_json_matches_smoke_inventory_and_schema() {
         )
     });
     assert_zone_unavailable_envelope(&envelope, &missing_public);
+}
+
+#[test]
+fn v3_mutations_fail_closed_with_the_zone_envelope() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let missing_public = tmp.path().join("public.sock");
+    let commands = [
+        (
+            "guest start",
+            &["guest", "start", "work", "--apply", "--json"][..],
+        ),
+        (
+            "guest stop",
+            &["guest", "stop", "work", "--apply", "--json"][..],
+        ),
+        (
+            "guest restart",
+            &["guest", "restart", "work", "--apply", "--json"][..],
+        ),
+        (
+            "activation build",
+            &["activation", "build", "Guest/work", "--json"][..],
+        ),
+        (
+            "activation switch",
+            &["activation", "switch", "Guest/work", "--apply", "--json"][..],
+        ),
+        (
+            "host prepare",
+            &["host", "prepare", "--apply", "--json"][..],
+        ),
+        (
+            "host destroy",
+            &["host", "destroy", "--apply", "--json"][..],
+        ),
+        (
+            "host install",
+            &["host", "install", "--apply", "--json"][..],
+        ),
+        (
+            "host reconcile",
+            &["host", "reconcile", "--network", "--apply", "--json"][..],
+        ),
+    ];
+
+    for (label, args) in commands {
+        let out = run_with_missing_socket(args, &missing_public);
+        assert_eq!(
+            out.status.code(),
+            Some(1),
+            "{label} must fail with Zone-unavailable, stderr:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            out.stderr.is_empty(),
+            "{label} JSON errors must stay on stdout; stderr:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let envelope: Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|error| {
+            panic!(
+                "{label} did not emit a v3 JSON envelope: {error}\nstdout:\n{}",
+                String::from_utf8_lossy(&out.stdout)
+            )
+        });
+        assert_zone_unavailable_envelope(&envelope, &missing_public);
+    }
+}
+
+#[test]
+fn retired_cli_namespaces_are_rejected_without_legacy_routing() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let missing_public = tmp.path().join("public.sock");
+    let commands = [
+        ("vm", &["vm", "start", "work", "--json"][..]),
+        ("realm", &["realm", "list", "--json"][..]),
+        ("up", &["up", "work", "--json"][..]),
+        ("keys", &["keys", "list", "--json"][..]),
+        ("usb", &["usb", "probe", "--json"][..]),
+    ];
+
+    for (label, args) in commands {
+        let out = run_with_missing_socket(args, &missing_public);
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "retired {label} command must be a clap usage error; stderr:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            out.stdout.is_empty(),
+            "retired {label} command must not emit a success or v3 envelope"
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            !stderr.contains("bash") && !stderr.contains("d2b-legacy"),
+            "retired {label} command exposed a legacy route:\n{stderr}"
+        );
+    }
+}
+
+#[test]
+fn retired_vm_lifecycle_does_not_expose_the_legacy_timeout_exit() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let missing_public = tmp.path().join("public.sock");
+    let out = run_with_missing_socket(
+        &["vm", "start", "work", "--apply", "--json"],
+        &missing_public,
+    );
+
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "retired vm lifecycle must stop at v3 parsing, not reach the old timeout path"
+    );
+    assert_ne!(
+        out.status.code(),
+        Some(33),
+        "legacy API-ready timeout exit must not be reachable from a retired command"
+    );
+    assert!(out.stdout.is_empty());
 }

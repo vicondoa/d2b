@@ -565,7 +565,34 @@ fn assert_probe_error_envelope(
 }
 
 #[test]
-fn host_check_usage_error_exits_three() {
+fn host_check_strict_without_read_only_exits_three() {
+    let out = Command::new(env!("CARGO_BIN_EXE_d2b"))
+        .args(["host", "check", "--strict", "--json"])
+        .output()
+        .expect("spawn d2b host check --strict --json");
+
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "strict host check without --read-only is a usage refusal"
+    );
+    assert!(
+        out.stderr.is_empty(),
+        "JSON usage refusals stay on stdout; stderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let envelope: Value =
+        serde_json::from_slice(&out.stdout).expect("strict usage refusal must be JSON");
+    assert_eq!(envelope["ok"], false);
+    assert_eq!(envelope["errorClass"], "ref-invalid");
+    assert_eq!(
+        envelope["message"],
+        "host check --strict requires --read-only"
+    );
+}
+
+#[test]
+fn host_check_unknown_flag_exits_two() {
     if fixtures_dir().is_none() {
         eprintln!("SKIP: D2B_FIXTURES unset (not the gated CLI-contract step)");
         return;
@@ -575,7 +602,7 @@ fn host_check_usage_error_exits_three() {
         .args(["host", "check", "--bogus"])
         .output()
         .expect("spawn d2b host check --bogus");
-    assert_eq!(out.status.code(), Some(2), "usage errors exit 2");
+    assert_eq!(out.status.code(), Some(2), "clap usage errors exit 2");
 }
 
 #[test]

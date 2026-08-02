@@ -243,7 +243,8 @@ fn keys(
             (
                 "KeysRotate",
                 json!({
-                    "name": args.guest_ref,
+                    "resourceRef": parse_guest_ref(context, &args.guest_ref, mode)?
+                        .to_canonical_string(),
                     "dryRun": args.dry_run,
                     "apply": args.apply
                 }),
@@ -262,7 +263,13 @@ fn named_call(
     mode: OutputMode,
     deadline: RequestDeadline,
 ) -> Result<i32, CliFailure> {
-    let value = context.invoke(method, json!({ "name": name }), deadline, mode)?;
+    let guest_ref = parse_guest_ref(context, name, mode)?;
+    let value = context.invoke(
+        method,
+        json!({ "resourceRef": guest_ref.to_canonical_string() }),
+        deadline,
+        mode,
+    )?;
     context.emit(&value, mode)?;
     Ok(0)
 }

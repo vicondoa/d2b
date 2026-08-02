@@ -163,6 +163,9 @@ pub(crate) fn run(
         HostCommand::Destroy(args) => mutation(context, "destroy", args, mode, deadline),
         HostCommand::Doctor(args) => {
             if !args.read_only {
+                // Keep the established command-local refusal envelope. This
+                // helper only renders the mandatory-flag error; it does not
+                // open a daemon, broker, SSH, or executable fallback path.
                 let legacy = crate::LegacyContext::from_env()?;
                 return crate::cmd_host_doctor(
                     &legacy,
@@ -188,22 +191,7 @@ pub(crate) fn run(
             context.emit(&value, mode)?;
             Ok(0)
         }
-        HostCommand::Install(args) => {
-            let legacy = crate::LegacyContext::from_env()?;
-            crate::cmd_host_install(
-                &legacy,
-                &crate::HostInstallArgs {
-                    dry_run: args.dry_run,
-                    apply: args.apply,
-                    enable: args.enable,
-                    start: args.start,
-                    no_start: args.no_start,
-                    json: mode.is_json(),
-                    human: !mode.is_json(),
-                },
-                &[],
-            )
-        }
+        HostCommand::Install(args) => install(context, args, mode, deadline),
         HostCommand::Validate(args) => {
             let legacy = crate::LegacyContext::from_env()?;
             crate::cmd_host_validate(
@@ -220,20 +208,7 @@ pub(crate) fn run(
                 },
             )
         }
-        HostCommand::Reconcile(args) => {
-            let legacy = crate::LegacyContext::from_env()?;
-            crate::cmd_host_reconcile(
-                &legacy,
-                &crate::HostReconcileArgs {
-                    network: args.network,
-                    dry_run: args.dry_run,
-                    apply: args.apply,
-                    json: mode.is_json(),
-                    human: !mode.is_json(),
-                },
-                &[],
-            )
-        }
+        HostCommand::Reconcile(args) => reconcile(context, args, mode, deadline),
     }
 }
 
@@ -363,6 +338,117 @@ fn mutation(
         json!({
             "resourceRef": "Host/system",
             "operation": operation,
+            "dryRun": args.dry_run,
+            "apply": args.apply,
+        }),
+        deadline,
+        mode,
+    )?;
+    context.emit(&value, mode)?;
+    Ok(0)
+}
+
+fn install(
+    context: &ZoneContext,
+    args: &HostInstallArgs,
+    mode: OutputMode,
+    deadline: RequestDeadline,
+) -> Result<i32, CliFailure> {
+    if !args.dry_run && !args.apply {
+        return Err(context.failure(
+            "ref-invalid",
+            "host install requires --dry-run or --apply",
+            mode,
+            78,
+        ));
+    }
+
+    if args.apply {
+        let value = context.invoke(
+            "HostInstall",
+            json!({
+                "dryRun": args.dry_run,
+                "apply": args.apply,
+                "enable": args.enable,
+                "start": args.start,
+                "noStart": args.no_start,
+            }),
+            deadline,
+            mode,
+        )?;
+        context.emit(&value, mode)?;
+        return Ok(0);
+    }
+
+    let value = json!({
+        "command": "host install",
+        "mode": "dry-run",
+        "notes": "dry-run preview; --apply routes through the daemon → broker RunHostInstall path.",
+        "planned_steps": [
+            {
+                "step": 1,
+                "what": "place systemd units at /etc/systemd/system/d2bd.service + d2b-priv-broker.socket"
+            },
+            {
+                "step": 2,
+                "what": "write daemon-config.json to /etc/d2b/daemon-config.json with paths matching the daemon's compiled-in defaults"
+            },
+            {
+                "step": 3,
+                "what": "bind /run/d2b/public.sock + /run/d2b/priv.sock with socket ACLs (launcher / admin groups)"
+            },
+            {
+                "step": 4,
+                "what": if args.enable && args.start {
+                    "systemctl enable --now d2bd.service"
+                } else if args.enable {
+                    "systemctl enable d2bd.service"
+                } else if args.no_start {
+                    "do NOT enable; operator starts manually"
+                } else {
+                    "neither --enable nor --start specified: leave service inactive"
+                }
+            },
+            {
+                "step": 5,
+                "what": "smoke: d2b auth status against /run/d2b/public.sock"
+            }
+        ]
+    });
+    if mode.is_json() {
+        context.emit(&value, mode)?;
+    } else {
+        crate::print_stdout(
+            "host install --dry-run: would install d2bd at /etc/systemd/system/ and bind /run/d2b/public.sock (the live --apply path routes through the daemon → broker RunHostInstall path)\n",
+        );
+    }
+    Ok(0)
+}
+
+fn reconcile(
+    context: &ZoneContext,
+    args: &HostReconcileArgs,
+    mode: OutputMode,
+    deadline: RequestDeadline,
+) -> Result<i32, CliFailure> {
+    if !args.dry_run && !args.apply {
+        return Err(context.failure(
+            "ref-invalid",
+            "host reconcile requires --dry-run or --apply",
+            mode,
+            78,
+        ));
+    }
+    if !args.network {
+        return Err(context.failure("ref-invalid", "host reconcile requires --network", mode, 78));
+    }
+
+    let value = context.invoke(
+        "Reconcile",
+        json!({
+            "resourceRef": "Host/system",
+            "operation": "reconcile",
+            "network": args.network,
             "dryRun": args.dry_run,
             "apply": args.apply,
         }),

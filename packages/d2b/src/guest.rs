@@ -312,7 +312,12 @@ fn reject_unsafe_local(
             .pointer("/spec/providerRef")
             .and_then(Value::as_str)
             .or_else(|| value.get("providerRef").and_then(Value::as_str))
-            == Some("Provider/unsafe-local");
+            == Some("Provider/unsafe-local")
+        || value
+            .pointer("/status/providerKind")
+            .and_then(Value::as_str)
+            .or_else(|| value.get("providerKind").and_then(Value::as_str))
+            == Some("unsafe-local");
     if unsafe_local {
         return Err(context.failure(
             "resource-schema-invalid",
@@ -334,7 +339,8 @@ mod tests {
             "items": [
                 {"resourceRef":"Guest/work", "status":{"phase":"Ready"}},
                 {"resourceRef":"Host/alice", "status":{"isolationPosture":"none"}},
-                {"resourceRef":"Guest/legacy", "spec":{"providerRef":"Provider/unsafe-local"}}
+                {"resourceRef":"Guest/legacy", "spec":{"providerRef":"Provider/unsafe-local"}},
+                {"resourceRef":"Guest/local", "status":{"providerKind":"unsafe-local"}}
             ]
         }));
         assert_eq!(filtered["items"].as_array().unwrap().len(), 1);
