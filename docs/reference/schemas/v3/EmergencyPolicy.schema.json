@@ -1,0 +1,129 @@
+{
+  "$id": "https://d2bus.org/schemas/v3/EmergencyPolicy.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Zone-wide emergency admission and drain policy.",
+  "properties": {
+    "apiVersion": {
+      "const": "resources.d2bus.org/v3"
+    },
+    "metadata": {
+      "additionalProperties": false,
+      "properties": {
+        "annotations": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Optional authored key-value annotation map.",
+          "type": "object"
+        },
+        "labels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Optional authored key-value label map.",
+          "type": "object"
+        },
+        "name": {
+          "description": "Zone-local resource name.",
+          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "ownerRef": {
+          "description": "Optional same-Zone ref of the owning resource.",
+          "pattern": "^[A-Z][A-Za-z0-9]{0,62}/[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "zone": {
+          "description": "Name of the Zone this resource is local to.",
+          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "zone"
+      ],
+      "type": "object"
+    },
+    "spec": {
+      "additionalProperties": false,
+      "properties": {
+        "drainDeadlineSeconds": {
+          "maximum": 300,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "providerRef": {
+          "pattern": "^[A-Z][A-Za-z0-9]{0,62}/[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "reason": {
+          "maxLength": 256,
+          "minLength": 0,
+          "type": "string"
+        },
+        "scope": {
+          "additionalProperties": false,
+          "properties": {
+            "disconnectZoneLinks": {
+              "type": "boolean"
+            },
+            "drainOngoingOperations": {
+              "type": "boolean"
+            },
+            "stopNewAdmissions": {
+              "type": "boolean"
+            },
+            "stopProviderProcesses": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "stopNewAdmissions",
+            "disconnectZoneLinks",
+            "stopProviderProcesses",
+            "drainOngoingOperations"
+          ],
+          "type": "object"
+        },
+        "updatePolicy": {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "manual",
+                "automatic",
+                "manual-disruptive"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [],
+          "type": "object"
+        }
+      },
+      "required": [
+        "enabled",
+        "scope",
+        "drainDeadlineSeconds",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "type": {
+      "const": "EmergencyPolicy"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "metadata",
+    "spec",
+    "type"
+  ],
+  "title": "EmergencyPolicy",
+  "type": "object"
+}

@@ -1,0 +1,246 @@
+{
+  "$id": "https://d2bus.org/schemas/v3/Endpoint.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Stable provider-neutral endpoint identity without a locator.",
+  "properties": {
+    "apiVersion": {
+      "const": "resources.d2bus.org/v3"
+    },
+    "metadata": {
+      "additionalProperties": false,
+      "properties": {
+        "annotations": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Optional authored key-value annotation map.",
+          "type": "object"
+        },
+        "labels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Optional authored key-value label map.",
+          "type": "object"
+        },
+        "name": {
+          "description": "Zone-local resource name.",
+          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "ownerRef": {
+          "description": "Optional same-Zone ref of the owning resource.",
+          "pattern": "^[A-Z][A-Za-z0-9]{0,62}/[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "zone": {
+          "description": "Name of the Zone this resource is local to.",
+          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "zone"
+      ],
+      "type": "object"
+    },
+    "spec": {
+      "additionalProperties": false,
+      "properties": {
+        "attachmentPolicy": {
+          "additionalProperties": false,
+          "properties": {
+            "maxAttachments": {
+              "maximum": 64,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "supported": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "supported",
+            "maxAttachments"
+          ],
+          "type": "object"
+        },
+        "consumerPolicy": {
+          "additionalProperties": false,
+          "properties": {
+            "allowedOperations": {
+              "items": {
+                "enum": [
+                  "resolve",
+                  "attach",
+                  "observe"
+                ],
+                "type": "string"
+              },
+              "maxItems": 3,
+              "type": "array"
+            },
+            "allowedProviderComponents": {
+              "items": {
+                "maxLength": 63,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 32,
+              "type": "array"
+            },
+            "allowedSubjects": {
+              "items": {
+                "pattern": "^[A-Z][A-Za-z0-9]{0,62}/[a-z][a-z0-9-]{0,62}$",
+                "type": "string"
+              },
+              "maxItems": 64,
+              "type": "array"
+            }
+          },
+          "required": [
+            "allowedSubjects",
+            "allowedProviderComponents",
+            "allowedOperations"
+          ],
+          "type": "object"
+        },
+        "endpointClass": {
+          "enum": [
+            "service",
+            "device",
+            "transport",
+            "control",
+            "data"
+          ],
+          "type": "string"
+        },
+        "lifecyclePolicy": {
+          "enum": [
+            "pinned",
+            "recycle-with-producer",
+            "recreate-on-generation"
+          ],
+          "type": "string"
+        },
+        "locality": {
+          "enum": [
+            "host-local",
+            "guest-local",
+            "cross-domain",
+            "zone-local"
+          ],
+          "type": "string"
+        },
+        "producerRef": {
+          "pattern": "^[A-Z][A-Za-z0-9]{0,62}/[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "provider": {
+          "additionalProperties": false,
+          "properties": {
+            "schemaId": {
+              "maxLength": 201,
+              "minLength": 1,
+              "type": "string"
+            },
+            "schemaVersion": {
+              "maxLength": 32,
+              "minLength": 3,
+              "type": "string"
+            },
+            "settings": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "schemaId",
+            "schemaVersion",
+            "settings"
+          ],
+          "type": "object"
+        },
+        "providerRef": {
+          "pattern": "^[A-Z][A-Za-z0-9]{0,62}/[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "purpose": {
+          "maxLength": 63,
+          "minLength": 1,
+          "type": "string"
+        },
+        "serviceFingerprint": {
+          "anyOf": [
+            {
+              "maxLength": 71,
+              "minLength": 0,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "transport": {
+          "enum": [
+            "unix",
+            "vsock",
+            "tcp",
+            "fd-attachment",
+            "opaque-carriage"
+          ],
+          "type": "string"
+        },
+        "updatePolicy": {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "manual",
+                "automatic",
+                "manual-disruptive"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [],
+          "type": "object"
+        },
+        "visibility": {
+          "enum": [
+            "owner",
+            "provider",
+            "zone"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "producerRef",
+        "endpointClass",
+        "transport",
+        "purpose",
+        "serviceFingerprint",
+        "locality",
+        "visibility",
+        "attachmentPolicy",
+        "consumerPolicy",
+        "lifecyclePolicy"
+      ],
+      "type": "object"
+    },
+    "type": {
+      "const": "Endpoint"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "metadata",
+    "spec",
+    "type"
+  ],
+  "title": "Endpoint",
+  "type": "object"
+}

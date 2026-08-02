@@ -1,0 +1,124 @@
+{
+  "$id": "https://d2bus.org/schemas/v3/RoleBinding.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Zone-local binding of a Role to authenticated subjects.",
+  "properties": {
+    "apiVersion": {
+      "const": "resources.d2bus.org/v3"
+    },
+    "metadata": {
+      "additionalProperties": false,
+      "properties": {
+        "annotations": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Optional authored key-value annotation map.",
+          "type": "object"
+        },
+        "labels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Optional authored key-value label map.",
+          "type": "object"
+        },
+        "name": {
+          "description": "Zone-local resource name.",
+          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "ownerRef": {
+          "description": "Optional same-Zone ref of the owning resource.",
+          "pattern": "^[A-Z][A-Za-z0-9]{0,62}/[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "zone": {
+          "description": "Name of the Zone this resource is local to.",
+          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "zone"
+      ],
+      "type": "object"
+    },
+    "spec": {
+      "additionalProperties": false,
+      "properties": {
+        "externalPrincipalSelector": {
+          "anyOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "providerRef": {
+          "pattern": "^[A-Z][A-Za-z0-9]{0,62}/[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "roleRef": {
+          "pattern": "^Role/[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "scopeNarrowing": {
+          "anyOf": [
+            {
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "subjects": {
+          "items": {
+            "pattern": "^[A-Z][A-Za-z0-9]{0,62}/[a-z][a-z0-9-]{0,62}$",
+            "type": "string"
+          },
+          "maxItems": 64,
+          "type": "array"
+        },
+        "updatePolicy": {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "manual",
+                "automatic",
+                "manual-disruptive"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [],
+          "type": "object"
+        }
+      },
+      "required": [
+        "roleRef",
+        "subjects",
+        "externalPrincipalSelector",
+        "scopeNarrowing"
+      ],
+      "type": "object"
+    },
+    "type": {
+      "const": "RoleBinding"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "metadata",
+    "spec",
+    "type"
+  ],
+  "title": "RoleBinding",
+  "type": "object"
+}

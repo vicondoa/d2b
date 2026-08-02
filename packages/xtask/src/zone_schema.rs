@@ -22,7 +22,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use serde_json::{Value, json};
+use schemars::{JsonSchema, schema::RootSchema};
+use serde_json::{Map, Value, json};
 
 /// D113 ResourceName / Zone name spelling: 1 to 63 bytes.
 const NAME_PATTERN: &str = "^[a-z][a-z0-9-]{0,62}$";
@@ -346,6 +347,645 @@ fn resource_schema(schema: &ResourceTypeSchema) -> Value {
     })
 }
 
+fn string_schema(pattern: &str) -> Value {
+    json!({
+        "type": "string",
+        "pattern": pattern,
+    })
+}
+
+fn bounded_string(min_length: usize, max_length: usize) -> Value {
+    json!({
+        "type": "string",
+        "minLength": min_length,
+        "maxLength": max_length,
+    })
+}
+
+fn enum_schema(values: &[&str]) -> Value {
+    json!({
+        "type": "string",
+        "enum": values,
+    })
+}
+
+fn nullable(schema: Value) -> Value {
+    json!({
+        "anyOf": [
+            schema,
+            { "type": "null" },
+        ],
+    })
+}
+
+fn resource_ref_schema() -> Value {
+    string_schema(RESOURCE_REF_PATTERN)
+}
+
+fn array_schema(items: Value, max_items: usize) -> Value {
+    json!({
+        "type": "array",
+        "maxItems": max_items,
+        "items": items,
+    })
+}
+
+fn object_schema_value(
+    properties: Map<String, Value>,
+    required: &[&str],
+    additional_properties: bool,
+) -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": additional_properties,
+        "properties": Value::Object(properties),
+        "required": required,
+    })
+}
+
+fn object_from_pairs(
+    pairs: impl IntoIterator<Item = (&'static str, Value)>,
+    required: &[&str],
+) -> Value {
+    object_schema_value(
+        pairs
+            .into_iter()
+            .map(|(name, value)| (name.to_owned(), value))
+            .collect(),
+        required,
+        false,
+    )
+}
+
+fn provider_extension_schema() -> Value {
+    object_from_pairs(
+        [
+            ("schemaId", bounded_string(1, 201)),
+            ("schemaVersion", bounded_string(3, 32)),
+            ("settings", json!({ "type": "object" })),
+        ],
+        &["schemaId", "schemaVersion", "settings"],
+    )
+}
+
+fn update_policy_schema() -> Value {
+    object_from_pairs(
+        [(
+            "mode",
+            enum_schema(&["manual", "automatic", "manual-disruptive"]),
+        )],
+        &[],
+    )
+}
+
+fn with_universal_spec_fields(name: &str, mut spec: Value) -> Value {
+    let object = spec
+        .as_object_mut()
+        .expect("ResourceType spec schemas are objects");
+    let properties = object
+        .entry("properties")
+        .or_insert_with(|| Value::Object(Map::new()))
+        .as_object_mut()
+        .expect("ResourceType spec properties are an object");
+
+    if name != "Provider" && name != "Zone" && name != "ZoneLink" {
+        properties
+            .entry("providerRef".to_owned())
+            .or_insert_with(resource_ref_schema);
+        properties
+            .entry("updatePolicy".to_owned())
+            .or_insert_with(update_policy_schema);
+    }
+
+    if matches!(
+        name,
+        "Host"
+            | "Guest"
+            | "Process"
+            | "EphemeralProcess"
+            | "Volume"
+            | "Network"
+            | "Device"
+            | "Credential"
+            | "Endpoint"
+            | "ResourceExport"
+            | "ResourceImport"
+    ) {
+        properties
+            .entry("provider".to_owned())
+            .or_insert_with(provider_extension_schema);
+    }
+
+    object.insert("additionalProperties".to_owned(), Value::Bool(false));
+    spec
+}
+
+fn strict_spec(mut spec: Value) -> Value {
+    spec.as_object_mut()
+        .expect("ResourceType spec schemas are objects")
+        .insert("additionalProperties".to_owned(), Value::Bool(false));
+    spec
+}
+
+fn dto_resource_schema<T: JsonSchema>(
+    name: &str,
+    description: &str,
+    include_universal_fields: bool,
+) -> Value {
+    let root: RootSchema = schemars::schema_for!(T);
+    let definitions = serde_json::to_value(&root.definitions).expect("schema definitions render");
+    let raw_spec = serde_json::to_value(&root.schema).expect("schema renders");
+    let spec = if include_universal_fields {
+        with_universal_spec_fields(name, raw_spec)
+    } else {
+        strict_spec(raw_spec)
+    };
+    let mut resource = resource_envelope_schema(name, description, spec);
+    if definitions != json!({}) {
+        resource
+            .as_object_mut()
+            .expect("resource schema is an object")
+            .insert("definitions".to_owned(), definitions);
+    }
+    resource
+}
+
+fn resource_envelope_schema(name: &str, description: &str, spec: Value) -> Value {
+    json!({
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$id": format!("https://d2bus.org/schemas/v3/{}.schema.json", name),
+        "title": name,
+        "description": description,
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["apiVersion", "metadata", "spec", "type"],
+        "properties": {
+            "apiVersion": { "const": API_VERSION },
+            "metadata": metadata_schema(name),
+            "spec": spec,
+            "type": { "const": name },
+        },
+    })
+}
+
+fn core_resource_schema(name: &str, description: &str, spec: Value) -> Value {
+    resource_envelope_schema(name, description, with_universal_spec_fields(name, spec))
+}
+
+fn role_rule_schema() -> Value {
+    object_from_pairs(
+        [
+            (
+                "resourceTypes",
+                array_schema(string_schema(RESOURCE_TYPE_NAME_PATTERN), 16),
+            ),
+            (
+                "verbs",
+                array_schema(
+                    enum_schema(&[
+                        "get",
+                        "list",
+                        "watch",
+                        "create",
+                        "update-spec",
+                        "update-status",
+                        "update-metadata",
+                        "update-finalizers",
+                        "delete",
+                        "use-credential",
+                        "admin-credential",
+                    ]),
+                    16,
+                ),
+            ),
+            ("subresources", array_schema(bounded_string(0, 201), 16)),
+            (
+                "resourceNames",
+                array_schema(string_schema(NAME_PATTERN), 64),
+            ),
+            ("zones", array_schema(string_schema(NAME_PATTERN), 8)),
+            ("executionRefs", array_schema(resource_ref_schema(), 32)),
+            (
+                "sessionVerbs",
+                array_schema(
+                    enum_schema(&[
+                        "connect",
+                        "invoke",
+                        "open-stream",
+                        "relay",
+                        "attach",
+                        "cancel",
+                        "observe",
+                        "audit-export",
+                        "support-bundle",
+                    ]),
+                    9,
+                ),
+            ),
+        ],
+        &[
+            "resourceTypes",
+            "verbs",
+            "subresources",
+            "resourceNames",
+            "zones",
+            "executionRefs",
+            "sessionVerbs",
+        ],
+    )
+}
+
+const RESOURCE_TYPE_NAME_PATTERN: &str =
+    "^[A-Z][A-Za-z0-9]{0,62}$|^[a-z][a-z0-9-]{0,62}\\.d2bus\\.org\\.[A-Z][A-Za-z0-9]{0,62}$";
+
+fn standard_core_schemas() -> Vec<(&'static str, Value)> {
+    let role = core_resource_schema(
+        "Role",
+        "Zone-local bounded authorization rules.",
+        object_from_pairs(
+            [("rules", array_schema(role_rule_schema(), 32))],
+            &["rules"],
+        ),
+    );
+    let role_binding = core_resource_schema(
+        "RoleBinding",
+        "Zone-local binding of a Role to authenticated subjects.",
+        object_from_pairs(
+            [
+                ("roleRef", string_schema("^Role/[a-z][a-z0-9-]{0,62}$")),
+                ("subjects", array_schema(resource_ref_schema(), 64)),
+                (
+                    "externalPrincipalSelector",
+                    nullable(json!({ "type": "object" })),
+                ),
+                ("scopeNarrowing", nullable(json!({ "type": "object" }))),
+            ],
+            &[
+                "roleRef",
+                "subjects",
+                "externalPrincipalSelector",
+                "scopeNarrowing",
+            ],
+        ),
+    );
+    let quota = core_resource_schema(
+        "Quota",
+        "Zone-wide aggregate resource ceilings.",
+        object_from_pairs(
+            [
+                (
+                    "ceilings",
+                    object_from_pairs(
+                        [
+                            (
+                                "maxResources",
+                                json!({ "type": "integer", "minimum": 1, "maximum": 65536 }),
+                            ),
+                            (
+                                "maxResourcesPerType",
+                                json!({ "type": "integer", "minimum": 1, "maximum": 65536 }),
+                            ),
+                            (
+                                "maxOwnerDepth",
+                                json!({ "type": "integer", "minimum": 1, "maximum": 32 }),
+                            ),
+                            (
+                                "maxCpu",
+                                nullable(json!({ "type": "integer", "minimum": 1 })),
+                            ),
+                            (
+                                "maxMemoryMib",
+                                nullable(json!({ "type": "integer", "minimum": 1 })),
+                            ),
+                            (
+                                "maxStorageGib",
+                                nullable(json!({ "type": "integer", "minimum": 1 })),
+                            ),
+                        ],
+                        &[
+                            "maxResources",
+                            "maxResourcesPerType",
+                            "maxOwnerDepth",
+                            "maxCpu",
+                            "maxMemoryMib",
+                            "maxStorageGib",
+                        ],
+                    ),
+                ),
+                (
+                    "perTypeCeilings",
+                    json!({
+                        "type": "object",
+                        "maxProperties": 64,
+                        "additionalProperties": { "type": "object" },
+                    }),
+                ),
+                ("scope", enum_schema(&["zone"])),
+                ("enforcementPolicy", enum_schema(&["hard", "soft"])),
+            ],
+            &["ceilings", "perTypeCeilings", "scope", "enforcementPolicy"],
+        ),
+    );
+    let emergency_policy = core_resource_schema(
+        "EmergencyPolicy",
+        "Zone-wide emergency admission and drain policy.",
+        object_from_pairs(
+            [
+                ("enabled", json!({ "type": "boolean" })),
+                (
+                    "scope",
+                    object_from_pairs(
+                        [
+                            ("stopNewAdmissions", json!({ "type": "boolean" })),
+                            ("disconnectZoneLinks", json!({ "type": "boolean" })),
+                            ("stopProviderProcesses", json!({ "type": "boolean" })),
+                            ("drainOngoingOperations", json!({ "type": "boolean" })),
+                        ],
+                        &[
+                            "stopNewAdmissions",
+                            "disconnectZoneLinks",
+                            "stopProviderProcesses",
+                            "drainOngoingOperations",
+                        ],
+                    ),
+                ),
+                (
+                    "drainDeadlineSeconds",
+                    json!({ "type": "integer", "minimum": 1, "maximum": 300 }),
+                ),
+                ("reason", bounded_string(0, 256)),
+            ],
+            &["enabled", "scope", "drainDeadlineSeconds", "reason"],
+        ),
+    );
+    let endpoint = core_resource_schema(
+        "Endpoint",
+        "Stable provider-neutral endpoint identity without a locator.",
+        object_from_pairs(
+            [
+                ("producerRef", resource_ref_schema()),
+                (
+                    "endpointClass",
+                    enum_schema(&["service", "device", "transport", "control", "data"]),
+                ),
+                (
+                    "transport",
+                    enum_schema(&["unix", "vsock", "tcp", "fd-attachment", "opaque-carriage"]),
+                ),
+                ("purpose", bounded_string(1, 63)),
+                ("serviceFingerprint", nullable(bounded_string(0, 71))),
+                (
+                    "locality",
+                    enum_schema(&["host-local", "guest-local", "cross-domain", "zone-local"]),
+                ),
+                ("visibility", enum_schema(&["owner", "provider", "zone"])),
+                (
+                    "attachmentPolicy",
+                    object_from_pairs(
+                        [
+                            ("supported", json!({ "type": "boolean" })),
+                            (
+                                "maxAttachments",
+                                json!({ "type": "integer", "minimum": 0, "maximum": 64 }),
+                            ),
+                        ],
+                        &["supported", "maxAttachments"],
+                    ),
+                ),
+                (
+                    "consumerPolicy",
+                    object_from_pairs(
+                        [
+                            ("allowedSubjects", array_schema(resource_ref_schema(), 64)),
+                            (
+                                "allowedProviderComponents",
+                                array_schema(bounded_string(1, 63), 32),
+                            ),
+                            (
+                                "allowedOperations",
+                                array_schema(enum_schema(&["resolve", "attach", "observe"]), 3),
+                            ),
+                        ],
+                        &[
+                            "allowedSubjects",
+                            "allowedProviderComponents",
+                            "allowedOperations",
+                        ],
+                    ),
+                ),
+                (
+                    "lifecyclePolicy",
+                    enum_schema(&["pinned", "recycle-with-producer", "recreate-on-generation"]),
+                ),
+            ],
+            &[
+                "producerRef",
+                "endpointClass",
+                "transport",
+                "purpose",
+                "serviceFingerprint",
+                "locality",
+                "visibility",
+                "attachmentPolicy",
+                "consumerPolicy",
+                "lifecyclePolicy",
+            ],
+        ),
+    );
+    let export = core_resource_schema(
+        "ResourceExport",
+        "Owner-Zone advertisement of one semantic Service authority.",
+        object_from_pairs(
+            [
+                (
+                    "providerRef",
+                    string_schema("^Provider/[a-z][a-z0-9-]{0,62}$"),
+                ),
+                ("resourceRef", resource_ref_schema()),
+                ("serviceType", string_schema(RESOURCE_TYPE_NAME_PATTERN)),
+                (
+                    "projectionSchemaFingerprint",
+                    string_schema("^sha256:[0-9a-f]{64}$"),
+                ),
+                ("factoryFingerprint", string_schema("^sha256:[0-9a-f]{64}$")),
+                ("operations", array_schema(bounded_string(1, 63), 64)),
+                (
+                    "arbitration",
+                    enum_schema(&["exclusive", "shared", "multiplexed"]),
+                ),
+                ("quota", json!({ "type": "object" })),
+                ("consumerZonePolicy", json!({ "type": "object" })),
+                ("visibility", enum_schema(&["child-zones", "named-zones"])),
+                ("updatePolicy", json!({ "type": "object" })),
+                ("revocationPolicy", json!({ "type": "object" })),
+            ],
+            &[
+                "providerRef",
+                "resourceRef",
+                "serviceType",
+                "projectionSchemaFingerprint",
+                "factoryFingerprint",
+                "operations",
+                "arbitration",
+                "quota",
+                "consumerZonePolicy",
+                "visibility",
+                "updatePolicy",
+                "revocationPolicy",
+            ],
+        ),
+    );
+    let import = core_resource_schema(
+        "ResourceImport",
+        "Consumer-Zone route to one remote semantic Service authority.",
+        object_from_pairs(
+            [
+                (
+                    "providerRef",
+                    string_schema("^Provider/[a-z][a-z0-9-]{0,62}$"),
+                ),
+                (
+                    "zoneLinkRef",
+                    string_schema("^ZoneLink/[a-z][a-z0-9-]{0,62}$"),
+                ),
+                ("exportKey", bounded_string(1, 128)),
+                (
+                    "expectedServiceType",
+                    string_schema(RESOURCE_TYPE_NAME_PATTERN),
+                ),
+                (
+                    "expectedProjectionSchemaFingerprint",
+                    string_schema("^sha256:[0-9a-f]{64}$"),
+                ),
+                (
+                    "expectedFactoryFingerprint",
+                    string_schema("^sha256:[0-9a-f]{64}$"),
+                ),
+                ("projectionName", string_schema(NAME_PATTERN)),
+                (
+                    "requestedCapabilities",
+                    array_schema(bounded_string(1, 63), 64),
+                ),
+                ("requestedQuota", json!({ "type": "object" })),
+                ("updatePolicy", json!({ "type": "object" })),
+                ("disconnectPolicy", json!({ "type": "object" })),
+            ],
+            &[
+                "providerRef",
+                "zoneLinkRef",
+                "exportKey",
+                "expectedServiceType",
+                "expectedProjectionSchemaFingerprint",
+                "expectedFactoryFingerprint",
+                "projectionName",
+                "requestedCapabilities",
+                "requestedQuota",
+                "updatePolicy",
+                "disconnectPolicy",
+            ],
+        ),
+    );
+    vec![
+        ("Role", role),
+        ("RoleBinding", role_binding),
+        ("Quota", quota),
+        ("EmergencyPolicy", emergency_policy),
+        ("Endpoint", endpoint),
+        ("ResourceExport", export),
+        ("ResourceImport", import),
+    ]
+}
+
+fn standard_resource_schemas() -> Vec<(&'static str, Value)> {
+    let mut schemas = vec![
+        ("Zone", resource_schema(&RESOURCE_TYPE_SCHEMAS[0])),
+        ("ZoneLink", resource_schema(&RESOURCE_TYPE_SCHEMAS[1])),
+        (
+            "Provider",
+            dto_resource_schema::<d2b_contracts::v3::provider::ProviderSpec>(
+                "Provider",
+                "Installed Provider package selection and schema-bound configuration.",
+                false,
+            ),
+        ),
+        (
+            "Host",
+            dto_resource_schema::<d2b_contracts::v3::host::HostSpec>(
+                "Host",
+                "Physical or local execution and policy parent.",
+                true,
+            ),
+        ),
+        (
+            "Guest",
+            dto_resource_schema::<d2b_contracts::v3::guest::GuestSpec>(
+                "Guest",
+                "VM, sandbox, cloud, or remote execution parent.",
+                true,
+            ),
+        ),
+        (
+            "Process",
+            dto_resource_schema::<d2b_contracts::v3::process::ProcessSpec>(
+                "Process",
+                "Long-lived Provider-managed process.",
+                true,
+            ),
+        ),
+        (
+            "EphemeralProcess",
+            dto_resource_schema::<d2b_contracts::v3::process::EphemeralProcessSpec>(
+                "EphemeralProcess",
+                "One-shot Provider-managed process.",
+                true,
+            ),
+        ),
+        (
+            "Volume",
+            dto_resource_schema::<d2b_contracts::v3::volume::VolumeSpec>(
+                "Volume",
+                "Shareable storage resource with bounded views and attachments.",
+                true,
+            ),
+        ),
+        (
+            "Network",
+            dto_resource_schema::<d2b_contracts::v3::network::NetworkSpec>(
+                "Network",
+                "Zone-local network fabric.",
+                true,
+            ),
+        ),
+        (
+            "Device",
+            dto_resource_schema::<d2b_contracts::v3::device::DeviceSpec>(
+                "Device",
+                "Inventoried physical or emulated device.",
+                true,
+            ),
+        ),
+        (
+            "User",
+            dto_resource_schema::<d2b_contracts::v3::user::UserSpec>(
+                "User",
+                "Zone-local named operating-system identity.",
+                false,
+            ),
+        ),
+        (
+            "Credential",
+            dto_resource_schema::<d2b_contracts::v3::credential::CredentialSpec>(
+                "Credential",
+                "Opaque rotating credential lease policy.",
+                true,
+            ),
+        ),
+    ];
+    schemas.extend(standard_core_schemas());
+    schemas.sort_by(|left, right| left.0.cmp(right.0));
+    schemas
+}
+
 /// `gen-zone-schemas`: emit the committed JSON Schema for every Zone-control
 /// ResourceType this model owns.
 pub fn gen_zone_schemas(repo_root: &Path) -> Result<Vec<PathBuf>, Box<dyn std::error::Error>> {
@@ -353,9 +993,9 @@ pub fn gen_zone_schemas(repo_root: &Path) -> Result<Vec<PathBuf>, Box<dyn std::e
     fs::create_dir_all(&out_dir)?;
 
     let mut written = Vec::new();
-    for schema in &RESOURCE_TYPE_SCHEMAS {
-        let path = out_dir.join(format!("{}.schema.json", schema.name));
-        let mut data = serde_json::to_string_pretty(&resource_schema(schema))?;
+    for (name, schema) in standard_resource_schemas() {
+        let path = out_dir.join(format!("{}.schema.json", name));
+        let mut data = serde_json::to_string_pretty(&schema)?;
         data.push('\n');
         fs::write(&path, data)?;
         written.push(path);
@@ -746,6 +1386,9 @@ mod tests {
                 &serde_json::to_string_pretty(&resource_schema(schema)).expect("schema renders"),
             );
         }
+        for (_, schema) in standard_resource_schemas() {
+            rendered.push_str(&serde_json::to_string_pretty(&schema).expect("schema renders"));
+        }
         for character in banned {
             assert!(
                 !rendered.contains(character),
@@ -772,6 +1415,14 @@ mod tests {
     #[test]
     fn committed_artifacts_match_the_generator() {
         let root = repo_root();
+        for (name, schema) in standard_resource_schemas() {
+            let schema_path = root.join(format!("docs/reference/schemas/v3/{}.schema.json", name));
+            let mut expected = serde_json::to_string_pretty(&schema).expect("schema renders");
+            expected.push('\n');
+            let committed = fs::read_to_string(&schema_path)
+                .unwrap_or_else(|_| panic!("{} is committed", schema_path.display()));
+            assert_eq!(committed, expected, "{} drifted", schema_path.display());
+        }
         for schema in &RESOURCE_TYPE_SCHEMAS {
             let schema_path = root.join(format!(
                 "docs/reference/schemas/v3/{}.schema.json",

@@ -1,0 +1,367 @@
+{
+  "$id": "https://d2bus.org/schemas/v3/Device.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "definitions": {
+    "BoundedToken": {
+      "maxLength": 63,
+      "minLength": 1,
+      "type": "string"
+    },
+    "DeviceArbitration": {
+      "description": "Whether the device may be held by more than one claimant.",
+      "enum": [
+        "exclusive",
+        "shared"
+      ],
+      "type": "string"
+    },
+    "DeviceClass": {
+      "description": "Whether a device exists in host inventory or is created by its Provider.",
+      "enum": [
+        "physical",
+        "emulated"
+      ],
+      "type": "string"
+    },
+    "DeviceFilterText": {
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+    },
+    "HexId": {
+      "maxLength": 4,
+      "minLength": 4,
+      "type": "string"
+    },
+    "InventorySelector": {
+      "description": "The closed inventory selector union, discriminated on `busClass`.\n\nAn emulated device carries no selector; a physical device always names a stable operator-defined `label`.",
+      "oneOf": [
+        {
+          "description": "A USB device.",
+          "properties": {
+            "busClass": {
+              "enum": [
+                "usb"
+              ],
+              "type": "string"
+            },
+            "label": {
+              "$ref": "#/definitions/BoundedToken"
+            },
+            "product_id": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/HexId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "serial": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/DeviceFilterText"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "vendor_id": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/HexId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "busClass",
+            "label"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A HID or hidraw device.",
+          "properties": {
+            "busClass": {
+              "enum": [
+                "hidraw"
+              ],
+              "type": "string"
+            },
+            "label": {
+              "$ref": "#/definitions/BoundedToken"
+            },
+            "product_id": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/HexId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "serial": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/DeviceFilterText"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "vendor_id": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/HexId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "busClass",
+            "label"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A DRM or GPU device.",
+          "properties": {
+            "busClass": {
+              "enum": [
+                "drm"
+              ],
+              "type": "string"
+            },
+            "label": {
+              "$ref": "#/definitions/BoundedToken"
+            },
+            "pci_slot": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/DeviceFilterText"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "busClass",
+            "label"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A non-GPU PCI device.",
+          "properties": {
+            "busClass": {
+              "enum": [
+                "pci"
+              ],
+              "type": "string"
+            },
+            "label": {
+              "$ref": "#/definitions/BoundedToken"
+            },
+            "slot": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/DeviceFilterText"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "busClass",
+            "label"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A physical TPM kernel device.",
+          "properties": {
+            "busClass": {
+              "enum": [
+                "tpm"
+              ],
+              "type": "string"
+            },
+            "index": {
+              "format": "uint8",
+              "minimum": 0.0,
+              "type": "integer"
+            },
+            "label": {
+              "$ref": "#/definitions/BoundedToken"
+            }
+          },
+          "required": [
+            "busClass",
+            "index",
+            "label"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "InventorySpec": {
+      "description": "The physical or emulated device selector.",
+      "properties": {
+        "selector": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/InventorySelector"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
+  "description": "Inventoried physical or emulated device.",
+  "properties": {
+    "apiVersion": {
+      "const": "resources.d2bus.org/v3"
+    },
+    "metadata": {
+      "additionalProperties": false,
+      "properties": {
+        "annotations": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Optional authored key-value annotation map.",
+          "type": "object"
+        },
+        "labels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Optional authored key-value label map.",
+          "type": "object"
+        },
+        "name": {
+          "description": "Zone-local resource name.",
+          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "ownerRef": {
+          "description": "Optional same-Zone ref of the owning resource.",
+          "pattern": "^[A-Z][A-Za-z0-9]{0,62}/[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "zone": {
+          "description": "Name of the Zone this resource is local to.",
+          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "zone"
+      ],
+      "type": "object"
+    },
+    "spec": {
+      "additionalProperties": false,
+      "description": "The Device ResourceType base spec.",
+      "properties": {
+        "arbitration": {
+          "$ref": "#/definitions/DeviceArbitration"
+        },
+        "deviceClass": {
+          "$ref": "#/definitions/DeviceClass"
+        },
+        "inventory": {
+          "$ref": "#/definitions/InventorySpec"
+        },
+        "maxConcurrentClaims": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "provider": {
+          "additionalProperties": false,
+          "properties": {
+            "schemaId": {
+              "maxLength": 201,
+              "minLength": 1,
+              "type": "string"
+            },
+            "schemaVersion": {
+              "maxLength": 32,
+              "minLength": 3,
+              "type": "string"
+            },
+            "settings": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "schemaId",
+            "schemaVersion",
+            "settings"
+          ],
+          "type": "object"
+        },
+        "providerRef": {
+          "pattern": "^[A-Z][A-Za-z0-9]{0,62}/[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "updatePolicy": {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "manual",
+                "automatic",
+                "manual-disruptive"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [],
+          "type": "object"
+        }
+      },
+      "required": [
+        "arbitration",
+        "deviceClass",
+        "inventory",
+        "maxConcurrentClaims"
+      ],
+      "title": "DeviceSpec",
+      "type": "object"
+    },
+    "type": {
+      "const": "Device"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "metadata",
+    "spec",
+    "type"
+  ],
+  "title": "Device",
+  "type": "object"
+}

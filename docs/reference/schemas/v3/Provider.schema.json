@@ -1,0 +1,89 @@
+{
+  "$id": "https://d2bus.org/schemas/v3/Provider.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "definitions": {
+    "ArtifactId": {
+      "maxLength": 63,
+      "minLength": 1,
+      "type": "string"
+    },
+    "CanonicalJsonObject": {
+      "type": "object"
+    }
+  },
+  "description": "Installed Provider package selection and schema-bound configuration.",
+  "properties": {
+    "apiVersion": {
+      "const": "resources.d2bus.org/v3"
+    },
+    "metadata": {
+      "additionalProperties": false,
+      "properties": {
+        "annotations": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Optional authored key-value annotation map.",
+          "type": "object"
+        },
+        "labels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Optional authored key-value label map.",
+          "type": "object"
+        },
+        "name": {
+          "description": "Zone-local resource name.",
+          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "ownerRef": {
+          "description": "Optional same-Zone ref of the owning resource.",
+          "pattern": "^[A-Z][A-Za-z0-9]{0,62}/[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "zone": {
+          "description": "Name of the Zone this resource is local to.",
+          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "zone"
+      ],
+      "type": "object"
+    },
+    "spec": {
+      "additionalProperties": false,
+      "description": "The Provider ResourceType base spec: exactly two authored fields.\n\nAdding a third field here would restate manifest-derived data in the resource row, which the specification forbids.",
+      "properties": {
+        "artifactId": {
+          "$ref": "#/definitions/ArtifactId"
+        },
+        "config": {
+          "$ref": "#/definitions/CanonicalJsonObject"
+        }
+      },
+      "required": [
+        "artifactId",
+        "config"
+      ],
+      "title": "ProviderSpec",
+      "type": "object"
+    },
+    "type": {
+      "const": "Provider"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "metadata",
+    "spec",
+    "type"
+  ],
+  "title": "Provider",
+  "type": "object"
+}

@@ -1,0 +1,560 @@
+{
+  "$id": "https://d2bus.org/schemas/v3/Network.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "definitions": {
+    "BoundedToken": {
+      "maxLength": 63,
+      "minLength": 1,
+      "type": "string"
+    },
+    "DhcpSpec": {
+      "description": "DHCP settings for the LAN.",
+      "properties": {
+        "domain": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/BoundedToken"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ignoreClientNames": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "ignoreClientNames"
+      ],
+      "type": "object"
+    },
+    "DnsSpec": {
+      "description": "DNS settings for the LAN.",
+      "properties": {
+        "cacheSize": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "forwarders": {
+          "items": {
+            "$ref": "#/definitions/Ipv4Address"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "cacheSize",
+        "forwarders"
+      ],
+      "type": "object"
+    },
+    "EgressSpec": {
+      "description": "External egress policy.",
+      "properties": {
+        "allowedCidrs": {
+          "items": {
+            "$ref": "#/definitions/Ipv4Cidr"
+          },
+          "type": "array"
+        },
+        "enable": {
+          "type": "boolean"
+        },
+        "masquerade": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "allowedCidrs",
+        "enable",
+        "masquerade"
+      ],
+      "type": "object"
+    },
+    "ExternalAttachmentMode": {
+      "description": "External attachment mode.",
+      "enum": [
+        "macvtap"
+      ],
+      "type": "string"
+    },
+    "ExternalAttachmentSpec": {
+      "description": "The optional external physical-NIC attachment.\n\n`parentInterface` is a requested host inventory selector, not the authority identity: core resolves it against trusted Host inventory and derives a non-reversible identity that never appears in a spec.",
+      "properties": {
+        "egress": {
+          "$ref": "#/definitions/EgressSpec"
+        },
+        "ipv4": {
+          "$ref": "#/definitions/ExternalIpv4Spec"
+        },
+        "mac": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MacAddress"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "macvtapMode": {
+          "$ref": "#/definitions/MacvtapMode"
+        },
+        "mode": {
+          "$ref": "#/definitions/ExternalAttachmentMode"
+        },
+        "parentInterface": {
+          "$ref": "#/definitions/IfName"
+        },
+        "portForwards": {
+          "items": {
+            "$ref": "#/definitions/PortForwardSpec"
+          },
+          "type": "array"
+        },
+        "sharingPolicy": {
+          "$ref": "#/definitions/SharingPolicy"
+        }
+      },
+      "required": [
+        "egress",
+        "ipv4",
+        "macvtapMode",
+        "mode",
+        "parentInterface",
+        "portForwards",
+        "sharingPolicy"
+      ],
+      "type": "object"
+    },
+    "ExternalIpv4Spec": {
+      "description": "External IPv4 configuration.",
+      "properties": {
+        "address": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Ipv4Cidr"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "dns": {
+          "items": {
+            "$ref": "#/definitions/Ipv4Address"
+          },
+          "type": "array"
+        },
+        "gateway": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Ipv4Address"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "method": {
+          "$ref": "#/definitions/Ipv4Method"
+        }
+      },
+      "required": [
+        "dns",
+        "method"
+      ],
+      "type": "object"
+    },
+    "ForwardProtocol": {
+      "description": "Forwarded-port transport protocol.",
+      "enum": [
+        "tcp",
+        "udp"
+      ],
+      "type": "string"
+    },
+    "IfName": {
+      "maxLength": 15,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "type": "string"
+    },
+    "Ipv4Address": {
+      "maxLength": 15,
+      "minLength": 7,
+      "type": "string"
+    },
+    "Ipv4Cidr": {
+      "maxLength": 43,
+      "minLength": 9,
+      "type": "string"
+    },
+    "Ipv4Method": {
+      "description": "IPv4 address acquisition method.",
+      "enum": [
+        "dhcp",
+        "static"
+      ],
+      "type": "string"
+    },
+    "IsolationSpec": {
+      "additionalProperties": false,
+      "description": "Per-Network isolation policy.",
+      "properties": {
+        "allowEastWest": {
+          "default": false,
+          "description": "The explicit per-Network east-west opt-in. No Zone-level gate applies.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "MacAddress": {
+      "maxLength": 17,
+      "minLength": 17,
+      "type": "string"
+    },
+    "MacvtapMode": {
+      "description": "macvtap operating mode.",
+      "enum": [
+        "bridge",
+        "private",
+        "vepa",
+        "passthru"
+      ],
+      "type": "string"
+    },
+    "MdnsSpec": {
+      "description": "mDNS settings.",
+      "properties": {
+        "dnsmasqLocal": {
+          "type": "boolean"
+        },
+        "dnsmasqLocalPort": {
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "enable": {
+          "type": "boolean"
+        },
+        "publishWorkstation": {
+          "type": "boolean"
+        },
+        "reflector": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "dnsmasqLocal",
+        "dnsmasqLocalPort",
+        "enable",
+        "publishWorkstation",
+        "reflector"
+      ],
+      "type": "object"
+    },
+    "NetworkAttachmentEntry": {
+      "description": "One reserved LAN address and MAC for a Host or Guest.",
+      "properties": {
+        "executionRef": {
+          "$ref": "#/definitions/ResourceRef"
+        },
+        "index": {
+          "format": "uint8",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "mac": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MacAddress"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "executionRef",
+        "index"
+      ],
+      "type": "object"
+    },
+    "PortForwardSpec": {
+      "description": "One inbound port forward on the external interface.",
+      "properties": {
+        "listenPort": {
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "protocol": {
+          "$ref": "#/definitions/ForwardProtocol"
+        },
+        "sourceCidrs": {
+          "items": {
+            "$ref": "#/definitions/Ipv4Cidr"
+          },
+          "type": "array"
+        },
+        "targetIp": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Ipv4Address"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "targetPort": {
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "targetRef": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "listenPort",
+        "protocol",
+        "sourceCidrs",
+        "targetPort"
+      ],
+      "type": "object"
+    },
+    "ResourceRef": {
+      "oneOf": [
+        {
+          "maxLength": 80,
+          "minLength": 6,
+          "pattern": "^(Zone|ZoneLink|Provider|Role|RoleBinding|Quota|EmergencyPolicy|Host|Guest|Process|EphemeralProcess|Volume|Network|Device|User|Credential|Endpoint|ResourceExport|ResourceImport)/[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        {
+          "maxLength": 201,
+          "minLength": 15,
+          "pattern": "^[a-z][a-z0-9-]{0,62}\\.d2bus\\.org\\.[A-Z][A-Za-z0-9]{0,62}/[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        }
+      ]
+    },
+    "RoutingSpec": {
+      "description": "Egress routing policy.",
+      "properties": {
+        "hostBlocklist": {
+          "items": {
+            "$ref": "#/definitions/Ipv4Cidr"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "hostBlocklist"
+      ],
+      "type": "object"
+    },
+    "SharingPolicy": {
+      "description": "How an external physical NIC claim is arbitrated.",
+      "enum": [
+        "exclusive",
+        "multiplexed"
+      ],
+      "type": "string"
+    }
+  },
+  "description": "Zone-local network fabric.",
+  "properties": {
+    "apiVersion": {
+      "const": "resources.d2bus.org/v3"
+    },
+    "metadata": {
+      "additionalProperties": false,
+      "properties": {
+        "annotations": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Optional authored key-value annotation map.",
+          "type": "object"
+        },
+        "labels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Optional authored key-value label map.",
+          "type": "object"
+        },
+        "name": {
+          "description": "Zone-local resource name.",
+          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "ownerRef": {
+          "description": "Optional same-Zone ref of the owning resource.",
+          "pattern": "^[A-Z][A-Za-z0-9]{0,62}/[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "zone": {
+          "description": "Name of the Zone this resource is local to.",
+          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "zone"
+      ],
+      "type": "object"
+    },
+    "spec": {
+      "additionalProperties": false,
+      "description": "The Network ResourceType base spec.",
+      "properties": {
+        "attachments": {
+          "items": {
+            "$ref": "#/definitions/NetworkAttachmentEntry"
+          },
+          "type": "array"
+        },
+        "dhcp": {
+          "$ref": "#/definitions/DhcpSpec"
+        },
+        "dns": {
+          "$ref": "#/definitions/DnsSpec"
+        },
+        "externalAttachment": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ExternalAttachmentSpec"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "isolation": {
+          "$ref": "#/definitions/IsolationSpec"
+        },
+        "lanCidr": {
+          "$ref": "#/definitions/Ipv4Cidr"
+        },
+        "mdns": {
+          "$ref": "#/definitions/MdnsSpec"
+        },
+        "mssClamp": {
+          "type": "boolean"
+        },
+        "mtu": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "netVmNameOverride": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/BoundedToken"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "netVmSystemArtifactId": {
+          "$ref": "#/definitions/BoundedToken"
+        },
+        "provider": {
+          "additionalProperties": false,
+          "properties": {
+            "schemaId": {
+              "maxLength": 201,
+              "minLength": 1,
+              "type": "string"
+            },
+            "schemaVersion": {
+              "maxLength": 32,
+              "minLength": 3,
+              "type": "string"
+            },
+            "settings": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "schemaId",
+            "schemaVersion",
+            "settings"
+          ],
+          "type": "object"
+        },
+        "providerRef": {
+          "pattern": "^[A-Z][A-Za-z0-9]{0,62}/[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "routing": {
+          "$ref": "#/definitions/RoutingSpec"
+        },
+        "updatePolicy": {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "manual",
+                "automatic",
+                "manual-disruptive"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [],
+          "type": "object"
+        },
+        "uplinkCidr": {
+          "$ref": "#/definitions/Ipv4Cidr"
+        }
+      },
+      "required": [
+        "attachments",
+        "dhcp",
+        "dns",
+        "isolation",
+        "lanCidr",
+        "mdns",
+        "mssClamp",
+        "netVmSystemArtifactId",
+        "routing",
+        "uplinkCidr"
+      ],
+      "title": "NetworkSpec",
+      "type": "object"
+    },
+    "type": {
+      "const": "Network"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "metadata",
+    "spec",
+    "type"
+  ],
+  "title": "Network",
+  "type": "object"
+}

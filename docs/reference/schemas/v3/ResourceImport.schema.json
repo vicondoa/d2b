@@ -1,0 +1,151 @@
+{
+  "$id": "https://d2bus.org/schemas/v3/ResourceImport.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Consumer-Zone route to one remote semantic Service authority.",
+  "properties": {
+    "apiVersion": {
+      "const": "resources.d2bus.org/v3"
+    },
+    "metadata": {
+      "additionalProperties": false,
+      "properties": {
+        "annotations": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Optional authored key-value annotation map.",
+          "type": "object"
+        },
+        "labels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Optional authored key-value label map.",
+          "type": "object"
+        },
+        "name": {
+          "description": "Zone-local resource name.",
+          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "ownerRef": {
+          "description": "Optional same-Zone ref of the owning resource.",
+          "pattern": "^[A-Z][A-Za-z0-9]{0,62}/[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "zone": {
+          "description": "Name of the Zone this resource is local to.",
+          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "zone"
+      ],
+      "type": "object"
+    },
+    "spec": {
+      "additionalProperties": false,
+      "properties": {
+        "disconnectPolicy": {
+          "type": "object"
+        },
+        "expectedFactoryFingerprint": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "expectedProjectionSchemaFingerprint": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "expectedServiceType": {
+          "pattern": "^[A-Z][A-Za-z0-9]{0,62}$|^[a-z][a-z0-9-]{0,62}\\.d2bus\\.org\\.[A-Z][A-Za-z0-9]{0,62}$",
+          "type": "string"
+        },
+        "exportKey": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "projectionName": {
+          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "provider": {
+          "additionalProperties": false,
+          "properties": {
+            "schemaId": {
+              "maxLength": 201,
+              "minLength": 1,
+              "type": "string"
+            },
+            "schemaVersion": {
+              "maxLength": 32,
+              "minLength": 3,
+              "type": "string"
+            },
+            "settings": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "schemaId",
+            "schemaVersion",
+            "settings"
+          ],
+          "type": "object"
+        },
+        "providerRef": {
+          "pattern": "^Provider/[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "requestedCapabilities": {
+          "items": {
+            "maxLength": 63,
+            "minLength": 1,
+            "type": "string"
+          },
+          "maxItems": 64,
+          "type": "array"
+        },
+        "requestedQuota": {
+          "type": "object"
+        },
+        "updatePolicy": {
+          "type": "object"
+        },
+        "zoneLinkRef": {
+          "pattern": "^ZoneLink/[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "providerRef",
+        "zoneLinkRef",
+        "exportKey",
+        "expectedServiceType",
+        "expectedProjectionSchemaFingerprint",
+        "expectedFactoryFingerprint",
+        "projectionName",
+        "requestedCapabilities",
+        "requestedQuota",
+        "updatePolicy",
+        "disconnectPolicy"
+      ],
+      "type": "object"
+    },
+    "type": {
+      "const": "ResourceImport"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "metadata",
+    "spec",
+    "type"
+  ],
+  "title": "ResourceImport",
+  "type": "object"
+}

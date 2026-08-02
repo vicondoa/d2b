@@ -1,0 +1,622 @@
+{
+  "$id": "https://d2bus.org/schemas/v3/Volume.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "definitions": {
+    "AclGrant": {
+      "description": "One POSIX ACL grant.",
+      "properties": {
+        "permissions": {
+          "type": "string"
+        },
+        "principal": {
+          "$ref": "#/definitions/AclPrincipal"
+        }
+      },
+      "required": [
+        "permissions",
+        "principal"
+      ],
+      "type": "object"
+    },
+    "AclPrincipal": {
+      "description": "One named ACL principal.",
+      "properties": {
+        "ref": {
+          "$ref": "#/definitions/ResourceRef"
+        }
+      },
+      "required": [
+        "ref"
+      ],
+      "type": "object"
+    },
+    "AttachmentAccess": {
+      "description": "Access level of one Volume attachment.",
+      "enum": [
+        "read-only",
+        "read-write",
+        "shared-write"
+      ],
+      "type": "string"
+    },
+    "AttachmentCache": {
+      "description": "Page-cache behavior of one attachment.",
+      "enum": [
+        "auto",
+        "always",
+        "never"
+      ],
+      "type": "string"
+    },
+    "AttachmentSettings": {
+      "description": "The typed base attachment options.",
+      "properties": {
+        "cache": {
+          "$ref": "#/definitions/AttachmentCache"
+        },
+        "inodeFileHandles": {
+          "$ref": "#/definitions/InodeFileHandles"
+        },
+        "posixAcl": {
+          "type": "boolean"
+        },
+        "socketGroup": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/BoundedToken"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "threadPoolSize": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "xattr": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "cache",
+        "inodeFileHandles",
+        "posixAcl",
+        "xattr"
+      ],
+      "type": "object"
+    },
+    "AttachmentTransport": {
+      "description": "Transport of one Volume attachment.",
+      "enum": [
+        "virtiofs",
+        "virtio-blk"
+      ],
+      "type": "string"
+    },
+    "BoundedToken": {
+      "maxLength": 63,
+      "minLength": 1,
+      "type": "string"
+    },
+    "CleanupPolicy": {
+      "description": "When a layout entry is removed.",
+      "enum": [
+        "never",
+        "owner-controlled",
+        "process-exit"
+      ],
+      "type": "string"
+    },
+    "CreatePolicy": {
+      "description": "When a layout entry is created.",
+      "enum": [
+        "create-if-absent",
+        "create-if-never-provisioned",
+        "always-recreate",
+        "observe-only"
+      ],
+      "type": "string"
+    },
+    "EntryAdoptionPolicy": {
+      "description": "How an existing entry is treated on first bind.",
+      "enum": [
+        "adopt-with-live-owner-proof",
+        "never-adopt"
+      ],
+      "type": "string"
+    },
+    "EntryRestartPolicy": {
+      "description": "Behavior across a Volume controller restart.",
+      "enum": [
+        "preserve-across-controller-restart",
+        "recreate-on-controller-restart"
+      ],
+      "type": "string"
+    },
+    "EntryType": {
+      "description": "Layout entry class.",
+      "enum": [
+        "directory",
+        "file",
+        "symlink",
+        "unix-socket"
+      ],
+      "type": "string"
+    },
+    "ForeignChildPolicy": {
+      "description": "How unlisted ACL entries on a directory's children are treated.",
+      "enum": [
+        "preserve",
+        "fail"
+      ],
+      "type": "string"
+    },
+    "InodeFileHandles": {
+      "description": "Inode file-handle behavior of one attachment.",
+      "enum": [
+        "never",
+        "prefer",
+        "mandatory"
+      ],
+      "type": "string"
+    },
+    "Invariant": {
+      "description": "Additional fail-closed layout check.",
+      "enum": [
+        "no-symlink",
+        "broker-opaque-id-only"
+      ],
+      "type": "string"
+    },
+    "LayoutEntry": {
+      "description": "One anchored layout entry relative to the Volume root.",
+      "properties": {
+        "accessAcl": {
+          "items": {
+            "$ref": "#/definitions/AclGrant"
+          },
+          "type": "array"
+        },
+        "adoptionPolicy": {
+          "$ref": "#/definitions/EntryAdoptionPolicy"
+        },
+        "cleanupPolicy": {
+          "$ref": "#/definitions/CleanupPolicy"
+        },
+        "createPolicy": {
+          "$ref": "#/definitions/CreatePolicy"
+        },
+        "defaultAcl": {
+          "items": {
+            "$ref": "#/definitions/AclGrant"
+          },
+          "type": "array"
+        },
+        "foreignChildPolicy": {
+          "$ref": "#/definitions/ForeignChildPolicy"
+        },
+        "groupRef": {
+          "$ref": "#/definitions/ResourceRef"
+        },
+        "invariants": {
+          "items": {
+            "$ref": "#/definitions/Invariant"
+          },
+          "type": "array"
+        },
+        "leaseClass": {
+          "$ref": "#/definitions/LeaseClass"
+        },
+        "mode": {
+          "type": "string"
+        },
+        "noFollow": {
+          "type": "boolean"
+        },
+        "ownerRef": {
+          "$ref": "#/definitions/ResourceRef"
+        },
+        "path": {
+          "type": "string"
+        },
+        "recursive": {
+          "type": "boolean"
+        },
+        "repairPolicy": {
+          "$ref": "#/definitions/RepairPolicy"
+        },
+        "restartPolicy": {
+          "$ref": "#/definitions/EntryRestartPolicy"
+        },
+        "sensitivity": {
+          "$ref": "#/definitions/SensitivityClass"
+        },
+        "target": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "$ref": "#/definitions/EntryType"
+        }
+      },
+      "required": [
+        "accessAcl",
+        "adoptionPolicy",
+        "cleanupPolicy",
+        "createPolicy",
+        "defaultAcl",
+        "foreignChildPolicy",
+        "groupRef",
+        "invariants",
+        "leaseClass",
+        "mode",
+        "noFollow",
+        "ownerRef",
+        "path",
+        "recursive",
+        "repairPolicy",
+        "restartPolicy",
+        "sensitivity",
+        "type"
+      ],
+      "type": "object"
+    },
+    "LeaseClass": {
+      "description": "Type of live-ownership lease checked during adoption.",
+      "enum": [
+        "none",
+        "process-pidfd",
+        "controller-lock"
+      ],
+      "type": "string"
+    },
+    "QuotaEnforcement": {
+      "description": "Whether the backing filesystem must enforce the declared quota.",
+      "enum": [
+        "none",
+        "hard"
+      ],
+      "type": "string"
+    },
+    "QuotaSpec": {
+      "description": "Storage limits for a Volume.",
+      "properties": {
+        "enforcement": {
+          "$ref": "#/definitions/QuotaEnforcement"
+        },
+        "maxBytes": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "maxInodes": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "enforcement"
+      ],
+      "type": "object"
+    },
+    "RepairPolicy": {
+      "description": "How drift from the declared layout state is reconciled.",
+      "enum": [
+        "none",
+        "exact-owner",
+        "exact-mode",
+        "exact-owner-and-acl"
+      ],
+      "type": "string"
+    },
+    "ResourceRef": {
+      "oneOf": [
+        {
+          "maxLength": 80,
+          "minLength": 6,
+          "pattern": "^(Zone|ZoneLink|Provider|Role|RoleBinding|Quota|EmergencyPolicy|Host|Guest|Process|EphemeralProcess|Volume|Network|Device|User|Credential|Endpoint|ResourceExport|ResourceImport)/[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        {
+          "maxLength": 201,
+          "minLength": 15,
+          "pattern": "^[a-z][a-z0-9-]{0,62}\\.d2bus\\.org\\.[A-Z][A-Za-z0-9]{0,62}/[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        }
+      ]
+    },
+    "SensitivityClass": {
+      "description": "Audit and log handling class of one layout entry.",
+      "enum": [
+        "public",
+        "private",
+        "secret"
+      ],
+      "type": "string"
+    },
+    "SourceKind": {
+      "description": "Backing class of the Volume source.",
+      "enum": [
+        "local-path",
+        "block-image",
+        "tmpfs"
+      ],
+      "type": "string"
+    },
+    "SourceSettings": {
+      "description": "The Volume base source settings.\n\n`sourcePolicyId` is an opaque bounded ID, never a raw host path.",
+      "properties": {
+        "kind": {
+          "$ref": "#/definitions/SourceKind"
+        },
+        "sourcePolicyId": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/BoundedToken"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "type": "object"
+    },
+    "ViewRight": {
+      "description": "One right granted by a named view.",
+      "enum": [
+        "read",
+        "write",
+        "create",
+        "delete",
+        "traverse",
+        "execute"
+      ],
+      "type": "string"
+    },
+    "ViewSpec": {
+      "description": "One named view onto a Volume subtree.",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "rights": {
+          "items": {
+            "$ref": "#/definitions/ViewRight"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "path",
+        "rights"
+      ],
+      "type": "object"
+    },
+    "VolumeAttachment": {
+      "description": "One same-Zone Host or Guest attachment.",
+      "properties": {
+        "access": {
+          "$ref": "#/definitions/AttachmentAccess"
+        },
+        "executionRef": {
+          "$ref": "#/definitions/ResourceRef"
+        },
+        "mountPath": {
+          "type": "string"
+        },
+        "settings": {
+          "$ref": "#/definitions/AttachmentSettings"
+        },
+        "transport": {
+          "$ref": "#/definitions/AttachmentTransport"
+        },
+        "view": {
+          "$ref": "#/definitions/BoundedToken"
+        }
+      },
+      "required": [
+        "access",
+        "executionRef",
+        "mountPath",
+        "settings",
+        "transport",
+        "view"
+      ],
+      "type": "object"
+    },
+    "VolumeKind": {
+      "description": "Semantic persistence class of a Volume.",
+      "enum": [
+        "durable",
+        "ephemeral",
+        "state",
+        "tmp",
+        "cache"
+      ],
+      "type": "string"
+    },
+    "VolumeSource": {
+      "description": "Where the backing storage lives, and how it is selected.",
+      "properties": {
+        "executionRef": {
+          "$ref": "#/definitions/ResourceRef"
+        },
+        "settings": {
+          "$ref": "#/definitions/SourceSettings"
+        }
+      },
+      "required": [
+        "executionRef",
+        "settings"
+      ],
+      "type": "object"
+    }
+  },
+  "description": "Shareable storage resource with bounded views and attachments.",
+  "properties": {
+    "apiVersion": {
+      "const": "resources.d2bus.org/v3"
+    },
+    "metadata": {
+      "additionalProperties": false,
+      "properties": {
+        "annotations": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Optional authored key-value annotation map.",
+          "type": "object"
+        },
+        "labels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Optional authored key-value label map.",
+          "type": "object"
+        },
+        "name": {
+          "description": "Zone-local resource name.",
+          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "ownerRef": {
+          "description": "Optional same-Zone ref of the owning resource.",
+          "pattern": "^[A-Z][A-Za-z0-9]{0,62}/[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "zone": {
+          "description": "Name of the Zone this resource is local to.",
+          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "zone"
+      ],
+      "type": "object"
+    },
+    "spec": {
+      "additionalProperties": false,
+      "description": "The Volume ResourceType base spec.",
+      "properties": {
+        "attachments": {
+          "items": {
+            "$ref": "#/definitions/VolumeAttachment"
+          },
+          "type": "array"
+        },
+        "kind": {
+          "$ref": "#/definitions/VolumeKind"
+        },
+        "layout": {
+          "items": {
+            "$ref": "#/definitions/LayoutEntry"
+          },
+          "type": "array"
+        },
+        "provider": {
+          "additionalProperties": false,
+          "properties": {
+            "schemaId": {
+              "maxLength": 201,
+              "minLength": 1,
+              "type": "string"
+            },
+            "schemaVersion": {
+              "maxLength": 32,
+              "minLength": 3,
+              "type": "string"
+            },
+            "settings": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "schemaId",
+            "schemaVersion",
+            "settings"
+          ],
+          "type": "object"
+        },
+        "providerRef": {
+          "pattern": "^[A-Z][A-Za-z0-9]{0,62}/[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "quota": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/QuotaSpec"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "$ref": "#/definitions/VolumeSource"
+        },
+        "updatePolicy": {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "manual",
+                "automatic",
+                "manual-disruptive"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [],
+          "type": "object"
+        },
+        "views": {
+          "additionalProperties": {
+            "$ref": "#/definitions/ViewSpec"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "attachments",
+        "kind",
+        "layout",
+        "source",
+        "views"
+      ],
+      "title": "VolumeSpec",
+      "type": "object"
+    },
+    "type": {
+      "const": "Volume"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "metadata",
+    "spec",
+    "type"
+  ],
+  "title": "Volume",
+  "type": "object"
+}

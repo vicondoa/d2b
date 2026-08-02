@@ -2559,6 +2559,12 @@ let
     ++ deviceDuplicateLabelAssertions;
 in
 {
+  imports = [
+    ./resource-schema-validation.nix
+    ./provider-settings-validation.nix
+    ./resources-sharing.nix
+  ];
+
   assertions = lib.flatten (
     vmAssertions
     ++ qemuMediaAssertions

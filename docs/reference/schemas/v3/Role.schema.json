@@ -1,0 +1,187 @@
+{
+  "$id": "https://d2bus.org/schemas/v3/Role.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Zone-local bounded authorization rules.",
+  "properties": {
+    "apiVersion": {
+      "const": "resources.d2bus.org/v3"
+    },
+    "metadata": {
+      "additionalProperties": false,
+      "properties": {
+        "annotations": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Optional authored key-value annotation map.",
+          "type": "object"
+        },
+        "labels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Optional authored key-value label map.",
+          "type": "object"
+        },
+        "name": {
+          "description": "Zone-local resource name.",
+          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "ownerRef": {
+          "description": "Optional same-Zone ref of the owning resource.",
+          "pattern": "^[A-Z][A-Za-z0-9]{0,62}/[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "zone": {
+          "description": "Name of the Zone this resource is local to.",
+          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "zone"
+      ],
+      "type": "object"
+    },
+    "spec": {
+      "additionalProperties": false,
+      "properties": {
+        "providerRef": {
+          "pattern": "^[A-Z][A-Za-z0-9]{0,62}/[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "rules": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "executionRefs": {
+                "items": {
+                  "pattern": "^[A-Z][A-Za-z0-9]{0,62}/[a-z][a-z0-9-]{0,62}$",
+                  "type": "string"
+                },
+                "maxItems": 32,
+                "type": "array"
+              },
+              "resourceNames": {
+                "items": {
+                  "pattern": "^[a-z][a-z0-9-]{0,62}$",
+                  "type": "string"
+                },
+                "maxItems": 64,
+                "type": "array"
+              },
+              "resourceTypes": {
+                "items": {
+                  "pattern": "^[A-Z][A-Za-z0-9]{0,62}$|^[a-z][a-z0-9-]{0,62}\\.d2bus\\.org\\.[A-Z][A-Za-z0-9]{0,62}$",
+                  "type": "string"
+                },
+                "maxItems": 16,
+                "type": "array"
+              },
+              "sessionVerbs": {
+                "items": {
+                  "enum": [
+                    "connect",
+                    "invoke",
+                    "open-stream",
+                    "relay",
+                    "attach",
+                    "cancel",
+                    "observe",
+                    "audit-export",
+                    "support-bundle"
+                  ],
+                  "type": "string"
+                },
+                "maxItems": 9,
+                "type": "array"
+              },
+              "subresources": {
+                "items": {
+                  "maxLength": 201,
+                  "minLength": 0,
+                  "type": "string"
+                },
+                "maxItems": 16,
+                "type": "array"
+              },
+              "verbs": {
+                "items": {
+                  "enum": [
+                    "get",
+                    "list",
+                    "watch",
+                    "create",
+                    "update-spec",
+                    "update-status",
+                    "update-metadata",
+                    "update-finalizers",
+                    "delete",
+                    "use-credential",
+                    "admin-credential"
+                  ],
+                  "type": "string"
+                },
+                "maxItems": 16,
+                "type": "array"
+              },
+              "zones": {
+                "items": {
+                  "pattern": "^[a-z][a-z0-9-]{0,62}$",
+                  "type": "string"
+                },
+                "maxItems": 8,
+                "type": "array"
+              }
+            },
+            "required": [
+              "resourceTypes",
+              "verbs",
+              "subresources",
+              "resourceNames",
+              "zones",
+              "executionRefs",
+              "sessionVerbs"
+            ],
+            "type": "object"
+          },
+          "maxItems": 32,
+          "type": "array"
+        },
+        "updatePolicy": {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "manual",
+                "automatic",
+                "manual-disruptive"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [],
+          "type": "object"
+        }
+      },
+      "required": [
+        "rules"
+      ],
+      "type": "object"
+    },
+    "type": {
+      "const": "Role"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "metadata",
+    "spec",
+    "type"
+  ],
+  "title": "Role",
+  "type": "object"
+}

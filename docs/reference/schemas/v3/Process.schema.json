@@ -1,0 +1,845 @@
+{
+  "$id": "https://d2bus.org/schemas/v3/Process.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "definitions": {
+    "AdoptionPolicy": {
+      "description": "Whether the controller adopts a running process after restart.",
+      "enum": [
+        "adopt-on-restart",
+        "never-adopt"
+      ],
+      "type": "string"
+    },
+    "BoundedToken": {
+      "maxLength": 63,
+      "minLength": 1,
+      "type": "string"
+    },
+    "BudgetSpec": {
+      "description": "The budget schema embedded in Host, Guest, Process, and EphemeralProcess.\n\nEvery field is optional; omitting a field means no d2b-level enforcement for that resource.",
+      "properties": {
+        "cpu": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CpuBudget"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fds": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CountBudget"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ioWeight": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "memory": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MemoryBudget"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "networkEgressBps": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pids": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CountBudget"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "threadLimit": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ByteQuantity": {
+      "maxLength": 32,
+      "minLength": 1,
+      "type": "string"
+    },
+    "CapabilityClass": {
+      "description": "Semantic capability grant.",
+      "enum": [
+        "network-bind",
+        "network-raw",
+        "network-admin",
+        "sys-time",
+        "sys-ptrace",
+        "sys-admin",
+        "dac-override",
+        "fowner",
+        "chown",
+        "setuid",
+        "setgid",
+        "audit-write",
+        "kill"
+      ],
+      "type": "string"
+    },
+    "CountBudget": {
+      "additionalProperties": false,
+      "description": "One optional integer ceiling.",
+      "properties": {
+        "limit": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "CpuBudget": {
+      "additionalProperties": false,
+      "description": "Requested and limited CPU.",
+      "properties": {
+        "limit": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MilliCpu"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "request": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MilliCpu"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "DesiredLifecycle": {
+      "description": "Desired steady-state lifecycle of a Process.",
+      "enum": [
+        "running",
+        "stopped"
+      ],
+      "type": "string"
+    },
+    "DeviceAccess": {
+      "description": "Device access level requested by one process.",
+      "enum": [
+        "shared",
+        "exclusive"
+      ],
+      "type": "string"
+    },
+    "DeviceUsageSpec": {
+      "description": "One device access declared by a process.\n\nThe field is named `deviceUsage` on the execution spec and is never renamed to `devices`.",
+      "properties": {
+        "access": {
+          "$ref": "#/definitions/DeviceAccess"
+        },
+        "deviceRef": {
+          "$ref": "#/definitions/ResourceRef"
+        },
+        "purpose": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "access",
+        "deviceRef",
+        "purpose"
+      ],
+      "type": "object"
+    },
+    "DurationMs": {
+      "maxLength": 32,
+      "minLength": 1,
+      "type": "string"
+    },
+    "EnvironmentClass": {
+      "description": "Semantic environment inheritance class.",
+      "enum": [
+        "minimal",
+        "safe-inherited",
+        "provider-defined"
+      ],
+      "type": "string"
+    },
+    "ExecutionDomain": {
+      "description": "The plain execution domain enumeration shared by Host, Guest, and Process.",
+      "enum": [
+        "system",
+        "user"
+      ],
+      "type": "string"
+    },
+    "HealthCheckClass": {
+      "description": "Health check mechanism.",
+      "enum": [
+        "provider-defined"
+      ],
+      "type": "string"
+    },
+    "HealthCheckSpec": {
+      "description": "Ongoing health check settings.",
+      "properties": {
+        "class": {
+          "$ref": "#/definitions/HealthCheckClass"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "failureThreshold": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "interval": {
+          "$ref": "#/definitions/DurationMs"
+        },
+        "timeout": {
+          "$ref": "#/definitions/DurationMs"
+        }
+      },
+      "required": [
+        "class",
+        "enabled",
+        "failureThreshold",
+        "interval",
+        "timeout"
+      ],
+      "type": "object"
+    },
+    "LogLevel": {
+      "description": "Log level hint carried by the telemetry bindings.",
+      "enum": [
+        "off",
+        "error",
+        "warn",
+        "info",
+        "debug"
+      ],
+      "type": "string"
+    },
+    "MappingClass": {
+      "description": "Frozen semantic user-namespace mapping class.\n\nNo numeric host UID or GID appears in the public spec; core resolves the exact identifiers into private launch state only.",
+      "enum": [
+        "process-principal-root"
+      ],
+      "type": "string"
+    },
+    "MemoryBudget": {
+      "additionalProperties": false,
+      "description": "Requested and limited memory.",
+      "properties": {
+        "limit": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ByteQuantity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "request": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ByteQuantity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "MilliCpu": {
+      "maxLength": 32,
+      "minLength": 2,
+      "type": "string"
+    },
+    "MountAccess": {
+      "description": "Access level of one Volume mount.",
+      "enum": [
+        "read-only",
+        "read-write"
+      ],
+      "type": "string"
+    },
+    "MountSpec": {
+      "description": "One Volume mount exposed inside the process sandbox.",
+      "properties": {
+        "access": {
+          "$ref": "#/definitions/MountAccess"
+        },
+        "mountPath": {
+          "type": "string"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "view": {
+          "$ref": "#/definitions/BoundedToken"
+        },
+        "volumeRef": {
+          "$ref": "#/definitions/ResourceRef"
+        }
+      },
+      "required": [
+        "access",
+        "mountPath",
+        "required",
+        "view",
+        "volumeRef"
+      ],
+      "type": "object"
+    },
+    "NamespaceClass": {
+      "description": "Semantic namespace isolation request.",
+      "enum": [
+        "user",
+        "pid",
+        "mount",
+        "ipc",
+        "uts",
+        "network",
+        "cgroup",
+        "time"
+      ],
+      "type": "string"
+    },
+    "NetworkUsageSpec": {
+      "description": "Network access declared by one process.\n\nThe field is named `networkUsage` on the execution spec and is never renamed to `network`.",
+      "properties": {
+        "allowEgress": {
+          "type": "boolean"
+        },
+        "networkRef": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ports": {
+          "items": {
+            "$ref": "#/definitions/PortSpec"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "allowEgress",
+        "ports"
+      ],
+      "type": "object"
+    },
+    "PortProtocol": {
+      "description": "Transport protocol of one declared port.",
+      "enum": [
+        "tcp",
+        "udp",
+        "sctp"
+      ],
+      "type": "string"
+    },
+    "PortSpec": {
+      "description": "One declared inbound port.",
+      "properties": {
+        "port": {
+          "format": "uint16",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "protocol": {
+          "$ref": "#/definitions/PortProtocol"
+        },
+        "purpose": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "port",
+        "protocol",
+        "purpose"
+      ],
+      "type": "object"
+    },
+    "ProcessClass": {
+      "description": "Process classification.",
+      "enum": [
+        "controller",
+        "service",
+        "worker"
+      ],
+      "type": "string"
+    },
+    "ReadinessClass": {
+      "description": "Readiness probe mechanism.",
+      "enum": [
+        "ready-condition",
+        "provider-defined"
+      ],
+      "type": "string"
+    },
+    "ReadinessSpec": {
+      "description": "Readiness probe settings.",
+      "properties": {
+        "class": {
+          "$ref": "#/definitions/ReadinessClass"
+        },
+        "failureThreshold": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "initialDelay": {
+          "$ref": "#/definitions/DurationMs"
+        },
+        "successThreshold": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "timeout": {
+          "$ref": "#/definitions/DurationMs"
+        }
+      },
+      "required": [
+        "class",
+        "failureThreshold",
+        "initialDelay",
+        "successThreshold",
+        "timeout"
+      ],
+      "type": "object"
+    },
+    "ResourceRef": {
+      "oneOf": [
+        {
+          "maxLength": 80,
+          "minLength": 6,
+          "pattern": "^(Zone|ZoneLink|Provider|Role|RoleBinding|Quota|EmergencyPolicy|Host|Guest|Process|EphemeralProcess|Volume|Network|Device|User|Credential|Endpoint|ResourceExport|ResourceImport)/[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        {
+          "maxLength": 201,
+          "minLength": 15,
+          "pattern": "^[a-z][a-z0-9-]{0,62}\\.d2bus\\.org\\.[A-Z][A-Za-z0-9]{0,62}/[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        }
+      ]
+    },
+    "RestartClass": {
+      "description": "Restart classification.",
+      "enum": [
+        "never",
+        "always",
+        "on-failure",
+        "on-crash"
+      ],
+      "type": "string"
+    },
+    "RestartPolicySpec": {
+      "description": "Restart and backoff behavior.\n\nThe backoff multiplier is integer fixed-point because canonical JSON admits no floating-point number.",
+      "properties": {
+        "backoffBase": {
+          "$ref": "#/definitions/DurationMs"
+        },
+        "backoffMax": {
+          "$ref": "#/definitions/DurationMs"
+        },
+        "backoffMultiplierMilli": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "class": {
+          "$ref": "#/definitions/RestartClass"
+        },
+        "maxRestarts": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "resetAfter": {
+          "$ref": "#/definitions/DurationMs"
+        }
+      },
+      "required": [
+        "backoffBase",
+        "backoffMax",
+        "backoffMultiplierMilli",
+        "class",
+        "resetAfter"
+      ],
+      "type": "object"
+    },
+    "SandboxSpec": {
+      "description": "Semantic sandbox requirements compiled by the selected Process Provider.",
+      "properties": {
+        "capabilityClasses": {
+          "items": {
+            "$ref": "#/definitions/CapabilityClass"
+          },
+          "type": "array"
+        },
+        "environmentClass": {
+          "$ref": "#/definitions/EnvironmentClass"
+        },
+        "namespaceClasses": {
+          "items": {
+            "$ref": "#/definitions/NamespaceClass"
+          },
+          "type": "array"
+        },
+        "noNewPrivileges": {
+          "type": "boolean"
+        },
+        "oomScoreAdj": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "readOnlyRoot": {
+          "type": "boolean"
+        },
+        "seccompClass": {
+          "$ref": "#/definitions/BoundedToken"
+        },
+        "startRoot": {
+          "type": "boolean"
+        },
+        "umask": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "userNamespace": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/UserNamespaceSpec"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "capabilityClasses",
+        "environmentClass",
+        "namespaceClasses",
+        "noNewPrivileges",
+        "oomScoreAdj",
+        "readOnlyRoot",
+        "seccompClass",
+        "startRoot"
+      ],
+      "type": "object"
+    },
+    "TelemetrySpec": {
+      "additionalProperties": false,
+      "description": "Telemetry and observability bindings.",
+      "properties": {
+        "logLevel": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/LogLevel"
+            }
+          ],
+          "default": "info"
+        },
+        "metricsEnabled": {
+          "default": true,
+          "type": "boolean"
+        },
+        "sensitiveLabels": {
+          "default": false,
+          "type": "boolean"
+        },
+        "tracingEnabled": {
+          "default": true,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "UserNamespaceSpec": {
+      "additionalProperties": false,
+      "description": "The single-entry user namespace pre-established before exec.",
+      "properties": {
+        "mappingClass": {
+          "$ref": "#/definitions/MappingClass"
+        }
+      },
+      "required": [
+        "mappingClass"
+      ],
+      "type": "object"
+    }
+  },
+  "description": "Long-lived Provider-managed process.",
+  "properties": {
+    "apiVersion": {
+      "const": "resources.d2bus.org/v3"
+    },
+    "metadata": {
+      "additionalProperties": false,
+      "properties": {
+        "annotations": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Optional authored key-value annotation map.",
+          "type": "object"
+        },
+        "labels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Optional authored key-value label map.",
+          "type": "object"
+        },
+        "name": {
+          "description": "Zone-local resource name.",
+          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "ownerRef": {
+          "description": "Optional same-Zone ref of the owning resource.",
+          "pattern": "^[A-Z][A-Za-z0-9]{0,62}/[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "zone": {
+          "description": "Name of the Zone this resource is local to.",
+          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "zone"
+      ],
+      "type": "object"
+    },
+    "spec": {
+      "additionalProperties": false,
+      "description": "The Process ResourceType base spec.",
+      "properties": {
+        "adoptionPolicy": {
+          "$ref": "#/definitions/AdoptionPolicy"
+        },
+        "budget": {
+          "$ref": "#/definitions/BudgetSpec"
+        },
+        "configRef": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "credentialRefs": {
+          "items": {
+            "$ref": "#/definitions/ResourceRef"
+          },
+          "type": "array"
+        },
+        "desiredLifecycle": {
+          "$ref": "#/definitions/DesiredLifecycle"
+        },
+        "deviceUsage": {
+          "items": {
+            "$ref": "#/definitions/DeviceUsageSpec"
+          },
+          "type": "array"
+        },
+        "domain": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ExecutionDomain"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "drainTimeout": {
+          "$ref": "#/definitions/DurationMs"
+        },
+        "executionRef": {
+          "$ref": "#/definitions/ResourceRef"
+        },
+        "healthCheck": {
+          "$ref": "#/definitions/HealthCheckSpec"
+        },
+        "mounts": {
+          "items": {
+            "$ref": "#/definitions/MountSpec"
+          },
+          "type": "array"
+        },
+        "networkUsage": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/NetworkUsageSpec"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "processClass": {
+          "$ref": "#/definitions/ProcessClass"
+        },
+        "provider": {
+          "additionalProperties": false,
+          "properties": {
+            "schemaId": {
+              "maxLength": 201,
+              "minLength": 1,
+              "type": "string"
+            },
+            "schemaVersion": {
+              "maxLength": 32,
+              "minLength": 3,
+              "type": "string"
+            },
+            "settings": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "schemaId",
+            "schemaVersion",
+            "settings"
+          ],
+          "type": "object"
+        },
+        "providerRef": {
+          "pattern": "^[A-Z][A-Za-z0-9]{0,62}/[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "readiness": {
+          "$ref": "#/definitions/ReadinessSpec"
+        },
+        "restartPolicy": {
+          "$ref": "#/definitions/RestartPolicySpec"
+        },
+        "sandbox": {
+          "$ref": "#/definitions/SandboxSpec"
+        },
+        "telemetry": {
+          "$ref": "#/definitions/TelemetrySpec"
+        },
+        "template": {
+          "$ref": "#/definitions/BoundedToken"
+        },
+        "updatePolicy": {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "manual",
+                "automatic",
+                "manual-disruptive"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [],
+          "type": "object"
+        },
+        "userRef": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "adoptionPolicy",
+        "budget",
+        "credentialRefs",
+        "desiredLifecycle",
+        "deviceUsage",
+        "drainTimeout",
+        "executionRef",
+        "healthCheck",
+        "mounts",
+        "processClass",
+        "readiness",
+        "restartPolicy",
+        "sandbox",
+        "telemetry",
+        "template"
+      ],
+      "title": "ProcessSpec",
+      "type": "object"
+    },
+    "type": {
+      "const": "Process"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "metadata",
+    "spec",
+    "type"
+  ],
+  "title": "Process",
+  "type": "object"
+}

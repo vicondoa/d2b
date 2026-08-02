@@ -1,0 +1,392 @@
+{
+  "$id": "https://d2bus.org/schemas/v3/Host.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "definitions": {
+    "BudgetSpec": {
+      "description": "The budget schema embedded in Host, Guest, Process, and EphemeralProcess.\n\nEvery field is optional; omitting a field means no d2b-level enforcement for that resource.",
+      "properties": {
+        "cpu": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CpuBudget"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fds": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CountBudget"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ioWeight": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "memory": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MemoryBudget"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "networkEgressBps": {
+          "format": "uint64",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pids": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CountBudget"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "threadLimit": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ByteQuantity": {
+      "maxLength": 32,
+      "minLength": 1,
+      "type": "string"
+    },
+    "CanonicalJsonObject": {
+      "type": "object"
+    },
+    "CountBudget": {
+      "additionalProperties": false,
+      "description": "One optional integer ceiling.",
+      "properties": {
+        "limit": {
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "CpuBudget": {
+      "additionalProperties": false,
+      "description": "Requested and limited CPU.",
+      "properties": {
+        "limit": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MilliCpu"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "request": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/MilliCpu"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "DeviceAttachment": {
+      "description": "One Device made available to Processes under an execution target.",
+      "properties": {
+        "deviceRef": {
+          "$ref": "#/definitions/ResourceRef"
+        },
+        "exclusive": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "deviceRef",
+        "exclusive"
+      ],
+      "type": "object"
+    },
+    "ExecutionDomain": {
+      "description": "The plain execution domain enumeration shared by Host, Guest, and Process.",
+      "enum": [
+        "system",
+        "user"
+      ],
+      "type": "string"
+    },
+    "IsolationPosture": {
+      "description": "The explicit no-isolation posture of the user-only Host.\n\nThe posture is a promoted Host base field; it is never a `spec.provider.settings` field, and `null` used to evade the no-isolation warning is rejected.",
+      "oneOf": [
+        {
+          "description": "The Host provides no isolation boundary.",
+          "enum": [
+            "none"
+          ],
+          "type": "string"
+        }
+      ]
+    },
+    "MemoryBudget": {
+      "additionalProperties": false,
+      "description": "Requested and limited memory.",
+      "properties": {
+        "limit": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ByteQuantity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "request": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ByteQuantity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "MilliCpu": {
+      "maxLength": 32,
+      "minLength": 2,
+      "type": "string"
+    },
+    "NetworkAttachment": {
+      "description": "One Network made available to Processes under an execution target.",
+      "properties": {
+        "default": {
+          "type": "boolean"
+        },
+        "networkRef": {
+          "$ref": "#/definitions/ResourceRef"
+        }
+      },
+      "required": [
+        "default",
+        "networkRef"
+      ],
+      "type": "object"
+    },
+    "ResourceRef": {
+      "oneOf": [
+        {
+          "maxLength": 80,
+          "minLength": 6,
+          "pattern": "^(Zone|ZoneLink|Provider|Role|RoleBinding|Quota|EmergencyPolicy|Host|Guest|Process|EphemeralProcess|Volume|Network|Device|User|Credential|Endpoint|ResourceExport|ResourceImport)/[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        {
+          "maxLength": 201,
+          "minLength": 15,
+          "pattern": "^[a-z][a-z0-9-]{0,62}\\.d2bus\\.org\\.[A-Z][A-Za-z0-9]{0,62}/[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "description": "Physical or local execution and policy parent.",
+  "properties": {
+    "apiVersion": {
+      "const": "resources.d2bus.org/v3"
+    },
+    "metadata": {
+      "additionalProperties": false,
+      "properties": {
+        "annotations": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Optional authored key-value annotation map.",
+          "type": "object"
+        },
+        "labels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Optional authored key-value label map.",
+          "type": "object"
+        },
+        "name": {
+          "description": "Zone-local resource name.",
+          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "ownerRef": {
+          "description": "Optional same-Zone ref of the owning resource.",
+          "pattern": "^[A-Z][A-Za-z0-9]{0,62}/[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "zone": {
+          "description": "Name of the Zone this resource is local to.",
+          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "zone"
+      ],
+      "type": "object"
+    },
+    "spec": {
+      "additionalProperties": false,
+      "description": "The Host ResourceType base spec.",
+      "properties": {
+        "allowedDomains": {
+          "items": {
+            "$ref": "#/definitions/ExecutionDomain"
+          },
+          "type": "array"
+        },
+        "budget": {
+          "$ref": "#/definitions/BudgetSpec"
+        },
+        "defaultDomain": {
+          "$ref": "#/definitions/ExecutionDomain"
+        },
+        "defaultUserRef": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ResourceRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "deviceAttachments": {
+          "items": {
+            "$ref": "#/definitions/DeviceAttachment"
+          },
+          "type": "array"
+        },
+        "isolationPosture": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/IsolationPosture"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "networkAttachments": {
+          "items": {
+            "$ref": "#/definitions/NetworkAttachment"
+          },
+          "type": "array"
+        },
+        "provider": {
+          "additionalProperties": false,
+          "properties": {
+            "schemaId": {
+              "maxLength": 201,
+              "minLength": 1,
+              "type": "string"
+            },
+            "schemaVersion": {
+              "maxLength": 32,
+              "minLength": 3,
+              "type": "string"
+            },
+            "settings": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "schemaId",
+            "schemaVersion",
+            "settings"
+          ],
+          "type": "object"
+        },
+        "providerRef": {
+          "pattern": "^[A-Z][A-Za-z0-9]{0,62}/[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "updatePolicy": {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "manual",
+                "automatic",
+                "manual-disruptive"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [],
+          "type": "object"
+        },
+        "volumeAttachmentDefaults": {
+          "items": {
+            "$ref": "#/definitions/CanonicalJsonObject"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "allowedDomains",
+        "budget",
+        "defaultDomain",
+        "deviceAttachments",
+        "networkAttachments",
+        "volumeAttachmentDefaults"
+      ],
+      "title": "HostSpec",
+      "type": "object"
+    },
+    "type": {
+      "const": "Host"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "metadata",
+    "spec",
+    "type"
+  ],
+  "title": "Host",
+  "type": "object"
+}

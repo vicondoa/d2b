@@ -1,0 +1,103 @@
+{
+  "$id": "https://d2bus.org/schemas/v3/User.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "definitions": {
+    "BoundedText": {
+      "maxLength": 128,
+      "minLength": 0,
+      "type": "string"
+    },
+    "OsGroupName": {
+      "maxLength": 63,
+      "minLength": 1,
+      "type": "string"
+    },
+    "OsUsername": {
+      "maxLength": 255,
+      "minLength": 1,
+      "type": "string"
+    }
+  },
+  "description": "Zone-local named operating-system identity.",
+  "properties": {
+    "apiVersion": {
+      "const": "resources.d2bus.org/v3"
+    },
+    "metadata": {
+      "additionalProperties": false,
+      "properties": {
+        "annotations": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Optional authored key-value annotation map.",
+          "type": "object"
+        },
+        "labels": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Optional authored key-value label map.",
+          "type": "object"
+        },
+        "name": {
+          "description": "Zone-local resource name.",
+          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "ownerRef": {
+          "description": "Optional same-Zone ref of the owning resource.",
+          "pattern": "^[A-Z][A-Za-z0-9]{0,62}/[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        },
+        "zone": {
+          "description": "Name of the Zone this resource is local to.",
+          "pattern": "^[a-z][a-z0-9-]{0,62}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "zone"
+      ],
+      "type": "object"
+    },
+    "spec": {
+      "additionalProperties": false,
+      "description": "The User ResourceType base spec.",
+      "properties": {
+        "displayName": {
+          "$ref": "#/definitions/BoundedText"
+        },
+        "groups": {
+          "items": {
+            "$ref": "#/definitions/OsGroupName"
+          },
+          "type": "array"
+        },
+        "osUsername": {
+          "$ref": "#/definitions/OsUsername"
+        }
+      },
+      "required": [
+        "displayName",
+        "groups",
+        "osUsername"
+      ],
+      "title": "UserSpec",
+      "type": "object"
+    },
+    "type": {
+      "const": "User"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "metadata",
+    "spec",
+    "type"
+  ],
+  "title": "User",
+  "type": "object"
+}
