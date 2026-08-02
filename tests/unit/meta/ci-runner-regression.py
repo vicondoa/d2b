@@ -161,8 +161,9 @@ my $status = main::run_manifest_lifecycle(
 
 fail("path boundary was not used exactly once") unless $path_calls == 1;
 fail("scheduler fork was not injected exactly once") unless $fork_calls == 1;
-fail("child subreaper setup was not injected exactly once")
-    unless $subreaper_calls == 1;
+my $expected_subreaper_calls = $scenario eq "term" ? 1 : 0;
+fail("child subreaper setup did not match the shutdown-only contract")
+    unless $subreaper_calls == $expected_subreaper_calls;
 fail("injected child survived") if $active_child;
 fail("evidence descriptor survived") unless same_snapshot($before, descriptor_snapshot());
 
