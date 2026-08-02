@@ -55,45 +55,65 @@ in
       zoneName,
       resourcesJson,
       providerSchemaDigestsJson,
-      schemaFingerprintsJson ? "{}",
       zoneJson,
       artifactCatalogPreimageJson,
+      artifactCatalogPath ? null,
+      schemaValidationPath ? null,
     }:
+    let
+      artifactCatalogPathArg =
+        if artifactCatalogPath == null then "" else "${artifactCatalogPath}";
+      schemaValidationPathArg =
+        if schemaValidationPath == null then "" else "${schemaValidationPath}";
+    in
     pkgs.runCommand "d2b-zone-${zoneName}-resource-bundle.json"
       {
         inherit
           resourcesJson
           providerSchemaDigestsJson
-          schemaFingerprintsJson
           zoneJson
           artifactCatalogPreimageJson
           ;
+        inherit artifactCatalogPathArg;
+        inherit schemaValidationPathArg;
         passAsFile = [
           "resourcesJson"
           "providerSchemaDigestsJson"
-          "schemaFingerprintsJson"
           "artifactCatalogPreimageJson"
         ];
+        nativeBuildInputs = [ pkgs.python3 ];
       }
       ''
         set -euo pipefail
         ${digestFunctions}
         verify_digest_vectors
+        if [ -n "$schemaValidationPathArg" ]; then
+          test -e "$schemaValidationPathArg"
+        fi
 
         contentHash=$(domain_digest 'd2b:v3:resource-bundle' \
           < "$resourcesJsonPath")
-        catalogDigest=$(domain_digest 'd2b:v3:artifact-catalog' \
-          < "$artifactCatalogPreimageJsonPath")
+        if [ -n "$artifactCatalogPathArg" ]; then
+          catalogDigest=$(python3 - "$artifactCatalogPathArg" <<'PY'
+        import json
+        import pathlib
+        import sys
+
+        print(json.loads(pathlib.Path(sys.argv[1]).read_text())["catalogDigest"])
+        PY
+          )
+        else
+          catalogDigest="sha256:$(domain_digest 'd2b:v3:artifact-catalog' \
+            < "$artifactCatalogPreimageJsonPath")"
+        fi
         {
-          printf '%s' '{"artifactCatalogDigest":"sha256:'
+          printf '%s' '{"artifactCatalogDigest":"'
           printf '%s' "$catalogDigest"
           printf '%s' '","bundleVersion":1,"contentHash":"sha256:'
           printf '%s' "$contentHash"
           printf '%s' '","generatedAt":"1970-01-01T00:00:00.000Z"'
           printf '%s' ',"providerSchemaDigests":'
           cat "$providerSchemaDigestsJsonPath"
-          printf '%s' ',"schemaFingerprints":'
-          cat "$schemaFingerprintsJsonPath"
           printf '%s' ',"resources":'
           cat "$resourcesJsonPath"
           printf '%s' ',"schemaVersion":3,"zone":'

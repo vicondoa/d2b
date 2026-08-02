@@ -8,6 +8,9 @@
 let
   cfg = config.d2b;
   apiVersion = "resources.d2bus.org/v3";
+  providerCatalogEntries = cfg._providerCatalog.entries or [ ];
+  schemaValidation = cfg._resourceCompiler.schemaValidation or { };
+  schemaValidationPath = schemaValidation.buildValidation or null;
   runtimeFields = [
     "uid"
     "generation"
@@ -106,9 +109,18 @@ let
           if resource.type != "Provider" then null
           else
             let
-              artifactId = resource.spec.artifactId or resourceName;
-              digest = "sha256:${builtins.hashString "sha256"
-                "d2b:v3:schema/${artifactId}"}";
+              artifactId = resource.spec.artifactId or null;
+              catalog = lib.findFirst
+                (entry: entry.id == artifactId)
+                null
+                providerCatalogEntries;
+              digest =
+                if catalog != null
+                  && catalog ? entry
+                  && catalog.entry ? configDigest
+                then catalog.entry.configDigest
+                else "sha256:${builtins.hashString "sha256"
+                  "d2b:v3:schema/${if artifactId == null then resourceName else artifactId}"}";
             in
             lib.nameValuePair "Provider/${resourceName}" digest)
         (lib.filterAttrs (_: resource: resource.type != "Zone") zone.resources)));
@@ -136,13 +148,18 @@ let
       resourcesJson = builtins.toJSON data.resources;
       providerDigestsJson = builtins.toJSON data.providerSchemaDigests;
       zoneJson = builtins.toJSON zoneName;
-    in pkgs.runCommand "d2b-zone-${zoneName}-bundle.json"
+    in pkgs.runCommand "d2b-zone-${zoneName}-resource-bundle.json"
       {
         inherit resourcesJson providerDigestsJson zoneJson catalogDigest catalogPathArg;
+        schemaValidationPathArg =
+          if schemaValidationPath == null then "" else "${schemaValidationPath}";
         passAsFile = [ "resourcesJson" "providerDigestsJson" ];
         nativeBuildInputs = [ pkgs.python3 ];
       } ''
         set -euo pipefail
+        if [ -n "$schemaValidationPathArg" ]; then
+          test -e "$schemaValidationPathArg"
+        fi
         python3 - "$resourcesJsonPath" "$providerDigestsJsonPath" "$zoneJson" \
           "$catalogDigest" "$catalogPathArg" "$out" <<'PY'
         import hashlib

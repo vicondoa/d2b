@@ -175,6 +175,42 @@ let
     (guest: lib.nameValuePair "${guest.zoneName}/${guest.resourceName}"
       (v3ClosureArtifact guest))
     v3Guests);
+
+  # Artifact-keyed closure metadata is the v3 source for Guests.  A Guest
+  # selects a plain `systemArtifactId`; the runtime must not infer a closure
+  # from the legacy VM name table.
+  v3SystemArtifactIds = lib.sort lib.lessThan (lib.filter
+    (artifactId: cfg.artifacts.${artifactId}.type == "nixos-system")
+    (lib.attrNames (cfg.artifacts or { })));
+  v3ArtifactClosures = lib.listToAttrs (map
+    (artifactId:
+      let
+        artifact = cfg.artifacts.${artifactId};
+        closure = pkgs.closureInfo { rootPaths = [ artifact.package ]; };
+        relativePath = "closures/artifacts/${artifactId}.json";
+        file = pkgs.runCommand "d2b-${artifactId}-artifact-closure.json"
+          { nativeBuildInputs = [ pkgs.python3 ]; } ''
+            python3 - "$out" "${closure}/store-paths" <<'PY'
+            import json
+            import sys
+            out, store_paths = sys.argv[1:]
+            with open(store_paths, encoding="utf-8") as handle:
+                paths = sorted(line.strip() for line in handle if line.strip())
+            with open(out, "w", encoding="utf-8") as handle:
+                json.dump({
+                    "artifactId": "${artifactId}",
+                    "closurePaths": paths,
+                    "schemaVersion": 3,
+                }, handle, sort_keys=True, separators=(",", ":"))
+            PY
+          '';
+      in
+      lib.nameValuePair artifactId {
+        inherit artifactId relativePath file;
+        storePath = "${artifact.package}";
+        closurePaths = [ "${artifact.package}" ];
+      })
+    v3SystemArtifactIds);
 in
 {
   options.d2b._bundle.closuresV3 = lib.mkOption {
@@ -184,9 +220,17 @@ in
     visible = false;
   };
 
+  options.d2b._bundle.closuresV3ByArtifact = lib.mkOption {
+    type = lib.types.attrsOf lib.types.anything;
+    default = { };
+    internal = true;
+    visible = false;
+  };
+
   config = {
     d2b._bundle.closures = closures;
     d2b._bundle.closuresV3 = v3Closures;
+    d2b._bundle.closuresV3ByArtifact = v3ArtifactClosures;
     environment.etc = lib.mkMerge [
       (lib.mapAttrs'
         (_: closure:

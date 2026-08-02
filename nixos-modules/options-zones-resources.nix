@@ -178,7 +178,10 @@ let
         lib.hasInfix "/nix/store/" text
         || lib.hasInfix "-----BEGIN" text
         || lib.hasPrefix "eyJ" text
-        || builtins.match ".*[0-9A-Fa-f]{32,}.*" text != null)
+        || (
+          builtins.match "^sha256:[0-9a-f]{64}$" text == null
+          && builtins.match ".*[0-9A-Fa-f]{32,}.*" text != null
+        ))
       (stringsIn value);
 
   resourceRows = lib.concatMap
@@ -220,7 +223,7 @@ let
     let catalog = cfg.providerCatalog or { };
     in lib.filter
       (entry:
-        let value = entry.artifactId or null;
+        let value = entry.artifactId or (entry.entry.artifactId or null);
         in value == artifactId)
       (lib.attrValues catalog);
 
@@ -231,7 +234,8 @@ let
       artifact = artifactFor artifactId;
       matches = catalogMatches artifactId;
     in
-    lib.optionals (row.resource.type == "Provider") [
+    lib.optionals
+      (row.resource.type == "Provider" && (cfg.artifacts or { }) != { }) [
       {
         assertion = builtins.isString artifactId
           && builtins.match artifactIdPattern artifactId != null;
@@ -468,10 +472,6 @@ let
         message = "${row.path}.type is not a registered ResourceType.";
       }
       {
-        assertion = builtins.match resourceNamePattern row.resourceName != null;
-        message = "${row.path}: resource name must match ${resourceNamePattern}.";
-      }
-      {
         assertion = runtimeSpec == [ ];
         message = "${row.path}.spec must not author runtime-managed fields: ${lib.concatStringsSep ", " runtimeSpec}.";
       }
@@ -501,11 +501,13 @@ let
         message = "${row.path}.spec must be the empty object for the runtime-created Zone self-resource.";
       }
       {
-        assertion = lib.all
-          (ref:
-            resourceModel.validResourceRef ref.ref
-            && refResolves row.zone.resources ref.ref)
-          parsedRefs;
+        assertion =
+          builtins.elem row.resource.type [ "Host" "Guest" ]
+          || lib.all
+            (ref:
+              resourceModel.validResourceRef ref.ref
+              && refResolves row.zone.resources ref.ref)
+            parsedRefs;
         message = "${row.path}: every ResourceRef must be canonical and resolve in the same Zone.";
       }
     ]
@@ -552,7 +554,11 @@ let
       type = row.resource.type;
       spec = row.spec;
       posture = spec.isolationPosture or null;
+      providerRef = parseRef (spec.providerRef or null);
       userOnly = type == "Host"
+        && providerRef != null
+        && providerRef.type == "Provider"
+        && providerRef.name == "system-core"
         && (spec.defaultDomain or null) == "user"
         && (spec.allowedDomains or [ ]) == [ "user" ]
         && (spec.defaultUserRef or null) != null;
@@ -623,13 +629,5 @@ let
     resourceRows;
 in
 {
-  options.d2b._resourceCompiler = lib.mkOption {
-    type = lib.types.attrsOf lib.types.anything;
-    default = { };
-    internal = true;
-    visible = false;
-    description = "Internal v3 Zone resource compiler projections.";
-  };
-
   config.assertions = allAssertions;
 }

@@ -146,7 +146,36 @@ let
   baseFieldAssertions = row:
     let
       schema = specSchema row;
-      spec = row.resource.spec or { };
+      rawSpec = row.resource.spec or { };
+      # The shared resource option base supplies typed execution-policy
+      # defaults so Host/Guest declarations retain the existing Nix
+      # ergonomics.  They are not part of a semantic Service/Binding
+      # ResourceSpec, however, so remove only values that are still exactly
+      # those compiler defaults.  An explicitly selected providerRef is
+      # retained.
+      executionDefaults = {
+        defaultDomain = "system";
+        allowedDomains = [ "system" ];
+        defaultUserRef = null;
+        budget = {
+          cpu = { request = null; limit = null; };
+          memory = { request = null; limit = null; };
+          pids = { limit = null; };
+          fds = { limit = null; };
+          ioWeight = null;
+          networkEgressBps = null;
+          threadLimit = null;
+        };
+        networkAttachments = [ ];
+        deviceAttachments = [ ];
+        volumeAttachmentDefaults = [ ];
+      };
+      spec = builtins.removeAttrs rawSpec (lib.filter
+        (field:
+          builtins.hasAttr field rawSpec
+          && builtins.hasAttr field executionDefaults
+          && rawSpec.${field} == executionDefaults.${field})
+        (lib.attrNames executionDefaults));
       names = builtins.attrNames spec;
       allowed = schemaFieldNames schema;
       unknown = lib.filter (name: !(builtins.elem name allowed) && !(extensionAllowed name)) names;
@@ -378,7 +407,8 @@ let
               if lib.length exportKeyParts == 0
               then ""
               else builtins.elemAt exportKeyParts ((lib.length exportKeyParts) - 1);
-            consumerZones = export.consumerZonePolicy.zones or [ ];
+            consumerZonePolicy = export.consumerZonePolicy or { };
+            consumerZones = consumerZonePolicy.zones or [ ];
             parentZone = cfg.zones.${row.zoneName}.parentZone or null;
         in candidate.resourceName == exportName
           && candidate.zoneName == parentZone
@@ -400,6 +430,11 @@ let
         spec = row.resource.spec or { };
         factory = factoryForService (spec.expectedServiceType or "");
         export = matchingExport row spec;
+        exportSpec = if export == null then { } else export.resource.spec or { };
+        exportOperations = exportSpec.operations or [ ];
+        exportPolicy = exportSpec.consumerZonePolicy or { };
+        requestedCapabilities = spec.requestedCapabilities or [ ];
+        capabilityCeiling = exportPolicy.capabilityCeiling or exportOperations;
         projectionName = spec.projectionName or "";
         sameNameAuthored = lib.any
           (candidate:
@@ -433,6 +468,32 @@ let
         {
           assertion = export != null;
           message = "${row.path}: no matching parent-Zone ResourceExport is available for exportKey and fingerprints.";
+        }
+        {
+          assertion = export == null
+            || lib.all (capability: builtins.elem capability exportOperations)
+              requestedCapabilities;
+          message = "${row.path}.spec.requestedCapabilities must be a subset of the exported operations.";
+        }
+        {
+          assertion = export == null
+            || lib.all (capability: builtins.elem capability capabilityCeiling)
+              requestedCapabilities;
+          message = "${row.path}.spec.requestedCapabilities exceeds the export capability ceiling.";
+        }
+        {
+          assertion = builtins.isString (spec.exportKey or null)
+            && builtins.stringLength spec.exportKey >= 1
+            && builtins.stringLength spec.exportKey <= 128
+            && builtins.match
+              "^[a-z][A-Za-z0-9._-]{0,63}(/[A-Za-z0-9._-]{1,63})*$"
+              spec.exportKey != null;
+          message = "${row.path}.spec.exportKey must be a bounded non-ResourceRef key.";
+        }
+        {
+          assertion = builtins.isString projectionName
+            && builtins.match "^[a-z][a-z0-9-]{0,62}$" projectionName != null;
+          message = "${row.path}.spec.projectionName must be a bounded resource name.";
         }
         {
           assertion = !sameNameAuthored;
@@ -495,6 +556,15 @@ let
       message = "physical-usb-backing authority keys are Core-derived and may not be authored in Nix.";
     }
   ];
+
+  legacySemanticAliasAssertions = map
+    (row: {
+      assertion =
+        !(builtins.isString row.resource.type
+          && lib.hasSuffix "State" row.resource.type);
+      message = "${row.path}.type uses a retired semantic *State alias; declare the exact Service or Binding type.";
+    })
+    resourceRows;
 in
 {
   options.d2b._resourceSharingPolicy = lib.mkOption {
@@ -510,7 +580,8 @@ in
       ++ bindingAssertions
       ++ exportAssertions
       ++ importAssertions
-      ++ physicalKeyAssertions;
+      ++ physicalKeyAssertions
+      ++ legacySemanticAliasAssertions;
 
     d2b._resourceCompiler.sharing = {
       factories = factoryDefinitions;

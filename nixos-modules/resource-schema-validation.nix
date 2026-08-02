@@ -20,8 +20,12 @@ let
       })
       standardResourceTypes);
 
+  # Evaluation-time checks must not depend on realizing a schema farm
+  # derivation.  The committed schemas are the source of truth for Nix
+  # assertions; the farm is retained as an explicit build input below so a
+  # Provider package can replace it for the derivation-time round trip.
   schemaFor = resourceType:
-    let path = schemaFarm + "/${resourceType}.schema.json";
+    let path = ../docs/reference/schemas/v3 + "/${resourceType}.schema.json";
     in if builtins.pathExists path
     then builtins.fromJSON (builtins.readFile path)
     else null;
@@ -332,7 +336,11 @@ in
 
   config = {
     assertions = lib.mkIf validationEnabled assertions;
-    d2b._resourceCompiler.schemaValidation = lib.mkIf validationEnabled {
+    # Bundle derivations always consume the build-time validator.  The
+    # internal `enable` switch only controls eager eval-time diagnostics so
+    # existing module-only consumers can inspect legacy configurations
+    # without forcing the derivation check.
+    d2b._resourceCompiler.schemaValidation = {
       inherit schemaFarm buildValidation;
       resourceTypes = standardResourceTypes;
       errors = lib.concatMap rowErrors rows;
