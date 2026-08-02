@@ -125,6 +125,9 @@ impl DeviceAuthorityDescriptor {
 
 redacted_debug!(DeviceAuthorityDescriptor);
 
+/// Short alias used by Provider descriptors.
+pub type AuthorityDescriptor = DeviceAuthorityDescriptor;
+
 /// Core-derived opaque identity for one physical device backing.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]
@@ -143,6 +146,9 @@ impl DeviceAuthorityKey {
 }
 
 redacted_debug!(DeviceAuthorityKey);
+
+/// Short alias for the Core-derived physical backing key.
+pub type OpaqueAuthorityKey = DeviceAuthorityKey;
 
 impl<'de> Deserialize<'de> for DeviceAuthorityKey {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
@@ -750,6 +756,9 @@ impl DeviceStatusResource {
 
 redacted_debug!(DeviceStatusResource);
 
+/// Alias used by ResourceType status adapters.
+pub type DeviceStatus = DeviceStatusResource;
+
 impl<'de> Deserialize<'de> for DeviceStatusResource {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         #[derive(Deserialize)]
@@ -831,6 +840,24 @@ impl DeviceErrorCode {
             Self::DeviceWireContractMismatch => "device-wire-contract-mismatch",
         }
     }
+
+    /// Return the complete closed Device error-code set.
+    pub const fn all() -> &'static [Self; 13] {
+        &[
+            Self::DeviceNotFound,
+            Self::DeviceClaimConflict,
+            Self::DeviceClaimMaxExceeded,
+            Self::DeviceArbitrationViolation,
+            Self::DeviceProvisionFailed,
+            Self::DeviceBrokerInaccessible,
+            Self::DeviceStateIntegrityFailure,
+            Self::DeviceSessionTimeout,
+            Self::DeviceSessionCancelled,
+            Self::PhysicalUsbBackingConflict,
+            Self::DeviceWorkerFailed,
+            Self::DeviceWireContractMismatch,
+        ]
+    }
 }
 
 /// Device RBAC verbs and subresources.
@@ -871,7 +898,24 @@ impl DeviceResourceVerb {
             Self::UpdateFinalizers => "update-finalizers",
         }
     }
+
+    /// Return the complete Device RBAC verb set.
+    pub const fn all() -> &'static [Self; 8] {
+        &[
+            Self::Get,
+            Self::List,
+            Self::Watch,
+            Self::Create,
+            Self::UpdateSpec,
+            Self::Delete,
+            Self::UpdateStatus,
+            Self::UpdateFinalizers,
+        ]
+    }
 }
+
+/// Alias used by RBAC policy code.
+pub type DeviceRbacVerb = DeviceResourceVerb;
 
 /// Closed Device effect operation classes used by Core's adapter.
 #[derive(
@@ -891,6 +935,20 @@ pub enum DeviceEffectOperation {
     ApplyNftablesProjection,
     /// Open GPU device grants before worker clone.
     OpenDevice,
+}
+
+impl DeviceEffectOperation {
+    /// Return the complete closed effect-operation set.
+    pub const fn all() -> &'static [Self; 6] {
+        &[
+            Self::PrepareStateDir,
+            Self::SpawnRunner,
+            Self::SecurityKeyOpenDevice,
+            Self::SecurityKeyApplyUdevRules,
+            Self::ApplyNftablesProjection,
+            Self::OpenDevice,
+        ]
+    }
 }
 
 /// Conservative broker effect limits for Device Providers.
@@ -1056,6 +1114,9 @@ pub const DEVICE_OTEL_RESOURCE_ATTRIBUTES: [&str; 2] = ["d2b.zone", "d2b.provide
 
 /// Device telemetry contract version.
 pub const DEVICE_TELEMETRY_CONTRACT_VERSION: &str = "device-telemetry/v1";
+
+/// Alias used by semantic telemetry adapters.
+pub type DeviceTelemetryLabels = DeviceMetricLabels;
 
 const fn one() -> u32 {
     1
