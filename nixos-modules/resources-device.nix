@@ -444,12 +444,7 @@ in
   options.d2b.zones = lib.mkOption {
     type = lib.types.attrsOf (lib.types.submodule {
       options.resources = lib.mkOption {
-        type = lib.types.attrsOf (lib.types.submodule ({ config, ... }: {
-          config.spec = lib.mkIf (config.type == "Device") {
-            maxConcurrentClaims = lib.mkDefault 1;
-            inventory.selector = lib.mkDefault { };
-          };
-        }));
+        type = lib.types.attrsOf (lib.types.submodule { });
       };
     });
   };
