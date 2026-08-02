@@ -28,14 +28,25 @@ impl PrivateSocketPath {
         volume_ref: &ResourceRef,
         execution_ref: &ResourceRef,
     ) -> Result<Self, SocketPathError> {
-        if !zone_runtime_dir.starts_with('/')
-            || zone_runtime_dir.ends_with('/')
-            || zone_runtime_dir.contains('\0')
-        {
+        if !valid_runtime_root(zone_runtime_dir) {
             return Err(SocketPathError::InvalidRuntimeRoot);
         }
         if volume_ref.resource_type().as_str() != "Volume" {
             return Err(SocketPathError::InvalidResource);
+        }
+
+        fn valid_runtime_root(value: &str) -> bool {
+            if !value.starts_with('/')
+                || value.ends_with('/')
+                || value.contains('\0')
+                || value.contains('\\')
+            {
+                return false;
+            }
+            value
+                .split('/')
+                .skip(1)
+                .all(|component| !component.is_empty() && component != "." && component != "..")
         }
         if !matches!(execution_ref.resource_type().as_str(), "Guest" | "Host") {
             return Err(SocketPathError::InvalidResource);
@@ -144,5 +155,11 @@ mod tests {
             PrivateSocketPath::derive("run/d2b", &zone, &volume, &guest),
             Err(SocketPathError::InvalidRuntimeRoot)
         );
+        for root in ["/run/d2b/../other", "/run//d2b", "/run/./d2b", "/run\\d2b"] {
+            assert_eq!(
+                PrivateSocketPath::derive(root, &zone, &volume, &guest),
+                Err(SocketPathError::InvalidRuntimeRoot)
+            );
+        }
     }
 }

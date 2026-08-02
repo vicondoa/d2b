@@ -158,6 +158,9 @@ mod tests {
     #[test]
     fn virtio_blk_attachments_do_not_create_filesystem_exports() {
         let mut value = serde_json::to_value(fixtures::state_volume()).unwrap();
+        value["source"]["settings"]["kind"] = serde_json::json!("block-image");
+        value["source"]["settings"]["sourcePolicyId"] = serde_json::json!("disk-root");
+        value["quota"] = serde_json::json!({ "maxBytes": 4096, "enforcement": "none" });
         value["attachments"] = serde_json::json!([{
             "executionRef": "Guest/work-vm",
             "transport": "virtio-blk",

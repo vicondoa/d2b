@@ -15,12 +15,18 @@ use serde::{Deserialize, Serialize};
 pub const MARKER_VERSION: u32 = 1;
 
 /// Filesystem identity of an opened Volume root.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct VolumeRootIdentity {
     /// Filesystem device number observed from the held root descriptor.
     pub device: u64,
     /// Inode number observed from the held root descriptor.
     pub inode: u64,
+}
+
+impl fmt::Debug for VolumeRootIdentity {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("VolumeRootIdentity(<redacted>)")
+    }
 }
 
 /// Marker fields bound at first provision.
@@ -314,6 +320,20 @@ mod tests {
             ),
             Err(MarkerError::RootReplaced)
         );
+    }
+
+    #[test]
+    fn root_identity_diagnostics_do_not_expose_device_or_inode() {
+        let rendered = format!(
+            "{:?}",
+            VolumeRootIdentity {
+                device: 7,
+                inode: 11,
+            }
+        );
+        assert_eq!(rendered, "VolumeRootIdentity(<redacted>)");
+        assert!(!rendered.contains('7'));
+        assert!(!rendered.contains("11"));
     }
 
     #[test]
