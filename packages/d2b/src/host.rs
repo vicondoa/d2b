@@ -131,14 +131,18 @@ pub(crate) fn run(
                 mode,
             ) {
                 Ok(value) => value,
-                Err(error) if error.exit_code == 1 => json!({
-                    "ok": true,
-                    "zoneRef": context.zone_ref(),
-                    "schemaVersion": 1,
-                    "degraded": true,
-                    "source": "local-state",
-                    "message": "Zone runtime unavailable; local host diagnostics are incomplete"
-                }),
+                Err(error)
+                    if error.exit_code == 1 && error.message.starts_with("zone-unavailable") =>
+                {
+                    json!({
+                        "ok": true,
+                        "zoneRef": context.zone_ref(),
+                        "schemaVersion": 1,
+                        "degraded": true,
+                        "source": "local-state",
+                        "message": "Zone runtime unavailable; local host diagnostics are incomplete"
+                    })
+                }
                 Err(error) => return Err(error),
             };
             context.emit(&value, mode)?;

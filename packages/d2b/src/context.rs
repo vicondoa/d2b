@@ -532,14 +532,13 @@ fn human_summary(value: &Value) -> String {
                 let resource_ref = item
                     .get("resourceRef")
                     .and_then(Value::as_str)
+                    .map(str::to_owned)
                     .or_else(|| {
                         let resource_type = item.get("type").and_then(Value::as_str)?;
                         let name = item.pointer("/metadata/name").and_then(Value::as_str)?;
-                        Some(Box::leak(
-                            format!("{resource_type}/{name}").into_boxed_str(),
-                        ))
+                        Some(format!("{resource_type}/{name}"))
                     })
-                    .unwrap_or("<unknown>");
+                    .unwrap_or_else(|| "<unknown>".to_owned());
                 let phase = item
                     .pointer("/status/phase")
                     .and_then(Value::as_str)
