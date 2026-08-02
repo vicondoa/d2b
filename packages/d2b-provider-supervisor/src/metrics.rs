@@ -1,5 +1,7 @@
 //! Process Provider metric inventory and bounded emitter adapter.
 
+#![allow(dead_code)]
+
 use std::collections::BTreeMap;
 
 use d2b_telemetry::{

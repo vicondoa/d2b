@@ -152,7 +152,7 @@ impl<'a> BusAuditWriter<'a> {
         resolution: Result<(), RouteTableError>,
     ) -> Result<AuditWriteOutcome, RouteAuditError> {
         let (authz_decision, outcome) = match resolution {
-            Ok(()) => ("allowed", "ok"),
+            Ok(()) => (context.authz_decision.as_str(), "ok"),
             Err(RouteTableError::ServiceNotFound | RouteTableError::MethodNotFound) => {
                 ("denied", "denied")
             }

@@ -1,5 +1,7 @@
 //! Process launch and stop span projections.
 
+#![allow(dead_code)]
+
 use std::collections::BTreeMap;
 
 use d2b_telemetry::{
