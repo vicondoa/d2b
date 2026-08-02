@@ -144,6 +144,14 @@ pub struct ProcessCounts {
     pub failed: u32,
 }
 
+/// The non-suppressible warning shown for a user-only Host resource.
+pub const NO_ISOLATION_WARNING: &str = "⚠ no isolation boundary (user domain)";
+
+/// Render the Host posture annotation without exposing resource identity.
+pub fn isolation_warning(isolation_posture: Option<&str>) -> Option<&'static str> {
+    (isolation_posture == Some("none")).then_some(NO_ISOLATION_WARNING)
+}
+
 /// Inputs from trusted read-only Zone adapters.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DoctorInput {
@@ -427,5 +435,14 @@ mod tests {
                 .iter()
                 .any(|check| check.name == "isolation-posture-declared")
         );
+    }
+
+    #[test]
+    fn no_isolation_warning_is_not_suppressible_or_identity_bearing() {
+        assert_eq!(isolation_warning(Some("none")), Some(NO_ISOLATION_WARNING));
+        assert_eq!(isolation_warning(None), None);
+        assert!(!NO_ISOLATION_WARNING.contains("Host/"));
+        assert!(!NO_ISOLATION_WARNING.contains("User/"));
+        assert!(!NO_ISOLATION_WARNING.contains('/'));
     }
 }
