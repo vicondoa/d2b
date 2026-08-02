@@ -1241,4 +1241,64 @@ mod tests {
             "DeviceSpec(<redacted>)"
         );
     }
+
+    #[test]
+    fn closed_device_sets_and_effect_limits_are_frozen() {
+        assert_eq!(DeviceErrorCode::all().len(), 12);
+        assert_eq!(DeviceResourceVerb::all().len(), 8);
+        assert_eq!(DeviceEffectOperation::all().len(), 6);
+        let limits = DeviceEffectLimits::frozen();
+        assert_eq!(limits.security_key_open_max_concurrent(), 1);
+        assert_eq!(limits.security_key_open_fd_quota(), 1);
+        assert_eq!(limits.nftables_projection_batch_limit(), 1);
+        assert_eq!(limits.spawn_runner_tpm_per_device(), 1);
+        assert_eq!(limits.spawn_runner_gpu_per_device(), 1);
+        assert_eq!(limits.open_device_gpu_fd_quota(), 8);
+        assert_eq!(
+            DeviceMetricLabels::new(
+                DeviceMetricOperation::Claim,
+                DeviceMetricOutcome::Success,
+                None,
+            )
+            .provider,
+            "device"
+        );
+    }
+
+    #[test]
+    fn common_status_claims_are_bounded_and_resource_typed() {
+        let holder = ResourceRef::parse("Guest/corp-vm").unwrap();
+        let timestamp = Timestamp::parse("2026-07-22T00:00:01.000Z").unwrap();
+        let claim = DeviceClaim::new(
+            holder.clone(),
+            DeviceClaimKind::Exclusive,
+            Some(BoundedToken::parse("tpm-socket").unwrap()),
+            timestamp.clone(),
+            DeviceHealth::Healthy,
+        )
+        .unwrap();
+        let status = DeviceStatusResource::new(
+            Some(true),
+            DeviceHealth::Healthy,
+            vec![holder],
+            vec![claim],
+            Some(timestamp.clone()),
+            Some(timestamp),
+            None,
+        )
+        .unwrap();
+        assert_eq!(status.present(), Some(true));
+        assert_eq!(status.holder_refs().len(), 1);
+        assert_eq!(status.claims().len(), 1);
+        assert!(
+            DeviceClaim::new(
+                ResourceRef::parse("Volume/state").unwrap(),
+                DeviceClaimKind::Exclusive,
+                None,
+                Timestamp::parse("2026-07-22T00:00:01.000Z").unwrap(),
+                DeviceHealth::Healthy,
+            )
+            .is_err()
+        );
+    }
 }
