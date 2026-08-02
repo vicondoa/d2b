@@ -61,7 +61,7 @@ let
     else resource;
   helperAssertions = lib.flatten (lib.mapAttrsToList
     (zoneName: zone:
-      (resourcesBundle.bundleForZone zoneName
+      (resourcesBundle.validateBundle zoneName
         (lib.mapAttrs (_: helperResource) zone.resources)).assertions)
     cfg.zones);
   catalogDigest =
