@@ -193,11 +193,11 @@ that need the complete gate must use `make test-rust`. The focused
 
 CI invokes one Make target per Rust leaf, so local-only dependency edges do
 not repeat schema or inventory work in the main and broker jobs. A cold local
-aggregate (detected when `packages/target` is absent) runs leaves serially with
-the full budget and restores the shared workspace/API target layout used
-before this optimization. It also restores the original leaf order and runs
-inventory last so discovery reuses the main build. Warm local runs retain the
-parallel isolated-target profile.
+aggregate (detected when `packages/target` is absent) restores the shared
+workspace/API target layout used before this optimization. A bounded
+API/main/broker prebuild frontier runs first; fixture, schema and inventory
+then run as a full-budget chain so discovery reuses all prior builds. Warm
+local runs retain the parallel isolated-target profile.
 
 Use `D2B_RUST_BUDGET=<positive-integer>` to request a Rust budget. It is an
 upper bound, not a host-capacity bypass. The default is the smaller of logical

@@ -147,12 +147,12 @@ reference; `D2B_SKIP_FIXTURE_BUILD=1` intentionally omits only the conditional
 fixture and CLI IDs.
 
 The local warm aggregate keeps that parallel profile. When its normal Cargo
-target is absent, it selects a cold profile that runs one leaf at a time with
-the full budget, reuses the workspace target for fixture/CLI work and uses one
-shared serial API census target. It restores the original leaf order and runs
-inventory after the main build, avoiding a duplicate cold workspace compile.
-CI uses the same shared-target behavior, but dispatches each Rust leaf as its
-own job.
+target is absent, it selects a cold profile that reuses the workspace target
+for fixture/CLI work and one shared API census target. A four-lane bounded
+prebuild frontier overlaps API, main, broker and light independent work.
+Fixture, schema and inventory then run as a full-budget dependency chain, so
+inventory reuses every prior build. CI uses the same shared-target behavior,
+but dispatches each Rust leaf as its own job.
 
 `D2B_RUST_BUDGET` is the supported local Rust control. It must be a positive
 integer when set and is only a requested upper bound. The automatic budget is

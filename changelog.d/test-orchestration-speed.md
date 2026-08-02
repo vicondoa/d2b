@@ -16,6 +16,7 @@
   Cargo and nextest quotas from the effective CPU and memory budget.
 - Keep the separate enforcing fixture lane from duplicating the aggregate by
   honoring `D2B_SKIP_FIXTURE_BUILD=1` in the Layer-1 orchestration.
-- Keep the measured parallel profile for warm local runs, restore serial
-  full-budget execution and shared target trees for cold runs, and run each
-  Rust leaf as a separate full-budget CI job behind the stable rollup.
+- Keep the measured parallel profile for warm local runs, restore shared
+  target trees and a bounded prebuild plus full-budget chain for cold runs,
+  and run each Rust leaf as a separate full-budget CI job behind the stable
+  rollup.

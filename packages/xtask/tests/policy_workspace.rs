@@ -370,13 +370,17 @@ fn rust_dag_violations(makefile: &str) -> Vec<String> {
         "D2B_RUST_MAIN_PREREQS_main :=",
         "test-rust-leaf-main-workspace: $(D2B_RUST_MAIN_PREREQS)",
         "D2B_RUST_SCHEMA_PREREQS_aggregate := test-rust-leaf-inventory",
-        "D2B_RUST_SCHEMA_PREREQS_cold :=",
+        "D2B_RUST_SCHEMA_PREREQS_cold := test-rust-leaf-fixture-contracts",
         "D2B_RUST_SCHEMA_PREREQS_schema :=",
         "test-rust-leaf-schema: $(D2B_RUST_SCHEMA_PREREQS)",
         "D2B_RUST_BROKER_PREREQS_aggregate := test-rust-leaf-inventory",
         "D2B_RUST_BROKER_PREREQS_cold :=",
         "D2B_RUST_BROKER_PREREQS_broker :=",
         "test-rust-leaf-broker: $(D2B_RUST_BROKER_PREREQS)",
+        "D2B_RUST_FIXTURE_PREREQS_cold := test-rust-leaf-api-surface test-rust-leaf-main-workspace test-rust-leaf-broker test-rust-leaf-guest-shell-runner test-rust-leaf-no-bash-ast test-rust-leaf-supply-chain",
+        "test-rust-leaf-fixture-contracts: $(D2B_RUST_FIXTURE_PREREQS)",
+        "D2B_RUST_INVENTORY_PREREQS_cold := test-rust-leaf-schema",
+        "test-rust-leaf-inventory: $(D2B_RUST_INVENTORY_PREREQS)",
     ] {
         if !makefile.contains(required) {
             violations.push(format!(
@@ -868,10 +872,13 @@ test-rust-leaf-guest-shell-runner:
 test-rust-leaf-no-bash-ast:
 test-rust-leaf-supply-chain:
 D2B_RUST_SCHEMA_PREREQS_aggregate := test-rust-leaf-inventory
-D2B_RUST_SCHEMA_PREREQS_cold :=
+D2B_RUST_SCHEMA_PREREQS_cold := test-rust-leaf-fixture-contracts
 D2B_RUST_SCHEMA_PREREQS_schema :=
 test-rust-leaf-schema: $(D2B_RUST_SCHEMA_PREREQS)
-test-rust-leaf-inventory:
+D2B_RUST_FIXTURE_PREREQS_cold := test-rust-leaf-api-surface test-rust-leaf-main-workspace test-rust-leaf-broker test-rust-leaf-guest-shell-runner test-rust-leaf-no-bash-ast test-rust-leaf-supply-chain
+test-rust-leaf-fixture-contracts: $(D2B_RUST_FIXTURE_PREREQS)
+D2B_RUST_INVENTORY_PREREQS_cold := test-rust-leaf-schema
+test-rust-leaf-inventory: $(D2B_RUST_INVENTORY_PREREQS)
 "#;
     assert!(
         rust_dag_violations(good).is_empty(),

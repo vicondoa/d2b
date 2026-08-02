@@ -853,7 +853,22 @@ esac
         self.assertIn("D2B_RUST_SCHEMA_PREREQS_schema :=", makefile)
         self.assertIn("D2B_RUST_MAIN_PREREQS_cold :=", makefile)
         self.assertIn("D2B_RUST_BROKER_PREREQS_cold :=", makefile)
-        self.assertIn("D2B_RUST_SCHEMA_PREREQS_cold :=", makefile)
+        self.assertIn(
+            "D2B_RUST_SCHEMA_PREREQS_cold := test-rust-leaf-fixture-contracts",
+            makefile,
+        )
+        self.assertIn(
+            "D2B_RUST_INVENTORY_PREREQS_cold := test-rust-leaf-schema",
+            makefile,
+        )
+        self.assertIn(
+            "test-rust-leaf-fixture-contracts: $(D2B_RUST_FIXTURE_PREREQS)",
+            makefile,
+        )
+        self.assertIn(
+            "test-rust-leaf-inventory: $(D2B_RUST_INVENTORY_PREREQS)",
+            makefile,
+        )
         self.assertIn(
             "test-rust-leaf-broker: $(D2B_RUST_BROKER_PREREQS)",
             makefile,
@@ -986,7 +1001,7 @@ esac
             for marker in forbidden:
                 self.assertNotIn(marker, output, msg=f"{target} duplicated {marker}")
 
-    def test_rust_cold_profile_restores_serial_full_budget_execution(self) -> None:
+    def test_rust_cold_profile_restores_shared_target_bounded_execution(self) -> None:
         makefile = MAKEFILE.read_text(encoding="utf-8")
         driver = RUST_DRIVER.read_text(encoding="utf-8")
         api_driver = (ROOT / "tests/tools/api-surface-json.sh").read_text(
@@ -997,9 +1012,11 @@ esac
             makefile,
         )
         cold_block = makefile.split("  cold) \\", 1)[1].split("  api) \\", 1)[0]
-        self.assertIn("active_lanes=1;", cold_block)
-        self.assertIn('quota_main="$$runtime_budget";', cold_block)
-        self.assertIn('quota_broker="$$runtime_budget";', cold_block)
+        self.assertIn('[ "$$active_lanes" -le 4 ] || active_lanes=4;', cold_block)
+        self.assertIn("while [ \"$$surplus\" -gt 0 ]", cold_block)
+        self.assertIn('quota_fixture="$$runtime_budget";', cold_block)
+        self.assertIn('quota_schema="$$runtime_budget";', cold_block)
+        self.assertIn('quota_inventory="$$runtime_budget";', cold_block)
         self.assertIn('"D2B_RUST_COLD_PROFILE=$$cold_profile"', makefile)
         cold_order = (
             "test-rust-leaf-api-surface test-rust-leaf-main-workspace "
@@ -1009,9 +1026,30 @@ esac
             "test-rust-leaf-inventory"
         )
         self.assertIn(cold_order, makefile)
+        self.assertIn(
+            "D2B_RUST_FIXTURE_PREREQS_cold := "
+            "test-rust-leaf-api-surface test-rust-leaf-main-workspace "
+            "test-rust-leaf-broker test-rust-leaf-guest-shell-runner "
+            "test-rust-leaf-no-bash-ast test-rust-leaf-supply-chain",
+            makefile,
+        )
         self.assertIn('fixture_target_dir="$workspace_target_dir"', driver)
         self.assertIn('public_target="$target_root/census"', api_driver)
         self.assertIn('if [ "$shared_census" = 1 ]', api_driver)
+
+    def test_rust_cold_frontier_fits_budgets_one_through_twelve(self) -> None:
+        for budget in range(1, 13):
+            active_lanes = min(budget, 4)
+            quotas = {"main": 1, "broker": 1, "api": 1}
+            for turn in range(budget - active_lanes):
+                quotas[("main", "broker", "api")[turn % 3]] += 1
+            if active_lanes < 3:
+                frontier = active_lanes
+            elif active_lanes == 3:
+                frontier = sum(quotas.values())
+            else:
+                frontier = sum(quotas.values()) + 1
+            self.assertLessEqual(frontier, budget)
 
     def test_schema_leaf_uses_the_exported_cargo_job_budget_for_xtask(self) -> None:
         driver = RUST_DRIVER.read_text(encoding="utf-8")
