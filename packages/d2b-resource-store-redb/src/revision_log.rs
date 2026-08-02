@@ -28,6 +28,10 @@ pub const MAX_INITIAL_WATCH_CREDITS: u32 = WATCH_ADMISSION_CAPACITY as u32;
 pub const MAX_RETAINED_RESUME_CURSORS: usize = WATCH_ADMISSION_CAPACITY;
 /// Maximum simultaneously registered watches.
 pub const MAX_WATCH_REGISTRATIONS: usize = WATCH_ADMISSION_CAPACITY;
+/// Maximum revision rows removed by one compaction transaction.
+pub const MAX_COMPACTION_ROWS_PER_TRANSACTION: usize = 256;
+/// Maximum encoded key/value bytes removed by one compaction transaction.
+pub const MAX_COMPACTION_BYTES_PER_TRANSACTION: usize = 8 * 1024 * 1024;
 
 /// A closed selector carried by one watch registration.
 #[derive(Clone, PartialEq, Eq)]
@@ -383,11 +387,13 @@ impl WatchCoordinator {
         let upper = revision_key(target_floor.saturating_add(1))?;
         let mut keys = Vec::new();
         let mut last_revision = meta.compaction_floor;
+        let mut removed_bytes = 0_usize;
+        let row_limit = max_rows.min(MAX_COMPACTION_ROWS_PER_TRANSACTION);
         for row in table
             .range(..upper.as_slice())
             .map_err(crate::transaction::integrity)?
         {
-            let (key, _) = row.map_err(crate::transaction::integrity)?;
+            let (key, value) = row.map_err(crate::transaction::integrity)?;
             let decoded = DecodedKey::decode(key.value()).map_err(crate::transaction::integrity)?;
             let [DecodedKeyComponent::U64(revision)] = decoded.components() else {
                 return Err(crate::transaction::integrity("revision-key-shape-invalid"));
@@ -395,9 +401,20 @@ impl WatchCoordinator {
             if *revision <= meta.compaction_floor || *revision > target_floor {
                 continue;
             }
+            let row_bytes = key
+                .value()
+                .len()
+                .checked_add(value.value().len())
+                .ok_or_else(|| crate::transaction::integrity("compaction-size-overflow"))?;
+            if !keys.is_empty()
+                && removed_bytes.saturating_add(row_bytes) > MAX_COMPACTION_BYTES_PER_TRANSACTION
+            {
+                break;
+            }
             keys.push(key.value().to_vec());
+            removed_bytes = removed_bytes.saturating_add(row_bytes);
             last_revision = *revision;
-            if keys.len() >= max_rows {
+            if keys.len() >= row_limit {
                 break;
             }
         }
