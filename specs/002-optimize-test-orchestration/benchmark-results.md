@@ -320,12 +320,10 @@ reference, not a passing implementation of the future manifest contract.
 
 ## Rust optimized result
 
-The accepted three-run Rust benchmark was captured at
-`6d34ac9de7b99e8c5fb27207df3f5919ba817e43`. The subsequent scoped panel fixes
-do not change the scheduling topology; final fix tip
-`16d3cfe43dcea65ca91b692391b5cd041dbeb7bf` passed the complete aggregate with
-exact evidence in 135 coarse seconds. GNU Make owns nine bounded leaves,
-while `tests/test-rust.sh` owns only explicit leaf execution. The
+The accepted Rust implementation and final measurements are at
+`0e563f433ccd41f8a4a57c955679e10fc256cecc`. GNU Make owns nine bounded
+`test-rust-leaf-*` nodes, while `tests/test-rust.sh` owns only explicit leaf
+execution. The
 representative host calculated a 12-job budget and admitted at most nine
 lanes. Budgets through nine use one job per lane; the three surplus jobs on
 this host are assigned to the measured API long pole, so its two rustdoc
@@ -334,7 +332,7 @@ within 12.
 
 Two measured target-state changes removed the remaining warm critical path:
 
-* fixture/CLI work uses
+* warm-local fixture/CLI work uses
   `.scratch/rust-test-cache/fixture-contracts`, independent of
   `packages/target`, so its Nix evaluation and Cargo work overlap the main
   workspace without mutable target-directory sharing;
@@ -342,41 +340,63 @@ Two measured target-state changes removed the remaining warm critical path:
   targets, and the CPU-bound snapshot checker runs from Cargo's release
   profile in its own stable target.
 
+Cold and CI runs do not use those duplicated warm targets. Cold execution
+uses a four-lane bounded API/main/broker prebuild frontier, followed by a
+full-budget fixture, schema and inventory chain on shared targets. CI runs
+API, main, broker, guest shell runner, no-bash AST, schema, inventory and
+supply chain as eight independent full-budget Make jobs.
+
 The final hyperfine record is
 `.scratch/test-speedup-optimized/test-rust.json`:
 
 | Result | Seconds |
 | --- | ---: |
 | Baseline warm median | 324.763168 |
-| Optimized warm samples | 123.777214, 144.993658, 131.097166 |
-| Optimized warm median | **131.097166** |
-| Warm reduction | **59.633%** |
-| Slowest / median | 1.1060 |
+| Optimized warm samples | 139.945960, 140.117662, 139.419719 |
+| Optimized warm median | **139.945960** |
+| Warm reduction | **56.908%** |
+| Slowest / median | 1.0012 |
 
-The optimized median is 40.367% of baseline and therefore passes the
+The optimized median is 43.092% of baseline and therefore passes the
 50%-of-baseline ceiling of 162.381584 seconds. The slowest sample is less
-than 11% above the median, within the 20% stability limit. Because the Make
+than 1% above the median, within the 20% stability limit. Because the Make
 DAG met the hard target, the conditional mold experiment in T017 was not
 entered and no linker dependency was added.
 
 The final cold observation is
-`.scratch/test-speedup-optimized/test-rust-cold.json` at 1830.117173 seconds,
-compared with the 911.204650-second baseline cold median. This is a
-non-blocking regression. It was captured at `c8474cbf`, before the panel fixes
-that changed error handling, internal naming, policy placement, and transient
-scratch location but did not change the retained compiler target trees or cold
-quota allocation. The warm design retains duplicate isolated rustdoc
-target trees and assigns one job to non-API cold rebuild lanes; those choices
-remove target locking and satisfy the warm hard goal but increase cold
-compilation. The shared Nix store was not cleared. This tradeoff remains
-visible for the later resource-tuning phase rather than being excluded or
-reported as a warm result.
+`.scratch/test-speedup-optimized/test-rust-cold.json` at 888 seconds, compared
+with the 911.204650-second baseline cold median. Cold elapsed time is therefore
+2.547% lower than baseline. The shared Nix store and `.scratch` compiler cache
+were retained in both measurements.
+
+## Rust CI result
+
+The pre-change `v3` jobs completed in 5m24s for API, 7m30s for main and
+10m20s for the combined remaining shard. The final PR run split the remaining
+surface and reported:
+
+| CI Make target | Duration |
+| --- | ---: |
+| `test-rust-api-surface` | 4m22s |
+| `test-rust-main` | 6m11s |
+| `test-rust-broker` | 4m16s |
+| `test-rust-guest-shell-runner` | 1m56s |
+| `test-rust-no-bash-ast` | 1m18s |
+| `test-rust-schema` | 2m02s |
+| `test-rust-inventory` | 7m35s |
+| `test-rust-supply-chain` | 1m28s |
+| `test-rust` rollup | 8s |
+| `test-fixture-contracts` | 12m32s |
+
+The complete PR workflow ran from 23:22:42Z through 23:36:18Z, a 13m36s
+critical path. Every Rust leaf is below eight minutes and the adjacent
+fixture lane remains below 15 minutes.
 
 ## Rust coverage evidence
 
 The passing v1 manifest is
 `.scratch/test-speedup-optimized/test-rust-executed.json`, SHA-256
-`f450e2e42b24a56b37708b9d6e3b9b9d7be0a3c29b09d41408a13750e751db1a`.
+`511d01418593d085a1216defd319f71b2253cf2ab256059aa0cefc0a90c86c56`.
 It records `run_status = "passed"` and all 20 baseline leaf identifiers.
 Direct sorted comparison with the trace-derived baseline manifest has no
 missing or added leaf.
@@ -384,12 +404,13 @@ missing or added leaf.
 The optimized source census is
 `.scratch/test-speedup-optimized/test-rust-inventory.txt`. Cargo doctest
 listing prints elapsed-time summary lines, so both source inventories were
-also normalized by removing only lines beginning `all doctests ran in `.
+also normalized by removing empty lines and lines beginning
+`all doctests ran in `.
 The normalized optimized digest is
-`792e83e9dd295fa6262a766d4ca9a0a76090de460a400f1b9e3d7bba28ef4174`.
-The normalized comparison has no missing baseline test and 13 added tests:
-the execution-manifest documentation policy plus 12 Rust DAG, companion,
-quota, mutation, and excluded-workspace policy tests.
+`aa1ccf12e9c31d178dcf5fbbaf12e6c2489394086aff2310c7fa2d9aff03a336`.
+The normalized comparison has no missing baseline test and 16 added tests:
+the execution-manifest documentation policy plus 15 Rust DAG, companion,
+profile, quota, mutation, and excluded-workspace policy tests.
 
 ## Rust validation evidence
 
@@ -400,8 +421,10 @@ nix shell --inputs-from . nixpkgs#python3 --command \
   python3 tests/unit/meta/ci-runner-regression.py
 bash tests/unit/gates/ci-rust-cache-sync.sh
 cd packages && cargo test -p xtask --test policy_workspace
+cd packages && cargo test -p xtask --test policy_ci
 cargo test --manifest-path packages/d2b-contract-tests/Cargo.toml \
   --test policy_docs
+make layer1-workflow-check
 make test-policy
 D2B_ENABLE_FIXTURE_BUILD=1 make test-fixture-contracts
 D2B_EXECUTION_MANIFEST=.scratch/test-speedup-optimized/test-rust-executed.json \
@@ -412,6 +435,7 @@ The executable manifest regressions cover success, failure, lock contention,
 failed publication, handled TERM, shutdown-only subreaper activation,
 descendant draining, parent/path injection, cleanup chaining, Nix re-entry,
 status preservation, and descriptor closure. Targeted runs also exercised the
-schema/inventory dependency chain, isolated API leaf, isolated fixture leaf,
-PTY crate under the manifest helper, invalid budget exit 2, and Make dry runs
-with and without `D2B_SKIP_FIXTURE_BUILD=1`.
+warm/cold profile switch, all eight CI Make targets, schema/inventory
+dependency chains, isolated and shared API/fixture targets, PTY behavior under
+the manifest helper, invalid budget exit 2, and all harness-free smoke checks
+without libtest arguments.
