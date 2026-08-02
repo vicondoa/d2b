@@ -9,10 +9,11 @@ pub mod schema;
 mod transaction;
 pub mod values;
 
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
 use std::os::fd::{AsFd, OwnedFd};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use actor::{ReadPool, SignalCounters, WriterHandle};
 use d2b_contracts::v3::{ResourceUid, Timestamp, ZoneId};
@@ -119,6 +120,8 @@ pub struct RedbResourceStore {
     reads: ReadPool,
     signals: Arc<SignalCounters>,
     seal: MutationSealAcceptor,
+    watch_coordinator: Arc<Mutex<WatchCoordinator>>,
+    retained_watch_streams: Mutex<BTreeMap<WatchRegistrationId, WatchStream>>,
 }
 
 impl core::fmt::Debug for RedbResourceStore {
@@ -220,7 +223,12 @@ impl RedbResourceStore {
         let database = Arc::new(database);
         let signals = Arc::new(SignalCounters::default());
         let reads = ReadPool::start(Arc::clone(&database), identity.zone.clone())?;
-        let writer = WriterHandle::start(database, Arc::clone(&signals))?;
+        let watch_coordinator = Arc::new(Mutex::new(WatchCoordinator::default()));
+        let writer = WriterHandle::start(
+            database,
+            Arc::clone(&signals),
+            Arc::clone(&watch_coordinator),
+        )?;
         Ok(Self {
             identity,
             recovered_after_crash,
@@ -228,6 +236,8 @@ impl RedbResourceStore {
             reads,
             signals,
             seal,
+            watch_coordinator,
+            retained_watch_streams: Mutex::new(BTreeMap::new()),
         })
     }
 
@@ -272,6 +282,9 @@ impl RedbResourceStore {
 
     /// Persist a clean-shutdown marker and join the owned worker threads.
     pub async fn shutdown(mut self) -> Result<(), StoreError> {
+        if let Ok(mut streams) = self.retained_watch_streams.lock() {
+            streams.clear();
+        }
         self.reads.shutdown()?;
         self.writer.shutdown().await
     }
@@ -327,11 +340,119 @@ impl RedbResourceStore {
         self.reads.list(request).await
     }
 
-    pub async fn watch(&self, request: StoreWatchRequest) -> Result<StoreWatchReceipt, StoreError> {
+    /// Open a watch and return its stream to the caller that owns delivery.
+    ///
+    /// Registration, replay, and the writer's live-delivery boundary execute
+    /// in the same actor, so no commit can fall between registration and the
+    /// replay high-water mark.
+    pub async fn watch_stream(
+        &self,
+        request: StoreWatchRequest,
+    ) -> Result<(StoreWatchReceipt, WatchStream), StoreError> {
         if request.zone != self.identity.zone {
             return Err(transaction::integrity("request-zone-mismatch"));
         }
-        Err(transaction::unavailable("watch-coordinator-unavailable"))
+        let selector = WatchSelector::new(
+            request.resource_types,
+            request.resource_names,
+            request.filters,
+        );
+        let (stream, snapshot_revision) = self
+            .writer
+            .watch(request.after_revision, selector, request.initial_credits)
+            .await?;
+        let receipt = StoreWatchReceipt {
+            stream_name: Self::stream_name(stream.id()),
+            snapshot_revision,
+        };
+        Ok((receipt, stream))
+    }
+
+    /// Register a watch for the resource API and retain its stream by id.
+    ///
+    /// The API's current receipt-only contract hands the stream to a named
+    /// bus layer later.  [`Self::take_watch_stream`] is the single transfer
+    /// point for that handoff.
+    pub async fn watch(&self, request: StoreWatchRequest) -> Result<StoreWatchReceipt, StoreError> {
+        let (receipt, stream) = self.watch_stream(request).await?;
+        let id = stream.id();
+        let mut retained = match self.retained_watch_streams.lock() {
+            Ok(retained) => retained,
+            Err(_) => {
+                self.unregister_watch_now(id);
+                return Err(transaction::integrity("watch-stream-registry-poisoned"));
+            }
+        };
+        if retained.insert(id, stream).is_some() {
+            drop(retained);
+            self.unregister_watch_now(id);
+            return Err(transaction::integrity("watch-registration-duplicate"));
+        }
+        Ok(receipt)
+    }
+
+    /// Transfer a receipt-created stream to the bus/session owner.
+    pub fn take_watch_stream(
+        &self,
+        id: WatchRegistrationId,
+    ) -> Result<Option<WatchStream>, StoreError> {
+        self.retained_watch_streams
+            .lock()
+            .map_err(|_| transaction::integrity("watch-stream-registry-poisoned"))
+            .map(|mut streams| streams.remove(&id))
+    }
+
+    /// Transfer a receipt-created stream by its opaque receipt name.
+    pub fn take_watch_stream_named(&self, name: &str) -> Result<Option<WatchStream>, StoreError> {
+        let id = name
+            .strip_prefix("watch-")
+            .filter(|value| !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()))
+            .and_then(|value| value.parse::<u64>().ok())
+            .map(WatchRegistrationId::from_raw)
+            .ok_or_else(|| transaction::integrity("watch-stream-name-invalid"))?;
+        if Self::stream_name(id) != name {
+            return Err(transaction::integrity("watch-stream-name-invalid"));
+        }
+        self.take_watch_stream(id)
+    }
+
+    /// Acknowledge all queued deliveries through `revision`.
+    pub async fn acknowledge_watch(
+        &self,
+        id: WatchRegistrationId,
+        revision: d2b_contracts::v3::ZoneRevision,
+    ) -> Result<(), StoreError> {
+        self.writer.acknowledge_watch(id, revision).await
+    }
+
+    /// Unregister a watch and release all of its global budget.
+    pub async fn unregister_watch(
+        &self,
+        id: WatchRegistrationId,
+    ) -> Result<Option<d2b_contracts::v3::ZoneRevision>, StoreError> {
+        self.retained_watch_streams
+            .lock()
+            .map_err(|_| transaction::integrity("watch-stream-registry-poisoned"))?
+            .remove(&id);
+        self.writer.unregister_watch(id).await
+    }
+
+    /// Unregister a watch from a synchronous owner-drop path.
+    pub fn unregister_watch_now(&self, id: WatchRegistrationId) {
+        if let Ok(mut streams) = self.retained_watch_streams.lock() {
+            streams.remove(&id);
+        }
+        if let Ok(mut coordinator) = self.watch_coordinator.lock() {
+            let _ = coordinator.unregister(id);
+        }
+    }
+
+    /// Return the fixed-cardinality watch saturation snapshot.
+    pub fn watch_signals(&self) -> Result<WatchSignals, StoreError> {
+        self.watch_coordinator
+            .lock()
+            .map_err(|_| transaction::integrity("watch-coordinator-poisoned"))
+            .map(|coordinator| coordinator.signals())
     }
 
     pub async fn resolve_ref(
@@ -339,6 +460,10 @@ impl RedbResourceStore {
         request: StoreResolveRequest,
     ) -> Result<StoreResolvedIdentity, StoreError> {
         self.reads.resolve(request).await
+    }
+
+    fn stream_name(id: WatchRegistrationId) -> String {
+        format!("watch-{}", id.get())
     }
 
     pub async fn inspect_schema(

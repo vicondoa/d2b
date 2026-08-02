@@ -15,6 +15,7 @@ use redb::{Database, ReadableDatabase, ReadableTable};
 use tokio::sync::{OwnedSemaphorePermit, mpsc, oneshot};
 
 use crate::backup::LogicalBackup;
+use crate::revision_log::{WatchCoordinator, WatchRegistrationId, WatchSelector, WatchStream};
 use crate::transaction::{
     API_SCHEMAS, ChangeBatch, CommittedGroup, RESOURCES, ResourceRecord, StoreMeta, VerifiedWrite,
     apply_group, backpressure, current_meta, decode, resource_key, stored_resource, timeout,
@@ -126,16 +127,25 @@ impl WriterHandle {
     pub(crate) fn start(
         database: Arc<Database>,
         signals: Arc<SignalCounters>,
+        watch_coordinator: Arc<std::sync::Mutex<WatchCoordinator>>,
     ) -> Result<Self, StoreError> {
         let (sender, receiver) = mpsc::channel(WRITE_QUEUE_CAPACITY);
         crate::transaction::set_clean_shutdown(&database, false)?;
         let actor_signals = Arc::clone(&signals);
         let quarantined = Arc::new(AtomicBool::new(false));
         let actor_quarantined = Arc::clone(&quarantined);
+        let actor_watch_coordinator = Arc::clone(&watch_coordinator);
         let thread = std::thread::Builder::new()
             .name("d2b-redb-writer".to_owned())
             .spawn(move || {
-                WriterActor::new(database, receiver, actor_signals, actor_quarantined).run();
+                WriterActor::new(
+                    database,
+                    receiver,
+                    actor_signals,
+                    actor_quarantined,
+                    actor_watch_coordinator,
+                )
+                .run();
             })
             .map_err(|_| crate::transaction::integrity("writer-actor-start-failed"))?;
         Ok(Self {
@@ -238,6 +248,75 @@ impl WriterHandle {
         Ok(ZoneRevision::new(high_water))
     }
 
+    pub(crate) async fn watch(
+        &self,
+        after_revision: ZoneRevision,
+        selector: WatchSelector,
+        initial_credits: u32,
+    ) -> Result<(WatchStream, ZoneRevision), StoreError> {
+        if self.quarantined.load(Ordering::Acquire) {
+            return Err(crate::transaction::quarantined());
+        }
+        let (response, receiver) = oneshot::channel();
+        self.sender
+            .as_ref()
+            .ok_or_else(|| crate::transaction::integrity("writer-closed"))?
+            .send(WriterCommand::Watch {
+                after_revision,
+                selector,
+                initial_credits,
+                response,
+            })
+            .await
+            .map_err(|_| crate::transaction::integrity("writer-closed"))?;
+        receiver
+            .await
+            .map_err(|_| crate::transaction::integrity("watch-response-closed"))?
+    }
+
+    pub(crate) async fn acknowledge_watch(
+        &self,
+        id: WatchRegistrationId,
+        revision: ZoneRevision,
+    ) -> Result<(), StoreError> {
+        if self.quarantined.load(Ordering::Acquire) {
+            return Err(crate::transaction::quarantined());
+        }
+        let (response, receiver) = oneshot::channel();
+        self.sender
+            .as_ref()
+            .ok_or_else(|| crate::transaction::integrity("writer-closed"))?
+            .send(WriterCommand::AcknowledgeWatch {
+                id,
+                revision,
+                response,
+            })
+            .await
+            .map_err(|_| crate::transaction::integrity("writer-closed"))?;
+        receiver
+            .await
+            .map_err(|_| crate::transaction::integrity("watch-ack-response-closed"))?
+    }
+
+    pub(crate) async fn unregister_watch(
+        &self,
+        id: WatchRegistrationId,
+    ) -> Result<Option<ZoneRevision>, StoreError> {
+        if self.quarantined.load(Ordering::Acquire) {
+            return Err(crate::transaction::quarantined());
+        }
+        let (response, receiver) = oneshot::channel();
+        self.sender
+            .as_ref()
+            .ok_or_else(|| crate::transaction::integrity("writer-closed"))?
+            .send(WriterCommand::UnregisterWatch { id, response })
+            .await
+            .map_err(|_| crate::transaction::integrity("writer-closed"))?;
+        receiver
+            .await
+            .map_err(|_| crate::transaction::integrity("watch-unregister-response-closed"))?
+    }
+
     pub(crate) async fn backup(
         &self,
         identity: crate::StoreIdentity,
@@ -308,6 +387,21 @@ enum WriterCommand {
         resource_types: BTreeSet<ResourceTypeName>,
         visit: Box<dyn FnMut(SharedChangeBatch) -> Result<(), StoreError> + Send>,
         response: oneshot::Sender<Result<u64, StoreError>>,
+    },
+    Watch {
+        after_revision: ZoneRevision,
+        selector: WatchSelector,
+        initial_credits: u32,
+        response: oneshot::Sender<Result<(WatchStream, ZoneRevision), StoreError>>,
+    },
+    AcknowledgeWatch {
+        id: WatchRegistrationId,
+        revision: ZoneRevision,
+        response: oneshot::Sender<Result<(), StoreError>>,
+    },
+    UnregisterWatch {
+        id: WatchRegistrationId,
+        response: oneshot::Sender<Result<Option<ZoneRevision>, StoreError>>,
     },
     Backup {
         identity: crate::StoreIdentity,
@@ -401,6 +495,7 @@ struct WriterActor {
     signals: Arc<SignalCounters>,
     sequence: u64,
     quarantined: Arc<AtomicBool>,
+    watch_coordinator: Arc<std::sync::Mutex<WatchCoordinator>>,
 }
 
 impl WriterActor {
@@ -409,6 +504,7 @@ impl WriterActor {
         receiver: mpsc::Receiver<WriterCommand>,
         signals: Arc<SignalCounters>,
         quarantined: Arc<AtomicBool>,
+        watch_coordinator: Arc<std::sync::Mutex<WatchCoordinator>>,
     ) -> Self {
         Self {
             database,
@@ -417,6 +513,7 @@ impl WriterActor {
             signals,
             sequence: 0,
             quarantined,
+            watch_coordinator,
         }
     }
 
@@ -470,6 +567,51 @@ impl WriterActor {
                         self.quarantine(error.clone());
                     }
                     let _ = response.send(replayed);
+                }
+                WriterCommand::Watch {
+                    after_revision,
+                    selector,
+                    initial_credits,
+                    response,
+                } => {
+                    let result = self
+                        .watch_coordinator
+                        .lock()
+                        .map_err(|_| crate::transaction::integrity("watch-coordinator-poisoned"))
+                        .and_then(|mut coordinator| {
+                            coordinator.register_and_replay(
+                                &self.database,
+                                after_revision,
+                                selector,
+                                initial_credits,
+                            )
+                        });
+                    if let Err(error) = &result
+                        && error.kind() == d2b_resource_store::StoreErrorKind::StoreIntegrityFailure
+                    {
+                        self.quarantine(error.clone());
+                    }
+                    let _ = response.send(result);
+                }
+                WriterCommand::AcknowledgeWatch {
+                    id,
+                    revision,
+                    response,
+                } => {
+                    let result = self
+                        .watch_coordinator
+                        .lock()
+                        .map_err(|_| crate::transaction::integrity("watch-coordinator-poisoned"))
+                        .and_then(|mut coordinator| coordinator.acknowledge(id, revision));
+                    let _ = response.send(result);
+                }
+                WriterCommand::UnregisterWatch { id, response } => {
+                    let result = self
+                        .watch_coordinator
+                        .lock()
+                        .map_err(|_| crate::transaction::integrity("watch-coordinator-poisoned"))
+                        .map(|mut coordinator| coordinator.unregister(id));
+                    let _ = response.send(result);
                 }
                 WriterCommand::Backup { identity, response } => {
                     let backup = LogicalBackup::from_database(&self.database, &identity);
@@ -531,7 +673,15 @@ impl WriterActor {
                         }
                         _ => None,
                     });
-                    let _ = batch;
+                    if let Some(batch) = batch
+                        && let Err(error) = self.dispatch_live(batch)
+                    {
+                        for response in responses {
+                            let _ = response.send(Err(error.clone()));
+                        }
+                        self.quarantine(error);
+                        return;
+                    }
                     for (response, result) in responses.into_iter().zip(results) {
                         let _ = response.send(result);
                     }
@@ -551,6 +701,24 @@ impl WriterActor {
                 }
             }
         }
+    }
+
+    fn dispatch_live(&self, batch: ChangeBatch) -> Result<(), StoreError> {
+        let Some(shared) = shared_batch(batch) else {
+            return Ok(());
+        };
+        let fanout = self
+            .watch_coordinator
+            .lock()
+            .map_err(|_| crate::transaction::integrity("watch-coordinator-poisoned"))?
+            .dispatch(shared);
+        if fanout != 0 {
+            self.signals.record_shared_batch();
+            self.signals
+                .fanout_references
+                .fetch_add(fanout, Ordering::Relaxed);
+        }
+        Ok(())
     }
 
     fn quarantine(&mut self, error: StoreError) {
@@ -579,6 +747,15 @@ impl WriterActor {
                         .send(Err(crate::transaction::quarantined()));
                 }
                 WriterCommand::Replay { response, .. } => {
+                    let _ = response.send(Err(crate::transaction::quarantined()));
+                }
+                WriterCommand::Watch { response, .. } => {
+                    let _ = response.send(Err(crate::transaction::quarantined()));
+                }
+                WriterCommand::AcknowledgeWatch { response, .. } => {
+                    let _ = response.send(Err(crate::transaction::quarantined()));
+                }
+                WriterCommand::UnregisterWatch { response, .. } => {
                     let _ = response.send(Err(crate::transaction::quarantined()));
                 }
                 WriterCommand::Backup { response, .. } => {
@@ -615,6 +792,10 @@ pub(crate) fn filter_batch_with(
         batch,
         indices: Arc::from(indices),
     })
+}
+
+pub(crate) fn shared_batch(batch: ChangeBatch) -> Option<SharedChangeBatch> {
+    filter_batch_with(Arc::new(batch), |_| true)
 }
 
 pub(crate) fn replay_after<F>(
@@ -1401,11 +1582,13 @@ mod tests {
         let (second_response, second_result) = oneshot::channel();
         let mut second = second;
         second.response = second_response;
+        let watch_coordinator = Arc::new(std::sync::Mutex::new(WatchCoordinator::default()));
         let mut actor = WriterActor::new(
             database,
             command_receiver,
             Arc::clone(&signals),
             Arc::clone(&quarantined),
+            watch_coordinator,
         );
         actor.scheduler.push(first);
         actor.scheduler.push(second);

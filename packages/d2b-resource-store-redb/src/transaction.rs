@@ -2780,10 +2780,6 @@ pub(crate) fn quarantined_reason(reason: &'static str) -> StoreError {
     error(StoreErrorKind::StoreQuarantined, None, reason)
 }
 
-pub(crate) fn unavailable(reason: &'static str) -> StoreError {
-    error(StoreErrorKind::ResourcePlaneUnavailable, None, reason)
-}
-
 pub(crate) fn set_full_durability(write: &mut redb::WriteTransaction) -> Result<(), StoreError> {
     write
         .set_durability(Durability::Immediate)

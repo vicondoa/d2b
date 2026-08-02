@@ -9,7 +9,9 @@ use std::collections::BTreeSet;
 use std::fmt;
 use std::fs::File;
 
-use d2b_contracts::v3::{RetryClass, canonical_digest, canonical_json_bytes};
+use d2b_contracts::v3::{
+    ResourceUid, RetryClass, Timestamp, ZoneId, canonical_digest, canonical_json_bytes,
+};
 use redb::{Database, Durability, ReadableDatabase, ReadableTable, TableDefinition};
 use rustix::fs::{AtFlags, FileType, fsync, renameat, statat};
 use serde::{Deserialize, Serialize};
@@ -201,11 +203,15 @@ impl LogicalBackup {
         if self.tables.len() != ALL_TABLES.len() {
             return Err(integrity("backup-table-set-invalid"));
         }
+        ResourceUid::parse(self.store_uuid.clone()).map_err(integrity)?;
+        ZoneId::parse(self.zone_name.clone()).map_err(integrity)?;
+        ResourceUid::parse(self.zone_uid.clone()).map_err(integrity)?;
+        Timestamp::parse(self.created_at.clone()).map_err(integrity)?;
 
         let mut names = BTreeSet::new();
         let mut total_rows = 0_usize;
         let mut total_row_bytes = 0_usize;
-        for table in &self.tables {
+        for (table_index, table) in self.tables.iter().enumerate() {
             if !names.insert(table.name.as_str()) {
                 return Err(integrity("backup-table-duplicate"));
             }
@@ -213,6 +219,12 @@ impl LogicalBackup {
                 .iter()
                 .find(|schema| schema.name == table.name)
                 .ok_or_else(|| integrity("backup-table-unknown"))?;
+            let expected_schema = TABLE_SCHEMAS
+                .get(table_index)
+                .ok_or_else(|| integrity("backup-table-set-invalid"))?;
+            if schema.name != expected_schema.name {
+                return Err(integrity("backup-table-order-invalid"));
+            }
             if table.key_space != schema.key_space.discriminant()
                 || table.value_kind != schema.value_kind.discriminant()
             {
@@ -227,7 +239,7 @@ impl LogicalBackup {
             if checksum_rows(&table.rows) != table.checksum {
                 return Err(integrity("backup-table-checksum-mismatch"));
             }
-            let mut keys = BTreeSet::new();
+            let mut previous_key: Option<&[u8]> = None;
             for row in &table.rows {
                 total_row_bytes = total_row_bytes
                     .checked_add(row.key.len())
@@ -236,9 +248,10 @@ impl LogicalBackup {
                 if total_row_bytes > MAX_LOGICAL_BACKUP_BYTES {
                     return Err(integrity("backup-size-over-limit"));
                 }
-                if !keys.insert(row.key.as_slice()) {
-                    return Err(integrity("backup-table-key-duplicate"));
+                if previous_key.is_some_and(|previous| previous >= row.key.as_slice()) {
+                    return Err(integrity("backup-table-rows-not-sorted"));
                 }
+                previous_key = Some(row.key.as_slice());
                 validate_row(schema.key_space, schema.value_kind, row)?;
             }
         }
@@ -253,6 +266,13 @@ impl LogicalBackup {
             .ok_or_else(|| integrity("backup-store-meta-missing"))?;
         if meta_table.rows.len() != 1 {
             return Err(integrity("backup-store-meta-cardinality-invalid"));
+        }
+        if meta_table
+            .rows
+            .first()
+            .is_none_or(|row| row.key != crate::transaction::meta_key())
+        {
+            return Err(integrity("backup-store-meta-key-invalid"));
         }
         let meta: StoreMeta = decode(
             ValueKind::StoreMetaScalar,
@@ -696,6 +716,12 @@ mod tests {
         let encoded = backup.to_bytes().unwrap();
         let decoded = LogicalBackup::from_bytes(&encoded).unwrap();
         assert_eq!(decoded.digest().unwrap(), backup.digest().unwrap());
+        let mut reordered = backup.clone();
+        reordered.tables.swap(0, 1);
+        assert_eq!(
+            reordered.validate().unwrap_err().reason_code(),
+            "backup-table-order-invalid"
+        );
 
         let staged_dir = tempfile::tempdir().unwrap();
         let staged_file = OpenOptions::new()
