@@ -5458,6 +5458,13 @@ fn cmd_host_migrate_storage(
 }
 
 fn cmd_host_validate(_context: &LegacyContext, args: &HostValidateArgs) -> Result<i32, CliFailure> {
+    // The flag helper emits this refusal before returning an error.  Returning
+    // that error to the v3 dispatcher would cause it to render a second,
+    // generic Zone envelope, so keep the already-emitted host envelope as the
+    // complete command result.
+    if !args.dry_run && !args.apply {
+        return emit_host_error(&missing_mutation_flag_envelope("host validate"), args.json);
+    }
     let flags =
         require_explicit_mutation_flag("host validate", args.dry_run, args.apply, args.json)?;
     let mode = if flags.apply {
@@ -9669,22 +9676,23 @@ fn require_mutation_flag_impl(
         }
         return Ok(resolution.flags);
     }
-    let exit_code = emit_host_error(
-        &host_error_envelope(
-            &format!("{verb} requires either --dry-run or --apply"),
-            "--apply-or-dry-run-required",
-            78,
-            &format!("{verb} invocation flags."),
-            "Neither --dry-run nor --apply was provided.",
-            &format!("Re-run as `d2b {verb} --dry-run` to plan or `d2b {verb} --apply` to mutate.",),
-            "docs/reference/error-codes.md#--apply-or-dry-run-required",
-        ),
-        json,
-    )?;
+    let exit_code = emit_host_error(&missing_mutation_flag_envelope(verb), json)?;
     Err(CliFailure::new(
         exit_code,
         format!("{verb} refused without --dry-run or --apply"),
     ))
+}
+
+fn missing_mutation_flag_envelope(verb: &str) -> HostErrorEnvelope {
+    host_error_envelope(
+        &format!("{verb} requires either --dry-run or --apply"),
+        "--apply-or-dry-run-required",
+        78,
+        &format!("{verb} invocation flags."),
+        "Neither --dry-run nor --apply was provided.",
+        &format!("Re-run as `d2b {verb} --dry-run` to plan or `d2b {verb} --apply` to mutate.",),
+        "docs/reference/error-codes.md#--apply-or-dry-run-required",
+    )
 }
 
 fn cmd_auth_status(context: &LegacyContext, args: &AuthStatusArgs) -> Result<i32, CliFailure> {
