@@ -1147,6 +1147,19 @@ catalog:
   classified as a non-reference, and this one catches a declared backing field
   that names nothing in the base. The three failures are independent, and no
   one control fires on the other two.
+
+  **The planted control is not sufficient on its own, and a counted assertion
+  goes with it.** A planted control operates on a locally constructed
+  declaration; it proves the predicate *can* fail and says nothing about
+  whether the real catalog scan visited anything. Those are different claims and
+  a scan that iterates nothing still satisfies the first. So the positive scan
+  additionally asserts its own coverage: the number of `Constrained` families it
+  visited is nonzero and equals the number of `Constrained` families in the
+  catalog, and the total number of field-membership checks it performed is
+  nonzero. Expressed against `catalog()` rather than as a literal, so it stays
+  correct when a family is added. The two assertions answer different questions:
+  the planted control answers "would this notice a violation", the counts answer
+  "did this look at anything".
 - `no_family_admits_its_own_service_or_binding_type_as_backing` - decision 7.
 - `every_family_yields_a_projection_factory` - all four return `Ok`, replacing
   the current three-of-four state.
@@ -1174,14 +1187,35 @@ For decision 4's restored coupling, over the whole catalog:
   fields, and the two sets never intersect. **Two planted-violation controls,
   one per property, because one control cannot exercise both.** Totality: a
   local copy of a family's allowed set gains an unclassified field name and the
-  assertion must reject it, so the scan cannot pass vacuously on an empty
-  universe. Disjointness: a local copy of `NON_BACKING_SERVICE_BASE_FIELDS`
-  gains `backingDeviceRef`, a name that is genuinely a declared backing field of
-  the USB family, and the assertion must reject that too. Without the second
-  control a disjointness check that never fires would look identical to one that
-  passes, and misclassifying a real backing field as a non-reference is exactly
-  the mistake that would let decision 4's coupling admit `NoBacking` for a
-  family that has a backing.
+  assertion must reject it. Disjointness: a local copy of
+  `NON_BACKING_SERVICE_BASE_FIELDS` gains `backingDeviceRef`, a name that is
+  genuinely a declared backing field of the USB family, and the assertion must
+  reject that too. Without the second control a disjointness check that never
+  fires would look identical to one that passes, and misclassifying a real
+  backing field as a non-reference is exactly the mistake that would let
+  decision 4's coupling admit `NoBacking` for a family that has a backing.
+
+  **Both properties can also pass over an empty universe, so both carry counted
+  coverage assertions.** Totality is a subset check: iterating zero families, or
+  zero fields within them, satisfies it trivially. Disjointness is an
+  intersection-empty check, which is *even more* prone to this, because it
+  passes not only when the scan visits no families but also when
+  `NON_BACKING_SERVICE_BASE_FIELDS` is itself empty; an empty intersection is
+  the expected result in three different degenerate cases and the success value
+  is identical in all of them. The positive scan therefore asserts: the number
+  of families visited is nonzero and equals `catalog()`'s length; every family
+  contributed at least one field check, which holds because `providerRef` is in
+  every `service_spec_allowed`; the total number of classification checks is
+  nonzero; and `NON_BACKING_SERVICE_BASE_FIELDS` is itself non-empty. Counts are
+  expressed against `catalog()` and against the declarations rather than as
+  literals, so adding a family does not require editing the numbers.
+
+  The division of labour is the same as for grounding, and is worth stating once
+  rather than per test. **Planted controls prove predicate failure**: the
+  assertion is capable of rejecting a violation. **Counts prove non-empty real
+  coverage**: the assertion actually ran over the committed catalog. A scan can
+  satisfy either while failing the other, so neither substitutes for the other
+  and both are required on each of the three properties.
 - `no_backing_is_declared_exactly_when_no_base_field_is_a_backing_reference` -
   the coupling itself, both directions, over all four families. Positive
   controls: security key is `NoBacking` and every one of its four base fields is
