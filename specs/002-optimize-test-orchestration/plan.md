@@ -203,10 +203,20 @@ Required ordering inside lanes remains:
 The public override is `D2B_RUST_BUDGET`. Its default is the smaller of
 detected logical CPUs and an effective-memory cap. Effective available memory
 is the smaller of Linux `MemAvailable` and the remaining finite cgroup v2
-`memory.max` or `memory.high` allowance after `memory.current`; unlimited or
-unavailable cgroup files fall back to `MemAvailable`. The calculation reserves
-2 GiB for the host and budgets 3 GiB per heavy Rust job. Invalid or
-non-positive values fail with exit status 2.
+`memory.max` or `memory.high` allowance. Effective cgroup usage is
+`memory.current` minus the reclaimable `inactive_file` value from
+`memory.stat`, clamped at zero. Unlimited cgroup limits fall back to
+`MemAvailable`. If `/proc/self/cgroup` reports v2 membership but the effective
+controller files cannot be read, automatic sizing fails closed to budget `1`
+with a warning. The calculation reserves 2 GiB for the host and budgets 3 GiB
+per heavy Rust job.
+
+`D2B_RUST_BUDGET` is a requested positive upper bound and cannot bypass CPU or
+memory caps. Invalid values fail with exit status 2 and an actionable message
+that includes the rejected value. A numeric top-level `make -jN` or
+`--jobs=N` is also folded into the effective minimum so existing Make
+concurrency intent is honored. Bare unlimited `make -j` fails early and
+directs the operator to `D2B_RUST_BUDGET`.
 
 GNU Make's jobserver schedules eligible workspace lanes. Each CPU-heavy lane
 has a static relative weight, but its explicit Cargo `--jobs` and nextest
@@ -220,10 +230,13 @@ per-workspace Cargo limits without making constrained hosts edit the DAG.
 Same-target leaves are dependency-ordered as shown above.
 
 Recursive Make recipe lines use `+$(MAKE)` so Make owns jobserver propagation.
-Before invoking Cargo or nextest, the leaf dispatcher unsets `MAKEFLAGS`,
-`MFLAGS`, and `MAKELEVEL`; those processes therefore honor the explicit lane
-quota instead of discovering Make's jobserver. Recursive Make calls retain the
-jobserver. Cargo concurrency is not based on weighted jobserver tokens.
+Before invoking Cargo or nextest, the leaf dispatcher saves and parses
+`MAKEFLAGS`, closes numeric descriptors from `--jobserver-auth=R,W` or
+`--jobserver-fds=R,W`, and unsets `MAKEFLAGS`, `MFLAGS`, and `MAKELEVEL`.
+FIFO jobserver authentication has no numeric descriptors to close. Those
+processes therefore honor the explicit lane quota and do not leak jobserver
+descriptors into test binaries. Recursive Make calls retain the jobserver.
+Cargo concurrency is not based on weighted jobserver tokens.
 
 `tests/test-rust.sh` becomes a leaf dispatcher and environment provider. Its
 serial `all` scheduler is removed. `tests/static.sh` and other callers use the
@@ -379,6 +392,7 @@ This plan uses strict phase ordering rather than pipelined dispatch.
 |---|---|---|---|
 | Tooling | Plan panel round 1 | The research subagent returned no usable output, so the Nix tool survey was repeated directly against upstream documentation and repositories. | Resolved |
 | Design | Plan panel round 2 | Cargo quota and Make jobserver ownership needed a second clarification pass to cover dynamic constrained-host budgets and cgroup memory limits. | Resolved |
+| Kernel semantics | Plan panel round 3 | The automatic Rust budget needed cache-aware cgroup accounting and explicit jobserver descriptor closure. | Resolved |
 
 ## Post-Design Constitution Check
 

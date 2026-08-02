@@ -64,14 +64,14 @@ passes, and achieve a warm median no greater than 50% of baseline.
 
 ### Tests for User Story 1
 
-- [ ] T008 [P] [US1] Add failing static contract assertions for the Make-owned Rust DAG, grouped keep-going execution, `D2B_RUST_BUDGET` validation, memory-aware default, execution-manifest output, and removal of the serial `all` scheduler in `tests/unit/meta/ci-runner-regression.py`
+- [ ] T008 [P] [US1] Add failing static contract assertions for the Make-owned Rust DAG, grouped keep-going execution, actionable `D2B_RUST_BUDGET` validation, numeric Make `-jN` capping, bare `-j` rejection, cache-aware cgroup default, unreadable-controller fallback to budget `1`, execution-manifest output, and removal of the serial `all` scheduler in `tests/unit/meta/ci-runner-regression.py`
 - [ ] T009 [P] [US1] Add failing policy assertions for retained doctests, discovered `harness = false` binaries with explicit empty-discovery failure, serial broker feature passes, same-target dependency edges, runtime frontier quota bounds, leaf-only driver modes, and unchanged excluded workspaces in `packages/xtask/tests/policy_workspace.rs`
 
 ### Implementation for User Story 1
 
 - [ ] T010 [US1] Refactor `tests/test-rust.sh` into environment setup plus explicit leaf modes for API surface, main workspace, broker, guest shell runner, no-bash AST scan, schema reproducibility, supply-chain checks, and inventory/stub checks; remove the no-argument serial `all` scheduler
-- [ ] T011 [US1] Implement the bounded recursive GNU Make Rust DAG, cgroup-aware `D2B_RUST_BUDGET`, runtime active-lane and quota calculation valid down to budget `1`, grouped output, keep-going behavior, recursive-Make jobserver propagation, and stable public shard targets in `Makefile`
-- [ ] T012 [US1] Pass each Rust lane's runtime quota through Cargo `--jobs` and nextest test threads, dependency-order same-target operations, unset `MAKEFLAGS`, `MFLAGS`, and `MAKELEVEL` for quota-controlled Cargo/nextest children, and write completed leaves to `D2B_EXECUTION_MANIFEST` in `tests/test-rust.sh`
+- [ ] T011 [US1] Implement the bounded recursive GNU Make Rust DAG, cache-aware cgroup `D2B_RUST_BUDGET`, numeric top-level Make `-jN` cap, bare `-j` rejection, runtime active-lane and quota calculation valid down to budget `1`, grouped output, keep-going behavior, recursive-Make jobserver propagation, and stable public shard targets in `Makefile`
+- [ ] T012 [US1] Pass each Rust lane's runtime quota through Cargo `--jobs` and nextest test threads, dependency-order same-target operations, close numeric jobserver descriptors and unset `MAKEFLAGS`, `MFLAGS`, and `MAKELEVEL` for quota-controlled children, and write completed leaves to `D2B_EXECUTION_MANIFEST` in `tests/test-rust.sh`
 - [ ] T013 [US1] Route monolithic and background Rust callers through `make test-rust` instead of invoking the removed Bash aggregate in `tests/static.sh`
 - [ ] T014 [US1] Update target-directory and cache synchronization assertions for the new Rust leaf layout in `tests/unit/gates/ci-rust-cache-sync.sh`; if Rust manifest wiring changes, update `tests/layer1-jobs.json` and regenerate `.github/workflows/pr-l1-static-fast.yml`
 - [ ] T015 [US1] Commit the Rust implementation and contract-test changes with tag `( spec002w1 )` in `Makefile`, `tests/test-rust.sh`, `tests/static.sh`, `tests/unit/meta/ci-runner-regression.py`, `tests/unit/gates/ci-rust-cache-sync.sh`, and `packages/xtask/tests/policy_workspace.rs` before running Nix-backed validation
@@ -170,12 +170,12 @@ recorded external contention.
 
 ### Tests for User Story 4
 
-- [ ] T039 [P] [US4] Add failing assertions for positive `D2B_RUST_BUDGET` validation, cgroup-constrained memory behavior, grouped output, runtime frontier bounds for budgets including `1`, and actionable deprecation failures for obsolete local Nix worker knobs in `tests/unit/meta/ci-runner-regression.py`
+- [ ] T039 [P] [US4] Add failing assertions for positive `D2B_RUST_BUDGET` validation, numeric Make job caps, reclaimable-cache and unreadable cgroup behavior, jobserver descriptor closure, grouped output, runtime frontier bounds for budgets including `1`, and actionable deprecation failures for obsolete local Nix worker knobs in `tests/unit/meta/ci-runner-regression.py`
 - [ ] T040 [P] [US4] Add policy assertions that broker passes remain serial and same-target-directory Rust leaves cannot overlap in `packages/xtask/tests/policy_workspace.rs`
 
 ### Implementation for User Story 4
 
-- [ ] T041 [US4] Tune the aggregate Rust lane count and runtime per-lane Cargo/nextest quotas from CPU plus the smaller of `MemAvailable` and remaining cgroup v2 allowance, preserve the `D2B_RUST_BUDGET` constrained-host override, and prove every active frontier stays within budget in `Makefile` and `tests/test-rust.sh`
+- [ ] T041 [US4] Tune the aggregate Rust lane count and runtime per-lane Cargo/nextest quotas from CPU, numeric Make job caps, and the smaller of `MemAvailable` and cache-adjusted remaining cgroup v2 allowance; preserve `D2B_RUST_BUDGET` as an upper bound and prove every active frontier stays within budget in `Makefile` and `tests/test-rust.sh`
 - [ ] T042 [US4] Remove only scheduler variables made obsolete by the selected implementations from `tests/layer1-jobs.json` and `Makefile`; retain compatibility aliases or fail-fast migration checks in the drivers as recorded by the candidate decision, plus all CI selectors
 - [ ] T043 [US4] Commit the final resource-budget and policy changes with tag `( spec002w4 )` in `Makefile`, `tests/test-rust.sh`, `tests/test-nix-unit.sh`, `tests/test-flake.sh`, `tests/layer1-jobs.json`, `tests/unit/meta/ci-runner-regression.py`, and `packages/xtask/tests/policy_workspace.rs` before resource validation
 - [ ] T044 [US4] Run warm-cache default-budget and constrained-budget repetitions of all three targets, capture CPU, memory, load, exit status, and variance in `.scratch/test-speedup-optimized/resource-stability.json`, require the slowest valid warm run to remain within 20% of its median, and record conclusions in `specs/002-optimize-test-orchestration/benchmark-results.md`

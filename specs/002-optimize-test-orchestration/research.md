@@ -23,8 +23,9 @@ represent directly.
   linearize the graph. Cargo is not expected to acquire weighted Make tokens.
 - Recursive Make recipes use `+$(MAKE)` and preserve the inherited jobserver.
   Cargo and nextest commands explicitly unset `MAKEFLAGS`, `MFLAGS`, and
-  `MAKELEVEL` so their explicit quotas cannot be overridden by jobserver
-  discovery.
+  `MAKELEVEL` and close numeric jobserver descriptors parsed from the saved
+  flags, so their explicit quotas cannot be overridden and no coordination
+  descriptor leaks into test processes.
 
 **Alternatives considered**:
 

@@ -53,13 +53,24 @@ The stable `test-rust` CI context remains the rollup of those enforcing jobs.
 - The default aggregate budget is the smaller of available logical CPUs and a
   memory-derived cap. Available memory is the smaller of Linux `MemAvailable`
   and the remaining finite cgroup v2 `memory.max` or `memory.high` allowance,
-  then reserves 2 GiB for the host and budgets 3 GiB per heavy Rust job.
+  where effective cgroup usage subtracts `inactive_file` from
+  `memory.current`. It then reserves 2 GiB for the host and budgets 3 GiB per
+  heavy Rust job.
+- A numeric top-level Make `-jN` or `--jobs=N` is an additional cap. Bare
+  unlimited `-j` fails with a migration message directing the contributor to
+  `D2B_RUST_BUDGET`.
+- `D2B_RUST_BUDGET` is a requested upper bound, not a bypass for CPU, cgroup,
+  or Make caps.
 - GNU Make's jobserver limits the number of simultaneously active workspace
   lanes. Relative lane weights are static, but each Cargo `--jobs` and nextest
   thread quota is computed from the runtime `D2B_RUST_BUDGET`. The active-lane
   limit and quotas MUST guarantee that every runnable frontier sums to no more
   than the runtime budget, including a budget of `1`.
-- Invalid budget values return exit status `2`.
+- Invalid budget values return exit status `2` with a message naming the
+  rejected value and requiring a positive integer.
+- If `/proc/self/cgroup` identifies a cgroup v2 membership but its memory
+  controller data cannot be read, the automatic budget fails closed to `1`
+  with a warning rather than using host memory.
 
 ## `make test-nix-unit`
 
