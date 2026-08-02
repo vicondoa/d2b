@@ -19435,7 +19435,7 @@
       "destinations" : [
         "`packages/d2b-provider-observability-otel/src/agent.rs` adapted; ComponentSessionDriver mock becomes shared Provider session fixture."
       ],
-      "detailedDesign" : "Session-bound ProviderAgentProcess construction, bounded audit snapshot, closed-set ProviderAgentError paths, and full ComponentSessionDriver mock for hermetic Provider tests. Primary reuse disposition: `adapt`. Preserved source-plan detail: Adapt provider-agent session wrapper and audit ring; replace gateway-runtime audit envelope with v3 `d2b-audit` records..",
+      "detailedDesign" : "Session-bound ProviderAgentProcess construction, bounded audit snapshot, closed-set ProviderAgentError paths, and full ComponentSessionDriver mock for hermetic Provider tests. The bounded ring is a Provider-local diagnostic surface and is never the authority for what happened. Primary reuse disposition: `adapt`. Preserved source-plan detail: Adapt provider-agent session wrapper and audit ring; replace the gateway-runtime audit envelope with the admitted `d2b-provider-toolkit` diagnostic event boundary rather than a Provider-local `d2b-audit` writer..",
       "entryContracts" : [
         "ADR-046-telemetry-audit-and-support"
       ],
@@ -19451,7 +19451,7 @@
       ],
       "specId" : "ADR-046-telemetry-audit-and-support",
       "topologicalRank" : 14,
-      "validation" : "Adopt `provider_agent_v2.rs` mock harness unchanged as shared v3 Provider session fixture. Add v3 audit-bridge test: provider-agent session → `SessionConnect{transport_class=\"zone_link\"}` record emitted.",
+      "validation" : "Adopt the `provider_agent_v2.rs` mock harness as the shared v3 Provider session fixture. Add a Provider-side boundary test: a provider-agent session emits a bounded diagnostic event with `record_class = \"session-connect\"` and `transport_class = \"zone_link\"` and no payload, and the crate manifest names neither `d2b-audit` nor `d2b-telemetry`. The authoritative `SessionConnect{transport_class=\"zone_link\"}` record assertion belongs to `ADR046-audit-003` against `d2b-session`, not to this item.",
       "wave" : "W5"
     },
     {
@@ -22498,7 +22498,7 @@
       ],
       "specId" : "ADR-046-telemetry-audit-and-support",
       "topologicalRank" : 10,
-      "validation" : "`emitter_socket_receive`, `emitter_ring_drains_on_socket_available`, `emitter_ring_drop_on_overflow`, table-driven `ingress_metric_policy` across all four ingress adapters, `no_vm_label_in_metrics`, and `zone_startup_proceeds_without_provider` tests; adapted `policy_observability.rs` tests (retain `loki_native_otel_resource_attributes` and SigNoz-only backend assertions); adapted `minijail_relay_otel.rs` shape test for Provider-managed runner",
+      "validation" : "`emitter_socket_receive`, `emitter_ring_drains_on_socket_available`, `emitter_ring_drop_on_overflow`, a table-driven `ingress_metric_policy` test covering all four `Ingress` variants of the one shared structural gate, `no_vm_label_in_metrics`, and `zone_startup_proceeds_without_provider` tests; adapted `policy_observability.rs` tests (retain `loki_native_otel_resource_attributes` and SigNoz-only backend assertions); adapted `minijail_relay_otel.rs` shape test for Provider-managed runner. The table is proven exhaustive by a wildcard-free `match` over `Ingress`, so a new variant fails the build rather than escaping coverage. Live `otlp_unix`, `otlp_vsock` and `import_stream` ingress adapters are not validated here: they require the OTLP exporter, the native OTLP-over-vsock path and D096 import ingest, and this item's own Removal proof retires the socat host bridge only after those land.",
       "wave" : "W5"
     },
     {

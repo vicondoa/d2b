@@ -1122,7 +1122,7 @@
         "ADR-046-terminology-and-identities"
       ],
       "path" : "docs/specs/ADR-046-telemetry-audit-and-support.md",
-      "sha256" : "f3fe03538910d76b7f7c09ef1c1bbf568207b654ae63abd60bde40bf2043043e",
+      "sha256" : "92d04c60b30b1667e8bbaa49e934166d6bf66614123cf84a15851333d37ab8aa",
       "specId" : "ADR-046-telemetry-audit-and-support",
       "status" : "Accepted",
       "supersedes" : "Current `d2bd` hand-rolled Prometheus registry; current daemon/broker/gateway JSONL audit paths",

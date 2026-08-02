@@ -230,6 +230,25 @@ item `ADR046-process-001` is W4. Per "existing code is canon" the machine-readab
 This plan follows the graph. Correcting the prose is a specification amendment that re-opens
 that spec's evidence, so it is raised to the integrator rather than fixed mid-wave.
 
+`ADR-046-telemetry-audit-and-support` work item `ADR046-reuse-005` required the
+`observability-otel` Provider to emit authoritative `SessionConnect` records "via `d2b-audit`".
+That obligation is not dischargeable from a Provider crate and contradicts two committed,
+passing surfaces. `ALLOWED_WORKSPACE_DEPS` in
+`packages/d2b-contract-tests/tests/policy_provider_crates.rs` admits only `d2b-contracts`,
+`d2b-controller-toolkit`, `d2b-core`, `d2b-process-conformance`, `d2b-provider` and
+`d2b-provider-toolkit`, and `packages/d2b-provider-toolkit/src/audit.rs` states in code that the
+Provider agent ring is "diagnostic, never the authority for what happened". The authoritative
+writer already exists at `packages/d2b-session/src/audit.rs` and belongs to `ADR046-audit-003`.
+Per "existing code is canon" the code wins, and per the ruling class established in
+`implementation-debt.md` §16.1 this is a manifest defect rather than permission for a
+slice-local workaround. The correction was authored in the member spec and regenerated:
+the Provider is the subject of the record, not its author; the crate takes no `d2b-audit` and
+no direct `d2b-telemetry` dependency; the closed `METRIC_LABEL_POLICY` data is single-sourced
+in `d2b-contracts` and re-exported by both sides. `ADR046-telem-006`'s validation phrase was
+corrected in the same pass to distinguish the table-driven four-variant test of the one shared
+ingress gate, which is owed now, from live `otlp_unix` / `otlp_vsock` / `import_stream`
+adapters, which that item's own Removal proof sequences after the OTLP exporter.
+
 ## Complexity Tracking
 
 | Violation | Why Needed | Simpler Alternative Rejected Because |
