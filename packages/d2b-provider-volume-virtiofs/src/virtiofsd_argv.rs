@@ -47,7 +47,7 @@ impl SocketGroup {
 }
 
 /// Inputs accepted by the effect-boundary argv renderer.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct VirtiofsdArgvInput {
     /// Absolute path to the trusted virtiofsd binary.
     pub virtiofsd_binary_path: String,
@@ -67,6 +67,22 @@ pub struct VirtiofsdArgvInput {
     pub cache: VirtiofsdCacheMode,
     /// Whether to serve the view read-only.
     pub readonly: bool,
+}
+
+impl fmt::Debug for VirtiofsdArgvInput {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("VirtiofsdArgvInput")
+            .field("socket_path", &self.socket_path)
+            .field("shared_dir_fd", &self.shared_dir_fd)
+            .field("socket_group", &self.socket_group)
+            .field("thread_pool_size", &self.thread_pool_size)
+            .field("posix_acl", &self.posix_acl)
+            .field("xattr", &self.xattr)
+            .field("cache", &self.cache)
+            .field("readonly", &self.readonly)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Closed argv rendering failure.
@@ -211,5 +227,13 @@ mod tests {
                 .skip(1)
                 .all(|arg| { known.iter().any(|prefix| arg.starts_with(prefix)) })
         );
+    }
+
+    #[test]
+    fn argv_input_debug_redacts_private_binary_and_socket_values() {
+        let rendered = format!("{:?}", input());
+        assert!(!rendered.contains("/nix/store"));
+        assert!(!rendered.contains(".sock"));
+        assert!(rendered.contains("VirtiofsdArgvInput"));
     }
 }
