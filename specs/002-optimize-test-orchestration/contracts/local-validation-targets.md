@@ -26,6 +26,9 @@ All three commands:
   begins, and publish partial evidence atomically on failure or handled
   interruption. The binding schema is
   `docs/reference/schemas/test-execution-manifest-v1.json`.
+- If `<manifest>.lock` is held by another invocation, fail with an actionable
+  message naming the lock and directing the contributor to wait for the active
+  run to finish.
 
 ## `make test-rust`
 

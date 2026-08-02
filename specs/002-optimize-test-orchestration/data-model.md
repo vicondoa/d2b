@@ -77,11 +77,16 @@ repository merely made available for discovery.
 - The manifest is deterministic after sorting.
 - A target acquires an exclusive lock on a separate persistent
   `<manifest>.lock` file before invalidating prior evidence. The lockfile is
-  mode `0600`, current-user-owned, opened without following symlinks, and is
-  never unlinked as part of manifest replacement.
-- Fragment storage is created with `mktemp -d`, mode `0700`, and the current
-  effective uid; the finalizer rejects symlinks, owner mismatches, or broader
-  permissions.
+  mode `0600`, current-user-owned, opened with `O_CLOEXEC`, and protected by a
+  non-blocking `F_OFD_SETLK` lock. It is never unlinked as part of manifest
+  replacement. Contention fails with an error naming `<manifest>.lock` and
+  directing the operator to wait for the active run to finish.
+- The manifest parent and cleanup candidates are opened with anchored
+  resolution equivalent to `openat2` `RESOLVE_NO_SYMLINKS` and
+  `RESOLVE_NO_MAGICLINKS`. Fragment storage is created adjacent to the
+  requested manifest on the same filesystem, with mode `0700` and the current
+  effective uid, so final publication cannot fail with cross-filesystem
+  `EXDEV`. The finalizer rejects owner mismatches or broader permissions.
 - The top-level target removes the requested prior manifest and only its own
   prior temporary fragment directory before any evaluation or dispatch.
   Concurrent leaves write one uniquely named temporary fragment each and
@@ -95,9 +100,10 @@ repository merely made available for discovery.
   run-specific temporary state, and preserves the original exit status.
 - An uncatchable termination may leave no manifest, but the prior success
   manifest has already been removed. Stale cleanup opens each candidate
-  directory first, verifies type, ownership, and permissions with `fstat`, and
-  removes entries through anchored fd-relative operations such as `unlinkat`;
-  it never uses a stat-then-path-unlink sequence.
+  directory through the anchored no-symlink/no-magiclink boundary, verifies
+  type, ownership, and permissions with `fstat`, and removes entries through
+  fd-relative operations such as `unlinkat`; it never uses a
+  stat-then-path-unlink sequence.
 - The production shutdown grace is fixed at 10 seconds. The shutdown helper
   accepts an internal clock and process-control boundary so hermetic tests can
   inject a zero-duration grace and mocked children without exposing a public

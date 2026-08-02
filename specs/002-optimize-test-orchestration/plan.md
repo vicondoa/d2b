@@ -429,6 +429,7 @@ This plan uses strict phase ordering rather than pipelined dispatch.
 | Partial evidence | Plan panel round 8 | Failure paths needed atomic partial manifests, pre-evaluation invalidation, zero-interval handling, and explicit PSI composite rejection tests. | Resolved |
 | Signal lifecycle | Plan panel round 9 | Partial finalization needed bounded process-group shutdown, secure atomic fragments, temporary cleanup, schema versioning, and explicit interruption tests. | Resolved |
 | Evidence path safety | Plan panel round 10 | Manifest ownership needed a persistent lockfile, anchored fd-relative cleanup, Make-owned descriptor closure, injectable shutdown tests, and a binding JSON schema. | Resolved |
+| Lock and schema delivery | Plan panel round 11 | The persistent lock needed OFD and close-on-exec semantics, temp storage needed same-filesystem anchored resolution, and schema/docs/changelog had to ship with the first emitter commit. | Resolved |
 
 ## Post-Design Constitution Check
 
