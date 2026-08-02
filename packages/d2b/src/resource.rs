@@ -296,16 +296,16 @@ pub(crate) fn request_list(
     deadline: RequestDeadline,
 ) -> Result<Value, CliFailure> {
     let resource_type = parse_resource_type(&args.resource_type)?;
-    let payload = list_payload(
-        resource_type.as_str(),
-        args.execution_ref.as_deref(),
-        args.domain.as_deref(),
-        args.phase.as_deref(),
-        args.label_selector.as_deref(),
-        args.updates,
-        args.page_token.as_deref(),
-        args.limit,
-    )?;
+    let payload = list_payload(ListPayloadArgs {
+        resource_type: resource_type.as_str(),
+        execution_ref: args.execution_ref.as_deref(),
+        domain: args.domain.as_deref(),
+        phase: args.phase.as_deref(),
+        label_selector: args.label_selector.as_deref(),
+        updates: args.updates,
+        page_token: args.page_token.as_deref(),
+        limit: args.limit,
+    })?;
     context.invoke("List", payload, deadline, mode)
 }
 
@@ -319,16 +319,16 @@ pub(crate) fn watch(
         return Err(context.failure("ref-invalid", "watch output is JSON-lines only", mode, 2));
     }
     let resource_type = parse_resource_type(&args.resource_type)?;
-    let payload = list_payload(
-        resource_type.as_str(),
-        None,
-        None,
-        args.phase.as_deref(),
-        args.label_selector.as_deref(),
-        false,
-        None,
-        None,
-    )?
+    let payload = list_payload(ListPayloadArgs {
+        resource_type: resource_type.as_str(),
+        execution_ref: None,
+        domain: None,
+        phase: args.phase.as_deref(),
+        label_selector: args.label_selector.as_deref(),
+        updates: false,
+        page_token: None,
+        limit: None,
+    })?
     .as_object()
     .cloned()
     .map(|mut object| {
@@ -697,16 +697,28 @@ fn authorities(
     Ok(0)
 }
 
-fn list_payload(
-    resource_type: &str,
-    execution_ref: Option<&str>,
-    domain: Option<&str>,
-    phase: Option<&str>,
-    label_selector: Option<&str>,
+struct ListPayloadArgs<'a> {
+    resource_type: &'a str,
+    execution_ref: Option<&'a str>,
+    domain: Option<&'a str>,
+    phase: Option<&'a str>,
+    label_selector: Option<&'a str>,
     updates: bool,
-    page_token: Option<&str>,
+    page_token: Option<&'a str>,
     limit: Option<u32>,
-) -> Result<Value, CliFailure> {
+}
+
+fn list_payload(args: ListPayloadArgs<'_>) -> Result<Value, CliFailure> {
+    let ListPayloadArgs {
+        resource_type,
+        execution_ref,
+        domain,
+        phase,
+        label_selector,
+        updates,
+        page_token,
+        limit,
+    } = args;
     if let Some(selector) = label_selector {
         let (key, value) = selector
             .split_once('=')
@@ -900,19 +912,43 @@ mod tests {
     #[test]
     fn list_limits_and_selectors_are_bounded() {
         assert!(
-            list_payload(
-                "Guest",
-                None,
-                None,
-                None,
-                Some("env=dev"),
-                false,
-                None,
-                Some(1)
-            )
+            list_payload(ListPayloadArgs {
+                resource_type: "Guest",
+                execution_ref: None,
+                domain: None,
+                phase: None,
+                label_selector: Some("env=dev"),
+                updates: false,
+                page_token: None,
+                limit: Some(1),
+            })
             .is_ok()
         );
-        assert!(list_payload("Guest", None, None, None, Some("env"), false, None, None).is_err());
-        assert!(list_payload("Guest", None, None, None, None, false, None, Some(501)).is_err());
+        assert!(
+            list_payload(ListPayloadArgs {
+                resource_type: "Guest",
+                execution_ref: None,
+                domain: None,
+                phase: None,
+                label_selector: Some("env"),
+                updates: false,
+                page_token: None,
+                limit: None,
+            })
+            .is_err()
+        );
+        assert!(
+            list_payload(ListPayloadArgs {
+                resource_type: "Guest",
+                execution_ref: None,
+                domain: None,
+                phase: None,
+                label_selector: None,
+                updates: false,
+                page_token: None,
+                limit: Some(501),
+            })
+            .is_err()
+        );
     }
 }
