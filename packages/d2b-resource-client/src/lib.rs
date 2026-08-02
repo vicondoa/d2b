@@ -27,12 +27,12 @@
 //!
 //! # What this crate deliberately does not contain
 //!
-//! Session establishment, the Noise handshake, wire encoding, attachments, and
-//! named streams are not here. Those depend on the Zone session engine and the
-//! v3 session contract module, which land separately; `d2b-bus` composes them
-//! with the route and call policy this crate provides. Consequently there is no
-//! connector trait, no `ConnectedClient`, and no `Response` type yet: inventing
-//! one would fix a session contract this crate has no authority to define.
+//! Session establishment, the Noise handshake, wire encoding, and attachment
+//! ownership remain with the Zone session engine. This crate exposes the
+//! transport-neutral connector and connected-session seams that let that
+//! engine supply authenticated evidence without moving authority or wire
+//! ownership into the client. Named Watch teardown is likewise delegated to
+//! the session-owned stream adapter.
 //!
 //! The request-metadata bounds in `call` are carried over from the ADR45
 //! client because the v3 session contract module does not publish them yet.

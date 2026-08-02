@@ -480,7 +480,7 @@ where
         let resolved = self
             .resource
             .resolve(target, ZoneServiceKind::Resource, selection)?;
-        let profile = method_profile(verb, &options)?;
+        let profile = method_profile_for_service(ZoneServiceKind::Resource, verb, &options)?;
         let driver = self
             .resource
             .prepare_call(&resolved, profile, options, has_attachments)?;
@@ -532,8 +532,8 @@ where
         execute_resource_call(&self.resource, session, &resolved, verb, _driver, request).await
     }
 
-    /// Execute a call over a handle whose authenticated route pin was checked
-    /// by [`Self::connect`].
+    /// Execute a typed call over a handle whose authenticated route pin was
+    /// checked by [`Self::connect`].
     pub async fn call_connected(
         &self,
         connection: &ConnectedZoneClient<C::Session>,
@@ -546,11 +546,11 @@ where
     {
         if !connection
             .session_pin()
-            .matches_target(connection.target(), ZoneServiceKind::Resource)
+            .matches_target(connection.target(), connection.target().service())
         {
             return Err(ClientError::TransportPolicyMismatch);
         }
-        let profile = method_profile(verb, &options)?;
+        let profile = method_profile_for_service(connection.target().service(), verb, &options)?;
         let driver = self.resource.prepare_call(
             connection.target(),
             profile,
@@ -569,7 +569,11 @@ where
     }
 }
 
-fn method_profile(verb: ResourceVerb, options: &CallOptions) -> Result<MethodProfile, ClientError> {
+fn method_profile_for_service(
+    service: ZoneServiceKind,
+    verb: ResourceVerb,
+    options: &CallOptions,
+) -> Result<MethodProfile, ClientError> {
     let lifetime_ms = options
         .metadata
         .expires_at_unix_ms()
@@ -577,7 +581,7 @@ fn method_profile(verb: ResourceVerb, options: &CallOptions) -> Result<MethodPro
         .and_then(|value| u32::try_from(value).ok())
         .ok_or(ClientError::InvalidMetadata)?;
     MethodProfile::new(
-        ZoneServiceKind::Resource,
+        service,
         resource_verb_is_mutating(verb),
         resource_verb_is_mutating(verb),
         lifetime_ms,

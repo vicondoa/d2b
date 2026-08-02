@@ -3,14 +3,31 @@
 
 use std::{
     env, fs,
+    future::{Future, ready},
     io::{self, Read as _},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
+    task::{Context as TaskContext, Poll, Wake, Waker},
+    thread,
     time::Duration,
 };
 
-use d2b_contracts::v3::{ResourceRef, ResourceTypeName, ZoneId, identity::STANDARD_RESOURCE_TYPES};
+use d2b_contracts::v3::{
+    CanonicalJsonObject, ResourceErrorKind, ResourceRef, ResourceTypeName, RetryClass, ZoneId,
+    identity::STANDARD_RESOURCE_TYPES,
+};
+use d2b_resource_client::{
+    CallOptions, CancellationToken, ClientError, ConnectedZoneSession, MetadataInput,
+    ResourceCallOptions, ResourceVerb, RetryPolicy, RouteRecord, RouteTable, ServiceOwner,
+    SystemClock, TargetInput, TransportKind, TransportSelection, WallClock, ZoneClient,
+    ZonePeerIdentity, ZoneServiceKind, ZoneSessionConnector, ZoneSessionPin, ZoneSocketConnector,
+    resource_verb_is_mutating,
+};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 use crate::{CliFailure, MAX_FRAME_BYTES, SeqpacketUnixSocket, print_stdout};
 
@@ -48,7 +65,8 @@ impl RequestDeadline {
     }
 }
 
-/// Errors raised before a resource response exists.
+/// Errors raised by the test-only injected transport.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TransportError {
     Unavailable,
@@ -60,52 +78,46 @@ pub(crate) enum TransportError {
     Io,
 }
 
-/// The transport boundary is deliberately injectable. Tests can provide a
-/// pure response client without opening a host socket, while production uses
-/// the local ComponentSession endpoint.
+/// The transport boundary is deliberately injectable in unit tests. Production
+/// uses the typed `d2b-resource-client` facade and its private Zone adapter.
+#[cfg(test)]
 pub(crate) trait SessionClient: Send + Sync {
     fn invoke(&self, request: &[u8], deadline: RequestDeadline) -> Result<Vec<u8>, TransportError>;
 }
 
-#[derive(Debug)]
-struct UnixSessionClient {
+#[derive(Clone)]
+struct CanonicalZoneBackend {
+    zone_name: String,
+    zone_path: d2b_contracts::v3::zone_routing::ZonePath,
     socket_path: PathBuf,
 }
 
-impl SessionClient for UnixSessionClient {
-    fn invoke(&self, request: &[u8], deadline: RequestDeadline) -> Result<Vec<u8>, TransportError> {
-        let mut socket = SeqpacketUnixSocket::connect(&self.socket_path)
-            .map_err(|error| classify_transport_error(&error))?;
-        socket
-            .set_io_timeout(deadline.duration())
-            .map_err(|error| classify_transport_error(&error))?;
-        let hello = crate::daemon_hello_frame("hello").map_err(|_| TransportError::Io)?;
-        socket
-            .send_frame(&hello)
-            .map_err(|error| classify_transport_error(&error))?;
-        let hello_reply = socket
-            .recv_frame()
-            .map_err(|error| classify_transport_error(&error))?;
-        let hello_type = serde_json::from_slice::<Value>(&hello_reply)
-            .ok()
-            .and_then(|value| value.get("type").and_then(Value::as_str).map(str::to_owned));
-        if hello_type.as_deref() != Some("helloOk") {
-            return Err(if hello_type.as_deref() == Some("helloRejected") {
-                TransportError::AuthRejected
-            } else {
-                TransportError::InvalidResponse
-            });
+impl std::fmt::Debug for CanonicalZoneBackend {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CanonicalZoneBackend")
+            .field("zone_name", &self.zone_name)
+            .field("session", &"<authenticated>")
+            .finish()
+    }
+}
+
+#[cfg(test)]
+enum ContextBackend {
+    Canonical(CanonicalZoneBackend),
+    Injected(Arc<dyn SessionClient>),
+}
+
+#[cfg(not(test))]
+type ContextBackend = CanonicalZoneBackend;
+
+#[cfg(test)]
+impl std::fmt::Debug for ContextBackend {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Canonical(backend) => formatter.debug_tuple("Canonical").field(backend).finish(),
+            Self::Injected(_) => formatter.write_str("Injected(<test>)"),
         }
-        socket
-            .send_frame(request)
-            .map_err(|error| classify_transport_error(&error))?;
-        let response = socket
-            .recv_frame()
-            .map_err(|error| classify_transport_error(&error))?;
-        if response.len() > MAX_FRAME_BYTES {
-            return Err(TransportError::OversizedResponse);
-        }
-        Ok(response)
     }
 }
 
@@ -113,7 +125,8 @@ impl SessionClient for UnixSessionClient {
 pub(crate) struct ZoneContext {
     zone_name: String,
     socket_path: PathBuf,
-    session_client: Arc<dyn SessionClient>,
+    zone_path: d2b_contracts::v3::zone_routing::ZonePath,
+    backend: ContextBackend,
 }
 
 impl std::fmt::Debug for ZoneContext {
@@ -121,7 +134,7 @@ impl std::fmt::Debug for ZoneContext {
         formatter
             .debug_struct("ZoneContext")
             .field("zone_name", &self.zone_name)
-            .field("session_client", &"<injected>")
+            .field("backend", &self.backend)
             .finish()
     }
 }
@@ -131,11 +144,7 @@ impl ZoneContext {
         let socket_path = env::var_os("D2B_PUBLIC_SOCKET")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("/run/d2b/public.sock"));
-        Self {
-            zone_name: "local-root".to_owned(),
-            socket_path: socket_path.clone(),
-            session_client: Arc::new(UnixSessionClient { socket_path }),
-        }
+        Self::from_socket("local-root".to_owned(), socket_path)
     }
 
     /// Discover the nearest reachable Zone socket.
@@ -178,12 +187,14 @@ impl ZoneContext {
         });
         validate_zone_name(&selected_zone)?;
 
+        let zone_path = zone_path(&selected_zone)
+            .map_err(|_| CliFailure::new(2, "ref-invalid: invalid Zone name"))?;
+        let backend = canonical_backend(&selected_zone, &socket_path)?;
         Ok(Self {
-            session_client: Arc::new(UnixSessionClient {
-                socket_path: socket_path.clone(),
-            }),
             zone_name: selected_zone,
             socket_path,
+            zone_path,
+            backend,
         })
     }
 
@@ -196,11 +207,26 @@ impl ZoneContext {
     ) -> Result<Self, CliFailure> {
         let zone_name = zone_name.into();
         validate_zone_name(&zone_name)?;
+        let zone_path = zone_path(&zone_name)
+            .map_err(|_| CliFailure::new(2, "ref-invalid: invalid Zone name"))?;
         Ok(Self {
             zone_name,
             socket_path: socket_path.into(),
-            session_client,
+            zone_path,
+            backend: ContextBackend::Injected(session_client),
         })
+    }
+
+    fn from_socket(zone_name: String, socket_path: PathBuf) -> Self {
+        let zone_path = zone_path(&zone_name).expect("validated local Zone name");
+        let backend = canonical_backend(&zone_name, &socket_path)
+            .expect("validated local Zone socket backend");
+        Self {
+            zone_name,
+            socket_path,
+            zone_path,
+            backend,
+        }
     }
 
     pub(crate) fn zone_name(&self) -> &str {
@@ -254,6 +280,63 @@ impl ZoneContext {
         deadline: RequestDeadline,
         mode: OutputMode,
     ) -> Result<Value, CliFailure> {
+        #[cfg(test)]
+        if let ContextBackend::Injected(client) = &self.backend {
+            return self.invoke_injected(client.as_ref(), method, payload, deadline, mode);
+        }
+
+        #[cfg(test)]
+        let ContextBackend::Canonical(backend) = &self.backend else {
+            unreachable!("injected transport returned above");
+        };
+        #[cfg(not(test))]
+        let backend = &self.backend;
+
+        let value = backend
+            .invoke(method, payload, deadline)
+            .map_err(|error| self.client_failure(error, mode))?;
+        self.decorate_response(value)
+    }
+
+    #[cfg(test)]
+    fn invoke_injected(
+        &self,
+        client: &dyn SessionClient,
+        method: &str,
+        payload: Value,
+        deadline: RequestDeadline,
+        mode: OutputMode,
+    ) -> Result<Value, CliFailure> {
+        let request = self.request_value(method, payload, mode)?;
+        let request = serde_json::to_vec(&request).map_err(|_| {
+            self.failure(
+                "internal-error",
+                "failed to encode resource request",
+                mode,
+                1,
+            )
+        })?;
+        let response = client
+            .invoke(&request, deadline)
+            .map_err(|error| self.transport_failure(error, mode))?;
+        let value: Value = serde_json::from_slice(&response).map_err(|_| {
+            self.failure(
+                "exec-protocol-error",
+                "Zone returned an invalid resource response",
+                mode,
+                1,
+            )
+        })?;
+        let value = self.validate_response(value, mode)?;
+        self.decorate_response(value)
+    }
+
+    fn request_value(
+        &self,
+        method: &str,
+        payload: Value,
+        mode: OutputMode,
+    ) -> Result<Value, CliFailure> {
         let mut request = match payload {
             Value::Object(object) => object,
             _ => {
@@ -275,27 +358,10 @@ impl ZoneContext {
             "schemaVersion".to_owned(),
             Value::Number(serde_json::Number::from(JSON_SCHEMA_VERSION)),
         );
-        let request = serde_json::to_vec(&Value::Object(request)).map_err(|_| {
-            self.failure(
-                "internal-error",
-                "failed to encode resource request",
-                mode,
-                1,
-            )
-        })?;
+        Ok(Value::Object(request))
+    }
 
-        let response = self
-            .session_client
-            .invoke(&request, deadline)
-            .map_err(|error| self.transport_failure(error, mode))?;
-        let mut value: Value = serde_json::from_slice(&response).map_err(|_| {
-            self.failure(
-                "exec-protocol-error",
-                "Zone returned an invalid resource response",
-                mode,
-                1,
-            )
-        })?;
+    fn validate_response(&self, value: Value, mode: OutputMode) -> Result<Value, CliFailure> {
         if !value.is_object() {
             return Err(self.failure(
                 "resource-schema-invalid",
@@ -351,6 +417,10 @@ impl ZoneContext {
             );
             return Err(self.failure(class, &message, mode, error_exit_code(class)));
         }
+        Ok(value)
+    }
+
+    fn decorate_response(&self, mut value: Value) -> Result<Value, CliFailure> {
         if let Value::Object(object) = &mut value {
             object.entry("ok".to_owned()).or_insert(Value::Bool(true));
             object.insert("zoneRef".to_owned(), Value::String(self.zone_ref()));
@@ -387,6 +457,51 @@ impl ZoneContext {
         failure
     }
 
+    fn client_failure(&self, error: ClientError, mode: OutputMode) -> CliFailure {
+        let (class, message, exit_code) = match error {
+            ClientError::InvalidTarget
+            | ClientError::InvalidService
+            | ClientError::InvalidMethod
+            | ClientError::InvalidMetadata
+            | ClientError::IdempotencyRequired => {
+                ("resource-schema-invalid", "resource request was invalid", 2)
+            }
+            ClientError::RouteUnavailable | ClientError::SessionLost => {
+                ("zone-unavailable", "Zone runtime is unavailable", 1)
+            }
+            ClientError::TransportPolicyMismatch => (
+                "exec-auth-error",
+                "Zone session route authentication was rejected",
+                77,
+            ),
+            ClientError::DeadlineExpired => {
+                ("deadline-exceeded", "Zone request exceeded its deadline", 1)
+            }
+            ClientError::Cancelled => ("operation-cancelled", "Zone request was cancelled", 3),
+            ClientError::TransportFailed => {
+                ("zone-unavailable", "Zone transport is unavailable", 1)
+            }
+            ClientError::AmbiguousMutation => (
+                "resource-conflict",
+                "resource mutation outcome was ambiguous",
+                1,
+            ),
+            ClientError::ContractViolation => (
+                "exec-protocol-error",
+                "Zone returned an invalid resource response",
+                1,
+            ),
+            ClientError::RetryLimitExceeded => (
+                "zone-unavailable",
+                "Zone request retry budget was exhausted",
+                1,
+            ),
+            ClientError::Remote { kind, .. } => resource_error_surface(kind),
+        };
+        self.failure(class, message, mode, exit_code)
+    }
+
+    #[cfg(test)]
     fn transport_failure(&self, error: TransportError, mode: OutputMode) -> CliFailure {
         match error {
             TransportError::Unavailable | TransportError::Io => {
@@ -469,6 +584,497 @@ impl ZoneContext {
                 .or_insert_with(|| Value::Number(serde_json::Number::from(JSON_SCHEMA_VERSION)));
         }
         value
+    }
+}
+
+fn canonical_backend(zone_name: &str, socket_path: &Path) -> Result<ContextBackend, CliFailure> {
+    let zone_path =
+        zone_path(zone_name).map_err(|_| CliFailure::new(2, "ref-invalid: invalid Zone name"))?;
+    let backend = CanonicalZoneBackend {
+        zone_name: zone_name.to_owned(),
+        zone_path,
+        socket_path: socket_path.to_owned(),
+    };
+    #[cfg(test)]
+    {
+        Ok(ContextBackend::Canonical(backend))
+    }
+    #[cfg(not(test))]
+    {
+        Ok(backend)
+    }
+}
+
+impl CanonicalZoneBackend {
+    fn invoke(
+        &self,
+        method: &str,
+        payload: Value,
+        deadline: RequestDeadline,
+    ) -> Result<Value, ClientError> {
+        let payload = serde_json::to_vec(&payload).map_err(|_| ClientError::ContractViolation)?;
+        let payload =
+            CanonicalJsonObject::parse(&payload).map_err(|_| ClientError::ContractViolation)?;
+        let verb = canonical_verb(method);
+        let service = operation_service(method);
+        let options = call_options(deadline, verb)?;
+        let cancellation = CancellationToken::default();
+        let request = ResourceCallOptions::new(payload, false, &cancellation);
+        let owner = owner_for_zone(&self.zone_path);
+        let resolver = RouteTable::new(vec![RouteRecord::new(
+            owner.clone(),
+            TransportKind::LocalUnix,
+        )]);
+        let connector = CliZoneConnector::new(
+            self.zone_name.clone(),
+            self.zone_path.clone(),
+            self.socket_path.clone(),
+            method.to_owned(),
+            deadline.duration(),
+        );
+        let client = ZoneClient::new(resolver, connector);
+        let target = TargetInput::Service { owner, service };
+        let selection = TransportSelection::exact(TransportKind::LocalUnix);
+        let connection = block_on(client.connect(&target, service, selection))?;
+        let response = block_on(client.call_connected(&connection, verb, options, request))?;
+        serde_json::from_slice(&response.to_canonical_bytes())
+            .map_err(|_| ClientError::ContractViolation)
+    }
+}
+
+/// The CLI's private bridge from the local authenticated session endpoint to
+/// the transport-neutral resource client.
+#[derive(Clone)]
+struct CliZoneConnector {
+    zone_name: String,
+    zone_path: d2b_contracts::v3::zone_routing::ZonePath,
+    socket_path: PathBuf,
+    operation: String,
+    handshake_timeout: Duration,
+}
+
+impl std::fmt::Debug for CliZoneConnector {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CliZoneConnector")
+            .field("zone_name", &self.zone_name)
+            .field("operation", &self.operation)
+            .field("session", &"<authenticated>")
+            .finish()
+    }
+}
+
+impl CliZoneConnector {
+    fn new(
+        zone_name: String,
+        zone_path: d2b_contracts::v3::zone_routing::ZonePath,
+        socket_path: PathBuf,
+        operation: String,
+        request_timeout: Duration,
+    ) -> Self {
+        Self {
+            zone_name,
+            zone_path,
+            socket_path,
+            operation,
+            handshake_timeout: request_timeout
+                .min(Duration::from_millis(LOCAL_HANDSHAKE_DEADLINE_MS)),
+        }
+    }
+
+    fn connect_now(
+        &self,
+        target: &d2b_resource_client::ResolvedTarget,
+        service: ZoneServiceKind,
+    ) -> Result<(CliConnectedSession, ZoneSessionPin), ClientError> {
+        if !matches!(service, ZoneServiceKind::Resource | ZoneServiceKind::Zone)
+            || target.service() != service
+            || target.transport() != TransportKind::LocalUnix
+            || target.owner().zone() != &self.zone_path
+        {
+            return Err(ClientError::TransportPolicyMismatch);
+        }
+        let operation = validate_operation(&self.operation)?;
+        let mut socket =
+            SeqpacketUnixSocket::connect(&self.socket_path).map_err(classify_client_io_error)?;
+        socket
+            .set_io_timeout(self.handshake_timeout)
+            .map_err(classify_client_io_error)?;
+        let hello =
+            crate::daemon_hello_frame("hello").map_err(|_| ClientError::ContractViolation)?;
+        socket
+            .send_frame(&hello)
+            .map_err(classify_client_io_error)?;
+        let hello_reply = socket.recv_frame().map_err(classify_client_io_error)?;
+        let hello_type = serde_json::from_slice::<Value>(&hello_reply)
+            .ok()
+            .and_then(|value| value.get("type").and_then(Value::as_str).map(str::to_owned));
+        if hello_type.as_deref() != Some("helloOk") {
+            return Err(if hello_type.as_deref() == Some("helloRejected") {
+                ClientError::Remote {
+                    kind: ResourceErrorKind::AuthorizationDenied,
+                    retry: RetryClass::Never,
+                }
+            } else {
+                ClientError::ContractViolation
+            });
+        }
+        let peer = ZonePeerIdentity::from_observed_static_key(
+            self.zone_path.clone(),
+            peer_fingerprint(&self.zone_name),
+        );
+        let transcript_hash: [u8; 32] = Sha256::digest(&hello_reply).into();
+        let pin = ZoneSessionPin::new(
+            peer.clone(),
+            service,
+            TransportKind::LocalUnix,
+            1,
+            transcript_hash,
+        )?;
+        ZoneSocketConnector::new(peer).verify_session_pin(&pin)?;
+        Ok((
+            CliConnectedSession {
+                zone_name: self.zone_name.clone(),
+                operation,
+                socket: Arc::new(Mutex::new(socket)),
+            },
+            pin,
+        ))
+    }
+}
+
+impl ZoneSessionConnector for CliZoneConnector {
+    type Session = CliConnectedSession;
+
+    fn connect(
+        &self,
+        target: &d2b_resource_client::ResolvedTarget,
+        service: ZoneServiceKind,
+    ) -> impl Future<Output = Result<(Self::Session, ZoneSessionPin), ClientError>> + Send {
+        ready(self.connect_now(target, service))
+    }
+}
+
+#[derive(Clone)]
+struct CliConnectedSession {
+    zone_name: String,
+    operation: String,
+    socket: Arc<Mutex<SeqpacketUnixSocket>>,
+}
+
+impl std::fmt::Debug for CliConnectedSession {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("CliConnectedSession(<authenticated>)")
+    }
+}
+
+impl ConnectedZoneSession for CliConnectedSession {
+    fn call(
+        &self,
+        verb: ResourceVerb,
+        target: Option<ResourceRef>,
+        payload: CanonicalJsonObject,
+    ) -> impl Future<Output = Result<CanonicalJsonObject, ClientError>> + Send {
+        self.call_with_timeout(verb, target, payload, u64::MAX)
+    }
+
+    fn call_with_timeout(
+        &self,
+        _verb: ResourceVerb,
+        target: Option<ResourceRef>,
+        payload: CanonicalJsonObject,
+        relative_timeout_nanos: u64,
+    ) -> impl Future<Output = Result<CanonicalJsonObject, ClientError>> + Send {
+        let result = self.invoke(target, payload, relative_timeout_nanos);
+        ready(result)
+    }
+}
+
+impl CliConnectedSession {
+    fn invoke(
+        &self,
+        target: Option<ResourceRef>,
+        payload: CanonicalJsonObject,
+        relative_timeout_nanos: u64,
+    ) -> Result<CanonicalJsonObject, ClientError> {
+        let mut request: Value = serde_json::from_slice(&payload.to_canonical_bytes())
+            .map_err(|_| ClientError::ContractViolation)?;
+        let object = request
+            .as_object_mut()
+            .ok_or(ClientError::ContractViolation)?;
+        object.insert(
+            "type".to_owned(),
+            Value::String("resourceRequest".to_owned()),
+        );
+        object.insert("method".to_owned(), Value::String(self.operation.clone()));
+        object.insert(
+            "zoneRef".to_owned(),
+            Value::String(format!("Zone/{}", self.zone_name)),
+        );
+        object.insert(
+            "schemaVersion".to_owned(),
+            Value::Number(serde_json::Number::from(JSON_SCHEMA_VERSION)),
+        );
+        if let Some(target) = target {
+            object
+                .entry("resourceRef".to_owned())
+                .or_insert_with(|| Value::String(target.to_canonical_string()));
+        }
+        let request = serde_json::to_vec(&request).map_err(|_| ClientError::ContractViolation)?;
+        let timeout = Duration::from_nanos(relative_timeout_nanos.max(1));
+        let mut socket = self
+            .socket
+            .lock()
+            .map_err(|_| ClientError::TransportFailed)?;
+        socket
+            .set_io_timeout(timeout)
+            .map_err(classify_client_io_error)?;
+        socket
+            .send_frame(&request)
+            .map_err(classify_client_io_error)?;
+        let response = socket.recv_frame().map_err(classify_client_io_error)?;
+        if response.len() > MAX_FRAME_BYTES {
+            return Err(ClientError::ContractViolation);
+        }
+        let value: Value =
+            serde_json::from_slice(&response).map_err(|_| ClientError::ContractViolation)?;
+        if !value.is_object() {
+            return Err(ClientError::ContractViolation);
+        }
+        if matches!(
+            value.get("type").and_then(Value::as_str),
+            Some("error" | "helloRejected")
+        ) || value
+            .get("ok")
+            .and_then(Value::as_bool)
+            .is_some_and(|ok| !ok)
+        {
+            return Err(remote_client_error(&value));
+        }
+        CanonicalJsonObject::parse(&response).map_err(|_| ClientError::ContractViolation)
+    }
+}
+
+fn zone_path(zone_name: &str) -> Result<d2b_contracts::v3::zone_routing::ZonePath, ()> {
+    let label = d2b_contracts::v3::zone_routing::ZoneLabelId::parse(zone_name.to_owned())
+        .map_err(|_| ())?;
+    d2b_contracts::v3::zone_routing::ZonePath::new(vec![label]).map_err(|_| ())
+}
+
+fn owner_for_zone(zone_path: &d2b_contracts::v3::zone_routing::ZonePath) -> ServiceOwner {
+    if zone_path == &d2b_contracts::v3::zone_routing::ZonePath::local_root() {
+        ServiceOwner::ZoneLocal(zone_path.clone())
+    } else {
+        ServiceOwner::Zone(zone_path.clone())
+    }
+}
+
+fn validate_operation(operation: &str) -> Result<String, ClientError> {
+    if operation.is_empty()
+        || operation.len() > 64
+        || !operation
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '_')
+    {
+        return Err(ClientError::InvalidMethod);
+    }
+    Ok(operation.to_owned())
+}
+
+fn canonical_verb(method: &str) -> ResourceVerb {
+    match method {
+        "List" => ResourceVerb::List,
+        "Watch" => ResourceVerb::Watch,
+        "Create" | "DeviceUsbAttach" | "DeviceUsbDetach" | "SecurityKeyCancel" | "Apply" => {
+            ResourceVerb::Create
+        }
+        "UpdateSpec" => ResourceVerb::UpdateSpec,
+        "Delete" => ResourceVerb::Delete,
+        "Upgrade" => ResourceVerb::Upgrade,
+        _ => ResourceVerb::Get,
+    }
+}
+
+fn operation_service(method: &str) -> ZoneServiceKind {
+    match method {
+        "ZoneGet" | "ZoneList" | "ZoneStatus" => ZoneServiceKind::Zone,
+        _ => ZoneServiceKind::Resource,
+    }
+}
+
+fn call_options(deadline: RequestDeadline, verb: ResourceVerb) -> Result<CallOptions, ClientError> {
+    static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
+    let issued = SystemClock.now_unix_ms().max(1);
+    let lifetime_ms =
+        u64::try_from(deadline.duration().as_millis()).map_err(|_| ClientError::InvalidMetadata)?;
+    let expires = issued
+        .checked_add(lifetime_ms)
+        .ok_or(ClientError::InvalidMetadata)?;
+    let sequence = NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
+    let mut request_id = [0_u8; d2b_resource_client::REQUEST_ID_BYTES];
+    request_id[..8].copy_from_slice(&issued.to_le_bytes());
+    request_id[8..].copy_from_slice(&sequence.to_le_bytes());
+    let mut metadata = MetadataInput::new(request_id, issued, expires)?;
+    if resource_verb_is_mutating(verb) {
+        metadata = metadata.with_idempotency(request_id.to_vec())?;
+    }
+    Ok(CallOptions {
+        metadata,
+        retry: RetryPolicy::no_retry(),
+    })
+}
+
+fn peer_fingerprint(zone_name: &str) -> [u8; 32] {
+    Sha256::digest(format!("d2b-cli-zone-peer-v3:{zone_name}").as_bytes()).into()
+}
+
+fn classify_client_io_error(error: io::Error) -> ClientError {
+    match error.kind() {
+        io::ErrorKind::NotFound
+        | io::ErrorKind::ConnectionRefused
+        | io::ErrorKind::ConnectionReset
+        | io::ErrorKind::BrokenPipe => ClientError::SessionLost,
+        io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock => ClientError::DeadlineExpired,
+        io::ErrorKind::InvalidData | io::ErrorKind::UnexpectedEof => ClientError::ContractViolation,
+        _ => ClientError::TransportFailed,
+    }
+}
+
+fn remote_client_error(value: &Value) -> ClientError {
+    let class = value
+        .pointer("/error/errorClass")
+        .and_then(Value::as_str)
+        .or_else(|| value.pointer("/error/kind").and_then(Value::as_str))
+        .or_else(|| value.get("errorClass").and_then(Value::as_str))
+        .or_else(|| value.get("kind").and_then(Value::as_str))
+        .unwrap_or("internal-integrity-failure");
+    let kind = resource_error_kind(class);
+    let retry = value
+        .pointer("/error/retryClass")
+        .and_then(Value::as_str)
+        .or_else(|| value.get("retryClass").and_then(Value::as_str))
+        .map(retry_class)
+        .unwrap_or(RetryClass::Never);
+    ClientError::Remote { kind, retry }
+}
+
+fn resource_error_kind(value: &str) -> ResourceErrorKind {
+    match value {
+        "resource-not-found" => ResourceErrorKind::ResourceNotFound,
+        "resource-already-exists" => ResourceErrorKind::ResourceAlreadyExists,
+        "resource-conflict" => ResourceErrorKind::ResourceConflict,
+        "resource-schema-invalid" => ResourceErrorKind::ResourceSchemaInvalid,
+        "resource-ref-invalid" | "ref-invalid" => ResourceErrorKind::ResourceRefInvalid,
+        "resource-owner-cycle" => ResourceErrorKind::ResourceOwnerCycle,
+        "resource-owner-depth" => ResourceErrorKind::ResourceOwnerDepth,
+        "resource-finalizer-denied" => ResourceErrorKind::ResourceFinalizerDenied,
+        "resource-provider-unavailable" | "provider-unavailable" => {
+            ResourceErrorKind::ResourceProviderUnavailable
+        }
+        "resource-controller-mismatch" => ResourceErrorKind::ResourceControllerMismatch,
+        "resource-status-owner-mismatch" => ResourceErrorKind::ResourceStatusOwnerMismatch,
+        "status-oversize" => ResourceErrorKind::StatusOversize,
+        "status-provider-schema-invalid" => ResourceErrorKind::StatusProviderSchemaInvalid,
+        "status-provider-overlap" => ResourceErrorKind::StatusProviderOverlap,
+        "spec-provider-schema-invalid" => ResourceErrorKind::SpecProviderSchemaInvalid,
+        "spec-provider-shadow" => ResourceErrorKind::SpecProviderShadow,
+        "unsupported-capability" => ResourceErrorKind::UnsupportedCapability,
+        "expedited-not-authorized" => ResourceErrorKind::ExpeditedNotAuthorized,
+        "expedited-quota-exceeded" => ResourceErrorKind::ExpeditedQuotaExceeded,
+        "expedited-reconcile-pending" => ResourceErrorKind::ExpeditedReconcilePending,
+        "upgrade-required" => ResourceErrorKind::UpgradeRequired,
+        "endpoint-resolve-denied" => ResourceErrorKind::EndpointResolveDenied,
+        "relay-denied" => ResourceErrorKind::RelayDenied,
+        "role-relay-grant-restricted" => ResourceErrorKind::RoleRelayGrantRestricted,
+        "authorization-denied" | "exec-auth-error" => ResourceErrorKind::AuthorizationDenied,
+        "revision-expired" => ResourceErrorKind::RevisionExpired,
+        "backpressure" => ResourceErrorKind::Backpressure,
+        "timeout" | "deadline-exceeded" => ResourceErrorKind::Timeout,
+        "cancelled" | "operation-cancelled" => ResourceErrorKind::Cancelled,
+        "zone-unavailable" | "resource-plane-unavailable" => {
+            ResourceErrorKind::ResourcePlaneUnavailable
+        }
+        _ => ResourceErrorKind::InternalIntegrityFailure,
+    }
+}
+
+fn retry_class(value: &str) -> RetryClass {
+    match value {
+        "immediate" => RetryClass::Immediate,
+        "after-delay" => RetryClass::AfterDelay,
+        "reauthorize" => RetryClass::Reauthorize,
+        _ => RetryClass::Never,
+    }
+}
+
+fn resource_error_surface(kind: ResourceErrorKind) -> (&'static str, &'static str, i32) {
+    match kind {
+        ResourceErrorKind::ResourceNotFound => ("resource-not-found", "resource was not found", 1),
+        ResourceErrorKind::ResourceAlreadyExists => {
+            ("resource-already-exists", "resource already exists", 1)
+        }
+        ResourceErrorKind::ResourceConflict | ResourceErrorKind::RevisionExpired => {
+            ("resource-conflict", "resource revision conflict", 1)
+        }
+        ResourceErrorKind::ResourceSchemaInvalid
+        | ResourceErrorKind::ResourceRefInvalid
+        | ResourceErrorKind::ResourceOwnerCycle
+        | ResourceErrorKind::ResourceOwnerDepth
+        | ResourceErrorKind::StatusOversize
+        | ResourceErrorKind::StatusProviderSchemaInvalid
+        | ResourceErrorKind::StatusProviderOverlap
+        | ResourceErrorKind::SpecProviderSchemaInvalid
+        | ResourceErrorKind::SpecProviderShadow => (
+            "resource-schema-invalid",
+            "Zone rejected the resource schema",
+            2,
+        ),
+        ResourceErrorKind::ResourceProviderUnavailable => (
+            "provider-unavailable",
+            "resource Provider is unavailable",
+            1,
+        ),
+        ResourceErrorKind::AuthorizationDenied
+        | ResourceErrorKind::EndpointResolveDenied
+        | ResourceErrorKind::RelayDenied
+        | ResourceErrorKind::RoleRelayGrantRestricted
+        | ResourceErrorKind::ExpeditedNotAuthorized => (
+            "authorization-denied",
+            "resource request was not authorized",
+            1,
+        ),
+        ResourceErrorKind::Timeout => {
+            ("deadline-exceeded", "Zone request exceeded its deadline", 1)
+        }
+        ResourceErrorKind::Cancelled => ("operation-cancelled", "Zone request was cancelled", 3),
+        ResourceErrorKind::ResourcePlaneUnavailable | ResourceErrorKind::Backpressure => {
+            ("zone-unavailable", "Zone runtime is unavailable", 1)
+        }
+        _ => ("internal-error", "Zone rejected the resource request", 1),
+    }
+}
+
+struct ThreadWaker(thread::Thread);
+
+impl Wake for ThreadWaker {
+    fn wake(self: Arc<Self>) {
+        self.0.unpark();
+    }
+}
+
+fn block_on<F>(future: F) -> F::Output
+where
+    F: Future,
+{
+    let current = thread::current();
+    let waker = Waker::from(Arc::new(ThreadWaker(current.clone())));
+    let mut future = Box::pin(future);
+    let mut context = TaskContext::from_waker(&waker);
+    loop {
+        match future.as_mut().poll(&mut context) {
+            Poll::Ready(value) => return value,
+            Poll::Pending => thread::park(),
+        }
     }
 }
 
@@ -629,6 +1235,7 @@ fn parse_duration(value: &str) -> Result<Duration, CliFailure> {
     Ok(Duration::from_millis(millis))
 }
 
+#[cfg(test)]
 fn classify_transport_error(error: &io::Error) -> TransportError {
     match error.kind() {
         io::ErrorKind::NotFound
@@ -893,6 +1500,31 @@ mod tests {
         let request: Value = serde_json::from_slice(&request[0]).unwrap();
         assert_eq!(request["method"], "List");
         assert_eq!(request["zoneRef"], "Zone/dev");
+    }
+
+    #[test]
+    fn canonical_call_policy_binds_zone_service_and_mutation_idempotency() {
+        assert_eq!(operation_service("ZoneGet"), ZoneServiceKind::Zone);
+        assert_eq!(
+            operation_service("ResolveEndpoint"),
+            ZoneServiceKind::Resource
+        );
+        assert!(matches!(
+            owner_for_zone(&zone_path("local-root").unwrap()),
+            ServiceOwner::ZoneLocal(_)
+        ));
+        assert!(matches!(
+            owner_for_zone(&zone_path("work").unwrap()),
+            ServiceOwner::Zone(_)
+        ));
+
+        let deadline = ZoneContext::deadline(Some("30s")).unwrap();
+        let read = call_options(deadline, ResourceVerb::Get).unwrap();
+        assert!(!read.metadata.has_idempotency_key());
+
+        let write = call_options(deadline, ResourceVerb::UpdateSpec).unwrap();
+        assert!(write.metadata.has_idempotency_key());
+        assert_eq!(write.retry.max_attempts(), 1);
     }
 
     #[test]
