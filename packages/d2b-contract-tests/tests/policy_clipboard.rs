@@ -46,32 +46,33 @@ fn d2b_clipd_exported_in_flake_nix() {
 /// The `d2b` CLI must expose a `Clipboard` top-level subcommand for the
 /// ADR 0042 explicit picker-driven paste action (`d2b clipboard arm`).
 ///
-/// Regression gate: if the `Clipboard` variant is removed from `NativeCommand`
+/// Regression gate: if the `Clipboard` variant is removed from `ModernCommand`
 /// (breaking the `d2b clipboard arm` operator path), this test fails.
 #[test]
 fn d2b_cli_has_clipboard_subcommand() {
-    let legacy = read_repo_file("packages/d2b/src/legacy.rs");
+    let dispatch = read_repo_file("packages/d2b/src/dispatch.rs");
 
-    // The NativeCommand enum must have a Clipboard variant.
+    // The v3 command registry must have a Clipboard projection variant.
     assert!(
-        legacy.contains("Clipboard(ClipboardArgs)")
-            || legacy.contains("Clipboard(clipboard_args"),
-        "packages/d2b/src/legacy.rs must declare a `Clipboard(ClipboardArgs)` variant in \
-         the NativeCommand enum. ADR 0042 requires `d2b clipboard arm` as the \
+        dispatch.contains("Clipboard(ProjectionCommandArgs)"),
+        "packages/d2b/src/dispatch.rs must declare a \
+         `Clipboard(ProjectionCommandArgs)` variant in ModernCommand. \
+         ADR 0042 requires `d2b clipboard arm` as the \
          explicit picker-driven paste command."
     );
 
-    // The dispatch block must handle the Clipboard arm.
+    // The dispatch block must route clipboard verbs through the projection path.
     assert!(
-        legacy.contains("NativeCommand::Clipboard"),
-        "packages/d2b/src/legacy.rs must handle NativeCommand::Clipboard in the dispatch block."
+        dispatch.contains("ModernCommand::Clipboard(args)")
+            && dispatch.contains("provider_projection(context, \"clipboard\", args"),
+        "packages/d2b/src/dispatch.rs must route ModernCommand::Clipboard \
+         through the clipboard projection dispatcher."
     );
 
-    // The command must have at least an Arm subverb.
+    // Projection commands carry the explicit verb, including `arm`.
     assert!(
-        legacy.contains("ClipboardCommand::Arm") || legacy.contains("clipboard arm"),
-        "packages/d2b/src/legacy.rs must declare a ClipboardCommand::Arm subverb \
-         for the explicit picker-driven paste workflow (ADR 0042 §fallback)."
+        dispatch.contains("pub(crate) verb: String"),
+        "ProjectionCommandArgs must retain the explicit clipboard verb."
     );
 }
 
