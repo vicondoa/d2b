@@ -298,35 +298,35 @@ pub(crate) fn runtime_dispatch(cli: &ModernCli, context: &ZoneContext) -> Result
         ModernCommand::Op(args) => unsupported(context, "op", &args.command, mode),
         ModernCommand::Auth(args) => unsupported(context, "auth", &args.command, mode),
     }
+}
 
-    fn audit(
-        context: &ZoneContext,
-        args: &GenericAuditArgs,
-        mode: OutputMode,
-        deadline: crate::context::RequestDeadline,
-    ) -> Result<i32, CliFailure> {
-        match context.invoke(
-            "Audit",
-            serde_json::json!({
-                "strict": args.strict,
-                "format": if mode.is_json() { "json" } else { "human" },
-            }),
-            deadline,
-            mode,
-        ) {
-            Ok(value) => {
-                if mode.is_json() {
-                    context.emit_stream(&value, mode)?;
-                } else {
-                    context.emit(&value, mode)?;
-                }
-                Ok(0)
+fn audit(
+    context: &ZoneContext,
+    args: &GenericAuditArgs,
+    mode: OutputMode,
+    deadline: crate::context::RequestDeadline,
+) -> Result<i32, CliFailure> {
+    match context.invoke(
+        "Audit",
+        serde_json::json!({
+            "strict": args.strict,
+            "format": if mode.is_json() { "json" } else { "human" },
+        }),
+        deadline,
+        mode,
+    ) {
+        Ok(value) => {
+            if mode.is_json() {
+                context.emit_stream(&value, mode)?;
+            } else {
+                context.emit(&value, mode)?;
             }
-            Err(error) if error.message.starts_with("zone-unavailable") => {
-                Err(context.failure("zone-unavailable", "Zone runtime is unavailable", mode, 1))
-            }
-            Err(error) => Err(error),
+            Ok(0)
         }
+        Err(error) if error.message.starts_with("zone-unavailable") => {
+            Err(context.failure("zone-unavailable", "Zone runtime is unavailable", mode, 1))
+        }
+        Err(error) => Err(error),
     }
 }
 
