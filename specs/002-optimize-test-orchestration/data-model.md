@@ -63,7 +63,9 @@ repository merely made available for discovery.
 |---|---|
 | `target` | Owning Test Target |
 | `commit` | Exact Git commit |
+| `run_status` | `passed`, `failed`, or `interrupted` |
 | `completed_leaves` | Stable leaf identifiers written only after required commands succeed |
+| `failed_surfaces` | Stable identifiers for failures observed before finalization |
 | `installables` | Nix attrs actually submitted by the target |
 | `realized_checks` | Flake checks actually realized |
 | `source_inventory_digest` | Digest of the matching source census |
@@ -72,11 +74,16 @@ repository merely made available for discovery.
 
 - The manifest is deterministic after sorting.
 - The top-level target removes the requested prior manifest and only its own
-  prior temporary fragment directory before dispatch. Concurrent leaves write
-  one uniquely named fragment each; a successful final step sorts and
-  atomically replaces the requested manifest. An interrupted or failed run
-  therefore leaves no stale success manifest.
+  prior temporary fragment directory before any evaluation or dispatch.
+  Concurrent leaves write one uniquely named fragment each. An idempotent
+  finalizer runs after the scheduler returns and from handled `INT` or `TERM`,
+  sorts the available fragments, records `run_status`, and atomically replaces
+  the requested manifest before preserving the original exit status.
+- An uncatchable termination may leave no manifest, but the prior success
+  manifest has already been removed.
 - A required leaf is absent when its command did not complete successfully.
+- A failed or interrupted manifest is diagnostic partial evidence and cannot
+  satisfy coverage acceptance; acceptance requires `run_status = "passed"`.
 - Every baseline execution leaf remains represented after optimization.
 - A source inventory comparison without an execution-manifest comparison is
   insufficient acceptance evidence.
@@ -139,12 +146,11 @@ Represents one timed command execution.
 | `exit_status` | Command result |
 | `host_fingerprint` | CPU count, memory, system, and tool versions |
 | `inventory_digest` | Coverage inventory used |
-| `external_contention` | Recorded invalidating contention, if any |
 | `effective_cpu_budget` | CPU concurrency available to the target after host and cgroup limits |
 | `heavy_interval_usec` | Microseconds from first CPU-heavy leaf start through last CPU-heavy leaf completion |
 | `measurement_scope` | Rust target accounting, combined Nix client plus daemon-cgroup accounting, or baseline-adjusted host accounting |
 | `cpu_usage_delta_usec` | `cpu.stat usage_usec` delta or equivalent user plus system CPU delta; combined Nix scope sums client and daemon deltas |
-| `cpu_budget_utilization` | `cpu_usage_delta_usec / (heavy_interval_usec * effective_cpu_budget)` |
+| `cpu_budget_utilization` | `cpu_usage_delta_usec / (max(1, heavy_interval_usec) * effective_cpu_budget)` |
 | `peak_memory_bytes` | Peak sampled combined memory for the declared scope, or maximum baseline-adjusted reduction in host `MemAvailable` |
 | `peak_admitted_cpu_slots` | Maximum sum of scheduler-admitted CPU quotas in an active frontier |
 | `peak_scope_tasks` | Maximum hierarchical `pids.current` value for cgroup scopes, or recursive process/thread count for a declared fallback scope |
@@ -174,13 +180,16 @@ prepared -> running -> passed
 - A CPU-heavy leaf is one assigned a nonzero scheduler CPU quota. The heavy
   interval starts when the first such leaf is admitted and ends when the last
   such leaf completes.
-- A sustained memory-pressure stall means `memory.pressure` `full total`
-  increases by more than 1% of heavy-interval wall time. When only host PSI is
-  readable, the sample is valid only without external contention.
+- A run with no admitted CPU-heavy leaf is invalidated as `no-heavy-work`.
+  Sub-microsecond clock resolution uses a one-microsecond divisor.
+- A sustained memory-pressure stall means `memory.pressure` `some total`
+  increases by more than 10% or `full total` increases by more than 1% of
+  heavy-interval wall time. When only host PSI is readable, the sample is valid
+  only without external contention.
 - Swap thrashing means baseline-adjusted swap I/O exceeds both 64 MiB total and
   1 MiB per second over the heavy interval. Any `oom`, `oom_kill`, or
   `oom_group_kill` increase fails acceptance; a `max` or `high` increase is
-  reported and fails when accompanied by the sustained-stall threshold.
+  reported and fails when accompanied by either sustained-stall threshold.
 - `peak_admitted_cpu_slots` MUST NOT exceed `effective_cpu_budget`.
 - Rust uses target-cgroup `cpu.stat`, hierarchical `pids.current`, and memory
   counters when available. Nix combines client-scope evaluation with sampled

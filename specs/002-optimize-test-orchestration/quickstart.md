@@ -101,12 +101,21 @@ D2B_EXECUTION_MANIFEST="$D2B_EVIDENCE_DIR/test-nix-unit-executed.json" \
   make test-nix-unit
 D2B_EXECUTION_MANIFEST="$D2B_EVIDENCE_DIR/test-flake-executed.json" \
   make test-flake
+
+jq -e '.run_status == "passed"' \
+  "$D2B_EVIDENCE_DIR/test-rust-executed.json"
+jq -e '.run_status == "passed"' \
+  "$D2B_EVIDENCE_DIR/test-nix-unit-executed.json"
+jq -e '.run_status == "passed"' \
+  "$D2B_EVIDENCE_DIR/test-flake-executed.json"
 ```
 
 For the baseline commit, retain the full command traces from the actual public
 target runs and record the completed baseline leaves in the corresponding
 `*-executed.json` files. Each entry must cite the trace line proving that the
-leaf completed. The optimized manifests must contain every baseline leaf.
+leaf completed and set `run_status` to `passed`. Failed and handled-interrupted
+runs retain partial diagnostic manifests but cannot serve as acceptance
+evidence. The optimized passing manifests must contain every baseline leaf.
 
 ## Warm-cache benchmark
 
@@ -182,14 +191,17 @@ CPU usage delta usec / (CPU-heavy interval usec * effective CPU budget)
 The median representative warm run for each target must reach at least 80%.
 A lower value is acceptable only when the evidence identifies a non-CPU
 bottleneck and proves the selected candidate exhausted viable concurrency for
-that interval. Reject a run or candidate if an active CPU-quota frontier
+that interval. A run with no admitted CPU-heavy leaf is invalid; use a minimum
+one-microsecond divisor only for clock-resolution rounding. Reject a run or
+candidate if an active CPU-quota frontier
 exceeds the budget, admitted workers exceed the declared bound, peak memory
 exceeds the calculated envelope, or an OOM counter increases. A sustained
-memory-pressure stall is a `full total` delta above 1% of heavy-interval wall
-time. Swap thrashing requires baseline-adjusted swap I/O above both 64 MiB
-total and 1 MiB per second. A `memory.events` `max` or `high` increase fails
-when accompanied by the sustained-stall threshold. Use mocked evidence, never
-an intentional host OOM or swap storm, to prove rejection behavior.
+memory-pressure stall is a `some total` delta above 10% or a `full total`
+delta above 1% of heavy-interval wall time. Swap thrashing requires
+baseline-adjusted swap I/O above both 64 MiB total and 1 MiB per second. A
+`memory.events` `max` or `high` increase fails when accompanied by either
+sustained-stall threshold. Use mocked evidence, never an intentional host OOM
+or swap storm, to prove rejection behavior.
 
 ## Cold-cache observation
 

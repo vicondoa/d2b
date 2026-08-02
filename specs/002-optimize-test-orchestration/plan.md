@@ -348,8 +348,10 @@ the baseline before proceeding. A target is accepted only when:
 - every baseline enforcing surface remains present and every added test is
   classified separately;
 - an execution manifest from the actual aggregate run proves every required
-  leaf or Nix check class completed, so static discovery alone cannot mask a
-  dropped lane;
+  leaf or Nix check class completed with `run_status = "passed"`, so static
+  discovery alone cannot mask a dropped lane. Failed and handled-interruption
+  runs atomically publish partial diagnostic manifests after removing prior
+  success evidence before dispatch;
 - failures from multiple independent lanes are visible in one invocation;
 - the target process tree consumes at least 80% of its effective CPU budget
   over the CPU-heavy interval for Rust; Nix measurements combine client
@@ -362,10 +364,10 @@ the baseline before proceeding. A target is accepted only when:
 - no active CPU-quota frontier exceeds the effective budget, worker counts
   remain within their declared bounds, peak memory remains within the
   calculated envelope, and no orchestration-attributable OOM occurs. Memory
-  PSI `full total` may consume at most 1% of heavy-interval wall time. Swap
-  thrashing is a baseline-adjusted total above both 64 MiB and 1 MiB per
-  second. `memory.events` `max` or `high` deltas fail when paired with the
-  sustained-stall threshold;
+  PSI `some total` may consume at most 10% and `full total` at most 1% of
+  heavy-interval wall time. Swap thrashing is a baseline-adjusted total above
+  both 64 MiB and 1 MiB per second. `memory.events` `max` or `high` deltas fail
+  when paired with either sustained-stall threshold;
 - cold-cache behavior is recorded and any regression is explained, although
   cold-cache reduction is not a merge blocker.
 
@@ -423,6 +425,7 @@ This plan uses strict phase ordering rather than pipelined dispatch.
 | Nix attribution | Plan panel round 7 | Nix evaluation and daemon builds require combined accounting, and the shared daemon requires contention invalidation even when its cgroup is readable. | Resolved |
 | Counter semantics | Plan panel round 7 | CPU interval units and hierarchical task counts needed explicit microsecond and `pids.current` definitions. | Resolved |
 | Failure evidence | Plan panel round 7 | A failed or interrupted run must remove the prior requested execution manifest before dispatch so stale success cannot survive. | Resolved |
+| Partial evidence | Plan panel round 8 | Failure paths needed atomic partial manifests, pre-evaluation invalidation, zero-interval handling, and explicit PSI composite rejection tests. | Resolved |
 
 ## Post-Design Constitution Check
 

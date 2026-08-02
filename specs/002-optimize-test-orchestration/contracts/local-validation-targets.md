@@ -21,7 +21,9 @@ All three commands:
 - preserve every item in the current enforcing coverage inventory;
 - classify any new orchestration tests separately from the preserved baseline;
 - when `D2B_EXECUTION_MANIFEST=<path>` is set, write a deterministic manifest
-  of the execution leaves that completed their required commands.
+  with the run status, completed leaves, and observed failure surfaces. Remove
+  the prior manifest before work begins, and publish partial evidence
+  atomically on failure or handled interruption.
 
 ## `make test-rust`
 
