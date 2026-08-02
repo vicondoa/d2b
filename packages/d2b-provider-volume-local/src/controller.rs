@@ -16,6 +16,7 @@ use crate::error::VolumeLocalError;
 use crate::identity::VolumeRootHandle;
 use crate::layout::{ConditionSeverity, EntryCondition, EntryRequest, plan_cleanup, plan_entry};
 use crate::port::{QuotaCapability, VolumeLayoutEffectPort, VolumeSourceEffectPort};
+use crate::source::validate_source_spec;
 use crate::status::{AttachmentState, AttachmentStatus, LayoutPhase, VolumeStatusReport};
 use crate::views::admit_attachments;
 
@@ -105,6 +106,7 @@ impl<S: VolumeSourceEffectPort, L: VolumeLayoutEffectPort> VolumeLocalController
         volume_uid: &ResourceUid,
         spec: &VolumeSpec,
     ) -> Result<VolumeStatusReport, VolumeLocalError> {
+        validate_source_spec(spec)?;
         let kind = spec.source().settings().kind();
         if !self.profile.supported_source_kinds().contains(&kind) {
             return Err(VolumeLocalError::SourceKindUnsupported);
@@ -121,7 +123,16 @@ impl<S: VolumeSourceEffectPort, L: VolumeLayoutEffectPort> VolumeLocalController
         let mut phase = LayoutPhase::Pending;
         let mut conditions = Vec::new();
 
-        for declared in spec.layout() {
+        let mut ordered_entries: Vec<_> = spec.layout().iter().collect();
+        ordered_entries.sort_by_key(|entry| {
+            (
+                !entry.path().is_empty(),
+                entry.path().split('/').count(),
+                entry.path(),
+            )
+        });
+
+        for declared in ordered_entries {
             let entry = EntryRequest::resolve(volume_uid, declared)?;
             let observed = self.layout.observe(&root, &entry).await?;
             let plan = plan_entry(&entry, &observed, marker);
@@ -187,7 +198,15 @@ impl<S: VolumeSourceEffectPort, L: VolumeLayoutEffectPort> VolumeLocalController
             )
             .await?;
         let mut removed = Vec::new();
-        for declared in spec.layout().iter().rev() {
+        let mut ordered_entries: Vec<_> = spec.layout().iter().collect();
+        ordered_entries.sort_by_key(|entry| {
+            (
+                !entry.path().is_empty(),
+                core::cmp::Reverse(entry.path().split('/').count()),
+                core::cmp::Reverse(entry.path()),
+            )
+        });
+        for declared in ordered_entries {
             let entry = EntryRequest::resolve(volume_uid, declared)?;
             let observed = self.layout.observe(&root, &entry).await?;
             if plan_cleanup(&entry, &observed) {

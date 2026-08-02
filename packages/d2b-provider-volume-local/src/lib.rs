@@ -23,10 +23,14 @@
 #![deny(missing_docs)]
 
 mod controller;
+mod acl;
 mod error;
+mod exports;
 mod identity;
 mod layout;
 mod port;
+mod quota;
+mod source;
 mod status;
 mod store_view;
 mod swtpm_volume;
@@ -46,7 +50,12 @@ pub mod snapshot;
 pub mod testing;
 
 pub use controller::{VolumeLocalController, VolumeLocalProfile};
+pub use acl::{
+    AclAction, AclBinding, AclGrantSummary, AclObservation, plan_acl_reconciliation,
+    user_revision_changed,
+};
 pub use error::VolumeLocalError;
+pub use exports::{EXPORT_RESOURCE_TYPE, ExportIntent, desired_export_intents};
 pub use identity::{EntryDigest, MarkerState, OwnerProof, VolumeRootHandle};
 pub use layout::{
     ConditionSeverity, EntryCondition, EntryPlan, EntryRequest, plan_cleanup, plan_entry,
@@ -54,10 +63,15 @@ pub use layout::{
 pub use port::{
     DriftClass, ObservedEntry, QuotaCapability, VolumeLayoutEffectPort, VolumeSourceEffectPort,
 };
+pub use quota::{QuotaUsage, QuotaUsageDecision, admit_quota, check_usage, usage_error};
+pub use source::{
+    BlockImagePlan, SourcePolicy, SourcePolicyCatalog, TmpfsMountOptions, validate_source_spec,
+};
 pub use status::{AttachmentState, AttachmentStatus, LayoutPhase, VolumeStatusReport};
 pub use store_view::{
     CURRENT_LINK, GCROOTS_DIR, GENERATIONS_DIR, LIVE_DIR, META_DIR, REJECTED_GCROOTS_DIR,
-    STATE_DIR, SYNC_LOCK, assert_ro_store_attachment, assert_store_view_layout, marker_path,
+    STATE_DIR, SYNC_LOCK, StoreViewAction, StoreViewObservation, assert_ro_store_attachment,
+    assert_store_view_layout, classify_store_view, marker_path, validate_store_view_observation,
 };
 pub use swtpm_volume::{SwtpmDisposition, assert_swtpm_volume, evaluate_swtpm_state};
 pub use views::{AttachmentPlan, admit_access, admit_attachments, is_read_only, resolve_view};

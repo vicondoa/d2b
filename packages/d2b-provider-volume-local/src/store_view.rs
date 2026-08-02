@@ -81,7 +81,7 @@ pub fn assert_store_view_layout(
     let target = current
         .target()
         .ok_or(VolumeLocalError::InvariantViolated)?;
-    if !target.starts_with("generations") {
+    if target != "generations" && !target.starts_with("generations/") {
         return Err(VolumeLocalError::InvariantViolated);
     }
 
@@ -100,7 +100,7 @@ pub fn assert_store_view_layout(
 pub fn assert_ro_store_attachment(spec: &VolumeSpec) -> Result<(), VolumeLocalError> {
     for attachment in spec.attachments() {
         let view = resolve_view(spec, attachment.view())?;
-        if view.path() != LIVE_DIR && view.path() != META_DIR {
+        if view.path() != LIVE_DIR {
             return Err(VolumeLocalError::InvariantViolated);
         }
         if attachment.access() != AttachmentAccess::ReadOnly {
@@ -108,4 +108,60 @@ pub fn assert_ro_store_attachment(spec: &VolumeSpec) -> Result<(), VolumeLocalEr
         }
     }
     Ok(())
+}
+
+/// Read-only observations needed before a store-view sync or Export launch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StoreViewObservation {
+    /// `/nix/store` and the Volume root have equal device identity.
+    pub same_filesystem: bool,
+    /// The live readiness marker exists and has zero length.
+    pub marker_zero_length: bool,
+    /// The OFD lock file exists and has not been replaced.
+    pub sync_lock_preserved: bool,
+    /// `gcroots/` is at the store-view root.
+    pub gcroots_at_root: bool,
+    /// `state/` is at the store-view root.
+    pub state_at_root: bool,
+}
+
+/// Validate the runtime store-view posture before serving it.
+pub fn validate_store_view_observation(
+    observation: StoreViewObservation,
+) -> Result<(), VolumeLocalError> {
+    if !observation.same_filesystem {
+        return Err(VolumeLocalError::InvariantViolated);
+    }
+    if !observation.marker_zero_length {
+        return Err(VolumeLocalError::StoreViewMarkerMissing);
+    }
+    if !observation.sync_lock_preserved
+        || !observation.gcroots_at_root
+        || !observation.state_at_root
+    {
+        return Err(VolumeLocalError::InvariantViolated);
+    }
+    Ok(())
+}
+
+/// The bounded decision made before a store-view worker launch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StoreViewAction {
+    /// The marker is not ready; the caller should requeue.
+    WaitForMarker,
+    /// The farm may be synchronized and served.
+    Serve,
+    /// A hard invariant failed.
+    Fail,
+}
+
+/// Classify a store-view observation without exposing any path.
+pub fn classify_store_view(
+    observation: StoreViewObservation,
+) -> Result<StoreViewAction, VolumeLocalError> {
+    if !observation.marker_zero_length {
+        return Ok(StoreViewAction::WaitForMarker);
+    }
+    validate_store_view_observation(observation)?;
+    Ok(StoreViewAction::Serve)
 }
