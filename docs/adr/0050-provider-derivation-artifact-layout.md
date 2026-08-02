@@ -345,22 +345,38 @@ The result is a derivation whose `$out/bin/<name>` is a **compiled** `ET_DYN`
 image, not a `#!` line and not a `makeWrapper` shell script, which is why it
 satisfies item 3 where those do not.
 
-Five properties are normative, because a wrapper that relaxes any of them
+Seven properties are normative, because a wrapper that relaxes any of them
 reintroduces the surface the layout closed:
 
-1. The interpreter path and the program path are **baked in at build time** as
-   string literals. The shim takes no argument that selects what to execute.
-2. The shim `execve`s the absolute interpreter path. No `PATH` search, no
-   `execvp`, no shell, no environment-derived program selection.
-3. `argv[1..]` from the caller is forwarded after the fixed arguments, never
+1. The interpreter and the program are **resolved to canonical Nix store paths at
+   build time** and baked in as string literals, split into a directory and a
+   final component. The shim takes no argument that selects what to execute, and
+   reads no environment variable to find it.
+2. At build time the helper verifies each of the two inputs is a **regular file
+   and not a symlink**, using the same `lstat`-free discipline item 8 requires:
+   `openat2` beneath the input's own store directory with
+   `RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS | RESOLVE_BENEATH`, then `fstat`
+   for `S_ISREG`. A symlinked interpreter is refused at build, not discovered at
+   launch.
+3. Both inputs are **members of the shim derivation's runtime closure**, so Nix
+   guarantees they are present wherever the shim is, and the closure digest of
+   item 4 covers them.
+4. At runtime the shim resolves the interpreter with the **same anchored fd
+   discipline the framework uses on the shim itself**: open the baked interpreter
+   directory `O_PATH | O_DIRECTORY | O_CLOEXEC`, `openat2` the final component
+   with `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS` and
+   `O_PATH | O_CLOEXEC`, `fstat` for `S_ISREG`, then
+   `execveat(fd, "", argv, envp, AT_EMPTY_PATH)`. There is no `execve` on a
+   concatenated string, no `PATH` search, no `execvp`, and no shell.
+5. `argv[1..]` from the caller is forwarded after the fixed arguments, never
    interpreted as a program.
-4. `name` is validated at eval against the item 3 grammar, so the helper cannot
+6. `name` is validated at eval against the item 3 grammar, so the helper cannot
    emit a `bin/` entry the compiler will later reject for its name.
-5. The derivation self-checks its own output at build time: `readelf -h`
+7. The derivation self-checks its own output at build time: `readelf -h`
    confirms `ELFCLASS64` and an `e_type` of `ET_EXEC` or `ET_DYN`. The helper
    fails rather than producing something Phase 2 would refuse.
 
-Property 5 is not new machinery. `flake.nix` already runs exactly this shape of
+Property 7 is not new machinery. `flake.nix` already runs exactly this shape of
 `postInstall` ELF assertion over the static guest helpers, checking `readelf -h`,
 rejecting an unexpected program interpreter, and rejecting unexpected `NEEDED`
 entries. The shim builder reuses that pattern rather than inventing a second one.
@@ -373,12 +389,52 @@ to a third party would export a cost the framework created. It is also tiny, has
 no runtime surface, and adds no dependency - it is a C file and a `stdenv.cc`
 invocation.
 
-**What it does not do.** It pins the shim, not the interpreter. The Python
-runtime and the script live in the closure and are covered by the package content
-digest, but they are not separately named in `executableDigests`, because they
-are not `bin/` entries. That is the same residual item 2 already records for the
-unpinned remainder of the output, not a new one, and item 7 still bounds it: the
-shim is the only thing the framework will launch.
+**The framework still launches exactly one thing: the verified shim.** Items 7
+and 8 are unchanged by this helper. The framework resolves
+`<out>/bin/<binaryRef>` beneath the anchored artifact dirfd, verifies it, and
+`execveat`s it. The shim's own subsequent exec of an interpreter is a *second*
+exec performed by an already-launched, already-verified program inside its own
+sandbox profile - the same position any Provider binary is in when it spawns a
+child. The helper does not widen what the framework will launch.
+
+**The exception is bounded to the framework-generated shim, and no further.**
+Only a shim emitted by `d2b.lib.buildProviderElfShim` gets the build-time
+verification and closure guarantees of properties 2 and 3. A hand-written
+Provider binary that execs a sibling receives no exception, no verification, and
+no special standing; it is bounded by its sandbox profile alone, exactly as
+before. Nothing here licenses a general "Providers may exec things" rule.
+
+**Why an immutable store path is not the string-path redirection it resembles.**
+The objection is that baking `/nix/store/<hash>-python3/bin/python3` into a
+binary is an unqualified absolute-path exec, and that a path is a name someone
+else could rebind. Three facts make that not so here, and they are why property 4
+is sufficient rather than merely comforting:
+
+- **The path is a content address, not a name.** A store path's hash is derived
+  from the derivation inputs. Changing the interpreter's content produces a
+  *different* path. There is no version of "the same path, different content"
+  that Nix will produce.
+- **The path is in the shim's closure**, so Nix keeps it present and the garbage
+  collector will not remove it while the shim is live. It cannot become dangling
+  and then be recreated as something else.
+- **Rebinding it requires writing to `/nix/store`**, which NixOS mounts read-only
+  and which otherwise requires root. An attacker who can write the store can
+  replace the shim, the Provider, and `d2bd` itself, so the shim's exec target is
+  not the boundary that failed.
+
+Property 4 does not rest on those three facts alone, which is the point: it
+resolves the interpreter through the same `RESOLVE_NO_SYMLINKS` anchored open the
+framework uses, so a symlink appearing at that path is refused at runtime rather
+than trusted because the store is supposed to be immutable.
+
+**What it does not do, stated exactly.** The interpreter is verified and executed
+under fd discipline; the *program* the interpreter then reads is not, because the
+interpreter opens it by path itself and no framework code sits in between. The
+program is covered by build-time regular-file verification, canonical-path
+baking, and closure membership, and by nothing stronger. Neither the interpreter
+nor the program is named in `executableDigests`, because neither is a `bin/`
+entry. That is the residual item 2 already records for the unpinned remainder,
+narrowed rather than widened by this helper.
 
 ### 4. Digest preimages, stated exactly
 
@@ -509,8 +565,9 @@ Neither the compiler nor the launcher resolves a layout path by building a strin
 and calling `stat` then `open`. Both anchor once and stay anchored.
 
 **Anchor.** Open the pinned store path once with `O_PATH | O_DIRECTORY |
-O_CLOEXEC`. Every subsequent resolution is `openat2(2)` relative to that dirfd
-with `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS`, and the
+O_CLOEXEC`. The anchor is never read from, so `O_PATH` is the right authority for
+it. Every subsequent resolution is `openat2(2)` relative to that dirfd with
+`RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS`, and the
 path argument is a fixed literal from item 2 or a single already-validated
 `bin/<name>` component from item 3. `RESOLVE_BENEATH` makes escape from the
 anchor a kernel-enforced `EXDEV` rather than a check the caller could forget.
@@ -519,13 +576,58 @@ regular-file rules in items 2 and 3 are enforced by the open itself rather than
 by a preceding `lstat` whose result could be stale.
 `RESOLVE_NO_MAGICLINKS` refuses `/proc/*/fd`-style jumps.
 
+**Two handle modes, because the compiler reads and the launcher does not.**
+Round 3 stated a single `O_PATH` mode and then required the compiler to read the
+ELF prefix and compute a digest from that descriptor. That is not possible, and
+the correction is measured rather than argued:
+
+```text
+A O_PATH read -> n=-1 errno=Bad file descriptor
+```
+
+An `O_PATH` descriptor names a file without granting access to its contents, so
+`read(2)` on one returns `EBADF`. The two callers therefore open in two different
+modes, each the least authority that suffices:
+
+| Caller | Open flags | Why |
+| --- | --- | --- |
+| Resource compiler | `O_RDONLY \| O_NONBLOCK \| O_CLOEXEC` | It must read: the ELF prefix of item 3 and the bytes of every digest in item 4 |
+| Launcher | `O_PATH \| O_CLOEXEC` | It never reads the image; `execveat` needs only a reference |
+
+Both use the same `openat2` resolve set. The mode is the only difference.
+
+**`O_NONBLOCK` is a denial-of-service guard, not an I/O style.** Opening a FIFO
+for reading blocks until a writer appears, and opening some device nodes blocks
+or has side effects. A resource compiler that blocks forever on a hostile entry
+in an artifact is a build that never finishes. `O_NONBLOCK` makes the open return
+so the `fstat` can refuse it:
+
+```text
+B O_RDONLY|O_NONBLOCK regular: fd=5 S_ISREG=1 read=4 first4=7f 45 4c 46
+B cloexec=1
+C FIFO O_RDONLY|O_NONBLOCK -> fd=6 opened (did not block)
+C fstat S_ISREG=0 S_ISFIFO=1 -> rejected by S_ISREG check
+```
+
+On a regular file `O_NONBLOCK` is ignored and the read returns the ELF magic
+directly. On a FIFO the open returns immediately and `fstat` refuses it. The flag
+costs nothing on the path that succeeds and closes the hang on the path that
+fails.
+
+A device node is the one case where the open itself is the exposure, since
+`openat2` cannot filter by file type and the refusal necessarily comes after.
+Two things bound it: `O_NONBLOCK` prevents the open from hanging, and a device
+node cannot normally exist in a store path at all, because creating one needs
+`CAP_MKNOD`, which the Nix builder does not have. The `S_ISREG` refusal is still
+the authority; the second fact is why the case is not expected to arise.
+
 **`O_CLOEXEC` on every descriptor, without exception.** The anchor dirfd and
-every child descriptor the helper opens set `O_CLOEXEC` in `open_how.flags`. This
-is the same rule ADR 0034 states for storage locks, and it exists for the same
-reason: this codebase transfers descriptors explicitly, over `SCM_RIGHTS`, and a
-descriptor that survives an exec it was not handed to is an implicit transfer
-nobody authorised. A Provider binary launched by item 7 must not receive a
-writable-adjacent handle to its own artifact directory.
+every child descriptor either caller opens set `O_CLOEXEC` in `open_how.flags`,
+in both modes. This is the same rule ADR 0034 states for storage locks, and it
+exists for the same reason: this codebase transfers descriptors explicitly, over
+`SCM_RIGHTS`, and a descriptor that survives an exec it was not handed to is an
+implicit transfer nobody authorised. A Provider binary launched by item 7 must
+not receive a writable-adjacent handle to its own artifact directory.
 
 **Measured, because the interaction with `execveat` is not obvious.** The
 concern is real: `O_CLOEXEC` on the very descriptor being executed sounds like it
@@ -567,16 +669,28 @@ One consequence worth recording: the child's `/proc/self/exe` resolves to the
 real store path, not to `/proc/self/fd/N`, so `execveat`-from-descriptor does not
 disturb any consumer that reads its own image path.
 
-**Confirm after opening, not before.** Every opened fd is `fstat(2)`ed on the fd
-and refused unless `S_ISREG` holds, and the ELF prefix of item 3 is read from
-that same fd. The digest is then computed by reading *that same fd*, never by
-reopening the path. There is no window between the check and the use because
-there is no second resolution.
+**Confirm after opening, not before.** Every opened descriptor is `fstat(2)`ed
+**on the descriptor**, in both modes, and refused unless `S_ISREG` holds. `fstat`
+works on an `O_PATH` descriptor, which is what lets the launcher apply the same
+refusal without read authority. In the compiler's `O_RDONLY` mode the ELF prefix
+of item 3 and every digest of item 4 are then read from *that same descriptor*,
+never by reopening the path. There is no window between the check and the use
+because there is no second resolution.
+
+**Ordering is normative:** open, `fstat`, refuse or proceed, then read or exec.
+Reading before the `fstat` would mean reading from a handle whose type is not yet
+established.
 
 **Launch.** The launcher resolves `bin/<binaryRef>` through the same anchored
-`openat2`, `fstat`s the fd for `S_ISREG`, and executes it with
-`execveat(fd, "", argv, envp, AT_EMPTY_PATH)`. The program that runs is the
-inode the digest was computed over, with no path re-traversal in between.
+`openat2` in `O_PATH | O_CLOEXEC` mode, `fstat`s the descriptor for `S_ISREG`,
+and executes it with `execveat(fd, "", argv, envp, AT_EMPTY_PATH)`. The program
+that runs is the inode the digest was computed over, with no path re-traversal in
+between.
+
+`execveat` also succeeds on an `O_RDONLY` descriptor, measured, so the launcher's
+use of `O_PATH` is a least-authority choice rather than a kernel requirement: the
+launcher has no reason to hold a readable handle to a Provider image, so it does
+not take one.
 
 ### 8a. The syscall sequence sits behind an injectable boundary
 
@@ -587,28 +701,49 @@ symlink, or a real exec:
 ```rust
 /// A directory the caller has already anchored. Implementations resolve
 /// only single, pre-validated components beneath the anchor.
+///
+/// The two open modes of item 8 are two methods rather than a flag
+/// argument, so a caller cannot ask for a readable handle it does not need,
+/// and a launcher cannot accidentally receive one.
 pub trait AnchoredDir: Send + Sync {
-    type File: AnchoredFile;
-    /// Resolve one layout-relative path to a regular file, refusing
+    /// `O_RDONLY | O_NONBLOCK | O_CLOEXEC`, fstat-verified `S_ISREG`.
+    type Readable: ReadableFile;
+    /// `O_PATH | O_CLOEXEC`, fstat-verified `S_ISREG`.
+    type Executable: ExecutableFile;
+
+    /// Resolve one layout-relative path to a readable regular file, refusing
     /// symlinks, magic links, escapes, and non-regular types.
-    fn open_regular(&self, path: LayoutPath) -> Result<Self::File, LayoutError>;
+    fn open_readable(&self, path: LayoutPath) -> Result<Self::Readable, LayoutError>;
+    /// Resolve one layout-relative path to an executable reference, with the
+    /// same refusals and no read authority.
+    fn open_executable(&self, path: LayoutPath) -> Result<Self::Executable, LayoutError>;
     /// Enumerate the entries of a closed subdirectory.
     fn entries(&self, dir: LayoutDir) -> Result<Vec<OsString>, LayoutError>;
 }
 
-/// An opened regular file, readable exactly once and never re-resolved.
-pub trait AnchoredFile: Send {
+/// An opened regular file the compiler may read. Never re-resolved.
+pub trait ReadableFile: Send {
     fn len(&self) -> u64;
     fn read_prefix(&mut self, out: &mut [u8]) -> Result<usize, LayoutError>;
     fn read_to_digest(self) -> Result<ArtifactDigest, LayoutError>;
 }
 
-/// Launching a program from an already-opened, already-verified file.
+/// An `O_PATH` reference the launcher may execute and cannot read.
+pub trait ExecutableFile: Send {}
+
+/// Launching a program from an already-opened, already-verified reference.
 pub trait ProcessLauncher: Send + Sync {
-    type File: AnchoredFile;
-    fn exec_from(&self, file: Self::File, argv: &Argv, envp: &Envp) -> Result<Infallible, LaunchError>;
+    type Executable: ExecutableFile;
+    fn exec_from(&self, file: Self::Executable, argv: &Argv, envp: &Envp)
+        -> Result<Infallible, LaunchError>;
 }
 ```
+
+Splitting the handle into two types is what makes the mode distinction a
+compile-time fact rather than a comment. `ExecutableFile` exposes no read method,
+so the launcher cannot read a Provider image even by mistake, and
+`ProcessLauncher` accepts nothing else, so a readable handle cannot be executed
+without first being reopened in the other mode.
 
 The production implementation is the only place in the workspace that names
 `openat2`, `execveat`, or `AT_EMPTY_PATH`, which makes "is the sequence correct"
@@ -624,7 +759,7 @@ launcher that records what it was handed instead of execing. That is what makes
 `nix-build-required-output-not-regular`, `nix-build-executable-not-elf`, and the
 Phase 3 launcher scenario hermetic rather than requiring a privileged fixture.
 
-Taking an `AnchoredFile` **by value** in `read_to_digest` and `exec_from` is the
+Taking the handle **by value** in `read_to_digest` and `exec_from` is the
 same single-use discipline ADR 0049 established for the mutation seal: a
 descriptor that was verified and then digested cannot be handed to the launcher
 a second time after the verification result has been discarded.
@@ -739,7 +874,7 @@ The missing scenarios are added to section 15.8. Each is named so
 | `nix-build-required-outputs-missing` | 2 | A Provider derivation missing any of `share/d2b/provider/provider-manifest.json`, `provider-manifest.json.sig`, or `config-schema.json` fails build naming the absent layout-relative path |
 | `nix-build-required-output-not-regular` | 2 | Each of the three `share/d2b/provider/` paths, replaced in turn by a symlink (including one resolving inside the same output) and by a directory, fails build naming the path and the observed file type |
 | `nix-build-executable-not-elf` | 2 | A `bin/` entry that is a `#!` script, an empty file, a file shorter than the ELF header, an `ET_REL` object, or an `ET_CORE` image fails build naming the entry and the first four octets as hex, and the message names `d2b.lib.buildProviderElfShim` |
-| `nix-build-elf-shim-satisfies-the-layout` | 2 | A Provider whose entry point is a script, packaged through `d2b.lib.buildProviderElfShim`, produces a `bin/` entry that passes the ELF, regular-file, and name checks and launches its interpreter; the helper itself fails at build time if its own output is not `ET_EXEC`/`ET_DYN`, and fails at eval if `name` violates the item 3 grammar |
+| `nix-build-elf-shim-satisfies-the-layout` | 2 | A Provider whose entry point is a script, packaged through `d2b.lib.buildProviderElfShim`, produces a `bin/` entry that passes the ELF, regular-file, and name checks and launches its interpreter. The helper fails at eval if `name` violates the item 3 grammar; fails at build if its own output is not `ET_EXEC`/`ET_DYN`, if the interpreter or program is a symlink, or if either is not a regular file; and the emitted shim, run with a symlink substituted at the baked interpreter path, refuses rather than following it |
 | `nix-build-component-execution-invalid` | 2 | A non-bootstrap Provider whose component descriptor omits `binaryRef` fails build; a bootstrap-exception Provider omitting it succeeds; a Provider declaring an empty `executableDigests` while a component still names a `binaryRef`, and the converse, both fail |
 | `nix-build-manifest-binary-ref-wire-compatible` | 2 | A component descriptor authored with the flat `binaryRef` field of section 4.3.3 parses unchanged, round-trips to identical bytes, and yields an unchanged `manifestDigest`; a `binaryRef` violating the item 3 grammar is refused during deserialization rather than after |
 | `nix-build-manifest-signature-invalid` | 2 | Four distinct cases fail with four distinct codes: unregistered publisher, unresolvable `signatureId`, a `.sig` that is not exactly 64 octets, and 64 well-formed octets that do not verify |
@@ -867,7 +1002,8 @@ one.
 It is a distinct type from `ArtifactId` and `ComponentId` even though the three
 grammars coincide today, because they are three different namespaces and a
 coincidence of syntax is not a licence to substitute one for another. The
-newtype is what lets `AnchoredDir::open_regular` accept a component name without
+newtype is what lets `AnchoredDir::open_readable` and `open_executable` accept a
+component name without
 a traversal check at the call site: the type is the check.
 
 **Launchability is an enum, so there is no contradictory state.** A bare
@@ -939,13 +1075,15 @@ Two admission rules keep the bootstrap arm from becoming a general escape hatch:
    the same biconditional item 2 states, now checkable on the contract side
    rather than only against the filesystem. A violation raises the same code.
 
-**W5 implementation obligation.** `ComponentDescriptor` gains
-`ComponentExecution` with `BinaryRef`, the flat-wire parse boundary, and the
-validating `Deserialize`, before three of this ADR's scenarios are implementable:
+**W5 implementation obligation.** Two obligations gate four of this ADR's
+scenarios. `ComponentDescriptor` gains `ComponentExecution` with `BinaryRef`, the
+flat-wire parse boundary, and the validating `Deserialize`, which gates
 `nix-build-binary-ref-unresolved`, `nix-build-component-execution-invalid`, and
-`nix-build-manifest-binary-ref-wire-compatible`. The other seventeen of the
-twenty are independent of it, and the amendment records the split rather than
-letting the whole item slip.
+`nix-build-manifest-binary-ref-wire-compatible`. `d2b.lib.buildProviderElfShim`
+must exist before `nix-build-elf-shim-satisfies-the-layout` can be written at
+all, since there is nothing to exercise until the helper lands. The other sixteen
+of the twenty are independent of both, and the amendment records the split rather
+than letting the whole item slip.
 
 ## Consequences
 
@@ -955,8 +1093,8 @@ against fixed paths, and every one of the nineteen scenarios in item 11 is a
 filesystem or digest comparison a machine evaluates, with a twentieth in
 item 12 covering the launcher at Phase 3. The blocking status recorded
 in implementation-debt 19.7 lifts for `015`, and with it for `016` and `021` -
-with three exceptions, which item 14 records as blocked on a contract field that
-does not exist yet.
+with four exceptions, which item 14 records as blocked on a contract field and a
+framework helper that do not exist yet.
 
 **Multi-output Provider packaging is permitted but must be said out loud.** This
 is where panel round 1 moved the decision, and round 2 widened it further. A
