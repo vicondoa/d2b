@@ -161,7 +161,10 @@ in
       publicEntries = map (entry: builtins.removeAttrs entry [ "storePath" ]) artifactRows;
     };
 
-    d2b._bundle.extraArtifacts.artifactCatalog = lib.mkDefault {
+    # This is the shipped v3 document. Its eval-visible `data` retains the
+    # compatibility projection, while jsonText/path are the realised v3
+    # catalog and are selected over the legacy emitter.
+    d2b._bundle.extraArtifacts.artifactCatalog = lib.mkForce {
       data = compatibilityData;
       jsonText = catalogJson;
       path = catalogPath;

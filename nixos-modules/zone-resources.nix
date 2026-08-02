@@ -211,8 +211,11 @@ let
 in
 {
   config = lib.mkIf (cfg.zones != { }) {
-    d2b._bundle.zoneResourceBundles = zoneBundles;
-    d2b._bundle.extraArtifacts.artifactCatalog = {
+    # Keep the pre-cutover projection available as a compatibility fallback.
+    # bundle-zones.nix force-selects the coherent v3 table for installation.
+    d2b._bundle.zoneResourceBundlesCompatibility = zoneBundles;
+    d2b._bundle.zoneResourceBundles = lib.mkDefault zoneBundles;
+    d2b._bundle.extraArtifacts.artifactCatalog = lib.mkDefault {
       data = artifactCatalogPreimage;
       path = artifactCatalogPath;
       installFileName = "artifact-catalog.json";

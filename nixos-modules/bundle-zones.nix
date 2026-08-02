@@ -47,22 +47,21 @@ let
     deviceAttachments = [ ];
     volumeAttachmentDefaults = [ ];
   };
-  helperResource = resource:
-    if resource.type == "Provider" then
-      resource // {
-        spec = (resource.spec or { }) // {
-          # Provider-specific config is validated by its ResourceType schema.
-          # The shared helper only owns the common self-metrics envelope.
-          config = lib.filterAttrs
-            (field: _: field == "selfMetrics")
-            (resource.spec.config or { });
-        };
-      }
-    else resource;
   helperAssertions = lib.flatten (lib.mapAttrsToList
     (zoneName: zone:
-      (resourcesBundle.validateBundle zoneName
-        (lib.mapAttrs (_: helperResource) zone.resources)).assertions)
+      let
+        validation = resourcesBundle.validateBundle zoneName zone.resources;
+        # Keep ordinary validation failures visible as assertions, but never
+        # downgrade secret-shaped material to a soft assertion.
+        hasForbiddenMaterial = lib.any
+          (resource:
+            builtins.isAttrs resource
+            && resourcesBundle.forbiddenRows (resource.spec or { }) != [ ])
+          (lib.attrValues zone.resources);
+      in
+      if hasForbiddenMaterial
+      then (resourcesBundle.bundleForZone zoneName zone.resources).assertions
+      else validation.assertions)
     cfg.zones);
   catalogDigest =
     if cfg ? _artifactCatalogV3 && cfg._artifactCatalogV3 ? catalogDigest
@@ -204,15 +203,13 @@ let
             resources_path,
             digests_path,
             zone_json,
-            catalog,
+            expected_catalog_digest,
             catalog_path,
             expected_content_hash,
             output,
         ) = sys.argv[1:]
         resources = json.loads(pathlib.Path(resources_path).read_text())
         provider_digests = json.loads(pathlib.Path(digests_path).read_text())
-        if catalog_path:
-            catalog = json.loads(pathlib.Path(catalog_path).read_text())["catalogDigest"]
         resources_bytes = pathlib.Path(resources_path).read_bytes()
         canonical_resources = json.dumps(
             resources,
@@ -227,8 +224,20 @@ let
         ).hexdigest()
         if expected_content_hash != "sha256:" + content:
             raise SystemExit("resource bundle contentHash does not match resources")
+        catalog_digest = expected_catalog_digest
+        if catalog_path:
+            catalog_document = json.loads(
+                pathlib.Path(catalog_path).read_text()
+            )
+            realised_catalog_digest = catalog_document["catalogDigest"]
+            if realised_catalog_digest != expected_catalog_digest:
+                raise SystemExit(
+                    "resource bundle artifactCatalogDigest does not match "
+                    "the realised artifact catalog"
+                )
+            catalog_digest = realised_catalog_digest
         document = {
-            "artifactCatalogDigest": catalog,
+            "artifactCatalogDigest": catalog_digest,
             "bundleVersion": 1,
             "contentHash": "sha256:" + content,
             "generatedAt": "1970-01-01T00:00:00.000Z",
@@ -255,6 +264,15 @@ let
         sensitivity = "nonSecret";
       })
     cfg.zones;
+  activeBundles = lib.mapAttrs
+      (zoneName: bundle:
+        let compatibility = cfg._bundle.zoneResourceBundlesCompatibility.${zoneName} or { };
+        in bundle // {
+          # Keep the old eval projection for compatibility, but never its path:
+          # the active artifact always comes from the coherent v3 emitter.
+          data = compatibility.data or bundle.data;
+        })
+      bundles;
 in
 {
   options.d2b._bundle = {
@@ -269,9 +287,8 @@ in
   config = {
     assertions = helperAssertions;
     d2b._bundle.zoneResourceBundlesV3 = bundles;
-    # The old emitter remains the compatibility default until the integrator
-    # switches the aggregator. A direct v3 import still exposes the canonical
-    # destination through zoneResourceBundlesV3.
-    d2b._bundle.zoneResourceBundles = lib.mkDefault bundles;
+    # The v3 emitter owns every installed path. Only the eval-visible data
+    # field retains the compatibility projection used by older consumers.
+    d2b._bundle.zoneResourceBundles = lib.mkForce activeBundles;
   };
 }
