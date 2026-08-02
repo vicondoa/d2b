@@ -736,6 +736,10 @@ set -euo pipefail
         api_driver = (ROOT / "tests" / "tools" / "api-surface-json.sh").read_text(
             encoding="utf-8"
         )
+        self.assertIn(
+            'd2b_mktemp ".scratch/.d2b-api-surface.XXXXXX"',
+            api_driver,
+        )
         self.assertIn('public_target="$target_root/public-census"', api_driver)
         self.assertIn('private_target="$target_root/private-census"', api_driver)
         self.assertIn('checker_target="$target_root/checker"', api_driver)
