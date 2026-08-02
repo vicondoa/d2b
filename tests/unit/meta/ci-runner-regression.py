@@ -875,9 +875,9 @@ esac
                 "test-rust-api-surface",
                 {"D2B_RUST_BUDGET": "4"},
                 (
-                    "D2B_RUST_PROFILE=api",
-                    "D2B_RUST_ACTIVE_LANES=1",
-                    "D2B_RUST_QUOTA_API=4",
+                    "1 active lane(s), api profile",
+                    'D2B_RUST_CARGO_JOBS="4"',
+                    "bash tests/test-rust.sh api-surface",
                 ),
                 (),
             ),
@@ -888,9 +888,8 @@ esac
                     "D2B_SKIP_FIXTURE_BUILD": "1",
                 },
                 (
-                    "D2B_RUST_PROFILE=main",
-                    "D2B_RUST_ACTIVE_LANES=1",
-                    "D2B_RUST_QUOTA_MAIN=4",
+                    "1 active lane(s), main profile",
+                    'D2B_RUST_CARGO_JOBS="4"',
                     "bash tests/test-rust.sh main-workspace",
                 ),
                 (
@@ -903,9 +902,8 @@ esac
                 "test-rust-broker",
                 {"D2B_RUST_BUDGET": "4"},
                 (
-                    "D2B_RUST_PROFILE=broker",
-                    "D2B_RUST_ACTIVE_LANES=1",
-                    "D2B_RUST_QUOTA_BROKER=4",
+                    "1 active lane(s), broker profile",
+                    'D2B_RUST_CARGO_JOBS="4"',
                     "bash tests/test-rust.sh broker",
                 ),
                 ("bash tests/test-rust.sh inventory-stub",),
@@ -914,8 +912,9 @@ esac
                 "test-rust-guest-shell-runner",
                 {"D2B_RUST_BUDGET": "4"},
                 (
-                    "D2B_RUST_PROFILE=guest",
-                    "D2B_RUST_QUOTA_GUEST=4",
+                    "1 active lane(s), guest profile",
+                    'D2B_RUST_CARGO_JOBS="4"',
+                    "bash tests/test-rust.sh guest-shell-runner",
                 ),
                 (),
             ),
@@ -923,8 +922,9 @@ esac
                 "test-rust-no-bash-ast",
                 {"D2B_RUST_BUDGET": "4"},
                 (
-                    "D2B_RUST_PROFILE=no-bash",
-                    "D2B_RUST_QUOTA_AST=4",
+                    "1 active lane(s), no-bash profile",
+                    'D2B_RUST_CARGO_JOBS="4"',
+                    "bash tests/test-rust.sh no-bash-ast",
                 ),
                 (),
             ),
@@ -932,8 +932,8 @@ esac
                 "test-rust-schema",
                 {"D2B_RUST_BUDGET": "4"},
                 (
-                    "D2B_RUST_PROFILE=schema",
-                    "D2B_RUST_QUOTA_SCHEMA=4",
+                    "1 active lane(s), schema profile",
+                    'D2B_RUST_CARGO_JOBS="4"',
                     "bash tests/test-rust.sh schema-reproducibility",
                 ),
                 ("bash tests/test-rust.sh inventory-stub",),
@@ -942,8 +942,9 @@ esac
                 "test-rust-inventory",
                 {"D2B_RUST_BUDGET": "4"},
                 (
-                    "D2B_RUST_PROFILE=inventory",
-                    "D2B_RUST_QUOTA_INVENTORY=4",
+                    "1 active lane(s), inventory profile",
+                    'D2B_RUST_CARGO_JOBS="4"',
+                    "bash tests/test-rust.sh inventory-stub",
                 ),
                 (),
             ),
@@ -951,8 +952,9 @@ esac
                 "test-rust-supply-chain",
                 {"D2B_RUST_BUDGET": "4"},
                 (
-                    "D2B_RUST_PROFILE=supply",
-                    "D2B_RUST_QUOTA_SUPPLY=4",
+                    "1 active lane(s), supply profile",
+                    'D2B_RUST_CARGO_JOBS="4"',
+                    "bash tests/test-rust.sh supply-chain",
                 ),
                 (),
             ),
@@ -990,11 +992,10 @@ esac
             'if [ "$$profile" = aggregate ] && [ ! -d packages/target ]',
             makefile,
         )
-        self.assertRegex(
-            makefile,
-            r"(?s)cold\).*?active_lanes=1;.*?quota_main=\"\\$\\$runtime_budget\";"
-            r".*?quota_broker=\"\\$\\$runtime_budget\";",
-        )
+        cold_block = makefile.split("  cold) \\", 1)[1].split("  api) \\", 1)[0]
+        self.assertIn("active_lanes=1;", cold_block)
+        self.assertIn('quota_main="$$runtime_budget";', cold_block)
+        self.assertIn('quota_broker="$$runtime_budget";', cold_block)
         self.assertIn('"D2B_RUST_COLD_PROFILE=$$cold_profile"', makefile)
         self.assertIn('fixture_target_dir="$workspace_target_dir"', driver)
         self.assertIn('public_target="$target_root/census"', api_driver)
