@@ -1,15 +1,11 @@
-//! CLI-output golden contract migrated from `tests/cli-json-drift.sh`.
+//! CLI-output contract migrated from `tests/cli-json-drift.sh`.
 //!
 //! The schema-generation half of that shell gate now lives in
-//! `tests/unit/gates/drift-check.sh`; this test owns the committed
-//! `tests/golden/cli-output/*.golden` output contract that remained.  Existing
-//! CLI-contract tests already cover the daemon-only runtime semantics for the
-//! list/status/audit/host-check/auth/usb surfaces; this module adds golden
-//! checks for the unique dry-run renderer matrix and keeps the committed v0.4.0
-//! bash subset goldens tied to the Rust JSON shape.  A few retired-process
-//! phrases in old goldens are normalized to the committed daemon-only wording
-//! before runtime comparison; those spec corrections are documented in the
-//! migration commit.
+//! `tests/unit/gates/drift-check.sh`.  This test keeps the committed golden
+//! output contract for the local audit, host, and auth surfaces, plus the USB
+//! probe contract, while exercising Zone-backed ModernCli commands through
+//! their strict JSON and human error envelopes.  The retired v2 inventory and
+//! lifecycle goldens are deliberately not treated as v3 output.
 
 use std::fs;
 use std::os::fd::AsRawFd;
@@ -18,33 +14,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use nix::sys::socket::{
-    AddressFamily, Backlog, SockFlag, SockType, UnixAddr, accept, bind, listen, socket,
+    accept, bind, listen, socket, AddressFamily, Backlog, SockFlag, SockType, UnixAddr,
 };
-use serde_json::{Value, json};
-
-const SYSTEM_STATE_JSON: &str = r#"{
-  "units": {
-    "d2bd.service": "inactive",
-    "d2b@corp-vm.service": "inactive",
-    "microvm@corp-vm.service": "inactive",
-    "d2b@sys-work-net.service": "active",
-    "microvm@sys-work-net.service": "active"
-  },
-  "bridges": {
-    "br-work-lan": {
-      "state": "UP",
-      "admin": "up",
-      "expectedCarrier": "NO-CARRIER",
-      "result": "ok"
-    },
-    "br-work-up": {
-      "state": "UP",
-      "admin": "up",
-      "expectedCarrier": "UP",
-      "result": "ok"
-    }
-  }
-}"#;
+use serde_json::{json, Value};
 
 const AUTH_LAUNCHER_JSON: &str = r#"{
   "publicReachable": true,
@@ -53,10 +25,11 @@ const AUTH_LAUNCHER_JSON: &str = r#"{
   "brokerVersion": null
 }"#;
 
+const V3_ERROR_KEYS: &[&str] = &["errorClass", "message", "ok", "schemaVersion", "zoneRef"];
+
 struct FixtureEnv {
     _tmp: tempfile::TempDir,
     tree: PathBuf,
-    system_state: PathBuf,
     auth_status: PathBuf,
     home: PathBuf,
     runtime: PathBuf,
@@ -69,9 +42,6 @@ impl FixtureEnv {
         let tmp = target_tempdir("cli-json-output-contract");
         let tree = tmp.path().join("bundle-tree");
         build_hermetic_bundle_tree(&fixtures, &tree);
-
-        let system_state = tmp.path().join("system-state.json");
-        fs::write(&system_state, SYSTEM_STATE_JSON).expect("write system-state fixture");
 
         let auth_status = tmp.path().join("auth-launcher.json");
         fs::write(&auth_status, AUTH_LAUNCHER_JSON).expect("write auth-status fixture");
@@ -86,7 +56,6 @@ impl FixtureEnv {
         Some(Self {
             _tmp: tmp,
             tree,
-            system_state,
             auth_status,
             home,
             runtime,
@@ -99,10 +68,9 @@ impl FixtureEnv {
         cmd.env("D2B_MANIFEST_PATH", self.tree.join("manifest.json"))
             .env("D2B_BUNDLE_PATH", self.tree.join("bundle.json"))
             .env("D2B_DAEMON_STATE_DIR", &self.daemon_state)
-            // Read-only verbs (list/status/...) prefer d2bd's public socket
-            // for live VM status (d098dfca); point it + the broker socket at
-            // non-existent paths so spawns fall back to the static fixture
-            // inventory instead of the operator's live daemon.
+            // Keep the rendered artifacts available while making Zone
+            // transport unavailable.  ModernCli must not fall back to the
+            // retired static inventory when these sockets are missing.
             .env("D2B_PUBLIC_SOCKET", self.tree.join("public.sock"))
             .env("D2B_BROKER_SOCKET", self.tree.join("priv.sock"));
         for (key, value) in envs {
@@ -112,14 +80,8 @@ impl FixtureEnv {
             .unwrap_or_else(|err| panic!("spawn d2b {}: {err}", args.join(" ")))
     }
 
-    fn run_with_shape(&self, shape: &str, args: &[&str]) -> Output {
-        let mut cmd = base_command(args, &self.home, &self.runtime);
-        cmd.env("D2B_MANIFEST_PATH", self.tree.join("manifest.json"))
-            .env("D2B_BUNDLE_PATH", self.tree.join("bundle.json"))
-            .env("D2B_DAEMON_STATE_DIR", &self.daemon_state)
-            .env("D2B_TEST_DEPLOYMENT_SHAPE", shape);
-        cmd.output()
-            .unwrap_or_else(|err| panic!("spawn d2b {}: {err}", args.join(" ")))
+    fn missing_public_socket(&self) -> PathBuf {
+        self.tree.join("public.sock")
     }
 
     fn run_host_install(&self, args: &[&str]) -> Output {
@@ -222,6 +184,119 @@ fn assert_matches_golden(out: &Output, golden_name: &str, label: &str) {
     );
 }
 
+fn assert_no_legacy_fallback(out: &Output, missing_socket: &Path, label: &str) {
+    let rendered = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !rendered.contains(&missing_socket.display().to_string()),
+        "{label} leaked the missing Zone socket path:\n{rendered}"
+    );
+    for marker in ["bash", "legacy", "ssh"] {
+        assert!(
+            !rendered.to_ascii_lowercase().contains(marker),
+            "{label} exposed a retired {marker} fallback:\n{rendered}"
+        );
+    }
+}
+
+fn assert_zone_unavailable_json(out: &Output, missing_socket: &Path, label: &str) {
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "{label} must exit 1 when Zone transport is unavailable; stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        out.stderr.is_empty(),
+        "{label} JSON error must stay on stdout; stderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let value = json_value(&out.stdout, label);
+    let object = value
+        .as_object()
+        .unwrap_or_else(|| panic!("{label} envelope is not an object: {value}"));
+    let mut keys: Vec<&str> = object.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys, V3_ERROR_KEYS,
+        "{label} Zone envelope key set drifted: {value}"
+    );
+    assert_eq!(value["ok"], false, "{label} expected ok=false");
+    assert_eq!(
+        value["zoneRef"], "Zone/local-root",
+        "{label} unexpected Zone reference"
+    );
+    assert_eq!(
+        value["errorClass"], "zone-unavailable",
+        "{label} unexpected error class"
+    );
+    assert_eq!(
+        value["message"], "Zone runtime is unavailable",
+        "{label} unexpected error message"
+    );
+    assert_eq!(
+        value["schemaVersion"], 1,
+        "{label} unexpected schema version"
+    );
+    assert_no_legacy_fallback(out, missing_socket, label);
+}
+
+fn assert_zone_unavailable_human(out: &Output, missing_socket: &Path, label: &str) {
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "{label} must exit 1 when Zone transport is unavailable; stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        out.stdout.is_empty(),
+        "{label} human error must stay on stderr; stdout:\n{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("zone-unavailable") && stderr.contains("Zone runtime is unavailable"),
+        "{label} human error is not the Zone-unavailable message:\n{stderr}"
+    );
+    assert_no_legacy_fallback(out, missing_socket, label);
+}
+
+fn assert_zone_unavailable_modes(env: &FixtureEnv, args: &[&str], label: &str) {
+    let mut json_args = args.to_vec();
+    json_args.push("--json");
+    let json = env.run(&json_args, &[]);
+    assert_zone_unavailable_json(&json, &env.missing_public_socket(), label);
+
+    let mut human_args = args.to_vec();
+    human_args.push("--human");
+    let human = env.run(&human_args, &[]);
+    assert_zone_unavailable_human(&human, &env.missing_public_socket(), label);
+}
+
+fn assert_usage_rejection(out: &Output, marker: &str, label: &str) {
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "{label} must be rejected by ModernCli; stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        out.stdout.is_empty(),
+        "{label} clap rejection must not emit JSON"
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains(marker),
+        "{label} clap rejection missed {marker:?}; stderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
 fn normalize_nix_store_hashes(value: &str) -> String {
     const PREFIX: &str = "/nix/store/";
 
@@ -258,25 +333,7 @@ fn normalize_nix_store_hashes(value: &str) -> String {
 /// over adding another rewrite here.
 fn normalized_runtime_golden(name: &str) -> String {
     let expected = golden(name);
-    expected
-        .replace(
-            "uses the daemon-first bridge and falls back to the legacy bash path only when needed.",
-            "routes through d2bd → broker.",
-        )
-        .replace(
-            "Keys rotate --dry-run is a planned operation. --apply uses the daemon-first bridge and broker audit when the daemon handles the request.",
-            "d2b keys rotate --dry-run: planned operation. --apply routes through d2bd → broker RunKeysRotate with broker audit.",
-        )
-        .replace(
-            "Keys trust --dry-run is a planned operation. --apply uses the daemon-first bridge and broker audit when the daemon handles the request.",
-            "d2b keys trust --dry-run: planned operation. --apply routes through d2bd → broker RunKeysRotate with broker audit.",
-        )
-        .replace(
-            "Keys rotate-known-host --dry-run is a planned operation. --apply uses the daemon-first bridge and broker audit when the daemon handles the request.",
-            "d2b keys rotate-known-host --dry-run: planned operation. --apply routes through d2bd → broker RunKeysRotate with broker audit.",
-        )
-        .replace("Host-prepare", "host-prepare")
-        .replace("with the required socket ACLs", "with socket ACLs")
+    expected.replace("with the required socket ACLs", "with socket ACLs")
 }
 
 fn build_hermetic_bundle_tree(fixtures: &Path, dir: &Path) {
@@ -327,85 +384,29 @@ fn json_value(bytes: &[u8], label: &str) -> Value {
     })
 }
 
-fn list_v04_subset(value: &Value) -> Value {
-    Value::Array(
-        value
-            .as_array()
-            .expect("list output is an array")
-            .iter()
-            .map(|item| {
-                json!({
-                    "name": item["name"].clone(),
-                    "env": item["env"].clone(),
-                    "graphics": item["graphics"].clone(),
-                    "tpm": item["tpm"].clone(),
-                    "usbip": item["usbip"].clone(),
-                    "staticIp": item["staticIp"].clone(),
-                    "status": item["status"].clone(),
-                    "isNetVm": item["isNetVm"].clone(),
-                })
-            })
-            .collect(),
-    )
-}
-
-fn status_v04_subset(value: &Value) -> Value {
-    json!({
-        "name": value["name"].clone(),
-        "services": value["services"].clone(),
-        "current": value["current"].clone(),
-        "booted": value["booted"].clone(),
-        "pendingRestart": value["pendingRestart"].clone(),
-    })
-}
-
 #[test]
 fn list_output_matches_cli_json_drift_goldens() {
+    // Keep the migration pin name, but exercise the v3 typed Guest inventory
+    // and prove the old top-level inventory shape is not an alias.
     let Some(env) = FixtureEnv::new() else {
         return;
     };
-    let human = env.run(
-        &["list", "--human"],
-        &[("D2B_TEST_SYSTEM_STATE_JSON", &env.system_state)],
-    );
-    assert_matches_golden(&human, "list-human.golden", "list --human");
-
-    let json = env.run(
-        &["list", "--json"],
-        &[("D2B_TEST_SYSTEM_STATE_JSON", &env.system_state)],
-    );
-    assert_matches_golden(&json, "list-json.golden", "list --json");
-
-    let rust_subset = list_v04_subset(&json_value(&json.stdout, "list --json"));
-    let bash_subset = json_value(
-        golden("list.v04bash.golden").as_bytes(),
-        "list.v04bash.golden",
-    );
-    assert_eq!(
-        rust_subset, bash_subset,
-        "list rust JSON stays equivalent to the v0.4.0 bash subset"
-    );
+    for mode in ["--human", "--json"] {
+        let out = env.run(&["list", mode], &[]);
+        assert_usage_rejection(&out, "<RESOURCE_TYPE>", &format!("list {mode}"));
+        assert_no_legacy_fallback(&out, &env.missing_public_socket(), &format!("list {mode}"));
+    }
+    assert_zone_unavailable_modes(&env, &["guest", "list"], "guest list");
 }
 
 #[test]
 fn status_goldens_preserve_v04_bash_subset() {
-    let status = json_value(
-        golden("status-json.golden").as_bytes(),
-        "status-json.golden",
-    );
-    let rust_subset = status_v04_subset(&status);
-    let bash_subset = json_value(
-        golden("status.v04bash.golden").as_bytes(),
-        "status.v04bash.golden",
-    );
-    assert_eq!(
-        rust_subset, bash_subset,
-        "status rust JSON golden stays equivalent to the v0.4.0 bash subset"
-    );
-    assert!(
-        golden("status-human.golden").contains("=== corp-vm ==="),
-        "status-human.golden remains the committed corp-vm human contract"
-    );
+    // Keep the migration pin name while replacing the retired v0.4 subset
+    // comparison with the v3 Guest status envelope.
+    let Some(env) = FixtureEnv::new() else {
+        return;
+    };
+    assert_zone_unavailable_modes(&env, &["guest", "status", "corp-vm"], "guest status");
 }
 
 #[test]
@@ -495,178 +496,92 @@ fn host_check_and_auth_status_outputs_match_goldens() {
 
 #[test]
 fn vm_lifecycle_dry_run_outputs_match_goldens() {
+    // Keep the migration pin name; v3 lifecycle is typed Guest dispatch.
     let Some(env) = FixtureEnv::new() else {
         return;
     };
-    for (args, golden_name, label) in [
-        (
-            &["vm", "start", "corp-vm", "--dry-run", "--human"][..],
-            "vm-start-dry-run-human.golden",
-            "vm start corp-vm --dry-run --human",
-        ),
-        (
-            &["vm", "start", "corp-vm", "--dry-run", "--json"][..],
-            "vm-start-dry-run-json.golden",
-            "vm start corp-vm --dry-run --json",
-        ),
-        (
-            &["vm", "stop", "corp-vm", "--dry-run", "--human"][..],
-            "vm-stop-dry-run-human.golden",
-            "vm stop corp-vm --dry-run --human",
-        ),
-        (
-            &["vm", "stop", "corp-vm", "--dry-run", "--json"][..],
-            "vm-stop-dry-run-json.golden",
-            "vm stop corp-vm --dry-run --json",
-        ),
-        (
-            &["vm", "restart", "corp-vm", "--dry-run", "--human"][..],
-            "vm-restart-dry-run-human.golden",
-            "vm restart corp-vm --dry-run --human",
-        ),
-        (
-            &["vm", "restart", "corp-vm", "--dry-run", "--json"][..],
-            "vm-restart-dry-run-json.golden",
-            "vm restart corp-vm --dry-run --json",
-        ),
-    ] {
-        let out = env.run(args, &[]);
-        assert_matches_golden(&out, golden_name, label);
+    for action in ["start", "stop", "restart"] {
+        assert_zone_unavailable_modes(
+            &env,
+            &["guest", action, "corp-vm", "--dry-run"],
+            &format!("guest {action} corp-vm"),
+        );
     }
 }
 
 #[test]
 fn top_level_lifecycle_dry_run_outputs_match_goldens() {
+    // Keep the migration pin name while rejecting the retired aliases and
+    // exercising their activation namespace replacements.
     let Some(env) = FixtureEnv::new() else {
         return;
     };
-    for (args, golden_name, label) in [
-        (
-            &["switch", "corp-vm", "--dry-run", "--human"][..],
-            "switch-dry-run-human.golden",
-            "switch corp-vm --dry-run --human",
-        ),
-        (
-            &["switch", "corp-vm", "--dry-run", "--json"][..],
-            "switch-dry-run-json.golden",
-            "switch corp-vm --dry-run --json",
-        ),
-        (
-            &["boot", "corp-vm", "--dry-run", "--human"][..],
-            "boot-dry-run-human.golden",
-            "boot corp-vm --dry-run --human",
-        ),
-        (
-            &["boot", "corp-vm", "--dry-run", "--json"][..],
-            "boot-dry-run-json.golden",
-            "boot corp-vm --dry-run --json",
-        ),
-        (
-            &["test", "corp-vm", "--dry-run", "--human"][..],
-            "test-dry-run-human.golden",
-            "test corp-vm --dry-run --human",
-        ),
-        (
-            &["test", "corp-vm", "--dry-run", "--json"][..],
-            "test-dry-run-json.golden",
-            "test corp-vm --dry-run --json",
-        ),
-        (
-            &["rollback", "corp-vm", "--dry-run", "--human"][..],
-            "rollback-dry-run-human.golden",
-            "rollback corp-vm --dry-run --human",
-        ),
+    for (args, marker) in [
+        (&["switch", "corp-vm", "--dry-run", "--json"][..], "switch"),
+        (&["boot", "corp-vm", "--dry-run", "--json"][..], "boot"),
+        (&["test", "corp-vm", "--dry-run", "--json"][..], "test"),
         (
             &["rollback", "corp-vm", "--dry-run", "--json"][..],
-            "rollback-dry-run-json.golden",
-            "rollback corp-vm --dry-run --json",
+            "rollback",
         ),
-        (
-            &["gc", "--dry-run", "--human"][..],
-            "gc-dry-run-human.golden",
-            "gc --dry-run --human",
-        ),
-        (
-            &["gc", "--dry-run", "--json"][..],
-            "gc-dry-run-json.golden",
-            "gc --dry-run --json",
-        ),
-        (
-            &["keys", "rotate", "corp-vm", "--dry-run", "--human"][..],
-            "keys-rotate-dry-run-human.golden",
-            "keys rotate corp-vm --dry-run --human",
-        ),
+        (&["gc", "--dry-run", "--json"][..], "gc"),
         (
             &["keys", "rotate", "corp-vm", "--dry-run", "--json"][..],
-            "keys-rotate-dry-run-json.golden",
-            "keys rotate corp-vm --dry-run --json",
+            "keys",
         ),
-        (
-            &["trust", "corp-vm", "--dry-run", "--human"][..],
-            "trust-dry-run-human.golden",
-            "trust corp-vm --dry-run --human",
-        ),
-        (
-            &["trust", "corp-vm", "--dry-run", "--json"][..],
-            "trust-dry-run-json.golden",
-            "trust corp-vm --dry-run --json",
-        ),
-        (
-            &["rotate-known-host", "corp-vm", "--dry-run", "--human"][..],
-            "rotate-known-host-dry-run-human.golden",
-            "rotate-known-host corp-vm --dry-run --human",
-        ),
+        (&["trust", "corp-vm", "--dry-run", "--json"][..], "trust"),
         (
             &["rotate-known-host", "corp-vm", "--dry-run", "--json"][..],
-            "rotate-known-host-dry-run-json.golden",
-            "rotate-known-host corp-vm --dry-run --json",
+            "rotate-known-host",
         ),
     ] {
         let out = env.run(args, &[]);
-        assert_matches_golden(&out, golden_name, label);
+        let label = format!("retired {marker}");
+        assert_usage_rejection(&out, &format!("unrecognized subcommand '{marker}'"), &label);
+        assert_no_legacy_fallback(&out, &env.missing_public_socket(), &label);
+    }
+
+    for args in [
+        &["activation", "switch", "Guest/corp-vm", "--dry-run"][..],
+        &["activation", "boot", "Guest/corp-vm", "--dry-run"][..],
+        &["activation", "test", "Guest/corp-vm", "--dry-run"][..],
+        &["activation", "rollback", "Guest/corp-vm", "--dry-run"][..],
+        &["activation", "gc", "--dry-run"][..],
+        &["activation", "migrate", "--dry-run"][..],
+        &["activation", "keys", "list"][..],
+        &["activation", "keys", "rotate", "Guest/corp-vm", "--dry-run"][..],
+        &["activation", "trust", "corp-vm"][..],
+        &["activation", "rotate-known-host", "corp-vm"][..],
+    ] {
+        assert_zone_unavailable_modes(&env, args, &format!("d2b {}", args.join(" ")));
     }
 }
 
 #[test]
 fn host_lifecycle_dry_run_outputs_match_goldens() {
+    // Host install remains a local golden contract; Zone-backed host
+    // mutations use the v3 error envelope instead of retired snapshots.
     let Some(env) = FixtureEnv::new() else {
         return;
     };
-    for (args, golden_name, label) in [
-        (
-            &["host", "prepare", "--dry-run", "--human"][..],
-            "host-prepare-dry-run-human.golden",
-            "host prepare --dry-run --human",
-        ),
-        (
-            &["host", "prepare", "--dry-run", "--json"][..],
-            "host-prepare-dry-run-json.golden",
-            "host prepare --dry-run --json",
-        ),
-        (
-            &["host", "destroy", "--dry-run", "--human"][..],
-            "host-destroy-dry-run-human.golden",
-            "host destroy --dry-run --human",
-        ),
-        (
-            &["host", "destroy", "--dry-run", "--json"][..],
-            "host-destroy-dry-run-json.golden",
-            "host destroy --dry-run --json",
-        ),
-        (
-            &["migrate", "--dry-run", "--human"][..],
-            "migrate-dry-run-human.golden",
-            "migrate --dry-run --human",
-        ),
-        (
-            &["migrate", "--dry-run", "--json"][..],
-            "migrate-dry-run-json.golden",
-            "migrate --dry-run --json",
-        ),
+    for args in [
+        &["host", "prepare", "--dry-run"][..],
+        &["host", "destroy", "--dry-run"][..],
     ] {
-        let out = env.run_with_shape("all-daemon", args);
-        assert_matches_golden(&out, golden_name, label);
+        assert_zone_unavailable_modes(&env, args, &format!("d2b {}", args.join(" ")));
     }
+
+    let retired_migrate = env.run(&["migrate", "--dry-run", "--json"], &[]);
+    assert_usage_rejection(
+        &retired_migrate,
+        "unrecognized subcommand 'migrate'",
+        "retired migrate",
+    );
+    assert_no_legacy_fallback(
+        &retired_migrate,
+        &env.missing_public_socket(),
+        "retired migrate",
+    );
 
     for (args, golden_name, label) in [
         (
@@ -704,132 +619,49 @@ fn host_install_help_builds_without_clap_assertion() {
 }
 
 #[test]
-fn host_migrate_storage_dry_run_json_reports_checkpoint_and_rollback() {
-    let Some(env) = FixtureEnv::new() else {
-        return;
-    };
-    let out = env.run(&["host", "migrate-storage", "--dry-run", "--json"], &[]);
-    assert_success(&out, "host migrate-storage --dry-run --json");
-    let value: Value = serde_json::from_slice(&out.stdout).expect("parse migrate-storage JSON");
-    assert_eq!(value["command"], "host migrate-storage");
-    assert_eq!(value["mode"], "dry-run");
-    let checkpoint = value["checkpointId"].as_str().expect("checkpointId string");
-    assert!(checkpoint.starts_with("storage-cutover-"));
-    assert!(
-        value["rollbackCommand"]
-            .as_str()
-            .expect("rollback command string")
-            .contains(checkpoint)
-    );
-    assert_eq!(value["applyStatus"], "not-implemented-in-this-build");
-    assert!(
-        value["preserve"]
-            .as_array()
-            .expect("preserve array")
-            .iter()
-            .any(|entry| entry.as_str().is_some_and(|s| s.contains("swtpm NVRAM")))
-    );
-    assert!(
-        value["preflightRequirements"]
-            .as_array()
-            .expect("preflight array")
-            .iter()
-            .any(|entry| entry
-                .as_str()
-                .is_some_and(|s| s.contains("net VMs stopped")))
-    );
-    assert!(
-        value["failClosedHazards"]
-            .as_array()
-            .expect("hazards array")
-            .iter()
-            .any(|entry| entry
-                .as_str()
-                .is_some_and(|s| s.contains("unlink lock files")))
-    );
-}
-
-#[test]
-fn host_migrate_storage_apply_fails_closed_without_mutation() {
-    let Some(env) = FixtureEnv::new() else {
-        return;
-    };
-    let out = env.run(&["host", "migrate-storage", "--apply", "--json"], &[]);
-    assert!(
-        !out.status.success(),
-        "apply should fail closed until broker support lands"
-    );
-    let value: Value = serde_json::from_slice(&out.stdout).expect("parse apply refusal JSON");
-    assert_eq!(value["code"], "storage-migration-apply-not-implemented");
-    assert_eq!(value["exitCode"], 78);
-    assert!(
-        value["remediation"]
-            .as_str()
-            .expect("remediation")
-            .contains("host migrate-storage --dry-run")
-    );
-}
-
-#[test]
-fn host_migrate_storage_rollback_fails_closed_without_mutation() {
-    let Some(env) = FixtureEnv::new() else {
-        return;
-    };
-    let out = env.run(
-        &[
-            "host",
-            "migrate-storage",
-            "--rollback",
-            "--from-checkpoint",
-            "storage-cutover-test",
-            "--json",
-        ],
-        &[],
-    );
-    assert!(
-        !out.status.success(),
-        "rollback should fail closed until broker support lands"
-    );
-    let value: Value = serde_json::from_slice(&out.stdout).expect("parse rollback refusal JSON");
-    assert_eq!(value["code"], "storage-migration-rollback-not-implemented");
-    assert_eq!(value["exitCode"], 78);
-    assert!(
-        value["observedState"]
-            .as_str()
-            .expect("observed state")
-            .contains("storage-cutover-test")
+fn retired_host_migrate_storage_is_not_an_alias() {
+    let home = tempfile::tempdir().expect("create migration HOME");
+    let runtime = tempfile::tempdir().expect("create migration XDG_RUNTIME_DIR");
+    let out = base_command(
+        &["host", "migrate-storage", "--dry-run", "--json"],
+        home.path(),
+        runtime.path(),
+    )
+    .output()
+    .expect("spawn retired host migrate-storage");
+    assert_usage_rejection(
+        &out,
+        "unrecognized subcommand 'migrate-storage'",
+        "retired host migrate-storage",
     );
 }
 
 #[test]
 fn usb_dry_run_outputs_match_goldens() {
+    // Keep the migration pin name; USB mutations now use typed Device
+    // resources and report the Zone envelope when no runtime is present.
     let Some(env) = FixtureEnv::new() else {
         return;
     };
-    for (args, golden_name, label) in [
-        (
-            &["usb", "attach", "corp-vm", "1-2", "--dry-run", "--human"][..],
-            "usb-attach-dry-run-human.golden",
-            "usb attach corp-vm 1-2 --dry-run --human",
-        ),
-        (
-            &["usb", "attach", "corp-vm", "1-2", "--dry-run", "--json"][..],
-            "usb-attach-dry-run-json.golden",
-            "usb attach corp-vm 1-2 --dry-run --json",
-        ),
-        (
-            &["usb", "detach", "corp-vm", "1-2", "--dry-run", "--human"][..],
-            "usb-detach-dry-run-human.golden",
-            "usb detach corp-vm 1-2 --dry-run --human",
-        ),
-        (
-            &["usb", "detach", "corp-vm", "1-2", "--dry-run", "--json"][..],
-            "usb-detach-dry-run-json.golden",
-            "usb detach corp-vm 1-2 --dry-run --json",
-        ),
+    for args in [
+        &[
+            "device",
+            "usb",
+            "attach",
+            "Device/corp-vm",
+            "1-2",
+            "--dry-run",
+        ][..],
+        &[
+            "device",
+            "usb",
+            "detach",
+            "Device/corp-vm",
+            "1-2",
+            "--dry-run",
+        ][..],
     ] {
-        let out = env.run(args, &[]);
-        assert_matches_golden(&out, golden_name, label);
+        assert_zone_unavailable_modes(&env, args, &format!("d2b {}", args.join(" ")));
     }
 }
 
@@ -838,58 +670,17 @@ fn usb_security_key_dry_run_outputs_match_goldens() {
     let Some(env) = FixtureEnv::new() else {
         return;
     };
-    for (args, golden_name, label) in [
-        (
-            &[
-                "usb",
-                "security-key",
-                "cancel",
-                "--current",
-                "--dry-run",
-                "--human",
-            ][..],
-            "usb-security-key-cancel-current-dry-run-human.golden",
-            "usb security-key cancel --current --dry-run --human",
-        ),
-        (
-            &[
-                "usb",
-                "security-key",
-                "cancel",
-                "--current",
-                "--dry-run",
-                "--json",
-            ][..],
-            "usb-security-key-cancel-current-dry-run-json.golden",
-            "usb security-key cancel --current --dry-run --json",
-        ),
-        (
-            &[
-                "usb",
-                "security-key",
-                "test",
-                "corp-vm",
-                "--dry-run",
-                "--human",
-            ][..],
-            "usb-security-key-test-dry-run-human.golden",
-            "usb security-key test corp-vm --dry-run --human",
-        ),
-        (
-            &[
-                "usb",
-                "security-key",
-                "test",
-                "corp-vm",
-                "--dry-run",
-                "--json",
-            ][..],
-            "usb-security-key-test-dry-run-json.golden",
-            "usb security-key test corp-vm --dry-run --json",
-        ),
+    for args in [
+        &["device", "security-key", "cancel", "--current", "--dry-run"][..],
+        &[
+            "device",
+            "security-key",
+            "test",
+            "Device/corp-vm",
+            "--dry-run",
+        ][..],
     ] {
-        let out = env.run(args, &[]);
-        assert_matches_golden(&out, golden_name, label);
+        assert_zone_unavailable_modes(&env, args, &format!("d2b {}", args.join(" ")));
     }
 }
 
@@ -898,21 +689,11 @@ fn usb_security_key_status_not_yet_implemented() {
     let Some(env) = FixtureEnv::new() else {
         return;
     };
-    let out = env.run(&["usb", "security-key", "status", "--json"], &[]);
-    assert_eq!(
-        out.status.code(),
-        Some(78),
-        "usb security-key status exits 78 (not-yet-implemented)"
+    assert_zone_unavailable_modes(
+        &env,
+        &["device", "security-key", "status"],
+        "device security-key status",
     );
-    assert!(out.stderr.is_empty(), "JSON mode error must go to stdout");
-    let envelope: Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|e| {
-        panic!(
-            "usb security-key status --json envelope: {e}\n{}",
-            String::from_utf8_lossy(&out.stdout)
-        )
-    });
-    assert_eq!(envelope["code"], "not-yet-implemented");
-    assert_eq!(envelope["exitCode"], 78);
 }
 
 #[test]
@@ -920,21 +701,11 @@ fn usb_security_key_sessions_not_yet_implemented() {
     let Some(env) = FixtureEnv::new() else {
         return;
     };
-    let out = env.run(&["usb", "security-key", "sessions", "--json"], &[]);
-    assert_eq!(
-        out.status.code(),
-        Some(78),
-        "usb security-key sessions exits 78 (not-yet-implemented)"
+    assert_zone_unavailable_modes(
+        &env,
+        &["device", "security-key", "sessions"],
+        "device security-key sessions",
     );
-    assert!(out.stderr.is_empty(), "JSON mode error must go to stdout");
-    let envelope: Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|e| {
-        panic!(
-            "usb security-key sessions --json envelope: {e}\n{}",
-            String::from_utf8_lossy(&out.stdout)
-        )
-    });
-    assert_eq!(envelope["code"], "not-yet-implemented");
-    assert_eq!(envelope["exitCode"], 78);
 }
 
 #[test]
