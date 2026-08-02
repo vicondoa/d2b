@@ -2458,6 +2458,17 @@ let
   deviceSettings = row:
     zoneAttrOr (zoneAttrOr row.resource.spec "provider" { }) "settings" { };
 
+  deviceUnorderedPairs = values:
+    let count = lib.length values;
+    in lib.concatMap
+      (index: lib.genList
+        (offset: {
+          left = lib.elemAt values index;
+          right = lib.elemAt values (index + offset + 1);
+        })
+        (count - index - 1))
+      (lib.genList (index: index) count);
+
   deviceOwnerRefValid = row:
     let owner = zoneAttrOr row.resource.metadata "ownerRef" null;
         parsed = if builtins.isString owner then lib.splitString "/" owner else [ ];
@@ -2482,7 +2493,7 @@ let
       && builtins.elem (deviceProviderName pair.left) [ "device-usbip" "device-security-key" ]
       && builtins.elem (deviceProviderName pair.right) [ "device-usbip" "device-security-key" ]
       && deviceProviderName pair.left != deviceProviderName pair.right)
-    (unorderedPairs deviceRows);
+    (deviceUnorderedPairs deviceRows);
 
   deviceMutualExclusionAssertions = map
     (pair: {
