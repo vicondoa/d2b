@@ -725,6 +725,8 @@
             "observability.nix"
             "provider-catalog.nix"
             "readiness-waves.nix"
+            "resource-sharing.nix"
+            "resources-bundle-telemetry.nix"
             "restart-policy.nix"
             "usb-security-key.nix"
             "vm-eval-overlays.nix"
