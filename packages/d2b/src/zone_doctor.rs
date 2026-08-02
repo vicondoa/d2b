@@ -183,6 +183,8 @@ pub struct DoctorInput {
 
 /// Build the fixed doctor check set.
 pub fn build_report(zone: impl Into<String>, input: DoctorInput) -> ZoneDoctorReport {
+    let zone = safe_zone(&zone.into());
+    let input = sanitize_input(input);
     let mut checks = Vec::new();
     let store_revision_monotonic =
         input.store_health.revision >= input.store_health.compaction_floor;
@@ -228,13 +230,17 @@ pub fn build_report(zone: impl Into<String>, input: DoctorInput) -> ZoneDoctorRe
             "provider-degraded"
         },
     );
+    let audit_healthy = input.audit.phase == "ok";
+    let audit_rate_limited = input.audit.phase == "rate_limited";
     push_check(
         &mut checks,
         "audit-sink-healthy",
-        input.audit.phase == "ok",
-        true,
-        if input.audit.phase == "ok" {
+        audit_healthy,
+        !audit_rate_limited,
+        if audit_healthy {
             "ok"
+        } else if audit_rate_limited {
+            "audit-rate-limited"
         } else {
             "audit-unavailable"
         },
@@ -244,10 +250,10 @@ pub fn build_report(zone: impl Into<String>, input: DoctorInput) -> ZoneDoctorRe
         "otel-sink-reachable",
         matches!(input.telemetry.phase.as_str(), "ok" | "buffering"),
         false,
-        if input.telemetry.phase == "ok" {
-            "ok"
-        } else {
-            "telemetry-buffering"
+        match input.telemetry.phase.as_str() {
+            "ok" => "ok",
+            "buffering" => "telemetry-buffering",
+            _ => "telemetry-unavailable",
         },
     );
     push_check(
@@ -298,7 +304,7 @@ pub fn build_report(zone: impl Into<String>, input: DoctorInput) -> ZoneDoctorRe
     }
     let summary = summarize(&checks);
     ZoneDoctorReport {
-        zone: zone.into(),
+        zone,
         zone_phase: input.zone_phase,
         store_health: input.store_health,
         controllers: input.controllers,
@@ -356,6 +362,125 @@ fn summarize(checks: &[DoctorCheck]) -> DoctorSummary {
         }
     }
     summary
+}
+
+fn sanitize_input(mut input: DoctorInput) -> DoctorInput {
+    input.store_health.phase = closed_token(
+        &input.store_health.phase,
+        &[
+            "pending",
+            "ready",
+            "degraded",
+            "failed",
+            "quarantined",
+            "unknown",
+        ],
+    );
+    input.controllers = input
+        .controllers
+        .into_iter()
+        .map(|mut controller| {
+            controller.handler = closed_token(
+                &controller.handler,
+                &[
+                    "configuration",
+                    "api_catalog",
+                    "authz",
+                    "provider",
+                    "controller_registration",
+                    "ownership",
+                    "watch_maintenance",
+                    "ephemeral_cleanup",
+                    "zone_link",
+                    "budget",
+                    "store_lifecycle",
+                    "system_core_host",
+                    "system_core_user",
+                ],
+            );
+            controller.phase = closed_token(
+                &controller.phase,
+                &["pending", "ready", "degraded", "failed", "unknown"],
+            );
+            controller.last_reconciled_at = safe_observation(&controller.last_reconciled_at);
+            controller
+        })
+        .collect();
+    input.providers = input
+        .providers
+        .into_iter()
+        .map(|mut provider| {
+            provider.provider = closed_token(
+                &provider.provider,
+                &[
+                    "system-core",
+                    "system-minijail",
+                    "system-systemd",
+                    "observability-otel",
+                ],
+            );
+            provider.phase = closed_token(
+                &provider.phase,
+                &["pending", "ready", "degraded", "failed", "unknown"],
+            );
+            provider.component_phases = provider
+                .component_phases
+                .into_iter()
+                .filter_map(|(component, phase)| {
+                    if !["controller", "service", "worker"].contains(&component.as_str()) {
+                        return None;
+                    }
+                    Some((
+                        component,
+                        closed_token(
+                            &phase,
+                            &["pending", "ready", "degraded", "failed", "unknown"],
+                        ),
+                    ))
+                })
+                .collect();
+            provider
+        })
+        .collect();
+    input.audit.phase = closed_token(&input.audit.phase, &["ok", "rate_limited", "unavailable"]);
+    input.telemetry.phase =
+        closed_token(&input.telemetry.phase, &["ok", "buffering", "unavailable"]);
+    input
+}
+
+fn closed_token(value: &str, allowed: &[&str]) -> String {
+    if allowed.contains(&value) {
+        value.to_owned()
+    } else {
+        "unknown".to_owned()
+    }
+}
+
+fn safe_observation(value: &str) -> String {
+    if !value.is_empty()
+        && value.len() <= 64
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b':' | b'.' | b'T' | b'Z')
+        })
+    {
+        value.to_owned()
+    } else {
+        "unknown".to_owned()
+    }
+}
+
+fn safe_zone(value: &str) -> String {
+    if !value.is_empty()
+        && value.len() <= 63
+        && value.bytes().enumerate().all(|(index, byte)| {
+            (byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+                && (index != 0 || byte.is_ascii_lowercase())
+        })
+    {
+        value.to_owned()
+    } else {
+        "unknown".to_owned()
+    }
 }
 
 #[cfg(test)]

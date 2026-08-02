@@ -18,12 +18,29 @@ impl core::fmt::Display for ConfigError {
 impl std::error::Error for ConfigError {}
 
 /// The only installation-wide setting accepted by the Provider.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProviderConfig {
     /// Whether bounded self-metrics are exposed.
-    #[serde(default = "default_true")]
     pub self_metrics_enable: bool,
+}
+
+impl Serialize for ProviderConfig {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.to_json().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ProviderConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        Self::from_json(&value).map_err(|_| serde::de::Error::custom(ConfigError::Invalid))
+    }
 }
 
 impl Default for ProviderConfig {
@@ -69,10 +86,6 @@ impl ProviderConfig {
             }
         })
     }
-}
-
-const fn default_true() -> bool {
-    true
 }
 
 #[cfg(test)]

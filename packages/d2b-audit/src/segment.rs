@@ -67,13 +67,22 @@ impl SegmentWriter {
 
     /// Append a record and rotate before crossing a size or UTC-day boundary.
     pub fn append(&mut self, record: &AuditRecord) -> io::Result<PathBuf> {
+        self.append_at(record, now_ms())
+    }
+
+    /// Append a record at a supplied timestamp.
+    ///
+    /// The timestamp is used only for deterministic rotation decisions; the
+    /// audit record's own timestamp remains part of the caller-supplied
+    /// record and is never rewritten by the segment writer.
+    pub fn append_at(&mut self, record: &AuditRecord, timestamp_ms: u64) -> io::Result<PathBuf> {
         let line = record.to_json_line().map_err(io::Error::other)?;
-        let current_day = day_number(now_ms());
+        let current_day = day_number(timestamp_ms);
         if self.bytes > 0
             && (self.bytes.saturating_add(line.len() as u64) > self.max_bytes
                 || current_day != self.opened_day)
         {
-            self.rotate(now_ms())?;
+            self.rotate(timestamp_ms)?;
         }
         self.file.write_all(&line)?;
         self.file.sync_data()?;

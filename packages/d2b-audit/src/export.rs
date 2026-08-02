@@ -41,10 +41,39 @@ impl ExportLine {
 
 /// Export all owned segments in lexical order.
 pub fn export_segments(directory: impl AsRef<Path>) -> io::Result<Vec<ExportLine>> {
+    export_segments_range(directory, None, None)
+}
+
+/// Export a lexical segment range while validating the selected chain.
+///
+/// `after` and `before` are exclusive filename boundaries. They accept only
+/// the basename shape produced by [`SegmentWriter`](crate::SegmentWriter);
+/// accepting a path here would turn an export filter into a filesystem
+/// traversal surface.
+pub fn export_segments_range(
+    directory: impl AsRef<Path>,
+    after: Option<&str>,
+    before: Option<&str>,
+) -> io::Result<Vec<ExportLine>> {
+    if after.is_some_and(|name| !is_segment_name(name))
+        || before.is_some_and(|name| !is_segment_name(name))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "audit-segment-boundary-invalid",
+        ));
+    }
     let mut paths = fs::read_dir(directory.as_ref())?
         .filter_map(Result::ok)
         .map(|entry| entry.path())
-        .filter(|path| is_segment(path))
+        .filter(|path| {
+            let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+                return false;
+            };
+            is_segment_name(name)
+                && after.is_none_or(|boundary| name > boundary)
+                && before.is_none_or(|boundary| name < boundary)
+        })
         .collect::<Vec<PathBuf>>();
     paths.sort();
     let mut lines = Vec::new();
@@ -88,10 +117,15 @@ pub fn export_segments(directory: impl AsRef<Path>) -> io::Result<Vec<ExportLine
     Ok(lines)
 }
 
-fn is_segment(path: &Path) -> bool {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.starts_with("audit-") && name.ends_with(".jsonl"))
+/// Return whether a value is an owned audit segment basename.
+pub fn is_segment_name(name: &str) -> bool {
+    let Some(digits) = name
+        .strip_prefix("audit-")
+        .and_then(|value| value.strip_suffix(".jsonl"))
+    else {
+        return false;
+    };
+    digits.len() == 20 && digits.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 #[cfg(test)]

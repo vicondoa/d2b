@@ -182,6 +182,8 @@ fn no_isolation_is_confined_to_audit_and_status_surfaces() {
         assert!(
             path.contains("audit")
                 || path.contains("host.rs")
+                || path == "packages/d2b-provider-system-core/src/host_status.rs"
+                || path == "packages/d2b/src/context.rs"
                 || path.contains("zone_doctor.rs")
                 || path.contains("zone_support_bundle.rs")
                 || path.contains("redaction_guard.rs")

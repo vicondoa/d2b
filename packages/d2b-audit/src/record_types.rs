@@ -409,6 +409,26 @@ impl AuditRecord {
         &self.zone
     }
 
+    /// Opaque operation correlator.
+    pub fn operation_id(&self) -> &str {
+        &self.operation_id
+    }
+
+    /// Opaque cross-system correlator.
+    pub fn correlation_id(&self) -> &str {
+        &self.correlation_id
+    }
+
+    /// Optional opaque trace identifier.
+    pub fn trace_id(&self) -> Option<&str> {
+        self.trace_id.as_deref()
+    }
+
+    /// Emitting component class.
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+
     /// Previous hash.
     pub const fn previous_hash(&self) -> &AuditHash {
         &self.previous_hash
@@ -530,12 +550,47 @@ impl<'de> Deserialize<'de> for AuditRecord {
         let object = value
             .as_object()
             .ok_or_else(|| serde::de::Error::custom("audit-record-not-object"))?;
+        const ENVELOPE_KEYS: &[&str] = &[
+            "ts_ms",
+            "schema_version",
+            "zone",
+            "record_class",
+            "operation_id",
+            "correlation_id",
+            "trace_id",
+            "source",
+            "prev_hash",
+            "record_hash",
+            "resource_mutation_fields",
+            "resource_upgrade_fields",
+            "rbac_change_fields",
+            "session_connect_fields",
+            "route_admission_fields",
+            "resource_share_fields",
+            "broker_effect_fields",
+            "process_effect_fields",
+            "state_reset_fields",
+        ];
+        if object
+            .keys()
+            .any(|key| !ENVELOPE_KEYS.contains(&key.as_str()))
+        {
+            return Err(serde::de::Error::custom("audit-record-unknown-field"));
+        }
         let class_name = object
             .get("record_class")
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| serde::de::Error::custom("audit-record-class-missing"))?;
         let class = AuditRecordClass::parse(class_name)
             .ok_or_else(|| serde::de::Error::custom("audit-record-class-invalid"))?;
+        if object
+            .keys()
+            .any(|key| key.ends_with("_fields") && key != class.fields_key())
+        {
+            return Err(serde::de::Error::custom(
+                "audit-record-class-fields-mismatch",
+            ));
+        }
         let field_value = object
             .get(class.fields_key())
             .cloned()
@@ -550,13 +605,20 @@ impl<'de> Deserialize<'de> for AuditRecord {
                 .map(str::to_owned)
                 .ok_or_else(|| serde::de::Error::custom("audit-record-field-invalid"))
         };
+        let get_bounded_string = |key: &str| {
+            bounded_text(get_string(key)?)
+                .map_err(|_| serde::de::Error::custom("audit-record-text-out-of-bounds"))
+        };
         let trace_id = match object.get("trace_id") {
             None | Some(serde_json::Value::Null) => None,
             Some(value) => Some(
-                value
-                    .as_str()
-                    .ok_or_else(|| serde::de::Error::custom("audit-record-field-invalid"))?
-                    .to_owned(),
+                bounded_text(
+                    value
+                        .as_str()
+                        .ok_or_else(|| serde::de::Error::custom("audit-record-field-invalid"))?
+                        .to_owned(),
+                )
+                .map_err(|_| serde::de::Error::custom("audit-record-text-out-of-bounds"))?,
             ),
         };
         let record_hash =
@@ -576,11 +638,11 @@ impl<'de> Deserialize<'de> for AuditRecord {
                 .and_then(serde_json::Value::as_u64)
                 .ok_or_else(|| serde::de::Error::custom("audit-record-field-invalid"))?,
             schema_version: AUDIT_SCHEMA_VERSION,
-            zone: get_string("zone")?,
-            operation_id: get_string("operation_id")?,
-            correlation_id: get_string("correlation_id")?,
+            zone: get_bounded_string("zone")?,
+            operation_id: get_bounded_string("operation_id")?,
+            correlation_id: get_bounded_string("correlation_id")?,
             trace_id,
-            source: get_string("source")?,
+            source: get_bounded_string("source")?,
             previous_hash,
             record_hash,
             fields,
@@ -889,5 +951,17 @@ mod tests {
         let mut value = serde_json::to_value(&record).unwrap();
         value["zone"] = serde_json::json!("other");
         assert!(serde_json::from_value::<AuditRecord>(value).is_err());
+    }
+
+    #[test]
+    fn deserialization_rejects_unknown_envelope_fields_and_unbounded_text() {
+        let record = record(genesis_hash());
+        let mut unknown = serde_json::to_value(&record).unwrap();
+        unknown["unexpected"] = serde_json::json!(true);
+        assert!(serde_json::from_value::<AuditRecord>(unknown).is_err());
+
+        let mut unbounded = serde_json::to_value(&record).unwrap();
+        unbounded["zone"] = serde_json::json!("x".repeat(257));
+        assert!(serde_json::from_value::<AuditRecord>(unbounded).is_err());
     }
 }

@@ -7,6 +7,7 @@
 #[cfg(test)]
 extern crate self as d2b_bus;
 
+pub mod audit;
 pub mod authorization;
 pub mod operations;
 pub mod registry;

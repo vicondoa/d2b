@@ -4,6 +4,9 @@ use std::collections::BTreeMap;
 
 use crate::metric_label_policy::OTEL_RESOURCE_ATTRIBUTES;
 
+/// Maximum bytes in one OTEL resource attribute value.
+pub const MAX_RESOURCE_ATTRIBUTE_BYTES: usize = 256;
+
 /// A redaction policy failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RedactionError {
@@ -42,7 +45,12 @@ impl RedactionGuard {
             if !OTEL_RESOURCE_ATTRIBUTES.contains(&key.as_str()) {
                 return Err(RedactionError::AttributeNotAllowlisted);
             }
-            if value.is_empty() || value.bytes().any(|byte| byte.is_ascii_control()) {
+            if value.is_empty()
+                || value.len() > MAX_RESOURCE_ATTRIBUTE_BYTES
+                || value
+                    .bytes()
+                    .any(|byte| byte.is_ascii_control() || byte == b'/')
+            {
                 return Err(RedactionError::AttributeNotAllowlisted);
             }
             values.insert(key, value);
@@ -67,8 +75,21 @@ impl RedactionGuard {
             "realm",
             "workload_id",
             "no_isolation",
+            "zone",
+            "zone_id",
+            "zone_uid",
+            "resource_name",
+            "metadata",
+            "uid",
         ];
-        if FORBIDDEN.contains(&key) || key.ends_with("_path") || key.ends_with("_uid") {
+        if FORBIDDEN.contains(&key)
+            || key.ends_with("_path")
+            || key.ends_with("_uid")
+            || key.ends_with("_name")
+            || key.ends_with("_name_hash")
+            || key.ends_with("_name_digest")
+            || key.ends_with("_digest")
+        {
             return Err(RedactionError::ForbiddenSpanField);
         }
         Ok(())
@@ -82,7 +103,13 @@ impl RedactionGuard {
         for (key, value) in fields {
             let key = key.into();
             Self::validate_span_field(&key)?;
-            if value.into().bytes().any(|byte| byte.is_ascii_control()) {
+            let value = value.into();
+            if value.is_empty()
+                || value.len() > MAX_RESOURCE_ATTRIBUTE_BYTES
+                || value
+                    .bytes()
+                    .any(|byte| byte.is_ascii_control() || byte == b'/')
+            {
                 return Err(RedactionError::ForbiddenSpanField);
             }
             output.insert(key, "<bounded>".to_owned());

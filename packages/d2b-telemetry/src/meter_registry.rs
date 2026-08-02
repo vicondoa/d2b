@@ -48,9 +48,8 @@ impl MetricFamily {
             return Err(MetricPolicyError::DescriptorMalformed);
         }
         if kind == MetricKind::Histogram
-            && buckets
-                .windows(2)
-                .any(|window| window[0] <= 0.0 || window[0] >= window[1])
+            && (buckets.iter().any(|bucket| *bucket <= 0.0)
+                || buckets.windows(2).any(|window| window[0] >= window[1]))
         {
             return Err(MetricPolicyError::DescriptorMalformed);
         }
@@ -118,9 +117,10 @@ impl MeterRegistry {
     /// Register one family.
     pub fn register(&mut self, family: MetricFamily) -> Result<(), MetricPolicyError> {
         let name = family.descriptor().name().to_owned();
-        if self.families.insert(name, family).is_some() {
+        if self.families.contains_key(&name) {
             return Err(MetricPolicyError::DescriptorMalformed);
         }
+        self.families.insert(name, family);
         Ok(())
     }
 
