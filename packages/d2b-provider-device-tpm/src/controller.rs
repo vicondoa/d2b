@@ -217,18 +217,9 @@ impl TpmController {
             Ok(prepared) => prepared,
             Err(error) => return self.effect_failed(error),
         };
-        if self
-            .intent
-            .validate(&prepared.observation)
-            .map_err(TpmControllerError::StateValidation)
-            .is_err()
-        {
+        if let Err(error) = self.intent.validate(&prepared.observation) {
             self.phase = TpmPhase::Failed;
-            return Err(TpmControllerError::StateValidation(
-                self.intent
-                    .validate(&prepared.observation)
-                    .expect_err("the prior validation rejected the observation"),
-            ));
+            return Err(TpmControllerError::StateValidation(error));
         }
         if self.settings.startup_clear {
             self.phase = TpmPhase::Flushing;
