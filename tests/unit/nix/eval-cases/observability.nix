@@ -429,7 +429,7 @@ in
     extract = nixos:
       let
         execStart =
-          nixos.config.microvm.vms.corp-vm.config.config.systemd.services.d2b-otel-collector.serviceConfig.ExecStart;
+          nixos.config.d2b._computed.corp-vm.config.systemd.services.d2b-otel-collector.serviceConfig.ExecStart;
       in
       builtins.deepSeq execStart (hasInfix "otelcol-contrib --config=file:" execStart);
     expectedExtract = true;
@@ -446,7 +446,7 @@ in
     extract = nixos:
       let
         execStart =
-          nixos.config.microvm.vms.corp-vm.config.config.systemd.services.d2b-otel-collector.serviceConfig.ExecStart;
+          nixos.config.d2b._computed.corp-vm.config.systemd.services.d2b-otel-collector.serviceConfig.ExecStart;
       in
       builtins.deepSeq execStart (hasInfix "otelcol-contrib --config=file:" execStart);
     expectedExtract = true;
