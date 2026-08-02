@@ -644,6 +644,7 @@ impl WriterActor {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn new_with_ports(
         database: Arc<Database>,
         receiver: mpsc::Receiver<WriterCommand>,
