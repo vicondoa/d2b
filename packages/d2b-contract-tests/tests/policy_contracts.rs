@@ -289,8 +289,9 @@ fn tap_dag_contract_doc_matches_implementation() {
 //
 // Guest exec runtime static guard. Asserts:
 //   * the ATTACHED non-interactive exec runtime stays inside its scope -
-//     guestd-local process execution only, no userd call path, no low-level
-//     TTY/PTY syscalls, no detached retained-log writes in the attached path,
+//     guestd-local process execution only, no legacy user-session call path,
+//     no low-level TTY/PTY syscalls, no detached retained-log writes in the
+//     attached path,
 //     stdin closed (never piped), no extra vsock listeners, no CH
 //     CONNECT/relay/host-network/observability surface;
 //   * the DETACHED path is present-and-bounded - slot-keyed transient units
@@ -319,11 +320,12 @@ fn guest_exec_runtime_static() {
     }
     let exec_pair: &[&str] = &[&exec_src, &exec_linux_src];
 
-    // No userd runtime call path in the exec runtime.
+    // No legacy user-session runtime call path in the exec runtime.
     assert_files_have_no_line(
         exec_pair,
-        r"userd|d2b-userd",
-        "guest-exec-runtime-static: exec runtime must not reference userd",
+        r"userd",
+        "guest-exec-runtime-static: exec runtime must not reference \
+         legacy user-session code",
     );
 
     // No LOW-LEVEL TTY/PTY syscalls in the ATTACHED exec runtime. The

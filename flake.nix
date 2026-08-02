@@ -28,7 +28,6 @@
           cp -r ${./packages/d2b-core} $out/packages/d2b-core
           cp -r ${./packages/d2b-contracts} $out/packages/d2b-contracts
           cp -r ${./packages/d2b-guestd} $out/packages/d2b-guestd
-          cp -r ${./packages/d2b-userd} $out/packages/d2b-userd
           cp -r ${./packages/d2b-exec-runner} $out/packages/d2b-exec-runner
           cp -r ${./packages/d2b-sk-frontend} $out/packages/d2b-sk-frontend
           cp ${./packages/Cargo.guest.lock} $out/packages/Cargo.lock
@@ -215,7 +214,6 @@
           install -Dm644 ${./docs/completions/d2b.fish} "$out/share/fish/vendor_completions.d/d2b.fish"
         '';
         d2b-guestd-static = guestStaticPackage "d2b-guestd" "d2b-guestd";
-        d2b-userd-static = guestStaticPackage "d2b-userd" "d2b-userd";
         d2b-exec-runner-static =
           guestStaticPackage "d2b-exec-runner" "d2b-exec-runner";
         d2b-sk-frontend-static =
@@ -1059,7 +1057,6 @@
           readelf=${pkgs.pkgsStatic.binutils.bintools}/bin/readelf
           for bin in \
             ${self.packages.${system}.d2b-guestd-static}/bin/d2b-guestd \
-            ${self.packages.${system}.d2b-userd-static}/bin/d2b-userd \
             ${self.packages.${system}.d2b-exec-runner-static}/bin/d2b-exec-runner \
             ${self.packages.${system}.d2b-sk-frontend-static}/bin/d2b-sk-frontend \
             ${self.packages.${system}.d2b-guest-shell-runner-static}/bin/d2b-guest-shell-runner

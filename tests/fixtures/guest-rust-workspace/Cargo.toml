@@ -5,7 +5,6 @@ members = [
   "d2b-core",
   "d2b-contracts",
   "d2b-guestd",
-  "d2b-userd",
   "d2b-exec-runner",
   "d2b-sk-frontend",
 ]
