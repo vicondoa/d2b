@@ -316,6 +316,25 @@ let
       }
     ];
 
+  unsafeLocalAssertions = row:
+    let
+      spec = row.spec;
+      providerRef = parseRef (spec.providerRef or null);
+      userOnly =
+        row.resource.type == "Host"
+        && providerRef != null
+        && providerRef.type == "Provider"
+        && providerRef.name == "system-core"
+        && (spec.defaultDomain or null) == "user"
+        && (spec.allowedDomains or [ ]) == [ "user" ];
+    in
+    lib.optionals userOnly [
+      {
+        assertion = (spec.isolationPosture or null) == "none";
+        message = "${row.path}.spec.isolationPosture must be none for a user-only system-core Host.";
+      }
+    ];
+
   roleAssertions = row:
     let
       spec = row.spec;
@@ -490,6 +509,7 @@ let
     ++ providerArtifactAssertions row
     ++ systemArtifactAssertions row
     ++ executionAssertions row
+    ++ unsafeLocalAssertions row
     ++ roleAssertions row
     ++ roleBindingAssertions row
     ++ endpointAssertions row
