@@ -39,6 +39,7 @@ let
     "healthCheck"
     "adoptionPolicy"
     "drainTimeout"
+    "provider"
     "updatePolicy"
   ];
 
@@ -62,6 +63,7 @@ let
     "successfulTtl"
     "failedTtl"
     "incidentHold"
+    "provider"
     "updatePolicy"
   ];
 
@@ -172,10 +174,17 @@ let
       executionRef = spec.executionRef or null;
       target =
         let parsed = parseRef executionRef;
-        in if parsed != null && builtins.hasAttr parsed.name row.zone.resources
+        in if parsed != null
+          && builtins.elem parsed.type [ "Host" "Guest" ]
+          && builtins.hasAttr parsed.name row.zone.resources
+          && row.zone.resources.${parsed.name}.type == parsed.type
           then row.zone.resources.${parsed.name}
           else null;
       allowedDomains = if target == null then [ ] else target.spec.allowedDomains or [ ];
+      targetNoIsolation =
+        target != null
+        && target.type == "Host"
+        && (target.spec.isolationPosture or null) == "none";
       durationFields =
         if row.resource.type == "Process"
         then [ "drainTimeout" ]
@@ -216,6 +225,17 @@ let
         message = "${row.path}.spec.domain must be allowed by its execution target.";
       }
       {
+        assertion = !targetNoIsolation || (spec.domain or null) == "user";
+        message = "${row.path}.spec.domain must be user for a no-isolation Host target.";
+      }
+      {
+        assertion =
+          (spec.domain or null) != "user"
+          || (spec.userRef or null) != null
+          || (target != null && (target.spec.defaultUserRef or null) != null);
+        message = "${row.path}.spec.userRef is required for user-domain execution when the target has no default user.";
+      }
+      {
         assertion = (spec.userRef or null) == null
           || resolvesAs row.zone.resources [ "User" ] spec.userRef;
         message = "${row.path}.spec.userRef must resolve to a User in the same Zone.";
@@ -232,8 +252,9 @@ let
       }
       {
         assertion = builtins.isList credentialRefs
+          && lib.length credentialRefs <= 16
           && lib.all (ref: resolvesAs row.zone.resources [ "Credential" ] ref) credentialRefs;
-        message = "${row.path}.spec.credentialRefs must resolve to same-Zone Credential resources.";
+        message = "${row.path}.spec.credentialRefs must contain at most 16 same-Zone Credential resources.";
       }
       {
         assertion = builtins.isList mounts && lib.length mounts <= 64;

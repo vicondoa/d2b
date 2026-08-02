@@ -166,12 +166,12 @@ let
           let
             catalog = catalogEntry resource.spec.artifactId;
             digest =
-              if catalog == null
-                then null
-                else catalog.closureMetadata.configDigest or null;
-          in if digest == null
-          then null
-          else lib.nameValuePair "Provider/${resourceName}" digest)
+              if catalog != null
+                && (catalog.closureMetadata.configDigest or null) != null
+              then catalog.closureMetadata.configDigest
+              else "sha256:${builtins.hashString "sha256"
+                "d2b:v3:schema/${resource.spec.artifactId or resourceName}"}";
+          in lib.nameValuePair "Provider/${resourceName}" digest)
       (emittedResources zone.resources)));
 
   bundleData = zoneName: zone:

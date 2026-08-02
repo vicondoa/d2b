@@ -162,6 +162,202 @@ let
       };
     };
   };
+
+  projectionFixture = { ... }: {
+    d2b.artifacts = {
+      credential-entra = artifactFor "credential-entra";
+      display-wayland = artifactFor "display-wayland";
+      runtime-cloud-hypervisor = artifactFor "runtime-cloud-hypervisor";
+      system-core = artifactFor "system-core";
+      system-systemd = artifactFor "system-systemd";
+      d2b-provider-device-tpm = artifactFor "d2b-provider-device-tpm";
+    };
+    d2b.zones.local-root.resources = {
+      alice = {
+        type = "User";
+        spec = { };
+      };
+      "credential-entra" = {
+        type = "Provider";
+        spec = {
+          artifactId = "credential-entra";
+          config = {
+            credentialDomains = [ "system" ];
+            supportedOperations = [
+              "acquire-token"
+              "refresh-token"
+              "inspect-metadata"
+            ];
+          };
+        };
+      };
+      display-wayland = {
+        type = "Provider";
+        spec = {
+          artifactId = "display-wayland";
+          config = { };
+        };
+      };
+      runtime-cloud-hypervisor = {
+        type = "Provider";
+        spec = {
+          artifactId = "runtime-cloud-hypervisor";
+          config = { };
+        };
+      };
+      system-core = {
+        type = "Provider";
+        spec = {
+          artifactId = "system-core";
+          config = { };
+        };
+      };
+      system-systemd = {
+        type = "Provider";
+        spec = {
+          artifactId = "system-systemd";
+          config = { };
+        };
+      };
+      device-tpm = {
+        type = "Provider";
+        spec = {
+          artifactId = "d2b-provider-device-tpm";
+          config = { };
+        };
+      };
+      host-system = {
+        type = "Host";
+        spec = {
+          providerRef = "Provider/system-core";
+          defaultDomain = "system";
+          allowedDomains = [ "system" ];
+        };
+      };
+      host-user = {
+        type = "Host";
+        spec = {
+          providerRef = "Provider/system-core";
+          defaultDomain = "user";
+          allowedDomains = [ "user" ];
+          defaultUserRef = "User/alice";
+          isolationPosture = "none";
+        };
+      };
+      identity = {
+        type = "Guest";
+        spec = {
+          providerRef = "Provider/runtime-cloud-hypervisor";
+          defaultDomain = "system";
+          allowedDomains = [ "system" ];
+        };
+      };
+      "vm-tpm" = {
+        type = "Device";
+        spec = {
+          providerRef = "Provider/device-tpm";
+          deviceClass = "emulated";
+          arbitration = "exclusive";
+          maxConcurrentClaims = 1;
+          inventory.selector = { };
+        };
+      };
+      "entra-login" = {
+        type = "Process";
+        metadata = {
+          ownerRef = "Provider/credential-entra";
+          annotations = {
+            "d2b.org/launcher-label" = "Identity";
+            "d2b.org/launcher-icon" = "applications-system";
+          };
+        };
+        spec = {
+          providerRef = "Provider/system-systemd";
+          executionRef = "Guest/identity";
+          domain = "system";
+          processClass = "service";
+          template = "entra-login-token";
+          credentialRefs = [ ];
+        };
+      };
+      "entra-login-endpoint" = {
+        type = "Endpoint";
+        spec = {
+          providerRef = "Provider/credential-entra";
+          producerRef = "Process/entra-login";
+          endpointClass = "service";
+          transport = "unix";
+          purpose = "credential-entra.d2bus.org/entra-login-token";
+          serviceFingerprint = "credential-entra.d2bus.org/EntrablauLoginTokenService/v1";
+          locality = "guest-local";
+          visibility = "provider";
+          attachmentPolicy = {
+            supported = false;
+            maxAttachments = 0;
+          };
+          consumerPolicy = {
+            allowedSubjects = [
+              "Provider/credential-entra"
+              "Provider/runtime-cloud-hypervisor"
+            ];
+            allowedProviderComponents = [ ];
+            allowedOperations = [ "resolve" ];
+          };
+          lifecyclePolicy = "recycle-with-producer";
+        };
+      };
+      "work-entra" = {
+        type = "Credential";
+        spec = {
+          providerRef = "Provider/credential-entra";
+          identityGuestRef = "Guest/identity";
+          loginEndpointRef = "Endpoint/entra-login-endpoint";
+          scope = {
+            executionRef = "Guest/identity";
+            domainFilter = "system";
+          };
+          audience = "azure-resource-manager";
+          consumerRef = "Provider/runtime-cloud-hypervisor";
+          allowedOperations = [ "acquire-token" "inspect-metadata" ];
+          rotation = {
+            policy = "on-demand";
+            maxLeaseLifetimeMs = 0;
+          };
+        };
+      };
+      "host-user-process" = {
+        type = "Process";
+        metadata.annotations."d2b.org/launcher-label" = "Local tools";
+        spec = {
+          providerRef = "Provider/system-systemd";
+          executionRef = "Host/host-user";
+          domain = "user";
+          userRef = "User/alice";
+          processClass = "service";
+          template = "shell-terminal";
+          credentialRefs = [ "Credential/work-entra" ];
+        };
+      };
+    };
+  };
+
+  projectionCfg = (mkEval [ base projectionFixture ]).config;
+  projectionBundle = projectionCfg.d2b._bundle.zoneResourceBundles.local-root.data;
+  projectionResource = type: name:
+    lib.findFirst
+      (resource:
+        resource.type == type && resource.metadata.name == name)
+      null
+      projectionBundle.resources;
+
+  projectionFailureMessages = module:
+    map (assertion: assertion.message)
+      (lib.filter (assertion: !assertion.assertion)
+        (mkEval [ base projectionFixture module ]).config.assertions);
+
+  projectionRejects = needle: module:
+    lib.any (message: lib.hasInfix needle message)
+      (projectionFailureMessages module);
 in
 {
   # An empty catalog is the default: no artifact exists unless it is authored.
@@ -450,6 +646,122 @@ in
       metadataKeys = [ "labels" "name" "zone" ];
       hasStorePath = false;
       artifactEntryKeys = [ "closureMetadata" "id" "packageDigest" "storePath" "type" ];
+    };
+  };
+
+  "provider-catalog/v3-launcher-annotations-and-credential-refs" = {
+    expr =
+      let
+        launcher = projectionResource "Process" "entra-login";
+        consumer = projectionResource "Process" "host-user-process";
+        credential = projectionResource "Credential" "work-entra";
+        endpoint = projectionResource "Endpoint" "entra-login-endpoint";
+        encoded = builtins.toJSON projectionBundle;
+      in {
+        launcherAnnotations = launcher.metadata.annotations;
+        consumerCredentialRefs = consumer.spec.credentialRefs;
+        credentialRefs = {
+          identityGuestRef = credential.spec.identityGuestRef;
+          loginEndpointRef = credential.spec.loginEndpointRef;
+          consumerRef = credential.spec.consumerRef;
+        };
+        endpointPolicy = {
+          visibility = endpoint.spec.visibility;
+          subjects = endpoint.spec.consumerPolicy.allowedSubjects;
+          operations = endpoint.spec.consumerPolicy.allowedOperations;
+        };
+        noSecretPayload =
+          !(lib.hasInfix "PRIVATE KEY" encoded)
+          && !(lib.hasInfix "/nix/store/" encoded)
+          && !(lib.hasInfix "\"argv\"" encoded);
+      };
+    expected = {
+      launcherAnnotations = {
+        "d2b.org/launcher-icon" = "applications-system";
+        "d2b.org/launcher-label" = "Identity";
+      };
+      consumerCredentialRefs = [ "Credential/work-entra" ];
+      credentialRefs = {
+        identityGuestRef = "Guest/identity";
+        loginEndpointRef = "Endpoint/entra-login-endpoint";
+        consumerRef = "Provider/runtime-cloud-hypervisor";
+      };
+      endpointPolicy = {
+        visibility = "provider";
+        subjects = [ "Provider/credential-entra" "Provider/runtime-cloud-hypervisor" ];
+        operations = [ "resolve" ];
+      };
+      noSecretPayload = true;
+    };
+  };
+
+  "provider-catalog/v3-user-only-host-process-posture" = {
+    expr =
+      let
+        host = projectionResource "Host" "host-user";
+        process = projectionResource "Process" "host-user-process";
+      in {
+        hostPosture = host.spec.isolationPosture;
+        hostDomains = host.spec.allowedDomains;
+        processDomain = process.spec.domain;
+        processTarget = process.spec.executionRef;
+      };
+    expected = {
+      hostPosture = "none";
+      hostDomains = [ "user" ];
+      processDomain = "user";
+      processTarget = "Host/host-user";
+    };
+  };
+
+  "provider-catalog/v3-user-only-host-posture-is-not-optional" = {
+    expr = {
+      missingPosture = projectionRejects "isolationPosture=none is required" {
+        d2b.zones.local-root.resources.host-user.spec.isolationPosture = lib.mkForce null;
+      };
+      systemProcess = projectionRejects "must be user for a no-isolation Host target" {
+        d2b.zones.local-root.resources.bad-system-process = {
+          type = "Process";
+          spec = {
+            providerRef = "Provider/system-systemd";
+            executionRef = "Host/host-user";
+            domain = "system";
+            processClass = "service";
+            template = "invalid-system-process";
+            credentialRefs = [ ];
+          };
+        };
+      };
+      zoneVisibleLoginEndpoint = projectionRejects
+        "provider-only resolve contract" {
+          d2b.zones.local-root.resources.entra-login-endpoint.spec.visibility = "zone";
+        };
+    };
+    expected = {
+      missingPosture = true;
+      systemProcess = true;
+      zoneVisibleLoginEndpoint = true;
+    };
+  };
+
+  "provider-catalog/v3-device-provider-install-is-explicit" = {
+    expr =
+      let
+        provider = projectionResource "Provider" "device-tpm";
+        device = projectionResource "Device" "vm-tpm";
+      in {
+        providerArtifact = provider.spec.artifactId;
+        providerConfig = provider.spec.config;
+        deviceProviderRef = device.spec.providerRef;
+        deviceClass = device.spec.deviceClass;
+        bundleHasProvider = provider != null;
+      };
+    expected = {
+      providerArtifact = "d2b-provider-device-tpm";
+      providerConfig = { };
+      deviceProviderRef = "Provider/device-tpm";
+      deviceClass = "emulated";
+      bundleHasProvider = true;
     };
   };
 }

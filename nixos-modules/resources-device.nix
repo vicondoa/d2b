@@ -55,6 +55,12 @@ let
     then resources.${parsed.name}
     else null;
 
+  artifactFor = artifactId:
+    if builtins.isString artifactId
+      && builtins.hasAttr artifactId (cfg.artifacts or { })
+    then cfg.artifacts.${artifactId}
+    else null;
+
   devices = lib.concatMap
     (zoneName:
       let zone = cfg.zones.${zoneName};
@@ -295,6 +301,19 @@ let
     { }
     devices;
 
+  providerInstallRefs = lib.unique (lib.filter builtins.isString
+    (map (device: attrOr device.spec "providerRef" null) devices));
+
+  providerInstallations = map
+    (providerRef:
+      let
+        parsed = parseRef providerRef;
+      in {
+        inherit providerRef;
+        providerName = if parsed == null then null else parsed.name;
+      })
+    providerInstallRefs;
+
   deviceAssertions = lib.flatten (map
     (device:
       let
@@ -309,6 +328,12 @@ let
         maxClaims = attrOr spec "maxConcurrentClaims" 1;
         value = selector device;
         busClass = attrOr value "busClass" null;
+        providerSpec = if provider == null then { } else provider.spec or { };
+        providerArtifactId = providerSpec.artifactId or null;
+        providerArtifact =
+          if builtins.isString providerArtifactId
+          then artifactFor providerArtifactId
+          else null;
       in [
         {
           assertion = exactKeys [
@@ -338,6 +363,23 @@ let
         {
           assertion = provider != null;
           message = "${device.path}.spec.providerRef must resolve to an installed Provider (unresolved-provider-ref).";
+        }
+        {
+          assertion = provider == null
+            || (builtins.isString providerArtifactId
+              && builtins.match tokenPattern providerArtifactId != null);
+          message = "${device.path}.spec.providerRef must select an explicit Provider install with a bounded artifactId.";
+        }
+        {
+          assertion = provider == null
+            || (providerSpec ? config && builtins.isAttrs providerSpec.config);
+          message = "${device.path}.spec.providerRef must select a Provider install with a config object.";
+        }
+        {
+          assertion = (cfg.artifacts or { }) == { }
+            || provider == null
+            || (providerArtifact != null && (providerArtifact.type or null) == "provider");
+          message = "${device.path}.spec.providerRef artifactId must resolve to a provider artifact.";
         }
         {
           assertion = builtins.elem name [
@@ -494,6 +536,11 @@ in
       list = devices;
       byZone = compiledByZone;
     };
-    d2b._resourceCompiler.devices = compiledByZone;
+    d2b._resourceCompiler.devices = {
+      list = devices;
+      byZone = compiledByZone;
+      providerRefs = providerInstallRefs;
+      providerInstallations = providerInstallations;
+    };
   };
 }

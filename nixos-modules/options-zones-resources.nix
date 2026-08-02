@@ -294,6 +294,13 @@ let
         in parsed != null && parsed.type == "User"
           && builtins.hasAttr parsed.name row.zone.resources
           && row.zone.resources.${parsed.name}.type == "User";
+      credentialRefs = spec.credentialRefs or [ ];
+      credentialRefsValid =
+        builtins.isList credentialRefs
+        && lib.length credentialRefs <= 16
+        && lib.all (ref: refResolves row.zone.resources ref
+          && (let parsed = parseRef ref; in parsed.type == "Credential"))
+          credentialRefs;
     in
     lib.optionals (builtins.elem row.resource.type [ "Process" "EphemeralProcess" ]) [
       {
@@ -317,6 +324,10 @@ let
       {
         assertion = userRef == null || userResolved;
         message = "${row.path}.spec.userRef must resolve to a User in the same Zone.";
+      }
+      {
+        assertion = credentialRefsValid;
+        message = "${row.path}.spec.credentialRefs must contain at most 16 resolved Credential refs in the same Zone.";
       }
     ];
 
@@ -432,30 +443,71 @@ let
           then endpoint.${parsed.name}
           else null;
       policy = if endpointResource == null then { } else endpointResource.spec.consumerPolicy or { };
-      subjects = policy.allowedSubjects or [ ];
-      requiredSubjects = [
-        "Provider/credential-entra"
-        consumer
-      ];
+      subjectValue = policy.allowedSubjects or [ ];
+      subjects = if builtins.isList subjectValue then subjectValue else [ ];
+      subjectsAreStrings =
+        builtins.isList subjectValue && lib.all builtins.isString subjectValue;
+      requiredSubjects =
+        [ "Provider/credential-entra" ]
+        ++ lib.optional (builtins.isString consumer) consumer;
+      identityParsed = parseRef identity;
+      loginParsed = parseRef login;
+      consumerParsed = parseRef consumer;
+      endpointProviderRef =
+        if endpointResource == null then null else endpointResource.spec.providerRef or null;
+      endpointProducerRef =
+        if endpointResource == null then null else endpointResource.spec.producerRef or null;
+      producerResource =
+        let parsed = parseRef endpointProducerRef;
+        in if parsed != null && builtins.hasAttr parsed.name endpoint
+          then endpoint.${parsed.name}
+          else null;
+      producerExecutionRef =
+        if producerResource == null then null else producerResource.spec.executionRef or null;
+      sortedSubjects =
+        if subjectsAreStrings then lib.sort lib.lessThan subjects else [ ];
+      sortedRequiredSubjects = lib.sort lib.lessThan requiredSubjects;
+      operationValue = policy.allowedOperations or [ ];
+      operations = if builtins.isList operationValue then operationValue else [ ];
+      operationsAreStrings =
+        builtins.isList operationValue && lib.all builtins.isString operationValue;
     in
     lib.optionals (row.resource.type == "Credential"
       && (let parsed = parseRef (spec.providerRef or null);
           in parsed != null && parsed.name == "credential-entra")) [
       {
-        assertion = refResolves row.zone.resources identity
+        assertion =
+          identityParsed != null
+          && identityParsed.type == "Guest"
+          && refResolves row.zone.resources identity
+          && loginParsed != null
+          && loginParsed.type == "Endpoint"
           && refResolves row.zone.resources login
-          && refResolves row.zone.resources consumer;
+          && consumerParsed != null
+          && consumerParsed.type == "Provider"
+          && refResolves row.zone.resources consumer
+          && (let scope = spec.scope or { };
+              in (let parsed = parseRef (scope.executionRef or null);
+                  in parsed != null && parsed.type == "Guest")
+              && refResolves row.zone.resources (scope.executionRef or null));
         message = "${row.path}: credential-entra references must resolve within the Zone.";
       }
       {
         assertion = endpointResource != null
           && endpointResource.type == "Endpoint"
+          && endpointProviderRef == "Provider/credential-entra"
           && (endpointResource.spec.purpose or null)
             == "credential-entra.d2bus.org/entra-login-token"
           && (endpointResource.spec.visibility or null) == "provider"
-          && lib.all (subject: builtins.elem subject subjects) requiredSubjects
-          && builtins.sort builtins.lessThan (policy.allowedOperations or [ ])
-            == [ "resolve" ];
+          && sortedSubjects == sortedRequiredSubjects
+          && lib.length subjects == lib.length (lib.unique subjects)
+          && producerResource != null
+          && producerResource.type == "Process"
+          && producerExecutionRef == identity
+          && (endpointResource.spec.endpointClass or null) == "service"
+          && (endpointResource.spec.transport or null) == "unix"
+          && operationsAreStrings
+          && builtins.sort builtins.lessThan operations == [ "resolve" ];
         message = "${row.path}: credential-entra login Endpoint must use the provider-only resolve contract.";
       }
     ];
@@ -495,6 +547,11 @@ let
       {
         assertion = !hasRawSecret spec;
         message = "${row.path}.spec contains a raw store path or secret-shaped value.";
+      }
+      {
+        assertion = !hasRawSecret (row.resource.metadata.annotations or { })
+          && !hasRawSecret (row.resource.metadata.labels or { });
+        message = "${row.path}.metadata labels and annotations must not contain raw store paths or secret-shaped values.";
       }
       {
         assertion = type != "Zone" || spec == { };

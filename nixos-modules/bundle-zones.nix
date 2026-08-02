@@ -11,6 +11,10 @@ let
   providerCatalogEntries = cfg._providerCatalog.entries or [ ];
   schemaValidation = cfg._resourceCompiler.schemaValidation or { };
   schemaValidationPath = schemaValidation.buildValidation or null;
+  emptyArtifactCatalogPreimageJson = builtins.toJSON {
+    entries = [ ];
+    schemaVersion = 3;
+  };
   runtimeFields = [
     "uid"
     "generation"
@@ -44,7 +48,8 @@ let
   catalogDigest =
     if cfg ? _artifactCatalogV3 && cfg._artifactCatalogV3 ? catalogDigest
     then cfg._artifactCatalogV3.catalogDigest
-    else "sha256:${builtins.hashString "sha256" "d2b:v3:artifact-catalog\000{}"}";
+    else "sha256:${builtins.hashString "sha256"
+      ("d2b:v3:artifact-catalog\000" + emptyArtifactCatalogPreimageJson)}";
   catalogPath =
     if cfg ? _artifactCatalogV3 && cfg._artifactCatalogV3 ? path
     then cfg._artifactCatalogV3.path
