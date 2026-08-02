@@ -1,6 +1,9 @@
 //! Authorization audit projections.
 
-use d2b_audit::{AuditHash, AuditRecord, AuditRecordError, AuditRecordFields, RbacChangeFields};
+use d2b_audit::{
+    AuditHash, AuditRecord, AuditRecordError, AuditRecordFields, AuditSink, AuditSinkError,
+    AuditWriteClass, AuditWriteOutcome, RbacChangeFields,
+};
 use sha2::{Digest, Sha256};
 
 /// Derive a subject digest from a normalized canonical subject.
@@ -54,6 +57,73 @@ pub fn rbac_change_record(
             outcome: outcome.into(),
         }),
     )
+}
+
+/// Typed bridge for the privileged RBAC audit boundary.
+pub struct AuthzAuditWriter<'a> {
+    sink: &'a AuditSink,
+}
+
+impl<'a> AuthzAuditWriter<'a> {
+    /// Borrow the shared authoritative audit sink.
+    pub const fn new(sink: &'a AuditSink) -> Self {
+        Self { sink }
+    }
+
+    /// Append one RBAC change with privileged durability.
+    pub fn append_rbac_change(
+        &self,
+        record: &AuditRecord,
+    ) -> Result<AuditWriteOutcome, AuditSinkError> {
+        self.sink.append(AuditWriteClass::Privileged, record)
+    }
+
+    /// Build and append one RBAC change without retaining subject text.
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_rbac_change(
+        &self,
+        ts_ms: u64,
+        zone: impl Into<String>,
+        operation_id: impl Into<String>,
+        correlation_id: impl Into<String>,
+        source: impl Into<String>,
+        previous_hash: AuditHash,
+        verb: impl Into<String>,
+        resource_type: impl Into<String>,
+        resource_uid: impl Into<String>,
+        generation: u64,
+        subject: &str,
+        policy_revision: u64,
+        outcome: impl Into<String>,
+    ) -> Result<AuditWriteOutcome, AuthzAuditError> {
+        let record = rbac_change_record(
+            ts_ms,
+            zone,
+            operation_id,
+            correlation_id,
+            source,
+            previous_hash,
+            verb,
+            resource_type,
+            resource_uid,
+            generation,
+            subject,
+            policy_revision,
+            outcome,
+        )
+        .map_err(AuthzAuditError::Record)?;
+        self.append_rbac_change(&record)
+            .map_err(AuthzAuditError::Sink)
+    }
+}
+
+/// Failure from the RBAC record construction or durable append.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthzAuditError {
+    /// The typed record was invalid.
+    Record(AuditRecordError),
+    /// The sink could not append or synchronize the record.
+    Sink(AuditSinkError),
 }
 
 #[cfg(test)]

@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use d2b_contracts::v3::{ResourceRef, ResourceTypeName, ZoneId, ZoneRevision};
 use d2b_resource_store::{
@@ -14,8 +14,13 @@ use d2b_resource_store::{
 use redb::{Database, ReadableDatabase, ReadableTable};
 use tokio::sync::{OwnedSemaphorePermit, mpsc, oneshot};
 
+use crate::audit::{
+    DurableMutationAudit, NoopMutationAudit, opaque_digest, resource_mutation_record,
+};
 use crate::backup::LogicalBackup;
+use crate::metrics::{NoopStoreTelemetry, StoreMetric, StoreTelemetry};
 use crate::revision_log::{WatchCoordinator, WatchRegistrationId, WatchSelector, WatchStream};
+use crate::tracing::{STORE_READ_SPAN, STORE_WRITE_SPAN};
 use crate::transaction::{
     API_SCHEMAS, ChangeBatch, CommittedGroup, RESOURCES, ResourceRecord, StoreMeta, VerifiedWrite,
     apply_group, backpressure, current_meta, decode, resource_key, stored_resource, timeout,
@@ -118,6 +123,7 @@ impl SignalCounters {
 pub(crate) struct WriterHandle {
     sender: Option<mpsc::Sender<WriterCommand>>,
     signals: Arc<SignalCounters>,
+    telemetry: Arc<dyn StoreTelemetry>,
     write_permits: Arc<tokio::sync::Semaphore>,
     thread: Option<std::thread::JoinHandle<()>>,
     quarantined: Arc<AtomicBool>,
@@ -129,21 +135,41 @@ impl WriterHandle {
         signals: Arc<SignalCounters>,
         watch_coordinator: Arc<std::sync::Mutex<WatchCoordinator>>,
     ) -> Result<Self, StoreError> {
+        Self::start_with_ports(
+            database,
+            signals,
+            watch_coordinator,
+            Arc::new(NoopStoreTelemetry),
+            Arc::new(NoopMutationAudit),
+        )
+    }
+
+    pub(crate) fn start_with_ports(
+        database: Arc<Database>,
+        signals: Arc<SignalCounters>,
+        watch_coordinator: Arc<std::sync::Mutex<WatchCoordinator>>,
+        telemetry: Arc<dyn StoreTelemetry>,
+        audit: Arc<dyn DurableMutationAudit>,
+    ) -> Result<Self, StoreError> {
         let (sender, receiver) = mpsc::channel(WRITE_QUEUE_CAPACITY);
         crate::transaction::set_clean_shutdown(&database, false)?;
         let actor_signals = Arc::clone(&signals);
+        let actor_telemetry = Arc::clone(&telemetry);
+        let actor_audit = Arc::clone(&audit);
         let quarantined = Arc::new(AtomicBool::new(false));
         let actor_quarantined = Arc::clone(&quarantined);
         let actor_watch_coordinator = Arc::clone(&watch_coordinator);
         let thread = std::thread::Builder::new()
             .name("d2b-redb-writer".to_owned())
             .spawn(move || {
-                WriterActor::new(
+                WriterActor::new_with_ports(
                     database,
                     receiver,
                     actor_signals,
                     actor_quarantined,
                     actor_watch_coordinator,
+                    actor_telemetry,
+                    actor_audit,
                 )
                 .run();
             })
@@ -151,6 +177,7 @@ impl WriterHandle {
         Ok(Self {
             sender: Some(sender),
             signals,
+            telemetry,
             write_permits: Arc::new(tokio::sync::Semaphore::new(WRITE_QUEUE_CAPACITY)),
             thread: Some(thread),
             quarantined,
@@ -198,6 +225,11 @@ impl WriterHandle {
         self.signals
             .writer_queue_depth
             .fetch_add(1, Ordering::Relaxed);
+        self.telemetry.metric(
+            StoreMetric::QueueDepth,
+            BTreeMap::from([("queue".to_owned(), "write".to_owned())]),
+            self.signals.writer_queue_depth.load(Ordering::Relaxed) as f64,
+        );
         if let Err(error) = sender.try_send(WriterCommand::Commit(Box::new(WriteRequest {
             sequence: 0,
             principal,
@@ -496,6 +528,8 @@ struct WriterActor {
     sequence: u64,
     quarantined: Arc<AtomicBool>,
     watch_coordinator: Arc<std::sync::Mutex<WatchCoordinator>>,
+    telemetry: Arc<dyn StoreTelemetry>,
+    audit: Arc<dyn DurableMutationAudit>,
 }
 
 impl WriterActor {
@@ -506,6 +540,26 @@ impl WriterActor {
         quarantined: Arc<AtomicBool>,
         watch_coordinator: Arc<std::sync::Mutex<WatchCoordinator>>,
     ) -> Self {
+        Self::new_with_ports(
+            database,
+            receiver,
+            signals,
+            quarantined,
+            watch_coordinator,
+            Arc::new(NoopStoreTelemetry),
+            Arc::new(NoopMutationAudit),
+        )
+    }
+
+    fn new_with_ports(
+        database: Arc<Database>,
+        receiver: mpsc::Receiver<WriterCommand>,
+        signals: Arc<SignalCounters>,
+        quarantined: Arc<AtomicBool>,
+        watch_coordinator: Arc<std::sync::Mutex<WatchCoordinator>>,
+        telemetry: Arc<dyn StoreTelemetry>,
+        audit: Arc<dyn DurableMutationAudit>,
+    ) -> Self {
         Self {
             database,
             receiver,
@@ -514,6 +568,8 @@ impl WriterActor {
             sequence: 0,
             quarantined,
             watch_coordinator,
+            telemetry,
+            audit,
         }
     }
 
@@ -545,6 +601,7 @@ impl WriterActor {
                     mut visit,
                     response,
                 } => {
+                    let started = Instant::now();
                     let high_water = current_meta(&self.database).map(|meta| meta.current_revision);
                     let replayed = match high_water {
                         Ok(high_water) => {
@@ -566,6 +623,21 @@ impl WriterActor {
                     {
                         self.quarantine(error.clone());
                     }
+                    let outcome = if replayed.is_ok() { "ok" } else { "error" };
+                    let elapsed = elapsed_seconds(started);
+                    self.telemetry.metric(
+                        StoreMetric::ReadDuration,
+                        BTreeMap::from([("op".to_owned(), "scan".to_owned())]),
+                        elapsed,
+                    );
+                    self.telemetry.span(
+                        STORE_READ_SPAN,
+                        BTreeMap::from([
+                            ("op".to_owned(), "scan".to_owned()),
+                            ("outcome".to_owned(), outcome.to_owned()),
+                        ]),
+                        None,
+                    );
                     let _ = response.send(replayed);
                 }
                 WriterCommand::Watch {
@@ -591,6 +663,15 @@ impl WriterActor {
                     {
                         self.quarantine(error.clone());
                     }
+                    if result.is_ok()
+                        && let Ok(coordinator) = self.watch_coordinator.lock()
+                    {
+                        self.telemetry.metric(
+                            StoreMetric::WatchActive,
+                            BTreeMap::new(),
+                            coordinator.signals().current_registrations as f64,
+                        );
+                    }
                     let _ = response.send(result);
                 }
                 WriterCommand::AcknowledgeWatch {
@@ -611,10 +692,26 @@ impl WriterActor {
                         .lock()
                         .map_err(|_| crate::transaction::integrity("watch-coordinator-poisoned"))
                         .map(|mut coordinator| coordinator.unregister(id));
+                    if result.is_ok()
+                        && let Ok(coordinator) = self.watch_coordinator.lock()
+                    {
+                        self.telemetry.metric(
+                            StoreMetric::WatchActive,
+                            BTreeMap::new(),
+                            coordinator.signals().current_registrations as f64,
+                        );
+                    }
                     let _ = response.send(result);
                 }
                 WriterCommand::Backup { identity, response } => {
+                    let started = Instant::now();
                     let backup = LogicalBackup::from_database(&self.database, &identity);
+                    let outcome = if backup.is_ok() { "ok" } else { "error" };
+                    self.telemetry.metric(
+                        StoreMetric::BackupDuration,
+                        BTreeMap::from([("outcome".to_owned(), outcome.to_owned())]),
+                        elapsed_seconds(started),
+                    );
                     if let Err(error) = &backup
                         && error.kind() == d2b_resource_store::StoreErrorKind::StoreIntegrityFailure
                     {
@@ -654,6 +751,30 @@ impl WriterActor {
                 u64::try_from(requests.len()).unwrap_or(u64::MAX),
                 Ordering::Relaxed,
             );
+            if let Err(error) = self.append_mutation_audits(&requests) {
+                self.telemetry.metric(
+                    StoreMetric::WriteDuration,
+                    BTreeMap::from([
+                        ("kind".to_owned(), commit_kind(requests.len()).to_owned()),
+                        ("outcome".to_owned(), "error".to_owned()),
+                    ]),
+                    0.0,
+                );
+                self.telemetry.span(
+                    STORE_WRITE_SPAN,
+                    BTreeMap::from([
+                        ("kind".to_owned(), commit_kind(requests.len()).to_owned()),
+                        ("outcome".to_owned(), "error".to_owned()),
+                    ]),
+                    None,
+                );
+                for request in requests {
+                    let _ = request.response.send(Err(error.clone()));
+                }
+                continue;
+            }
+            let started = Instant::now();
+            let request_count = requests.len();
             let owned = requests
                 .into_iter()
                 .map(|request| {
@@ -662,8 +783,37 @@ impl WriterActor {
                 })
                 .collect::<Vec<_>>();
             let (mutations, responses): (Vec<_>, Vec<_>) = owned.into_iter().unzip();
+            self.telemetry.metric(
+                StoreMetric::GroupCommitSize,
+                BTreeMap::new(),
+                request_count as f64,
+            );
             match apply_group(&self.database, mutations) {
                 Ok(CommittedGroup { results, batch }) => {
+                    let outcome = commit_outcome(&results);
+                    self.telemetry.metric(
+                        StoreMetric::WriteDuration,
+                        BTreeMap::from([
+                            ("kind".to_owned(), commit_kind(request_count).to_owned()),
+                            ("outcome".to_owned(), outcome.to_owned()),
+                        ]),
+                        elapsed_seconds(started),
+                    );
+                    self.telemetry.span(
+                        STORE_WRITE_SPAN,
+                        BTreeMap::from([
+                            ("kind".to_owned(), commit_kind(request_count).to_owned()),
+                            ("outcome".to_owned(), outcome.to_owned()),
+                        ]),
+                        None,
+                    );
+                    if outcome == "conflict" {
+                        self.telemetry.metric(
+                            StoreMetric::Conflict,
+                            BTreeMap::from([("resource_type".to_owned(), "vendor".to_owned())]),
+                            1.0,
+                        );
+                    }
                     let integrity_error = results.iter().find_map(|result| match result {
                         Err(error)
                             if error.kind()
@@ -682,6 +832,13 @@ impl WriterActor {
                         self.quarantine(error);
                         return;
                     }
+                    if let Ok(meta) = current_meta(&self.database) {
+                        self.telemetry.metric(
+                            StoreMetric::Revision,
+                            BTreeMap::new(),
+                            meta.current_revision as f64,
+                        );
+                    }
                     for (response, result) in responses.into_iter().zip(results) {
                         let _ = response.send(result);
                     }
@@ -691,6 +848,22 @@ impl WriterActor {
                     }
                 }
                 Err(error) => {
+                    self.telemetry.metric(
+                        StoreMetric::WriteDuration,
+                        BTreeMap::from([
+                            ("kind".to_owned(), commit_kind(request_count).to_owned()),
+                            ("outcome".to_owned(), "error".to_owned()),
+                        ]),
+                        elapsed_seconds(started),
+                    );
+                    self.telemetry.span(
+                        STORE_WRITE_SPAN,
+                        BTreeMap::from([
+                            ("kind".to_owned(), commit_kind(request_count).to_owned()),
+                            ("outcome".to_owned(), "error".to_owned()),
+                        ]),
+                        None,
+                    );
                     for response in responses {
                         let _ = response.send(Err(error.clone()));
                     }
@@ -699,6 +872,49 @@ impl WriterActor {
                         return;
                     }
                 }
+            }
+
+            fn append_mutation_audits(&self, requests: &[WriteRequest]) -> Result<(), StoreError> {
+                let meta = current_meta(&self.database)?;
+                let resulting_revision = meta
+                    .current_revision
+                    .checked_add(1)
+                    .ok_or_else(|| crate::transaction::integrity("zone-revision-exhausted"))?;
+                let mut previous_hash = self
+                    .audit
+                    .previous_hash()
+                    .map_err(|_| crate::transaction::durability_failure("audit-unavailable"))?;
+                for request in requests {
+                    let Some(resource) = request.resources.first() else {
+                        return Err(crate::transaction::durability_failure(
+                            "audit-mutation-target-missing",
+                        ));
+                    };
+                    let record = resource_mutation_record(
+                        unix_timestamp_ms(),
+                        meta.zone_name.clone(),
+                        format!("writer-{}", request.sequence),
+                        format!("writer-correlation-{}", request.sequence),
+                        "resource-store",
+                        previous_hash,
+                        "update-spec",
+                        audit_resource_type(resource.resource_type().as_str()),
+                        opaque_digest(&resource.to_canonical_string()),
+                        0,
+                        meta.current_revision,
+                        resulting_revision,
+                        opaque_digest(&request.principal),
+                        meta.policy_revision,
+                        "ok",
+                        None,
+                    )
+                    .map_err(|_| crate::transaction::durability_failure("audit-record-invalid"))?;
+                    self.audit
+                        .append_before_commit(&record)
+                        .map_err(|_| crate::transaction::durability_failure("audit-unavailable"))?;
+                    previous_hash = record.record_hash().clone();
+                }
+                Ok(())
             }
         }
     }
@@ -821,16 +1037,71 @@ where
     result
 }
 
+fn elapsed_seconds(started: Instant) -> f64 {
+    started.elapsed().as_secs_f64()
+}
+
+fn unix_timestamp_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| u64::try_from(duration.as_millis()).ok())
+        .unwrap_or(0)
+}
+
+fn commit_kind(request_count: usize) -> &'static str {
+    if request_count == 1 {
+        "single"
+    } else {
+        "group"
+    }
+}
+
+fn commit_outcome(
+    results: &[Result<d2b_resource_store::StoreCommitResult, StoreError>],
+) -> &'static str {
+    if results.iter().all(Result::is_ok) {
+        return "ok";
+    }
+    if results.iter().any(|result| {
+        result.as_ref().err().is_some_and(|error| {
+            error.kind() == d2b_resource_store::StoreErrorKind::ResourceConflict
+        })
+    }) {
+        "conflict"
+    } else {
+        "error"
+    }
+}
+
+fn audit_resource_type(resource_type: &str) -> &'static str {
+    match resource_type {
+        "Zone" | "ZoneLink" | "Provider" | "Role" | "RoleBinding" | "Quota" | "Host" | "Guest"
+        | "Process" | "EphemeralProcess" | "Volume" | "Network" | "Device" | "User"
+        | "Credential" | "Endpoint" | "ResourceExport" | "ResourceImport" => resource_type,
+        _ => "vendor",
+    }
+}
+
 pub(crate) struct ReadPool {
     senders: Vec<std::sync::mpsc::SyncSender<ReadWork>>,
     next_worker: AtomicU64,
     zone: ZoneId,
     permits: Arc<tokio::sync::Semaphore>,
     threads: Vec<std::thread::JoinHandle<()>>,
+    telemetry: Arc<dyn StoreTelemetry>,
 }
 
 impl ReadPool {
     pub(crate) fn start(database: Arc<Database>, zone: ZoneId) -> Result<Self, StoreError> {
+        Self::start_with_telemetry(database, zone, Arc::new(NoopStoreTelemetry))
+    }
+
+    pub(crate) fn start_with_telemetry(
+        database: Arc<Database>,
+        zone: ZoneId,
+        telemetry: Arc<dyn StoreTelemetry>,
+    ) -> Result<Self, StoreError> {
         let per_worker_capacity = MAX_CONCURRENT_READS / READ_POOL_THREADS;
         debug_assert_eq!(
             per_worker_capacity * READ_POOL_THREADS,
@@ -863,13 +1134,16 @@ impl ReadPool {
             zone,
             permits: Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_READS)),
             threads,
+            telemetry,
         })
     }
 
     async fn submit<T>(
         &self,
+        operation: &'static str,
         make: impl FnOnce(oneshot::Sender<Result<T, StoreError>>) -> ReadCommand,
     ) -> Result<T, StoreError> {
+        let started = Instant::now();
         let permit = Arc::clone(&self.permits)
             .try_acquire_owned()
             .map_err(|_| backpressure())?;
@@ -891,15 +1165,30 @@ impl ReadPool {
                     crate::transaction::integrity("read-pool-closed")
                 }
             })?;
-        tokio::time::timeout(READ_LIFETIME + Duration::from_millis(25), receiver)
+        let result = tokio::time::timeout(READ_LIFETIME + Duration::from_millis(25), receiver)
             .await
             .map_err(|_| timeout())?
-            .map_err(|_| crate::transaction::integrity("read-response-closed"))?
+            .map_err(|_| crate::transaction::integrity("read-response-closed"))?;
+        let outcome = if result.is_ok() { "ok" } else { "error" };
+        self.telemetry.metric(
+            StoreMetric::ReadDuration,
+            BTreeMap::from([("op".to_owned(), operation.to_owned())]),
+            elapsed_seconds(started),
+        );
+        self.telemetry.span(
+            STORE_READ_SPAN,
+            BTreeMap::from([
+                ("op".to_owned(), operation.to_owned()),
+                ("outcome".to_owned(), outcome.to_owned()),
+            ]),
+            None,
+        );
+        result
     }
 
     pub(crate) async fn get(&self, request: StoreGetRequest) -> Result<StoredResource, StoreError> {
         self.validate_zone(&request.zone)?;
-        self.submit(|response| ReadCommand::Get { request, response })
+        self.submit("get", |response| ReadCommand::Get { request, response })
             .await
     }
 
@@ -908,7 +1197,7 @@ impl ReadPool {
         request: StoreListRequest,
     ) -> Result<StoreListResult, StoreError> {
         self.validate_zone(&request.zone)?;
-        self.submit(|response| ReadCommand::List { request, response })
+        self.submit("list", |response| ReadCommand::List { request, response })
             .await
     }
 
@@ -917,7 +1206,7 @@ impl ReadPool {
         request: StoreResolveRequest,
     ) -> Result<StoreResolvedIdentity, StoreError> {
         self.validate_zone(&request.zone)?;
-        self.submit(|response| ReadCommand::Resolve { request, response })
+        self.submit("get", |response| ReadCommand::Resolve { request, response })
             .await
     }
 
@@ -926,12 +1215,16 @@ impl ReadPool {
         request: StoreInspectSchemaRequest,
     ) -> Result<StoredSchema, StoreError> {
         self.validate_zone(&request.zone)?;
-        self.submit(|response| ReadCommand::InspectSchema { request, response })
-            .await
+        self.submit("scan", |response| ReadCommand::InspectSchema {
+            request,
+            response,
+        })
+        .await
     }
 
     pub(crate) async fn meta(&self) -> Result<StoreMeta, StoreError> {
-        self.submit(|response| ReadCommand::Meta { response }).await
+        self.submit("scan", |response| ReadCommand::Meta { response })
+            .await
     }
 
     fn validate_zone(&self, zone: &ZoneId) -> Result<(), StoreError> {
@@ -943,7 +1236,7 @@ impl ReadPool {
 
     #[cfg(test)]
     pub(crate) async fn expiry_probe(&self) -> Result<(), StoreError> {
-        self.submit(|response| ReadCommand::NeverRespond { response })
+        self.submit("scan", |response| ReadCommand::NeverRespond { response })
             .await
     }
 

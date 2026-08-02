@@ -9,9 +9,11 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+d2b-audit = { path = "../d2b-audit", version = "0.0.0-bootstrap" }
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 d2b-controller-toolkit = { path = "../d2b-controller-toolkit", version = "0.0.0-bootstrap" }
 d2b-resource-store = { path = "../d2b-resource-store", version = "0.0.0-bootstrap" }
+d2b-telemetry = { path = "../d2b-telemetry", version = "0.0.0-bootstrap" }
 redb = { version = "=4.1.0", default-features = false }
 rustix.workspace = true
 serde.workspace = true

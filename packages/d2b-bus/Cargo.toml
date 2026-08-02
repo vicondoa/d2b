@@ -25,4 +25,5 @@ d2b-resource-store = { path = "../d2b-resource-store", version = "0.0.0-bootstra
 quote = "1"
 serde_json.workspace = true
 syn = { version = "2", features = ["full", "visit"] }
+tempfile = "3"
 tokio = { workspace = true, features = ["macros", "rt", "sync", "test-util"] }

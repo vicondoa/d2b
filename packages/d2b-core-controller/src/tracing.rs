@@ -2,7 +2,10 @@
 
 use std::collections::BTreeMap;
 
-use d2b_telemetry::{RedactionError, RedactionGuard, TraceContext};
+use d2b_telemetry::{
+    BoundedEmitter, EmitOutcome, EmitterError, RedactionError, RedactionGuard, Signal,
+    TraceContext, encode_frame,
+};
 
 /// Hint span name.
 pub const HINT_SPAN: &str = "d2b.controller.hint";
@@ -55,6 +58,20 @@ impl ControllerSpan {
     pub const fn trace(&self) -> Option<&TraceContext> {
         self.trace.as_ref()
     }
+
+    /// Emit this bounded span through the core-process telemetry port.
+    pub fn emit(&self, emitter: &BoundedEmitter) -> Result<EmitOutcome, EmitterError> {
+        let frame = encode_frame(
+            Signal::Trace,
+            &serde_json::json!({
+                "name": self.name,
+                "fields": self.fields,
+                "trace_id": self.trace.as_ref().map(TraceContext::trace_id),
+            }),
+        )
+        .map_err(|_| EmitterError::FrameTooLarge)?;
+        emitter.emit(Signal::Trace, &frame)
+    }
 }
 
 #[cfg(test)]
@@ -69,5 +86,12 @@ mod tests {
         assert_eq!(hint.name(), HINT_SPAN);
         assert_eq!(child.name(), RECONCILE_SPAN);
         assert_eq!(child.trace().unwrap().trace_id(), "trace");
+    }
+
+    #[test]
+    fn controller_span_has_a_bounded_emit_port() {
+        let emitter = BoundedEmitter::new("/nonexistent", 1024).unwrap();
+        let span = hint_span([("handler", "provider")], None).unwrap();
+        span.emit(&emitter).unwrap();
     }
 }

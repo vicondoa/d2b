@@ -230,6 +230,8 @@ pub enum RouteTableError {
     ServiceNotFound,
     /// Method absent.
     MethodNotFound,
+    /// The authoritative route audit sink was unavailable.
+    AuditUnavailable,
 }
 
 #[cfg(test)]

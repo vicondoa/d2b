@@ -91,6 +91,47 @@ pub fn session_connect_record_with_trace(
     )
 }
 
+/// Construct a bounded close record after the session owner has closed.
+#[allow(clippy::too_many_arguments)]
+pub fn session_close_record(
+    ts_ms: u64,
+    zone: impl Into<String>,
+    operation_id: impl Into<String>,
+    correlation_id: impl Into<String>,
+    source: impl Into<String>,
+    previous_hash: AuditHash,
+    profile: impl Into<String>,
+    purpose_class: impl Into<String>,
+    transport_class: impl Into<String>,
+    subject_digest: impl Into<String>,
+    authz_decision: impl Into<String>,
+    authz_revision: u64,
+    session_gen_digest: impl Into<String>,
+    outcome: impl Into<String>,
+    error_code: Option<String>,
+    trace: Option<&TraceContext>,
+) -> Result<AuditRecord, AuditRecordError> {
+    session_connect_record_with_trace(
+        ts_ms,
+        zone,
+        operation_id,
+        correlation_id,
+        source,
+        previous_hash,
+        "close",
+        profile,
+        purpose_class,
+        transport_class,
+        subject_digest,
+        authz_decision,
+        authz_revision,
+        session_gen_digest,
+        outcome,
+        error_code,
+        trace,
+    )
+}
+
 /// A typed bridge from session lifecycle decisions to the durable audit sink.
 pub struct SessionAuditWriter<'a> {
     sink: &'a AuditSink,
@@ -110,12 +151,28 @@ impl<'a> SessionAuditWriter<'a> {
         self.sink.append(connect_write_class(record), record)
     }
 
+    /// Append a close or reconnect lifecycle record.
+    pub fn append_lifecycle(
+        &self,
+        record: &AuditRecord,
+    ) -> Result<AuditWriteOutcome, AuditSinkError> {
+        self.append_connect(record)
+    }
+
     /// Append an informational process effect for a running session.
     pub fn append_process_effect(
         &self,
         record: &AuditRecord,
     ) -> Result<AuditWriteOutcome, AuditSinkError> {
         self.sink.append(AuditWriteClass::Standard, record)
+    }
+
+    /// Append a bounded process-effect lifecycle record.
+    pub fn append_running(
+        &self,
+        record: &AuditRecord,
+    ) -> Result<AuditWriteOutcome, AuditSinkError> {
+        self.append_process_effect(record)
     }
 }
 
@@ -227,5 +284,34 @@ mod tests {
         .unwrap();
         assert_eq!(record.trace_id(), Some("trace-id"));
         assert!(!serde_json::to_string(&record).unwrap().contains("span-id"));
+    }
+
+    #[test]
+    fn close_lifecycle_record_is_bounded_and_uses_the_session_class() {
+        let record = session_close_record(
+            1,
+            "work",
+            "operation",
+            "correlation",
+            "session",
+            genesis_hash(),
+            "NN",
+            "local",
+            "unix",
+            "sha256:subject",
+            "allowed",
+            1,
+            "sha256:generation",
+            "ok",
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(record.class().as_str(), "session-connect");
+        assert!(
+            serde_json::to_string(&record)
+                .unwrap()
+                .contains("\"event\":\"close\"")
+        );
     }
 }

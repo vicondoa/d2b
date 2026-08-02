@@ -2,7 +2,10 @@
 
 use std::collections::BTreeMap;
 
-use d2b_telemetry::{RedactionError, RedactionGuard, TraceContext};
+use d2b_telemetry::{
+    BoundedEmitter, EmitOutcome, EmitterError, RedactionError, RedactionGuard, Signal,
+    TraceContext, encode_frame,
+};
 
 /// Span names owned by the redb store.
 pub const STORE_WRITE_SPAN: &str = "d2b.store.write";
@@ -52,6 +55,20 @@ impl StoreSpan {
     /// Propagated trace context.
     pub const fn trace(&self) -> Option<&TraceContext> {
         self.trace.as_ref()
+    }
+
+    /// Emit this redacted span through the bounded telemetry port.
+    pub fn emit(&self, emitter: &BoundedEmitter) -> Result<EmitOutcome, EmitterError> {
+        let frame = encode_frame(
+            Signal::Trace,
+            &serde_json::json!({
+                "name": self.name,
+                "fields": self.fields,
+                "trace_id": self.trace.as_ref().map(TraceContext::trace_id),
+            }),
+        )
+        .map_err(|_| EmitterError::FrameTooLarge)?;
+        emitter.emit(Signal::Trace, &frame)
     }
 }
 

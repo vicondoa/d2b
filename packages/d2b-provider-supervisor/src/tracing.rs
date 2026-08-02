@@ -2,7 +2,10 @@
 
 use std::collections::BTreeMap;
 
-use d2b_telemetry::{RedactionError, RedactionGuard, TraceContext};
+use d2b_telemetry::{
+    BoundedEmitter, EmitOutcome, EmitterError, RedactionError, RedactionGuard, Signal,
+    TraceContext, encode_frame,
+};
 
 /// Launch span.
 pub const PROCESS_LAUNCH_SPAN: &str = "d2b.process.launch";
@@ -39,6 +42,20 @@ impl ProcessSpan {
         self.name
     }
 
+    /// Emit this bounded process span through the telemetry port.
+    pub fn emit(&self, emitter: &BoundedEmitter) -> Result<EmitOutcome, EmitterError> {
+        let frame = encode_frame(
+            Signal::Trace,
+            &serde_json::json!({
+                "name": self.name,
+                "fields": self.fields,
+                "trace_id": self.trace.as_ref().map(TraceContext::trace_id),
+            }),
+        )
+        .map_err(|_| EmitterError::FrameTooLarge)?;
+        emitter.emit(Signal::Trace, &frame)
+    }
+
     fn new(
         name: &'static str,
         fields: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
@@ -60,5 +77,14 @@ mod tests {
     fn process_span_does_not_accept_process_identity() {
         assert!(ProcessSpan::launch([("pid", "1")], None).is_err());
         assert!(ProcessSpan::launch([("provider", "systemd")], None).is_ok());
+    }
+
+    #[test]
+    fn process_span_has_a_bounded_emit_port() {
+        let emitter = BoundedEmitter::new("/nonexistent", 1024).unwrap();
+        ProcessSpan::launch([("provider", "systemd")], None)
+            .unwrap()
+            .emit(&emitter)
+            .unwrap();
     }
 }

@@ -14,6 +14,7 @@ d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 d2b-core-controller = { path = "../d2b-core-controller", version = "0.0.0-bootstrap" }
 d2b-resource-store = { path = "../d2b-resource-store", version = "0.0.0-bootstrap" }
 d2b-resource-store-redb = { path = "../d2b-resource-store-redb", version = "0.0.0-bootstrap" }
+d2b-telemetry = { path = "../d2b-telemetry", version = "0.0.0-bootstrap" }
 protobuf = "3.7.2"
 sha2.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }

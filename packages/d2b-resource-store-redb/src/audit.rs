@@ -1,8 +1,12 @@
 //! Store-side durable mutation audit handoff.
 
+use std::sync::Arc;
+
 use d2b_audit::{
-    AuditHash, AuditRecord, AuditRecordError, AuditRecordFields, ResourceMutationFields,
+    AuditHash, AuditRecord, AuditRecordError, AuditRecordFields, AuditSink, AuditSinkError,
+    AuditWriteClass, AuditWriteOutcome, ResourceMutationFields, genesis_hash,
 };
+use sha2::{Digest, Sha256};
 
 /// Build a ResourceMutation record from commit metadata only.
 #[allow(clippy::too_many_arguments)]
@@ -47,8 +51,24 @@ pub fn resource_mutation_record(
     )
 }
 
+/// Hash a subject, resource reference, or operation token before it reaches
+/// the audit envelope.
+pub fn opaque_digest(value: &str) -> String {
+    let digest = Sha256::digest(value.as_bytes());
+    let mut output = String::from("sha256:");
+    for byte in digest {
+        output.push_str(&format!("{byte:02x}"));
+    }
+    output
+}
+
 /// A durable-audit callback used by the store transaction boundary.
 pub trait DurableMutationAudit: Send + Sync {
+    /// Return the predecessor hash for the next record.
+    fn previous_hash(&self) -> Result<AuditHash, AuditRecordError> {
+        Ok(genesis_hash())
+    }
+
     /// Append and synchronize a privileged mutation record.
     fn append_before_commit(&self, record: &AuditRecord) -> Result<(), AuditRecordError>;
 }
@@ -60,6 +80,53 @@ pub struct NoopMutationAudit;
 impl DurableMutationAudit for NoopMutationAudit {
     fn append_before_commit(&self, _record: &AuditRecord) -> Result<(), AuditRecordError> {
         Ok(())
+    }
+}
+
+/// Adapter from the store's pre-commit port to the synchronized audit sink.
+#[derive(Clone)]
+pub struct AuditSinkMutationAudit {
+    sink: Arc<AuditSink>,
+}
+
+impl core::fmt::Debug for AuditSinkMutationAudit {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("AuditSinkMutationAudit(<redacted>)")
+    }
+}
+
+impl AuditSinkMutationAudit {
+    /// Construct a store audit adapter around a shared sink.
+    pub fn new(sink: Arc<AuditSink>) -> Self {
+        Self { sink }
+    }
+
+    /// Borrow the shared sink.
+    pub fn sink(&self) -> &Arc<AuditSink> {
+        &self.sink
+    }
+
+    fn map_sink_error(_error: AuditSinkError) -> AuditRecordError {
+        AuditRecordError::Serialization
+    }
+}
+
+impl DurableMutationAudit for AuditSinkMutationAudit {
+    fn previous_hash(&self) -> Result<AuditHash, AuditRecordError> {
+        self.sink.chain_head().map_err(Self::map_sink_error)
+    }
+
+    fn append_before_commit(&self, record: &AuditRecord) -> Result<(), AuditRecordError> {
+        match self
+            .sink
+            .append(AuditWriteClass::Privileged, record)
+            .map_err(Self::map_sink_error)?
+        {
+            AuditWriteOutcome::Written => Ok(()),
+            AuditWriteOutcome::RateLimited | AuditWriteOutcome::DroppedUnavailable => {
+                Err(AuditRecordError::Serialization)
+            }
+        }
     }
 }
 
@@ -92,5 +159,12 @@ mod tests {
         let json = serde_json::to_string(&record).unwrap();
         assert!(!json.contains("\"spec\""));
         assert!(!json.contains("\"realm\""));
+    }
+
+    #[test]
+    fn opaque_digest_keeps_resource_identity_out_of_the_record() {
+        let digest = opaque_digest("Host/secret-name");
+        assert!(digest.starts_with("sha256:"));
+        assert!(!digest.contains("secret-name"));
     }
 }

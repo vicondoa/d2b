@@ -2,6 +2,8 @@
 
 use std::collections::BTreeMap;
 
+use d2b_telemetry::BoundedEmitter;
+
 /// Closed Provider component phase.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ComponentPhase {
@@ -60,6 +62,28 @@ impl ProviderLifecycleDispatch {
         Ok(())
     }
 
+    /// Set one component phase and emit its bounded lifecycle gauge.
+    pub fn set_phase_with_telemetry(
+        &mut self,
+        component_type: impl Into<String>,
+        phase: ComponentPhase,
+        emitter: &BoundedEmitter,
+    ) -> Result<(), ProviderEffectError> {
+        let component_type = component_type.into();
+        self.set_phase(component_type.clone(), phase)?;
+        let _ = crate::metrics::ControllerMetrics::new(emitter.clone())
+            .provider_component_phase(component_type, phase.as_str());
+        Ok(())
+    }
+
+    /// Emit the current component phase snapshot through a bounded emitter.
+    pub fn emit_phases(&self, emitter: &BoundedEmitter) {
+        let metrics = crate::metrics::ControllerMetrics::new(emitter.clone());
+        for (component_type, phase) in &self.components {
+            let _ = metrics.provider_component_phase(component_type.clone(), phase.as_str());
+        }
+    }
+
     /// Provider class used for the fixed metric label.
     pub fn provider_class(&self) -> &str {
         &self.provider_class
@@ -94,5 +118,15 @@ mod tests {
                 .set_phase("resource-name", ComponentPhase::Ready)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn lifecycle_phase_callsite_emits_only_closed_labels() {
+        let emitter = d2b_telemetry::BoundedEmitter::new("/nonexistent", 2048).unwrap();
+        let mut dispatch = ProviderLifecycleDispatch::new("observability-otel");
+        dispatch
+            .set_phase_with_telemetry("service", ComponentPhase::Ready, &emitter)
+            .unwrap();
+        dispatch.emit_phases(&emitter);
     }
 }
