@@ -33,6 +33,31 @@ revision.
 The target contracts are documented in
 [contracts/local-validation-targets.md](./contracts/local-validation-targets.md).
 
+## Baseline driver notes
+
+The accepted baseline commit `d09cba95f7602b70f1f79b957f426ecfacf65bf1`
+predates the orchestration changes described by this quickstart. Its
+committed drivers prove the following command-surface differences, which are
+recorded in the baseline evidence rather than silently projected onto the
+optimized contract:
+
+- `make test-rust` runs the `tests/test-rust.sh` `all` mode serially. It
+  includes the fixture-dependent and CLI-contract layers unless the caller
+  explicitly sets `D2B_SKIP_FIXTURE_BUILD=1`; it does not emit an execution
+  manifest.
+- `make test-nix-unit` discovers seven checks and launches up to two workers by
+  default (`D2B_NIX_UNIT_JOBS`, bounded to four). Its baseline driver addresses
+  checks through `.#checks...`, not the `git+file://` reference used by the
+  inventory commands below; it does not emit an execution manifest.
+- Direct `make test-flake` runs one native `nix flake check --no-build`
+  invocation without an explicit `--keep-going` flag. The legacy local
+  Layer-1 path is selected by `D2B_FLAKE_LOCAL_SHARDS=1`, launches one child
+  per check plus the package-output sweep, and defaults to four workers via
+  `D2B_FLAKE_JOBS`; neither path emits an execution manifest.
+- Baseline execution manifests are therefore manually derived from the full
+  `script` traces. They remain diagnostic evidence and are not evidence that
+  the baseline already satisfies the v1 emitter contract.
+
 ## Capture coverage inventories
 
 Rust:
@@ -212,24 +237,32 @@ For Rust, use the repository's guarded cleanup while retaining the shared
 compiler cache:
 
 ```bash
-D2B_CLEAN_SKIP_GC=1 make clean
+D2B_CLEAN_SKIP_GC=1 D2B_CLEAN_KEEP_SCRATCH=1 make clean
 make test-rust
 ```
+
+`D2B_CLEAN_KEEP_SCRATCH=1` is required when the evidence directory is inside
+`.scratch/`: the committed `make clean` driver removes that directory by
+default. It does not change the cache reset; it only preserves the evidence
+being collected.
 
 For Nix evaluation, use a fresh evaluator cache directory:
 
 ```bash
 (
   set -euo pipefail
-  cache_dir=$(mktemp -d)
+  cache_dir="$D2B_EVIDENCE_DIR/cold-cache/<target>-<sample>"
+  rm -rf -- "$cache_dir"
+  mkdir -p "$cache_dir"
   trap 'rm -rf -- "$cache_dir"' EXIT
   XDG_CACHE_HOME="$cache_dir" make test-nix-unit
   XDG_CACHE_HOME="$cache_dir" make test-flake
 )
 ```
 
-Repeat as required by the benchmark record. Remove only the explicitly created
-temporary directory.
+Repeat with a new `<target>-<sample>` directory as required by the benchmark
+record. Remove only the explicitly created directory. The shared Nix store is
+never cleared.
 
 ## Failure behavior
 

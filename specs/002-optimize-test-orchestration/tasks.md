@@ -25,10 +25,10 @@ evidence phases.
 **Purpose**: Capture the immutable baseline environment and test contracts
 before implementation changes begin.
 
-- [ ] T001 Record the baseline commit, CPU, memory, Rust, Cargo, nextest, Nix, and Make versions in `.scratch/test-speedup-baseline/environment.txt`
-- [ ] T002 Capture the complete Rust, Nix unit, and flake source inventories plus full command traces from actual public target runs; derive trace-cited baseline execution manifests in `.scratch/test-speedup-baseline/` as described by `specs/002-optimize-test-orchestration/quickstart.md`
-- [ ] T003 Capture one priming run plus three warm-cache samples and three best-effort cold-cache samples for Rust, Nix unit, the direct flake target, and the legacy local Layer-1 flake shard path into `.scratch/test-speedup-baseline/test-rust.json`, `.scratch/test-speedup-baseline/test-nix-unit.json`, `.scratch/test-speedup-baseline/test-flake-direct.json`, and `.scratch/test-speedup-baseline/test-flake-layer1.json`
-- [ ] T004 Capture Cargo timing output, active linker evidence, per-phase Rust durations, and duplicate feature/build observations in `.scratch/test-speedup-baseline/cargo-timings/` and `.scratch/test-speedup-baseline/rust-analysis.md`
+- [x] T001 Record the baseline commit, CPU, memory, Rust, Cargo, nextest, Nix, and Make versions in `.scratch/test-speedup-baseline/environment.txt`
+- [x] T002 Capture the complete Rust, Nix unit, and flake source inventories plus full command traces from actual public target runs; derive trace-cited baseline execution manifests in `.scratch/test-speedup-baseline/` as described by `specs/002-optimize-test-orchestration/quickstart.md`
+- [x] T003 Capture one priming run plus three warm-cache samples and three best-effort cold-cache samples for Rust, Nix unit, the direct flake target, and the legacy local Layer-1 flake shard path into `.scratch/test-speedup-baseline/test-rust.json`, `.scratch/test-speedup-baseline/test-nix-unit.json`, `.scratch/test-speedup-baseline/test-flake-direct.json`, and `.scratch/test-speedup-baseline/test-flake-layer1.json`
+- [x] T004 Capture Cargo timing output, active linker evidence, per-phase Rust durations, and duplicate feature/build observations in `.scratch/test-speedup-baseline/cargo-timings/` and `.scratch/test-speedup-baseline/rust-analysis.md`
 
 ---
 
@@ -40,9 +40,9 @@ artifacts and committed code before changing orchestration.
 **CRITICAL**: User story implementation begins only after this phase records a
 valid baseline against committed `v3` behavior.
 
-- [ ] T005 Create `specs/002-optimize-test-orchestration/benchmark-results.md` with the baseline environment, sample medians, inventory digests, cache definitions, and invalidated-sample rules from `data-model.md`
-- [ ] T006 Reconcile any baseline coverage or command-contract drift by updating `specs/002-optimize-test-orchestration/contracts/local-validation-targets.md` and `specs/002-optimize-test-orchestration/quickstart.md` to match committed passing code
-- [ ] T007 Record the planned execution-manifest v1 fields, prose/schema paths, Rust execution-leaf ownership, target-directory conflicts, broker serial chain, Nix installable sets, and realized flake check set in `specs/002-optimize-test-orchestration/benchmark-results.md`
+- [x] T005 Create `specs/002-optimize-test-orchestration/benchmark-results.md` with the baseline environment, sample medians, inventory digests, cache definitions, and invalidated-sample rules from `data-model.md`
+- [x] T006 Reconcile any baseline coverage or command-contract drift by updating `specs/002-optimize-test-orchestration/contracts/local-validation-targets.md` and `specs/002-optimize-test-orchestration/quickstart.md` to match committed passing code
+- [x] T007 Record the planned execution-manifest v1 fields, prose/schema paths, Rust execution-leaf ownership, target-directory conflicts, broker serial chain, Nix installable sets, and realized flake check set in `specs/002-optimize-test-orchestration/benchmark-results.md`
 
 **Checkpoint**: Baselines, inventories, and execution boundaries are recorded
 before any target implementation changes.

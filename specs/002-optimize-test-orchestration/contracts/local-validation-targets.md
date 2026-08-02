@@ -148,3 +148,26 @@ Optimization is invalid if any of the following disappears:
 - a native flake check;
 - the realized video command-surface check;
 - a current supply-chain, schema, stub, or inventory assertion.
+
+## Baseline drift recorded at `d09cba95`
+
+The contract above is the post-optimization target contract. The committed
+baseline drivers at `d09cba95f7602b70f1f79b957f426ecfacf65bf1` do not yet
+provide every post-optimization property, and the baseline evidence records
+the differences explicitly:
+
+- `tests/test-rust.sh` executes its `all` mode serially and has no
+  `D2B_EXECUTION_MANIFEST` emitter.
+- `tests/test-nix-unit.sh` uses the bounded `D2B_NIX_UNIT_JOBS` worker pool
+  (default `2`, maximum `4`) and bare `.#checks...` installable expressions;
+  it has no manifest emitter.
+- `tests/test-flake.sh` uses one native `nix flake check --no-build` for the
+  direct path without spelling `--keep-going`. Its legacy
+  `D2B_FLAKE_LOCAL_SHARDS=1` mode runs one child per check plus the package
+  output sweep, with `D2B_FLAKE_JOBS` defaulting to `4`; neither mode emits a
+  manifest.
+
+These are baseline facts, not waivers for the requirements above. The
+trace-derived baseline manifests under
+`.scratch/test-speedup-baseline/` carry `emitter_support: false` and cite the
+physical trace line for every completed leaf.
