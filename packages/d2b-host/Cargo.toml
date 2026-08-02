@@ -25,8 +25,6 @@ default = []
 fake-backends = []
 
 [dependencies]
-d2b-realm-core = { path = "../d2b-realm-core", version = "0.0.0-bootstrap" }
-d2b-realm-provider = { path = "../d2b-realm-provider", version = "0.0.0-bootstrap" }
 d2b-core = { path = "../d2b-core", version = "0.0.0-bootstrap" }
 d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 async-trait = "0.1"
