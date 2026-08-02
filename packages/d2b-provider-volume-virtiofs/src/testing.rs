@@ -159,15 +159,15 @@ impl VirtiofsExportEffectPort for &ScriptedPort {
         if self.deleted() {
             return Ok(self.guest_mount_after_delete);
         }
-
-        async fn observe_store_view_marker(
-            &self,
-            _export: &ExportSpec,
-        ) -> Result<bool, VirtiofsExportError> {
-            self.record(PortCall::ObserveStoreViewMarker);
-            Ok(self.store_view_marker)
-        }
         Ok(self.guest_mount_ready)
+    }
+
+    async fn observe_store_view_marker(
+        &self,
+        _export: &ExportSpec,
+    ) -> Result<bool, VirtiofsExportError> {
+        self.record(PortCall::ObserveStoreViewMarker);
+        Ok(self.store_view_marker)
     }
 
     async fn delete_worker(&self, _worker: &LaunchedWorker) -> Result<(), VirtiofsExportError> {
