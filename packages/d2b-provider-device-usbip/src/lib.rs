@@ -8,10 +8,15 @@
 
 #![deny(missing_docs)]
 
+mod arbitration;
+mod busid;
 mod controller;
 mod firewall;
+mod process;
 mod workers;
 
+pub use arbitration::{UsbipArbitrator, UsbipClaim, UsbipClaimError};
+pub use busid::{BusId, FirewallOwnershipMarker, MAX_BUS_ID_BYTES, PhysicalUsbBackingToken};
 pub use controller::{
     NetworkDependency, ScopedResourceUid, UsbipController, UsbipControllerError, UsbipMetricLabels,
     UsbipOperation, UsbipOutcome, UsbipServicePhase,
@@ -21,6 +26,7 @@ pub use firewall::{
     FirewallObservation, FirewallProjectionAction, FirewallProjectionIntent, FirewallToken,
     RelayAuthorityLease, UsbipEffectError, UsbipEffectPort,
 };
+pub use process::{AttachSource, EphemeralProcessIntent, EphemeralProcessKind, UsbipDaemonProcess};
 pub use workers::{
     AttachmentActivation, AttachmentCommand, UsbipWorkerClass, UsbipWorkerDeclaration,
 };
