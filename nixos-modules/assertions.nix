@@ -2426,6 +2426,126 @@ let
           zone.resources
         ++ zoneLinkAssertions zoneName zone)
       cfg.zones);
+
+  # --- Device ResourceType cross-resource assertions -------------------
+  #
+  # Field shape and Provider settings belong to resources-device.nix. These
+  # six cross-resource checks remain here so the top-level assertion surface
+  # also protects evaluations that only import the established assertions
+  # module.
+  deviceRows = lib.flatten (lib.mapAttrsToList
+    (zoneName: zone:
+      lib.mapAttrsToList
+        (resourceName: resource: {
+          inherit zoneName zone resourceName resource;
+          path = "d2b.zones.${zoneName}.resources.${resourceName}";
+        })
+        (lib.filterAttrs (_: resource: resource.type == "Device") zone.resources))
+    cfg.zones);
+
+  deviceProviderName = row:
+    let parts = lib.splitString "/" (zoneAttrOr row.resource.spec "providerRef" "");
+    in if lib.length parts == 2 && builtins.elemAt parts 0 == "Provider"
+    then builtins.elemAt parts 1
+    else null;
+
+  deviceSelector = row:
+    zoneAttrOr (zoneAttrOr row.resource.spec "inventory" { }) "selector" { };
+
+  deviceSelectorLabel = row:
+    zoneAttrOr (deviceSelector row) "label" null;
+
+  deviceSettings = row:
+    zoneAttrOr (zoneAttrOr row.resource.spec "provider" { }) "settings" { };
+
+  deviceOwnerRefValid = row:
+    let owner = zoneAttrOr row.resource.metadata "ownerRef" null;
+        parsed = if builtins.isString owner then lib.splitString "/" owner else [ ];
+    in owner != null
+      && lib.length parsed == 2
+      && builtins.elem (builtins.elemAt parsed 0) [ "Guest" "Host" ]
+      && builtins.hasAttr (builtins.elemAt parsed 1) row.zone.resources
+      && row.zone.resources.${builtins.elemAt parsed 1}.type == builtins.elemAt parsed 0;
+
+  deviceOwnerAssertions = map
+    (row: {
+      assertion = deviceOwnerRefValid row;
+      message = "${row.path}.metadata.ownerRef must resolve to a same-Zone Guest or Host (invalid-owner-ref).";
+    })
+    deviceRows;
+
+  deviceMutualExclusionPairs = lib.filter
+    (pair:
+      pair.left.zoneName == pair.right.zoneName
+      && deviceSelectorLabel pair.left != null
+      && deviceSelectorLabel pair.left == deviceSelectorLabel pair.right
+      && builtins.elem (deviceProviderName pair.left) [ "device-usbip" "device-security-key" ]
+      && builtins.elem (deviceProviderName pair.right) [ "device-usbip" "device-security-key" ]
+      && deviceProviderName pair.left != deviceProviderName pair.right)
+    (unorderedPairs deviceRows);
+
+  deviceMutualExclusionAssertions = map
+    (pair: {
+      assertion = false;
+      message = "${pair.left.path} and ${pair.right.path}: usbip-sk-mutual-exclusion for one physical selector label (usbip-sk-mutual-exclusion).";
+    })
+    deviceMutualExclusionPairs;
+
+  deviceVideoSidecarAssertions = map
+    (row:
+      let settings = deviceSettings row;
+      in {
+        assertion = !(deviceProviderName row == "device-gpu"
+          && zoneAttrOr settings "videoSidecar" false)
+          || !(zoneAttrOr settings "renderNodeOnly" false);
+        message = "${row.path}: videoSidecar requires a full GPU realization (video-sidecar-requires-full-gpu).";
+      })
+    deviceRows;
+
+  deviceVirglVideoAssertions = map
+    (row:
+      let settings = deviceSettings row;
+      in {
+        assertion = !(deviceProviderName row == "device-gpu"
+          && zoneAttrOr settings "virglVideo" false
+          && zoneAttrOr settings "videoSidecar" false);
+        message = "${row.path}: virglVideo and videoSidecar are mutually exclusive (gpu-video-modes-conflict).";
+      })
+    deviceRows;
+
+  deviceSharedArbitrationAssertions = map
+    (row:
+      let
+        spec = row.resource.spec;
+        settings = deviceSettings row;
+        shared = zoneAttrOr spec "arbitration" null == "shared";
+      in {
+        assertion = !shared
+          || (zoneAttrOr spec "deviceClass" null == "physical"
+            && (deviceProviderName row != "device-gpu"
+              || zoneAttrOr settings "renderNodeOnly" false));
+        message = "${row.path}: shared arbitration requires a physical Device and GPU renderNodeOnly (shared-arbitration-requires-render-node-only).";
+      })
+    deviceRows;
+
+  deviceLabelRows = lib.filter (row: deviceSelectorLabel row != null) deviceRows;
+  deviceLabelGroups = lib.groupBy
+    (row: "${row.zoneName}:${deviceSelectorLabel row}")
+    deviceLabelRows;
+  deviceDuplicateLabelAssertions = lib.flatten (lib.mapAttrsToList
+    (key: rows: lib.optional (lib.length rows > 1) {
+      assertion = false;
+      message = "Device selector label ${key} is declared more than once in one Zone (duplicate-device-label).";
+    })
+    deviceLabelGroups);
+
+  deviceCrossResourceAssertions =
+    deviceOwnerAssertions
+    ++ deviceMutualExclusionAssertions
+    ++ deviceVideoSidecarAssertions
+    ++ deviceVirglVideoAssertions
+    ++ deviceSharedArbitrationAssertions
+    ++ deviceDuplicateLabelAssertions;
 in
 {
   assertions = lib.flatten (
@@ -2457,6 +2577,7 @@ in
     ++ securityKeyHostRequiredAssertions
     ++ securityKeyUsbipMutualExclusionAssertions
     ++ securityKeyDeviceAssertions
+    ++ deviceCrossResourceAssertions
     ++ zoneTopologyAssertions
   );
 
