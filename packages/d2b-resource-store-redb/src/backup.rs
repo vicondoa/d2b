@@ -188,7 +188,7 @@ impl LogicalBackup {
         }
         if self.schema_version != PHYSICAL_SCHEMA_VERSION {
             return Err(crate::StoreError::new(
-                crate::StoreErrorKind::UpgradeRequired,
+                d2b_resource_store::StoreErrorKind::UpgradeRequired,
                 None,
                 None,
                 RetryClass::Never,

@@ -1244,7 +1244,7 @@ fn not_found() -> StoreError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transaction::{ChangeEntry, ChangeEvent, REVISION_LOG, encode};
+    use crate::transaction::{ChangeEntry, ChangeEvent, REVISION_LOG, encode, revision_key};
     use d2b_contracts::v3::{ResourceGeneration, ResourceName, ResourceUid};
     use std::fs::OpenOptions;
 

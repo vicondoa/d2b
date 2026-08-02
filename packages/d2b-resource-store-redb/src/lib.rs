@@ -4,6 +4,7 @@ pub mod actor;
 pub mod backup;
 pub mod keys;
 pub mod ownership;
+pub mod revision_log;
 pub mod schema;
 mod transaction;
 pub mod values;
