@@ -347,6 +347,7 @@ let
           resourceRelay = builtins.elem "relay" verbs;
           zones = rule.zones or [ ];
           names = rule.resourceNames or [ ];
+          relayAuthority = spec.relayAuthority or spec.relayProvenance or null;
           exactZoneBounds = lib.length zones == 1 && lib.length names >= 1
             && lib.all (zone: builtins.hasAttr zone cfg.zones) zones
             && lib.all (name: builtins.match resourceNamePattern name != null) names;
@@ -362,7 +363,8 @@ let
           }
           {
             assertion = !relay || exactZoneBounds
-              && builtins.elem "ZoneLink" (rule.resourceTypes or [ ]);
+              && builtins.elem "ZoneLink" (rule.resourceTypes or [ ])
+              && builtins.elem relayAuthority [ "core-generated" "durable-local-admin" ];
             message = "${row.path}.spec.rules relay grants require exact ZoneLink-scoped bounds.";
           }
         ];
