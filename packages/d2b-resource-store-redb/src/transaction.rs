@@ -1236,15 +1236,17 @@ fn operation_resource(record: &OperationResourceRecord) -> Result<StoredResource
     .map_err(integrity)?;
     let envelope = ResourceEnvelope::from_json(&record.canonical_json)
         .map_err(|_| integrity("operation-resource-envelope-invalid"))?;
+    let zone = ZoneId::parse(&record.zone).map_err(integrity)?;
     if envelope.resource_type() != resource_ref.resource_type()
         || envelope.metadata().name() != resource_ref.name()
+        || envelope.metadata().zone() != &zone
         || envelope.digest().map_err(integrity)? != record.payload_digest
     {
         return Err(integrity("operation-resource-invalid"));
     }
     Ok(StoredResource {
         resource_ref,
-        zone: ZoneId::parse(&record.zone).map_err(integrity)?,
+        zone,
         uid: envelope.metadata().uid().clone(),
         generation: envelope.metadata().generation(),
         revision: envelope.metadata().revision(),

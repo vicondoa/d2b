@@ -14,10 +14,10 @@ use d2b_resource_store::{
 use redb::{Database, ReadableDatabase, ReadableTable};
 use tokio::sync::{OwnedSemaphorePermit, mpsc, oneshot};
 
+use crate::backup::LogicalBackup;
 use crate::transaction::{
     API_SCHEMAS, ChangeBatch, CommittedGroup, RESOURCES, ResourceRecord, StoreMeta, VerifiedWrite,
-    apply_group, backpressure, current_meta, decode, resource_key, revision_key, stored_resource,
-    timeout,
+    apply_group, backpressure, current_meta, decode, resource_key, stored_resource, timeout,
 };
 use crate::{KeySpace, ValueKind};
 use d2b_resource_store::mutation_seal::OpenedMutation;
@@ -52,6 +52,10 @@ impl core::fmt::Debug for SharedChangeBatch {
 impl SharedChangeBatch {
     pub fn revision(&self) -> ZoneRevision {
         self.batch.revision()
+    }
+
+    pub(crate) fn batch_arc(&self) -> Arc<ChangeBatch> {
+        Arc::clone(&self.batch)
     }
 
     pub fn entries(&self) -> impl ExactSizeIterator<Item = &crate::transaction::ChangeEntry> {
@@ -98,6 +102,14 @@ impl SignalCounters {
             writer_queue_depth: self.writer_queue_depth.load(Ordering::Relaxed),
             writer_queue_capacity: WRITE_QUEUE_CAPACITY as u64,
         }
+    }
+
+    fn record_shared_batch(&self) {
+        self.shared_immutable_batches.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_fanout_reference(&self) {
+        self.fanout_references.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -225,6 +237,28 @@ impl WriterHandle {
         Ok(ZoneRevision::new(high_water))
     }
 
+    pub(crate) async fn backup(
+        &self,
+        identity: crate::StoreIdentity,
+    ) -> Result<LogicalBackup, StoreError> {
+        if self.quarantined.load(Ordering::Acquire) {
+            return Err(crate::transaction::quarantined());
+        }
+        let (response, receiver) = oneshot::channel();
+        self.sender
+            .as_ref()
+            .ok_or_else(|| crate::transaction::integrity("writer-closed"))?
+            .send(WriterCommand::Backup {
+                identity,
+                response,
+            })
+            .await
+            .map_err(|_| crate::transaction::integrity("writer-closed"))?;
+        receiver
+            .await
+            .map_err(|_| crate::transaction::integrity("writer-backup-response-closed"))?
+    }
+
     pub(crate) async fn shutdown(&mut self) -> Result<(), StoreError> {
         let sender = self
             .sender
@@ -276,6 +310,10 @@ enum WriterCommand {
         resource_types: BTreeSet<ResourceTypeName>,
         visit: Box<dyn FnMut(SharedChangeBatch) -> Result<(), StoreError> + Send>,
         response: oneshot::Sender<Result<u64, StoreError>>,
+    },
+    Backup {
+        identity: crate::StoreIdentity,
+        response: oneshot::Sender<Result<LogicalBackup, StoreError>>,
     },
     Shutdown {
         response: oneshot::Sender<Result<(), StoreError>>,
@@ -420,8 +458,10 @@ impl WriterActor {
                                 let Some(filtered) = filter_batch(batch, &resource_types) else {
                                     return Ok(());
                                 };
-                                visit(filtered)
-                            })
+                            self.signals.record_shared_batch();
+                            self.signals.record_fanout_reference();
+                            visit(filtered)
+                        })
                             .map(|()| high_water)
                         }
                         Err(error) => Err(error),
@@ -432,6 +472,15 @@ impl WriterActor {
                         self.quarantine(error.clone());
                     }
                     let _ = response.send(replayed);
+                }
+                WriterCommand::Backup { identity, response } => {
+                    let backup = LogicalBackup::from_database(&self.database, &identity);
+                    if let Err(error) = &backup
+                        && error.kind() == d2b_resource_store::StoreErrorKind::StoreIntegrityFailure
+                    {
+                        self.quarantine(error.clone());
+                    }
+                    let _ = response.send(backup);
                 }
                 WriterCommand::Shutdown { response } => {
                     let result = if self.quarantined.load(Ordering::Acquire) {
@@ -534,6 +583,9 @@ impl WriterActor {
                 WriterCommand::Replay { response, .. } => {
                     let _ = response.send(Err(crate::transaction::quarantined()));
                 }
+                WriterCommand::Backup { response, .. } => {
+                    let _ = response.send(Err(crate::transaction::quarantined()));
+                }
                 WriterCommand::Shutdown { response } => {
                     let _ = response.send(Err(error.clone()));
                 }
@@ -542,19 +594,24 @@ impl WriterActor {
     }
 }
 
-fn filter_batch(
+pub(crate) fn filter_batch(
     batch: Arc<ChangeBatch>,
     resource_types: &BTreeSet<ResourceTypeName>,
+) -> Option<SharedChangeBatch> {
+    filter_batch_with(batch, |entry| {
+        resource_types.contains(entry.resource_type())
+    })
+}
+
+pub(crate) fn filter_batch_with(
+    batch: Arc<ChangeBatch>,
+    mut matches: impl FnMut(&crate::transaction::ChangeEntry) -> bool,
 ) -> Option<SharedChangeBatch> {
     let indices = batch
         .entries()
         .iter()
         .enumerate()
-        .filter_map(|(index, entry)| {
-            resource_types
-                .contains(entry.resource_type())
-                .then_some(index)
-        })
+        .filter_map(|(index, entry)| matches(entry).then_some(index))
         .collect::<Vec<_>>();
     (!indices.is_empty()).then(|| SharedChangeBatch {
         batch,
@@ -571,28 +628,23 @@ pub(crate) fn replay_after<F>(
 where
     F: FnMut(ChangeBatch) -> Result<(), StoreError>,
 {
-    let Some(first) = after_revision.checked_add(1) else {
-        return Ok(());
-    };
-    let read = database
-        .begin_read()
-        .map_err(crate::transaction::integrity)?;
-    let table = read
-        .open_table(crate::transaction::REVISION_LOG)
-        .map_err(crate::transaction::integrity)?;
-    let lower = revision_key(first)?;
-    signals.revision_range_seeks.fetch_add(1, Ordering::Relaxed);
-    for row in table
-        .range(lower.as_slice()..)
-        .map_err(crate::transaction::integrity)?
-    {
-        let (_, value) = row.map_err(crate::transaction::integrity)?;
-        signals.replay_rows_scanned.fetch_add(1, Ordering::Relaxed);
-        let batch = decode(ValueKind::ChangeBatch, value.value())?;
-        signals.replay_rows_decoded.fetch_add(1, Ordering::Relaxed);
-        visit(batch)?;
-    }
-    Ok(())
+    let mut replay = crate::revision_log::ReplaySignals::default();
+    let result = crate::revision_log::stream_after(
+        database,
+        after_revision,
+        &mut replay,
+        visit,
+    );
+    signals
+        .revision_range_seeks
+        .fetch_add(replay.range_seeks(), Ordering::Relaxed);
+    signals
+        .replay_rows_scanned
+        .fetch_add(replay.rows_scanned(), Ordering::Relaxed);
+    signals
+        .replay_rows_decoded
+        .fetch_add(replay.rows_decoded(), Ordering::Relaxed);
+    result
 }
 
 pub(crate) struct ReadPool {
@@ -1155,7 +1207,14 @@ fn read_schema(
         .get(key.as_bytes())
         .map_err(crate::transaction::integrity)?
         .ok_or_else(not_found)?;
-    let canonical_json: Vec<u8> = decode(ValueKind::ApiSchemaRecord, bytes.value())?;
+    let decoded =
+        crate::DecodedValue::decode(bytes.value()).map_err(crate::transaction::integrity)?;
+    if decoded.kind() != ValueKind::ApiSchemaRecord {
+        return Err(crate::transaction::integrity(
+            "table-value-kind-mismatch",
+        ));
+    }
+    let canonical_json = decoded.canonical_json().to_vec();
     let payload_digest =
         d2b_contracts::v3::canonical_digest("d2b:v3:resource-schema", &canonical_json);
     Ok(StoredSchema {

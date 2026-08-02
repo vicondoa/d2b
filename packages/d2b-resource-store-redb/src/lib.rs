@@ -1,6 +1,7 @@
 //! Production redb backend for one Zone resource store.
 
 pub mod actor;
+pub mod backup;
 pub mod keys;
 pub mod ownership;
 pub mod schema;
@@ -29,6 +30,11 @@ use rustix::net::{RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, recvmsg}
 pub use actor::{
     BackendSignals, GROUP_COMMIT_MAX, MAX_CONCURRENT_READS, READ_LIFETIME, READ_POOL_THREADS,
     SharedChangeBatch, WRITE_QUEUE_CAPACITY,
+};
+pub use backup::{
+    BackupRow, BackupTable, LogicalBackup, MAX_LOGICAL_BACKUP_BYTES,
+    MAX_LOGICAL_BACKUP_ROWS, MAX_PUBLICATION_NAME_BYTES, PublicationState,
+    LOGICAL_BACKUP_FORMAT_VERSION, publish_staged, publication_state, sync_staged_file,
 };
 pub use keys::{
     DecodedKey, DecodedKeyComponent, EncodedKey, KeyCodecError, KeyComponent, KeySpace,
@@ -234,6 +240,16 @@ impl RedbResourceStore {
             .await
     }
 
+    /// Capture a consistent logical snapshot while the writer owns ordering.
+    pub async fn logical_backup(&self) -> Result<LogicalBackup, StoreError> {
+        self.writer.backup(self.identity.clone()).await
+    }
+
+    /// Alias used by storage owners when exporting the logical image.
+    pub async fn backup(&self) -> Result<LogicalBackup, StoreError> {
+        self.logical_backup().await
+    }
+
     pub fn signals(&self) -> BackendSignals {
         self.signals.snapshot()
     }
@@ -251,6 +267,49 @@ impl RedbResourceStore {
     pub async fn shutdown(mut self) -> Result<(), StoreError> {
         self.reads.shutdown()?;
         self.writer.shutdown().await
+    }
+
+    /// Restore a validated logical image into a new owned descriptor.
+    ///
+    /// The target descriptor must be empty and the marker must already have
+    /// been provisioned for the same store identity.  Publication of the
+    /// staged descriptor remains an fd-relative storage-owner operation.
+    pub async fn restore_owned(
+        file: File,
+        mut marker: File,
+        backup: LogicalBackup,
+        identity: StoreIdentity,
+        acceptor: MutationSealAcceptor,
+    ) -> Result<Self, StoreError> {
+        let slot = identity.slot();
+        validate_acceptor(&identity, &acceptor)?;
+        validate_owned_file(&file).map_err(|error| error.with_store_slot(slot))?;
+        validate_owned_file(&marker).map_err(|error| error.with_store_slot(slot))?;
+        validate_provisioning_marker(&mut marker, &identity)
+            .map_err(|error| error.with_store_slot(slot))?;
+        if file
+            .metadata()
+            .map_err(transaction::integrity)
+            .map_err(|error| error.with_store_slot(slot))?
+            .len()
+            != 0
+        {
+            return Err(
+                transaction::quarantined_reason("restore-target-not-empty")
+                    .with_store_slot(slot),
+            );
+        }
+        let open_identity = identity.clone();
+        let database = tokio::task::spawn_blocking(move || {
+            backup.restore_file(file, &open_identity)
+        })
+        .await
+        .map_err(|_| {
+            transaction::integrity("database-restore-task-failed").with_store_slot(slot)
+        })?
+        .map_err(|error| error.with_store_slot(slot))?;
+        Self::start(database, identity, false, acceptor)
+            .map_err(|error| error.with_store_slot(slot))
     }
 }
 
