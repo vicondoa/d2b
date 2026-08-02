@@ -4,6 +4,7 @@ pub mod component_session;
 pub mod credential;
 pub mod credential_controller;
 pub mod device;
+pub mod emergency_policy;
 pub mod endpoint;
 pub mod error;
 pub mod execution_policy;
@@ -15,19 +16,31 @@ pub mod limits;
 pub mod network;
 pub mod process;
 pub mod provider;
+pub mod provider_registry;
+pub mod quota;
 pub mod resource;
 pub mod resource_bundle;
 pub mod resource_ref;
 pub mod resource_schema;
 pub mod resource_status;
+pub mod role;
+pub mod role_binding;
 pub mod semantic_services;
+pub mod services;
 pub mod storage;
 pub mod user;
 pub mod volume;
 pub mod volume_state;
+pub mod zone;
+pub mod zone_link;
 pub mod zone_routing;
 pub mod zone_session;
 
+pub use emergency_policy::{
+    EMERGENCY_DRAIN_FINALIZER, EMERGENCY_POLICY_RESOURCE_TYPE, EmergencyPolicyConditionType,
+    EmergencyPolicySpec, EmergencyPolicyStatus, EmergencyPolicyStatusResource, EmergencyScope,
+    effective_scope,
+};
 pub use endpoint::{
     ENDPOINT_RESOURCE_TYPE, EndpointAttachmentPolicy, EndpointClass, EndpointConsumerPolicy,
     EndpointLifecyclePolicy, EndpointLocality, EndpointOperation, EndpointSpec, EndpointSpecError,
@@ -98,6 +111,35 @@ pub use provider::{
     RevocationState, SignatureState, SpecifiedProviderMethod, StandardCapabilityMatrix,
     TrustEvidence, UNSUPPORTED_CAPABILITY_CODE, UpgradeDisposition,
     UpgradePolicy as ProviderUpgradePolicy,
+};
+pub use provider_registry::{
+    MAX_PROVIDER_MAPPING_ID_BYTES, MAX_PROVIDER_REGISTRY_MAPPINGS, ProviderBindingAxis,
+    ProviderRegistryEntry, ProviderRegistryPublication,
+};
+pub use quota::{
+    MAX_QUOTA_OWNER_DEPTH, MAX_QUOTA_PER_TYPE_ENTRIES, MAX_QUOTA_RESOURCES, QUOTA_DRAIN_FINALIZER,
+    QUOTA_RESOURCE_TYPE, QuotaCeilings, QuotaEnforcementPolicy, QuotaScope, QuotaSpec, QuotaStatus,
+    QuotaStatusResource, QuotaTypeCeiling,
+};
+pub use role::{
+    RoleConditionType, RoleResourceVerb, RoleRule, RoleSessionVerb, RoleSpec, RoleStatus,
+    RoleStatusResource,
+};
+pub use role_binding::{
+    ExternalPrincipalSelector, RoleBindingConditionType, RoleBindingSpec, RoleBindingStatus,
+    RoleBindingStatusResource, ScopeNarrowing,
+};
+pub use services::{
+    AuditSegment, ProviderMethod, ResourceMethod, ServiceDescriptor, ServiceDescriptorError,
+    V3Service, ZoneMethod, missing_audit_segments,
+};
+pub use zone::{
+    ZoneConditionType, ZoneHandlerName, ZoneHandlerPhase, ZoneHandlerStatus, ZoneSpec, ZoneStatus,
+    ZoneStatusResource, validate_finalizer, validate_self_resource,
+};
+pub use zone_link::{
+    ZoneLinkConditionType, ZoneLinkLimits, ZoneLinkSpec, ZoneLinkStatus, ZoneLinkStatusResource,
+    admit_local_intent,
 };
 
 // The `semantic_services` module's re-exports. Keep every

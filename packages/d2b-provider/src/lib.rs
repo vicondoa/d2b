@@ -31,6 +31,7 @@
 
 #![deny(missing_docs)]
 
+pub mod agent;
 mod context;
 mod descriptor;
 mod error;
@@ -43,6 +44,11 @@ mod session;
 pub mod instance;
 pub mod rpc;
 
+pub use agent::{
+    MAX_AGENT_AUDIT_EVENTS, MAX_AGENT_IN_FLIGHT, MAX_AGENT_TIMEOUT_MS, ProviderAgent,
+    ProviderAgentAuditEvent, ProviderAgentError, ProviderAgentMessage, ProviderAgentOutcome,
+    ProviderAgentRequest, ProviderAgentResponse, ProviderAgentService,
+};
 pub use context::{CancellationToken, OwnedOperationContext};
 pub use descriptor::ProviderDescriptor;
 pub use error::{ProviderRuntimeError, RegistryBuildError};

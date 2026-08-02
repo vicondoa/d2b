@@ -7,3 +7,8 @@
 
 pub mod credit;
 pub mod unix;
+
+pub use d2b_session::{
+    OwnedTransport, TransportDescriptor, TransportError, TransportPacket, TransportReader,
+    TransportWriter,
+};

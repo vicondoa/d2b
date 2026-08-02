@@ -15,6 +15,10 @@ use d2b_contracts::v3::{ResourceName, ResourceRef, ZoneId};
 
 /// Maximum bytes in one metadata token.
 pub const MAX_METADATA_TOKEN_BYTES: usize = 128;
+/// Maximum total attempts for one client call.
+pub const MAX_RETRY_ATTEMPTS: u8 = 8;
+/// Maximum request lifetime in milliseconds.
+pub const MAX_REQUEST_LIFETIME_MS: u64 = 15 * 60 * 1_000;
 
 /// A v3 client target. Resource addressing is always Zone-scoped; there is no
 /// Realm or Workload spelling and no caller-supplied host path.
@@ -313,7 +317,25 @@ pub enum SessionFailure {
 impl SessionFailure {
     /// Whether retry policy may automatically retry this failure.
     pub const fn retryable(self) -> bool {
-        matches!(self, Self::BeforeDispatch | Self::Retryable)
+        matches!(
+            self,
+            Self::BeforeDispatch | Self::Retryable | Self::Disconnected
+        )
+    }
+
+    /// Whether this failure is safe to retry for one call profile.
+    ///
+    /// A mutating call may retry only when the caller supplied an
+    /// idempotency key.  Ambiguous completion, deadline, cancellation, and
+    /// protocol failures never become safe merely because attempts remain.
+    pub const fn retryable_for(self, mutating: bool, has_idempotency_key: bool) -> bool {
+        match self {
+            Self::BeforeDispatch | Self::Retryable | Self::Disconnected => {
+                !mutating || has_idempotency_key
+            }
+            Self::Ambiguous => !mutating,
+            Self::Deadline | Self::Cancelled | Self::Protocol => false,
+        }
     }
 }
 
@@ -393,6 +415,9 @@ impl MetadataInput {
         if deadline.is_some_and(|value| value.is_zero()) {
             return Err(ClientError::InvalidMetadata);
         }
+        if deadline.is_some_and(|value| value.as_millis() > MAX_REQUEST_LIFETIME_MS as u128) {
+            return Err(ClientError::InvalidMetadata);
+        }
         Ok(Self {
             trace: None,
             correlation_id,
@@ -453,6 +478,7 @@ impl RetryPolicy {
     /// Validate policy bounds.
     pub fn validate(self) -> Result<Self, ClientError> {
         if self.max_attempts == 0
+            || self.max_attempts > MAX_RETRY_ATTEMPTS
             || self.initial_delay.is_zero()
             || self.max_delay < self.initial_delay
             || self.max_delay > Duration::from_secs(60)
@@ -560,6 +586,21 @@ where
         metadata: &MetadataInput,
         cancellation: &CancellationToken,
     ) -> Result<Vec<u8>, ClientError> {
+        self.call_with_safety(service, method, metadata, cancellation, false)
+    }
+
+    /// Call a method with an explicit mutation safety profile.
+    ///
+    /// The connector remains transport-only; this flag is a caller-side
+    /// description of the method contract and does not grant authority.
+    pub fn call_with_safety(
+        &self,
+        service: &str,
+        method: &str,
+        metadata: &MetadataInput,
+        cancellation: &CancellationToken,
+        mutating: bool,
+    ) -> Result<Vec<u8>, ClientError> {
         if service.is_empty() || method.is_empty() {
             return Err(ClientError::InvalidRoute);
         }
@@ -577,7 +618,10 @@ where
             }
             match connector.call(service, method, metadata) {
                 Ok(response) => return Ok(response),
-                Err(error) if error.retryable() && attempt + 1 < self.retry.max_attempts => {
+                Err(error)
+                    if error.retryable_for(mutating, metadata.idempotency_key().is_some())
+                        && attempt + 1 < self.retry.max_attempts =>
+                {
                     let _delay = self.retry.delay_for(attempt + 1);
                 }
                 Err(error) => return Err(error),
