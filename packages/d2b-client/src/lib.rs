@@ -22,6 +22,22 @@ pub const MAX_METADATA_TOKEN_BYTES: usize = 128;
 pub enum TargetInput {
     /// The Zone service itself.
     Zone(ZoneId),
+    /// A Zone service selected from the closed service inventory.
+    ZoneService(ZoneId, ZoneServiceKind),
+    /// A Host-owned service.
+    Host {
+        /// Zone owning the Host.
+        zone: ZoneId,
+        /// Host resource identity.
+        resource: ResourceRef,
+    },
+    /// A Guest-owned service.
+    Guest {
+        /// Zone owning the Guest.
+        zone: ZoneId,
+        /// Guest resource identity.
+        resource: ResourceRef,
+    },
     /// A same-Zone resource service.
     Resource {
         /// Zone owning the resource.
@@ -29,6 +45,17 @@ pub enum TargetInput {
         /// Canonical resource identity within that Zone.
         resource: ResourceRef,
     },
+}
+
+/// Closed Zone service kinds used by TargetInput.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ZoneServiceKind {
+    /// The Zone control service.
+    Zone,
+    /// The resource API service.
+    Resource,
+    /// The ZoneLink routing service.
+    ZoneLink,
 }
 
 impl TargetInput {
@@ -45,15 +72,21 @@ impl TargetInput {
     /// Borrow the target Zone.
     pub const fn zone_id(&self) -> &ZoneId {
         match self {
-            Self::Zone(zone) | Self::Resource { zone, .. } => zone,
+            Self::Zone(zone)
+            | Self::ZoneService(zone, _)
+            | Self::Host { zone, .. }
+            | Self::Guest { zone, .. }
+            | Self::Resource { zone, .. } => zone,
         }
     }
 
     /// Borrow the ResourceRef when this target is not the Zone service.
     pub const fn resource_ref(&self) -> Option<&ResourceRef> {
         match self {
-            Self::Zone(_) => None,
-            Self::Resource { resource, .. } => Some(resource),
+            Self::Zone(_) | Self::ZoneService(_, _) => None,
+            Self::Host { resource, .. }
+            | Self::Guest { resource, .. }
+            | Self::Resource { resource, .. } => Some(resource),
         }
     }
 
@@ -65,13 +98,17 @@ impl TargetInput {
             if target != zone {
                 return Err(ClientError::InvalidTarget);
             }
-            return Ok(Self::Zone(zone));
+            return Ok(Self::ZoneService(zone, ZoneServiceKind::Zone));
         }
         let resource = ResourceRef::parse(value).map_err(|_| ClientError::InvalidTarget)?;
         if resource.resource_type().as_str() == "Zone" {
             return Err(ClientError::InvalidTarget);
         }
-        Ok(Self::Resource { zone, resource })
+        Ok(match resource.resource_type().as_str() {
+            "Host" => Self::Host { zone, resource },
+            "Guest" => Self::Guest { zone, resource },
+            _ => Self::Resource { zone, resource },
+        })
     }
 }
 
@@ -80,6 +117,20 @@ impl TargetInput {
 pub enum ServiceOwner {
     /// The Zone runtime owns the service.
     Zone(ZoneId),
+    /// A Host resource owns the service.
+    Host {
+        /// Owning Zone.
+        zone: ZoneId,
+        /// Host ResourceName.
+        resource: ResourceName,
+    },
+    /// A Guest resource owns the service.
+    Guest {
+        /// Owning Zone.
+        zone: ZoneId,
+        /// Guest ResourceName.
+        resource: ResourceName,
+    },
     /// A resource in one Zone owns the service.
     Resource {
         /// Owning Zone.
@@ -98,7 +149,10 @@ impl ServiceOwner {
     /// Borrow the owning Zone.
     pub const fn zone_id(&self) -> &ZoneId {
         match self {
-            Self::Zone(zone) | Self::Resource { zone, .. } => zone,
+            Self::Zone(zone)
+            | Self::Host { zone, .. }
+            | Self::Guest { zone, .. }
+            | Self::Resource { zone, .. } => zone,
         }
     }
 }
