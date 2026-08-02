@@ -294,9 +294,39 @@ pub(crate) fn runtime_dispatch(cli: &ModernCli, context: &ZoneContext) -> Result
         }
         ModernCommand::Activation(args) => activation::run(context, args, mode, deadline),
         ModernCommand::Complete(args) => complete::run(args),
-        ModernCommand::Audit(args) => unsupported(context, "audit", args.strict, mode),
+        ModernCommand::Audit(args) => audit(context, args, mode, deadline),
         ModernCommand::Op(args) => unsupported(context, "op", &args.command, mode),
         ModernCommand::Auth(args) => unsupported(context, "auth", &args.command, mode),
+    }
+
+    fn audit(
+        context: &ZoneContext,
+        args: &GenericAuditArgs,
+        mode: OutputMode,
+        deadline: crate::context::RequestDeadline,
+    ) -> Result<i32, CliFailure> {
+        match context.invoke(
+            "Audit",
+            serde_json::json!({
+                "strict": args.strict,
+                "format": if mode.is_json() { "json" } else { "human" },
+            }),
+            deadline,
+            mode,
+        ) {
+            Ok(value) => {
+                if mode.is_json() {
+                    context.emit_stream(&value, mode)?;
+                } else {
+                    context.emit(&value, mode)?;
+                }
+                Ok(0)
+            }
+            Err(error) if error.message.starts_with("zone-unavailable") => {
+                Err(context.failure("zone-unavailable", "Zone runtime is unavailable", mode, 1))
+            }
+            Err(error) => Err(error),
+        }
     }
 }
 
@@ -329,7 +359,15 @@ pub(crate) fn modern_run(raw_args: Vec<OsString>) -> i32 {
     };
     match runtime_dispatch(&cli, &context) {
         Ok(code) => code,
-        Err(error) => crate::report_failure(error),
+        Err(error) => {
+            let exit_code = error.exit_code;
+            if let Some(rendered) = error.rendered_stderr {
+                crate::print_stdout(&rendered);
+                exit_code
+            } else {
+                crate::report_failure(error)
+            }
+        }
     }
 }
 

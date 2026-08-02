@@ -126,7 +126,7 @@ impl ZoneContext {
     pub(crate) fn discover(zone_arg: Option<&str>) -> Result<Self, CliFailure> {
         let requested_zone = zone_arg
             .map(str::to_owned)
-            .or_else(|| env::var("D2B_ZONE").ok());
+            .or_else(|| env::var("D2B_ZONE").ok().filter(|value| !value.is_empty()));
         let zone_name = requested_zone.as_deref().unwrap_or("local-root").to_owned();
         validate_zone_name(&zone_name)?;
 
