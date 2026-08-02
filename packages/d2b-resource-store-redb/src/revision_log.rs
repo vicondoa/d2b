@@ -69,26 +69,25 @@ impl WatchSelector {
 
     /// Match one persisted change without inspecting its payload.
     pub(crate) fn matches(&self, entry: &crate::transaction::ChangeEntry) -> bool {
-        if !self.resource_types.is_empty()
-            && !self.resource_types.contains(entry.resource_type())
-        {
+        if !self.resource_types.is_empty() && !self.resource_types.contains(entry.resource_type()) {
             return false;
         }
-        if !self.resource_names.is_empty() && !self.resource_names.contains(entry.resource_name())
-        {
+        if !self.resource_names.is_empty() && !self.resource_names.contains(entry.resource_name()) {
             return false;
         }
-        self.filters.iter().all(|filter| match filter.field.as_str() {
-            "metadata.name" => filter
-                .values
-                .iter()
-                .any(|value| value == entry.resource_name().as_str()),
-            "type" => filter
-                .values
-                .iter()
-                .any(|value| value == entry.resource_type().as_str()),
-            _ => false,
-        })
+        self.filters
+            .iter()
+            .all(|filter| match filter.field.as_str() {
+                "metadata.name" => filter
+                    .values
+                    .iter()
+                    .any(|value| value == entry.resource_name().as_str()),
+                "type" => filter
+                    .values
+                    .iter()
+                    .any(|value| value == entry.resource_type().as_str()),
+                _ => false,
+            })
     }
 }
 
@@ -111,7 +110,7 @@ impl WatchRegistrationId {
 /// Receiver returned by the storage-side admission helper.
 pub struct WatchStream {
     id: WatchRegistrationId,
-    receiver: mpsc::Receiver<SharedChangeBatch>,
+    receiver: mpsc::UnboundedReceiver<SharedChangeBatch>,
 }
 
 impl core::fmt::Debug for WatchStream {
@@ -171,7 +170,7 @@ struct Registration {
     cursor: u64,
     last_delivered: u64,
     pending: VecDeque<u64>,
-    sender: mpsc::Sender<SharedChangeBatch>,
+    sender: mpsc::UnboundedSender<SharedChangeBatch>,
 }
 
 /// Storage-side watch coordinator with one global queued-delivery budget.
@@ -198,7 +197,7 @@ impl core::fmt::Debug for WatchCoordinator {
 }
 
 impl WatchCoordinator {
-    /// Admit one watch and allocate its bounded receiver.
+    /// Admit one watch with global accounting for its queued deliveries.
     pub fn admit(
         &mut self,
         after_revision: ZoneRevision,
@@ -209,10 +208,7 @@ impl WatchCoordinator {
             self.admission_rejections = self.admission_rejections.saturating_add(1);
             return Err(crate::transaction::backpressure());
         }
-        let (sender, receiver) = mpsc::channel(
-            usize::try_from(initial_credits)
-                .map_err(|_| crate::transaction::integrity("watch-credits-invalid"))?,
-        );
+        let (sender, receiver) = mpsc::unbounded_channel();
         let id = self.register(after_revision, selector, initial_credits, sender)?;
         Ok(WatchStream { id, receiver })
     }
@@ -224,7 +220,7 @@ impl WatchCoordinator {
         after_revision: ZoneRevision,
         selector: WatchSelector,
         initial_credits: u32,
-        sender: mpsc::Sender<SharedChangeBatch>,
+        sender: mpsc::UnboundedSender<SharedChangeBatch>,
     ) -> Result<WatchRegistrationId, StoreError> {
         if initial_credits == 0 || initial_credits > MAX_INITIAL_WATCH_CREDITS {
             self.admission_rejections = self.admission_rejections.saturating_add(1);
@@ -258,13 +254,16 @@ impl WatchCoordinator {
     pub fn dispatch(&mut self, batch: SharedChangeBatch) {
         let ids = self.registrations.keys().copied().collect::<Vec<_>>();
         for id in ids {
-            let Some(selector) = self.registrations.get(&id).map(|entry| entry.selector.clone())
+            let Some(selector) = self
+                .registrations
+                .get(&id)
+                .map(|entry| entry.selector.clone())
             else {
                 continue;
             };
-            let Some(filtered) = filter_batch_with(batch.batch_arc(), |entry| {
-                selector.matches(entry)
-            }) else {
+            let Some(filtered) =
+                filter_batch_with(batch.batch_arc(), |entry| selector.matches(entry))
+            else {
                 continue;
             };
             let _ = self.enqueue(id, filtered, false);
@@ -313,8 +312,7 @@ impl WatchCoordinator {
 
     /// Remove one registration without counting it as a slow watcher.
     pub fn unregister(&mut self, id: WatchRegistrationId) -> Option<ZoneRevision> {
-        self.remove_registration(id, false)
-            .map(ZoneRevision::new)
+        self.remove_registration(id, false).map(ZoneRevision::new)
     }
 
     /// Return the last acknowledged cursor for an active or evicted watch.
@@ -372,19 +370,17 @@ impl WatchCoordinator {
             self.admission_rejections = self.admission_rejections.saturating_add(1);
             return Err(crate::transaction::backpressure());
         }
-        let (sender, receiver) = mpsc::channel(
-            usize::try_from(initial_credits)
-                .map_err(|_| crate::transaction::integrity("watch-credits-invalid"))?,
-        );
+        let (sender, receiver) = mpsc::unbounded_channel();
         let id = self.register(after_revision, selector, initial_credits, sender)?;
         let mut replay = ReplaySignals::default();
         let replay_result = stream_after(database, after_revision.get(), &mut replay, |batch| {
             let batch = Arc::new(batch);
-            let Some(selector) = self.registrations.get(&id).map(|entry| entry.selector.clone())
+            let Some(selector) = self
+                .registrations
+                .get(&id)
+                .map(|entry| entry.selector.clone())
             else {
-                return Err(crate::transaction::integrity(
-                    "watch-registration-missing",
-                ));
+                return Err(crate::transaction::integrity("watch-registration-missing"));
             };
             let Some(filtered) = filter_batch_with(batch, |entry| selector.matches(entry)) else {
                 return Ok(());
@@ -408,13 +404,15 @@ impl WatchCoordinator {
         replay: bool,
     ) -> Result<(), StoreError> {
         let revision = batch.revision().get();
-        let Some((sender, credits, pending_len)) = self.registrations.get(&id).map(|registration| {
-            (
-                registration.sender.clone(),
-                registration.credits,
-                registration.pending.len(),
-            )
-        }) else {
+        let Some((sender, credits, pending_len)) =
+            self.registrations.get(&id).map(|registration| {
+                (
+                    registration.sender.clone(),
+                    registration.credits,
+                    registration.pending.len(),
+                )
+            })
+        else {
             return Err(crate::transaction::integrity("watch-registration-missing"));
         };
 
@@ -430,25 +428,25 @@ impl WatchCoordinator {
                 }
                 return Err(crate::transaction::backpressure());
             }
+            if !self.registrations.contains_key(&id) {
+                if replay {
+                    self.admission_rejections = self.admission_rejections.saturating_add(1);
+                }
+                return Err(crate::transaction::backpressure());
+            }
         }
 
-        match sender.try_send(batch) {
+        match sender.send(batch) {
             Ok(()) => {
                 let Some(registration) = self.registrations.get_mut(&id) else {
-                    return Err(crate::transaction::integrity(
-                        "watch-registration-missing",
-                    ));
+                    return Err(crate::transaction::integrity("watch-registration-missing"));
                 };
                 registration.pending.push_back(revision);
                 registration.last_delivered = registration.last_delivered.max(revision);
                 self.budget_used += 1;
                 Ok(())
             }
-            Err(mpsc::error::TrySendError::Full(_)) => {
-                self.remove_registration(id, true);
-                Err(crate::transaction::backpressure())
-            }
-            Err(mpsc::error::TrySendError::Closed(_)) => {
+            Err(_) => {
                 self.remove_registration(id, false);
                 Err(crate::transaction::integrity("watch-stream-closed"))
             }
@@ -469,9 +467,7 @@ impl WatchCoordinator {
 
     fn remove_registration(&mut self, id: WatchRegistrationId, slow: bool) -> Option<u64> {
         let registration = self.registrations.remove(&id)?;
-        self.budget_used = self
-            .budget_used
-            .saturating_sub(registration.pending.len());
+        self.budget_used = self.budget_used.saturating_sub(registration.pending.len());
         if slow {
             self.slow_watcher_evictions = self.slow_watcher_evictions.saturating_add(1);
             self.evicted_cursors.push_back((id, registration.cursor));
@@ -535,8 +531,7 @@ mod tests {
             None,
             Some(ResourceGeneration::new(1).unwrap()),
             None,
-            "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-                .to_owned(),
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_owned(),
             None,
             "operation".to_owned(),
             "correlation".to_owned(),
@@ -552,12 +547,10 @@ mod tests {
     #[test]
     fn budget_eviction_releases_entries_and_retains_ack_cursor() {
         let mut coordinator = WatchCoordinator::default();
-        let selector = WatchSelector::new(
-            [ResourceTypeName::parse("Process").unwrap()],
-            [],
-            [],
-        );
-        let mut stream = coordinator.admit(ZoneRevision::new(0), selector, 1).unwrap();
+        let selector = WatchSelector::new([ResourceTypeName::parse("Process").unwrap()], [], []);
+        let mut stream = coordinator
+            .admit(ZoneRevision::new(0), selector, 1)
+            .unwrap();
         let first = batch(1);
         coordinator.dispatch(first);
         assert_eq!(coordinator.signals().budget_used, 1);
@@ -576,14 +569,14 @@ mod tests {
     #[test]
     fn acknowledgement_releases_global_budget() {
         let mut coordinator = WatchCoordinator::default();
-        let selector = WatchSelector::new(
-            [ResourceTypeName::parse("Process").unwrap()],
-            [],
-            [],
-        );
-        let stream = coordinator.admit(ZoneRevision::new(0), selector, 2).unwrap();
+        let selector = WatchSelector::new([ResourceTypeName::parse("Process").unwrap()], [], []);
+        let stream = coordinator
+            .admit(ZoneRevision::new(0), selector, 2)
+            .unwrap();
         coordinator.dispatch(batch(1));
-        coordinator.acknowledge(stream.id(), ZoneRevision::new(1)).unwrap();
+        coordinator
+            .acknowledge(stream.id(), ZoneRevision::new(1))
+            .unwrap();
         assert_eq!(coordinator.signals().budget_used, 0);
         assert_eq!(
             coordinator.resume_cursor(stream.id()),
