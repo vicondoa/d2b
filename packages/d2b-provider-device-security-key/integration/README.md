@@ -7,4 +7,3 @@ Heavier scenarios live in:
 - `guest_frontend_connect/` for Guest frontend authentication over AF_VSOCK.
 
 They require the existing container or Host/Guest integration lane.
-

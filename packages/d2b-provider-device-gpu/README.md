@@ -56,4 +56,3 @@ the existing container or Host/Guest lane.
 An extracted Provider repository should retain `d2b-contracts`, the signed
 component descriptor, the wire-contract constants, and the opaque Core effect
 adapter while replacing only workspace packaging and release metadata.
-

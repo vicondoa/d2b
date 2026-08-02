@@ -9,4 +9,3 @@
 
 - Device configuration now emits canonical, provider-bound resource
   specifications without exposing host paths or runtime management state.
-

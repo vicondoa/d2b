@@ -7,4 +7,3 @@ Heavier scenarios live in:
 - `video_dependency/` for video-after-GPU readiness.
 
 They require the existing container or Host/Guest integration lane.
-
