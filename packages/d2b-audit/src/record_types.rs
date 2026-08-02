@@ -394,6 +394,7 @@ impl AuditRecord {
             record_hash: genesis_hash(),
             fields,
         };
+        validate_fields(&record.fields)?;
         record.record_hash = record.computed_record_hash()?;
         Ok(record)
     }
@@ -541,6 +542,7 @@ impl<'de> Deserialize<'de> for AuditRecord {
             .ok_or_else(|| serde::de::Error::custom("audit-record-fields-missing"))?;
         let fields =
             AuditRecordFields::from_value(class, field_value).map_err(serde::de::Error::custom)?;
+        validate_fields(&fields).map_err(serde::de::Error::custom)?;
         let get_string = |key: &str| {
             object
                 .get(key)
@@ -605,6 +607,8 @@ pub enum AuditRecordError {
     ChainMismatch,
     /// The record hash did not match.
     HashMismatch,
+    /// A class field was outside its closed domain.
+    FieldInvalid,
 }
 
 impl core::fmt::Display for AuditRecordError {
@@ -614,6 +618,7 @@ impl core::fmt::Display for AuditRecordError {
             Self::Serialization => "audit-record-serialization-failed",
             Self::ChainMismatch => "audit-record-chain-mismatch",
             Self::HashMismatch => "audit-record-hash-mismatch",
+            Self::FieldInvalid => "audit-record-field-invalid",
         })
     }
 }
@@ -621,10 +626,208 @@ impl core::fmt::Display for AuditRecordError {
 impl std::error::Error for AuditRecordError {}
 
 fn bounded_text(value: String) -> Result<String, AuditRecordError> {
-    if value.is_empty() || value.len() > 256 || value.bytes().any(|byte| byte.is_ascii_control()) {
+    if value.is_empty()
+        || value.len() > 256
+        || value
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || byte == b'/')
+    {
         return Err(AuditRecordError::TextOutOfBounds);
     }
     Ok(value)
+}
+
+fn closed(value: &str, allowed: &[&str]) -> bool {
+    allowed.contains(&value)
+}
+
+fn validate_fields(fields: &AuditRecordFields) -> Result<(), AuditRecordError> {
+    let valid_resource_type = |value: &str| {
+        [
+            "Zone",
+            "ZoneLink",
+            "Provider",
+            "Role",
+            "RoleBinding",
+            "Quota",
+            "Host",
+            "Guest",
+            "Process",
+            "EphemeralProcess",
+            "Volume",
+            "Network",
+            "Device",
+            "User",
+            "Credential",
+            "Endpoint",
+            "ResourceExport",
+            "ResourceImport",
+            "vendor",
+        ]
+        .contains(&value)
+            || value.contains(".d2bus.org.")
+    };
+    let valid_digestish = |value: &str| {
+        !value.is_empty()
+            && value.len() <= 256
+            && value
+                .bytes()
+                .all(|byte| !byte.is_ascii_control() && byte != b'/')
+    };
+    match fields {
+        AuditRecordFields::ResourceMutation(fields) => {
+            if !closed(
+                &fields.verb,
+                &[
+                    "create",
+                    "update-spec",
+                    "update-status",
+                    "update-metadata",
+                    "update-finalizers",
+                    "delete",
+                    "use-credential",
+                    "admin-credential",
+                ],
+            ) || !valid_resource_type(&fields.resource_type)
+                || !closed(
+                    &fields.outcome,
+                    &["ok", "conflict", "denied", "invalid", "error"],
+                )
+                || !valid_digestish(&fields.resource_uid)
+                || !valid_digestish(&fields.subject_digest)
+            {
+                return Err(AuditRecordError::FieldInvalid);
+            }
+        }
+        AuditRecordFields::ResourceUpgrade(fields) => {
+            if !closed(&fields.verb, &["assess", "plan", "execute"])
+                || !valid_resource_type(&fields.resource_type)
+                || !closed(
+                    &fields.update_state,
+                    &[
+                        "Current",
+                        "UpdateAvailable",
+                        "UpgradeRequired",
+                        "Upgrading",
+                        "Blocked",
+                        "Unknown",
+                    ],
+                )
+                || !closed(
+                    &fields.disruption,
+                    &["None", "Reload", "Restart", "Recycle", "Replace"],
+                )
+                || !closed(
+                    &fields.outcome,
+                    &["ok", "blocked", "conflict", "denied", "error"],
+                )
+                || !valid_digestish(&fields.resource_uid)
+                || !valid_digestish(&fields.operation_id)
+                || fields.reasons.len() > 16
+                || fields.reasons.iter().any(|reason| !valid_digestish(reason))
+            {
+                return Err(AuditRecordError::FieldInvalid);
+            }
+        }
+        AuditRecordFields::RbacChange(fields) => {
+            if !closed(&fields.verb, &["create", "update-spec", "delete"])
+                || !closed(&fields.resource_type, &["Role", "RoleBinding"])
+                || !closed(&fields.outcome, &["ok", "denied", "error"])
+                || !valid_digestish(&fields.resource_uid)
+                || !valid_digestish(&fields.subject_digest)
+            {
+                return Err(AuditRecordError::FieldInvalid);
+            }
+        }
+        AuditRecordFields::SessionConnect(fields) => {
+            if !closed(&fields.event, &["connect", "reconnect", "close"])
+                || !closed(&fields.profile, &["NN", "KK", "IKpsk2"])
+                || !closed(&fields.purpose_class, &["local", "enrolled", "bootstrap"])
+                || !closed(&fields.transport_class, &["unix", "vsock", "zone_link"])
+                || !closed(&fields.authz_decision, &["allowed", "denied"])
+                || !closed(
+                    &fields.outcome,
+                    &["ok", "auth", "policy", "timeout", "error"],
+                )
+                || !valid_digestish(&fields.subject_digest)
+                || !valid_digestish(&fields.session_gen_digest)
+            {
+                return Err(AuditRecordError::FieldInvalid);
+            }
+        }
+        AuditRecordFields::RouteAdmission(fields) => {
+            if !valid_digestish(&fields.service)
+                || !valid_digestish(&fields.method)
+                || !closed(&fields.direction, &["local", "host", "guest", "zone_link"])
+                || !closed(&fields.authz_decision, &["allowed", "denied"])
+                || !closed(&fields.outcome, &["ok", "denied", "error"])
+                || !valid_digestish(&fields.subject_digest)
+            {
+                return Err(AuditRecordError::FieldInvalid);
+            }
+        }
+        AuditRecordFields::ResourceShare(fields) => {
+            if !closed(
+                &fields.event,
+                &["advertise", "admit", "revoke", "reconnect"],
+            ) || !closed(
+                &fields.outcome,
+                &["ok", "denied", "quota", "revoked", "degraded", "error"],
+            ) || !valid_digestish(&fields.peer_zone)
+                || fields.capability_subset.len() > 16
+                || fields
+                    .capability_subset
+                    .iter()
+                    .any(|capability| !valid_digestish(capability))
+            {
+                return Err(AuditRecordError::FieldInvalid);
+            }
+        }
+        AuditRecordFields::BrokerEffect(fields) => {
+            if !valid_digestish(&fields.op_class)
+                || !valid_digestish(&fields.subject_digest)
+                || !valid_digestish(&fields.execution_context_digest)
+                || !valid_digestish(&fields.resource_context_digest)
+                || !closed(&fields.outcome, &["ok", "denied", "error"])
+            {
+                return Err(AuditRecordError::FieldInvalid);
+            }
+        }
+        AuditRecordFields::ProcessEffect(fields) => {
+            if !closed(&fields.event, &["launch", "stop", "adopt", "quarantine"])
+                || !closed(
+                    &fields.provider,
+                    &["minijail", "systemd", "system-core-user"],
+                )
+                || !closed(&fields.domain, &["system", "user"])
+                || !closed(&fields.outcome, &["ok", "error"])
+                || fields
+                    .exit_class
+                    .as_deref()
+                    .is_some_and(|value| !closed(value, &["exited", "signaled", "killed"]))
+                || fields.no_isolation
+                    && (fields.domain != "user" || fields.provider != "system-core-user")
+                || fields.provider == "system-core-user" && fields.domain != "user"
+                || !valid_digestish(&fields.execution_ref_digest)
+                || !valid_digestish(&fields.process_uid)
+            {
+                return Err(AuditRecordError::FieldInvalid);
+            }
+        }
+        AuditRecordFields::StateReset(fields) => {
+            if !closed(&fields.scope, &["zone", "provider", "host", "guest"])
+                || !closed(
+                    &fields.trigger,
+                    &["operator", "upgrade", "corruption", "emergency"],
+                )
+                || !closed(&fields.outcome, &["ok", "error"])
+                || !valid_digestish(&fields.prior_digest)
+            {
+                return Err(AuditRecordError::FieldInvalid);
+            }
+        }
+    }
+    Ok(())
 }
 
 fn contains_legacy_fields(value: &serde_json::Value) -> bool {
