@@ -369,7 +369,8 @@ sub drain_adopted_descendants {
             next;
         }
         last if $! == ECHILD;
-        fatal("could not drain adopted scheduler descendants");
+        my $errno = 0 + $!;
+        fatal("could not drain adopted scheduler descendants (errno $errno)");
     }
 }
 

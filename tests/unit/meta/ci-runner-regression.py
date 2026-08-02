@@ -1725,6 +1725,12 @@ esac
             'fatal("could not drain adopted scheduler descendants (errno $errno)")',
             blocking_wait,
         )
+        self.assertEqual(
+            helper.count(
+                'fatal("could not drain adopted scheduler descendants (errno $errno)")'
+            ),
+            2,
+        )
         self.assertGreaterEqual(helper.count("$! == EINTR"), 4)
         self.assertGreaterEqual(helper.count("$! == EAGAIN"), 3)
 
@@ -1766,6 +1772,46 @@ exit 0;
             result.returncode,
             0,
             msg=f"waitpid failure did not fail closed\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}",
+        )
+
+    def test_manifest_unexpected_nonblocking_waitpid_error_fails_closed(self) -> None:
+        perl = shutil.which("perl")
+        self.assertIsNotNone(perl, "Perl is required for execution-manifest coverage")
+        assert perl is not None
+        harness = r"""
+use strict;
+use warnings;
+use Errno qw(EIO);
+require $ARGV[0];
+my $error;
+eval {
+    main::drain_adopted_descendants({
+        waitpid => sub {
+            $! = EIO;
+            return -1;
+        },
+    });
+    1;
+} or $error = $@;
+exit 91 unless ref($error) && $error->isa("ExecutionManifest::Fatal");
+exit 92 unless "$error" eq "could not drain adopted scheduler descendants (errno 5)";
+exit 0;
+"""
+        result = subprocess.run(
+            [perl, "-e", harness, str(EXECUTION_MANIFEST_HELPER)],
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(
+            result.returncode,
+            0,
+            msg=(
+                "nonblocking waitpid failure did not fail closed\n"
+                f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+            ),
         )
 
     def test_diagnostic_redaction_normalizes_ansi_before_matching(self) -> None:
