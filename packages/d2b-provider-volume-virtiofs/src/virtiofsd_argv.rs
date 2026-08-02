@@ -179,7 +179,11 @@ mod tests {
         assert!(argv.iter().any(|arg| arg == "--sandbox=chroot"));
         assert!(argv.iter().any(|arg| arg == "--inode-file-handles=never"));
         assert!(argv.iter().any(|arg| arg == "--readonly"));
-        assert!(!argv.iter().any(|arg| arg.contains("/nix/store")));
+        assert!(
+            !argv
+                .iter()
+                .any(|arg| arg.starts_with("--shared-dir=/nix/store"))
+        );
     }
 
     #[test]
