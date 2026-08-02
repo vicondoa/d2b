@@ -491,6 +491,9 @@ impl EphemeralProcessCleanupController {
         now: &Timestamp,
     ) -> Result<EphemeralCleanupDecision, EphemeralCleanupError> {
         let key = observation.key.clone();
+        let existing = self.records.get(&key);
+        let had_record = existing.is_some();
+        let prior_incident_held = existing.is_some_and(EphemeralCleanupRecord::incident_held);
         let record = self
             .records
             .entry(key.clone())
@@ -533,44 +536,47 @@ impl EphemeralProcessCleanupController {
             EphemeralProcessPhase::Pending | EphemeralProcessPhase::Unknown => 0,
         };
         let computed = add_millis(completed_at, ttl_ms)?;
-        let eligible = observation
-            .cleanup_eligible_at
-            .clone()
-            .or_else(|| record.cleanup_eligible_at.clone())
-            .unwrap_or_else(|| computed.clone());
-        if observation.cleanup_eligible_at.is_none() && record.cleanup_eligible_at.is_none() {
-            record.cleanup_eligible_at = Some(computed.clone());
+        // `cleanupEligibleAt` is a derived status field, not an authority
+        // supplied by the resource. Recompute it on every terminal watch and
+        // repair a missing, stale, or tampered projection before considering
+        // Delete. A caller-provided value that matches the derivation is
+        // already persisted and needs no redundant status write.
+        let supplied_eligible_is_valid =
+            observation.cleanup_eligible_at.as_ref() == Some(&computed);
+        let status_needs_update = !supplied_eligible_is_valid
+            || (had_record && prior_incident_held != observation.incident_hold);
+        record.cleanup_eligible_at = Some(computed.clone());
+        if status_needs_update {
             return Ok(EphemeralCleanupDecision::UpdateStatus {
                 cleanup_eligible_at: computed,
                 incident_held: observation.incident_hold,
                 expected_revision: observation.expected_revision,
             });
         }
-        record.cleanup_eligible_at = Some(eligible.clone());
 
         if observation.incident_hold {
             return Ok(EphemeralCleanupDecision::Blocked {
                 reason: EphemeralCleanupBlock::IncidentHold,
-                cleanup_eligible_at: Some(eligible),
+                cleanup_eligible_at: Some(computed),
             });
         }
         if observation.pending_finalizers > 0 {
             return Ok(EphemeralCleanupDecision::Blocked {
                 reason: EphemeralCleanupBlock::Finalizer,
-                cleanup_eligible_at: Some(eligible),
+                cleanup_eligible_at: Some(computed),
             });
         }
         if observation.owner_deletion_requested {
             return Ok(EphemeralCleanupDecision::Blocked {
                 reason: EphemeralCleanupBlock::OwnerDeletion,
-                cleanup_eligible_at: Some(eligible),
+                cleanup_eligible_at: Some(computed),
             });
         }
         if timestamp_millis(now).ok_or(EphemeralCleanupError::InvalidTimestamp)?
-            < timestamp_millis(&eligible).ok_or(EphemeralCleanupError::InvalidTimestamp)?
+            < timestamp_millis(&computed).ok_or(EphemeralCleanupError::InvalidTimestamp)?
         {
             return Ok(EphemeralCleanupDecision::RequeueAt {
-                at: eligible,
+                at: computed,
                 expected_revision: observation.expected_revision,
             });
         }
@@ -784,6 +790,52 @@ mod ephemeral_cleanup_tests {
     }
 
     #[test]
+    fn mismatched_cleanup_eligibility_is_repaired_before_delete() {
+        let mut controller = EphemeralProcessCleanupController::default();
+        let observation = EphemeralProcessObservation::with_defaults(
+            key(),
+            EphemeralProcessPhase::Succeeded,
+            Some(timestamp("2026-08-01T00:00:00.000Z")),
+            false,
+            0,
+            false,
+            Some(timestamp("2026-08-01T00:00:00.000Z")),
+            ZoneRevision::new(6),
+        )
+        .unwrap();
+        assert_eq!(
+            controller
+                .reconcile(observation, &timestamp("2026-08-01T02:00:00.000Z"))
+                .unwrap(),
+            EphemeralCleanupDecision::UpdateStatus {
+                cleanup_eligible_at: timestamp("2026-08-01T01:00:00.000Z"),
+                incident_held: false,
+                expected_revision: ZoneRevision::new(6),
+            }
+        );
+
+        let valid = EphemeralProcessObservation::with_defaults(
+            key(),
+            EphemeralProcessPhase::Succeeded,
+            Some(timestamp("2026-08-01T00:00:00.000Z")),
+            false,
+            0,
+            false,
+            Some(timestamp("2026-08-01T01:00:00.000Z")),
+            ZoneRevision::new(7),
+        )
+        .unwrap();
+        assert_eq!(
+            controller
+                .reconcile(valid, &timestamp("2026-08-01T01:00:00.000Z"))
+                .unwrap(),
+            EphemeralCleanupDecision::Delete {
+                expected_revision: ZoneRevision::new(7),
+            }
+        );
+    }
+
+    #[test]
     fn incident_hold_finalizer_and_unknown_outcome_never_issue_delete() {
         let completed = Some(timestamp("2026-08-01T00:00:00.000Z"));
         let mut controller = EphemeralProcessCleanupController::default();
@@ -814,12 +866,13 @@ mod ephemeral_cleanup_tests {
             false,
             1,
             false,
-            Some(timestamp("2026-08-01T00:00:00.000Z")),
+            Some(timestamp("2026-08-02T00:00:00.000Z")),
             ZoneRevision::new(2),
         )
         .unwrap();
+        let mut finalizer_controller = EphemeralProcessCleanupController::default();
         assert!(matches!(
-            controller
+            finalizer_controller
                 .reconcile(finalizer, &timestamp("2026-08-01T02:00:00.000Z"))
                 .unwrap(),
             EphemeralCleanupDecision::Blocked {

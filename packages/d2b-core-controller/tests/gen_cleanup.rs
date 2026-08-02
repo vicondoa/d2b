@@ -89,8 +89,13 @@ fn removed_configuration_resource_is_deleted_asynchronously() {
     assert_eq!(second.state().pending_cleanup_count(), 1);
     assert!(second.effects().iter().any(|effect| matches!(
         effect,
-        d2b_core_controller::configuration::bundle_apply::BundleApplyEffect::DeleteResource { key: target, .. }
+        d2b_core_controller::configuration::bundle_apply::BundleApplyEffect::DeleteResource {
+            key: target,
+            deletion_requested_at,
+            ..
+        }
             if target == &key("device-a")
+                && deletion_requested_at == &now()
     )));
     assert!(!second.effects().iter().any(|effect| matches!(
         effect,
@@ -106,6 +111,47 @@ fn removed_configuration_resource_is_deleted_asynchronously() {
         .unwrap();
     assert_eq!(controller.state().phase(), GenerationPhase::Ready);
     assert_eq!(controller.state().pending_cleanup_count(), 0);
+}
+
+#[test]
+fn ordinary_activation_cancels_an_outstanding_delete_for_a_revived_device() {
+    let mut controller = ZoneConfigController::new(
+        ZoneId::parse("work").unwrap(),
+        RetainedGenerations::default_value(),
+    );
+    controller
+        .activate(BundleActivation::new(input_bundle('a', true)), &[], &now())
+        .unwrap();
+    controller.complete_intent(&key("device-a")).unwrap();
+    controller
+        .activate(
+            BundleActivation::new(input_bundle('b', false)),
+            &[stored_device()],
+            &now(),
+        )
+        .unwrap();
+    assert_eq!(controller.state().pending_cleanup_count(), 1);
+
+    let revived = controller
+        .activate(
+            BundleActivation::new(input_bundle('c', true)),
+            &[stored_device()],
+            &now(),
+        )
+        .unwrap();
+    assert_eq!(controller.state().pending_cleanup_count(), 0);
+    assert!(revived.effects().iter().any(|effect| matches!(
+        effect,
+        d2b_core_controller::configuration::bundle_apply::BundleApplyEffect::CancelDelete(target)
+            if target == &key("device-a")
+    )));
+    assert!(!revived.effects().iter().any(|effect| matches!(
+        effect,
+        d2b_core_controller::configuration::bundle_apply::BundleApplyEffect::DeleteResource {
+            key: target,
+            ..
+        } if target == &key("device-a")
+    )));
 }
 
 #[test]
