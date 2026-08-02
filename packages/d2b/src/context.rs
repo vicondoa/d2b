@@ -520,10 +520,10 @@ fn classify_transport_error(error: &io::Error) -> TransportError {
         io::ErrorKind::InvalidData => TransportError::InvalidResponse,
         _ => TransportError::Io,
     }
+}
 
-    fn socket_reachable(path: &Path) -> bool {
-        SeqpacketUnixSocket::connect(path).is_ok()
-    }
+fn socket_reachable(path: &Path) -> bool {
+    SeqpacketUnixSocket::connect(path).is_ok()
 }
 
 fn error_exit_code(class: &str) -> i32 {
