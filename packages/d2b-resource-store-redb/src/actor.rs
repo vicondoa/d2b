@@ -533,6 +533,7 @@ struct WriterActor {
 }
 
 impl WriterActor {
+    #[cfg(test)]
     fn new(
         database: Arc<Database>,
         receiver: mpsc::Receiver<WriterCommand>,

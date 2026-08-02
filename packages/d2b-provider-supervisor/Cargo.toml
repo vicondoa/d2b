@@ -13,6 +13,7 @@ d2b-contracts = { path = "../d2b-contracts", version = "0.0.0-bootstrap" }
 d2b-process = { path = "../d2b-process", version = "0.0.0-bootstrap" }
 d2b-process-conformance = { path = "../d2b-process-conformance", version = "0.0.0-bootstrap" }
 d2b-telemetry = { path = "../d2b-telemetry", version = "0.0.0-bootstrap" }
+serde_json.workspace = true
 rustix = { workspace = true, features = ["event"] }
 sha2 = { workspace = true }
 socket2 = "0.5"
