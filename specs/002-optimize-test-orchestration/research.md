@@ -22,10 +22,11 @@ represent directly.
   budget, and Make limits simultaneous heavy lanes so constrained budgets can
   linearize the graph. Cargo is not expected to acquire weighted Make tokens.
 - Recursive Make recipes use `+$(MAKE)` and preserve the inherited jobserver.
-  Cargo and nextest commands explicitly unset `MAKEFLAGS`, `MFLAGS`, and
-  `MAKELEVEL` and close numeric jobserver descriptors parsed from the saved
-  flags, so their explicit quotas cannot be overridden and no coordination
-  descriptor leaks into test processes.
+  Each Bash leaf immediately closes numeric jobserver descriptors parsed from
+  the saved flags before spawning any setup command, then Cargo and nextest
+  commands run without `MAKEFLAGS`, `MFLAGS`, or `MAKELEVEL`. Their explicit
+  quotas cannot be overridden and no coordination descriptor leaks into test
+  processes.
 
 **Alternatives considered**:
 
