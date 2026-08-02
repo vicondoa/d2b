@@ -42,6 +42,11 @@ let
     if cfg ? _artifactCatalogV3 && cfg._artifactCatalogV3 ? catalogDigest
     then cfg._artifactCatalogV3.catalogDigest
     else "sha256:${builtins.hashString "sha256" "d2b:v3:artifact-catalog\000{}"}";
+  catalogPath =
+    if cfg ? _artifactCatalogV3 && cfg._artifactCatalogV3 ? path
+    then cfg._artifactCatalogV3.path
+    else null;
+  catalogPathArg = if catalogPath == null then "" else "${catalogPath}";
 
   stripRuntime = value:
     if builtins.isAttrs value
@@ -133,21 +138,23 @@ let
       zoneJson = builtins.toJSON zoneName;
     in pkgs.runCommand "d2b-zone-${zoneName}-bundle.json"
       {
-        inherit resourcesJson providerDigestsJson zoneJson catalogDigest;
+        inherit resourcesJson providerDigestsJson zoneJson catalogDigest catalogPathArg;
         passAsFile = [ "resourcesJson" "providerDigestsJson" ];
         nativeBuildInputs = [ pkgs.python3 ];
       } ''
         set -euo pipefail
         python3 - "$resourcesJsonPath" "$providerDigestsJsonPath" "$zoneJson" \
-          "$catalogDigest" "$out" <<'PY'
+          "$catalogDigest" "$catalogPathArg" "$out" <<'PY'
         import hashlib
         import json
         import pathlib
         import sys
 
-        resources_path, digests_path, zone_json, catalog, output = sys.argv[1:]
+        resources_path, digests_path, zone_json, catalog, catalog_path, output = sys.argv[1:]
         resources = json.loads(pathlib.Path(resources_path).read_text())
         provider_digests = json.loads(pathlib.Path(digests_path).read_text())
+        if catalog_path:
+            catalog = json.loads(pathlib.Path(catalog_path).read_text())["catalogDigest"]
         resources_bytes = pathlib.Path(resources_path).read_bytes()
         content = hashlib.sha256(
             b"d2b:v3:resource-bundle\0" + resources_bytes
