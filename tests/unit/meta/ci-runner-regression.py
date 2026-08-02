@@ -1525,8 +1525,10 @@ set -euo pipefail
         self.assertIn('subreaper => sub { establish_child_subreaper() }', helper)
         self.assertRegex(
             helper,
-            r"(?s)subreaper.*?fork.*?could not create the Rust scheduler process",
+            r"(?s)handled_signal.*?subreaper.*?kill.*?handled_signal",
         )
+        pre_fork = helper.split("my $pid = $process_control->{fork}->();", 1)[0]
+        self.assertNotIn("$process_control->{subreaper}->();", pre_fork)
 
     def test_diagnostic_redaction_normalizes_ansi_before_matching(self) -> None:
         layer1_jobs = load_layer1_jobs()

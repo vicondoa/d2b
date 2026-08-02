@@ -621,10 +621,6 @@ sub run_manifest_lifecycle {
     $SIG{INT} = sub { $handled_signal ||= 2 };
     $SIG{TERM} = sub { $handled_signal ||= 15 };
 
-    # This process must adopt orphaned scheduler descendants before the
-    # scheduler is forked. A failed prctl is fatal; continuing would make the
-    # advertised descendant-reap contract false.
-    $process_control->{subreaper}->();
     my $pid = $process_control->{fork}->();
     fatal("could not create the Rust scheduler process") unless defined($pid);
     if ($pid == 0) {
@@ -637,6 +633,10 @@ sub run_manifest_lifecycle {
     while (1) {
         if ($handled_signal && !$forwarded) {
             $forwarded = 1;
+            # Become the nearest reaper only for shutdown. Setting this before
+            # the scheduler starts would change orphan adoption semantics
+            # inside the test processes themselves.
+            $process_control->{subreaper}->();
             $process_control->{kill}->($handled_signal, -$pid);
             my $deadline = $clock->() + SHUTDOWN_GRACE_SECONDS;
             while ($clock->() < $deadline) {
