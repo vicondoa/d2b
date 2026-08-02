@@ -1559,6 +1559,7 @@ dependencies = [
 name = "d2b-telemetry"
 version = "0.0.0-bootstrap"
 dependencies = [
+ "d2b-contracts",
  "serde",
  "serde_json",
  "sha2",
