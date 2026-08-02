@@ -860,9 +860,13 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
         "execution-manifest-policy: fixture target is not isolated under the Rust test cache"
     );
     assert!(
-        api_driver.contains("checker_target=\"$target_root/checker\"")
+        api_driver.contains("public_target=\"$target_root/public-census\"")
+            && api_driver.contains("private_target=\"$target_root/private-census\"")
+            && api_driver.contains("checker_target=\"$target_root/checker\"")
+            && api_driver.contains("CARGO_BUILD_JOBS=\"$public_jobs\"")
+            && api_driver.contains("CARGO_BUILD_JOBS=\"$private_jobs\"")
             && api_driver.contains("CARGO_TARGET_DIR=\"$checker_target\" cargo run"),
-        "execution-manifest-policy: API checker is not isolated under the Rust test cache"
+        "execution-manifest-policy: API census targets or split quotas drifted"
     );
     assert!(
         makefile.contains("rust-broker: rust-inventory-and-stub"),

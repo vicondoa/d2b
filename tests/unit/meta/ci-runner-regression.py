@@ -734,8 +734,15 @@ set -euo pipefail
         api_driver = (ROOT / "tests" / "tools" / "api-surface-json.sh").read_text(
             encoding="utf-8"
         )
+        self.assertIn('public_target="$target_root/public-census"', api_driver)
+        self.assertIn('private_target="$target_root/private-census"', api_driver)
         self.assertIn('checker_target="$target_root/checker"', api_driver)
         self.assertIn('CARGO_TARGET_DIR="$checker_target" cargo run', api_driver)
+        self.assertIn('CARGO_BUILD_JOBS="$public_jobs"', api_driver)
+        self.assertIn('CARGO_BUILD_JOBS="$private_jobs"', api_driver)
+        self.assertIn("run_public_census &", api_driver)
+        self.assertIn("run_private_census &", api_driver)
+        self.assertIn('if [ "$api_jobs" -ge 2 ]', api_driver)
 
     def test_rust_fixture_leaf_sets_internal_opt_in_but_public_target_stays_closed(self) -> None:
         makefile = MAKEFILE.read_text(encoding="utf-8")

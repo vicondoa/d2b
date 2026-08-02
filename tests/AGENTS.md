@@ -195,8 +195,11 @@ surfaces. Fixture and CLI leaves use an isolated stable target below
 `.scratch/rust-test-cache`, so they can overlap the main workspace without
 sharing mutable Cargo state; `D2B_SKIP_FIXTURE_BUILD=1` omits them for the
 Layer-1 graph. The focused `make test-rust-main` retains the same conditional
-fixture behavior. Direct `tests/test-rust.sh` calls require exactly one leaf
-mode and must not be used as an aggregate scheduler. The broker passes remain
+fixture behavior. The public and private rustdoc censuses use separate stable
+targets and overlap only when the API leaf has at least two admitted jobs,
+with split Cargo quotas bounded by that leaf's budget. Direct
+`tests/test-rust.sh` calls require exactly one leaf mode and must not be used
+as an aggregate scheduler. The broker passes remain
 serial, and the main workspace, schema, and inventory leaves retain their
 dependency edges.
 

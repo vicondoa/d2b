@@ -181,10 +181,12 @@ explicit leaves with `--keep-going` and `--output-sync=target`, so independent
 leaves continue after a failure and each target's output remains grouped. The
 broker feature passes stay serial. Fixture/CLI work and the API snapshot
 checker use isolated stable targets below `.scratch/rust-test-cache`, so they
-can overlap the main workspace without sharing mutable Cargo state. Direct calls to
-`tests/test-rust.sh` require one explicit leaf mode; callers that need the
-complete gate must use `make test-rust`. The focused `make test-rust-main`
-also retains conditional fixture/CLI coverage.
+can overlap the main workspace without sharing mutable Cargo state. The public
+and private rustdoc censuses overlap only when the API leaf receives at least
+two jobs, and their split Cargo quotas stay within that leaf's budget. Direct
+calls to `tests/test-rust.sh` require one explicit leaf mode; callers that need
+the complete gate must use `make test-rust`. The focused
+`make test-rust-main` also retains conditional fixture/CLI coverage.
 
 Use `D2B_RUST_BUDGET=<positive-integer>` to request a Rust budget. It is an
 upper bound, not a host-capacity bypass. The default is the smaller of logical

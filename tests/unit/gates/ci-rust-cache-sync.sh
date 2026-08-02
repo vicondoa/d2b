@@ -102,8 +102,19 @@ if ! grep -qF 'fixture_target_dir="$ROOT/.scratch/rust-test-cache/fixture-contra
   log "FAIL: fixture/CLI target does not use its isolated cached Cargo target"
   rc=1
 fi
-if ! grep -qF 'checker_target="$target_root/checker"' "$ROOT/tests/tools/api-surface-json.sh"; then
-  log "FAIL: API snapshot checker does not use its isolated cached Cargo target"
+api_script="$ROOT/tests/tools/api-surface-json.sh"
+for marker in \
+  'public_target="$target_root/public-census"' \
+  'private_target="$target_root/private-census"' \
+  'checker_target="$target_root/checker"'; do
+  if ! grep -qF "$marker" "$api_script"; then
+    log "FAIL: API surface target marker '$marker' is missing"
+    rc=1
+  fi
+done
+if ! grep -qF 'CARGO_BUILD_JOBS="$public_jobs"' "$api_script" \
+  || ! grep -qF 'CARGO_BUILD_JOBS="$private_jobs"' "$api_script"; then
+  log "FAIL: parallel API rustdoc passes do not carry split Cargo quotas"
   rc=1
 fi
 if ! grep -qF 'D2B_SKIP_FIXTURE_BUILD' "$makefile"; then
