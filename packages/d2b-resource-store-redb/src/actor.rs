@@ -302,19 +302,20 @@ impl WriterHandle {
             BTreeMap::from([("operation".to_owned(), "write".to_owned())]),
             self.signals.writer_queue_depth.load(Ordering::Relaxed) as f64,
         );
-        let mut audit_intents = match self.audit_intents.lock() {
-            Ok(intents) => intents,
-            Err(_) => {
-                self.signals
-                    .writer_queue_depth
-                    .fetch_sub(1, Ordering::Relaxed);
-                return Err(crate::transaction::integrity(
-                    "audit-intent-registry-poisoned",
-                ));
-            }
-        };
-        audit_intents.insert(sequence, intent);
-        drop(audit_intents);
+        {
+            let mut audit_intents = match self.audit_intents.lock() {
+                Ok(intents) => intents,
+                Err(_) => {
+                    self.signals
+                        .writer_queue_depth
+                        .fetch_sub(1, Ordering::Relaxed);
+                    return Err(crate::transaction::integrity(
+                        "audit-intent-registry-poisoned",
+                    ));
+                }
+            };
+            audit_intents.insert(sequence, intent);
+        }
         if let Err(error) = sender.try_send(WriterCommand::Commit(Box::new(WriteRequest {
             sequence,
             principal,
@@ -829,7 +830,7 @@ impl WriterActor {
         }
     }
 
-    fn enqueue(&mut self, mut request: WriteRequest) {
+    fn enqueue(&mut self, request: WriteRequest) {
         self.sequence = self.sequence.max(request.sequence.wrapping_add(1));
         self.scheduler.push(request);
     }
