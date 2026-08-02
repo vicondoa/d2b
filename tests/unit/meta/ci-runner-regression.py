@@ -1722,7 +1722,7 @@ esac
             1,
         )[1][:600]
         self.assertIn(
-            'fatal("could not drain adopted scheduler descendants")',
+            'fatal("could not drain adopted scheduler descendants (errno $errno)")',
             blocking_wait,
         )
         self.assertGreaterEqual(helper.count("$! == EINTR"), 4)
