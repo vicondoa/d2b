@@ -19,6 +19,7 @@ impl !core::panic::unwind_safe::UnwindSafe for d2b_bus::router::ZoneRegistrar
 impl !core::panic::unwind_safe::UnwindSafe for d2b_bus::session::zone_link::ZoneLinkSession
 impl !core::panic::unwind_safe::UnwindSafe for d2b_bus::streams::IncomingStream
 impl !core::panic::unwind_safe::UnwindSafe for d2b_bus::transport::unix::ZonePeerIdentity
+impl core::clone::Clone for d2b_bus::audit::BusErrorKind
 impl core::clone::Clone for d2b_bus::authorization::AuthorizationError
 impl core::clone::Clone for d2b_bus::authorization::AuthorizationErrorClass
 impl core::clone::Clone for d2b_bus::operations::Cancellation
@@ -68,6 +69,7 @@ impl core::clone::Clone for d2b_bus::transport::credit::CreditError
 impl core::clone::Clone for d2b_bus::transport::credit::RouteClass
 impl core::clone::Clone for d2b_bus::transport::unix::AllocatedSocketKind
 impl core::clone::Clone for d2b_bus::transport::unix::TransportAdmissionError
+impl core::clone::Clone for d2b_bus::wire::ZoneBoundPolicyIdentity
 impl core::clone::Clone for d2b_bus::zone_route::AdmittedZoneRoute
 impl core::clone::Clone for d2b_bus::zone_route::CancelForward
 impl core::clone::Clone for d2b_bus::zone_route::ChildWatchCursor
@@ -84,6 +86,7 @@ impl core::clone::Clone for d2b_bus::zone_route::ZoneLinkIdempotencyKey
 impl core::clone::Clone for d2b_bus::zone_route::ZoneRouteError
 impl core::clone::Clone for d2b_bus::zone_route::ZoneRouteOutcome
 impl core::clone::Clone for d2b_bus::zone_route::ZoneRouteQuery
+impl core::cmp::Eq for d2b_bus::audit::BusErrorKind
 impl core::cmp::Eq for d2b_bus::authorization::AuthorizationError
 impl core::cmp::Eq for d2b_bus::authorization::AuthorizationErrorClass
 impl core::cmp::Eq for d2b_bus::operations::OperationError
@@ -132,6 +135,7 @@ impl core::cmp::Eq for d2b_bus::transport::credit::CreditError
 impl core::cmp::Eq for d2b_bus::transport::credit::RouteClass
 impl core::cmp::Eq for d2b_bus::transport::unix::AllocatedSocketKind
 impl core::cmp::Eq for d2b_bus::transport::unix::TransportAdmissionError
+impl core::cmp::Eq for d2b_bus::wire::ZoneBoundPolicyIdentity
 impl core::cmp::Eq for d2b_bus::zone_route::AdmittedZoneRoute
 impl core::cmp::Eq for d2b_bus::zone_route::CancelForward
 impl core::cmp::Eq for d2b_bus::zone_route::ChildWatchCursor
@@ -165,6 +169,7 @@ impl core::cmp::Ord for d2b_bus::zone_route::PrincipalDigest
 impl core::cmp::Ord for d2b_bus::zone_route::RequestFingerprint
 impl core::cmp::Ord for d2b_bus::zone_route::ZoneLinkIdempotencyKey
 impl core::cmp::Ord for d2b_bus::zone_route::ZoneRouteError
+impl core::cmp::PartialEq for d2b_bus::audit::BusErrorKind
 impl core::cmp::PartialEq for d2b_bus::authorization::AuthorizationError
 impl core::cmp::PartialEq for d2b_bus::authorization::AuthorizationErrorClass
 impl core::cmp::PartialEq for d2b_bus::operations::OperationError
@@ -213,6 +218,7 @@ impl core::cmp::PartialEq for d2b_bus::transport::credit::CreditError
 impl core::cmp::PartialEq for d2b_bus::transport::credit::RouteClass
 impl core::cmp::PartialEq for d2b_bus::transport::unix::AllocatedSocketKind
 impl core::cmp::PartialEq for d2b_bus::transport::unix::TransportAdmissionError
+impl core::cmp::PartialEq for d2b_bus::wire::ZoneBoundPolicyIdentity
 impl core::cmp::PartialEq for d2b_bus::zone_route::AdmittedZoneRoute
 impl core::cmp::PartialEq for d2b_bus::zone_route::CancelForward
 impl core::cmp::PartialEq for d2b_bus::zone_route::ChildWatchCursor
@@ -271,6 +277,7 @@ impl core::error::Error for d2b_bus::session::zone_link::ZoneLinkSessionError
 impl core::error::Error for d2b_bus::streams::StreamError
 impl core::error::Error for d2b_bus::transport::credit::CreditError
 impl core::error::Error for d2b_bus::transport::unix::TransportAdmissionError
+impl core::fmt::Debug for d2b_bus::audit::BusErrorKind
 impl core::fmt::Debug for d2b_bus::authorization::AuthorizationError
 impl core::fmt::Debug for d2b_bus::authorization::AuthorizationErrorClass
 impl core::fmt::Debug for d2b_bus::authorization::BusAuthorizer
@@ -337,6 +344,7 @@ impl core::fmt::Debug for d2b_bus::transport::unix::AllocatedSocketKind
 impl core::fmt::Debug for d2b_bus::transport::unix::AllocatedTransportFd
 impl core::fmt::Debug for d2b_bus::transport::unix::TransportAdmissionError
 impl core::fmt::Debug for d2b_bus::transport::unix::ZonePeerIdentity
+impl core::fmt::Debug for d2b_bus::wire::ZoneBoundPolicyIdentity
 impl core::fmt::Debug for d2b_bus::zone_route::AdmittedZoneRoute
 impl core::fmt::Debug for d2b_bus::zone_route::CancelForward
 impl core::fmt::Debug for d2b_bus::zone_route::ChildWatchCursor
@@ -381,6 +389,7 @@ impl core::hash::Hash for d2b_bus::zone_route::PrincipalDigest
 impl core::hash::Hash for d2b_bus::zone_route::RequestFingerprint
 impl core::hash::Hash for d2b_bus::zone_route::ZoneLinkIdempotencyKey
 impl core::hash::Hash for d2b_bus::zone_route::ZoneRouteError
+impl core::marker::Copy for d2b_bus::audit::BusErrorKind
 impl core::marker::Copy for d2b_bus::authorization::AuthorizationError
 impl core::marker::Copy for d2b_bus::authorization::AuthorizationErrorClass
 impl core::marker::Copy for d2b_bus::operations::OperationError
@@ -415,6 +424,7 @@ impl core::marker::Copy for d2b_bus::transport::credit::RouteClass
 impl core::marker::Copy for d2b_bus::transport::unix::AllocatedSocketKind
 impl core::marker::Copy for d2b_bus::transport::unix::TransportAdmissionError
 impl core::marker::Copy for d2b_bus::zone_route::ZoneRouteError
+impl core::marker::Freeze for d2b_bus::audit::BusErrorKind
 impl core::marker::Freeze for d2b_bus::authorization::AuthorizationError
 impl core::marker::Freeze for d2b_bus::authorization::AuthorizationErrorClass
 impl core::marker::Freeze for d2b_bus::operations::Cancellation
@@ -477,6 +487,7 @@ impl core::marker::Freeze for d2b_bus::transport::unix::AllocatedSocketKind
 impl core::marker::Freeze for d2b_bus::transport::unix::AllocatedTransportFd
 impl core::marker::Freeze for d2b_bus::transport::unix::TransportAdmissionError
 impl core::marker::Freeze for d2b_bus::transport::unix::ZonePeerIdentity
+impl core::marker::Freeze for d2b_bus::wire::ZoneBoundPolicyIdentity
 impl core::marker::Freeze for d2b_bus::zone_route::AdmittedZoneRoute
 impl core::marker::Freeze for d2b_bus::zone_route::CancelForward
 impl core::marker::Freeze for d2b_bus::zone_route::ChildWatchCursor
@@ -494,6 +505,7 @@ impl core::marker::Freeze for d2b_bus::zone_route::ZoneLinkIdempotencyKey
 impl core::marker::Freeze for d2b_bus::zone_route::ZoneRouteError
 impl core::marker::Freeze for d2b_bus::zone_route::ZoneRouteOutcome
 impl core::marker::Freeze for d2b_bus::zone_route::ZoneRouteQuery
+impl core::marker::Send for d2b_bus::audit::BusErrorKind
 impl core::marker::Send for d2b_bus::authorization::AuthorizationError
 impl core::marker::Send for d2b_bus::authorization::AuthorizationErrorClass
 impl core::marker::Send for d2b_bus::authorization::BusAuthorizer
@@ -559,6 +571,7 @@ impl core::marker::Send for d2b_bus::transport::unix::AllocatedSocketKind
 impl core::marker::Send for d2b_bus::transport::unix::AllocatedTransportFd
 impl core::marker::Send for d2b_bus::transport::unix::TransportAdmissionError
 impl core::marker::Send for d2b_bus::transport::unix::ZonePeerIdentity
+impl core::marker::Send for d2b_bus::wire::ZoneBoundPolicyIdentity
 impl core::marker::Send for d2b_bus::zone_route::AdmittedZoneRoute
 impl core::marker::Send for d2b_bus::zone_route::CancelForward
 impl core::marker::Send for d2b_bus::zone_route::ChildWatchCursor
@@ -576,6 +589,7 @@ impl core::marker::Send for d2b_bus::zone_route::ZoneLinkIdempotencyKey
 impl core::marker::Send for d2b_bus::zone_route::ZoneRouteError
 impl core::marker::Send for d2b_bus::zone_route::ZoneRouteOutcome
 impl core::marker::Send for d2b_bus::zone_route::ZoneRouteQuery
+impl core::marker::StructuralPartialEq for d2b_bus::audit::BusErrorKind
 impl core::marker::StructuralPartialEq for d2b_bus::authorization::AuthorizationError
 impl core::marker::StructuralPartialEq for d2b_bus::authorization::AuthorizationErrorClass
 impl core::marker::StructuralPartialEq for d2b_bus::operations::OperationError
@@ -624,6 +638,7 @@ impl core::marker::StructuralPartialEq for d2b_bus::transport::credit::CreditErr
 impl core::marker::StructuralPartialEq for d2b_bus::transport::credit::RouteClass
 impl core::marker::StructuralPartialEq for d2b_bus::transport::unix::AllocatedSocketKind
 impl core::marker::StructuralPartialEq for d2b_bus::transport::unix::TransportAdmissionError
+impl core::marker::StructuralPartialEq for d2b_bus::wire::ZoneBoundPolicyIdentity
 impl core::marker::StructuralPartialEq for d2b_bus::zone_route::AdmittedZoneRoute
 impl core::marker::StructuralPartialEq for d2b_bus::zone_route::CancelForward
 impl core::marker::StructuralPartialEq for d2b_bus::zone_route::ChildWatchCursor
@@ -640,6 +655,7 @@ impl core::marker::StructuralPartialEq for d2b_bus::zone_route::ZoneLinkIdempote
 impl core::marker::StructuralPartialEq for d2b_bus::zone_route::ZoneRouteError
 impl core::marker::StructuralPartialEq for d2b_bus::zone_route::ZoneRouteOutcome
 impl core::marker::StructuralPartialEq for d2b_bus::zone_route::ZoneRouteQuery
+impl core::marker::Sync for d2b_bus::audit::BusErrorKind
 impl core::marker::Sync for d2b_bus::authorization::AuthorizationError
 impl core::marker::Sync for d2b_bus::authorization::AuthorizationErrorClass
 impl core::marker::Sync for d2b_bus::authorization::BusAuthorizer
@@ -705,6 +721,7 @@ impl core::marker::Sync for d2b_bus::transport::unix::AllocatedSocketKind
 impl core::marker::Sync for d2b_bus::transport::unix::AllocatedTransportFd
 impl core::marker::Sync for d2b_bus::transport::unix::TransportAdmissionError
 impl core::marker::Sync for d2b_bus::transport::unix::ZonePeerIdentity
+impl core::marker::Sync for d2b_bus::wire::ZoneBoundPolicyIdentity
 impl core::marker::Sync for d2b_bus::zone_route::AdmittedZoneRoute
 impl core::marker::Sync for d2b_bus::zone_route::CancelForward
 impl core::marker::Sync for d2b_bus::zone_route::ChildWatchCursor
@@ -722,6 +739,7 @@ impl core::marker::Sync for d2b_bus::zone_route::ZoneLinkIdempotencyKey
 impl core::marker::Sync for d2b_bus::zone_route::ZoneRouteError
 impl core::marker::Sync for d2b_bus::zone_route::ZoneRouteOutcome
 impl core::marker::Sync for d2b_bus::zone_route::ZoneRouteQuery
+impl core::marker::Unpin for d2b_bus::audit::BusErrorKind
 impl core::marker::Unpin for d2b_bus::authorization::AuthorizationError
 impl core::marker::Unpin for d2b_bus::authorization::AuthorizationErrorClass
 impl core::marker::Unpin for d2b_bus::authorization::BusAuthorizer
@@ -787,6 +805,7 @@ impl core::marker::Unpin for d2b_bus::transport::unix::AllocatedSocketKind
 impl core::marker::Unpin for d2b_bus::transport::unix::AllocatedTransportFd
 impl core::marker::Unpin for d2b_bus::transport::unix::TransportAdmissionError
 impl core::marker::Unpin for d2b_bus::transport::unix::ZonePeerIdentity
+impl core::marker::Unpin for d2b_bus::wire::ZoneBoundPolicyIdentity
 impl core::marker::Unpin for d2b_bus::zone_route::AdmittedZoneRoute
 impl core::marker::Unpin for d2b_bus::zone_route::CancelForward
 impl core::marker::Unpin for d2b_bus::zone_route::ChildWatchCursor
@@ -804,6 +823,7 @@ impl core::marker::Unpin for d2b_bus::zone_route::ZoneLinkIdempotencyKey
 impl core::marker::Unpin for d2b_bus::zone_route::ZoneRouteError
 impl core::marker::Unpin for d2b_bus::zone_route::ZoneRouteOutcome
 impl core::marker::Unpin for d2b_bus::zone_route::ZoneRouteQuery
+impl core::marker::UnsafeUnpin for d2b_bus::audit::BusErrorKind
 impl core::marker::UnsafeUnpin for d2b_bus::authorization::AuthorizationError
 impl core::marker::UnsafeUnpin for d2b_bus::authorization::AuthorizationErrorClass
 impl core::marker::UnsafeUnpin for d2b_bus::authorization::BusAuthorizer
@@ -869,6 +889,7 @@ impl core::marker::UnsafeUnpin for d2b_bus::transport::unix::AllocatedSocketKind
 impl core::marker::UnsafeUnpin for d2b_bus::transport::unix::AllocatedTransportFd
 impl core::marker::UnsafeUnpin for d2b_bus::transport::unix::TransportAdmissionError
 impl core::marker::UnsafeUnpin for d2b_bus::transport::unix::ZonePeerIdentity
+impl core::marker::UnsafeUnpin for d2b_bus::wire::ZoneBoundPolicyIdentity
 impl core::marker::UnsafeUnpin for d2b_bus::zone_route::AdmittedZoneRoute
 impl core::marker::UnsafeUnpin for d2b_bus::zone_route::CancelForward
 impl core::marker::UnsafeUnpin for d2b_bus::zone_route::ChildWatchCursor
@@ -889,6 +910,7 @@ impl core::marker::UnsafeUnpin for d2b_bus::zone_route::ZoneRouteQuery
 impl core::ops::drop::Drop for d2b_bus::router::BusIngress
 impl core::ops::drop::Drop for d2b_bus::router::BusStream
 impl core::ops::drop::Drop for d2b_bus::streams::IncomingStream
+impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::audit::BusErrorKind
 impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::authorization::AuthorizationError
 impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::authorization::AuthorizationErrorClass
 impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::authorization::BusAuthorizer
@@ -945,6 +967,7 @@ impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::transport::credit::Rou
 impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::transport::unix::AllocatedSocketKind
 impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::transport::unix::AllocatedTransportFd
 impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::transport::unix::TransportAdmissionError
+impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::wire::ZoneBoundPolicyIdentity
 impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::zone_route::AdmittedZoneRoute
 impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::zone_route::CancelForward
 impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::zone_route::ChildWatchCursor
@@ -962,6 +985,7 @@ impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::zone_route::ZoneLinkId
 impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::zone_route::ZoneRouteError
 impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::zone_route::ZoneRouteOutcome
 impl core::panic::unwind_safe::RefUnwindSafe for d2b_bus::zone_route::ZoneRouteQuery
+impl core::panic::unwind_safe::UnwindSafe for d2b_bus::audit::BusErrorKind
 impl core::panic::unwind_safe::UnwindSafe for d2b_bus::authorization::AuthorizationError
 impl core::panic::unwind_safe::UnwindSafe for d2b_bus::authorization::AuthorizationErrorClass
 impl core::panic::unwind_safe::UnwindSafe for d2b_bus::authorization::BusAuthorizer
@@ -1018,6 +1042,7 @@ impl core::panic::unwind_safe::UnwindSafe for d2b_bus::transport::credit::RouteC
 impl core::panic::unwind_safe::UnwindSafe for d2b_bus::transport::unix::AllocatedSocketKind
 impl core::panic::unwind_safe::UnwindSafe for d2b_bus::transport::unix::AllocatedTransportFd
 impl core::panic::unwind_safe::UnwindSafe for d2b_bus::transport::unix::TransportAdmissionError
+impl core::panic::unwind_safe::UnwindSafe for d2b_bus::wire::ZoneBoundPolicyIdentity
 impl core::panic::unwind_safe::UnwindSafe for d2b_bus::zone_route::AdmittedZoneRoute
 impl core::panic::unwind_safe::UnwindSafe for d2b_bus::zone_route::CancelForward
 impl core::panic::unwind_safe::UnwindSafe for d2b_bus::zone_route::ChildWatchCursor
@@ -1035,6 +1060,7 @@ impl core::panic::unwind_safe::UnwindSafe for d2b_bus::zone_route::ZoneLinkIdemp
 impl core::panic::unwind_safe::UnwindSafe for d2b_bus::zone_route::ZoneRouteError
 impl core::panic::unwind_safe::UnwindSafe for d2b_bus::zone_route::ZoneRouteOutcome
 impl core::panic::unwind_safe::UnwindSafe for d2b_bus::zone_route::ZoneRouteQuery
+impl d2b_bus::audit::BusErrorKind
 impl d2b_bus::authorization::AuthorizationError
 impl d2b_bus::authorization::AuthorizationErrorClass
 impl d2b_bus::authorization::BusAuthorizer
@@ -1083,6 +1109,7 @@ impl d2b_bus::transport::credit::AttachmentCreditPlan
 impl d2b_bus::transport::credit::RouteClass
 impl d2b_bus::transport::unix::AllocatedSocketKind
 impl d2b_bus::transport::unix::AllocatedTransportFd
+impl d2b_bus::wire::ZoneBoundPolicyIdentity
 impl d2b_bus::zone_route::AdmittedZoneRoute
 impl d2b_bus::zone_route::CancelForward
 impl d2b_bus::zone_route::ChildWatchCursor
@@ -1112,6 +1139,7 @@ impl<O> core::marker::Unpin for d2b_bus::relay::RelayHandler<O> where O: core::m
 impl<O> core::marker::UnsafeUnpin for d2b_bus::relay::RelayHandler<O> where O: core::marker::UnsafeUnpin
 impl<O> core::panic::unwind_safe::RefUnwindSafe for d2b_bus::relay::RelayHandler<O> where O: core::panic::unwind_safe::RefUnwindSafe
 impl<O> core::panic::unwind_safe::UnwindSafe for d2b_bus::relay::RelayHandler<O> where O: core::panic::unwind_safe::UnwindSafe
+impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::audit::BusErrorKind where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::authorization::AuthorizationError where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::authorization::AuthorizationErrorClass where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::operations::OperationError where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
@@ -1160,6 +1188,7 @@ impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::transport::credit::C
 impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::transport::credit::RouteClass where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::transport::unix::AllocatedSocketKind where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::transport::unix::TransportAdmissionError where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::wire::ZoneBoundPolicyIdentity where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::zone_route::AdmittedZoneRoute where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::zone_route::CancelForward where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::zone_route::ChildWatchCursor where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
@@ -1176,6 +1205,7 @@ impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::zone_route::ZoneLink
 impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::zone_route::ZoneRouteError where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::zone_route::ZoneRouteOutcome where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
 impl<Q, K> indexmap::equivalent::Equivalent<K> for d2b_bus::zone_route::ZoneRouteQuery where Q: core::cmp::Eq + ?core::marker::Sized, K: core::borrow::Borrow<Q> + ?core::marker::Sized
+impl<T, U> core::convert::Into<U> for d2b_bus::audit::BusErrorKind where U: core::convert::From<T>
 impl<T, U> core::convert::Into<U> for d2b_bus::authorization::AuthorizationError where U: core::convert::From<T>
 impl<T, U> core::convert::Into<U> for d2b_bus::authorization::AuthorizationErrorClass where U: core::convert::From<T>
 impl<T, U> core::convert::Into<U> for d2b_bus::authorization::BusAuthorizer where U: core::convert::From<T>
@@ -1243,6 +1273,7 @@ impl<T, U> core::convert::Into<U> for d2b_bus::transport::unix::AllocatedSocketK
 impl<T, U> core::convert::Into<U> for d2b_bus::transport::unix::AllocatedTransportFd where U: core::convert::From<T>
 impl<T, U> core::convert::Into<U> for d2b_bus::transport::unix::TransportAdmissionError where U: core::convert::From<T>
 impl<T, U> core::convert::Into<U> for d2b_bus::transport::unix::ZonePeerIdentity where U: core::convert::From<T>
+impl<T, U> core::convert::Into<U> for d2b_bus::wire::ZoneBoundPolicyIdentity where U: core::convert::From<T>
 impl<T, U> core::convert::Into<U> for d2b_bus::zone_route::AdmittedZoneRoute where U: core::convert::From<T>
 impl<T, U> core::convert::Into<U> for d2b_bus::zone_route::CancelForward where U: core::convert::From<T>
 impl<T, U> core::convert::Into<U> for d2b_bus::zone_route::ChildWatchCursor where U: core::convert::From<T>
@@ -1260,6 +1291,7 @@ impl<T, U> core::convert::Into<U> for d2b_bus::zone_route::ZoneLinkIdempotencyKe
 impl<T, U> core::convert::Into<U> for d2b_bus::zone_route::ZoneRouteError where U: core::convert::From<T>
 impl<T, U> core::convert::Into<U> for d2b_bus::zone_route::ZoneRouteOutcome where U: core::convert::From<T>
 impl<T, U> core::convert::Into<U> for d2b_bus::zone_route::ZoneRouteQuery where U: core::convert::From<T>
+impl<T, U> core::convert::TryFrom<U> for d2b_bus::audit::BusErrorKind where U: core::convert::Into<T>
 impl<T, U> core::convert::TryFrom<U> for d2b_bus::authorization::AuthorizationError where U: core::convert::Into<T>
 impl<T, U> core::convert::TryFrom<U> for d2b_bus::authorization::AuthorizationErrorClass where U: core::convert::Into<T>
 impl<T, U> core::convert::TryFrom<U> for d2b_bus::authorization::BusAuthorizer where U: core::convert::Into<T>
@@ -1327,6 +1359,7 @@ impl<T, U> core::convert::TryFrom<U> for d2b_bus::transport::unix::AllocatedSock
 impl<T, U> core::convert::TryFrom<U> for d2b_bus::transport::unix::AllocatedTransportFd where U: core::convert::Into<T>
 impl<T, U> core::convert::TryFrom<U> for d2b_bus::transport::unix::TransportAdmissionError where U: core::convert::Into<T>
 impl<T, U> core::convert::TryFrom<U> for d2b_bus::transport::unix::ZonePeerIdentity where U: core::convert::Into<T>
+impl<T, U> core::convert::TryFrom<U> for d2b_bus::wire::ZoneBoundPolicyIdentity where U: core::convert::Into<T>
 impl<T, U> core::convert::TryFrom<U> for d2b_bus::zone_route::AdmittedZoneRoute where U: core::convert::Into<T>
 impl<T, U> core::convert::TryFrom<U> for d2b_bus::zone_route::CancelForward where U: core::convert::Into<T>
 impl<T, U> core::convert::TryFrom<U> for d2b_bus::zone_route::ChildWatchCursor where U: core::convert::Into<T>
@@ -1344,6 +1377,7 @@ impl<T, U> core::convert::TryFrom<U> for d2b_bus::zone_route::ZoneLinkIdempotenc
 impl<T, U> core::convert::TryFrom<U> for d2b_bus::zone_route::ZoneRouteError where U: core::convert::Into<T>
 impl<T, U> core::convert::TryFrom<U> for d2b_bus::zone_route::ZoneRouteOutcome where U: core::convert::Into<T>
 impl<T, U> core::convert::TryFrom<U> for d2b_bus::zone_route::ZoneRouteQuery where U: core::convert::Into<T>
+impl<T, U> core::convert::TryInto<U> for d2b_bus::audit::BusErrorKind where U: core::convert::TryFrom<T>
 impl<T, U> core::convert::TryInto<U> for d2b_bus::authorization::AuthorizationError where U: core::convert::TryFrom<T>
 impl<T, U> core::convert::TryInto<U> for d2b_bus::authorization::AuthorizationErrorClass where U: core::convert::TryFrom<T>
 impl<T, U> core::convert::TryInto<U> for d2b_bus::authorization::BusAuthorizer where U: core::convert::TryFrom<T>
@@ -1411,6 +1445,7 @@ impl<T, U> core::convert::TryInto<U> for d2b_bus::transport::unix::AllocatedSock
 impl<T, U> core::convert::TryInto<U> for d2b_bus::transport::unix::AllocatedTransportFd where U: core::convert::TryFrom<T>
 impl<T, U> core::convert::TryInto<U> for d2b_bus::transport::unix::TransportAdmissionError where U: core::convert::TryFrom<T>
 impl<T, U> core::convert::TryInto<U> for d2b_bus::transport::unix::ZonePeerIdentity where U: core::convert::TryFrom<T>
+impl<T, U> core::convert::TryInto<U> for d2b_bus::wire::ZoneBoundPolicyIdentity where U: core::convert::TryFrom<T>
 impl<T, U> core::convert::TryInto<U> for d2b_bus::zone_route::AdmittedZoneRoute where U: core::convert::TryFrom<T>
 impl<T, U> core::convert::TryInto<U> for d2b_bus::zone_route::CancelForward where U: core::convert::TryFrom<T>
 impl<T, U> core::convert::TryInto<U> for d2b_bus::zone_route::ChildWatchCursor where U: core::convert::TryFrom<T>
@@ -1428,6 +1463,7 @@ impl<T, U> core::convert::TryInto<U> for d2b_bus::zone_route::ZoneLinkIdempotenc
 impl<T, U> core::convert::TryInto<U> for d2b_bus::zone_route::ZoneRouteError where U: core::convert::TryFrom<T>
 impl<T, U> core::convert::TryInto<U> for d2b_bus::zone_route::ZoneRouteOutcome where U: core::convert::TryFrom<T>
 impl<T, U> core::convert::TryInto<U> for d2b_bus::zone_route::ZoneRouteQuery where U: core::convert::TryFrom<T>
+impl<T> alloc::borrow::ToOwned for d2b_bus::audit::BusErrorKind where T: core::clone::Clone
 impl<T> alloc::borrow::ToOwned for d2b_bus::authorization::AuthorizationError where T: core::clone::Clone
 impl<T> alloc::borrow::ToOwned for d2b_bus::authorization::AuthorizationErrorClass where T: core::clone::Clone
 impl<T> alloc::borrow::ToOwned for d2b_bus::operations::Cancellation where T: core::clone::Clone
@@ -1477,6 +1513,7 @@ impl<T> alloc::borrow::ToOwned for d2b_bus::transport::credit::CreditError where
 impl<T> alloc::borrow::ToOwned for d2b_bus::transport::credit::RouteClass where T: core::clone::Clone
 impl<T> alloc::borrow::ToOwned for d2b_bus::transport::unix::AllocatedSocketKind where T: core::clone::Clone
 impl<T> alloc::borrow::ToOwned for d2b_bus::transport::unix::TransportAdmissionError where T: core::clone::Clone
+impl<T> alloc::borrow::ToOwned for d2b_bus::wire::ZoneBoundPolicyIdentity where T: core::clone::Clone
 impl<T> alloc::borrow::ToOwned for d2b_bus::zone_route::AdmittedZoneRoute where T: core::clone::Clone
 impl<T> alloc::borrow::ToOwned for d2b_bus::zone_route::CancelForward where T: core::clone::Clone
 impl<T> alloc::borrow::ToOwned for d2b_bus::zone_route::ChildWatchCursor where T: core::clone::Clone
@@ -1504,6 +1541,7 @@ impl<T> alloc::string::ToString for d2b_bus::session::zone_link::ZoneLinkSession
 impl<T> alloc::string::ToString for d2b_bus::streams::StreamError where T: core::fmt::Display + ?core::marker::Sized
 impl<T> alloc::string::ToString for d2b_bus::transport::credit::CreditError where T: core::fmt::Display + ?core::marker::Sized
 impl<T> alloc::string::ToString for d2b_bus::transport::unix::TransportAdmissionError where T: core::fmt::Display + ?core::marker::Sized
+impl<T> core::any::Any for d2b_bus::audit::BusErrorKind where T: 'static + ?core::marker::Sized
 impl<T> core::any::Any for d2b_bus::authorization::AuthorizationError where T: 'static + ?core::marker::Sized
 impl<T> core::any::Any for d2b_bus::authorization::AuthorizationErrorClass where T: 'static + ?core::marker::Sized
 impl<T> core::any::Any for d2b_bus::authorization::BusAuthorizer where T: 'static + ?core::marker::Sized
@@ -1571,6 +1609,7 @@ impl<T> core::any::Any for d2b_bus::transport::unix::AllocatedSocketKind where T
 impl<T> core::any::Any for d2b_bus::transport::unix::AllocatedTransportFd where T: 'static + ?core::marker::Sized
 impl<T> core::any::Any for d2b_bus::transport::unix::TransportAdmissionError where T: 'static + ?core::marker::Sized
 impl<T> core::any::Any for d2b_bus::transport::unix::ZonePeerIdentity where T: 'static + ?core::marker::Sized
+impl<T> core::any::Any for d2b_bus::wire::ZoneBoundPolicyIdentity where T: 'static + ?core::marker::Sized
 impl<T> core::any::Any for d2b_bus::zone_route::AdmittedZoneRoute where T: 'static + ?core::marker::Sized
 impl<T> core::any::Any for d2b_bus::zone_route::CancelForward where T: 'static + ?core::marker::Sized
 impl<T> core::any::Any for d2b_bus::zone_route::ChildWatchCursor where T: 'static + ?core::marker::Sized
@@ -1588,6 +1627,7 @@ impl<T> core::any::Any for d2b_bus::zone_route::ZoneLinkIdempotencyKey where T: 
 impl<T> core::any::Any for d2b_bus::zone_route::ZoneRouteError where T: 'static + ?core::marker::Sized
 impl<T> core::any::Any for d2b_bus::zone_route::ZoneRouteOutcome where T: 'static + ?core::marker::Sized
 impl<T> core::any::Any for d2b_bus::zone_route::ZoneRouteQuery where T: 'static + ?core::marker::Sized
+impl<T> core::borrow::Borrow<T> for d2b_bus::audit::BusErrorKind where T: ?core::marker::Sized
 impl<T> core::borrow::Borrow<T> for d2b_bus::authorization::AuthorizationError where T: ?core::marker::Sized
 impl<T> core::borrow::Borrow<T> for d2b_bus::authorization::AuthorizationErrorClass where T: ?core::marker::Sized
 impl<T> core::borrow::Borrow<T> for d2b_bus::authorization::BusAuthorizer where T: ?core::marker::Sized
@@ -1655,6 +1695,7 @@ impl<T> core::borrow::Borrow<T> for d2b_bus::transport::unix::AllocatedSocketKin
 impl<T> core::borrow::Borrow<T> for d2b_bus::transport::unix::AllocatedTransportFd where T: ?core::marker::Sized
 impl<T> core::borrow::Borrow<T> for d2b_bus::transport::unix::TransportAdmissionError where T: ?core::marker::Sized
 impl<T> core::borrow::Borrow<T> for d2b_bus::transport::unix::ZonePeerIdentity where T: ?core::marker::Sized
+impl<T> core::borrow::Borrow<T> for d2b_bus::wire::ZoneBoundPolicyIdentity where T: ?core::marker::Sized
 impl<T> core::borrow::Borrow<T> for d2b_bus::zone_route::AdmittedZoneRoute where T: ?core::marker::Sized
 impl<T> core::borrow::Borrow<T> for d2b_bus::zone_route::CancelForward where T: ?core::marker::Sized
 impl<T> core::borrow::Borrow<T> for d2b_bus::zone_route::ChildWatchCursor where T: ?core::marker::Sized
@@ -1672,6 +1713,7 @@ impl<T> core::borrow::Borrow<T> for d2b_bus::zone_route::ZoneLinkIdempotencyKey 
 impl<T> core::borrow::Borrow<T> for d2b_bus::zone_route::ZoneRouteError where T: ?core::marker::Sized
 impl<T> core::borrow::Borrow<T> for d2b_bus::zone_route::ZoneRouteOutcome where T: ?core::marker::Sized
 impl<T> core::borrow::Borrow<T> for d2b_bus::zone_route::ZoneRouteQuery where T: ?core::marker::Sized
+impl<T> core::borrow::BorrowMut<T> for d2b_bus::audit::BusErrorKind where T: ?core::marker::Sized
 impl<T> core::borrow::BorrowMut<T> for d2b_bus::authorization::AuthorizationError where T: ?core::marker::Sized
 impl<T> core::borrow::BorrowMut<T> for d2b_bus::authorization::AuthorizationErrorClass where T: ?core::marker::Sized
 impl<T> core::borrow::BorrowMut<T> for d2b_bus::authorization::BusAuthorizer where T: ?core::marker::Sized
@@ -1739,6 +1781,7 @@ impl<T> core::borrow::BorrowMut<T> for d2b_bus::transport::unix::AllocatedSocket
 impl<T> core::borrow::BorrowMut<T> for d2b_bus::transport::unix::AllocatedTransportFd where T: ?core::marker::Sized
 impl<T> core::borrow::BorrowMut<T> for d2b_bus::transport::unix::TransportAdmissionError where T: ?core::marker::Sized
 impl<T> core::borrow::BorrowMut<T> for d2b_bus::transport::unix::ZonePeerIdentity where T: ?core::marker::Sized
+impl<T> core::borrow::BorrowMut<T> for d2b_bus::wire::ZoneBoundPolicyIdentity where T: ?core::marker::Sized
 impl<T> core::borrow::BorrowMut<T> for d2b_bus::zone_route::AdmittedZoneRoute where T: ?core::marker::Sized
 impl<T> core::borrow::BorrowMut<T> for d2b_bus::zone_route::CancelForward where T: ?core::marker::Sized
 impl<T> core::borrow::BorrowMut<T> for d2b_bus::zone_route::ChildWatchCursor where T: ?core::marker::Sized
@@ -1756,6 +1799,7 @@ impl<T> core::borrow::BorrowMut<T> for d2b_bus::zone_route::ZoneLinkIdempotencyK
 impl<T> core::borrow::BorrowMut<T> for d2b_bus::zone_route::ZoneRouteError where T: ?core::marker::Sized
 impl<T> core::borrow::BorrowMut<T> for d2b_bus::zone_route::ZoneRouteOutcome where T: ?core::marker::Sized
 impl<T> core::borrow::BorrowMut<T> for d2b_bus::zone_route::ZoneRouteQuery where T: ?core::marker::Sized
+impl<T> core::clone::CloneToUninit for d2b_bus::audit::BusErrorKind where T: core::clone::Clone
 impl<T> core::clone::CloneToUninit for d2b_bus::authorization::AuthorizationError where T: core::clone::Clone
 impl<T> core::clone::CloneToUninit for d2b_bus::authorization::AuthorizationErrorClass where T: core::clone::Clone
 impl<T> core::clone::CloneToUninit for d2b_bus::operations::Cancellation where T: core::clone::Clone
@@ -1805,6 +1849,7 @@ impl<T> core::clone::CloneToUninit for d2b_bus::transport::credit::CreditError w
 impl<T> core::clone::CloneToUninit for d2b_bus::transport::credit::RouteClass where T: core::clone::Clone
 impl<T> core::clone::CloneToUninit for d2b_bus::transport::unix::AllocatedSocketKind where T: core::clone::Clone
 impl<T> core::clone::CloneToUninit for d2b_bus::transport::unix::TransportAdmissionError where T: core::clone::Clone
+impl<T> core::clone::CloneToUninit for d2b_bus::wire::ZoneBoundPolicyIdentity where T: core::clone::Clone
 impl<T> core::clone::CloneToUninit for d2b_bus::zone_route::AdmittedZoneRoute where T: core::clone::Clone
 impl<T> core::clone::CloneToUninit for d2b_bus::zone_route::CancelForward where T: core::clone::Clone
 impl<T> core::clone::CloneToUninit for d2b_bus::zone_route::ChildWatchCursor where T: core::clone::Clone
@@ -1821,6 +1866,7 @@ impl<T> core::clone::CloneToUninit for d2b_bus::zone_route::ZoneLinkIdempotencyK
 impl<T> core::clone::CloneToUninit for d2b_bus::zone_route::ZoneRouteError where T: core::clone::Clone
 impl<T> core::clone::CloneToUninit for d2b_bus::zone_route::ZoneRouteOutcome where T: core::clone::Clone
 impl<T> core::clone::CloneToUninit for d2b_bus::zone_route::ZoneRouteQuery where T: core::clone::Clone
+impl<T> core::convert::From<T> for d2b_bus::audit::BusErrorKind
 impl<T> core::convert::From<T> for d2b_bus::authorization::AuthorizationError
 impl<T> core::convert::From<T> for d2b_bus::authorization::AuthorizationErrorClass
 impl<T> core::convert::From<T> for d2b_bus::authorization::BusAuthorizer
@@ -1888,6 +1934,7 @@ impl<T> core::convert::From<T> for d2b_bus::transport::unix::AllocatedSocketKind
 impl<T> core::convert::From<T> for d2b_bus::transport::unix::AllocatedTransportFd
 impl<T> core::convert::From<T> for d2b_bus::transport::unix::TransportAdmissionError
 impl<T> core::convert::From<T> for d2b_bus::transport::unix::ZonePeerIdentity
+impl<T> core::convert::From<T> for d2b_bus::wire::ZoneBoundPolicyIdentity
 impl<T> core::convert::From<T> for d2b_bus::zone_route::AdmittedZoneRoute
 impl<T> core::convert::From<T> for d2b_bus::zone_route::CancelForward
 impl<T> core::convert::From<T> for d2b_bus::zone_route::ChildWatchCursor
@@ -1905,6 +1952,7 @@ impl<T> core::convert::From<T> for d2b_bus::zone_route::ZoneLinkIdempotencyKey
 impl<T> core::convert::From<T> for d2b_bus::zone_route::ZoneRouteError
 impl<T> core::convert::From<T> for d2b_bus::zone_route::ZoneRouteOutcome
 impl<T> core::convert::From<T> for d2b_bus::zone_route::ZoneRouteQuery
+impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::audit::BusErrorKind
 impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::authorization::AuthorizationError
 impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::authorization::AuthorizationErrorClass
 impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::authorization::BusAuthorizer
@@ -1972,6 +2020,7 @@ impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::transport::unix::Allocat
 impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::transport::unix::AllocatedTransportFd
 impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::transport::unix::TransportAdmissionError
 impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::transport::unix::ZonePeerIdentity
+impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::wire::ZoneBoundPolicyIdentity
 impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::zone_route::AdmittedZoneRoute
 impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::zone_route::CancelForward
 impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::zone_route::ChildWatchCursor
@@ -1989,6 +2038,7 @@ impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::zone_route::ZoneLinkIdem
 impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::zone_route::ZoneRouteError
 impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::zone_route::ZoneRouteOutcome
 impl<T> crossbeam_epoch::atomic::Pointable for d2b_bus::zone_route::ZoneRouteQuery
+impl<T> dyn_clone::DynClone for d2b_bus::audit::BusErrorKind where T: core::clone::Clone
 impl<T> dyn_clone::DynClone for d2b_bus::authorization::AuthorizationError where T: core::clone::Clone
 impl<T> dyn_clone::DynClone for d2b_bus::authorization::AuthorizationErrorClass where T: core::clone::Clone
 impl<T> dyn_clone::DynClone for d2b_bus::operations::Cancellation where T: core::clone::Clone
@@ -2038,6 +2088,7 @@ impl<T> dyn_clone::DynClone for d2b_bus::transport::credit::CreditError where T:
 impl<T> dyn_clone::DynClone for d2b_bus::transport::credit::RouteClass where T: core::clone::Clone
 impl<T> dyn_clone::DynClone for d2b_bus::transport::unix::AllocatedSocketKind where T: core::clone::Clone
 impl<T> dyn_clone::DynClone for d2b_bus::transport::unix::TransportAdmissionError where T: core::clone::Clone
+impl<T> dyn_clone::DynClone for d2b_bus::wire::ZoneBoundPolicyIdentity where T: core::clone::Clone
 impl<T> dyn_clone::DynClone for d2b_bus::zone_route::AdmittedZoneRoute where T: core::clone::Clone
 impl<T> dyn_clone::DynClone for d2b_bus::zone_route::CancelForward where T: core::clone::Clone
 impl<T> dyn_clone::DynClone for d2b_bus::zone_route::ChildWatchCursor where T: core::clone::Clone
@@ -2054,6 +2105,7 @@ impl<T> dyn_clone::DynClone for d2b_bus::zone_route::ZoneLinkIdempotencyKey wher
 impl<T> dyn_clone::DynClone for d2b_bus::zone_route::ZoneRouteError where T: core::clone::Clone
 impl<T> dyn_clone::DynClone for d2b_bus::zone_route::ZoneRouteOutcome where T: core::clone::Clone
 impl<T> dyn_clone::DynClone for d2b_bus::zone_route::ZoneRouteQuery where T: core::clone::Clone
+impl<T> typenum::type_operators::Same for d2b_bus::audit::BusErrorKind
 impl<T> typenum::type_operators::Same for d2b_bus::authorization::AuthorizationError
 impl<T> typenum::type_operators::Same for d2b_bus::authorization::AuthorizationErrorClass
 impl<T> typenum::type_operators::Same for d2b_bus::authorization::BusAuthorizer
@@ -2121,6 +2173,7 @@ impl<T> typenum::type_operators::Same for d2b_bus::transport::unix::AllocatedSoc
 impl<T> typenum::type_operators::Same for d2b_bus::transport::unix::AllocatedTransportFd
 impl<T> typenum::type_operators::Same for d2b_bus::transport::unix::TransportAdmissionError
 impl<T> typenum::type_operators::Same for d2b_bus::transport::unix::ZonePeerIdentity
+impl<T> typenum::type_operators::Same for d2b_bus::wire::ZoneBoundPolicyIdentity
 impl<T> typenum::type_operators::Same for d2b_bus::zone_route::AdmittedZoneRoute
 impl<T> typenum::type_operators::Same for d2b_bus::zone_route::CancelForward
 impl<T> typenum::type_operators::Same for d2b_bus::zone_route::ChildWatchCursor
@@ -2161,6 +2214,7 @@ pub async fn d2b_bus::session::zone_link::ZoneLinkSession::send_forwarded_stream
 pub async fn d2b_bus::streams::IncomingStream::grant(&self, &d2b_bus::streams::StreamName, usize) -> core::result::Result<(), d2b_bus::streams::StreamError>
 pub async fn d2b_bus::streams::IncomingStream::grant_frame(&self, &d2b_bus::streams::ReceivedFrame, usize) -> core::result::Result<(), d2b_bus::streams::StreamError>
 pub async fn d2b_bus::streams::IncomingStream::receive_next(&self) -> core::result::Result<d2b_bus::streams::ReceivedFrame, d2b_bus::streams::StreamError>
+pub const d2b_bus::audit::BusErrorKind::ALIGN: usize
 pub const d2b_bus::authorization::AuthorizationError::ALIGN: usize
 pub const d2b_bus::authorization::AuthorizationErrorClass::ALIGN: usize
 pub const d2b_bus::authorization::BusAuthorizer::ALIGN: usize
@@ -2251,6 +2305,7 @@ pub const d2b_bus::transport::unix::AllocatedSocketKind::ALIGN: usize
 pub const d2b_bus::transport::unix::AllocatedTransportFd::ALIGN: usize
 pub const d2b_bus::transport::unix::TransportAdmissionError::ALIGN: usize
 pub const d2b_bus::transport::unix::ZonePeerIdentity::ALIGN: usize
+pub const d2b_bus::wire::ZoneBoundPolicyIdentity::ALIGN: usize
 pub const d2b_bus::zone_route::AdmittedZoneRoute::ALIGN: usize
 pub const d2b_bus::zone_route::CancelForward::ALIGN: usize
 pub const d2b_bus::zone_route::ChildWatchCursor::ALIGN: usize
@@ -2272,6 +2327,7 @@ pub const d2b_bus::zone_route::ZoneLinkIdempotencyKey::ALIGN: usize
 pub const d2b_bus::zone_route::ZoneRouteError::ALIGN: usize
 pub const d2b_bus::zone_route::ZoneRouteOutcome::ALIGN: usize
 pub const d2b_bus::zone_route::ZoneRouteQuery::ALIGN: usize
+pub const fn d2b_bus::audit::BusErrorKind::code(self) -> &'static str
 pub const fn d2b_bus::authorization::AuthorizationError::class(self) -> d2b_bus::authorization::AuthorizationErrorClass
 pub const fn d2b_bus::authorization::AuthorizationError::native_denial(self) -> core::option::Option<d2b_resource_api::authz::AuthorizationDenial>
 pub const fn d2b_bus::authorization::AuthorizationError::remediation(self) -> &'static str
@@ -2346,6 +2402,10 @@ pub const fn d2b_bus::transport::credit::RouteClass::as_str(self) -> &'static st
 pub const fn d2b_bus::transport::credit::RouteClass::permits_attachments(self) -> bool
 pub const fn d2b_bus::transport::unix::AllocatedSocketKind::as_str(self) -> &'static str
 pub const fn d2b_bus::transport::unix::AllocatedTransportFd::kind(&self) -> d2b_bus::transport::unix::AllocatedSocketKind
+pub const fn d2b_bus::wire::ZoneBoundPolicyIdentity::policy(&self) -> &d2b_contracts::v3::component_session::EndpointPolicyIdentity
+pub const fn d2b_bus::wire::ZoneBoundPolicyIdentity::provider_ref(&self) -> core::option::Option<&d2b_contracts::v3::resource_ref::ResourceRef>
+pub const fn d2b_bus::wire::ZoneBoundPolicyIdentity::zone(&self) -> &d2b_contracts::v3::identity::ZoneId
+pub const fn d2b_bus::wire::local_default_limits() -> d2b_contracts::v3::component_session::LimitProfile
 pub const fn d2b_bus::zone_route::AdmittedZoneRoute::effective_capabilities(&self) -> core::option::Option<&d2b_contracts::v3::zone_routing::ZoneRouteCapabilitySet>
 pub const fn d2b_bus::zone_route::AdmittedZoneRoute::from_engine_decision(d2b_contracts::v3::zone_routing::ZoneRoutePath, core::option::Option<d2b_contracts::v3::zone_routing::ZoneRouteCapabilitySet>, u32) -> Self
 pub const fn d2b_bus::zone_route::AdmittedZoneRoute::path(&self) -> &d2b_contracts::v3::zone_routing::ZoneRoutePath
@@ -2481,6 +2541,10 @@ pub d2b_bus::StreamLimits::max_queued_bytes_per_principal: usize
 pub d2b_bus::StreamLimits::max_stream_credit: usize
 pub d2b_bus::StreamLimits::max_streams: usize
 pub d2b_bus::StreamLimits::max_streams_per_principal: usize
+pub d2b_bus::audit::BusErrorKind::Denied
+pub d2b_bus::audit::BusErrorKind::Error
+pub d2b_bus::audit::BusErrorKind::NotFound
+pub d2b_bus::audit::BusErrorKind::Ok
 pub d2b_bus::authorization::AuthorizationError::DiagnosticBinding
 pub d2b_bus::authorization::AuthorizationError::InvalidResourceCall
 pub d2b_bus::authorization::AuthorizationError::Native(d2b_resource_api::authz::AuthorizationDenial)
@@ -2792,6 +2856,7 @@ pub enum d2b_bus::ResourceCall
 pub enum d2b_bus::RouteMember
 pub enum d2b_bus::RouteTarget
 pub enum d2b_bus::StreamError
+pub enum d2b_bus::audit::BusErrorKind
 pub enum d2b_bus::authorization::AuthorizationError
 pub enum d2b_bus::authorization::AuthorizationErrorClass
 pub enum d2b_bus::operations::OperationError
@@ -2833,6 +2898,21 @@ pub fn d2b_bus::BusEndpoint::invoke<'life0, 'async_trait>(&'life0 self, d2b_bus:
 pub fn d2b_bus::BusEndpoint::open_stream<'life0, 'async_trait>(&'life0 self, d2b_bus::router::DeliveredStream) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), d2b_bus::registry::EndpointError>> + core::marker::Send + 'async_trait)>> where Self: 'async_trait, 'life0: 'async_trait
 pub fn d2b_bus::BusEndpoint::terminalize_cancel(&self, &d2b_bus::operations::OperationId, &d2b_bus::operations::Cancellation) -> core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<(), d2b_bus::registry::EndpointError>> + core::marker::Send + 'static)>>
 pub fn d2b_bus::BusObserver::record(&self, d2b_bus::router::BusEvent, d2b_bus::router::BusFailureReason)
+pub fn d2b_bus::audit::BusErrorKind::__clone_box(&self, dyn_clone::sealed::Private) -> *mut ()
+pub fn d2b_bus::audit::BusErrorKind::borrow(&self) -> &T
+pub fn d2b_bus::audit::BusErrorKind::borrow_mut(&mut self) -> &mut T
+pub fn d2b_bus::audit::BusErrorKind::clone(&self) -> d2b_bus::audit::BusErrorKind
+pub fn d2b_bus::audit::BusErrorKind::clone_into(&self, &mut T)
+pub fn d2b_bus::audit::BusErrorKind::eq(&self, &d2b_bus::audit::BusErrorKind) -> bool
+pub fn d2b_bus::audit::BusErrorKind::equivalent(&self, &K) -> bool
+pub fn d2b_bus::audit::BusErrorKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn d2b_bus::audit::BusErrorKind::from(T) -> T
+pub fn d2b_bus::audit::BusErrorKind::into(self) -> U
+pub fn d2b_bus::audit::BusErrorKind::to_owned(&self) -> T
+pub fn d2b_bus::audit::BusErrorKind::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+pub fn d2b_bus::audit::BusErrorKind::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+pub fn d2b_bus::audit::BusErrorKind::type_id(&self) -> core::any::TypeId
+pub fn d2b_bus::audit::route_admission_record(u64, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, d2b_telemetry::audit_hash::AuditHash, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, u64, impl core::convert::Into<alloc::string::String>) -> core::result::Result<d2b_audit::record_types::AuditRecord, d2b_audit::record_types::AuditRecordError>
 pub fn d2b_bus::authorization::AuthorizationError::__clone_box(&self, dyn_clone::sealed::Private) -> *mut ()
 pub fn d2b_bus::authorization::AuthorizationError::borrow(&self) -> &T
 pub fn d2b_bus::authorization::AuthorizationError::borrow_mut(&mut self) -> &mut T
@@ -3808,6 +3888,23 @@ pub fn d2b_bus::transport::unix::ZonePeerIdentity::try_into(self) -> core::resul
 pub fn d2b_bus::transport::unix::ZonePeerIdentity::type_id(&self) -> core::any::TypeId
 pub fn d2b_bus::transport::unix::open_within_zone_seqpacket(d2b_bus::transport::unix::AllocatedTransportFd, d2b_contracts::v3::component_session::Locality, d2b_contracts::v3::component_session::LimitProfile, &d2b_bus::transport::credit::AttachmentCreditPlan, d2b_session_unix::adapter::DescriptorPolicyResolver, d2b_bus::transport::unix::ZonePeerIdentity) -> core::result::Result<alloc::boxed::Box<dyn d2b_session::transport::OwnedTransport>, d2b_bus::transport::unix::TransportAdmissionError>
 pub fn d2b_bus::transport::unix::open_zone_link_stream(d2b_bus::transport::unix::AllocatedTransportFd, d2b_contracts::v3::component_session::Locality, d2b_contracts::v3::component_session::LimitProfile, &d2b_bus::transport::credit::AttachmentCreditPlan) -> core::result::Result<alloc::boxed::Box<dyn d2b_session::transport::OwnedTransport>, d2b_bus::transport::unix::TransportAdmissionError>
+pub fn d2b_bus::wire::ZoneBoundPolicyIdentity::__clone_box(&self, dyn_clone::sealed::Private) -> *mut ()
+pub fn d2b_bus::wire::ZoneBoundPolicyIdentity::borrow(&self) -> &T
+pub fn d2b_bus::wire::ZoneBoundPolicyIdentity::borrow_mut(&mut self) -> &mut T
+pub fn d2b_bus::wire::ZoneBoundPolicyIdentity::clone(&self) -> d2b_bus::wire::ZoneBoundPolicyIdentity
+pub fn d2b_bus::wire::ZoneBoundPolicyIdentity::clone_into(&self, &mut T)
+pub fn d2b_bus::wire::ZoneBoundPolicyIdentity::digest(&self) -> core::result::Result<alloc::string::String, d2b_contracts::v3::component_session::BinaryError>
+pub fn d2b_bus::wire::ZoneBoundPolicyIdentity::eq(&self, &d2b_bus::wire::ZoneBoundPolicyIdentity) -> bool
+pub fn d2b_bus::wire::ZoneBoundPolicyIdentity::equivalent(&self, &K) -> bool
+pub fn d2b_bus::wire::ZoneBoundPolicyIdentity::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn d2b_bus::wire::ZoneBoundPolicyIdentity::from(T) -> T
+pub fn d2b_bus::wire::ZoneBoundPolicyIdentity::into(self) -> U
+pub fn d2b_bus::wire::ZoneBoundPolicyIdentity::new(d2b_contracts::v3::identity::ZoneId, d2b_contracts::v3::component_session::EndpointPolicyIdentity) -> Self
+pub fn d2b_bus::wire::ZoneBoundPolicyIdentity::to_owned(&self) -> T
+pub fn d2b_bus::wire::ZoneBoundPolicyIdentity::try_from(U) -> core::result::Result<T, <T as core::convert::TryFrom<U>>::Error>
+pub fn d2b_bus::wire::ZoneBoundPolicyIdentity::try_into(self) -> core::result::Result<U, <U as core::convert::TryFrom<T>>::Error>
+pub fn d2b_bus::wire::ZoneBoundPolicyIdentity::type_id(&self) -> core::any::TypeId
+pub fn d2b_bus::wire::ZoneBoundPolicyIdentity::with_provider(d2b_contracts::v3::identity::ZoneId, d2b_contracts::v3::resource_ref::ResourceRef, d2b_contracts::v3::component_session::EndpointPolicyIdentity) -> core::result::Result<Self, &'static str>
 pub fn d2b_bus::zone_route::AdmittedZoneRoute::__clone_box(&self, dyn_clone::sealed::Private) -> *mut ()
 pub fn d2b_bus::zone_route::AdmittedZoneRoute::borrow(&self) -> &T
 pub fn d2b_bus::zone_route::AdmittedZoneRoute::borrow_mut(&mut self) -> &mut T
@@ -4087,7 +4184,12 @@ pub fn d2b_bus::zone_route::ZoneRouteQuery::type_id(&self) -> core::any::TypeId
 pub fn d2b_bus::zone_route::admit_single_zone_batch(&[d2b_contracts::v3::zone_routing::ZonePath]) -> core::result::Result<d2b_contracts::v3::zone_routing::ZonePath, d2b_bus::zone_route::ZoneRouteError>
 pub fn d2b_bus::zone_route::forward_cancel(&d2b_bus::zone_route::PinnedReversePath, &d2b_bus::operations::OperationId, &[d2b_contracts::v3::identity::ReconnectGeneration]) -> core::result::Result<d2b_bus::zone_route::CancelForward, d2b_contracts::v3::zone_routing::ZoneRouteFailClosedReason>
 pub mod d2b_bus
+pub mod d2b_bus::audit
 pub mod d2b_bus::authorization
+pub mod d2b_bus::driver
+pub mod d2b_bus::engine
+pub mod d2b_bus::error
+pub mod d2b_bus::lifecycle
 pub mod d2b_bus::operations
 pub mod d2b_bus::registry
 pub mod d2b_bus::relay
@@ -4101,6 +4203,7 @@ pub mod d2b_bus::streams
 pub mod d2b_bus::transport
 pub mod d2b_bus::transport::credit
 pub mod d2b_bus::transport::unix
+pub mod d2b_bus::wire
 pub mod d2b_bus::zone_route
 pub struct d2b_bus::BusAuthorizer
 pub struct d2b_bus::BusConfig
@@ -4179,6 +4282,7 @@ pub struct d2b_bus::streams::StreamLimits
 pub struct d2b_bus::streams::StreamName(_)
 pub struct d2b_bus::transport::credit::AttachmentCreditPlan
 pub struct d2b_bus::transport::unix::AllocatedTransportFd
+pub struct d2b_bus::wire::ZoneBoundPolicyIdentity
 pub struct d2b_bus::zone_route::AdmittedZoneRoute
 pub struct d2b_bus::zone_route::CancelForward
 pub struct d2b_bus::zone_route::ChildWatchCursor
@@ -4199,6 +4303,11 @@ pub trait d2b_bus::relay::RelayHopOracle
 pub trait d2b_bus::router::BusClock: core::marker::Send + core::marker::Sync + 'static
 pub trait d2b_bus::router::BusObserver: core::marker::Send + core::marker::Sync
 pub trait d2b_bus::zone_route::ZoneRouteOracle
+pub type d2b_bus::audit::BusErrorKind::Error = <U as core::convert::TryFrom<T>>::Error
+pub type d2b_bus::audit::BusErrorKind::Error = core::convert::Infallible
+pub type d2b_bus::audit::BusErrorKind::Init = T
+pub type d2b_bus::audit::BusErrorKind::Output = T
+pub type d2b_bus::audit::BusErrorKind::Owned = T
 pub type d2b_bus::authorization::AuthorizationError::Error = <U as core::convert::TryFrom<T>>::Error
 pub type d2b_bus::authorization::AuthorizationError::Error = core::convert::Infallible
 pub type d2b_bus::authorization::AuthorizationError::Init = T
@@ -4516,6 +4625,11 @@ pub type d2b_bus::transport::unix::ZonePeerIdentity::Error = <U as core::convert
 pub type d2b_bus::transport::unix::ZonePeerIdentity::Error = core::convert::Infallible
 pub type d2b_bus::transport::unix::ZonePeerIdentity::Init = T
 pub type d2b_bus::transport::unix::ZonePeerIdentity::Output = T
+pub type d2b_bus::wire::ZoneBoundPolicyIdentity::Error = <U as core::convert::TryFrom<T>>::Error
+pub type d2b_bus::wire::ZoneBoundPolicyIdentity::Error = core::convert::Infallible
+pub type d2b_bus::wire::ZoneBoundPolicyIdentity::Init = T
+pub type d2b_bus::wire::ZoneBoundPolicyIdentity::Output = T
+pub type d2b_bus::wire::ZoneBoundPolicyIdentity::Owned = T
 pub type d2b_bus::zone_route::AdmittedZoneRoute::Error = <U as core::convert::TryFrom<T>>::Error
 pub type d2b_bus::zone_route::AdmittedZoneRoute::Error = core::convert::Infallible
 pub type d2b_bus::zone_route::AdmittedZoneRoute::Init = T
@@ -4600,6 +4714,11 @@ pub type d2b_bus::zone_route::ZoneRouteQuery::Error = core::convert::Infallible
 pub type d2b_bus::zone_route::ZoneRouteQuery::Init = T
 pub type d2b_bus::zone_route::ZoneRouteQuery::Output = T
 pub type d2b_bus::zone_route::ZoneRouteQuery::Owned = T
+pub unsafe fn d2b_bus::audit::BusErrorKind::clone_to_uninit(&self, *mut u8)
+pub unsafe fn d2b_bus::audit::BusErrorKind::deref<'a>(usize) -> &'a T
+pub unsafe fn d2b_bus::audit::BusErrorKind::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn d2b_bus::audit::BusErrorKind::drop(usize)
+pub unsafe fn d2b_bus::audit::BusErrorKind::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
 pub unsafe fn d2b_bus::authorization::AuthorizationError::clone_to_uninit(&self, *mut u8)
 pub unsafe fn d2b_bus::authorization::AuthorizationError::deref<'a>(usize) -> &'a T
 pub unsafe fn d2b_bus::authorization::AuthorizationError::deref_mut<'a>(usize) -> &'a mut T
@@ -4917,6 +5036,11 @@ pub unsafe fn d2b_bus::transport::unix::ZonePeerIdentity::deref<'a>(usize) -> &'
 pub unsafe fn d2b_bus::transport::unix::ZonePeerIdentity::deref_mut<'a>(usize) -> &'a mut T
 pub unsafe fn d2b_bus::transport::unix::ZonePeerIdentity::drop(usize)
 pub unsafe fn d2b_bus::transport::unix::ZonePeerIdentity::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
+pub unsafe fn d2b_bus::wire::ZoneBoundPolicyIdentity::clone_to_uninit(&self, *mut u8)
+pub unsafe fn d2b_bus::wire::ZoneBoundPolicyIdentity::deref<'a>(usize) -> &'a T
+pub unsafe fn d2b_bus::wire::ZoneBoundPolicyIdentity::deref_mut<'a>(usize) -> &'a mut T
+pub unsafe fn d2b_bus::wire::ZoneBoundPolicyIdentity::drop(usize)
+pub unsafe fn d2b_bus::wire::ZoneBoundPolicyIdentity::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
 pub unsafe fn d2b_bus::zone_route::AdmittedZoneRoute::clone_to_uninit(&self, *mut u8)
 pub unsafe fn d2b_bus::zone_route::AdmittedZoneRoute::deref<'a>(usize) -> &'a T
 pub unsafe fn d2b_bus::zone_route::AdmittedZoneRoute::deref_mut<'a>(usize) -> &'a mut T
@@ -5002,6 +5126,18 @@ pub unsafe fn d2b_bus::zone_route::ZoneRouteQuery::deref_mut<'a>(usize) -> &'a m
 pub unsafe fn d2b_bus::zone_route::ZoneRouteQuery::drop(usize)
 pub unsafe fn d2b_bus::zone_route::ZoneRouteQuery::init(<T as crossbeam_epoch::atomic::Pointable>::Init) -> usize
 pub use d2b_bus::SessionVerb
+pub use d2b_bus::driver::ComponentSessionDriver
+pub use d2b_bus::driver::SessionDriverHandle
+pub use d2b_bus::engine::SessionEngine
+pub use d2b_bus::engine::SessionEvent
+pub use d2b_bus::error::Result
+pub use d2b_bus::error::SessionError
+pub use d2b_bus::error::SessionErrorClass
+pub use d2b_bus::error::SessionServerError
+pub use d2b_bus::error::TransportError
+pub use d2b_bus::lifecycle::KeepaliveAction
+pub use d2b_bus::lifecycle::SessionLifecycle
+pub use d2b_bus::lifecycle::SessionPhase
 pub use d2b_bus::session::AdmittedBootstrapPsk
 pub use d2b_bus::session::AttachmentPayload
 pub use d2b_bus::session::AttachmentValidationError
@@ -5062,6 +5198,16 @@ pub use d2b_bus::session::negotiate_offer
 pub use d2b_bus::session::serialized_transport_split
 pub use d2b_bus::session::wire
 pub use d2b_bus::session::x25519_public_key
+pub use d2b_bus::streams::NamedStreamMux
+pub use d2b_bus::streams::StreamEvent
+pub use d2b_bus::streams::StreamId
+pub use d2b_bus::streams::StreamPhase
+pub use d2b_bus::transport::OwnedTransport
+pub use d2b_bus::transport::TransportDescriptor
+pub use d2b_bus::transport::TransportError
+pub use d2b_bus::transport::TransportPacket
+pub use d2b_bus::transport::TransportReader
+pub use d2b_bus::transport::TransportWriter
 pub use d2b_bus::transport::credit::CreditBundle
 pub use d2b_bus::transport::credit::CreditPool
 pub use d2b_bus::transport::credit::CreditScope
@@ -5074,3 +5220,39 @@ pub use d2b_bus::transport::unix::PathnamePeerVerifier
 pub use d2b_bus::transport::unix::UnixTransportEvent
 pub use d2b_bus::transport::unix::UnixTransportFailure
 pub use d2b_bus::transport::unix::UnixTransportObserver
+pub use d2b_bus::wire::COMPONENT_SESSION_MAJOR
+pub use d2b_bus::wire::COMPONENT_SESSION_MINOR
+pub use d2b_bus::wire::FRAGMENT_HEADER_LEN
+pub use d2b_bus::wire::HANDSHAKE_OFFER_CANONICAL_LEN
+pub use d2b_bus::wire::LOCAL_HANDSHAKE_DEADLINE_MS
+pub use d2b_bus::wire::LOCAL_RECONNECT_DEADLINE_MS
+pub use d2b_bus::wire::MAX_ACTIVE_NAMED_STREAMS
+pub use d2b_bus::wire::MAX_AGGREGATE_NAMED_STREAM_QUEUE_BYTES
+pub use d2b_bus::wire::MAX_CLOCK_SKEW_MS
+pub use d2b_bus::wire::MAX_HANDSHAKE_OFFER_BYTES
+pub use d2b_bus::wire::MAX_HOST_ATTACHMENT_CREDITS
+pub use d2b_bus::wire::MAX_ID_BYTES
+pub use d2b_bus::wire::MAX_KEEPALIVE_INTERVAL_MS
+pub use d2b_bus::wire::MAX_KEEPALIVE_TIMEOUT_MS
+pub use d2b_bus::wire::MAX_LOGICAL_MESSAGE_BYTES
+pub use d2b_bus::wire::MAX_NAMED_STREAM_QUEUE_BYTES
+pub use d2b_bus::wire::MAX_OPERATION_ATTACHMENTS
+pub use d2b_bus::wire::MAX_PACKET_ATTACHMENTS
+pub use d2b_bus::wire::MAX_PROCESS_ATTACHMENT_CREDITS
+pub use d2b_bus::wire::MAX_PROTECTED_CIPHERTEXT_BYTES
+pub use d2b_bus::wire::MAX_PROTECTED_PLAINTEXT_BYTES
+pub use d2b_bus::wire::MAX_RECONNECT_ATTEMPTS
+pub use d2b_bus::wire::MAX_RECONNECT_WINDOW_MS
+pub use d2b_bus::wire::MAX_REQUEST_ATTACHMENTS
+pub use d2b_bus::wire::MAX_REQUEST_LIFETIME_MS
+pub use d2b_bus::wire::MAX_SESSION_ATTACHMENTS
+pub use d2b_bus::wire::MAX_SESSION_CONTROL_QUEUE_BYTES
+pub use d2b_bus::wire::MAX_TTRPC_CONTROL_QUEUE_BYTES
+pub use d2b_bus::wire::NOISE_TAG_BYTES
+pub use d2b_bus::wire::PREFACE_LEN
+pub use d2b_bus::wire::PREFACE_MAGIC
+pub use d2b_bus::wire::RECORD_HEADER_LEN
+pub use d2b_bus::wire::RECORD_LENGTH_BYTES
+pub use d2b_bus::wire::REMOTE_HANDSHAKE_DEADLINE_MS
+pub use d2b_bus::wire::REMOTE_RECONNECT_DEADLINE_MS
+pub use d2b_bus::wire::RESERVED_CONTROL_FDS
