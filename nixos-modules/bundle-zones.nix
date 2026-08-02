@@ -8,6 +8,8 @@
 let
   cfg = config.d2b;
   apiVersion = "resources.d2bus.org/v3";
+  nul = builtins.fromJSON "\"\\u0000\"";
+  resourcesBundle = import ./resources-bundle.nix { inherit lib; };
   providerCatalogEntries = cfg._providerCatalog.entries or [ ];
   schemaValidation = cfg._resourceCompiler.schemaValidation or { };
   schemaValidationPath = schemaValidation.buildValidation or null;
@@ -45,11 +47,28 @@ let
     deviceAttachments = [ ];
     volumeAttachmentDefaults = [ ];
   };
+  helperResource = resource:
+    if resource.type == "Provider" then
+      resource // {
+        spec = (resource.spec or { }) // {
+          # Provider-specific config is validated by its ResourceType schema.
+          # The shared helper only owns the common self-metrics envelope.
+          config = lib.filterAttrs
+            (field: _: field == "selfMetrics")
+            (resource.spec.config or { });
+        };
+      }
+    else resource;
+  helperAssertions = lib.flatten (lib.mapAttrsToList
+    (zoneName: zone:
+      (resourcesBundle.bundleForZone zoneName
+        (lib.mapAttrs (_: helperResource) zone.resources)).assertions)
+    cfg.zones);
   catalogDigest =
     if cfg ? _artifactCatalogV3 && cfg._artifactCatalogV3 ? catalogDigest
     then cfg._artifactCatalogV3.catalogDigest
     else "sha256:${builtins.hashString "sha256"
-      ("d2b:v3:artifact-catalog\000" + emptyArtifactCatalogPreimageJson)}";
+      ("d2b:v3:artifact-catalog" + nul + emptyArtifactCatalogPreimageJson)}";
   catalogPath =
     if cfg ? _artifactCatalogV3 && cfg._artifactCatalogV3 ? path
     then cfg._artifactCatalogV3.path
@@ -105,6 +124,7 @@ let
     sortResources (lib.mapAttrsToList
       (resourceName: resource: canonicalResource zoneName resourceName resource)
       (lib.filterAttrs (_: resource: resource.type != "Zone") zone.resources));
+  canonicalJson = value: builtins.toJSON (resourcesBundle.canonical value);
 
   providerSchemaDigests = zone:
     lib.listToAttrs (lib.filter
@@ -124,19 +144,20 @@ let
                   && catalog ? entry
                   && catalog.entry ? configDigest
                 then catalog.entry.configDigest
-                else "sha256:${builtins.hashString "sha256"
-                  "d2b:v3:schema/${if artifactId == null then resourceName else artifactId}"}";
+                else null;
             in
-            lib.nameValuePair "Provider/${resourceName}" digest)
+            if digest == null
+            then null
+            else lib.nameValuePair "Provider/${resourceName}" digest)
         (lib.filterAttrs (_: resource: resource.type != "Zone") zone.resources)));
 
   bundleData = zoneName: zone:
     let
       resources = resourceList zoneName zone;
-      resourcesJson = builtins.toJSON resources;
+      resourcesJson = canonicalJson resources;
       contentHash =
         "sha256:${builtins.hashString "sha256"
-          ("d2b:v3:resource-bundle\000" + resourcesJson)}";
+          ("d2b:v3:resource-bundle" + nul + resourcesJson)}";
     in {
       schemaVersion = 3;
       bundleVersion = 1;
@@ -150,12 +171,19 @@ let
 
   bundlePath = zoneName: data:
     let
-      resourcesJson = builtins.toJSON data.resources;
-      providerDigestsJson = builtins.toJSON data.providerSchemaDigests;
-      zoneJson = builtins.toJSON zoneName;
+      resourcesJson = canonicalJson data.resources;
+      providerDigestsJson = canonicalJson data.providerSchemaDigests;
+      zoneJson = canonicalJson zoneName;
     in pkgs.runCommand "d2b-zone-${zoneName}-resource-bundle.json"
       {
-        inherit resourcesJson providerDigestsJson zoneJson catalogDigest catalogPathArg;
+        inherit
+          resourcesJson
+          providerDigestsJson
+          zoneJson
+          catalogDigest
+          catalogPathArg
+          ;
+        contentHash = data.contentHash;
         schemaValidationPathArg =
           if schemaValidationPath == null then "" else "${schemaValidationPath}";
         passAsFile = [ "resourcesJson" "providerDigestsJson" ];
@@ -166,21 +194,39 @@ let
           test -e "$schemaValidationPathArg"
         fi
         python3 - "$resourcesJsonPath" "$providerDigestsJsonPath" "$zoneJson" \
-          "$catalogDigest" "$catalogPathArg" "$out" <<'PY'
+          "$catalogDigest" "$catalogPathArg" "$contentHash" "$out" <<'PY'
         import hashlib
         import json
         import pathlib
         import sys
 
-        resources_path, digests_path, zone_json, catalog, catalog_path, output = sys.argv[1:]
+        (
+            resources_path,
+            digests_path,
+            zone_json,
+            catalog,
+            catalog_path,
+            expected_content_hash,
+            output,
+        ) = sys.argv[1:]
         resources = json.loads(pathlib.Path(resources_path).read_text())
         provider_digests = json.loads(pathlib.Path(digests_path).read_text())
         if catalog_path:
             catalog = json.loads(pathlib.Path(catalog_path).read_text())["catalogDigest"]
         resources_bytes = pathlib.Path(resources_path).read_bytes()
+        canonical_resources = json.dumps(
+            resources,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        if canonical_resources != resources_bytes:
+            raise SystemExit("resource bundle resources are not canonical JSON")
         content = hashlib.sha256(
             b"d2b:v3:resource-bundle\0" + resources_bytes
         ).hexdigest()
+        if expected_content_hash != "sha256:" + content:
+            raise SystemExit("resource bundle contentHash does not match resources")
         document = {
             "artifactCatalogDigest": catalog,
             "bundleVersion": 1,
@@ -221,6 +267,7 @@ in
   };
 
   config = {
+    assertions = helperAssertions;
     d2b._bundle.zoneResourceBundlesV3 = bundles;
     # The old emitter remains the compatibility default until the integrator
     # switches the aggregator. A direct v3 import still exposes the canonical

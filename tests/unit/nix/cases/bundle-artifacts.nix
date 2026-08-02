@@ -1,4 +1,4 @@
-{ mkEval, lib, ... }:
+{ mkEval, lib, pkgs, system, ... }:
 
 let
   base = { lib, ... }: {
@@ -68,6 +68,40 @@ let
       replacement = "atomic-rename-retain-prior-quarantine-ambiguity";
     };
   };
+
+  bundleNul = builtins.fromJSON "\"\\u0000\"";
+  digestCfg = (mkEval [ base ({ ... }: {
+    d2b.artifacts = lib.optionalAttrs (system == "x86_64-linux") {
+      sample = {
+        package = pkgs.writeText "sample-artifact" "sample";
+        type = "config-bundle";
+      };
+    };
+    d2b.zones.local-root = { };
+  }) ]).config;
+  digestBundle = digestCfg.d2b._bundle.zoneResourceBundlesV3.local-root;
+  realisedDigestBundle =
+    builtins.fromJSON (builtins.readFile digestBundle.path);
+  realisedCatalog =
+    builtins.fromJSON
+      (builtins.unsafeDiscardStringContext
+        (builtins.readFile digestCfg.d2b._artifactCatalogV3.path));
+  helperWiringCfg = (mkEval [ base ({ ... }: {
+    d2b.zones.local-root.resources.telemetry = {
+      type = "Provider";
+      spec.telemetry.emitter.ringCapacityBytes = 0;
+    };
+  }) ]).config;
+  nullProviderCfg = (mkEval [ base ({ ... }: {
+    d2b.artifacts.provider = {
+      package = pkgs.writeText "provider-artifact" "provider";
+      type = "provider";
+    };
+    d2b.zones.local-root.resources.provider = {
+      type = "Provider";
+      spec.artifactId = "provider";
+    };
+  }) ]).config;
 
   storePathString = path:
     builtins.unsafeDiscardStringContext (toString path);
@@ -146,6 +180,46 @@ in
         group = "d2bd";
       };
     };
+  };
+
+  "bundle-artifacts/v3-zone-data-matches-realised-json" = {
+    expr = if system != "x86_64-linux"
+      then true
+      else digestBundle.data == realisedDigestBundle;
+    expected = true;
+  };
+
+  "bundle-artifacts/v3-zone-content-hash-covers-shipped-resources" = {
+    expr = if system != "x86_64-linux" then true else
+      digestBundle.data.contentHash
+        == "sha256:${builtins.hashString "sha256"
+          ("d2b:v3:resource-bundle" + bundleNul
+            + builtins.toJSON digestBundle.data.resources)}";
+    expected = true;
+  };
+
+  "bundle-artifacts/v3-artifact-catalog-data-matches-realised-json" = {
+    expr = if system != "x86_64-linux" then true else
+      digestCfg.d2b._artifactCatalogV3.catalogData == realisedCatalog
+      && digestBundle.data.artifactCatalogDigest == realisedCatalog.catalogDigest;
+    expected = true;
+  };
+
+  "bundle-artifacts/v3-bundle-wires-shared-resource-validation" = {
+    expr = lib.any
+      (assertion:
+        !assertion.assertion
+        && lib.hasInfix "ringCapacityBytes is out of bounds"
+          assertion.message)
+      helperWiringCfg.assertions;
+    expected = true;
+  };
+
+  "bundle-artifacts/v3-null-provider-digest-is-not-verified" = {
+    expr = if system != "x86_64-linux" then true else
+      nullProviderCfg.d2b._bundle.zoneResourceBundlesV3.local-root.data
+        .providerSchemaDigests == { };
+    expected = true;
   };
 
   "bundle-artifacts/root-group-compat" = {

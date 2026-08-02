@@ -38,17 +38,6 @@ let
       })
     ids;
 
-  preimage = {
-    schemaVersion = 3;
-    entries = artifactRows;
-  };
-  preimageJson = builtins.toJSON preimage;
-  catalogDigest =
-    "sha256:${builtins.hashString "sha256"
-      ("d2b:v3:artifact-catalog\000" + preimageJson)}";
-  catalogData = preimage // { inherit catalogDigest; };
-  catalogJson = builtins.toJSON catalogData;
-
   # Keep the pre-cutover internal projection available to the legacy
   # zone-resources emitter while the installed document uses the v3 artifact
   # rows above.  The compatibility view intentionally contains no new
@@ -144,6 +133,18 @@ let
       )
       PY
     '';
+
+  # The installed catalog is the authority for the digest copied into every
+  # Zone bundle. Read that one realised document back into the eval-visible
+  # projection so the bundle's `.data` and its shipped JSON cannot carry
+  # different catalogDigest values.
+  realisedCatalogData = builtins.fromJSON
+    (builtins.unsafeDiscardStringContext (builtins.readFile catalogPath));
+  preimage = builtins.removeAttrs realisedCatalogData [ "catalogDigest" ];
+  preimageJson = builtins.toJSON preimage;
+  catalogDigest = realisedCatalogData.catalogDigest;
+  catalogData = realisedCatalogData;
+  catalogJson = builtins.toJSON catalogData;
 in
 {
   options.d2b._artifactCatalogV3 = lib.mkOption {
