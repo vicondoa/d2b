@@ -545,6 +545,20 @@ mod tests {
     }
 
     #[test]
+    fn all_zone_phases_serialize_with_closed_vocabulary() {
+        let phases = [
+            (ZonePhase::Pending, "\"Pending\""),
+            (ZonePhase::Ready, "\"Ready\""),
+            (ZonePhase::Degraded, "\"Degraded\""),
+            (ZonePhase::Failed, "\"Failed\""),
+            (ZonePhase::Unknown, "\"Unknown\""),
+        ];
+        for (phase, expected) in phases {
+            assert_eq!(serde_json::to_string(&phase).unwrap(), expected);
+        }
+    }
+
+    #[test]
     fn isolation_check_is_omitted_without_user_hosts() {
         let report = build_report("work", input(0, 0));
         assert!(
