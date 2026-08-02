@@ -7,6 +7,7 @@
 #![allow(special_module_name)]
 
 pub mod api_catalog;
+pub mod audit;
 pub mod authority;
 pub mod authz;
 pub mod budgets;

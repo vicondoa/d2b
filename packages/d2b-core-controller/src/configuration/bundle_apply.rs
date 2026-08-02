@@ -331,6 +331,26 @@ pub fn begin_bundle_apply(
     store: &[StoredResource],
     now: &Timestamp,
 ) -> Result<BundleApplyOutcome, BundleApplyError> {
+    begin_bundle_apply_mode(service, bundle, store, now, false)
+}
+
+/// Diff a retained bundle for an explicit rollback activation.
+pub fn begin_bundle_rollback(
+    service: &mut ConfigurationService,
+    bundle: &ZoneBundle,
+    store: &[StoredResource],
+    now: &Timestamp,
+) -> Result<BundleApplyOutcome, BundleApplyError> {
+    begin_bundle_apply_mode(service, bundle, store, now, true)
+}
+
+fn begin_bundle_apply_mode(
+    service: &mut ConfigurationService,
+    bundle: &ZoneBundle,
+    store: &[StoredResource],
+    now: &Timestamp,
+    rollback: bool,
+) -> Result<BundleApplyOutcome, BundleApplyError> {
     let declared: Vec<(ResourceKey, DesiredBundleResource, super::BundleResource)> = bundle
         .resources()
         .iter()
@@ -363,7 +383,12 @@ pub fn begin_bundle_apply(
         bundle.content_hash().clone(),
         resources,
     )?;
-    match service.begin_activation(&adapted, store, now)? {
+    let outcome = if rollback {
+        service.begin_rollback(&adapted, store, now)?
+    } else {
+        service.begin_activation(&adapted, store, now)?
+    };
+    match outcome {
         ActivationOutcome::Unchanged => Ok(BundleApplyOutcome::Unchanged {
             name_conflicts: conflicts,
         }),
