@@ -94,7 +94,7 @@ impl StoreMetric {
             Self::CompactionDuration | Self::BackupDuration => {
                 vec![label("outcome", &["ok", "error"])]
             }
-            Self::QueueDepth => vec![label("queue", &["write", "read"])],
+            Self::QueueDepth => vec![label("operation", &["write", "read"])],
             Self::GroupCommitSize | Self::WatchActive | Self::Revision => Vec::new(),
         };
         MetricDescriptor::new(self.name(), labels)
@@ -253,7 +253,7 @@ mod tests {
         let telemetry = EmitterStoreTelemetry::new(emitter);
         telemetry.metric(
             StoreMetric::QueueDepth,
-            BTreeMap::from([("queue".to_owned(), "write".to_owned())]),
+            BTreeMap::from([("operation".to_owned(), "write".to_owned())]),
             1.0,
         );
         telemetry.span(

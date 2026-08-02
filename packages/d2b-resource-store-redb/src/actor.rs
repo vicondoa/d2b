@@ -227,7 +227,7 @@ impl WriterHandle {
             .fetch_add(1, Ordering::Relaxed);
         self.telemetry.metric(
             StoreMetric::QueueDepth,
-            BTreeMap::from([("queue".to_owned(), "write".to_owned())]),
+            BTreeMap::from([("operation".to_owned(), "write".to_owned())]),
             self.signals.writer_queue_depth.load(Ordering::Relaxed) as f64,
         );
         if let Err(error) = sender.try_send(WriterCommand::Commit(Box::new(WriteRequest {
