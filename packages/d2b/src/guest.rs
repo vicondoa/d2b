@@ -39,7 +39,7 @@ pub(crate) struct LifecycleArgs {
     pub(crate) name: String,
     #[arg(long, conflicts_with = "apply")]
     pub(crate) dry_run: bool,
-    #[arg(long, conflicts_with = "dry-run")]
+    #[arg(long, conflicts_with = "dry_run")]
     pub(crate) apply: bool,
     #[arg(long = "no-wait-ready", requires = "apply")]
     pub(crate) no_wait_ready: bool,

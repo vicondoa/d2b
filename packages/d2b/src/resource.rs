@@ -69,9 +69,9 @@ pub(crate) struct TypedWatchArgs {
 
 #[derive(Debug, Args, Clone)]
 pub(crate) struct TypedCreateArgs {
-    #[arg(long = "spec-file", conflicts_with = "spec-stdin")]
+    #[arg(long = "spec-file", conflicts_with = "spec_stdin")]
     pub(crate) spec_file: Option<std::path::PathBuf>,
-    #[arg(long = "spec-stdin", conflicts_with = "spec-file")]
+    #[arg(long = "spec-stdin", conflicts_with = "spec_file")]
     pub(crate) spec_stdin: bool,
     #[arg(long = "wait-for-reconcile")]
     pub(crate) wait_for_reconcile: bool,
@@ -84,9 +84,9 @@ pub(crate) struct TypedUpdateSpecArgs {
     pub(crate) name: String,
     #[arg(long)]
     pub(crate) revision: Option<String>,
-    #[arg(long = "spec-file", conflicts_with = "spec-stdin")]
+    #[arg(long = "spec-file", conflicts_with = "spec_stdin")]
     pub(crate) spec_file: Option<std::path::PathBuf>,
-    #[arg(long = "spec-stdin", conflicts_with = "spec-file")]
+    #[arg(long = "spec-stdin", conflicts_with = "spec_file")]
     pub(crate) spec_stdin: bool,
     #[arg(long = "wait-for-reconcile")]
     pub(crate) wait_for_reconcile: bool,

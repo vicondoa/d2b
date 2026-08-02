@@ -41,7 +41,7 @@ pub(crate) struct ActivationTargetArgs {
     pub(crate) guest_ref: String,
     #[arg(long, conflicts_with = "apply")]
     pub(crate) dry_run: bool,
-    #[arg(long, conflicts_with = "dry-run")]
+    #[arg(long, conflicts_with = "dry_run")]
     pub(crate) apply: bool,
 }
 
@@ -49,7 +49,7 @@ pub(crate) struct ActivationTargetArgs {
 pub(crate) struct ActivationMutationArgs {
     #[arg(long, conflicts_with = "apply")]
     pub(crate) dry_run: bool,
-    #[arg(long, conflicts_with = "dry-run")]
+    #[arg(long, conflicts_with = "dry_run")]
     pub(crate) apply: bool,
 }
 

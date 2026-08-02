@@ -151,9 +151,9 @@ pub(crate) struct GenericWatchArgs {
 #[derive(Debug, Args, Clone)]
 pub(crate) struct GenericCreateArgs {
     pub(crate) resource_type: String,
-    #[arg(long = "spec-file", conflicts_with = "spec-stdin")]
+    #[arg(long = "spec-file", conflicts_with = "spec_stdin")]
     pub(crate) spec_file: Option<PathBuf>,
-    #[arg(long = "spec-stdin", conflicts_with = "spec-file")]
+    #[arg(long = "spec-stdin", conflicts_with = "spec_file")]
     pub(crate) spec_stdin: bool,
     #[arg(long = "wait-for-reconcile")]
     pub(crate) wait_for_reconcile: bool,
@@ -166,9 +166,9 @@ pub(crate) struct GenericUpdateSpecArgs {
     pub(crate) resource_ref: String,
     #[arg(long)]
     pub(crate) revision: Option<String>,
-    #[arg(long = "spec-file", conflicts_with = "spec-stdin")]
+    #[arg(long = "spec-file", conflicts_with = "spec_stdin")]
     pub(crate) spec_file: Option<PathBuf>,
-    #[arg(long = "spec-stdin", conflicts_with = "spec-file")]
+    #[arg(long = "spec-stdin", conflicts_with = "spec_file")]
     pub(crate) spec_stdin: bool,
     #[arg(long = "wait-for-reconcile")]
     pub(crate) wait_for_reconcile: bool,

@@ -42,7 +42,7 @@ pub(crate) struct HostCheckArgs {
 pub(crate) struct HostMutationArgs {
     #[arg(long, conflicts_with = "apply")]
     pub(crate) dry_run: bool,
-    #[arg(long, conflicts_with = "dry-run")]
+    #[arg(long, conflicts_with = "dry_run")]
     pub(crate) apply: bool,
 }
 
@@ -56,13 +56,13 @@ pub(crate) struct HostDoctorArgs {
 pub(crate) struct HostInstallArgs {
     #[arg(long, conflicts_with_all = ["apply", "enable", "start", "no-start"])]
     pub(crate) dry_run: bool,
-    #[arg(long, conflicts_with = "dry-run")]
+    #[arg(long, conflicts_with = "dry_run")]
     pub(crate) apply: bool,
-    #[arg(long, requires = "apply", conflicts_with = "dry-run")]
+    #[arg(long, requires = "apply", conflicts_with = "dry_run")]
     pub(crate) enable: bool,
-    #[arg(long, requires = "apply", conflicts_with_all = ["dry-run", "no-start"])]
+    #[arg(long, requires = "apply", conflicts_with_all = ["dry_run", "no_start"])]
     pub(crate) start: bool,
-    #[arg(long, requires = "apply", conflicts_with_all = ["dry-run", "start"])]
+    #[arg(long, requires = "apply", conflicts_with_all = ["dry_run", "start"])]
     pub(crate) no_start: bool,
 }
 
@@ -70,7 +70,7 @@ pub(crate) struct HostInstallArgs {
 pub(crate) struct HostValidateArgs {
     #[arg(long, conflicts_with = "apply")]
     pub(crate) dry_run: bool,
-    #[arg(long, conflicts_with = "dry-run")]
+    #[arg(long, conflicts_with = "dry_run")]
     pub(crate) apply: bool,
     #[arg(long)]
     pub(crate) wave: Option<String>,
