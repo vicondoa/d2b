@@ -8,6 +8,7 @@ import importlib.util
 import io
 import os
 import pathlib
+import re
 import shlex
 import shutil
 import subprocess
@@ -20,6 +21,38 @@ from unittest import mock
 ROOT = pathlib.Path(__file__).resolve().parents[3]
 SCRATCH = ROOT / ".scratch"
 LAYER1_JOBS = ROOT / "tests" / "tools" / "layer1-jobs.py"
+MAKEFILE = ROOT / "Makefile"
+RUST_DRIVER = ROOT / "tests" / "test-rust.sh"
+
+
+def make_target_block(source: str, target: str) -> str:
+    """Return one Make target and its recipes, without executing Make."""
+    match = re.search(
+        rf"(?m)^{re.escape(target)}\s*:[^\n]*\n",
+        source,
+    )
+    if match is None:
+        raise AssertionError(f"Make target {target!r} is not defined")
+    remainder = source[match.end() :]
+    next_target = re.search(r"(?m)^[A-Za-z0-9_.-]+\s*:", remainder)
+    end = match.end() + (next_target.start() if next_target else len(remainder))
+    return source[match.start() : end]
+
+
+def manifest_source() -> str:
+    return "\n".join(
+        (
+            MAKEFILE.read_text(encoding="utf-8"),
+            RUST_DRIVER.read_text(encoding="utf-8"),
+        )
+    )
+
+
+def source_near(source: str, needle: str, radius: int = 1200) -> str:
+    index = source.find(needle)
+    if index < 0:
+        raise AssertionError(f"source does not contain {needle!r}")
+    return source[max(0, index - radius) : index + radius]
 
 
 def load_layer1_jobs() -> types.ModuleType:
@@ -403,6 +436,475 @@ set -euo pipefail
         self.assertIn("api-surface-pin:", makefile)
         self.assertIn("D2B_API_SURFACE_UPDATE=1 bash tests/tools/api-surface-json.sh", makefile)
         self.assertIn('prefix-key: "v2-rust-api-json"', workflow)
+
+    def test_rust_aggregate_is_a_make_owned_keep_going_dag(self) -> None:
+        makefile = MAKEFILE.read_text(encoding="utf-8")
+        aggregate = make_target_block(makefile, "test-rust")
+
+        self.assertNotIn("bash tests/test-rust.sh", aggregate)
+        self.assertIn("$(MAKE)", aggregate)
+        self.assertIn("--keep-going", aggregate)
+        self.assertIn("--output-sync=target", aggregate)
+        for leaf in (
+            "rust-api-surface",
+            "rust-main-workspace",
+            "rust-schema-reproducibility",
+            "rust-inventory-and-stub",
+            "rust-broker",
+            "rust-guest-shell-runner",
+            "rust-no-bash-ast",
+            "rust-supply-chain",
+        ):
+            self.assertRegex(
+                makefile,
+                rf"(?m)^{re.escape(leaf)}\s*:",
+                msg=f"Rust DAG leaf {leaf} is not Make-owned",
+            )
+
+    def test_rust_budget_validation_is_actionable_static_and_redacted(self) -> None:
+        source = "\n".join(
+            (
+                MAKEFILE.read_text(encoding="utf-8"),
+                RUST_DRIVER.read_text(encoding="utf-8"),
+            )
+        )
+        self.assertIn("D2B_RUST_BUDGET", source)
+        budget_region = source_near(source, "D2B_RUST_BUDGET", radius=2600)
+        self.assertRegex(budget_region, r"(?i)positive integer")
+        self.assertRegex(budget_region, r"(?m)\b(?:exit|return)\s+2\b")
+        self.assertRegex(budget_region, r"(?i)(?:empty|zero|non[- ]digit|invalid)")
+
+        invalid_lines = [
+            line
+            for line in budget_region.splitlines()
+            if re.search(r"(?i)(?:invalid|positive integer|must be)", line)
+        ]
+        self.assertTrue(invalid_lines, "the invalid-budget branch has no static message")
+        for line in invalid_lines:
+            self.assertNotRegex(
+                line,
+                r"\$(?:\{)?(?:D2B_RUST_BUDGET|budget|requested|raw|value)"
+                r"(?:\}|[A-Za-z0-9_:-])?",
+                msg="invalid-budget diagnostics must not echo untrusted environment text",
+            )
+
+    def test_rust_logs_the_effective_budget_and_names_the_target_control(self) -> None:
+        source = "\n".join(
+            (
+                MAKEFILE.read_text(encoding="utf-8"),
+                RUST_DRIVER.read_text(encoding="utf-8"),
+            )
+        )
+        logging_lines = [
+            line
+            for line in source.splitlines()
+            if re.search(r"\b(?:log|echo|printf)\b", line)
+        ]
+        self.assertTrue(
+            any(
+                re.search(r"(?i)(?:effective|runtime)", line)
+                and re.search(r"(?i)budget", line)
+                for line in logging_lines
+            ),
+            "the Rust target must log the effective runtime budget",
+        )
+        self.assertTrue(
+            any(
+                "D2B_RUST_BUDGET" in line
+                and re.search(r"(?i)(?:target|control|override)", line)
+                for line in logging_lines
+            ),
+            "the budget log must direct contributors to D2B_RUST_BUDGET",
+        )
+
+    def test_rust_default_budget_reads_cache_aware_cgroup_limits(self) -> None:
+        source = "\n".join(
+            (
+                MAKEFILE.read_text(encoding="utf-8"),
+                RUST_DRIVER.read_text(encoding="utf-8"),
+            )
+        )
+        for marker in (
+            "/proc/self/cgroup",
+            "/proc/meminfo",
+            "MemAvailable",
+            "memory.max",
+            "memory.high",
+            "memory.current",
+            "memory.stat",
+            "inactive_file",
+        ):
+            self.assertIn(marker, source)
+        self.assertRegex(
+            source,
+            r"(?is)memory\.current.{0,700}inactive_file|inactive_file.{0,700}memory\.current",
+        )
+        self.assertRegex(source, r"(?i)(?:smaller|min(?:imum)?|least)")
+        self.assertRegex(source, r"(?i)2\s*GiB")
+        self.assertRegex(source, r"(?i)3\s*GiB")
+
+    def test_rust_unreadable_cgroup_controller_fails_closed_to_budget_one(self) -> None:
+        source = "\n".join(
+            (
+                MAKEFILE.read_text(encoding="utf-8"),
+                RUST_DRIVER.read_text(encoding="utf-8"),
+            )
+        )
+        self.assertRegex(
+            source,
+            r"(?is)(?:cgroup|controller).{0,400}(?:unreadable|cannot read|visibility).{0,400}(?:budget|worker).{0,100}(?:1|one)",
+        )
+        self.assertRegex(source, r"(?i)fix controller visibility")
+        self.assertRegex(
+            source,
+            r"(?is)(?:outside|out of).{0,100}(?:the )?constrained environment",
+        )
+
+    def test_rust_leaf_recipes_are_ordinary_and_drop_make_metadata_immediately(self) -> None:
+        makefile = MAKEFILE.read_text(encoding="utf-8")
+        for leaf in (
+            "rust-api-surface",
+            "rust-main-workspace",
+            "rust-schema-reproducibility",
+            "rust-inventory-and-stub",
+            "rust-broker",
+            "rust-guest-shell-runner",
+            "rust-no-bash-ast",
+            "rust-supply-chain",
+        ):
+            block = make_target_block(makefile, leaf)
+            recipes = [
+                line
+                for line in block.splitlines()
+                if line.startswith("\t") and line.strip()
+            ]
+            self.assertTrue(recipes, f"Rust leaf {leaf} has no recipe")
+            for recipe in recipes:
+                self.assertFalse(
+                    recipe.lstrip().startswith("+"),
+                    msg=f"Rust leaf {leaf} must be an ordinary Make recipe",
+                )
+                self.assertNotIn(
+                    "$(MAKE)",
+                    recipe,
+                    msg=f"Rust leaf {leaf} must not own recursive Make scheduling",
+                )
+        self.assertRegex(
+            makefile,
+            r"(?i)ordinary\s+(?:non[- ]submake|leaf)\s+recipe",
+        )
+
+        driver = RUST_DRIVER.read_text(encoding="utf-8")
+        metadata = re.search(
+            r"(?m)^\s*unset\s+MAKEFLAGS\s+MFLAGS\s+MAKELEVEL\s*$",
+            driver,
+        )
+        self.assertIsNotNone(
+            metadata,
+            "the leaf must immediately remove inherited Make metadata",
+        )
+        assert metadata is not None
+        first_tool_match = re.search(
+            r"(?m)^\s*(?:cargo|nix|rustup)\s+",
+            driver,
+        )
+        self.assertIsNotNone(first_tool_match, "Rust leaf setup has no tool command")
+        assert first_tool_match is not None
+        self.assertLess(
+            metadata.start(),
+            first_tool_match.start(),
+            "MAKEFLAGS/MFLAGS/MAKELEVEL must be removed before leaf setup",
+        )
+        self.assertNotRegex(
+            driver,
+            r"(?m)^\s*(?:eval|exec)\b.*(?:jobserver|MAKEFLAGS|MFLAGS)",
+        )
+
+    def test_removed_no_argument_all_scheduler_is_rejected_actionably(self) -> None:
+        driver = RUST_DRIVER.read_text(encoding="utf-8")
+
+        self.assertNotIn('rust_mode="${1:-all}"', driver)
+        self.assertRegex(
+            driver,
+            r"(?is)(?:no[- ]argument|all scheduler|all mode|removed).{0,400}"
+            r"make\s+test-rust",
+        )
+        self.assertRegex(
+            driver,
+            r"(?is)(?:no[- ]argument|all scheduler|all mode|removed).{0,500}"
+            r"(?:exit|return)\s+2\b",
+        )
+
+    def test_top_level_make_removes_prior_evidence_before_dispatch(self) -> None:
+        makefile = MAKEFILE.read_text(encoding="utf-8")
+        aggregate = make_target_block(makefile, "test-rust")
+        self.assertIn("D2B_EXECUTION_MANIFEST", aggregate)
+        invalidation = re.search(
+            r"(?is)(?:(?:D2B_EXECUTION_MANIFEST|execution[- ]manifest).{0,300}"
+            r"(?:remove|unlink|invalidate|rm\s+-f)|"
+            r"(?:remove|unlink|invalidate|rm\s+-f).{0,180}"
+            r"(?:D2B_EXECUTION_MANIFEST|execution[- ]manifest|manifest))",
+            aggregate,
+        )
+        self.assertIsNotNone(
+            invalidation,
+            "top-level Make must invalidate requested evidence before dispatch",
+        )
+        assert invalidation is not None
+        dispatch_positions = [
+            position
+            for position in (
+                aggregate.find("$(MAKE)"),
+                aggregate.find("bash tests/test-rust.sh"),
+            )
+            if position >= 0
+        ]
+        self.assertTrue(dispatch_positions, "Rust dispatch is not visible in Make")
+        self.assertLess(
+            invalidation.start(),
+            min(dispatch_positions),
+            "prior success evidence must be removed before any Rust leaf starts",
+        )
+
+    def test_manifest_uses_injected_clock_process_and_path_boundaries(self) -> None:
+        source = manifest_source()
+        region = source_near(source, "D2B_EXECUTION_MANIFEST", radius=5000)
+
+        self.assertRegex(
+            region,
+            r"(?is)(?:manifest|shutdown).{0,180}"
+            r"(?:clock|now).{0,180}(?:inject|boundary|test|hook|fn)",
+        )
+        self.assertRegex(
+            region,
+            r"(?is)(?:manifest|shutdown).{0,180}"
+            r"(?:process|child).{0,180}(?:inject|boundary|test|hook|fn)",
+        )
+        self.assertRegex(
+            region,
+            r"(?is)(?:manifest|cleanup|path).{0,180}"
+            r"(?:path|resolver|directory).{0,180}"
+            r"(?:inject|boundary|test|hook|fn)",
+        )
+        self.assertRegex(region, r"(?i)10\s*(?:seconds|s)")
+        self.assertNotRegex(
+            source,
+            r"D2B_(?!TEST_)[A-Z0-9_]*(?:SHUTDOWN|MANIFEST)[A-Z0-9_]*GRACE",
+            msg="production shutdown grace must not become a public timing knob",
+        )
+
+    def test_manifest_fragments_are_versioned_same_filesystem_and_atomic(self) -> None:
+        source = manifest_source()
+        for field in (
+            "version",
+            "run_status",
+            "completed_leaves",
+            "failed_surfaces",
+            "fragment",
+        ):
+            self.assertRegex(
+                source,
+                rf"(?i){re.escape(field)}",
+                msg=f"execution evidence is missing {field}",
+            )
+        self.assertRegex(
+            source,
+            r"(?is)(?:same[- ]filesystem|same parent|adjacent|st_dev)",
+        )
+        self.assertRegex(
+            source,
+            r"(?is)(?:mktemp|mkdir|install).{0,260}(?:0700|mode[^0-9]*700)",
+        )
+        self.assertRegex(source, r"(?i)(?:atomic|rename|\bmv\b)")
+        self.assertRegex(
+            source,
+            r"(?is)(?:fragment|temporary).{0,500}(?:rename|atomic|\bmv\b)",
+        )
+        self.assertRegex(
+            source,
+            r"(?is)(?:version|schema).{0,120}(?:1|v1)",
+        )
+
+    def test_manifest_anchors_parent_before_noninheritable_ofd_lock(self) -> None:
+        source = manifest_source()
+        for marker in (
+            "O_CLOEXEC",
+            "O_NOFOLLOW",
+            "F_OFD_SETLK",
+            "openat2",
+            "RESOLVE_NO_SYMLINKS",
+            "RESOLVE_NO_MAGICLINKS",
+        ):
+            self.assertIn(marker, source)
+
+        parent_positions = [
+            position
+            for position in (
+                source.find("openat2"),
+                source.lower().find("manifest parent"),
+                source.lower().find("parent_fd"),
+                source.lower().find("anchor"),
+            )
+            if position >= 0
+        ]
+        lock_positions = [
+            position
+            for position in (
+                source.find(".lock"),
+                source.lower().find("lockfile"),
+                source.find("F_OFD_SETLK"),
+            )
+            if position >= 0
+        ]
+        self.assertTrue(parent_positions, "manifest parent is not visibly anchored")
+        self.assertTrue(lock_positions, "persistent manifest lock is not visible")
+        self.assertLess(
+            min(parent_positions),
+            min(lock_positions),
+            "the manifest parent must be anchored before relative lock creation",
+        )
+        self.assertRegex(
+            source,
+            r"(?is)(?:parent_fd|manifest parent|anchored parent).{0,700}"
+            r"(?:openat|lockfile|\.lock).{0,700}F_OFD_SETLK",
+        )
+        lock_region = source_near(source, "F_OFD_SETLK", radius=1800)
+        self.assertRegex(lock_region, r"0600")
+        self.assertRegex(lock_region, r"(?i)(?:current uid|effective uid|geteuid|st_uid)")
+        self.assertRegex(lock_region, r"(?i)(?:non[- ]blocking|F_OFD_SETLK)")
+        self.assertNotIn("F_OFD_SETLKW", source)
+
+    def test_manifest_lock_contention_is_fixed_actionable_and_path_free(self) -> None:
+        source = manifest_source()
+        self.assertIn("manifest-lock-contended", source)
+        region = source_near(source, "manifest-lock-contended", radius=1600)
+        for wording in (
+            "execution-manifest lock",
+            "wait",
+            "retry",
+        ):
+            self.assertIn(wording, region.lower())
+
+        diagnostic_lines = [
+            line
+            for line in region.splitlines()
+            if "manifest-lock-contended" in line
+            or "execution-manifest lock" in line.lower()
+        ]
+        self.assertTrue(diagnostic_lines)
+        for line in diagnostic_lines:
+            self.assertNotRegex(
+                line,
+                r"\$(?:\{)?(?:manifest|lock|path|tmp|dir)[A-Za-z0-9_}]?",
+                msg="lock contention output must not interpolate a filesystem path",
+            )
+            self.assertNotRegex(
+                line,
+                r"/(?:tmp|home|run|nix|var)/",
+                msg="lock contention output must not print an absolute path",
+            )
+
+    def test_manifest_rejects_unsafe_owner_mode_and_cleans_only_anchored_entries(self) -> None:
+        source = manifest_source()
+        for marker in (
+            "RESOLVE_NO_SYMLINKS",
+            "RESOLVE_NO_MAGICLINKS",
+            "fstat",
+            "st_uid",
+            "st_mode",
+            "0600",
+            "0700",
+            "openat",
+            "unlinkat",
+        ):
+            self.assertIn(marker, source)
+
+        safety_region = source_near(source, "RESOLVE_NO_SYMLINKS", radius=2600)
+        self.assertRegex(
+            safety_region,
+            r"(?is)(?:reject|refus|mismatch|invalid).{0,260}"
+            r"(?:owner|uid|mode|permission|symlink|magiclink)",
+        )
+        self.assertRegex(
+            safety_region,
+            r"(?is)(?:fragment|temporary).{0,500}"
+            r"(?:0700|mode[^0-9]*700)",
+        )
+        self.assertRegex(
+            safety_region,
+            r"(?is)(?:fragment|temporary).{0,500}"
+            r"(?:current uid|effective uid|geteuid|st_uid)",
+        )
+        cleanup_region = source_near(source, "unlinkat", radius=3000)
+        self.assertRegex(
+            cleanup_region,
+            r"(?is)(?:invalid|unsafe|mismatch|reject).{0,260}continue",
+        )
+        self.assertNotRegex(
+            cleanup_region,
+            r"\brm\s+-rf\b",
+            msg="stale evidence cleanup must not use path-based recursive removal",
+        )
+
+    def test_manifest_failed_and_interrupted_runs_publish_current_partial_evidence(self) -> None:
+        source = manifest_source()
+        for status in ("passed", "failed", "interrupted"):
+            self.assertRegex(
+                source,
+                rf"(?is)run_status.{0,100}(?:[\"'=])?{status}",
+                msg=f"manifest has no {status} status",
+            )
+        for field in ("completed_leaves", "failed_surfaces", "partial", "stale"):
+            self.assertIn(field, source)
+        self.assertRegex(
+            source,
+            r"(?is)(?:failed|interrupted).{0,700}"
+            r"(?:finaliz|publish|replace).{0,700}"
+            r"(?:atomic|manifest)",
+        )
+        self.assertRegex(
+            source,
+            r"(?is)(?:current|run[- ]specific).{0,260}"
+            r"(?:stale|temporary).{0,260}(?:clean|remove|unlink)",
+        )
+
+    def test_manifest_shutdown_reaps_children_closes_fds_and_preserves_status(self) -> None:
+        source = manifest_source()
+        for marker in (
+            "SIGTERM",
+            "SIGKILL",
+            "wait",
+            "reap",
+            "setsid",
+            "O_CLOEXEC",
+            "FD_CLOEXEC",
+        ):
+            self.assertIn(marker, source)
+        shutdown_region = source_near(source, "SIGTERM", radius=3600)
+        self.assertRegex(
+            shutdown_region,
+            r"(?is)SIGTERM.{0,1400}(?:10\s*(?:seconds|s)|clock|deadline)"
+            r".{0,1400}SIGKILL",
+        )
+        self.assertRegex(
+            shutdown_region,
+            r"(?is)(?:SIGKILL|kill).{0,500}(?:wait|reap)",
+        )
+        self.assertRegex(
+            source,
+            r"(?is)(?:original|saved|preserved)[-_ ]status.{0,1200}"
+            r"(?:finaliz|publish).{0,1200}(?:exit|return)",
+        )
+        self.assertRegex(
+            source,
+            r"(?is)(?:close|closed|closing).{0,260}"
+            r"(?:evidence|fragment|manifest).{0,260}(?:fd|file descriptor)",
+        )
+        self.assertRegex(
+            source,
+            r"(?is)(?:process group|kill\s+[-].*group|kill\s+--\s*-).{0,800}"
+            r"(?:wait|reap)",
+        )
 
     def test_diagnostic_redaction_normalizes_ansi_before_matching(self) -> None:
         layer1_jobs = load_layer1_jobs()
