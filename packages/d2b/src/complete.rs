@@ -85,14 +85,13 @@ fn render_completion_names(shell: CompletionShell, provider_commands: &[String])
     names.sort();
     names.dedup();
     let words = names.join(" ");
-    let output = match shell {
+    match shell {
         CompletionShell::Bash => format!(
             "_d2b_complete() {{\n  local cur=\"${{COMP_WORDS[COMP_CWORD]}}\"\n  COMPREPLY=( $(compgen -W '{words}' -- \"$cur\") )\n}}\ncomplete -F _d2b_complete d2b\n"
         ),
         CompletionShell::Zsh => format!("#compdef d2b\n_arguments '1:command:({words})'\n"),
         CompletionShell::Fish => format!("complete -c d2b -f -a '{words}'\n"),
-    };
-    output
+    }
 }
 
 fn load_provider_commands(
