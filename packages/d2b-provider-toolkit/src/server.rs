@@ -311,7 +311,7 @@ mod tests {
                 CanonicalJsonObject::empty(),
             )
             .expect("dispatch");
-        assert_eq!(response.get("state").is_some(), true);
+        assert!(response.get("state").is_some());
         assert_eq!(server.generated_services().len(), 1);
     }
 }

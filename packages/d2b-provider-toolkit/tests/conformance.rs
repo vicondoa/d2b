@@ -51,7 +51,7 @@ async fn fake_provider_round_trip_uses_the_exact_placement_binding() {
         )
         .await
         .expect("round trip");
-    assert_eq!(response.payload().get("state").is_some(), true);
+    assert!(response.payload().get("state").is_some());
     assert_eq!(
         proxy
             .dispatch(&second_admitted.context, first.call(method).expect("call"),)
