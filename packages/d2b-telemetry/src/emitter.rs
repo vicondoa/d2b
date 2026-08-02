@@ -232,6 +232,12 @@ impl BoundedEmitter {
         let Ok(socket) = UnixDatagram::unbound() else {
             return;
         };
+        // Export is deliberately best-effort. A blocking datagram send can
+        // otherwise pin a core process behind a stalled collector, defeating
+        // the bounded-ring failure mode.
+        if socket.set_nonblocking(true).is_err() {
+            return;
+        }
         if socket.connect(self.path.as_path()).is_ok() {
             state.socket = Some(socket);
         }

@@ -9,7 +9,7 @@ pub mod record_types;
 pub mod segment;
 pub mod sink;
 
-pub use export::{ExportLine, export_segments};
+pub use export::{ExportLine, export_segments, export_segments_range, is_segment_name};
 pub use hash_chain::{AuditChainLink, AuditHash, AuditHashError, genesis_hash};
 pub use rate_limit::{
     AuditRateLimiter, AuditWriteClass, DEFAULT_AUDIT_WRITES_PER_SECOND, RateDecision,

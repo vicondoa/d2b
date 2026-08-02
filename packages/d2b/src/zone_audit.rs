@@ -1,6 +1,6 @@
 //! Admin-only Zone audit export support.
 
-use d2b_audit::{ExportLine, export_segments};
+use d2b_audit::{ExportLine, export_segments_range};
 
 /// A bounded audit-export request.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,6 +47,8 @@ pub enum ZoneAuditError {
     ZoneInvalid,
     /// The requested Zone did not match the grant.
     ZoneMismatch,
+    /// A segment boundary was not an owned basename.
+    RangeInvalid,
     /// Segment read or verification failed.
     ReadFailed,
 }
@@ -57,6 +59,7 @@ impl core::fmt::Display for ZoneAuditError {
             Self::AdminRequired => "audit-export-admin-required",
             Self::ZoneInvalid => "audit-export-zone-invalid",
             Self::ZoneMismatch => "audit-export-zone-mismatch",
+            Self::RangeInvalid => "audit-export-range-invalid",
             Self::ReadFailed => "audit-export-read-failed",
         })
     }
@@ -73,7 +76,18 @@ pub fn export_ndjson(
     if grant.zone != request.zone {
         return Err(ZoneAuditError::ZoneMismatch);
     }
-    let lines = export_segments(audit_directory).map_err(|_| ZoneAuditError::ReadFailed)?;
+    let lines = export_segments_range(
+        audit_directory,
+        request.after.as_deref(),
+        request.before.as_deref(),
+    )
+    .map_err(|error| {
+        if error.kind() == std::io::ErrorKind::InvalidInput {
+            ZoneAuditError::RangeInvalid
+        } else {
+            ZoneAuditError::ReadFailed
+        }
+    })?;
     Ok(lines.into_iter().map(|line| line.to_json()).collect())
 }
 

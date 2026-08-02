@@ -104,33 +104,58 @@ pub struct SupportBundle {
 pub fn build_bundle(
     doctor: ZoneDoctorReport,
     quarantined: bool,
-    mut resource_status: Vec<ResourceStatusSnapshot>,
-    mut controllers: Vec<ControllerSnapshot>,
-    mut schema_catalog: Vec<(String, String)>,
-    mut audit_segments: Vec<AuditSegmentInventory>,
+    resource_status: Vec<ResourceStatusSnapshot>,
+    controllers: Vec<ControllerSnapshot>,
+    schema_catalog: Vec<(String, String)>,
+    audit_segments: Vec<AuditSegmentInventory>,
     telemetry: Option<OtelSummary>,
-    mut logs: Vec<StructuredLogEntry>,
+    logs: Vec<StructuredLogEntry>,
 ) -> SupportBundle {
-    resource_status.truncate(MAX_TOTAL_SNAPSHOTS);
-    let mut by_type = std::collections::BTreeMap::<String, usize>::new();
-    resource_status.retain(|snapshot| {
+    let mut by_type = std::collections::BTreeMap::<String, Vec<_>>::new();
+    for snapshot in resource_status.into_iter().map(sanitize_resource_status) {
         let kind = snapshot
             .uid
             .split_once(':')
             .map(|(kind, _)| kind)
-            .unwrap_or("resource");
-        let count = by_type.entry(kind.to_owned()).or_default();
-        if *count >= MAX_SNAPSHOTS_PER_TYPE {
-            false
-        } else {
-            *count += 1;
-            true
-        }
-    });
+            .unwrap_or("resource")
+            .to_owned();
+        by_type.entry(kind).or_default().push(snapshot);
+    }
+    let mut resource_status = by_type
+        .into_values()
+        .flat_map(|mut snapshots| {
+            if snapshots.len() > MAX_SNAPSHOTS_PER_TYPE {
+                let keep_from = snapshots.len() - MAX_SNAPSHOTS_PER_TYPE;
+                snapshots.drain(..keep_from);
+            }
+            snapshots
+        })
+        .collect::<Vec<_>>();
+    if resource_status.len() > MAX_TOTAL_SNAPSHOTS {
+        let keep_from = resource_status.len() - MAX_TOTAL_SNAPSHOTS;
+        resource_status.drain(..keep_from);
+    }
+    let mut controllers = controllers
+        .into_iter()
+        .map(sanitize_controller)
+        .collect::<Vec<_>>();
     controllers.truncate(64);
+    let mut schema_catalog = schema_catalog
+        .into_iter()
+        .map(|(name, version)| (safe_token(&name), safe_token(&version)))
+        .collect::<Vec<_>>();
     schema_catalog.truncate(128);
+    let mut audit_segments = audit_segments
+        .into_iter()
+        .map(sanitize_audit_segment)
+        .collect::<Vec<_>>();
     audit_segments.truncate(128);
-    logs.truncate(MAX_LOG_ENTRIES);
+    let mut logs = logs.into_iter().map(sanitize_log).collect::<Vec<_>>();
+    if logs.len() > MAX_LOG_ENTRIES {
+        let keep_from = logs.len() - MAX_LOG_ENTRIES;
+        logs.drain(..keep_from);
+    }
+    let telemetry = telemetry.map(sanitize_otel);
     SupportBundle {
         bundle_completeness: if quarantined { "partial" } else { "complete" },
         doctor,
@@ -148,6 +173,167 @@ pub fn render_ndjson(bundle: &SupportBundle) -> Result<String, serde_json::Error
     let mut output = serde_json::to_string(bundle)?;
     output.push('\n');
     Ok(output)
+}
+
+fn sanitize_resource_status(mut snapshot: ResourceStatusSnapshot) -> ResourceStatusSnapshot {
+    snapshot.uid = safe_opaque(&snapshot.uid);
+    snapshot.zone = safe_zone(&snapshot.zone);
+    snapshot.observed_at = safe_observation(&snapshot.observed_at);
+    snapshot.phase = closed_token(
+        &snapshot.phase,
+        &["pending", "ready", "degraded", "failed", "unknown"],
+    );
+    snapshot.conditions = snapshot
+        .conditions
+        .into_iter()
+        .filter_map(|condition| {
+            let value = closed_token(
+                &condition,
+                &[
+                    "store-quarantined",
+                    "deletion-pending",
+                    "pending-cleanup",
+                    "telemetry-export-unavailable",
+                    "cleanup-stalled",
+                ],
+            );
+            (value != "unknown").then_some(value)
+        })
+        .collect();
+    snapshot.outcome = snapshot.outcome.and_then(|outcome| {
+        let value = closed_token(&outcome, &["ok", "error", "denied", "degraded"]);
+        (value != "unknown").then_some(value)
+    });
+    snapshot
+}
+
+fn sanitize_controller(mut controller: ControllerSnapshot) -> ControllerSnapshot {
+    controller.handler = closed_token(
+        &controller.handler,
+        &[
+            "configuration",
+            "api_catalog",
+            "authz",
+            "provider",
+            "controller_registration",
+            "ownership",
+            "watch_maintenance",
+            "ephemeral_cleanup",
+            "zone_link",
+            "budget",
+            "store_lifecycle",
+            "system_core_host",
+            "system_core_user",
+        ],
+    );
+    controller.phase = closed_token(
+        &controller.phase,
+        &["pending", "ready", "degraded", "failed", "unknown"],
+    );
+    controller
+}
+
+fn sanitize_audit_segment(mut segment: AuditSegmentInventory) -> AuditSegmentInventory {
+    if !owned_segment_name(&segment.filename) {
+        segment.filename = "audit-00000000000000000000.jsonl".to_owned();
+    }
+    segment
+}
+
+fn sanitize_otel(mut telemetry: OtelSummary) -> OtelSummary {
+    telemetry.phase = closed_token(
+        &telemetry.phase,
+        &["ok", "buffering", "unavailable", "unknown"],
+    );
+    telemetry
+}
+
+fn sanitize_log(mut log: StructuredLogEntry) -> StructuredLogEntry {
+    log.event = closed_token(
+        &log.event,
+        &[
+            "collector-drain",
+            "collector-export",
+            "collector-startup",
+            "forwarder-session",
+            "journald-cycle",
+            "unknown",
+        ],
+    );
+    log.outcome = closed_token(&log.outcome, &["ok", "error", "dropped", "unknown"]);
+    log.timestamp = safe_observation(&log.timestamp);
+    log
+}
+
+fn closed_token(value: &str, allowed: &[&str]) -> String {
+    if allowed.contains(&value) {
+        value.to_owned()
+    } else {
+        "unknown".to_owned()
+    }
+}
+
+fn safe_token(value: &str) -> String {
+    if !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+    {
+        value.to_owned()
+    } else {
+        "unknown".to_owned()
+    }
+}
+
+fn safe_opaque(value: &str) -> String {
+    if !value.is_empty()
+        && value.len() <= 256
+        && value
+            .bytes()
+            .all(|byte| !byte.is_ascii_control() && byte != b'/')
+    {
+        value.to_owned()
+    } else {
+        "opaque".to_owned()
+    }
+}
+
+fn safe_zone(value: &str) -> String {
+    if !value.is_empty()
+        && value.len() <= 63
+        && value.bytes().enumerate().all(|(index, byte)| {
+            (byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+                && (index != 0 || byte.is_ascii_lowercase())
+        })
+    {
+        value.to_owned()
+    } else {
+        "unknown".to_owned()
+    }
+}
+
+fn safe_observation(value: &str) -> String {
+    if !value.is_empty()
+        && value.len() <= 64
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b':' | b'.' | b'T' | b'Z')
+        })
+    {
+        value.to_owned()
+    } else {
+        "unknown".to_owned()
+    }
+}
+
+fn owned_segment_name(name: &str) -> bool {
+    let Some(digits) = name
+        .strip_prefix("audit-")
+        .and_then(|value| value.strip_suffix(".jsonl"))
+    else {
+        return false;
+    };
+    digits.len() == 20 && digits.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 #[cfg(test)]

@@ -9,7 +9,13 @@ use d2b_telemetry::{
 /// Maximum frame bytes accepted before policy evaluation.
 pub const MAX_INGRESS_FRAME_BYTES: usize = 4 * 1024 * 1024;
 /// Maximum frames quarantined for one stream.
-pub const MAX_QUARANTINED_FRAMES: usize = 32;
+pub const MAX_QUARANTINED_CONNECTIONS: usize = 64;
+/// Backward-compatible name for the bounded quarantine ceiling.
+pub const MAX_QUARANTINED_FRAMES: usize = MAX_QUARANTINED_CONNECTIONS;
+/// Number of policy violations before a stream is quarantined.
+pub const QUARANTINE_VIOLATION_THRESHOLD: u8 = 3;
+/// Maximum time a stream quarantine is intended to remain active.
+pub const QUARANTINE_DURATION_SECONDS: u64 = 30;
 
 /// Telemetry ingress adapter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -119,8 +125,14 @@ impl MetricFrame {
 /// A policy gate with bounded stream quarantine state.
 #[derive(Debug, Default)]
 pub struct IngressPolicyGate {
-    quarantined: std::collections::BTreeSet<Ingress>,
-    quarantined_frames: usize,
+    connections: BTreeMap<(Ingress, u64), ConnectionState>,
+    quarantined_connections: usize,
+}
+
+#[derive(Debug, Default)]
+struct ConnectionState {
+    violations: u8,
+    quarantined: bool,
 }
 
 impl IngressPolicyGate {
@@ -132,18 +144,41 @@ impl IngressPolicyGate {
         canaries: &IdentityCanaries,
         capacity_available: bool,
     ) -> (IngressOutcome, IngressErrorClass) {
-        if self.quarantined.contains(&ingress) {
+        self.admit_for_connection(ingress, 0, frame, canaries, capacity_available)
+    }
+
+    /// Admit a frame for one opaque stream connection.
+    ///
+    /// Datagram ingress uses the legacy connection id `0` and is never
+    /// quarantined. Stream callers should provide their own bounded opaque
+    /// connection id so one noisy producer cannot quarantine its peers.
+    pub fn admit_for_connection(
+        &mut self,
+        ingress: Ingress,
+        connection_id: u64,
+        frame: &MetricFrame,
+        canaries: &IdentityCanaries,
+        capacity_available: bool,
+    ) -> (IngressOutcome, IngressErrorClass) {
+        if self
+            .connections
+            .get(&(ingress, connection_id))
+            .is_some_and(|state| state.quarantined)
+        {
             return (IngressOutcome::Quarantined, IngressErrorClass::Malformed);
         }
         if frame.encoded_bytes > MAX_INGRESS_FRAME_BYTES {
-            return self.reject(ingress, IngressErrorClass::Oversize);
+            return self.reject(ingress, connection_id, IngressErrorClass::Oversize);
         }
         if !valid_resource_attributes(&frame.resource_attributes) {
-            return self.reject(ingress, IngressErrorClass::Malformed);
+            return self.reject(ingress, connection_id, IngressErrorClass::Malformed);
+        }
+        if frame.points.is_empty() {
+            return self.reject(ingress, connection_id, IngressErrorClass::Malformed);
         }
         for point in &frame.points {
             if let Err(error) = validate_data_point(&point.descriptor, &point.labels, canaries) {
-                return self.reject(ingress, map_policy_error(error));
+                return self.reject(ingress, connection_id, map_policy_error(error));
             }
         }
         if !capacity_available {
@@ -154,29 +189,73 @@ impl IngressPolicyGate {
 
     /// Whether a stream is quarantined.
     pub fn is_quarantined(&self, ingress: Ingress) -> bool {
-        self.quarantined.contains(&ingress)
+        self.connections
+            .iter()
+            .any(|((kind, _), state)| *kind == ingress && state.quarantined)
     }
 
-    /// Number of frames retained while quarantined.
+    /// Whether one opaque connection is quarantined.
+    pub fn is_connection_quarantined(&self, ingress: Ingress, connection_id: u64) -> bool {
+        self.connections
+            .get(&(ingress, connection_id))
+            .is_some_and(|state| state.quarantined)
+    }
+
+    /// Number of bounded quarantine entries retained.
     pub const fn quarantined_frames(&self) -> usize {
-        self.quarantined_frames
+        self.quarantined_connections
     }
 
     /// Credits available to a quarantined imported stream.
     pub const fn available_import_credits(&self) -> usize {
-        0
+        // The legacy API has no connection id. A quarantined import means no
+        // anonymous import credits can be granted.
+        if self.quarantined_connections == 0 {
+            1
+        } else {
+            0
+        }
+    }
+
+    /// Credits available to one imported stream connection.
+    pub fn available_import_credits_for(&self, connection_id: u64) -> usize {
+        if self.is_connection_quarantined(Ingress::ImportStream, connection_id) {
+            0
+        } else {
+            1
+        }
+    }
+
+    /// Forget a disconnected connection and release its quarantine slot.
+    pub fn reset_connection(&mut self, ingress: Ingress, connection_id: u64) {
+        if self
+            .connections
+            .remove(&(ingress, connection_id))
+            .is_some_and(|state| state.quarantined)
+        {
+            self.quarantined_connections = self.quarantined_connections.saturating_sub(1);
+        }
     }
 
     fn reject(
         &mut self,
         ingress: Ingress,
+        connection_id: u64,
         error: IngressErrorClass,
     ) -> (IngressOutcome, IngressErrorClass) {
-        if matches!(ingress, Ingress::ImportStream)
-            && self.quarantined_frames < MAX_QUARANTINED_FRAMES
+        if matches!(ingress, Ingress::EmitterUnix) {
+            return (IngressOutcome::Rejected, error);
+        }
+        let state = self
+            .connections
+            .entry((ingress, connection_id))
+            .or_default();
+        state.violations = state.violations.saturating_add(1);
+        if state.violations >= QUARANTINE_VIOLATION_THRESHOLD
+            && self.quarantined_connections < MAX_QUARANTINED_CONNECTIONS
         {
-            self.quarantined.insert(ingress);
-            self.quarantined_frames += 1;
+            state.quarantined = true;
+            self.quarantined_connections += 1;
             return (IngressOutcome::Quarantined, error);
         }
         (IngressOutcome::Rejected, error)
@@ -253,14 +332,20 @@ mod tests {
     fn import_stream_has_no_credits_after_quarantine() {
         let mut gate = IngressPolicyGate::default();
         let invalid = frame("vm", "work");
-        let outcome = gate.admit(
-            Ingress::ImportStream,
-            &invalid,
-            &IdentityCanaries::default(),
-            true,
-        );
+        let outcome = (0..3)
+            .map(|_| {
+                gate.admit_for_connection(
+                    Ingress::ImportStream,
+                    7,
+                    &invalid,
+                    &IdentityCanaries::default(),
+                    true,
+                )
+            })
+            .last()
+            .unwrap();
         assert_eq!(outcome.0, IngressOutcome::Quarantined);
-        assert_eq!(gate.available_import_credits(), 0);
-        assert!(gate.is_quarantined(Ingress::ImportStream));
+        assert_eq!(gate.available_import_credits_for(7), 0);
+        assert!(gate.is_connection_quarantined(Ingress::ImportStream, 7));
     }
 }

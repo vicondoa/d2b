@@ -3,9 +3,13 @@
 use std::{
     collections::VecDeque,
     fs, io,
+    os::unix::fs::PermissionsExt,
     os::unix::net::UnixDatagram,
     path::{Path, PathBuf},
 };
+
+/// Maximum compact frame accepted from a core-process emitter.
+pub const MAX_COMPACT_FRAME_BYTES: usize = 64 * 1024;
 
 /// Receiver state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,6 +52,11 @@ impl EmitterSocket {
             fs::create_dir_all(parent)?;
         }
         let socket = UnixDatagram::bind(&path)?;
+        if let Err(error) = fs::set_permissions(&path, fs::Permissions::from_mode(0o660)) {
+            drop(socket);
+            let _ = fs::remove_file(&path);
+            return Err(error);
+        }
         socket.set_nonblocking(true)?;
         Ok(Self {
             path,
@@ -64,9 +73,16 @@ impl EmitterSocket {
     pub fn drain_once(&mut self) -> io::Result<usize> {
         let mut drained = 0;
         loop {
-            let mut bytes = vec![0_u8; 4 * 1024 * 1024];
+            // One extra byte lets the receiver distinguish a full-size frame
+            // from a datagram truncated by the bounded receive buffer.
+            let mut bytes = vec![0_u8; MAX_COMPACT_FRAME_BYTES + 1];
             match self.socket.recv(&mut bytes) {
                 Ok(size) => {
+                    if size > MAX_COMPACT_FRAME_BYTES {
+                        self.dropped = self.dropped.saturating_add(1);
+                        drained += 1;
+                        continue;
+                    }
                     bytes.truncate(size);
                     while self.queued_bytes.saturating_add(bytes.len()) > self.capacity_bytes {
                         let Some(oldest) = self.frames.pop_front() else {
