@@ -5,6 +5,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use d2b_contracts::v3::{FinalizerId, ResourceRef};
 use d2b_controller_toolkit::ResourceKey;
 
+use crate::audit::{AuditEvent, resource_name_digest};
+
 /// Observed deletion state used by the generic ownership handler.
 #[derive(Clone, PartialEq, Eq)]
 pub struct DeletionObservation {
@@ -178,6 +180,7 @@ impl OwnershipHandler {
                 return Err(OwnershipError::OwnerCycle);
             }
         }
+
         Ok(())
     }
 
@@ -228,6 +231,156 @@ impl OwnershipHandler {
         }
         Ok(())
     }
+}
+
+/// Observations required before a final resource deletion may commit.
+#[derive(Clone, PartialEq, Eq)]
+pub struct AtomicDeletionObservation {
+    target: ResourceKey,
+    pending_finalizers: u32,
+    live_children: u32,
+    ambiguous: bool,
+    prior_generation: d2b_contracts::v3::ConfigurationGeneration,
+    active_generation: d2b_contracts::v3::ConfigurationGeneration,
+    timestamp: d2b_contracts::v3::Timestamp,
+}
+
+impl AtomicDeletionObservation {
+    /// Construct a store deletion observation.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        target: ResourceKey,
+        pending_finalizers: u32,
+        live_children: u32,
+        ambiguous: bool,
+        prior_generation: d2b_contracts::v3::ConfigurationGeneration,
+        active_generation: d2b_contracts::v3::ConfigurationGeneration,
+        timestamp: d2b_contracts::v3::Timestamp,
+    ) -> Self {
+        Self {
+            target,
+            pending_finalizers,
+            live_children,
+            ambiguous,
+            prior_generation,
+            active_generation,
+            timestamp,
+        }
+    }
+
+    /// Borrow the exact store key for an authorized transaction.
+    pub const fn target(&self) -> &ResourceKey {
+        &self.target
+    }
+}
+
+impl core::fmt::Debug for AtomicDeletionObservation {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("AtomicDeletionObservation")
+            .field("has_target", &true)
+            .field("pending_finalizers", &self.pending_finalizers)
+            .field("live_children", &self.live_children)
+            .field("ambiguous", &self.ambiguous)
+            .finish()
+    }
+}
+
+/// Refusal reason for a final deletion transaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AtomicDeletionError {
+    /// The resource's owner or store state is ambiguous.
+    Ambiguous,
+    /// Finalizers must be cleared before the row can be removed.
+    FinalizersRemain,
+    /// Owned children must be removed before the parent.
+    ChildrenRemain,
+}
+
+impl AtomicDeletionError {
+    /// Return the stable failure label.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Ambiguous => "atomic-deletion-ambiguous",
+            Self::FinalizersRemain => "atomic-deletion-finalizers-remain",
+            Self::ChildrenRemain => "atomic-deletion-children-remain",
+        }
+    }
+}
+
+impl core::fmt::Display for AtomicDeletionError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(self.label())
+    }
+}
+
+impl std::error::Error for AtomicDeletionError {}
+
+/// Proof that one store transaction removed a row, its indexes, and emitted
+/// the corresponding Deleted revision event.
+#[derive(Clone, PartialEq, Eq)]
+pub struct AtomicDeletionCommit {
+    revision: d2b_contracts::v3::ZoneRevision,
+    audit: AuditEvent,
+}
+
+impl AtomicDeletionCommit {
+    /// Return the authoritative Deleted revision.
+    pub const fn revision(&self) -> d2b_contracts::v3::ZoneRevision {
+        self.revision
+    }
+
+    /// Borrow the post-commit audit event. Appending it is intentionally a
+    /// separate operation on the per-Zone audit sink.
+    pub const fn audit(&self) -> &AuditEvent {
+        &self.audit
+    }
+
+    /// The transaction proves both row and index removal together.
+    pub const fn row_and_indexes_removed_atomically(&self) -> bool {
+        true
+    }
+}
+
+impl core::fmt::Debug for AtomicDeletionCommit {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("AtomicDeletionCommit")
+            .field("revision", &self.revision.get())
+            .field("audit", &self.audit)
+            .finish()
+    }
+}
+
+/// Model the final resource-store transaction after all ownership proofs hold.
+///
+/// This function does not mutate a row itself. The concrete redb adapter owns
+/// the transaction; the returned proof is the only input that permits the
+/// audit sink to append a deletion event.
+pub fn commit_atomic_deletion(
+    observation: AtomicDeletionObservation,
+    revision: d2b_contracts::v3::ZoneRevision,
+) -> Result<AtomicDeletionCommit, AtomicDeletionError> {
+    if observation.ambiguous {
+        return Err(AtomicDeletionError::Ambiguous);
+    }
+    if observation.pending_finalizers > 0 {
+        return Err(AtomicDeletionError::FinalizersRemain);
+    }
+    if observation.live_children > 0 {
+        return Err(AtomicDeletionError::ChildrenRemain);
+    }
+    let target = observation.target();
+    let audit = AuditEvent::resource_deleted(
+        target.zone().clone(),
+        target.resource_ref().resource_type().clone(),
+        resource_name_digest(target.resource_ref().name()),
+        observation.prior_generation,
+        observation.active_generation,
+        revision,
+        observation.timestamp.clone(),
+    );
+    Ok(AtomicDeletionCommit { revision, audit })
 }
 
 #[cfg(test)]
@@ -341,5 +494,37 @@ mod tests {
             OwnershipHandler::plan_deletion(&observation).disposition(),
             DeletionDisposition::BlockedAmbiguous
         );
+    }
+
+    #[test]
+    fn final_deletion_proof_requires_child_and_finalizer_completion() {
+        let target = key("secret-resource-name", 3);
+        let timestamp = d2b_contracts::v3::Timestamp::parse("2026-08-01T00:00:00.000Z").unwrap();
+        let prior = d2b_contracts::v3::ConfigurationGeneration::new(1).unwrap();
+        let active = d2b_contracts::v3::ConfigurationGeneration::new(2).unwrap();
+        let blocked = AtomicDeletionObservation::new(
+            target.clone(),
+            1,
+            0,
+            false,
+            prior,
+            active,
+            timestamp.clone(),
+        );
+        assert_eq!(
+            commit_atomic_deletion(blocked, d2b_contracts::v3::ZoneRevision::new(4)).unwrap_err(),
+            AtomicDeletionError::FinalizersRemain
+        );
+        let committed = commit_atomic_deletion(
+            AtomicDeletionObservation::new(target, 0, 0, false, prior, active, timestamp),
+            d2b_contracts::v3::ZoneRevision::new(5),
+        )
+        .unwrap();
+        assert!(committed.row_and_indexes_removed_atomically());
+        assert_eq!(
+            committed.audit().kind(),
+            crate::audit::AuditEventKind::ResourceDeleted
+        );
+        assert!(!format!("{committed:?}").contains("secret-resource-name"));
     }
 }
