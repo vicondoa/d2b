@@ -864,7 +864,9 @@ fn execution_manifest_schema_and_prose_agree_with_non_empty_discovery() {
             && api_driver.contains("checker_target=\"$target_root/checker\"")
             && api_driver.contains("CARGO_BUILD_JOBS=\"$public_jobs\"")
             && api_driver.contains("CARGO_BUILD_JOBS=\"$private_jobs\"")
-            && api_driver.contains("CARGO_TARGET_DIR=\"$checker_target\" cargo run"),
+            && api_driver.contains(
+                "CARGO_TARGET_DIR=\"$checker_target\" cargo run --quiet --release --locked"
+            ),
         "execution-manifest-policy: API census targets or split quotas drifted"
     );
     assert!(

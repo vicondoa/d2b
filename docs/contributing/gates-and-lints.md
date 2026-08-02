@@ -135,7 +135,9 @@ targets below `.scratch/rust-test-cache`, so they overlap the main workspace
 without sharing mutable Cargo state. The public and private rustdoc censuses
 also use separate stable targets and overlap only when the API leaf has at
 least two admitted Cargo jobs; their split job shares never exceed that leaf's
-quota. Budgets through nine use one job per active lane; surplus jobs above
+quota. The snapshot checker runs from Cargo's release profile because its
+measured long pole is CPU-bound JSON processing, not compilation. Budgets
+through nine use one job per active lane; surplus jobs above
 nine are assigned to the measured API long pole while the full nine-lane
 frontier stays within the effective budget. Direct calls to
 `tests/test-rust.sh` require one explicit leaf mode and are not aggregate

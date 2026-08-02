@@ -183,8 +183,9 @@ broker feature passes stay serial. Fixture/CLI work and the API snapshot
 checker use isolated stable targets below `.scratch/rust-test-cache`, so they
 can overlap the main workspace without sharing mutable Cargo state. The public
 and private rustdoc censuses overlap only when the API leaf receives at least
-two jobs, and their split Cargo quotas stay within that leaf's budget. Budgets
-through nine use one job per active lane; surplus jobs above nine are assigned
+two jobs, and their split Cargo quotas stay within that leaf's budget. The
+snapshot checker uses its release profile for the measured CPU-bound JSON
+pass. Budgets through nine use one job per active lane; surplus jobs above nine are assigned
 to the measured API long pole while the complete frontier stays bounded.
 Direct calls to `tests/test-rust.sh` require one explicit leaf mode; callers
 that need the complete gate must use `make test-rust`. The focused

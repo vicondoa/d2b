@@ -160,7 +160,7 @@ mode=--check
 log "--> d2b-api-surface snapshot check"
 (
 cd "$ROOT/packages"
-CARGO_TARGET_DIR="$checker_target" cargo run --quiet --locked \
+CARGO_TARGET_DIR="$checker_target" cargo run --quiet --release --locked \
   -p d2b-api-surface --bin d2b-api-surface -- \
   --public-json-dir "$public_dir" \
   --private-json-dir "$private_dir" \

@@ -737,7 +737,10 @@ set -euo pipefail
         self.assertIn('public_target="$target_root/public-census"', api_driver)
         self.assertIn('private_target="$target_root/private-census"', api_driver)
         self.assertIn('checker_target="$target_root/checker"', api_driver)
-        self.assertIn('CARGO_TARGET_DIR="$checker_target" cargo run', api_driver)
+        self.assertIn(
+            'CARGO_TARGET_DIR="$checker_target" cargo run --quiet --release --locked',
+            api_driver,
+        )
         self.assertIn('CARGO_BUILD_JOBS="$public_jobs"', api_driver)
         self.assertIn('CARGO_BUILD_JOBS="$private_jobs"', api_driver)
         self.assertIn("run_public_census &", api_driver)

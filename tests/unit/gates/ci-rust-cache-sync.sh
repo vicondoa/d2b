@@ -117,6 +117,10 @@ if ! grep -qF 'CARGO_BUILD_JOBS="$public_jobs"' "$api_script" \
   log "FAIL: parallel API rustdoc passes do not carry split Cargo quotas"
   rc=1
 fi
+if ! grep -qF 'cargo run --quiet --release --locked' "$api_script"; then
+  log "FAIL: API snapshot checker is not using the measured release profile"
+  rc=1
+fi
 if ! grep -qF 'D2B_SKIP_FIXTURE_BUILD' "$makefile"; then
   log "FAIL: Rust aggregate lost its conditional fixture behavior"
   rc=1
