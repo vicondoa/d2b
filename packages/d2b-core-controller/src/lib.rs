@@ -14,6 +14,7 @@ pub mod budgets;
 pub mod cleanup;
 pub mod configuration;
 pub mod controllers;
+pub mod coordinator;
 pub mod dependencies;
 pub mod hints;
 pub mod main;
@@ -27,6 +28,7 @@ pub mod runtime;
 pub mod store;
 pub mod watches;
 pub mod zone_links;
+pub mod zonelink;
 
 pub use controllers::{
     AggregateHealth, CoreHandlerKind, CoreHandlerRegistry, CurrencyAggregation,
