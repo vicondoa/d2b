@@ -131,12 +131,14 @@ Failures, both fail-closed:
 
 | Condition | Error code | Message names |
 | --- | --- | --- |
-| Multi-output package pinning its first output with no evidence of selection | `provider-artifact-output-ambiguous` | artifact ID, the declared output names, and **both** remedies, because which applies depends on how the derivation was built: select the output on a `stdenv.mkDerivation` derivation (`package = pkgs.<name>.out;`), or repackage a raw `builtins.derivation` with `stdenv.mkDerivation`, since selecting an output on a raw primop derivation does not set `outputSpecified` and will not satisfy this check |
+| Multi-output package pinning its first output with no evidence of selection | `provider-artifact-output-ambiguous` | artifact ID, the declared output names, and the remedy for the case at hand: on a `stdenv.mkDerivation` derivation select any output (`package = pkgs.<name>.out;`), which sets `outputSpecified`; on a raw `builtins.derivation` selecting a **non-first** output already satisfies the check through the `outputName` witness; only wanting the raw primop's **first** output requires repackaging with `stdenv.mkDerivation` |
 | `outputs` present but not a non-empty list of strings | `provider-artifact-output-shape-unknown` | artifact ID; the remedy is to supply a derivation or a store path rather than a hand-built attrset |
 
 The message MUST NOT tell an operator to select an output when selection cannot
-produce the evidence the predicate reads. That is why the ambiguous message
-carries both remedies and names the condition under which each applies.
+produce the evidence the predicate reads, and it MUST NOT tell an operator to
+repackage when selection would suffice. Selecting a non-first output on a raw
+primop derivation **does** satisfy the check, through the `outputName` witness;
+only the raw primop's first output is unreachable by selection.
 
 Residual case, stated exactly: a raw-primop multi-output derivation whose
 **first** output is explicitly selected is indistinguishable from the whole
@@ -235,13 +237,56 @@ read of the first 18 octets from the already-open descriptor: `e_ident` begins
 `EI_VERSION` is 1, and `e_type` is `ET_EXEC` or `ET_DYN`. No parser runs, nothing
 is mapped, nothing is executed. `ET_REL`, `ET_CORE`, a `#!` script, an empty
 file, and a file shorter than the header are all refused with
-`provider-executable-not-elf`, naming the entry and the first four octets as hex.
+`provider-executable-not-elf`, naming the entry and the first four octets as hex
+and pointing at the shim builder of 4.9.3a.
 
 The requirement is not stylistic. `execveat` with `AT_EMPTY_PATH` on an `O_PATH`
 descriptor needs `/proc` mounted in the callee's mount namespace to start a `#!`
 interpreter (see 4.9.7), and d2b sandbox profiles do not promise one. Refusing
 non-ELF entries at build time means the same artifact behaves identically on
 every host, instead of succeeding where `/proc` happens to be mounted.
+
+##### 4.9.3a `d2b.lib.buildProviderElfShim` (normative, framework-owned)
+
+The framework MUST ship a helper that produces a conforming ELF entry point for
+a Provider whose component is an interpreted program, so that the ELF rule of
+4.9.3 has a supported route rather than only a prohibition:
+
+```nix
+d2b.lib.buildProviderElfShim {
+  inherit pkgs;
+  name        = "d2b-provider-foo-controller";    # the bin/ entry name
+  interpreter = "${pkgs.python3}/bin/python3";    # absolute store path
+  program     = ./controller.py;
+  extraArgs   = [ ];
+}
+```
+
+The result is a derivation whose `$out/bin/<name>` is a compiled `ET_DYN` image,
+not a `#!` line and not a `makeWrapper` shell script.
+
+Five properties are normative:
+
+1. the interpreter path and the program path are baked in at build time as
+   string literals; the shim takes no argument that selects what to execute;
+2. the shim `execve`s the absolute interpreter path: no `PATH` search, no
+   `execvp`, no shell, no environment-derived program selection;
+3. caller `argv[1..]` is forwarded after the fixed arguments and is never
+   interpreted as a program;
+4. `name` is validated at eval against the 4.9.3 grammar, so the helper cannot
+   emit an entry the resource compiler would reject for its name;
+5. the derivation self-checks its own output with `readelf -h`, requiring
+   `ELFCLASS64` and an `e_type` of `ET_EXEC` or `ET_DYN`, and fails rather than
+   emitting something Phase 2 would refuse.
+
+Property 5 reuses the `postInstall` ELF-assertion pattern `flake.nix` already
+applies to the static guest helpers rather than introducing a second one.
+
+The helper pins the shim, not the interpreter: the interpreter and the script are
+in the closure and covered by the package content digest, but they are not
+entries of `bin/` and are therefore not named in `package.executableDigests`.
+That is the residual 4.9.2 already records for the unpinned remainder, bounded by
+the launch rule below.
 
 A Process created for a Provider component resolves its program as
 `<out>/bin/<binaryRef>` and by no other means: no `PATH` lookup, no
@@ -261,7 +306,19 @@ The field this amendment requires is not a `String` and not an
 ```rust
 /// A `^[a-z][a-z0-9-]*$` component binary name, at most 64 bytes.
 /// Parsing is the only constructor, so the grammar above is a type invariant.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(transparent)]
 pub struct BinaryRef(BoundedToken);
+
+/// Deserialization MUST route through the validating parser, mirroring
+/// `ArtifactId` in the same module. A derived `transparent` impl would accept
+/// any string from a signed manifest, leaving the grammar enforced only for
+/// values constructed in Rust.
+impl<'de> Deserialize<'de> for BinaryRef {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Self::parse(String::deserialize(d)?).map_err(serde::de::Error::custom)
+    }
+}
 
 pub enum ComponentExecution {
     /// A Process is created and `<out>/bin/<binary_ref>` is launched.
@@ -272,17 +329,38 @@ pub enum ComponentExecution {
 }
 ```
 
-`Option<BinaryRef>` is rejected because `None` would mean both "not launchable"
-and "launchable but the manifest omitted the field", and the second is the hole
-this check exists to close. `ComponentDescriptor` holds one
-`ComponentExecution`, so launchability and the presence of a binary name are the
-same fact.
+**Wire representation: the flat `binaryRef` field is unchanged and the schema is
+not versioned.** `ComponentExecution` is an in-memory invariant, not a new JSON
+shape. No serde enum representation is used - not `tag`, not `untagged`, not
+adjacent - because each would change the manifest bytes section 4.3.3 already
+specifies, forcing a `schemaVersion` bump and a `manifestDigest` change on every
+existing artifact. The descriptor is deserialized through a private wire struct
+carrying `#[serde(default)] binary_ref: Option<BinaryRef>`, mapped once at the
+parse boundary: present becomes `Launchable`, absent becomes
+`InProcessBootstrap`. Serialization is the inverse, with `InProcessBootstrap`
+omitting the field via `skip_serializing_if`, so a descriptor round-trips to the
+bytes it was parsed from and `manifestDigest` is unaffected. Existing manifests
+parse unchanged. **No `schemaVersion` or `apiVersion` bump is required.**
 
-Two admission rules bound the bootstrap arm:
+The ambiguity is not reintroduced but relocated to the only place it can be
+resolved. On the wire a field is present or absent and nothing further can be
+said; whether an absence is legitimate is a fact about the Provider, not the
+JSON. The parse boundary names the variant and admission decides whether it was
+allowed, so after admission there is exactly one in-memory representation of each
+state and no `Option` for a caller to misread.
+
+`Option<BinaryRef>` as the descriptor field is rejected because `None` would mean
+both "not launchable" and "launchable but the manifest omitted the field", and
+the second is the hole this check exists to close. `ComponentDescriptor` holds
+one `ComponentExecution`, so launchability and the presence of a binary name are
+the same fact.
+
+Two admission rules bound the bootstrap arm, both raising
+`provider-component-execution-invalid`:
 
 1. `InProcessBootstrap` is admissible only for a Provider on the closed
    bootstrap-exception list (`system-core`, `system-minijail`); any other
-   Provider declaring it is refused at manifest admission;
+   Provider omitting `binaryRef` is refused at manifest admission;
 2. a Provider whose components are all `InProcessBootstrap` MUST declare an empty
    `package.executableDigests` and ship no `bin/`, and conversely.
 
@@ -291,9 +369,10 @@ grammars coincide today, because they are three namespaces and syntactic
 coincidence is not a licence to substitute.
 
 The drift predates this amendment. It is carried as a W5 implementation
-obligation; until it lands, `nix-build-binary-ref-unresolved` is blocked and the
-other twelve Phase 2 scenarios this amendment adds are not, nor are the three
-Phase 1 scenarios or the Phase 3 launcher scenario.
+obligation; until it lands, `nix-build-binary-ref-unresolved`,
+`nix-build-component-execution-invalid`, and
+`nix-build-manifest-binary-ref-wire-compatible` are blocked, and the other
+seventeen scenarios this amendment adds are not.
 
 #### 4.9.4 Digest preimages
 
@@ -311,6 +390,15 @@ Executable digests carry no domain tag: an ELF image is not canonical JSON and
 there is nothing to canonicalize. The executable set digest is domain-separated
 under D101 using the existing `canonical_digest` helper,
 `SHA-256(domain_tag || 0x00 || canonical_bytes)`.
+
+**Import the right helper.** Two functions in the workspace are named
+`canonical_digest`. `packages/d2b-contracts/src/v3/resource_schema.rs:518` is the
+D101 contract digest and hashes `domain_tag || 0x00 || canonical_bytes`;
+`packages/xtask/src/delivery/model.rs:591` belongs to the delivery tooling,
+hashes `domain || payload_len_u64_be || bytes`, and takes plain
+`serde_json::to_vec` output rather than `d2b-cjson/v1` canonical bytes. This
+amendment means the first. The second is not a D101 digest and must not be used
+for any artifact in this layout.
 
 The set digest binds the **map**, not a summary of it. The preimage is the
 serialization of the object
@@ -527,7 +615,8 @@ secret, credential, path, or process data.
 | `provider-manifest-not-canonical` | File octets are not their own canonical bytes | artifact ID, layout-relative path, byte offset of first divergence, expected and observed lengths, and the fixed remediation "re-emit with the toolkit canonical serializer; the usual cause is a trailing newline" |
 | `provider-executable-name-invalid` | A `bin/` entry violates the 4.9.3 grammar | artifact ID, the rejected entry, the grammar |
 | `provider-executable-set-empty` | `bin/` exists with no entries | artifact ID |
-| `provider-executable-not-elf` | A `bin/` entry is not an `ET_EXEC`/`ET_DYN` ELF64 image | artifact ID, the entry, first four octets as hex |
+| `provider-executable-not-elf` | A `bin/` entry is not an `ET_EXEC`/`ET_DYN` ELF64 image | artifact ID, the entry, first four octets as hex, and the `d2b.lib.buildProviderElfShim` remedy |
+| `provider-component-execution-invalid` | A non-bootstrap Provider omitted `binaryRef`, or the empty-`executableDigests` biconditional of §4.9.3 is violated | artifact ID, component ID |
 | `provider-executable-not-regular` | A `bin/` entry is not a regular file | artifact ID, entry, observed file type token |
 | `provider-executable-set-mismatch` | Key set and directory set differ | artifact ID, the symmetric difference and the side of each name |
 | `provider-binary-ref-unresolved` | A `binaryRef` is not a key | artifact ID, component ID, the ref |
@@ -613,7 +702,10 @@ section 4 below; it had none.
 > | `nix-build-executable-set-empty` | A derivation with a `bin/` directory containing no entries fails build, and is distinguished from a Provider that legitimately declares an empty `package.executableDigests` and ships no `bin/` at all, which succeeds |
 > | `nix-build-executable-name-invalid` | A `bin/` entry whose name violates `^[a-z][a-z0-9-]*$`, exceeds 64 bytes, contains `/`, `.`, `..`, NUL, an ASCII control byte, or whitespace, begins with `-`, or is not valid UTF-8, fails build naming the entry; the name is checked as read from the directory, not only as declared in the manifest |
 > | `nix-build-executable-not-regular-file` | A `bin/` entry that is a symlink, directory, FIFO, socket, or device node fails build naming the entry |
-> | `nix-build-executable-not-elf` | A `bin/` entry that is a `#!` script, an empty file, a file shorter than the ELF header, an `ET_REL` object, or an `ET_CORE` image fails build naming the entry and the first four octets as hex |
+> | `nix-build-executable-not-elf` | A `bin/` entry that is a `#!` script, an empty file, a file shorter than the ELF header, an `ET_REL` object, or an `ET_CORE` image fails build naming the entry and the first four octets as hex, and the message names `d2b.lib.buildProviderElfShim` |
+> | `nix-build-elf-shim-satisfies-the-layout` | A Provider whose entry point is a script, packaged through `d2b.lib.buildProviderElfShim`, produces a `bin/` entry passing the ELF, regular-file and name checks and launching its interpreter; the helper fails at build time if its own output is not `ET_EXEC`/`ET_DYN`, and at eval if `name` violates the §4.9.3 grammar |
+> | `nix-build-component-execution-invalid` | A non-bootstrap Provider whose component descriptor omits `binaryRef` fails build; a bootstrap-exception Provider omitting it succeeds; an empty `executableDigests` alongside a component naming a `binaryRef`, and the converse, both fail |
+> | `nix-build-manifest-binary-ref-wire-compatible` | A component descriptor authored with the flat `binaryRef` field of §4.3.3 parses unchanged, round-trips to identical bytes, and yields an unchanged `manifestDigest`; a `binaryRef` violating the §4.9.3 grammar is refused during deserialization rather than after |
 > | `nix-build-binary-ref-unresolved` | A component descriptor `binaryRef` absent from `package.executableDigests` fails build naming the component and the ref |
 > | `nix-build-executable-digest-mismatch` | A `bin/` file whose SHA-256 differs from its `package.executableDigests` value fails build naming the binary and both digests in full |
 > | `nix-build-catalog-manifest-disagreement` | Operator-authored catalog digests, manifest-declared digests, and compiler-recomputed digests disagreeing on any pinned value fails build naming the two disagreeing sources and both digest values |
@@ -644,7 +736,7 @@ enumerating the whole table: its Phase 2 entries are
 
 Replace the Validation cell with:
 
-> | Validation | All Phase 2 build tests in §15.8 (`nix-build-artifact-id-missing-from-catalog`, `nix-build-artifact-wrong-type-rejected`, `nix-build-duplicate-artifact-id`, `nix-build-artifact-store-path-absent-from-bundle`, `nix-build-artifact-store-path-absent-from-config`, `nix-build-config-schema-failure`, `nix-build-schema-digest-mismatch`, `nix-build-manifest-digest-mismatch`, `nix-build-required-outputs-missing`, `nix-build-required-output-not-regular`, `nix-build-manifest-signature-invalid`, `nix-build-manifest-not-canonical`, `nix-build-executable-set-mismatch`, `nix-build-executable-set-empty`, `nix-build-executable-name-invalid`, `nix-build-executable-not-regular-file`, `nix-build-executable-not-elf`, `nix-build-binary-ref-unresolved`, `nix-build-executable-digest-mismatch`, `nix-build-catalog-manifest-disagreement`, `nix-build-provider-error-redaction`, `nix-build-resourcetype-collision`, `nix-build-bundle-sorted`, `nix-build-content-hash-stable`, `nix-build-artifact-catalog-digest-anchored`, `nix-build-credential-ref-survives-build`, `nix-build-inline-secret-lint-warning`, `nix-build-inline-secret-strict-failure`) and the Phase 1 eval tests `nix-eval-provider-output-ambiguous`, `nix-eval-provider-output-shape-accepted`, and `nix-eval-provider-output-shape-unknown`. `nix-build-binary-ref-unresolved` is blocked until `ComponentDescriptor` gains `ComponentExecution` with a validated `BinaryRef` (§4.9.3); the remaining scenarios are not |
+> | Validation | All Phase 2 build tests in §15.8 (`nix-build-artifact-id-missing-from-catalog`, `nix-build-artifact-wrong-type-rejected`, `nix-build-duplicate-artifact-id`, `nix-build-artifact-store-path-absent-from-bundle`, `nix-build-artifact-store-path-absent-from-config`, `nix-build-config-schema-failure`, `nix-build-schema-digest-mismatch`, `nix-build-manifest-digest-mismatch`, `nix-build-required-outputs-missing`, `nix-build-required-output-not-regular`, `nix-build-manifest-signature-invalid`, `nix-build-manifest-not-canonical`, `nix-build-executable-set-mismatch`, `nix-build-executable-set-empty`, `nix-build-executable-name-invalid`, `nix-build-executable-not-regular-file`, `nix-build-executable-not-elf`, `nix-build-elf-shim-satisfies-the-layout`, `nix-build-component-execution-invalid`, `nix-build-manifest-binary-ref-wire-compatible`, `nix-build-binary-ref-unresolved`, `nix-build-executable-digest-mismatch`, `nix-build-catalog-manifest-disagreement`, `nix-build-provider-error-redaction`, `nix-build-resourcetype-collision`, `nix-build-bundle-sorted`, `nix-build-content-hash-stable`, `nix-build-artifact-catalog-digest-anchored`, `nix-build-credential-ref-survives-build`, `nix-build-inline-secret-lint-warning`, `nix-build-inline-secret-strict-failure`) and the Phase 1 eval tests `nix-eval-provider-output-ambiguous`, `nix-eval-provider-output-shape-accepted`, and `nix-eval-provider-output-shape-unknown`. `nix-build-binary-ref-unresolved`, `nix-build-component-execution-invalid`, and `nix-build-manifest-binary-ref-wire-compatible` are blocked until `ComponentDescriptor` gains `ComponentExecution` with a validated `BinaryRef` and the flat-wire parse boundary (§4.9.3); the remaining scenarios are not |
 
 Also append to its Detailed design cell, after "extract and hash manifest and
 config schema files":
@@ -815,6 +907,16 @@ many distinguishable outcomes exist, and record that anchored `openat2`
 resolution (section 4.9.7) is what closes the check-to-use window between
 verifying a file and reading it.
 
+### 7.5 `ADR-046-provider-model-and-packaging`, "Toolkit"
+
+The Toolkit section enumerates what the official Rust toolkit provides and ends
+with "Provider flake/project templates". Add the framework-owned Nix helper
+alongside it, since it is the supported route the ELF rule of 4.9.3 depends on:
+
+> - `d2b.lib.buildProviderElfShim`, the framework-owned builder that produces a
+>   conforming ELF entry point for an interpreted Provider component
+>   (`ADR-046-resources-zone-control` section 4.9.3a).
+
 ## 8. Applying this amendment: the manifests are generated
 
 `docs/specs/ADR-046-work-items.json`, `ADR-046-implementation-graph.json`,
@@ -842,7 +944,7 @@ a signal that the edit did something unintended.
 | Required-outputs row has no conformance scenario in the section 15.8 Phase 2 table (12.3) | Closed by section 4 above |
 | Output cardinality not checkable: no Provider crate has a package output (12.2) | Closed by ADR 0050 item 1: the cardinality is now an eval assertion on the artifact entry, which exists whether or not any Provider crate ships a package yet |
 | `d2b.artifacts.<id>.package` typed `types.package` already enforces the cardinality at the one entry point (12.2, "inference, needs confirm or reject") | **Reject.** `types.package` pins one derivation per artifact ID; it does not pin one output per derivation, and `"${package}"` selecting the first output is exactly the case it misses. It is also weaker than it looks: `lib.types.package.check` accepts a bare store path, which the module system coerces through `lib.toDerivation`. The inference is superseded by the explicit §4.9.1 predicate |
-| `ADR046-zone-control-015` stays blocked pending an amendment (19.7) | Closed on acceptance, with one carve-out: `nix-build-binary-ref-unresolved` stays blocked on the `ComponentExecution`/`BinaryRef` obligation recorded in section 11. `016` and `021` unblock, and `016` gains one new Phase 3 launcher scenario |
+| `ADR046-zone-control-015` stays blocked pending an amendment (19.7) | Closed on acceptance, with one carve-out: three scenarios stay blocked on the `ComponentExecution`/`BinaryRef` obligation recorded in section 11. `016` and `021` unblock, and `016` gains one new Phase 3 launcher scenario |
 | Catalog names component and descriptor digests; contract names exported schema and service digests (12.4) | **Partly narrowed, not closed.** The executable digest was never part of the dispute: the catalog's singular value and the manifest's map are different objects, and section 2 states the derivation rule. The component/descriptor versus schema/service pair remains open and remains `ADR046-provider-002`'s |
 
 ## 10. Drift observed while drafting, recorded not fixed
@@ -858,14 +960,15 @@ Not in scope for this amendment; recorded so it is not lost.
 
 ## 11. Implementation obligation this amendment creates
 
-Unlike section 10, this one is **in scope and blocking for one scenario**, so it
-is recorded separately rather than as observed drift.
+Unlike section 10, these are **in scope and blocking**, so they are recorded
+separately rather than as observed drift.
 
 | Obligation | Owner | Blocks |
 | --- | --- | --- |
-| `ComponentDescriptor` in `packages/d2b-contracts/src/v3/provider.rs` gains a `ComponentExecution` field carrying a validated `BinaryRef` newtype, per §4.9.3. Not `Option<BinaryRef>`: `None` would mean both "not launchable" and "launchable, field omitted". The shipped struct declares `component_id`, `component_type`, `exported_resource_types`, `exported_methods`, `allowed_domains`, `cardinality`, `config_digest`, `dependencies`, `declares_state_volume`, `state_namespaces` and no `binary_ref`, while §4.3.3 defines `binaryRef` three times as normative. The `InProcessBootstrap` arm is admissible only for the closed bootstrap-exception list, per §6.3 | W5, alongside `ADR046-zone-control-015` | `nix-build-binary-ref-unresolved` only; the other twelve Phase 2 scenarios, the three Phase 1 scenarios, and the Phase 3 launcher scenario are independent of it |
+| `ComponentDescriptor` in `packages/d2b-contracts/src/v3/provider.rs` gains a `ComponentExecution` field carrying a validated `BinaryRef` newtype, with `Deserialize` routed through the validating parser and the flat `binaryRef` wire mapping of §4.9.3. Not `Option<BinaryRef>`: `None` would mean both "not launchable" and "launchable, field omitted". The shipped struct declares `component_id`, `component_type`, `exported_resource_types`, `exported_methods`, `allowed_domains`, `cardinality`, `config_digest`, `dependencies`, `declares_state_volume`, `state_namespaces` and no `binary_ref`, while §4.3.3 defines `binaryRef` three times as normative. The `InProcessBootstrap` arm is admissible only for the closed bootstrap-exception list, per §6.3 | W5, alongside `ADR046-zone-control-015` | `nix-build-binary-ref-unresolved`, `nix-build-component-execution-invalid`, and `nix-build-manifest-binary-ref-wire-compatible`; the other seventeen scenarios are independent of it |
+| `d2b.lib.buildProviderElfShim` is implemented and exposed on the flake's existing `lib` output, per §4.9.3a. The flake already carries `lib = nixpkgs.lib.makeExtensible (_: { evalFixture = ...; })`, so this extends a surface rather than creating one. Framework-owned rather than a sibling flake because the framework is the party imposing the ELF rule | W5, alongside `ADR046-zone-control-015` | `nix-build-elf-shim-satisfies-the-layout`; and it is what makes the ELF rule of §4.9.3 a supported path rather than only a prohibition |
 
-The drift predates this amendment. It is recorded as an obligation rather than
-as observed drift because §4.9.3 depends on it, and carrying it in the
-observed-drift table would let T174 ship with the same shape of hole it was
-blocked on.
+The `ComponentDescriptor` drift predates this amendment. Both are recorded as
+obligations rather than observed drift because §4.9.3 depends on them, and
+carrying them in the observed-drift table would let T174 ship with the same shape
+of hole it was blocked on.
