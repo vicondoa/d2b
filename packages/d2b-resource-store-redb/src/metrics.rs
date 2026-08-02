@@ -66,7 +66,7 @@ impl StoreMetric {
                 label("kind", &["single", "group"]),
                 label("outcome", &["ok", "conflict", "error"]),
             ],
-            Self::ReadDuration => vec![label("op", &["get", "list", "scan"])],
+            Self::ReadDuration => vec![label("operation", &["get", "list", "scan"])],
             Self::Conflict => vec![label(
                 "resource_type",
                 &[

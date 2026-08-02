@@ -628,7 +628,7 @@ impl WriterActor {
                     let elapsed = elapsed_seconds(started);
                     self.telemetry.metric(
                         StoreMetric::ReadDuration,
-                        BTreeMap::from([("op".to_owned(), "scan".to_owned())]),
+                        BTreeMap::from([("operation".to_owned(), "scan".to_owned())]),
                         elapsed,
                     );
                     self.telemetry.span(
@@ -1188,7 +1188,7 @@ impl ReadPool {
         let outcome = if result.is_ok() { "ok" } else { "error" };
         self.telemetry.metric(
             StoreMetric::ReadDuration,
-            BTreeMap::from([("op".to_owned(), operation.to_owned())]),
+            BTreeMap::from([("operation".to_owned(), operation.to_owned())]),
             elapsed_seconds(started),
         );
         self.telemetry.span(
