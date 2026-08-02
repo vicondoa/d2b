@@ -8,9 +8,16 @@ pub const FORBIDDEN_LABEL_KEYS: &[&str] = &[
     "zone",
     "zone_id",
     "zone_uid",
+    "credential",
     "credential_name",
     "network",
     "network_name",
+    "guest",
+    "host",
+    "user",
+    "volume",
+    "device",
+    "process",
     "link_name_hash",
 ];
 
@@ -155,6 +162,7 @@ impl std::error::Error for MetricPolicyError {}
 /// Validate one metric descriptor against the closed registry.
 pub fn validate_descriptor(descriptor: &MetricDescriptor) -> Result<(), MetricPolicyError> {
     if descriptor.name.is_empty()
+        || descriptor.name.len() > 128
         || !descriptor
             .name
             .bytes()
@@ -164,7 +172,13 @@ pub fn validate_descriptor(descriptor: &MetricDescriptor) -> Result<(), MetricPo
     }
 
     let mut seen = BTreeSet::new();
+    if descriptor.labels.len() > 16 {
+        return Err(MetricPolicyError::DescriptorMalformed);
+    }
     for label in &descriptor.labels {
+        if label.key.is_empty() || label.key.len() > 64 {
+            return Err(MetricPolicyError::DescriptorMalformed);
+        }
         if !seen.insert(label.key.clone()) {
             return Err(MetricPolicyError::DescriptorMalformed);
         }
@@ -231,10 +245,52 @@ pub fn validate_data_point(
     Ok(())
 }
 
+/// Validate labels when a frame does not carry a full descriptor.
+///
+/// The emitter uses this defense-in-depth check for compact metric frames.
+/// Descriptor-bearing collector ingress should use [`validate_data_point`]
+/// instead so it also enforces the exact label set.
+pub fn validate_labels(
+    labels: &BTreeMap<String, String>,
+    canaries: &IdentityCanaries,
+) -> Result<(), MetricPolicyError> {
+    if labels.len() > 16 {
+        return Err(MetricPolicyError::DescriptorMalformed);
+    }
+    for (key, value) in labels {
+        validate_label_key(key)?;
+        let Some(allowed) = allowed_values(key) else {
+            return Err(MetricPolicyError::KeyNotAllowlisted);
+        };
+        if !allowed.iter().any(|candidate| candidate == value) {
+            return Err(MetricPolicyError::ValueNotAllowlisted);
+        }
+        if canaries.contains(value) {
+            return Err(MetricPolicyError::ValueIdentity);
+        }
+    }
+    Ok(())
+}
+
 /// Return the closed value domain for one accepted label key.
 pub fn allowed_values(key: &str) -> Option<&'static [&'static str]> {
     match key {
-        "service" => Some(&["resource-api", "bus", "session", "store", "controller"]),
+        "service" => Some(&[
+            "resource-api",
+            "bus",
+            "session",
+            "store",
+            "controller",
+            "d2b.resource.v3",
+            "d2b.controller.v3",
+            "d2b.provider.v3",
+            "d2b.audit.v3",
+            "d2b.support.v3",
+            "d2b.credential.v3",
+            "d2b.zone.v3",
+            "d2b.zonelink.v3",
+            "d2b.volume.v3",
+        ]),
         "direction" => Some(&["local", "host", "guest", "zone_link", "send", "recv"]),
         "outcome" => Some(&[
             "ok",
@@ -256,6 +312,9 @@ pub fn allowed_values(key: &str) -> Option<&'static [&'static str]> {
             "accepted",
             "rejected",
             "quarantined",
+            "cancel",
+            "revoked",
+            "degraded",
         ]),
         "resource_type" | "exported_type" | "projection_type" => Some(&[
             "Zone",
@@ -317,7 +376,13 @@ pub fn allowed_values(key: &str) -> Option<&'static [&'static str]> {
             "system_core_host",
             "system_core_user",
         ]),
-        "provider" => Some(&["minijail", "systemd", "system-core-user", "system-core"]),
+        "provider" => Some(&[
+            "minijail",
+            "systemd",
+            "system-core-user",
+            "system-core",
+            "observability-otel",
+        ]),
         "domain" => Some(&["system", "user"]),
         "operation" => Some(&[
             "get",
@@ -331,6 +396,7 @@ pub fn allowed_values(key: &str) -> Option<&'static [&'static str]> {
             "reconnect",
             "write",
             "read",
+            "cancel",
         ]),
         "record_class" => Some(&[
             "resource-mutation",
@@ -426,6 +492,21 @@ mod tests {
         labels.insert("outcome".to_owned(), "resource-name".to_owned());
         assert_eq!(
             validate_data_point(&descriptor, &labels, &canaries),
+            Err(MetricPolicyError::ValueNotAllowlisted)
+        );
+    }
+
+    #[test]
+    fn untyped_labels_reject_out_of_policy_keys_and_identity_values() {
+        let canaries = IdentityCanaries::new(["work"], ["uid"], ["Zone/work"]);
+        let labels = BTreeMap::from([("zone".to_owned(), "work".to_owned())]);
+        assert_eq!(
+            validate_labels(&labels, &canaries),
+            Err(MetricPolicyError::KeyForbidden)
+        );
+        let labels = BTreeMap::from([("outcome".to_owned(), "work".to_owned())]);
+        assert_eq!(
+            validate_labels(&labels, &canaries),
             Err(MetricPolicyError::ValueNotAllowlisted)
         );
     }

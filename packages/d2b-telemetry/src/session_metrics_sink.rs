@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use crate::{
-    emitter::{BoundedEmitter, EmitOutcome, Signal, encode_frame},
+    emitter::{BoundedEmitter, EmitOutcome},
     metric_label_policy::{IdentityCanaries, MetricDescriptor, validate_data_point},
 };
 
@@ -53,17 +53,8 @@ impl SessionMetricsSink {
         let descriptor = descriptor_for(event)?;
         validate_data_point(&descriptor, &labels, &IdentityCanaries::default())
             .map_err(SessionMetricsError::Policy)?;
-        let frame = encode_frame(
-            Signal::Metric,
-            &serde_json::json!({
-                "name": event.metric_name(),
-                "labels": labels,
-                "value": 1,
-            }),
-        )
-        .map_err(SessionMetricsError::Encode)?;
         self.emitter
-            .emit(Signal::Metric, &frame)
+            .emit_metric(&descriptor, &labels, &IdentityCanaries::default(), &1_u64)
             .map_err(SessionMetricsError::Emitter)
     }
 

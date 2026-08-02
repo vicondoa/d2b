@@ -49,11 +49,13 @@ impl RedactionGuard {
                 || value.len() > MAX_RESOURCE_ATTRIBUTE_BYTES
                 || value
                     .bytes()
-                    .any(|byte| byte.is_ascii_control() || byte == b'/')
+                    .any(|byte| !byte.is_ascii_graphic() || byte == b'/')
             {
                 return Err(RedactionError::AttributeNotAllowlisted);
             }
-            values.insert(key, value);
+            if values.insert(key, value).is_some() {
+                return Err(RedactionError::AttributeNotAllowlisted);
+            }
         }
         Ok(Self { attributes: values })
     }
@@ -73,7 +75,20 @@ impl RedactionGuard {
             "pid",
             "exe",
             "realm",
+            "node",
+            "workload",
             "workload_id",
+            "credential",
+            "secret",
+            "token",
+            "resource_ref",
+            "resource_uid",
+            "subject",
+            "principal",
+            "name",
+            "uid",
+            "trace_id",
+            "span_id",
             "no_isolation",
             "zone",
             "zone_id",
@@ -108,11 +123,13 @@ impl RedactionGuard {
                 || value.len() > MAX_RESOURCE_ATTRIBUTE_BYTES
                 || value
                     .bytes()
-                    .any(|byte| byte.is_ascii_control() || byte == b'/')
+                    .any(|byte| !byte.is_ascii_graphic() || byte == b'/')
             {
                 return Err(RedactionError::ForbiddenSpanField);
             }
-            output.insert(key, "<bounded>".to_owned());
+            if output.insert(key, "<bounded>".to_owned()).is_some() {
+                return Err(RedactionError::ForbiddenSpanField);
+            }
         }
         Ok(output)
     }
@@ -135,7 +152,17 @@ mod tests {
 
     #[test]
     fn sensitive_span_fields_are_rejected() {
-        for field in ["path", "socket", "argv", "pid", "realm", "no_isolation"] {
+        for field in [
+            "path",
+            "socket",
+            "argv",
+            "pid",
+            "realm",
+            "node",
+            "resource_ref",
+            "subject",
+            "no_isolation",
+        ] {
             assert_eq!(
                 RedactionGuard::validate_span_field(field),
                 Err(RedactionError::ForbiddenSpanField)

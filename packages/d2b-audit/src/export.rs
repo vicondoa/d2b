@@ -71,47 +71,68 @@ pub fn export_segments_range(
                 return false;
             };
             is_segment_name(name)
-                && after.is_none_or(|boundary| name > boundary)
-                && before.is_none_or(|boundary| name < boundary)
         })
         .collect::<Vec<PathBuf>>();
     paths.sort();
     let mut lines = Vec::new();
     let mut previous = genesis_hash();
+    let mut chain_valid = true;
     let mut sequence = 0_u64;
     for path in paths {
+        let in_range = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .is_some_and(|name| {
+                after.is_none_or(|boundary| name > boundary)
+                    && before.is_none_or(|boundary| name < boundary)
+            });
         let file = fs::File::open(path)?;
         for line in io::BufReader::new(file).lines() {
             let Ok(line) = line else {
-                lines.push(ExportLine::Error {
-                    sequence,
-                    error_code: "read-failed",
-                });
-                sequence = sequence.saturating_add(1);
+                if in_range {
+                    lines.push(ExportLine::Error {
+                        sequence,
+                        error_code: "read-failed",
+                    });
+                    sequence = sequence.saturating_add(1);
+                }
+                chain_valid = false;
                 continue;
             };
             match serde_json::from_str::<AuditRecord>(&line) {
-                Ok(record) => {
-                    if record.verify(&previous).is_err() {
+                Ok(record) if chain_valid && record.verify(&previous).is_ok() => {
+                    previous = record.record_hash().clone();
+                    if in_range {
+                        lines.push(ExportLine::Record(line));
+                        sequence = sequence.saturating_add(1);
+                    }
+                }
+                Ok(_record) => {
+                    chain_valid = false;
+                    if in_range {
                         lines.push(ExportLine::Error {
                             sequence,
                             error_code: "hash-break",
                         });
-                    } else {
-                        previous = record.record_hash().clone();
-                        lines.push(ExportLine::Record(line));
+                        sequence = sequence.saturating_add(1);
                     }
                 }
-                Err(error) => lines.push(ExportLine::Error {
-                    sequence,
-                    error_code: if error.to_string().contains("audit-record-hash-mismatch") {
-                        "hash-break"
-                    } else {
-                        "record-invalid"
-                    },
-                }),
+                Err(error) => {
+                    if in_range {
+                        lines.push(ExportLine::Error {
+                            sequence,
+                            error_code: if error.to_string().contains("audit-record-hash-mismatch")
+                            {
+                                "hash-break"
+                            } else {
+                                "record-invalid"
+                            },
+                        });
+                        sequence = sequence.saturating_add(1);
+                    }
+                    chain_valid = false;
+                }
             }
-            sequence = sequence.saturating_add(1);
         }
     }
     Ok(lines)

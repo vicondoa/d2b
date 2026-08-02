@@ -111,7 +111,7 @@ impl SegmentWriter {
             let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
                 continue;
             };
-            if !name.starts_with("audit-") || !name.ends_with(".jsonl") || path == self.path {
+            if !crate::export::is_segment_name(name) || path == self.path {
                 continue;
             }
             let Ok(metadata) = fs::metadata(&path) else {
@@ -149,7 +149,7 @@ fn open_append(path: &Path) -> io::Result<File> {
         .append(true)
         .read(true)
         .mode(0o640)
-        .custom_flags(libc::O_CLOEXEC)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
         .open(path)
 }
 
@@ -260,6 +260,20 @@ mod tests {
         );
         assert_ne!(first, second);
         assert!(second.extension().is_some_and(|value| value == "jsonl"));
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn pruning_ignores_unowned_jsonl_names() {
+        let directory =
+            std::env::temp_dir().join(format!("d2b-audit-prune-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+        let writer = SegmentWriter::open_at(&directory, 1024, 1, 1_700_000_000_000).unwrap();
+        let unowned = directory.join("audit-not-a-segment.jsonl");
+        fs::write(&unowned, b"not an audit segment\n").unwrap();
+        let removed = writer.prune_old(1_900_000_000_000).unwrap();
+        assert_eq!(removed, 0);
+        assert!(unowned.exists());
         let _ = fs::remove_dir_all(directory);
     }
 }

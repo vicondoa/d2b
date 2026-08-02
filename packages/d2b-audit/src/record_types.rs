@@ -409,6 +409,11 @@ impl AuditRecord {
         &self.zone
     }
 
+    /// Event timestamp in milliseconds since the Unix epoch.
+    pub const fn timestamp_ms(&self) -> u64 {
+        self.ts_ms
+    }
+
     /// Opaque operation correlator.
     pub fn operation_id(&self) -> &str {
         &self.operation_id
@@ -692,7 +697,7 @@ fn bounded_text(value: String) -> Result<String, AuditRecordError> {
         || value.len() > 256
         || value
             .bytes()
-            .any(|byte| byte.is_ascii_control() || byte == b'/')
+            .any(|byte| !byte.is_ascii_graphic() || byte == b'/')
     {
         return Err(AuditRecordError::TextOutOfBounds);
     }
@@ -703,9 +708,21 @@ fn closed(value: &str, allowed: &[&str]) -> bool {
     allowed.contains(&value)
 }
 
+fn valid_code(value: Option<&str>) -> bool {
+    value.is_none_or(|value| {
+        !value.is_empty()
+            && value.len() <= 128
+            && value.bytes().all(|byte| {
+                byte.is_ascii_lowercase()
+                    || byte.is_ascii_digit()
+                    || matches!(byte, b'-' | b'_' | b'.')
+            })
+    })
+}
+
 fn validate_fields(fields: &AuditRecordFields) -> Result<(), AuditRecordError> {
     let valid_resource_type = |value: &str| {
-        [
+        ([
             "Zone",
             "ZoneLink",
             "Provider",
@@ -727,14 +744,33 @@ fn validate_fields(fields: &AuditRecordFields) -> Result<(), AuditRecordError> {
             "vendor",
         ]
         .contains(&value)
-            || value.contains(".d2bus.org.")
+            || value.contains(".d2bus.org."))
+            && value.len() <= 256
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_graphic() && byte != b'/')
     };
     let valid_digestish = |value: &str| {
         !value.is_empty()
             && value.len() <= 256
             && value
                 .bytes()
-                .all(|byte| !byte.is_ascii_control() && byte != b'/')
+                .all(|byte| byte.is_ascii_graphic() && byte != b'/')
+    };
+    let valid_digest = |value: &str| {
+        value
+            .strip_prefix("sha256:")
+            .is_some_and(|digest| !digest.is_empty() && valid_digestish(value))
+    };
+    let valid_route_component = |value: &str| {
+        !value.is_empty()
+            && value.len() <= 128
+            && value.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_' | b'/' | b':')
+            })
+    };
+    let valid_service = |value: &str| {
+        valid_route_component(value) && value.starts_with("d2b.") && value.ends_with(".v3")
     };
     match fields {
         AuditRecordFields::ResourceMutation(fields) => {
@@ -756,7 +792,8 @@ fn validate_fields(fields: &AuditRecordFields) -> Result<(), AuditRecordError> {
                     &["ok", "conflict", "denied", "invalid", "error"],
                 )
                 || !valid_digestish(&fields.resource_uid)
-                || !valid_digestish(&fields.subject_digest)
+                || !valid_digest(&fields.subject_digest)
+                || !valid_code(fields.error_code.as_deref())
             {
                 return Err(AuditRecordError::FieldInvalid);
             }
@@ -786,7 +823,21 @@ fn validate_fields(fields: &AuditRecordFields) -> Result<(), AuditRecordError> {
                 || !valid_digestish(&fields.resource_uid)
                 || !valid_digestish(&fields.operation_id)
                 || fields.reasons.len() > 16
-                || fields.reasons.iter().any(|reason| !valid_digestish(reason))
+                || fields.reasons.iter().any(|reason| {
+                    !closed(
+                        reason,
+                        &[
+                            "CoreGenerationChanged",
+                            "ProviderGenerationChanged",
+                            "ArtifactChanged",
+                            "ImageOrSystemGenerationChanged",
+                            "SpecChanged",
+                            "DependencyChanged",
+                            "SecurityPolicyChanged",
+                        ],
+                    )
+                })
+                || !valid_code(fields.error_code.as_deref())
             {
                 return Err(AuditRecordError::FieldInvalid);
             }
@@ -796,7 +847,7 @@ fn validate_fields(fields: &AuditRecordFields) -> Result<(), AuditRecordError> {
                 || !closed(&fields.resource_type, &["Role", "RoleBinding"])
                 || !closed(&fields.outcome, &["ok", "denied", "error"])
                 || !valid_digestish(&fields.resource_uid)
-                || !valid_digestish(&fields.subject_digest)
+                || !valid_digest(&fields.subject_digest)
             {
                 return Err(AuditRecordError::FieldInvalid);
             }
@@ -811,19 +862,20 @@ fn validate_fields(fields: &AuditRecordFields) -> Result<(), AuditRecordError> {
                     &fields.outcome,
                     &["ok", "auth", "policy", "timeout", "error"],
                 )
-                || !valid_digestish(&fields.subject_digest)
-                || !valid_digestish(&fields.session_gen_digest)
+                || !valid_digest(&fields.subject_digest)
+                || !valid_digest(&fields.session_gen_digest)
+                || !valid_code(fields.error_code.as_deref())
             {
                 return Err(AuditRecordError::FieldInvalid);
             }
         }
         AuditRecordFields::RouteAdmission(fields) => {
-            if !valid_digestish(&fields.service)
-                || !valid_digestish(&fields.method)
+            if !valid_service(&fields.service)
+                || !valid_route_component(&fields.method)
                 || !closed(&fields.direction, &["local", "host", "guest", "zone_link"])
                 || !closed(&fields.authz_decision, &["allowed", "denied"])
                 || !closed(&fields.outcome, &["ok", "denied", "error"])
-                || !valid_digestish(&fields.subject_digest)
+                || !valid_digest(&fields.subject_digest)
             {
                 return Err(AuditRecordError::FieldInvalid);
             }
@@ -847,10 +899,11 @@ fn validate_fields(fields: &AuditRecordFields) -> Result<(), AuditRecordError> {
         }
         AuditRecordFields::BrokerEffect(fields) => {
             if !valid_digestish(&fields.op_class)
-                || !valid_digestish(&fields.subject_digest)
-                || !valid_digestish(&fields.execution_context_digest)
-                || !valid_digestish(&fields.resource_context_digest)
+                || !valid_digest(&fields.subject_digest)
+                || !valid_digest(&fields.execution_context_digest)
+                || !valid_digest(&fields.resource_context_digest)
                 || !closed(&fields.outcome, &["ok", "denied", "error"])
+                || !valid_code(fields.error_code.as_deref())
             {
                 return Err(AuditRecordError::FieldInvalid);
             }
@@ -870,7 +923,7 @@ fn validate_fields(fields: &AuditRecordFields) -> Result<(), AuditRecordError> {
                 || fields.no_isolation
                     && (fields.domain != "user" || fields.provider != "system-core-user")
                 || fields.provider == "system-core-user" && fields.domain != "user"
-                || !valid_digestish(&fields.execution_ref_digest)
+                || !valid_digest(&fields.execution_ref_digest)
                 || !valid_digestish(&fields.process_uid)
             {
                 return Err(AuditRecordError::FieldInvalid);
@@ -883,7 +936,7 @@ fn validate_fields(fields: &AuditRecordFields) -> Result<(), AuditRecordError> {
                     &["operator", "upgrade", "corruption", "emergency"],
                 )
                 || !closed(&fields.outcome, &["ok", "error"])
-                || !valid_digestish(&fields.prior_digest)
+                || !valid_digest(&fields.prior_digest)
             {
                 return Err(AuditRecordError::FieldInvalid);
             }
@@ -963,5 +1016,35 @@ mod tests {
         let mut unbounded = serde_json::to_value(&record).unwrap();
         unbounded["zone"] = serde_json::json!("x".repeat(257));
         assert!(serde_json::from_value::<AuditRecord>(unbounded).is_err());
+    }
+
+    #[test]
+    fn session_subjects_must_be_opaque_digest_values() {
+        let fields = AuditRecordFields::SessionConnect(SessionConnectFields {
+            event: "connect".to_owned(),
+            profile: "NN".to_owned(),
+            purpose_class: "local".to_owned(),
+            transport_class: "unix".to_owned(),
+            subject_digest: "alice".to_owned(),
+            authz_decision: "allowed".to_owned(),
+            authz_revision: 1,
+            session_gen_digest: "sha256:generation".to_owned(),
+            outcome: "ok".to_owned(),
+            error_code: None,
+        });
+        assert_eq!(
+            AuditRecord::new(
+                1,
+                "work",
+                "operation",
+                "correlation",
+                None,
+                "session",
+                genesis_hash(),
+                fields,
+            )
+            .unwrap_err(),
+            AuditRecordError::FieldInvalid
+        );
     }
 }

@@ -9,8 +9,12 @@ pub mod record_types;
 pub mod segment;
 pub mod sink;
 
+pub use d2b_telemetry::TraceContext;
 pub use export::{ExportLine, export_segments, export_segments_range, is_segment_name};
-pub use hash_chain::{AuditChainLink, AuditHash, AuditHashError, genesis_hash};
+pub use hash_chain::{
+    AuditChainLink, AuditHash, AuditHashError, ChainVerificationError, genesis_hash, payload_hash,
+    record_hash,
+};
 pub use rate_limit::{
     AuditRateLimiter, AuditWriteClass, DEFAULT_AUDIT_WRITES_PER_SECOND, RateDecision,
 };

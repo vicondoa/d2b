@@ -116,6 +116,24 @@ impl AuditChainLink {
         }
         Ok(())
     }
+
+    /// Verify a link, including its expected sequence number.
+    ///
+    /// The shorter [`Self::verify`] method intentionally remains available
+    /// for callers that do not have a segment sequence. Export and replay
+    /// paths should use this method when they do.
+    pub fn verify_at(
+        &self,
+        expected_sequence: u64,
+        previous_hash: &AuditHash,
+        payload_hash: &AuditHash,
+        record_hash: &AuditHash,
+    ) -> Result<(), ChainVerificationError> {
+        if self.sequence != expected_sequence {
+            return Err(ChainVerificationError::SequenceMismatch);
+        }
+        self.verify(previous_hash, payload_hash, record_hash)
+    }
 }
 
 /// A chain verification failure.
@@ -192,5 +210,18 @@ mod tests {
             record_hash(&first, b"payload"),
             record_hash(&second, b"payload")
         );
+    }
+
+    #[test]
+    fn chain_link_verification_checks_sequence_when_supplied() {
+        let previous = genesis_hash();
+        let payload = payload_hash(b"payload");
+        let record = record_hash(&previous, b"record");
+        let link = AuditChainLink::new(2, previous.clone(), payload.clone(), record.clone());
+        assert_eq!(
+            link.verify_at(1, &previous, &payload, &record),
+            Err(ChainVerificationError::SequenceMismatch)
+        );
+        assert!(link.verify_at(2, &previous, &payload, &record).is_ok());
     }
 }

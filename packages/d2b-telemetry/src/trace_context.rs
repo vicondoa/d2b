@@ -32,6 +32,11 @@ impl TraceContext {
     pub fn span_id(&self) -> &str {
         &self.span_id
     }
+
+    /// Derive a child span while preserving the validated trace identifier.
+    pub fn child_span(&self, span_id: impl Into<String>) -> Option<Self> {
+        Self::new(self.trace_id.clone(), span_id)
+    }
 }
 
 impl core::fmt::Debug for TraceContext {
@@ -88,5 +93,14 @@ mod tests {
         let rendered = format!("{context:?}");
         assert_eq!(rendered, "TraceContext(<redacted>)");
         assert!(!rendered.contains("sensitive"));
+    }
+
+    #[test]
+    fn child_span_propagates_only_the_validated_trace_id() {
+        let parent = TraceContext::new("trace", "parent").unwrap();
+        let child = parent.child_span("child").unwrap();
+        assert_eq!(child.trace_id(), "trace");
+        assert_eq!(child.span_id(), "child");
+        assert!(parent.child_span("span id").is_none());
     }
 }

@@ -1,7 +1,7 @@
 //! Bounded, best-effort Unix datagram telemetry emitter.
 
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     io,
     os::unix::net::UnixDatagram,
     path::{Path, PathBuf},
@@ -9,6 +9,10 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
+};
+
+use crate::metric_label_policy::{
+    IdentityCanaries, MetricDescriptor, MetricPolicyError, validate_data_point, validate_labels,
 };
 
 /// Default frame limit for core-process telemetry.
@@ -50,12 +54,14 @@ pub enum EmitOutcome {
 }
 
 /// Emitter failures which do not expose a socket path.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EmitterError {
     /// The frame exceeded the bounded frame limit.
     FrameTooLarge,
     /// The emitter lock was poisoned.
     StatePoisoned,
+    /// A metric frame did not satisfy the closed label policy.
+    MetricPolicy(MetricPolicyError),
 }
 
 impl core::fmt::Display for EmitterError {
@@ -63,6 +69,7 @@ impl core::fmt::Display for EmitterError {
         formatter.write_str(match self {
             Self::FrameTooLarge => "telemetry-frame-too-large",
             Self::StatePoisoned => "telemetry-emitter-state-poisoned",
+            Self::MetricPolicy(_) => "telemetry-metric-policy-rejected",
         })
     }
 }
@@ -153,6 +160,9 @@ impl BoundedEmitter {
 
     /// Emit one bounded frame.
     pub fn emit(&self, signal: Signal, frame: &[u8]) -> Result<EmitOutcome, EmitterError> {
+        if signal == Signal::Metric {
+            validate_metric_frame(frame)?;
+        }
         if frame.len() > MAX_FRAME_BYTES {
             self.drops.increment(signal);
             return Err(EmitterError::FrameTooLarge);
@@ -167,6 +177,10 @@ impl BoundedEmitter {
         }
 
         let bytes = frame.to_vec();
+        if bytes.len() > self.capacity_bytes {
+            self.drops.increment(signal);
+            return Ok(EmitOutcome::Dropped);
+        }
         while state.queued_bytes.saturating_add(bytes.len()) > self.capacity_bytes {
             let Some(oldest) = state.queue.pop_front() else {
                 break;
@@ -174,13 +188,34 @@ impl BoundedEmitter {
             state.queued_bytes = state.queued_bytes.saturating_sub(oldest.bytes.len());
             self.drops.increment(oldest.signal);
         }
-        if bytes.len() > self.capacity_bytes {
-            self.drops.increment(signal);
-            return Ok(EmitOutcome::Dropped);
-        }
         state.queued_bytes += bytes.len();
         state.queue.push_back(QueuedFrame { signal, bytes });
         Ok(EmitOutcome::Buffered)
+    }
+
+    /// Validate and emit one compact metric frame.
+    ///
+    /// The descriptor and identity canaries are checked before serialization,
+    /// queue admission, or socket I/O. This is the emitter-side defense in
+    /// depth for callers that have a typed metric descriptor.
+    pub fn emit_metric<T: serde::Serialize>(
+        &self,
+        descriptor: &MetricDescriptor,
+        labels: &BTreeMap<String, String>,
+        canaries: &IdentityCanaries,
+        value: &T,
+    ) -> Result<EmitOutcome, EmitterError> {
+        validate_data_point(descriptor, labels, canaries).map_err(EmitterError::MetricPolicy)?;
+        let frame = encode_frame(
+            Signal::Metric,
+            &serde_json::json!({
+                "name": descriptor.name(),
+                "labels": labels,
+                "value": value,
+            }),
+        )
+        .map_err(|_| EmitterError::MetricPolicy(MetricPolicyError::DescriptorMalformed))?;
+        self.emit(Signal::Metric, &frame)
     }
 
     /// Try to reconnect and drain buffered frames in FIFO order.
@@ -253,6 +288,32 @@ pub fn encode_frame<T: serde::Serialize>(signal: Signal, value: &T) -> Result<Ve
     .map_err(io::Error::other)
 }
 
+fn validate_metric_frame(frame: &[u8]) -> Result<(), EmitterError> {
+    let value = serde_json::from_slice::<serde_json::Value>(frame)
+        .map_err(|_| EmitterError::MetricPolicy(MetricPolicyError::DescriptorMalformed))?;
+    let labels = value
+        .get("labels")
+        .or_else(|| value.get("value").and_then(|value| value.get("labels")));
+    let Some(labels) = labels else {
+        return Ok(());
+    };
+    let labels = labels.as_object().ok_or(EmitterError::MetricPolicy(
+        MetricPolicyError::DescriptorMalformed,
+    ))?;
+    let labels = labels
+        .iter()
+        .map(|(key, value)| {
+            value
+                .as_str()
+                .map(|value| (key.clone(), value.to_owned()))
+                .ok_or(EmitterError::MetricPolicy(
+                    MetricPolicyError::ValueNotAllowlisted,
+                ))
+        })
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
+    validate_labels(&labels, &IdentityCanaries::default()).map_err(EmitterError::MetricPolicy)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -303,6 +364,46 @@ mod tests {
         emitter.emit(Signal::Log, b"5678").unwrap();
         assert_eq!(emitter.buffered_frames().unwrap(), 1);
         assert_eq!(emitter.drops().metric, 1);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn metric_emission_rejects_an_out_of_policy_label() {
+        let path = socket_path("policy");
+        let emitter = BoundedEmitter::new(&path, 128).unwrap();
+        let descriptor = MetricDescriptor::new(
+            "d2b_test_total",
+            [crate::meter_registry::label("vm", &["work"])],
+        );
+        let labels = BTreeMap::from([("vm".to_owned(), "work".to_owned())]);
+        assert_eq!(
+            emitter
+                .emit_metric(&descriptor, &labels, &IdentityCanaries::default(), &1_u64)
+                .unwrap_err(),
+            EmitterError::MetricPolicy(MetricPolicyError::KeyForbidden)
+        );
+        assert_eq!(emitter.buffered_frames().unwrap(), 0);
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn raw_metric_frames_are_checked_before_buffer_admission() {
+        let path = socket_path("raw-policy");
+        let emitter = BoundedEmitter::new(&path, 128).unwrap();
+        let frame = encode_frame(
+            Signal::Metric,
+            &serde_json::json!({
+                "name": "d2b_test_total",
+                "labels": {"zone": "work"},
+                "value": 1,
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            emitter.emit(Signal::Metric, &frame).unwrap_err(),
+            EmitterError::MetricPolicy(MetricPolicyError::KeyForbidden)
+        );
+        assert_eq!(emitter.buffered_frames().unwrap(), 0);
         let _ = fs::remove_file(path);
     }
 }

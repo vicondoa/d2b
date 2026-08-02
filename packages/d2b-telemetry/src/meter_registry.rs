@@ -93,6 +93,14 @@ impl MetricFamily {
         ) {
             return Err(MetricPolicyError::DescriptorMalformed);
         }
+        if matches!(
+            (&self.kind, &value),
+            (MetricKind::Gauge | MetricKind::Histogram, MetricValue::Scalar(value))
+                if !value.is_finite()
+                    || (self.kind == MetricKind::Histogram && *value < 0.0)
+        ) {
+            return Err(MetricPolicyError::DescriptorMalformed);
+        }
         let key = labels
             .iter()
             .map(|(key, value)| (key.clone(), value.clone()))
