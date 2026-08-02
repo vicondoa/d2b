@@ -41,6 +41,11 @@ impl GpuEffectTokenSet {
     pub const fn len(&self) -> usize {
         self.tokens.len()
     }
+
+    /// Return whether no opaque grants are present.
+    pub const fn is_empty(&self) -> bool {
+        self.tokens.is_empty()
+    }
 }
 
 impl fmt::Debug for GpuEffectTokenSet {
