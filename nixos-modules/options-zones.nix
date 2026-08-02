@@ -126,9 +126,21 @@ let
           policy = resource.spec;
           isExecutionTarget =
             resource.type == "Host" || resource.type == "Guest";
+          isProcess =
+            resource.type == "Process" || resource.type == "EphemeralProcess";
           canonicalRef = "${resource.type}/${resourceName}";
           defaultNetworks =
             lib.filter (attachment: attachment.default) policy.networkAttachments;
+          executionTarget =
+            let parsed = parseRef (policy.executionRef or null);
+            in if parsed != null && builtins.hasAttr parsed.name resources
+              then resources.${parsed.name}
+              else null;
+          targetHasNoIsolation =
+            isProcess
+            && executionTarget != null
+            && executionTarget.type == "Host"
+            && (executionTarget.spec.isolationPosture or null) == "none";
         in
         [
           {
@@ -218,6 +230,19 @@ let
             assertion =
               !isExecutionTarget || lib.length policy.volumeAttachmentDefaults <= 64;
             message = "${path}.spec.volumeAttachmentDefaults must contain at most 64 entries.";
+          }
+          {
+            assertion = !targetHasNoIsolation || (policy.domain or null) == "user";
+            message = "${path}.spec.domain must be user for a no-isolation Host target.";
+          }
+          {
+            assertion =
+              !isProcess
+              || (policy.domain or null) != "user"
+              || (policy.userRef or null) != null
+              || (executionTarget != null
+                && (executionTarget.spec.defaultUserRef or null) != null);
+            message = "${path}.spec.userRef is required for user-domain execution when the target has no default user.";
           }
         ]
         ++ artifactAssertions zoneName resourceName resource)

@@ -337,7 +337,7 @@ let
       {
         assertion = exactKeys (
           [
-            "providerRef" "updatePolicy" "kind" "source" "layout" "views" "attachments"
+            "providerRef" "updatePolicy" "provider" "kind" "source" "layout" "views" "attachments"
             "quota" "identityMarker" "stateSchema" "persistenceClass" "sensitivityClass"
           ] ++ genericExecutionFields) spec;
         message = "${row.path}.spec contains an unsupported Volume field.";
