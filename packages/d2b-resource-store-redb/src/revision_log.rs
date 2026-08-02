@@ -619,6 +619,7 @@ where
 mod tests {
     use super::*;
     use d2b_contracts::v3::{ResourceGeneration, ResourceUid};
+    use redb::ReadableTableMetadata;
     use std::fs::OpenOptions;
 
     fn batch(revision: u64) -> SharedChangeBatch {
