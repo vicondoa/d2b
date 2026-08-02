@@ -243,7 +243,8 @@ mod tests {
             StoreMetric::BackupDuration,
             StoreMetric::QueueDepth,
         ] {
-            validate_descriptor(&metric.descriptor()).unwrap();
+            validate_descriptor(&metric.descriptor())
+                .unwrap_or_else(|error| panic!("{}: {error:?}", metric.name()));
         }
     }
 
