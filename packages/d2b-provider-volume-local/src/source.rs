@@ -10,7 +10,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use d2b_contracts::v3::execution_policy::BoundedToken;
 use d2b_contracts::v3::volume::{
-    AttachmentTransport, CreatePolicy, EntryRestartPolicy, SourceKind, VolumeKind, VolumeSpec,
+    AttachmentTransport, BlockImageFormat, CreatePolicy, EntryRestartPolicy, SourceKind,
+    VolumeKind, VolumeSpec,
 };
 
 use crate::error::VolumeLocalError;
@@ -59,9 +60,15 @@ impl SourcePolicy {
 }
 
 /// A bounded source-policy catalog.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Clone, PartialEq, Eq, Default)]
 pub struct SourcePolicyCatalog {
     policies: BTreeMap<String, SourcePolicy>,
+}
+
+impl core::fmt::Debug for SourcePolicyCatalog {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("SourcePolicyCatalog(<redacted>)")
+    }
 }
 
 impl SourcePolicyCatalog {
@@ -77,14 +84,16 @@ impl SourcePolicyCatalog {
                 return Err(VolumeLocalError::InvalidSpec);
             }
         }
-        if catalog.policies.is_empty() {
-            return Err(VolumeLocalError::InvalidSpec);
-        }
         Ok(catalog)
     }
 
     /// Validate the opaque policy selected by a Volume.
     pub fn validate(&self, spec: &VolumeSpec) -> Result<(), VolumeLocalError> {
+        if spec.source().settings().kind() == SourceKind::Tmpfs {
+            // The v3 base contract carries no sourcePolicyId for tmpfs:
+            // the kernel mount is created by the selected execution domain.
+            return Ok(());
+        }
         let policy_id = spec
             .source()
             .settings()
@@ -115,20 +124,13 @@ impl SourcePolicyCatalog {
 /// current base contract constructor.
 pub fn validate_source_spec(spec: &VolumeSpec) -> Result<(), VolumeLocalError> {
     match spec.source().settings().kind() {
-        SourceKind::LocalPath => Ok(()),
-        SourceKind::BlockImage => {
-            if !matches!(spec.kind(), VolumeKind::Durable | VolumeKind::Ephemeral) {
-                return Err(VolumeLocalError::SourceKindVolumeKindMismatch);
-            }
-            if spec.quota().and_then(|quota| quota.max_bytes()).is_none() {
-                return Err(VolumeLocalError::BlockImageQuotaMissing);
-            }
+        SourceKind::LocalPath => {
             if spec
                 .attachments()
                 .iter()
-                .any(|attachment| attachment.transport() != AttachmentTransport::VirtioBlk)
+                .any(|attachment| attachment.transport() != AttachmentTransport::Virtiofs)
             {
-                return Err(VolumeLocalError::BlockImageTransportMismatch);
+                return Err(VolumeLocalError::InvalidSpec);
             }
             Ok(())
         }
@@ -141,6 +143,16 @@ pub fn validate_source_spec(spec: &VolumeSpec) -> Result<(), VolumeLocalError> {
             };
             if quota.max_bytes().is_none() || quota.max_inodes().is_none() {
                 return Err(VolumeLocalError::TmpfsQuotaMissing);
+            }
+            if quota.enforcement() != d2b_contracts::v3::volume::QuotaEnforcement::Hard {
+                return Err(VolumeLocalError::InvalidSpec);
+            }
+            if spec
+                .attachments()
+                .iter()
+                .any(|attachment| attachment.transport() != AttachmentTransport::Virtiofs)
+            {
+                return Err(VolumeLocalError::InvalidSpec);
             }
             for entry in spec.layout() {
                 let rendered =
@@ -158,6 +170,22 @@ pub fn validate_source_spec(spec: &VolumeSpec) -> Result<(), VolumeLocalError> {
                 {
                     return Err(VolumeLocalError::InvalidSpec);
                 }
+            }
+            Ok(())
+        }
+        SourceKind::BlockImage => {
+            if !matches!(spec.kind(), VolumeKind::Durable | VolumeKind::Ephemeral) {
+                return Err(VolumeLocalError::SourceKindVolumeKindMismatch);
+            }
+            if spec.quota().and_then(|quota| quota.max_bytes()).is_none() {
+                return Err(VolumeLocalError::BlockImageQuotaMissing);
+            }
+            if spec
+                .attachments()
+                .iter()
+                .any(|attachment| attachment.transport() != AttachmentTransport::VirtioBlk)
+            {
+                return Err(VolumeLocalError::BlockImageTransportMismatch);
             }
             Ok(())
         }
@@ -212,6 +240,8 @@ impl TmpfsMountOptions {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BlockImagePlan {
     max_bytes: u64,
+    format: BlockImageFormat,
+    preallocate: bool,
 }
 
 impl BlockImagePlan {
@@ -226,12 +256,24 @@ impl BlockImagePlan {
                 .quota()
                 .and_then(|quota| quota.max_bytes())
                 .ok_or(VolumeLocalError::BlockImageQuotaMissing)?,
+            format: spec.source().settings().image_format(),
+            preallocate: spec.source().settings().preallocate(),
         })
     }
 
     /// Return the declared image ceiling.
     pub const fn max_bytes(self) -> u64 {
         self.max_bytes
+    }
+
+    /// Return the requested on-disk image format.
+    pub const fn format(self) -> BlockImageFormat {
+        self.format
+    }
+
+    /// Whether the image should be preallocated.
+    pub const fn preallocate(self) -> bool {
+        self.preallocate
     }
 }
 
@@ -280,16 +322,25 @@ mod tests {
             wrong.validate(&spec),
             Err(VolumeLocalError::SourcePolicyMismatch)
         );
+        let empty = SourcePolicyCatalog::new([]).expect("an empty catalog is valid");
+        assert_eq!(
+            empty.validate(&spec),
+            Err(VolumeLocalError::SourcePolicyNotFound)
+        );
     }
 
     #[test]
     fn block_images_require_a_byte_ceiling_and_virtio_blk() {
-        let spec: VolumeSpec = serde_json::from_value(source("block-image", Some("disk-root")))
-            .expect("base contract fixture");
-        assert_eq!(
-            validate_source_spec(&spec),
-            Err(VolumeLocalError::BlockImageQuotaMissing)
-        );
+        let mut value = source("block-image", Some("disk-root"));
+        value["quota"] = json!({ "maxBytes": 4096, "enforcement": "none" });
+        value["attachments"] = json!([{
+            "executionRef": "Guest/work-vm",
+            "transport": "virtiofs",
+            "view": "controller",
+            "access": "read-only",
+            "mountPath": "/disk"
+        }]);
+        assert!(serde_json::from_value::<VolumeSpec>(value).is_err());
     }
 
     #[test]
@@ -302,5 +353,30 @@ mod tests {
             .expect("limits")
             .mount_options();
         assert_eq!(options, ["size=4096", "nr_inodes=32"]);
+    }
+
+    #[test]
+    fn block_image_plan_keeps_the_declared_byte_ceiling_opaque() {
+        let mut value = source("block-image", Some("disk-root"));
+        value["quota"] = json!({ "maxBytes": 8192, "enforcement": "none" });
+        value["source"]["settings"]["imageFormat"] = json!("qcow2");
+        value["source"]["settings"]["preallocate"] = json!(true);
+        let spec: VolumeSpec = serde_json::from_value(value).expect("valid block image");
+        let plan = BlockImagePlan::from_spec(&spec).unwrap();
+        assert_eq!(plan.max_bytes(), 8192);
+        assert_eq!(plan.format(), BlockImageFormat::Qcow2);
+        assert!(plan.preallocate());
+    }
+
+    #[test]
+    fn source_policy_catalog_debug_does_not_publish_opaque_ids() {
+        let catalog = SourcePolicyCatalog::new([SourcePolicy::new(
+            "state-root",
+            SourceKind::LocalPath,
+            [VolumeKind::State],
+        )
+        .unwrap()])
+        .unwrap();
+        assert_eq!(format!("{catalog:?}"), "SourcePolicyCatalog(<redacted>)");
     }
 }

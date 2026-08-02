@@ -31,7 +31,7 @@ impl VirtiofsdCacheMode {
 }
 
 /// A resolved socket group, kept separate from authored resource data.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct SocketGroup(u32);
 
 impl SocketGroup {
@@ -43,6 +43,12 @@ impl SocketGroup {
     /// Return the resolved numeric group for the effect adapter.
     pub const fn get(self) -> u32 {
         self.0
+    }
+}
+
+impl fmt::Debug for SocketGroup {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("SocketGroup(<redacted>)")
     }
 }
 
@@ -74,7 +80,7 @@ impl fmt::Debug for VirtiofsdArgvInput {
         formatter
             .debug_struct("VirtiofsdArgvInput")
             .field("socket_path", &self.socket_path)
-            .field("shared_dir_fd", &self.shared_dir_fd)
+            .field("shared_dir_fd", &"<redacted>")
             .field("socket_group", &self.socket_group)
             .field("thread_pool_size", &self.thread_pool_size)
             .field("posix_acl", &self.posix_acl)
@@ -234,6 +240,8 @@ mod tests {
         let rendered = format!("{:?}", input());
         assert!(!rendered.contains("/nix/store"));
         assert!(!rendered.contains(".sock"));
+        assert!(!rendered.contains("shared_dir_fd: 17"));
+        assert!(!rendered.contains("SocketGroup(100)"));
         assert!(rendered.contains("VirtiofsdArgvInput"));
     }
 }

@@ -50,6 +50,9 @@ pub fn check_usage(
     let Some(quota) = quota else {
         return Ok(QuotaUsageDecision::Allowed);
     };
+    if quota.enforcement() == QuotaEnforcement::None {
+        return Ok(QuotaUsageDecision::Allowed);
+    }
     if quota
         .max_bytes()
         .is_some_and(|limit| usage.used_bytes > limit)
@@ -86,7 +89,7 @@ mod tests {
 
     #[test]
     fn usage_checks_both_byte_and_inode_limits() {
-        let quota = QuotaSpec::new(Some(1024), Some(8), QuotaEnforcement::None).unwrap();
+        let quota = QuotaSpec::new(Some(1024), Some(8), QuotaEnforcement::Hard).unwrap();
         assert_eq!(
             check_usage(
                 Some(&quota),
@@ -108,6 +111,22 @@ mod tests {
             )
             .unwrap(),
             QuotaUsageDecision::Rejected
+        );
+    }
+
+    #[test]
+    fn informational_limits_do_not_reject_writes() {
+        let quota = QuotaSpec::new(Some(1), Some(1), QuotaEnforcement::None).unwrap();
+        assert_eq!(
+            check_usage(
+                Some(&quota),
+                QuotaUsage {
+                    used_bytes: 2,
+                    inode_count: 2,
+                }
+            )
+            .unwrap(),
+            QuotaUsageDecision::Allowed
         );
     }
 }

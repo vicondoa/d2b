@@ -202,6 +202,10 @@ impl<S: VolumeSourceEffectPort, L: VolumeLayoutEffectPort> VolumeLocalController
         volume_uid: &ResourceUid,
         spec: &VolumeSpec,
     ) -> Result<Vec<crate::identity::EntryDigest>, VolumeLocalError> {
+        validate_source_spec(spec)?;
+        if let Some(catalog) = &self.profile.source_policies {
+            catalog.validate(spec)?;
+        }
         let root = self
             .source
             .resolve_root(
