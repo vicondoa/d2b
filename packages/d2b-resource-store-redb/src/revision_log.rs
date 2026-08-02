@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use d2b_contracts::v3::{ResourceName, ResourceTypeName, ZoneRevision};
 use d2b_resource_store::{StoreError, StoreFilter};
-use redb::{Database, ReadableDatabase, ReadableTable};
+use redb::{Database, ReadableDatabase};
 use tokio::sync::mpsc;
 
 use crate::actor::{SharedChangeBatch, filter_batch_with};
@@ -52,8 +52,8 @@ impl WatchSelector {
         resource_names: impl IntoIterator<Item = ResourceName>,
         filters: impl IntoIterator<Item = StoreFilter>,
     ) -> Self {
-        let mut resource_types = resource_types.into_iter().collect::<BTreeSet<_>>();
-        let mut resource_names = resource_names.into_iter().collect::<BTreeSet<_>>();
+        let resource_types = resource_types.into_iter().collect::<BTreeSet<_>>();
+        let resource_names = resource_names.into_iter().collect::<BTreeSet<_>>();
         let mut filters = filters.into_iter().collect::<Vec<_>>();
         filters.sort_by(|left, right| {
             left.field
@@ -370,7 +370,7 @@ impl WatchCoordinator {
     /// The caller must invoke this from the same serialized writer context
     /// that commits changes.  That ordering is what makes registration plus
     /// replay a no-gap operation.
-    pub(crate) fn register_and_replay(
+    pub fn register_and_replay(
         &mut self,
         database: &Database,
         after_revision: ZoneRevision,

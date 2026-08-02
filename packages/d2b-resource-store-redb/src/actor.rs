@@ -623,7 +623,7 @@ pub(crate) fn replay_after<F>(
     database: &Database,
     after_revision: u64,
     signals: &SignalCounters,
-    mut visit: F,
+    visit: F,
 ) -> Result<(), StoreError>
 where
     F: FnMut(ChangeBatch) -> Result<(), StoreError>,
