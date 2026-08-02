@@ -437,6 +437,11 @@ fn rust_companion_violations(driver: &str, harness_targets: &[String]) -> Vec<St
             "harness=false discovery must fail explicitly when its result is empty".to_owned(),
         );
     }
+    if non_comment_lines(driver).iter().any(|line| {
+        line.contains("cargo test") && line.contains("--test") && line.contains("--test-threads")
+    }) {
+        violations.push("harness=false binaries must not receive libtest arguments".to_owned());
+    }
     violations
 }
 
@@ -766,6 +771,17 @@ run_companions() {
             "removing the {label} contract must be rejected"
         );
     }
+    let mutated = good.replace(
+        "cargo test --test smoke",
+        "cargo test --test smoke -- --test-threads 4",
+    );
+    let violations = rust_companion_violations(&mutated, &targets);
+    assert!(
+        violations
+            .iter()
+            .any(|violation| violation.contains("libtest arguments")),
+        "passing libtest arguments to a harness-free binary must be rejected"
+    );
 }
 
 #[test]

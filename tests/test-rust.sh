@@ -460,7 +460,7 @@ run_nextest_companions() {
     log "  --> cargo test -p $pkg --test $bin ($label; harness=false, not a nextest surface)"
     # Forward the same selectors the listing used, so the companion runs the
     # configuration that produced it rather than a default-feature rebuild.
-    cargo test --jobs "$D2B_RUST_CARGO_JOBS" --manifest-path "$manifest_path" "$@" -p "$pkg" --test "$bin" -- --test-threads "$D2B_RUST_NEXTEST_THREADS"
+    cargo test --jobs "$D2B_RUST_CARGO_JOBS" --manifest-path "$manifest_path" "$@" -p "$pkg" --test "$bin"
     ran=$((ran + 1))
   done <<<"$targets"
   if [ "$ran" -eq 0 ] && [ "$label" = "main workspace" ]; then

@@ -1016,6 +1016,17 @@ esac
         )
         self.assertNotRegex(driver, r"cargo\s+--jobs\s+[^\n]*\sxtask\b")
 
+    def test_harness_free_binaries_receive_no_libtest_arguments(self) -> None:
+        driver = RUST_DRIVER.read_text(encoding="utf-8")
+        command = next(
+            line
+            for line in driver.splitlines()
+            if 'cargo test --jobs "$D2B_RUST_CARGO_JOBS"' in line
+            and '--test "$bin"' in line
+        )
+        self.assertNotIn("--test-threads", command)
+        self.assertFalse(command.rstrip().endswith(" --"))
+
     def test_rust_exit_cleanup_and_nix_reentry_are_executable_without_duplicate_fragments(self) -> None:
         tree = self.scratch / "rust-reentry-tree"
         for relative in (
