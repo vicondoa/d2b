@@ -143,7 +143,7 @@ pub struct HostProbeSnapshot {
 ///
 /// The adapter owns the bounded OS calls. The reconciler only receives these
 /// already-bounded values and never opens a host handle itself.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct HostProbeMetadata {
     /// Bounded `uname -r` observation.
     pub kernel_release: String,
@@ -153,17 +153,6 @@ pub struct HostProbeMetadata {
     pub user_manager_available: bool,
     /// Number of non-terminal child processes observed.
     pub active_process_count: u32,
-}
-
-impl Default for HostProbeMetadata {
-    fn default() -> Self {
-        Self {
-            kernel_release: String::new(),
-            os_name: String::new(),
-            user_manager_available: false,
-            active_process_count: 0,
-        }
-    }
 }
 
 impl HostProbeSnapshot {
