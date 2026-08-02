@@ -201,22 +201,29 @@ Required ordering inside lanes remains:
 - supply chain: the three workspace policies with existing retry semantics.
 
 The public override is `D2B_RUST_BUDGET`. Its default is the smaller of
-detected logical CPUs and a Linux `MemAvailable` cap that reserves 2 GiB for
-the host and budgets 3 GiB per heavy Rust job. Invalid or non-positive values
-fail with exit status 2.
+detected logical CPUs and an effective-memory cap. Effective available memory
+is the smaller of Linux `MemAvailable` and the remaining finite cgroup v2
+`memory.max` or `memory.high` allowance after `memory.current`; unlimited or
+unavailable cgroup files fall back to `MemAvailable`. The calculation reserves
+2 GiB for the host and budgets 3 GiB per heavy Rust job. Invalid or
+non-positive values fail with exit status 2.
 
 GNU Make's jobserver schedules eligible workspace lanes. Each CPU-heavy lane
-has a static weight and receives that explicit Cargo `--jobs` and nextest
-test-thread quota. The DAG and weights are valid only when the sum of every
-runnable frontier is no greater than `D2B_RUST_BUDGET`; this is asserted by a
-policy test. This preserves the intended per-workspace Cargo limits while
-preventing overlapping quotas from oversubscribing the host. Same-target
-leaves are dependency-ordered as shown above.
+has a static relative weight, but its explicit Cargo `--jobs` and nextest
+test-thread quota is computed at runtime from `D2B_RUST_BUDGET`. The maximum
+number of simultaneous heavy lanes is also capped by the runtime budget, so a
+budget of `1` linearizes heavy work. Quotas are distributed deterministically
+across the active-lane cap, including remainder jobs, such that the largest
+possible active set never sums above the budget. Contract tests exercise
+budgets from `1` through the representative-host default. This preserves
+per-workspace Cargo limits without making constrained hosts edit the DAG.
+Same-target leaves are dependency-ordered as shown above.
 
 Recursive Make recipe lines use `+$(MAKE)` so Make owns jobserver propagation.
-The Bash leaf dispatcher neither parses `MAKEFLAGS` nor redirects inherited
-jobserver descriptors. Cargo concurrency is controlled by the explicit lane
-quota, not by assuming Bash can allocate weighted jobserver tokens.
+Before invoking Cargo or nextest, the leaf dispatcher unsets `MAKEFLAGS`,
+`MFLAGS`, and `MAKELEVEL`; those processes therefore honor the explicit lane
+quota instead of discovering Make's jobserver. Recursive Make calls retain the
+jobserver. Cargo concurrency is not based on weighted jobserver tokens.
 
 `tests/test-rust.sh` becomes a leaf dispatcher and environment provider. Its
 serial `all` scheduler is removed. `tests/static.sh` and other callers use the
@@ -371,6 +378,7 @@ This plan uses strict phase ordering rather than pipelined dispatch.
 | Category | Phase | Impact | Status |
 |---|---|---|---|
 | Tooling | Plan panel round 1 | The research subagent returned no usable output, so the Nix tool survey was repeated directly against upstream documentation and repositories. | Resolved |
+| Design | Plan panel round 2 | Cargo quota and Make jobserver ownership needed a second clarification pass to cover dynamic constrained-host budgets and cgroup memory limits. | Resolved |
 
 ## Post-Design Constitution Check
 

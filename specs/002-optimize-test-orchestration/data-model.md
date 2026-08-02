@@ -37,7 +37,7 @@ Represents the smallest independently schedulable unit.
 | `command_kind` | Cargo, nextest, Nix evaluation, Nix build, or repository leaf |
 | `inputs` | Manifest, flake attr, feature set, fixtures, and toolchain |
 | `target_directory` | Cargo output directory, if applicable |
-| `cpu_weight` | Share of the aggregate CPU budget |
+| `cpu_weight` | Relative share used to derive a runtime quota |
 | `memory_class` | Ordinary or memory-sensitive |
 | `dependencies` | Leaves that must complete first |
 | `can_overlap` | Leaves proven safe to run concurrently |
@@ -48,9 +48,11 @@ Represents the smallest independently schedulable unit.
 - Leaves sharing a mutable Cargo target directory do not overlap.
 - Broker feature leaves remain in one serial chain.
 - Every required coverage id is owned by exactly one leaf in a local run.
-- The summed CPU weights of every runnable DAG frontier are no greater than
-  the aggregate host budget.
-- Heavy-lane Cargo and nextest quotas equal the leaf CPU weight.
+- The heavy-lane concurrency limit is no greater than the runtime aggregate
+  budget.
+- Runtime Cargo and nextest quotas are derived from relative weights and the
+  active-lane limit; every possible active set sums to no more than the runtime
+  aggregate budget, including constrained overrides below the lane count.
 
 ## Execution Manifest
 

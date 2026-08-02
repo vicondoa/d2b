@@ -17,11 +17,14 @@ represent directly.
 - A Make DAG can encode the important safety edges: broker feature passes stay
   serial, same-target-directory operations do not overlap, and independent
   workspaces may overlap under one CPU and memory budget.
-- Each heavy Cargo workspace receives an explicit `--jobs` quota. The static
-  lane weights are chosen so every runnable Make frontier sums to no more than
-  the aggregate budget; Cargo is not expected to acquire weighted Make tokens.
+- Each heavy Cargo workspace receives an explicit `--jobs` quota. Static
+  relative weights are converted into runtime quotas from the actual aggregate
+  budget, and Make limits simultaneous heavy lanes so constrained budgets can
+  linearize the graph. Cargo is not expected to acquire weighted Make tokens.
 - Recursive Make recipes use `+$(MAKE)` and preserve the inherited jobserver.
-  Bash leaf dispatchers do not interpret or redirect jobserver descriptors.
+  Cargo and nextest commands explicitly unset `MAKEFLAGS`, `MFLAGS`, and
+  `MAKELEVEL` so their explicit quotas cannot be overridden by jobserver
+  discovery.
 
 **Alternatives considered**:
 

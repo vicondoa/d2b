@@ -38,31 +38,32 @@ The target contracts are documented in
 Rust:
 
 ```bash
-set -euo pipefail
-
 (
-  cd packages
-  cargo nextest list --workspace --message-format oneline
-  cargo test --workspace --doc -- --list
+  set -euo pipefail
+  (
+    cd packages
+    cargo nextest list --workspace --message-format oneline
+    cargo test --workspace --doc -- --list
 
-  cargo test \
-    --manifest-path d2b-priv-broker/Cargo.toml \
-    --workspace -- --list
-  cargo test \
-    --manifest-path d2b-priv-broker/Cargo.toml \
-    --workspace --features layer1-bootstrap -- --list
-  cargo test \
-    --manifest-path d2b-priv-broker/Cargo.toml \
-    --workspace --features fake-backends -- --list
+    cargo test \
+      --manifest-path d2b-priv-broker/Cargo.toml \
+      --workspace -- --list
+    cargo test \
+      --manifest-path d2b-priv-broker/Cargo.toml \
+      --workspace --features layer1-bootstrap -- --list
+    cargo test \
+      --manifest-path d2b-priv-broker/Cargo.toml \
+      --workspace --features fake-backends -- --list
 
-  cargo nextest list \
-    --manifest-path d2b-guest-shell-runner/Cargo.toml \
-    --workspace --features real-libshpool \
-    --message-format oneline
-  cargo test \
-    --manifest-path d2b-guest-shell-runner/Cargo.toml \
-    --workspace --features real-libshpool --doc -- --list
-) | LC_ALL=C sort -u > "$D2B_EVIDENCE_DIR/test-rust-inventory.txt"
+    cargo nextest list \
+      --manifest-path d2b-guest-shell-runner/Cargo.toml \
+      --workspace --features real-libshpool \
+      --message-format oneline
+    cargo test \
+      --manifest-path d2b-guest-shell-runner/Cargo.toml \
+      --workspace --features real-libshpool --doc -- --list
+  ) | LC_ALL=C sort -u > "$D2B_EVIDENCE_DIR/test-rust-inventory.txt"
+)
 
 bash tests/tools/assert-pinned-tests.sh
 ```
@@ -74,18 +75,19 @@ libtest case listing.
 Nix unit and flake checks:
 
 ```bash
-set -euo pipefail
+(
+  set -euo pipefail
+  system=$(nix eval --raw --impure --expr builtins.currentSystem)
+  flake_ref="git+file://$(git rev-parse --show-toplevel)"
 
-system=$(nix eval --raw --impure --expr builtins.currentSystem)
-flake_ref="git+file://$(git rev-parse --show-toplevel)"
+  nix eval --json "${flake_ref}#checks.${system}" \
+    --apply 'checks: builtins.filter (name: name == "nix-unit" || builtins.substring 0 9 name == "nix-unit-") (builtins.attrNames checks)' \
+    > "$D2B_EVIDENCE_DIR/test-nix-unit-inventory.json"
 
-nix eval --json "${flake_ref}#checks.${system}" \
-  --apply 'checks: builtins.filter (name: name == "nix-unit" || builtins.substring 0 9 name == "nix-unit-") (builtins.attrNames checks)' \
-  > "$D2B_EVIDENCE_DIR/test-nix-unit-inventory.json"
-
-nix eval --json "${flake_ref}#checks.${system}" \
-  --apply builtins.attrNames \
-  > "$D2B_EVIDENCE_DIR/test-flake-inventory.json"
+  nix eval --json "${flake_ref}#checks.${system}" \
+    --apply builtins.attrNames \
+    > "$D2B_EVIDENCE_DIR/test-flake-inventory.json"
+)
 ```
 
 Static discovery proves that required tests still exist, but it does not prove
@@ -171,12 +173,13 @@ make test-rust
 For Nix evaluation, use a fresh evaluator cache directory:
 
 ```bash
-cache_dir=$(mktemp -d)
-trap 'rm -rf -- "$cache_dir"' EXIT
-XDG_CACHE_HOME="$cache_dir" make test-nix-unit
-XDG_CACHE_HOME="$cache_dir" make test-flake
-rm -rf -- "$cache_dir"
-trap - EXIT
+(
+  set -euo pipefail
+  cache_dir=$(mktemp -d)
+  trap 'rm -rf -- "$cache_dir"' EXIT
+  XDG_CACHE_HOME="$cache_dir" make test-nix-unit
+  XDG_CACHE_HOME="$cache_dir" make test-flake
+)
 ```
 
 Repeat as required by the benchmark record. Remove only the explicitly created
@@ -199,37 +202,39 @@ Do not retain the intentional failure in the implementation branch.
 Confirm that every baseline item remains present:
 
 ```bash
-set -euo pipefail
+(
+  set -euo pipefail
 
-comm -23 \
-  .scratch/test-speedup-baseline/test-rust-inventory.txt \
-  .scratch/test-speedup-optimized/test-rust-inventory.txt
+  comm -23 \
+    .scratch/test-speedup-baseline/test-rust-inventory.txt \
+    .scratch/test-speedup-optimized/test-rust-inventory.txt
 
-jq -r '.[]' .scratch/test-speedup-baseline/test-nix-unit-inventory.json \
-  | LC_ALL=C sort > .scratch/test-speedup-baseline/test-nix-unit-inventory.txt
-jq -r '.[]' .scratch/test-speedup-optimized/test-nix-unit-inventory.json \
-  | LC_ALL=C sort > .scratch/test-speedup-optimized/test-nix-unit-inventory.txt
-comm -23 \
-  .scratch/test-speedup-baseline/test-nix-unit-inventory.txt \
-  .scratch/test-speedup-optimized/test-nix-unit-inventory.txt
+  jq -r '.[]' .scratch/test-speedup-baseline/test-nix-unit-inventory.json \
+    | LC_ALL=C sort > .scratch/test-speedup-baseline/test-nix-unit-inventory.txt
+  jq -r '.[]' .scratch/test-speedup-optimized/test-nix-unit-inventory.json \
+    | LC_ALL=C sort > .scratch/test-speedup-optimized/test-nix-unit-inventory.txt
+  comm -23 \
+    .scratch/test-speedup-baseline/test-nix-unit-inventory.txt \
+    .scratch/test-speedup-optimized/test-nix-unit-inventory.txt
 
-jq -r '.[]' .scratch/test-speedup-baseline/test-flake-inventory.json \
-  | LC_ALL=C sort > .scratch/test-speedup-baseline/test-flake-inventory.txt
-jq -r '.[]' .scratch/test-speedup-optimized/test-flake-inventory.json \
-  | LC_ALL=C sort > .scratch/test-speedup-optimized/test-flake-inventory.txt
-comm -23 \
-  .scratch/test-speedup-baseline/test-flake-inventory.txt \
-  .scratch/test-speedup-optimized/test-flake-inventory.txt
+  jq -r '.[]' .scratch/test-speedup-baseline/test-flake-inventory.json \
+    | LC_ALL=C sort > .scratch/test-speedup-baseline/test-flake-inventory.txt
+  jq -r '.[]' .scratch/test-speedup-optimized/test-flake-inventory.json \
+    | LC_ALL=C sort > .scratch/test-speedup-optimized/test-flake-inventory.txt
+  comm -23 \
+    .scratch/test-speedup-baseline/test-flake-inventory.txt \
+    .scratch/test-speedup-optimized/test-flake-inventory.txt
 
-jq -r '.completed_leaves[]' \
-  .scratch/test-speedup-baseline/test-rust-executed.json | LC_ALL=C sort \
-  > .scratch/test-speedup-baseline/test-rust-executed.txt
-jq -r '.completed_leaves[]' \
-  .scratch/test-speedup-optimized/test-rust-executed.json | LC_ALL=C sort \
-  > .scratch/test-speedup-optimized/test-rust-executed.txt
-comm -23 \
-  .scratch/test-speedup-baseline/test-rust-executed.txt \
-  .scratch/test-speedup-optimized/test-rust-executed.txt
+  jq -r '.completed_leaves[]' \
+    .scratch/test-speedup-baseline/test-rust-executed.json | LC_ALL=C sort \
+    > .scratch/test-speedup-baseline/test-rust-executed.txt
+  jq -r '.completed_leaves[]' \
+    .scratch/test-speedup-optimized/test-rust-executed.json | LC_ALL=C sort \
+    > .scratch/test-speedup-optimized/test-rust-executed.txt
+  comm -23 \
+    .scratch/test-speedup-baseline/test-rust-executed.txt \
+    .scratch/test-speedup-optimized/test-rust-executed.txt
+)
 ```
 
 Repeat the executed-manifest comparison for Nix unit and flake manifests. Each
@@ -238,3 +243,12 @@ pairs to list and classify newly added orchestration tests or leaves.
 
 Then run the targeted infrastructure checks named in
 [plan.md](./plan.md#validation-strategy).
+
+Execution manifests preserve each target's own contract; they do not merge
+separate Layer-1 jobs into `test-rust`. Run the adjacent enforcing policy and
+fixture lanes explicitly:
+
+```bash
+make test-policy
+make test-fixture-contracts
+```

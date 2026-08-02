@@ -51,12 +51,14 @@ The stable `test-rust` CI context remains the rollup of those enforcing jobs.
 
 - The public local override is `D2B_RUST_BUDGET=<positive-integer>`.
 - The default aggregate budget is the smaller of available logical CPUs and a
-  memory-derived cap using Linux `MemAvailable`, a 2 GiB host reserve, and a
-  conservative 3 GiB allowance per heavy Rust job.
-- GNU Make's jobserver schedules eligible workspace lanes. Each heavy lane
-  receives an explicit Cargo `--jobs` and nextest thread quota, and every
-  runnable DAG frontier MUST have a summed quota no greater than
-  `D2B_RUST_BUDGET`.
+  memory-derived cap. Available memory is the smaller of Linux `MemAvailable`
+  and the remaining finite cgroup v2 `memory.max` or `memory.high` allowance,
+  then reserves 2 GiB for the host and budgets 3 GiB per heavy Rust job.
+- GNU Make's jobserver limits the number of simultaneously active workspace
+  lanes. Relative lane weights are static, but each Cargo `--jobs` and nextest
+  thread quota is computed from the runtime `D2B_RUST_BUDGET`. The active-lane
+  limit and quotas MUST guarantee that every runnable frontier sums to no more
+  than the runtime budget, including a budget of `1`.
 - Invalid budget values return exit status `2`.
 
 ## `make test-nix-unit`
