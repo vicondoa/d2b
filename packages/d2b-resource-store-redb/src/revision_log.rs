@@ -109,6 +109,10 @@ impl core::fmt::Debug for WatchRegistrationId {
 }
 
 impl WatchRegistrationId {
+    pub(crate) const fn from_raw(value: u64) -> Self {
+        Self(value)
+    }
+
     pub const fn get(self) -> u64 {
         self.0
     }
@@ -258,7 +262,12 @@ impl WatchCoordinator {
     }
 
     /// Deliver one already-decoded immutable batch to matching registrations.
-    pub fn dispatch(&mut self, batch: SharedChangeBatch) {
+    ///
+    /// The return value is the number of registrations that accepted a
+    /// delivery.  It lets the backend account for fan-out without exposing
+    /// selectors or registration identities in its bounded signal surface.
+    pub fn dispatch(&mut self, batch: SharedChangeBatch) -> u64 {
+        let mut delivered = 0_u64;
         let ids = self.registrations.keys().copied().collect::<Vec<_>>();
         for id in ids {
             let Some(selector) = self
@@ -273,8 +282,11 @@ impl WatchCoordinator {
             else {
                 continue;
             };
-            let _ = self.enqueue(id, filtered, false);
+            if self.enqueue(id, filtered, false).is_ok() {
+                delivered = delivered.saturating_add(1);
+            }
         }
+        delivered
     }
 
     /// Deliver one replay row while retaining only the caller's cursor state.

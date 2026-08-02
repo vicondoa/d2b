@@ -1113,10 +1113,21 @@ async fn list_cursor_is_bound_to_snapshot_and_selector() {
 }
 
 #[tokio::test]
-async fn public_watch_fails_until_the_coordinator_owns_stream_registration() {
-    let (_directory, file, marker) = provisioned_store();
-    let store = provision_store(file, marker, identity()).await.unwrap();
-    let error = store
+async fn public_watch_replays_and_delivers_one_shared_committed_batch() {
+    let (directory, file) = owned_file();
+    let store_identity = identity();
+    let (issuer, acceptor) = mutation_seal_pair(store_identity.seal_identity());
+    let mut marker = OpenOptions::new()
+        .create_new(true)
+        .read(true)
+        .write(true)
+        .open(directory.path().join("store.marker"))
+        .unwrap();
+    write_provisioning_marker(&mut marker, &store_identity).unwrap();
+    let store = RedbResourceStore::provision_owned(file, marker, store_identity, acceptor)
+        .await
+        .unwrap();
+    let receipt = store
         .watch(StoreWatchRequest {
             operation: operation("watch-host"),
             zone: ZoneId::parse("work").unwrap(),
@@ -1128,12 +1139,61 @@ async fn public_watch_fails_until_the_coordinator_owns_stream_registration() {
             projection: StoreProjection::Full,
         })
         .await
-        .unwrap_err();
-    assert_eq!(
-        error.kind(),
-        d2b_resource_store::StoreErrorKind::ResourcePlaneUnavailable
+        .unwrap();
+    let mut stream = store
+        .take_watch_stream_named(&receipt.stream_name)
+        .unwrap()
+        .expect("receipt stream is retained until transfer");
+    assert!(
+        store
+            .take_watch_stream_named(&receipt.stream_name)
+            .unwrap()
+            .is_none()
     );
-    assert_eq!(error.reason_code(), "watch-coordinator-unavailable");
+    let (_second_receipt, mut second_stream) = store
+        .watch_stream(StoreWatchRequest {
+            operation: operation("watch-host-second"),
+            zone: ZoneId::parse("work").unwrap(),
+            resource_types: vec![ResourceTypeName::parse("Host").unwrap()],
+            resource_names: Vec::new(),
+            filters: Vec::new(),
+            after_revision: d2b_contracts::v3::ZoneRevision::new(0),
+            initial_credits: 1,
+            projection: StoreProjection::Full,
+        })
+        .await
+        .unwrap();
+    assert_eq!(receipt.snapshot_revision.get(), 0);
+
+    let canonical = create_body("watch-host");
+    let payload_digest = canonical_digest(RESOURCE_ENVELOPE_DOMAIN_TAG, &canonical);
+    let result = store
+        .commit_verified(issuer.seal(create_seal_body("watch-host", "watch-host", payload_digest)))
+        .await
+        .unwrap();
+    let batch = stream.recv().await.expect("committed batch is delivered");
+    let second_batch = second_stream
+        .recv()
+        .await
+        .expect("the second watcher receives the same batch");
+    assert_eq!(batch.revision(), result.revision);
+    assert!(batch.shares_batch_with(&second_batch));
+    assert_eq!(batch.entries().len(), 1);
+    assert!(batch.shares_batch_with(&batch));
+    assert_eq!(store.watch_signals().unwrap().budget_used, 2);
+    let backend_signals = store.signals();
+    assert_eq!(backend_signals.shared_immutable_batches, 1);
+    assert_eq!(backend_signals.fanout_references, 2);
+
+    store
+        .acknowledge_watch(stream.id(), result.revision)
+        .await
+        .unwrap();
+    store
+        .acknowledge_watch(second_stream.id(), result.revision)
+        .await
+        .unwrap();
+    assert_eq!(store.watch_signals().unwrap().budget_used, 0);
 }
 
 #[test]
