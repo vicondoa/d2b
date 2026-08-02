@@ -762,6 +762,7 @@ set -euo pipefail
         self.assertIn('private_target="$target_root/private-census"', api_driver)
         self.assertIn('public_target="$target_root/census"', api_driver)
         self.assertIn('private_target="$target_root/census"', api_driver)
+        self.assertNotIn('rm -rf "$target_root/census"', api_driver)
         self.assertIn('${D2B_RUST_COLD_PROFILE:-0}', api_driver)
         self.assertIn('if [ "$shared_census" = 1 ]', api_driver)
         self.assertIn('checker_target="$target_root/checker"', api_driver)

@@ -73,8 +73,6 @@ checker_target="$target_root/checker"
 rm -rf "$target_root/public" "$target_root/private"
 if [ "$shared_census" = 1 ]; then
   rm -rf "$target_root/public-census" "$target_root/private-census"
-else
-  rm -rf "$target_root/census"
 fi
 
 # Delete only rendered JSON. Cargo's compiled intermediate artifacts remain
